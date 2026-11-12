@@ -73,6 +73,14 @@ const WORK = [1, 2].map((n) => ({
 // What the project holds as w2.txt before the second Merge, which must then
 // be a conflict.
 const WORK_MINE = "written in the project by hand\n";
+// Review in the Tasks panel sends this to the lead (REVIEW_ASK in
+// Agents.tsx). The lead starts a review helper, which is given the change
+// and reports one finding that must be fixed.
+const REVIEW_ASK = "Review the change: start one helper with type review, then tell me what it found.";
+const REVIEW_PROMPT = "smoke review helper: check the two work files";
+const REVIEW_FINDING = `${WORK[0].file}:1 the smoke blocker`;
+const REVIEW_HELPER_REPLY = "The review helper found one blocker";
+const REVIEW_REPLY = "The review found one blocker";
 // The Tasks panel of a lead session reads when the app says its tasks
 // changed, and otherwise only every 15 seconds. A change the mock has seen
 // must show within this long, three times in a row: a timer cannot do that.
@@ -121,6 +129,28 @@ function mockReply(callNumber, body) {
   const stage = helperStage(body);
   if (stage === "start") return toolCall("smoke-helper-read", "read_file", { target_file: AGENT_NOTE });
   if (stage === "read") return textReply(AGENT_HELPER_REPLY);
+  // The review helper starts fresh: its requests carry its task and not the
+  // lead's spawn call. Its task holds the diff, so it is checked before
+  // anything a file in the change could match.
+  if (body.includes(REVIEW_PROMPT) && !body.includes("smoke-review-spawn")) {
+    if (!body.includes("smoke-review-report")) {
+      return toolCall("smoke-review-report", "report_findings", {
+        findings: [{ severity: "high", text: REVIEW_FINDING }],
+      });
+    }
+    return textReply(REVIEW_HELPER_REPLY);
+  }
+  // The lead's turn after Review, which carries every earlier turn.
+  if (body.includes(REVIEW_ASK)) {
+    if (!body.includes("smoke-review-spawn")) {
+      return toolCall("smoke-review-spawn", "spawn_subagent", {
+        type: "review",
+        description: "review the change",
+        prompt: REVIEW_PROMPT,
+      });
+    }
+    return textReply(REVIEW_REPLY);
+  }
   // A worktree helper starts fresh, so its requests carry its own prompt and
   // not the lead's message.
   const worker = WORK.find((w) => body.includes(w.prompt) && !body.includes(AGENT_PROMPT_3));
@@ -1826,6 +1856,161 @@ async function helperWork(s, workspace, other) {
     throw new Error(`Discard changed the project's ${second.file}`);
   }
   console.log(`code tab: Discard asked ${JSON.stringify(asked)} and removed the row (${JSON.stringify(gone)})`);
+
+  // Review: nothing is reviewed until the person asks. The button sends the
+  // ask in this session; the lead starts a read-only review helper, which is
+  // handed the plan and the change and reports a blocker. The findings show
+  // in the panel, the record is in the config folder, and the project's
+  // files, HEAD and status are as they were.
+  const line = `${panel} .review-line`;
+  const before = await waitFor("the Review section", async () => (await pageText(line)) || null);
+  if (before !== "Not reviewed") throw new Error(`before any review the panel said ${JSON.stringify(before)}`);
+  const records = join(dirname(workspace), "helper-work");
+  const reviewFiles = () =>
+    readdirSync(records)
+      .map((session) => join(records, session, "review.json"))
+      .filter((file) => existsSync(file));
+  if (reviewFiles().length !== 0) throw new Error("a review record exists before any review");
+  const statusBefore = git(workspace, "status", "--porcelain");
+  await scrollIntoView(s, line);
+  // Review waits while a turn of the session runs; the lead's turn is over.
+  await waitFor("Review to be free to press", () =>
+    wd("POST", `${s}/execute/sync`, {
+      script:
+        "const at = document.querySelector(arguments[0]); const b = [...(at ? at.querySelectorAll('button') : [])].find((b) => b.textContent.trim() === 'Review'); return b && !b.disabled ? true : null;",
+      args: [panel],
+    }),
+  );
+  await press(panel, "Review");
+  const reviewed = await waitFor(
+    "the review's findings in the Tasks panel",
+    async () => {
+      const text = await pageText(line);
+      return text.startsWith("Reviewed") ? text : null;
+    },
+    60000,
+  );
+  if (reviewed !== "Reviewed: 1 blocker") throw new Error(`after the review the panel said ${JSON.stringify(reviewed)}`);
+  const found = await pageText(`${panel} ul[aria-label='Review findings'] li`);
+  if (found !== `${REVIEW_FINDING}Blocker`) throw new Error(`the finding read ${JSON.stringify(found)}`);
+  await waitFor("Review again and Ask the lead to fix", async () =>
+    (await button(panel, "Review again")) && (await button(panel, "Ask the lead to fix")),
+  );
+  // What the helper was sent: the approved plan, the changed files, the diff
+  // and the lead's words last, with no write and no shell among its tools.
+  const sent = mockSeen.find((c) => c.body.includes(REVIEW_PROMPT) && !c.body.includes("smoke-review-spawn"));
+  if (!sent) throw new Error("the review helper never called the model");
+  const request = JSON.parse(sent.body);
+  const task = JSON.stringify(request.input);
+  for (const part of [
+    "Approved plan:\\nWrite one note in the project.",
+    `Changed files (2):\\nA ${first.file}\\nA ${second.file}`,
+    `+${first.text.trim()}`,
+    `+${WORK_MINE.trim()}`,
+    `Note from the lead:\\n${REVIEW_PROMPT}`,
+  ]) {
+    if (!task.includes(part)) throw new Error(`the review helper's task lacks ${JSON.stringify(part)}: ${task}`);
+  }
+  const tools = request.tools.map((tool) => tool.name);
+  for (const banned of ["write", "search_replace", "run_terminal_command"]) {
+    if (tools.includes(banned)) throw new Error(`the review helper was offered ${banned}`);
+  }
+  if (!tools.includes("report_findings")) throw new Error(`the review helper's tools were ${JSON.stringify(tools)}`);
+  const files = reviewFiles();
+  if (files.length !== 1) throw new Error(`expected one review record, found ${files.length}`);
+  const record = JSON.parse(readFileSync(files[0], "utf8"));
+  if (record.head !== head || record.base !== head || record.blockers !== 1 || record.planGiven !== true) {
+    throw new Error(`the review record read ${JSON.stringify(record)}`);
+  }
+  if (!/^[0-9a-f]{40}$/.test(record.tree) || record.commits.length !== 0) {
+    throw new Error(`the review record's tree and commits read ${JSON.stringify([record.tree, record.commits])}`);
+  }
+  if (git(workspace, "rev-parse", "HEAD") !== head) throw new Error("the review moved the project's HEAD");
+  if (git(workspace, "status", "--porcelain") !== statusBefore) throw new Error("the review changed the project's files");
+  // The lead gets the helper's words and, with them, the findings.
+  await waitFor("the review helper's answer and its findings back at the lead", () =>
+    mockSeen.some(
+      (c) =>
+        c.body.includes("smoke-review-spawn") &&
+        c.body.includes(REVIEW_HELPER_REPLY) &&
+        c.body.includes(`Findings from this run\\n\\n- High: ${REVIEW_FINDING}`),
+    ),
+  );
+  await scrollIntoView(s, line);
+  await shot(s, "code-agent-review");
+  console.log(
+    `code tab: Review sent the ask in the session, a read-only helper got the plan and the diff, the lead got its findings, and the panel read ${JSON.stringify(reviewed)} (${JSON.stringify(found)}); the record names HEAD and the project is unchanged`,
+  );
+
+  // Checks: read only. With the turn over, the panel lists the tests, the
+  // secret scan and the branch, and what is in the way of a commit: the
+  // review's blocker and the default branch. A planted fake key is flagged
+  // by path and line, never by value, and makes the review stale; taking it
+  // out brings the review back. Nothing is committed or staged.
+  const checks = `${panel} ul[aria-label='Checks']`;
+  const check = (name) => pageText(`${checks} li[aria-label='${name}']`);
+  const blocked = () =>
+    wd("POST", `${s}/execute/sync`, {
+      script:
+        "return [...document.querySelectorAll(arguments[0])].map((row) => row.textContent);",
+      args: [`${panel} ul[aria-label='In the way of a commit'] li`],
+    });
+  const IN_TURN = "Wait for the agent to finish its turn.";
+  const BLOCKER = "The review found 1 blocker.";
+  const way = await waitFor("the checks once the lead's turn is over", async () => {
+    const rows = await blocked();
+    return rows.includes(BLOCKER) && !rows.includes(IN_TURN) ? rows : null;
+  });
+  const branch = git(workspace, "symbolic-ref", "--short", "HEAD");
+  const onDefault = ["main", "master"].includes(branch)
+    ? `${branch} is the main or default branch. The app never commits to it; make a branch first.`
+    : "This project's default branch is not known. Use New branch.";
+  if (!way.includes(onDefault)) throw new Error(`the checks did not refuse the branch ${branch}: ${JSON.stringify(way)}`);
+  const rows = { tests: await check("Tests"), scan: await check("Secret scan"), branch: await check("Branch") };
+  const expected = {
+    tests: "TestsNo test command is known, so no tests are run.",
+    scan: "Secret scanNothing flagged.",
+    branch: `Branch${branch}`,
+  };
+  if (JSON.stringify(rows) !== JSON.stringify(expected)) throw new Error(`the checks read ${JSON.stringify(rows)}`);
+  const recordBefore = readFileSync(files[0], "utf8");
+  const fakeKey = "sk-abcdefghijklmnopqrstuv";
+  writeFileSync(join(workspace, "smoke-key.txt"), `first line\ntoken = "${fakeKey}"\n`);
+  await scrollIntoView(s, checks);
+  await press(panel, "Check again");
+  const FLAGGED = "The secret scan flagged 1 place in the change.";
+  const STALE = "Files or commits changed since the review. Review again.";
+  const flagged = await waitFor("the planted key in the secret scan", async () => {
+    const text = await check("Secret scan");
+    return text.includes("smoke-key.txt") ? text : null;
+  });
+  if (flagged !== "Secret scansmoke-key.txt:2 · looks like a key or a password") {
+    throw new Error(`the secret scan read ${JSON.stringify(flagged)}`);
+  }
+  const whole = await pageText(panel);
+  if (whole.includes(fakeKey) || whole.includes("abcdefghij")) throw new Error("the panel shows the flagged value");
+  const now = await blocked();
+  for (const sentence of [FLAGGED, STALE]) {
+    if (!now.includes(sentence)) throw new Error(`with the key planted the checks read ${JSON.stringify(now)}`);
+  }
+  if (now.includes(BLOCKER)) throw new Error("a stale review still counted its blockers");
+  const staleLine = await pageText(line);
+  if (staleLine !== "Stale: files or commits changed since the review") {
+    throw new Error(`with a file changed the review line read ${JSON.stringify(staleLine)}`);
+  }
+  await shot(s, "code-agent-checks");
+  rmSync(join(workspace, "smoke-key.txt"));
+  await press(panel, "Check again");
+  await waitFor("the review to count again once the key is gone", async () => {
+    const rows = await blocked();
+    return rows.includes(BLOCKER) && !rows.includes(STALE) && !rows.includes(FLAGGED) && (await pageText(line)) === reviewed;
+  });
+  if (readFileSync(files[0], "utf8") !== recordBefore) throw new Error("reading the checks changed the review record");
+  if (git(workspace, "rev-parse", "HEAD") !== head) throw new Error("the checks moved the project's HEAD");
+  if (git(workspace, "status", "--porcelain") !== statusBefore) throw new Error("the checks changed the project's files");
+  console.log(
+    `code tab: Checks listed ${JSON.stringify(rows)} and ${JSON.stringify(way)}; a planted key read ${JSON.stringify(flagged)} and made the review stale, and taking it out brought ${JSON.stringify(reviewed)} back; HEAD and the files are unchanged`,
+  );
 }
 
 /** The window opens 900px wide (tauri.conf.json). Every tab, the brand, the

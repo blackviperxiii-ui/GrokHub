@@ -666,6 +666,10 @@ mod tests {
     /// that conflicted) and its words in the description added 49 to
     /// Chat/Agent (11_743 → 11_792, and 11_798 measured with eager look_at_screen beside them), Plan/Ask (7_526 → 7_575) and background
     /// (10_229 → 10_278).
+    /// `spawn_subagent`'s `review` type (a read-only helper that checks the
+    /// session's change against the approved plan), named in the description,
+    /// added 39 to Chat/Agent (11_798 → 11_837), Plan/Ask (7_575 → 7_614) and
+    /// background (10_278 → 10_317).
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -677,27 +681,28 @@ mod tests {
                 full.clone(),
                 // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes,
                 // +334 for eager look_at_screen,
-                // +57 for the merge_subagent_work index line, +49 for spawn_subagent's redo.
-                11_798,
+                // +57 for the merge_subagent_work index line, +49 for spawn_subagent's redo,
+                // +39 for its review type.
+                11_837,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                11_798,
+                11_837,
             ),
             (
                 "plan/ask",
                 profile(PermMode::Ask, true, true),
                 full,
                 // +506 for web_search: a read-only session can still look things up (LO-51).
-                7_575,
+                7_614,
             ),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                10_278,
+                10_317,
             ),
         ];
         for (label, gate, set, budget) in cases {

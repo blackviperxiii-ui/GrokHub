@@ -1,16 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  codeTestPlan,
+  codeTestRun,
   discardTaskWork,
   getQueue,
   mergeTaskWork,
   onEventGap,
   onTasksChanged,
   resumeTaskWork,
+  shipStatus,
   stopTask,
   type HelperWork,
   type Queue,
   type QueueProgress,
+  type Review,
+  type ReviewFinding,
+  type SecretHit,
+  type ShipStatus,
   type TaskStatus,
+  type TestsCheck,
   type TodoState,
 } from "./api";
 import { TaskDetailWindow } from "./TaskDetail";
@@ -193,6 +201,84 @@ export function deleteWorktreeText(work: HelperWork): string {
     : "Delete the worktree?";
 }
 
+export const REVIEW_TITLE = "Review";
+export const REVIEW_NOTE =
+  "A read-only helper checks the change against the plan you approved. A blocker is a finding that must be fixed before the change ships.";
+export const NOT_REVIEWED = "Not reviewed";
+/** A paired browser lists the findings and starts nothing. */
+export const REVIEW_DESKTOP_ONLY = "Start a review in the desktop app.";
+/** A paired browser reads no checks, so it cannot say a review is stale. */
+export const REVIEW_AGE_DESKTOP_ONLY = "The desktop app says whether this review is still current.";
+/** What Review sends the lead, as a message in the session. */
+export const REVIEW_ASK = "Review the change: start one helper with type review, then tell me what it found.";
+/** What Ask the lead to fix sends. */
+export const FIX_ASK = "Fix each blocker the review found through a helper, then review again.";
+
+export const FINDING_LABELS: Record<ReviewFinding["severity"], string> = {
+  high: "Blocker",
+  medium: "Medium",
+  low: "Low",
+  info: "Note",
+};
+
+/** "Reviewed: 1 blocker, 2 notes". A note is any finding that is not a
+ * blocker. A review with no approved plan says so, and so does one whose
+ * helper was shown only part of a long change. */
+export function reviewLine(review: Review): string {
+  const notes = review.findings.length - review.blockers;
+  const parts: string[] = [];
+  if (review.blockers > 0) parts.push(counted(review.blockers, "blocker"));
+  if (notes > 0 || parts.length === 0) parts.push(counted(notes, "note"));
+  const plan = review.planGiven ? "" : " · no plan";
+  const cut = review.cut ? " · only part of the change was shown" : "";
+  return `Reviewed: ${parts.join(", ")}${plan}${cut}`;
+}
+
+/** The review read another change: a file, HEAD or a commit differs now. */
+export const REVIEW_STALE = "Stale: files or commits changed since the review";
+
+export const CHECKS_TITLE = "Checks";
+export const CHECKS_NOTE =
+  "What has to hold before this change can be committed. Reading the checks changes nothing in the project.";
+export const CHECKS_BLOCKED = "In the way of a commit:";
+export const CHECKS_PASS = "Every check passes.";
+/** A test run that wrote to the project does not count for the change. */
+export const TESTS_CHANGED_FILES = "The tests changed files; run them again.";
+export const TEST_RUN_QUESTION = "Run the tests?";
+
+/** The tests check in one line, with the exact command. */
+export function testsLine(tests: TestsCheck): string {
+  switch (tests.state) {
+    case "noCommand":
+      return "No test command is known, so no tests are run.";
+    case "notRun":
+      return `Not run: ${tests.command}`;
+    case "stale":
+      return `Files changed since the last run: ${tests.command}`;
+    case "failed":
+      return `Failed (exit ${tests.exit}): ${tests.command}`;
+    case "passed":
+      return `Passed: ${tests.command}`;
+  }
+}
+
+const SECRET_LABELS: Record<SecretHit["kind"], string> = {
+  name: "a file that holds secrets",
+  held: "one of this project's secrets",
+  shape: "looks like a key or a password",
+};
+
+/** How many flagged places the Secret scan row lists before it counts the rest. */
+const SECRETS_SHOWN = 20;
+
+/** "src/client.ts:12 · looks like a key or a password". The place only,
+ * never the line's text. */
+export function secretLine(hit: SecretHit): string {
+  const place = hit.line === null ? hit.path : `${hit.path}:${hit.line}`;
+  const commit = hit.commit ? ` · in commit ${hit.commit.slice(0, 8)}` : "";
+  return `${place} · ${SECRET_LABELS[hit.kind]}${commit}`;
+}
+
 type WorkAction = "merge" | "finish" | "putBack" | "discard";
 
 /** A click's label while its call runs. */
@@ -308,6 +394,7 @@ export function Agents({
   onRun,
   active = true,
   live = false,
+  onAsk,
 }: {
   /** The chat the window last heard from; none before the first message. */
   conversationId?: string;
@@ -321,6 +408,9 @@ export function Agents({
   /** Run on a queued job: Chat opens and sends its prompt in its chat. The
    * Code tab's panel has no Run. */
   onRun?: (prompt: string, threadId: string) => void;
+  /** Sends a message to the session's lead. With it the Tasks panel has a
+   * Review section. */
+  onAsk?: (text: string) => void;
 }) {
   const [queue, setQueue] = useState<Queue | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -337,6 +427,19 @@ export function Agents({
   const [said, setSaid] = useState<string | null>(null);
   /** The helper work whose click just ended: focus goes back to its row. */
   const [ended, setEnded] = useState<{ key: string } | null>(null);
+  /** The queue a Review click was made on: its buttons wait for the next
+   * read, and then for the turn the click started to end. */
+  const [askedOn, setAskedOn] = useState<Queue | null>(null);
+  /** The checks on the session's change, and the state they were read for. */
+  const [ship, setShip] = useState<{ key: string; status: ShipStatus } | null>(null);
+  const [shipNote, setShipNote] = useState<string | null>(null);
+  /** Counts the reads the person or a test run asked for. */
+  const [shipAsk, setShipAsk] = useState(0);
+  /** The test command a confirm window asks about. */
+  const [testAsk, setTestAsk] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  /** How the last test run from this panel ended. */
+  const [testSaid, setTestSaid] = useState<string | null>(null);
   const section = useRef<HTMLElement>(null);
   const saidLine = useRef<HTMLParagraphElement>(null);
   // A different chat starts from nothing, not from the last chat's queue.
@@ -350,6 +453,11 @@ export function Agents({
     setRefused(null);
     setSaid(null);
     setEnded(null);
+    setAskedOn(null);
+    setShip(null);
+    setShipNote(null);
+    setTestAsk(null);
+    setTestSaid(null);
   }
   /** The chat on screen now, for a call that answers after a switch. */
   const onScreen = useRef(conversationId);
@@ -451,6 +559,67 @@ export function Agents({
     };
   }, [conversationId, active, live]);
 
+  // The checks are read when the section shows, when the review, the helper
+  // work or the turn changes, and when asked. A snapshot of the project is
+  // not taken on every nudge.
+  const shipKey =
+    !onOpenChat && onAsk && queue && inShell() && (queue.review || queue.reviewError || queue.todos.length > 0)
+      ? JSON.stringify([
+          queue.review?.atMs ?? null,
+          queue.working ?? false,
+          (queue.work ?? []).map((row) => [row.key, row.state]),
+        ])
+      : null;
+  useEffect(() => {
+    if (!conversationId || !active || shipKey === null) return;
+    let gone = false;
+    shipStatus(conversationId).then(
+      (status) => {
+        if (gone) return;
+        setShip({ key: shipKey, status });
+        setShipNote(null);
+      },
+      (err) => {
+        if (!gone) setShipNote(String(err));
+      },
+    );
+    return () => {
+      gone = true;
+    };
+  }, [conversationId, active, shipKey, shipAsk]);
+
+  /** Runs the session's test command in its folder. The first run of a
+   * command asks with the exact command. */
+  async function runTests(confirmed?: string) {
+    if (!conversationId || testing) return;
+    const id = conversationId;
+    setTestAsk(null);
+    setTestSaid(null);
+    setTesting(true);
+    try {
+      let command = confirmed;
+      if (command === undefined) {
+        const plan = await codeTestPlan(null, id);
+        if (onScreen.current !== id) return;
+        if (plan.needsConfirm) {
+          setTestAsk(plan.command);
+          return;
+        }
+        command = plan.command;
+      }
+      const result = await codeTestRun(command, confirmed !== undefined, id);
+      if (onScreen.current !== id) return;
+      setTestSaid(
+        result.changedFiles ? TESTS_CHANGED_FILES : result.exit === 0 ? "Tests passed." : `Tests exited with ${result.exit}.`,
+      );
+      setShipAsk((n) => n + 1);
+    } catch (err) {
+      if (onScreen.current === id) setTestSaid(String(err));
+    } finally {
+      setTesting(false);
+    }
+  }
+
   async function stop(taskId?: string) {
     if (!conversationId) return;
     setBusy(taskId ?? "*");
@@ -509,6 +678,19 @@ export function Agents({
     busy === `${action}:${key}` ? WORKING[action] : label;
   const running = tasks.filter((task) => task.live).length;
   const panel = !onOpenChat;
+  const review = queue?.review;
+  // A session with a lead and something to review, or a review to show.
+  const reviewShown = panel && !!onAsk && !!queue && (!!review || !!queue.reviewError || todos.length > 0);
+  const askLead = (text: string) => {
+    setAskedOn(queue);
+    onAsk?.(text);
+  };
+  // An ask sent while a turn runs waits behind it, and a second click would
+  // wait there too.
+  const asking = askedOn === queue || !!queue?.working;
+  const checks = ship?.status.checks;
+  // Only a read of the state on screen says the review is stale.
+  const stale = !!ship && ship.key === shipKey && checks?.review.state === "stale";
   /** A helper's progress by its task id; only the Tasks panel shows it. */
   const progressOf = (id?: string) => (panel ? tasks.find((task) => task.id === id)?.progress : undefined);
   // Beside the agent window the lead's tasks come first, then what runs for them.
@@ -550,7 +732,7 @@ export function Agents({
       )}
       {!conversationId && <p className="empty">{AGENTS_NO_CHAT}</p>}
       {conversationId && queue === null && !note && <p className="empty">Loading jobs…</p>}
-      {queue && tasks.length === 0 && todos.length === 0 && jobs.length === 0 && waiting.length === 0 && !queue.workError && !said && (
+      {queue && tasks.length === 0 && todos.length === 0 && jobs.length === 0 && waiting.length === 0 && !queue.workError && !said && !reviewShown && (
         <p className="empty">{onOpenChat ? AGENTS_EMPTY : TASKS_EMPTY}</p>
       )}
       {jobs.length > 0 && (
@@ -730,6 +912,121 @@ export function Agents({
           )}
         </>
       )}
+      {reviewShown && (
+        <>
+          <h2>{REVIEW_TITLE}</h2>
+          <p className="note">{REVIEW_NOTE}</p>
+          {queue.reviewError && (
+            <p className="error" role="alert">
+              The review can't be read: {queue.reviewError}
+            </p>
+          )}
+          {!queue.reviewError && (
+            <p className="status review-line" role="status">
+              {review ? (stale ? REVIEW_STALE : reviewLine(review)) : NOT_REVIEWED}
+            </p>
+          )}
+          {review && (
+            <ul className="rows" aria-label="Review findings">
+              {review.findings.map((finding, at) => (
+                <li key={at} className={`card agent finding ${finding.severity}`}>
+                  <div className="card-title">{finding.text}</div>
+                  <div className="card-status">{FINDING_LABELS[finding.severity]}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {desktop ? (
+            <div className="card-buttons">
+              <button type="button" disabled={asking} onClick={() => askLead(REVIEW_ASK)}>
+                {review ? "Review again" : "Review"}
+              </button>
+              {review && review.blockers > 0 && (
+                <button type="button" className="quiet" disabled={asking} onClick={() => askLead(FIX_ASK)}>
+                  Ask the lead to fix
+                </button>
+              )}
+            </div>
+          ) : (
+            <p className="note">
+              {REVIEW_DESKTOP_ONLY}
+              {review ? ` ${REVIEW_AGE_DESKTOP_ONLY}` : ""}
+            </p>
+          )}
+        </>
+      )}
+      {reviewShown && desktop && (
+        <>
+          <h2>{CHECKS_TITLE}</h2>
+          <p className="note">{CHECKS_NOTE}</p>
+          {shipNote && (
+            <p className="error" role="alert">
+              The checks can't be read: {shipNote}
+            </p>
+          )}
+          {checks && (
+            <ul className="rows" aria-label={CHECKS_TITLE}>
+              <li className="card agent" aria-label="Tests">
+                <div className="card-title">Tests</div>
+                <div className="card-status">{testsLine(checks.tests)}</div>
+                {testSaid && (
+                  <div className="card-status" role="status">
+                    {testSaid}
+                  </div>
+                )}
+                {checks.tests.state !== "noCommand" && (
+                  <div className="card-buttons">
+                    <button type="button" className="quiet" disabled={testing} onClick={() => void runTests()}>
+                      {testing ? "Running…" : "Run"}
+                    </button>
+                  </div>
+                )}
+              </li>
+              <li className="card agent" aria-label="Secret scan">
+                <div className="card-title">Secret scan</div>
+                {checks.secrets === null && <div className="card-status">The scan could not run.</div>}
+                {checks.secrets?.length === 0 && <div className="card-status">Nothing flagged.</div>}
+                {checks.secrets?.slice(0, SECRETS_SHOWN).map((hit, at) => (
+                  <div key={at} className="card-status">
+                    {secretLine(hit)}
+                  </div>
+                ))}
+                {checks.secrets && checks.secrets.length > SECRETS_SHOWN && (
+                  <div className="card-status">and {checks.secrets.length - SECRETS_SHOWN} more</div>
+                )}
+              </li>
+              <li className="card agent" aria-label="Branch">
+                <div className="card-title">Branch</div>
+                <div className="card-status">{checks.branch ?? "Detached HEAD"}</div>
+              </li>
+            </ul>
+          )}
+          {ship && ship.status.blocked.length > 0 && (
+            <>
+              <p className="status" role="status">
+                {CHECKS_BLOCKED}
+              </p>
+              <ul className="rows" aria-label="In the way of a commit">
+                {ship.status.blocked.map((why, at) => (
+                  <li key={at} className="card agent">
+                    <div className="card-status">{why}</div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {ship && ship.status.blocked.length === 0 && (
+            <p className="status" role="status">
+              {CHECKS_PASS}
+            </p>
+          )}
+          <div className="card-buttons">
+            <button type="button" className="quiet" onClick={() => setShipAsk((n) => n + 1)}>
+              Check again
+            </button>
+          </div>
+        </>
+      )}
       {onOpenChat && todos.length > 0 && (
         <>
           <h2>To-dos</h2>
@@ -765,6 +1062,17 @@ export function Agents({
           danger
           onConfirm={() => void act(asked, "discard")}
           onClose={() => setAsk(null)}
+        />
+      )}
+      {testAsk !== null && (
+        <WorkConfirm
+          question={TEST_RUN_QUESTION}
+          text={testAsk}
+          yes="Run"
+          no="Cancel"
+          danger={false}
+          onConfirm={() => void runTests(testAsk)}
+          onClose={() => setTestAsk(null)}
         />
       )}
       {panel && conversationId && detail && (

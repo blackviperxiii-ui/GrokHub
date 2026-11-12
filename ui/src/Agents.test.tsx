@@ -1,7 +1,7 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HelperWork, Queue, TaskDetail } from "./api";
+import type { CodeTestPlan, CodeTestResult, HelperWork, Queue, Review, ShipStatus, TaskDetail } from "./api";
 
 const api = vi.hoisted(() => ({
   getQueue: vi.fn<(conversationId: string) => Promise<Queue>>(),
@@ -12,6 +12,9 @@ const api = vi.hoisted(() => ({
   mergeTaskWork: vi.fn<(conversationId: string, key: string) => Promise<Queue>>(),
   resumeTaskWork: vi.fn<(conversationId: string, key: string, finish: boolean) => Promise<Queue>>(),
   discardTaskWork: vi.fn<(conversationId: string, key: string) => Promise<Queue>>(),
+  shipStatus: vi.fn<(conversationId: string) => Promise<ShipStatus>>(),
+  codeTestPlan: vi.fn<(command?: string | null, conversationId?: string) => Promise<CodeTestPlan>>(),
+  codeTestRun: vi.fn<(command: string, confirmed: boolean, conversationId?: string) => Promise<CodeTestResult>>(),
 }));
 /** Whether the page runs in the desktop app; a paired browser does not. */
 const shell = vi.hoisted(() => ({ desktop: true }));
@@ -34,12 +37,24 @@ import {
   Agents,
   AGENTS_EMPTY,
   AGENTS_NO_CHAT,
+  CHECKS_BLOCKED,
+  CHECKS_NOTE,
+  CHECKS_PASS,
+  FIX_ASK,
   LEAD_LABELS,
   LIVE_FALLBACK_MS,
   mergeOffer,
+  NOT_REVIEWED,
+  REVIEW_ASK,
+  REVIEW_DESKTOP_ONLY,
+  REVIEW_STALE,
+  reviewLine,
+  secretLine,
   taskProgress,
   TASKS_EMPTY,
   TASKS_NOTE,
+  TESTS_CHANGED_FILES,
+  testsLine,
   WORK_DESKTOP_ONLY,
   WORK_NOTE,
   workLine,
@@ -119,6 +134,60 @@ const STOPPED_MERGE = work({
   landing: true,
 });
 
+/** A review with one blocker and two notes, as the queue lists it. */
+const REVIEW: Review = {
+  findings: [
+    { severity: "high", text: "src/a.rs:3 the total is off by one" },
+    { severity: "medium", text: "src/b.rs:9 the name is unclear" },
+    { severity: "info", text: "README:1 reads well" },
+  ],
+  blockers: 1,
+  atMs: 1_700_000_000_000,
+  planGiven: true,
+};
+
+/** A lead session whose one task is done. */
+const LEAD_QUEUE: Queue = {
+  tasks: [],
+  todos: [{ id: "task-1", content: "Add the parser", status: "completed", state: "done" }],
+};
+
+/** A change with nothing in the way: reviewed clean, tested, on a work branch. */
+const SHIP_READY: ShipStatus = {
+  blocked: [],
+  checks: {
+    branch: "work/one",
+    review: { state: "clean" },
+    tests: { state: "passed", command: "cargo test" },
+    secrets: [],
+  },
+};
+
+/** The same change before its tests ran, with a blocker and two flagged places. */
+const SHIP_BLOCKED: ShipStatus = {
+  blocked: [
+    "The review found 1 blocker.",
+    "The tests have not run on this change.",
+    "The secret scan flagged 2 places in the change.",
+  ],
+  checks: {
+    branch: "work/one",
+    review: { state: "blockers", count: 1 },
+    tests: { state: "notRun", command: "cargo test" },
+    secrets: [
+      { path: "src/client.ts", line: 12, kind: "shape", commit: null },
+      { path: ".env", line: null, kind: "name", commit: "0123456789abcdef0123456789abcdef01234567" },
+    ],
+  },
+};
+
+/** The text of each row of the list with this name. */
+function rowsOf(name: string): (string | null)[] {
+  return within(screen.getByRole("list", { name }))
+    .getAllByRole("listitem")
+    .map((row) => row.textContent);
+}
+
 /** A relaunched chat: its helper work, and no tasks or to-dos. */
 function workQueue(...rows: HelperWork[]): Queue {
   return { tasks: [], todos: [], work: rows };
@@ -150,6 +219,7 @@ describe("Agents", () => {
       feed.gap = handler;
       return Promise.resolve(feed.unlistenGap);
     });
+    api.shipStatus.mockResolvedValue(SHIP_READY);
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -958,6 +1028,392 @@ describe("Agents", () => {
     render(<Agents conversationId="shell-c1" />);
     expect(await screen.findByText(TASKS_EMPTY)).toBeInTheDocument();
     expect(screen.queryByText(AGENTS_EMPTY)).not.toBeInTheDocument();
+  });
+
+  it("a lead's Tasks panel says Not reviewed, and Review asks the lead once per read", async () => {
+    const onAsk = vi.fn<(text: string) => void>();
+    api.getQueue.mockResolvedValue(LEAD_QUEUE);
+    render(<Agents conversationId="shell-c1" live onAsk={onAsk} />);
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Review" })).toBeInTheDocument();
+    expect(screen.getByText(NOT_REVIEWED)).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Review findings" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ask the lead to fix" })).toBeNull();
+    const button = screen.getByRole("button", { name: "Review" });
+    await userEvent.click(button);
+    expect(onAsk.mock.calls).toEqual([[REVIEW_ASK]]);
+    expect(REVIEW_ASK).toBe("Review the change: start one helper with type review, then tell me what it found.");
+    // The click is taken: the button waits for the panel's next read.
+    expect(button).toBeDisabled();
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    await act(async () => feed.changed("shell-c1"));
+    expect(await screen.findByRole("button", { name: "Review again" })).toBeEnabled();
+  });
+
+  it("a review lists its findings, blockers first, with Review again and Ask the lead to fix", async () => {
+    const onAsk = vi.fn<(text: string) => void>();
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    render(<Agents conversationId="shell-c1" live onAsk={onAsk} />);
+
+    const list = await screen.findByRole("list", { name: "Review findings" });
+    expect(screen.getByText("Reviewed: 1 blocker, 2 notes")).toBeInTheDocument();
+    expect(within(list).getAllByRole("listitem").map((row) => row.textContent)).toEqual([
+      "src/a.rs:3 the total is off by oneBlocker",
+      "src/b.rs:9 the name is unclearMedium",
+      "README:1 reads wellNote",
+    ]);
+    expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Review again" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Ask the lead to fix" }));
+    expect(onAsk.mock.calls).toEqual([[FIX_ASK]]);
+    expect(FIX_ASK).toBe("Fix each blocker the review found through a helper, then review again.");
+    expect(screen.getByRole("button", { name: "Review again" })).toBeDisabled();
+  });
+
+  it("a review's line counts blockers and notes, and says when there was no plan", () => {
+    expect(reviewLine(REVIEW)).toBe("Reviewed: 1 blocker, 2 notes");
+    const clean: Review = { ...REVIEW, findings: [{ severity: "info", text: "README:1 nothing to fix" }], blockers: 0 };
+    expect(reviewLine(clean)).toBe("Reviewed: 1 note");
+    const two: Review = {
+      ...REVIEW,
+      findings: [
+        { severity: "high", text: "a.rs:1 one" },
+        { severity: "high", text: "a.rs:2 two" },
+      ],
+      blockers: 2,
+      planGiven: false,
+    };
+    expect(reviewLine(two)).toBe("Reviewed: 2 blockers · no plan");
+    // A change too long to show the helper whole.
+    expect(reviewLine({ ...clean, cut: true })).toBe("Reviewed: 1 note · only part of the change was shown");
+    expect(reviewLine({ ...two, cut: true })).toBe(
+      "Reviewed: 2 blockers · no plan · only part of the change was shown",
+    );
+  });
+
+  it("Review and Ask the lead to fix wait while a turn of the session runs", async () => {
+    const onAsk = vi.fn<(text: string) => void>();
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW, working: true });
+    render(<Agents conversationId="shell-c1" live onAsk={onAsk} />);
+    // An ask sent now would wait behind the turn, and so would a second one.
+    const again = await screen.findByRole("button", { name: "Review again" });
+    expect(again).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Ask the lead to fix" })).toBeDisabled();
+    await userEvent.click(again);
+    expect(onAsk).not.toHaveBeenCalled();
+    // The turn ends: both can be pressed.
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    await act(async () => feed.changed("shell-c1"));
+    expect(await screen.findByRole("button", { name: "Review again" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Ask the lead to fix" })).toBeEnabled();
+  });
+
+  it("a clean review offers no fix", async () => {
+    const clean: Review = { ...REVIEW, findings: [{ severity: "info", text: "README:1 nothing to fix" }], blockers: 0 };
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: clean });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    expect(await screen.findByText("Reviewed: 1 note")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review again" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ask the lead to fix" })).toBeNull();
+  });
+
+  it("a session with no lead and the Agents page have no Review section", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    const view = render(<Agents conversationId="shell-c1" />);
+    expect(await screen.findByRole("list", { name: "Tasks" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Review" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review again" })).toBeNull();
+    view.unmount();
+    render(<Agents conversationId="shell-c1" onOpenChat={() => {}} onAsk={() => {}} />);
+    expect(await screen.findByRole("list", { name: "To-dos" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Review" })).toBeNull();
+  });
+
+  it("a lead session with no tasks yet has no Review section", async () => {
+    api.getQueue.mockResolvedValue({ tasks: [], todos: [] });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    expect(await screen.findByText(TASKS_EMPTY)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Review" })).toBeNull();
+  });
+
+  it("a review that can't be read says so and is not Not reviewed", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, reviewError: "review.json: EOF while parsing" });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The review can't be read: review.json: EOF while parsing",
+    );
+    expect(screen.queryByText(NOT_REVIEWED)).toBeNull();
+    expect(screen.getByRole("button", { name: "Review" })).toBeEnabled();
+  });
+
+  it("a paired browser lists the findings and starts no review", async () => {
+    shell.desktop = false;
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    const list = await screen.findByRole("list", { name: "Review findings" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+    // It reads no checks, so it says where the review's age is shown.
+    expect(
+      screen.getByText("Start a review in the desktop app. The desktop app says whether this review is still current."),
+    ).toBeInTheDocument();
+    expect(REVIEW_DESKTOP_ONLY).toBe("Start a review in the desktop app.");
+    expect(screen.queryByRole("button", { name: "Review again" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ask the lead to fix" })).toBeNull();
+    expect(api.shipStatus).not.toHaveBeenCalled();
+  });
+
+  it("a paired browser with no review yet says only where to start one", async () => {
+    shell.desktop = false;
+    api.getQueue.mockResolvedValue(LEAD_QUEUE);
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    expect(await screen.findByText(REVIEW_DESKTOP_ONLY)).toBeInTheDocument();
+  });
+
+  it("a lead's Tasks panel lists the checks and what is in the way of a commit", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    api.shipStatus.mockResolvedValue(SHIP_BLOCKED);
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+
+    expect(await screen.findByRole("list", { name: "Checks" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Checks" })).toBeInTheDocument();
+    expect(screen.getByText(CHECKS_NOTE)).toBeInTheDocument();
+    expect(rowsOf("Checks")).toEqual([
+      "TestsNot run: cargo testRun",
+      "Secret scansrc/client.ts:12 · looks like a key or a password.env · a file that holds secrets · in commit 01234567",
+      "Branchwork/one",
+    ]);
+    expect(screen.getByText(CHECKS_BLOCKED)).toBeInTheDocument();
+    expect(CHECKS_BLOCKED).toBe("In the way of a commit:");
+    expect(rowsOf("In the way of a commit")).toEqual([
+      "The review found 1 blocker.",
+      "The tests have not run on this change.",
+      "The secret scan flagged 2 places in the change.",
+    ]);
+    expect(screen.queryByText(CHECKS_PASS)).toBeNull();
+    expect(screen.getByText("Reviewed: 1 blocker, 2 notes")).toBeInTheDocument();
+    expect(api.shipStatus.mock.calls).toEqual([["shell-c1"]]);
+    // Nothing on the panel commits or pushes.
+    expect(screen.queryByRole("button", { name: /commit|push/i })).toBeNull();
+  });
+
+  it("a change with nothing in the way says every check passes", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: { ...REVIEW, blockers: 0, findings: [] } });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    expect(await screen.findByText(CHECKS_PASS)).toBeInTheDocument();
+    expect(CHECKS_PASS).toBe("Every check passes.");
+    expect(rowsOf("Checks")).toEqual(["TestsPassed: cargo testRun", "Secret scanNothing flagged.", "Branchwork/one"]);
+    expect(screen.queryByText(CHECKS_BLOCKED)).toBeNull();
+    expect(screen.queryByRole("list", { name: "In the way of a commit" })).toBeNull();
+  });
+
+  it("a review of an earlier state of the files reads Stale in place of its count", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    api.shipStatus.mockResolvedValue({
+      blocked: ["Files or commits changed since the review. Review again."],
+      checks: { ...SHIP_READY.checks!, review: { state: "stale" } },
+    });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    expect(await screen.findByText(REVIEW_STALE)).toBeInTheDocument();
+    expect(REVIEW_STALE).toBe("Stale: files or commits changed since the review");
+    expect(screen.queryByText("Reviewed: 1 blocker, 2 notes")).toBeNull();
+    // The findings it made stay listed.
+    expect(rowsOf("Review findings")).toHaveLength(3);
+    expect(screen.getByRole("button", { name: "Review again" })).toBeEnabled();
+  });
+
+  it("a new review is not called stale by the checks read for the one before", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    api.shipStatus.mockResolvedValueOnce({
+      blocked: ["Files or commits changed since the review. Review again."],
+      checks: { ...SHIP_READY.checks!, review: { state: "stale" } },
+    });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    expect(await screen.findByText(REVIEW_STALE)).toBeInTheDocument();
+    // A new review arrives. Until its own checks are read, the old read
+    // says nothing about it.
+    let answer: (status: ShipStatus) => void = () => {};
+    api.shipStatus.mockReturnValueOnce(new Promise<ShipStatus>((resolve) => (answer = resolve)));
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: { ...REVIEW, atMs: REVIEW.atMs + 60_000 } });
+    await act(async () => feed.changed("shell-c1"));
+    expect(await screen.findByText("Reviewed: 1 blocker, 2 notes")).toBeInTheDocument();
+    expect(screen.queryByText(REVIEW_STALE)).toBeNull();
+    await act(async () => answer(SHIP_BLOCKED));
+    expect(screen.getByText("Reviewed: 1 blocker, 2 notes")).toBeInTheDocument();
+  });
+
+  it("a project that can't be read lists the reason and no checks", async () => {
+    api.getQueue.mockResolvedValue(LEAD_QUEUE);
+    api.shipStatus.mockResolvedValue({ blocked: ["This folder is not a git repository."], checks: null });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    expect(await screen.findByRole("list", { name: "In the way of a commit" })).toBeInTheDocument();
+    expect(rowsOf("In the way of a commit")).toEqual(["This folder is not a git repository."]);
+    expect(screen.queryByRole("list", { name: "Checks" })).toBeNull();
+    expect(screen.getByText(NOT_REVIEWED)).toBeInTheDocument();
+  });
+
+  it("each state of the tests and each kind of flagged place has its own line", () => {
+    expect(testsLine({ state: "noCommand" })).toBe("No test command is known, so no tests are run.");
+    expect(testsLine({ state: "notRun", command: "npm test" })).toBe("Not run: npm test");
+    expect(testsLine({ state: "stale", command: "npm test" })).toBe("Files changed since the last run: npm test");
+    expect(testsLine({ state: "failed", command: "npm test", exit: 3 })).toBe("Failed (exit 3): npm test");
+    expect(testsLine({ state: "passed", command: "npm test" })).toBe("Passed: npm test");
+    expect(secretLine({ path: "a/b.ts", line: 7, kind: "held", commit: null })).toBe(
+      "a/b.ts:7 · one of this project's secrets",
+    );
+    expect(secretLine({ path: "id_rsa", line: null, kind: "name", commit: null })).toBe(
+      "id_rsa · a file that holds secrets",
+    );
+  });
+
+  it("a scan that could not run says so, a long list is counted, and no command has no Run", async () => {
+    api.getQueue.mockResolvedValue(LEAD_QUEUE);
+    api.shipStatus.mockResolvedValue({
+      blocked: ["The secret scan could not run: git diff-tree failed"],
+      checks: { branch: null, review: { state: "none" }, tests: { state: "noCommand" }, secrets: null },
+    });
+    const view = render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    await screen.findByRole("list", { name: "Checks" });
+    expect(rowsOf("Checks")).toEqual([
+      "TestsNo test command is known, so no tests are run.",
+      "Secret scanThe scan could not run.",
+      "BranchDetached HEAD",
+    ]);
+    expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
+    view.unmount();
+
+    const many = Array.from({ length: 23 }, (_, at) => ({
+      path: "keys.txt",
+      line: at + 1,
+      kind: "shape" as const,
+      commit: null,
+    }));
+    api.shipStatus.mockResolvedValue({
+      blocked: ["The secret scan flagged 23 places in the change."],
+      checks: { ...SHIP_READY.checks!, secrets: many },
+    });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    const scan = within(await screen.findByRole("list", { name: "Checks" })).getByRole("listitem", {
+      name: "Secret scan",
+    });
+    expect(within(scan).getByText("keys.txt:20 · looks like a key or a password")).toBeInTheDocument();
+    expect(within(scan).queryByText("keys.txt:21 · looks like a key or a password")).toBeNull();
+    expect(within(scan).getByText("and 3 more")).toBeInTheDocument();
+  });
+
+  it("the first Run of a test command asks with the exact command, then runs it in the session", async () => {
+    api.getQueue.mockResolvedValue(LEAD_QUEUE);
+    api.shipStatus.mockResolvedValue(SHIP_BLOCKED);
+    api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: true, remembered: null });
+    api.codeTestRun.mockResolvedValue({ command: "cargo test", exit: 0, output: "ok\n", cut: false, changedFiles: false });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Run" }));
+    const ask = await screen.findByRole("alertdialog", { name: "Run the tests?" });
+    expect(within(ask).getByText("cargo test")).toBeInTheDocument();
+    expect(api.codeTestPlan.mock.calls).toEqual([[null, "shell-c1"]]);
+    expect(api.codeTestRun).not.toHaveBeenCalled();
+    // Cancel runs nothing.
+    await userEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(api.codeTestRun).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    api.shipStatus.mockResolvedValue(SHIP_READY);
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog", { name: "Run the tests?" })).getByRole("button", { name: "Run" }),
+    );
+    expect(api.codeTestRun.mock.calls).toEqual([["cargo test", true, "shell-c1"]]);
+    const tests = within(screen.getByRole("list", { name: "Checks" })).getByRole("listitem", { name: "Tests" });
+    expect(await within(tests).findByText("Tests passed.")).toBeInTheDocument();
+    // The checks are read again after the run.
+    expect(await within(tests).findByText("Passed: cargo test")).toBeInTheDocument();
+    expect(api.shipStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("a remembered test command runs with no ask, and a failed or file-changing run says so", async () => {
+    api.getQueue.mockResolvedValue(LEAD_QUEUE);
+    api.shipStatus.mockResolvedValue(SHIP_BLOCKED);
+    api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
+    api.codeTestRun.mockResolvedValue({ command: "cargo test", exit: 3, output: "", cut: false, changedFiles: false });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Run" }));
+    expect(await screen.findByText("Tests exited with 3.")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(api.codeTestRun.mock.calls).toEqual([["cargo test", false, "shell-c1"]]);
+
+    api.codeTestRun.mockResolvedValue({ command: "cargo test", exit: 0, output: "", cut: false, changedFiles: true });
+    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(await screen.findByText(TESTS_CHANGED_FILES)).toBeInTheDocument();
+    expect(TESTS_CHANGED_FILES).toBe("The tests changed files; run them again.");
+    expect(screen.queryByText("Tests passed.")).toBeNull();
+
+    api.codeTestRun.mockRejectedValue("A run is already in progress.");
+    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(await screen.findByText("A run is already in progress.")).toBeInTheDocument();
+  });
+
+  it("the checks are read again when the review, the helper work or the turn changes, not on every nudge", async () => {
+    api.getQueue.mockResolvedValue(LEAD_QUEUE);
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    await screen.findByRole("list", { name: "Checks" });
+    expect(api.shipStatus).toHaveBeenCalledTimes(1);
+
+    // A nudge with the same queue takes no new snapshot of the project.
+    await act(async () => feed.changed("shell-c1"));
+    expect(api.getQueue).toHaveBeenCalledTimes(2);
+    expect(api.shipStatus).toHaveBeenCalledTimes(1);
+
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, working: true });
+    await act(async () => feed.changed("shell-c1"));
+    expect(api.shipStatus).toHaveBeenCalledTimes(2);
+
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, working: true, review: REVIEW });
+    await act(async () => feed.changed("shell-c1"));
+    expect(api.shipStatus).toHaveBeenCalledTimes(3);
+
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, working: true, review: REVIEW, work: [work()] });
+    await act(async () => feed.changed("shell-c1"));
+    expect(api.shipStatus).toHaveBeenCalledTimes(4);
+
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, working: true, review: REVIEW, work: [work({ state: "merged" })] });
+    await act(async () => feed.changed("shell-c1"));
+    expect(api.shipStatus).toHaveBeenCalledTimes(5);
+  });
+
+  it("Check again reads the checks, and a read that fails says so", async () => {
+    api.getQueue.mockResolvedValue(LEAD_QUEUE);
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    expect(await screen.findByText(CHECKS_PASS)).toBeInTheDocument();
+
+    api.shipStatus.mockResolvedValue(SHIP_BLOCKED);
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByText("The tests have not run on this change.")).toBeInTheDocument();
+    expect(api.shipStatus).toHaveBeenCalledTimes(2);
+
+    api.shipStatus.mockRejectedValue("the window is closing");
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The checks can't be read: the window is closing");
+  });
+
+  it("a paired browser, a session with no lead and the Agents page read no checks", async () => {
+    shell.desktop = false;
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    const paired = render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    await screen.findByRole("list", { name: "Review findings" });
+    expect(screen.queryByRole("heading", { name: "Checks" })).toBeNull();
+    paired.unmount();
+
+    shell.desktop = true;
+    const alone = render(<Agents conversationId="shell-c1" />);
+    await screen.findByRole("list", { name: "Tasks" });
+    expect(screen.queryByRole("heading", { name: "Checks" })).toBeNull();
+    alone.unmount();
+
+    render(<Agents conversationId="shell-c1" onOpenChat={() => {}} onAsk={() => {}} />);
+    await screen.findByRole("list", { name: "To-dos" });
+    expect(screen.queryByRole("heading", { name: "Checks" })).toBeNull();
+    expect(api.shipStatus).not.toHaveBeenCalled();
   });
 
   it("reads nothing while its tab is not the one on screen, and reads when it shows", async () => {

@@ -347,6 +347,68 @@ pub struct Queue {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work_error: Option<String>,
     pub jobs: Vec<Job>,
+    /// The newest review of the session's change. It is read from disk, so
+    /// it is here after a relaunch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review: Option<ReviewView>,
+    /// Why the review could not be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_error: Option<String>,
+    /// A turn of the chat runs now.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub working: bool,
+}
+
+/// One finding of a review: "high", "medium", "low" or "info", and its text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewFinding {
+    pub severity: &'static str,
+    pub text: String,
+}
+
+/// A review as the Tasks panel shows it. Findings come most severe first; a
+/// "high" one is a blocker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewView {
+    pub findings: Vec<ReviewFinding>,
+    pub blockers: u32,
+    pub at_ms: u64,
+    /// False when the session had no approved plan to review against.
+    pub plan_given: bool,
+    /// True when the helper was shown only part of the change.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
+}
+
+/// The session's review record as the page shows it.
+fn review_view(conversation_id: &str) -> Result<Option<ReviewView>, String> {
+    use grokhub_core::findings::{Findings, Severity};
+    let Some(review) = grokhub_agent::review::review_for(conversation_id)? else {
+        return Ok(None);
+    };
+    let card = Findings::parse(&review.body).ok_or("the review's findings could not be read")?;
+    let findings = card
+        .items
+        .into_iter()
+        .map(|item| ReviewFinding {
+            severity: match item.severity {
+                Severity::High => "high",
+                Severity::Medium => "medium",
+                Severity::Low => "low",
+                Severity::Info => "info",
+            },
+            text: item.text,
+        })
+        .collect();
+    Ok(Some(ReviewView {
+        findings,
+        blockers: review.blockers,
+        at_ms: review.at_ms,
+        plan_given: review.plan_given,
+        cut: review.cut,
+    }))
 }
 
 /// The queued jobs, kept in memory for this run of the app as the cabin
@@ -403,6 +465,10 @@ pub fn queue(config_dir: &Path, conversation_id: &str) -> Queue {
         Err(err) => (Vec::new(), Some(err)),
     };
     let work = work_rows(&records, hub.as_ref().map(|hub| hub.nonce()), &rows);
+    let (review, review_error) = match review_view(conversation_id) {
+        Ok(review) => (review, None),
+        Err(err) => (None, Some(err)),
+    };
     let now_ms = grokhub_core::now_ms();
     let needs_you = crate::helper_asks::needs_you(conversation_id);
     let working = crate::helper_asks::in_turn(conversation_id);
@@ -444,6 +510,9 @@ pub fn queue(config_dir: &Path, conversation_id: &str) -> Queue {
         work,
         work_error,
         jobs: queued_jobs(),
+        review,
+        review_error,
+        working,
     }
 }
 
@@ -1284,6 +1353,141 @@ mod tests {
         let value = serde_json::to_value(&queue).unwrap();
         assert_eq!(value["work"], serde_json::json!([]));
         assert_eq!(value["workError"], serde_json::json!(queue.work_error));
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    /// Writes a chat's review record where the engine reads it.
+    fn save_review(cfg: &Path, session: &str, text: &str) {
+        let dir = cfg.join("helper-work").join(session);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("review.json"), text).unwrap();
+    }
+
+    #[test]
+    fn a_relaunched_chat_lists_its_review_with_blockers_first() {
+        let cfg = scratch("review");
+        let id = format!("queue-review-{}", grokhub_core::now_ms());
+        save_review(
+            &cfg,
+            &id,
+            &serde_json::json!({
+                "project": "/home/user/my-app",
+                "base": "1111111111111111111111111111111111111111",
+                "head": "2222222222222222222222222222222222222222",
+                "commits": ["2222222222222222222222222222222222222222"],
+                "tree": "3333333333333333333333333333333333333333",
+                "atMs": 1700000000000u64,
+                "planGiven": true,
+                "body": "Findings from this run\n\n- High: src/a.rs:3 the total is off by one\n- Info: README:1 reads well",
+                "blockers": 1,
+            })
+            .to_string(),
+        );
+        // No hub, no tasks: the record alone is what a relaunch has.
+        assert!(!grokhub_agent::session_is_live(&id));
+        let queue = queue(&cfg, &id);
+        assert_eq!(queue.review_error, None);
+        assert_eq!(
+            queue.review,
+            Some(ReviewView {
+                findings: vec![
+                    ReviewFinding {
+                        severity: "high",
+                        text: "src/a.rs:3 the total is off by one".into(),
+                    },
+                    ReviewFinding {
+                        severity: "info",
+                        text: "README:1 reads well".into(),
+                    },
+                ],
+                blockers: 1,
+                at_ms: 1_700_000_000_000,
+                plan_given: true,
+                cut: false,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&queue).unwrap()["review"],
+            serde_json::json!({
+                "findings": [
+                    {"severity": "high", "text": "src/a.rs:3 the total is off by one"},
+                    {"severity": "info", "text": "README:1 reads well"},
+                ],
+                "blockers": 1,
+                "atMs": 1_700_000_000_000u64,
+                "planGiven": true,
+            })
+        );
+        // A review of a change too long to show whole says so.
+        let cut = format!("queue-review-cut-{}", grokhub_core::now_ms());
+        save_review(
+            &cfg,
+            &cut,
+            &serde_json::json!({
+                "project": "/home/user/my-app",
+                "base": "1111111111111111111111111111111111111111",
+                "head": "1111111111111111111111111111111111111111",
+                "commits": [],
+                "tree": "3333333333333333333333333333333333333333",
+                "atMs": 1700000000000u64,
+                "planGiven": false,
+                "body": "Findings from this run\n\n- Info: README:1 reads well",
+                "blockers": 0,
+                "cut": true,
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            serde_json::to_value(super::queue(&cfg, &cut)).unwrap()["review"],
+            serde_json::json!({
+                "findings": [{"severity": "info", "text": "README:1 reads well"}],
+                "blockers": 0,
+                "atMs": 1_700_000_000_000u64,
+                "planGiven": false,
+                "cut": true,
+            })
+        );
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_chat_says_whether_a_turn_of_it_runs_now() {
+        let cfg = scratch("working");
+        let id = format!("queue-working-{}", grokhub_core::now_ms());
+        assert!(!queue(&cfg, &id).working);
+        crate::helper_asks::turn_started(&id);
+        let during = queue(&cfg, &id);
+        assert!(during.working);
+        assert_eq!(
+            serde_json::to_value(&during).unwrap()["working"],
+            serde_json::json!(true)
+        );
+        crate::helper_asks::turn_ended(&id);
+        let after = queue(&cfg, &id);
+        assert!(!after.working);
+        assert_eq!(serde_json::to_value(&after).unwrap().get("working"), None);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn an_unreadable_review_is_an_error_line_and_never_not_reviewed() {
+        let cfg = scratch("review-error");
+        let id = format!("queue-review-error-{}", grokhub_core::now_ms());
+        save_review(&cfg, &id, r#"{"project": "#);
+        let queue = queue(&cfg, &id);
+        assert_eq!(queue.review, None);
+        assert_eq!(
+            queue.review_error,
+            Some(format!(
+                "{}: EOF while parsing a value at line 1 column 12",
+                cfg.join("helper-work")
+                    .join(&id)
+                    .join("review.json")
+                    .display()
+            ))
+        );
+        let value = serde_json::to_value(&queue).unwrap();
+        assert_eq!(value["reviewError"], serde_json::json!(queue.review_error));
         let _ = std::fs::remove_dir_all(&cfg);
     }
 

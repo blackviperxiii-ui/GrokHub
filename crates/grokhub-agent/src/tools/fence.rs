@@ -121,8 +121,21 @@ fn first_marker(text: &str) -> Option<usize> {
     }
 }
 
+/// The workspace's own text handed to a helper as data, such as a diff of
+/// the project: fenced, so no line of it reads as ours. Like a file read in
+/// the workspace it is not outside text, so the run is not marked and no
+/// value in it is noted as one that came from outside.
+pub fn fence_workspace(text: &str) -> String {
+    let nonce = format!("{}{LOCAL_NONCE_TAIL}", run_nonce());
+    mark(HELPER_LOCAL, &nonce, text)
+}
+
 fn wrap(source: &str, nonce: &str, text: &str) -> String {
     crate::harness::provenance::note_outside(text);
+    mark(source, nonce, text)
+}
+
+fn mark(source: &str, nonce: &str, text: &str) -> String {
     let source = sanitize_source(source);
     let body = defang(text, nonce);
     note_fenced(&source);

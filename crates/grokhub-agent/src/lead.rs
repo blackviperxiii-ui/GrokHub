@@ -53,12 +53,16 @@ is not a git repository, run one writing helper at a time.
 failed and can't be done, set it to cancelled and say why.
 5. Make only small edits yourself. If a helper is refused, do what the refusal says, and tell \
 the person about any task that is left.
-6. When every task is closed, report what changed, what was checked, and what is left.";
+6. When every task is closed, report what changed, what was checked, and what is left.
+7. When every task is closed and all work is merged, start one helper with type review. Fix \
+each high finding through a helper, then review again. Never commit, push or open a pull \
+request: tell the person the change is ready to ship.";
 
 /// The note of a turn that does not plan. It claims no approval.
 pub(crate) const LEAD_NEXT: &str = "Keep working from the task list and hand open tasks to \
 helpers as before. For new work that is more than a small change, call enter_plan_mode and plan \
-it first.";
+it first. After merged work changes, start a helper with type review. Never commit, push or \
+open a pull request.";
 
 /// Lead sessions remembered; a full map starts over.
 const LEADS_CAP: usize = 256;
@@ -176,7 +180,9 @@ mod tests {
                  started as a helper for one task, ignore it and do that task. As a helper, do \
                  not call enter_plan_mode or exit_plan_mode.\nKeep working from the task list \
                  and hand open tasks to helpers as before. For new work that is more than a \
-                 small change, call enter_plan_mode and plan it first."
+                 small change, call enter_plan_mode and plan it first. After merged work \
+                 changes, start a helper with type review. Never commit, push or open a pull \
+                 request."
             )
         );
         set_lead_session(id, None);
@@ -218,6 +224,17 @@ mod tests {
              held or conflict is not done: tell the person. Work that conflicts can be \
              redone: its result says how. If the folder is not a git repository, run one \
              writing helper at a time.\n4. Read each result."
+        ));
+        assert!(LEAD_WORK.ends_with(
+            "\n6. When every task is closed, report what changed, what was checked, and what \
+             is left.\n7. When every task is closed and all work is merged, start one helper \
+             with type review. Fix each high finding through a helper, then review again. \
+             Never commit, push or open a pull request: tell the person the change is ready \
+             to ship."
+        ));
+        assert!(LEAD_NEXT.ends_with(
+            " After merged work changes, start a helper with type review. Never commit, push \
+             or open a pull request."
         ));
         assert!(!LEAD_NEXT.contains("approved"));
         assert!(!LEAD_PLAN.contains("approved"));

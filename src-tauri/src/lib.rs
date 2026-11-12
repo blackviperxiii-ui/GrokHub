@@ -28,6 +28,7 @@ pub mod command_box;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
 // old module names stay so the commands below and settings read the same.
 pub use grokhub_code::activity as code_activity;
+pub use grokhub_code::commit as code_commit;
 pub use grokhub_code::deploy as code_deploy;
 pub use grokhub_code::files as code_files;
 pub use grokhub_code::repo as code;
@@ -111,6 +112,7 @@ pub mod screenshot_offer;
 pub mod self_improve;
 pub mod settings;
 pub mod shell_update;
+pub mod ship_gate;
 pub mod skills;
 pub mod slash;
 pub mod slash_ops;
@@ -1657,6 +1659,20 @@ async fn stop_task(
     .await?
 }
 
+/// Tasks → the checks on the session's change before it can be committed.
+/// Read only: nothing is committed, staged or pushed. Desktop only: it reads
+/// the project folder and the keychain, and is not a web command.
+#[tauri::command]
+async fn ship_status(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+) -> Result<code_commit::ShipStatus, String> {
+    let dir = workspace_of(&state, Some(&conversation_id));
+    let config = state.config_dir.clone();
+    let cfg = current(&state).code_ship;
+    off_main(move || ship_gate::status(&config, &dir, &conversation_id, &cfg)).await
+}
+
 /// Tasks → Merge: a helper's work goes into the project folder. Desktop
 /// only: it is not a web command.
 #[tauri::command]
@@ -2538,27 +2554,32 @@ async fn code_builtins(state: State<'_, ShellState>) -> Result<Vec<code::Builtin
 }
 
 /// Code tab: the test command to show, and whether it still needs a confirm.
+/// With `conversation_id`, for the folder that session works in.
 #[tauri::command]
 async fn code_test_plan(
     state: State<'_, ShellState>,
     command: Option<String>,
+    conversation_id: Option<String>,
 ) -> Result<code_runs::Plan, String> {
-    let dir = workspace(&state);
+    let dir = workspace_of(&state, conversation_id.as_deref());
     let config = state.config_dir.clone();
     off_main(move || code_runs::plan(&config, &dir, command.as_deref(), code_runs::Mode::Auto))
         .await?
 }
 
 /// Code tab: run the test command. `confirmed` must be true when the store
-/// still wants a confirm for this command.
+/// still wants a confirm for this command. With `conversation_id`, in the
+/// folder that session works in. A run in a git repository that leaves the
+/// files as it found them is kept as the project's last test run.
 #[tauri::command]
 async fn code_test_run(
     app: AppHandle,
     state: State<'_, ShellState>,
     command: String,
     confirmed: bool,
+    conversation_id: Option<String>,
 ) -> Result<code_runs::RunResult, String> {
-    let dir = workspace(&state);
+    let dir = workspace_of(&state, conversation_id.as_deref());
     let config = state.config_dir.clone();
     off_main(move || {
         let result = code_runs::run(
@@ -6336,6 +6357,7 @@ pub fn run() {
             desktop_nyx_set_passthrough,
             get_queue,
             stop_task,
+            ship_status,
             merge_task_work,
             resume_task_work,
             discard_task_work,

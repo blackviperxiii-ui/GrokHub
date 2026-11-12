@@ -50,6 +50,7 @@ mod recovery;
 pub mod repair;
 mod research;
 mod retry;
+pub mod review;
 pub mod route;
 mod run;
 pub mod sandbox;
@@ -57,6 +58,7 @@ mod scan;
 pub mod self_manage;
 mod session;
 mod session_tools;
+pub mod ship_tree;
 mod skills;
 mod slash_parity;
 mod sse;
@@ -182,6 +184,6 @@ pub use tools::{
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};
 pub use work::{
-    discard_work, how_ended, merge_work, resume_work, why_held, work_for, By, Counts, Ended, Held,
-    Landing, Resume, Work, WorkState,
+    discard_work, how_ended, merge_work, resume_work, settled, why_held, work_for, By, Counts,
+    Ended, Held, Landing, Resume, Work, WorkState,
 };

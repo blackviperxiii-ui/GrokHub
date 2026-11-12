@@ -49,7 +49,7 @@ vi.mock("./Chat", async () => {
     embedded?: boolean;
     lead?: boolean;
     active?: boolean;
-    prefill?: { text: string; conversationId?: string };
+    prefill?: { text: string; conversationId?: string; send?: boolean };
     open?: { id: string };
     onConversation?: (id: string) => void;
     onBusy?: (busy: boolean) => void;
@@ -64,7 +64,7 @@ vi.mock("./Chat", async () => {
     return (
       <div data-testid="agent-chat" data-embedded={String(embedded)} data-lead={String(lead)} data-active={String(active)}>
         <span>session {id}</span>
-        <span>box [{prefill?.text ?? ""}]</span>
+        <span>{prefill?.send ? `sent [${prefill.text}]` : `box [${prefill?.text ?? ""}]`}</span>
         <span>deleted {deleted?.n ?? 0}</span>
         <button type="button" onClick={onRan}>
           stub slash
@@ -78,14 +78,24 @@ vi.mock("./Chat", async () => {
   return { Chat, newConversationId: () => `shell-new-${++made}` };
 });
 vi.mock("./Agents", () => ({
-  Agents: (p: { conversationId?: string; active?: boolean; live?: boolean; onOpenChat?: () => void }) => (
+  Agents: (p: {
+    conversationId?: string;
+    active?: boolean;
+    live?: boolean;
+    onOpenChat?: () => void;
+    onAsk?: (text: string) => void;
+  }) => (
     <div
       data-testid="agent-tasks"
       data-active={String(p.active)}
       data-live={String(p.live)}
       data-links={String(Boolean(p.onOpenChat))}
+      data-asks={String(Boolean(p.onAsk))}
     >
       tasks of {p.conversationId}
+      <button type="button" onClick={() => p.onAsk?.("review the change")}>
+        stub review
+      </button>
     </div>
   ),
 }));
@@ -832,6 +842,24 @@ describe("Code tab", () => {
     await waitFor(() => expect(api.codeSessionLead).toHaveBeenLastCalledWith("chat-7"));
     expect(chat).toHaveAttribute("data-lead", "false");
     expect(tasks).toHaveAttribute("data-live", "false");
+  });
+
+  it("the Tasks panel's ask is sent in the lead's own session, and a session with no lead has none", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.codeSessionLead.mockImplementation((id) => Promise.resolve(id === "shell-first"));
+    render(<Tab shown />);
+    const chat = screen.getByTestId("agent-chat");
+    const tasks = screen.getByTestId("agent-tasks");
+    expect(tasks).toHaveAttribute("data-asks", "false");
+    await waitFor(() => expect(tasks).toHaveAttribute("data-asks", "true"));
+    await userEvent.click(screen.getByRole("button", { name: "stub review" }));
+    // Sent, not left in the box, and the session is the one that was open.
+    expect(chat).toHaveTextContent("sent [review the change]");
+    expect(chat).toHaveTextContent("session shell-first");
+    expect(tasks).toHaveTextContent("tasks of shell-first");
+    await userEvent.click(screen.getByRole("button", { name: "stub open session" }));
+    await waitFor(() => expect(chat).toHaveTextContent("session chat-7"));
+    await waitFor(() => expect(tasks).toHaveAttribute("data-asks", "false"));
   });
 
   it("keeps the agent window mounted and idle while another tab shows", async () => {

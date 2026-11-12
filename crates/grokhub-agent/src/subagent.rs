@@ -100,7 +100,7 @@ pub fn drain_side_events() -> Vec<SideEvent> {
 
 pub fn spawn_schema() -> Value {
     // One fixed text, so a setting never rewrites the cached tool list.
-    let description = "Start a helper; do small or sequential work yourself. type explore: read-only, wide reading. general: your permissions. isolation worktree; redo: work key to redo. background: task id.";
+    let description = "Start a helper; do small or sequential work yourself. type explore: read-only, wide reading. review: read-only check of the change. general: your permissions. isolation worktree; redo: work key to redo. background: task id.";
     json!({
         "type": "function",
         "name": "spawn_subagent",
@@ -173,6 +173,9 @@ struct Spec {
     description: String,
     persona: String,
     explore: bool,
+    /// A review helper: an explore helper that is given the session's change
+    /// and whose findings are recorded.
+    review: bool,
     background: bool,
     worktree: bool,
     /// The key of the helper work this worktree helper redoes.
@@ -207,6 +210,17 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             ToolOutput::err("a helper cannot start worktree helpers; ask the lead to start it"),
             Usage::default(),
         );
+    }
+    // A review reads the whole change, so it waits for every helper's work.
+    if spec.review {
+        if let Err(open) = work::open_work(call.session) {
+            return (
+                ToolOutput::err(format!(
+                    "{open} Start the review once all helper work is merged or discarded."
+                )),
+                Usage::default(),
+            );
+        }
     }
     // Item 34: with boundary routing on, a general helper needs a brief and
     // runs fresh on the cheap lane rather than forking the chat.
@@ -311,7 +325,11 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         None => (call.workspace.to_path_buf(), None),
     };
     let conversation_id = format!("{}/{}", call.session, id);
-    let kind_name = if spec.explore { "explore" } else { "general" };
+    let kind_name = match (spec.review, spec.explore) {
+        (true, _) => "review",
+        (false, true) => "explore",
+        (false, false) => "general",
+    };
     // A plain general child of the chat forks it: same system, tools and
     // history, so its first request reuses the chat's cached prefix. An
     // explore child (other tools), a persona or a worktree starts fresh.
@@ -323,6 +341,26 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     .then(|| parent_request(call.session))
     .flatten()
     .filter(|req| req.model == call.model);
+    let prompt = if fork.is_some() {
+        fork_task(&spec.prompt)
+    } else {
+        let task = match redo_note {
+            Some(note) => format!("{}\n\n{note}", spec.prompt),
+            None => spec.prompt,
+        };
+        match parent_request(call.session).and_then(|req| known_context(&req.input)) {
+            Some(known) => format!("{task}\n\n{known}"),
+            None => task,
+        }
+    };
+    // A review helper has no shell: it is handed the approved plan and the
+    // session's change, with the lead's own words last.
+    let (prompt, review) = if spec.review {
+        let (task, run) = crate::review::begin(call.session, call.workspace, &prompt);
+        (task, Some(run))
+    } else {
+        (prompt, None)
+    };
     let job = ChildJob {
         client: Arc::clone(&client),
         permits: call
@@ -350,18 +388,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         policy: call.policy.cloned(),
         depth: call.depth.saturating_add(1),
         tasks: Arc::clone(&tasks),
-        prompt: if fork.is_some() {
-            fork_task(&spec.prompt)
-        } else {
-            let task = match redo_note {
-                Some(note) => format!("{}\n\n{note}", spec.prompt),
-                None => spec.prompt,
-            };
-            match parent_request(call.session).and_then(|req| known_context(&req.input)) {
-                Some(known) => format!("{task}\n\n{known}"),
-                None => task,
-            }
-        },
+        prompt,
         agent_id: id.clone(),
         kind_name: kind_name.to_string(),
         title: title.clone(),
@@ -374,6 +401,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         class: child_class(crate::route::live::current_class(), briefed),
         ticket,
         work: job_work,
+        review,
     };
     if spec.background {
         thread::spawn(move || run_job(job, None));
@@ -406,6 +434,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             text: "subagent ended without a result".into(),
             looked_at: Vec::new(),
             work: None,
+            findings: Vec::new(),
         }
     });
     (call.on_event)(LoopEvent::Task {
@@ -502,6 +531,8 @@ struct ChildJob {
     /// A worktree helper's record and the lock on its tree, held until its
     /// work is sealed.
     work: Option<(Work, work::Live)>,
+    /// A review helper's run, ended when the helper does.
+    review: Option<crate::review::Run>,
 }
 
 struct ChildDone {
@@ -512,6 +543,8 @@ struct ChildDone {
     looked_at: Vec<String>,
     /// A worktree helper's record once its work is sealed.
     work: Option<Box<Work>>,
+    /// Every findings card a review helper reported, in order.
+    findings: Vec<String>,
 }
 
 enum ChildNote {
@@ -552,6 +585,24 @@ fn run_job(mut job: ChildJob, tx: Option<Sender<ChildNote>>) {
             ),
         }
     });
+    // A review is recorded only when it ended on the change it began on.
+    // Its findings go to the lead with the helper's own words, whether or
+    // not they were recorded: the helper's last message need not repeat them.
+    let review_line = job.review.take().and_then(|run| {
+        let findings = crate::review::merged(&done.findings);
+        let line = run.end(
+            &job.parent_session,
+            &job.parent_workspace,
+            findings.as_deref(),
+            &done.stop,
+        );
+        if let Some(findings) = findings {
+            done.text = format!("{}\n\n{findings}", done.text.trim_end())
+                .trim_start()
+                .to_string();
+        }
+        line
+    });
     job.ticket.spent(
         done.usage
             .input_tokens
@@ -576,7 +627,7 @@ fn run_job(mut job: ChildJob, tx: Option<Sender<ChildNote>>) {
         }
     }
     // What became of the work is the last line, outside the fence.
-    if let Some(line) = work_line {
+    if let Some(line) = work_line.or(review_line) {
         if !done.text.is_empty() {
             done.text.push('\n');
         }
@@ -619,10 +670,12 @@ fn run_child_retrying(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDo
             text: String::new(),
             looked_at: Vec::new(),
             work: None,
+            findings: Vec::new(),
         },
         Err(_) => attempt().unwrap_or_else(|_| ChildDone {
             looked_at: Vec::new(),
             work: None,
+            findings: Vec::new(),
             stop: StopReason::Error(CRASHED_TWICE.into()),
             usage: Usage::default(),
             text: String::new(),
@@ -688,8 +741,16 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     };
     let background = job.background;
     let parent_session = job.parent_session.clone();
+    // A review helper's findings are kept for its record, every card of them.
+    let findings = std::cell::RefCell::new(Vec::new());
+    let keep = |ev: &LoopEvent| {
+        if let (Some(_), LoopEvent::Findings(body)) = (&job.review, ev) {
+            findings.borrow_mut().push(body.clone());
+        }
+    };
     let mut out = crate::run_loop(&input, &mut history, &job.prompt, None, &mut |ev| {
         job.tasks.note_step(&agent_id, &ev);
+        keep(&ev);
         emit_child(ev, background, &parent_session, tx)
     });
     let blocked =
@@ -698,6 +759,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     if let Some(reason) = blocked.filter(|_| matches!(out.stop, StopReason::EndTurn)) {
         let again = crate::run_loop(&input, &mut history, &reason, None, &mut |ev| {
             job.tasks.note_step(&agent_id, &ev);
+            keep(&ev);
             emit_child(ev, background, &parent_session, tx)
         });
         let _ = crate::hooks::on_subagent_stop(
@@ -723,6 +785,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         text: child_text(&history[own..]),
         looked_at: looked_at(&history[own..]),
         work: None,
+        findings: findings.into_inner(),
     }
 }
 
@@ -846,6 +909,7 @@ fn parse_spec(workspace: &Path, arguments: &str) -> Result<Spec, String> {
         other => return Err(format!("unknown isolation `{other}`")),
     };
     let explore = kind_is_explore(&value);
+    let review = kind_is_review(&value);
     if explore && worktree {
         return Err(
             "explore subagents are read-only and do not use worktree isolation; omit isolation or use type general"
@@ -873,11 +937,16 @@ fn parse_spec(workspace: &Path, arguments: &str) -> Result<Spec, String> {
             }
         }
     }
+    // The built-in reviewer, whatever persona was named.
+    if review {
+        persona = crate::review::REVIEW_PERSONA.to_string();
+    }
     Ok(Spec {
         prompt,
         description: text_field(&value, &["description"]),
         persona,
         explore,
+        review,
         background: bool_field(&value, &["background", "run_in_background"]),
         worktree,
         redo,
@@ -893,16 +962,16 @@ fn named_kind(value: &Value) -> String {
         .to_string()
 }
 
+/// An explore helper is read-only. A review helper is one too.
 fn kind_is_explore(value: &Value) -> bool {
-    let raw = ["type", "subagent_type", "agent_type"]
-        .iter()
-        .find_map(|key| value.get(*key).and_then(|item| item.as_str()));
     matches!(
-        raw.map(str::trim)
-            .map(|text| text.to_ascii_lowercase())
-            .as_deref(),
-        Some("explore")
+        named_kind(value).to_ascii_lowercase().as_str(),
+        "explore" | "review"
     )
+}
+
+fn kind_is_review(value: &Value) -> bool {
+    named_kind(value).eq_ignore_ascii_case("review")
 }
 
 fn text_field(value: &Value, keys: &[&str]) -> String {
@@ -3882,6 +3951,7 @@ mod tests {
                 text: "found two of three".into(),
                 looked_at: Vec::new(),
                 work: None,
+                findings: Vec::new(),
             }));
         });
         let past = std::time::Instant::now();
@@ -3889,6 +3959,389 @@ mod tests {
         assert!(timed_out);
         assert!(child.is_cancelled());
         assert_eq!(done.map(|d| d.text).as_deref(), Some("found two of three"));
+    }
+
+    #[test]
+    fn a_review_helper_is_read_only_and_always_the_built_in_reviewer() {
+        let spec = parse_spec(
+            Path::new("."),
+            r#"{"prompt":"check it","type":"Review","persona":"be kind"}"#,
+        )
+        .unwrap();
+        assert!(spec.review);
+        assert!(spec.explore);
+        assert_eq!(spec.persona, crate::review::REVIEW_PERSONA);
+        for key in ["subagent_type", "agent_type"] {
+            let args = json!({"prompt": "x", key: " review "}).to_string();
+            assert!(parse_spec(Path::new("."), &args).unwrap().review, "{key}");
+            assert!(spawn_is_explore("spawn_subagent", &args), "{key}");
+        }
+        let explore = parse_spec(Path::new("."), r#"{"prompt":"x","type":"explore"}"#).unwrap();
+        assert!(explore.explore && !explore.review);
+        assert_eq!(explore.persona, "");
+        let general = parse_spec(Path::new("."), r#"{"prompt":"x","type":"reviewer"}"#).unwrap();
+        assert!(!general.explore && !general.review);
+        let err = parse_spec(
+            Path::new("."),
+            &spawn_args("look", "review", false, "worktree"),
+        )
+        .err()
+        .unwrap_or_default();
+        assert!(err.contains("do not use worktree isolation"), "{err}");
+        // It starts in a read-only session, as an explore helper does.
+        let decision = crate::gate::decide_with(
+            &Gate::phase_readonly(),
+            "spawn_subagent",
+            r#"{"prompt":"look","type":"review"}"#,
+            false,
+            None,
+            Path::new("."),
+            None,
+        );
+        assert!(matches!(decision, Decision::Run));
+        assert!(spawn_schema()["description"]
+            .as_str()
+            .unwrap()
+            .contains(" review: read-only check of the change."));
+    }
+
+    /// What a review run leaves: the lead's tool outputs, what the helper
+    /// was sent on its first call (its tools, then each message), and the
+    /// session's review record.
+    struct Reviewed {
+        outputs: String,
+        tools: Vec<String>,
+        sent: Vec<String>,
+        review: Option<crate::review::Review>,
+        head: String,
+        project: PathBuf,
+    }
+
+    /// A lead in a project with one commit and one new file starts a review
+    /// helper. `helper(n, project)` is the helper's nth answer.
+    fn run_review(
+        tag: &str,
+        helper: impl Fn(u32, &Path) -> TurnOutput + Send + Sync + 'static,
+    ) -> Reviewed {
+        use crate::work::test_support::{git, git_repo};
+        let base = crate::work::test_support::scratch(tag);
+        let _config = crate::perm::ConfigGuard::set(base.join("cfg"));
+        let project = base.join("my-app");
+        std::fs::create_dir_all(&project).unwrap();
+        git_repo(&project);
+        let head = git(&project, &["rev-parse", "HEAD"]).trim().to_string();
+        let sid = session(tag);
+        crate::review::note_base(&sid, &project);
+        crate::review::save_plan(&sid, "Add a total.", "");
+        std::fs::write(project.join("total.txt"), "41\n").unwrap();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&sent);
+        let parent_id = sid.clone();
+        let folder = project.clone();
+        let client = fake(&sid, move |req, _cancel, n| {
+            if req.conversation_id != parent_id {
+                if n == 0 {
+                    *seen.lock().unwrap() = req
+                        .input
+                        .iter()
+                        .map(|item| crate::compact::message_text(item).to_string())
+                        .collect();
+                }
+                return Ok(helper(n, &folder));
+            }
+            if n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        r#"{"prompt":"CHECK-THE-TOTAL","type":"review","persona":"be kind"}"#,
+                    )],
+                    Usage::default(),
+                ));
+            }
+            Ok(text_turn("done", Usage::default()))
+        });
+        let (_out, history) = run_parent(
+            &client,
+            &project,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let tools = client.child_tools.lock().unwrap()[0].clone();
+        let sent = sent.lock().unwrap().clone();
+        Reviewed {
+            outputs: joined_outputs(&history),
+            tools,
+            sent,
+            review: crate::review::review_for(&sid).unwrap(),
+            head,
+            project,
+        }
+    }
+
+    fn report(findings: Value) -> TurnOutput {
+        calls_turn(
+            vec![call(
+                "f",
+                "report_findings",
+                &json!({ "findings": findings }).to_string(),
+            )],
+            Usage::default(),
+        )
+    }
+
+    fn one_blocker() -> TurnOutput {
+        report(json!([
+            {"severity": "low", "text": "README:1 says hi"},
+            {"severity": "high", "text": "total.txt:1 the total is 41, the plan says 42"},
+        ]))
+    }
+
+    #[test]
+    fn a_review_helper_gets_the_plan_and_the_change_and_its_findings_are_recorded() {
+        let ran = run_review("review-ok", |n, _project| match n {
+            // It may not write or run a command.
+            0 => calls_turn(
+                vec![
+                    call("w", "write", r#"{"path":"sneak.txt","content":"no"}"#),
+                    call(
+                        "c",
+                        "run_terminal_command",
+                        r#"{"command":"git commit -am x"}"#,
+                    ),
+                ],
+                Usage::default(),
+            ),
+            1 => one_blocker(),
+            _ => text_turn("One thing must be fixed.", Usage::default()),
+        });
+        for banned in ["write", "search_replace", "run_terminal_command"] {
+            assert!(
+                !ran.tools.iter().any(|name| name == banned),
+                "{:?}",
+                ran.tools
+            );
+        }
+        for kept in ["read_file", "grep", "report_findings"] {
+            assert!(ran.tools.iter().any(|name| name == kept), "{:?}", ran.tools);
+        }
+        assert!(!ran.project.join("sneak.txt").exists());
+        assert!(ran.outputs.contains(READ_ONLY_PHASE), "{}", ran.outputs);
+        // The persona is the built-in one, and the task ends with the lead's words.
+        let all = ran.sent.join("\n---\n");
+        assert!(all.contains(crate::review::REVIEW_PERSONA), "{all}");
+        assert!(!all.contains("be kind"), "{all}");
+        let task = ran.sent.last().expect("the task");
+        assert!(
+            task.starts_with(
+                "Approved plan:\nAdd a total.\n\nCommits made since this session began: none\n\n\
+                 Changed files (1):\nA total.txt\n\n\
+                 The change as a diff from the commit this session began at:\n"
+            ),
+            "{task}"
+        );
+        assert!(task.contains("\n+41\n"), "{task}");
+        assert!(
+            task.ends_with("\n\nNote from the lead:\nCHECK-THE-TOTAL"),
+            "{task}"
+        );
+        // The lead gets the helper's words and its findings in one fence.
+        assert!(
+            ran.outputs.contains("\nOne thing must be fixed.\n"),
+            "{}",
+            ran.outputs
+        );
+        assert!(
+            ran.outputs.contains(
+                "\n\nFindings from this run\n\n\
+                 - High: total.txt:1 the total is 41, the plan says 42\n\
+                 - Low: README:1 says hi\n<<<END_UNTRUSTED"
+            ),
+            "{}",
+            ran.outputs
+        );
+        assert!(
+            !ran.outputs.contains("No review was recorded"),
+            "{}",
+            ran.outputs
+        );
+        let review = ran.review.expect("a review");
+        assert_eq!(review.head, ran.head);
+        assert_eq!(review.base, ran.head);
+        assert_eq!(review.commits, Vec::<String>::new());
+        assert_eq!(review.blockers, 1);
+        assert!(review.plan_given);
+        assert_eq!(
+            review.body,
+            "Findings from this run\n\n\
+             - High: total.txt:1 the total is 41, the plan says 42\n\
+             - Low: README:1 says hi"
+        );
+        assert_eq!(
+            review.tree,
+            crate::ship_tree::tree_id(&ran.project).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_second_findings_card_adds_to_the_first_and_the_lead_gets_them_all() {
+        // The helper reports twice and ends with a few words that name no
+        // finding.
+        let ran = run_review("review-twice", |n, _project| match n {
+            0 => one_blocker(),
+            1 => report(json!([{"severity": "info", "text": "README:1 the rest is fine"}])),
+            _ => text_turn("Reported.", Usage::default()),
+        });
+        let all = "Findings from this run\n\n\
+                   - High: total.txt:1 the total is 41, the plan says 42\n\
+                   - Low: README:1 says hi\n\
+                   - Info: README:1 the rest is fine";
+        let review = ran.review.expect("a review");
+        assert_eq!(review.blockers, 1);
+        assert_eq!(review.body, all);
+        assert!(
+            ran.outputs
+                .contains(&format!("\nReported.\n\n{all}\n<<<END_UNTRUSTED")),
+            "{}",
+            ran.outputs
+        );
+        assert!(
+            !ran.outputs.contains("No review was recorded"),
+            "{}",
+            ran.outputs
+        );
+    }
+
+    #[test]
+    fn a_review_waits_for_helper_work_that_is_not_merged_yet() {
+        use crate::work::test_support::git_repo;
+        let base = crate::work::test_support::scratch("review-open-work");
+        let _config = crate::perm::ConfigGuard::set(base.join("cfg"));
+        let project = base.join("my-app");
+        std::fs::create_dir_all(&project).unwrap();
+        git_repo(&project);
+        let sid = session("review-open-work");
+        crate::review::note_base(&sid, &project);
+        let parent_id = sid.clone();
+        let helpers = Arc::new(Mutex::new(Vec::new()));
+        let started = Arc::clone(&helpers);
+        let client = fake(&sid, move |req, _cancel, n| {
+            if req.conversation_id != parent_id {
+                // A worktree helper writes a file and ends; a review helper
+                // would report.
+                started.lock().unwrap().push(req.conversation_id.clone());
+                return Ok(match n {
+                    0 => calls_turn(
+                        vec![call(
+                            "w",
+                            "write",
+                            r#"{"path":"new.txt","content":"new\n"}"#,
+                        )],
+                        Usage::default(),
+                    ),
+                    _ => text_turn("wrote it", Usage::default()),
+                });
+            }
+            Ok(match n {
+                0 => calls_turn(
+                    vec![call(
+                        "a",
+                        "spawn_subagent",
+                        &spawn_args("write new.txt", "general", false, "worktree"),
+                    )],
+                    Usage::default(),
+                ),
+                1 => calls_turn(
+                    vec![call(
+                        "b",
+                        "spawn_subagent",
+                        r#"{"prompt":"check it","type":"review"}"#,
+                    )],
+                    Usage::default(),
+                ),
+                _ => text_turn("done", Usage::default()),
+            })
+        });
+        let (_out, history) = run_parent(
+            &client,
+            &project,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let outputs = joined_outputs(&history);
+        assert!(
+            outputs.contains(
+                "Helper work is waiting to be merged. Start the review once all helper work is \
+                 merged or discarded."
+            ),
+            "{outputs}"
+        );
+        // Only the worktree helper ran.
+        let mut ran = helpers.lock().unwrap().clone();
+        ran.dedup();
+        assert_eq!(ran, [format!("{sid}/s1")]);
+        assert_eq!(crate::review::review_for(&sid), Ok(None));
+    }
+
+    #[test]
+    fn a_review_helper_that_reports_nothing_leaves_no_record() {
+        let ran = run_review("review-silent", |_n, _project| {
+            text_turn("Looks fine to me.", Usage::default())
+        });
+        assert_eq!(ran.review, None);
+        assert!(
+            ran.outputs.contains(
+                "\nNo review was recorded: the helper reported no findings.\nstatus: done\n"
+            ),
+            "{}",
+            ran.outputs
+        );
+    }
+
+    #[test]
+    fn a_file_changed_while_the_review_ran_leaves_no_record() {
+        let ran = run_review("review-edit", |n, project| match n {
+            0 => {
+                std::fs::write(project.join("total.txt"), "42\n").unwrap();
+                one_blocker()
+            }
+            _ => text_turn("Reviewed.", Usage::default()),
+        });
+        assert_eq!(ran.review, None);
+        assert!(
+            ran.outputs.contains(
+                "\nNo review was recorded: files changed while the review ran.\nstatus: done\n"
+            ),
+            "{}",
+            ran.outputs
+        );
+    }
+
+    #[test]
+    fn a_commit_made_while_the_review_ran_leaves_no_record() {
+        let ran = run_review("review-commit", |n, project| match n {
+            0 => {
+                use crate::work::test_support::git;
+                git(project, &["add", "total.txt"]);
+                git(project, &["commit", "-m", "sneaked in"]);
+                one_blocker()
+            }
+            _ => text_turn("Reviewed.", Usage::default()),
+        });
+        assert_eq!(ran.review, None);
+        assert!(
+            ran.outputs.contains(
+                "\nNo review was recorded: the branch moved while the review ran.\nstatus: done\n"
+            ),
+            "{}",
+            ran.outputs
+        );
     }
 
     #[test]

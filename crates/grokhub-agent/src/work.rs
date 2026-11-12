@@ -594,6 +594,12 @@ pub(crate) fn run(cmd: Command) -> Result<GitOut, String> {
     run_within(cmd, None, GIT_LIMIT)
 }
 
+/// [`run`] for a call that reads `input`.
+pub(crate) fn run_fed(cmd: Command, input: &[u8]) -> Result<GitOut, String> {
+    let mut feed = |pipe: &mut dyn Write| pipe.write_all(input);
+    run_within(cmd, Some(&mut feed), GIT_LIMIT)
+}
+
 /// Runs `cmd`. `feed` writes its input; when `feed` fails the process is
 /// killed, so a half-written stream is never used. After `limit` the process
 /// is killed and the call is an error.
@@ -692,17 +698,45 @@ fn scrub(cmd: &mut Command, inherited: impl Iterator<Item = OsString>) {
 /// A git call against the person's project. The project top is the current
 /// directory and `GIT_DIR` is not set, so git finds the repository itself:
 /// a project that is a linked worktree uses its own HEAD and index. Only
-/// `rev-parse`, `ls-files`, `worktree add --no-checkout --detach` and
-/// `read-tree HEAD` are ever run this way.
+/// these are ever run this way. Here: `rev-parse`, `ls-files`,
+/// `worktree add --no-checkout --detach` and `read-tree HEAD`. In
+/// `ship_tree.rs`, none of which writes the project's index, refs or
+/// objects: `rev-parse`, `symbolic-ref` (read), `config --list`,
+/// `config --get`, `remote get-url`, `merge-base --is-ancestor`, `rev-list`,
+/// `ls-files -v`, `diff-tree`, `cat-file --batch`, and, with an index and an
+/// object folder of their own in the config folder, `read-tree`, `add -A` and
+/// `write-tree`.
+///
+/// None of them talks to a remote, so every transport is off: a repository
+/// whose own config names a promisor remote cannot make a read fetch a
+/// missing object through a program of its choosing. A grafts file is not
+/// read, so the history is the one the commits themselves record, which is
+/// the one a push sends.
 pub(crate) fn project_git(top: &Path) -> Command {
     let mut cmd = grokhub_core::git_cmd::git();
     scrub(&mut cmd, std::env::vars_os().map(|(name, _)| name));
-    cmd.current_dir(top)
+    cmd.args(NO_TRANSPORT)
+        .current_dir(top)
         .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .env("GIT_GRAFT_FILE", NO_FILE)
+        .env("GIT_NO_LAZY_FETCH", "1")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0");
     cmd
 }
+
+/// No protocol is allowed, and `ext` (which runs a command line) is refused
+/// by its own key as well, because a `protocol.<name>.allow` in the
+/// repository's config would beat the general one.
+const NO_TRANSPORT: [&str; 4] = [
+    "-c",
+    "protocol.allow=never",
+    "-c",
+    "protocol.ext.allow=never",
+];
+
+/// The system's empty file.
+const NO_FILE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 /// The oldest git these calls work with (`--attr-source`).
 const GIT_MIN: (u32, u32) = (2, 41);
@@ -1645,6 +1679,73 @@ fn busy(project: &Project) -> Result<bool, String> {
     let mut cmd = project_git(&project.top);
     cmd.args(["ls-files", "-u", "-z"]);
     Ok(!run(cmd)?.ok("ls-files")?.is_empty())
+}
+
+/// `Ok` when no helper work of this chat is still open and the project in
+/// `folder` is in the middle of nothing: the change in the folder is whole
+/// and can be reviewed and shipped. Otherwise the sentence that says what
+/// is in the way.
+pub fn settled(session: &str, folder: &Path) -> Result<(), String> {
+    settled_in(&root(), session, folder)
+}
+
+/// `Ok` when no helper work of this chat is still open: none is being
+/// written, waits for a merge, is in conflict or held, or is part way
+/// through a merge. Otherwise the sentence that says which.
+pub(crate) fn open_work(session: &str) -> Result<Vec<Work>, String> {
+    open_work_in(&root(), session)
+}
+
+fn open_work_in(root: &Path, session: &str) -> Result<Vec<Work>, String> {
+    let list = records_for(root, session)
+        .map_err(|err| format!("The helper work list could not be read: {}", plain(&err)))?;
+    for work in &list {
+        if work.landing.is_some() {
+            return Err(
+                "A merge of helper work stopped part way. Finish it or put the files back.".into(),
+            );
+        }
+        let open = match &work.state {
+            WorkState::Opening | WorkState::Running => "A helper is still working.",
+            WorkState::Ready => "Helper work is waiting to be merged.",
+            WorkState::Conflict { .. } => {
+                "Helper work has a conflict. Merge it again or discard it."
+            }
+            WorkState::Held { .. } => "Helper work is held. Merge or discard it.",
+            WorkState::Empty | WorkState::Merged | WorkState::Discarded => continue,
+        };
+        return Err(open.into());
+    }
+    Ok(list)
+}
+
+fn settled_in(root: &Path, session: &str, folder: &Path) -> Result<(), String> {
+    let list = open_work_in(root, session)?;
+    let unread = |err: String| {
+        format!(
+            "This project's git folder could not be read: {}",
+            plain(&err)
+        )
+    };
+    let project = project_of(folder).map_err(|err| match err.as_str() {
+        NOT_A_REPO => "This folder is not a git repository.".to_string(),
+        NO_COMMITS => "This repository has no commits.".to_string(),
+        _ => unread(err),
+    })?;
+    if list
+        .iter()
+        .any(|work| !crate::ship_tree::same_folder(&project.top, &work.project))
+    {
+        return Err("This session has helper work from another project folder.".into());
+    }
+    if busy(&project).map_err(unread)? {
+        return Err(
+            "The project is in the middle of a merge or rebase, or has unresolved conflicts. \
+             Finish or abort it first."
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 /// The project's tracked files. A snapshot takes these even when a pattern
@@ -3384,7 +3485,7 @@ fn discard(root: &Path, session: &str, key: &str) -> Result<Work, String> {
 /// harness's own words. A helper chooses its file names, so a line break or
 /// another control character is written as an escape, and the text is cut
 /// at 200 characters.
-fn plain(text: &str) -> String {
+pub(crate) fn plain(text: &str) -> String {
     const MAX: usize = 200;
     let mut out = String::new();
     for (count, c) in text.chars().enumerate() {
@@ -7061,6 +7162,176 @@ mod tests {
             )
         );
         assert!(!root.join("chat").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // -- settled ------------------------------------------------------------
+
+    /// A record of `proj` in `state`, written to the chat's list.
+    fn recorded(root: &Path, proj: &Path, key: &str, state: WorkState) -> Work {
+        let mut work = sample(key);
+        work.project = proj.to_path_buf();
+        work.common = proj.join(".git");
+        work.state = state;
+        put(root, "chat", &work).unwrap();
+        work
+    }
+
+    fn unsettled(root: &Path, proj: &Path) -> String {
+        settled_in(root, "chat", proj).unwrap_err()
+    }
+
+    #[test]
+    fn a_project_with_no_open_helper_work_is_settled() {
+        let (base, proj, root) = project("settled");
+        assert_eq!(settled_in(&root, "chat", &proj), Ok(()));
+        recorded(&root, &proj, "k1", WorkState::Merged);
+        recorded(&root, &proj, "k2", WorkState::Discarded);
+        recorded(&root, &proj, "k3", WorkState::Empty);
+        assert_eq!(settled_in(&root, "chat", &proj), Ok(()));
+        // A child's id reads its root session's list, and a subfolder is in
+        // the same project.
+        std::fs::create_dir_all(proj.join("src")).unwrap();
+        assert_eq!(settled_in(&root, "chat/s2", &proj.join("src")), Ok(()));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn work_that_is_opening_is_not_settled() {
+        let (base, proj, root) = project("settled-opening");
+        recorded(&root, &proj, "k1", WorkState::Merged);
+        recorded(&root, &proj, "k2", WorkState::Opening);
+        assert_eq!(unsettled(&root, &proj), "A helper is still working.");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn work_that_is_running_is_not_settled() {
+        let (base, proj, root) = project("settled-running");
+        recorded(&root, &proj, "k1", WorkState::Running);
+        let live = Live::take(&root, "chat", "k1").unwrap();
+        assert_eq!(unsettled(&root, &proj), "A helper is still working.");
+        // Its lock is free: the app closed under it, and the work is held.
+        drop(live);
+        assert_eq!(
+            unsettled(&root, &proj),
+            "Helper work is held. Merge or discard it."
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn work_that_waits_for_a_merge_is_not_settled() {
+        let (base, proj, root) = project("settled-ready");
+        recorded(&root, &proj, "k1", WorkState::Ready);
+        assert_eq!(
+            unsettled(&root, &proj),
+            "Helper work is waiting to be merged."
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn work_with_a_conflict_is_not_settled() {
+        let (base, proj, root) = project("settled-conflict");
+        recorded(
+            &root,
+            &proj,
+            "k1",
+            WorkState::Conflict {
+                files: vec!["a.txt".into()],
+            },
+        );
+        assert_eq!(
+            unsettled(&root, &proj),
+            "Helper work has a conflict. Merge it again or discard it."
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn work_that_is_held_is_not_settled() {
+        let (base, proj, root) = project("settled-held");
+        recorded(&root, &proj, "k1", WorkState::Held { why: Held::Partial });
+        assert_eq!(
+            unsettled(&root, &proj),
+            "Helper work is held. Merge or discard it."
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_merge_stopped_part_way_is_not_settled() {
+        let (base, proj, root) = project("settled-landing");
+        let mut work = recorded(&root, &proj, "k1", WorkState::Merged);
+        work.landing = Some(Landing {
+            before: "b0".into(),
+            merged: "m0".into(),
+            paths: vec!["a.txt".into()],
+            made: Vec::new(),
+            from: Box::new(WorkState::Ready),
+            started_ms: 1,
+        });
+        put(&root, "chat", &work).unwrap();
+        assert_eq!(
+            unsettled(&root, &proj),
+            "A merge of helper work stopped part way. Finish it or put the files back."
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn work_from_another_project_folder_is_not_settled() {
+        let (base, proj, root) = project("settled-elsewhere");
+        let other = base.join("other-app");
+        std::fs::create_dir_all(&other).unwrap();
+        git_repo(&other);
+        recorded(&root, &other, "k1", WorkState::Merged);
+        assert_eq!(
+            unsettled(&root, &proj),
+            "This session has helper work from another project folder."
+        );
+        assert_eq!(settled_in(&root, "chat", &other), Ok(()));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_project_in_the_middle_of_a_merge_is_not_settled() {
+        let (base, proj, root) = project("settled-busy");
+        write(&proj.join(".git/MERGE_HEAD"), "0123abcd\n");
+        assert_eq!(
+            unsettled(&root, &proj),
+            "The project is in the middle of a merge or rebase, or has unresolved conflicts. \
+             Finish or abort it first."
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_work_list_that_cannot_be_read_is_not_settled() {
+        let (base, proj, root) = project("settled-unread");
+        write(&root.join("chat/work.json"), "{ not json");
+        let err = unsettled(&root, &proj);
+        let start = format!(
+            "The helper work list could not be read: {}: ",
+            root.join("chat/work.json").display()
+        );
+        assert!(err.starts_with(&start), "{err}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_folder_with_no_repository_or_no_commits_is_not_settled() {
+        let base = scratch("settled-norepo");
+        let root = base.join("cfg").join("helper-work");
+        let dir = base.join("plain");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            unsettled(&root, &dir),
+            "This folder is not a git repository."
+        );
+        git(&dir, &["init"]);
+        assert_eq!(unsettled(&root, &dir), "This repository has no commits.");
         let _ = std::fs::remove_dir_all(&base);
     }
 

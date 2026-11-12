@@ -1126,6 +1126,10 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             SessionMode::Chat => Some(grokhub_agent::LeadPhase::Work),
         };
         grokhub_agent::set_lead_session(&conversation_id, lead_phase);
+        // Where a lead session began: a review reads its change from here.
+        if lead_phase.is_some() {
+            grokhub_agent::review::note_base(&conversation_id, &route.workspace);
+        }
         let mut plan_watch = crate::lead::PlanWatch::default();
         crate::helper_asks::turn_started(&conversation_id);
         // A side answer on a lead session moves its tasks' state too.

@@ -3133,6 +3133,30 @@ export interface Queue {
   work?: HelperWork[];
   /** Why the helper work list could not be read. */
   workError?: string;
+  /** The newest review of the session's change; none before the first. */
+  review?: Review;
+  /** Why the review could not be read. */
+  reviewError?: string;
+  /** A turn of the chat runs now. */
+  working?: boolean;
+}
+
+/** One finding of a review. A "high" one is a blocker. */
+export interface ReviewFinding {
+  severity: "high" | "medium" | "low" | "info";
+  text: string;
+}
+
+/** A review helper's findings on the session's change (src-tauri/src/queue.rs),
+ * most severe first. */
+export interface Review {
+  findings: ReviewFinding[];
+  blockers: number;
+  atMs: number;
+  /** False when the session had no approved plan to review against. */
+  planGiven: boolean;
+  /** True when the helper was shown only part of the change. Left out when not. */
+  cut?: boolean;
 }
 
 export function getQueue(conversationId: string): Promise<Queue> {
@@ -3145,6 +3169,50 @@ export function stopTask(
   taskId?: string,
 ): Promise<Queue> {
   return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
+}
+
+/** How the session's review stands against the change that is there now.
+ * "stale": a file, HEAD or a commit differs from what the review read. */
+export type ReviewCheck = { state: "none" | "stale" | "clean" } | { state: "blockers"; count: number };
+
+/** How the project's tests stand against the change that is there now.
+ * "noCommand" does not block. */
+export type TestsCheck =
+  | { state: "noCommand" }
+  | { state: "notRun" | "stale" | "passed"; command: string }
+  | { state: "failed"; command: string; exit: number };
+
+/** One place the secret scan flagged. It never carries the line's text. */
+export interface SecretHit {
+  path: string;
+  /** None for a file flagged by its name. */
+  line: number | null;
+  kind: "name" | "held" | "shape";
+  /** The session commit that added it; none for the uncommitted change. */
+  commit: string | null;
+}
+
+export interface ShipChecks {
+  /** None on a detached HEAD. */
+  branch: string | null;
+  review: ReviewCheck;
+  tests: TestsCheck;
+  /** None when the scan could not run. */
+  secrets: SecretHit[] | null;
+}
+
+/** Whether the session's change could be committed
+ * (crates/grokhub-code/src/commit.rs). */
+export interface ShipStatus {
+  /** One sentence for each thing in the way; empty when nothing is. */
+  blocked: string[];
+  /** None when the project could not be read at all. */
+  checks: ShipChecks | null;
+}
+
+/** Tasks: the checks on the session's change. Read only; desktop only. */
+export function shipStatus(conversationId: string): Promise<ShipStatus> {
+  return invoke<ShipStatus>("ship_status", { conversationId });
 }
 
 /** Merges a helper's work into the project folder, as uncommitted changes.
@@ -3901,6 +3969,9 @@ export interface CodeTestResult {
   exit: number;
   output: string;
   cut: boolean;
+  /** The run changed a file of the project, so it does not count as a run of
+   * the change that is there now. */
+  changedFiles: boolean;
 }
 
 /** Settings → Code: the remembered test command for this project, if any. */
@@ -3916,15 +3987,18 @@ export interface CodeRunChunk {
   cut: boolean;
 }
 
-export function codeTestPlan(command?: string | null): Promise<CodeTestPlan> {
-  return invoke<CodeTestPlan>("code_test_plan", { command: command ?? null });
+/** With `conversationId`, for the folder that session works in. */
+export function codeTestPlan(command?: string | null, conversationId?: string): Promise<CodeTestPlan> {
+  return invoke<CodeTestPlan>("code_test_plan", { command: command ?? null, conversationId: conversationId ?? null });
 }
 
+/** With `conversationId`, in the folder that session works in. */
 export function codeTestRun(
   command: string,
   confirmed: boolean,
+  conversationId?: string,
 ): Promise<CodeTestResult> {
-  return invoke<CodeTestResult>("code_test_run", { command, confirmed });
+  return invoke<CodeTestResult>("code_test_run", { command, confirmed, conversationId: conversationId ?? null });
 }
 
 export function codeTestRemembered(): Promise<CodeTestRemembered> {

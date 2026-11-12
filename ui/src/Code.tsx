@@ -107,6 +107,12 @@ export function Code({
     codeSessionBind(id).then(show, show);
   }, []);
 
+  /** A message to the lead, sent in the session the agent window shows. */
+  const askLead = useCallback((text: string) => {
+    const id = sessionNow.current;
+    if (id) setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, send: true, conversationId: id }));
+  }, []);
+
   /** A saved session. The Chat tab keeps the one it has open; any other
    * takes its folder first, so opening it is not the Chat tab's last chat. */
   function openSession(id: string) {
@@ -203,7 +209,7 @@ export function Code({
           onOpenPalette={onOpenPalette}
           grokSignIn={grokSignIn}
         />
-        <Agents conversationId={session} active={shown} live={lead} />
+        <Agents conversationId={session} active={shown} live={lead} onAsk={lead ? askLead : undefined} />
       </aside>
     </div>
   );
