@@ -1951,6 +1951,79 @@ fn wipe_personal(state: State<'_, ShellState>) -> Result<memory::Wiped, String> 
     memory::wipe(&workspace(&state))
 }
 
+#[tauri::command]
+fn get_memory_files() -> Result<memory::MemoryFiles, String> {
+    memory::load_files()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryFileSaved {
+    files: memory::MemoryFiles,
+    redacted: bool,
+}
+
+#[tauri::command]
+fn save_memory_file(
+    name: String,
+    text: String,
+    base: String,
+) -> Result<MemoryFileSaved, String> {
+    let (files, redacted) = memory::save_file(&name, &text, &base)?;
+    Ok(MemoryFileSaved { files, redacted })
+}
+
+#[tauri::command]
+fn restore_memory_file(name: String) -> Result<memory::MemoryFiles, String> {
+    memory::restore_file(&name)
+}
+
+#[tauri::command]
+fn reflect_memory(
+    state: State<'_, ShellState>,
+    conversation_id: Option<String>,
+) -> Result<memory::ReflectResult, String> {
+    memory::reflect(
+        &state.config_dir,
+        conversation_id.as_deref(),
+    )
+}
+
+#[tauri::command]
+fn tidy_memory_ledger() -> Result<memory::MemoryFiles, String> {
+    memory::tidy_ledger()
+}
+
+#[tauri::command]
+fn apply_memory_raw_tidy() -> Result<memory::MemoryFiles, String> {
+    memory::apply_raw_tidy()
+}
+
+#[tauri::command]
+fn dismiss_memory_raw_tidy() -> Result<memory::MemoryFiles, String> {
+    memory::dismiss_raw_tidy()
+}
+
+#[tauri::command]
+fn get_memory_retention() -> memory::RetentionSetting {
+    memory::retention_setting()
+}
+
+#[tauri::command]
+fn set_memory_retention(days: u32) -> Result<memory::RetentionSetting, String> {
+    memory::set_retention(days)
+}
+
+#[tauri::command]
+fn get_chat_archive() -> memory::ArchiveSetting {
+    memory::archive_setting()
+}
+
+#[tauri::command]
+fn set_chat_archive(days: u32) -> Result<memory::ArchiveSetting, String> {
+    memory::set_archive(days)
+}
+
 /// Every connector call can wait on a server's slot while chat or a check
 /// holds it for up to the startup or tool timeout, so all of them run off
 /// the main thread.
@@ -4922,6 +4995,21 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "text")?,
             arg(args, "group")?,
         )?),
+        "get_memory_files" => out(get_memory_files()?),
+        "save_memory_file" => out(save_memory_file(
+            arg(args, "name")?,
+            arg(args, "text")?,
+            arg(args, "base")?,
+        )?),
+        "restore_memory_file" => out(restore_memory_file(arg(args, "name")?)?),
+        "reflect_memory" => out(reflect_memory(state, arg(args, "conversationId")?)?),
+        "tidy_memory_ledger" => out(tidy_memory_ledger()?),
+        "apply_memory_raw_tidy" => out(apply_memory_raw_tidy()?),
+        "dismiss_memory_raw_tidy" => out(dismiss_memory_raw_tidy()?),
+        "get_memory_retention" => out(get_memory_retention()),
+        "set_memory_retention" => out(set_memory_retention(arg(args, "days")?)?),
+        "get_chat_archive" => out(get_chat_archive()),
+        "set_chat_archive" => out(set_chat_archive(arg(args, "days")?)?),
         "list_connectors" => out(block_on(list_connectors(state))?),
         "check_connectors" => out(block_on(check_connectors(state))?),
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
@@ -5621,6 +5709,17 @@ pub fn run() {
             add_personal_fact,
             export_personal,
             wipe_personal,
+            get_memory_files,
+            save_memory_file,
+            restore_memory_file,
+            reflect_memory,
+            tidy_memory_ledger,
+            apply_memory_raw_tidy,
+            dismiss_memory_raw_tidy,
+            get_memory_retention,
+            set_memory_retention,
+            get_chat_archive,
+            set_chat_archive,
             list_connectors,
             check_connectors,
             restart_connector,

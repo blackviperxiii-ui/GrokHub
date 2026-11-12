@@ -956,6 +956,96 @@ export function wipePersonal(): Promise<PersonalWiped> {
   return invoke<PersonalWiped>("wipe_personal");
 }
 
+/** SOUL / USER / MEMORY tabs in the config memory folder. */
+export interface MemoryFiles {
+  soul: string;
+  user: string;
+  memory: string;
+  soulPath: string;
+  userPath: string;
+  memoryPath: string;
+  soulPrev: boolean;
+  userPrev: boolean;
+  memoryPrev: boolean;
+  /** Old chat lines still in MEMORY.md, offered once for removal. */
+  rawLines: string[];
+  rawTidyDone: boolean;
+}
+
+export type MemoryTab = "SOUL.md" | "USER.md" | "MEMORY.md";
+
+export function getMemoryFiles(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("get_memory_files");
+}
+
+export function saveMemoryFile(
+  name: MemoryTab,
+  text: string,
+  base: string,
+): Promise<{ files: MemoryFiles; redacted: boolean }> {
+  return invoke("save_memory_file", { name, text, base });
+}
+
+export function restoreMemoryFile(name: MemoryTab): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("restore_memory_file", { name });
+}
+
+export interface ReflectResult {
+  status: string;
+  diff: string;
+  files: MemoryFiles;
+}
+
+/** Reflect over recent chat; returns what was written. */
+export function reflectMemory(conversationId?: string): Promise<ReflectResult> {
+  return invoke<ReflectResult>("reflect_memory", { conversationId });
+}
+
+export function tidyMemoryLedger(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("tidy_memory_ledger");
+}
+
+export function applyMemoryRawTidy(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("apply_memory_raw_tidy");
+}
+
+export function dismissMemoryRawTidy(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("dismiss_memory_raw_tidy");
+}
+
+export interface DaysChoice {
+  days: number;
+  label: string;
+}
+
+export interface MemoryRetention {
+  days: number;
+  label: string;
+  choices: DaysChoice[];
+}
+
+export function getMemoryRetention(): Promise<MemoryRetention> {
+  return invoke<MemoryRetention>("get_memory_retention");
+}
+
+export function setMemoryRetention(days: number): Promise<MemoryRetention> {
+  return invoke<MemoryRetention>("set_memory_retention", { days });
+}
+
+export interface ChatArchive {
+  days: number;
+  label: string;
+  choices: DaysChoice[];
+}
+
+export function getChatArchive(): Promise<ChatArchive> {
+  return invoke<ChatArchive>("get_chat_archive");
+}
+
+export function setChatArchive(days: number): Promise<ChatArchive> {
+  return invoke<ChatArchive>("set_chat_archive", { days });
+}
+
 /** One MCP server from `mcp.json`, as the Connectors page shows it. */
 export interface ConnectorRow {
   name: string;

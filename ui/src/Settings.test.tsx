@@ -41,6 +41,8 @@ vi.mock("./Learned", () => ({ Learned: () => <p>Learned panel</p> }));
 vi.mock("./Permissions", () => ({ Permissions: () => <p>Permissions panel</p> }));
 // Behavior, Privacy and Background have their own tests.
 vi.mock("./WorkboardTidy", () => ({ WorkboardTidy: () => <p>Workboard tidy</p> }));
+vi.mock("./MemoryRetention", () => ({ MemoryRetention: () => <p>Memory retention</p> }));
+vi.mock("./ChatArchive", () => ({ ChatArchive: () => <p>Chat archive</p> }));
 vi.mock("./ScreenshotExplain", () => ({ ScreenshotExplain: () => <p>Screenshot explain row</p> }));
 vi.mock("./GameWatch", () => ({ GameWatch: () => <p>Game watcher row</p> }));
 vi.mock("./SteamPulseSources", () => ({ SteamPulseSources: () => <p>Steam Pulse sources</p> }));
