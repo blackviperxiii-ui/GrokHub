@@ -1,10 +1,11 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryHit, MemoryNotes } from "./api";
+import type { MemoryFiles, MemoryHit, MemoryNotes, ReflectResult } from "./api";
 
 const api = vi.hoisted(() => ({
   getMemory: vi.fn<() => Promise<MemoryNotes>>(),
+  getMemoryFiles: vi.fn<() => Promise<MemoryFiles>>(),
   saveMemory: vi.fn<
     (
       global: boolean,
@@ -12,6 +13,18 @@ const api = vi.hoisted(() => ({
       base: string,
     ) => Promise<{ notes: MemoryNotes; redacted: boolean }>
   >(),
+  saveMemoryFile: vi.fn<
+    (
+      name: string,
+      text: string,
+      base: string,
+    ) => Promise<{ files: MemoryFiles; redacted: boolean }>
+  >(),
+  restoreMemoryFile: vi.fn<(name: string) => Promise<MemoryFiles>>(),
+  reflectMemory: vi.fn<(conversationId?: string) => Promise<ReflectResult>>(),
+  tidyMemoryLedger: vi.fn<() => Promise<MemoryFiles>>(),
+  applyMemoryRawTidy: vi.fn<() => Promise<MemoryFiles>>(),
+  dismissMemoryRawTidy: vi.fn<() => Promise<MemoryFiles>>(),
   addMemory: vi.fn<
     (text: string, global: boolean) => Promise<{ status: string; notes: MemoryNotes }>
   >(),
@@ -40,6 +53,23 @@ vi.mock("./api", () => ({
 }));
 
 import { Memory } from "./Memory";
+
+function memFiles(over: Partial<MemoryFiles> = {}): MemoryFiles {
+  return {
+    soul: "Be brief.\n",
+    user: "- Likes tea\n",
+    memory: "- 2026-11-01: spare key\n",
+    soulPath: "/cfg/memory/SOUL.md",
+    userPath: "/cfg/memory/USER.md",
+    memoryPath: "/cfg/memory/MEMORY.md",
+    soulPrev: true,
+    userPrev: false,
+    memoryPrev: true,
+    rawLines: [],
+    rawTidyDone: true,
+    ...over,
+  };
+}
 
 function notes(over: Partial<MemoryNotes> = {}): MemoryNotes {
   return {
@@ -90,6 +120,31 @@ const NIGHTS = {
 describe("Memory", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+    api.getMemoryFiles.mockResolvedValue(memFiles());
+  });
+
+  it("shows SOUL USER MEMORY tabs with Reflect and Restore", async () => {
+    api.getMemory.mockResolvedValue(notes());
+    api.reflectMemory.mockResolvedValue({
+      status: "Reflect: nothing new",
+      diff: "",
+      files: memFiles(),
+    });
+    render(<Memory />);
+    expect(await screen.findByRole("tab", { name: "MEMORY.md" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("tab", { name: "SOUL.md" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "USER.md" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reflect" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore" })).toBeEnabled();
+    expect(screen.getByLabelText("MEMORY.md")).toHaveValue("- 2026-11-01: spare key\n");
+    await userEvent.click(screen.getByRole("tab", { name: "SOUL.md" }));
+    expect(screen.getByLabelText("SOUL.md")).toHaveValue("Be brief.\n");
+    await userEvent.click(screen.getByRole("button", { name: "Reflect" }));
+    expect(api.reflectMemory).toHaveBeenCalled();
+    expect(await screen.findByText("Reflect: nothing new")).toBeInTheDocument();
   });
 
   it("shows both files with their paths", async () => {
@@ -98,7 +153,7 @@ describe("Memory", () => {
     expect(await screen.findByLabelText("Project notes")).toHaveValue("the build needs node 22\n");
     expect(screen.getByLabelText("Global notes")).toHaveValue("I like short answers\n");
     expect(screen.getByText("/ws/MEMORY.md")).toBeInTheDocument();
-    expect(screen.getByText("/cfg/memory/MEMORY.md")).toBeInTheDocument();
+    expect(screen.getAllByText("/cfg/memory/MEMORY.md").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Save project notes" })).toBeDisabled();
     expect(screen.queryByText(/AMR store/)).toBeNull();
   });

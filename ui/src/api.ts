@@ -557,6 +557,67 @@ export function deleteChat(id: string): Promise<void> {
   return invoke<void>("delete_chat", { id });
 }
 
+/** One row on the Hangout chat tab strip (or an Archived / Recently deleted menu). */
+export interface ChatTab {
+  id: string;
+  title: string;
+  pinned: boolean;
+  updated: number;
+  archivedAt?: number;
+  deletedAt?: number;
+}
+
+export type HangoutMode = "talk" | "type";
+
+/** Live tabs under the title bar (not archived, not soft-deleted). */
+export function listChatTabs(): Promise<ChatTab[]> {
+  return invoke<ChatTab[]>("list_chat_tabs");
+}
+
+export function listArchivedChats(): Promise<ChatTab[]> {
+  return invoke<ChatTab[]>("list_archived_chats");
+}
+
+export function listDeletedChats(): Promise<ChatTab[]> {
+  return invoke<ChatTab[]>("list_deleted_chats");
+}
+
+export function chatTabSwitch(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_switch", { id });
+}
+
+export function chatTabPin(id: string): Promise<boolean> {
+  return invoke<boolean>("chat_tab_pin", { id });
+}
+
+export function chatTabRename(id: string, title: string): Promise<void> {
+  return invoke<void>("chat_tab_rename", { id, title });
+}
+
+export function chatTabArchive(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_archive", { id });
+}
+
+export function chatTabUnarchive(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_unarchive", { id });
+}
+
+export function chatTabSoftDelete(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_soft_delete", { id });
+}
+
+export function chatTabRestoreDeleted(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_restore_deleted", { id });
+}
+
+export function getHangoutMode(): Promise<HangoutMode> {
+  return invoke<HangoutMode>("get_hangout_mode");
+}
+
+export function setHangoutMode(mode: HangoutMode): Promise<HangoutMode> {
+  return invoke<HangoutMode>("set_hangout_mode", { mode });
+}
+
 /** A chat export on disk (src-tauri/src/export.rs). Open and Show in folder
  * take its token, never a path. */
 export interface SavedFile {
@@ -954,6 +1015,96 @@ export interface PersonalWiped {
 /** Deletes every learned line for good. Desktop only. */
 export function wipePersonal(): Promise<PersonalWiped> {
   return invoke<PersonalWiped>("wipe_personal");
+}
+
+/** SOUL / USER / MEMORY tabs in the config memory folder. */
+export interface MemoryFiles {
+  soul: string;
+  user: string;
+  memory: string;
+  soulPath: string;
+  userPath: string;
+  memoryPath: string;
+  soulPrev: boolean;
+  userPrev: boolean;
+  memoryPrev: boolean;
+  /** Old chat lines still in MEMORY.md, offered once for removal. */
+  rawLines: string[];
+  rawTidyDone: boolean;
+}
+
+export type MemoryTab = "SOUL.md" | "USER.md" | "MEMORY.md";
+
+export function getMemoryFiles(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("get_memory_files");
+}
+
+export function saveMemoryFile(
+  name: MemoryTab,
+  text: string,
+  base: string,
+): Promise<{ files: MemoryFiles; redacted: boolean }> {
+  return invoke("save_memory_file", { name, text, base });
+}
+
+export function restoreMemoryFile(name: MemoryTab): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("restore_memory_file", { name });
+}
+
+export interface ReflectResult {
+  status: string;
+  diff: string;
+  files: MemoryFiles;
+}
+
+/** Reflect over recent chat; returns what was written. */
+export function reflectMemory(conversationId?: string): Promise<ReflectResult> {
+  return invoke<ReflectResult>("reflect_memory", { conversationId });
+}
+
+export function tidyMemoryLedger(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("tidy_memory_ledger");
+}
+
+export function applyMemoryRawTidy(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("apply_memory_raw_tidy");
+}
+
+export function dismissMemoryRawTidy(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("dismiss_memory_raw_tidy");
+}
+
+export interface DaysChoice {
+  days: number;
+  label: string;
+}
+
+export interface MemoryRetention {
+  days: number;
+  label: string;
+  choices: DaysChoice[];
+}
+
+export function getMemoryRetention(): Promise<MemoryRetention> {
+  return invoke<MemoryRetention>("get_memory_retention");
+}
+
+export function setMemoryRetention(days: number): Promise<MemoryRetention> {
+  return invoke<MemoryRetention>("set_memory_retention", { days });
+}
+
+export interface ChatArchive {
+  days: number;
+  label: string;
+  choices: DaysChoice[];
+}
+
+export function getChatArchive(): Promise<ChatArchive> {
+  return invoke<ChatArchive>("get_chat_archive");
+}
+
+export function setChatArchive(days: number): Promise<ChatArchive> {
+  return invoke<ChatArchive>("set_chat_archive", { days });
 }
 
 /** One MCP server from `mcp.json`, as the Connectors page shows it. */

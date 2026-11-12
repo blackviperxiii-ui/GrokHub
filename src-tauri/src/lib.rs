@@ -18,6 +18,7 @@ pub mod bg_runs;
 mod brand_guard;
 pub mod capabilities;
 pub mod changes;
+pub mod chat_tabs;
 pub mod chips;
 mod code_agent;
 mod code_rollback;
@@ -1338,6 +1339,108 @@ async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), Str
     Ok(())
 }
 
+/// Tab strip: live chats (not archived / not soft-deleted).
+#[tauri::command]
+async fn list_chat_tabs(state: State<'_, ShellState>) -> Result<Vec<chat_tabs::ChatTab>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::list_tabs(&dir)).await
+}
+
+#[tauri::command]
+async fn list_archived_chats(
+    state: State<'_, ShellState>,
+) -> Result<Vec<chat_tabs::ChatTab>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::list_archived(&dir)).await
+}
+
+#[tauri::command]
+async fn list_deleted_chats(
+    state: State<'_, ShellState>,
+) -> Result<Vec<chat_tabs::ChatTab>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::list_deleted(&dir)).await
+}
+
+#[tauri::command]
+async fn chat_tab_switch(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::switch_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_pin(state: State<'_, ShellState>, id: String) -> Result<bool, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::pin_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_rename(
+    state: State<'_, ShellState>,
+    id: String,
+    title: String,
+) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::rename_tab(&dir, &id, &title)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_archive(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::archive_tab(&dir, &id, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn chat_tab_unarchive(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::unarchive_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_soft_delete(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::soft_delete_tab(&dir, &id, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn chat_tab_restore_deleted(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::restore_deleted_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn get_hangout_mode(
+    state: State<'_, ShellState>,
+) -> Result<chat_tabs::HangoutMode, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::get_hangout_mode(&dir)).await
+}
+
+#[tauri::command]
+async fn set_hangout_mode(
+    state: State<'_, ShellState>,
+    mode: String,
+) -> Result<chat_tabs::HangoutMode, String> {
+    let dir = state.config_dir.clone();
+    let parsed = chat_tabs::HangoutMode::parse(&mode)?;
+    off_main(move || chat_tabs::set_hangout_mode(&dir, parsed)).await?
+}
+
 /// Where History's Delete all is armed; the second click inside its window
 /// deletes (`history::delete_all`).
 static DELETE_ALL_ARM: Mutex<history::DeleteArm> = Mutex::new(history::DeleteArm::new());
@@ -1950,6 +2053,79 @@ fn export_personal() -> Result<String, String> {
 #[tauri::command]
 fn wipe_personal(state: State<'_, ShellState>) -> Result<memory::Wiped, String> {
     memory::wipe(&workspace(&state))
+}
+
+#[tauri::command]
+fn get_memory_files() -> Result<memory::MemoryFiles, String> {
+    memory::load_files()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryFileSaved {
+    files: memory::MemoryFiles,
+    redacted: bool,
+}
+
+#[tauri::command]
+fn save_memory_file(
+    name: String,
+    text: String,
+    base: String,
+) -> Result<MemoryFileSaved, String> {
+    let (files, redacted) = memory::save_file(&name, &text, &base)?;
+    Ok(MemoryFileSaved { files, redacted })
+}
+
+#[tauri::command]
+fn restore_memory_file(name: String) -> Result<memory::MemoryFiles, String> {
+    memory::restore_file(&name)
+}
+
+#[tauri::command]
+fn reflect_memory(
+    state: State<'_, ShellState>,
+    conversation_id: Option<String>,
+) -> Result<memory::ReflectResult, String> {
+    memory::reflect(
+        &state.config_dir,
+        conversation_id.as_deref(),
+    )
+}
+
+#[tauri::command]
+fn tidy_memory_ledger() -> Result<memory::MemoryFiles, String> {
+    memory::tidy_ledger()
+}
+
+#[tauri::command]
+fn apply_memory_raw_tidy() -> Result<memory::MemoryFiles, String> {
+    memory::apply_raw_tidy()
+}
+
+#[tauri::command]
+fn dismiss_memory_raw_tidy() -> Result<memory::MemoryFiles, String> {
+    memory::dismiss_raw_tidy()
+}
+
+#[tauri::command]
+fn get_memory_retention() -> memory::RetentionSetting {
+    memory::retention_setting()
+}
+
+#[tauri::command]
+fn set_memory_retention(days: u32) -> Result<memory::RetentionSetting, String> {
+    memory::set_retention(days)
+}
+
+#[tauri::command]
+fn get_chat_archive() -> memory::ArchiveSetting {
+    memory::archive_setting()
+}
+
+#[tauri::command]
+fn set_chat_archive(days: u32) -> Result<memory::ArchiveSetting, String> {
+    memory::set_archive(days)
 }
 
 /// Every connector call can wait on a server's slot while chat or a check
@@ -4923,6 +5099,21 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "text")?,
             arg(args, "group")?,
         )?),
+        "get_memory_files" => out(get_memory_files()?),
+        "save_memory_file" => out(save_memory_file(
+            arg(args, "name")?,
+            arg(args, "text")?,
+            arg(args, "base")?,
+        )?),
+        "restore_memory_file" => out(restore_memory_file(arg(args, "name")?)?),
+        "reflect_memory" => out(reflect_memory(state, arg(args, "conversationId")?)?),
+        "tidy_memory_ledger" => out(tidy_memory_ledger()?),
+        "apply_memory_raw_tidy" => out(apply_memory_raw_tidy()?),
+        "dismiss_memory_raw_tidy" => out(dismiss_memory_raw_tidy()?),
+        "get_memory_retention" => out(get_memory_retention()),
+        "set_memory_retention" => out(set_memory_retention(arg(args, "days")?)?),
+        "get_chat_archive" => out(get_chat_archive()),
+        "set_chat_archive" => out(set_chat_archive(arg(args, "days")?)?),
         "list_connectors" => out(block_on(list_connectors(state))?),
         "check_connectors" => out(block_on(check_connectors(state))?),
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
@@ -5597,6 +5788,18 @@ pub fn run() {
             view_read_only_chat,
             search_steps,
             delete_chat,
+            list_chat_tabs,
+            list_archived_chats,
+            list_deleted_chats,
+            chat_tab_switch,
+            chat_tab_pin,
+            chat_tab_rename,
+            chat_tab_archive,
+            chat_tab_unarchive,
+            chat_tab_soft_delete,
+            chat_tab_restore_deleted,
+            get_hangout_mode,
+            set_hangout_mode,
             forget_message,
             stage_attachment,
             stage_attachment_paths,
@@ -5622,6 +5825,17 @@ pub fn run() {
             add_personal_fact,
             export_personal,
             wipe_personal,
+            get_memory_files,
+            save_memory_file,
+            restore_memory_file,
+            reflect_memory,
+            tidy_memory_ledger,
+            apply_memory_raw_tidy,
+            dismiss_memory_raw_tidy,
+            get_memory_retention,
+            set_memory_retention,
+            get_chat_archive,
+            set_chat_archive,
             list_connectors,
             check_connectors,
             restart_connector,

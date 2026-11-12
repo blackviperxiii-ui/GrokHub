@@ -45,6 +45,8 @@ import {
 import { Toggle } from "./Toggle";
 import { Updates } from "./Updates";
 import { WebAccess } from "./WebAccess";
+import { ChatArchive } from "./ChatArchive";
+import { MemoryRetention } from "./MemoryRetention";
 import { WorkboardTidy } from "./WorkboardTidy";
 import { LOGO_MARK_URL, PRODUCT_NAME, TAGLINE } from "./brand";
 import { StatusLine, useNote } from "./ui";
@@ -268,6 +270,8 @@ export function Settings({
             )}
             {section === "behavior" && <ScreenshotExplain />}
             {section === "behavior" && <GameWatch />}
+            {section === "behavior" && <MemoryRetention />}
+            {section === "behavior" && <ChatArchive />}
             {section === "behavior" && <WorkboardTidy />}
             {section === "appearance" && (
               <Appearance

@@ -14,7 +14,10 @@ const desktop = vi.hoisted(() => ({
   call: vi.fn<(command: string, args?: Record<string, unknown>) => Promise<unknown>>(),
 }));
 
-vi.mock("./api", () => ({
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return {
+  ...chatTabApiStubs(),
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
   sendChat: api.sendChat,
@@ -50,7 +53,8 @@ vi.mock("./api", () => ({
   stageAttachmentPaths: vi.fn(),
   pickAttachments: vi.fn(),
   removeAttachment: vi.fn(),
-}));
+};
+});
 
 vi.mock("./transport", () => ({ call: desktop.call, inShell: () => false }));
 

@@ -34,7 +34,10 @@ vi.mock("./episodeApi", () => ({
   episodeArmed: vi.fn(() => Promise.resolve(false)),
 }));
 
-vi.mock("./api", () => ({
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return {
+  ...chatTabApiStubs(),
   sendChat: api.sendChat,
   getSettings: api.getSettings,
   answerElicit: vi.fn(),
@@ -68,7 +71,8 @@ vi.mock("./api", () => ({
   stageAttachmentPaths: vi.fn(),
   pickAttachments: vi.fn(),
   removeAttachment: vi.fn(),
-}));
+};
+});
 
 import { Chat } from "./Chat";
 

@@ -48,6 +48,18 @@ const api = vi.hoisted(() => ({
   quickChips: vi.fn<(surface: string, id?: string, draft?: string, mode?: SessionMode) => Promise<QuickChip[]>>(),
   chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
   goalAct: vi.fn(() => Promise.resolve({ board: { today: [], mine: [], suggested: [], season: { label: "", done: 0, trophies: [], badges: [] } } })),
+  getHangoutMode: vi.fn(() => Promise.resolve("type" as const)),
+  setHangoutMode: vi.fn((mode: "talk" | "type") => Promise.resolve(mode)),
+  listChatTabs: vi.fn(() => Promise.resolve([])),
+  listArchivedChats: vi.fn(() => Promise.resolve([])),
+  listDeletedChats: vi.fn(() => Promise.resolve([])),
+  chatTabSwitch: vi.fn(),
+  chatTabPin: vi.fn(),
+  chatTabRename: vi.fn(),
+  chatTabArchive: vi.fn(),
+  chatTabUnarchive: vi.fn(),
+  chatTabSoftDelete: vi.fn(),
+  chatTabRestoreDeleted: vi.fn(),
 }));
 
 // A chat line that asks for a setting is answered by auto setup.
@@ -80,6 +92,18 @@ vi.mock("./api", () => ({
   quickChips: api.quickChips,
   chipOutcome: api.chipOutcome,
   goalAct: api.goalAct,
+  getHangoutMode: api.getHangoutMode,
+  setHangoutMode: api.setHangoutMode,
+  listChatTabs: api.listChatTabs,
+  listArchivedChats: api.listArchivedChats,
+  listDeletedChats: api.listDeletedChats,
+  chatTabSwitch: api.chatTabSwitch,
+  chatTabPin: api.chatTabPin,
+  chatTabRename: api.chatTabRename,
+  chatTabArchive: api.chatTabArchive,
+  chatTabUnarchive: api.chatTabUnarchive,
+  chatTabSoftDelete: api.chatTabSoftDelete,
+  chatTabRestoreDeleted: api.chatTabRestoreDeleted,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
     return Promise.resolve(() => {});
@@ -235,6 +259,21 @@ describe("Chat", () => {
     rerender(<Chat onOpenSettings={() => {}} prefill={{ text: "check the build", n: 2 }} />);
     expect(box).toHaveValue("check the build");
     expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
+  it("TALK and TYPE keep the draft in the box", async () => {
+    api.getHangoutMode.mockResolvedValue("type");
+    api.setHangoutMode.mockImplementation(async (mode) => mode);
+    render(<Chat onOpenSettings={() => {}} />);
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await userEvent.type(box, "keep me while switching");
+    expect(await screen.findByRole("group", { name: "Hangout mode" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "TALK" }));
+    await waitFor(() => expect(api.setHangoutMode).toHaveBeenCalledWith("talk"));
+    expect(box).toHaveValue("keep me while switching");
+    await userEvent.click(screen.getByRole("button", { name: "TYPE" }));
+    await waitFor(() => expect(api.setHangoutMode).toHaveBeenCalledWith("type"));
+    expect(box).toHaveValue("keep me while switching");
   });
 
   it("a send prefill (the Command line's run) goes as a chat message, leaving the box alone", async () => {
@@ -777,9 +816,11 @@ describe("Chat", () => {
     api.sendChat.mockResolvedValue("end_turn");
     render(<Chat onOpenSettings={() => {}} />);
     const first = await startTurn("one");
-    await waitFor(() => expect(screen.getByRole("button", { name: "New chat" })).toBeEnabled());
+    const fresh = () =>
+      screen.getByRole("button", { name: "New chat" });
+    await waitFor(() => expect(fresh()).toBeEnabled());
 
-    await userEvent.click(screen.getByRole("button", { name: "New chat" }));
+    await userEvent.click(fresh());
     expect(api.closeChat).toHaveBeenCalledWith(first);
     expect(screen.queryByText("one")).toBeNull();
 
@@ -844,7 +885,8 @@ describe("Chat", () => {
 
   it("the conversation log takes keyboard focus, so a long one can be scrolled", async () => {
     render(<Chat onOpenSettings={() => {}} />);
-    await userEvent.tab();
+    // Hangout tab strip and TALK/TYPE sit above the log in tab order.
+    screen.getByRole("log").focus();
     expect(screen.getByRole("log")).toHaveFocus();
   });
 });

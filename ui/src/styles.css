@@ -589,6 +589,131 @@ select:focus-visible {
   gap: 8px;
 }
 
+.chat-tabs {
+  border-bottom: 1px solid var(--border);
+  padding: 0 0 8px;
+}
+
+.chat-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  overflow: hidden;
+}
+
+.chat-tab {
+  flex: 1 1 0;
+  min-width: 96px;
+  max-width: 180px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--fg);
+  font-size: var(--font-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-tab[aria-selected="true"] {
+  border-color: var(--fg);
+  background: var(--bg);
+}
+
+.chat-tab.pinned .chat-tab-pin {
+  margin-right: 4px;
+  color: var(--muted);
+}
+
+.chat-tab-plus,
+.chat-tab-tools {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+}
+
+.chat-tab-plus:hover,
+.chat-tab-tools:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.chat-tab-rename {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+  margin-top: 8px;
+}
+
+.chat-tab-rename label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  font-size: var(--font-caption);
+  color: var(--muted);
+}
+
+.chat-tab-rename input {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--fg);
+}
+
+.hangout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 2px 8px;
+}
+
+.hangout-copy h2 {
+  margin: 0;
+  font-size: var(--font-prose);
+  font-weight: 600;
+}
+
+.hangout-copy p {
+  margin: 2px 0 0;
+  font-size: var(--font-caption);
+  color: var(--muted);
+}
+
+.hangout-modes {
+  display: flex;
+  gap: 8px;
+}
+
+.hangout-mode {
+  min-width: 64px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--font-body);
+  letter-spacing: 0.04em;
+}
+
+.hangout-mode.on,
+.hangout-mode[aria-pressed="true"] {
+  color: var(--fg);
+  border-color: var(--fg);
+  background: var(--bg);
+}
+
 .log {
   flex: 1;
   overflow-y: auto;

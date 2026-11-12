@@ -30,7 +30,12 @@ pub struct GameWatch {
 
 /// The cabin's toggle label and help, kept so both apps say the same thing.
 pub const TITLE: &str = "Game watcher (Counter-Strike 2, Dota 2)";
-pub const HELP: &str = "Follows your match as you play, through Game State Integration, the feed Valve built and supports for this. Turning it on writes one small file into the game's own config folder that tells the game to send its state to Loadout, here on this computer only, while the game runs. Turning it off removes that file. Nothing reads the game's memory or touches the game.";
+
+pub fn help() -> &'static str {
+    grokhub_core::brand::filled(
+        "Follows your match as you play, through Game State Integration, the feed Valve built and supports for this. Turning it on writes one small file into the game's own config folder that tells the game to send its state to {product}, here on this computer only, while the game runs. Turning it off removes that file. Nothing reads the game's memory or touches the game.",
+    )
+}
 
 fn names(games: &[GsiGame]) -> String {
     let names: Vec<&str> = games.iter().map(|g| g.name()).collect();
