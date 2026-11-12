@@ -134,7 +134,6 @@ if [[ "${#missing[@]}" -gt 0 ]]; then
   exit 1
 fi
 
-
 if [[ "$SWITCH" -eq 1 ]]; then
   CHANGED="$(git status --porcelain --untracked-files=no)"
   if [[ "$CHANGED" == " M Cargo.lock" ]]; then
