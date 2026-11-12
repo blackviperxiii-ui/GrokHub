@@ -35,6 +35,7 @@ vi.mock("./Labs", () => ({ Labs: () => <p>Labs panel</p> }));
 vi.mock("./Personality", () => ({ Personality: () => <p>Personality panel</p> }));
 vi.mock("./Playbooks", () => ({ Playbooks: () => <p>Playbooks panel</p> }));
 vi.mock("./Interests", () => ({ Interests: () => <p>Interests panel</p> }));
+vi.mock("./PulseSources", () => ({ PulseSources: () => <p>Pulse sources panel</p> }));
 vi.mock("./PcHelpers", () => ({ PcHelpers: () => <p>PC helpers panel</p> }));
 vi.mock("./CodeSettings", () => ({ CodeSettings: () => <p>Code panel</p> }));
 vi.mock("./Learned", () => ({ Learned: () => <p>Learned panel</p> }));

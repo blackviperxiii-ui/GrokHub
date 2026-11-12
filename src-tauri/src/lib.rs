@@ -95,6 +95,7 @@ pub mod privacy;
 pub mod proactive;
 pub mod projects;
 pub mod pulse;
+pub mod pulse_digests;
 pub mod pulse_feed;
 pub mod queue;
 pub mod remote;
@@ -700,6 +701,8 @@ async fn chat_turn(
     if capabilities::current().pulse {
         // What the person says in chat steers the Feed writer's taste note.
         pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
+        // Typed asks also feed the repeated-ask automate offers.
+        pulse_digests::note_ask(&config_dir, &text, grokhub_core::now_ms());
     }
     tauri::async_runtime::spawn_blocking(move || {
         let mut route = route(&settings, mode, &config_dir)?;
@@ -4070,6 +4073,25 @@ async fn learned_say(line: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn get_pulse_sources(
+    state: State<'_, ShellState>,
+) -> Result<pulse_digests::SourcesView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || Ok(pulse_digests::sources_view(&dir))).await?
+}
+
+#[tauri::command]
+async fn save_pulse_sources(
+    state: State<'_, ShellState>,
+    view: pulse_digests::SourcesView,
+) -> Result<pulse_digests::SourcesView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse_digests::save_sources(&dir, view)).await?
+}
+
+#[tauri::command]
 async fn get_interests(state: State<'_, ShellState>) -> Result<interests::Page, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
@@ -6030,6 +6052,8 @@ pub fn run() {
             get_learned,
             learned_act,
             learned_say,
+            get_pulse_sources,
+            save_pulse_sources,
             get_interests,
             add_interest,
             interest_act,

@@ -22,6 +22,7 @@ use grokhub_core::pulse::{self as pc, LedgerReason};
 use grokhub_core::pulse_sources::{self as ps, SavedFind};
 use grokhub_core::pulse_writer::TasteKind;
 use grokhub_core::reactions::{self, Outcome};
+use grokhub_core::update_feed::UpdateStatus;
 use grokhub_core::{CardReaction, UpdateCard, UpdateKind};
 
 use crate::pulse_feed;
@@ -399,6 +400,35 @@ pub fn add_post(config_dir: &Path, card: UpdateCard) -> Result<bool, String> {
     Ok(added)
 }
 
+/// Post a digest card, retiring the previous live card of the same digest
+/// first (by source prefix, or by exact source id when no prefix is
+/// given) — the shell twin of the cabin's digest posting.
+pub fn post_digest(
+    config_dir: &Path,
+    card: UpdateCard,
+    retire_prefix: Option<&str>,
+    retire_exact: Option<&str>,
+) -> Result<bool, String> {
+    let _store = store();
+    let mut cards = load_unlocked(config_dir)?;
+    let source = card.source_id.clone();
+    cards.retain(|c| {
+        let hits = match retire_prefix {
+            Some(prefix) => c.source_id.starts_with(prefix),
+            None => retire_exact.is_some_and(|exact| c.source_id == exact),
+        };
+        !hits
+            || c.kind != UpdateKind::Digest
+            || c.status == UpdateStatus::Dismissed
+            || c.source_id == source
+    });
+    let added = grokhub_core::post_update(&mut cards, card);
+    if added {
+        save(config_dir, &cards)?;
+    }
+    Ok(added)
+}
+
 /// Add one idea run's ideas. Returns how many landed.
 pub fn add_ideas(
     config_dir: &Path,
@@ -671,6 +701,19 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         return Err("That card is gone. The page now shows what is left.".into());
     };
     let source = ps::is_source_post(&card);
+    // Helper offers (posted by pulse_digests) answer through the helper's
+    // own switch: Accept turns it on, Dismiss remembers the no.
+    if let Some(offer) = crate::pulse_digests::HelperOffer::from_source(&card.source_id) {
+        match act {
+            Act::Accept => {
+                let _ = crate::pulse_digests::apply_helper_accept(config_dir, offer);
+            }
+            Act::Dismiss | Act::Delete => {
+                let _ = crate::pulse_digests::note_helper_dismissed(config_dir, offer);
+            }
+            _ => {}
+        }
+    }
     let (outcome, shift) = match act {
         // Dismiss absorbs Delete: no category outcome (Delete taste is below).
         // Not interested trains card taste only, so one or two clicks stay small.
