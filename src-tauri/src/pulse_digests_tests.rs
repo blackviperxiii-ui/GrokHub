@@ -27,7 +27,7 @@ fn ctx(dir: &Path, now: u64) -> Ctx {
     Ctx {
         config_dir: dir.to_path_buf(),
         now,
-        clock: grokhub_core::organs::LocalClock::at(now, 0),
+        clock: grokhub_core::LocalClock::at_offset(now, 0),
         day: local_day(now, 0),
         quiet: false,
     }

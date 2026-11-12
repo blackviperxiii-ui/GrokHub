@@ -269,8 +269,8 @@ pub struct LocalClock {
 
 impl LocalClock {
     /// The local wall clock at `now_ms` for a UTC offset in minutes.
-    /// 1 Jan 1970 was a Thursday, so day 0 is weekday 4 (Sunday 0).
-    pub fn at(now_ms: u64, offset_min: i32) -> Self {
+    /// 1 Jan 1970 was a Thursday.
+    pub fn at_offset(now_ms: u64, offset_min: i32) -> Self {
         let local = (now_ms / 60_000) as i64 + i64::from(offset_min);
         let (day, tod) = (local.div_euclid(1440), local.rem_euclid(1440));
         Self {

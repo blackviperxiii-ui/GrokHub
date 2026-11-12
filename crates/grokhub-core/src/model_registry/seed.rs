@@ -1,9 +1,9 @@
-//! Known xAI list prices and context windows for the Grok models Auto routes
-//! to most, used only where no xAI API listing describes the model (a Grok
+//! Known xAI list prices and context windows (from the built-in profiles,
+//! `data/model_profiles.toml`), used only where no xAI API listing describes the model (a Grok
 //! Build sign-in lists bare ids) and for the eval's cost estimate. A row the
 //! xAI API lists keeps its own figures: the live listing always wins.
 
-use super::record::{model_id_stem, ModelMeta, Prices};
+use super::record::{ModelMeta, Prices};
 
 /// xAI bills every token of a request (cached ones too) at twice the rate
 /// once its prompt reaches this many tokens (docs.x.ai pricing, Grok 4 models).
@@ -13,39 +13,26 @@ pub const LONG_CONTEXT_TOKENS: u64 = 200_000;
 /// router's 200k gate prefers it.
 pub const MILLION_CONTEXT: u64 = 1_000_000;
 
-/// (stem, prompt, cached, completion, context window). Prices are USD cents
-/// per 100M tokens, the unit xAI reports ($2 per 1M is 20_000).
-const SEED: [(&str, u64, u64, u64, u64); 3] = [
-    ("grok-4.7", 20_000, 5_000, 60_000, 500_000),
-    ("grok-4.5", 20_000, 3_000, 60_000, 500_000),
-    ("grok-4.3", 12_500, 2_000, 25_000, MILLION_CONTEXT),
-];
-
-fn row(id: &str) -> Option<(u64, u64, u64, u64)> {
-    let stem = model_id_stem(id);
-    SEED.iter()
-        .find(|(s, ..)| *s == stem)
-        .map(|&(_, p, c, o, ctx)| (p, c, o, ctx))
+/// The xAI row for a bare id (a dated or `-latest` form, or an alias),
+/// from the built-in profiles. An id with a provider prefix is never a
+/// direct xAI model.
+fn row(id: &str) -> Option<super::builtin::Profile> {
+    if id.contains('/') {
+        return None;
+    }
+    super::builtin::get(id).filter(|p| p.provider.as_deref() == Some("xai"))
 }
 
 /// The seed prices of `id` (or a dated / `-latest` form of it), with the
-/// long-context step at twice the short rates.
+/// long-context step the profile states (2x at 200k for the Grok 4 line).
 pub fn seed_prices(id: &str) -> Option<Prices> {
-    let (prompt, cached, completion, _) = row(id)?;
-    Some(Prices {
-        prompt: Some(prompt),
-        cached: Some(cached),
-        cache_write: None,
-        completion: Some(completion),
-        prompt_long: Some(prompt * 2),
-        completion_long: Some(completion * 2),
-        long_context_threshold: Some(LONG_CONTEXT_TOKENS),
-    })
+    let p = row(id)?.prices();
+    (!p.is_empty()).then_some(p)
 }
 
 /// The seed context window of `id`, in tokens.
 pub fn seed_context(id: &str) -> Option<u64> {
-    row(id).map(|(.., ctx)| ctx)
+    row(id)?.context
 }
 
 /// Fill a row no xAI API listing described: the whole price block when it
