@@ -9,7 +9,10 @@ import type { ScreenshotOfferView } from "./screenshotOfferApi";
 // and fills an empty box, and nothing is sent until the person sends.
 const seen = vi.hoisted(() => ({ sent: 0 }));
 
-vi.mock("./api", () => ({
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return {
+  ...chatTabApiStubs(),
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
   getLastChat: () => Promise.resolve(null),
@@ -25,7 +28,8 @@ vi.mock("./api", () => ({
   onEventGap: () => Promise.resolve(() => {}),
   onFileDrop: () => Promise.resolve(() => {}),
   removeAttachment: () => Promise.resolve(),
-}));
+};
+});
 
 const PROMPT =
   "Explain what you see in this screenshot. Name the app or screen, the important text, and what the user might want to do next.";

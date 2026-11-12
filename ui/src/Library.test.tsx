@@ -37,6 +37,21 @@ const api = vi.hoisted(() => ({
   gameOsrsSave: vi.fn(),
   gameOsrsForget: vi.fn(),
   gameOsrsRefresh: vi.fn(),
+  gameDestiny: vi.fn(),
+  gameDestinyRefresh: vi.fn(),
+  gameDestinyStartKey: vi.fn(),
+  gameDestinyAnswerKey: vi.fn(),
+  gameDestinySaveName: vi.fn(),
+  gameDestinyRemove: vi.fn(),
+  gamePoe: vi.fn(),
+  gameElite: vi.fn(),
+  gameFactorio: vi.fn(),
+  gameFactorioMod: vi.fn(),
+  gameStardew: vi.fn(),
+  gameMinecraft: vi.fn(),
+  gameRl: vi.fn(),
+  getGameWatch: vi.fn<() => Promise<{ on: boolean; note: string }>>(),
+  setGameWatch: vi.fn<(on: boolean) => Promise<{ on: boolean; note: string }>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -133,6 +148,7 @@ describe("Library", () => {
     api.getBattlenet.mockResolvedValue({ found: false, games: [] });
     api.getMission.mockResolvedValue({ mission: null, xp: EMPTY_XP });
     api.companionFrame.mockResolvedValue({ note: "", news: [], guidesUrl: null });
+    api.getGameWatch.mockResolvedValue({ on: false, note: "" });
     api.gameWow.mockResolvedValue({
       title: "WORLD OF WARCRAFT",
       running: false,
@@ -165,6 +181,58 @@ describe("Library", () => {
       kinds: ["Normal", "Ironman", "Hardcore ironman", "Ultimate ironman"],
       note: "",
       nameHint: "Your display name on Jagex's public hiscores. No password or key.",
+    });
+    api.gameDestiny.mockResolvedValue({
+      status:
+        "Destiny 2: add your own Bungie.net API key and Bungie Name to read your public profile.",
+      hasKey: false,
+      hasName: false,
+      bungieName: null,
+      profileLine: null,
+      note: "",
+      howTo: "Register an application at bungie.net.",
+      keyHint: "From your Bungie.net application page.",
+      nameHint: "Your name with its code, like Guardian#1234.",
+    });
+    api.gamePoe.mockResolvedValue({
+      title: "Path of Exile",
+      appId: 238960,
+      status: "",
+      empty: "Play with the game watcher on.",
+      note: "",
+    });
+    api.gameElite.mockResolvedValue({
+      title: "Elite Dangerous",
+      status: "",
+      empty: "Play with the game watcher on.",
+      note: "",
+    });
+    api.gameFactorio.mockResolvedValue({
+      status: "",
+      warning: null,
+      action: null,
+      note: "",
+      empty: "Factorio hasn't written its user folder yet.",
+      userDir: null,
+    });
+    api.gameStardew.mockResolvedValue({
+      title: "Stardew Valley",
+      status: "",
+      empty: "No farm save read yet.",
+      note: "",
+    });
+    api.gameMinecraft.mockResolvedValue({
+      title: "Minecraft: Java Edition",
+      status: "",
+      empty: "Play with the game watcher on.",
+      note: "",
+    });
+    api.gameRl.mockResolvedValue({
+      title: "Rocket League",
+      status: "Rocket League's Stats API is off.",
+      howTo: true,
+      iniLine: "PacketSendRate=30",
+      note: "",
     });
   });
 

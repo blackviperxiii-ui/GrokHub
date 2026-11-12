@@ -29,7 +29,10 @@ vi.mock("./transport", async (original) => ({
   inShell: () => api.shell,
 }));
 
-vi.mock("./api", () => ({
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return {
+  ...chatTabApiStubs(),
   // No chat saved from an earlier launch.
   getLastChat: api.getLastChat,
   quickChips: () => Promise.resolve([]),
@@ -40,6 +43,20 @@ vi.mock("./api", () => ({
   getCapabilities: api.getCapabilities,
   getSettings: api.getSettings,
   getMemory: api.getMemory,
+  getMemoryFiles: () =>
+    Promise.resolve({
+      soul: "",
+      user: "",
+      memory: "",
+      soulPath: "/cfg/memory/SOUL.md",
+      userPath: "/cfg/memory/USER.md",
+      memoryPath: "/cfg/memory/MEMORY.md",
+      soulPrev: false,
+      userPrev: false,
+      memoryPrev: false,
+      rawLines: [],
+      rawTidyDone: true,
+    }),
   PERSONAL_ADD_GROUPS: [["about", "About you"]],
   getWorkboard: () => Promise.resolve({ followUp: [], columns: [], archived: [], stamp: 0 }),
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
@@ -60,7 +77,8 @@ vi.mock("./api", () => ({
     api.sentTo.push(conversationId);
     return new Promise<string>(() => {});
   },
-}));
+};
+});
 vi.mock("./Automations", () => ({ Automations: () => null, resultLine: () => "" }));
 
 import { App } from "./App";

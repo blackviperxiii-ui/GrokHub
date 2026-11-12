@@ -1,0 +1,1 @@
+- Shell: Labs can put Nyx on the desktop in her own see-through window, with a wardrobe on the dock and right-click menu; off by default, same `desktopNyx` switch key as the cabin.

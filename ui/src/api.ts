@@ -557,6 +557,67 @@ export function deleteChat(id: string): Promise<void> {
   return invoke<void>("delete_chat", { id });
 }
 
+/** One row on the Hangout chat tab strip (or an Archived / Recently deleted menu). */
+export interface ChatTab {
+  id: string;
+  title: string;
+  pinned: boolean;
+  updated: number;
+  archivedAt?: number;
+  deletedAt?: number;
+}
+
+export type HangoutMode = "talk" | "type";
+
+/** Live tabs under the title bar (not archived, not soft-deleted). */
+export function listChatTabs(): Promise<ChatTab[]> {
+  return invoke<ChatTab[]>("list_chat_tabs");
+}
+
+export function listArchivedChats(): Promise<ChatTab[]> {
+  return invoke<ChatTab[]>("list_archived_chats");
+}
+
+export function listDeletedChats(): Promise<ChatTab[]> {
+  return invoke<ChatTab[]>("list_deleted_chats");
+}
+
+export function chatTabSwitch(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_switch", { id });
+}
+
+export function chatTabPin(id: string): Promise<boolean> {
+  return invoke<boolean>("chat_tab_pin", { id });
+}
+
+export function chatTabRename(id: string, title: string): Promise<void> {
+  return invoke<void>("chat_tab_rename", { id, title });
+}
+
+export function chatTabArchive(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_archive", { id });
+}
+
+export function chatTabUnarchive(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_unarchive", { id });
+}
+
+export function chatTabSoftDelete(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_soft_delete", { id });
+}
+
+export function chatTabRestoreDeleted(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_restore_deleted", { id });
+}
+
+export function getHangoutMode(): Promise<HangoutMode> {
+  return invoke<HangoutMode>("get_hangout_mode");
+}
+
+export function setHangoutMode(mode: HangoutMode): Promise<HangoutMode> {
+  return invoke<HangoutMode>("set_hangout_mode", { mode });
+}
+
 /** A chat export on disk (src-tauri/src/export.rs). Open and Show in folder
  * take its token, never a path. */
 export interface SavedFile {
@@ -954,6 +1015,96 @@ export interface PersonalWiped {
 /** Deletes every learned line for good. Desktop only. */
 export function wipePersonal(): Promise<PersonalWiped> {
   return invoke<PersonalWiped>("wipe_personal");
+}
+
+/** SOUL / USER / MEMORY tabs in the config memory folder. */
+export interface MemoryFiles {
+  soul: string;
+  user: string;
+  memory: string;
+  soulPath: string;
+  userPath: string;
+  memoryPath: string;
+  soulPrev: boolean;
+  userPrev: boolean;
+  memoryPrev: boolean;
+  /** Old chat lines still in MEMORY.md, offered once for removal. */
+  rawLines: string[];
+  rawTidyDone: boolean;
+}
+
+export type MemoryTab = "SOUL.md" | "USER.md" | "MEMORY.md";
+
+export function getMemoryFiles(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("get_memory_files");
+}
+
+export function saveMemoryFile(
+  name: MemoryTab,
+  text: string,
+  base: string,
+): Promise<{ files: MemoryFiles; redacted: boolean }> {
+  return invoke("save_memory_file", { name, text, base });
+}
+
+export function restoreMemoryFile(name: MemoryTab): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("restore_memory_file", { name });
+}
+
+export interface ReflectResult {
+  status: string;
+  diff: string;
+  files: MemoryFiles;
+}
+
+/** Reflect over recent chat; returns what was written. */
+export function reflectMemory(conversationId?: string): Promise<ReflectResult> {
+  return invoke<ReflectResult>("reflect_memory", { conversationId });
+}
+
+export function tidyMemoryLedger(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("tidy_memory_ledger");
+}
+
+export function applyMemoryRawTidy(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("apply_memory_raw_tidy");
+}
+
+export function dismissMemoryRawTidy(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("dismiss_memory_raw_tidy");
+}
+
+export interface DaysChoice {
+  days: number;
+  label: string;
+}
+
+export interface MemoryRetention {
+  days: number;
+  label: string;
+  choices: DaysChoice[];
+}
+
+export function getMemoryRetention(): Promise<MemoryRetention> {
+  return invoke<MemoryRetention>("get_memory_retention");
+}
+
+export function setMemoryRetention(days: number): Promise<MemoryRetention> {
+  return invoke<MemoryRetention>("set_memory_retention", { days });
+}
+
+export interface ChatArchive {
+  days: number;
+  label: string;
+  choices: DaysChoice[];
+}
+
+export function getChatArchive(): Promise<ChatArchive> {
+  return invoke<ChatArchive>("get_chat_archive");
+}
+
+export function setChatArchive(days: number): Promise<ChatArchive> {
+  return invoke<ChatArchive>("set_chat_archive", { days });
 }
 
 /** One MCP server from `mcp.json`, as the Connectors page shows it. */
@@ -3147,6 +3298,183 @@ export function gameOsrsForget(): Promise<OsrsView> {
 
 export function gameOsrsRefresh(): Promise<OsrsView> {
   return invoke<OsrsView>("game_osrs_refresh");
+}
+
+export interface DestinyView {
+  status: string;
+  hasKey: boolean;
+  hasName: boolean;
+  bungieName: string | null;
+  profileLine: string | null;
+  note: string;
+  howTo: string;
+  keyHint: string;
+  nameHint: string;
+}
+
+export interface DestinyKeyCard {
+  id: string;
+  action: string;
+}
+
+export interface PoeView {
+  title: string;
+  appId: number;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface EliteView {
+  title: string;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface FactorioView {
+  status: string;
+  warning: string | null;
+  action: string | null;
+  note: string;
+  empty: string | null;
+  userDir: string | null;
+}
+
+export interface StardewView {
+  title: string;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface MinecraftView {
+  title: string;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface RocketLeagueView {
+  title: string;
+  status: string;
+  howTo: boolean;
+  iniLine: string;
+  note: string;
+}
+
+export function gameDestiny(): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny");
+}
+
+export function gameDestinyRefresh(): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_refresh");
+}
+
+export function gameDestinyStartKey(key: string): Promise<DestinyKeyCard> {
+  return invoke<DestinyKeyCard>("game_destiny_start_key", { key });
+}
+
+export function gameDestinyAnswerKey(id: string, approve: boolean): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_answer_key", { id, approve });
+}
+
+export function gameDestinySaveName(name: string): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_save_name", { name });
+}
+
+export function gameDestinyRemove(): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_remove");
+}
+
+export function gamePoe(appId: number): Promise<PoeView> {
+  return invoke<PoeView>("game_poe", { appId });
+}
+
+export function gameElite(): Promise<EliteView> {
+  return invoke<EliteView>("game_elite");
+}
+
+export function gameFactorio(): Promise<FactorioView> {
+  return invoke<FactorioView>("game_factorio");
+}
+
+export function gameFactorioMod(dir: string, install: boolean): Promise<FactorioView> {
+  return invoke<FactorioView>("game_factorio_mod", { dir, install });
+}
+
+export function gameStardew(): Promise<StardewView> {
+  return invoke<StardewView>("game_stardew");
+}
+
+export function gameMinecraft(): Promise<MinecraftView> {
+  return invoke<MinecraftView>("game_minecraft");
+}
+
+export function gameRl(): Promise<RocketLeagueView> {
+  return invoke<RocketLeagueView>("game_rl");
+}
+
+/** Settings → Behavior / Library companion: game watcher (`app.json` gameWatch). */
+export interface GameWatch {
+  on: boolean;
+  note: string;
+}
+
+export function getGameWatch(): Promise<GameWatch> {
+  return invoke<GameWatch>("get_game_watch");
+}
+
+export function setGameWatch(on: boolean): Promise<GameWatch> {
+  return invoke<GameWatch>("set_game_watch", { on });
+}
+
+/** Settings → Pulse: Steam achievement nudges and wishlist sale alerts. */
+export interface SteamPulseThreshold {
+  key: string;
+  label: string;
+}
+
+export interface SteamPulse {
+  achievementsOn: boolean;
+  wishlistOn: boolean;
+  threshold: string;
+  thresholds: SteamPulseThreshold[];
+  /** Sealed SteamID on disk — never the digits. */
+  hasId: boolean;
+  canUseLocal: boolean;
+  achNote: string;
+  wishNote: string;
+  achPrivate: boolean;
+  wishPrivate: boolean;
+}
+
+export function getSteamPulse(): Promise<SteamPulse> {
+  return invoke<SteamPulse>("get_steam_pulse");
+}
+
+export function setSteamAchievements(on: boolean): Promise<SteamPulse> {
+  return invoke<SteamPulse>("set_steam_achievements", { on });
+}
+
+export function setSteamWishlist(on: boolean): Promise<SteamPulse> {
+  return invoke<SteamPulse>("set_steam_wishlist", { on });
+}
+
+export function setSteamWishlistThreshold(threshold: string): Promise<SteamPulse> {
+  return invoke<SteamPulse>("set_steam_wishlist_threshold", { threshold });
+}
+
+export function saveSteamId(draft: string, useLocal: boolean): Promise<SteamPulse> {
+  return invoke<SteamPulse>("save_steam_id", { draft, useLocal });
+}
+
+export function forgetSteamId(): Promise<SteamPulse> {
+  return invoke<SteamPulse>("forget_steam_id");
+}
+
+export function steamCheckNow(module: "achievements" | "deals"): Promise<SteamPulse> {
+  return invoke<SteamPulse>("steam_check_now", { module });
 }
 
 /** A Home tile's Turn on, for a switch that needs nothing else. */

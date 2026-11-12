@@ -13,7 +13,28 @@ const api = vi.hoisted(() => ({
   listChats: vi.fn(() => Promise.resolve([])),
 }));
 
+const desk = vi.hoisted(() => ({
+  desktopNyxGet: vi.fn(() =>
+    Promise.resolve({
+      enabled: false,
+      undocked: false,
+      behind: false,
+      adult: false,
+      adultsOk: false,
+      outfit: null,
+      outfitFile: "brand/nyx-hanging-out.jpg",
+      outfits: [],
+      pos: null,
+      effects: { transparent: true, onTop: true },
+      companion: "Nyx",
+    }),
+  ),
+  desktopNyxSet: vi.fn(),
+}));
+
 vi.mock("./api", () => api);
+vi.mock("./desktopNyxApi", () => desk);
+vi.mock("./transport", () => ({ inShell: () => false }));
 
 import { CHANNEL_NOTE, Labs, PLUGINS_EMPTY, PLUGINS_TIP } from "./Labs";
 

@@ -157,7 +157,7 @@ pub fn set_files_folder(config_dir: &Path, picked: &Path) -> Result<(), String> 
         .map_err(|why| format!("Can't use that folder: {why}"))
 }
 
-fn open_folder(dir: &Path) -> Result<(), String> {
+pub(crate) fn open_folder(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let opener = if cfg!(windows) {
         "explorer"

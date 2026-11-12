@@ -1,0 +1,1 @@
+- Library companion screens for Destiny 2, Path of Exile, Elite Dangerous, Factorio, Stardew Valley, Minecraft and Rocket League, matching the cabin.

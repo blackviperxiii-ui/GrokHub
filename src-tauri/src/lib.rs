@@ -17,8 +17,12 @@ pub mod bg_runs;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
+pub mod change_rows;
 pub mod changes;
+pub mod chat_tabs;
 pub mod chips;
+mod code_agent;
+mod code_rollback;
 mod code_sessions;
 pub mod command_box;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
@@ -38,6 +42,7 @@ pub mod diagnostics;
 pub mod episode;
 pub mod export;
 pub mod game_companion;
+pub mod game_watch;
 pub mod games;
 pub mod goals;
 mod helper_asks;
@@ -71,6 +76,8 @@ pub mod mods_install;
 mod net_watch;
 mod nudges;
 pub mod nyx;
+#[cfg(desktop)]
+pub mod desktop_nyx;
 pub use grokhub_agent::xai_keychain as oauth;
 pub mod onboard;
 pub mod opener;
@@ -105,6 +112,7 @@ pub mod skills;
 pub mod slash;
 pub mod slash_ops;
 mod steam_checks;
+pub mod storage;
 mod turns;
 pub mod voice;
 pub mod workboard;
@@ -686,6 +694,9 @@ async fn chat_turn(
     let config_dir = state.config_dir.clone();
     // A Code tab session works in its own project's folder, not the app's.
     let own_folder = state.code_sessions.of(&conversation_id);
+    // Its agent pushes through the Code tab's push guard and codes with the
+    // bundled skills always on.
+    code_agent::bind(&state.config_dir, &conversation_id, own_folder.is_some());
     if capabilities::current().pulse {
         // What the person says in chat steers the Feed writer's taste note.
         pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
@@ -1161,6 +1172,7 @@ fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
 fn end_chat(state: &ShellState, conversation_id: &str) {
     drop_worker(state, conversation_id);
     state.code_sessions.forget(conversation_id);
+    code_agent::bind(&state.config_dir, conversation_id, false);
     if current(state).last_chat == conversation_id {
         set_last_chat(state, "");
     }
@@ -1329,6 +1341,106 @@ async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), Str
     off_main(move || history::delete(&dir, &doomed)).await??;
     end_chat(&state, &id);
     Ok(())
+}
+
+/// Tab strip: live chats (not archived / not soft-deleted).
+#[tauri::command]
+async fn list_chat_tabs(state: State<'_, ShellState>) -> Result<Vec<chat_tabs::ChatTab>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::list_tabs(&dir)).await
+}
+
+#[tauri::command]
+async fn list_archived_chats(
+    state: State<'_, ShellState>,
+) -> Result<Vec<chat_tabs::ChatTab>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::list_archived(&dir)).await
+}
+
+#[tauri::command]
+async fn list_deleted_chats(
+    state: State<'_, ShellState>,
+) -> Result<Vec<chat_tabs::ChatTab>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::list_deleted(&dir)).await
+}
+
+#[tauri::command]
+async fn chat_tab_switch(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::switch_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_pin(state: State<'_, ShellState>, id: String) -> Result<bool, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::pin_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_rename(
+    state: State<'_, ShellState>,
+    id: String,
+    title: String,
+) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::rename_tab(&dir, &id, &title)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_archive(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::archive_tab(&dir, &id, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn chat_tab_unarchive(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::unarchive_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_soft_delete(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::soft_delete_tab(&dir, &id, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn chat_tab_restore_deleted(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::restore_deleted_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn get_hangout_mode(state: State<'_, ShellState>) -> Result<chat_tabs::HangoutMode, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::get_hangout_mode(&dir)).await
+}
+
+#[tauri::command]
+async fn set_hangout_mode(
+    state: State<'_, ShellState>,
+    mode: String,
+) -> Result<chat_tabs::HangoutMode, String> {
+    let dir = state.config_dir.clone();
+    let parsed = chat_tabs::HangoutMode::parse(&mode)?;
+    off_main(move || chat_tabs::set_hangout_mode(&dir, parsed)).await?
 }
 
 /// Where History's Delete all is armed; the second click inside its window
@@ -1943,6 +2055,72 @@ fn export_personal() -> Result<String, String> {
 #[tauri::command]
 fn wipe_personal(state: State<'_, ShellState>) -> Result<memory::Wiped, String> {
     memory::wipe(&workspace(&state))
+}
+
+#[tauri::command]
+fn get_memory_files() -> Result<memory::MemoryFiles, String> {
+    memory::load_files()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryFileSaved {
+    files: memory::MemoryFiles,
+    redacted: bool,
+}
+
+#[tauri::command]
+fn save_memory_file(name: String, text: String, base: String) -> Result<MemoryFileSaved, String> {
+    let (files, redacted) = memory::save_file(&name, &text, &base)?;
+    Ok(MemoryFileSaved { files, redacted })
+}
+
+#[tauri::command]
+fn restore_memory_file(name: String) -> Result<memory::MemoryFiles, String> {
+    memory::restore_file(&name)
+}
+
+#[tauri::command]
+fn reflect_memory(
+    state: State<'_, ShellState>,
+    conversation_id: Option<String>,
+) -> Result<memory::ReflectResult, String> {
+    memory::reflect(&state.config_dir, conversation_id.as_deref())
+}
+
+#[tauri::command]
+fn tidy_memory_ledger() -> Result<memory::MemoryFiles, String> {
+    memory::tidy_ledger()
+}
+
+#[tauri::command]
+fn apply_memory_raw_tidy() -> Result<memory::MemoryFiles, String> {
+    memory::apply_raw_tidy()
+}
+
+#[tauri::command]
+fn dismiss_memory_raw_tidy() -> Result<memory::MemoryFiles, String> {
+    memory::dismiss_raw_tidy()
+}
+
+#[tauri::command]
+fn get_memory_retention() -> memory::RetentionSetting {
+    memory::retention_setting()
+}
+
+#[tauri::command]
+fn set_memory_retention(days: u32) -> Result<memory::RetentionSetting, String> {
+    memory::set_retention(days)
+}
+
+#[tauri::command]
+fn get_chat_archive() -> memory::ArchiveSetting {
+    memory::archive_setting()
+}
+
+#[tauri::command]
+fn set_chat_archive(days: u32) -> Result<memory::ArchiveSetting, String> {
+    memory::set_archive(days)
 }
 
 /// Every connector call can wait on a server's slot while chat or a check
@@ -3001,6 +3179,91 @@ fn nyx_tiles(state: State<'_, ShellState>, ids: Vec<String>) -> HashMap<String, 
     nyx::tiles(&ids, current(&state).adults_on())
 }
 
+/// Labs / dock: desktop companion state (switch, undock, wardrobe, effects).
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_get(state: State<'_, ShellState>) -> desktop_nyx::State {
+    desktop_nyx::state_of(&current(&state), desktop_nyx::wayland_now())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_set(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    patch: desktop_nyx::Patch,
+) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::apply_patch(current(&state), patch);
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    desktop_nyx::show_window(&app, &next)?;
+    let _ = desktop_nyx::apply_behind(&app, next.desktop_nyx_behind);
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_undock(app: AppHandle, state: State<'_, ShellState>) -> Result<desktop_nyx::State, String> {
+    let mut next = current(&state);
+    if !next.desktop_nyx {
+        next.desktop_nyx = true;
+    }
+    next.desktop_nyx_undocked = true;
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    desktop_nyx::show_window(&app, &next)?;
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_dock(app: AppHandle, state: State<'_, ShellState>) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::apply_patch(
+        current(&state),
+        desktop_nyx::Patch {
+            undocked: Some(false),
+            ..desktop_nyx::Patch::default()
+        },
+    );
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    desktop_nyx::hide_window(&app)?;
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_set_outfit(
+    state: State<'_, ShellState>,
+    id: Option<String>,
+) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::set_outfit(current(&state), id)?;
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_save_pos(
+    state: State<'_, ShellState>,
+    x: f64,
+    y: f64,
+    monitor_w: f64,
+    monitor_h: f64,
+) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::save_pos(current(&state), [x, y], [monitor_w, monitor_h]);
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_set_passthrough(app: AppHandle, ignore: bool) -> Result<(), String> {
+    desktop_nyx::set_passthrough(&app, ignore)
+}
+
 #[tauri::command]
 async fn get_playbooks(state: State<'_, ShellState>) -> Result<playbooks::Page, String> {
     let dir = state.config_dir.clone();
@@ -3191,10 +3454,91 @@ async fn companion_set_note(
 }
 
 #[tauri::command]
-async fn game_wow() -> Result<games::WowView, String> {
+async fn get_game_watch(state: State<'_, ShellState>) -> Result<game_watch::GameWatch, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || game_watch::read(&dir)).await
+}
+
+#[tauri::command]
+async fn set_game_watch(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<game_watch::GameWatch, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || game_watch::set(&dir, on, None, grokhub_core::game_watch_gsi::GSI_PORT))
+        .await?
+}
+
+#[tauri::command]
+async fn get_steam_pulse(state: State<'_, ShellState>) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::pulse_status(&dir)).await
+}
+
+#[tauri::command]
+async fn set_steam_achievements(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::set_achievements(&dir, on)).await?
+}
+
+#[tauri::command]
+async fn set_steam_wishlist(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::set_wishlist(&dir, on)).await?
+}
+
+#[tauri::command]
+async fn set_steam_wishlist_threshold(
+    state: State<'_, ShellState>,
+    threshold: String,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::set_threshold(&dir, &threshold)).await?
+}
+
+#[tauri::command]
+async fn save_steam_id(
+    state: State<'_, ShellState>,
+    draft: String,
+    use_local: bool,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::save_id(&dir, &draft, use_local)).await?
+}
+
+#[tauri::command]
+async fn forget_steam_id(state: State<'_, ShellState>) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::forget_id(&dir)).await?
+}
+
+#[tauri::command]
+async fn steam_check_now(
+    state: State<'_, ShellState>,
+    module: String,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::check_now(&dir, &module)).await?
+}
+
+#[tauri::command]
+async fn game_wow(state: State<'_, ShellState>) -> Result<games::WowView, String> {
     capabilities::needs(capabilities::current().library, "Library")?;
-    // Shell has no game-watcher switch yet; companion screens follow combat log when possible.
-    off_main(|| games::wow_view(true)).await
+    let dir = state.config_dir.clone();
+    off_main(move || games::wow_view(game_watch::is_on(&dir))).await
 }
 
 #[tauri::command]
@@ -3291,6 +3635,100 @@ async fn game_osrs_refresh(state: State<'_, ShellState>) -> Result<games::OsrsVi
     capabilities::needs(capabilities::current().library, "Library")?;
     let dir = state.config_dir.clone();
     off_main(move || games::osrs_refresh(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_destiny(state: State<'_, ShellState>) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_view(&dir, grokhub_core::now_ms())).await
+}
+
+#[tauri::command]
+async fn game_destiny_refresh(state: State<'_, ShellState>) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_refresh(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_destiny_start_key(
+    state: State<'_, ShellState>,
+    key: String,
+) -> Result<games::DestinyKeyCard, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_start_key(&dir, key)).await?
+}
+
+#[tauri::command]
+async fn game_destiny_answer_key(
+    state: State<'_, ShellState>,
+    id: String,
+    approve: bool,
+) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_answer_key(&dir, &id, approve, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_destiny_save_name(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_save_name(&dir, &name, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_destiny_remove(state: State<'_, ShellState>) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_remove(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_poe(app_id: u32) -> Result<games::PoeView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || games::poe_view(app_id)).await
+}
+
+#[tauri::command]
+async fn game_elite() -> Result<games::EliteView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::elite_view).await
+}
+
+#[tauri::command]
+async fn game_factorio() -> Result<games::FactorioView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::factorio_view).await
+}
+
+#[tauri::command]
+async fn game_factorio_mod(dir: String, install: bool) -> Result<games::FactorioView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || games::factorio_mod_action(Path::new(&dir), install)).await?
+}
+
+#[tauri::command]
+async fn game_stardew() -> Result<games::StardewView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::stardew_view).await
+}
+
+#[tauri::command]
+async fn game_minecraft() -> Result<games::MinecraftView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::minecraft_view).await
+}
+
+#[tauri::command]
+async fn game_rl() -> Result<games::RocketLeagueView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::rocket_league_view).await
 }
 
 /// A Home tile's Turn on, for a switch that needs nothing else. The rest
@@ -4741,6 +5179,21 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "text")?,
             arg(args, "group")?,
         )?),
+        "get_memory_files" => out(get_memory_files()?),
+        "save_memory_file" => out(save_memory_file(
+            arg(args, "name")?,
+            arg(args, "text")?,
+            arg(args, "base")?,
+        )?),
+        "restore_memory_file" => out(restore_memory_file(arg(args, "name")?)?),
+        "reflect_memory" => out(reflect_memory(state, arg(args, "conversationId")?)?),
+        "tidy_memory_ledger" => out(tidy_memory_ledger()?),
+        "apply_memory_raw_tidy" => out(apply_memory_raw_tidy()?),
+        "dismiss_memory_raw_tidy" => out(dismiss_memory_raw_tidy()?),
+        "get_memory_retention" => out(get_memory_retention()),
+        "set_memory_retention" => out(set_memory_retention(arg(args, "days")?)?),
+        "get_chat_archive" => out(get_chat_archive()),
+        "set_chat_archive" => out(set_chat_archive(arg(args, "days")?)?),
         "list_connectors" => out(block_on(list_connectors(state))?),
         "check_connectors" => out(block_on(check_connectors(state))?),
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
@@ -5349,6 +5802,11 @@ pub fn run() {
             proactive::start(app.state::<ShellState>().config_dir.clone());
             build_main_window(app)?;
             #[cfg(desktop)]
+            {
+                let settings = current(&app.state::<ShellState>());
+                let _ = desktop_nyx::show_window(app.handle(), &settings);
+            }
+            #[cfg(desktop)]
             build_tray(app)?;
             #[cfg(desktop)]
             watch_for_updates(app.handle().clone(), grokhub_agent::perm::config_dir());
@@ -5356,6 +5814,20 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
+                #[cfg(desktop)]
+                if window.label() == desktop_nyx::LABEL {
+                    let state = window.state::<ShellState>();
+                    let next = desktop_nyx::apply_patch(
+                        current(&state),
+                        desktop_nyx::Patch {
+                            undocked: Some(false),
+                            ..desktop_nyx::Patch::default()
+                        },
+                    );
+                    let _ = settings::save(&state.config_dir, &next);
+                    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+                    return;
+                }
                 let state = window.state::<ShellState>();
                 if current(&state).close_to_tray {
                     api.prevent_close();
@@ -5415,6 +5887,18 @@ pub fn run() {
             view_read_only_chat,
             search_steps,
             delete_chat,
+            list_chat_tabs,
+            list_archived_chats,
+            list_deleted_chats,
+            chat_tab_switch,
+            chat_tab_pin,
+            chat_tab_rename,
+            chat_tab_archive,
+            chat_tab_unarchive,
+            chat_tab_soft_delete,
+            chat_tab_restore_deleted,
+            get_hangout_mode,
+            set_hangout_mode,
             forget_message,
             stage_attachment,
             stage_attachment_paths,
@@ -5440,6 +5924,17 @@ pub fn run() {
             add_personal_fact,
             export_personal,
             wipe_personal,
+            get_memory_files,
+            save_memory_file,
+            restore_memory_file,
+            reflect_memory,
+            tidy_memory_ledger,
+            apply_memory_raw_tidy,
+            dismiss_memory_raw_tidy,
+            get_memory_retention,
+            set_memory_retention,
+            get_chat_archive,
+            set_chat_archive,
             list_connectors,
             check_connectors,
             restart_connector,
@@ -5468,6 +5963,9 @@ pub fn run() {
             code_ship_run,
             code_new_branch,
             code_activity_list,
+            code_rollback::code_revert_list,
+            code_rollback::code_revert_plan,
+            code_rollback::code_revert_run,
             code_secret_list,
             code_secret_set,
             code_secret_delete,
@@ -5600,6 +6098,20 @@ pub fn run() {
             os_extras::set_notifications,
             nyx_look,
             nyx_tiles,
+            #[cfg(desktop)]
+            desktop_nyx_get,
+            #[cfg(desktop)]
+            desktop_nyx_set,
+            #[cfg(desktop)]
+            desktop_nyx_undock,
+            #[cfg(desktop)]
+            desktop_nyx_dock,
+            #[cfg(desktop)]
+            desktop_nyx_set_outfit,
+            #[cfg(desktop)]
+            desktop_nyx_save_pos,
+            #[cfg(desktop)]
+            desktop_nyx_set_passthrough,
             get_queue,
             stop_task,
             get_workboard,
@@ -5648,6 +6160,10 @@ pub fn run() {
             self_improve::set_self_improve_quiet,
             self_improve::self_improve_revert,
             self_improve::self_improve_issue,
+            change_rows::get_change_rows,
+            change_rows::change_row_undo,
+            change_rows::change_row_keep,
+            change_rows::change_row_restore,
             save_defaults,
             get_privacy,
             get_diagnostics,
@@ -5658,6 +6174,11 @@ pub fn run() {
             open_data_folder,
             open_files_folder,
             change_files_folder,
+            storage::get_storage,
+            storage::storage_change,
+            storage::storage_reset,
+            storage::storage_bring_over,
+            storage::storage_open,
             export_chat,
             open_saved,
             reveal_saved,
@@ -5675,6 +6196,15 @@ pub fn run() {
             battlenet_open_folder,
             companion_frame,
             companion_set_note,
+            get_game_watch,
+            set_game_watch,
+            get_steam_pulse,
+            set_steam_achievements,
+            set_steam_wishlist,
+            set_steam_wishlist_threshold,
+            save_steam_id,
+            forget_steam_id,
+            steam_check_now,
             game_wow,
             game_wow_addon,
             game_gw2,
@@ -5688,6 +6218,19 @@ pub fn run() {
             game_osrs_save,
             game_osrs_forget,
             game_osrs_refresh,
+            game_destiny,
+            game_destiny_refresh,
+            game_destiny_start_key,
+            game_destiny_answer_key,
+            game_destiny_save_name,
+            game_destiny_remove,
+            game_poe,
+            game_elite,
+            game_factorio,
+            game_factorio_mod,
+            game_stardew,
+            game_minecraft,
+            game_rl,
             home_open_clip,
             library_friends,
             library_steam_settings,

@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "The main window may listen for chat events. App commands have no manifest, so Tauri allows them from the app's own page only; other origins are refused.",
-  "windows": ["main"],
+  "windows": ["main", "desktop-nyx"],
   "permissions": ["core:event:default"]
 }
