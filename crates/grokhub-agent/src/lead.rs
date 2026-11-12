@@ -47,8 +47,8 @@ together: give each helper isolation worktree and background true, at most three
 wait with get_command_or_subagent_output. Tasks that change the same files run one after \
 another. A worktree helper's work is not in the project until it is merged: ask with \
 merge_subagent_work, and wait for the person. A result that says partial, held or conflict is \
-not done: tell the person. If the folder is not a git repository, run one writing helper at a \
-time.
+not done: tell the person. Work that conflicts can be redone: its result says how. If the folder \
+is not a git repository, run one writing helper at a time.
 4. Read each result. Check the change yourself before you set the task to completed. If a task \
 failed and can't be done, set it to cancelled and say why.
 5. Make only small edits yourself. If a helper is refused, do what the refusal says, and tell \
@@ -215,8 +215,9 @@ mod tests {
              get_command_or_subagent_output. Tasks that change the same files run one after \
              another. A worktree helper's work is not in the project until it is merged: ask \
              with merge_subagent_work, and wait for the person. A result that says partial, \
-             held or conflict is not done: tell the person. If the folder is not a git \
-             repository, run one writing helper at a time.\n4. Read each result."
+             held or conflict is not done: tell the person. Work that conflicts can be \
+             redone: its result says how. If the folder is not a git repository, run one \
+             writing helper at a time.\n4. Read each result."
         ));
         assert!(!LEAD_NEXT.contains("approved"));
         assert!(!LEAD_PLAN.contains("approved"));

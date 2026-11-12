@@ -2861,6 +2861,10 @@ export interface HelperWork {
   landing: boolean;
   /** A helper row of this launch is this work's helper. */
   live: boolean;
+  /** The title of the work this helper redid (its key once that is gone). */
+  redoOf?: string;
+  /** This work still waits, and a newer helper that finished redid it. */
+  redone?: boolean;
 }
 
 export interface Queue {

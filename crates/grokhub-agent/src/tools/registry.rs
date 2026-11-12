@@ -659,6 +659,10 @@ mod tests {
     /// merge a worktree helper's work) added 57 to Chat/Agent (11_352 → 11_409)
     /// and background (10_172 → 10_229). The index is not cut to a job's tool
     /// set, so a background job reads the line; the call is refused there.
+    /// `spawn_subagent`'s `redo` argument (a new worktree helper redoes work
+    /// that conflicted) and its words in the description added 49 to
+    /// Chat/Agent (11_409 → 11_458), Plan/Ask (7_526 → 7_575) and background
+    /// (10_229 → 10_278).
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -669,27 +673,27 @@ mod tests {
                 profile(PermMode::Ask, false, true),
                 full.clone(),
                 // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes,
-                // +57 for the merge_subagent_work index line.
-                11_409,
+                // +57 for the merge_subagent_work index line, +49 for spawn_subagent's redo.
+                11_458,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                11_409,
+                11_458,
             ),
             (
                 "plan/ask",
                 profile(PermMode::Ask, true, true),
                 full,
                 // +506 for web_search: a read-only session can still look things up (LO-51).
-                7_526,
+                7_575,
             ),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                10_229,
+                10_278,
             ),
         ];
         for (label, gate, set, budget) in cases {

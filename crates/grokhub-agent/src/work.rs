@@ -1694,6 +1694,9 @@ pub(crate) struct Opened {
 /// The tree's content is kept as the `base` commit in the store.
 ///
 /// `root` is `<config>/helper-work`. On any failure nothing is left behind.
+/// `redo_of` is the key of the work this helper redoes ([`redo_note`]); it
+/// is written on the new record, and the old record is not touched. Work
+/// that can't be redone is refused before anything is made.
 pub(crate) fn open(
     root: &Path,
     workspace: &Path,
@@ -1702,6 +1705,7 @@ pub(crate) fn open(
     task: &str,
     title: &str,
     description: &str,
+    redo_of: Option<&str>,
 ) -> Result<Opened, String> {
     git_ok()?;
     // First, before any git call: git is never run in a helper's tree.
@@ -1713,8 +1717,17 @@ pub(crate) fn open(
     if busy(&project)? {
         return Err(PROJECT_BUSY.into());
     }
-    read_records(root, session)
+    let records = read_records(root, session)
         .map_err(|err| format!("the helper work list for this chat can't be read: {err}"))?;
+    if let Some(old) = redo_of {
+        // A record never names work this chat does not have, or work that
+        // was merged or discarded since the caller looked.
+        let old = records
+            .iter()
+            .find(|work| work.key == old)
+            .ok_or_else(|| no_such_work(old))?;
+        redoable(old)?;
+    }
 
     let key = new_key();
     let live = Live::take(root, session, &key)?;
@@ -1737,7 +1750,7 @@ pub(crate) fn open(
         counts: Counts::default(),
         ignored: Vec::new(),
         ended: None,
-        redo_of: None,
+        redo_of: redo_of.map(str::to_string),
         landing: None,
         skipped: Vec::new(),
         state: WorkState::Opening,
@@ -2835,7 +2848,11 @@ fn record_of(root: &Path, session: &str, key: &str) -> Result<Work, String> {
     read_records(root, session)?
         .into_iter()
         .find(|work| work.key == key)
-        .ok_or_else(|| format!("there is no helper work {} in this chat", plain(key)))
+        .ok_or_else(|| no_such_work(key))
+}
+
+fn no_such_work(key: &str) -> String {
+    format!("there is no helper work {} in this chat", plain(key))
 }
 
 /// Takes the `.live` of a work this chat has. A key it does not have is
@@ -3458,6 +3475,170 @@ pub(crate) fn lead_card(session: &str, key: &str) -> Result<String, String> {
         work.project.display(),
         plain(&work.title)
     ))
+}
+
+/// At most this many characters of an old work's diff are given to the
+/// helper that redoes it.
+const REDO_DIFF_MAX: usize = 40_000;
+/// At most this many conflicting files are named ahead of the diff. A
+/// helper chose the names, and they are read outside the fence.
+const REDO_NAMES_MAX: usize = 20;
+
+/// What a helper that redoes work is told after its own task.
+pub(crate) struct Redo {
+    /// The harness's own words: which work, and the files that conflicted.
+    head: String,
+    /// The old work's changes, cut at [`REDO_DIFF_MAX`] characters.
+    diff: String,
+    /// The old work holds text a run wrote after it read outside text.
+    outside: bool,
+}
+
+impl Redo {
+    /// The text for the new helper's prompt, with the diff fenced: as
+    /// outside text when the old work holds any, and else as a helper's own
+    /// words. Fencing outside text marks this run as having read it, so this
+    /// is called only once the helper's worktree is made.
+    pub(crate) fn text(&self) -> String {
+        use crate::tools::fence;
+        let fenced = if self.outside {
+            fence::fence(fence::HELPER, &self.diff)
+        } else {
+            fence::fence_helper_result(&self.diff)
+        };
+        format!("{}{fenced}", self.head)
+    }
+}
+
+/// The base and the tip of work a new helper can redo: sealed work that
+/// still waits for the person. `Err` is why this work can't be redone.
+fn redoable(old: &Work) -> Result<(&str, &str), String> {
+    if old.landing.is_some() {
+        return Err(JOURNAL_OPEN.into());
+    }
+    let cannot = |why: &str| Err(format!("work {} can't be redone: {why}", old.key));
+    match (&old.state, &old.base, &old.tip) {
+        (WorkState::Opening | WorkState::Running, ..) => Err(STILL_RUNNING.into()),
+        (WorkState::Empty, ..) => cannot("it changed nothing"),
+        (WorkState::Merged, ..) => cannot("it is already merged"),
+        (WorkState::Discarded, ..) => cannot("it was discarded"),
+        (
+            WorkState::Ready | WorkState::Conflict { .. } | WorkState::Held { .. },
+            Some(base),
+            Some(tip),
+        ) => Ok((base, tip)),
+        _ => cannot("nothing of it was sealed"),
+    }
+}
+
+/// Whether what a work changed may hold outside text: it changed a mark
+/// list or a spooled tool output, or a mark list of its tip names a file it
+/// changed ([`crate::tools::taint`]).
+fn holds_marked(store: &Store, base: &str, tip: &str) -> Result<bool, String> {
+    use crate::tools::taint;
+    let out = store.git(&[
+        "diff-tree",
+        "-r",
+        "-z",
+        "--no-renames",
+        "--name-only",
+        base,
+        tip,
+    ])?;
+    let changed: BTreeSet<String> = out
+        .split(|b| *b == 0)
+        .filter(|name| !name.is_empty())
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .collect();
+    if changed
+        .iter()
+        .any(|path| taint::list_folder(path).is_some() || taint::spooled(path))
+    {
+        return Ok(true);
+    }
+    for entry in store.entries(tip)?.0 {
+        let Some(folder) = taint::list_folder(&entry.path) else {
+            continue;
+        };
+        let list = store.git(&["cat-file", "blob", &format!("{tip}:{}", entry.path)])?;
+        let marked = taint::marks(&String::from_utf8_lossy(&list));
+        if marked
+            .iter()
+            .any(|name| changed.contains(&format!("{folder}{name}")))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// What a helper that redoes the work `key` is told, after its own task:
+/// which work it redoes, the files that conflicted (the first
+/// [`REDO_NAMES_MAX`]), and the old work's changes as a diff, cut at
+/// [`REDO_DIFF_MAX`] characters with a line that says so. The old worktree
+/// is not named: the file tools open only the helper's own tree, and a
+/// sandboxed command reads the config folder as empty.
+///
+/// Nothing is written and nothing is fenced here: the old record, its tree
+/// and its refs stay as they are until the person merges or discards that
+/// work. `Err` is why the work can't be redone.
+pub(crate) fn redo_note(root: &Path, session: &str, key: &str) -> Result<Redo, String> {
+    if !valid_key(key) {
+        return Err(format!("not a helper work key: {}", plain(key)));
+    }
+    // Read as the Tasks panel reads it: work the app closed under is not
+    // running.
+    let old = records_for(root, session)?
+        .into_iter()
+        .find(|work| work.key == key)
+        .ok_or_else(|| no_such_work(key))?;
+    let (base, tip) = redoable(&old)?;
+    let store = Store::open(root)?;
+    let diff = store.git(&[
+        "diff-tree",
+        "-p",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        base,
+        tip,
+    ])?;
+    let diff = String::from_utf8_lossy(&diff);
+    let cut = diff.char_indices().nth(REDO_DIFF_MAX).map(|(at, _)| at);
+
+    let mut head = format!(
+        "This task redoes helper work {key} ({}), which was made on an older copy of the \
+         project and is not merged. Your worktree is a fresh copy of the project as it is \
+         now. Make that work's change here so that it fits the project as it is now.",
+        plain(&old.title)
+    );
+    if let WorkState::Conflict { files } = &old.state {
+        let shown = plain_list(&files[..files.len().min(REDO_NAMES_MAX)]);
+        head.push_str(&format!("\nFiles that conflicted: {shown}"));
+        match files.len().saturating_sub(REDO_NAMES_MAX) {
+            0 => head.push('.'),
+            more => head.push_str(&format!(" and {more} more.")),
+        }
+    }
+    if old.merged_ms.is_some() {
+        head.push_str(
+            "\nA merge of that work was finished before, so part of it may be in the project \
+             already. The diff is what its record still holds.",
+        );
+    }
+    head.push_str("\nThe old work's changes as a diff");
+    if cut.is_some() {
+        head.push_str(
+            ", cut at 40,000 characters; the rest is not shown, so say in your result what \
+             you could not redo",
+        );
+    }
+    head.push_str(":\n");
+    Ok(Redo {
+        head,
+        diff: diff[..cut.unwrap_or(diff.len())].to_string(),
+        outside: holds_marked(&store, base, tip)?,
+    })
 }
 
 /// The last line of a worktree helper's result: what became of its work.
@@ -5174,6 +5355,7 @@ mod tests {
             task,
             "Fix the parser",
             "fix the parser",
+            None,
         )
         .unwrap()
     }
@@ -5326,6 +5508,7 @@ mod tests {
             "s2",
             "Sub",
             "sub",
+            None,
         )
         .unwrap();
         assert_eq!(sub.workspace, sub.work.tree.join("src"));
@@ -5440,8 +5623,10 @@ mod tests {
     fn open_refuses_what_it_cannot_do_safely_and_leaves_nothing_behind() {
         let (base, proj, root) = project("refuse");
         let try_open = |workspace: &Path| {
-            open(&root, workspace, "chat", "hub1", "s1", "Title", "title")
-                .map(|opened| opened.work.key)
+            open(
+                &root, workspace, "chat", "hub1", "s1", "Title", "title", None,
+            )
+            .map(|opened| opened.work.key)
         };
 
         let plain = base.join("plain");
@@ -5533,7 +5718,7 @@ mod tests {
 
         // The snapshot stops: the tree was made and is taken away again.
         test_hooks::lower_limits(3, u64::MAX);
-        let err = open(&root, &proj, "chat", "hub1", "s1", "Title", "title").unwrap_err();
+        let err = open(&root, &proj, "chat", "hub1", "s1", "Title", "title", None).unwrap_err();
         assert_eq!(
             err,
             "the project has more than 200 MB of untracked files; commit or ignore them first"
@@ -5554,7 +5739,7 @@ mod tests {
         // `git worktree add` itself fails.
         let _ = std::fs::remove_dir_all(proj.join(".git/worktrees"));
         std::fs::write(proj.join(".git/worktrees"), "in the way\n").unwrap();
-        let err = open(&root, &proj, "chat", "hub1", "s1", "Title", "title").unwrap_err();
+        let err = open(&root, &proj, "chat", "hub1", "s1", "Title", "title", None).unwrap_err();
         assert!(err.starts_with("git worktree add failed: "), "{err}");
         nothing_left(&root);
         assert_eq!(
@@ -5571,7 +5756,7 @@ mod tests {
         let started = Instant::now();
         let (opened, waited) = std::thread::scope(|scope| {
             let helper = scope.spawn(|| {
-                let opened = open(&root, &proj, "chat", "hub1", "s1", "Title", "title");
+                let opened = open(&root, &proj, "chat", "hub1", "s1", "Title", "title", None);
                 (opened, started.elapsed())
             });
             // While the landing runs there is a record and no tree yet.
@@ -6633,7 +6818,7 @@ mod tests {
         test_hooks::lower_limits(0, u64::MAX);
         write(&proj.join("u.txt"), "untracked\n");
         assert_eq!(
-            open(&root, &proj, "chat", "hub1", "s2", "Title", "title")
+            open(&root, &proj, "chat", "hub1", "s2", "Title", "title", None)
                 .map(|opened| opened.work.key),
             Err(
                 "the project has more than 200 MB of untracked files; commit or ignore them first"
@@ -6832,6 +7017,7 @@ mod tests {
                 "s1",
                 "Title",
                 "title",
+                None,
             )
             .unwrap();
             assert_eq!(opened.workspace, opened.work.tree.join(sub));
@@ -6866,7 +7052,7 @@ mod tests {
         assert!(child.wait().unwrap().success());
         assert_eq!(git(&proj, &["status", "--porcelain"]), "UU README\n");
         assert_eq!(
-            open(&root, &proj, "chat", "hub1", "s1", "Title", "title")
+            open(&root, &proj, "chat", "hub1", "s1", "Title", "title", None)
                 .map(|opened| opened.work.key),
             Err(
                 "the project is in the middle of a merge or rebase, or has unresolved conflicts. \
@@ -8754,6 +8940,404 @@ mod tests {
         let done = land(&root, "chat", &work.key, By::Person).unwrap();
         assert_eq!(done.state, WorkState::Merged);
         assert_eq!(text(&proj.join("a.txt")), "new\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // -- redo ----------------------------------------------------------------
+
+    /// Two helpers changed one line; the first landed, so the second is a
+    /// conflict. Returns the project parts and the conflicted record.
+    fn conflicted(name: &str) -> (PathBuf, PathBuf, PathBuf, Work) {
+        let (base, proj, root) = project(name);
+        write(&proj.join("a.txt"), "one\ntwo\nthree\n");
+        commit_all(&proj);
+        let first = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "one\nTWO first\nthree\n");
+        });
+        let second = sealed(&root, &proj, "s2", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "one\nTWO second\nthree\n");
+        });
+        land(&root, "chat", &first.key, By::Person).unwrap();
+        let lost = land(&root, "chat", &second.key, By::Person).unwrap();
+        assert_eq!(
+            lost.state,
+            WorkState::Conflict {
+                files: vec!["a.txt".into()]
+            }
+        );
+        (base, proj, root, lost)
+    }
+
+    fn redo_for(root: &Path, proj: &Path, old: &str) -> Opened {
+        open(
+            root,
+            proj,
+            "chat",
+            "hub1",
+            "s3",
+            "Fix it again",
+            "fix it again",
+            Some(old),
+        )
+        .unwrap()
+    }
+
+    /// What a redo of `key` is told, or why it is not started.
+    fn redo_text(root: &Path, session: &str, key: &str) -> Result<String, String> {
+        redo_note(root, session, key).map(|note| note.text())
+    }
+
+    #[test]
+    fn a_redo_is_told_the_old_work_s_diff_word_for_word_and_the_old_work_stays_as_it_is() {
+        use crate::tools::fence;
+        fence::reset_run_nonce_for_tests();
+        let (base, proj, root, old) = conflicted("redotext");
+        let key = old.key.clone();
+        let before = person_s_git(&proj);
+
+        let told = redo_text(&root, "chat", &key).unwrap();
+        let store = Store::open(&root).unwrap();
+        let short = |commit: &Option<String>| {
+            let name = format!("{}:a.txt", commit.as_deref().unwrap());
+            let out = store.git(&["rev-parse", "--short", &name]).unwrap();
+            String::from_utf8(out).unwrap().trim().to_string()
+        };
+        let diff = format!(
+            "diff --git a/a.txt b/a.txt\nindex {}..{} 100644\n--- a/a.txt\n+++ b/a.txt\n\
+             @@ -1,3 +1,3 @@\n one\n-two\n+TWO second\n three\n",
+            short(&old.base),
+            short(&old.tip)
+        );
+        assert_eq!(
+            told,
+            format!(
+                "This task redoes helper work {key} (Fix the parser), which was made on an older \
+                 copy of the project and is not merged. Your worktree is a fresh copy of the \
+                 project as it is now. Make that work's change here so that it fits the project \
+                 as it is now.\n\
+                 Files that conflicted: a.txt.\n\
+                 The old work's changes as a diff:\n{}",
+                fence::fence_local(&diff)
+            )
+        );
+        // The old helper's run read no outside text, so its diff is a
+        // helper's own words and reading it marks nobody.
+        assert!(told.contains("\n<<<UNTRUSTED source=subagent:local nonce="));
+        assert!(!fence::holds_outside(&told));
+        assert!(!fence::run_saw_untrusted());
+
+        // The new helper's tree is the project as it is now, and its record
+        // names the work it redoes.
+        let opened = redo_for(&root, &proj, &key);
+        assert_eq!(opened.work.redo_of.as_deref(), Some(key.as_str()));
+        assert_eq!(
+            stored(&root, &opened.work.key).redo_of.as_deref(),
+            Some(key.as_str())
+        );
+        assert_eq!(
+            text(&opened.work.tree.join("a.txt")),
+            "one\nTWO first\nthree\n"
+        );
+        // Nothing of the old work moved: its record, its tree, its refs.
+        assert_eq!(stored(&root, &key), old);
+        assert_eq!(text(&old.tree.join("a.txt")), "one\nTWO second\nthree\n");
+        assert_eq!(refs_of(&root, &key), ["base", "tip"]);
+        assert_eq!(person_s_git(&proj), before);
+
+        // The redo finishes and lands like any helper's work. The old work
+        // is still the person's to discard.
+        write(&opened.work.tree.join("a.txt"), "one\nTWO both\nthree\n");
+        let done = settle(&root, "chat", opened.work, Ended::Done, opened.live).unwrap();
+        assert_eq!(done.state, WorkState::Ready);
+        assert_eq!(
+            land(&root, "chat", &done.key, By::Person).unwrap().state,
+            WorkState::Merged
+        );
+        assert_eq!(text(&proj.join("a.txt")), "one\nTWO both\nthree\n");
+        assert_eq!(stored(&root, &key), old);
+        assert!(!holds_markers(&base), "a conflict marker was written");
+        assert_eq!(
+            discard(&root, "chat", &key).unwrap().state,
+            WorkState::Discarded
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_redo_that_is_stopped_after_a_write_is_partial_and_no_file_holds_a_conflict_marker() {
+        let (base, proj, root, old) = conflicted("redostop");
+        let opened = redo_for(&root, &proj, &old.key);
+        let tree = opened.work.tree.clone();
+        write(&tree.join("a.txt"), "one\nTWO half\nthree\n");
+        let stopped = settle(&root, "chat", opened.work, Ended::Stopped, opened.live).unwrap();
+
+        assert_eq!(stopped.state, held(Held::Partial));
+        assert_eq!(stopped.redo_of.as_deref(), Some(old.key.as_str()));
+        assert_eq!(stopped.files, ["a.txt"]);
+        // Neither tree and no file of the project holds a marker, and the
+        // project is as the first helper's merge left it.
+        for dir in [&tree, &old.tree, &proj] {
+            assert!(!holds_markers(dir), "{}", dir.display());
+        }
+        assert_eq!(text(&proj.join("a.txt")), "one\nTWO first\nthree\n");
+        assert_eq!(text(&tree.join("a.txt")), "one\nTWO half\nthree\n");
+        assert_eq!(stored(&root, &old.key), old);
+        // Only the person can merge what a stopped redo left.
+        assert_eq!(
+            land(&root, "chat", &stopped.key, By::Lead).err().as_deref(),
+            Some("this work is partial or held; the person merges it from the Tasks panel")
+        );
+        assert_eq!(text(&proj.join("a.txt")), "one\nTWO first\nthree\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_long_diff_is_cut_at_40_000_characters_and_the_text_says_so() {
+        let (base, proj, root) = project("redocut");
+        // Two-byte characters: the cut counts characters and never splits one.
+        let line = format!("{}\n", "\u{e9}".repeat(99));
+        let work = sealed(&root, &proj, "s1", Ended::Stopped, |tree| {
+            write(&tree.join("big.txt"), &line.repeat(500));
+        });
+        assert_eq!(work.state, held(Held::Partial));
+        let body_of = |told: &str| {
+            let (_, fenced) = told.split_once("characters; ").unwrap();
+            let mut lines: Vec<&str> = fenced.split('\n').collect();
+            assert!(lines.last().unwrap().starts_with("<<<END_UNTRUSTED nonce="));
+            assert!(lines[1].starts_with("<<<UNTRUSTED source=subagent:local nonce="));
+            lines.pop();
+            (lines[0].to_string(), lines[2..].join("\n"))
+        };
+
+        let told = redo_text(&root, "chat", &work.key).unwrap();
+        assert!(!told.contains("Files that conflicted"), "{told}");
+        let (note, body) = body_of(&told);
+        assert_eq!(
+            note,
+            "the rest is not shown, so say in your result what you could not redo:"
+        );
+        assert!(
+            told.contains(
+                "\nThe old work's changes as a diff, cut at 40,000 characters; the rest is not \
+                 shown, so say in your result what you could not redo:\n\
+                 <<<UNTRUSTED source=subagent:local nonce="
+            ),
+            "{told}"
+        );
+        assert_eq!(body.chars().count(), 40_000);
+        assert!(body.starts_with("diff --git a/big.txt b/big.txt\nnew file mode 100644\n"));
+        assert!(body.ends_with('\u{e9}'), "the cut split a character");
+        // The old worktree is still there, and the helper is not sent to it:
+        // its tools can't open that folder.
+        assert!(work.tree.join("big.txt").is_file());
+        assert!(!told.contains(&work.tree.display().to_string()), "{told}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A helper chose the names of the files it changed, and they are read
+    /// outside the fence, so only the first 20 are given.
+    #[test]
+    fn a_redo_is_told_the_first_20_conflicting_files_and_how_many_more() {
+        let (base, proj, root) = project("redonames");
+        let names: Vec<String> = (1..=22).map(|n| format!("f{n:02}.txt")).collect();
+        for name in &names {
+            write(&proj.join(name), "old\n");
+        }
+        commit_all(&proj);
+        let all = |text: &'static str| {
+            let names = names.clone();
+            move |tree: &Path| {
+                for name in &names {
+                    write(&tree.join(name), text);
+                }
+            }
+        };
+        let first = sealed(&root, &proj, "s1", Ended::Done, all("first\n"));
+        let second = sealed(&root, &proj, "s2", Ended::Done, all("second\n"));
+        land(&root, "chat", &first.key, By::Person).unwrap();
+        let lost = land(&root, "chat", &second.key, By::Person).unwrap();
+        assert_eq!(lost.state, WorkState::Conflict { files: names });
+
+        let told = redo_text(&root, "chat", &lost.key).unwrap();
+        assert!(
+            told.contains(
+                "\nFiles that conflicted: f01.txt, f02.txt, f03.txt, f04.txt, f05.txt, f06.txt, \
+                 f07.txt, f08.txt, f09.txt, f10.txt, f11.txt, f12.txt, f13.txt, f14.txt, \
+                 f15.txt, f16.txt, f17.txt, f18.txt, f19.txt, f20.txt and 2 more.\n\
+                 The old work's changes as a diff:\n"
+            ),
+            "{told}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A file a run wrote after it read outside text keeps a mark in the
+    /// tree's mark list. A diff of such a file is outside text again.
+    #[test]
+    fn a_redo_of_work_that_holds_outside_text_is_fenced_as_outside_text_once_it_is_told() {
+        use crate::tools::fence;
+        let (base, proj, root) = project("redomarked");
+        for name in ["a.txt", "b.txt", "c.txt", "sub/x.txt"] {
+            write(&proj.join(name), "old\n");
+        }
+        // The project already marks b.txt and, for the folder `sub`, x.txt.
+        write(&proj.join(".grokhub/tainted-files"), "b.txt\n");
+        write(&proj.join("sub/.grokhub/tainted-files"), "x.txt\n");
+        commit_all(&proj);
+        let work = |task: &str, edit: fn(&Path)| sealed(&root, &proj, task, Ended::Done, edit);
+        let outside = "\n<<<UNTRUSTED source=subagent nonce=";
+        let local = "\n<<<UNTRUSTED source=subagent:local nonce=";
+
+        // The helper's own run marked the file it wrote.
+        let marked = work("s1", |tree| {
+            write(&tree.join("a.txt"), "from a page\n");
+            write(&tree.join(".grokhub/tainted-files"), "a.txt\nb.txt\n");
+        });
+        assert_eq!(marked.files, [".grokhub/tainted-files", "a.txt"]);
+        // A file that was marked before the helper changed part of it.
+        let kept = work("s2", |tree| write(&tree.join("b.txt"), "old\nmore\n"));
+        let below = work("s3", |tree| write(&tree.join("sub/x.txt"), "old\nmore\n"));
+        // A file no list marks.
+        let clean = work("s4", |tree| write(&tree.join("c.txt"), "new\n"));
+        for work in [&marked, &kept, &below, &clean] {
+            assert_eq!(work.state, WorkState::Ready);
+        }
+
+        fence::reset_run_nonce_for_tests();
+        let told = redo_text(&root, "chat", &clean.key).unwrap();
+        assert!(told.contains(local), "{told}");
+        assert!(!fence::run_saw_untrusted());
+
+        for work in [&marked, &kept, &below] {
+            fence::reset_run_nonce_for_tests();
+            // Reading what the old work holds marks nobody: a start that is
+            // refused after this leaves the run as it was.
+            let note = redo_note(&root, "chat", &work.key).unwrap();
+            assert!(!fence::run_saw_untrusted());
+            let told = note.text();
+            assert!(told.contains(outside), "{told}");
+            assert!(!told.contains(local), "{told}");
+            assert!(fence::holds_outside(&told));
+            assert!(fence::run_saw_untrusted());
+        }
+
+        // A run that has read outside text passes that on with any diff.
+        let told = redo_text(&root, "chat", &clean.key).unwrap();
+        assert!(told.contains(outside), "{told}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Finish moved the work's starting point to what landed, so the diff
+    /// of what is left is only what its tree got later.
+    #[test]
+    fn a_redo_of_work_that_partly_landed_is_told_so_and_gets_only_what_is_left() {
+        let (base, proj, root) = project("redolate");
+        for name in ["a.txt", "b.txt"] {
+            write(&proj.join(name), "old\n");
+        }
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "new\n");
+            write(&tree.join("b.txt"), "new\n");
+        });
+        land_until(&root, &work.key, "b.txt");
+        assert_eq!(
+            redo_text(&root, "chat", &work.key).err().as_deref(),
+            Some("finish the merge or put the files back first")
+        );
+        write(&work.tree.join("late.txt"), "late\n");
+        let out = resume(&root, "chat", &work.key, Resume::Finish).unwrap();
+        assert_eq!(out.state, held(Held::ChangedAfterSeal));
+
+        let told = redo_text(&root, "chat", &work.key).unwrap();
+        assert!(
+            told.contains(
+                "\nA merge of that work was finished before, so part of it may be in the \
+                 project already. The diff is what its record still holds.\n"
+            ),
+            "{told}"
+        );
+        assert!(
+            told.contains("\n--- /dev/null\n+++ b/late.txt\n@@ -0,0 +1 @@\n+late\n"),
+            "{told}"
+        );
+        assert_eq!(told.matches("diff --git ").count(), 1, "{told}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn work_that_cannot_be_redone_is_refused_in_these_words_and_nothing_is_made() {
+        let (base, proj, root) = project("redorefuse");
+        let refused = |key: &str| redo_text(&root, "chat", key).unwrap_err();
+        assert_eq!(refused("../x"), "not a helper work key: ../x");
+        assert_eq!(refused("zz"), "there is no helper work zz in this chat");
+
+        let running = open_for(&root, &proj, "s1");
+        assert_eq!(refused(&running.work.key), "that helper is still running");
+        let empty = settle(&root, "chat", running.work, Ended::Done, running.live).unwrap();
+        assert_eq!(
+            refused(&empty.key),
+            format!("work {} can't be redone: it changed nothing", empty.key)
+        );
+        let merged = sealed(&root, &proj, "s2", Ended::Done, |tree| {
+            write(&tree.join("one.txt"), "one\n");
+        });
+        land(&root, "chat", &merged.key, By::Person).unwrap();
+        assert_eq!(
+            refused(&merged.key),
+            format!("work {} can't be redone: it is already merged", merged.key)
+        );
+        let gone = sealed(&root, &proj, "s3", Ended::Done, |tree| {
+            write(&tree.join("two.txt"), "two\n");
+        });
+        discard(&root, "chat", &gone.key).unwrap();
+        assert_eq!(
+            refused(&gone.key),
+            format!("work {} can't be redone: it was discarded", gone.key)
+        );
+        // Another chat's work is not this chat's to redo.
+        assert_eq!(
+            redo_text(&root, "other", &gone.key).unwrap_err(),
+            format!("there is no helper work {} in this chat", gone.key)
+        );
+        // The app closed under a helper: its tree is kept and nothing of it
+        // is in the store.
+        let closed = open_for(&root, &proj, "s5");
+        write(&closed.work.tree.join("three.txt"), "three\n");
+        drop(closed.live);
+        assert_eq!(
+            records_for(&root, "chat").unwrap()[3].state,
+            held(Held::Interrupted)
+        );
+        assert_eq!(
+            refused(&closed.work.key),
+            format!(
+                "work {} can't be redone: nothing of it was sealed",
+                closed.work.key
+            )
+        );
+
+        // A helper is not started for work this chat does not have.
+        let chat = session_dir(&root, "chat");
+        let before = (read_records(&root, "chat").unwrap(), names_in(&chat));
+        let err = open(&root, &proj, "chat", "hub1", "s4", "T", "t", Some("zz"))
+            .map(|opened| opened.work.key)
+            .unwrap_err();
+        assert_eq!(err, "there is no helper work zz in this chat");
+        // Nor for work that was merged or discarded since the lead looked.
+        for (old, why) in [
+            (&merged.key, "it is already merged"),
+            (&gone.key, "it was discarded"),
+        ] {
+            let err = open(&root, &proj, "chat", "hub1", "s4", "T", "t", Some(old))
+                .map(|opened| opened.work.key)
+                .unwrap_err();
+            assert_eq!(err, format!("work {old} can't be redone: {why}"));
+        }
+        assert_eq!(
+            (read_records(&root, "chat").unwrap(), names_in(&chat)),
+            before
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

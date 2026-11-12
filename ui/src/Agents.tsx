@@ -159,6 +159,9 @@ export function mergeOffer(work: HelperWork): { label: string; asks: boolean } |
   }
 }
 
+/** On work that still waits after a newer helper redid it. Discard stays
+ * the person's click. */
+const REDONE_NOTE = "A newer helper redid this";
 export const MERGE_PARTIAL_QUESTION = "Merge partial work?";
 export const DISCARD_QUESTION = "Discard this work?";
 export const DELETE_WORKTREE_QUESTION = "Delete this worktree?";
@@ -617,6 +620,8 @@ export function Agents({
                     <div className="card-title">{row.title}</div>
                     <div className="card-status task-work">{workLine(row, true)}</div>
                     {row.partial && <div className="card-status work-partial">Partial · {row.ended}</div>}
+                    {row.redoOf && <div className="card-status work-detail">Redo of: {row.redoOf}</div>}
+                    {row.redone && <div className="card-status work-detail">{REDONE_NOTE}</div>}
                     {total > 0 && <div className="card-status work-detail">{workCounts(row)}</div>}
                     {row.files.length > 0 && (
                       <div className="card-status work-detail">Files: {someNames(row.files, total)}</div>

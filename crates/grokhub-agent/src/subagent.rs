@@ -100,7 +100,7 @@ pub fn drain_side_events() -> Vec<SideEvent> {
 
 pub fn spawn_schema() -> Value {
     // One fixed text, so a setting never rewrites the cached tool list.
-    let description = "Start a helper; do small or sequential work yourself. type explore: read-only, wide reading. general: your permissions. isolation worktree. background: task id.";
+    let description = "Start a helper; do small or sequential work yourself. type explore: read-only, wide reading. general: your permissions. isolation worktree; redo: work key to redo. background: task id.";
     json!({
         "type": "function",
         "name": "spawn_subagent",
@@ -115,7 +115,8 @@ pub fn spawn_schema() -> Value {
                 "persona": {"type": "string"},
                 "background": {"type": "boolean"},
                 "run_in_background": {"type": "boolean"},
-                "isolation": {"type": "string"}
+                "isolation": {"type": "string"},
+                "redo": {"type": "string"}
             },
             "required": ["prompt"],
             "additionalProperties": false
@@ -174,6 +175,8 @@ struct Spec {
     explore: bool,
     background: bool,
     worktree: bool,
+    /// The key of the helper work this worktree helper redoes.
+    redo: Option<String>,
 }
 
 fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
@@ -262,16 +265,28 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     let opened = if spec.worktree {
         let root = work::root();
         work::prune(&root);
-        match work::open(
-            &root,
-            call.workspace,
-            call.session,
-            tasks.nonce(),
-            &id,
-            &title,
-            spec.description.trim(),
-        ) {
-            Ok(opened) => Some(opened),
+        // A redo is given what the old work changed, as text after its task.
+        // Work that can't be redone starts no helper and makes no tree.
+        let redo = spec.redo.as_deref();
+        let made = redo
+            .map(|key| work::redo_note(&root, call.session, key))
+            .transpose()
+            .and_then(|note| {
+                let opened = work::open(
+                    &root,
+                    call.workspace,
+                    call.session,
+                    tasks.nonce(),
+                    &id,
+                    &title,
+                    spec.description.trim(),
+                    redo,
+                )?;
+                // Fenced only now: a refused start leaves this run unmarked.
+                Ok((opened, note.map(|note| note.text())))
+            });
+        match made {
+            Ok(made) => Some(made),
             Err(err) => {
                 forget_steer(&steer_key(&tasks, &id));
                 let _ = tasks.kill(&id);
@@ -280,6 +295,10 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         }
     } else {
         None
+    };
+    let (opened, redo_note) = match opened {
+        Some((opened, note)) => (Some(opened), note),
+        None => (None, None),
     };
     (call.on_event)(LoopEvent::Task {
         id: id.clone(),
@@ -334,9 +353,13 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         prompt: if fork.is_some() {
             fork_task(&spec.prompt)
         } else {
-            match parent_request(call.session).and_then(|req| known_context(&req.input)) {
-                Some(known) => format!("{}\n\n{known}", spec.prompt),
+            let task = match redo_note {
+                Some(note) => format!("{}\n\n{note}", spec.prompt),
                 None => spec.prompt,
+            };
+            match parent_request(call.session).and_then(|req| known_context(&req.input)) {
+                Some(known) => format!("{task}\n\n{known}"),
+                None => task,
             }
         },
         agent_id: id.clone(),
@@ -829,6 +852,16 @@ fn parse_spec(workspace: &Path, arguments: &str) -> Result<Spec, String> {
                 .into(),
         );
     }
+    if value
+        .get("redo")
+        .is_some_and(|key| !key.is_string() && !key.is_null())
+    {
+        return Err("redo must be a work key, as text".into());
+    }
+    let redo = Some(text_field(&value, &["redo"])).filter(|key| !key.is_empty());
+    if redo.is_some() && !worktree {
+        return Err("redo needs isolation worktree: the work is redone in a new worktree".into());
+    }
     let mut persona = text_field(&value, &["persona"]);
     if let Some(body) = crate::plugins::persona_body(workspace, &persona) {
         persona = body;
@@ -847,6 +880,7 @@ fn parse_spec(workspace: &Path, arguments: &str) -> Result<Spec, String> {
         explore,
         background: bool_field(&value, &["background", "run_in_background"]),
         worktree,
+        redo,
     })
 }
 
@@ -2736,6 +2770,352 @@ mod tests {
         assert!(output.contains(&line), "{output}");
         assert!(!dir.join("child.txt").exists());
         let _ = std::fs::remove_dir_all(&wt);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn redo_is_a_work_key_and_only_goes_with_a_worktree() {
+        let parse = |args: &str| parse_spec(Path::new("."), args).map(|spec| spec.redo);
+        assert_eq!(
+            parse(r#"{"prompt":"again","isolation":"worktree","redo":" mb3x9k2a-7q1z "}"#),
+            Ok(Some("mb3x9k2a-7q1z".to_string()))
+        );
+        assert_eq!(
+            parse(r#"{"prompt":"again","isolation":"worktree"}"#),
+            Ok(None)
+        );
+        assert_eq!(
+            parse(r#"{"prompt":"again","isolation":"worktree","redo":"  "}"#),
+            Ok(None)
+        );
+        for args in [
+            r#"{"prompt":"again","redo":"mb3x9k2a-7q1z"}"#,
+            r#"{"prompt":"again","isolation":"none","redo":"mb3x9k2a-7q1z"}"#,
+        ] {
+            assert_eq!(
+                parse(args),
+                Err("redo needs isolation worktree: the work is redone in a new worktree".into())
+            );
+        }
+        // A value that is not text is refused, not dropped: the helper would
+        // start as a plain one, with no diff.
+        for args in [
+            r#"{"prompt":"again","isolation":"worktree","redo":123}"#,
+            r#"{"prompt":"again","isolation":"worktree","redo":["mb3x9k2a-7q1z"]}"#,
+        ] {
+            assert_eq!(parse(args), Err("redo must be a work key, as text".into()));
+        }
+        assert_eq!(
+            parse(r#"{"prompt":"again","isolation":"worktree","redo":null}"#),
+            Ok(None)
+        );
+        assert_eq!(
+            spawn_schema()["parameters"]["properties"]["redo"],
+            json!({"type": "string"})
+        );
+    }
+
+    /// The first user message of a request: a helper's task.
+    fn task_of(req: &ResponsesRequest) -> String {
+        req.input
+            .iter()
+            .find_map(|item| match item {
+                InputItem::Message { role, .. } if role == "user" => {
+                    Some(crate::compact::message_text(item))
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    fn one(id: &str, name: &str, args: &str) -> Result<TurnOutput, ClientError> {
+        Ok(calls_turn(vec![call(id, name, args)], Usage::default()))
+    }
+
+    fn redo_args(work: &str) -> String {
+        json!({
+            "prompt": "again",
+            "description": "again",
+            "isolation": "worktree",
+            "redo": work,
+        })
+        .to_string()
+    }
+
+    /// A project where two worktree helpers changed one line of `a.txt`,
+    /// the first is merged and the second is a conflict. With `marked`, the
+    /// project's mark list names `a.txt` from the start. Returns the
+    /// project, the config folder with its guard, the chat and the
+    /// conflicted record.
+    fn conflict_to_redo(
+        tag: &str,
+        marked: bool,
+    ) -> (
+        PathBuf,
+        PathBuf,
+        crate::perm::ConfigGuard,
+        String,
+        work::Work,
+    ) {
+        let dir = scratch(tag);
+        git_repo(&dir);
+        std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        if marked {
+            std::fs::create_dir_all(dir.join(".grokhub")).unwrap();
+            std::fs::write(dir.join(".grokhub/tainted-files"), "a.txt\n").unwrap();
+        }
+        for args in [&["add", "."][..], &["commit", "-m", "a"]] {
+            let done = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(done.status.success(), "{args:?}");
+        }
+        let cfg = scratch(&format!("{tag}cfg"));
+        let guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session(tag);
+
+        let parent_id = sid.clone();
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            match (depth, n) {
+                (0, 0) => one(
+                    "s1",
+                    "spawn_subagent",
+                    &spawn_args("first", "general", false, "worktree"),
+                ),
+                (0, 1) => one(
+                    "s2",
+                    "spawn_subagent",
+                    &spawn_args("second", "general", false, "worktree"),
+                ),
+                (1, 0) => {
+                    let who = if task_of(req).starts_with("first") {
+                        "first"
+                    } else {
+                        "second"
+                    };
+                    let content = format!("one\nTWO {who}\nthree\n");
+                    one(
+                        "w",
+                        "write",
+                        &json!({"path": "a.txt", "content": content}).to_string(),
+                    )
+                }
+                _ => Ok(text_turn("done", Usage::default())),
+            }
+        });
+        run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let made = work::work_for(&sid).unwrap();
+        assert_eq!(
+            made.iter().map(|work| &work.title).collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        let merged = work::merge_work(&sid, &made[0].key, work::By::Person).unwrap();
+        assert_eq!(merged.state, work::WorkState::Merged);
+        let old = work::merge_work(&sid, &made[1].key, work::By::Person).unwrap();
+        assert_eq!(
+            old.state,
+            work::WorkState::Conflict {
+                files: vec!["a.txt".into()]
+            }
+        );
+        (dir, cfg, guard, sid, old)
+    }
+
+    /// Two helpers change one line, the first is merged, the second is a
+    /// conflict. The lead then starts a helper that redoes the second.
+    #[test]
+    fn a_redo_helper_gets_the_project_as_it_is_now_and_the_old_work_s_diff() {
+        let (dir, cfg, _guard, sid, old) = conflict_to_redo("redo", false);
+        let key = old.key.clone();
+
+        // The lead first names work this chat does not have, then the
+        // conflicted work. The helper tries to read the old worktree.
+        let helper_task = Arc::new(Mutex::new(String::new()));
+        let refusal = Arc::new(Mutex::new(String::new()));
+        let old_tree_read = Arc::new(Mutex::new(String::new()));
+        let (task, heard, read) = (
+            Arc::clone(&helper_task),
+            Arc::clone(&refusal),
+            Arc::clone(&old_tree_read),
+        );
+        let (parent_id, redo_key) = (sid.clone(), key.clone());
+        let old_file = old.tree.join("a.txt");
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            match (depth, n) {
+                (0, 0) => one("r0", "spawn_subagent", &redo_args("zz")),
+                (0, 1) => {
+                    *heard.lock().unwrap() = last_output(req);
+                    one("r1", "spawn_subagent", &redo_args(&redo_key))
+                }
+                (1, 0) => {
+                    *task.lock().unwrap() = task_of(req);
+                    one(
+                        "r",
+                        "read_file",
+                        &json!({"target_file": old_file.to_string_lossy()}).to_string(),
+                    )
+                }
+                (1, 1) => {
+                    *read.lock().unwrap() = last_output(req);
+                    one("w", "write", r#"{"path":"note.txt","content":"redone"}"#)
+                }
+                _ => Ok(text_turn("done", Usage::default())),
+            }
+        });
+        run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+
+        assert_eq!(
+            *refusal.lock().unwrap(),
+            "there is no helper work zz in this chat"
+        );
+        let told = helper_task.lock().unwrap().clone();
+        let start = format!(
+            "again\n\nThis task redoes helper work {key} (second), which was made on an older \
+             copy of the project and is not merged. Your worktree is a fresh copy of the \
+             project as it is now. Make that work's change here so that it fits the project \
+             as it is now.\n\
+             Files that conflicted: a.txt.\n\
+             The old work's changes as a diff:\n<<<UNTRUSTED source=subagent:local nonce="
+        );
+        assert!(told.starts_with(&start), "{told}");
+        assert!(
+            told.contains(
+                "\n--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO second\n three\n"
+            ),
+            "{told}"
+        );
+        // The helper is not sent to the old worktree: the file tools open
+        // only its own.
+        assert!(!told.contains(&old.tree.display().to_string()), "{told}");
+        assert_eq!(*old_tree_read.lock().unwrap(), "path escapes the workspace");
+
+        // One new record, for the redo: the refused call made none. Its
+        // tree was cut from the project as the first merge left it.
+        let records = work::work_for(&sid).unwrap();
+        assert_eq!(records.len(), 3);
+        let redone = &records[2];
+        assert_eq!(redone.redo_of.as_deref(), Some(key.as_str()));
+        assert_eq!(redone.state, work::WorkState::Ready);
+        // The old helper's run read no outside text, so its diff marks
+        // nobody and the redo's work is the one file it wrote.
+        assert_eq!(redone.files, ["note.txt"]);
+        assert_eq!(
+            std::fs::read_to_string(redone.tree.join("a.txt")).unwrap(),
+            "one\nTWO first\nthree\n"
+        );
+        // The old work is as the conflict left it, tree and record.
+        assert_eq!(records[1], old);
+        assert_eq!(
+            std::fs::read_to_string(old.tree.join("a.txt")).unwrap(),
+            "one\nTWO second\nthree\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\nTWO first\nthree\n"
+        );
+        assert!(!dir.join("note.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    /// The old work changed a file on the mark list, so its diff is outside
+    /// text. The lead's run is marked by it only once a helper starts.
+    #[test]
+    fn a_refused_redo_marks_nobody_and_a_started_one_reads_marked_work_as_outside_text() {
+        let (dir, cfg, _guard, sid, old) = conflict_to_redo("redomark", true);
+        let key = old.key.clone();
+        let list = dir.join(".grokhub/tainted-files");
+        // Both helpers rewrote the whole file in runs that had read no
+        // outside text, which took its mark away; the merge landed that.
+        assert_eq!(std::fs::read_to_string(&list).unwrap(), "");
+
+        // The project is in the middle of a merge for the first call.
+        let merge_head = dir.join(".git/MERGE_HEAD");
+        std::fs::write(&merge_head, "0000000000000000000000000000000000000000\n").unwrap();
+        let helper_task = Arc::new(Mutex::new(String::new()));
+        let refusal = Arc::new(Mutex::new(String::new()));
+        let (task, heard) = (Arc::clone(&helper_task), Arc::clone(&refusal));
+        let (parent_id, redo_key) = (sid.clone(), key.clone());
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            match (depth, n) {
+                (0, 0) => one("r0", "spawn_subagent", &redo_args(&redo_key)),
+                (0, 1) => {
+                    *heard.lock().unwrap() = last_output(req);
+                    std::fs::remove_file(&merge_head).unwrap();
+                    one("w", "write", r#"{"path":"lead.txt","content":"mine"}"#)
+                }
+                (0, 2) => one("r1", "spawn_subagent", &redo_args(&redo_key)),
+                (1, 0) => {
+                    *task.lock().unwrap() = task_of(req);
+                    one("w", "write", r#"{"path":"note.txt","content":"redone"}"#)
+                }
+                _ => Ok(text_turn("done", Usage::default())),
+            }
+        });
+        run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+
+        assert_eq!(
+            *refusal.lock().unwrap(),
+            "the project is in the middle of a merge or rebase, or has unresolved conflicts. \
+             Finish or abort it, then try again."
+        );
+        // The refused start left the lead's run unmarked: the file it wrote
+        // next is not on the project's mark list.
+        assert_eq!(
+            std::fs::read_to_string(dir.join("lead.txt")).unwrap(),
+            "mine"
+        );
+        assert_eq!(std::fs::read_to_string(&list).unwrap(), "");
+
+        let told = helper_task.lock().unwrap().clone();
+        assert!(
+            told.contains(
+                "\nThe old work's changes as a diff:\n<<<UNTRUSTED source=subagent nonce="
+            ),
+            "{told}"
+        );
+        // The helper that read it is marked, so the file it wrote is too.
+        let records = work::work_for(&sid).unwrap();
+        assert_eq!(records.len(), 3);
+        let redone = &records[2];
+        assert_eq!(redone.redo_of.as_deref(), Some(key.as_str()));
+        assert_eq!(redone.files, [".grokhub/tainted-files", "note.txt"]);
+        assert_eq!(
+            std::fs::read_to_string(redone.tree.join(".grokhub/tainted-files")).unwrap(),
+            "note.txt\n"
+        );
+        assert_eq!(records[1], old);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&cfg);
     }

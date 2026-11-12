@@ -389,6 +389,39 @@ describe("Agents", () => {
     ]);
   });
 
+  it("a redo names the work it redid, and that work says a newer helper redid it and keeps its buttons", async () => {
+    const old = work({ key: "k4-dddd", title: "task-4: Fix the test", state: "conflict", conflicts: ["src/a.rs"], redone: true });
+    const redo = work({ key: "k8-hhhh", title: "task-4: Fix the test again", redoOf: "task-4: Fix the test" });
+    api.getQueue.mockResolvedValue(workQueue(old, redo, work({ key: "k9-iiii", title: "task-9: Other" })));
+    render(<Agents conversationId="shell-c1" />);
+
+    const lines = (row: HTMLElement) => [...row.querySelectorAll(".card-status")].map((el) => el.textContent);
+    const oldRow = await workRow("task-4: Fix the test");
+    expect(lines(oldRow)).toEqual([
+      "Conflict · src/a.rs",
+      "A newer helper redid this",
+      "1 new, 1 changed, 1 deleted",
+      "Files: src/a.rs, src/b.rs, old.rs",
+      "Worktree: /home/user/.config/GrokHub/helper-work/chat/k1-aaaa",
+    ]);
+    expect(buttons(oldRow)).toEqual(["Merge again", "Discard"]);
+    const redoRow = await workRow("task-4: Fix the test again");
+    expect(lines(redoRow)).toEqual([
+      "Ready to merge · 3 files",
+      "Redo of: task-4: Fix the test",
+      "1 new, 1 changed, 1 deleted",
+      "Files: src/a.rs, src/b.rs, old.rs",
+      "Worktree: /home/user/.config/GrokHub/helper-work/chat/k1-aaaa",
+    ]);
+    expect(buttons(redoRow)).toEqual(["Merge", "Discard"]);
+    expect(lines(await workRow("task-9: Other"))).toEqual([
+      "Ready to merge · 3 files",
+      "1 new, 1 changed, 1 deleted",
+      "Files: src/a.rs, src/b.rs, old.rs",
+      "Worktree: /home/user/.config/GrokHub/helper-work/chat/k1-aaaa",
+    ]);
+  });
+
   it("a row names five files and counts the rest, and one ignored path reads in the singular", async () => {
     const big = work({
       files: ["a", "b", "c", "d", "e", "f", "g"],

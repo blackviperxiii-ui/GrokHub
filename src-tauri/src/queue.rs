@@ -169,6 +169,14 @@ pub struct HelperWork {
     pub landing: bool,
     /// A helper row of this launch is this work's helper.
     pub live: bool,
+    /// The title of the work this helper redid, or that work's key once its
+    /// record is gone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redo_of: Option<String>,
+    /// This work still waits, and a newer helper that finished redid it: the
+    /// redo's work is sealed whole, or merged.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub redone: bool,
 }
 
 fn why_kind(why: &Held) -> &'static str {
@@ -223,7 +231,26 @@ fn helper_work(work: &Work, live: bool, tree_kept: bool) -> Option<HelperWork> {
         tree_kept,
         landing: work.landing.is_some(),
         live,
+        redo_of: None,
+        redone: false,
     })
+}
+
+/// Whether the person still has this work to merge or discard.
+fn waits(state: &WorkState) -> bool {
+    matches!(
+        state,
+        WorkState::Ready | WorkState::Conflict { .. } | WorkState::Held { .. }
+    )
+}
+
+/// Whether a redo did the work again: it is merged, or its helper finished
+/// and what it made is sealed and waits. A redo that still runs, changed
+/// nothing, was stopped part way, was never sealed or was discarded redid
+/// nothing, and the person must not discard the old work on its word.
+fn redid(redo: &Work) -> bool {
+    redo.state == WorkState::Merged
+        || (waits(&redo.state) && redo.tip.is_some() && redo.ended == Some(Ended::Done))
 }
 
 /// Whether a record has a row. Work that waits for the person always has
@@ -246,7 +273,16 @@ fn work_rows(records: &[Work], nonce: Option<&str>, rows: &[TaskRow]) -> Vec<Hel
             let live =
                 nonce == Some(work.hub.as_str()) && rows.iter().any(|row| row.id == work.task);
             let tree_kept = std::fs::symlink_metadata(&work.tree).is_ok();
-            helper_work(work, live, tree_kept)
+            let mut row = helper_work(work, live, tree_kept)?;
+            row.redo_of = work.redo_of.as_ref().map(|old| {
+                let found = records.iter().find(|other| &other.key == old);
+                found.map_or_else(|| old.clone(), |other| other.title.clone())
+            });
+            row.redone = waits(&work.state)
+                && records.iter().any(|other| {
+                    other.redo_of.as_deref() == Some(work.key.as_str()) && redid(other)
+                });
+            Some(row)
         })
         .filter(listed)
         .collect()
@@ -267,10 +303,7 @@ fn todo_state(
     working: bool,
     needs_you: bool,
 ) -> TodoState {
-    if matches!(
-        work,
-        Some(WorkState::Ready | WorkState::Conflict { .. } | WorkState::Held { .. })
-    ) {
+    if work.is_some_and(waits) {
         return TodoState::NotMerged;
     }
     let running = if needs_you {
@@ -1002,6 +1035,105 @@ mod tests {
             ]
         );
         let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_redo_names_the_work_it_redid_and_that_work_says_a_newer_helper_redid_it() {
+        let conflict = || WorkState::Conflict {
+            files: vec!["src/a.rs".into()],
+        };
+        let redo = |key: &str, of: &str, state: WorkState| {
+            let mut work = record(key, "Fix the parser again", state, 2);
+            work.redo_of = Some(of.into());
+            work
+        };
+        let marks = |records: &[Work]| -> Vec<(String, Option<String>, bool)> {
+            work_rows(
+                records,
+                Some("hub-a"),
+                &[row("s1", "x", TaskState::Exited(0))],
+            )
+            .into_iter()
+            .map(|work| (work.key, work.redo_of, work.redone))
+            .collect()
+        };
+        let old = record("k1", "Fix the parser", conflict(), 1);
+        let again = Some("Fix the parser".to_string());
+
+        // A redo that finished and is sealed marks the work it redid, merged
+        // or not, and so does a stopped one the person merged anyway.
+        let stopped_and_merged = {
+            let mut work = redo("k2", "k1", WorkState::Merged);
+            work.ended = Some(Ended::Stopped);
+            work
+        };
+        for newer in [
+            redo("k2", "k1", WorkState::Ready),
+            redo("k2", "k1", conflict()),
+            redo("k2", "k1", held(Held::ChangedAfterSeal)),
+            redo("k2", "k1", WorkState::Merged),
+            stopped_and_merged,
+        ] {
+            assert_eq!(
+                marks(&[old.clone(), newer]),
+                [
+                    ("k1".to_string(), None, true),
+                    ("k2".to_string(), again.clone(), false),
+                ]
+            );
+        }
+        // One that still runs, changed nothing or was discarded redid
+        // nothing. Nor did one that was stopped part way, or one the app
+        // closed under or whose seal failed: nothing of those is sealed.
+        let stopped = {
+            let mut work = redo("k2", "k1", held(Held::Partial));
+            work.ended = Some(Ended::Stopped);
+            work
+        };
+        let unsealed = |why: Held| {
+            let mut work = redo("k2", "k1", held(why));
+            work.tip = None;
+            work.ended = None;
+            work
+        };
+        for newer in [
+            redo("k2", "k1", WorkState::Running),
+            redo("k2", "k1", WorkState::Empty),
+            redo("k2", "k1", WorkState::Discarded),
+            stopped,
+            unsealed(Held::Interrupted),
+            unsealed(Held::SealFailed("disk full".into())),
+        ] {
+            assert_eq!(
+                marks(&[old.clone(), newer]),
+                [
+                    ("k1".to_string(), None, false),
+                    ("k2".to_string(), again.clone(), false),
+                ]
+            );
+        }
+        // Old work that is over carries no mark, and a redo whose old record
+        // is gone names it by its key.
+        let mut merged = old.clone();
+        merged.state = WorkState::Merged;
+        assert_eq!(
+            marks(&[merged, redo("k2", "k1", WorkState::Ready)]),
+            [
+                ("k1".to_string(), None, false),
+                ("k2".to_string(), again, false),
+            ]
+        );
+        assert_eq!(
+            marks(&[redo("k2", "k1", WorkState::Ready)]),
+            [("k2".to_string(), Some("k1".to_string()), false)]
+        );
+
+        let mut row = helper_work(&old, false, true).unwrap();
+        row.redo_of = Some("An older fix".into());
+        row.redone = true;
+        let json = serde_json::to_value(row).unwrap();
+        assert_eq!(json["redoOf"], "An older fix");
+        assert_eq!(json["redone"], true);
     }
 
     /// A session file whose one turn wrote these to-dos.
