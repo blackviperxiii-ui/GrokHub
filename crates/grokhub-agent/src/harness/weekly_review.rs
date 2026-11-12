@@ -56,7 +56,9 @@ fn save(config_dir: &Path, map: &Map<String, Value>) -> Result<(), String> {
     let text =
         serde_json::to_string_pretty(&Value::Object(map.clone())).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
-    std::fs::write(config_dir.join(SELF_REVIEW_FILE), text).map_err(|e| e.to_string())
+    let tmp = config_dir.join(format!("{SELF_REVIEW_FILE}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, config_dir.join(SELF_REVIEW_FILE)).map_err(|e| e.to_string())
 }
 
 fn list<T: serde::de::DeserializeOwned>(map: &Map<String, Value>, key: &str) -> Vec<T> {
@@ -91,6 +93,16 @@ pub fn claim_week(config_dir: &Path, today: &str, clock: &LocalClock, night_hour
     }
     map.insert("last_day".into(), Value::String(today.to_string()));
     save(config_dir, &map).is_ok()
+}
+
+/// Release tonight's claim when the model call failed before posting anything,
+/// so the next tick can retry later that night.
+pub fn unclaim_week(config_dir: &Path, today: &str) {
+    let mut map = load(config_dir);
+    if map.get("last_day").and_then(Value::as_str) == Some(today) {
+        map.remove("last_day");
+        let _ = save(config_dir, &map);
+    }
 }
 
 /// One card waiting on the user, in the cabin's `pending` shape.

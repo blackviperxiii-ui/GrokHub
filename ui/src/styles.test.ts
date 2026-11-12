@@ -124,6 +124,15 @@ describe("styles.css views bar in a narrow window", () => {
     expect(bare.indexOf(last)).toBeGreaterThan(bare.indexOf(narrow));
     expect(rule(last, ".tabs {")).toContain("flex-wrap: nowrap;");
   });
+
+  it("gives the phone composer textarea a full row above its buttons", () => {
+    const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+    const phone = mediaBlocks(CSS, "(max-width: 600px)").find((b) => b.includes(".composer {")) ?? "";
+    expect(bare.indexOf(phone)).toBeGreaterThan(bare.indexOf(".composer textarea {"));
+    expect(rule(phone, ".composer {")).toContain("flex-wrap: wrap;");
+    expect(rule(phone, ".composer textarea {")).toContain("order: -1;");
+    expect(rule(phone, ".composer textarea {")).toContain("flex: 1 0 100%;");
+  });
 });
 
 // The Code tab is a column flex box that scrolls. A section allowed to shrink
