@@ -671,6 +671,7 @@ mod tests {
             tok_s: Default::default(),
             parts: &[],
             skills: Default::default(),
+            profile: Default::default(),
         }
     }
 

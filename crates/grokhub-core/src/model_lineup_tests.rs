@@ -166,3 +166,16 @@ fn nothing_to_fetch_says_so_and_a_pc_without_avx_gets_no_chat_models() {
     }
     assert!(l.queue.iter().all(|m| !m.is_chat()));
 }
+
+#[test]
+fn a_gpu_starts_from_its_tiers_speed_estimate() {
+    let e2b = ls::model_by_id(E2B).expect("catalog model");
+    let speeds = e2b.profile.tok_s_tier;
+    let (big, small) = (pc(&[24_564], 32_768, 0), pc(&[6_141], 16_384, 0));
+    assert_eq!(Some(est_tok_s(&big, e2b)), speeds.t4);
+    assert_eq!(Some(est_tok_s(&small, e2b)), speeds.t1);
+    assert!(
+        speeds.t4 > speeds.t1,
+        "a bigger card reads the weights faster"
+    );
+}

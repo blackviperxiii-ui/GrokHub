@@ -645,3 +645,32 @@ fn the_gaming_model_is_the_one_a_game_would_swap_to() {
     assert_eq!(gaming_model(&file(SMALL), &disk), None, "nothing lighter");
     assert_eq!(gaming_model(Path::new("/models/unknown.gguf"), &disk), None);
 }
+
+#[test]
+fn a_game_takes_the_lightest_gaming_safe_model_over_a_lighter_one_that_isnt() {
+    let safe = m(SMALL);
+    assert!(
+        safe.profile.gaming_safe,
+        "the catalog marks e2b gaming-safe"
+    );
+    let weak: &'static LocalModel = Box::leak(Box::new(LocalModel {
+        id: "weak",
+        file: "weak.gguf",
+        run_mb: 1_000,
+        profile: local_setup::LocalProfile {
+            gaming_safe: false,
+            ..safe.profile
+        },
+        ..*safe
+    }));
+    let disk = vec![
+        (weak, PathBuf::from("/models/weak.gguf")),
+        (safe, file(SMALL)),
+    ];
+    assert_eq!(gaming_below(m(BIG), &disk), Some(file(SMALL)));
+    assert_eq!(
+        gaming_below(m(BIG), &disk[..1]),
+        Some(PathBuf::from("/models/weak.gguf")),
+        "with no gaming-safe model, the lightest still stands in"
+    );
+}
