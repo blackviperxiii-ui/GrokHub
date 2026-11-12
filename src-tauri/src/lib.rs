@@ -103,6 +103,7 @@ pub mod queue;
 pub mod remote;
 pub mod remote_devices;
 pub mod remote_tls;
+pub mod review_cards;
 #[cfg(desktop)]
 pub mod scheduler;
 pub mod scopes;
@@ -4331,6 +4332,53 @@ async fn pulse_act(
     off_main(move || pulse::act(&dir, &id, act, &day, grokhub_core::now_ms())).await?
 }
 
+/// What a weekly self-review card's Apply did, and the page after it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewDone {
+    line: String,
+    page: pulse::Page,
+}
+
+/// A weekly self-review card's Apply change, Revert or Save idea: noted like
+/// the card's other accepts, then applied the way the cabin applies it.
+#[tauri::command]
+async fn pulse_review_apply(
+    state: State<'_, ShellState>,
+    id: String,
+    day: pulse::Day,
+) -> Result<ReviewDone, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let now = grokhub_core::now_ms();
+        pulse::act(&dir, &id, pulse::Act::Accept, &day, now)?;
+        let line = review_cards::apply(&dir, &id, now)?;
+        let page = pulse::load(&dir, Some(&day), now)?;
+        Ok(ReviewDone { line, page })
+    })
+    .await?
+}
+
+/// A code-idea card's Copy as GitHub issue: the text, redacted, for the
+/// page to put on the clipboard. The card stays.
+#[tauri::command]
+async fn pulse_review_issue(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<self_improve::IssueText, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let home = grokhub_core::user_home().map(|h| h.to_string_lossy().into_owned());
+        Ok(self_improve::IssueText {
+            text: review_cards::issue(&dir, &id, home.as_deref())?,
+            copied: self_improve::issue_copied(),
+        })
+    })
+    .await?
+}
+
 /// The Imagine page: the gallery (the cabin's wall) and whether chat can sign a call.
 #[tauri::command]
 async fn get_imagine(state: State<'_, ShellState>) -> Result<imagine::Page, String> {
@@ -6180,6 +6228,8 @@ pub fn run() {
             know_me::know_me_wipe,
             get_pulse,
             pulse_act,
+            pulse_review_apply,
+            pulse_review_issue,
             pulse_discuss,
             pulse_offer,
             pulse_remind,

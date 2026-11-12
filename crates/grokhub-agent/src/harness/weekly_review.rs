@@ -491,6 +491,179 @@ fn trial_noun(m: super::Metric) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Apply, from a card's button. Each goes through the change ledger with
+// `origin: self_manage`, and a skill or note change goes on trial, as in the
+// cabin.
+
+/// What Apply did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Applied {
+    /// The status line for the person.
+    pub line: String,
+    /// A trial that started: post [`trial_card`] for it.
+    pub trial: Option<Box<Version>>,
+    /// The card stays (the replay gate refused; `line` says why).
+    pub keep_card: bool,
+}
+
+impl Applied {
+    fn done(line: String, trial: Option<Version>) -> Self {
+        Self {
+            line,
+            trial: trial.map(Box::new),
+            keep_card: false,
+        }
+    }
+}
+
+fn target_text(t: &dyn super::ChangeTarget) -> String {
+    t.read()
+        .ok()
+        .flatten()
+        .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// A chat-note card's Apply: the guard checks the name and text again, the
+/// ledger keeps the version, and the note goes on trial in every chat. A
+/// refusal is logged as a guard span and the card is done.
+pub fn apply_snippet(
+    config_dir: &Path,
+    name: &str,
+    title: &str,
+    text: &str,
+    now: u64,
+) -> Result<Applied, String> {
+    use grokhub_core::protected_surface::{ProtectedSurface, TuneTarget};
+    let checked = ProtectedSurface::check(&format!("snippet:{name}")).and_then(|t| match t {
+        TuneTarget::Snippet(n) => ProtectedSurface::check_text(text).map(|text| (n, text)),
+        _ => Err("not a chat note".into()),
+    });
+    let (name, text) = match checked {
+        Ok(ok) => ok,
+        Err(why) => {
+            let _ = super::append_span(
+                config_dir,
+                &super::guard_span(&format!("snippet:{name}"), &why, now),
+            );
+            return Ok(Applied::done(why, None));
+        }
+    };
+    let target = super::SnippetTarget {
+        config_dir,
+        name: &name,
+    };
+    let before = target_text(&target);
+    let reason = format!("weekly self-review: {}", title.trim());
+    let body = format!("{text}\n");
+    let written = super::record_change(
+        config_dir,
+        &target,
+        super::Origin::SelfManage,
+        &reason,
+        || super::ChangeTarget::put(&target, Some(body.as_bytes())),
+    )?;
+    let Some(change) = written else {
+        return Ok(Applied::done(
+            format!("Chat note {name} already says that."),
+            None,
+        ));
+    };
+    let label = format!("{} (chat note)", title.trim());
+    let trial = super::start_trial(
+        config_dir,
+        &change,
+        super::ALL_RUNS,
+        &label,
+        super::Metric::Steps,
+        &before,
+        &body,
+    )
+    .ok();
+    Ok(Applied::done(
+        format!("Chat note {name} added: one chat in five tries it first."),
+        trial,
+    ))
+}
+
+/// Write one skill's `SKILL.md` (no secrets in markdown).
+pub fn write_skill_md(skills_dir: &Path, s: &SkillMd) -> Result<(), String> {
+    if !grokhub_core::skill_safe(&s.instructions) || !grokhub_core::skill_safe(&s.pitfalls) {
+        return Err("Secrets never in markdown".into());
+    }
+    let dir = skills_dir.join(grokhub_core::skill_dir_name(&s.name));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("SKILL.md");
+    let tmp = dir.join("SKILL.md.weekly.tmp");
+    std::fs::write(&tmp, grokhub_core::render_skill_md(s)).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+/// A patch or draft card's Apply: an existing skill must pass the replay
+/// gate first (a refusal keeps the card and says why); then the new
+/// `SKILL.md` goes through the ledger and on trial, judged on steps.
+pub fn apply_skill(
+    config_dir: &Path,
+    skills_dir: &Path,
+    name: &str,
+    title: &str,
+    md: &str,
+    skills: &[SkillMd],
+    now: u64,
+) -> Result<Applied, String> {
+    let old = skills
+        .iter()
+        .find(|s| grokhub_core::skill_dir_name(&s.name) == name)
+        .map(grokhub_core::render_skill_md)
+        .unwrap_or_default();
+    if !old.is_empty() {
+        if let Err(note) = super::replay_gate(config_dir, name, &old, md, now) {
+            return Ok(Applied {
+                line: note,
+                trial: None,
+                keep_card: true,
+            });
+        }
+    }
+    let skill = grokhub_core::parse_skill_md(md);
+    let reason = format!("weekly self-review: {title}");
+    let change = super::record_skill_change(
+        config_dir,
+        skills_dir,
+        &skill.name,
+        super::Origin::SelfManage,
+        &reason,
+        || write_skill_md(skills_dir, &skill),
+    )?;
+    let trial = change.and_then(|c| {
+        let class = grokhub_core::outcome::skill_signature(&skill.name);
+        let label = format!("{} in {}", title.trim(), skill.name);
+        super::start_trial(
+            config_dir,
+            &c,
+            &class,
+            &label,
+            super::Metric::Steps,
+            &old,
+            md,
+        )
+        .ok()
+    });
+    Ok(Applied::done(
+        format!("{name} changed: one run in five tries it first. /skills changes can undo it."),
+        trial,
+    ))
+}
+
+/// A code-idea card's Save line.
+pub fn idea_saved_line() -> String {
+    format!(
+        "Idea saved in Settings → Your PC → Automations & limits. {} never changes its own code.",
+        grokhub_core::brand::product_name()
+    )
+}
+
 /// The switched-on skills in `skills_dir`, by name, the list the pass
 /// drafts against and patches. A file that holds a secret is skipped.
 pub fn cabin_skills(skills_dir: &Path) -> Vec<SkillMd> {
