@@ -3203,7 +3203,8 @@ async fn set_game_watch(
     on: bool,
 ) -> Result<game_watch::GameWatch, String> {
     let dir = state.config_dir.clone();
-    off_main(move || game_watch::set(&dir, on, None, grokhub_core::game_watch_gsi::GSI_PORT)).await?
+    off_main(move || game_watch::set(&dir, on, None, grokhub_core::game_watch_gsi::GSI_PORT))
+        .await?
 }
 
 #[tauri::command]
@@ -3255,9 +3256,7 @@ async fn save_steam_id(
 }
 
 #[tauri::command]
-async fn forget_steam_id(
-    state: State<'_, ShellState>,
-) -> Result<steam_checks::SteamPulse, String> {
+async fn forget_steam_id(state: State<'_, ShellState>) -> Result<steam_checks::SteamPulse, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
     off_main(move || steam_checks::forget_id(&dir)).await?
