@@ -1964,11 +1964,7 @@ struct MemoryFileSaved {
 }
 
 #[tauri::command]
-fn save_memory_file(
-    name: String,
-    text: String,
-    base: String,
-) -> Result<MemoryFileSaved, String> {
+fn save_memory_file(name: String, text: String, base: String) -> Result<MemoryFileSaved, String> {
     let (files, redacted) = memory::save_file(&name, &text, &base)?;
     Ok(MemoryFileSaved { files, redacted })
 }
@@ -1983,10 +1979,7 @@ fn reflect_memory(
     state: State<'_, ShellState>,
     conversation_id: Option<String>,
 ) -> Result<memory::ReflectResult, String> {
-    memory::reflect(
-        &state.config_dir,
-        conversation_id.as_deref(),
-    )
+    memory::reflect(&state.config_dir, conversation_id.as_deref())
 }
 
 #[tauri::command]
