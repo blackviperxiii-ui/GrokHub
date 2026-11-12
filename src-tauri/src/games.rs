@@ -24,8 +24,7 @@ use serde::Serialize;
 use crate::credential;
 
 const GW2_KEYRING_ACCOUNT: &str = "gw2-api-key";
-const GW2_OFFLINE: &str =
-    "Offline only or the network guard held the Guild Wars 2 refresh back.";
+const GW2_OFFLINE: &str = "Offline only or the network guard held the Guild Wars 2 refresh back.";
 const OSRS_OFFLINE: &str = "Offline only or the network guard held the hiscores refresh back.";
 const WATCHER_OFF: &str = "Turn on the game watcher in Settings → Your PC → App & extras to follow boss pulls from WoW's own combat log (type /combatlog in game).";
 const WOW_EMPTY_SAVED: &str =
@@ -171,7 +170,10 @@ pub fn wow_view_from(
     };
     let missing = flavors
         .iter()
-        .filter(|f| f.action.as_deref() == Some("Install addon") || f.action.as_deref() == Some("Update addon"))
+        .filter(|f| {
+            f.action.as_deref() == Some("Install addon")
+                || f.action.as_deref() == Some("Update addon")
+        })
         .count();
     let install_all = if missing > 1 {
         Some(format!("Install addon in all {missing} versions"))
@@ -531,7 +533,12 @@ pub fn gw2_start_key(config_dir: &Path, key: String) -> Result<Gw2KeyCard, Strin
 }
 
 /// Save or Deny on the GW2 credentials card.
-pub fn gw2_answer_key(config_dir: &Path, id: &str, approve: bool, now_ms: u64) -> Result<Gw2View, String> {
+pub fn gw2_answer_key(
+    config_dir: &Path,
+    id: &str,
+    approve: bool,
+    now_ms: u64,
+) -> Result<Gw2View, String> {
     let (park_dir, waiter) = GW2_KEY_WAITERS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -680,11 +687,7 @@ pub fn eso_addon_action(server_dir: &Path, install: bool) -> Result<EsoView, Str
     let mut view = eso_view(grokhub_core::steam::detect_root().as_deref());
     // Re-scan including this dir if detection missed a fixture path.
     if !view.servers.iter().any(|s| Path::new(&s.dir) == server_dir) {
-        let mut dirs: Vec<PathBuf> = view
-            .servers
-            .iter()
-            .map(|s| PathBuf::from(&s.dir))
-            .collect();
+        let mut dirs: Vec<PathBuf> = view.servers.iter().map(|s| PathBuf::from(&s.dir)).collect();
         dirs.push(server_dir.to_path_buf());
         view = eso_view_from(&dirs);
     }
@@ -741,9 +744,7 @@ pub fn osrs_view(config_dir: &Path, now_ms: u64) -> OsrsView {
     let saved = osrs::load(config_dir);
     OsrsView {
         status: osrs_status(saved.as_ref(), now_ms),
-        gains: saved
-            .as_ref()
-            .and_then(|s| osrs::gains_line(&s.snapshots)),
+        gains: saved.as_ref().and_then(|s| osrs::gains_line(&s.snapshots)),
         has_player: saved.is_some(),
         name: saved.as_ref().map(|s| s.name.clone()),
         kind: saved
@@ -759,7 +760,12 @@ pub fn osrs_view(config_dir: &Path, now_ms: u64) -> OsrsView {
     }
 }
 
-pub fn osrs_save(config_dir: &Path, name: &str, kind: &str, now_ms: u64) -> Result<OsrsView, String> {
+pub fn osrs_save(
+    config_dir: &Path,
+    name: &str,
+    kind: &str,
+    now_ms: u64,
+) -> Result<OsrsView, String> {
     if !osrs::valid_name(name) {
         return Err("That isn't a display name Jagex allows.".into());
     }

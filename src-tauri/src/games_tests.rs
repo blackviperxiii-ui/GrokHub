@@ -92,9 +92,8 @@ fn gw2_status_and_offline_row() {
     assert!(empty.status.contains("add a read-only API key"));
     assert!(!empty.has_key);
 
-    *TEST_GW2_KEY.lock().unwrap() = Some(
-        "ABCDEF01-2345-6789-ABCD-EF0123456789ABCDEF01-2345-6789-ABCD-EF0123456789".into(),
-    );
+    *TEST_GW2_KEY.lock().unwrap() =
+        Some("ABCDEF01-2345-6789-ABCD-EF0123456789ABCDEF01-2345-6789-ABCD-EF0123456789".into());
     let keyed = gw2_view(&dir, 0);
     assert_eq!(keyed.status, "Guild Wars 2: key saved, nothing read yet.");
     assert!(keyed.has_key);
