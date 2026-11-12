@@ -186,6 +186,9 @@ GROKHUB_CHANNEL="$CHANNEL" "$ROOT/ui/node_modules/.bin/tauri" build --no-bundle 
 SHELL_TARGET="${CARGO_TARGET_DIR:-$ROOT/src-tauri/target}"
 
 install -Dm755 "$TARGET/release/grokhub-hub" "$PREFIX/bin/grokhub-hub"
+# The renamed-binary shim: old `grokhub --mcp-*` / `--doctor` configs keep
+# working for at least one release. It replaces an old cabin binary here.
+install -Dm755 "$TARGET/release/grokhub" "$PREFIX/bin/grokhub"
 install -Dm755 "$SHELL_TARGET/release/grokhub-shell" "$PREFIX/bin/grokhub-shell"
 install_desktop_entry() {
   local src="$1"
@@ -329,6 +332,7 @@ fi
 
 echo "installed $PREFIX/bin/grokhub-shell (channel $CHANNEL)"
 echo "installed $PREFIX/bin/grokhub-hub"
+echo "installed $PREFIX/bin/grokhub (renamed-binary shim)"
 if [[ "$SYSTEM" -eq 0 ]]; then
   echo "ensure $PREFIX/bin is on PATH"
 fi

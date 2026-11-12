@@ -311,8 +311,8 @@ jobs:
       - run: cargo nextest run --workspace --locked --profile ci
       - run: cargo test --doc --workspace --locked
       - run: cargo build -p grokhub-hub
-      - name: Hub binary exists
-        run: test -x target/debug/grokhub-hub
+      - name: Hub and shim binaries exist
+        run: test -x target/debug/grokhub-hub && test -x target/debug/grokhub
   # Supply chain: known advisories (RustSec), licenses, wildcard deps and
   # crate sources, per deny.toml.
   deny:
