@@ -108,6 +108,25 @@ pub enum Tier {
 }
 
 impl Tier {
+    /// The tier dedicated GPUs (VRAM in MiB each) alone reach: the card's
+    /// cut-offs, with several cards counting together only for T4.
+    pub fn of_vram(vram_mb: &[u64]) -> Tier {
+        let gb = |mb: u64| mb as f64 / 1_024.0;
+        let best = gb(vram_mb.iter().copied().max().unwrap_or(0));
+        let total = gb(vram_mb.iter().sum());
+        if best >= 23.0 || (vram_mb.len() > 1 && total >= 23.0) {
+            Tier::T4
+        } else if best >= 14.0 {
+            Tier::T3
+        } else if best >= 7.5 {
+            Tier::T2
+        } else if best >= 3.5 {
+            Tier::T1
+        } else {
+            Tier::T0
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Tier::T0 => "T0",
@@ -223,8 +242,6 @@ impl DeviceProfile {
     pub fn tier(&self) -> Tier {
         let gb = |mb: u64| mb as f64 / 1_024.0;
         let dgpus: Vec<u64> = self.discrete().map(|g| g.vram_mb).collect();
-        let best = gb(dgpus.iter().copied().max().unwrap_or(0));
-        let total = gb(dgpus.iter().sum());
         let ram = gb(self.ram_mb);
         if self.gpus.iter().any(|g| g.unified) {
             return if ram >= 60.0 {
@@ -239,16 +256,9 @@ impl DeviceProfile {
                 Tier::T0
             };
         }
-        if best >= 23.0 || (dgpus.len() > 1 && total >= 23.0) {
-            Tier::T4
-        } else if best >= 14.0 {
-            Tier::T3
-        } else if best >= 7.5 {
-            Tier::T2
-        } else if best >= 3.5 || ram >= 15.0 {
-            Tier::T1
-        } else {
-            Tier::T0
+        match Tier::of_vram(&dgpus) {
+            Tier::T0 if ram >= 15.0 => Tier::T1,
+            tier => tier,
         }
     }
 

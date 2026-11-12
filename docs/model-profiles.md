@@ -57,3 +57,22 @@ Direct xAI prices and windows come only from the xAI API listing, or from the pr
 ## User overrides
 
 `{config}/models/profile_overrides.toml` uses the same schema (`schema = 1`, then `[[model]]` rows). An override row's fields replace the built-in row's and are pinned, so they beat listings too. A key the profiles don't have adds a row. A file that doesn't parse is ignored as a whole. The router reads it when the model registry loads.
+
+## Local models
+
+Every on-device chat model in `crates/grokhub-core/data/local_catalog.toml` carries a profile too, read into `LocalModel::profile`:
+
+- `params_b`, `active_b`: billions of parameters, all and active per token (they differ for a mixture of experts).
+- `ctx_max`: the context window it was trained for, known before the download.
+- `tok_s_tier`: estimated tok/s on each hardware tier's reference GPU (T1 6 GB, T2 8 GB, T3 16 GB, T4 24 GB), only on tiers whose VRAM holds it. The hot-swap lineup (`model_lineup::est_tok_s`) starts from the figure for this PC's tier; the setup wizard's default still uses `tok_s`, and a speed test replaces either.
+- `gaming_safe`: at most 4.5 GiB at the default context and quality 38 or more. A game swaps to the lightest gaming-safe model below the one in use, and to the lightest one when none is.
+- Tool calling, memory need, quality and tier were already on the row (`badges`, `run_mb`, `min_budget`, `skills`, `tier`); `LocalModel::tools()` reads the badge.
+
+Everything above is an estimate until measured: `estimate` lists the fields, and a field moves to `measured` once someone measures it. To add or change a model, set its `params_b`, `active_b` and `ctx_max`, then:
+
+```
+python3 .github/scripts/local_profiles.py write   # derive tok_s_tier, gaming_safe, estimate
+python3 .github/scripts/local_profiles.py check   # what CI runs
+```
+
+Raise the catalog's `version` with any change, so a newer signed catalog reaches older apps.
