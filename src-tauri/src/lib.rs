@@ -17,6 +17,7 @@ pub mod bg_runs;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
+pub mod change_rows;
 pub mod changes;
 pub mod chat_tabs;
 pub mod chips;
@@ -6151,6 +6152,10 @@ pub fn run() {
             self_improve::set_self_improve_quiet,
             self_improve::self_improve_revert,
             self_improve::self_improve_issue,
+            change_rows::get_change_rows,
+            change_rows::change_row_undo,
+            change_rows::change_row_keep,
+            change_rows::change_row_restore,
             save_defaults,
             get_privacy,
             get_diagnostics,

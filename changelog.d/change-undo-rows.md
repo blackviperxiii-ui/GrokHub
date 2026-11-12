@@ -1,0 +1,1 @@
+- Settings → Behavior: "What Loadout changed on its own" lists self-made changes to skills, connections and automations, with Undo, Keep, and Restore for a removed skill, all on the same change ledger as /skills changes.

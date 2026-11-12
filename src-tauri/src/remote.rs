@@ -1207,6 +1207,10 @@ mod tests {
             "set_self_improve_quiet",
             "self_improve_revert",
             "self_improve_issue",
+            "get_change_rows",
+            "change_row_undo",
+            "change_row_keep",
+            "change_row_restore",
             // Provider keys, grants and spend limits stay on the computer.
             "get_ai_models",
             "add_ai_provider",
