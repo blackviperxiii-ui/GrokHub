@@ -841,7 +841,183 @@ select:focus-visible {
     margin: 0;
     text-align: center;
   }
+
+  .nyx-dock-desktop {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .nyx-dock-outfit {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .nyx-dock-outfit select {
+    width: 100%;
+  }
 }
+
+/* Desktop companion window (NyxDesk.tsx / nyx-desk.html). Transparent stage. */
+.nyx-desk {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+.nyx-desk-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.nyx-desk-stage > * {
+  pointer-events: auto;
+}
+
+.nyx-desk-pedestal {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 4%;
+  height: 42%;
+  pointer-events: auto;
+}
+
+.nyx-desk-disc {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8%;
+  height: 28%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(20, 16, 12, 0.85), rgba(0, 0, 0, 0.55));
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+
+.nyx-desk-cone {
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  bottom: 22%;
+  height: 70%;
+  background: linear-gradient(to top, rgba(255, 176, 0, 0.28), transparent 70%);
+  clip-path: polygon(10% 100%, 90% 100%, 70% 0, 30% 0);
+  filter: blur(0.5px);
+}
+
+.nyx-desk-ring {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  bottom: 10%;
+  height: 24%;
+  border-radius: 50%;
+  border: 1.5px dashed rgba(255, 176, 0, 0.55);
+  animation: nyx-desk-spin 14s linear infinite;
+}
+
+.nyx-desk-ring-inner {
+  left: 14%;
+  right: 14%;
+  bottom: 14%;
+  height: 16%;
+  border-color: rgba(255, 176, 0, 0.4);
+  animation-duration: 9s;
+  animation-direction: reverse;
+}
+
+@keyframes nyx-desk-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nyx-desk-ring {
+    animation: none;
+  }
+}
+
+.nyx-desk-figure {
+  position: relative;
+  z-index: 1;
+  max-width: 88%;
+  max-height: 86%;
+  object-fit: contain;
+  object-position: bottom center;
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.35));
+  animation: nyx-desk-bob 5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nyx-desk-figure {
+    animation: none;
+  }
+}
+
+@keyframes nyx-desk-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+.nyx-desk-menu {
+  position: fixed;
+  z-index: 5;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  min-width: 170px;
+  background: var(--panel, #111113);
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+.nyx-desk-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.nyx-desk-menu button:hover {
+  background: var(--hover, #1c1c1f);
+}
+
+.nyx-desk-menu-label {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.labs-desktop-nyx {
+  margin-bottom: 24px;
+}
+
 
 /* A reply's Markdown (Markdown.tsx). Theme tokens only, so contrast.test.ts covers it. */
 /* Like the cabin, a code block or a table takes the bubble's full width. */
