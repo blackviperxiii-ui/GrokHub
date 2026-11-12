@@ -115,7 +115,7 @@ pub fn outfit_choices(adults_ok: bool) -> Vec<OutfitChoice> {
 }
 
 /// The picture to show: pinned when allowed, else the hanging-out default.
-pub fn shown_outfit<'a>(pin: Option<&'a str>, adults_ok: bool) -> &'a companion::Outfit {
+pub fn shown_outfit(pin: Option<&str>, adults_ok: bool) -> &companion::Outfit {
     let nyx = companion::nyx();
     if let Some(id) = pin {
         if let Some(o) = nyx.outfit(id).filter(|o| adults_ok || !o.adult) {
@@ -377,10 +377,12 @@ mod tests {
 
     #[test]
     fn adult_outfits_need_both_gates_and_wardrobe_filters() {
-        let mut s = ShellSettings::default();
-        s.explicit_personalities = true;
-        s.adult_confirmed = true;
-        s.desktop_nyx_adult = false;
+        let mut s = ShellSettings {
+            explicit_personalities: true,
+            adult_confirmed: true,
+            desktop_nyx_adult: false,
+            ..Default::default()
+        };
         assert!(!adults_ok(&s));
         let safe = outfit_choices(false);
         assert!(safe.iter().all(|o| !o.adult));
