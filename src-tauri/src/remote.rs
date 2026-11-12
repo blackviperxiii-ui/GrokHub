@@ -1403,6 +1403,11 @@ mod tests {
             "open_data_folder",
             "open_files_folder",
             "change_files_folder",
+            "get_storage",
+            "storage_change",
+            "storage_reset",
+            "storage_bring_over",
+            "storage_open",
         ] {
             assert!(!web_command(name), "{name}");
         }

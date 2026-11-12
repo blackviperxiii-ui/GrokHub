@@ -104,6 +104,7 @@ pub mod skills;
 pub mod slash;
 pub mod slash_ops;
 mod steam_checks;
+pub mod storage;
 mod turns;
 pub mod voice;
 pub mod workboard;
@@ -5650,6 +5651,11 @@ pub fn run() {
             open_data_folder,
             open_files_folder,
             change_files_folder,
+            storage::get_storage,
+            storage::storage_change,
+            storage::storage_reset,
+            storage::storage_bring_over,
+            storage::storage_open,
             export_chat,
             open_saved,
             reveal_saved,
