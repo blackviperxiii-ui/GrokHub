@@ -10,6 +10,7 @@
 use std::path::Path;
 
 use grokhub_agent::harness::{self as hx, ConsentLedger, UserClick};
+use grokhub_agent::indexers::{self as idx, IndexedFact, ScopeIndex};
 use serde::Serialize;
 
 /// Browsers the history row offers: (scope id, name the user reads).
@@ -25,6 +26,9 @@ pub const CHOOSE_FOLDER: &str = "Choose folder…";
 pub const ADD_FOLDER: &str = "Add a folder";
 const ADD_BROWSER: &str = "Add a browser";
 const PATH_HINT_CHARS: usize = 48;
+/// Lines of learned facts shown under a scope row before "and N more".
+const FACTS_SHOWN: usize = 3;
+pub const FORGET_THESE: &str = "Forget these";
 pub const NO_FOLDER_DIALOG: &str =
     "No folder dialog opened on this computer. Type the folder's path instead.";
 
@@ -141,6 +145,54 @@ pub struct Granted {
     pub hint: String,
     /// The whole folder path, for hover.
     pub detail: Option<String>,
+    pub learned: Learned,
+}
+
+/// Under a granted row: what it taught the app, and whether "Forget these"
+/// shows. The same lines as the cabin's `indexer_ui.rs`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Learned {
+    /// "Learned N things, sealed on this computer:".
+    pub head: Option<String>,
+    /// The first few facts.
+    pub lines: Vec<String>,
+    /// "and N more".
+    pub more: Option<String>,
+    /// Said instead when nothing is listed.
+    pub note: Option<String>,
+    pub can_forget: bool,
+}
+
+pub fn learned(source: &str, facts: &[IndexedFact]) -> Learned {
+    let product = grokhub_core::brand::product_name();
+    let reader = hx::Scope::parse(source).is_some_and(|s| idx::has_reader(&s));
+    // The row's hint already says nothing reads it; the cabin says it twice.
+    if !reader {
+        return Learned::default();
+    }
+    if facts.is_empty() {
+        return Learned {
+            note: Some(format!("Nothing learned to show. {product} reads it on a heartbeat, never on battery or in quiet hours.")),
+            ..Learned::default()
+        };
+    }
+    let n = facts.len();
+    Learned {
+        head: Some(if n == 1 {
+            "Learned 1 thing, sealed on this computer:".to_string()
+        } else {
+            format!("Learned {n} things, sealed on this computer:")
+        }),
+        lines: facts
+            .iter()
+            .take(FACTS_SHOWN)
+            .map(|f| f.line.clone())
+            .collect(),
+        more: (n > FACTS_SHOWN).then(|| format!("and {} more", n - FACTS_SHOWN)),
+        note: None,
+        can_forget: true,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -175,6 +227,13 @@ pub struct ScopesView {
 
 pub fn view(config_dir: &Path, now: u64) -> ScopesView {
     let ledger = ConsentLedger::load(config_dir);
+    let locked = ledger.locked();
+    // Locked: nothing learned shows, the same as the cabin.
+    let index = if locked.is_some() {
+        ScopeIndex::default()
+    } else {
+        ScopeIndex::load(config_dir)
+    };
     let rows = hx::SCOPE_KINDS
         .iter()
         .map(|(kind, label)| {
@@ -194,6 +253,7 @@ pub fn view(config_dir: &Path, now: u64) -> ScopesView {
                         title: scope_label(&g.source),
                         hint: format!("On since {since}. {rest}"),
                         detail,
+                        learned: learned(&g.source, index.for_scope(&g.source)),
                     }
                 })
                 .collect();
@@ -222,7 +282,6 @@ pub fn view(config_dir: &Path, now: u64) -> ScopesView {
             }
         })
         .collect();
-    let locked = ledger.locked();
     ScopesView {
         heading: heading(),
         note: note().to_string(),
@@ -293,6 +352,34 @@ pub fn revoke(config_dir: &Path, id: &str) -> String {
     }
 }
 
+/// "Forget these" on one granted row: every fact it taught is tombstoned.
+/// The grant stays; only Revoke stops the reading.
+pub fn forget(config_dir: &Path, id: &str) -> String {
+    let ledger = ConsentLedger::load(config_dir);
+    if let Some(why) = ledger.locked() {
+        return why.message();
+    }
+    let Some(source) = ledger
+        .active()
+        .find(|g| g.id == id && g.destination.is_empty())
+        .map(|g| g.source.clone())
+    else {
+        return "That grant is already gone.".into();
+    };
+    let ids: Vec<String> = ScopeIndex::load(config_dir)
+        .for_scope(&source)
+        .iter()
+        .map(|f| f.id.clone())
+        .collect();
+    let label = scope_label(&source);
+    match idx::forget_facts(config_dir, &ids) {
+        Ok(n) => format!(
+            "Forgot {n} things learned from {label}. It stays allowed; revoke it to stop reading."
+        ),
+        Err(e) => format!("Could not forget: {e}"),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Answer {
@@ -338,6 +425,22 @@ pub(crate) async fn revoke_scope(
     let dir = state.config_dir.clone();
     crate::off_main(move || {
         let status = revoke(&dir, &id);
+        Answer {
+            view: view(&dir, grokhub_core::now_ms()),
+            status,
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn forget_scope_facts(
+    state: tauri::State<'_, crate::ShellState>,
+    id: String,
+) -> Result<Answer, String> {
+    let dir = state.config_dir.clone();
+    crate::off_main(move || {
+        let status = forget(&dir, &id);
         Answer {
             view: view(&dir, grokhub_core::now_ms()),
             status,

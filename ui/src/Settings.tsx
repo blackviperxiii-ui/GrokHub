@@ -23,6 +23,7 @@ import { GrokSignIn } from "./GrokSignIn";
 import { Labs } from "./Labs";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
+import { KnowMe } from "./KnowMe";
 import { AiModels } from "./AiModels";
 import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
@@ -291,6 +292,7 @@ export function Settings({
             {section === "code" && caps.code && <CodeSettings />}
             {section === "pulse" && caps.pulse && <Interests />}
             {section === "pulse" && caps.pulse && <SteamPulseSources />}
+            {section === "pulse" && caps.pulse && <KnowMe />}
             {section === "localAi" && caps.localAi && <LocalAi />}
             {section === "aiModels" && caps.localAi && <AiModels />}
             {section === "webAccess" && caps.webAccess && <WebAccess />}

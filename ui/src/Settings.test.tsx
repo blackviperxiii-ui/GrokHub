@@ -46,6 +46,7 @@ vi.mock("./ChatArchive", () => ({ ChatArchive: () => <p>Chat archive</p> }));
 vi.mock("./ScreenshotExplain", () => ({ ScreenshotExplain: () => <p>Screenshot explain row</p> }));
 vi.mock("./GameWatch", () => ({ GameWatch: () => <p>Game watcher row</p> }));
 vi.mock("./SteamPulseSources", () => ({ SteamPulseSources: () => <p>Steam Pulse sources</p> }));
+vi.mock("./KnowMe", () => ({ KnowMe: () => <p>Know me panel</p> }));
 vi.mock("./Behavior", () => ({
   Behavior: ({ readOnly, onCloseToTray }: { readOnly?: boolean; onCloseToTray?: (on: boolean) => void }) =>
     readOnly ? (
@@ -398,12 +399,14 @@ describe("Settings", () => {
     await openSection("Pulse");
     expect(screen.getByText("Interests panel")).toBeInTheDocument();
     expect(screen.getByText("Steam Pulse sources")).toBeInTheDocument();
+    expect(screen.getByText("Know me panel")).toBeInTheDocument();
     expect(screen.queryByText("Code panel")).toBeNull();
 
     await openSection("Local AI");
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();
     expect(screen.queryByText("Interests panel")).toBeNull();
     expect(screen.queryByText("Steam Pulse sources")).toBeNull();
+    expect(screen.queryByText("Know me panel")).toBeNull();
 
     await openSection("AI models");
     expect(screen.getByText("AI models panel")).toBeInTheDocument();

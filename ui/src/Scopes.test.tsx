@@ -9,12 +9,20 @@ const api = vi.hoisted(() => ({
   allowScope: vi.fn<(kind: string, value: string) => Promise<ScopeAnswer>>(),
   revokeScope: vi.fn<(id: string) => Promise<ScopeAnswer>>(),
   pickScopeFolder: vi.fn<() => Promise<string | null>>(),
+  forgetScopeFacts: vi.fn<(id: string) => Promise<ScopeAnswer>>(),
 }));
 vi.mock("./scopesApi", () => api);
 
 import { Scopes } from "./Scopes";
 
 const HEAD = "What Loadout can read";
+const NOTHING = {
+  head: null,
+  lines: [],
+  more: null,
+  note: "Nothing learned to show. Loadout reads it on a heartbeat, never on battery or in quiet hours.",
+  canForget: false,
+};
 
 function view(over: Partial<ScopesView> = {}): ScopesView {
   return {
@@ -33,7 +41,7 @@ function view(over: Partial<ScopesView> = {}): ScopesView {
       },
       {
         kind: "apps",
-        granted: [{ id: "g-apps", title: "Installed apps", hint: "On since 1m ago. Installed apps and how often you open them.", detail: null }],
+        granted: [{ id: "g-apps", title: "Installed apps", hint: "On since 1m ago. Installed apps and how often you open them.", detail: null, learned: NOTHING }],
         add: null,
       },
       {
@@ -118,5 +126,45 @@ describe("Scopes", () => {
       expect(b).toBeDisabled();
       expect(b).toHaveAttribute("title", "Private data is unavailable");
     }
+  });
+
+  it("lists what an allowed scope taught, and Forget these asks first", async () => {
+    const taught = {
+      head: "Learned 5 things, sealed on this computer:",
+      lines: ["App: Blender, opened 12 times", "App: Steam, opened 9 times", "App: Krita, opened 4 times"],
+      more: "and 2 more",
+      note: null,
+      canForget: true,
+    };
+    const shown = view();
+    shown.rows[1].granted[0] = { ...shown.rows[1].granted[0], learned: taught };
+    api.getScopes.mockResolvedValue(shown);
+    api.forgetScopeFacts.mockResolvedValue({
+      view: view(),
+      status: "Forgot 5 things learned from Installed apps. It stays allowed; revoke it to stop reading.",
+    });
+    render(<Scopes />);
+    const apps = within(await screen.findByRole("listitem", { name: "Installed apps" }));
+    const facts = within(apps.getByLabelText("Learned from Installed apps"));
+    expect(facts.getByText("Learned 5 things, sealed on this computer:")).toBeInTheDocument();
+    expect(facts.getByText("App: Krita, opened 4 times")).toBeInTheDocument();
+    expect(facts.getByText("and 2 more")).toBeInTheDocument();
+    await userEvent.click(apps.getByRole("button", { name: "Forget these" }));
+    expect(api.forgetScopeFacts).not.toHaveBeenCalled();
+    const ask = within(apps.getByRole("group", { name: "Forget what Installed apps taught?" }));
+    await userEvent.click(ask.getByRole("button", { name: "Forget" }));
+    expect(api.forgetScopeFacts).toHaveBeenCalledWith("g-apps");
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Forgot 5 things learned from Installed apps. It stays allowed; revoke it to stop reading.",
+    );
+  });
+
+  it("says why nothing is listed and offers no Forget these", async () => {
+    render(<Scopes />);
+    const apps = within(await screen.findByRole("listitem", { name: "Installed apps" }));
+    expect(
+      apps.getByText("Nothing learned to show. Loadout reads it on a heartbeat, never on battery or in quiet hours."),
+    ).toBeInTheDocument();
+    expect(apps.queryByRole("button", { name: "Forget these" })).toBeNull();
   });
 });
