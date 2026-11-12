@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { getGameWatch, setGameWatch } from "./api";
+import { PRODUCT_NAME } from "./brand";
 import { Toggle } from "./Toggle";
 
 /** The cabin's words for Settings → Behavior → Game watcher. */
 export const GAME_WATCH_TITLE = "Game watcher (Counter-Strike 2, Dota 2)";
-export const GAME_WATCH_HELP =
-  "Follows your match as you play, through Game State Integration, the feed Valve built and supports for this. Turning it on writes one small file into the game's own config folder that tells the game to send its state to Loadout, here on this computer only, while the game runs. Turning it off removes that file. Nothing reads the game's memory or touches the game.";
+export const GAME_WATCH_HELP = `Follows your match as you play, through Game State Integration, the feed Valve built and supports for this. Turning it on writes one small file into the game's own config folder that tells the game to send its state to ${PRODUCT_NAME}, here on this computer only, while the game runs. Turning it off removes that file. Nothing reads the game's memory or touches the game.`;
 
 /**
  * Game watcher switch. Full row in Settings → Behavior; compact status in the
