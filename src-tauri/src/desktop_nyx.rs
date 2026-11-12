@@ -115,10 +115,7 @@ pub fn outfit_choices(adults_ok: bool) -> Vec<OutfitChoice> {
 }
 
 /// The picture to show: pinned when allowed, else the hanging-out default.
-pub fn shown_outfit<'a>(
-    pin: Option<&'a str>,
-    adults_ok: bool,
-) -> &'a companion::Outfit {
+pub fn shown_outfit<'a>(pin: Option<&'a str>, adults_ok: bool) -> &'a companion::Outfit {
     let nyx = companion::nyx();
     if let Some(id) = pin {
         if let Some(o) = nyx.outfit(id).filter(|o| adults_ok || !o.adult) {
