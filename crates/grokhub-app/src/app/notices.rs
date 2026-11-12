@@ -230,7 +230,28 @@ pub(super) fn notice_age(now: u64, at: u64) -> String {
     }
 }
 
+/// The one-time note that the desktop app moved to the Tauri app, which
+/// replaces the cabin. Same voice as the sign-in note.
+pub(super) const SHELL_MOVE_NOTE: &str = "{product} has a new desktop app. Get it from the latest release: GrokHub-Shell-Setup on Windows, the .AppImage or .deb on Linux. From a source folder, run ./scripts/install.sh --user.";
+
 impl Cabin {
+    /// Heartbeat: the new-app note lands in the bell once per install, as an
+    /// Info row with no pill. Clear all or reading it is the dismiss; the flag
+    /// in `app.json` keeps it from coming back.
+    pub(super) fn post_shell_move_notice(&mut self) {
+        if self.cfg.shell_move_notice_seen {
+            return;
+        }
+        self.cfg.shell_move_notice_seen = true;
+        self.notify(
+            NoticeKind::Info,
+            grokhub_core::brand::filled(SHELL_MOVE_NOTE).to_string(),
+            Some(NoticePlace::Settings(SettingsSec::Update)),
+            None,
+        );
+        self.persist_cfg();
+    }
+
     /// The one way into the bell: what happened, where it came from (a click
     /// on the row goes there), and an optional action.
     pub(super) fn notify(
@@ -897,6 +918,49 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn the_new_app_note_lands_in_the_bell_once_and_stays_gone() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("bell-shell-move");
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.post_shell_move_notice();
+        cabin.post_shell_move_notice();
+        assert_eq!(cabin.notices.items.len(), 1);
+        assert_eq!(
+            cabin.notices.items[0].text,
+            format!(
+                "{} has a new desktop app. Get it from the latest release: GrokHub-Shell-Setup on Windows, the .AppImage or .deb on Linux. From a source folder, run ./scripts/install.sh --user.",
+                grokhub_core::brand::product_name()
+            )
+        );
+        assert_eq!(cabin.notices.items[0].kind, NoticeKind::Info);
+        assert_eq!(cabin.notices.items[0].action, None);
+        assert_eq!(
+            cabin.notices.items[0].from.as_ref().map(NoticePlace::name),
+            Some("Settings \u{203a} Update".to_string())
+        );
+        assert_eq!(cabin.notices.unread, 1);
+        assert!(cabin.cfg.shell_move_notice_seen);
+        // Dismissed with Clear all, it never comes back in this run...
+        cabin.notices.clear();
+        cabin.post_shell_move_notice();
+        assert!(cabin.notices.items.is_empty());
+        // ...or after a restart: the flag is in the saved settings.
+        let cfg = crate::config::AppConfig {
+            shell_move_notice_seen: true,
+            ..Default::default()
+        };
+        crate::config::save(&cfg).expect("save");
+        assert!(crate::config::load().shell_move_notice_seen);
+        let mut next = Cabin::quiet_for_test();
+        next.cfg = crate::config::load();
+        next.post_shell_move_notice();
+        assert!(next.notices.items.is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

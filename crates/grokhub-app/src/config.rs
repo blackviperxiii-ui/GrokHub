@@ -366,6 +366,9 @@ pub struct AppConfig {
     /// First close-to-tray toast has been shown. Quiet hours do not set this.
     #[serde(default)]
     pub close_to_tray_tip_seen: bool,
+    /// The one-time "get the new desktop app" note is in the bell already.
+    #[serde(default)]
+    pub shell_move_notice_seen: bool,
     /// Pre-R1 saved effort. Effort is automatic now: [`load`] drops it and logs
     /// that once, and it is never written back.
     #[serde(default, rename = "reasoningEffort", skip_serializing)]
@@ -919,6 +922,7 @@ impl Default for AppConfig {
             last_chat_tab: String::new(),
             close_to_tray: default_close_to_tray(),
             close_to_tray_tip_seen: false,
+            shell_move_notice_seen: false,
             legacy_reasoning_effort: None,
             local_model: false,
             prompt_cleanup: false,
