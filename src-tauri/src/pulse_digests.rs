@@ -96,7 +96,7 @@ fn day_key(days: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-pub(crate) fn local_day(now_ms: u64, offset_min: i32) -> String {
+fn local_day(now_ms: u64, offset_min: i32) -> String {
     let local = (now_ms / 60_000) as i64 + i64::from(offset_min);
     day_key(local.div_euclid(1440))
 }

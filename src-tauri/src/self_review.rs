@@ -115,7 +115,7 @@ pub fn look(
         return Look::NoClock;
     };
     let clock = crate::scheduler::local_clock(now, offset);
-    let today = crate::pulse_digests::local_day(now, offset);
+    let today = local_day(now, offset);
     if !wr::claim_week(config_dir, &today, &clock, dream_hour(config_dir)) {
         return Look::NotDue;
     }
@@ -204,6 +204,15 @@ fn post_all(
         n
     })
     .unwrap_or(0)
+}
+
+/// `YYYY-MM-DD` for the local day holding `now` at `offset_min` from UTC,
+/// the key the cabin writes as `last_day`.
+fn local_day(now: u64, offset_min: i32) -> String {
+    let local = (now as i64)
+        .saturating_add(i64::from(offset_min) * 60_000)
+        .max(0);
+    grokhub_core::model_registry::quota::utc_day_key(local as u64)
 }
 
 #[cfg(test)]

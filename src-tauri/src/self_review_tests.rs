@@ -258,3 +258,10 @@ fn a_quiet_week_with_no_failures_makes_no_call() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_local_day_key_matches_the_cabins_last_day() {
+    assert_eq!(local_day(SUN_3AM, 0), "2026-11-15");
+    assert_eq!(local_day(SUN_3AM, -360), "2026-11-14");
+    assert_eq!(local_day(SAT_11PM, 60), "2026-11-15");
+}
