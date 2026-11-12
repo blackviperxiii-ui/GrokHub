@@ -178,4 +178,7 @@ pub use tools::{
     WebSearchBackend, WebSearchSettings, READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};
-pub use work::{work_for, Counts, Ended, Held, Landing, Work, WorkState};
+pub use work::{
+    discard_work, merge_work, resume_work, work_for, By, Counts, Ended, Held, Landing, Resume,
+    Work, WorkState,
+};

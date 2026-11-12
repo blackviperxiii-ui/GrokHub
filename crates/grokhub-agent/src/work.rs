@@ -17,7 +17,7 @@
 //! harness opens each file itself, without following links, and streams the
 //! bytes to `git fast-import`.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{BufWriter, Read, Write};
@@ -100,6 +100,10 @@ pub struct Landing {
     /// Store commit: the merge result.
     pub merged: String,
     pub paths: Vec<String>,
+    /// The folders this landing makes for new files, outermost first. Only
+    /// these are removed again when the files are put back.
+    #[serde(default)]
+    pub made: Vec<String>,
     /// The state to return to if the files are put back.
     pub from: Box<WorkState>,
     pub started_ms: u64,
@@ -360,12 +364,28 @@ fn lock_within(file: &File, shared: bool, wait: Duration) -> Result<bool, String
     }
 }
 
+/// A lock file with its OS lock held. Dropping it lets the lock go.
+///
+/// The lock is given up with an unlock call, not by closing the file. A
+/// process that another thread starts at that moment holds a copy of every
+/// open file until it has replaced itself with its program, and a lock
+/// belongs to the open file, not to one handle: closing ours would leave
+/// the lock held, by nobody who knows of it, for that instant.
+#[derive(Debug)]
+struct Locked(File);
+
+impl Drop for Locked {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// `records.lock`, held for one read-modify-write of one `work.json`. No git
 /// call runs under it. It is the last lock in the order: `.live`, then
 /// `landing.lock`, then `records.lock`.
 pub(crate) struct RecordsGuard {
     root: PathBuf,
-    _file: File,
+    _file: Locked,
 }
 
 impl RecordsGuard {
@@ -380,7 +400,7 @@ impl RecordsGuard {
         }
         Ok(Self {
             root: root.to_path_buf(),
-            _file: file,
+            _file: Locked(file),
         })
     }
 
@@ -432,7 +452,17 @@ pub(crate) fn update_records<T>(
 /// from a half-landed project and two opens do not wait for each other.
 #[derive(Debug)]
 pub(crate) struct LandingGuard {
-    _file: File,
+    file: Locked,
+    /// Held alone: the file names its holder until the lock is let go.
+    alone: bool,
+}
+
+impl Drop for LandingGuard {
+    fn drop(&mut self) {
+        if self.alone {
+            let _ = self.file.0.set_len(0);
+        }
+    }
 }
 
 impl LandingGuard {
@@ -445,7 +475,36 @@ impl LandingGuard {
         if !lock_within(&file, true, wait)? {
             return Err(LANDING_BUSY.into());
         }
-        Ok(Self { _file: file })
+        Ok(Self {
+            file: Locked(file),
+            alone: false,
+        })
+    }
+
+    /// Takes the lock alone, as a landing holds it, and writes who holds it
+    /// into the file: `{pid, op, since_ms}`. `op` is `merge` or `resume`.
+    pub(crate) fn alone(root: &Path, op: &str) -> Result<Self, String> {
+        Self::alone_within(root, op, LOCK_WAIT)
+    }
+
+    fn alone_within(root: &Path, op: &str, wait: Duration) -> Result<Self, String> {
+        let file = open_lock_file(&landing_path(root))?;
+        if !lock_within(&file, false, wait)? {
+            return Err(LANDING_BUSY.into());
+        }
+        let guard = Self {
+            file: Locked(file),
+            alone: true,
+        };
+        // Only a note for whoever looks at a lock that stays held.
+        let note = serde_json::json!({
+            "pid": std::process::id(),
+            "op": op,
+            "since_ms": now_ms(),
+        });
+        let _ = guard.file.0.set_len(0);
+        let _ = (&guard.file.0).write_all(format!("{note}\n").as_bytes());
+        Ok(guard)
     }
 }
 
@@ -459,7 +518,7 @@ fn landing_path(root: &Path) -> PathBuf {
 /// held.
 #[derive(Debug)]
 pub(crate) struct Live {
-    _file: File,
+    _file: Locked,
 }
 
 impl Live {
@@ -471,7 +530,9 @@ impl Live {
         if !lock_within(&file, false, LIVE_WAIT)? {
             return Err(STILL_RUNNING.into());
         }
-        Ok(Self { _file: file })
+        Ok(Self {
+            _file: Locked(file),
+        })
     }
 }
 
@@ -488,7 +549,11 @@ fn live_is_free(path: &Path) -> Option<bool> {
         Err(_) => return None,
     };
     match file.try_lock_shared() {
-        Ok(()) => Some(true),
+        Ok(()) => {
+            // Let go by name; see [`Locked`].
+            let _ = file.unlock();
+            Some(true)
+        }
         Err(TryLockError::WouldBlock) => Some(false),
         Err(TryLockError::Error(_)) => None,
     }
@@ -941,10 +1006,37 @@ impl Store {
         key: &str,
         limit: SnapLimit,
     ) -> Result<Snap, SealError> {
+        self.snapshot(dir, known, exclude, key, limit, false)
+    }
+
+    /// A snapshot of the person's project at `top`, for a landing. It is
+    /// [`Store::snap`] with one difference: a landing's own staging files
+    /// are not part of it.
+    fn snap_project(
+        &self,
+        top: &Path,
+        known: &[Known],
+        exclude: Option<&Path>,
+        key: &str,
+    ) -> Result<Snap, SealError> {
+        self.snapshot(top, known, exclude, key, SnapLimit::Open, true)
+    }
+
+    /// `project` is true when `dir` is the person's project; see
+    /// [`Store::listing`].
+    fn snapshot(
+        &self,
+        dir: &Path,
+        known: &[Known],
+        exclude: Option<&Path>,
+        key: &str,
+        limit: SnapLimit,
+        project: bool,
+    ) -> Result<Snap, SealError> {
         if !valid_key(key) {
             return Err(SealError::Failed(format!("not a helper work key: {key}")));
         }
-        let Listing { names, ignored } = self.listing(dir, known, exclude, key, false)?;
+        let Listing { names, ignored } = self.listing(dir, known, exclude, key, project)?;
         let known_names: HashSet<&str> = known.iter().map(|known| known.path.as_str()).collect();
         let known_exec: HashSet<&str> = known
             .iter()
@@ -1909,6 +2001,10 @@ fn admin_of(common: &Path, admin: &Path) -> bool {
 /// every worktree of the person's whose folder is missing at that moment,
 /// such as one on a drive that is not plugged in, with its index.
 fn forget_tree(work: &Work) {
+    // A folder found on disk with no record names no repository.
+    if work.common.as_os_str().is_empty() {
+        return;
+    }
     // An open that stopped before it read the pointer recorded no folder;
     // git names it after the tree's.
     let admin = if work.admin.as_os_str().is_empty() {
@@ -2093,6 +2189,1177 @@ fn changes(store: &Store, base: &str, tip: &str) -> Result<(Vec<String>, Counts)
 }
 
 // ---------------------------------------------------------------------------
+// Land, resume, discard
+// ---------------------------------------------------------------------------
+
+/// Who asked for a merge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum By {
+    /// The person, from the Tasks panel.
+    Person,
+    /// The lead, through its tool. Only finished work that is ready, or was
+    /// in conflict, is merged for it.
+    Lead,
+}
+
+/// What to do with a landing that stopped part way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resume {
+    /// Apply the files it had not yet applied.
+    Finish,
+    /// Restore the files it had applied.
+    PutBack,
+}
+
+const JOURNAL_OPEN: &str = "finish the merge or put the files back first";
+const LEAD_MAY_NOT: &str =
+    "this work is partial or held; the person merges it from the Tasks panel";
+const NO_JOURNAL: &str = "there is no stopped merge for this work";
+
+/// Merges a helper's sealed work into the project folder, as uncommitted
+/// changes. `Ok` carries the record as it is afterwards, whatever became of
+/// the merge: `Merged`, `Conflict`, or `Held` with the reason. `Err` is a
+/// refusal that changed nothing.
+///
+/// The merge is computed in the store, in objects only, so no conflict
+/// marker is ever written to a file, and the person's HEAD, index, refs and
+/// object store are not touched.
+pub fn merge_work(session: &str, key: &str, by: By) -> Result<Work, String> {
+    land(&root(), session, key, by)
+}
+
+/// Finishes a landing that stopped part way, or puts its files back. No
+/// merge is computed: each file is compared with what the landing recorded.
+pub fn resume_work(session: &str, key: &str, how: Resume) -> Result<Work, String> {
+    resume(&root(), session, key, how)
+}
+
+/// Deletes a helper's unmerged work with its worktree, or the worktree a
+/// merged work was kept for. Only the person's click calls this.
+pub fn discard_work(session: &str, key: &str) -> Result<Work, String> {
+    discard(&root(), session, key)
+}
+
+/// A file in a store tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Entry {
+    /// `100644`, `100755` or `120000` for anything a landing writes.
+    mode: String,
+    id: String,
+}
+
+/// One path a landing changes: what the project holds there before, and
+/// after. `None` is "no file".
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Change {
+    path: String,
+    old: Option<Entry>,
+    new: Option<Entry>,
+}
+
+/// How a merge in the store ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Merge {
+    /// The merged tree.
+    Clean(String),
+    /// The files both sides changed in ways that do not fit together.
+    Conflict(Vec<String>),
+    /// Git said something other than clean or conflict.
+    Failed(String),
+}
+
+fn is_id(text: &[u8]) -> bool {
+    matches!(text.len(), 40 | 64) && text.iter().all(u8::is_ascii_hexdigit)
+}
+
+impl Store {
+    /// Merges `tip` into `now`, with `base` as where both started. Nothing
+    /// is written but objects. Merge rules are read from the `.gitattributes`
+    /// files of `now`, the project's own snapshot, and from nowhere else: a
+    /// helper's are not read, and no merge driver can run because the store
+    /// defines none.
+    fn merge(&self, base: &str, now: &str, tip: &str) -> Merge {
+        #[cfg(test)]
+        test_hooks::count_merge();
+        let mut cmd = self.cmd();
+        cmd.arg(format!("--attr-source={now}"))
+            .args([
+                "merge-tree",
+                "--write-tree",
+                "-z",
+                "--name-only",
+                "--no-messages",
+            ])
+            .arg(format!("--merge-base={base}"))
+            .args([now, tip]);
+        let out = match run(cmd) {
+            Ok(out) => out,
+            Err(err) => return Merge::Failed(err),
+        };
+        // Exit 1 is also what git gives for a commit it cannot find, with
+        // nothing printed: only a tree id and a NUL make it a conflict.
+        let mut fields = out.stdout.split(|b| *b == 0);
+        let tree = fields
+            .next()
+            .filter(|id| is_id(id) && out.stdout.len() > id.len());
+        match (out.code, tree) {
+            (Some(0), Some(tree)) => Merge::Clean(String::from_utf8_lossy(tree).into_owned()),
+            (Some(1), Some(_)) => {
+                let files: BTreeSet<String> = fields
+                    .filter(|name| !name.is_empty())
+                    .map(|name| String::from_utf8_lossy(name).into_owned())
+                    .collect();
+                Merge::Conflict(files.into_iter().collect())
+            }
+            (code, _) => {
+                let said = out.stderr.lines().next().unwrap_or("").trim();
+                Merge::Failed(if said.is_empty() {
+                    format!("git merge-tree ended with {code:?}")
+                } else {
+                    said.to_string()
+                })
+            }
+        }
+    }
+
+    /// Every path that differs between two store trees.
+    fn plan(&self, from: &str, to: &str) -> Result<Vec<Change>, String> {
+        let out = self.git(&[
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--raw",
+            "--no-abbrev",
+            from,
+            to,
+        ])?;
+        let mut changes = Vec::new();
+        let mut fields = out.split(|b| *b == 0);
+        while let Some(head) = fields.next().filter(|head| !head.is_empty()) {
+            let bad = || {
+                format!(
+                    "diff-tree: unexpected row {:?}",
+                    String::from_utf8_lossy(head)
+                )
+            };
+            let path = fields.next().ok_or_else(bad)?;
+            let path = std::str::from_utf8(path).map_err(|_| bad())?;
+            let head = std::str::from_utf8(head).map_err(|_| bad())?;
+            let mut parts = head.strip_prefix(':').ok_or_else(bad)?.split(' ');
+            let (Some(old_mode), Some(new_mode), Some(old_id), Some(new_id)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
+                return Err(bad());
+            };
+            let entry = |mode: &str, id: &str| {
+                (mode != "000000").then(|| Entry {
+                    mode: mode.to_string(),
+                    id: id.to_string(),
+                })
+            };
+            changes.push(Change {
+                path: path.to_string(),
+                old: entry(old_mode, old_id),
+                new: entry(new_mode, new_id),
+            });
+        }
+        Ok(changes)
+    }
+
+    /// A commit with no parent for `tree`, by the store's own name.
+    fn commit(&self, tree: &str) -> Result<String, String> {
+        let (name, mail) = STORE_IDENT.split_once(" <").unwrap_or((STORE_IDENT, ""));
+        let mail = mail.trim_end_matches('>');
+        let mut cmd = self.cmd();
+        cmd.env("GIT_AUTHOR_NAME", name)
+            .env("GIT_AUTHOR_EMAIL", mail)
+            .env("GIT_COMMITTER_NAME", name)
+            .env("GIT_COMMITTER_EMAIL", mail)
+            .args(["commit-tree", tree, "-m", "merged"]);
+        let out = run(cmd)?.ok("commit-tree")?;
+        let id = out.trim_ascii();
+        if !is_id(id) {
+            return Err("git commit-tree printed no commit".into());
+        }
+        Ok(String::from_utf8_lossy(id).into_owned())
+    }
+
+    /// The bytes of each blob in `ids`, from one `cat-file --batch`.
+    fn blobs(&self, ids: &BTreeSet<&str>) -> Result<HashMap<String, Vec<u8>>, String> {
+        let mut found = HashMap::new();
+        if ids.is_empty() {
+            return Ok(found);
+        }
+        let mut cmd = self.cmd();
+        cmd.args(["cat-file", "--batch"]);
+        let mut feed = |pipe: &mut dyn Write| -> std::io::Result<()> {
+            for id in ids {
+                writeln!(pipe, "{id}")?;
+            }
+            Ok(())
+        };
+        let out = run_within(cmd, Some(&mut feed), GIT_LIMIT)?.ok("cat-file")?;
+        let mut rest = &out[..];
+        for id in ids {
+            let bad = || format!("the store has no file content {id}");
+            let end = rest.iter().position(|b| *b == b'\n').ok_or_else(bad)?;
+            let head = String::from_utf8_lossy(&rest[..end]).into_owned();
+            let mut parts = head.split(' ');
+            let (Some(got), Some("blob"), Some(len)) = (parts.next(), parts.next(), parts.next())
+            else {
+                return Err(bad());
+            };
+            let len: usize = len.parse().map_err(|_| bad())?;
+            let body = rest.get(end + 1..end + 1 + len).ok_or_else(bad)?;
+            if got != *id || rest.get(end + 1 + len) != Some(&b'\n') {
+                return Err(bad());
+            }
+            found.insert(id.to_string(), body.to_vec());
+            rest = &rest[end + 2 + len..];
+        }
+        Ok(found)
+    }
+}
+
+/// The id git gives a blob of `len` bytes, in a store whose ids have `hex`
+/// digits. An error when `bytes` does not hold exactly `len`.
+fn blob_id(hex: usize, len: u64, mut bytes: impl Read) -> std::io::Result<String> {
+    let algorithm = if hex == 64 {
+        &ring::digest::SHA256
+    } else {
+        &ring::digest::SHA1_FOR_LEGACY_USE_ONLY
+    };
+    let mut hash = ring::digest::Context::new(algorithm);
+    hash.update(format!("blob {len}\0").as_bytes());
+    let mut buf = vec![0u8; 1 << 16];
+    let mut read = 0u64;
+    loop {
+        let count = bytes.read(&mut buf)?;
+        if count == 0 {
+            break;
+        }
+        read += count as u64;
+        hash.update(&buf[..count]);
+    }
+    if read != len {
+        return Err(std::io::Error::other("the file changed while it was read"));
+    }
+    Ok(hash
+        .finish()
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+/// What is at one path of the project.
+enum At {
+    Nothing,
+    File {
+        id: String,
+        exec: bool,
+    },
+    Link {
+        id: String,
+    },
+    /// A folder, a special file, something that can't be read, or a path
+    /// that leads through a link or a file.
+    Other,
+}
+
+/// Looks at `path` under `top`, one part at a time and never through a
+/// link. `hex` is the length of the store's ids.
+fn at(top: &Path, path: &str, hex: usize) -> At {
+    let mut full = top.to_path_buf();
+    let mut parts = path.split('/').peekable();
+    while let Some(part) = parts.next() {
+        full.push(part);
+        let meta = match std::fs::symlink_metadata(&full) {
+            Ok(meta) => meta,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return At::Nothing,
+            Err(_) => return At::Other,
+        };
+        let kind = meta.file_type();
+        if parts.peek().is_some() {
+            if kind.is_dir() {
+                continue;
+            }
+            return At::Other;
+        }
+        if kind.is_symlink() {
+            let id =
+                link_text(&full).and_then(|target| blob_id(hex, target.len() as u64, &target[..]));
+            return id.map_or(At::Other, |id| At::Link { id });
+        }
+        if !kind.is_file() {
+            return At::Other;
+        }
+        let read = open_no_follow(&full).and_then(|file| {
+            let meta = file.metadata()?;
+            if !meta.file_type().is_file() {
+                return Err(std::io::Error::other("not a regular file"));
+            }
+            let id = blob_id(hex, meta.len(), &file)?;
+            Ok(At::File {
+                id,
+                exec: exec_bit(&meta, false),
+            })
+        });
+        return read.unwrap_or(At::Other);
+    }
+    At::Other
+}
+
+/// True when what is on disk is exactly `want`: the same kind, the same
+/// bytes and, where the filesystem has one, the same execute bit.
+fn holds(seen: &At, want: Option<&Entry>) -> bool {
+    match (seen, want) {
+        (At::Nothing, None) => true,
+        (At::Link { id }, Some(entry)) => entry.mode == "120000" && entry.id == *id,
+        (At::File { id, exec }, Some(entry)) => {
+            entry.mode != "120000"
+                && entry.id == *id
+                && (!cfg!(unix) || *exec == (entry.mode == "100755"))
+        }
+        _ => false,
+    }
+}
+
+/// A name longer than this is staged under a digest of it, so the staging
+/// name stays within what a filesystem allows for one name.
+const STAGING_STEM_MAX: usize = 200;
+
+/// Where a landing keeps the new content of `path` until it is renamed into
+/// place: a sibling named `.<name>.grokhub-<key>.tmp`.
+fn staging_path(top: &Path, path: &str, key: &str) -> PathBuf {
+    let (folder, name) = match path.rsplit_once('/') {
+        Some((folder, name)) => (top.join(folder), name),
+        None => (top.to_path_buf(), path),
+    };
+    if name.len() > STAGING_STEM_MAX {
+        let digest = ring::digest::digest(&ring::digest::SHA256, name.as_bytes());
+        let stem: String = digest.as_ref()[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        return folder.join(format!(".{stem}.grokhub-{key}.tmp"));
+    }
+    folder.join(format!(".{name}.grokhub-{key}.tmp"))
+}
+
+/// The folders a plan's new files need that are not on disk, outermost
+/// first, as paths below `top`.
+fn folders_to_make(top: &Path, changes: &[Change]) -> Vec<String> {
+    let mut made = BTreeSet::new();
+    for change in changes.iter().filter(|change| change.new.is_some()) {
+        let mut parts: Vec<&str> = change.path.split('/').collect();
+        parts.pop();
+        let mut full = top.to_path_buf();
+        for (depth, part) in parts.iter().enumerate() {
+            full.push(part);
+            match std::fs::symlink_metadata(&full) {
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    for end in depth..parts.len() {
+                        made.insert(parts[..=end].join("/"));
+                    }
+                    break;
+                }
+                Ok(meta) if meta.file_type().is_dir() => {}
+                // Something is in the way; the landing stops on it later.
+                _ => break,
+            }
+        }
+    }
+    // A folder sorts before what is inside it.
+    made.into_iter().collect()
+}
+
+/// Removes the folders a landing made that hold nothing, innermost first.
+/// A folder reached through a link is left alone.
+fn drop_made(top: &Path, made: &[String]) {
+    for folder in made.iter().rev() {
+        if safe_name(folder) && !parent_in_the_way(top, &format!("{folder}/x")) {
+            let _ = std::fs::remove_dir(top.join(folder));
+        }
+    }
+}
+
+/// Removes every staging file of the work `key` below `dir`, wherever it is
+/// now: a folder that held one may have been renamed since. Links are not
+/// followed and a `.git` entry is not entered.
+fn sweep_staging(dir: &Path, key: &str) {
+    let tail = format!(".grokhub-{key}.tmp");
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(folder) = todo.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                if !name.eq_ignore_ascii_case(".git") {
+                    todo.push(entry.path());
+                }
+            } else if name
+                .to_str()
+                .is_some_and(|name| name.starts_with('.') && name.ends_with(&tail))
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+/// True when a folder `path` would be written into is on disk as something
+/// other than a real folder: a link, which would lead the write out of the
+/// project, or a file.
+fn parent_in_the_way(top: &Path, path: &str) -> bool {
+    let mut full = top.to_path_buf();
+    let mut parts = path.split('/').peekable();
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            break;
+        }
+        full.push(part);
+        match std::fs::symlink_metadata(&full) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return false,
+            _ => return true,
+        }
+    }
+    false
+}
+
+/// Gives a staging file the permissions of the file it replaces, with the
+/// execute bits the new content asks for. A new file keeps what it was
+/// created with.
+#[cfg(unix)]
+fn keep_permissions(file: &File, dest: &Path, exec: bool) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let old = std::fs::symlink_metadata(dest)
+        .ok()
+        .filter(|meta| meta.file_type().is_file())
+        .map(|meta| meta.permissions().mode() & 0o777);
+    let mode = match (old, exec) {
+        (None, false) => return Ok(()),
+        (None, true) => 0o755,
+        // Whoever may read it may run it.
+        (Some(mode), true) => mode | ((mode & 0o444) >> 2) | 0o100,
+        (Some(mode), false) => mode & !0o111,
+    };
+    file.set_permissions(std::fs::Permissions::from_mode(mode))
+}
+
+/// No permission bits to carry over on this filesystem.
+#[cfg(not(unix))]
+fn keep_permissions(_file: &File, _dest: &Path, _exec: bool) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Writes the content `path` is to get into its staging file, making the
+/// folders it needs.
+fn stage_one(top: &Path, key: &str, path: &str, entry: &Entry, bytes: &[u8]) -> Result<(), String> {
+    let failed = |err: std::io::Error| format!("{path}: {err}");
+    if let Some(folder) = Path::new(path).parent() {
+        make_folders(top, folder).map_err(|err| format!("{path}: {err}"))?;
+    }
+    let temp = staging_path(top, path, key);
+    if std::fs::symlink_metadata(&temp).is_ok() {
+        std::fs::remove_file(&temp).map_err(failed)?;
+    }
+    if entry.mode == "120000" {
+        return make_link(bytes, &temp).map_err(failed);
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(failed)?;
+    file.write_all(bytes).map_err(failed)?;
+    keep_permissions(&file, &top.join(path), entry.mode == "100755").map_err(failed)?;
+    file.sync_all().map_err(failed)
+}
+
+/// Makes `path` hold `to`: renames its staging file over it, or removes it.
+/// With `tidy`, the folders a removal leaves empty go too: that is for a
+/// file the helper deleted, not for taking back a file the landing added.
+fn swap_one(
+    top: &Path,
+    key: &str,
+    path: &str,
+    to: Option<&Entry>,
+    tidy: bool,
+) -> std::io::Result<()> {
+    #[cfg(test)]
+    if let Some(err) = test_hooks::swap(path) {
+        return Err(err);
+    }
+    let dest = top.join(path);
+    if to.is_some() {
+        return std::fs::rename(staging_path(top, path, key), &dest);
+    }
+    std::fs::remove_file(&dest)?;
+    if tidy {
+        drop_empty_folders(top, path);
+    }
+    Ok(())
+}
+
+/// Removes the folders `path` is in that hold nothing, deepest first, and
+/// never the project's top folder.
+fn drop_empty_folders(top: &Path, path: &str) {
+    let dest = top.join(path);
+    let mut folder = dest.parent();
+    while let Some(dir) = folder {
+        if dir == top || !dir.starts_with(top) || std::fs::remove_dir(dir).is_err() {
+            break;
+        }
+        folder = dir.parent();
+    }
+}
+
+/// Removes the staging files of a plan.
+fn clear_staging(top: &Path, key: &str, changes: &[Change]) {
+    for change in changes {
+        let _ = std::fs::remove_file(staging_path(top, &change.path, key));
+    }
+}
+
+/// The paths of a plan that this phase does not write: a mode other than a
+/// file, an executable or a link, a file that becomes a folder or a folder
+/// that becomes a file, and a name the project's snapshot never holds.
+fn unsupported(changes: &[Change]) -> Vec<String> {
+    let paths: BTreeSet<&str> = changes.iter().map(|change| change.path.as_str()).collect();
+    let mode_ok = |entry: &Option<Entry>| {
+        entry
+            .as_ref()
+            .is_none_or(|entry| matches!(entry.mode.as_str(), "100644" | "100755" | "120000"))
+    };
+    changes
+        .iter()
+        .filter(|change| {
+            let below = format!("{}/", change.path);
+            !mode_ok(&change.old)
+                || !mode_ok(&change.new)
+                || !safe_name(&change.path)
+                || staging_name(&change.path)
+                || paths
+                    .range::<str, _>((Bound::Included(below.as_str()), Bound::Unbounded))
+                    .next()
+                    .is_some_and(|next| next.starts_with(&below))
+        })
+        .map(|change| change.path.clone())
+        .collect()
+}
+
+/// Takes a journalled plan to one end, file by file, with no merge. Each
+/// file is compared with its content before the landing and after it:
+/// - as before: not applied. `Finish` applies it; `PutBack` leaves it.
+/// - as merged: applied. `Finish` leaves it; `PutBack` restores it.
+/// - neither: someone changed it since. It is left alone and named in the
+///   first list returned.
+///
+/// The second list names what could not be written, each with its error.
+/// When it is empty the plan's staging files are gone and, after a put
+/// back, so are the folders in `made` that hold nothing.
+fn drive(
+    store: &Store,
+    top: &Path,
+    key: &str,
+    changes: &[Change],
+    made: &[String],
+    how: Resume,
+) -> (Vec<String>, Vec<String>) {
+    let hex = changes
+        .iter()
+        .find_map(|change| change.old.as_ref().or(change.new.as_ref()))
+        .map_or(40, |entry| entry.id.len());
+    let mut skipped = Vec::new();
+    let mut failed = Vec::new();
+    // (path, what it holds now, what it is to hold)
+    let mut todo: Vec<(&str, Option<&Entry>, Option<&Entry>)> = Vec::new();
+    for change in changes {
+        let seen = at(top, &change.path, hex);
+        let (old, new) = (change.old.as_ref(), change.new.as_ref());
+        match (how, holds(&seen, old), holds(&seen, new)) {
+            (Resume::Finish, true, _) => todo.push((&change.path, old, new)),
+            (Resume::PutBack, _, true) => todo.push((&change.path, new, old)),
+            (Resume::Finish, _, true) | (Resume::PutBack, true, _) => {}
+            _ => skipped.push(change.path.clone()),
+        }
+    }
+    let wanted: BTreeSet<&str> = todo
+        .iter()
+        .filter_map(|(_, _, to)| to.map(|entry| entry.id.as_str()))
+        .collect();
+    let blobs = match store.blobs(&wanted) {
+        Ok(blobs) => blobs,
+        Err(err) => {
+            failed.extend(todo.iter().map(|(path, ..)| format!("{path}: {err}")));
+            return (skipped, failed);
+        }
+    };
+    for (path, from, to) in todo {
+        if let Some(entry) = to {
+            if parent_in_the_way(top, path) {
+                skipped.push(path.to_string());
+                continue;
+            }
+            let bytes = blobs.get(&entry.id).map_or(&[][..], Vec::as_slice);
+            if let Err(err) = stage_one(top, key, path, entry, bytes) {
+                failed.push(err);
+                continue;
+            }
+        }
+        if !holds(&at(top, path, hex), from) {
+            skipped.push(path.to_string());
+        } else if let Err(err) = swap_one(top, key, path, to, how == Resume::Finish) {
+            failed.push(format!("{path}: {err}"));
+        }
+    }
+    clear_staging(top, key, changes);
+    if how == Resume::PutBack && failed.is_empty() {
+        drop_made(top, made);
+    }
+    skipped.sort();
+    (skipped, failed)
+}
+
+/// The record `key` as stored, or the refusal for a key this chat does not
+/// have. It makes no file.
+fn record_of(root: &Path, session: &str, key: &str) -> Result<Work, String> {
+    read_records(root, session)?
+        .into_iter()
+        .find(|work| work.key == key)
+        .ok_or_else(|| format!("there is no helper work {} in this chat", plain(key)))
+}
+
+/// Takes the `.live` of a work this chat has. A key it does not have is
+/// refused before any lock file or folder is made for it.
+fn live_of(root: &Path, session: &str, key: &str) -> Result<Live, String> {
+    if !valid_key(key) {
+        return Err(format!("not a helper work key: {}", plain(key)));
+    }
+    record_of(root, session, key)?;
+    Live::take(root, session, key)
+}
+
+/// The record `key` as stored, for a caller that holds its `.live`. One
+/// still marked as running was left by an app that closed: no helper holds
+/// the lock.
+fn record_under_live(root: &Path, session: &str, key: &str) -> Result<Work, String> {
+    let mut work = record_of(root, session, key)?;
+    if work.state == WorkState::Running {
+        work.state = WorkState::Held {
+            why: Held::Interrupted,
+        };
+    }
+    Ok(work)
+}
+
+/// Writes a record that changed and tells the Tasks panel.
+fn save(root: &Path, session: &str, work: &mut Work) -> Result<(), String> {
+    work.updated_ms = now_ms();
+    put(root, session, work)?;
+    crate::tasks::mark_changed(root_session(session));
+    Ok(())
+}
+
+/// The project a record names, found and checked again: it must still be
+/// the repository the helper's tree was made from.
+fn project_at(work: &Work) -> Result<Project, String> {
+    if !work.project.is_dir() {
+        return Err(format!(
+            "the project folder {} can't be found. Put it back where it was, then try again.",
+            plain(&work.project.display().to_string())
+        ));
+    }
+    let project = project_of(&work.project)?;
+    let same = |one: &Path, other: &Path| {
+        std::fs::canonicalize(one)
+            .ok()
+            .zip(std::fs::canonicalize(other).ok())
+            .is_some_and(|(one, other)| one == other)
+    };
+    if !same(&project.top, &work.project) || !same(&project.common, &work.common) {
+        return Err(BAD_LAYOUT.into());
+    }
+    Ok(project)
+}
+
+/// Whether `by` may merge this work as it stands.
+fn may_land(work: &Work, by: By) -> Result<(), String> {
+    let cannot = |why: &str| Err(format!("this work can't be merged: {why}"));
+    match (&work.state, by) {
+        (WorkState::Ready | WorkState::Conflict { .. }, By::Lead)
+            if work.ended == Some(Ended::Done) =>
+        {
+            Ok(())
+        }
+        (_, By::Lead) => Err(LEAD_MAY_NOT.into()),
+        (WorkState::Ready | WorkState::Conflict { .. }, By::Person) => Ok(()),
+        (WorkState::Held { why }, By::Person) => match why {
+            Held::Partial
+            | Held::GitStateChanged
+            | Held::ChangedAfterSeal
+            | Held::Interrupted
+            | Held::ProjectChanged
+            | Held::Blocked(_)
+            | Held::MergeFailed(_)
+            | Held::ApplyFailed {
+                rolled_back: true, ..
+            } => Ok(()),
+            other => cannot(&why_held(other)),
+        },
+        (WorkState::Opening | WorkState::Running, By::Person) => cannot("it is not sealed yet"),
+        (WorkState::Empty, By::Person) => cannot("it changed nothing"),
+        (WorkState::Merged, By::Person) => cannot("it is already merged"),
+        (WorkState::Discarded, By::Person) => cannot("it was discarded"),
+    }
+}
+
+/// Seals the tree again, so what lands is what is in it now. `None` when it
+/// is the content the person was shown. Otherwise the new content is the
+/// tip, the record names its files, and the state returned stops the
+/// landing there: the person is asked before it lands.
+fn seal_again(
+    root: &Path,
+    session: &str,
+    store: &Store,
+    base: &str,
+    work: &mut Work,
+) -> Option<WorkState> {
+    let held = |why: Held| Some(WorkState::Held { why });
+    let exclude = exclude_path(root, session, &work.key);
+    let snapped = store
+        .entries(base)
+        .map_err(SealError::Failed)
+        .and_then(|(known, base_bytes)| {
+            store.snap(
+                &work.tree,
+                &known,
+                exclude.is_file().then_some(exclude.as_path()),
+                &work.key,
+                SnapLimit::Seal { base_bytes },
+            )
+        });
+    let snap = match snapped {
+        Ok(snap) => snap,
+        Err(SealError::NestedRepo(path)) => return held(Held::NestedRepo(path)),
+        Err(err) => return held(Held::SealFailed(err.to_string())),
+    };
+    work.ignored = snap.ignored.iter().take(IGNORED_MAX).cloned().collect();
+    let tip_tree = work.tip.as_ref().and_then(|tip| {
+        let tree = store.git(&["rev-parse", &format!("{tip}^{{tree}}")]).ok()?;
+        Some(String::from_utf8_lossy(&tree).trim().to_string())
+    });
+    if tip_tree.as_deref() == Some(snap.tree.as_str()) {
+        return None;
+    }
+    let named = store
+        .set_ref(&ref_name(&work.key, "tip"), &snap.commit)
+        .and_then(|()| changes(store, base, &snap.commit));
+    let (files, counts) = match named {
+        Ok(named) => named,
+        Err(err) => return held(Held::SealFailed(err)),
+    };
+    work.tip = Some(snap.commit);
+    work.files = files;
+    work.counts = counts;
+    let interrupted = work.state
+        == WorkState::Held {
+            why: Held::Interrupted,
+        };
+    held(if interrupted {
+        Held::Partial
+    } else {
+        Held::ChangedAfterSeal
+    })
+}
+
+fn land(root: &Path, session: &str, key: &str, by: By) -> Result<Work, String> {
+    git_ok()?;
+    let live = live_of(root, session, key)?;
+    let mut work = record_under_live(root, session, key)?;
+    if work.landing.is_some() {
+        return Err(JOURNAL_OPEN.into());
+    }
+    may_land(&work, by)?;
+    let Some(base) = work.base.clone() else {
+        return Err("this work can't be merged: it has no starting point".into());
+    };
+    let store = Store::open(root)?;
+
+    let mut landing = None;
+    let state = match seal_again(root, session, &store, &base, &mut work) {
+        // The tree can't be sealed now. What was sealed before stays as it
+        // is, so the work can be merged once the cause is gone.
+        Some(WorkState::Held {
+            why: why @ (Held::SealFailed(_) | Held::NestedRepo(_)),
+        }) => {
+            return Err(format!(
+                "this work can't be merged now: {}. Nothing was changed.",
+                why_held(&why)
+            ));
+        }
+        Some(stopped) => stopped,
+        None => {
+            landing = Some(LandingGuard::alone(root, "merge")?);
+            let project = project_at(&work)?;
+            if busy(&project)? {
+                return Err(PROJECT_BUSY.into());
+            }
+            work.skipped.clear();
+            // A project that changes under a landing gets one more try.
+            match attempt(root, session, &store, &project, &base, &mut work)? {
+                Some(state) => state,
+                None => attempt(root, session, &store, &project, &base, &mut work)?.unwrap_or(
+                    WorkState::Held {
+                        why: Held::ProjectChanged,
+                    },
+                ),
+            }
+        }
+    };
+    let merged = state == WorkState::Merged;
+    if merged {
+        work.merged_ms = Some(now_ms());
+    }
+    work.state = state;
+    save(root, session, &mut work)?;
+    if landing.is_some() && !merged && work.landing.is_none() {
+        // The restore point of a landing that changed nothing.
+        for name in ["before", "merged"] {
+            let _ = store.delete_ref(&ref_name(key, name));
+        }
+    }
+    drop(landing);
+    let gone = merged && work.ignored.is_empty() && clean_up(root, session, &work, &[]);
+    drop(live);
+    if gone {
+        let _ = std::fs::remove_file(live_path(root, session, key));
+    }
+    Ok(work)
+}
+
+/// Ends a try that wrote no file of the project, or put every one back:
+/// its staging files and its journal go, and the record is as it was.
+fn back_out(top: &Path, work: &mut Work, changes: &[Change], made: &[String], from: &WorkState) {
+    clear_staging(top, &work.key, changes);
+    drop_made(top, made);
+    work.landing = None;
+    work.state = from.clone();
+}
+
+/// One try at a landing, with `.live` and `landing.lock` held. `Ok(Some)`
+/// is how it ended. `Ok(None)` is "a file of the project changed under it":
+/// nothing of the try is left, and the caller may try once more.
+fn attempt(
+    root: &Path,
+    session: &str,
+    store: &Store,
+    project: &Project,
+    base: &str,
+    work: &mut Work,
+) -> Result<Option<WorkState>, String> {
+    let held = |why: Held| Ok(Some(WorkState::Held { why }));
+    let top = project.top.as_path();
+    let key = work.key.clone();
+    let Some(tip) = work.tip.clone() else {
+        return Err("this work can't be merged: it is not sealed".into());
+    };
+
+    // The project as it is now, and the merge, in objects only.
+    let exclude = exclude_path(root, session, &key);
+    let known = tracked(top)?;
+    let now = store
+        .snap_project(
+            top,
+            &known,
+            exclude.is_file().then_some(exclude.as_path()),
+            &key,
+        )
+        .map_err(|err| format!("the project can't be read: {err}"))?;
+    #[cfg(test)]
+    test_hooks::landing_step(test_hooks::Step::Merge);
+    let merged_tree = match store.merge(base, &now.commit, &tip) {
+        Merge::Clean(tree) => tree,
+        Merge::Conflict(files) => return Ok(Some(WorkState::Conflict { files })),
+        Merge::Failed(why) => return held(Held::MergeFailed(why)),
+    };
+    let changes = match store.plan(&now.commit, &merged_tree) {
+        Ok(changes) => changes,
+        Err(err) => return held(Held::MergeFailed(err)),
+    };
+    if changes.is_empty() {
+        return Ok(Some(WorkState::Merged));
+    }
+    let blocked = unsupported(&changes);
+    if !blocked.is_empty() {
+        return held(Held::Blocked(blocked));
+    }
+
+    // The journal: from here on the record says what the project should
+    // look like, whatever happens to this process.
+    let journalled = store.commit(&merged_tree).and_then(|merged| {
+        store.set_ref(&ref_name(&key, "merged"), &merged)?;
+        store.set_ref(&ref_name(&key, "before"), &now.commit)?;
+        Ok(merged)
+    });
+    let merged = match journalled {
+        Ok(merged) => merged,
+        Err(err) => return held(Held::MergeFailed(err)),
+    };
+    let from = work.state.clone();
+    let made = folders_to_make(top, &changes);
+    work.landing = Some(Landing {
+        before: now.commit.clone(),
+        merged,
+        paths: changes.iter().map(|change| change.path.clone()).collect(),
+        made: made.clone(),
+        from: Box::new(from.clone()),
+        started_ms: now_ms(),
+    });
+    work.state = WorkState::Held {
+        why: Held::ApplyFailed {
+            rolled_back: false,
+            files: Vec::new(),
+        },
+    };
+    save(root, session, work)?;
+
+    // Stage the new content beside each file.
+    let blocked: Vec<String> = changes
+        .iter()
+        .filter(|change| change.new.is_some() && parent_in_the_way(top, &change.path))
+        .map(|change| change.path.clone())
+        .collect();
+    if !blocked.is_empty() {
+        back_out(top, work, &changes, &made, &from);
+        return held(Held::Blocked(blocked));
+    }
+    let wanted: BTreeSet<&str> = changes
+        .iter()
+        .filter_map(|change| change.new.as_ref().map(|entry| entry.id.as_str()))
+        .collect();
+    let staged = store.blobs(&wanted).and_then(|blobs| {
+        for change in &changes {
+            if let Some(entry) = &change.new {
+                let bytes = blobs.get(&entry.id).map_or(&[][..], Vec::as_slice);
+                stage_one(top, &key, &change.path, entry, bytes)?;
+            }
+        }
+        Ok(())
+    });
+    if let Err(err) = staged {
+        back_out(top, work, &changes, &made, &from);
+        return held(Held::ApplyFailed {
+            rolled_back: true,
+            files: vec![err],
+        });
+    }
+
+    // Check every file of the plan against the snapshot the merge was
+    // computed from.
+    #[cfg(test)]
+    test_hooks::landing_step(test_hooks::Step::Check);
+    let hex = merged_tree.len();
+    let mut moved = false;
+    let mut blocked = Vec::new();
+    for change in &changes {
+        if holds(&at(top, &change.path, hex), change.old.as_ref()) {
+            continue;
+        }
+        match change.old {
+            // Something the snapshot does not know is where a new file
+            // goes: an ignored file, or a name that differs only in case.
+            None => blocked.push(change.path.clone()),
+            Some(_) => moved = true,
+        }
+    }
+    if moved {
+        back_out(top, work, &changes, &made, &from);
+        save(root, session, work)?;
+        return Ok(None);
+    }
+    if !blocked.is_empty() {
+        back_out(top, work, &changes, &made, &from);
+        return held(Held::Blocked(blocked));
+    }
+
+    // Apply, one file at a time, each checked once more first.
+    #[cfg(test)]
+    test_hooks::landing_step(test_hooks::Step::Apply);
+    let mut stopped = None;
+    for change in &changes {
+        if !holds(&at(top, &change.path, hex), change.old.as_ref()) {
+            stopped = Some(None);
+            break;
+        }
+        if let Err(err) = swap_one(top, &key, &change.path, change.new.as_ref(), true) {
+            stopped = Some(Some(format!("{}: {err}", change.path)));
+            break;
+        }
+    }
+    let Some(why) = stopped else {
+        work.landing = None;
+        return Ok(Some(WorkState::Merged));
+    };
+
+    // It stopped part way: put back what was applied, at once.
+    let (skipped, failed) = drive(store, top, &key, &changes, &made, Resume::PutBack);
+    if !failed.is_empty() {
+        // The journal stays; the person finishes it or puts the files back.
+        return held(Held::ApplyFailed {
+            rolled_back: false,
+            files: failed,
+        });
+    }
+    back_out(top, work, &changes, &made, &from);
+    // A file that was applied and then changed by hand stays as it is, and
+    // the record says so whatever a second try ends in.
+    work.skipped.extend(skipped);
+    work.skipped.sort();
+    work.skipped.dedup();
+    match why {
+        None => {
+            save(root, session, work)?;
+            Ok(None)
+        }
+        Some(err) => held(Held::ApplyFailed {
+            rolled_back: true,
+            files: vec![err],
+        }),
+    }
+}
+
+fn resume(root: &Path, session: &str, key: &str, how: Resume) -> Result<Work, String> {
+    let live = live_of(root, session, key)?;
+    let landing_lock = LandingGuard::alone(root, "resume")?;
+    let mut work = record_under_live(root, session, key)?;
+    let Some(landing) = work.landing.clone() else {
+        return Err(NO_JOURNAL.into());
+    };
+    let project = project_at(&work)?;
+    let store = Store::open(root)?;
+    let changes = store.plan(&landing.before, &landing.merged)?;
+    let (skipped, failed) = drive(&store, &project.top, key, &changes, &landing.made, how);
+    if !failed.is_empty() {
+        work.state = WorkState::Held {
+            why: Held::ApplyFailed {
+                rolled_back: false,
+                files: failed,
+            },
+        };
+        save(root, session, &mut work)?;
+        return Ok(work);
+    }
+    // A folder that held a staging file may have been renamed since.
+    sweep_staging(&project.top, key);
+    work.landing = None;
+    work.skipped = skipped;
+    let mut merged = how == Resume::Finish;
+    if merged {
+        work.state = WorkState::Merged;
+        work.merged_ms = Some(now_ms());
+        // The tree may have changed since the landing began, however long
+        // ago that was. What is in it now is sealed before the tree may go.
+        // If it is not what landed, the work is held with its tree, and
+        // what landed becomes its starting point: the person merges the
+        // rest, which is only what changed since, or discards it.
+        let landed = work.tip.clone();
+        let late = match (landed, std::fs::symlink_metadata(&work.tree)) {
+            (Some(landed), Ok(_)) => {
+                seal_again(root, session, &store, &landed, &mut work).map(|state| (state, landed))
+            }
+            _ => None,
+        };
+        if let Some((mut state, landed)) = late {
+            if state
+                == (WorkState::Held {
+                    why: Held::ChangedAfterSeal,
+                })
+            {
+                match store.set_ref(&ref_name(key, "base"), &landed) {
+                    Ok(()) => work.base = Some(landed),
+                    Err(err) => {
+                        state = WorkState::Held {
+                            why: Held::SealFailed(err),
+                        }
+                    }
+                }
+            }
+            work.state = state;
+            merged = false;
+        }
+    } else {
+        work.state = *landing.from;
+    }
+    save(root, session, &mut work)?;
+    if how == Resume::PutBack {
+        for name in ["before", "merged"] {
+            let _ = store.delete_ref(&ref_name(key, name));
+        }
+    }
+    drop(landing_lock);
+    let gone = merged && work.ignored.is_empty() && clean_up(root, session, &work, &[]);
+    drop(live);
+    if gone {
+        let _ = std::fs::remove_file(live_path(root, session, key));
+    }
+    Ok(work)
+}
+
+fn discard(root: &Path, session: &str, key: &str) -> Result<Work, String> {
+    let live = live_of(root, session, key)?;
+    let mut work = record_under_live(root, session, key)?;
+    if work.landing.is_some() {
+        return Err(JOURNAL_OPEN.into());
+    }
+    match work.state {
+        WorkState::Ready | WorkState::Conflict { .. } | WorkState::Held { .. } => {
+            // The record says so first; then the tree and the refs go.
+            work.state = WorkState::Discarded;
+            work.tip = None;
+            save(root, session, &mut work)?;
+            // Where no landing of this work finished, it has no restore
+            // point to keep: `before` and `merged` can only be leftovers.
+            let refs: &[&str] = if work.merged_ms.is_some() {
+                &["base", "tip"]
+            } else {
+                &["base", "tip", "before", "merged"]
+            };
+            let gone = clean_up(root, session, &work, refs);
+            drop(live);
+            if gone {
+                let _ = std::fs::remove_file(live_path(root, session, key));
+            }
+            Ok(work)
+        }
+        // Delete worktree: the tree a merged work was kept for, and only
+        // that. Its refs stay for their three days.
+        WorkState::Merged if std::fs::symlink_metadata(&work.tree).is_ok() => {
+            if !clean_up(root, session, &work, &[]) {
+                return Err("the worktree could not be deleted".into());
+            }
+            work.ignored.clear();
+            save(root, session, &mut work)?;
+            drop(live);
+            let _ = std::fs::remove_file(live_path(root, session, key));
+            Ok(work)
+        }
+        WorkState::Opening | WorkState::Running => Err(STILL_RUNNING.into()),
+        WorkState::Merged | WorkState::Empty | WorkState::Discarded => {
+            Err("there is nothing left of this work to delete".into())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Result lines
 // ---------------------------------------------------------------------------
 
@@ -2196,18 +3463,37 @@ pub(crate) fn result_line(work: &Work) -> String {
                 why_held(why)
             )
         }
-        WorkState::Conflict { files } => format!(
-            "conflict: {}. The project was not changed. work: {key}. To redo it on the current \
-             project, start a helper with isolation worktree and redo {key}.",
-            plain_list(files)
-        ),
-        WorkState::Merged if work.ignored.is_empty() => {
-            format!("merged: {files} into the project")
+        WorkState::Conflict { files } => {
+            let project = if work.skipped.is_empty() {
+                "The project was not changed.".to_string()
+            } else {
+                format!(
+                    "An earlier try was put back, except what the person changed meanwhile: {}.",
+                    plain_list(&work.skipped)
+                )
+            };
+            format!(
+                "conflict: {}. {project} work: {key}. To redo it on the current project, start \
+                 a helper with isolation worktree and redo {key}.",
+                plain_list(files)
+            )
         }
-        WorkState::Merged => format!(
-            "merged: {files} into the project. The worktree is kept at {tree}: it holds {}.",
-            counted(work.ignored.len(), "ignored path")
-        ),
+        WorkState::Merged => {
+            let mut line = format!("merged: {files} into the project");
+            if !work.skipped.is_empty() {
+                line.push_str(&format!(
+                    ". Left as the person changed them: {}",
+                    plain_list(&work.skipped)
+                ));
+            }
+            if !work.ignored.is_empty() {
+                line.push_str(&format!(
+                    ". The worktree is kept at {tree}: it holds {}.",
+                    counted(work.ignored.len(), "ignored path")
+                ));
+            }
+            line
+        }
         WorkState::Discarded => "discarded".into(),
     }
 }
@@ -2539,6 +3825,74 @@ mod test_hooks {
         }
     }
 
+    /// A point in a landing where a test may change the project.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum Step {
+        /// The project is snapshotted; the merge has not been computed.
+        Merge,
+        /// The new content is staged; no file has been checked yet.
+        Check,
+        /// Every file was checked; none has been replaced yet.
+        Apply,
+    }
+
+    type StepHook = Box<dyn FnMut(Step)>;
+    type SwapHook = Box<dyn FnMut(&str) -> Option<std::io::Error>>;
+
+    thread_local! {
+        static STEP: RefCell<Option<StepHook>> = const { RefCell::new(None) };
+        static SWAP: RefCell<Option<SwapHook>> = const { RefCell::new(None) };
+        static MERGES: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// Runs on this thread at each [`Step`] of a landing, until it is set
+    /// to `None` again.
+    pub(super) fn on_landing_step(hook: Option<StepHook>) {
+        STEP.with(|slot| *slot.borrow_mut() = hook);
+    }
+
+    pub(super) fn landing_step(step: Step) {
+        // Taken out while it runs, so a hook may itself start a landing.
+        let hook = STEP.with(|slot| slot.borrow_mut().take());
+        if let Some(mut hook) = hook {
+            hook(step);
+            STEP.with(|slot| {
+                let mut slot = slot.borrow_mut();
+                if slot.is_none() {
+                    *slot = Some(hook);
+                }
+            });
+        }
+    }
+
+    /// Runs on this thread before a file of the project is replaced or
+    /// removed, with its path. An error it returns is the write's error; a
+    /// panic in it is the app closing at that moment.
+    pub(super) fn on_swap(hook: Option<SwapHook>) {
+        SWAP.with(|slot| *slot.borrow_mut() = hook);
+    }
+
+    pub(super) fn swap(path: &str) -> Option<std::io::Error> {
+        let mut hook = SWAP.with(|slot| slot.borrow_mut().take())?;
+        let out = hook(path);
+        SWAP.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(hook);
+            }
+        });
+        out
+    }
+
+    pub(super) fn count_merge() {
+        MERGES.with(|count| count.set(count.get() + 1));
+    }
+
+    /// How many merges this thread has computed.
+    pub(super) fn merges() -> u32 {
+        MERGES.with(Cell::get)
+    }
+
     /// Lowers both size limits for snapshots on this thread.
     pub(super) fn lower_limits(untracked: u64, growth: u64) {
         UNTRACKED_MAX.with(|slot| slot.set(Some(untracked)));
@@ -2685,11 +4039,8 @@ mod tests {
 
     /// `landing.lock` held alone, as a landing holds it, or `None` while
     /// anyone else holds it.
-    fn landing_alone(root: &Path) -> Option<File> {
-        let file = open_lock_file(&landing_path(root)).unwrap();
-        lock_within(&file, false, Duration::ZERO)
-            .unwrap()
-            .then_some(file)
+    fn landing_alone(root: &Path) -> Option<LandingGuard> {
+        LandingGuard::alone_within(root, "merge", Duration::ZERO).ok()
     }
 
     fn sample(key: &str) -> Work {
@@ -3480,6 +4831,7 @@ mod tests {
             before: "c1".into(),
             merged: "c2".into(),
             paths: vec!["a.rs".into()],
+            made: vec!["src".into()],
             from: Box::new(WorkState::Conflict {
                 files: vec!["a.rs".into()],
             }),
@@ -3508,6 +4860,7 @@ mod tests {
                 "before": "c1",
                 "merged": "c2",
                 "paths": ["a.rs"],
+                "made": ["src"],
                 "from": { "state": "conflict", "files": ["a.rs"] },
                 "startedMs": 7
             },
@@ -5361,6 +6714,1826 @@ mod tests {
             ))
         );
         assert_eq!(refs(&store), "");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // -- land, resume, discard ---------------------------------------------
+
+    /// A helper's work on `proj`, sealed. `edit` is what the helper did in
+    /// its tree.
+    fn sealed(
+        root: &Path,
+        proj: &Path,
+        task: &str,
+        ended: Ended,
+        edit: impl FnOnce(&Path),
+    ) -> Work {
+        let opened = open_for(root, proj, task);
+        edit(&opened.work.tree);
+        settle(root, "chat", opened.work, ended, opened.live).unwrap()
+    }
+
+    fn text(path: &Path) -> String {
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    fn commit_all(proj: &Path) {
+        git(proj, &["add", "."]);
+        git(proj, &["commit", "-m", "more"]);
+    }
+
+    /// What a landing must leave byte for byte as it was: the person's HEAD,
+    /// index, refs and object store.
+    fn person_s_git(proj: &Path) -> (Vec<String>, Vec<u8>, Vec<u8>) {
+        (
+            vec![
+                git(proj, &["rev-parse", "HEAD"]),
+                git(proj, &["diff", "--cached"]),
+                git(proj, &["for-each-ref"]),
+                git(proj, &["count-objects", "-v"]),
+            ],
+            std::fs::read(proj.join(".git/HEAD")).unwrap(),
+            std::fs::read(proj.join(".git/index")).unwrap(),
+        )
+    }
+
+    /// The store refs of one work, by their last part.
+    fn refs_of(root: &Path, key: &str) -> Vec<String> {
+        let prefix = format!("refs/work/{key}/");
+        refs(&Store::open(root).unwrap())
+            .lines()
+            .filter_map(|name| name.strip_prefix(&prefix).map(str::to_string))
+            .collect()
+    }
+
+    /// Every file under `dir`, links not followed.
+    fn files_under(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut todo = vec![dir.to_path_buf()];
+        while let Some(path) = todo.pop() {
+            for entry in std::fs::read_dir(&path).unwrap() {
+                let entry = entry.unwrap();
+                let kind = entry.file_type().unwrap();
+                if kind.is_dir() {
+                    todo.push(entry.path());
+                } else if kind.is_file() {
+                    found.push(entry.path());
+                }
+            }
+        }
+        found
+    }
+
+    fn holds_markers(dir: &Path) -> bool {
+        files_under(dir).iter().any(|path| {
+            std::fs::read(path)
+                .unwrap()
+                .windows(7)
+                .any(|bytes| bytes == b"<<<<<<<")
+        })
+    }
+
+    /// Runs a landing that ends, as if the app closed, right before it
+    /// replaces or removes `path`.
+    fn land_until(root: &Path, key: &str, path: &'static str) {
+        test_hooks::on_swap(Some(Box::new(move |at| {
+            if at == path {
+                panic!("the app closes here");
+            }
+            None
+        })));
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            land(root, "chat", key, By::Person)
+        }));
+        test_hooks::on_swap(None);
+        let stopped = stopped.map(|out| out.map(|work| work.state));
+        assert!(stopped.is_err(), "it ran to its end: {stopped:?}");
+    }
+
+    fn stored(root: &Path, key: &str) -> Work {
+        read_records(root, "chat")
+            .unwrap()
+            .into_iter()
+            .find(|work| work.key == key)
+            .unwrap()
+    }
+
+    #[test]
+    fn two_works_on_different_files_both_land_and_the_person_s_git_is_as_it_was() {
+        let (base, proj, root) = project("landtwo");
+        let one = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("one.txt"), "one\n");
+        });
+        let two = sealed(&root, &proj, "s2", Ended::Done, |tree| {
+            write(&tree.join("src/two.txt"), "two\n");
+            write(&tree.join("README"), "hi\nmore\n");
+        });
+        assert_eq!(
+            (&one.state, &two.state),
+            (&WorkState::Ready, &WorkState::Ready)
+        );
+        assert_eq!(names_in(&proj), [".git", "README"]);
+        let before = person_s_git(&proj);
+
+        let first = land(&root, "chat", &one.key, By::Person).unwrap();
+        assert_eq!(first.state, WorkState::Merged);
+        assert_eq!(first.landing, None);
+        assert!(first.merged_ms.is_some_and(|at| at >= one.updated_ms));
+        assert_eq!(result_line(&first), "merged: 1 file into the project");
+        assert_eq!(stored(&root, &one.key), first);
+        assert_eq!(text(&proj.join("one.txt")), "one\n");
+        assert_eq!(names_in(&proj), [".git", "README", "one.txt"]);
+
+        // The lead may ask for work that is ready and finished.
+        let second = land(&root, "chat", &two.key, By::Lead).unwrap();
+        assert_eq!(second.state, WorkState::Merged);
+        assert_eq!(result_line(&second), "merged: 2 files into the project");
+        assert_eq!(text(&proj.join("src/two.txt")), "two\n");
+        assert_eq!(text(&proj.join("README")), "hi\nmore\n");
+        assert_eq!(names_in(&proj), [".git", "README", "one.txt", "src"]);
+        assert_eq!(names_in(&proj.join("src")), ["two.txt"]);
+
+        // Landed work is uncommitted changes; nothing of the person's git
+        // was written.
+        assert_eq!(person_s_git(&proj), before);
+        assert_eq!(
+            git(&proj, &["status", "--porcelain"]),
+            " M README\n?? one.txt\n?? src/\n"
+        );
+
+        // Both trees are gone, with what git kept for them. The four
+        // commits of each landing stay in the store.
+        assert!(!one.tree.exists() && !two.tree.exists());
+        assert!(!proj.join(".git/worktrees").exists());
+        assert_eq!(names_in(&root.join("chat")), ["work.json"]);
+        for key in [&one.key, &two.key] {
+            assert_eq!(refs_of(&root, key), ["base", "before", "merged", "tip"]);
+        }
+        let store = Store::open(&root).unwrap();
+        let journal = |key: &str, name: &str| rows(&store, &ref_name(key, name));
+        assert_eq!(
+            journal(&two.key, "before"),
+            ["100644 README", "100644 one.txt"]
+        );
+        assert_eq!(
+            journal(&two.key, "merged"),
+            ["100644 README", "100644 one.txt", "100644 src/two.txt"]
+        );
+
+        // Merged work is not merged twice, and has nothing left to delete.
+        assert_eq!(
+            land(&root, "chat", &one.key, By::Person).err().as_deref(),
+            Some("this work can't be merged: it is already merged")
+        );
+        assert_eq!(
+            discard(&root, "chat", &one.key).err().as_deref(),
+            Some("there is nothing left of this work to delete")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_later_of_two_works_on_one_line_is_a_conflict_and_nothing_is_written() {
+        let (base, proj, root) = project("conflict");
+        write(&proj.join("a.txt"), "one\ntwo\nthree\n");
+        commit_all(&proj);
+        let first = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "one\nTWO first\nthree\n");
+        });
+        let second = sealed(&root, &proj, "s2", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "one\nTWO second\nthree\n");
+        });
+        assert_eq!(
+            land(&root, "chat", &first.key, By::Person).unwrap().state,
+            WorkState::Merged
+        );
+        assert_eq!(text(&proj.join("a.txt")), "one\nTWO first\nthree\n");
+        let before = person_s_git(&proj);
+
+        let lost = land(&root, "chat", &second.key, By::Person).unwrap();
+        assert_eq!(
+            lost.state,
+            WorkState::Conflict {
+                files: vec!["a.txt".into()]
+            }
+        );
+        assert_eq!(stored(&root, &second.key), lost);
+        assert_eq!((&lost.landing, lost.merged_ms), (&None, None));
+        assert_eq!(text(&proj.join("a.txt")), "one\nTWO first\nthree\n");
+        assert_eq!(names_in(&proj), [".git", "README", "a.txt"]);
+        assert_eq!(person_s_git(&proj), before);
+        assert!(!holds_markers(&base), "a conflict marker was written");
+        assert_eq!(
+            result_line(&lost),
+            format!(
+                "conflict: a.txt. The project was not changed. work: {key}. To redo it on the \
+                 current project, start a helper with isolation worktree and redo {key}.",
+                key = second.key
+            )
+        );
+        // Its tree and its sealed content are kept; it left no restore point.
+        assert_eq!(text(&second.tree.join("a.txt")), "one\nTWO second\nthree\n");
+        assert_eq!(refs_of(&root, &second.key), ["base", "tip"]);
+
+        // Merge again on the same project is the same conflict.
+        let again = land(&root, "chat", &second.key, By::Lead).unwrap();
+        assert_eq!(again.state, lost.state);
+        assert_eq!(text(&proj.join("a.txt")), "one\nTWO first\nthree\n");
+        assert!(!holds_markers(&base));
+
+        // The person's Discard ends it.
+        let gone = discard(&root, "chat", &second.key).unwrap();
+        assert_eq!(gone.state, WorkState::Discarded);
+        assert!(!second.tree.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Git exits with 1 for a conflict and also for a commit it cannot
+    /// find. Only the first is a conflict.
+    #[test]
+    fn a_tip_that_does_not_exist_is_a_failed_merge_not_a_conflict() {
+        let (base, _root, store) = store("mergefail");
+        let tree = base.join("tree");
+        let snap = |line: &str| {
+            write(&tree.join("a.txt"), &format!("one\n{line}\nthree\n"));
+            let made = store
+                .snap(&tree, &[], None, "k1", SnapLimit::Open)
+                .unwrap()
+                .commit;
+            store
+                .set_ref(&format!("refs/work/k1/{line}"), &made)
+                .unwrap();
+            made
+        };
+        let (start, ours, theirs) = (snap("two"), snap("ours"), snap("theirs"));
+        assert_eq!(
+            store.merge(&start, &ours, &theirs),
+            Merge::Conflict(vec!["a.txt".into()])
+        );
+        let clean = store.merge(&start, &ours, &start);
+        let ours_tree = store
+            .git(&["rev-parse", &format!("{ours}^{{tree}}")])
+            .unwrap();
+        assert_eq!(
+            clean,
+            Merge::Clean(String::from_utf8_lossy(&ours_tree).trim().to_string())
+        );
+        let missing = "0123456789abcdef0123456789abcdef01234567";
+        let failed = store.merge(&start, &ours, missing);
+        assert!(
+            matches!(&failed, Merge::Failed(why) if !why.is_empty()),
+            "{failed:?}"
+        );
+        let failed = store.merge(missing, &ours, &theirs);
+        assert!(
+            matches!(&failed, Merge::Failed(why) if !why.is_empty()),
+            "{failed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Merge rules come from the `.gitattributes` files of the project as it
+    /// is on disk at the landing, and from nowhere else.
+    #[test]
+    fn only_the_project_s_own_gitattributes_steer_a_merge() {
+        let (base, proj, root) = project("mergeattrs");
+        write(&proj.join("a.txt"), "one\ntwo\nthree\nfour\nfive\n");
+        write(&proj.join("u.txt"), "one\ntwo\nthree\n");
+        commit_all(&proj);
+        // Not read: the person's `info/attributes`, and a rule the helper
+        // wrote in its own tree.
+        write(&proj.join(".git/info/attributes"), "* merge=union\n");
+        let same_line = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "one\ntwo\nTHREE helper\nfour\nfive\n");
+            write(&tree.join(".gitattributes"), "* merge=union\n");
+        });
+        write(&proj.join("a.txt"), "one\ntwo\nTHREE person\nfour\nfive\n");
+        let out = land(&root, "chat", &same_line.key, By::Person).unwrap();
+        assert_eq!(
+            out.state,
+            WorkState::Conflict {
+                files: vec!["a.txt".into()]
+            }
+        );
+        assert_eq!(
+            text(&proj.join("a.txt")),
+            "one\ntwo\nTHREE person\nfour\nfive\n"
+        );
+        assert!(!proj.join(".gitattributes").exists());
+        discard(&root, "chat", &same_line.key).unwrap();
+
+        // Read: `-merge` in the project's `.gitattributes`. Edits to two
+        // ends of the file, which a text merge takes, are a conflict.
+        write(&proj.join("a.txt"), "one\ntwo\nthree\nfour\nfive\n");
+        write(&proj.join(".gitattributes"), "a.txt -merge\n");
+        let far_apart = sealed(&root, &proj, "s2", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "one\ntwo\nthree\nfour\nFIVE helper\n");
+        });
+        write(&proj.join("a.txt"), "ONE person\ntwo\nthree\nfour\nfive\n");
+        let out = land(&root, "chat", &far_apart.key, By::Person).unwrap();
+        assert_eq!(
+            out.state,
+            WorkState::Conflict {
+                files: vec!["a.txt".into()]
+            }
+        );
+        assert_eq!(
+            text(&proj.join("a.txt")),
+            "ONE person\ntwo\nthree\nfour\nfive\n"
+        );
+        // Without the rule the same work merges, with both edits.
+        std::fs::remove_file(proj.join(".gitattributes")).unwrap();
+        let out = land(&root, "chat", &far_apart.key, By::Person).unwrap();
+        assert_eq!(out.state, WorkState::Merged);
+        assert_eq!(
+            text(&proj.join("a.txt")),
+            "ONE person\ntwo\nthree\nfour\nFIVE helper\n"
+        );
+
+        // Read: `merge=union` in the project's `.gitattributes` keeps both
+        // sides of one line.
+        write(&proj.join(".gitattributes"), "u.txt merge=union\n");
+        let union = sealed(&root, &proj, "s3", Ended::Done, |tree| {
+            write(&tree.join("u.txt"), "one\nTWO helper\nthree\n");
+        });
+        write(&proj.join("u.txt"), "one\nTWO person\nthree\n");
+        let out = land(&root, "chat", &union.key, By::Person).unwrap();
+        assert_eq!(out.state, WorkState::Merged);
+        assert_eq!(
+            text(&proj.join("u.txt")),
+            "one\nTWO person\nTWO helper\nthree\n"
+        );
+        assert!(!holds_markers(&base));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn what_the_person_did_since_the_helper_started_is_kept() {
+        let (base, proj, root) = project("personedits");
+        write(&proj.join("f.txt"), "1\n2\n3\n4\n5\n");
+        commit_all(&proj);
+        write(&proj.join("u.txt"), "untracked at the start\n");
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            assert_eq!(text(&tree.join("u.txt")), "untracked at the start\n");
+            write(&tree.join("f.txt"), "1\n2\n3\n4\n5 helper\n");
+        });
+        // The person deletes the untracked file and edits the other end of
+        // the file the helper changed. A landing's leftover of some other
+        // work lies about too.
+        std::fs::remove_file(proj.join("u.txt")).unwrap();
+        write(&proj.join("f.txt"), "1 person\n2\n3\n4\n5\n");
+        write(&proj.join(".f.txt.grokhub-old.tmp"), "stale\n");
+
+        let out = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(out.state, WorkState::Merged);
+        assert_eq!(text(&proj.join("f.txt")), "1 person\n2\n3\n4\n5 helper\n");
+        assert_eq!(
+            names_in(&proj),
+            [".f.txt.grokhub-old.tmp", ".git", "README", "f.txt"]
+        );
+        assert_eq!(text(&proj.join(".f.txt.grokhub-old.tmp")), "stale\n");
+        // The project's snapshot holds no staging file.
+        let store = Store::open(&root).unwrap();
+        assert_eq!(
+            rows(&store, &ref_name(&work.key, "before")),
+            ["100644 README", "100644 f.txt"]
+        );
+        assert_eq!(
+            blob(&store, &ref_name(&work.key, "before"), "f.txt"),
+            b"1 person\n2\n3\n4\n5\n"
+        );
+
+        // Work the person already made by hand lands as nothing to write.
+        let same = sealed(&root, &proj, "s2", Ended::Done, |tree| {
+            write(&tree.join("g.txt"), "g\n");
+        });
+        write(&proj.join("g.txt"), "g\n");
+        let out = land(&root, "chat", &same.key, By::Person).unwrap();
+        assert_eq!(out.state, WorkState::Merged);
+        assert_eq!(text(&proj.join("g.txt")), "g\n");
+        assert_eq!(refs_of(&root, &same.key), ["base", "tip"]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_tree_that_changed_after_the_seal_is_sealed_again_and_the_person_is_asked() {
+        let (base, proj, root) = project("afterseal");
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "a\n");
+        });
+        assert_eq!(work.files, ["a.txt"]);
+        write(&work.tree.join("late.txt"), "late\n");
+
+        let asked = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(asked.state, held(Held::ChangedAfterSeal));
+        assert_eq!(asked.files, ["a.txt", "late.txt"]);
+        assert_eq!(
+            asked.counts,
+            Counts {
+                added: 2,
+                changed: 0,
+                deleted: 0
+            }
+        );
+        assert_ne!(asked.tip, work.tip);
+        assert_eq!(stored(&root, &work.key), asked);
+        assert_eq!(names_in(&proj), [".git", "README"]);
+        assert_eq!(
+            result_line(&asked),
+            format!(
+                "held (the worktree changed after the helper ended): the worktree is kept at \
+                 {}. work: {}.",
+                work.tree.display(),
+                work.key
+            )
+        );
+        // Only the person merges it now.
+        assert_eq!(
+            land(&root, "chat", &work.key, By::Lead).err().as_deref(),
+            Some("this work is partial or held; the person merges it from the Tasks panel")
+        );
+        let done = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        assert_eq!(text(&proj.join("a.txt")), "a\n");
+        assert_eq!(text(&proj.join("late.txt")), "late\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn work_the_app_closed_under_is_sealed_first_and_lands_on_the_next_merge() {
+        let (base, proj, root) = project("interrupted");
+        let opened = open_for(&root, &proj, "s1");
+        let (key, tree) = (opened.work.key.clone(), opened.work.tree.clone());
+        write(&tree.join("a.txt"), "a\n");
+        // The app closes: nothing is sealed and the lock is free.
+        crate::sandbox::git_guard::unpin(&tree);
+        drop(opened.live);
+        assert_eq!(
+            records_for(&root, "chat").unwrap()[0].state,
+            held(Held::Interrupted)
+        );
+        assert_eq!(
+            land(&root, "chat", &key, By::Lead).err().as_deref(),
+            Some("this work is partial or held; the person merges it from the Tasks panel")
+        );
+
+        let asked = land(&root, "chat", &key, By::Person).unwrap();
+        assert_eq!(asked.state, held(Held::Partial));
+        assert_eq!(
+            (asked.files.as_slice(), &asked.ended),
+            (&["a.txt".to_string()][..], &None)
+        );
+        assert!(asked.tip.is_some());
+        assert_eq!(names_in(&proj), [".git", "README"]);
+        assert_eq!(
+            result_line(&asked),
+            format!(
+                "partial (the app closed while it ran), not merged: 1 file kept. work: {key}. \
+                 Only the person can merge partial work."
+            )
+        );
+        let done = land(&root, "chat", &key, By::Person).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        assert_eq!(text(&proj.join("a.txt")), "a\n");
+        assert!(!tree.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_tree_with_ignored_output_is_kept_after_a_merge_until_the_person_deletes_it() {
+        let (base, proj, root) = project("keptignored");
+        write(&proj.join(".gitignore"), ".env.local\n");
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join(".env.local"), "SECRET=1\n");
+            write(&tree.join("a.txt"), "a\n");
+        });
+        assert_eq!(work.ignored, [".env.local"]);
+
+        let done = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        assert_eq!(names_in(&proj), [".git", ".gitignore", "README", "a.txt"]);
+        assert_eq!(text(&work.tree.join(".env.local")), "SECRET=1\n");
+        assert_eq!(
+            result_line(&done),
+            format!(
+                "merged: 1 file into the project. The worktree is kept at {}: it holds 1 \
+                 ignored path.",
+                work.tree.display()
+            )
+        );
+        // A prune leaves it, however old the merge is.
+        update_records(&root, "chat", |list| {
+            list[0].merged_ms = Some(1);
+            list[0].updated_ms = 1;
+            Ok(())
+        })
+        .unwrap();
+        prune(&root);
+        assert_eq!(text(&work.tree.join(".env.local")), "SECRET=1\n");
+        assert_eq!(stored(&root, &work.key).state, WorkState::Merged);
+
+        // Delete worktree.
+        let deleted = discard(&root, "chat", &work.key).unwrap();
+        assert_eq!(deleted.state, WorkState::Merged);
+        assert_eq!(deleted.ignored, Vec::<String>::new());
+        assert_eq!(deleted.files, ["a.txt"]);
+        assert!(!work.tree.exists());
+        assert!(!proj.join(".git/worktrees").exists());
+        assert_eq!(names_in(&root.join("chat")), ["work.json"]);
+        assert_eq!(result_line(&deleted), "merged: 1 file into the project");
+        assert_eq!(text(&proj.join("a.txt")), "a\n");
+        assert_eq!(
+            discard(&root, "chat", &work.key).err().as_deref(),
+            Some("there is nothing left of this work to delete")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A project file that changes while a landing runs: the landing starts
+    /// over once from a new snapshot, and gives up the second time. It never
+    /// writes over a file it did not just read.
+    #[test]
+    fn a_project_that_changes_under_a_landing_gets_one_more_try_and_then_is_held() {
+        for step in [test_hooks::Step::Check, test_hooks::Step::Apply] {
+            let (base, proj, root) = project("moved");
+            write(&proj.join("a.txt"), "1\n2\n3\n4\n5\n");
+            write(&proj.join("b.txt"), "b\n");
+            commit_all(&proj);
+            let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+                write(&tree.join("a.txt"), "1\n2\n3\n4\n5 helper\n");
+                write(&tree.join("b.txt"), "b helper\n");
+            });
+            let before = person_s_git(&proj);
+
+            // Changed every time: held, and the person's bytes stay.
+            let file = proj.join("a.txt");
+            let mut edits = 0;
+            test_hooks::on_landing_step(Some(Box::new(move |at| {
+                if at == step {
+                    edits += 1;
+                    write(&file, &format!("1 person {edits}\n2\n3\n4\n5\n"));
+                }
+            })));
+            let merges = test_hooks::merges();
+            let out = land(&root, "chat", &work.key, By::Person).unwrap();
+            assert_eq!(out.state, held(Held::ProjectChanged), "{step:?}");
+            assert_eq!(test_hooks::merges() - merges, 2);
+            assert_eq!(out.landing, None);
+            assert_eq!(stored(&root, &work.key), out);
+            assert_eq!(text(&proj.join("a.txt")), "1 person 2\n2\n3\n4\n5\n");
+            assert_eq!(text(&proj.join("b.txt")), "b\n");
+            assert_eq!(names_in(&proj), [".git", "README", "a.txt", "b.txt"]);
+            assert_eq!(refs_of(&root, &work.key), ["base", "tip"]);
+            assert_eq!(person_s_git(&proj), before);
+            assert_eq!(
+                result_line(&out),
+                format!(
+                    "held (the project changed during the merge): the worktree is kept at {}. \
+                     work: {}.",
+                    work.tree.display(),
+                    work.key
+                )
+            );
+
+            // Changed once: the second try merges with the person's edit.
+            let file = proj.join("a.txt");
+            let mut once = true;
+            test_hooks::on_landing_step(Some(Box::new(move |at| {
+                if at == step && std::mem::take(&mut once) {
+                    write(&file, "1 person once\n2\n3\n4\n5\n");
+                }
+            })));
+            let merges = test_hooks::merges();
+            let out = land(&root, "chat", &work.key, By::Person).unwrap();
+            test_hooks::on_landing_step(None);
+            assert_eq!(out.state, WorkState::Merged, "{step:?}");
+            assert_eq!(test_hooks::merges() - merges, 2);
+            assert_eq!(
+                text(&proj.join("a.txt")),
+                "1 person once\n2\n3\n4\n5 helper\n"
+            );
+            assert_eq!(text(&proj.join("b.txt")), "b helper\n");
+            assert_eq!(names_in(&proj), [".git", "README", "a.txt", "b.txt"]);
+            assert_eq!(person_s_git(&proj), before);
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+
+    #[test]
+    fn a_write_that_fails_part_way_puts_the_files_back() {
+        let (base, proj, root) = project("applyfails");
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            write(&proj.join(name), "old\n");
+        }
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            for name in ["a.txt", "b.txt", "c.txt"] {
+                write(&tree.join(name), "new\n");
+            }
+            write(&tree.join("sub/d.txt"), "new\n");
+        });
+        let before = person_s_git(&proj);
+
+        // The third rename fails; the two files already replaced go back.
+        let mut renames = 0;
+        test_hooks::on_swap(Some(Box::new(move |_| {
+            renames += 1;
+            (renames == 3).then(|| std::io::Error::other("the disk is full"))
+        })));
+        let out = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(
+            out.state,
+            held(Held::ApplyFailed {
+                rolled_back: true,
+                files: vec!["c.txt: the disk is full".into()]
+            })
+        );
+        assert_eq!((&out.landing, out.skipped.len()), (&None, 0));
+        assert_eq!(stored(&root, &work.key), out);
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            assert_eq!(text(&proj.join(name)), "old\n", "{name}");
+        }
+        assert_eq!(
+            names_in(&proj),
+            [".git", "README", "a.txt", "b.txt", "c.txt"]
+        );
+        assert_eq!(refs_of(&root, &work.key), ["base", "tip"]);
+        assert_eq!(person_s_git(&proj), before);
+        assert_eq!(
+            result_line(&out),
+            format!(
+                "held (the merge could not be written; the files were put back): the worktree \
+                 is kept at {}. work: {}.",
+                work.tree.display(),
+                work.key
+            )
+        );
+
+        // Nothing can be written from the third rename on: the two files
+        // stay replaced, and the journal says so.
+        let mut renames = 0;
+        test_hooks::on_swap(Some(Box::new(move |_| {
+            renames += 1;
+            (renames >= 3).then(|| std::io::Error::other("the disk is full"))
+        })));
+        let out = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(
+            out.state,
+            held(Held::ApplyFailed {
+                rolled_back: false,
+                files: vec![
+                    "a.txt: the disk is full".into(),
+                    "b.txt: the disk is full".into()
+                ]
+            })
+        );
+        let journal = out.landing.clone().unwrap();
+        assert_eq!(journal.paths, ["a.txt", "b.txt", "c.txt", "sub/d.txt"]);
+        assert_eq!(
+            *journal.from,
+            held(Held::ApplyFailed {
+                rolled_back: true,
+                files: vec!["c.txt: the disk is full".into()]
+            })
+        );
+        assert_eq!(stored(&root, &work.key), out);
+        assert_eq!(text(&proj.join("a.txt")), "new\n");
+        assert_eq!(text(&proj.join("b.txt")), "new\n");
+        assert_eq!(text(&proj.join("c.txt")), "old\n");
+        assert_eq!(
+            refs_of(&root, &work.key),
+            ["base", "before", "merged", "tip"]
+        );
+        assert_eq!(
+            result_line(&out),
+            format!(
+                "held (the merge stopped part way): the worktree is kept at {}. work: {}.",
+                work.tree.display(),
+                work.key
+            )
+        );
+        // Put files back fails the same way, and says which.
+        let out = resume(&root, "chat", &work.key, Resume::PutBack).unwrap();
+        assert_eq!(
+            out.state,
+            held(Held::ApplyFailed {
+                rolled_back: false,
+                files: vec![
+                    "a.txt: the disk is full".into(),
+                    "b.txt: the disk is full".into()
+                ]
+            })
+        );
+        assert!(out.landing.is_some());
+
+        // The disk is fine again: Put files back restores them.
+        test_hooks::on_swap(None);
+        let back = resume(&root, "chat", &work.key, Resume::PutBack).unwrap();
+        assert_eq!(
+            back.state,
+            held(Held::ApplyFailed {
+                rolled_back: true,
+                files: vec!["c.txt: the disk is full".into()]
+            })
+        );
+        assert_eq!(back.landing, None);
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            assert_eq!(text(&proj.join(name)), "old\n", "{name}");
+        }
+        assert_eq!(
+            names_in(&proj),
+            [".git", "README", "a.txt", "b.txt", "c.txt"]
+        );
+        assert_eq!(refs_of(&root, &work.key), ["base", "tip"]);
+
+        // And a new Merge is a new landing on an untouched project.
+        let done = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        for name in ["a.txt", "b.txt", "c.txt", "sub/d.txt"] {
+            assert_eq!(text(&proj.join(name)), "new\n", "{name}");
+        }
+        assert_eq!(person_s_git(&proj), before);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The helper renamed `a.txt` to `b.txt` and edited it; the person
+    /// edited `a.txt`. The landing stops after it removed `a.txt` and before
+    /// `b.txt` is there. Merging again from that state would lose the
+    /// person's edit; the journal finishes it or undoes it instead.
+    #[test]
+    fn a_rename_that_stopped_after_the_delete_is_finished_or_put_back_with_no_new_merge() {
+        for how in [Resume::Finish, Resume::PutBack] {
+            let (base, proj, root) = project("renamecrash");
+            write(
+                &proj.join("a.txt"),
+                "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n",
+            );
+            commit_all(&proj);
+            let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+                std::fs::remove_file(tree.join("a.txt")).unwrap();
+                write(
+                    &tree.join("b.txt"),
+                    "one\ntwo\nthree\nfour\nfive\nsix\nseven\nEIGHT helper\n",
+                );
+            });
+            write(
+                &proj.join("a.txt"),
+                "ONE person\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n",
+            );
+            let before = person_s_git(&proj);
+            let stage = |name: &str| eprintln!("{how:?} {name}: {:?}", names_in(&proj));
+            stage("before the merge");
+            assert_eq!(names_in(&proj), [".git", "README", "a.txt"]);
+
+            land_until(&root, &work.key, "b.txt");
+            stage("stopped after the delete");
+            let staged = format!(".b.txt.grokhub-{}.tmp", work.key);
+            assert_eq!(names_in(&proj), [staged.as_str(), ".git", "README"]);
+            assert_eq!(
+                text(&proj.join(&staged)),
+                "ONE person\ntwo\nthree\nfour\nfive\nsix\nseven\nEIGHT helper\n"
+            );
+            let left = stored(&root, &work.key);
+            let journal = left.landing.clone().unwrap();
+            assert_eq!(journal.paths, ["a.txt", "b.txt"]);
+            assert_eq!(*journal.from, WorkState::Ready);
+            assert_eq!(
+                left.state,
+                held(Held::ApplyFailed {
+                    rolled_back: false,
+                    files: Vec::new()
+                })
+            );
+            let store = Store::open(&root).unwrap();
+            assert_eq!(
+                rows(&store, &journal.before),
+                ["100644 README", "100644 a.txt"]
+            );
+            assert_eq!(
+                rows(&store, &journal.merged),
+                ["100644 README", "100644 b.txt"]
+            );
+
+            // Only the journal acts on it now.
+            assert_eq!(
+                land(&root, "chat", &work.key, By::Person).err().as_deref(),
+                Some("finish the merge or put the files back first")
+            );
+            assert_eq!(
+                discard(&root, "chat", &work.key).err().as_deref(),
+                Some("finish the merge or put the files back first")
+            );
+            assert_eq!(names_in(&proj), [staged.as_str(), ".git", "README"]);
+
+            let merges = test_hooks::merges();
+            let out = resume(&root, "chat", &work.key, how).unwrap();
+            assert_eq!(
+                test_hooks::merges(),
+                merges,
+                "a journal is never merged again"
+            );
+            assert_eq!((&out.landing, out.skipped.len()), (&None, 0));
+            assert_eq!(stored(&root, &work.key), out);
+            match how {
+                Resume::Finish => {
+                    stage("after Finish merge");
+                    assert_eq!(out.state, WorkState::Merged);
+                    assert!(out.merged_ms.is_some());
+                    assert_eq!(names_in(&proj), [".git", "README", "b.txt"]);
+                    assert_eq!(
+                        text(&proj.join("b.txt")),
+                        "ONE person\ntwo\nthree\nfour\nfive\nsix\nseven\nEIGHT helper\n"
+                    );
+                    assert_eq!(
+                        refs_of(&root, &work.key),
+                        ["base", "before", "merged", "tip"]
+                    );
+                    assert!(!work.tree.exists());
+                }
+                Resume::PutBack => {
+                    stage("after Put files back");
+                    assert_eq!(out.state, WorkState::Ready);
+                    assert_eq!(out.merged_ms, None);
+                    assert_eq!(names_in(&proj), [".git", "README", "a.txt"]);
+                    assert_eq!(
+                        text(&proj.join("a.txt")),
+                        "ONE person\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n"
+                    );
+                    assert_eq!(refs_of(&root, &work.key), ["base", "tip"]);
+                    assert_eq!(
+                        text(&work.tree.join("b.txt")),
+                        "one\ntwo\nthree\nfour\nfive\nsix\nseven\nEIGHT helper\n"
+                    );
+                }
+            }
+            assert_eq!(person_s_git(&proj), before);
+            assert!(!holds_markers(&base));
+            assert_eq!(
+                resume(&root, "chat", &work.key, how).err().as_deref(),
+                Some("there is no stopped merge for this work")
+            );
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+
+    /// The person inserts a line inside a function and the helper adds a
+    /// function after it. Merging the helper's side into the merged file a
+    /// second time can add its function twice; finishing from the journal
+    /// cannot.
+    #[test]
+    fn a_landing_that_stopped_half_way_and_is_finished_holds_the_helper_s_work_once() {
+        let (base, proj, root) = project("halfway");
+        write(
+            &proj.join("lib.rs"),
+            "fn first() {\n    one();\n}\n\nfn last() {}\n",
+        );
+        write(&proj.join("z.txt"), "z\n");
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(
+                &tree.join("lib.rs"),
+                "fn first() {\n    one();\n}\n\nfn helper() {\n    two();\n}\n\nfn last() {}\n",
+            );
+            write(&tree.join("z.txt"), "z helper\n");
+        });
+        write(
+            &proj.join("lib.rs"),
+            "fn first() {\n    person();\n    one();\n}\n\nfn last() {}\n",
+        );
+        let merged =
+            "fn first() {\n    person();\n    one();\n}\n\nfn helper() {\n    two();\n}\n\n\
+                      fn last() {}\n";
+
+        land_until(&root, &work.key, "z.txt");
+        assert_eq!(text(&proj.join("lib.rs")), merged);
+        assert_eq!(text(&proj.join("z.txt")), "z\n");
+
+        let merges = test_hooks::merges();
+        let out = resume(&root, "chat", &work.key, Resume::Finish).unwrap();
+        assert_eq!(test_hooks::merges(), merges);
+        assert_eq!(out.state, WorkState::Merged);
+        assert_eq!(out.skipped, Vec::<String>::new());
+        assert_eq!(text(&proj.join("lib.rs")), merged);
+        assert_eq!(text(&proj.join("lib.rs")).matches("fn helper()").count(), 1);
+        assert_eq!(text(&proj.join("z.txt")), "z helper\n");
+        assert_eq!(names_in(&proj), [".git", "README", "lib.rs", "z.txt"]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_file_changed_by_hand_while_a_landing_is_open_is_left_alone_and_named() {
+        for how in [Resume::Finish, Resume::PutBack] {
+            let (base, proj, root) = project("byhand");
+            for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+                write(&proj.join(name), "old\n");
+            }
+            commit_all(&proj);
+            let work = sealed(&root, &proj, "s1", Ended::Stopped, |tree| {
+                for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+                    write(&tree.join(name), "new\n");
+                }
+            });
+            assert_eq!(work.state, held(Held::Partial));
+            // It stops with a and b applied; the person then edits one
+            // applied file and one that was not.
+            land_until(&root, &work.key, "c.txt");
+            write(&proj.join("b.txt"), "mine\n");
+            write(&proj.join("d.txt"), "mine too\n");
+
+            let out = resume(&root, "chat", &work.key, how).unwrap();
+            assert_eq!(out.skipped, ["b.txt", "d.txt"], "{how:?}");
+            assert_eq!(out.landing, None);
+            assert_eq!(text(&proj.join("b.txt")), "mine\n");
+            assert_eq!(text(&proj.join("d.txt")), "mine too\n");
+            let (state, others) = match how {
+                Resume::Finish => (WorkState::Merged, "new\n"),
+                // Back to what it was before the Merge click.
+                Resume::PutBack => (held(Held::Partial), "old\n"),
+            };
+            assert_eq!(out.state, state);
+            assert_eq!(text(&proj.join("a.txt")), others);
+            assert_eq!(text(&proj.join("c.txt")), others);
+            assert_eq!(
+                names_in(&proj),
+                [".git", "README", "a.txt", "b.txt", "c.txt", "d.txt"]
+            );
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+
+    #[test]
+    fn work_whose_helper_still_runs_is_not_merged_resumed_or_discarded() {
+        let (base, proj, root) = project("liveheld");
+        let opened = open_for(&root, &proj, "s1");
+        let key = opened.work.key.clone();
+        write(&opened.work.tree.join("a.txt"), "a\n");
+        let running = Some("that helper is still running");
+        assert_eq!(
+            land(&root, "chat", &key, By::Person).err().as_deref(),
+            running
+        );
+        assert_eq!(
+            land(&root, "chat", &key, By::Lead).err().as_deref(),
+            running
+        );
+        assert_eq!(
+            resume(&root, "chat", &key, Resume::Finish).err().as_deref(),
+            running
+        );
+        assert_eq!(discard(&root, "chat", &key).err().as_deref(), running);
+        assert!(opened.work.tree.join("a.txt").is_file());
+        assert_eq!(stored(&root, &key).state, WorkState::Running);
+
+        let done = settle(&root, "chat", opened.work, Ended::Done, opened.live).unwrap();
+        assert_eq!(done.state, WorkState::Ready);
+        assert_eq!(
+            land(&root, "chat", "nokey", By::Person).err().as_deref(),
+            Some("there is no helper work nokey in this chat")
+        );
+        assert_eq!(
+            land(&root, "chat", "../x", By::Person).err().as_deref(),
+            Some("not a helper work key: ../x")
+        );
+        assert_eq!(
+            resume(&root, "chat", &key, Resume::PutBack)
+                .err()
+                .as_deref(),
+            Some("there is no stopped merge for this work")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_landing_s_restore_point_outlives_other_work_and_goes_three_days_after_the_merge() {
+        let (base, proj, root) = project("restorepoint");
+        let landed = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "a\n");
+        });
+        let other = sealed(&root, &proj, "s2", Ended::Done, |tree| {
+            write(&tree.join("b.txt"), "b\n");
+        });
+        let done = land(&root, "chat", &landed.key, By::Person).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        let all = ["base", "before", "merged", "tip"];
+        assert_eq!(refs_of(&root, &landed.key), all);
+
+        // Another work is discarded: its own refs go, the landing's stay.
+        discard(&root, "chat", &other.key).unwrap();
+        assert_eq!(refs_of(&root, &other.key), Vec::<String>::new());
+        assert_eq!(refs_of(&root, &landed.key), all);
+        let store = Store::open(&root).unwrap();
+        assert_eq!(
+            rows(&store, &ref_name(&landed.key, "before")),
+            ["100644 README"]
+        );
+
+        // Two days after the merge it is still there; after three it goes.
+        let set_merged = |ago: Duration| {
+            update_records(&root, "chat", |list| {
+                let slot = list.iter_mut().find(|work| work.key == landed.key).unwrap();
+                slot.merged_ms = Some(now_ms() - ago.as_millis() as u64);
+                Ok(())
+            })
+            .unwrap();
+        };
+        set_merged(2 * DAY);
+        prune(&root);
+        assert_eq!(refs_of(&root, &landed.key), all);
+        set_merged(3 * DAY + Duration::from_secs(60));
+        prune(&root);
+        assert_eq!(refs(&store), "");
+        let kept = stored(&root, &landed.key);
+        assert_eq!(
+            (kept.state, kept.base, kept.tip),
+            (WorkState::Merged, None, None)
+        );
+        assert_eq!(text(&proj.join("a.txt")), "a\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_and_an_execute_bit_land_as_they_are() {
+        use std::os::unix::fs::PermissionsExt;
+        let (base, proj, root) = project("landlink");
+        std::os::unix::fs::symlink("README", proj.join("old-link")).unwrap();
+        write(&proj.join("run.sh"), "#!/bin/sh\n");
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            std::os::unix::fs::symlink("docs/guide.md", tree.join("link")).unwrap();
+            std::fs::remove_file(tree.join("old-link")).unwrap();
+            std::os::unix::fs::symlink("run.sh", tree.join("old-link")).unwrap();
+            make_executable(&tree.join("run.sh"));
+            write(&tree.join("tool"), "#!/bin/sh\necho hi\n");
+            make_executable(&tree.join("tool"));
+        });
+        let done = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        assert_eq!(
+            names_in(&proj),
+            [".git", "README", "link", "old-link", "run.sh", "tool"]
+        );
+        let link = |name: &str| std::fs::read_link(proj.join(name)).unwrap();
+        assert_eq!(link("link"), Path::new("docs/guide.md"));
+        assert_eq!(link("old-link"), Path::new("run.sh"));
+        let mode = |name: &str| {
+            std::fs::symlink_metadata(proj.join(name))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(mode("run.sh") & 0o111, 0o111);
+        assert_eq!(mode("tool") & 0o111, 0o111);
+        assert_eq!(mode("README") & 0o111, 0);
+        assert_eq!(text(&proj.join("tool")), "#!/bin/sh\necho hi\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Each of these plans is refused whole: nothing of the project changes
+    /// and the work is held, with the paths that are in the way.
+    #[test]
+    fn a_plan_that_cannot_be_written_safely_is_blocked_and_the_project_is_untouched() {
+        let (base, proj, root) = project("blocked");
+        write(&proj.join(".gitignore"), "*.log\n/vendor\n");
+        write(&proj.join("x"), "a file\n");
+        commit_all(&proj);
+        write(&proj.join("out.log"), "the person's log\n");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, proj.join("vendor")).unwrap();
+
+        let blocked = |task: &str, edit: &dyn Fn(&Path), person: &dyn Fn(), paths: &[&str]| {
+            let work = sealed(&root, &proj, task, Ended::Done, edit);
+            assert_eq!(work.state, WorkState::Ready, "{task}");
+            person();
+            let before = person_s_git(&proj);
+            let listing = names_in(&proj);
+            let out = land(&root, "chat", &work.key, By::Person).unwrap();
+            let paths: Vec<String> = paths.iter().map(|path| path.to_string()).collect();
+            assert_eq!(out.state, held(Held::Blocked(paths.clone())), "{task}");
+            assert_eq!(out.landing, None);
+            assert_eq!(stored(&root, &work.key), out);
+            assert_eq!(names_in(&proj), listing, "{task}");
+            assert_eq!(text(&proj.join("x")), "a file\n");
+            assert_eq!(text(&proj.join(".gitignore")), "*.log\n/vendor\n");
+            assert_eq!(text(&proj.join("out.log")), "the person's log\n");
+            assert_eq!(names_in(&outside), Vec::<String>::new());
+            assert_eq!(refs_of(&root, &work.key), ["base", "tip"]);
+            assert_eq!(person_s_git(&proj), before);
+            assert_eq!(
+                result_line(&out),
+                format!(
+                    "held (something is in the way: {}): the worktree is kept at {}. work: {}.",
+                    paths.join(", "),
+                    work.tree.display(),
+                    work.key
+                )
+            );
+            discard(&root, "chat", &work.key).unwrap();
+        };
+
+        // A file becomes a folder.
+        blocked(
+            "s1",
+            &|tree| {
+                std::fs::remove_file(tree.join("x")).unwrap();
+                write(&tree.join("x/y.txt"), "y\n");
+            },
+            &|| {},
+            &["x"],
+        );
+        // A new file where the project holds something its snapshot does
+        // not know: a file the person's rules ignore.
+        blocked(
+            "s2",
+            &|tree| {
+                write(&tree.join(".gitignore"), "/vendor\n");
+                write(&tree.join("out.log"), "the helper's log\n");
+            },
+            &|| {},
+            &["out.log"],
+        );
+        // A new file inside a folder that is a link out of the project.
+        #[cfg(unix)]
+        blocked(
+            "s3",
+            &|tree| {
+                write(&tree.join(".gitignore"), "*.log\n");
+                write(&tree.join("vendor/new.txt"), "new\n");
+            },
+            &|| {},
+            &["vendor/new.txt"],
+        );
+        // A file named like a landing's own staging file: the project's
+        // snapshot never holds one, so it could not be checked or put back.
+        blocked(
+            "s4",
+            &|tree| {
+                write(&tree.join("ok.txt"), "ok\n");
+                write(&tree.join("notes/.plan.grokhub-draft.tmp"), "the plan\n");
+            },
+            &|| {},
+            &["notes/.plan.grokhub-draft.tmp"],
+        );
+        // On a filesystem that folds case: a new name that differs only in
+        // case from a file the person made since.
+        if proj.join("readme").exists() {
+            blocked(
+                "s5",
+                &|tree| write(&tree.join("notes.txt"), "the helper's notes\n"),
+                &|| write(&proj.join("NOTES.txt"), "the person's notes\n"),
+                &["notes.txt"],
+            );
+            assert_eq!(text(&proj.join("NOTES.txt")), "the person's notes\n");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_project_in_the_middle_of_a_merge_is_not_landed_on() {
+        let (base, proj, root) = project("landbusy");
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "a\n");
+        });
+        let head = git(&proj, &["rev-parse", "HEAD"]);
+        write(&proj.join(".git/MERGE_HEAD"), &head);
+        assert_eq!(
+            land(&root, "chat", &work.key, By::Person).err().as_deref(),
+            Some(
+                "the project is in the middle of a merge or rebase, or has unresolved conflicts. \
+                 Finish or abort it, then try again."
+            )
+        );
+        assert_eq!(stored(&root, &work.key).state, WorkState::Ready);
+        assert_eq!(names_in(&proj), [".git", "README"]);
+        // The lock is free again for the next one.
+        assert!(landing_alone(&root).is_some());
+
+        std::fs::remove_file(proj.join(".git/MERGE_HEAD")).unwrap();
+        assert_eq!(
+            land(&root, "chat", &work.key, By::Person).unwrap().state,
+            WorkState::Merged
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn discard_removes_the_tree_and_the_refs_and_keeps_the_names() {
+        let (base, proj, root) = project("discard");
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "a\n");
+            std::fs::remove_file(tree.join("README")).unwrap();
+        });
+        assert_eq!(refs_of(&root, &work.key), ["base", "tip"]);
+        let before = person_s_git(&proj);
+
+        let gone = discard(&root, "chat", &work.key).unwrap();
+        assert_eq!(gone.state, WorkState::Discarded);
+        assert_eq!(gone.tip, None);
+        assert_eq!(gone.files, ["README", "a.txt"]);
+        assert_eq!(
+            gone.counts,
+            Counts {
+                added: 1,
+                changed: 0,
+                deleted: 1
+            }
+        );
+        assert_eq!(gone.title, "Fix the parser");
+        assert_eq!(stored(&root, &work.key), gone);
+        assert!(!work.tree.exists());
+        assert!(!proj.join(".git/worktrees").exists());
+        assert_eq!(names_in(&root.join("chat")), ["work.json"]);
+        assert_eq!(refs(&Store::open(&root).unwrap()), "");
+        assert_eq!(result_line(&gone), "discarded");
+        assert_eq!(names_in(&proj), [".git", "README"]);
+        assert_eq!(person_s_git(&proj), before);
+        for (who, why) in [
+            (By::Person, "this work can't be merged: it was discarded"),
+            (
+                By::Lead,
+                "this work is partial or held; the person merges it from the Tasks panel",
+            ),
+        ] {
+            assert_eq!(
+                land(&root, "chat", &work.key, who).err().as_deref(),
+                Some(why)
+            );
+        }
+        assert_eq!(
+            discard(&root, "chat", &work.key).err().as_deref(),
+            Some("there is nothing left of this work to delete")
+        );
+
+        // A folder found on disk with no record can only be discarded.
+        let stray = root.join("chat").join("k9");
+        write(&stray.join("notes.txt"), "notes\n");
+        put(&root, "chat", &orphan("k9", stray.clone(), now_ms())).unwrap();
+        assert_eq!(
+            land(&root, "chat", "k9", By::Person).err().as_deref(),
+            Some("this work can't be merged: a folder with no record")
+        );
+        assert!(stray.join("notes.txt").is_file());
+        assert_eq!(
+            discard(&root, "chat", "k9").unwrap().state,
+            WorkState::Discarded
+        );
+        assert!(!stray.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_lead_cannot_merge_work_that_did_not_finish() {
+        let (base, proj, root) = project("leadpartial");
+        write(&proj.join("a.txt"), "one\n");
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::StepLimit, |tree| {
+            write(&tree.join("a.txt"), "one helper\n");
+        });
+        assert_eq!(work.state, held(Held::Partial));
+        let refused =
+            Some("this work is partial or held; the person merges it from the Tasks panel");
+        assert_eq!(
+            land(&root, "chat", &work.key, By::Lead).err().as_deref(),
+            refused
+        );
+        assert_eq!(text(&proj.join("a.txt")), "one\n");
+
+        // A conflict does not make partial work the lead's to merge.
+        write(&proj.join("a.txt"), "one person\n");
+        let out = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(
+            out.state,
+            WorkState::Conflict {
+                files: vec!["a.txt".into()]
+            }
+        );
+        assert_eq!(out.ended, Some(Ended::StepLimit));
+        assert_eq!(
+            land(&root, "chat", &work.key, By::Lead).err().as_deref(),
+            refused
+        );
+
+        // Work that is held for a reason no merge can fix is nobody's.
+        let nested = sealed(&root, &proj, "s2", Ended::Done, |tree| {
+            write(&tree.join("sub/.git/config"), "[core]\n");
+        });
+        assert_eq!(nested.state, held(Held::NestedRepo("sub/.git".into())));
+        assert_eq!(
+            land(&root, "chat", &nested.key, By::Person)
+                .err()
+                .as_deref(),
+            Some("this work can't be merged: there is another repository at sub/.git")
+        );
+
+        // The person can still merge the first one once the project fits.
+        write(&proj.join("a.txt"), "one\n");
+        let out = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(out.state, WorkState::Merged);
+        assert_eq!(text(&proj.join("a.txt")), "one helper\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_landing_holds_its_lock_alone_and_the_file_names_it() {
+        let base = scratch("landinglock");
+        let root = base.join("helper-work");
+        let alone = LandingGuard::alone(&root, "merge").unwrap();
+        // Another handle cannot read a file locked this way on Windows.
+        #[cfg(unix)]
+        {
+            let note: serde_json::Value =
+                serde_json::from_str(&text(&landing_path(&root))).unwrap();
+            assert_eq!(note["pid"], std::process::id());
+            assert_eq!(note["op"], "merge");
+            assert!(note["since_ms"].as_u64().is_some_and(|at| at > 0));
+            assert_eq!(note.as_object().unwrap().len(), 3);
+        }
+        let busy = Some("another merge is still running; try again in a moment");
+        assert_eq!(
+            LandingGuard::alone_within(&root, "resume", Duration::from_millis(60))
+                .err()
+                .as_deref(),
+            busy
+        );
+        assert_eq!(
+            LandingGuard::shared_within(&root, Duration::ZERO)
+                .err()
+                .as_deref(),
+            busy
+        );
+        drop(alone);
+        assert_eq!(text(&landing_path(&root)), "");
+
+        // A helper that is being given its tree keeps a landing out.
+        let shared = LandingGuard::shared(&root).unwrap();
+        assert_eq!(
+            LandingGuard::alone_within(&root, "merge", Duration::ZERO)
+                .err()
+                .as_deref(),
+            busy
+        );
+        drop(shared);
+        assert!(LandingGuard::alone_within(&root, "merge", Duration::ZERO).is_ok());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The landing stopped; before it was finished, something wrote into
+    /// the helper's tree. Finishing must not delete what was written there.
+    #[test]
+    fn finishing_a_stopped_landing_seals_what_the_tree_got_since_and_keeps_it() {
+        let (base, proj, root) = project("latefinish");
+        for name in ["a.txt", "b.txt"] {
+            write(&proj.join(name), "old\n");
+        }
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "new\n");
+            write(&tree.join("b.txt"), "new\n");
+        });
+        land_until(&root, &work.key, "b.txt");
+        write(&work.tree.join("a.txt"), "newer\n");
+        write(&work.tree.join("late.txt"), "late\n");
+
+        let out = resume(&root, "chat", &work.key, Resume::Finish).unwrap();
+        assert_eq!(out.state, held(Held::ChangedAfterSeal));
+        assert_eq!((&out.landing, out.merged_ms.is_some()), (&None, true));
+        assert_eq!(text(&proj.join("a.txt")), "new\n");
+        assert_eq!(text(&proj.join("b.txt")), "new\n");
+        // The tree is there, and what it got since is sealed: what landed
+        // is where the rest starts from.
+        assert_eq!(text(&work.tree.join("late.txt")), "late\n");
+        assert_eq!(out.base, work.tip);
+        assert_eq!(out.files, ["a.txt", "late.txt"]);
+        assert_eq!(
+            out.counts,
+            Counts {
+                added: 1,
+                changed: 1,
+                deleted: 0
+            }
+        );
+        let store = Store::open(&root).unwrap();
+        let tip = out.tip.clone().unwrap();
+        assert_eq!(blob(&store, &tip, "late.txt"), b"late\n");
+        assert_eq!(blob(&store, &tip, "a.txt"), b"newer\n");
+        assert_eq!(stored(&root, &work.key), out);
+        assert_eq!(
+            refs_of(&root, &work.key),
+            ["base", "before", "merged", "tip"]
+        );
+
+        // The person merges the rest: only what changed since.
+        let done = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        assert_eq!(text(&proj.join("a.txt")), "newer\n");
+        assert_eq!(text(&proj.join("b.txt")), "new\n");
+        assert_eq!(text(&proj.join("late.txt")), "late\n");
+        assert!(!work.tree.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An unchanged tree still goes when a stopped landing is finished, and
+    /// discarding the rest of a finished landing keeps its restore point.
+    #[test]
+    fn a_finished_landing_s_restore_point_survives_a_discard_of_what_came_later() {
+        let (base, proj, root) = project("latediscard");
+        write(&proj.join("a.txt"), "old\n");
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "new\n");
+        });
+        land_until(&root, &work.key, "a.txt");
+        write(&work.tree.join("late.txt"), "late\n");
+        let out = resume(&root, "chat", &work.key, Resume::Finish).unwrap();
+        assert_eq!(out.state, held(Held::ChangedAfterSeal));
+        let gone = discard(&root, "chat", &work.key).unwrap();
+        assert_eq!(gone.state, WorkState::Discarded);
+        assert!(!work.tree.exists());
+        assert_eq!(refs_of(&root, &work.key), ["before", "merged"]);
+        assert_eq!(text(&proj.join("a.txt")), "new\n");
+
+        let other = sealed(&root, &proj, "s2", Ended::Done, |tree| {
+            write(&tree.join("b.txt"), "b\n");
+        });
+        land_until(&root, &other.key, "b.txt");
+        let done = resume(&root, "chat", &other.key, Resume::Finish).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        assert!(!other.tree.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn putting_files_back_removes_only_the_folders_the_landing_made() {
+        let (base, proj, root) = project("madefolders");
+        write(&proj.join("a.txt"), "old\n");
+        commit_all(&proj);
+        // The person's own empty folders: git does not know them.
+        std::fs::create_dir_all(proj.join("docs/deep")).unwrap();
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "new\n");
+            write(&tree.join("docs/deep/new.txt"), "n\n");
+            write(&tree.join("fresh/sub/x.txt"), "x\n");
+        });
+        let folders = |proj: &Path| {
+            (
+                proj.join("docs/deep").is_dir(),
+                proj.join("fresh").exists(),
+                names_in(proj),
+            )
+        };
+        let untouched = (
+            true,
+            false,
+            vec![
+                ".git".to_string(),
+                "README".into(),
+                "a.txt".into(),
+                "docs".into(),
+            ],
+        );
+
+        // A write fails: the landing puts the files back by itself.
+        test_hooks::on_swap(Some(Box::new(|path| {
+            (path == "fresh/sub/x.txt").then(|| std::io::Error::other("the disk is full"))
+        })));
+        let out = land(&root, "chat", &work.key, By::Person).unwrap();
+        test_hooks::on_swap(None);
+        assert_eq!(
+            out.state,
+            held(Held::ApplyFailed {
+                rolled_back: true,
+                files: vec!["fresh/sub/x.txt: the disk is full".into()]
+            })
+        );
+        assert_eq!(folders(&proj), untouched);
+        assert_eq!(names_in(&proj.join("docs/deep")), [""; 0]);
+
+        // The app closes part way, and the person puts the files back.
+        land_until(&root, &work.key, "fresh/sub/x.txt");
+        let journal = stored(&root, &work.key).landing.unwrap();
+        assert_eq!(journal.made, ["fresh", "fresh/sub"]);
+        assert_eq!(text(&proj.join("docs/deep/new.txt")), "n\n");
+        let back = resume(&root, "chat", &work.key, Resume::PutBack).unwrap();
+        assert_eq!(back.landing, None);
+        assert_eq!(folders(&proj), untouched);
+        assert_eq!(names_in(&proj.join("docs/deep")), [""; 0]);
+        assert_eq!(text(&proj.join("a.txt")), "old\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_landing_and_a_put_back_keep_each_file_s_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let (base, proj, root) = project("perms");
+        let files = [("ro.txt", 0o444), ("run.sh", 0o700), ("secret.txt", 0o600)];
+        let set = |proj: &Path| {
+            for (name, mode) in files {
+                std::fs::set_permissions(proj.join(name), std::fs::Permissions::from_mode(mode))
+                    .unwrap();
+            }
+        };
+        let seen = |proj: &Path| {
+            files.map(|(name, _)| {
+                let mode = std::fs::metadata(proj.join(name)).unwrap().permissions();
+                (name, mode.mode() & 0o777, text(&proj.join(name)))
+            })
+        };
+        for (name, _) in files {
+            write(&proj.join(name), "old\n");
+        }
+        set(&proj);
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            for (name, _) in files {
+                write(&tree.join(name), "new\n");
+            }
+        });
+        let old = files.map(|(name, mode)| (name, mode, "old\n".to_string()));
+        let new = files.map(|(name, mode)| (name, mode, "new\n".to_string()));
+        assert_eq!(seen(&proj), old);
+
+        // Two files are replaced, then the app closes; the person puts
+        // them back.
+        land_until(&root, &work.key, "secret.txt");
+        assert_eq!(text(&proj.join("run.sh")), "new\n");
+        let back = resume(&root, "chat", &work.key, Resume::PutBack).unwrap();
+        assert_eq!(back.state, WorkState::Ready);
+        assert_eq!(seen(&proj), old);
+
+        let done = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        assert_eq!(seen(&proj), new);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The person saves a file the landing had already replaced. The try is
+    /// put back around it, and the next try ends in a conflict elsewhere:
+    /// the line must not say the project was not changed.
+    #[test]
+    fn a_conflict_after_a_try_that_was_put_back_names_what_the_person_changed() {
+        let (base, proj, root) = project("triedconflict");
+        write(&proj.join("a.txt"), "one\ntwo\nthree\n");
+        write(&proj.join("b.txt"), "old\n");
+        write(&proj.join("c.txt"), "old\n");
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "one\nTWO\nthree\n");
+            write(&tree.join("b.txt"), "new\n");
+            write(&tree.join("c.txt"), "new\n");
+        });
+        let at = proj.clone();
+        test_hooks::on_swap(Some(Box::new(move |path| {
+            if path == "b.txt" {
+                write(&at.join("a.txt"), "one\nTWO\nthree\nperson\n");
+                write(&at.join("c.txt"), "theirs\n");
+            }
+            None
+        })));
+        let out = land(&root, "chat", &work.key, By::Person).unwrap();
+        test_hooks::on_swap(None);
+        assert_eq!(
+            out.state,
+            WorkState::Conflict {
+                files: vec!["c.txt".into()]
+            }
+        );
+        assert_eq!(out.skipped, ["a.txt", "c.txt"]);
+        assert_eq!(out.landing, None);
+        assert_eq!(text(&proj.join("a.txt")), "one\nTWO\nthree\nperson\n");
+        assert_eq!(text(&proj.join("b.txt")), "old\n");
+        assert_eq!(text(&proj.join("c.txt")), "theirs\n");
+        assert_eq!(
+            result_line(&out),
+            format!(
+                "conflict: c.txt. An earlier try was put back, except what the person changed \
+                 meanwhile: a.txt, c.txt. work: {key}. To redo it on the current project, start \
+                 a helper with isolation worktree and redo {key}.",
+                key = work.key
+            )
+        );
+        assert_eq!(stored(&root, &work.key), out);
+        assert_eq!(refs_of(&root, &work.key), ["base", "tip"]);
+
+        // A merged work that left a file alone says so too.
+        let mut merged = out.clone();
+        merged.state = WorkState::Merged;
+        merged.skipped = vec!["a.txt".into()];
+        assert_eq!(
+            result_line(&merged),
+            "merged: 3 files into the project. Left as the person changed them: a.txt"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_staging_file_in_a_folder_that_was_renamed_is_removed_on_resume() {
+        for how in [Resume::Finish, Resume::PutBack] {
+            let (base, proj, root) = project("movedstaging");
+            write(&proj.join("a.txt"), "old\n");
+            write(&proj.join("dir/f.txt"), "old\n");
+            commit_all(&proj);
+            let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+                write(&tree.join("a.txt"), "new\n");
+                write(&tree.join("dir/f.txt"), "new\n");
+            });
+            land_until(&root, &work.key, "a.txt");
+            assert_eq!(
+                names_in(&proj.join("dir")),
+                [format!(".f.txt.grokhub-{}.tmp", work.key), "f.txt".into()]
+            );
+            std::fs::rename(proj.join("dir"), proj.join("moved")).unwrap();
+
+            let out = resume(&root, "chat", &work.key, how).unwrap();
+            assert_eq!(out.skipped, ["dir/f.txt"], "{how:?}");
+            assert_eq!(out.landing, None);
+            assert_eq!(names_in(&proj.join("moved")), ["f.txt"]);
+            assert_eq!(text(&proj.join("moved/f.txt")), "old\n");
+            assert_eq!(names_in(&proj), [".git", "README", "a.txt", "moved"]);
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+
+    #[test]
+    fn a_long_name_is_staged_under_a_short_one() {
+        let name = format!("{}.txt", "a".repeat(246));
+        assert_eq!(
+            staging_path(Path::new("p"), &format!("d/{name}"), "k1"),
+            Path::new("p")
+                .join("d")
+                .join(".c45404f1e1855e6d.grokhub-k1.tmp")
+        );
+        assert!(staging_name("d/.c45404f1e1855e6d.grokhub-k1.tmp"));
+        let short = format!("{}.txt", "a".repeat(196));
+        assert_eq!(
+            staging_path(Path::new("p"), &short, "k1"),
+            Path::new("p").join(format!(".{short}.grokhub-k1.tmp"))
+        );
+    }
+
+    /// 250 bytes is within what one file name may have; the staging name
+    /// must not push it over.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_with_a_very_long_name_lands() {
+        let (base, proj, root) = project("longname");
+        let name = format!("{}.txt", "a".repeat(246));
+        write(&proj.join(&name), "old\n");
+        commit_all(&proj);
+        let added = format!("{}.txt", "b".repeat(246));
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join(&name), "new\n");
+            write(&tree.join(&added), "added\n");
+        });
+        let done = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        assert_eq!(text(&proj.join(&name)), "new\n");
+        assert_eq!(text(&proj.join(&added)), "added\n");
+        assert_eq!(names_in(&proj), [".git", "README", &name, &added]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_stopped_landing_whose_project_folder_is_gone_says_so_and_waits_for_it() {
+        let (base, proj, root) = project("projgone");
+        write(&proj.join("a.txt"), "old\n");
+        write(&proj.join("b.txt"), "old\n");
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "new\n");
+            write(&tree.join("b.txt"), "new\n");
+        });
+        land_until(&root, &work.key, "b.txt");
+        let away = base.join("elsewhere");
+        std::fs::rename(&proj, &away).unwrap();
+
+        let gone = format!(
+            "the project folder {} can't be found. Put it back where it was, then try again.",
+            proj.display()
+        );
+        for how in [Resume::Finish, Resume::PutBack] {
+            assert_eq!(
+                resume(&root, "chat", &work.key, how).err(),
+                Some(gone.clone())
+            );
+        }
+        assert_eq!(
+            discard(&root, "chat", &work.key).err().as_deref(),
+            Some("finish the merge or put the files back first")
+        );
+        assert!(stored(&root, &work.key).landing.is_some());
+        assert!(work.tree.exists());
+
+        std::fs::rename(&away, &proj).unwrap();
+        let back = resume(&root, "chat", &work.key, Resume::PutBack).unwrap();
+        assert_eq!(back.state, WorkState::Ready);
+        assert_eq!(text(&proj.join("a.txt")), "old\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A tree that can't be sealed when Merge is pressed does not cost the
+    /// work what was sealed before.
+    #[test]
+    fn a_tree_that_cannot_be_sealed_at_merge_is_refused_and_the_work_stays_ready() {
+        let (base, proj, root) = project("sealrefused");
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "a\n");
+        });
+        write(&work.tree.join("sub/.git/config"), "[core]\n");
+        for by in [By::Person, By::Lead] {
+            assert_eq!(
+                land(&root, "chat", &work.key, by).err().as_deref(),
+                Some(
+                    "this work can't be merged now: there is another repository at sub/.git. \
+                     Nothing was changed."
+                )
+            );
+        }
+        assert_eq!(stored(&root, &work.key), work);
+        assert_eq!(refs_of(&root, &work.key), ["base", "tip"]);
+        assert_eq!(names_in(&proj), [".git", "README"]);
+
+        std::fs::remove_dir_all(work.tree.join("sub")).unwrap();
+        let done = land(&root, "chat", &work.key, By::Lead).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        assert_eq!(text(&proj.join("a.txt")), "a\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_key_this_chat_does_not_have_is_refused_and_leaves_no_file() {
+        let (base, proj, root) = project("nokey");
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "a\n");
+        });
+        let chat = session_dir(&root, "chat");
+        let before = names_in(&chat);
+        let none = |key: &str| Some(format!("there is no helper work {key} in this chat"));
+        assert_eq!(land(&root, "ghost", "zz9", By::Lead).err(), none("zz9"));
+        assert_eq!(
+            land(&root, "ghost", &work.key, By::Person).err(),
+            none(&work.key)
+        );
+        assert_eq!(discard(&root, "chat", "nokey").err(), none("nokey"));
+        assert_eq!(
+            resume(&root, "chat", "nokey2", Resume::Finish).err(),
+            none("nokey2")
+        );
+        assert_eq!(
+            land(&root, "chat", "../x\ny", By::Lead).err().as_deref(),
+            Some("not a helper work key: ../x\\ny")
+        );
+        assert!(!session_dir(&root, "ghost").exists());
+        assert_eq!(names_in(&chat), before);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Git fails at the merge itself: that is a held work with the reason,
+    /// never a conflict, and the project is not written.
+    #[test]
+    fn a_merge_git_cannot_compute_is_held_as_failed_and_can_be_tried_again() {
+        let (base, proj, root) = project("mergeheld");
+        write(&proj.join("a.txt"), "old\n");
+        commit_all(&proj);
+        let work = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "new\n");
+        });
+        // The store loses its objects between the snapshot and the merge.
+        let objects = root.join(".harness").join("store.git").join("objects");
+        let away = root.join(".harness").join("objects-away");
+        let (from, to) = (objects.clone(), away.clone());
+        test_hooks::on_landing_step(Some(Box::new(move |step| {
+            if step == test_hooks::Step::Merge {
+                std::fs::rename(&from, &to).unwrap();
+                std::fs::create_dir(&from).unwrap();
+            }
+        })));
+        let out = land(&root, "chat", &work.key, By::Person).unwrap();
+        test_hooks::on_landing_step(None);
+        std::fs::remove_dir_all(&objects).unwrap();
+        std::fs::rename(&away, &objects).unwrap();
+        assert!(
+            matches!(&out.state, WorkState::Held { why: Held::MergeFailed(why) } if !why.is_empty()),
+            "{:?}",
+            out.state
+        );
+        assert_eq!(out.landing, None);
+        assert_eq!(stored(&root, &work.key), out);
+        assert_eq!(text(&proj.join("a.txt")), "old\n");
+        assert_eq!(names_in(&proj), [".git", "README", "a.txt"]);
+        assert!(work.tree.exists());
+        assert_eq!(
+            land(&root, "chat", &work.key, By::Lead).err().as_deref(),
+            Some("this work is partial or held; the person merges it from the Tasks panel")
+        );
+
+        let done = land(&root, "chat", &work.key, By::Person).unwrap();
+        assert_eq!(done.state, WorkState::Merged);
+        assert_eq!(text(&proj.join("a.txt")), "new\n");
         let _ = std::fs::remove_dir_all(&base);
     }
 }
