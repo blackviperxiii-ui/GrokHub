@@ -26,6 +26,7 @@ import {
   onChatEvent,
   onEventGap,
   readTurn,
+  replyPick,
   runSlash,
   saveSettings,
   sendChat,
@@ -77,6 +78,8 @@ import { settingAsk } from "./autoSetupApi";
 import { Episode } from "./Episode";
 import { ScreenshotOffer } from "./ScreenshotOffer";
 import { openImport } from "./onboardApi";
+import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
+import { Inbox } from "./Inbox";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -104,6 +107,12 @@ export type Item =
   | { kind: "saved"; saved: SavedFile }
   /** A destructive slash command asks first; Yes runs `yes`. */
   | { kind: "confirm"; command: string; prompt: string; yes: string }
+  /** A report_findings card under the reply (Order 733). */
+  | Extract<ChatEvent, { kind: "findings" }>
+  /** The reply's Finished block as a card (Order 733). */
+  | Extract<ChatEvent, { kind: "recap" }>
+  /** The evidence receipt for the turn that just ended (Order 733). */
+  | Extract<ChatEvent, { kind: "evidence" }>
   | ElicitItem;
 
 type Ended = "ended" | "halted";
@@ -256,6 +265,27 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     // The plan comes again on its approval card; one copy is enough.
     case "elicit":
       return [...items, { ...event, answer: null }];
+    case "findings":
+    case "evidence":
+      return [...items, { ...event }];
+    // The Finished block leaves the bubble for its card: the last reply's
+    // text becomes the reply without the block.
+    case "recap": {
+      let at = -1;
+      for (let i = items.length - 1; i >= 0; i--) {
+        if (items[i].kind === "assistant") {
+          at = i;
+          break;
+        }
+      }
+      const swapped =
+        at < 0
+          ? items
+          : items.map((item, i) =>
+              i === at && item.kind === "assistant" ? { ...item, text: event.body } : item,
+            );
+      return [...swapped, { ...event }];
+    }
     // A reply's follow-ups join the chip row under the box (`useChipRow`).
     default:
       return items;
@@ -442,6 +472,8 @@ function LogItem({
   onAnswerCard,
   onConfirm,
   onStopAsking,
+  onFix,
+  onChipPick,
   nyxUrl,
 }: {
   item: Item;
@@ -456,6 +488,10 @@ function LogItem({
   onConfirm: (item: Item, yes: boolean) => void;
   /** Stop asking me on a permission card, while the setting is Ask me first. */
   onStopAsking?: (id: string) => void;
+  /** A findings pill: put the fix in the composer, unsent. */
+  onFix: (text: string) => void;
+  /** A reply chip was picked; the shell remembers it for the next card. */
+  onChipPick: (key: string) => void;
 }) {
   "use memo";
   switch (item.kind) {
@@ -491,7 +527,30 @@ function LogItem({
     case "elicit":
       return (
         <ViewTransition>
-          <ElicitCard key={item.id} item={item} onAnswer={(action, value) => onAnswerCard(item, action, value)} />
+          <ElicitCard
+            key={item.id}
+            item={item}
+            onAnswer={(action, value) => onAnswerCard(item, action, value)}
+            onChipPick={onChipPick}
+          />
+        </ViewTransition>
+      );
+    case "findings":
+      return (
+        <ViewTransition>
+          <FindingsCard event={item} onFix={onFix} />
+        </ViewTransition>
+      );
+    case "recap":
+      return (
+        <ViewTransition>
+          <RecapCard event={item} />
+        </ViewTransition>
+      );
+    case "evidence":
+      return (
+        <ViewTransition>
+          <EvidenceCard event={item} />
         </ViewTransition>
       );
     case "slash":
@@ -1449,6 +1508,18 @@ export function Chat({
           <HangoutHeader mode={hangoutMode} onMode={pickHangout} />
         </>
       )}
+      <Inbox
+        onOpenChat={(id) => {
+          if (id === conversationId) return;
+          if (busyRef.current) {
+            setError(OPEN_BUSY);
+            return;
+          }
+          touched.current = true;
+          closeChat(conversationId).catch(() => {});
+          loadChat(id).then(show, (err) => setError(String(err)));
+        }}
+      />
       {/* Focusable so the keyboard can scroll a long conversation. */}
       <div className="log" role="log" aria-live="polite" tabIndex={0}>
         {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (
@@ -1483,6 +1554,12 @@ export function Chat({
             onAnswerCard={answerCard}
             onConfirm={settleConfirm}
             onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
+            onFix={(text) => setDraft(text)}
+            onChipPick={(key) => {
+              void Promise.resolve()
+                .then(() => replyPick(key))
+                .catch(() => {});
+            }}
           />
         ))}
         {busy && waiting && (

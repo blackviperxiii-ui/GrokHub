@@ -87,6 +87,26 @@ export function getCapabilities(): Promise<Capabilities> {
 export type Answer = "allow" | "always" | "deny";
 
 /** One engine event for a conversation, from `chat://event`. */
+/** One predicted reply for a card that waits on you (Order 733):
+ * `send` answers the card with `text`, `prefill` puts `text` in the box,
+ * `dismiss` sets the card aside. */
+export interface ReplyChipData {
+  key: string;
+  label: string;
+  act: "send" | "prefill" | "dismiss";
+  text: string;
+}
+
+/** One decision waiting in the decision inbox (Order 733). */
+export interface Decision {
+  id: string;
+  kind: "permission" | "elicit" | "park";
+  /** The chat the ask belongs to; empty for a harness park. */
+  chatId: string;
+  what: string;
+  hard: boolean;
+}
+
 export type ChatEvent =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; title: string; status: string; detail: string }
@@ -119,6 +139,38 @@ export type ChatEvent =
       secret: boolean;
       /** Answers to tap for the agent's question, the recommended one first. */
       options?: ElicitChoice[];
+      /** Predicted replies for this card, ranked by past picks. */
+      chips?: ReplyChipData[];
+    }
+  /** A report_findings card: one pill per fix; a pill fills the composer. */
+  | {
+      kind: "findings";
+      items: { severity: string; text: string }[];
+      fixes: { label: string; prompt: string }[];
+      doAll: string[] | null;
+    }
+  /** The reply's Finished block as a card; `body` replaces the block in the bubble. */
+  | {
+      kind: "recap";
+      body: string;
+      lines: { status: "done" | "partly" | "notDone"; text: string }[];
+      needsYou: string[];
+      undo: string[];
+      steps: { title: string; failed: boolean }[];
+    }
+  /** The evidence receipt for the turn that just ended. */
+  | {
+      kind: "evidence";
+      summary: string;
+      goal: string;
+      goalDetail: string;
+      plan: string[];
+      actions: string[];
+      checks: string[];
+      changes: string[];
+      confidence: string;
+      recovery: string;
+      toolRanNotVerified: boolean;
     };
 
 /** A quick chip: the cabin's engine picked it for this moment (`chips.rs`).
@@ -416,6 +468,27 @@ export function answerPermission(
 export function helperQuestions(conversationId: string): Promise<ChatEvent[]> {
   if (!inShell()) return Promise.resolve([]);
   return invoke<ChatEvent[]>("helper_questions", { conversationId });
+}
+
+/** Every decision waiting on you, in one list (the decision inbox). */
+export function decisionInbox(): Promise<Decision[]> {
+  return invoke<Decision[]>("decision_inbox", {});
+}
+
+/** Answers one inbox decision through the same path as its card. Resolves
+ * "answered", or "open:<chat id>" when an elicit's Approve opens its chat. */
+export function answerInbox(
+  conversationId: string,
+  id: string,
+  kind: Decision["kind"],
+  approve: boolean,
+): Promise<string> {
+  return invoke<string>("answer_inbox", { conversationId, id, kind, approve });
+}
+
+/** Remembers a picked reply chip, so the next waiting card ranks it higher. */
+export function replyPick(key: string): Promise<void> {
+  return invoke<void>("reply_pick", { key });
 }
 
 export function cancelChat(conversationId: string): Promise<void> {

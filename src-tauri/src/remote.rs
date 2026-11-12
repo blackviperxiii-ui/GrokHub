@@ -74,6 +74,10 @@ pub const WEB_COMMANDS: &[&str] = &[
     "cancel_chat",
     "steer_chat",
     "close_chat",
+    // The decision inbox: a browser sees and answers only its own chats' asks.
+    "decision_inbox",
+    "answer_inbox",
+    "reply_pick",
     // Pasted or dropped files only; the picker and paths stay on the computer.
     "stage_attachment",
     "remove_attachment",
@@ -1276,11 +1280,12 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-        const REVIEWED: [&str; 85] = [
+        const REVIEWED: [&str; 88] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
             "answer_elicit",
+            "answer_inbox",
             "answer_permission",
             "apply_memory_raw_tidy",
             "approve_memory_row",
@@ -1288,6 +1293,7 @@ mod tests {
             "check_connectors",
             "chip_outcome",
             "close_chat",
+            "decision_inbox",
             "disconnect_connector",
             "dismiss_memory_raw_tidy",
             "edit_automation",
@@ -1333,6 +1339,7 @@ mod tests {
             "reject_memory_row",
             "remove_attachment",
             "remove_automation",
+            "reply_pick",
             "restart_connector",
             "restore_memory_file",
             "run_automation",

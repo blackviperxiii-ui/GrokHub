@@ -1618,6 +1618,204 @@ button.danger:not(:disabled) {
   background: transparent;
 }
 
+/* Turn extras (Order 733): the findings, recap and evidence cards under a
+   finished reply, the reply chips on cards that wait, and the inbox. */
+.card.turn-extra {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.finding-items,
+.recap-lines,
+.recap-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.finding-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.severity {
+  font-size: var(--font-caption);
+  text-transform: capitalize;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 8px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.severity-high {
+  color: var(--danger-text);
+  border-color: var(--danger-text);
+}
+
+.severity-medium {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.fix-pills,
+.reply-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip.fix-pill.quiet,
+.chip.reply-chip.quiet {
+  color: var(--muted);
+}
+
+.recap-tally {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 8px;
+}
+
+.recap-line,
+.recap-step {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.recap-mark {
+  width: 1em;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.recap-line.done .recap-mark {
+  color: var(--accent);
+}
+
+.recap-line.partly .recap-mark {
+  color: var(--amber);
+}
+
+.recap-line.notDone .recap-mark,
+.recap-step.failed .recap-mark {
+  color: var(--danger-text);
+}
+
+.recap-fold {
+  align-self: flex-start;
+}
+
+.evidence-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
+.evidence-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evidence-title {
+  font-weight: 600;
+}
+
+.evidence-section ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.evidence-note {
+  color: var(--muted);
+  margin: 0;
+}
+
+/* The decision inbox: one line over the log, opening into a row per
+   decision that waits. */
+.inbox {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 12px;
+}
+
+.inbox-line {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+}
+
+.inbox-rows {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inbox-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.inbox-what {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  min-width: 0;
+}
+
+.inbox-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46ch;
+}
+
+.inbox-chat {
+  color: var(--muted);
+}
+
+.inbox-buttons {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.inbox-error {
+  color: var(--danger-text);
+  margin: 8px 0 0;
+}
+
 button.danger:hover:not(:disabled):not([role="menuitem"]) {
   filter: none;
   background: var(--hover);
