@@ -105,6 +105,7 @@ pub mod skills;
 pub mod slash;
 pub mod slash_ops;
 mod steam_checks;
+pub mod storage;
 mod turns;
 pub mod voice;
 pub mod workboard;
@@ -3297,6 +3298,100 @@ async fn game_osrs_refresh(state: State<'_, ShellState>) -> Result<games::OsrsVi
     off_main(move || games::osrs_refresh(&dir, grokhub_core::now_ms())).await?
 }
 
+#[tauri::command]
+async fn game_destiny(state: State<'_, ShellState>) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_view(&dir, grokhub_core::now_ms())).await
+}
+
+#[tauri::command]
+async fn game_destiny_refresh(state: State<'_, ShellState>) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_refresh(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_destiny_start_key(
+    state: State<'_, ShellState>,
+    key: String,
+) -> Result<games::DestinyKeyCard, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_start_key(&dir, key)).await?
+}
+
+#[tauri::command]
+async fn game_destiny_answer_key(
+    state: State<'_, ShellState>,
+    id: String,
+    approve: bool,
+) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_answer_key(&dir, &id, approve, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_destiny_save_name(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_save_name(&dir, &name, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_destiny_remove(state: State<'_, ShellState>) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_remove(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_poe(app_id: u32) -> Result<games::PoeView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || games::poe_view(app_id)).await
+}
+
+#[tauri::command]
+async fn game_elite() -> Result<games::EliteView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::elite_view).await
+}
+
+#[tauri::command]
+async fn game_factorio() -> Result<games::FactorioView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::factorio_view).await
+}
+
+#[tauri::command]
+async fn game_factorio_mod(dir: String, install: bool) -> Result<games::FactorioView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || games::factorio_mod_action(Path::new(&dir), install)).await?
+}
+
+#[tauri::command]
+async fn game_stardew() -> Result<games::StardewView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::stardew_view).await
+}
+
+#[tauri::command]
+async fn game_minecraft() -> Result<games::MinecraftView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::minecraft_view).await
+}
+
+#[tauri::command]
+async fn game_rl() -> Result<games::RocketLeagueView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::rocket_league_view).await
+}
+
 /// A Home tile's Turn on, for a switch that needs nothing else. The rest
 /// open their Settings row instead.
 #[tauri::command]
@@ -5655,6 +5750,11 @@ pub fn run() {
             open_data_folder,
             open_files_folder,
             change_files_folder,
+            storage::get_storage,
+            storage::storage_change,
+            storage::storage_reset,
+            storage::storage_bring_over,
+            storage::storage_open,
             export_chat,
             open_saved,
             reveal_saved,
@@ -5685,6 +5785,19 @@ pub fn run() {
             game_osrs_save,
             game_osrs_forget,
             game_osrs_refresh,
+            game_destiny,
+            game_destiny_refresh,
+            game_destiny_start_key,
+            game_destiny_answer_key,
+            game_destiny_save_name,
+            game_destiny_remove,
+            game_poe,
+            game_elite,
+            game_factorio,
+            game_factorio_mod,
+            game_stardew,
+            game_minecraft,
+            game_rl,
             home_open_clip,
             library_friends,
             library_steam_settings,

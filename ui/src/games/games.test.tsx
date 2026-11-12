@@ -2,10 +2,28 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { companionScreen, ESO_APP_ID, GW2_APP_ID, OSRS_APP_ID } from "./index";
+import {
+  companionScreen,
+  DESTINY_APP_ID,
+  ELITE_APP_ID,
+  ESO_APP_ID,
+  FACTORIO_APP_ID,
+  GW2_APP_ID,
+  OSRS_APP_ID,
+  POE_APP_ID,
+  ROCKET_LEAGUE_APP_ID,
+  STARDEW_APP_ID,
+} from "./index";
+import { Destiny } from "./Destiny";
+import { Elite } from "./Elite";
 import { Eso } from "./Eso";
+import { Factorio } from "./Factorio";
 import { Gw2 } from "./Gw2";
+import { Minecraft } from "./Minecraft";
 import { Osrs } from "./Osrs";
+import { Poe } from "./Poe";
+import { RocketLeague } from "./RocketLeague";
+import { Stardew } from "./Stardew";
 import { Wow } from "./Wow";
 
 const api = vi.hoisted(() => ({
@@ -22,6 +40,19 @@ const api = vi.hoisted(() => ({
   gameOsrsSave: vi.fn(),
   gameOsrsForget: vi.fn(),
   gameOsrsRefresh: vi.fn(),
+  gameDestiny: vi.fn(),
+  gameDestinyRefresh: vi.fn(),
+  gameDestinyStartKey: vi.fn(),
+  gameDestinyAnswerKey: vi.fn(),
+  gameDestinySaveName: vi.fn(),
+  gameDestinyRemove: vi.fn(),
+  gamePoe: vi.fn(),
+  gameElite: vi.fn(),
+  gameFactorio: vi.fn(),
+  gameFactorioMod: vi.fn(),
+  gameStardew: vi.fn(),
+  gameMinecraft: vi.fn(),
+  gameRl: vi.fn(),
 }));
 
 vi.mock("../api", () => api);
@@ -93,6 +124,39 @@ describe("companionScreen", () => {
         },
       }),
     ).toBeNull();
+    for (const appId of [
+      DESTINY_APP_ID,
+      POE_APP_ID,
+      ELITE_APP_ID,
+      FACTORIO_APP_ID,
+      STARDEW_APP_ID,
+      ROCKET_LEAGUE_APP_ID,
+    ]) {
+      expect(
+        companionScreen({
+          kind: "steam",
+          game: {
+            appId,
+            name: "Game",
+            installed: true,
+            lastPlayed: 0,
+            playtimeMin: 0,
+          },
+        }),
+      ).not.toBeNull();
+    }
+    expect(
+      companionScreen({
+        kind: "steam",
+        game: {
+          appId: 1,
+          name: "Minecraft: Java Edition",
+          installed: true,
+          lastPlayed: 0,
+          playtimeMin: 0,
+        },
+      }),
+    ).not.toBeNull();
   });
 });
 
@@ -276,5 +340,106 @@ describe("Osrs", () => {
     await userEvent.selectOptions(screen.getByLabelText("Account type"), "Ironman");
     await userEvent.click(screen.getByRole("button", { name: "Save name" }));
     expect(api.gameOsrsSave).toHaveBeenCalledWith("Zezima", "Ironman");
+  });
+});
+
+describe("Destiny", () => {
+  beforeEach(() => {
+    for (const k of [
+      "gameDestiny",
+      "gameDestinyRefresh",
+      "gameDestinyStartKey",
+      "gameDestinyAnswerKey",
+      "gameDestinySaveName",
+      "gameDestinyRemove",
+    ] as const) {
+      api[k].mockReset();
+    }
+  });
+
+  it("empty state asks for key and name", async () => {
+    api.gameDestiny.mockResolvedValue({
+      status:
+        "Destiny 2: add your own Bungie.net API key and Bungie Name to read your public profile.",
+      hasKey: false,
+      hasName: false,
+      bungieName: null,
+      profileLine: null,
+      note: "",
+      howTo: "Register an application at bungie.net.",
+      keyHint: "From your Bungie.net application page.",
+      nameHint: "Your name with its code, like Guardian#1234.",
+    });
+    render(<Destiny />);
+    expect(await screen.findByText(/add your own Bungie.net API key/)).toBeVisible();
+    expect(screen.getByLabelText("Bungie.net API key")).toBeVisible();
+    expect(screen.getByLabelText("Bungie Name")).toBeVisible();
+  });
+});
+
+describe("session screens", () => {
+  beforeEach(() => {
+    api.gamePoe.mockReset();
+    api.gameElite.mockReset();
+    api.gameStardew.mockReset();
+    api.gameMinecraft.mockReset();
+    api.gameRl.mockReset();
+    api.gameFactorio.mockReset();
+  });
+
+  it("renders empty fixtures", async () => {
+    api.gamePoe.mockResolvedValue({
+      title: "Path of Exile",
+      appId: POE_APP_ID,
+      status: "",
+      empty: "Play with the game watcher on.",
+      note: "",
+    });
+    api.gameElite.mockResolvedValue({
+      title: "Elite Dangerous",
+      status: "",
+      empty: "Play with the game watcher on.",
+      note: "",
+    });
+    api.gameStardew.mockResolvedValue({
+      title: "Stardew Valley",
+      status: "",
+      empty: "No farm save read yet.",
+      note: "",
+    });
+    api.gameMinecraft.mockResolvedValue({
+      title: "Minecraft: Java Edition",
+      status: "",
+      empty: "Play with the game watcher on.",
+      note: "",
+    });
+    api.gameRl.mockResolvedValue({
+      title: "Rocket League",
+      status: "Rocket League's Stats API is off.",
+      howTo: true,
+      iniLine: "PacketSendRate=30",
+      note: "",
+    });
+    api.gameFactorio.mockResolvedValue({
+      status: "",
+      warning: null,
+      action: null,
+      note: "",
+      empty: "Factorio hasn't written its user folder yet.",
+      userDir: null,
+    });
+
+    render(<Poe appId={POE_APP_ID} />);
+    expect(await screen.findByText("Path of Exile")).toBeVisible();
+    render(<Elite />);
+    expect(await screen.findByText("Elite Dangerous")).toBeVisible();
+    render(<Stardew />);
+    expect(await screen.findByText(/No farm save read yet/)).toBeVisible();
+    render(<Minecraft />);
+    expect(await screen.findByText("Minecraft: Java Edition")).toBeVisible();
+    render(<RocketLeague />);
+    expect(await screen.findByRole("button", { name: "Copy the setting" })).toBeVisible();
+    render(<Factorio />);
+    expect(await screen.findByText(/hasn't written its user folder/)).toBeVisible();
   });
 });
