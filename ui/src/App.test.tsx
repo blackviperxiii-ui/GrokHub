@@ -57,7 +57,10 @@ const api = vi.hoisted(() => ({
   recordStop: vi.fn(() => Promise.resolve(false)),
 }));
 
-vi.mock("./api", () => api);
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return { ...chatTabApiStubs(), ...api };
+});
 // Each page has its own tests; here only the tabs matter.
 vi.mock("./Chat", () => ({
   newConversationId: () => "shell-new",

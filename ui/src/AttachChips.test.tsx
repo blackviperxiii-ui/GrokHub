@@ -12,7 +12,10 @@ const api = vi.hoisted(() => ({
   drop: null as ((paths: string[]) => void) | null,
 }));
 
-vi.mock("./api", () => ({
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return {
+  ...chatTabApiStubs(),
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
   // No chat saved from an earlier launch.
@@ -48,7 +51,8 @@ vi.mock("./api", () => ({
   onChatEvent: () => Promise.resolve(() => {}),
   helperQuestions: () => Promise.resolve([]),
   onEventGap: () => Promise.resolve(() => {}),
-}));
+};
+});
 
 import { REMOTE_TOO_BIG } from "./AttachChips";
 import { Chat } from "./Chat";

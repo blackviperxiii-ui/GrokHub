@@ -29,7 +29,10 @@ vi.mock("./transport", async (original) => ({
   inShell: () => api.shell,
 }));
 
-vi.mock("./api", () => ({
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return {
+  ...chatTabApiStubs(),
   // No chat saved from an earlier launch.
   getLastChat: api.getLastChat,
   quickChips: () => Promise.resolve([]),
@@ -74,7 +77,8 @@ vi.mock("./api", () => ({
     api.sentTo.push(conversationId);
     return new Promise<string>(() => {});
   },
-}));
+};
+});
 vi.mock("./Automations", () => ({ Automations: () => null, resultLine: () => "" }));
 
 import { App } from "./App";

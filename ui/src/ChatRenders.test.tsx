@@ -14,7 +14,10 @@ const seen = vi.hoisted(() => ({
   sentTo: [] as string[],
 }));
 
-vi.mock("./api", () => ({
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return {
+  ...chatTabApiStubs(),
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
   // No chat saved from an earlier launch.
@@ -35,7 +38,8 @@ vi.mock("./api", () => ({
   helperQuestions: () => Promise.resolve([]),
   onEventGap: () => Promise.resolve(() => {}),
   onFileDrop: () => Promise.resolve(() => {}),
-}));
+};
+});
 
 vi.mock("./Modes", async (load) => {
   const real = await load<typeof import("./Modes")>();
