@@ -4,7 +4,7 @@
 //! Output is a 1 MiB tail. Completion and monitor lines are queued once
 //! and injected at the start of the next model turn.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,6 +25,71 @@ pub(crate) const JOIN_MAX: usize = 8;
 /// After an adopted command ends, how long its foreground readers get to
 /// pass on the last of its output before the finished notice is written.
 const ADOPTED_SETTLE: Duration = Duration::from_millis(200);
+/// The most step names kept for one helper; the oldest is dropped first.
+const STEP_LOG: usize = 40;
+
+/// On while a host wants to hear which sessions' task lists changed.
+static WATCH: AtomicBool = AtomicBool::new(false);
+/// Sessions whose tasks, to-dos or helper progress changed since the last
+/// [`drain_task_changes`]. A leaf lock: take it with no other lock held.
+static CHANGED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// Turn change marks and helper progress on or off for the whole process.
+/// Off by default: nothing is recorded until a host turns it on.
+pub fn set_task_watch(on: bool) {
+    WATCH.store(on, Ordering::SeqCst);
+}
+
+fn watching() -> bool {
+    WATCH.load(Ordering::SeqCst)
+}
+
+/// The sessions marked since the last call, sorted. Each is returned once.
+pub fn drain_task_changes() -> Vec<String> {
+    let mut changed = CHANGED.lock().unwrap_or_else(|err| err.into_inner());
+    std::mem::take(&mut *changed).into_iter().collect()
+}
+
+/// Note that `session`'s task list changed. Does nothing while the watch is
+/// off. Call it only after the hub lock is dropped.
+pub(crate) fn mark_changed(session: &str) {
+    if !watching() {
+        return;
+    }
+    CHANGED
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(session.to_string());
+}
+
+/// Sets the watch switch for one test and puts it back after. Plain
+/// `cargo test` shares one process, so the guard also holds a lock and
+/// starts and ends with no marks waiting.
+#[cfg(test)]
+pub(crate) struct WatchScope {
+    was: bool,
+    _held: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl WatchScope {
+    pub(crate) fn set(on: bool) -> Self {
+        static HELD: Mutex<()> = Mutex::new(());
+        let held = HELD.lock().unwrap_or_else(|err| err.into_inner());
+        let was = watching();
+        set_task_watch(on);
+        drain_task_changes();
+        Self { was, _held: held }
+    }
+}
+
+#[cfg(test)]
+impl Drop for WatchScope {
+    fn drop(&mut self) {
+        set_task_watch(self.was);
+        drain_task_changes();
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -83,6 +148,40 @@ struct TaskSlot {
     owner: Option<String>,
     /// A subagent, whose finished result our own code already fenced.
     agent: bool,
+    /// A subagent's progress, kept only when it started with the watch on.
+    progress: Option<Mutex<Progress>>,
+}
+
+struct Progress {
+    started_ms: u64,
+    ended_ms: Option<u64>,
+    steps: u32,
+    last_step: String,
+    tokens: u64,
+    log: VecDeque<String>,
+}
+
+impl TaskSlot {
+    fn progress(&self) -> Option<std::sync::MutexGuard<'_, Progress>> {
+        self.progress
+            .as_ref()
+            .map(|progress| progress.lock().unwrap_or_else(|err| err.into_inner()))
+    }
+
+    /// Stop the helper's clock, unless it already stopped.
+    fn end_clock(&self) {
+        if let Some(mut progress) = self.progress() {
+            progress.ended_ms.get_or_insert_with(grokhub_core::now_ms);
+        }
+    }
+}
+
+/// Input tokens that were not cached, plus output tokens.
+fn spent_tokens(usage: &crate::Usage) -> u64 {
+    usage
+        .input_tokens
+        .saturating_sub(usage.cached_tokens)
+        .saturating_add(usage.output_tokens)
 }
 
 /// A queued background notice: the app's own line, plus any text the task
@@ -167,6 +266,9 @@ pub(crate) const UNKNOWN_ID_HINT: &str = "An id comes only from the result of th
 
 pub struct TaskHub {
     inner: Mutex<HubInner>,
+    /// A random id of this hub. A task id (`s2`) starts over with every
+    /// hub, so helper work names the hub that ran it.
+    nonce: String,
 }
 
 /// Where a background command, subagent or monitor is.
@@ -186,6 +288,29 @@ pub struct TaskRow {
     pub state: TaskState,
 }
 
+/// How far one helper has got, for a queue view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskProgress {
+    pub started_ms: u64,
+    /// Set once the helper finished or was stopped.
+    pub ended_ms: Option<u64>,
+    /// Tool calls the helper has started.
+    pub steps: u32,
+    /// The name of the tool it started last.
+    pub last_step: String,
+    /// Input tokens that were not cached, plus output tokens.
+    pub tokens: u64,
+}
+
+/// One task's steps and result, read without taking them from the model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskPeek {
+    /// The names of the last tools a helper started, oldest first.
+    pub steps: Vec<String>,
+    /// Everything the task wrote so far, as a person reads it.
+    pub result: String,
+}
+
 impl TaskHub {
     pub(crate) fn new(session_id: impl Into<String>) -> Arc<Self> {
         Arc::new(Self {
@@ -199,7 +324,13 @@ impl TaskHub {
                 halted: false,
                 pending_usage: crate::Usage::default(),
             }),
+            nonce: crate::work::random_base36(12),
         })
+    }
+
+    /// This hub's random id: twelve characters of `0-9a-z`.
+    pub fn nonce(&self) -> &str {
+        &self.nonce
     }
 
     pub fn session_id(&self) -> String {
@@ -289,8 +420,10 @@ impl TaskHub {
             owned_by_monitor,
             owner,
             agent: false,
+            progress: None,
         });
         self.lock().tasks.insert(id.to_string(), Arc::clone(&slot));
+        self.mark();
         let notice_hub = Arc::clone(self);
         let task_id = id.to_string();
         let watched = Arc::clone(&slot);
@@ -433,8 +566,19 @@ impl TaskHub {
             owned_by_monitor: false,
             owner,
             agent: true,
+            progress: watching().then(|| {
+                Mutex::new(Progress {
+                    started_ms: grokhub_core::now_ms(),
+                    ended_ms: None,
+                    steps: 0,
+                    last_step: String::new(),
+                    tokens: 0,
+                    log: VecDeque::new(),
+                })
+            }),
         });
         self.lock().tasks.insert(id.clone(), slot);
+        self.mark();
         Ok(id)
     }
 
@@ -469,6 +613,7 @@ impl TaskHub {
         }
         *phase = Phase::Exited(0);
         drop(phase);
+        slot.end_clock();
         // A fenced result longer than the notice would lose its opening
         // marker in a tail, so it is read whole with the output tool instead.
         let mut note =
@@ -481,9 +626,106 @@ impl TaskHub {
                     .with_body("subagent", notice_tail(&slot))
             };
         note.agent = Some(id.to_string());
-        let mut hub = self.lock();
-        if !hub.joined.contains(id) {
-            hub.notices.push_back(note);
+        {
+            let mut hub = self.lock();
+            if !hub.joined.contains(id) {
+                hub.notices.push_back(note);
+            }
+        }
+        self.mark();
+    }
+
+    /// Count one event of helper `id`'s run toward its progress: a tool call
+    /// it started, or its token use so far. Does nothing while the watch is
+    /// off, for a helper that started with it off, or for any other event.
+    pub(crate) fn note_step(&self, id: &str, ev: &crate::LoopEvent) {
+        if !watching() {
+            return;
+        }
+        match ev {
+            crate::LoopEvent::Tool { name, status, .. } if status == "in_progress" => {
+                let Ok(slot) = self.task(id) else {
+                    return;
+                };
+                let Some(mut progress) = slot.progress() else {
+                    return;
+                };
+                progress.steps = progress.steps.saturating_add(1);
+                progress.last_step = name.clone();
+                if progress.log.len() == STEP_LOG {
+                    progress.log.pop_front();
+                }
+                progress.log.push_back(name.clone());
+            }
+            crate::LoopEvent::Usage(usage) => {
+                let Ok(slot) = self.task(id) else {
+                    return;
+                };
+                let Some(mut progress) = slot.progress() else {
+                    return;
+                };
+                // A helper sent on by a stop hook counts from zero again:
+                // the shown count never drops, and its end sets the sum.
+                progress.tokens = progress.tokens.max(spent_tokens(usage));
+            }
+            _ => return,
+        }
+        self.mark();
+    }
+
+    /// Helper `id`'s run is over: stop its clock and set its final token
+    /// count. A run that reports no tokens keeps the count seen while it ran.
+    pub(crate) fn note_end(&self, id: &str, usage: &crate::Usage) {
+        let Ok(slot) = self.task(id) else {
+            return;
+        };
+        let Some(mut progress) = slot.progress() else {
+            return;
+        };
+        progress.ended_ms.get_or_insert_with(grokhub_core::now_ms);
+        let tokens = spent_tokens(usage);
+        if tokens > 0 {
+            progress.tokens = tokens;
+        }
+    }
+
+    /// Helper `id`'s progress. `None` for a command, a monitor, an unknown
+    /// id, and a helper that started while the watch was off.
+    pub fn progress(&self, id: &str) -> Option<TaskProgress> {
+        let slot = self.lock().tasks.get(id).cloned()?;
+        let progress = slot.progress()?;
+        Some(TaskProgress {
+            started_ms: progress.started_ms,
+            ended_ms: progress.ended_ms,
+            steps: progress.steps,
+            last_step: progress.last_step.clone(),
+            tokens: progress.tokens,
+        })
+    }
+
+    /// Task `id`'s steps and everything it wrote, for a person to read. The
+    /// model's own read is untouched: its place in the output stays where it
+    /// was and the finish notice stays queued.
+    pub fn peek(&self, id: &str) -> Result<TaskPeek, String> {
+        let slot = self.task(id)?;
+        let steps = slot
+            .progress()
+            .map(|progress| progress.log.iter().cloned().collect())
+            .unwrap_or_default();
+        let bytes: Vec<u8> = {
+            let ring = slot.ring.lock().unwrap_or_else(|err| err.into_inner());
+            ring.buf.iter().copied().collect()
+        };
+        let raw = String::from_utf8_lossy(&bytes);
+        let result = crate::tools::fence::display_text(raw.trim()).into_owned();
+        Ok(TaskPeek { steps, result })
+    }
+
+    /// Tell a watching host that this session's task list changed. Call it
+    /// with the hub lock dropped.
+    fn mark(&self) {
+        if watching() {
+            mark_changed(&self.session_id());
         }
     }
 
@@ -511,6 +753,7 @@ impl TaskHub {
         for slot in slots {
             kill_slot(&slot);
         }
+        self.mark();
     }
 
     /// Child usage that arrived after the spawning tool returned.
@@ -529,9 +772,11 @@ impl TaskHub {
         let slot = self.lock().tasks.get(id).cloned();
         if let Some(slot) = slot {
             kill_slot(&slot);
+            self.mark();
             return Ok(format!("killed {id}"));
         }
         if self.stop_monitor(id) {
+            self.mark();
             return Ok(format!("stopped monitor {id}"));
         }
         Err(self.unknown(id))
@@ -586,6 +831,7 @@ impl TaskHub {
                 task_id: Some(watched.clone()),
             },
         );
+        self.mark();
         let timeout_ms = if timeout_ms == 0 {
             MONITOR_CAP_MS
         } else {
@@ -666,6 +912,7 @@ impl TaskHub {
         for slot in tasks {
             kill_slot(&slot);
         }
+        self.mark();
     }
 
     /// Notices queued since the last drain. Each one is returned once.
@@ -741,6 +988,7 @@ fn kill_slot(slot: &TaskSlot) {
     if matches!(*phase, Phase::Running) {
         (slot.kill)();
         *phase = Phase::Killed;
+        slot.end_clock();
     }
 }
 
@@ -857,6 +1105,8 @@ fn supervise(
     if matches!(*current, Phase::Running) {
         *current = phase;
     }
+    drop(current);
+    hub.mark();
 }
 
 fn reap(proc: &mut crate::tools::shell::BgProc, limit: Duration) -> bool {
@@ -983,6 +1233,7 @@ fn watch_lines(
         thread::sleep(POLL);
     }
     hub.lock().monitors.remove(&id);
+    hub.mark();
     let _ = task_id;
 }
 
@@ -1122,6 +1373,286 @@ pub fn monitor_watch_only(arguments: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn no_kill() -> Arc<dyn Fn() + Send + Sync> {
+        Arc::new(|| {})
+    }
+
+    fn tool_event(name: &str, status: &str) -> crate::LoopEvent {
+        crate::LoopEvent::Tool {
+            id: "call-1".into(),
+            name: name.into(),
+            status: status.into(),
+            detail: String::new(),
+            image: None,
+        }
+    }
+
+    fn usage_event() -> crate::LoopEvent {
+        crate::LoopEvent::Usage(crate::Usage {
+            input_tokens: 1000,
+            cached_tokens: 400,
+            output_tokens: 150,
+            ..crate::Usage::default()
+        })
+    }
+
+    #[test]
+    fn each_hub_has_its_own_twelve_character_nonce() {
+        let first = TaskHub::new("same-chat");
+        let second = TaskHub::new("same-chat");
+        for hub in [&first, &second] {
+            assert_eq!(hub.nonce().len(), 12);
+            assert!(hub
+                .nonce()
+                .bytes()
+                .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase()));
+        }
+        assert_ne!(first.nonce(), second.nonce());
+        assert_eq!(first.nonce(), first.nonce());
+    }
+
+    #[test]
+    fn watch_off_marks_nothing() {
+        let _watch = WatchScope::set(false);
+        let hub = TaskHub::new("w0");
+        let id = hub.register_agent(None, "look", no_kill()).unwrap();
+        hub.finish_agent(&id, "ok");
+        assert_eq!(drain_task_changes(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn hub_changes_mark_the_session_once() {
+        let _watch = WatchScope::set(true);
+        let hub = TaskHub::new("w1");
+        let id = hub.register_agent(None, "look", no_kill()).unwrap();
+        assert_eq!(id, "s1");
+        hub.finish_agent("s1", "ok");
+        assert_eq!(drain_task_changes(), vec!["w1".to_string()]);
+        assert_eq!(drain_task_changes(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn each_hub_change_marks_the_session() {
+        let _watch = WatchScope::set(true);
+        let hub = TaskHub::new("w4");
+        hub.register_agent(None, "look", no_kill()).unwrap();
+        assert_eq!(drain_task_changes(), vec!["w4".to_string()]);
+        hub.finish_agent("s1", "ok");
+        assert_eq!(drain_task_changes(), vec!["w4".to_string()]);
+        hub.register_agent(Some("s1".into()), "child", no_kill())
+            .unwrap();
+        drain_task_changes();
+        hub.kill_owner("s1");
+        assert_eq!(drain_task_changes(), vec!["w4".to_string()]);
+        hub.register_agent(None, "third", no_kill()).unwrap();
+        drain_task_changes();
+        assert_eq!(hub.kill("s3").unwrap(), "killed s3");
+        assert_eq!(drain_task_changes(), vec!["w4".to_string()]);
+        hub.halt_all();
+        assert_eq!(drain_task_changes(), vec!["w4".to_string()]);
+    }
+
+    #[test]
+    fn a_command_marks_the_session_when_it_starts_and_when_it_ends() {
+        let _watch = WatchScope::set(true);
+        let dir = scratch("mark-cmd");
+        let hub = TaskHub::new("w5");
+        let id = hub.spawn(&dir, "echo hi").unwrap();
+        assert_eq!(id, "t1");
+        assert_eq!(drain_task_changes(), vec!["w5".to_string()]);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while hub.rows()[0].state == TaskState::Running && Instant::now() < deadline {
+            thread::sleep(POLL);
+        }
+        assert_eq!(hub.rows()[0].state, TaskState::Exited(0));
+        // The mark follows the phase flip on the supervising thread.
+        let mut marked = drain_task_changes();
+        while marked.is_empty() && Instant::now() < deadline {
+            thread::sleep(POLL);
+            marked = drain_task_changes();
+        }
+        assert_eq!(marked, vec!["w5".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_monitor_marks_the_session_when_it_starts_and_when_it_ends_on_its_own() {
+        let _watch = WatchScope::set(true);
+        let dir = scratch("mark-mon");
+        let hub = TaskHub::new("w6");
+        hub.register_agent(None, "watched", no_kill()).unwrap();
+        drain_task_changes();
+        let id = hub
+            .start_monitor(&dir, None, Some("s1".into()), None, 200, String::new())
+            .unwrap();
+        assert_eq!(id, "m2");
+        assert_eq!(drain_task_changes(), vec!["w6".to_string()]);
+        // The helper keeps running, so the next mark can only be the
+        // monitor reaching its time limit.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut marked = drain_task_changes();
+        while marked.is_empty() && Instant::now() < deadline {
+            thread::sleep(POLL);
+            marked = drain_task_changes();
+        }
+        assert_eq!(marked, vec!["w6".to_string()]);
+        assert_eq!(hub.rows().len(), 1, "the monitor row is gone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn helper_steps_and_usage_show_as_progress() {
+        let _watch = WatchScope::set(true);
+        let hub = TaskHub::new("p1");
+        let id = hub.register_agent(None, "look", no_kill()).unwrap();
+        assert_eq!(id, "s1");
+        drain_task_changes();
+        hub.note_step("s1", &tool_event("read_file", "in_progress"));
+        assert_eq!(drain_task_changes(), vec!["p1".to_string()]);
+        hub.note_step("s1", &tool_event("read_file", "completed"));
+        hub.note_step("s1", &crate::LoopEvent::Text("thinking".into()));
+        assert_eq!(drain_task_changes(), Vec::<String>::new());
+        hub.note_step("s1", &tool_event("shell", "in_progress"));
+        hub.note_step("s1", &usage_event());
+        assert_eq!(drain_task_changes(), vec!["p1".to_string()]);
+        let progress = hub.progress("s1").unwrap();
+        assert_eq!(progress.steps, 2);
+        assert_eq!(progress.last_step, "shell");
+        assert_eq!(progress.tokens, 750);
+        assert_eq!(progress.ended_ms, None);
+        // A second run of the helper counts from zero: the count holds.
+        hub.note_step(
+            "s1",
+            &crate::LoopEvent::Usage(crate::Usage {
+                input_tokens: 100,
+                output_tokens: 20,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(hub.progress("s1").unwrap().tokens, 750);
+        assert_eq!(
+            hub.peek("s1").unwrap().steps,
+            vec!["read_file".to_string(), "shell".to_string()]
+        );
+    }
+
+    #[test]
+    fn watch_off_records_no_progress() {
+        let _watch = WatchScope::set(false);
+        let hub = TaskHub::new("p2");
+        let id = hub.register_agent(None, "look", no_kill()).unwrap();
+        assert_eq!(id, "s1");
+        hub.note_step("s1", &tool_event("read_file", "in_progress"));
+        hub.note_step("s1", &tool_event("read_file", "completed"));
+        hub.note_step("s1", &tool_event("shell", "in_progress"));
+        hub.note_step("s1", &usage_event());
+        hub.note_end("s1", &crate::Usage::default());
+        assert_eq!(hub.progress("s1"), None);
+        assert_eq!(hub.peek("s1").unwrap().steps, Vec::<String>::new());
+        assert_eq!(drain_task_changes(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn step_log_keeps_the_last_40() {
+        let _watch = WatchScope::set(true);
+        let hub = TaskHub::new("p3");
+        hub.register_agent(None, "look", no_kill()).unwrap();
+        for n in 1..=45 {
+            hub.note_step("s1", &tool_event(&format!("tool-{n}"), "in_progress"));
+        }
+        let steps = hub.peek("s1").unwrap().steps;
+        assert_eq!(steps.len(), 40);
+        assert_eq!(steps[0], "tool-6");
+        assert_eq!(steps[39], "tool-45");
+        assert_eq!(hub.progress("s1").unwrap().steps, 45);
+    }
+
+    #[test]
+    fn peek_leaves_the_result_for_the_lead() {
+        let hub = TaskHub::new("p4");
+        hub.register_agent(None, "look", no_kill()).unwrap();
+        let text = format!(
+            "{}\nlooked at: a.rs",
+            crate::tools::fence::fence_helper_result("the answer")
+        );
+        hub.finish_agent("s1", &text);
+        assert_eq!(
+            hub.peek("s1").unwrap().result,
+            "the answer\nlooked at: a.rs"
+        );
+        assert_eq!(
+            hub.peek("s1").unwrap().result,
+            "the answer\nlooked at: a.rs"
+        );
+        assert_eq!(hub.drain_notices().len(), 1);
+        let read = hub.read_output("s1", 0).unwrap();
+        assert!(read.contains("the answer"), "{read}");
+        assert!(read.contains("looked at: a.rs"), "{read}");
+    }
+
+    #[test]
+    fn peek_keeps_the_finish_notice_queued_for_the_lead() {
+        let hub = TaskHub::new("p5");
+        hub.register_agent(None, "look", no_kill()).unwrap();
+        hub.finish_agent("s1", "the answer");
+        assert_eq!(hub.peek("s1").unwrap().result, "the answer");
+        let notices = hub.drain_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].head, "Subagent s1 finished.");
+        assert_eq!(notices[0].body, "the answer");
+        assert_eq!(
+            hub.peek("s9"),
+            Err(
+                "No task with id s9 was started in this chat. The ids started in this chat are: s1."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn progress_is_none_for_a_command() {
+        let _watch = WatchScope::set(true);
+        let dir = scratch("progress-cmd");
+        let hub = TaskHub::new("p6");
+        let id = hub.spawn(&dir, "echo hi").unwrap();
+        assert_eq!(id, "t1");
+        assert_eq!(hub.progress("t1"), None);
+        assert_eq!(hub.progress("s9"), None);
+        let _ = hub.read_output("t1", 60_000);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_helper_clock_stops_when_it_ends_or_is_killed() {
+        let _watch = WatchScope::set(true);
+        let hub = TaskHub::new("p7");
+        hub.register_agent(None, "one", no_kill()).unwrap();
+        hub.register_agent(None, "two", no_kill()).unwrap();
+        hub.note_step("s1", &usage_event());
+        hub.note_end(
+            "s1",
+            &crate::Usage {
+                input_tokens: 2000,
+                cached_tokens: 500,
+                output_tokens: 100,
+                ..crate::Usage::default()
+            },
+        );
+        let ended = hub.progress("s1").unwrap();
+        assert_eq!(ended.tokens, 1600);
+        let at = ended.ended_ms.expect("the clock stopped");
+        assert!(at >= ended.started_ms, "{ended:?}");
+        hub.finish_agent("s1", "ok");
+        assert_eq!(hub.progress("s1").unwrap().ended_ms, Some(at));
+
+        assert_eq!(hub.progress("s2").unwrap().ended_ms, None);
+        hub.kill("s2").unwrap();
+        let killed = hub.progress("s2").unwrap();
+        let at = killed.ended_ms.expect("a kill stops the clock");
+        hub.note_end("s2", &crate::Usage::default());
+        assert_eq!(hub.progress("s2").unwrap().ended_ms, Some(at));
+    }
 
     fn scratch(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(

@@ -49,6 +49,7 @@ const CONTROL: &[&str] = &[
     "mods_prepare_install",
     "spawn_subagent",
     "send_subagent_message",
+    "merge_subagent_work",
 ];
 const DESKTOP: &[&str] = &[
     "screenshot",
@@ -820,5 +821,37 @@ mod tests {
         let tries = std::sync::atomic::AtomicUsize::new(0);
         let gave_up = || tries.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 3;
         assert_eq!(inbox.wait("old-card", &cancel, &gave_up), Waited::Halted);
+    }
+
+    #[test]
+    fn a_merge_request_always_asks_and_is_refused_when_nobody_can_answer() {
+        let call = r#"{"work":"mb3x9k2a-7q1z"}"#;
+        let ws = Path::new("/home/user/my-app");
+        let ask = |gate: &Gate, latched: bool| {
+            decide_with(gate, "merge_subagent_work", call, latched, None, ws, None)
+        };
+        // Always, and an Always answer given earlier in the run, still ask.
+        for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
+            assert_eq!(ask(&gate(mode, false, true, false), false), Decision::Ask);
+            assert_eq!(ask(&gate(mode, false, true, false), true), Decision::Ask);
+        }
+        assert_eq!(
+            ask(&gate(PermMode::Always, false, false, false), true),
+            Decision::Refuse(
+                "Tool `merge_subagent_work` was not executed: hard-class merge_work needs you, \
+                 and nobody is here to approve it"
+                    .into()
+            )
+        );
+        assert_eq!(
+            ask(&gate(PermMode::Always, true, true, false), true),
+            Decision::Refuse(
+                "read-only in this phase: `merge_subagent_work` is not available. Use \
+                 read_file, list_dir, grep, or glob."
+                    .into()
+            )
+        );
+        assert!(is_known("merge_subagent_work"));
+        assert!(!is_readonly("merge_subagent_work"));
     }
 }

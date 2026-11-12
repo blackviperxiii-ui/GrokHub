@@ -162,7 +162,7 @@ pub fn read_defs() -> &'static [ToolDef] {
 /// Mutating and gated tools. Edit and shell stay eager (the general coding set);
 /// scheduler, media, desktop, connection and the rest are deferred.
 pub fn action_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 23] = [
+    static DEFS: [ToolDef; 24] = [
         ToolDef {
             name: "send_subagent_message",
             blurb: "Send a message to a spawned subagent",
@@ -247,6 +247,13 @@ pub fn action_defs() -> &'static [ToolDef] {
             blurb: "Stop a background command or subagent",
             defer: true,
             schema: control::kill_schema,
+            visible: not_readonly,
+        },
+        ToolDef {
+            name: control::MERGE_WORK,
+            blurb: "Ask to merge a worktree helper's work",
+            defer: true,
+            schema: control::merge_schema,
             visible: not_readonly,
         },
         ToolDef {

@@ -247,6 +247,7 @@ describe("Episode", () => {
     expect(actions).toEqual([typed, "Loadout wants to click Send in Mail", "press Enter in Shop"]);
     expect(classWords("money")).toBe("Spend money");
     expect(classWords("credentials")).toBe("Password or key");
+    expect(classWords("merge_work")).toBe("Merge helper work");
   });
 
   it("an Allow a running reply picks up, and a Deny, send nothing", async () => {

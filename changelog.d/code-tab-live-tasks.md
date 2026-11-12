@@ -1,0 +1,1 @@
+- Code tab: in a session with a lead, Tasks updates when a task, helper or command changes instead of every 2 seconds. Each helper shows its last tool step, tokens and time, and **Details** opens its steps and result.

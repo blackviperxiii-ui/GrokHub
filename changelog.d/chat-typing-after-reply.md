@@ -1,0 +1,1 @@
+- Fix: text typed into the message box right after a reply ends no longer loses its first letters. Chat's cards rise in by their own animation instead of a view transition, which held the page's updates while it ran.

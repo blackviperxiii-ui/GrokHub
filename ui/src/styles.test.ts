@@ -35,22 +35,21 @@ function rule(block: string, selector: string): string {
     .trim();
 }
 
-describe("styles.css view transitions", () => {
-  it("eases cards' view transitions over 150ms", () => {
-    expect(
-      rule(CSS, "::view-transition-group(*),\n::view-transition-old(*),\n::view-transition-new(*) {"),
-    ).toBe(
-      "::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation-duration: 150ms; animation-timing-function: var(--ease-out); }",
+describe("styles.css chat cards", () => {
+  it("a new message or card rises in by its own animation, with no view transition", () => {
+    expect(rule(CSS, ".log > .bubble,\n.log > .card {")).toBe(
+      ".log > .bubble, .log > .card { animation: rise-in var(--t-base) var(--ease-out) backwards; }",
     );
+    // A view transition holds the page's updates while it runs, and the
+    // message box then drops what is typed.
+    expect(CSS).not.toContain("::view-transition");
   });
 
-  it("turns them off for reduced motion", () => {
+  it("turns motion off for reduced motion", () => {
     const reduced = mediaBlocks(CSS, "(prefers-reduced-motion: reduce)").find((b) =>
-      b.includes("::view-transition-group(*)"),
+      b.includes("animation-duration: 0.01ms !important"),
     );
-    expect(rule(reduced ?? "", "::view-transition-group(*)")).toBe(
-      "::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }",
-    );
+    expect(reduced).toContain("transition-duration: 0.01ms !important");
   });
 });
 
@@ -181,6 +180,14 @@ describe("styles.css Code tab layout", () => {
     expect(rule(CSS, "fieldset.channel label {")).toBe(
       "fieldset.channel label { display: flex; flex-direction: row; align-items: center; gap: 8px; }",
     );
+  });
+
+  it("wraps a long path in a helper work row instead of widening the Tasks panel", () => {
+    expect(rule(CSS, ".card.agent .card-status.task-work {")).toBe(
+      ".card.agent .card-status.task-work { color: var(--text); overflow-wrap: anywhere; }",
+    );
+    expect(rule(CSS, ".card.agent .card-status.work-detail {")).toContain("overflow-wrap: anywhere;");
+    expect(rule(CSS, ".card.agent.work .error {")).toContain("overflow-wrap: anywhere;");
   });
 
   it("shows a focus ring on the panes that scroll, and on the editor's frame rather than inside it", () => {
