@@ -230,6 +230,11 @@ pub fn run(op: Op, cx: &Ctx) -> Result<Applied, String> {
                 grokhub_core::now_ms(),
             ))
         }
+        Op::Learn => {
+            let _config = ConfigGuard::set(cx.config_dir);
+            let id = cx.conversation_id.filter(|id| !id.is_empty());
+            notice(crate::memory::reflect(cx.config_dir, id)?.status)
+        }
         Op::Skill(name) => {
             let _config = ConfigGuard::set(cx.config_dir);
             let home = grokhub_core::user_home();
@@ -927,6 +932,13 @@ mod tests {
             "Goal: ship the risk-management-process"
         );
         let _ = std::fs::remove_dir_all(h.config.parent().expect("root"));
+    }
+
+    #[test]
+    fn learn_with_no_saved_chat_says_nothing_new() {
+        let h = home("learn");
+        assert_eq!(text(go(&h, "/learn")), "Reflect: nothing new");
+        assert_eq!(text(go(&h, "/learn reflect")), "Reflect: nothing new");
     }
 
     #[test]

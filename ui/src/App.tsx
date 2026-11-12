@@ -647,6 +647,7 @@ export function App() {
           onOpenSettings={() => setView("settings")}
           onSignIn={() => run({ kind: "settings", section: "account" })}
           onOpenView={openView}
+          onOpenSection={(section) => run({ kind: "settings", section })}
           onOpenPalette={() => setPalette(true)}
           onQueue={onQueue}
           queueAct={queueAct}

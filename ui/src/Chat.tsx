@@ -60,6 +60,7 @@ import {
   MessageMenu,
   withoutCut,
 } from "./DeleteMessage";
+import { requestImagine } from "./imagineAsk";
 import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
@@ -609,6 +610,7 @@ export function Chat({
   onOpenSettings,
   onSignIn = onOpenSettings,
   onOpenView,
+  onOpenSection,
   onOpenPalette,
   onQueue,
   queueAct,
@@ -630,6 +632,8 @@ export function Chat({
   /** `/memory`, `/connectors` and the like open their page, and so does a
    * chip that goes somewhere. `false` back: this app has no such page. */
   onOpenView?: (view: View) => boolean | void;
+  /** `/plugins` opens Settings → Labs. */
+  onOpenSection?: (section: "labs") => void;
   /** `/palette` opens the command palette. */
   onOpenPalette?: () => void;
   /** The messages waiting behind the running reply, for the Activity menu. */
@@ -1225,6 +1229,17 @@ export function Chat({
           setItems((now) => withNotice(now, { kind: "slash", command, text: `${command} works on your computer.` }));
         }
         break;
+      case "imagine":
+        if (onOpenView?.("imagine") === false) {
+          setItems((now) => withNotice(now, { kind: "slash", command, text: `${command} works on your computer.` }));
+        } else {
+          requestImagine(effect.media, effect.prompt);
+        }
+        break;
+      case "openSection":
+        if (onOpenSection) onOpenSection(effect.section);
+        else onOpenView?.("settings");
+        break;
       case "import": {
         // Review opens with the workspace's notes; with none to read, the chat says so.
         const text = await openImport();
@@ -1306,6 +1321,10 @@ export function Chat({
         setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
         onOpenView?.(effect.view);
         break;
+      default: {
+        const _unhandled: never = effect;
+        return _unhandled;
+      }
     }
   }
 

@@ -979,7 +979,8 @@ export type SlashEffect =
         | "skills"
         | "workboard"
         | "devices"
-        | "updates";
+        | "updates"
+        | "journal";
     }
   | { kind: "notice"; text: string }
   | { kind: "import" }
@@ -1001,7 +1002,11 @@ export type SlashEffect =
   /** `/loop <words>`: saved as an automation, then its page opens. */
   | { kind: "loop"; seed: string }
   /** A page opens, with a line saying why. */
-  | { kind: "openNote"; view: "settings"; text: string };
+  | { kind: "openNote"; view: "settings"; text: string }
+  /** `/imagine` and `/imagine-video`. An empty prompt just opens the page. */
+  | { kind: "imagine"; media: "image" | "video"; prompt: string }
+  /** `/plugins`: Settings → Labs. */
+  | { kind: "openSection"; section: "labs" };
 
 export function slashHits(draft: string): Promise<SlashHit[]> {
   return invoke<SlashHit[]>("slash_hits", { draft });

@@ -304,6 +304,30 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         desktop_only: true,
         ..row("/update", "Open Updates", "/update")
     },
+    row("/imagine", "Open Imagine", "/imagine "),
+    row("/imagine-video", "Open Imagine video", "/imagine-video "),
+    ShellCmd {
+        desktop_only: true,
+        ..row("/journal", "Open the decision journal", "/journal")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/learn", "Reflect this chat into memory", "/learn")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/learn reflect",
+            "Reflect this chat into memory",
+            "/learn reflect",
+        )
+    },
+    row("/mcps", "Open Connectors", "/mcps"),
+    ShellCmd {
+        desktop_only: true,
+        ..row("/plugins", "Open Plugins", "/plugins")
+    },
+    row("/resume", "Open History", "/resume"),
     row("/palette", "Command palette", "/palette"),
     ShellCmd {
         ready: false,
@@ -392,6 +416,10 @@ pub enum Effect {
     Loop { seed: String },
     /// A page opens, and `text` says why.
     OpenNote { view: &'static str, text: String },
+    /// `/imagine` and `/imagine-video`. An empty prompt opens the page.
+    Imagine { media: &'static str, prompt: String },
+    /// `/plugins`: Settings → Labs, where the plugin list lives.
+    OpenSection { section: &'static str },
 }
 
 /// What `run` needs done outside this module.
@@ -432,6 +460,8 @@ pub enum Op {
     MemoryDream,
     Dream,
     Learned(String),
+    /// `/learn`: reflect this chat into memory.
+    Learn,
     Skill(String),
     SkillChanges,
     SkillUndo(String),
@@ -548,7 +578,7 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         "/background" => "/bg".to_string(),
         "/resume" | "/dashboard" | "/agents-dashboard" => "/sessions".to_string(),
         "/status" | "/info" | "/session-info" | "/doctor" => "/inspect".to_string(),
-        "/plugins" | "/marketplace" | "/mcps" => "/connectors".to_string(),
+        "/marketplace" | "/mcps" => "/connectors".to_string(),
         "/show-plan" | "/plan-view" => "/view-plan".to_string(),
         "/yolo" => "/always-approve".to_string(),
         "/workflows" => "/workflow".to_string(),
@@ -748,6 +778,17 @@ fn extras(word: &str, rest: &str) -> Option<Result<Action, String>> {
         "/host" => mine(Op::HostStatus),
         "/update" => open("updates"),
         "/palette" => fx(Effect::Palette),
+        "/imagine" => fx(Effect::Imagine {
+            media: "image",
+            prompt: rest.to_string(),
+        }),
+        "/imagine-video" => fx(Effect::Imagine {
+            media: "video",
+            prompt: rest.to_string(),
+        }),
+        "/journal" => open("journal"),
+        "/learn" => mine(Op::Learn),
+        "/plugins" => fx(Effect::OpenSection { section: "labs" }),
         _ => None,
     }
 }
@@ -807,14 +848,13 @@ mod tests {
     }
 
     #[test]
-    fn pl_lists_plan_and_cabin_commands_come_back_greyed() {
+    fn pl_lists_plan_and_plugins_ready() {
         let hits = hits("/pl", false);
-        assert_eq!(hits[0].cmd, "/plan");
+        assert_eq!(cmds(&hits), vec!["/plan", "/plugins"]);
         assert_eq!(hits[0].disabled, None);
         assert!(hits[0].run_on_pick);
-        // Every row past the shell's own is the cabin's, greyed.
-        for hit in &hits[1..] {
-            assert_eq!(hit.disabled.as_deref(), Some(IN_THE_CABIN), "{}", hit.cmd);
+        for hit in &hits {
+            assert_eq!(hit.disabled, None, "{}", hit.cmd);
         }
         let all = super::hits("/", false);
         assert!(cmds(&all).starts_with(&["/help", "/new", "/clear"]));
@@ -822,13 +862,18 @@ mod tests {
     }
 
     #[test]
-    fn a_cabin_only_command_is_listed_greyed_and_not_run() {
+    fn journal_opens_its_page_and_is_not_in_the_cabin() {
         let hits = hits("/jour", false);
         assert_eq!(cmds(&hits), vec!["/journal"]);
-        assert_eq!(hits[0].disabled.as_deref(), Some(IN_THE_CABIN));
+        assert_eq!(hits[0].disabled, None);
+        assert!(hits[0].run_on_pick);
         assert_eq!(
             parse("/journal", false),
-            Err("/journal runs in the cabin, not here.".into())
+            Ok(Action::Effect(Effect::Open { view: "journal" }))
+        );
+        assert_eq!(
+            parse("/journal", true),
+            Err("/journal works on your computer.".into())
         );
     }
 
@@ -1306,9 +1351,10 @@ mod tests {
                 "/skills restore"
             ]
         );
+        assert_eq!(parse("/learn reflect", false), Ok(Action::Op(Op::Learn)));
         assert_eq!(
-            parse("/learn reflect", false),
-            Err("/learn runs in the cabin, not here.".into())
+            parse("/learn", true),
+            Err("/learn works on your computer.".into())
         );
         let help = help();
         assert!(help.contains("/recall — Search chats and memory"));
@@ -1534,5 +1580,77 @@ mod tests {
             assert_eq!(hit.disabled, None, "{cmd}");
         }
         assert!(help().contains("/palette — Command palette"));
+    }
+
+    #[test]
+    fn imagine_journal_learn_mcps_plugins_and_resume_run_here() {
+        let open = |view| Ok(Action::Effect(Effect::Open { view }));
+        assert_eq!(
+            parse("/imagine", false),
+            Ok(Action::Effect(Effect::Imagine {
+                media: "image",
+                prompt: String::new()
+            }))
+        );
+        assert_eq!(
+            parse("/imagine a snowy cabin", false),
+            Ok(Action::Effect(Effect::Imagine {
+                media: "image",
+                prompt: "a snowy cabin".into()
+            }))
+        );
+        assert_eq!(
+            parse("/imagine-video waves", false),
+            Ok(Action::Effect(Effect::Imagine {
+                media: "video",
+                prompt: "waves".into()
+            }))
+        );
+        assert_eq!(
+            cmds(&hits("/imag", false)),
+            vec!["/imagine", "/imagine-video"]
+        );
+        assert_eq!(parse("/journal", false), open("journal"));
+        assert_eq!(parse("/learn", false), Ok(Action::Op(Op::Learn)));
+        assert_eq!(parse("/LEARN now", false), Ok(Action::Op(Op::Learn)));
+        assert_eq!(parse("/mcps", false), open("connectors"));
+        assert_eq!(parse("/marketplace", false), open("connectors"));
+        assert_eq!(
+            parse("/plugins", false),
+            Ok(Action::Effect(Effect::OpenSection { section: "labs" }))
+        );
+        assert_eq!(
+            parse("/plugins", true),
+            Err("/plugins works on your computer.".into())
+        );
+        assert_eq!(parse("/resume", false), Ok(Action::Op(Op::Sessions)));
+        for word in [
+            "/imagine",
+            "/imagine-video",
+            "/journal",
+            "/learn",
+            "/mcps",
+            "/plugins",
+            "/resume",
+        ] {
+            let row = hits(word, false)
+                .into_iter()
+                .find(|h| h.cmd == word)
+                .unwrap_or_else(|| panic!("{word} is listed"));
+            assert_eq!(row.disabled, None, "{word}");
+        }
+        let reflect = hits("/learn", false)
+            .into_iter()
+            .find(|h| h.cmd == "/learn reflect")
+            .expect("/learn reflect is listed");
+        assert_eq!(reflect.disabled, None);
+        let help = help();
+        assert!(help.contains("/imagine — Open Imagine"));
+        assert!(help.contains("/journal — Open the decision journal"));
+        assert!(help.contains("/learn — Reflect this chat into memory"));
+        assert!(help.contains("/mcps — Open Connectors"));
+        assert!(help.contains("/plugins — Open Plugins"));
+        assert!(help.contains("/resume — Open History"));
+        assert!(!help.contains("/learn reflect"));
     }
 }
