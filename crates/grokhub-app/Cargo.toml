@@ -22,7 +22,8 @@ grokhub-desktop = { path = "../grokhub-desktop" }
 grokhub-code = { path = "../grokhub-code" }
 serde.workspace = true
 serde_json.workspace = true
-# LU-11: egui/eframe 0.37 — system fonts / color emoji, CompletionPopup, PasteImage.
+# UP-03 / LU-11: egui family on 0.37 — system fonts / color emoji, CompletionPopup,
+# PasteImage. Overlay toasts (egui-notify) stay out: bell-only notices (#1571).
 # default_fonts + system_fonts + clipboard + accesskit are opt-in when default-features is off.
 eframe = { version = "0.37", default-features = false, features = [
     "default_fonts",
@@ -39,7 +40,7 @@ egui-phosphor = { package = "egui-pop-phosphor", version = "0.15", default-featu
 # U7e: bar charts (egui_plot 0.38 tracks egui 0.37).
 egui_plot = "0.38"
 # U7f: optional dockable main panels. Upstream egui_dock 0.21 is still egui ^0.36;
-# egui_stack continues that API on egui 0.37 (serde persists dock.json).
+# egui_stack 0.25.9 continues that API on egui 0.37 (serde persists dock.json).
 egui_stack = { version = "0.25", features = ["serde"] }
 tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 global-hotkey = "0.9"

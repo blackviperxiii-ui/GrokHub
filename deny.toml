@@ -8,7 +8,7 @@ ignore = [
     # 0.25 (U7f dock panels; continues egui_dock). No runtime code. Drop when
     # egui_stack drops paste or the cabin crate goes. Re-checked 2026-11-12:
     # egui_dock 0.21.1 is still upstream's newest (egui ^0.36); cabin uses
-    # egui_stack 0.25.8 on egui 0.37, which still depends on paste.
+    # egui_stack 0.25.9 on egui 0.37, which still depends on paste.
     { id = "RUSTSEC-2024-0436", reason = "build-time only, via egui_stack 0.25" },
     # zvariant, zvariant_derive and zbus_names (zbus 5) are unmaintained. They come in through
     # ashpd (portal dialogs) and secret-service (keychain) on Linux. Drop these
