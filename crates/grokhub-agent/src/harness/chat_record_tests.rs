@@ -54,7 +54,12 @@ fn a_turn_end_writes_one_outcome_and_one_metrics_line_once() {
     let d = dir("turn");
     let v = step(&d, "shell-a", 1, "verify_script", "pass", None);
     reply(&d, "shell-a", 1, "Report filled. VERIFY_OK");
-    assert_eq!(latest_step_turn(&d, "shell-a"), Some(1));
+    assert_eq!(latest_step_turn(&d, "shell-a", NOW - 10_000), Some(1));
+    assert_eq!(
+        latest_step_turn(&d, "shell-a", NOW),
+        None,
+        "the step ran before this turn"
+    );
     let o = record_turn(&d, "shell-a", 1, "skill:weekly-report", false, NOW, 90).expect("recorded");
     assert_eq!(
         (o.task.as_str(), o.signature.as_str(), o.result),
@@ -101,7 +106,7 @@ fn a_turn_end_writes_one_outcome_and_one_metrics_line_once() {
 fn a_reply_only_turn_or_an_empty_signature_records_nothing() {
     let d = dir("reply-only");
     reply(&d, "shell-b", 1, "Hi there");
-    assert_eq!(latest_step_turn(&d, "shell-b"), None);
+    assert_eq!(latest_step_turn(&d, "shell-b", 0), None);
     assert_eq!(
         record_turn(&d, "shell-b", 1, "topic:hi", false, NOW, 90),
         None

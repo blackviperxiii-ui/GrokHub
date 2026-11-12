@@ -29,12 +29,14 @@ pub fn task_id(trace: &str, turn: u32) -> String {
     format!("{trace}:{turn}")
 }
 
-/// The newest turn of `trace` that ran a step (a reply alone is not a run).
-pub fn latest_step_turn(config_dir: &Path, trace: &str) -> Option<u32> {
+/// The newest turn of `trace` that ran a step at or after `since` (a reply
+/// alone is not a run). An app passes the time its turn started, so a turn
+/// that ran no step never picks up an older one.
+pub fn latest_step_turn(config_dir: &Path, trace: &str, since: u64) -> Option<u32> {
     let (spans, _) = read_spans_tail(config_dir, trace, SPAN_LINES);
     spans
         .iter()
-        .filter(|s| s.chat_id == trace && s.tool != REPLY_TOOL)
+        .filter(|s| s.chat_id == trace && s.tool != REPLY_TOOL && s.ts_ms >= since)
         .map(|s| s.turn)
         .max()
 }
