@@ -448,7 +448,7 @@ mod tests {
         write_session(&config, "shell-pin-a", "Pinned", 1_000);
         write_session(&config, "shell-pin-b", "Loose", 2_000);
 
-        assert_eq!(pin_tab(&config, "shell-pin-a").expect("pin"), true);
+        assert!(pin_tab(&config, "shell-pin-a").expect("pin"));
         let tabs = list_tabs(&config);
         assert_eq!(tabs[0].id, "shell-pin-a");
         assert!(tabs[0].pinned);
