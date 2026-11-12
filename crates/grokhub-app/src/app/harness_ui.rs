@@ -2149,6 +2149,36 @@ mod tests {
     }
 
     #[test]
+    fn a_merge_ask_parks_under_always_and_is_never_queued() {
+        let (_pin, root) = pinned("harness-merge");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+        let line = "3 files (1 new, 2 changed, 0 deleted) into /home/user/my-app: Fix the parser";
+        // The run's own ask (path B) and a background helper's lead (path E).
+        assert_eq!(
+            cabin.harness_precheck(ask("merge_subagent_work", line)),
+            None
+        );
+        assert_eq!(
+            cabin.harness_precheck_on(ask("merge_subagent_work", line), "E"),
+            None
+        );
+        let park = cabin.harness.park.clone().expect("parked");
+        assert_eq!(park.class, HardClass::MergeWork);
+        assert_eq!(park.action, line);
+        assert_eq!(cabin.hard_waiting(), 2);
+        // Nothing an "Always" on another card could answer.
+        assert_eq!(cabin.perm_ask, None);
+        assert_eq!(cabin.perm_queue.len(), 0);
+        cabin.resolve_hard_park(false, "user denied");
+        let spans = hx::read_spans(&root, "session").unwrap();
+        let kinds: Vec<_> = spans.iter().map(|s| s.decision.as_str()).collect();
+        assert_eq!(kinds, vec!["park", "park", "deny"]);
+        assert_eq!(spans[2].approval_class, "merge_work");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn hard_park_ttl_fails_closed() {
         let (_pin, root) = pinned("harness-ttl");
         let mut cabin = Cabin::quiet_for_test();

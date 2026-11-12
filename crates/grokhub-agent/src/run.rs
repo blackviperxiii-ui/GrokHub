@@ -1434,6 +1434,18 @@ fn run_turn(
                 call_i += 1;
                 continue;
             }
+            // Before the gate: a request that would be refused after a yes
+            // (a helper's, or one for work the lead may not merge) must not
+            // put a card in front of the person.
+            if let Some(refusal) = merge_refusal(input, call) {
+                let output = ToolOutput::err(refusal);
+                let id = tool_id(call);
+                emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
+                emit_tool(on_event, &id, call, "failed", &output.text, None);
+                push_refusal(history, input.conversation_id, call, output);
+                call_i += 1;
+                continue;
+            }
             let key = repeat_key(call);
             if repeats.get(&key).copied().unwrap_or(0) >= REPEAT_LIMIT {
                 let output = ToolOutput::err(REPEAT_REPLAN);
@@ -1552,7 +1564,7 @@ fn run_turn(
                     on_event(LoopEvent::Permission {
                         id: id.clone(),
                         name: call.name.clone(),
-                        action: action_line(&call.name, &call.arguments),
+                        action: card_action(input.conversation_id, call),
                         reason: ask_reason,
                     });
                     let waited = input
@@ -1586,7 +1598,9 @@ fn run_turn(
                                     &call.arguments,
                                 );
                             }
-                            always = true;
+                            // A yes to a merge is a yes to that merge: it
+                            // never stops the asking for what comes after.
+                            always |= call.name != tools::control::MERGE_WORK;
                             note_tool(
                                 input,
                                 &mut gate,
@@ -2526,6 +2540,32 @@ fn dispatch_tool_call(
         tools::dispatch_for_job(&ctx, &call.name, &call.arguments, job_set.as_ref())
     });
     (output, Usage::default())
+}
+
+/// What a permission card says the call does. A merge request names the
+/// helper's work, its size and the folder it goes into, read from the
+/// record: the key alone tells the person nothing. Every other call, and a
+/// merge request for work this chat does not have, shows [`action_line`].
+fn card_action(session: &str, call: &FunctionCall) -> String {
+    if call.name == tools::control::MERGE_WORK {
+        if let Ok(line) = tools::control::merge_card(session, &call.arguments) {
+            return line;
+        }
+    }
+    action_line(&call.name, &call.arguments)
+}
+
+/// Why a merge request gets no card: a helper asked, or the lead may not
+/// merge this work as it stands. `None` for a request the person is asked
+/// about, and for every other call.
+fn merge_refusal(input: &LoopIn<'_>, call: &FunctionCall) -> Option<String> {
+    if call.name != tools::control::MERGE_WORK {
+        return None;
+    }
+    if input.agent_id.is_some() {
+        return Some(tools::control::ONLY_LEAD.into());
+    }
+    tools::control::merge_card(input.conversation_id, &call.arguments).err()
 }
 
 /// The line a permission card shows: the one argument the named tool acts
@@ -7786,6 +7826,11 @@ mod tests {
                 ALL,
             ),
             (
+                "merge_subagent_work",
+                r#"{"work":"mb3x9k2a-7q1z","command":"echo hi"}"#,
+                ALL,
+            ),
+            (
                 "monitor",
                 r#"{"command":"tail -f app.log"}"#,
                 "tail -f app.log",
@@ -7994,7 +8039,7 @@ mod tests {
         native.sort_unstable();
         native.dedup();
         assert_eq!(covered, native);
-        assert_eq!(native.len(), 71);
+        assert_eq!(native.len(), 72);
     }
 
     #[test]

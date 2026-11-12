@@ -50,6 +50,10 @@ pub enum HardClass {
     /// A new scheduled job (`automation_create`, `scheduler_create` with no
     /// `task_id`): it runs on its own later, so it is only ever offered.
     Automation,
+    /// A lead's request to merge a helper's work into the project folder
+    /// (`merge_subagent_work`): the person's files change, so it is only
+    /// ever offered.
+    MergeWork,
 }
 
 impl HardClass {
@@ -66,6 +70,7 @@ impl HardClass {
             Self::FlaggedDriver => "flagged_driver",
             Self::SystemAdmin => "system_admin",
             Self::Automation => "automation",
+            Self::MergeWork => "merge_work",
         }
     }
 
@@ -82,6 +87,7 @@ impl HardClass {
             Self::FlaggedDriver => "Driver anti-cheats block",
             Self::SystemAdmin => "Admin rights or system protection",
             Self::Automation => "New automation",
+            Self::MergeWork => "Merge helper work",
         }
     }
 
@@ -98,6 +104,7 @@ impl HardClass {
             "flagged_driver" => Some(Self::FlaggedDriver),
             "system_admin" => Some(Self::SystemAdmin),
             "automation" => Some(Self::Automation),
+            "merge_work" => Some(Self::MergeWork),
             _ => None,
         }
     }
@@ -178,6 +185,12 @@ fn use_tool_target(arguments: &str) -> Option<(String, String)> {
 /// Classify a Grok Build permission ask (ACP / native side ask) from its title and
 /// one-line action. The action is usually the command, path, or site.
 pub fn classify_ask(title: &str, action: &str) -> HardHit {
+    // The lead's merge request arrives as an ask titled with the tool's name.
+    // Its action is a line about the work, not a command, so nothing below
+    // would know it, and a host in Always would answer it by itself.
+    if title.trim() == crate::tools::control::MERGE_WORK {
+        return HardHit::Class(HardClass::MergeWork);
+    }
     let as_shell = serde_json::json!({ "command": action }).to_string();
     let floor = classify("run_terminal_command", &as_shell);
     if let HardHit::Floor(_) = floor {
@@ -2024,6 +2037,9 @@ pub fn creates_automation(name: &str, arguments: &str) -> bool {
 pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     if crate::gate::is_readonly(name) {
         return None;
+    }
+    if name == crate::tools::control::MERGE_WORK {
+        return Some(HardClass::MergeWork);
     }
     if touches_mod_root(name, arguments) {
         return Some(HardClass::IrreversibleOs);
@@ -4376,5 +4392,38 @@ mod tests {
             HardClass::parse(HardClass::Automation.as_str()),
             Some(HardClass::Automation)
         );
+    }
+
+    #[test]
+    fn a_merge_request_is_its_own_hard_class() {
+        assert_eq!(
+            hard_class("merge_subagent_work", r#"{"work":"mb3x9k2a-7q1z"}"#),
+            Some(HardClass::MergeWork)
+        );
+        assert_eq!(
+            hard_class("merge_subagent_work", "{}"),
+            Some(HardClass::MergeWork)
+        );
+        // Only the app's own tool, by its exact name.
+        assert_eq!(hard_class("notes__merge_subagent_work", "{}"), None);
+        assert_eq!(HardClass::MergeWork.as_str(), "merge_work");
+        assert_eq!(HardClass::MergeWork.label(), "Merge helper work");
+        assert_eq!(HardClass::parse("merge_work"), Some(HardClass::MergeWork));
+    }
+
+    #[test]
+    fn a_merge_ask_is_hard_whatever_its_card_line_says() {
+        let merge = HardHit::Class(HardClass::MergeWork);
+        let line = "3 files (1 new, 2 changed, 0 deleted) into /home/user/my-app: Fix the parser";
+        assert_eq!(classify_ask("merge_subagent_work", line), merge);
+        // The key alone, when the card has no line for the work.
+        assert_eq!(classify_ask("merge_subagent_work", "mb3x9k2a-7q1z"), merge);
+        // A helper's title is the lead's words: it can't turn the ask into
+        // a refusal or into another class.
+        let odd = "1 file (0 new, 1 changed, 0 deleted) into /home/user/my-app: rm -rf /";
+        assert_eq!(classify_ask("merge_subagent_work", odd), merge);
+        // Only the tool's exact name.
+        assert_eq!(classify_ask("merge_subagent_work_2", line), HardHit::None);
+        assert_eq!(classify_ask("Read file", line), HardHit::None);
     }
 }

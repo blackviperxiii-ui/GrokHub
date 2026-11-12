@@ -2212,7 +2212,7 @@ pub enum Resume {
 }
 
 const JOURNAL_OPEN: &str = "finish the merge or put the files back first";
-const LEAD_MAY_NOT: &str =
+pub(crate) const LEAD_MAY_NOT: &str =
     "this work is partial or held; the person merges it from the Tasks panel";
 const NO_JOURNAL: &str = "there is no stopped merge for this work";
 
@@ -3399,7 +3399,7 @@ fn counted(count: usize, noun: &str) -> String {
 }
 
 /// How a helper ended, for a person.
-fn how_ended(ended: Option<&Ended>) -> String {
+pub fn how_ended(ended: Option<&Ended>) -> String {
     match ended {
         Some(Ended::Done) => "it finished".into(),
         Some(Ended::StepLimit) => "it ran out of steps or time".into(),
@@ -3410,7 +3410,8 @@ fn how_ended(ended: Option<&Ended>) -> String {
     }
 }
 
-fn why_held(why: &Held) -> String {
+/// Why work is held, for a person.
+pub fn why_held(why: &Held) -> String {
     match why {
         Held::Partial => "the helper did not finish".into(),
         Held::GitStateChanged => "the helper changed the worktree's git state".into(),
@@ -3430,6 +3431,35 @@ fn why_held(why: &Held) -> String {
     }
 }
 
+/// What the approval card of a lead's merge request shows: how much, the
+/// folder it goes into, and whose work it is. The app's own numbers and
+/// folder come first, so a long title can never push them off the card.
+/// `Err` is the refusal the request would get after a yes; the caller
+/// gives it at once, so no card asks about a merge that can't happen.
+pub(crate) fn lead_card(session: &str, key: &str) -> Result<String, String> {
+    if !valid_key(key) {
+        return Err(format!("not a helper work key: {}", plain(key)));
+    }
+    let work = record_of(&root(), session, key)?;
+    if work.landing.is_some() {
+        return Err(JOURNAL_OPEN.into());
+    }
+    may_land(&work, By::Lead)?;
+    let counts = work.counts;
+    let files = counted(
+        (counts.added + counts.changed + counts.deleted) as usize,
+        "file",
+    );
+    Ok(format!(
+        "{files} ({} new, {} changed, {} deleted) into {}: {}",
+        counts.added,
+        counts.changed,
+        counts.deleted,
+        work.project.display(),
+        plain(&work.title)
+    ))
+}
+
 /// The last line of a worktree helper's result: what became of its work.
 pub(crate) fn result_line(work: &Work) -> String {
     let key = &work.key;
@@ -3443,8 +3473,9 @@ pub(crate) fn result_line(work: &Work) -> String {
         WorkState::Opening | WorkState::Running => format!("still running. work: {key}."),
         WorkState::Empty => "no changes".into(),
         WorkState::Ready => format!(
-            "ready to merge: {files} ({} new, {} changed, {} deleted). work: {key}. It is not in \
-             the project: the files are in the worktree.",
+            "ready to merge: {files} ({} new, {} changed, {} deleted). work: {key}. The \
+             person merges it from the Tasks panel, or call merge_subagent_work with work {key}; \
+             they will be asked.",
             counts.added, counts.changed, counts.deleted
         ),
         WorkState::Held { why: Held::Partial } => format!(
@@ -5805,7 +5836,8 @@ mod tests {
                         result_line(&done),
                         format!(
                             "ready to merge: 1 file (0 new, 1 changed, 0 deleted). work: {key}. \
-                             It is not in the project: the files are in the worktree."
+                             The person merges it from the Tasks panel, or call \
+                             merge_subagent_work with work {key}; they will be asked."
                         )
                     );
                 }
@@ -6191,6 +6223,193 @@ mod tests {
     // -- result lines --------------------------------------------------------
 
     #[test]
+    fn a_merge_card_names_the_size_the_project_and_the_work() {
+        let base = scratch("card-line");
+        let _config = crate::perm::ConfigGuard::set(base.join("cfg"));
+        let mut work = sample("mb3x9k2a-7q1z");
+        work.state = WorkState::Ready;
+        work.ended = Some(Ended::Done);
+        work.counts = Counts {
+            added: 1,
+            changed: 2,
+            deleted: 0,
+        };
+        // The longest title a helper can have, and a deep project folder.
+        let mut long = work.clone();
+        long.key = "mb3x9k2a-long".into();
+        long.title = "t".repeat(80);
+        long.project = PathBuf::from(format!("/home/user/{}", "deep/".repeat(40)));
+        update_records(&root(), "chat", |list| {
+            list.push(work);
+            list.push(long);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            lead_card("chat", "mb3x9k2a-7q1z").as_deref(),
+            Ok("3 files (1 new, 2 changed, 0 deleted) into /home/user/my-app: Fix the parser")
+        );
+        assert_eq!(
+            lead_card("chat", "mb3x9k2a-long"),
+            Ok(format!(
+                "3 files (1 new, 2 changed, 0 deleted) into /home/user/{}: {}",
+                "deep/".repeat(40),
+                "t".repeat(80)
+            ))
+        );
+        // A child of the chat reads the same records; another chat has none.
+        assert_eq!(
+            lead_card("chat/s1", "mb3x9k2a-7q1z"),
+            lead_card("chat", "mb3x9k2a-7q1z")
+        );
+        let none = |key: &str| Err(format!("there is no helper work {key} in this chat"));
+        assert_eq!(lead_card("chat", "mb3x9k2a-0000"), none("mb3x9k2a-0000"));
+        assert_eq!(lead_card("other", "mb3x9k2a-7q1z"), none("mb3x9k2a-7q1z"));
+        assert_eq!(
+            lead_card("chat", "../k1"),
+            Err("not a helper work key: ../k1".into())
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn no_merge_card_for_work_the_lead_may_not_merge() {
+        let base = scratch("card-refused");
+        let _config = crate::perm::ConfigGuard::set(base.join("cfg"));
+        let with = |key: &str, state: WorkState, ended: Option<Ended>| {
+            let mut work = sample(key);
+            work.state = state;
+            work.ended = ended;
+            work
+        };
+        let done = Some(Ended::Done);
+        let mut stopped_merge = with("k-landing", WorkState::Ready, done.clone());
+        stopped_merge.landing = Some(Landing {
+            before: "b1".into(),
+            merged: "m1".into(),
+            paths: vec!["a.txt".into()],
+            made: Vec::new(),
+            from: Box::new(WorkState::Ready),
+            started_ms: 1,
+        });
+        let records = vec![
+            with("k-ready", WorkState::Ready, done.clone()),
+            with(
+                "k-conflict",
+                WorkState::Conflict {
+                    files: vec!["a.txt".into()],
+                },
+                done.clone(),
+            ),
+            with("k-running", WorkState::Running, None),
+            with(
+                "k-partial",
+                WorkState::Held { why: Held::Partial },
+                Some(Ended::Stopped),
+            ),
+            with(
+                "k-changed",
+                WorkState::Held {
+                    why: Held::ChangedAfterSeal,
+                },
+                done.clone(),
+            ),
+            with("k-merged", WorkState::Merged, done.clone()),
+            with("k-discarded", WorkState::Discarded, done.clone()),
+            with("k-empty", WorkState::Empty, done),
+            stopped_merge,
+        ];
+        update_records(&root(), "chat", |list| {
+            list.extend(records);
+            Ok(())
+        })
+        .unwrap();
+        let line = "0 files (0 new, 0 changed, 0 deleted) into /home/user/my-app: Fix the parser";
+        assert_eq!(lead_card("chat", "k-ready").as_deref(), Ok(line));
+        assert_eq!(lead_card("chat", "k-conflict").as_deref(), Ok(line));
+        let held = "this work is partial or held; the person merges it from the Tasks panel";
+        for key in [
+            "k-running",
+            "k-partial",
+            "k-changed",
+            "k-merged",
+            "k-discarded",
+            "k-empty",
+        ] {
+            assert_eq!(lead_card("chat", key), Err(held.into()), "{key}");
+        }
+        assert_eq!(
+            lead_card("chat", "k-landing"),
+            Err("finish the merge or put the files back first".into())
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_lead_tool_reports_a_conflict_and_a_changed_worktree_as_not_done() {
+        let (base, proj, root) = project("leadtool");
+        let _config = crate::perm::ConfigGuard::set(base.join("cfg"));
+        write(&proj.join("a.txt"), "one\n");
+        commit_all(&proj);
+        let clash = sealed(&root, &proj, "s1", Ended::Done, |tree| {
+            write(&tree.join("a.txt"), "one helper\n");
+        });
+        let late = sealed(&root, &proj, "s2", Ended::Done, |tree| {
+            write(&tree.join("b.txt"), "b\n");
+        });
+        assert_eq!(clash.state, WorkState::Ready);
+        assert_eq!(late.state, WorkState::Ready);
+        // The person edits the same line; a file appears in the other tree.
+        write(&proj.join("a.txt"), "one person\n");
+        write(&late.tree.join("c.txt"), "late\n");
+        let ctx = crate::tools::ToolCtx {
+            workspace: &proj,
+            desktop: None,
+            stop: &|| false,
+            tasks: None,
+            owner: None,
+            session: Some("chat"),
+        };
+        let ask = |key: &str| {
+            let args = serde_json::json!({ "work": key }).to_string();
+            crate::tools::dispatch(&ctx, "merge_subagent_work", &args)
+        };
+
+        let out = ask(&clash.key);
+        assert!(out.failed, "a conflict is not a merge");
+        let key = &clash.key;
+        assert_eq!(
+            out.text,
+            format!(
+                "conflict: a.txt. The project was not changed. work: {key}. To redo it on the \
+                 current project, start a helper with isolation worktree and redo {key}."
+            )
+        );
+        assert_eq!(text(&proj.join("a.txt")), "one person\n");
+
+        let out = ask(&late.key);
+        assert!(out.failed, "held work is not a merge");
+        assert_eq!(
+            out.text,
+            format!(
+                "this work is partial or held; the person merges it from the Tasks panel. held \
+                 (the worktree changed after the helper ended): the worktree is kept at {}. \
+                 work: {}.",
+                late.tree.display(),
+                late.key
+            )
+        );
+        assert!(!proj.join("b.txt").exists());
+        assert!(!proj.join("c.txt").exists());
+        // The lead can't try that one again; the person is not asked either.
+        assert_eq!(
+            lead_card("chat", &late.key),
+            Err("this work is partial or held; the person merges it from the Tasks panel".into())
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn result_lines_read_exactly_like_this() {
         let mut work = sample("k1");
         work.counts = Counts {
@@ -6207,8 +6426,9 @@ mod tests {
         assert_eq!(line(WorkState::Empty, Some(Ended::Done)), "no changes");
         assert_eq!(
             line(WorkState::Ready, Some(Ended::Done)),
-            "ready to merge: 3 files (1 new, 2 changed, 0 deleted). work: k1. It is not in the \
-             project: the files are in the worktree."
+            "ready to merge: 3 files (1 new, 2 changed, 0 deleted). work: k1. The person \
+             merges it from the Tasks panel, or call merge_subagent_work with work k1; they will \
+             be asked."
         );
         assert_eq!(
             line(held(Held::Partial), Some(Ended::StepLimit)),

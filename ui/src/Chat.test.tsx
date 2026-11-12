@@ -594,6 +594,30 @@ describe("Chat", () => {
     expect(screen.getByText("Always allowed")).toBeInTheDocument();
   });
 
+  it("a merge request's card says what it is and offers only Allow once and Deny", async () => {
+    holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("merge it");
+
+    emit(id, {
+      kind: "permission",
+      id: "m1",
+      title: "merge_subagent_work",
+      action: "3 files (1 new, 2 changed, 0 deleted) into /home/user/my-app: Fix the parser",
+      reason: "",
+    });
+    const card = screen.getByRole("group", { name: "Approve merge_subagent_work" });
+    expect(card.textContent).toBe(
+      "Loadout wants to merge a helper's work into the project" +
+        "3 files (1 new, 2 changed, 0 deleted) into /home/user/my-app: Fix the parser" +
+        "Allow onceDeny",
+    );
+    expect(within(card).getAllByRole("button").map((button) => button.textContent)).toEqual(["Allow once", "Deny"]);
+
+    await userEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+    expect(api.answerPermission).toHaveBeenLastCalledWith(id, "m1", "allow");
+  });
+
   it("a card nobody answered is retired when the turn ends", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

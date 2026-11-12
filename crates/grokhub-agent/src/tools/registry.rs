@@ -655,6 +655,10 @@ mod tests {
     /// Chat/Agent and background, and 50 to Plan/Ask.
     /// The deferred `module_setup` index line (Home's one-tap Frame Rate setup)
     /// added 36 to Chat/Agent and background.
+    /// The deferred `merge_subagent_work` index line (the lead's request to
+    /// merge a worktree helper's work) added 57 to Chat/Agent (11_352 → 11_409)
+    /// and background (10_172 → 10_229). The index is not cut to a job's tool
+    /// set, so a background job reads the line; the call is refused there.
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -664,14 +668,15 @@ mod tests {
                 "chat",
                 profile(PermMode::Ask, false, true),
                 full.clone(),
-                // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes.
-                11_352,
+                // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes,
+                // +57 for the merge_subagent_work index line.
+                11_409,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                11_352,
+                11_409,
             ),
             (
                 "plan/ask",
@@ -684,7 +689,7 @@ mod tests {
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                10_172,
+                10_229,
             ),
         ];
         for (label, gate, set, budget) in cases {

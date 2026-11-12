@@ -42,7 +42,13 @@ status pending. Skip this if the list already holds them.
 2. Give each task to a helper: spawn_subagent, type general, description \"<task id>: <task>\", \
 and a prompt with these lines: Goal:, Constraints:, Edge cases:, Done when:, Files:.
 3. Set the task to in_progress before its helper starts. To change one task's status, call \
-todo_write with merge true and that row only. Run one writing helper at a time.
+todo_write with merge true and that row only. Tasks that change different files can run \
+together: give each helper isolation worktree and background true, at most three at once, then \
+wait with get_command_or_subagent_output. Tasks that change the same files run one after \
+another. A worktree helper's work is not in the project until it is merged: ask with \
+merge_subagent_work, and wait for the person. A result that says partial, held or conflict is \
+not done: tell the person. If the folder is not a git repository, run one writing helper at a \
+time.
 4. Read each result. Check the change yourself before you set the task to completed. If a task \
 failed and can't be done, set it to cancelled and say why.
 5. Make only small edits yourself. If a helper is refused, do what the refusal says, and tell \
@@ -200,6 +206,18 @@ mod tests {
             "To change one task's status, call todo_write with merge true and that row only."
         ));
         assert!(LEAD_WORK.contains("merge true"));
+        assert!(!LEAD_WORK.contains("Run one writing helper at a time."));
+        assert!(LEAD_WORK.contains(
+            "3. Set the task to in_progress before its helper starts. To change one task's \
+             status, call todo_write with merge true and that row only. Tasks that change \
+             different files can run together: give each helper isolation worktree and \
+             background true, at most three at once, then wait with \
+             get_command_or_subagent_output. Tasks that change the same files run one after \
+             another. A worktree helper's work is not in the project until it is merged: ask \
+             with merge_subagent_work, and wait for the person. A result that says partial, \
+             held or conflict is not done: tell the person. If the folder is not a git \
+             repository, run one writing helper at a time.\n4. Read each result."
+        ));
         assert!(!LEAD_NEXT.contains("approved"));
         assert!(!LEAD_PLAN.contains("approved"));
     }

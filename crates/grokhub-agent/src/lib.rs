@@ -179,6 +179,6 @@ pub use tools::{
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};
 pub use work::{
-    discard_work, merge_work, resume_work, work_for, By, Counts, Ended, Held, Landing, Resume,
-    Work, WorkState,
+    discard_work, how_ended, merge_work, resume_work, why_held, work_for, By, Counts, Ended, Held,
+    Landing, Resume, Work, WorkState,
 };

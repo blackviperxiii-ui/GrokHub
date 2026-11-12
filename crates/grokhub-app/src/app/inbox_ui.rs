@@ -130,6 +130,7 @@ pub(super) fn hard_words(class: HardClass, tool: &str, action: &str, held: &[Str
         }
         HardClass::AgentConfig => format!("Change agent instructions: {action}"),
         HardClass::Automation => format!("Add an automation: {action}"),
+        HardClass::MergeWork => format!("Merge helper work: {action}"),
         HardClass::OutsideValue => format!("Uses a value from outside text: {action}"),
         HardClass::RunsLater => format!("Changes a file that runs later: {action}"),
         HardClass::FlaggedDriver => {
@@ -1037,6 +1038,16 @@ mod tests {
         assert_eq!(
             hard_words(HardClass::Money, "buy", "", &[]),
             "Spend money: buy"
+        );
+        assert_eq!(
+            hard_words(
+                HardClass::MergeWork,
+                "merge_subagent_work",
+                "Fix the parser: 3 files (1 new, 2 changed, 0 deleted) into /home/user/my-app",
+                &[]
+            ),
+            "Merge helper work: Fix the parser: 3 files (1 new, 2 changed, 0 deleted) into \
+             /home/user/my-app"
         );
         assert_eq!(
             hard_words(

@@ -1459,6 +1459,53 @@ async fn stop_task(
     .await?
 }
 
+/// Tasks → Merge: a helper's work goes into the project folder. Desktop
+/// only: it is not a web command.
+#[tauri::command]
+async fn merge_task_work(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    key: String,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::merge_work(&dir, &conversation_id, &key)?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
+}
+
+/// Tasks → Finish merge (`finish`) or Put files back. Desktop only.
+#[tauri::command]
+async fn resume_task_work(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    key: String,
+    finish: bool,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::resume_work(&dir, &conversation_id, &key, finish)?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
+}
+
+/// Tasks → Discard or Delete worktree. Desktop only.
+#[tauri::command]
+async fn discard_task_work(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    key: String,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::discard_work(&dir, &conversation_id, &key)?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
+}
+
 /// Tasks → Details: a helper's steps so far and its result. Reading it
 /// leaves the result waiting for the session that started the helper.
 #[tauri::command]
@@ -5230,6 +5277,9 @@ pub fn run() {
             nyx_tiles,
             get_queue,
             stop_task,
+            merge_task_work,
+            resume_task_work,
+            discard_task_work,
             get_task_detail,
             get_workboard,
             workboard_add,

@@ -2795,7 +2795,7 @@ export interface QueueTask {
 }
 
 /** A to-do as the Code tab's Tasks panel shows it. */
-export type TodoState = "planned" | "running" | "needsYou" | "review" | "done" | "failed";
+export type TodoState = "planned" | "running" | "needsYou" | "review" | "notMerged" | "done" | "failed";
 
 /** A to-do Grok wrote in the chat: "pending", "in_progress", "completed" or "cancelled". */
 export interface QueueTodo {
@@ -2808,9 +2808,68 @@ export interface QueueTodo {
   state: TodoState;
 }
 
+/** What became of a helper's work in a worktree. */
+export type WorkState = "running" | "ready" | "conflict" | "held" | "merged" | "empty" | "discarded";
+
+/** Why a helper's work is held back from a plain merge. `rolledBack` is a
+ * merge that could not be written and was put back; `applyFailed` is one
+ * that stopped part way. */
+export type WorkHeld =
+  | "partial"
+  | "gitStateChanged"
+  | "changedAfterSeal"
+  | "ignoredOnly"
+  | "nestedRepo"
+  | "sealFailed"
+  | "interrupted"
+  | "orphan"
+  | "projectChanged"
+  | "blocked"
+  | "rolledBack"
+  | "applyFailed"
+  | "mergeFailed";
+
+/** One helper's work in a worktree of its own (src-tauri/src/queue.rs). It
+ * is in the project folder only after a Merge. */
+export interface HelperWork {
+  key: string;
+  /** The helper's task id ("s2") in the launch that ran it. */
+  task: string;
+  title: string;
+  state: WorkState;
+  /** The helper did not finish. */
+  partial: boolean;
+  /** How the helper ended, in words ("it was stopped"). */
+  ended: string;
+  /** The changed paths, at most 200 of them. */
+  files: string[];
+  counts: { added: number; changed: number; deleted: number };
+  /** Ignored paths the helper wrote. They are never merged. */
+  ignored: string[];
+  /** The files of a conflict. */
+  conflicts: string[];
+  why?: WorkHeld;
+  /** The same reason in words. */
+  whyText?: string;
+  /** Files a finished or put-back merge left as the person changed them. */
+  skipped: string[];
+  /** The worktree folder. */
+  path: string;
+  /** The worktree is still on disk. */
+  treeKept: boolean;
+  /** A merge stopped part way: it is finished or put back, nothing else. */
+  landing: boolean;
+  /** A helper row of this launch is this work's helper. */
+  live: boolean;
+}
+
 export interface Queue {
   todos: QueueTodo[];
   tasks: QueueTask[];
+  /** The chat's helper work, also after a relaunch, when it has no tasks. */
+  work?: HelperWork[];
+  /** Why the helper work list could not be read. */
+  workError?: string;
 }
 
 export function getQueue(conversationId: string): Promise<Queue> {
@@ -2823,6 +2882,23 @@ export function stopTask(
   taskId?: string,
 ): Promise<Queue> {
   return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
+}
+
+/** Merges a helper's work into the project folder, as uncommitted changes.
+ * A merge that ends in a conflict or held resolves: the row says how it
+ * ended. It rejects when it is refused and nothing changed. */
+export function mergeTaskWork(conversationId: string, key: string): Promise<Queue> {
+  return invoke<Queue>("merge_task_work", { conversationId, key });
+}
+
+/** Finishes a merge that stopped part way (`finish`), or puts its files back. */
+export function resumeTaskWork(conversationId: string, key: string, finish: boolean): Promise<Queue> {
+  return invoke<Queue>("resume_task_work", { conversationId, key, finish });
+}
+
+/** Deletes a helper's unmerged work, or the worktree kept for merged work. */
+export function discardTaskWork(conversationId: string, key: string): Promise<Queue> {
+  return invoke<Queue>("discard_task_work", { conversationId, key });
 }
 
 /** A session's tasks, helpers or to-dos changed: read the queue again. */

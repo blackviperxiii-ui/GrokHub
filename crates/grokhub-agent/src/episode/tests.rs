@@ -47,6 +47,8 @@ enum Act {
     DoneWrongSum,
     Say,
     Shell(&'static str),
+    /// Asks to merge a helper's work.
+    Merge,
     Shot,
     /// A click in a length-truncated reply: must not execute.
     TruncatedClick,
@@ -232,6 +234,14 @@ impl ModelClient for FakeModel {
             Act::Shell(cmd) => (
                 String::new(),
                 vec![call(n, "run_terminal_command", json!({"command": cmd}))],
+            ),
+            Act::Merge => (
+                String::new(),
+                vec![call(
+                    n,
+                    "merge_subagent_work",
+                    json!({"work": "mb3x9k2a-7q1z"}),
+                )],
             ),
             Act::Shot => (String::new(), vec![call(n, "screenshot", json!({}))]),
         };
@@ -1377,6 +1387,33 @@ fn workspace_deny_rules_hold_inside_an_episode() {
         "Always mode still obeys a deny rule: {}",
         step.result
     );
+}
+
+#[test]
+fn a_desktop_task_cannot_ask_for_a_merge() {
+    let r = rig(
+        "merge",
+        Box::new(|n| match n {
+            0 => Act::Merge,
+            _ => Act::Done,
+        }),
+    );
+    let mut ep = r.episode("Merge the helper's work");
+    r.run(&mut ep, &mut EpisodeView::default());
+    let spans = r.spans();
+    let step = spans
+        .iter()
+        .find(|s| s.tool == "merge_subagent_work")
+        .expect("the merge step is logged");
+    assert_eq!(step.decision, "deny");
+    assert_eq!(
+        step.result,
+        "a desktop task can't ask for a merge: helper work is merged from the chat's Tasks panel"
+    );
+    assert_eq!(step.approval_class, "merge_work");
+    // No card: there is nothing for the person to say yes to.
+    assert_eq!(r.parks.posted.lock().unwrap().len(), 0);
+    assert_eq!(r.asks.lock().unwrap().len(), 0);
 }
 
 #[test]

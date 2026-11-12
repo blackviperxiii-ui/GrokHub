@@ -3697,6 +3697,42 @@ label.toggle-row {
   font-size: var(--font-caption);
 }
 
+/* What became of a helper's work in its worktree. Only a conflict is the
+   failed row's red; held work waits for a click and is not an error. The
+   line can hold a conflict's file names or a held reason's folder, and a
+   path with no hyphen has nowhere to break unless it may break anywhere. */
+.card.agent .card-status.task-work {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.card.agent.work.conflict .card-status.task-work {
+  color: var(--danger-text);
+}
+
+.card.agent .card-status.work-partial {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* File names and folders are as long as the helper made them. */
+.card.agent .card-status.work-detail {
+  color: var(--muted);
+  font-size: var(--font-caption);
+  overflow-wrap: anywhere;
+}
+
+.card.agent.work .error {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+/* Focus lands here when the row a click was on is gone. */
+.agents .work-said:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* A helper's result in its details window: plain text that scrolls. */
 .task-steps {
   margin: 0;

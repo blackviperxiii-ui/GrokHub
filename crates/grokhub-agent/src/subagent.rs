@@ -1733,6 +1733,7 @@ mod tests {
             "send_subagent_message",
             "screenshot",
             "kill_command_or_subagent",
+            "merge_subagent_work",
         ] {
             assert!(!names.iter().any(|name| name == banned), "{names:?}");
         }
@@ -2632,8 +2633,9 @@ mod tests {
         assert_eq!(records[0].tree, wt);
         assert!(
             text.contains(&format!(
-                "ready to merge: 1 file (1 new, 0 changed, 0 deleted). work: {key}. It is not in \
-                 the project: the files are in the worktree."
+                "ready to merge: 1 file (1 new, 0 changed, 0 deleted). work: {key}. The \
+                 person merges it from the Tasks panel, or call merge_subagent_work with work \
+                 {key}; they will be asked."
             )),
             "{text}"
         );
@@ -2734,6 +2736,258 @@ mod tests {
         assert!(output.contains(&line), "{output}");
         assert!(!dir.join("child.txt").exists());
         let _ = std::fs::remove_dir_all(&wt);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_merge_request_changes_the_project_only_after_a_yes() {
+        let dir = scratch("mergeask");
+        git_repo(&dir);
+        let cfg = scratch("mergeaskcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .expect("git");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let head = git(&["rev-parse", "HEAD"]);
+        let sid = session("mergeask");
+        let parent_id = sid.clone();
+        let project = dir.clone();
+        // What the helper heard back, and what the lead saw after the no.
+        let helper_heard = Arc::new(Mutex::new(String::new()));
+        let after_no = Arc::new(Mutex::new(None::<(String, bool)>));
+        let (heard, seen) = (Arc::clone(&helper_heard), Arc::clone(&after_no));
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            let one = |id: &str, name: &str, args: &str| {
+                Ok(calls_turn(vec![call(id, name, args)], Usage::default()))
+            };
+            if depth >= 1 {
+                return match n {
+                    0 => one(
+                        "w",
+                        "write",
+                        r#"{"path":"child.txt","content":"from-child"}"#,
+                    ),
+                    1 => one("hm", "merge_subagent_work", r#"{"work":"mb3x9k2a-7q1z"}"#),
+                    _ => {
+                        if n == 2 {
+                            *heard.lock().unwrap() = last_output(req);
+                        }
+                        Ok(text_turn("done", Usage::default()))
+                    }
+                };
+            }
+            match n {
+                0 => one(
+                    "s",
+                    "spawn_subagent",
+                    &spawn_args("write", "general", false, "worktree"),
+                ),
+                1 | 2 => {
+                    if n == 2 {
+                        *seen.lock().unwrap() =
+                            Some((last_output(req), project.join("child.txt").exists()));
+                    }
+                    let key = req
+                        .input
+                        .iter()
+                        .find_map(|item| match item {
+                            InputItem::FunctionCallOutput { output, .. } => {
+                                task_line(output, "work:")
+                            }
+                            _ => None,
+                        })
+                        .expect("the spawn result names the work");
+                    one(
+                        if n == 1 { "m1" } else { "m2" },
+                        "merge_subagent_work",
+                        &json!({ "work": key }).to_string(),
+                    )
+                }
+                _ => Ok(text_turn("done", Usage::default())),
+            }
+        });
+        let asks = Arc::new(SeqPerm {
+            answers: Mutex::new(VecDeque::from([PermAnswer::Deny, PermAnswer::Allow])),
+            asks: AtomicUsize::new(0),
+        });
+        let permits: Arc<dyn PermitWait + Send + Sync> = Arc::clone(&asks) as _;
+        let mut cards = Vec::new();
+        // Always: the helper's write runs unasked, the merge still asks.
+        let (_out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &permits,
+            &CancelToken::new(),
+            &mut |event| {
+                if let LoopEvent::Permission { name, action, .. } = event {
+                    cards.push((name, action));
+                }
+            },
+        );
+        let text = joined_outputs(&history);
+        let records = work::work_for(&sid).unwrap();
+        assert_eq!(records.len(), 1, "{text}");
+        let record = &records[0];
+
+        // The helper's own request was refused and put no card up.
+        assert_eq!(
+            *helper_heard.lock().unwrap(),
+            "only the lead can ask for a merge"
+        );
+        assert_eq!(asks.asks.load(Ordering::SeqCst), 2, "{text}");
+        let card = (
+            "merge_subagent_work".to_string(),
+            format!(
+                "1 file (1 new, 0 changed, 0 deleted) into {}: write",
+                record.project.display()
+            ),
+        );
+        assert_eq!(cards, [card.clone(), card]);
+
+        // After the no: the refusal, and nothing in the project.
+        let (refusal, landed) = after_no.lock().unwrap().clone().expect("a second turn");
+        assert_eq!(
+            refusal,
+            "User rejected the execution for tool `merge_subagent_work`"
+        );
+        assert!(!landed, "a refused merge wrote the project");
+
+        // After the yes: the file is in the project, uncommitted.
+        assert!(text.ends_with("merged: 1 file into the project"), "{text}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("child.txt")).unwrap(),
+            "from-child"
+        );
+        assert_eq!(record.state, work::WorkState::Merged);
+        assert_eq!(git(&["rev-parse", "HEAD"]), head);
+        assert_eq!(git(&["status", "--porcelain"]), "?? child.txt\n");
+        assert_eq!(git(&["diff", "--cached", "--name-only"]), "");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn an_always_on_a_merge_card_is_for_that_merge_and_merged_work_asks_nothing() {
+        let dir = scratch("mergealways");
+        git_repo(&dir);
+        let cfg = scratch("mergealwayscfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("mergealways");
+        let parent_id = sid.clone();
+        let again = Arc::new(Mutex::new(String::new()));
+        let heard = Arc::clone(&again);
+        let client = fake(&sid, move |req, _cancel, n| {
+            let one = |id: &str, name: &str, args: &str| {
+                Ok(calls_turn(vec![call(id, name, args)], Usage::default()))
+            };
+            if depth_of(&parent_id, &req.conversation_id) >= 1 {
+                return match n {
+                    0 => one(
+                        "w",
+                        "write",
+                        r#"{"path":"child.txt","content":"from-child"}"#,
+                    ),
+                    _ => Ok(text_turn("done", Usage::default())),
+                };
+            }
+            let key = || {
+                req.input
+                    .iter()
+                    .find_map(|item| match item {
+                        InputItem::FunctionCallOutput { output, .. } => task_line(output, "work:"),
+                        _ => None,
+                    })
+                    .expect("the spawn result names the work")
+            };
+            match n {
+                0 => one(
+                    "s",
+                    "spawn_subagent",
+                    &spawn_args("write", "general", false, "worktree"),
+                ),
+                // One reply with both calls: an "Always" lasts for a reply.
+                1 => Ok(calls_turn(
+                    vec![
+                        call(
+                            "m1",
+                            "merge_subagent_work",
+                            &json!({ "work": key() }).to_string(),
+                        ),
+                        call(
+                            "lw",
+                            "write",
+                            r#"{"path":"lead.txt","content":"from-lead"}"#,
+                        ),
+                    ],
+                    Usage::default(),
+                )),
+                2 => one(
+                    "m2",
+                    "merge_subagent_work",
+                    &json!({ "work": key() }).to_string(),
+                ),
+                _ => {
+                    if n == 3 {
+                        *heard.lock().unwrap() = last_output(req);
+                    }
+                    Ok(text_turn("done", Usage::default()))
+                }
+            }
+        });
+        // The spawn, the helper's write, the merge, then the lead's own write.
+        let asks = Arc::new(SeqPerm {
+            answers: Mutex::new(VecDeque::from([
+                PermAnswer::Allow,
+                PermAnswer::Allow,
+                PermAnswer::Always,
+                PermAnswer::Deny,
+            ])),
+            asks: AtomicUsize::new(0),
+        });
+        let permits: Arc<dyn PermitWait + Send + Sync> = Arc::clone(&asks) as _;
+        let mut cards = Vec::new();
+        let (_out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Ask, false, true),
+            &permits,
+            &CancelToken::new(),
+            &mut |event| {
+                if let LoopEvent::Permission { name, .. } = event {
+                    cards.push(name);
+                }
+            },
+        );
+        let text = joined_outputs(&history);
+        // "Always" on the merge card merged the work...
+        assert_eq!(
+            std::fs::read_to_string(dir.join("child.txt")).unwrap(),
+            "from-child",
+            "{text}"
+        );
+        // ...and the lead's next write still asked, and was refused.
+        // Work that is already merged is then refused with no card at all.
+        assert_eq!(
+            cards,
+            ["spawn_subagent", "write", "merge_subagent_work", "write"]
+        );
+        assert_eq!(asks.asks.load(Ordering::SeqCst), 4, "{text}");
+        assert!(!dir.join("lead.txt").exists(), "{text}");
+        assert_eq!(
+            *again.lock().unwrap(),
+            "this work is partial or held; the person merges it from the Tasks panel"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&cfg);
     }

@@ -9,9 +9,9 @@ static WORKFLOWS_GONE: std::sync::LazyLock<String> = std::sync::LazyLock::new(||
         grokhub_core::brand::product_name()
     )
 });
-/// `--worktree` was a Grok Build CLI flag; the engine works in the bound folder.
-const WORKTREE_GONE: &str =
-    "Worktrees were a grok CLI feature; chats run in the bound project folder";
+/// `--worktree` was a Grok Build CLI flag; a chat works in the bound folder.
+const WORKTREE_GONE: &str = "There is no /worktree command. Chats run in the bound project \
+     folder; only helpers work in worktrees of their own";
 /// Native sessions are append-only JSONL: dropping only the bubble would leave
 /// the reply in the model's history.
 const REWIND_NA: &str = "N/A on native threads: the session is append-only.";

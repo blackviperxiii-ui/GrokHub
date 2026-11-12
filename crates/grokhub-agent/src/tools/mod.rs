@@ -218,6 +218,7 @@ pub fn dispatch_for_job(
         "search_replace" => search_replace::run(ctx.workspace, &args),
         "run_terminal_command" => run_shell(ctx, &args),
         "kill_command_or_subagent" => control::kill(ctx.tasks.as_ref(), &args),
+        control::MERGE_WORK => control::merge(ctx, &args),
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),

@@ -378,6 +378,10 @@ const ToolCard = memo(function ToolCard({
   );
 });
 
+/** The lead's request to merge a helper's work. It asks every time, so its
+ * card has no button that says it will stop asking. */
+const MERGE_TOOL = "merge_subagent_work";
+
 function PermissionCard({
   item,
   onAnswer,
@@ -388,10 +392,17 @@ function PermissionCard({
   /** Allow this and ask less from now on; absent when it can't change here. */
   onStopAsking?: () => void;
 }) {
+  const merge = item.title === MERGE_TOOL;
   return (
     <div className="card permission" role="group" aria-label={`Approve ${item.title}`}>
       <div className="card-title">
-        {PRODUCT_NAME} wants to run <code>{item.title}</code>
+        {merge ? (
+          `${PRODUCT_NAME} wants to merge a helper's work into the project`
+        ) : (
+          <>
+            {PRODUCT_NAME} wants to run <code>{item.title}</code>
+          </>
+        )}
       </div>
       {item.action && <pre className="card-action">{item.action}</pre>}
       {item.reason && <p className="card-reason">{item.reason}</p>}
@@ -402,13 +413,15 @@ function PermissionCard({
           <button type="button" onClick={() => onAnswer("allow")}>
             Allow once
           </button>
-          <button type="button" className="quiet" onClick={() => onAnswer("always")}>
-            Always allow
-          </button>
+          {!merge && (
+            <button type="button" className="quiet" onClick={() => onAnswer("always")}>
+              Always allow
+            </button>
+          )}
           <button type="button" className="quiet danger" onClick={() => onAnswer("deny")}>
             Deny
           </button>
-          {onStopAsking && (
+          {!merge && onStopAsking && (
             <button
               type="button"
               className="link"

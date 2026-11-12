@@ -182,6 +182,14 @@ describe("styles.css Code tab layout", () => {
     );
   });
 
+  it("wraps a long path in a helper work row instead of widening the Tasks panel", () => {
+    expect(rule(CSS, ".card.agent .card-status.task-work {")).toBe(
+      ".card.agent .card-status.task-work { color: var(--text); overflow-wrap: anywhere; }",
+    );
+    expect(rule(CSS, ".card.agent .card-status.work-detail {")).toContain("overflow-wrap: anywhere;");
+    expect(rule(CSS, ".card.agent.work .error {")).toContain("overflow-wrap: anywhere;");
+  });
+
   it("shows a focus ring on the panes that scroll, and on the editor's frame rather than inside it", () => {
     expect(rule(CSS, ".code-diff:focus-visible,\n.code-log:focus-visible {")).toBe(
       ".code-diff:focus-visible, .code-log:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }",

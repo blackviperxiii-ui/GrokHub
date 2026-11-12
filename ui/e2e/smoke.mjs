@@ -53,6 +53,26 @@ const AGENT_REPLY_2 = "The follow-up note is written";
 const AGENT_HELPER_PROMPT = "smoke helper: read the session note";
 const AGENT_HELPER_TITLE = `1: ${AGENT_TODO}`;
 const AGENT_HELPER_REPLY = "The helper read the session note";
+// A third message hands two tasks to helpers that each work in a worktree of
+// their own. Each writes one file there; nothing reaches the project until
+// Merge is clicked in the Tasks panel.
+const AGENT_PROMPT_3 = "smoke agent window: write two files in worktrees";
+const AGENT_REPLY_3 = "Two helpers are writing in worktrees";
+const WORK = [1, 2].map((n) => ({
+  todo: { id: String(n + 1), content: `write work file ${n}`, status: "in_progress" },
+  title: `${n + 1}: write work file ${n}`,
+  // The session's first helper was s1.
+  helper: `s${n + 1}`,
+  prompt: `smoke worktree helper ${n}: write w${n}.txt`,
+  spawn: `smoke-work-spawn-${n}`,
+  call: `smoke-work-write-${n}`,
+  file: `w${n}.txt`,
+  text: `written by worktree helper ${n}\n`,
+  reply: `Worktree helper ${n} wrote w${n}.txt`,
+}));
+// What the project holds as w2.txt before the second Merge, which must then
+// be a conflict.
+const WORK_MINE = "written in the project by hand\n";
 // The Tasks panel of a lead session reads when the app says its tasks
 // changed, and otherwise only every 15 seconds. A change the mock has seen
 // must show within this long, three times in a row: a timer cannot do that.
@@ -101,6 +121,41 @@ function mockReply(callNumber, body) {
   const stage = helperStage(body);
   if (stage === "start") return toolCall("smoke-helper-read", "read_file", { target_file: AGENT_NOTE });
   if (stage === "read") return textReply(AGENT_HELPER_REPLY);
+  // A worktree helper starts fresh, so its requests carry its own prompt and
+  // not the lead's message.
+  const worker = WORK.find((w) => body.includes(w.prompt) && !body.includes(AGENT_PROMPT_3));
+  if (worker) {
+    if (!body.includes(worker.call)) {
+      return toolCall(worker.call, "write", { path: worker.file, content: worker.text });
+    }
+    return textReply(worker.reply);
+  }
+  // Before the earlier agent prompts, which this turn carries as history.
+  if (body.includes(AGENT_PROMPT_3)) {
+    if (!body.includes("smoke-work-todo")) {
+      return toolCall("smoke-work-todo", "todo_write", {
+        todos: [{ id: "1", content: AGENT_TODO, status: "completed" }, ...WORK.map((w) => w.todo)],
+      });
+    }
+    // One tool call per answer: the two helpers start in two steps.
+    const next = WORK.find((w) => !body.includes(w.spawn));
+    if (next) {
+      return toolCall(next.spawn, "spawn_subagent", {
+        type: "general",
+        description: next.title,
+        prompt: [
+          `Goal: ${next.prompt}`,
+          "Constraints: write only that file",
+          "Edge cases: none",
+          `Done when: ${next.file} is written`,
+          `Files: ${next.file}`,
+        ].join("\n"),
+        isolation: "worktree",
+        background: true,
+      });
+    }
+    return textReply(AGENT_REPLY_3);
+  }
   // Before the first agent prompt, which this turn carries as history.
   if (body.includes(AGENT_PROMPT_2)) {
     if (!body.includes("smoke-agent-todo-run")) {
@@ -1594,6 +1649,7 @@ async function codeAgent(s, config, workspace) {
     (await wd("POST", `${s}/elements`, { using: "css selector", value: dialog })).length === 0,
   );
   console.log("code tab: Details showed the helper's step and result");
+  await helperWork(s, workspace, other);
   await waitFor("the to-do in the Tasks panel", () =>
     find(s, `${pane} section[aria-label='Agent tasks'] li[aria-label='${AGENT_TODO}']`),
   );
@@ -1619,6 +1675,148 @@ async function codeAgent(s, config, workspace) {
     (await wd("POST", `${s}/elements`, { using: "css selector", value: `${pane} .bubble` })).length === 0,
   );
   console.log("code tab: the agent window ran a session in its own project while the app moved, and listed its to-do");
+}
+
+/** `git` in the folder, with the user set inline so no git config is read
+ * for it or written. Returns what it printed. */
+function git(dir, ...args) {
+  const run = spawnSync(
+    "git",
+    ["-c", "user.name=smoke", "-c", "user.email=smoke@example.com", "-c", "commit.gpgsign=false", ...args],
+    { cwd: dir, encoding: "utf8" },
+  );
+  if (run.status !== 0) throw new Error(`git ${args.join(" ")}: ${run.error?.message ?? run.stderr}`);
+  return run.stdout.trim();
+}
+
+/** Two helpers each write one file in a worktree of their own. The work
+ * waits in the Tasks panel's Helper work list: Merge puts the first file in
+ * the project as an uncommitted change, a file the project got meanwhile
+ * makes the second a conflict that changes nothing, and Discard removes it. */
+async function helperWork(s, workspace, other) {
+  const pane = "aside.code-agent";
+  const panel = `${pane} section[aria-label='Agent tasks']`;
+  const row = (w) => `${panel} ul[aria-label='Helper work'] li[aria-label='${w.title}']`;
+  const ownRow = (w) => `${panel} ul[aria-label='Helpers and commands'] li[aria-label='${w.title}']`;
+  const todoRow = (w) => `${panel} ul[aria-label='Tasks'] li[aria-label='${w.todo.content}']`;
+  const pageText = (css) =>
+    wd("POST", `${s}/execute/sync`, {
+      script: "const el = document.querySelector(arguments[0]); return el ? el.textContent : '';",
+      args: [css],
+    });
+  const count = async (css) => (await wd("POST", `${s}/elements`, { using: "css selector", value: css })).length;
+  /** The button with this label inside the element the selector names. */
+  const button = async (css, label) => {
+    const el = await wd("POST", `${s}/execute/sync`, {
+      script:
+        "const at = document.querySelector(arguments[0]); return [...(at ? at.querySelectorAll('button') : [])].find((b) => b.textContent.trim() === arguments[1]) ?? null;",
+      args: [css, label],
+    });
+    return el ? el[ELEMENT] : null;
+  };
+  const press = async (css, label) => {
+    const el = await waitFor(`${label} in ${css}`, () => button(css, label));
+    await clickStill(s, el, label);
+  };
+
+  // The session's project becomes a git repository with one commit.
+  git(workspace, "init", "-q");
+  git(workspace, "add", "-A");
+  git(workspace, "commit", "-q", "-m", "smoke project");
+  const head = git(workspace, "rev-parse", "HEAD");
+
+  const box = await find(s, `${pane} textarea[aria-label='Message the agent']`);
+  await wd("POST", `${s}/element/${box}/value`, { text: AGENT_PROMPT_3 });
+  await click(s, `${pane} form.composer button[type='submit']`);
+
+  // Ask me first: each helper's write waits on its card in the agent window.
+  const ready = "Ready to merge · 1 file";
+  await waitFor("both helpers' work ready to merge", async () => {
+    const lines = [];
+    for (const w of WORK) lines.push(await pageText(`${row(w)} .task-work`));
+    if (lines.every((line) => line === ready)) return true;
+    const cards = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: `${pane} .card.permission .card-buttons button:not([disabled])`,
+    });
+    const allow = cards[0];
+    if (allow && (await settled(s, allow[ELEMENT]))) {
+      await wd("POST", `${s}/element/${allow[ELEMENT]}/click`, {}).catch(() => {});
+    }
+    throw new Error(`the Helper work rows read ${JSON.stringify(lines)}`);
+  }, 60000);
+  for (const w of WORK) {
+    if (!mockSeen.some((c) => c.body.includes(w.call) && c.body.includes("function_call_output"))) {
+      throw new Error(`the write of ${w.file} never reached its helper`);
+    }
+    for (const dir of [workspace, other]) {
+      if (existsSync(join(dir, w.file))) throw new Error(`${w.file} is in ${dir} before any Merge`);
+    }
+    const todo = await pageText(`${todoRow(w)} .card-status`);
+    if (todo !== `Not merged · helper ${w.helper}`) throw new Error(`the task of ${w.file} read ${JSON.stringify(todo)}`);
+  }
+  if (git(workspace, "status", "--porcelain") !== "") throw new Error("the project changed before any Merge");
+  await waitFor("Send again in the agent window", async () => {
+    const send = await wd("POST", `${s}/elements`, {
+      using: "xpath",
+      value:
+        "//aside[contains(@class,'code-agent')]//form[contains(@class,'composer')]//button[@type='submit'][normalize-space()='Send']",
+    });
+    if (send.length === 1) return true;
+    throw new Error(`the composer read ${JSON.stringify(await pageText(`${pane} form.composer`))}`);
+  });
+  await scrollIntoView(s, row(WORK[0]));
+  await shot(s, "helper-work-ready");
+  console.log(`code tab: two helpers' work waits (${JSON.stringify(ready)} twice, tasks "Not merged · helper s2" and "… s3"), nothing in the project`);
+
+  // Merge the first: its file is in the project, uncommitted.
+  const [first, second] = WORK;
+  await press(row(first), "Merge");
+  const merged = await waitFor("the first helper's work merged", async () => {
+    const line = await pageText(`${ownRow(first)} .task-work`);
+    return line === "Merged · 1 file" ? line : null;
+  });
+  const said = await pageText(`${panel} .work-said`);
+  if (said !== "Merged 1 file into the project.") throw new Error(`after Merge the panel said ${JSON.stringify(said)}`);
+  if ((await count(row(first))) !== 0) throw new Error("merged work stayed in the Helper work list");
+  const landed = readFileSync(join(workspace, first.file), "utf8");
+  if (landed !== first.text) throw new Error(`${first.file} holds ${JSON.stringify(landed)}`);
+  if (git(workspace, "rev-parse", "HEAD") !== head) throw new Error("Merge moved the project's HEAD");
+  const status = git(workspace, "status", "--porcelain");
+  if (status !== `?? ${first.file}`) throw new Error(`after Merge git status read ${JSON.stringify(status)}`);
+  if (existsSync(join(workspace, second.file))) throw new Error(`${second.file} is in the project before its Merge`);
+  console.log(`code tab: Merge put ${first.file} in the project uncommitted (${JSON.stringify(merged)}, ${JSON.stringify(said)}, HEAD unchanged)`);
+
+  // The project gets its own w2.txt, so the second Merge is a conflict.
+  writeFileSync(join(workspace, second.file), WORK_MINE);
+  await press(row(second), "Merge");
+  const conflict = await waitFor("the second helper's work in conflict", async () => {
+    const line = await pageText(`${row(second)} .task-work`);
+    return line === `Conflict · ${second.file}` ? line : null;
+  });
+  const mine = readFileSync(join(workspace, second.file), "utf8");
+  if (mine !== WORK_MINE) throw new Error(`the conflict changed ${second.file} to ${JSON.stringify(mine)}`);
+  if (git(workspace, "rev-parse", "HEAD") !== head) throw new Error("the conflict moved the project's HEAD");
+  await waitFor("Merge again on the conflict row", () => button(row(second), "Merge again"));
+  await scrollIntoView(s, row(second));
+  await shot(s, "helper-work-conflict");
+  console.log(`code tab: a file the project got meanwhile made the second Merge ${JSON.stringify(conflict)}, the project's file unchanged`);
+
+  // Discard asks first, then the row is gone.
+  await press(row(second), "Discard");
+  const dialog = "[role='alertdialog'][aria-label='Discard this work?']";
+  const asked = await waitFor("the Discard question", async () => (await pageText(`${dialog} p`)) || null);
+  if (asked !== "Delete this helper's 1 changed file? This can't be undone.") {
+    throw new Error(`the Discard question read ${JSON.stringify(asked)}`);
+  }
+  await press(dialog, "Discard");
+  await waitFor("the discarded row to go", async () => (await count(row(second))) === 0);
+  const gone = await waitFor("the line after Discard", async () => (await pageText(`${panel} .work-said`)) || null);
+  if (gone !== "Work discarded.") throw new Error(`after Discard the panel said ${JSON.stringify(gone)}`);
+  if (readFileSync(join(workspace, second.file), "utf8") !== WORK_MINE) {
+    throw new Error(`Discard changed the project's ${second.file}`);
+  }
+  console.log(`code tab: Discard asked ${JSON.stringify(asked)} and removed the row (${JSON.stringify(gone)})`);
 }
 
 /** The window opens 900px wide (tauri.conf.json). Every tab, the brand, the
