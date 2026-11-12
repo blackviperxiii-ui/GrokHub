@@ -2,9 +2,10 @@
 //! the same `updates.json`, ranked by the same rules in `grokhub_core::pulse`.
 //! Not this, Love and Accept write the same MEMORY.md ledger line the cabin
 //! writes, so the next ranking learns from them. Like (Love) and Not interested
-//! also train card taste (`grokhub_core::card_taste`), which orders the feed
-//! and steers the writer. Love and Discuss feed the writer's taste summary
-//! (`pulse_feed`). Dismiss and Delete only remove: they carry no weight.
+//! also train card taste (`grokhub_core::card_taste`) and the learning engine;
+//! Pulse orders the feed from trait beliefs (`rank_live`) and the writer
+//! still reads the taste summary (`pulse_feed`). Dismiss and Delete only
+//! remove: they carry no weight.
 //! Ideas take Let's do it (Accept), More like this and Not interested; the
 //! last two move the interest topics the idea names and steer the next idea
 //! run.
@@ -566,11 +567,10 @@ fn build(
     };
     let by_id = |id: &str| cards.iter().find(|c| c.id == id);
     let (today, older) = pc::feed_day(cards, &inputs);
-    // Card taste: liked kinds rise, disliked kinds sink, the worst leave.
-    let weights = card_taste::cached_weights(config_dir);
+    // Trait beliefs from the learning engine: liked rise, disliked sink.
     let (today, older) = (
-        card_taste::rank_with(today, &weights),
-        card_taste::rank_with(older, &weights),
+        card_taste::rank_live(today, now_ms),
+        card_taste::rank_live(older, now_ms),
     );
     let shown: Vec<UpdateCard> = today.iter().chain(older.iter()).cloned().collect();
     // Only marks which posts are saved; a damaged file shows on the Saved page.

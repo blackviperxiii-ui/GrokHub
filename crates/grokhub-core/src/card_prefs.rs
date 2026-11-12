@@ -569,6 +569,8 @@ fn topic_score(card: &UpdateCard, prefs: &CardPrefs, now: u64) -> TopicScore {
 }
 
 /// Score parts. `novelty` adds [`NOVELTY_BONUS`] when the caller already chose this card.
+/// Trait beliefs from the learning engine lean the score by at most
+/// [`crate::card_taste::HOME_BELIEF_CAP`].
 pub fn card_score(card: &UpdateCard, prefs: &CardPrefs, now: u64, novelty: bool) -> f64 {
     let (kind_a, _) = feature_affinity(&prefs.kinds, kind_key(card.kind), now);
     let (group_a, _) = feature_affinity(&prefs.groups, &signal_group(card), now);
@@ -576,7 +578,13 @@ pub fn card_score(card: &UpdateCard, prefs: &CardPrefs, now: u64, novelty: bool)
     let age_h = now.saturating_sub(card.created_at) as f64 / HOUR_MS;
     let recency = 0.3 * 0.5_f64.powf(age_h / 12.0);
     let novelty_term = if novelty { NOVELTY_BONUS } else { 0.0 };
-    base_score(card) + kind_a + 1.5 * group_a + topics.mean + recency + novelty_term
+    base_score(card)
+        + kind_a
+        + 1.5 * group_a
+        + topics.mean
+        + recency
+        + novelty_term
+        + crate::card_taste::home_belief_boost(card, now)
 }
 
 struct HintTerm {

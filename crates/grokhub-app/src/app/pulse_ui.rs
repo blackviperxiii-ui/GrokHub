@@ -1720,9 +1720,8 @@ impl Cabin {
             }
             posts.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
         }
-        // Card taste: liked kinds rise, disliked kinds sink, the worst leave.
-        let weights = grokhub_core::card_taste::cached_weights(&crate::config::config_dir());
-        grokhub_core::card_taste::rank_with(posts, &weights)
+        // Trait beliefs from the learning engine: liked rise, disliked sink.
+        grokhub_core::card_taste::rank_live(posts, now)
     }
 
     /// One post: "source · age" with ··· on top, the headline, the short
