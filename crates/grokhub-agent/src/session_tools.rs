@@ -265,6 +265,7 @@ fn todo_write(session: &str, arguments: &str) -> ToolOutput {
         .lock()
         .unwrap_or_else(|err| err.into_inner())
         .insert(session.to_string(), current.clone());
+    crate::tasks::mark_changed(session);
     ToolOutput::ok(render_todos(&current))
 }
 
@@ -799,6 +800,35 @@ mod tests {
                 });
             }
         }
+    }
+
+    #[test]
+    fn todo_write_marks_the_session() {
+        let cfg = scratch("todomarkcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let _watch = crate::tasks::WatchScope::set(true);
+        let out = todo_write(
+            "w2",
+            r#"{"todos":[{"id":"1","content":"a","status":"pending"}]}"#,
+        );
+        assert!(!out.failed, "{}", out.text);
+        assert_eq!(crate::tasks::drain_task_changes(), vec!["w2".to_string()]);
+        assert_eq!(crate::tasks::drain_task_changes(), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn todo_write_marks_nothing_with_the_watch_off() {
+        let cfg = scratch("todoquietcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let _watch = crate::tasks::WatchScope::set(false);
+        let out = todo_write(
+            "w3",
+            r#"{"todos":[{"id":"1","content":"a","status":"pending"}]}"#,
+        );
+        assert!(!out.failed, "{}", out.text);
+        assert_eq!(crate::tasks::drain_task_changes(), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&cfg);
     }
 
     #[test]

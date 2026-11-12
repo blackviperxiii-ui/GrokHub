@@ -36,6 +36,8 @@ fn pending() -> &'static Pending {
 pub fn start(app: AppHandle) {
     std::thread::spawn(move || loop {
         for (chat, event) in pending().take(grokhub_agent::drain_side_events()) {
+            // A helper's question turns its task to "Needs you".
+            crate::task_feed::touch(&chat);
             #[cfg(desktop)]
             crate::os_extras::on_chat_event(&app, &chat, &event);
             let _ = app.emit(
@@ -44,6 +46,15 @@ pub fn start(app: AppHandle) {
                     conversation_id: &chat,
                     event: &event,
                     helper: true,
+                },
+            );
+        }
+        // One nudge per chat whose tasks changed since the last tick.
+        for chat in crate::task_feed::take() {
+            let _ = app.emit(
+                crate::TASKS_EVENT,
+                crate::task_feed::TasksChanged {
+                    conversation_id: &chat,
                 },
             );
         }
@@ -58,6 +69,7 @@ pub fn waiting(chat: &str) -> Vec<UiEvent> {
 
 /// The question `id` in `chat` was answered.
 pub fn answered(chat: &str, id: &str) {
+    crate::task_feed::touch(chat);
     pending().answered(chat, id);
     let mut asks = turn_asks().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(list) = asks.get_mut(chat) {
@@ -72,6 +84,7 @@ pub fn answered(chat: &str, id: &str) {
 pub fn chat_ended(chat: &str) {
     pending().chat_ended(chat);
     turn_ended(chat);
+    crate::task_feed::touch(chat);
 }
 
 /// The ids of the asks a lead session's running turn waits on. Such an ask

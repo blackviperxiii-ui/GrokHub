@@ -537,6 +537,7 @@ fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
         }
     }
     let cancelled = matches!(done.stop, StopReason::Cancelled | StopReason::Halted);
+    job.tasks.note_end(&job.agent_id, &done.usage);
     if cancelled {
         let _ = job.tasks.append_output(&job.agent_id, &done.text);
         let _ = job.tasks.kill(&job.agent_id);
@@ -640,6 +641,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     let background = job.background;
     let parent_session = job.parent_session.clone();
     let mut out = crate::run_loop(&input, &mut history, &job.prompt, None, &mut |ev| {
+        job.tasks.note_step(&agent_id, &ev);
         emit_child(ev, background, &parent_session, tx)
     });
     let blocked =
@@ -647,6 +649,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     // A SubagentStop hook that blocks sends the helper on once with its reason.
     if let Some(reason) = blocked.filter(|_| matches!(out.stop, StopReason::EndTurn)) {
         let again = crate::run_loop(&input, &mut history, &reason, None, &mut |ev| {
+            job.tasks.note_step(&agent_id, &ev);
             emit_child(ev, background, &parent_session, tx)
         });
         let _ = crate::hooks::on_subagent_stop(

@@ -2774,6 +2774,15 @@ export function openSkillFolder(
 /** A background task's status on the Agents page (src-tauri/src/queue.rs). */
 export type TaskStatus = "running" | "failed" | "done" | "stopped";
 
+/** How far a helper has got: its tool steps, tokens and time so far. */
+export interface QueueProgress {
+  steps: number;
+  /** The tool the last step ran; empty before the first one. */
+  lastStep: string;
+  tokens: number;
+  seconds: number;
+}
+
 /** A background command, subagent or monitor of the open chat. */
 export interface QueueTask {
   id: string;
@@ -2781,6 +2790,8 @@ export interface QueueTask {
   status: TaskStatus;
   /** Still going, so Stop has something to stop. */
   live: boolean;
+  /** Only on a helper of a session whose Tasks panel is live. */
+  progress?: QueueProgress;
 }
 
 /** A to-do as the Code tab's Tasks panel shows it. */
@@ -2812,6 +2823,24 @@ export function stopTask(
   taskId?: string,
 ): Promise<Queue> {
   return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
+}
+
+/** A session's tasks, helpers or to-dos changed: read the queue again. */
+export const TASKS_EVENT = "tasks://changed";
+
+export function onTasksChanged(handler: (conversationId: string) => void): Promise<UnlistenFn> {
+  return subscribe<{ conversationId: string }>(TASKS_EVENT, (changed) => handler(changed.conversationId));
+}
+
+/** A helper's steps so far, by tool name, and its result as plain text. */
+export interface TaskDetail {
+  steps: string[];
+  result: string;
+}
+
+/** Reads a helper's steps and result without taking the result from the lead. */
+export function getTaskDetail(conversationId: string, taskId: string): Promise<TaskDetail> {
+  return invoke<TaskDetail>("get_task_detail", { conversationId, taskId });
 }
 
 /** Settings → Behavior, saved in shell.json. Everything starts off. */

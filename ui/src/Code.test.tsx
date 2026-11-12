@@ -78,8 +78,13 @@ vi.mock("./Chat", async () => {
   return { Chat, newConversationId: () => `shell-new-${++made}` };
 });
 vi.mock("./Agents", () => ({
-  Agents: (p: { conversationId?: string; active?: boolean; onOpenChat?: () => void }) => (
-    <div data-testid="agent-tasks" data-active={String(p.active)} data-links={String(Boolean(p.onOpenChat))}>
+  Agents: (p: { conversationId?: string; active?: boolean; live?: boolean; onOpenChat?: () => void }) => (
+    <div
+      data-testid="agent-tasks"
+      data-active={String(p.active)}
+      data-live={String(p.live)}
+      data-links={String(Boolean(p.onOpenChat))}
+    >
       tasks of {p.conversationId}
     </div>
   ),
@@ -811,7 +816,11 @@ describe("Code tab", () => {
     api.codeSessionLead.mockImplementation((id) => Promise.resolve(id === "shell-first"));
     render(<Tab shown />);
     const chat = screen.getByTestId("agent-chat");
+    const tasks = screen.getByTestId("agent-tasks");
+    // Until the answer is in, the Tasks panel keeps its timed read.
+    expect(tasks).toHaveAttribute("data-live", "false");
     await waitFor(() => expect(chat).toHaveAttribute("data-lead", "true"));
+    expect(tasks).toHaveAttribute("data-live", "true");
     expect(api.codeSessionLead).toHaveBeenLastCalledWith("shell-first");
     expect(api.codeSessionBind.mock.invocationCallOrder[0]).toBeLessThan(
       api.codeSessionLead.mock.invocationCallOrder[0],
@@ -821,6 +830,7 @@ describe("Code tab", () => {
     await waitFor(() => expect(chat).toHaveTextContent("session chat-7"));
     await waitFor(() => expect(api.codeSessionLead).toHaveBeenLastCalledWith("chat-7"));
     expect(chat).toHaveAttribute("data-lead", "false");
+    expect(tasks).toHaveAttribute("data-live", "false");
   });
 
   it("keeps the agent window mounted and idle while another tab shows", async () => {

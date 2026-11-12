@@ -48,6 +48,15 @@ const AGENT_REPLY = "The session note is written";
 const AGENT_PROMPT_2 = "smoke agent window: write the follow-up note";
 const AGENT_NOTE_2 = "agent-session-follow-up.txt";
 const AGENT_REPLY_2 = "The follow-up note is written";
+// That message hands its task to a helper first. The helper reads one file
+// and answers; the Tasks panel must follow it as it runs.
+const AGENT_HELPER_PROMPT = "smoke helper: read the session note";
+const AGENT_HELPER_TITLE = `1: ${AGENT_TODO}`;
+const AGENT_HELPER_REPLY = "The helper read the session note";
+// The Tasks panel of a lead session reads when the app says its tasks
+// changed, and otherwise only every 15 seconds. A change the mock has seen
+// must show within this long, three times in a row: a timer cannot do that.
+const LIVE_MS = 1000;
 
 const binary = process.argv[2];
 if (!binary) {
@@ -87,8 +96,38 @@ function mockReply(callNumber, body) {
     return textReply(JSON.stringify([PULSE_IDEA]));
   }
   if (body.includes(WEB_PROMPT)) return textReply(WEB_REPLY);
+  // The helper of the agent window's second message. Checked first: its
+  // request starts from the lead's conversation, so it carries that prompt.
+  const stage = helperStage(body);
+  if (stage === "start") return toolCall("smoke-helper-read", "read_file", { target_file: AGENT_NOTE });
+  if (stage === "read") return textReply(AGENT_HELPER_REPLY);
   // Before the first agent prompt, which this turn carries as history.
   if (body.includes(AGENT_PROMPT_2)) {
+    if (!body.includes("smoke-agent-todo-run")) {
+      return toolCall("smoke-agent-todo-run", "todo_write", {
+        todos: [{ id: "1", content: AGENT_TODO, status: "in_progress" }],
+      });
+    }
+    if (!body.includes("smoke-agent-spawn")) {
+      return toolCall("smoke-agent-spawn", "spawn_subagent", {
+        type: "general",
+        description: AGENT_HELPER_TITLE,
+        prompt: [
+          `Goal: ${AGENT_HELPER_PROMPT}`,
+          "Constraints: read only",
+          "Edge cases: none",
+          "Done when: the note is read",
+          `Files: ${AGENT_NOTE}`,
+        ].join("\n"),
+      });
+    }
+    if (!body.includes("smoke-agent-todo-done")) {
+      return toolCall("smoke-agent-todo-done", "todo_write", {
+        todos: [{ id: "1", content: AGENT_TODO, status: "completed" }],
+      });
+    }
+    // This request carries the to-do's result, so the task is closed by now.
+    taskSeen.done ??= Date.now();
     if (!body.includes("smoke-agent-follow-up")) {
       return toolCall("smoke-agent-follow-up", "write", { path: AGENT_NOTE_2, content: AGENT_NOTE_TEXT });
     }
@@ -165,6 +204,23 @@ function mockRunPrompt() {
  * the test can act while that reply is still running. */
 let agentHold = null;
 
+/** Which of the helper's two model calls this is: "start" before it has read
+ * the note and "read" after, or null for any other call. The lead's own
+ * requests carry the helper's prompt too, but only after its spawn call. */
+function helperStage(body) {
+  if (!body.includes(AGENT_HELPER_PROMPT) || body.includes("smoke-agent-spawn")) return null;
+  return body.includes("smoke-helper-read") ? "read" : "start";
+}
+
+/** When the mock first saw each change to the second message's task: the
+ * helper's two calls ("start", "read") and the lead's request after it
+ * closed the task ("done"). */
+const taskSeen = {};
+
+/** While set, the mock holds its answer to each of the helper's calls
+ * (`start`, `read`), so the test can read the Tasks panel at that point. */
+let helperHold = null;
+
 function startMock() {
   const seen = [];
   mockSeen = seen;
@@ -184,7 +240,10 @@ function startMock() {
         });
         res.end(payload);
       };
-      if (agentHold && body.includes(AGENT_PROMPT)) void agentHold.then(answer);
+      const stage = helperStage(body);
+      if (stage) taskSeen[stage] ??= Date.now();
+      const hold = stage ? helperHold?.[stage] : agentHold && body.includes(AGENT_PROMPT) ? agentHold : null;
+      if (hold) void hold.then(answer);
       else answer();
     });
   });
@@ -1457,9 +1516,84 @@ async function codeAgent(s, config, workspace) {
   // and the session still works in the first.
   if (realpathSync(bound()) !== realpathSync(other)) throw new Error("the app left the second project early");
   const again = await find(s, `${pane} textarea[aria-label='Message the agent']`);
+  // The lead hands the task to a helper. The mock holds each of the helper's
+  // two model calls, so the task stands still while the panel is read.
+  let startHelper = () => {};
+  let endHelper = () => {};
+  helperHold = {
+    start: new Promise((ok) => (startHelper = ok)),
+    read: new Promise((ok) => (endHelper = ok)),
+  };
+  const panel = `${pane} section[aria-label='Agent tasks']`;
+  const todoRow = `${panel} ul[aria-label='Tasks'] li[aria-label='${AGENT_TODO}']`;
+  const helperRow = `${panel} ul[aria-label='Helpers and commands'] li[aria-label='${AGENT_HELPER_TITLE}']`;
+  /** The first match's own text, shown or not; "" when nothing matches. */
+  const pageText = (css) =>
+    wd("POST", `${s}/execute/sync`, {
+      script: "const el = document.querySelector(arguments[0]); return el ? el.textContent : '';",
+      args: [css],
+    });
+  /** Waits for the mock to see the change, then reads the panel until it
+   * shows it. The panel has LIVE_MS from the moment the mock saw it. */
+  const live = async (stage, what, css, ok) => {
+    // A tight wait: a slow look here would eat the panel's LIVE_MS.
+    for (const giveUp = Date.now() + 60000; taskSeen[stage] === undefined; await sleep(25)) {
+      if (Date.now() > giveUp) throw new Error(`timed out waiting for the mock to see: ${what}`);
+    }
+    const end = taskSeen[stage] + LIVE_MS;
+    for (;;) {
+      const late = Date.now() > end;
+      const text = await pageText(css);
+      if (ok(text)) return text;
+      if (late) {
+        throw new Error(
+          `${what}: ${LIVE_MS} ms after the change the Tasks panel still read ${JSON.stringify(text)}; it must update when the app says the tasks changed`,
+        );
+      }
+      await sleep(25);
+    }
+  };
   await wd("POST", `${s}/element/${again}/value`, { text: AGENT_PROMPT_2 });
   await click(s, `${pane} form.composer button[type='submit']`);
+  await live("start", "the helper started", `${todoRow} .card-status`, (text) => text === "Running · helper s1");
+  startHelper();
+  const stepped = await live("read", "the helper took its first step", `${todoRow} .task-progress`, (text) =>
+    /^Step 1: read_file · (\d+ tokens · )?\d+s$/.test(text),
+  );
+  if ((await pageText(`${todoRow} .card-status`)) !== "Running · helper s1") {
+    throw new Error("the task left Running while its helper was still working");
+  }
+  await shot(s, "code-agent-tasks-live");
+  endHelper();
+  await live("done", "the lead closed the task", `${todoRow} .card-status`, (text) => text === "Done · helper s1");
+  helperHold = null;
+  console.log(`code tab: the Tasks panel followed the helper live (running, ${JSON.stringify(stepped)}, done)`);
   await wrote(AGENT_NOTE_2, AGENT_REPLY_2);
+  // The helper really ran: its answer went back to the lead as the result.
+  if (!mockSeen.some((c) => c.body.includes("smoke-agent-spawn") && c.body.includes(AGENT_HELPER_REPLY))) {
+    throw new Error("the lead never got its helper's answer");
+  }
+  // The helper's own row keeps its progress after it ended, with Details.
+  await waitFor("the ended helper's row", async () => (await pageText(`${helperRow} .card-status`)) === "Done · s1");
+  const spent = await pageText(`${helperRow} .task-progress`);
+  if (!/^Step 1: read_file · \d+ tokens · \d+s$/.test(spent)) {
+    throw new Error(`the ended helper's progress read ${JSON.stringify(spent)}`);
+  }
+  const details = await find(s, `${helperRow} button[aria-label='Helper s1 details']`);
+  await clickStill(s, details, "Details on the helper's row");
+  const dialog = "[role='dialog'][aria-label='Helper s1']";
+  await waitFor("the helper's result in its details window", async () =>
+    (await pageText(`${dialog} pre.task-result[aria-label='Result']`)).includes(AGENT_HELPER_REPLY),
+  );
+  const steps = await pageText(`${dialog} ol.task-steps[aria-label='Steps']`);
+  if (steps !== "read_file") throw new Error(`the helper's steps read ${JSON.stringify(steps)}`);
+  await shot(s, "code-agent-task-details");
+  const [close] = await xp("//div[@role='dialog'][@aria-label='Helper s1']//button[normalize-space()='Close']");
+  await clickStill(s, close[ELEMENT], "Close in the helper's details window");
+  await waitFor("the details window to close", async () =>
+    (await wd("POST", `${s}/elements`, { using: "css selector", value: dialog })).length === 0,
+  );
+  console.log("code tab: Details showed the helper's step and result");
   await waitFor("the to-do in the Tasks panel", () =>
     find(s, `${pane} section[aria-label='Agent tasks'] li[aria-label='${AGENT_TODO}']`),
   );

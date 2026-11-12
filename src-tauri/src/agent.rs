@@ -910,6 +910,10 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         grokhub_agent::set_lead_session(&conversation_id, lead_phase);
         let mut plan_watch = crate::lead::PlanWatch::default();
         crate::helper_asks::turn_started(&conversation_id);
+        // A side answer on a lead session moves its tasks' state too.
+        if route.lead {
+            crate::task_feed::touch(&conversation_id);
+        }
         let engine = match (&mut engine, inbox.take()) {
             (Some(engine), _) => {
                 engine.set_workspace(route.workspace);
@@ -980,6 +984,9 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             };
             if lead_phase.is_some() {
                 crate::helper_asks::turn_ask(&conversation_id, &ui);
+                if matches!(ui, UiEvent::Permission { .. } | UiEvent::Elicit { .. }) {
+                    crate::task_feed::touch(&conversation_id);
+                }
                 // The lead's own plan is saved with the session: the draft,
                 // and the text as the person edited it.
                 let plan = match &ui {
@@ -1069,6 +1076,9 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             emit(ui);
         });
         crate::helper_asks::turn_ended(&conversation_id);
+        if route.lead {
+            crate::task_feed::touch(&conversation_id);
+        }
         // A planning turn that ends out of plan mode had its plan approved.
         if lead_phase == Some(grokhub_agent::LeadPhase::Plan)
             && !grokhub_agent::plan_on(&conversation_id)

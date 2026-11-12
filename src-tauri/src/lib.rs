@@ -98,6 +98,7 @@ pub mod skills;
 pub mod slash;
 pub mod slash_ops;
 mod steam_checks;
+mod task_feed;
 mod turns;
 pub mod voice;
 pub mod workboard;
@@ -119,6 +120,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Listener, Manager, State, WindowEvent};
 
 pub const CHAT_EVENT: &str = "chat://event";
+/// Sent when a chat's to-dos or background tasks changed: read the queue again.
+pub const TASKS_EVENT: &str = "tasks://changed";
 /// Sent after every Halt, with the chats it stopped mid-reply.
 pub const HALT_EVENT: &str = "halt://done";
 
@@ -1454,6 +1457,16 @@ async fn stop_task(
         Ok(queue::queue(&dir, &conversation_id))
     })
     .await?
+}
+
+/// Tasks → Details: a helper's steps so far and its result. Reading it
+/// leaves the result waiting for the session that started the helper.
+#[tauri::command]
+async fn get_task_detail(
+    conversation_id: String,
+    task_id: String,
+) -> Result<queue::TaskDetail, String> {
+    off_main(move || queue::detail(&conversation_id, &task_id)).await?
 }
 
 fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
@@ -4950,6 +4963,8 @@ pub fn run() {
             #[cfg(desktop)]
             start_scheduler(app);
             // Questions from helpers that outlive their chat's reply.
+            // Only this shell watches task changes; the cabin leaves it off.
+            grokhub_agent::set_task_watch(true);
             helper_asks::start(app.handle().clone());
             // The internet log, when it's on and the cabin isn't running.
             #[cfg(desktop)]
@@ -5215,6 +5230,7 @@ pub fn run() {
             nyx_tiles,
             get_queue,
             stop_task,
+            get_task_detail,
             get_workboard,
             workboard_add,
             workboard_act,

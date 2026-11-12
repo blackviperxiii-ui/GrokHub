@@ -1,16 +1,36 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Queue } from "./api";
+import type { Queue, TaskDetail } from "./api";
 
 const api = vi.hoisted(() => ({
   getQueue: vi.fn<(conversationId: string) => Promise<Queue>>(),
   stopTask: vi.fn<(conversationId: string, taskId?: string) => Promise<Queue>>(),
+  onTasksChanged: vi.fn<(handler: (conversationId: string) => void) => Promise<() => void>>(),
+  onEventGap: vi.fn<(handler: () => void) => Promise<() => void>>(),
+  getTaskDetail: vi.fn<(conversationId: string, taskId: string) => Promise<TaskDetail>>(),
+}));
+// Apart from `api`, whose every value beforeEach resets: what the panel
+// subscribed with, and the spies that stand for its unlisten calls.
+const feed = vi.hoisted(() => ({
+  changed: (() => {}) as (conversationId: string) => void,
+  gap: (() => {}) as () => void,
+  unlisten: vi.fn<() => void>(),
+  unlistenGap: vi.fn<() => void>(),
 }));
 
 vi.mock("./api", () => api);
 
-import { Agents, AGENTS_EMPTY, AGENTS_NO_CHAT, LEAD_LABELS, TASKS_EMPTY, TASKS_NOTE } from "./Agents";
+import {
+  Agents,
+  AGENTS_EMPTY,
+  AGENTS_NO_CHAT,
+  LEAD_LABELS,
+  LIVE_FALLBACK_MS,
+  taskProgress,
+  TASKS_EMPTY,
+  TASKS_NOTE,
+} from "./Agents";
 
 const QUEUE: Queue = {
   tasks: [
@@ -25,9 +45,27 @@ const QUEUE: Queue = {
   ],
 };
 
+/** The same queue, with helper s2 three steps into its task. */
+const PROGRESS_QUEUE: Queue = {
+  ...QUEUE,
+  tasks: QUEUE.tasks.map((task) =>
+    task.id === "s2" ? { ...task, progress: { steps: 3, lastStep: "read_file", tokens: 1234, seconds: 125 } } : task,
+  ),
+};
+
 describe("Agents", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+    feed.unlisten.mockReset();
+    feed.unlistenGap.mockReset();
+    api.onTasksChanged.mockImplementation((handler) => {
+      feed.changed = handler;
+      return Promise.resolve(feed.unlisten);
+    });
+    api.onEventGap.mockImplementation((handler) => {
+      feed.gap = handler;
+      return Promise.resolve(feed.unlistenGap);
+    });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -209,5 +247,216 @@ describe("Agents", () => {
     view.rerender(<Agents conversationId="shell-c1" active />);
     expect(await screen.findByText("Write the page")).toBeInTheDocument();
     expect(api.getQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("a live panel reads on an event, not every 2 seconds", async () => {
+    vi.useFakeTimers();
+    api.getQueue.mockResolvedValue({ tasks: [], todos: [] });
+    const { unmount } = render(<Agents conversationId="shell-c1" live />);
+    await act(async () => {});
+    expect(api.onTasksChanged).toHaveBeenCalledTimes(1);
+    expect(api.getQueue).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(api.getQueue).toHaveBeenCalledTimes(1);
+
+    await act(async () => feed.changed("shell-c1"));
+    expect(api.getQueue).toHaveBeenCalledTimes(2);
+    await act(async () => feed.changed("other"));
+    expect(api.getQueue).toHaveBeenCalledTimes(2);
+
+    expect(LIVE_FALLBACK_MS).toBe(15000);
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+    });
+    expect(api.getQueue).toHaveBeenCalledTimes(3);
+
+    unmount();
+    expect(feed.unlisten).toHaveBeenCalledTimes(1);
+    expect(feed.unlistenGap).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      feed.changed("shell-c1");
+      vi.advanceTimersByTime(30000);
+    });
+    expect(api.getQueue).toHaveBeenCalledTimes(3);
+  });
+
+  it("a live panel waits for its listener before the first read, and reads again after lost events", async () => {
+    api.getQueue.mockResolvedValue({ tasks: [], todos: [] });
+    let listening: (unlisten: () => void) => void = () => {};
+    api.onTasksChanged.mockImplementation((handler) => {
+      feed.changed = handler;
+      return new Promise((resolve) => {
+        listening = resolve;
+      });
+    });
+    render(<Agents conversationId="shell-c1" live />);
+    await act(async () => {});
+    expect(api.getQueue).not.toHaveBeenCalled();
+    await act(async () => listening(feed.unlisten));
+    expect(api.getQueue).toHaveBeenCalledTimes(1);
+    await act(async () => feed.gap());
+    expect(api.getQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it("a live panel shows the newest read when an older one answers last", async () => {
+    const answers: ((queue: Queue) => void)[] = [];
+    api.getQueue.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+    render(<Agents conversationId="shell-c1" live />);
+    await act(async () => {});
+    await act(async () => feed.changed("shell-c1"));
+    expect(answers).toHaveLength(2);
+    await act(async () => answers[1](QUEUE));
+    expect(screen.getByText("Write the page")).toBeInTheDocument();
+    await act(async () => answers[0]({ tasks: [], todos: [] }));
+    expect(screen.getByText("Write the page")).toBeInTheDocument();
+    expect(screen.queryByText(TASKS_EMPTY)).toBeNull();
+  });
+
+  it("a panel that is not live keeps the 2 second read", async () => {
+    vi.useFakeTimers();
+    api.getQueue.mockResolvedValue({ tasks: [], todos: [] });
+    render(<Agents conversationId="shell-c1" />);
+    await act(async () => {});
+    expect(api.getQueue).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(api.getQueue).toHaveBeenCalledTimes(2);
+    expect(api.onTasksChanged).not.toHaveBeenCalled();
+    expect(api.onEventGap).not.toHaveBeenCalled();
+  });
+
+  it("a panel that turns live reads once more, then only on events", async () => {
+    vi.useFakeTimers();
+    api.getQueue.mockResolvedValue({ tasks: [], todos: [] });
+    const view = render(<Agents conversationId="shell-c1" />);
+    await act(async () => {});
+    expect(api.getQueue).toHaveBeenCalledTimes(1);
+    view.rerender(<Agents conversationId="shell-c1" live />);
+    await act(async () => {});
+    expect(api.getQueue).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      vi.advanceTimersByTime(6000);
+    });
+    expect(api.getQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it("says a helper's progress in one line", () => {
+    expect(taskProgress({ steps: 3, lastStep: "read_file", tokens: 1234, seconds: 125 })).toBe(
+      "Step 3: read_file · 1.2k tokens · 2m 5s",
+    );
+    expect(taskProgress({ steps: 0, lastStep: "", tokens: 0, seconds: 3 })).toBe("3s");
+    expect(taskProgress({ steps: 1, lastStep: "shell", tokens: 950, seconds: 42 })).toBe(
+      "Step 1: shell · 950 tokens · 42s",
+    );
+  });
+
+  it("the Tasks panel shows a helper's progress on its task and on its own row, with one Details", async () => {
+    api.getQueue.mockResolvedValue(PROGRESS_QUEUE);
+    render(<Agents conversationId="shell-c1" />);
+
+    const tasks = await screen.findByRole("list", { name: "Tasks" });
+    expect(within(tasks).getAllByRole("listitem").map((row) => row.textContent)).toEqual([
+      "Read the specDone",
+      "Write the pageRunning · helper s2Step 3: read_file · 1.2k tokens · 2m 5s",
+    ]);
+    const hub = screen.getByRole("list", { name: "Helpers and commands" });
+    expect(within(hub).getAllByRole("listitem").map((row) => row.textContent)).toEqual([
+      "cargo test --workspaceRunning · t1Stop",
+      "failed to fetch the docsFailed · s2Step 3: read_file · 1.2k tokens · 2m 5sStopDetails",
+      "npm run buildFailed · t3",
+      "Monitor: build logDone · m4",
+    ]);
+    expect(screen.getAllByRole("button", { name: /details$/ }).map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Helper s2 details",
+    ]);
+  });
+
+  it("a helper that has ended keeps its Details and loses its Stop", async () => {
+    api.getQueue.mockResolvedValue({
+      todos: [],
+      tasks: [
+        {
+          id: "s1",
+          title: "write the session note",
+          status: "done",
+          live: false,
+          progress: { steps: 1, lastStep: "read_file", tokens: 0, seconds: 61 },
+        },
+      ],
+    });
+    render(<Agents conversationId="shell-c1" />);
+    const row = await screen.findByRole("listitem", { name: "write the session note" });
+    expect(row.textContent).toBe("write the session noteDone · s1Step 1: read_file · 1m 1sDetails");
+  });
+
+  it("Details opens the helper's steps and result, and Close shuts it", async () => {
+    api.getQueue.mockResolvedValue(PROGRESS_QUEUE);
+    api.getTaskDetail.mockResolvedValue({ steps: ["read_file", "shell"], result: "the answer" });
+    render(<Agents conversationId="shell-c1" />);
+
+    const opener = await screen.findByRole("button", { name: "Helper s2 details" });
+    await userEvent.click(opener);
+    expect(api.getTaskDetail).toHaveBeenCalledTimes(1);
+    expect(api.getTaskDetail).toHaveBeenCalledWith("shell-c1", "s2");
+    const dialog = await screen.findByRole("dialog", { name: "Helper s2" });
+    const steps = await within(dialog).findByRole("list", { name: "Steps" });
+    expect(within(steps).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["read_file", "shell"]);
+    expect(within(dialog).getByRole("region", { name: "Result" }).textContent).toBe("the answer");
+
+    // Tab stays inside the window: Close, the result, Close again.
+    const close = within(dialog).getByRole("button", { name: "Close" });
+    expect(close).toHaveFocus();
+    await userEvent.tab();
+    expect(within(dialog).getByRole("region", { name: "Result" })).toHaveFocus();
+    await userEvent.tab();
+    expect(close).toHaveFocus();
+
+    await userEvent.click(close);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(opener).toHaveFocus();
+  });
+
+  it("the details window shows a result as plain text, says when there is none, and closes on Escape", async () => {
+    api.getQueue.mockResolvedValue(PROGRESS_QUEUE);
+    api.getTaskDetail.mockResolvedValueOnce({ steps: [], result: "" });
+    render(<Agents conversationId="shell-c1" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Helper s2 details" }));
+    const empty = await screen.findByRole("dialog", { name: "Helper s2" });
+    expect(await within(empty).findByText("No steps yet.")).toBeInTheDocument();
+    expect(within(empty).getByRole("region", { name: "Result" }).textContent).toBe("No result yet.");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    api.getTaskDetail.mockResolvedValueOnce({ steps: ["shell"], result: "# done\n<b>bold</b> [a](https://example.com)" });
+    await userEvent.click(screen.getByRole("button", { name: "Helper s2 details" }));
+    const dialog = await screen.findByRole("dialog", { name: "Helper s2" });
+    const result = await within(dialog).findByRole("region", { name: "Result" });
+    expect(result.textContent).toBe("# done\n<b>bold</b> [a](https://example.com)");
+    expect(result.children).toHaveLength(0);
+  });
+
+  it("the details window shows a refused read", async () => {
+    api.getQueue.mockResolvedValue(PROGRESS_QUEUE);
+    api.getTaskDetail.mockRejectedValue("task s2 not found");
+    render(<Agents conversationId="shell-c1" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Helper s2 details" }));
+    const dialog = await screen.findByRole("dialog", { name: "Helper s2" });
+    expect(await within(dialog).findByRole("status")).toHaveTextContent("task s2 not found");
+    expect(within(dialog).queryByRole("region", { name: "Result" })).toBeNull();
+  });
+
+  it("the Agents page shows no progress line and no Details", async () => {
+    api.getQueue.mockResolvedValue(PROGRESS_QUEUE);
+    render(<Agents conversationId="shell-c1" onOpenChat={() => {}} />);
+
+    const row = await screen.findByRole("listitem", { name: "failed to fetch the docs" });
+    expect(row.textContent).toBe("failed to fetch the docsFailed · s2Stop");
+    expect(screen.queryByRole("button", { name: "Helper s2 details" })).toBeNull();
+    expect(document.querySelector(".task-progress")).toBeNull();
   });
 });

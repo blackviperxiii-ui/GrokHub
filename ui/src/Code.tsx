@@ -202,7 +202,7 @@ export function Code({
           onOpenPalette={onOpenPalette}
           grokSignIn={grokSignIn}
         />
-        <Agents conversationId={session} active={shown} />
+        <Agents conversationId={session} active={shown} live={lead} />
       </aside>
     </div>
   );

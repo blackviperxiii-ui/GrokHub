@@ -3691,6 +3691,33 @@ label.toggle-row {
   color: var(--danger-text);
 }
 
+/* A helper's step, tokens and time: never the failed row's red. */
+.card.agent .card-status.task-progress {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+/* A helper's result in its details window: plain text that scrolls. */
+.task-steps {
+  margin: 0;
+  padding-left: 24px;
+}
+
+.task-result {
+  max-height: 40vh;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-caption);
+}
+
+.task-result:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .card.agent.completed .card-title,
 .card.agent.cancelled .card-title,
 .card.agent.done .card-title,

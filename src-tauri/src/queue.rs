@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use grokhub_agent::{TaskRow, TaskState};
+use grokhub_agent::{TaskProgress, TaskRow, TaskState};
 use serde::Serialize;
 
 /// A background task's status on the page.
@@ -24,6 +24,40 @@ pub struct Task {
     pub status: Status,
     /// Still going, so Stop has something to stop.
     pub live: bool,
+    /// A helper's progress, when this app watched it run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<Progress>,
+}
+
+/// How far a helper has got: its tool steps, the last tool's name, the
+/// tokens it used and the seconds it has run (or ran, once it ended).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    pub steps: u32,
+    pub last_step: String,
+    pub tokens: u64,
+    pub seconds: u64,
+}
+
+/// A helper's progress as the page shows it, with its clock read at `now_ms`.
+fn progress_of(progress: &TaskProgress, now_ms: u64) -> Progress {
+    let end = progress.ended_ms.unwrap_or(now_ms);
+    Progress {
+        steps: progress.steps,
+        last_step: progress.last_step.clone(),
+        tokens: progress.tokens,
+        seconds: end.saturating_sub(progress.started_ms) / 1000,
+    }
+}
+
+/// Tasks → Details: a helper's steps, by tool name and oldest first, and its
+/// result as plain text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskDetail {
+    pub steps: Vec<String>,
+    pub result: String,
 }
 
 /// One `todo_write` row: "pending", "in_progress", "completed" or "cancelled".
@@ -125,12 +159,10 @@ pub fn status(row: &TaskRow) -> Status {
 /// looking does not open a task hub for it.
 pub fn queue(config_dir: &Path, conversation_id: &str) -> Queue {
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
-    let live = grokhub_agent::session_is_live(conversation_id);
-    let rows = if live {
-        grokhub_agent::hub_for(conversation_id).rows()
-    } else {
-        Vec::new()
-    };
+    let hub = grokhub_agent::session_is_live(conversation_id)
+        .then(|| grokhub_agent::hub_for(conversation_id));
+    let rows = hub.as_ref().map(|hub| hub.rows()).unwrap_or_default();
+    let now_ms = grokhub_core::now_ms();
     let needs_you = crate::helper_asks::needs_you(conversation_id);
     let working = crate::helper_asks::in_turn(conversation_id);
     let todos = grokhub_agent::todos_for(conversation_id)
@@ -155,9 +187,27 @@ pub fn queue(config_dir: &Path, conversation_id: &str) -> Queue {
             title: row.title.clone(),
             status: status(row),
             live: row.state == TaskState::Running,
+            progress: hub
+                .as_ref()
+                .and_then(|hub| hub.progress(&row.id))
+                .map(|progress| progress_of(&progress, now_ms)),
         })
         .collect();
     Queue { todos, tasks }
+}
+
+/// One task's steps and result. Reading them takes nothing from the session
+/// that started the task: its result still waits there.
+pub fn detail(conversation_id: &str, task_id: &str) -> Result<TaskDetail, String> {
+    let id = task_id.trim();
+    if !grokhub_agent::session_is_live(conversation_id) {
+        return Err(format!("task {id} not found"));
+    }
+    let peek = grokhub_agent::hub_for(conversation_id).peek(id)?;
+    Ok(TaskDetail {
+        steps: peek.steps,
+        result: peek.result,
+    })
 }
 
 /// Stops one task, or with no `task_id` halts every task, monitor and
@@ -199,6 +249,7 @@ mod tests {
             title: title.into(),
             status,
             live,
+            progress: None,
         }
     }
 
@@ -465,6 +516,93 @@ mod tests {
         );
         grokhub_agent::forget_session(&id);
         let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_helpers_clock_runs_until_it_ends() {
+        let running = TaskProgress {
+            started_ms: 1_000,
+            ended_ms: None,
+            steps: 2,
+            last_step: "shell".into(),
+            tokens: 750,
+        };
+        assert_eq!(
+            progress_of(&running, 43_500),
+            Progress {
+                steps: 2,
+                last_step: "shell".into(),
+                tokens: 750,
+                seconds: 42,
+            }
+        );
+        let ended = TaskProgress {
+            ended_ms: Some(11_000),
+            ..running.clone()
+        };
+        assert_eq!(progress_of(&ended, 43_500).seconds, 10);
+        // A clock that reads before the start gives 0, not a wrapped number.
+        assert_eq!(progress_of(&running, 500).seconds, 0);
+    }
+
+    #[test]
+    fn a_task_carries_progress_only_when_it_has_some() {
+        let mut plain = task("t1", "x", Status::Running, true);
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"id":"t1","title":"x","status":"running","live":true}"#
+        );
+        plain.progress = Some(Progress {
+            steps: 2,
+            last_step: "shell".into(),
+            tokens: 750,
+            seconds: 42,
+        });
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"id":"t1","title":"x","status":"running","live":true,"progress":{"steps":2,"lastStep":"shell","tokens":750,"seconds":42}}"#
+        );
+    }
+
+    #[test]
+    fn details_for_a_chat_with_no_tasks_names_the_task() {
+        assert_eq!(
+            detail("no-such-chat", "s1"),
+            Err("task s1 not found".into())
+        );
+    }
+
+    #[test]
+    fn details_show_a_helpers_result_and_leave_it_for_the_session() {
+        let id = format!("queue-detail-{}", grokhub_core::now_ms());
+        let hub = grokhub_agent::hub_for(&id);
+        hub.register_agent(None, "task-1: Add the parser", Arc::new(|| {}))
+            .unwrap();
+        assert_eq!(
+            detail(&id, "s1"),
+            Ok(TaskDetail {
+                steps: Vec::new(),
+                result: String::new(),
+            })
+        );
+        hub.finish_agent("s1", "the answer");
+        let want = TaskDetail {
+            steps: Vec::new(),
+            result: "the answer".into(),
+        };
+        assert_eq!(detail(&id, " s1 "), Ok(want.clone()));
+        assert_eq!(detail(&id, "s1"), Ok(want));
+        assert_eq!(
+            serde_json::to_string(&detail(&id, "s1").unwrap()).unwrap(),
+            r#"{"steps":[],"result":"the answer"}"#
+        );
+        // The session that started the helper still has its result to read.
+        assert_eq!(hub.drain_notices().len(), 1);
+        assert_eq!(
+            detail(&id, "s9"),
+            Err("No task with id s9 was started in this chat. The ids started in this chat are: s1.".into())
+        );
+        grokhub_agent::forget_session(&id);
     }
 
     #[test]
