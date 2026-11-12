@@ -46,7 +46,8 @@ pub fn older_spots(home: Option<&Path>, previous: Option<&Path>) -> Vec<(PathBuf
             UserFolder::Recordings,
         ));
         spots.push((
-            home.join("GrokHub-Work").join("imagine"),
+            home.join(format!("{}-Work", grokhub_core::brand::INTERNAL_ID))
+                .join("imagine"),
             UserFolder::Images,
         ));
     }
