@@ -144,8 +144,7 @@ mod tests {
     }
 
     fn steam_with_cs2(root: &Path) -> PathBuf {
-        let cfg = root
-            .join("steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg");
+        let cfg = root.join("steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg");
         fs::create_dir_all(&cfg).unwrap();
         fs::write(cfg.join("autoexec.cfg"), "bind x noclip").unwrap();
         root.to_path_buf()
