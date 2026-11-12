@@ -8,6 +8,7 @@ import {
   type PermissionPage,
   type RuleKind,
 } from "./api";
+import { Scopes } from "./Scopes";
 
 export const RULES_NOTE =
   "Deny wins over ask, and ask wins over allow. Dangerous commands still ask, including after Allow always.";
@@ -166,6 +167,7 @@ export function Permissions() {
           ))}
         </ul>
       )}
+      <Scopes />
     </div>
   );
 }

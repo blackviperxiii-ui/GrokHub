@@ -92,6 +92,7 @@ pub mod remote_devices;
 pub mod remote_tls;
 #[cfg(desktop)]
 pub mod scheduler;
+pub mod scopes;
 pub mod screen_record;
 pub mod screenshot_offer;
 pub mod settings;
@@ -5386,6 +5387,10 @@ pub fn run() {
             journal_act,
             journal_to_mission,
             get_permissions,
+            scopes::get_scopes,
+            scopes::allow_scope,
+            scopes::revoke_scope,
+            scopes::pick_scope_folder,
             add_permission_rule,
             remove_permission_rule,
             remember_grant,
