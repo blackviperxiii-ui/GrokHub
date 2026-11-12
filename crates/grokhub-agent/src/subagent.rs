@@ -19,6 +19,7 @@ use crate::gate::{Gate, PermitWait};
 use crate::run::{HaltCheck, LoopEvent, LoopIn, SteerQueue, StopReason};
 use crate::tasks::TaskHub;
 use crate::tools::{DesktopOps, ToolOutput};
+use crate::work::{self, root_session, Work};
 use crate::{CancelToken, InputItem, ModelClient, Usage};
 
 const DEPTH_LIMIT: u32 = 2;
@@ -87,11 +88,6 @@ pub fn requeue_side_events(events: Vec<SideEvent>) {
     for event in events.into_iter().rev() {
         queue.push_front(event);
     }
-}
-
-/// `root/s1/s2` -> `root`. Child conversation ids nest under the root session.
-fn root_session(session: &str) -> &str {
-    session.split('/').next().unwrap_or(session)
 }
 
 pub fn drain_side_events() -> Vec<SideEvent> {
@@ -203,6 +199,12 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         Ok(spec) => spec,
         Err(err) => return (ToolOutput::err(err), Usage::default()),
     };
+    if spec.worktree && call.depth > 0 {
+        return (
+            ToolOutput::err("a helper cannot start worktree helpers; ask the lead to start it"),
+            Usage::default(),
+        );
+    }
     // Item 34: with boundary routing on, a general helper needs a brief and
     // runs fresh on the cheap lane rather than forking the chat.
     let briefed = !spec.explore
@@ -232,13 +234,10 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     };
     let child_cancel = CancelToken::child_of(call.cancel);
     let steer = SteerQueue::new();
-    let wt_cell: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
     let id_cell = Arc::new(Mutex::new(String::new()));
     let kill_cancel = child_cancel.clone();
-    let kill_wt = Arc::clone(&wt_cell);
     let kill_id = Arc::clone(&id_cell);
     let kill_hub = Arc::clone(&tasks);
-    let parent_ws = call.workspace.to_path_buf();
     let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         kill_cancel.cancel();
         let id = kill_id
@@ -248,13 +247,6 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         if !id.is_empty() {
             kill_hub.kill_owner(&id);
         }
-        if let Some(path) = kill_wt
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clone()
-        {
-            remove_worktree(&parent_ws, &path);
-        }
     });
     let id = match tasks.register_agent(call.agent_id.map(str::to_string), &spec.description, kill)
     {
@@ -263,13 +255,23 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     };
     *id_cell.lock().unwrap_or_else(|err| err.into_inner()) = id.clone();
     remember_steer(&steer_key(&tasks, &id), steer.clone());
-    let worktree = if spec.worktree {
-        prune_old_worktrees(call.workspace, &crate::perm::config_dir().join("worktrees"));
-        match prepare_worktree(call.workspace, call.session, &id) {
-            Ok(path) => {
-                *wt_cell.lock().unwrap_or_else(|err| err.into_inner()) = Some(path.clone());
-                Some(path)
-            }
+    let title = title_of(&spec.description, &spec.prompt);
+    // A worktree helper works in its own tree of the project. What it
+    // changes there is sealed when it ends and kept until the person merges
+    // or discards it.
+    let opened = if spec.worktree {
+        let root = work::root();
+        work::prune(&root);
+        match work::open(
+            &root,
+            call.workspace,
+            call.session,
+            tasks.nonce(),
+            &id,
+            &title,
+            spec.description.trim(),
+        ) {
+            Ok(opened) => Some(opened),
             Err(err) => {
                 forget_steer(&steer_key(&tasks, &id));
                 let _ = tasks.kill(&id);
@@ -279,15 +281,16 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     } else {
         None
     };
-    let title = title_of(&spec.description, &spec.prompt);
     (call.on_event)(LoopEvent::Task {
         id: id.clone(),
         title: title.clone(),
         done: false,
     });
-    let workspace = worktree
-        .clone()
-        .unwrap_or_else(|| call.workspace.to_path_buf());
+    let running = running_text(&id, opened.as_ref().map(|opened| &opened.work));
+    let (workspace, job_work) = match opened {
+        Some(opened) => (opened.workspace, Some((opened.work, opened.live))),
+        None => (call.workspace.to_path_buf(), None),
+    };
     let conversation_id = format!("{}/{}", call.session, id);
     let kind_name = if spec.explore { "explore" } else { "general" };
     // A plain general child of the chat forks it: same system, tools and
@@ -297,7 +300,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         && !briefed
         && !spec.explore
         && spec.persona.trim().is_empty()
-        && worktree.is_none())
+        && job_work.is_none())
     .then(|| parent_request(call.session))
     .flatten()
     .filter(|req| req.model == call.model);
@@ -347,13 +350,11 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         config: crate::perm::pinned_config(),
         class: child_class(crate::route::live::current_class(), briefed),
         ticket,
+        work: job_work,
     };
     if spec.background {
         thread::spawn(move || run_job(job, None));
-        return (
-            ToolOutput::ok(running_text(&id, worktree.as_deref())),
-            Usage::default(),
-        );
+        return (ToolOutput::ok(running), Usage::default());
     }
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || run_job(job, Some(tx)));
@@ -381,6 +382,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             usage: Usage::default(),
             text: "subagent ended without a result".into(),
             looked_at: Vec::new(),
+            work: None,
         }
     });
     (call.on_event)(LoopEvent::Task {
@@ -388,21 +390,12 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         title,
         done: true,
     });
-    // A worktree the helper left clean is removed; one with changes stays for
-    // the parent to look at and copy from.
-    let kept = worktree.filter(|path| {
-        let changed = worktree_changed(path);
-        if !changed {
-            remove_worktree(call.workspace, path);
-        }
-        changed
-    });
     // The helper fenced its result on its own thread; this run has now read
     // it, and what the helper read from outside with it.
     if crate::tools::fence::holds_outside(&done.text) {
         crate::tools::fence::note_untrusted_seen();
     }
-    let text = format_result(&done.text, &id, kept.as_deref(), &done.stop);
+    let text = format_result(&done.text, &id, done.work.as_deref(), &done.stop);
     (ToolOutput::ok(text), done.usage)
 }
 
@@ -483,6 +476,9 @@ struct ChildJob {
     class: Option<&'static str>,
     /// Its place in the spawn policy's counts, freed when the job ends.
     ticket: crate::subagent_policy::Ticket,
+    /// A worktree helper's record and the lock on its tree, held until its
+    /// work is sealed.
+    work: Option<(Work, work::Live)>,
 }
 
 struct ChildDone {
@@ -491,6 +487,8 @@ struct ChildDone {
     text: String,
     /// Files and pages the helper read, for the parent to check its claims.
     looked_at: Vec<String>,
+    /// A worktree helper's record once its work is sealed.
+    work: Option<Box<Work>>,
 }
 
 enum ChildNote {
@@ -508,11 +506,29 @@ impl HaltCheck for HubHalt {
     }
 }
 
-fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
+fn run_job(mut job: ChildJob, tx: Option<Sender<ChildNote>>) {
     let _origin = crate::harness::OriginScope::enter(job.origin);
     let _trace = crate::tools::fence::enter(&job.fence);
     let _config = job.config.clone().map(crate::perm::ConfigGuard::set);
     let mut done = run_child_retrying(&job, &tx);
+    // A worktree helper's work is sealed however the helper ended, once its
+    // background commands and its own helpers are dead.
+    let work_line = job.work.take().map(|(record, live)| {
+        job.tasks.kill_owner(&job.agent_id);
+        let tree = record.tree.clone();
+        let ended = ended_of(&done.stop);
+        match work::settle(&work::root(), &job.parent_session, record, ended, live) {
+            Ok(settled) => {
+                let line = work::result_line(&settled);
+                done.work = Some(Box::new(settled));
+                line
+            }
+            Err(err) => format!(
+                "held (the seal could not be recorded: {err}): the worktree is kept at {}.",
+                tree.display()
+            ),
+        }
+    });
     job.ticket.spent(
         done.usage
             .input_tokens
@@ -535,6 +551,13 @@ fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
             done.text.push('\n');
             done.text.push_str(&listed);
         }
+    }
+    // What became of the work is the last line, outside the fence.
+    if let Some(line) = work_line {
+        if !done.text.is_empty() {
+            done.text.push('\n');
+        }
+        done.text.push_str(&line);
     }
     let cancelled = matches!(done.stop, StopReason::Cancelled | StopReason::Halted);
     job.tasks.note_end(&job.agent_id, &done.usage);
@@ -572,9 +595,11 @@ fn run_child_retrying(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDo
             usage: Usage::default(),
             text: String::new(),
             looked_at: Vec::new(),
+            work: None,
         },
         Err(_) => attempt().unwrap_or_else(|_| ChildDone {
             looked_at: Vec::new(),
+            work: None,
             stop: StopReason::Error(CRASHED_TWICE.into()),
             usage: Usage::default(),
             text: String::new(),
@@ -674,6 +699,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         usage: out.usage,
         text: child_text(&history[own..]),
         looked_at: looked_at(&history[own..]),
+        work: None,
     }
 }
 
@@ -1013,10 +1039,14 @@ fn title_of(description: &str, prompt: &str) -> String {
     }
 }
 
-fn running_text(id: &str, worktree: Option<&Path>) -> String {
+fn running_text(id: &str, work: Option<&Work>) -> String {
     let mut text = format!("task id: {id}\nstatus: running");
-    if let Some(path) = worktree {
-        text.push_str(&format!("\nworktree: {}", path.display()));
+    if let Some(work) = work {
+        text.push_str(&format!(
+            "\nworktree: {}\nwork: {}",
+            work.tree.display(),
+            work.key
+        ));
     }
     text
 }
@@ -1049,7 +1079,19 @@ fn guard_result(workspace: &Path, session: &str, id: &str, text: &str) -> String
     crate::tools::fence::fence_helper_result(&body)
 }
 
-fn format_result(text: &str, id: &str, worktree: Option<&Path>, stop: &StopReason) -> String {
+/// How a worktree helper's record says the helper ended. A foreground helper
+/// past its time arrives here as cancelled.
+fn ended_of(stop: &StopReason) -> work::Ended {
+    match stop {
+        StopReason::EndTurn => work::Ended::Done,
+        StopReason::MaxTurns => work::Ended::StepLimit,
+        StopReason::Cancelled => work::Ended::Stopped,
+        StopReason::Halted => work::Ended::Halted,
+        StopReason::Error(err) => work::Ended::Failed(err.clone()),
+    }
+}
+
+fn format_result(text: &str, id: &str, work: Option<&Work>, stop: &StopReason) -> String {
     let mut out = text.trim().to_string();
     if !out.is_empty() {
         out.push('\n');
@@ -1057,9 +1099,14 @@ fn format_result(text: &str, id: &str, worktree: Option<&Path>, stop: &StopReaso
     out.push_str(&format!("status: {}", status_line(stop)));
     out.push('\n');
     out.push_str(&format!("task id: {id}"));
-    if let Some(path) = worktree {
+    if let Some(work) = work {
+        // An empty work's tree is gone.
+        if work.state != work::WorkState::Empty {
+            out.push('\n');
+            out.push_str(&format!("worktree: {}", work.tree.display()));
+        }
         out.push('\n');
-        out.push_str(&format!("worktree: {}", path.display()));
+        out.push_str(&format!("work: {}", work.key));
     }
     out
 }
@@ -1082,118 +1129,6 @@ fn usage_empty(usage: &Usage) -> bool {
         && usage.output_tokens == 0
         && usage.reasoning_tokens == 0
         && usage.cost_in_usd_ticks == 0
-}
-
-fn path_part(raw: &str) -> String {
-    let mut out: String = raw
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .take(80)
-        .collect();
-    if out.is_empty() {
-        out.push_str("session");
-    }
-    out
-}
-
-fn prepare_worktree(workspace: &Path, session: &str, id: &str) -> Result<PathBuf, String> {
-    let inside = git(workspace, &["rev-parse", "--is-inside-work-tree"])?;
-    let stderr = String::from_utf8_lossy(&inside.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&inside.stdout).trim().to_string();
-    if !inside.status.success() || stdout != "true" {
-        if stderr.is_empty() || stderr.contains("not a git repository") {
-            return Err(
-                "workspace is not a git repository; worktree isolation was not used".into(),
-            );
-        }
-        return Err(format!("git worktree isolation failed: {stderr}"));
-    }
-    let dest = crate::perm::config_dir()
-        .join("worktrees")
-        .join(path_part(session))
-        .join(id);
-    if dest.exists() {
-        return Err(format!("worktree path already exists: {}", dest.display()));
-    }
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| format!("worktree dir: {err}"))?;
-    }
-    let added = git(
-        workspace,
-        &["worktree", "add", "--detach", &dest.display().to_string()],
-    )?;
-    if !added.status.success() {
-        let err = String::from_utf8_lossy(&added.stderr).trim().to_string();
-        let _ = std::fs::remove_dir_all(&dest);
-        return Err(format!("git worktree add failed: {err}"));
-    }
-    Ok(dest)
-}
-
-fn remove_worktree(workspace: &Path, dest: &Path) {
-    let _ = git(
-        workspace,
-        &["worktree", "remove", "--force", &dest.display().to_string()],
-    );
-    let _ = std::fs::remove_dir_all(dest);
-}
-
-/// True when the helper changed, added or removed a file in its worktree.
-/// A worktree git can't read counts as changed, so nothing is lost.
-fn worktree_changed(path: &Path) -> bool {
-    match git(path, &["status", "--porcelain"]) {
-        Ok(out) if out.status.success() => !out.stdout.iter().all(u8::is_ascii_whitespace),
-        _ => true,
-    }
-}
-
-/// Helper worktrees older than this are removed when the next one is made.
-const WORKTREE_KEEP: Duration = Duration::from_secs(3 * 24 * 60 * 60);
-
-/// `root/<session>/<id>` folders untouched for [`WORKTREE_KEEP`] are removed,
-/// and git forgets them.
-fn prune_old_worktrees(workspace: &Path, root: &Path) {
-    let Ok(sessions) = std::fs::read_dir(root) else {
-        return;
-    };
-    let mut removed = false;
-    for session in sessions.flatten() {
-        let Ok(children) = std::fs::read_dir(session.path()) else {
-            continue;
-        };
-        for child in children.flatten() {
-            let old = child
-                .metadata()
-                .and_then(|meta| meta.modified())
-                .ok()
-                .and_then(|at| at.elapsed().ok())
-                .is_some_and(|age| age > WORKTREE_KEEP);
-            if old {
-                remove_worktree(workspace, &child.path());
-                removed = true;
-            }
-        }
-    }
-    if removed {
-        let _ = git(workspace, &["worktree", "prune"]);
-    }
-}
-
-fn git(workspace: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    // Hooks and fsmonitor off: a sandboxed command can plant either in the
-    // workspace's repository, and this runs with no sandbox.
-    grokhub_core::git_cmd::git()
-        .arg("-C")
-        .arg(workspace)
-        .args(args)
-        .output()
-        .map_err(|err| format!("git failed to start: {err}"))
 }
 
 fn side_queue() -> &'static Mutex<std::collections::VecDeque<SideEvent>> {
@@ -1399,6 +1334,7 @@ mod tests {
     }
     use crate::gate::{ClosedPermits, Decision, Gate, PermAnswer, PermMode, PermitWait, Waited};
     use crate::tools::{self, READ_ONLY_PHASE};
+    use crate::work::test_support::git_repo;
     use crate::{ClientError, FunctionCall, InputItem, ResponsesRequest, TurnOutput};
     use std::collections::{HashMap, VecDeque};
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -2685,6 +2621,22 @@ mod tests {
             "from-child"
         );
         assert!(wt.exists(), "a successful subagent keeps its worktree");
+        // The work is sealed and waits for the person.
+        let key = task_line(&text, "work:").expect(&text);
+        let records = work::work_for(&sid).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].key, key);
+        assert_eq!(records[0].state, work::WorkState::Ready);
+        assert_eq!(records[0].ended, Some(work::Ended::Done));
+        assert_eq!(records[0].files, ["child.txt"]);
+        assert_eq!(records[0].tree, wt);
+        assert!(
+            text.contains(&format!(
+                "ready to merge: 1 file (1 new, 0 changed, 0 deleted). work: {key}. It is not in \
+                 the project: the files are in the worktree."
+            )),
+            "{text}"
+        );
 
         let sid = session("wtcancel");
         let parent_id = sid.clone();
@@ -2702,6 +2654,17 @@ mod tests {
             }
             if depth == 0 {
                 return Ok(text_turn("done", Usage::default()));
+            }
+            // The helper writes a file first and then never finishes.
+            if n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "w",
+                        "write",
+                        r#"{"path":"child.txt","content":"half-done"}"#,
+                    )],
+                    Usage::default(),
+                ));
             }
             block_until_cancel(cancel, &AtomicBool::new(false))
         });
@@ -2722,42 +2685,57 @@ mod tests {
             "worktree should exist while the child runs"
         );
         let id = task_line(&text, "task id:").expect(&text);
-        let hub = crate::tasks::hub_for(&sid);
-        hub.kill(&id).expect("kill");
+        let key = task_line(&text, "work:").expect(&text);
         let start = Instant::now();
-        while doomed.exists() && start.elapsed() < Duration::from_secs(5) {
+        while !doomed.join("child.txt").exists() && start.elapsed() < Duration::from_secs(5) {
             thread::sleep(Duration::from_millis(20));
         }
-        assert!(!doomed.exists(), "cancel removes the worktree");
+        let hub = crate::tasks::hub_for(&sid);
+        hub.kill(&id).expect("kill");
+        // A stopped helper's work is sealed and kept: only the person
+        // removes it.
+        let record = || {
+            work::work_for(&sid)
+                .unwrap()
+                .into_iter()
+                .find(|record| record.key == key)
+                .expect("the record")
+        };
+        let start = Instant::now();
+        while record().ended.is_none() && start.elapsed() < Duration::from_secs(20) {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let stopped = record();
+        assert_eq!(
+            stopped.state,
+            work::WorkState::Held {
+                why: work::Held::Partial
+            }
+        );
+        assert_eq!(stopped.ended, Some(work::Ended::Stopped));
+        assert_eq!(stopped.files, ["child.txt"]);
+        assert_eq!(stopped.tree, doomed);
+        assert!(stopped.tip.is_some());
+        assert_eq!(
+            std::fs::read_to_string(doomed.join("child.txt")).unwrap(),
+            "half-done",
+            "a stop keeps the worktree"
+        );
+        let line = format!(
+            "partial (it was stopped), not merged: 1 file kept. work: {key}. Only the person \
+             can merge partial work."
+        );
+        let start = Instant::now();
+        let mut output = String::new();
+        while !output.contains(&line) && start.elapsed() < Duration::from_secs(5) {
+            output = hub.read_output(&id, 0).unwrap_or_default();
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(output.contains(&line), "{output}");
         assert!(!dir.join("child.txt").exists());
         let _ = std::fs::remove_dir_all(&wt);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&cfg);
-    }
-
-    fn git_repo(dir: &Path) {
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .arg("-c")
-                .arg("safe.directory=*")
-                .arg("-C")
-                .arg(dir)
-                .args(args)
-                .output()
-                .expect("git");
-            assert!(
-                out.status.success(),
-                "{args:?} {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        };
-        git(&["init"]);
-        git(&["config", "user.email", "test@example.com"]);
-        git(&["config", "user.name", "test"]);
-        git(&["config", "commit.gpgsign", "false"]);
-        std::fs::write(dir.join("README"), "hi\n").unwrap();
-        git(&["add", "README"]);
-        git(&["commit", "-m", "init"]);
     }
 
     #[test]
@@ -3151,8 +3129,20 @@ mod tests {
         );
         let text = joined_outputs(&history);
         assert_eq!(task_line(&text, "worktree:"), None, "{text}");
-        let id = task_line(&text, "task id:").expect(&text);
-        let made = cfg.join("worktrees").join(path_part(&sid)).join(&id);
+        assert!(
+            text.lines().any(|line| line.trim() == "no changes"),
+            "{text}"
+        );
+        let key = task_line(&text, "work:").expect(&text);
+        let records = work::work_for(&sid).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].key, key);
+        assert_eq!(records[0].state, work::WorkState::Empty);
+        let made = cfg
+            .join("helper-work")
+            .join(work::path_part(&sid))
+            .join(&key);
+        assert_eq!(records[0].tree, made);
         assert!(
             !made.exists(),
             "a clean worktree is removed: {}",
@@ -3162,8 +3152,79 @@ mod tests {
             !stale.exists(),
             "a worktree older than three days is pruned"
         );
+        assert_eq!(
+            std::fs::read_dir(cfg.join("helper-work").join("oldsession"))
+                .unwrap()
+                .count(),
+            0,
+            "and it is gone from where it was moved to"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_helper_that_asks_for_a_worktree_helper_is_refused() {
+        let dir = scratch("wtnested");
+        git_repo(&dir);
+        let cfg = scratch("wtnestedcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("wtnested");
+        let parent_id = sid.clone();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let child_saw = Arc::clone(&seen);
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            let isolation = if depth == 0 { "none" } else { "worktree" };
+            if depth <= 1 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("write", "general", false, isolation),
+                    )],
+                    Usage::default(),
+                ));
+            }
+            if depth == 1 {
+                // What the helper was told when it asked.
+                child_saw
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push(last_output(req));
+            }
+            Ok(text_turn("done", Usage::default()))
+        });
+        let (_out, _history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let outputs = seen.lock().unwrap_or_else(|err| err.into_inner()).clone();
+        assert_eq!(
+            outputs,
+            ["a helper cannot start worktree helpers; ask the lead to start it"]
+        );
+        assert_eq!(work::work_for(&sid), Ok(Vec::new()));
+        assert!(!cfg.join("helper-work").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn each_way_a_helper_stops_is_recorded_as_how_it_ended() {
+        assert_eq!(ended_of(&StopReason::EndTurn), work::Ended::Done);
+        assert_eq!(ended_of(&StopReason::MaxTurns), work::Ended::StepLimit);
+        assert_eq!(ended_of(&StopReason::Cancelled), work::Ended::Stopped);
+        assert_eq!(ended_of(&StopReason::Halted), work::Ended::Halted);
+        assert_eq!(
+            ended_of(&StopReason::Error(CRASHED_TWICE.into())),
+            work::Ended::Failed("the helper crashed twice and stopped".into())
+        );
     }
 
     #[test]
@@ -3186,6 +3247,7 @@ mod tests {
                 usage: Usage::default(),
                 text: "found two of three".into(),
                 looked_at: Vec::new(),
+                work: None,
             }));
         });
         let past = std::time::Instant::now();

@@ -68,6 +68,7 @@ mod tools;
 mod turn_budget;
 mod unattended;
 pub mod voice_session;
+mod work;
 mod ws_mode;
 pub mod xai_keychain;
 
@@ -177,3 +178,4 @@ pub use tools::{
     WebSearchBackend, WebSearchSettings, READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};
+pub use work::{work_for, Counts, Ended, Held, Landing, Work, WorkState};

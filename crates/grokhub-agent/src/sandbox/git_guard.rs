@@ -16,6 +16,11 @@
 //! points to is not. A `.git` that was replaced or moved is reported, not
 //! put back.
 //!
+//! A worktree helper owns the `.git` file in its tree and could point it
+//! anywhere. For a folder under `<config>/helper-work` the guard never reads
+//! where `.git` leads: it guards the repository folder that was named with
+//! [`pin`] when the tree was made, and nothing once the helper has ended.
+//!
 //! The checks and the work that follows them use paths, so a command that is
 //! still running could swap a link in between the two. Closing that needs
 //! calls that work from an open folder, which this module does not make yet.
@@ -25,6 +30,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 /// Hooks folders are small (the samples are about 25 KB); anything larger is
 /// not copied, and then only the config file is guarded.
@@ -48,6 +54,9 @@ enum DotGit {
     Dir,
     /// A linked worktree's or submodule's pointer file, with its bytes.
     Pointer(Vec<u8>),
+    /// In a helper's tree: no longer the pointer file git wrote there. It is
+    /// the helper's to change, and it is never followed.
+    Other,
 }
 
 /// The repository's config file before the command.
@@ -186,14 +195,75 @@ fn make_link(target: &Path, at: &Path, folder: bool) -> bool {
     }
 }
 
+/// A worktree helper's tree and the repository folder it belongs to.
+struct Pin {
+    /// The tree as it was named, and its real path.
+    tree: PathBuf,
+    real: PathBuf,
+    common: PathBuf,
+}
+
+fn pins() -> &'static Mutex<Vec<Pin>> {
+    static PINS: OnceLock<Mutex<Vec<Pin>>> = OnceLock::new();
+    PINS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Name the repository folder of a helper's tree, for as long as the helper
+/// runs. The helper owns the `.git` file in its tree and could point it
+/// anywhere, so the guard takes the folder from here and never from there.
+pub(crate) fn pin(tree: &Path, common: &Path) {
+    let mut pins = pins().lock().unwrap_or_else(|err| err.into_inner());
+    pins.retain(|pin| pin.tree != tree);
+    pins.push(Pin {
+        tree: tree.to_path_buf(),
+        real: fs::canonicalize(tree).unwrap_or_else(|_| tree.to_path_buf()),
+        common: common.to_path_buf(),
+    });
+}
+
+/// Forget a helper's tree once the helper has ended.
+pub(crate) fn unpin(tree: &Path) {
+    pins()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .retain(|pin| pin.tree != tree);
+}
+
+/// `None` for a folder that is not a helper's. For a folder in a helper's
+/// tree: that tree and its repository folder while the tree is pinned,
+/// `Some(None)` when it is not.
+fn helper_tree(workspace: &Path) -> Option<Option<(PathBuf, PathBuf)>> {
+    let real = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let here = real(workspace);
+    let pinned = pins()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .iter()
+        .find(|pin| here.starts_with(&pin.real) || workspace.starts_with(&pin.tree))
+        .map(|pin| (pin.real.clone(), pin.common.clone()));
+    if pinned.is_some() {
+        return Some(pinned);
+    }
+    let root = crate::work::root();
+    (here.starts_with(real(&root)) || workspace.starts_with(&root)).then_some(None)
+}
+
 /// The repository folder git reads for `workspace`: `.git` itself, or the
 /// common folder of a linked worktree (where its config and hooks live).
 pub fn common_dir(workspace: &Path) -> Option<PathBuf> {
-    read_dot(workspace).map(|(_, common)| common)
+    read_dot(workspace).map(|(_, _, common)| common)
 }
 
-/// What `<workspace>/.git` is, and the repository folder it leads to.
-fn read_dot(workspace: &Path) -> Option<(DotGit, PathBuf)> {
+/// The folder that holds `.git` for `workspace`, what that `.git` is, and
+/// the repository folder it leads to.
+fn read_dot(workspace: &Path) -> Option<(PathBuf, DotGit, PathBuf)> {
+    if let Some(pinned) = helper_tree(workspace) {
+        // A helper's tree: where its `.git` points is never followed.
+        let (tree, common) = pinned?;
+        let dot =
+            read_file(&tree.join(".git"), MAX_POINTER_BYTES).map_or(DotGit::Other, DotGit::Pointer);
+        return Some((tree, dot, common));
+    }
     let dot = workspace.join(".git");
     let (was, git_dir) = match kind(&dot) {
         Kind::Dir => (DotGit::Dir, dot),
@@ -224,7 +294,7 @@ fn read_dot(workspace: &Path) -> Option<(DotGit, PathBuf)> {
         }
         None => git_dir,
     };
-    Some((was, common))
+    Some((workspace.to_path_buf(), was, common))
 }
 
 /// Folders one level down that are checked for a repository of their own,
@@ -240,7 +310,12 @@ pub struct Guard(Vec<Snapshot>);
 /// workspace holds no repository yet (so `git init` and `git clone` work).
 pub fn take(workspace: &Path) -> Option<Guard> {
     let mut snaps: Vec<Snapshot> = take_repo(workspace).into_iter().collect();
-    if let Ok(entries) = fs::read_dir(workspace) {
+    // A helper's tree belongs to one repository, whatever its folders hold.
+    let folders = match helper_tree(workspace) {
+        Some(_) => None,
+        None => fs::read_dir(workspace).ok(),
+    };
+    if let Some(entries) = folders {
         for entry in entries.flatten().take(MAX_CHILD_DIRS) {
             let path = entry.path();
             if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
@@ -287,11 +362,11 @@ pub fn restore(guard: &Guard) -> Option<String> {
 }
 
 fn take_repo(workspace: &Path) -> Option<Snapshot> {
-    let (dot, named) = read_dot(workspace)?;
+    let (holder, dot, named) = read_dot(workspace)?;
     if kind(&named) != Kind::Dir {
         return None;
     }
-    let work = fs::canonicalize(workspace).ok()?;
+    let work = fs::canonicalize(holder).ok()?;
     let common = fs::canonicalize(&named).ok()?;
     let config_path = common.join("config");
     let config = match kind(&config_path) {
@@ -1361,5 +1436,121 @@ mod tests {
             "[core]\n"
         );
         let _ = fs::remove_dir_all(&ws);
+    }
+
+    /// A helper's tree under `<config>/helper-work`, with the project it
+    /// belongs to and a folder a command might point `.git` at.
+    fn helper_tree_of(base: &Path) -> (PathBuf, PathBuf, PathBuf, String) {
+        let (main, _, _) = linked(base);
+        let tree = base.join("cfg").join("helper-work").join("chat").join("k1");
+        fs::create_dir_all(&tree).unwrap();
+        let pointer = format!("gitdir: {}\n", main.join(".git/worktrees/wt").display());
+        fs::write(tree.join(".git"), &pointer).unwrap();
+        let planted = base.join("planted");
+        fs::create_dir_all(planted.join("hooks")).unwrap();
+        fs::write(planted.join("config"), "[planted]\n").unwrap();
+        fs::write(planted.join("hooks/pre-commit"), "#!/bin/sh\nplanted\n").unwrap();
+        (main, tree, planted, pointer)
+    }
+
+    #[test]
+    fn a_helper_tree_is_guarded_through_its_pin_and_its_pointer_is_never_followed() {
+        let base = scratch("pin");
+        let _config = crate::perm::ConfigGuard::set(base.join("cfg"));
+        let (main, tree, planted, pointer) = helper_tree_of(&base);
+        let before = listing(&planted);
+        assert_eq!(
+            before,
+            pairs(&[
+                ("config", "[planted]\n"),
+                ("hooks/pre-commit", "#!/bin/sh\nplanted\n"),
+            ])
+        );
+        // The helper points its `.git` at the planted folder before the
+        // command runs. The guard still takes the pinned repository.
+        let lure = format!("gitdir: {}\n", planted.display());
+        fs::write(tree.join(".git"), &lure).unwrap();
+        pin(&tree, &main.join(".git"));
+        assert_eq!(common_dir(&tree), Some(main.join(".git")));
+        assert_eq!(common_dir(&tree.join("src")), Some(main.join(".git")));
+        let guard = take(&tree).expect("the pinned repository");
+
+        // The command changes the planted folder, the pointer and the
+        // project's config.
+        fs::write(planted.join("config"), "[planted]\n\tchanged = 1\n").unwrap();
+        fs::write(planted.join("hooks/post-checkout"), "#!/bin/sh\n").unwrap();
+        fs::write(tree.join(".git"), &pointer).unwrap();
+        fs::write(main.join(".git/config"), "[core]\n\tsshCommand = evil\n").unwrap();
+        let note = restore(&guard).expect("put back");
+
+        assert!(
+            note.starts_with("The sandbox put back .git and .git/config: "),
+            "{note}"
+        );
+        assert_eq!(
+            listing(&planted),
+            pairs(&[
+                ("config", "[planted]\n\tchanged = 1\n"),
+                ("hooks/post-checkout", "#!/bin/sh\n"),
+                ("hooks/pre-commit", "#!/bin/sh\nplanted\n"),
+            ]),
+            "the folder the pointer named is the command's own: nothing in it is put back"
+        );
+        assert_eq!(fs::read_to_string(tree.join(".git")).unwrap(), lure);
+        assert_eq!(
+            fs::read_to_string(main.join(".git/config")).unwrap(),
+            "[core]\n"
+        );
+
+        // Once the helper has ended the tree leads nowhere.
+        unpin(&tree);
+        assert_eq!(common_dir(&tree), None);
+        assert_eq!(take(&tree), None);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_helper_tree_that_is_not_pinned_is_not_followed_even_with_a_good_pointer() {
+        let base = scratch("unpinned");
+        let _config = crate::perm::ConfigGuard::set(base.join("cfg"));
+        let (main, tree, _planted, _pointer) = helper_tree_of(&base);
+        // Outside `helper-work` the same pointer is followed, as before.
+        let plain = base.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        fs::copy(tree.join(".git"), plain.join(".git")).unwrap();
+        assert_eq!(
+            common_dir(&plain),
+            Some(main.join(".git/worktrees/wt/../.."))
+        );
+
+        assert_eq!(common_dir(&tree), None);
+        assert_eq!(take(&tree), None);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_helper_that_replaced_its_git_file_still_has_the_project_guarded() {
+        let base = scratch("pin-replaced");
+        let _config = crate::perm::ConfigGuard::set(base.join("cfg"));
+        let (main, tree, _planted, _pointer) = helper_tree_of(&base);
+        fs::remove_file(tree.join(".git")).unwrap();
+        fs::create_dir_all(tree.join(".git/hooks")).unwrap();
+        fs::write(tree.join(".git/config"), "[helper]\n").unwrap();
+        pin(&tree, &main.join(".git"));
+        let guard = take(&tree).expect("the pinned repository");
+
+        fs::write(main.join(".git/hooks/pre-commit"), "#!/bin/sh\nevil\n").unwrap();
+        fs::write(tree.join(".git/config"), "[helper]\n\tmore = 1\n").unwrap();
+        let note = restore(&guard);
+
+        assert_eq!(note, Some(put_back(".git/hooks")));
+        assert!(!main.join(".git/hooks/pre-commit").exists());
+        assert_eq!(
+            fs::read_to_string(tree.join(".git/config")).unwrap(),
+            "[helper]\n\tmore = 1\n",
+            "the helper's own repository folder is not the guard's to change"
+        );
+        unpin(&tree);
+        let _ = fs::remove_dir_all(&base);
     }
 }

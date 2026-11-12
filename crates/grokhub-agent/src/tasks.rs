@@ -266,6 +266,9 @@ pub(crate) const UNKNOWN_ID_HINT: &str = "An id comes only from the result of th
 
 pub struct TaskHub {
     inner: Mutex<HubInner>,
+    /// A random id of this hub. A task id (`s2`) starts over with every
+    /// hub, so helper work names the hub that ran it.
+    nonce: String,
 }
 
 /// Where a background command, subagent or monitor is.
@@ -321,7 +324,13 @@ impl TaskHub {
                 halted: false,
                 pending_usage: crate::Usage::default(),
             }),
+            nonce: crate::work::random_base36(12),
         })
+    }
+
+    /// This hub's random id: twelve characters of `0-9a-z`.
+    pub fn nonce(&self) -> &str {
+        &self.nonce
     }
 
     pub fn session_id(&self) -> String {
@@ -1386,6 +1395,21 @@ mod tests {
             output_tokens: 150,
             ..crate::Usage::default()
         })
+    }
+
+    #[test]
+    fn each_hub_has_its_own_twelve_character_nonce() {
+        let first = TaskHub::new("same-chat");
+        let second = TaskHub::new("same-chat");
+        for hub in [&first, &second] {
+            assert_eq!(hub.nonce().len(), 12);
+            assert!(hub
+                .nonce()
+                .bytes()
+                .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase()));
+        }
+        assert_ne!(first.nonce(), second.nonce());
+        assert_eq!(first.nonce(), first.nonce());
     }
 
     #[test]
