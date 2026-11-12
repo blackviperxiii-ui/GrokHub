@@ -913,9 +913,11 @@ async function plan(s, workspace) {
   if (!refused || !refused.body.includes("read-only")) throw new Error("the write was not refused as read-only");
   await shot(s, "plan-card");
   console.log("plan mode refused the write and showed the plan");
+  // Since #1838 a plan card with reply chips offers "Yes, go" in place of
+  // the Approve plan button; either one approves.
   const approve = await wd("POST", `${s}/element/${card}/element`, {
     using: "xpath",
-    value: ".//button[normalize-space()='Approve plan']",
+    value: ".//button[normalize-space()='Approve plan' or normalize-space()='Yes, go']",
   });
   await wd("POST", `${s}/element/${approve[ELEMENT]}/click`, {});
   await waitFor("the reply after the plan", async () => {
