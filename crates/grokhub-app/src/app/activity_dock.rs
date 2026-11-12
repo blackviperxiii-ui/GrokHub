@@ -703,7 +703,7 @@ impl Cabin {
             .map(|i| self.queued_steers_here(i))
             .collect();
         let mut open_card: Option<String> = None;
-        let list = egui::Area::new(egui::Id::new("activity-dock-list"))
+        let list = egui::Area::new(egui::Id::unique("activity-dock-list"))
             .order(egui::Order::Foreground)
             .fixed_pos(egui::pos2(
                 top.right() - 340.0,

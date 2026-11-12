@@ -470,6 +470,22 @@ impl Cabin {
         self.attach_kind = None;
     }
 
+    /// Write an egui [`ColorImage`] (from `Event::PasteImage`) to a temp PNG.
+    pub(super) fn write_paste_image(img: &ColorImage) -> Option<PathBuf> {
+        let [w, h] = img.size;
+        if w == 0 || h == 0 || img.pixels.len() != w.saturating_mul(h) {
+            return None;
+        }
+        let mut rgba = Vec::with_capacity(w.saturating_mul(h).saturating_mul(4));
+        for p in &img.pixels {
+            rgba.extend_from_slice(&[p.r(), p.g(), p.b(), p.a()]);
+        }
+        let path =
+            std::env::temp_dir().join(format!("grokhub-paste-{}.png", grokhub_core::new_token()));
+        image::save_buffer(&path, &rgba, w as u32, h as u32, image::ColorType::Rgba8).ok()?;
+        Some(path)
+    }
+
     pub(super) fn try_composer_attach_paste(
         &mut self,
         ui: &egui::Ui,
@@ -477,6 +493,29 @@ impl Cabin {
     ) -> bool {
         if !ui.memory(|m| m.has_focus(composer_id)) {
             return false;
+        }
+        // egui 0.37: native image paste arrives as PasteImage (color emoji /
+        // system clipboard pixels). Prefer that over the OS clipboard worker.
+        let pasted = ui.input_mut(|i| {
+            let mut img = None;
+            i.events.retain(|ev| match ev {
+                egui::Event::PasteImage(c) if img.is_none() => {
+                    img = Some(std::sync::Arc::clone(c));
+                    false
+                }
+                egui::Event::PasteImage(_) => false,
+                _ => true,
+            });
+            img
+        });
+        if let Some(img) = pasted {
+            if let Some(path) = Self::write_paste_image(img.as_ref()) {
+                self.enqueue_attach_paths(vec![path]);
+                self.status = "Pasted image".into();
+                return true;
+            }
+            self.status = "Could not save pasted image".into();
+            return true;
         }
         let shortcut = egui::KeyboardShortcut::new(
             if cfg!(target_os = "macos") {

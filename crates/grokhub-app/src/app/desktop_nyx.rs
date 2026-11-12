@@ -651,7 +651,7 @@ fn paint_window(ui: &mut egui::Ui, shared: &Arc<Mutex<Shared>>) {
     );
     let resp = ui.interact(
         frame,
-        ui.id().with("desktop-nyx"),
+        ui.scope_id().with("desktop-nyx"),
         egui::Sense::click_and_drag(),
     );
     let pointer = resp.hover_pos();
@@ -743,7 +743,7 @@ fn paint_companion(
     still: bool,
     talk: Option<crate::lipsync::Talk>,
 ) -> bool {
-    let anim_id = ui.id().with("desktop-nyx-anim");
+    let anim_id = ui.scope_id().with("desktop-nyx-anim");
     let mut state = ui
         .ctx()
         .data(|d| d.get_temp::<WindowAnim>(anim_id))
@@ -755,7 +755,7 @@ fn paint_companion(
     if state.outfit != outfit.id {
         // Keep the old picture for the fade; its texture is cached on the
         // context under the old outfit's key.
-        let prev_id = egui::Id::new(format!("desktop-nyx-{}", state.outfit).as_str());
+        let prev_id = egui::Id::unique(format!("desktop-nyx-{}", state.outfit).as_str());
         state.prev = ui.ctx().data(|d| d.get_temp::<Cached>(prev_id));
         state.outfit = outfit.id.clone();
         state.fade_start = t;
@@ -838,7 +838,7 @@ fn paint_companion(
 /// blink.
 fn patch_texture(ctx: &egui::Context, file: &str) -> Option<egui::TextureHandle> {
     let key = format!("desktop-nyx-patch-{file}");
-    let id = egui::Id::new(key.as_str());
+    let id = egui::Id::unique(key.as_str());
     if let Some(c) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
         return c;
     }
@@ -905,7 +905,7 @@ pub(super) fn outfit_label(id: &str) -> String {
 
 fn load_outfit_texture(ctx: &egui::Context, outfit: &Outfit, mood: Mood) -> Option<Cached> {
     let key = format!("desktop-nyx-{}", outfit.id);
-    let id = egui::Id::new(key.as_str());
+    let id = egui::Id::unique(key.as_str());
     if let Some(c) = ctx.data(|d| d.get_temp::<Cached>(id)) {
         return Some(c);
     }

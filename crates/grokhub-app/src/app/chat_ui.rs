@@ -312,7 +312,7 @@ pub(super) fn drop_key(ui: &egui::Ui, key: egui::Key) {
 /// A menu, popup or sheet is over the chat (this frame or the last), so Esc and
 /// Enter are its keys. The passive jump-to-latest pill does not count.
 pub(super) fn overlay_over_chat(ctx: &egui::Context) -> bool {
-    let jump = egui::Id::new("chat-jump");
+    let jump = egui::Id::unique("chat-jump");
     egui::Popup::is_any_open(ctx)
         || ctx.memory(|m| {
             m.areas()
@@ -404,12 +404,31 @@ pub(super) fn slash_pick_take(
     }
 }
 
-pub(super) fn slash_pick_retain(pick: usize, list_changed: bool, len: usize) -> usize {
-    if list_changed || len == 0 {
-        0
-    } else {
-        slash_pick_step(pick, len, 0)
+/// Slash suggestions for egui 0.37 [`CompletionPopup`] (word under the cursor).
+pub(super) fn slash_completion_suggestions(
+    word: &str,
+    extra: &[SlashHit],
+) -> Vec<egui::Suggestion> {
+    if !word.starts_with('/') {
+        return Vec::new();
     }
+    filter_slash_hits(word, extra)
+        .into_iter()
+        .map(|h| egui::Suggestion::new(h.insert.clone()).content(format!("{}  {}", h.cmd, h.hint)))
+        .collect()
+}
+
+/// After `CompletionPopup` accepts an insert, run it when the command says so.
+pub(super) fn slash_completion_run(
+    composer: &mut String,
+    insert: &str,
+    extra: &[SlashHit],
+) -> Option<String> {
+    let run = filter_slash_hits(insert, extra)
+        .into_iter()
+        .find(|h| h.insert == insert)
+        .is_some_and(|h| h.run_on_pick);
+    slash_pick_take(composer, insert, run)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -486,7 +505,7 @@ fn hangout_mode_btn(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
         (galley.size().x + pad.x * 2.0).max(64.0),
         (galley.size().y + pad.y * 2.0).max(28.0),
     );
-    let id = egui::Id::new(("hangout-mode", label));
+    let id = egui::Id::unique(("hangout-mode", label));
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let resp = ui.interact(rect, id, egui::Sense::click());
     let (resp, rect, _) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
@@ -907,7 +926,7 @@ pub(super) fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Respo
 /// resize does not reuse wrap heights measured at another width.
 /// Height cache for the live turn's rows, keyed like stored rows by pane width.
 pub(super) fn live_row_height_id(thread_id: &str, pane_w: f32) -> egui::Id {
-    egui::Id::new(("cabin-live-row-h", thread_id, pane_width_bucket(pane_w)))
+    egui::Id::unique(("cabin-live-row-h", thread_id, pane_width_bucket(pane_w)))
 }
 
 /// Which block a live row starts on. A text block has its own fold slot; a tool
@@ -917,7 +936,7 @@ pub(super) fn live_row_ident(b: &LiveBlock) -> u64 {
     if b.fold_slot != 0 {
         b.fold_slot
     } else {
-        egui::Id::new(("cabin-live-tool-row", b.tool_id.as_str())).value()
+        egui::Id::unique(("cabin-live-tool-row", b.tool_id.as_str())).value()
     }
 }
 
@@ -940,7 +959,7 @@ pub(super) fn live_row_shape(
 }
 
 pub(super) fn chat_row_height_id(thread_id: &str, pane_w: f32) -> egui::Id {
-    egui::Id::new(("cabin-chat-row-h", thread_id, pane_width_bucket(pane_w)))
+    egui::Id::unique(("cabin-chat-row-h", thread_id, pane_width_bucket(pane_w)))
 }
 
 pub(super) fn pane_width_bucket(pane_w: f32) -> i32 {
@@ -984,7 +1003,7 @@ impl Cabin {
         // Keep painting while streaming or while the 200ms settle to idle α is in flight.
         let settle = crate::theme::animate_selection_secs(
             ui,
-            egui::Id::new("composer-glow-stream"),
+            egui::Id::unique("composer-glow-stream"),
             self.thinking_here(),
             grokhub_core::GLOW_SETTLE_SECS,
         );
@@ -1066,7 +1085,7 @@ fn view_fold_key(view: &ChatView) -> u64 {
 /// `kind` is `"slot"` while the thought is a live block, `"body"` once it is stored.
 /// The body key is [`thought_body_key`], so a collapse survives that handoff.
 pub(super) fn thought_fold_id(thread_id: &str, kind: &str, key: u64) -> egui::Id {
-    egui::Id::new(("cabin-thought-fold", thread_id, kind, key))
+    egui::Id::unique(("cabin-thought-fold", thread_id, kind, key))
 }
 
 #[cfg(test)]
@@ -1079,7 +1098,7 @@ pub(super) fn write_thought_fold(ctx: &egui::Context, id: egui::Id, fold: Though
 }
 
 pub(super) fn session_thoughts_collapsed_id(thread_id: &str) -> egui::Id {
-    egui::Id::new(("cabin-session-thoughts-collapsed", thread_id))
+    egui::Id::unique(("cabin-session-thoughts-collapsed", thread_id))
 }
 
 pub(super) fn read_session_thoughts_collapsed(ctx: &egui::Context, thread_id: &str) -> bool {
@@ -1956,7 +1975,7 @@ impl Cabin {
                 self.paint_find_bar(&ctx, out.inner_rect);
             }
             if scrolled_off_tail(
-                out.state.offset.y,
+                out.state.clamped_offset().y,
                 out.content_size.y,
                 out.inner_rect.height(),
                 CHAT_TAIL_SLACK,
@@ -1978,7 +1997,7 @@ impl Cabin {
         let has_hits = !self.find.hits().is_empty();
         let mut step: Option<bool> = None;
         let mut close = false;
-        egui::Area::new(egui::Id::new("chat-find"))
+        egui::Area::new(egui::Id::unique("chat-find"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
             .show(ctx, |ui| {
@@ -1993,7 +2012,7 @@ impl Cabin {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
                             let edit = egui::TextEdit::singleline(&mut self.find.query)
-                                .id(egui::Id::new("chat-find-input"))
+                                .id(egui::Id::unique("chat-find-input"))
                                 .hint_text(
                                     RichText::new("Find in this chat").color(crate::theme::muted()),
                                 )
@@ -2092,7 +2111,7 @@ impl Cabin {
             (pane.max.y - size.y - 10.0).max(pane.min.y),
         );
         let has_last_you = last_user_text(&self.messages).is_some();
-        egui::Area::new(egui::Id::new("chat-jump"))
+        egui::Area::new(egui::Id::unique("chat-jump"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
             .show(ctx, |ui| {
@@ -2108,8 +2127,8 @@ impl Cabin {
                     "Jump to latest"
                 };
                 let resp = resp.on_hover_text(tip);
-                let hold_id = egui::Id::new("chat-jump-hold");
-                let used_id = egui::Id::new("chat-jump-used");
+                let hold_id = egui::Id::unique("chat-jump-hold");
+                let used_id = egui::Id::unique("chat-jump-used");
                 if has_last_you && resp.is_pointer_button_down_on() {
                     let now = ui.input(|i| i.time);
                     let start = ui.ctx().data(|d| d.get_temp::<f64>(hold_id)).unwrap_or(now);
@@ -2491,7 +2510,7 @@ impl Cabin {
             self.perm_always_confirm = None;
         }
         ui.add_space(8.0);
-        let ask_id = egui::Id::new(("perm-ask-motion", p.rpc_id.as_str()));
+        let ask_id = egui::Id::unique(("perm-ask-motion", p.rpc_id.as_str()));
         let enter_t = crate::motion::approval_enter_t(ui, ask_id, true);
         let y = crate::motion::approval_y(enter_t, false);
         let avail = ui.available_rect_before_wrap();
@@ -3095,90 +3114,12 @@ impl Cabin {
                         self.paint_live_work(ui);
                     }
                     ComposerStackSlot::SlashPalette => {
-                        let hits = filter_slash_hits(&self.composer, &self.grok_commands);
-                        if !hits.is_empty() {
-                            let first = hits.first().map(|s| s.cmd.as_str()).unwrap_or("");
-                            let n = hits.len();
-                            let changed =
-                                self.slash_filter_n != n || self.slash_filter_first != first;
-                            self.slash_pick = slash_pick_retain(self.slash_pick, changed, n);
-                            self.slash_filter_n = n;
-                            self.slash_filter_first = first.to_string();
-                            ui.label(
-                                RichText::new("↑↓  Tab accepts")
-                                    .size(crate::theme::FONT_META)
-                                    .color(crate::theme::subtle()),
-                            );
-                            ui.add_space(4.0);
-                            egui::Frame::NONE
-                                .fill(crate::theme::surface())
-                                .corner_radius(crate::theme::CHROME_RADIUS)
-                                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                                .inner_margin(egui::Margin::same(8))
-                                .show(ui, |ui| {
-                                    egui::ScrollArea::vertical()
-                                        .max_height(148.0)
-                                        .auto_shrink([false, true])
-                                        .show(ui, |ui| {
-                                            for (i, s) in hits.iter().enumerate() {
-                                                let on = i == self.slash_pick;
-                                                let row = format!("{}  {}", s.cmd, s.hint);
-                                                let fill = if on {
-                                                    crate::theme::nav_active()
-                                                } else {
-                                                    egui::Color32::TRANSPARENT
-                                                };
-                                                if crate::theme::felt_label_button(
-                                                    ui,
-                                                    &row,
-                                                    fill,
-                                                    if on {
-                                                        crate::theme::fg()
-                                                    } else {
-                                                        crate::theme::muted()
-                                                    },
-                                                    8.0,
-                                                    egui::vec2(ui.available_width(), 28.0),
-                                                    None,
-                                                    false,
-                                                )
-                                                .clicked()
-                                                {
-                                                    if let Some(t) = slash_pick_take(
-                                                        &mut self.composer,
-                                                        &s.insert,
-                                                        s.run_on_pick,
-                                                    ) {
-                                                        self.send_chat(t);
-                                                    }
-                                                }
-                                            }
-                                        });
-                                });
-                            if ui.input_mut(|i| {
-                                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
-                            }) {
-                                self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), 1);
-                            } else if ui.input_mut(|i| {
-                                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
-                            }) {
-                                self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), -1);
-                            } else if ui
-                                .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
-                            {
-                                let s = &hits[self.slash_pick.min(hits.len() - 1)];
-                                if let Some(t) =
-                                    slash_pick_take(&mut self.composer, &s.insert, s.run_on_pick)
-                                {
-                                    self.send_chat(t);
-                                }
-                            }
-                            ui.add_space(8.0);
-                        } else {
-                            self.slash_pick = 0;
-                            self.slash_filter_n = 0;
-                            self.slash_filter_first.clear();
-                        }
+                        // LU-11: slash completion lives on the composer TextEdit via
+                        // egui::CompletionPopup (see Pill). Keep the slot so stack order
+                        // and source-split tests stay stable; clear leftover pick state.
+                        self.slash_pick = 0;
+                        self.slash_filter_n = 0;
+                        self.slash_filter_first.clear();
                     }
                     ComposerStackSlot::ScreenshotOffer => {
                         self.ui_screenshot_offer_chip(ui);
@@ -3210,7 +3151,7 @@ impl Cabin {
                         let cap = pill_w.min(ui.available_width()).max(360.0);
                         ui.set_width(cap);
                         ui.set_max_width(cap);
-                        let composer_id = egui::Id::new("chat-composer");
+                        let composer_id = egui::Id::unique("chat-composer");
                         let focused = ui.memory(|m| m.has_focus(composer_id));
                         let pad_l = 20.0;
                         let pad_r = 24.0;
@@ -3286,13 +3227,12 @@ impl Cabin {
                                                 // taller than the pill and scrolls.
                                                 ui.set_min_height(pill_h);
                                                 let hint_align = if rows == 1 {
-                                                    egui::Align::Center
+                                                    egui::Align2::LEFT_CENTER
                                                 } else {
-                                                    egui::Align::Min
+                                                    egui::Align2::LEFT_TOP
                                                 };
-                                                ui.add(
+                                                let text_edit =
                                                     egui::TextEdit::multiline(&mut self.composer)
-                                                        .id(composer_id)
                                                         .desired_width(text_w)
                                                         .desired_rows(rows)
                                                         .min_size(egui::vec2(
@@ -3300,7 +3240,7 @@ impl Cabin {
                                                             if rows == 1 { pill_h } else { 0.0 },
                                                         ))
                                                         .frame(composer_field_frame())
-                                                        .vertical_align(hint_align)
+                                                        .align(hint_align)
                                                         .font(egui::FontId::new(
                                                             crate::theme::TYPE_PROSE,
                                                             egui::FontFamily::Proportional,
@@ -3312,8 +3252,25 @@ impl Cabin {
                                                                 egui::Modifiers::COMMAND,
                                                                 egui::Key::Enter,
                                                             ),
-                                                        )),
-                                                )
+                                                        ));
+                                                let cmds = self.grok_commands.clone();
+                                                let out = egui::CompletionPopup::new(composer_id)
+                                                    .max_height(148.0)
+                                                    .show(ui, text_edit, |query| {
+                                                        slash_completion_suggestions(
+                                                            query.word, &cmds,
+                                                        )
+                                                    });
+                                                if let Some(acc) = out.accepted {
+                                                    if let Some(t) = slash_completion_run(
+                                                        &mut self.composer,
+                                                        &acc.insert,
+                                                        &self.grok_commands,
+                                                    ) {
+                                                        self.send_chat(t);
+                                                    }
+                                                }
+                                                out.text_edit.response
                                             })
                                             .inner;
                                         self.composer_ghost_touch(ui, composer_id, &edit, text_w);

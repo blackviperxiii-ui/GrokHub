@@ -183,12 +183,12 @@ impl Cabin {
         ui.horizontal(|ui| {
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.interests.draft)
-                    .id(egui::Id::new("pulse-interest-add"))
+                    .id(egui::Id::unique("pulse-interest-add"))
                     .hint_text("Add a topic, like air compressors")
                     .char_limit(interests::TOPIC_CHARS)
                     .desired_width(280.0)
                     .min_size(egui::vec2(280.0, ADD_ROW_H))
-                    .vertical_align(egui::Align::Center),
+                    .align(egui::Align2::LEFT_CENTER),
             );
             if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 add = true;
@@ -359,7 +359,7 @@ mod tests {
         };
         // The field is the pill's height, and its box is centred on the Add label.
         let field = ctx
-            .read_response(egui::Id::new("pulse-interest-add"))
+            .read_response(egui::Id::unique("pulse-interest-add"))
             .expect("the Add topic field")
             .rect;
         let add = y("Add");

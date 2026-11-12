@@ -506,7 +506,7 @@ impl Cabin {
             true,
         );
         let mut act = steal;
-        let id = egui::Id::new("cabin-confirm-sheet");
+        let id = egui::Id::unique("cabin-confirm-sheet");
         egui::Area::new(id)
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])

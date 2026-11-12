@@ -1015,8 +1015,8 @@ pub struct Cabin {
     /// Last frame's composer pill, mic, and Send/Stop disc. Not saved.
     composer_geom: Option<(egui::Rect, egui::Rect, egui::Rect)>,
     composer_ghost: ghost::ComposerGhost,
-    /// U7f: egui_dock layout when `cfg.dock_panels` is on (persisted in dock.json).
-    dock_state: egui_dock::DockState<dock_ui::DockTab>,
+    /// U7f: egui_stack layout when `cfg.dock_panels` is on (persisted in dock.json).
+    dock_state: egui_stack::DockState<dock_ui::DockTab>,
     /// Activity Dock (running / waiting / recent), titlebar chrome.
     activity: activity_dock::DockState,
     /// Labs Diagnostics: the preview waiting for Save, and the last zip.
@@ -5610,7 +5610,7 @@ impl eframe::App for Cabin {
         self.ui_imagine_overlays(&ctx);
         self.ui_project_overlays(&ctx);
         if self.agent_cursor.is_some() {
-            egui::Area::new(egui::Id::new("wave2e-agent-cursor"))
+            egui::Area::new(egui::Id::unique("wave2e-agent-cursor"))
                 .order(egui::Order::Foreground)
                 .interactable(false)
                 .fixed_pos(ctx.content_rect().min)
@@ -5891,7 +5891,7 @@ fn eyes_frame_tex(ctx: &egui::Context, url: &str) -> Option<(TextureHandle, [usi
         return None;
     }
     let key: String = url.chars().take(48).collect();
-    let id = egui::Id::new(("eyes-frame", url.len(), key.as_str()));
+    let id = egui::Id::unique(("eyes-frame", url.len(), key.as_str()));
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
         return Some(hit);
     }

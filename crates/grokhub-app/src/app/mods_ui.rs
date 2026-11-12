@@ -136,7 +136,7 @@ impl Cabin {
         let mut view = ModsView::default();
         view.pick(key);
         view.show_cant = true;
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(VIEW_ID), view));
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique(VIEW_ID), view));
         self.set_nav_id("mods");
     }
 
@@ -161,7 +161,7 @@ impl Cabin {
     }
 
     pub(super) fn ui_mods(&mut self, ui: &mut egui::Ui) {
-        let id = egui::Id::new(VIEW_ID);
+        let id = egui::Id::unique(VIEW_ID);
         let mut view: ModsView = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
         let (_, steam) = self.steam_library(now_ms());
         let steam = steam.to_vec();

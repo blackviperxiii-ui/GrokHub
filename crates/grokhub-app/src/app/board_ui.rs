@@ -139,11 +139,11 @@ pub(super) fn auto_delete_label(days: u32) -> String {
 }
 
 pub(super) fn board_chat_edit_id(id: &str) -> egui::Id {
-    egui::Id::new(("board-chat-edit", id))
+    egui::Id::unique(("board-chat-edit", id))
 }
 
 fn board_notes_edit_id(id: &str) -> egui::Id {
-    egui::Id::new(("board-notes-edit", id))
+    egui::Id::unique(("board-notes-edit", id))
 }
 
 /// The short line under a card's title: where it left off, then what it has.
@@ -683,7 +683,7 @@ impl Cabin {
         // scope, then `allocate_rect`); a skipped card burns the same two.
         let dragged = egui::DragAndDrop::payload::<BoardDrag>(ui.ctx()).is_some_and(|d| d.0 == id);
         let width = ui.available_width().max(1.0);
-        let cache_id = egui::Id::new((
+        let cache_id = egui::Id::unique((
             "cabin-board-row-h",
             id,
             super::chat_ui::pane_width_bucket(width),
@@ -801,7 +801,7 @@ impl Cabin {
         let resp = ui
             .interact(
                 rect,
-                egui::Id::new(("board-card", id.as_str())),
+                egui::Id::unique(("board-card", id.as_str())),
                 egui::Sense::click_and_drag(),
             )
             .on_hover_cursor(egui::CursorIcon::Grab);
@@ -923,7 +923,7 @@ impl Cabin {
             let grip = ui
                 .interact(
                     grip_rect,
-                    egui::Id::new(("board-grip", id.as_str())),
+                    egui::Id::unique(("board-grip", id.as_str())),
                     egui::Sense::click_and_drag(),
                 )
                 .on_hover_cursor(egui::CursorIcon::Grab);

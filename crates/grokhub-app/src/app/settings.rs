@@ -235,7 +235,7 @@ pub(super) fn settings_sheet_cover(screen: egui::Rect) -> egui::Rect {
 /// True when Settings wasn't on screen last frame: a fresh open, so the page
 /// lands on the asked-for section instead of an old scroll position.
 fn settings_fresh_view(ctx: &egui::Context) -> bool {
-    let id = egui::Id::new("settings-last-view");
+    let id = egui::Id::unique("settings-last-view");
     let pass = ctx.cumulative_pass_nr();
     let last = ctx.data_mut(|d| {
         let last = d.get_temp::<u64>(id);
@@ -643,7 +643,7 @@ impl Cabin {
         } else {
             settings_sheet_cover(screen)
         };
-        egui::Area::new(egui::Id::new("settings-overlay"))
+        egui::Area::new(egui::Id::unique("settings-overlay"))
             .fixed_pos(cover.min)
             // Kept where it is: a constrained Area slid left over the rail when
             // its content ran a few pixels wide, and swallowed every rail click.
@@ -1378,7 +1378,7 @@ impl Cabin {
     /// the field loses focus; blank hides the link, anything but a plain web
     /// page is refused.
     fn ui_support_url_field(&mut self, ui: &mut egui::Ui) {
-        let id = ui.id().with("support_url_draft");
+        let id = ui.scope_id().with("support_url_draft");
         let mut draft = ui
             .data_mut(|d| d.get_temp::<String>(id))
             .unwrap_or_else(|| self.cfg.support_url.clone());
@@ -1431,7 +1431,7 @@ impl Cabin {
     }
 
     pub(super) fn ui_permission_editor(&mut self, ui: &mut egui::Ui) {
-        let draft_id = egui::Id::new("grokhub-perm-draft");
+        let draft_id = egui::Id::unique("grokhub-perm-draft");
         let mut draft = ui
             .ctx()
             .data(|data| data.get_temp::<PermDraft>(draft_id))
@@ -1718,6 +1718,7 @@ mod tests {
                         delta: egui::vec2(0.0, -wheel),
                         phase: egui::TouchPhase::Move,
                         modifiers: egui::Modifiers::NONE,
+                        source: egui::MouseWheelSource::Unknown,
                     },
                 ]
             } else {
@@ -1729,7 +1730,7 @@ mod tests {
                 let out = settings_body_scroll(300.0, to_top, sec).show(ui, |ui| {
                     ui.allocate_space(egui::vec2(200.0, 2000.0));
                 });
-                offset = out.state.offset.y;
+                offset = out.state.clamped_offset().y;
             });
             offset
         };

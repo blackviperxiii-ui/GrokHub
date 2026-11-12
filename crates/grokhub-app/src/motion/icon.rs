@@ -162,7 +162,7 @@ struct CardRects {
 fn card_rects<R>(ctx: &egui::Context, f: impl FnOnce(&mut CardRects) -> R) -> R {
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|d| {
-        let rects = d.get_temp_mut_or_default::<CardRects>(egui::Id::new("motion-card-rects"));
+        let rects = d.get_temp_mut_or_default::<CardRects>(egui::Id::unique("motion-card-rects"));
         if rects.pass != pass {
             let last = std::mem::take(&mut rects.now);
             rects.prev = if rects.pass + 1 == pass {
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn hover_eases_in_its_time_then_stops_asking_for_frames() {
         let ctx = egui::Context::default();
-        let id = egui::Id::new("timing-probe");
+        let id = egui::Id::unique("timing-probe");
         let run = |time: f64, hovered: bool| {
             let mut got = Pose::REST;
             let out = crate::theme::test_pass(&ctx, raw(time, None), |ui| {
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn becoming_active_pops_once_and_rests() {
         let ctx = egui::Context::default();
-        let id = egui::Id::new("pop-probe");
+        let id = egui::Id::unique("pop-probe");
         let scale_at = |time: f64, active: bool| {
             let mut got = 0.0;
             let _ = crate::theme::test_pass(&ctx, raw(time, None), |ui| {
@@ -369,7 +369,7 @@ mod tests {
     fn reduced_motion_rests_every_glyph_and_asks_for_no_frame() {
         let ctx = egui::Context::default();
         ctx.all_styles_mut(|s| s.animation_time = 0.0);
-        let id = egui::Id::new("reduced-probe");
+        let id = egui::Id::unique("reduced-probe");
         for (i, cue) in [
             Cue::default(),
             Cue {
@@ -412,7 +412,7 @@ mod tests {
             let _ = crate::theme::test_pass(&ctx, raw(time, pointer), |ui| {
                 got = (
                     card_hovered(ui, icon),
-                    card_icon_pose(ui, egui::Id::new("card-icon"), icon),
+                    card_icon_pose(ui, egui::Id::unique("card-icon"), icon),
                 );
                 note_card(ui, card);
             });

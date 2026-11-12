@@ -331,7 +331,7 @@ impl Cabin {
             let folders = folder_choices(&self.projects);
             let mut picked: Option<Option<String>> = None;
             let mut menu_rect = egui::Rect::NOTHING;
-            egui::Area::new(egui::Id::new("proj-add"))
+            egui::Area::new(egui::Id::unique("proj-add"))
                 .fixed_pos(self.proj_menu_pos + egui::vec2(8.0, 8.0))
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {

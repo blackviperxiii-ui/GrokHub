@@ -1070,7 +1070,7 @@ fn paint_post_row_rects(
 /// motion snaps to 1.
 fn paint_like_slot(ui: &mut egui::Ui, label: &str) -> bool {
     let liked = label == "♥";
-    let id = ui.id().with("pulse_like_heart");
+    let id = ui.scope_id().with("pulse_like_heart");
     let was = ui.ctx().data(|d| d.get_temp::<bool>(id).unwrap_or(false));
     if liked && !was && !crate::motion::reduced_motion(ui) {
         // Snap the tween to the start of the pop so the next frames ease up.
@@ -2568,7 +2568,7 @@ impl Cabin {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)) {
             save = true;
         }
-        let modal = egui::Modal::new(egui::Id::new("pulse-feed-instructions"))
+        let modal = egui::Modal::new(egui::Id::unique("pulse-feed-instructions"))
             .backdrop_color(egui::Color32::from_black_alpha(153))
             .frame(
                 egui::Frame::NONE
@@ -2609,7 +2609,7 @@ impl Cabin {
                 ui.add_space(12.0);
                 ui.add(
                     egui::TextEdit::multiline(&mut draft)
-                        .id(egui::Id::new("pulse-feed-instructions-text"))
+                        .id(egui::Id::unique("pulse-feed-instructions-text"))
                         .desired_rows(14)
                         .desired_width(f32::INFINITY)
                         .char_limit(pc::FEED_INSTRUCTIONS_CAP)

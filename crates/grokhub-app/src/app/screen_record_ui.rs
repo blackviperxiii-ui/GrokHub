@@ -803,7 +803,7 @@ impl Cabin {
                 None => (String::new(), String::new(), Vec::new()),
             });
         let _ = hard;
-        egui::Area::new(egui::Id::new("watch-learn-chrome"))
+        egui::Area::new(egui::Id::unique("watch-learn-chrome"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {

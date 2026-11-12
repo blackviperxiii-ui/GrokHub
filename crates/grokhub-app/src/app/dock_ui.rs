@@ -1,8 +1,8 @@
-//! U7f: optional egui_dock main-panel tabs (Settings → Dockable panels; off by default).
+//! U7f: optional egui_stack main-panel tabs (Settings → Dockable panels; off by default).
 //! Layout tree persists in `dock.json`. Fixed sidebar + page CentralPanel path stays when off.
 
 use eframe::egui;
-use egui_dock::{DockArea, DockState, Style, TabViewer};
+use egui_stack::{DockArea, DockState, Style, TabViewer};
 use serde::{Deserialize, Serialize};
 
 use super::{Cabin, Nav};
@@ -159,7 +159,7 @@ impl TabViewer for CabinTabViewer<'_> {
     type Tab = DockTab;
 
     fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
-        egui::Id::new(("u7f-dock-tab", *tab))
+        egui::Id::unique(("u7f-dock-tab", *tab))
     }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
@@ -167,7 +167,7 @@ impl TabViewer for CabinTabViewer<'_> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        // Paint only. Do not touch page_nav here — egui_dock paints every visible
+        // Paint only. Do not touch page_nav here — egui_stack paints every visible
         // split leaf each frame, so last-leaf-wins would steal sidebar / Settings.
         match *tab {
             DockTab::Chat => {
@@ -263,7 +263,7 @@ fn ensure_focused_leaf(state: &mut DockState<DockTab>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_dock::NodeIndex;
+    use egui_stack::NodeIndex;
 
     fn split_state() -> DockState<DockTab> {
         let mut s = DockState::new(vec![DockTab::Chat]);

@@ -205,7 +205,7 @@ impl Cabin {
                         .selectable(false),
                     )
                 });
-            let id = egui::Id::new(("titlebar-pill", i));
+            let id = egui::Id::unique(("titlebar-pill", i));
             let pill = ui.interact(pill.response.rect, id, egui::Sense::click());
             if red_ring && pill.clicked() {
                 self.open_personality_pill();
@@ -738,7 +738,7 @@ impl Cabin {
                                         )
                                         .hint_text(crate::theme::hint("Name"))
                                         .font(egui::FontId::proportional(crate::theme::TYPE_BODY))
-                                        .vertical_align(egui::Align::Center),
+                                        .align(egui::Align2::LEFT_CENTER),
                                 );
                                 if self.proj_rename_focus {
                                     edit.request_focus();
@@ -1010,7 +1010,7 @@ mod titlebar_pill_tests {
             });
         }
         let rect = |i: usize| {
-            ctx.read_response(egui::Id::new(("titlebar-pill", i)))
+            ctx.read_response(egui::Id::unique(("titlebar-pill", i)))
                 .expect("pill painted")
                 .rect
         };

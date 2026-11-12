@@ -505,7 +505,7 @@ pub struct AppConfig {
     /// Where "Move to models" puts a model; empty means `~/Models`.
     #[serde(default)]
     pub models_folder: String,
-    /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
+    /// Settings → Behavior: dockable main panels (egui_stack). Off by default; layout in dock.json.
     #[serde(default)]
     pub dock_panels: bool,
     /// Settings → Appearance: reduce motion. No hover lifts, no icon motion,

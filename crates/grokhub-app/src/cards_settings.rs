@@ -34,16 +34,14 @@ pub fn settings_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     ui.painter()
         .galley(rect.center() - galley.size() * 0.5, galley, ink);
     let enabled = resp.enabled();
-    resp.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, label)
-    });
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, label));
     resp.clicked()
 }
 
 /// Settings' way out: a large, labelled button ("← Back to Chat"), not a
 /// small ×.
 pub fn settings_back(ui: &mut egui::Ui, label: &str) -> bool {
-    let id = Some(egui::Id::new("settings-back"));
+    let id = Some(egui::Id::unique("settings-back"));
     let size = egui::vec2(150.0, 40.0);
     if crate::theme::is_loadout_paint() {
         return crate::ui_kit::recipe::button(ui, id, label, true, size, true).clicked();

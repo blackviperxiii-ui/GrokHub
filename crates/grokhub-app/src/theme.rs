@@ -1296,7 +1296,7 @@ struct GlidePick {
 }
 
 fn glide_id(group: &str) -> egui::Id {
-    egui::Id::new(("cabin-glide", group))
+    egui::Id::unique(("cabin-glide", group))
 }
 
 /// Paint last frame's highlight before the row's labels, so it sits behind them.
@@ -1561,7 +1561,7 @@ pub fn felt_label_button_with(
     ui.painter().galley(text_pos, galley, text_color);
     let resp = pointing(resp);
     let enabled = resp.enabled();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     resp
 }
 
@@ -1587,7 +1587,7 @@ pub fn felt_icon_hit(
     );
     let resp = pointing(resp);
     let enabled = resp.enabled();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     resp
 }
 
@@ -1642,7 +1642,7 @@ pub fn kb_nav_next(prev: bool, nav_key: bool, pointer: bool) -> bool {
 }
 
 fn kb_nav_active(ctx: &egui::Context) -> bool {
-    let id = egui::Id::new("cabin-kb-nav");
+    let id = egui::Id::unique("cabin-kb-nav");
     let prev = ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
     let (nav_key, pointer) = ctx.input(|i| {
         let nav_key = i.events.iter().any(
@@ -1780,7 +1780,7 @@ fn mark_image() -> &'static ColorImage {
 }
 
 pub fn mark(ctx: &egui::Context) -> TextureHandle {
-    let id = egui::Id::new("grokhub-mark");
+    let id = egui::Id::unique("grokhub-mark");
     if let Some(tex) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
         return tex;
     }
@@ -1790,7 +1790,7 @@ pub fn mark(ctx: &egui::Context) -> TextureHandle {
 }
 
 pub fn loadout_mark(ctx: &egui::Context) -> TextureHandle {
-    let id = egui::Id::new("loadout-mark");
+    let id = egui::Id::unique("loadout-mark");
     if let Some(tex) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
         return tex;
     }

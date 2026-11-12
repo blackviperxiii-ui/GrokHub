@@ -685,7 +685,7 @@ fn automations_job_rows_use_enabled_switch_not_a_checkbox() {
         .and_then(|s| s.split("pub fn switch_access_name(").next())
         .expect("finish_switch");
     assert!(
-        finish.contains("switch_access_name") && finish.contains("WidgetType::Checkbox"),
+        finish.contains("switch_access_name") && finish.contains("Role::CheckBox"),
         "the switch keeps an On/Off name: {finish}"
     );
 }

@@ -389,14 +389,13 @@ fn composer_wants_frame(live: bool, channels: &[f32]) -> bool {
 /// monitor's refresh rate (up to 165 fps) for as long as a turn ran.
 pub(crate) const LIVE_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 
-/// Ask for the next frame [`LIVE_FRAME`] from now. egui takes its predicted
-/// frame time (1/60 s) off any delay and eframe counts from the call, mid
-/// frame, so a plain 33 ms request ran at about 50 fps. Adding it back gives
-/// about 30.
+/// Ask for the next frame [`LIVE_FRAME`] from now.
+///
+/// egui 0.36 subtracted `predicted_dt` from every `request_repaint_after`
+/// delay, so we used to add it back. egui 0.37 keeps the delay as given, so
+/// request [`LIVE_FRAME`] directly for about 30 fps.
 pub(crate) fn request_live_frame(ctx: &egui::Context) {
-    let predicted = ctx.input(|i| i.predicted_dt);
-    let pad = std::time::Duration::try_from_secs_f32(predicted).unwrap_or_default();
-    ctx.request_repaint_after(LIVE_FRAME + pad);
+    ctx.request_repaint_after(LIVE_FRAME);
 }
 
 /// Another frame now while a channel is easing; while the control is only
@@ -747,7 +746,7 @@ pub fn bar_icon_name(icon: BarIcon) -> &'static str {
 
 fn name_control(resp: &egui::Response, name: &str) {
     let enabled = resp.enabled();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
 }
 
 pub fn paint_bar_icon(
@@ -1193,7 +1192,7 @@ mod tests {
             let _ = crate::theme::test_pass(&ctx, input, |ui| {
                 let ctx = ui.ctx().clone();
                 let hover_t = ctx.animate_bool_with_time(
-                    egui::Id::new("composer-hover-ease"),
+                    egui::Id::unique("composer-hover-ease"),
                     step > 0,
                     grokhub_core::HOVER_SECS,
                 );
@@ -1344,10 +1343,10 @@ mod tests {
 
     #[test]
     fn a_running_stop_breathes_at_thirty_frames_a_second_not_the_monitor_rate() {
-        // egui takes its predicted frame time off a delay; the request adds it
-        // back, so the settled delay is exactly LIVE_FRAME. Before, a running
-        // Stop asked for the next frame at once, every frame. Reduced motion
-        // keeps the frames (voice mode polls on them).
+        // egui 0.37 keeps request_repaint_after delays as given, so a live
+        // Stop settles on LIVE_FRAME (~30 fps). Before, a running Stop asked
+        // for the next frame at once, every frame. Reduced motion keeps the
+        // frames (voice mode polls on them).
         for animation_time in [egui::Style::default().animation_time, 0.0] {
             let ctx = egui::Context::default();
             ctx.global_style_mut(|s| s.animation_time = animation_time);

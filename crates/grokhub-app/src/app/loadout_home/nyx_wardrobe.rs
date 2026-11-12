@@ -293,7 +293,7 @@ impl PoseCycle {
 /// ([`Cabin::companion_activity`], the mood under any outfit).
 pub(in crate::app) fn dock_pose(ctx: &egui::Context, look: &Look, activity: Mood) -> Option<Pose> {
     let i = ctx.data_mut(|d| {
-        d.get_temp_mut_or_default::<PoseCycle>(egui::Id::new(CYCLE))
+        d.get_temp_mut_or_default::<PoseCycle>(egui::Id::unique(CYCLE))
             .pick(look.set, activity, look.poses.len())
     });
     look.poses.get(i).copied()
@@ -303,7 +303,7 @@ pub(in crate::app) fn dock_pose(ctx: &egui::Context, look: &Look, activity: Mood
 /// so walking through the wardrobe never holds every picture in memory.
 pub(in crate::app) fn dock_texture(ctx: &egui::Context, pose: Pose) -> Option<egui::TextureHandle> {
     type Cached = (&'static str, egui::TextureHandle);
-    let id = egui::Id::new(DOCK_TEX);
+    let id = egui::Id::unique(DOCK_TEX);
     if let Some((key, tex)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
         if key == pose.key {
             return Some(tex);
@@ -325,7 +325,7 @@ pub(in crate::app) fn thumb_texture(
     ctx: &egui::Context,
     pose: Pose,
 ) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new(("nyx-wardrobe-thumb", pose.key));
+    let id = egui::Id::unique(("nyx-wardrobe-thumb", pose.key));
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return Some(tex);
     }
@@ -431,12 +431,12 @@ fn square_thumb(jpg: &[u8]) -> Option<egui::ColorImage> {
 
 /// Hands this frame's explicit-art gate to painters that have no cabin.
 pub(in crate::app) fn publish_explicit_ok(ctx: &egui::Context, ok: bool) {
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new(EXPLICIT_OK), ok));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(EXPLICIT_OK), ok));
 }
 
 /// This frame's explicit-art gate. Off until a frame publishes it.
 pub(in crate::app) fn explicit_ok(ctx: &egui::Context) -> bool {
-    ctx.data(|d| d.get_temp::<bool>(egui::Id::new(EXPLICIT_OK)))
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::unique(EXPLICIT_OK)))
         .unwrap_or(false)
 }
 

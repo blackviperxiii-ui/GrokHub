@@ -105,7 +105,7 @@ pub fn reduced_motion_ctx(ctx: &egui::Context) -> bool {
 /// the clock it had. Runs each frame: a theme switch that rebuilds the style
 /// can't undo it.
 pub fn sync_reduced(ctx: &egui::Context, on: bool) {
-    let saved = egui::Id::new("motion-reduced-saved-clock");
+    let saved = egui::Id::unique("motion-reduced-saved-clock");
     let current = ctx.global_style().animation_time;
     if on {
         if current > 0.0 {

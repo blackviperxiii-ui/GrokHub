@@ -126,7 +126,7 @@ pub(super) fn imagine_popup(
 ) -> (Option<usize>, egui::Rect) {
     let mut picked = None;
     let mut menu_rect = egui::Rect::NOTHING;
-    egui::Area::new(egui::Id::new(id))
+    egui::Area::new(egui::Id::unique(id))
         .fixed_pos(anchor.left_bottom() + egui::vec2(0.0, 6.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
@@ -421,7 +421,7 @@ impl Cabin {
         let stage_on = imagine_stage_visible(working, !last.is_empty()) || !imagine_err.is_empty();
         let video = self.imagine_kind == ImagineKind::Video;
         let aspect = imagine_aspect_label(self.imagine_aspect).to_string();
-        let composer_id = egui::Id::new("imagine-composer");
+        let composer_id = egui::Id::unique("imagine-composer");
         let cap = if imagine_toolbox_shows_title(dock) {
             260.0
         } else {
@@ -532,7 +532,7 @@ impl Cabin {
         let bar_w = (content.width() - 48.0).clamp(280.0, crate::theme::IMAGINE_BAR_W);
         let y = imagine_toolbox_top(content.top(), content.height(), box_h, dock);
         let x = content.center().x - bar_w * 0.5;
-        egui::Area::new(egui::Id::new("imagine-new"))
+        egui::Area::new(egui::Id::unique("imagine-new"))
             .fixed_pos(egui::pos2(content.right() - 148.0, content.top() + 12.0))
             .order(egui::Order::Foreground)
             .show(&ctx, |ui| {
@@ -590,7 +590,7 @@ impl Cabin {
         }
         if self.imagine_expand && !last.is_empty() && !grokhub_core::imagine_is_video_path(&last) {
             let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-            egui::Area::new(egui::Id::new("imagine-lightbox"))
+            egui::Area::new(egui::Id::unique("imagine-lightbox"))
                 .fixed_pos(content.min)
                 .order(egui::Order::Tooltip)
                 .show(&ctx, |ui| {
@@ -663,7 +663,7 @@ impl Cabin {
     pub(super) fn ui_imagine_bar(&mut self, ui: &mut egui::Ui) -> ImagineBarOut {
         let mut out = ImagineBarOut::default();
         let bar_w = ui.available_width().min(crate::theme::IMAGINE_BAR_W);
-        let focused = ui.memory(|m| m.has_focus(egui::Id::new("imagine-prompt")));
+        let focused = ui.memory(|m| m.has_focus(egui::Id::unique("imagine-prompt")));
         let stroke = if focused {
             crate::theme::border_strong()
         } else {
@@ -685,7 +685,7 @@ impl Cabin {
                 let edit = ui.put(
                     prompt_rect,
                     egui::TextEdit::singleline(&mut self.imagine_prompt)
-                        .id(egui::Id::new("imagine-prompt"))
+                        .id(egui::Id::unique("imagine-prompt"))
                         .desired_width(prompt_w)
                         .clip_text(true)
                         .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)))
@@ -900,7 +900,7 @@ impl Cabin {
                             let style = ui
                                 .interact(
                                     style_inner.response.rect,
-                                    egui::Id::new("imagine-style-hit"),
+                                    egui::Id::unique("imagine-style-hit"),
                                     egui::Sense::click(),
                                 )
                                 .on_hover_text("Style — suffix on the still");
@@ -941,7 +941,7 @@ impl Cabin {
                             let aspect_hit = ui
                                 .interact(
                                     aspect_inner.response.rect,
-                                    egui::Id::new("imagine-aspect-hit"),
+                                    egui::Id::unique("imagine-aspect-hit"),
                                     egui::Sense::click(),
                                 )
                                 .on_hover_text(format!("{aspect} {aspect_name}"));
@@ -972,7 +972,7 @@ impl Cabin {
                             let more = ui
                                 .interact(
                                     more_inner.response.rect,
-                                    egui::Id::new("imagine-more-hit"),
+                                    egui::Id::unique("imagine-more-hit"),
                                     egui::Sense::click(),
                                 )
                                 .on_hover_text("Account, mode, and sources");
@@ -1677,7 +1677,7 @@ impl Cabin {
     /// Account, mode, model, count and sources behind the composer's More chip.
     pub(super) fn ui_imagine_more(&mut self, ctx: &egui::Context) -> egui::Rect {
         let anchor = self.imagine_native.more_anchor;
-        egui::Area::new(egui::Id::new("imagine_more_menu"))
+        egui::Area::new(egui::Id::unique("imagine_more_menu"))
             .pivot(egui::Align2::LEFT_BOTTOM)
             .fixed_pos(anchor.left_top() - egui::vec2(0.0, 6.0))
             .order(egui::Order::Foreground)
