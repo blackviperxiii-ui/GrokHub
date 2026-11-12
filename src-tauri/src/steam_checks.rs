@@ -239,6 +239,205 @@ fn account(dir: &Path) -> Result<u64, String> {
     Ok(id)
 }
 
+/// Settings → Pulse sources: what the achievement and wishlist rows show.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteamPulse {
+    pub achievements_on: bool,
+    pub wishlist_on: bool,
+    /// camelCase threshold key (`anySale`, `off25`, `off50`, `lowest`).
+    pub threshold: String,
+    pub thresholds: Vec<ThresholdChoice>,
+    /// Whether a sealed SteamID is on disk. Never the ID itself.
+    pub has_id: bool,
+    /// True when this PC has exactly one signed-in Steam account to pick.
+    pub can_use_local: bool,
+    pub ach_note: String,
+    pub wish_note: String,
+    pub ach_private: bool,
+    pub wish_private: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThresholdChoice {
+    pub key: String,
+    pub label: String,
+}
+
+fn threshold_key(t: sw::Threshold) -> String {
+    match t {
+        sw::Threshold::AnySale => "anySale".into(),
+        sw::Threshold::Off25 => "off25".into(),
+        sw::Threshold::Off50 => "off50".into(),
+        sw::Threshold::Lowest => "lowest".into(),
+    }
+}
+
+fn parse_threshold(key: &str) -> Result<sw::Threshold, String> {
+    match key {
+        "anySale" => Ok(sw::Threshold::AnySale),
+        "off25" => Ok(sw::Threshold::Off25),
+        "off50" => Ok(sw::Threshold::Off50),
+        "lowest" => Ok(sw::Threshold::Lowest),
+        _ => Err("Pick Any sale, 25%, 50%, or Lowest.".into()),
+    }
+}
+
+fn has_id(dir: &Path) -> bool {
+    dir.join(sw::ID_FILE).exists()
+}
+
+fn can_use_local() -> bool {
+    grokhub_core::steam::detect_root()
+        .map(|root| sw::local_accounts(&root).len() == 1)
+        .unwrap_or(false)
+}
+
+/// Snapshot for Settings → Pulse sources. Never includes a SteamID.
+pub fn pulse_status(dir: &Path) -> SteamPulse {
+    let ach = sa::load(dir);
+    let wish = sw::load(dir);
+    SteamPulse {
+        achievements_on: ach.on,
+        wishlist_on: wish.on,
+        threshold: threshold_key(wish.threshold),
+        thresholds: sw::Threshold::ALL
+            .iter()
+            .map(|t| ThresholdChoice {
+                key: threshold_key(*t),
+                label: t.label().into(),
+            })
+            .collect(),
+        has_id: has_id(dir),
+        can_use_local: can_use_local(),
+        ach_note: note("achievements").unwrap_or_default(),
+        wish_note: note("deals").unwrap_or_default(),
+        ach_private: ach.private,
+        wish_private: wish.private,
+    }
+}
+
+/// Flip achievement nudges on or off (same files as the cabin Settings row).
+/// Does not require a SteamID yet — the UI asks for one while the source is on.
+pub fn set_achievements(dir: &Path, on: bool) -> Result<SteamPulse, String> {
+    let mut t = sa::load(dir);
+    if on {
+        t.on = true;
+    } else {
+        t.turn_off();
+        set_note("achievements", String::new());
+    }
+    sa::save(dir, &t)?;
+    Ok(pulse_status(dir))
+}
+
+/// Flip wishlist sale alerts on or off (Settings row; ID can follow).
+pub fn set_wishlist(dir: &Path, on: bool) -> Result<SteamPulse, String> {
+    let mut l = sw::load(dir);
+    if on {
+        l.on = true;
+    } else {
+        l.turn_off();
+        set_note("deals", String::new());
+    }
+    sw::save(dir, &l)?;
+    Ok(pulse_status(dir))
+}
+
+/// Set the wishlist sale threshold.
+pub fn set_threshold(dir: &Path, key: &str) -> Result<SteamPulse, String> {
+    let mut list = sw::load(dir);
+    list.threshold = parse_threshold(key)?;
+    sw::save(dir, &list)?;
+    Ok(pulse_status(dir))
+}
+
+/// Seal a SteamID from what the person typed (or the one account on this PC).
+/// Never returns the ID. `draft` empty + `use_local` uses the single local account.
+pub fn save_id(dir: &Path, draft: &str, use_local: bool) -> Result<SteamPulse, String> {
+    let id = if use_local {
+        let root = grokhub_core::steam::detect_root()
+            .ok_or("Steam isn't installed on this PC, so there's nothing to check yet.")?;
+        let local = sw::local_accounts(&root);
+        match local.as_slice() {
+            [id] => *id,
+            [] => {
+                return Err(
+                    "Sign in to Steam on this PC once, then tap Use the account on this PC again."
+                        .into(),
+                )
+            }
+            _ => {
+                return Err(
+                    "More than one Steam account signs in here. Paste the SteamID64 for the one you play on."
+                        .into(),
+                )
+            }
+        }
+    } else {
+        sw::parse_steam_id(draft)?
+    };
+    seal_steam_id(dir, id).map_err(|e| format!("Couldn't save the SteamID: {e}"))?;
+    // Reset clocks so the next check (or Check now) runs soon.
+    let mut wish = sw::load(dir);
+    wish.last_check_ms = 0;
+    sw::save(dir, &wish)?;
+    let mut ach = sa::load(dir);
+    ach.last_check_ms = 0;
+    sa::save(dir, &ach)?;
+    Ok(pulse_status(dir))
+}
+
+/// Forget the sealed SteamID and turn both sources off.
+pub fn forget_id(dir: &Path) -> Result<SteamPulse, String> {
+    let _ = std::fs::remove_file(dir.join(sw::ID_FILE));
+    let mut wish = sw::load(dir);
+    wish.turn_off();
+    sw::save(dir, &wish)?;
+    let mut ach = sa::load(dir);
+    ach.turn_off();
+    sa::save(dir, &ach)?;
+    set_note("deals", String::new());
+    set_note("achievements", String::new());
+    Ok(pulse_status(dir))
+}
+
+/// Run one check now (`achievements` or `deals`). Needs a sealed SteamID.
+pub fn check_now(dir: &Path, module: &str) -> Result<SteamPulse, String> {
+    if !has_id(dir) {
+        return Err("Save a SteamID first.".into());
+    }
+    match module {
+        "achievements" => {
+            let mut t = sa::load(dir);
+            if !t.on {
+                return Err("Turn achievement nudges on first.".into());
+            }
+            t.last_check_ms = 0;
+            t.failures = 0;
+            sa::save(dir, &t)?;
+            set_note("achievements", "Checking your achievements…".into());
+        }
+        "deals" => {
+            let mut l = sw::load(dir);
+            if !l.on {
+                return Err("Turn wishlist alerts on first.".into());
+            }
+            l.last_check_ms = 0;
+            sw::save(dir, &l)?;
+            if let Ok(mut t) = WISH_FAILED_MS.lock() {
+                *t = 0;
+            }
+            set_note("deals", "Checking your wishlist…".into());
+        }
+        _ => return Err("That source has no check here.".into()),
+    }
+    let dir_owned = dir.to_path_buf();
+    std::thread::spawn(move || tick(&dir_owned, grokhub_core::now_ms()));
+    Ok(pulse_status(dir))
+}
+
 /// Home's Turn on (or Turn off) for Achievements and Deals: uses the Steam
 /// account signed in on this PC, switches the source, and checks right away.
 pub fn turn(dir: &Path, module: &str, on: bool) -> Result<String, String> {
@@ -405,6 +604,60 @@ mod tests {
         );
         assert!(!sw::load(&d).on);
         assert!(turn(&d, "frame_rate", true).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn pulse_status_defaults_are_all_off() {
+        let d = dir("status");
+        let s = pulse_status(&d);
+        assert!(!s.achievements_on);
+        assert!(!s.wishlist_on);
+        assert!(!s.has_id);
+        assert_eq!(s.threshold, "anySale");
+        assert_eq!(s.thresholds.len(), 4);
+        assert_eq!(s.thresholds[0].label, "Any sale");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn save_id_seals_without_echoing_and_forget_clears() {
+        let d = dir("seal");
+        // Seal needs a LearnedVault key; without the OS keyring this may fail
+        // in CI — skip the seal path when the vault can't open, and still
+        // assert parse / forget / threshold.
+        let draft = "76561197960278073";
+        match save_id(&d, draft, false) {
+            Ok(s) => {
+                assert!(s.has_id);
+                // The view must never carry the digits.
+                let dumped = format!("{s:?}");
+                assert!(!dumped.contains(draft), "{dumped}");
+                let after = forget_id(&d).unwrap();
+                assert!(!after.has_id);
+                assert!(!after.wishlist_on);
+                assert!(!after.achievements_on);
+            }
+            Err(why) => {
+                // Vault unavailable in this environment: still no ID in the error.
+                assert!(!why.contains(draft), "{why}");
+                assert!(!has_id(&d));
+            }
+        }
+        let s = set_threshold(&d, "off50").unwrap();
+        assert_eq!(s.threshold, "off50");
+        assert!(set_threshold(&d, "nope").is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn wishlist_toggle_without_id_stays_on_for_entry() {
+        let d = dir("wish-ui");
+        let s = set_wishlist(&d, true).unwrap();
+        assert!(s.wishlist_on);
+        assert!(!s.has_id);
+        let off = set_wishlist(&d, false).unwrap();
+        assert!(!off.wishlist_on);
         let _ = std::fs::remove_dir_all(&d);
     }
 }
