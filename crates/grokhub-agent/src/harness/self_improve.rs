@@ -928,6 +928,7 @@ mod tests {
             "crates/grokhub-agent/src/harness/chat_record.rs",
             "src-tauri/src/self_improve.rs",
             "src-tauri/src/changes.rs",
+            "src-tauri/src/chat_trials.rs",
         ];
         let banned = [
             "ureq",
