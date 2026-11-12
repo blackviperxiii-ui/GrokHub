@@ -1,0 +1,1 @@
+- Shell: Nyx's dock loads desktop companion state on mount without a setState-in-effect refresh wrapper.

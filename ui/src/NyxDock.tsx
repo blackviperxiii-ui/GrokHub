@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { memo, useEffect, useState, useSyncExternalStore } from "react";
 import { COMPANION_NAME } from "./brand";
 import {
   desktopNyxDock,
@@ -45,16 +45,14 @@ export function useWide(): boolean {
 export const NyxDock = memo(function NyxDock({ url, mood }: { url: string; mood: Mood }) {
   const wide = useWide();
   const [desk, setDesk] = useState<DesktopNyxState | null>(null);
-  const refresh = useCallback(() => {
-    if (!inShell()) {
-      setDesk(null);
-      return;
-    }
+
+  // Mount load only. Inlined like Memory: no refresh wrapper that setStates
+  // from the effect (react-hooks/set-state-in-effect). Off the shell, desk
+  // stays null; button handlers refresh via their own .then(setDesk).
+  useEffect(() => {
+    if (!inShell()) return;
     void desktopNyxGet().then(setDesk, () => setDesk(null));
   }, []);
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
 
   if (!wide) return null;
   const doing = MOOD_LABEL[mood] ?? MOOD_LABEL["hanging-out"];
