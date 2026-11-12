@@ -3264,6 +3264,68 @@ export function gameRl(): Promise<RocketLeagueView> {
   return invoke<RocketLeagueView>("game_rl");
 }
 
+/** Settings → Behavior / Library companion: game watcher (`app.json` gameWatch). */
+export interface GameWatch {
+  on: boolean;
+  note: string;
+}
+
+export function getGameWatch(): Promise<GameWatch> {
+  return invoke<GameWatch>("get_game_watch");
+}
+
+export function setGameWatch(on: boolean): Promise<GameWatch> {
+  return invoke<GameWatch>("set_game_watch", { on });
+}
+
+/** Settings → Pulse: Steam achievement nudges and wishlist sale alerts. */
+export interface SteamPulseThreshold {
+  key: string;
+  label: string;
+}
+
+export interface SteamPulse {
+  achievementsOn: boolean;
+  wishlistOn: boolean;
+  threshold: string;
+  thresholds: SteamPulseThreshold[];
+  /** Sealed SteamID on disk — never the digits. */
+  hasId: boolean;
+  canUseLocal: boolean;
+  achNote: string;
+  wishNote: string;
+  achPrivate: boolean;
+  wishPrivate: boolean;
+}
+
+export function getSteamPulse(): Promise<SteamPulse> {
+  return invoke<SteamPulse>("get_steam_pulse");
+}
+
+export function setSteamAchievements(on: boolean): Promise<SteamPulse> {
+  return invoke<SteamPulse>("set_steam_achievements", { on });
+}
+
+export function setSteamWishlist(on: boolean): Promise<SteamPulse> {
+  return invoke<SteamPulse>("set_steam_wishlist", { on });
+}
+
+export function setSteamWishlistThreshold(threshold: string): Promise<SteamPulse> {
+  return invoke<SteamPulse>("set_steam_wishlist_threshold", { threshold });
+}
+
+export function saveSteamId(draft: string, useLocal: boolean): Promise<SteamPulse> {
+  return invoke<SteamPulse>("save_steam_id", { draft, useLocal });
+}
+
+export function forgetSteamId(): Promise<SteamPulse> {
+  return invoke<SteamPulse>("forget_steam_id");
+}
+
+export function steamCheckNow(module: "achievements" | "deals"): Promise<SteamPulse> {
+  return invoke<SteamPulse>("steam_check_now", { module });
+}
+
 /** A Home tile's Turn on, for a switch that needs nothing else. */
 export function homeTurnOn(feature: string): Promise<void> {
   return invoke<void>("home_turn_on", { feature });

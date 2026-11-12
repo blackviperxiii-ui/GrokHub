@@ -3542,6 +3542,37 @@ label.toggle-row {
   margin-top: 4px;
 }
 
+.game-watch-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.steam-pulse-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.steam-pulse-sources h2 {
+  margin: 0;
+}
+
+.steam-source-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 0 0;
+  padding-left: 4px;
+}
+
+.steam-id-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .game-screen {
   display: flex;
   flex-direction: column;

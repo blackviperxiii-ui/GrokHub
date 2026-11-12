@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { companionFrame, companionSetNote, type CompanionFrame } from "./api";
+import { GameWatch } from "./GameWatch";
 
 export const NO_NEWS = "No news since you last played.";
 export const NEWS_UNAVAILABLE = "Couldn't read the news for it just now.";
@@ -111,6 +112,7 @@ export function GameCompanion({
           </a>
         </p>
       )}
+      <GameWatch compact />
       <div className="game-companion-slot" aria-label="Game screen">
         {children ?? <p className="card-status">Game details land here in a later update.</p>}
       </div>
