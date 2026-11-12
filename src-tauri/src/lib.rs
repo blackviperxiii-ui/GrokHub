@@ -73,6 +73,8 @@ pub mod mods_install;
 mod net_watch;
 mod nudges;
 pub mod nyx;
+#[cfg(desktop)]
+pub mod desktop_nyx;
 pub use grokhub_agent::xai_keychain as oauth;
 pub mod onboard;
 pub mod opener;
@@ -3174,6 +3176,91 @@ fn nyx_tiles(state: State<'_, ShellState>, ids: Vec<String>) -> HashMap<String, 
     nyx::tiles(&ids, current(&state).adults_on())
 }
 
+/// Labs / dock: desktop companion state (switch, undock, wardrobe, effects).
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_get(state: State<'_, ShellState>) -> desktop_nyx::State {
+    desktop_nyx::state_of(&current(&state), desktop_nyx::wayland_now())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_set(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    patch: desktop_nyx::Patch,
+) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::apply_patch(current(&state), patch);
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    desktop_nyx::show_window(&app, &next)?;
+    let _ = desktop_nyx::apply_behind(&app, next.desktop_nyx_behind);
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_undock(app: AppHandle, state: State<'_, ShellState>) -> Result<desktop_nyx::State, String> {
+    let mut next = current(&state);
+    if !next.desktop_nyx {
+        next.desktop_nyx = true;
+    }
+    next.desktop_nyx_undocked = true;
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    desktop_nyx::show_window(&app, &next)?;
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_dock(app: AppHandle, state: State<'_, ShellState>) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::apply_patch(
+        current(&state),
+        desktop_nyx::Patch {
+            undocked: Some(false),
+            ..desktop_nyx::Patch::default()
+        },
+    );
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    desktop_nyx::hide_window(&app)?;
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_set_outfit(
+    state: State<'_, ShellState>,
+    id: Option<String>,
+) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::set_outfit(current(&state), id)?;
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_save_pos(
+    state: State<'_, ShellState>,
+    x: f64,
+    y: f64,
+    monitor_w: f64,
+    monitor_h: f64,
+) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::save_pos(current(&state), [x, y], [monitor_w, monitor_h]);
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_set_passthrough(app: AppHandle, ignore: bool) -> Result<(), String> {
+    desktop_nyx::set_passthrough(&app, ignore)
+}
+
 #[tauri::command]
 async fn get_playbooks(state: State<'_, ShellState>) -> Result<playbooks::Page, String> {
     let dir = state.config_dir.clone();
@@ -5712,6 +5799,11 @@ pub fn run() {
             proactive::start(app.state::<ShellState>().config_dir.clone());
             build_main_window(app)?;
             #[cfg(desktop)]
+            {
+                let settings = current(&app.state::<ShellState>());
+                let _ = desktop_nyx::show_window(app.handle(), &settings);
+            }
+            #[cfg(desktop)]
             build_tray(app)?;
             #[cfg(desktop)]
             watch_for_updates(app.handle().clone(), grokhub_agent::perm::config_dir());
@@ -5719,6 +5811,20 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
+                #[cfg(desktop)]
+                if window.label() == desktop_nyx::LABEL {
+                    let state = window.state::<ShellState>();
+                    let next = desktop_nyx::apply_patch(
+                        current(&state),
+                        desktop_nyx::Patch {
+                            undocked: Some(false),
+                            ..desktop_nyx::Patch::default()
+                        },
+                    );
+                    let _ = settings::save(&state.config_dir, &next);
+                    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+                    return;
+                }
                 let state = window.state::<ShellState>();
                 if current(&state).close_to_tray {
                     api.prevent_close();
@@ -5979,6 +6085,20 @@ pub fn run() {
             os_extras::set_notifications,
             nyx_look,
             nyx_tiles,
+            #[cfg(desktop)]
+            desktop_nyx_get,
+            #[cfg(desktop)]
+            desktop_nyx_set,
+            #[cfg(desktop)]
+            desktop_nyx_undock,
+            #[cfg(desktop)]
+            desktop_nyx_dock,
+            #[cfg(desktop)]
+            desktop_nyx_set_outfit,
+            #[cfg(desktop)]
+            desktop_nyx_save_pos,
+            #[cfg(desktop)]
+            desktop_nyx_set_passthrough,
             get_queue,
             stop_task,
             get_workboard,

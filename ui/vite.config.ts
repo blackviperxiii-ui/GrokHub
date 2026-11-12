@@ -5,6 +5,7 @@ import brand from "../brand/brand.json" with { type: "json" };
 
 // Tauri loads the dev server on a fixed port and the built files from dist/.
 // The dev server may also read ../brand, where brand.json and the logo art live.
+// `nyx-desk` is the desktop companion's own see-through window page.
 export default defineConfig({
   plugins: [
     react({
@@ -28,7 +29,17 @@ export default defineConfig({
   },
   // licenses.md ships the notices of every bundled package (MIT and the like
   // ask for theirs to travel with the code).
-  build: { outDir: "dist", target: "es2022", license: { fileName: "licenses.md" } },
+  build: {
+    outDir: "dist",
+    target: "es2022",
+    license: { fileName: "licenses.md" },
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        "nyx-desk": "nyx-desk.html",
+      },
+    },
+  },
   test: {
     environment: "jsdom",
     globals: true,

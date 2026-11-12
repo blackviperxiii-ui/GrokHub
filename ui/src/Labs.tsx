@@ -9,8 +9,15 @@ import {
   type PluginPage,
   type PluginRow,
 } from "./api";
-import { PRODUCT_NAME } from "./brand";
+import { COMPANION_NAME, PRODUCT_NAME } from "./brand";
+import {
+  desktopNyxGet,
+  desktopNyxSet,
+  type DesktopNyxState,
+} from "./desktopNyxApi";
 import { Diagnostics } from "./Diagnostics";
+import { Toggle } from "./Toggle";
+import { inShell } from "./transport";
 import { StatusLine, useNote } from "./ui";
 
 export const LABS_NOTE = "Early features. They work, but they may change.";
@@ -22,6 +29,9 @@ export const PLUGINS_NOTE =
   "Bundles stay off until you trust this version and turn them on. Trust covers the hook commands, MCP server commands, skills and agents a bundle lists. Fetching a marketplace list installs nothing.";
 export const PLUGINS_EMPTY =
   "No plugins yet. Install a bundle above. It stays off until you trust it and turn it on.";
+export const DESKTOP_NYX_TIP = `Puts a pop-out on ${COMPANION_NAME}'s dock. Popped out, she stands on a holo pedestal in a small see-through window over your desktop.`;
+export const DESKTOP_NYX_WAYLAND =
+  "On this desktop, a see-through always-on-top window may not be honoured (common on Wayland). She still opens; the glass and float may not.";
 
 /** The next step for a bundle: trust first, then on and off. */
 function next(row: PluginRow): { act: PluginAct; label: string } {
@@ -95,6 +105,7 @@ export function Labs() {
       <h2>Labs</h2>
       <p className="note">{LABS_NOTE}</p>
       <p className="note">{CHANNEL_NOTE}</p>
+      {inShell() && <DesktopCompanion />}
       <h3>
         Plugins{" "}
         <span className="badge" title={PLUGINS_TIP}>
@@ -194,6 +205,63 @@ export function Labs() {
         </ul>
       )}
       <Diagnostics />
+    </div>
+  );
+}
+
+/** Settings → Labs → Desktop companion (cabin desktop_nyx). Off by default. */
+function DesktopCompanion() {
+  const [desk, setDesk] = useState<DesktopNyxState | null>(null);
+  const { fail } = useNote();
+  useEffect(() => {
+    void desktopNyxGet().then(setDesk, fail);
+  }, [fail]);
+  if (!desk) return null;
+  const effectsOk = desk.effects.transparent && desk.effects.onTop;
+  return (
+    <div className="labs-desktop-nyx" role="group" aria-label={`Desktop ${desk.companion}`}>
+      <h3>
+        Desktop {desk.companion}{" "}
+        <span className="badge" title={DESKTOP_NYX_TIP}>
+          Preview
+        </span>
+      </h3>
+      <Toggle
+        checked={desk.enabled}
+        onChange={(on) => void desktopNyxSet({ enabled: on }).then(setDesk, fail)}
+      >
+        Desktop companion
+      </Toggle>
+      <p className="note">{DESKTOP_NYX_TIP}</p>
+      {!effectsOk && <p className="note warn">{DESKTOP_NYX_WAYLAND}</p>}
+      {desk.enabled && (
+        <>
+          <Toggle
+            checked={desk.behind}
+            onChange={(behind) => void desktopNyxSet({ behind }).then(setDesk, fail)}
+          >
+            Stay behind windows
+          </Toggle>
+          <p className="note">
+            On: she sits on the desktop and your apps cover her. Off: she floats above them.
+          </p>
+          <Toggle
+            checked={desk.adult}
+            onChange={(adult) => void desktopNyxSet({ adult }).then(setDesk, fail)}
+          >
+            Allow 18+ outfits on the desktop
+          </Toggle>
+          <p className="note">
+            Off by default: the desktop is visible to anyone at the screen. Needs adults-only
+            personalities on.
+          </p>
+          <p className="note">
+            {desk.undocked
+              ? "On the desktop. Use Bring her back on her dock or right-click menu."
+              : "Docked in the chat. Use Put her on the desktop on her dock."}
+          </p>
+        </>
+      )}
     </div>
   );
 }
