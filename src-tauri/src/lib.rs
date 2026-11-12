@@ -20,6 +20,7 @@ pub mod capabilities;
 pub mod change_rows;
 pub mod changes;
 pub mod chat_tabs;
+pub mod chat_trials;
 pub mod chips;
 mod code_agent;
 mod code_rollback;
@@ -705,6 +706,10 @@ async fn chat_turn(
         // Typed asks also feed the repeated-ask automate offers.
         pulse_digests::note_ask(&config_dir, &text, grokhub_core::now_ms());
     }
+    // "That was wrong" fails the chat's last task before this turn runs; the
+    // turn's own outcome is written when it ends (as the cabin does).
+    let started = grokhub_core::now_ms();
+    chat_trials::said(&config_dir, &conversation_id, &text, started);
     tauri::async_runtime::spawn_blocking(move || {
         let mut route = route(&settings, mode, &config_dir)?;
         if let Some(dir) = own_folder {
@@ -771,6 +776,9 @@ async fn chat_turn(
             let now = grokhub_core::now_ms();
             let offset = clock.map_or(0, |c| c.at(now).utc_offset_min());
             home::turn_done_for(&config_dir, &conversation_id, now, offset);
+            // The turn's task outcome and run metrics, for the weekly
+            // self-review and skill trials.
+            chat_trials::turn_end(&config_dir, &conversation_id, &text, started, now);
         }
         stop
     })
