@@ -171,11 +171,17 @@ pub fn set_enabled(
     enabled: bool,
     clock: LocalClock,
 ) -> Result<Vec<Automation>, String> {
-    change(config_dir, id, |list, at| {
+    let out = change(config_dir, id, |list, at| {
         let mut a = list[at].clone();
         a.enabled = enabled;
         list[at] = grokhub_core::ensure_automation_schedule(a, clock);
-    })
+    })?;
+    grokhub_core::learn::hub::note_all(grokhub_core::learn::sources::automation_toggle(
+        id,
+        enabled,
+        grokhub_core::now_ms(),
+    ));
+    Ok(out)
 }
 
 /// Edit in place: the new words set the name, the ask and the schedule. The

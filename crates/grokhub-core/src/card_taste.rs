@@ -2,13 +2,12 @@
 //! I don't like on Pulse cards. Dismiss is not a signal and never lands here.
 //!
 //! Every card carries a few generic traits (`kind:value`, such as
-//! `topic:<x>`, `subject:<x>`, `tone:<x>`, `source:<x>`). One reaction says
-//! little about which trait caused it, so the weights are refit from all
-//! reactions together: a small regularised logistic fit. A trait seen on
-//! liked and disliked cards alike stays near even, and the blame for a
-//! dislike lands on the trait only the disliked cards share. The fit starts
-//! every weight at zero and pulls it back toward zero, so one or two clicks
-//! move a little and repeated clicks move more.
+//! `topic:<x>`, `subject:<x>`, `tone:<x>`, `source:<x>`). Reactions still
+//! land in `card-taste.json` (for the writer's "More of / Less of" line, via
+//! a small regularised logistic fit) and also feed the learning engine as
+//! hashed `trait:<kind>/<hash>` beliefs. **Pulse and Home ranking** read
+//! those beliefs (`score_from_beliefs` / `rank_live`), not the logistic
+//! weights, so the page and the learned list share one store.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -37,6 +36,8 @@ pub const HIDE_AT: f64 = -1.5;
 pub const RANK_MS_PER_POINT: f64 = 6.0 * 3_600_000.0;
 /// The most a score moves a card, in points.
 const RANK_CAP: f64 = 3.0;
+/// How far Home may lean on trait beliefs, in score points.
+pub const HOME_BELIEF_CAP: f64 = 1.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -239,13 +240,81 @@ impl Taste {
     }
 }
 
+/// One trait belief's lean for ranking: rate 1 → +confidence, rate 0 →
+/// −confidence. Wrong / forgotten / non-rate beliefs count as zero.
+pub fn belief_weight(belief: &crate::learn::Belief, now_ms: u64) -> f64 {
+    let Some(rate) = belief.rate() else {
+        return 0.0;
+    };
+    (rate as f64 * 2.0 - 1.0) * belief.confidence(now_ms) as f64
+}
+
+/// Sum of trait beliefs for a card's traits (hashed the same way
+/// [`crate::learn::sources::taste`] records them).
+pub fn score_from_beliefs(beliefs: &crate::learn::Beliefs, traits: &[String], now_ms: u64) -> f64 {
+    traits
+        .iter()
+        .filter_map(|t| crate::learn::sources::trait_id(t))
+        .filter_map(|id| crate::learn::Subject::new("trait", &id))
+        .filter_map(|s| beliefs.get(&s).map(|b| belief_weight(b, now_ms)))
+        .sum()
+}
+
 /// Where a card sorts on the page: its time, moved by its score.
 pub fn rank_time(created_at: u64, score: f64) -> i64 {
     created_at as i64 + (score.clamp(-RANK_CAP, RANK_CAP) * RANK_MS_PER_POINT) as i64
 }
 
-/// Order feed cards by taste: liked kinds rise, disliked kinds sink, and
-/// cards at or below [`HIDE_AT`] leave the page.
+/// Order feed cards from engine beliefs: liked traits rise, disliked sink,
+/// and cards at or below [`HIDE_AT`] leave the page. No signal: the order
+/// is kept.
+pub fn rank_from_beliefs(
+    cards: Vec<UpdateCard>,
+    beliefs: &crate::learn::Beliefs,
+    now_ms: u64,
+) -> Vec<UpdateCard> {
+    let scored: Vec<(f64, UpdateCard)> = cards
+        .into_iter()
+        .map(|c| {
+            let s = score_from_beliefs(beliefs, &card_traits(&c), now_ms);
+            (s, c)
+        })
+        .collect();
+    if scored.iter().all(|(s, _)| *s == 0.0) {
+        return scored.into_iter().map(|(_, c)| c).collect();
+    }
+    let mut ranked: Vec<(i64, UpdateCard)> = scored
+        .into_iter()
+        .filter_map(|(s, c)| (s > HIDE_AT).then(|| (rank_time(c.created_at, s), c)))
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.id.cmp(&b.1.id)));
+    ranked.into_iter().map(|(_, c)| c).collect()
+}
+
+/// [`rank_from_beliefs`] over the running engine. Before [`crate::learn::hub::start`]
+/// the cards keep their order.
+pub fn rank_live(cards: Vec<UpdateCard>, now_ms: u64) -> Vec<UpdateCard> {
+    if !crate::learn::hub::started() {
+        return cards;
+    }
+    crate::learn::hub::read(|e| rank_from_beliefs(cards.clone(), e.beliefs(), now_ms))
+        .unwrap_or(cards)
+}
+
+/// Home's capped lean on the same trait beliefs (±[`HOME_BELIEF_CAP`]).
+pub fn home_belief_boost(card: &UpdateCard, now_ms: u64) -> f64 {
+    if !crate::learn::hub::started() {
+        return 0.0;
+    }
+    crate::learn::hub::read(|e| {
+        score_from_beliefs(e.beliefs(), &card_traits(card), now_ms)
+            .clamp(-HOME_BELIEF_CAP, HOME_BELIEF_CAP)
+    })
+    .unwrap_or(0.0)
+}
+
+/// Order feed cards by the logistic fit still stored for the writer. Prefer
+/// [`rank_live`] for the page.
 pub fn rank(cards: Vec<UpdateCard>, taste: &Taste) -> Vec<UpdateCard> {
     rank_with(cards, &taste.weights())
 }
