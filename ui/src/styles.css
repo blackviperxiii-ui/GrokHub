@@ -3549,7 +3549,8 @@ label.toggle-row {
   margin-top: 8px;
 }
 
-.game-screen h3 {
+.game-screen h3,
+.game-screen-title {
   margin: 0;
   font-size: var(--font-body);
   letter-spacing: 0.04em;
