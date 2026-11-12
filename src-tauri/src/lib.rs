@@ -38,6 +38,8 @@ pub use grokhub_code::term as code_term;
 pub mod battlenet;
 pub mod connectors;
 pub mod credential;
+#[cfg(desktop)]
+pub mod desktop_nyx;
 pub mod diagnostics;
 pub mod episode;
 pub mod export;
@@ -75,8 +77,6 @@ pub mod mods_install;
 mod net_watch;
 mod nudges;
 pub mod nyx;
-#[cfg(desktop)]
-pub mod desktop_nyx;
 pub use grokhub_agent::xai_keychain as oauth;
 pub mod onboard;
 pub mod opener;
@@ -3202,7 +3202,10 @@ fn desktop_nyx_set(
 
 #[cfg(desktop)]
 #[tauri::command]
-fn desktop_nyx_undock(app: AppHandle, state: State<'_, ShellState>) -> Result<desktop_nyx::State, String> {
+fn desktop_nyx_undock(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+) -> Result<desktop_nyx::State, String> {
     let mut next = current(&state);
     if !next.desktop_nyx {
         next.desktop_nyx = true;
@@ -3216,7 +3219,10 @@ fn desktop_nyx_undock(app: AppHandle, state: State<'_, ShellState>) -> Result<de
 
 #[cfg(desktop)]
 #[tauri::command]
-fn desktop_nyx_dock(app: AppHandle, state: State<'_, ShellState>) -> Result<desktop_nyx::State, String> {
+fn desktop_nyx_dock(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+) -> Result<desktop_nyx::State, String> {
     let next = desktop_nyx::apply_patch(
         current(&state),
         desktop_nyx::Patch {

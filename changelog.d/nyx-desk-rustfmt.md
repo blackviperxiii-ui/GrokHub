@@ -1,0 +1,1 @@
+- Shell: rustfmt the desktop Nyx module and command signatures left unformatted by the wardrobe PR.
