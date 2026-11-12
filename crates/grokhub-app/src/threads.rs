@@ -846,10 +846,7 @@ pub fn archive_thread(thread: &mut ChatThread, now_ms: u64) -> bool {
 
 /// Restore a chat to the main list. Returns false when it was not archived.
 pub fn unarchive_thread(thread: &mut ChatThread) -> bool {
-    if thread.archived_at.take().is_none() {
-        return false;
-    }
-    true
+    thread.archived_at.take().is_some()
 }
 
 pub fn is_deleted(thread: &ChatThread) -> bool {
@@ -868,10 +865,7 @@ pub fn soft_delete_thread(thread: &mut ChatThread, now_ms: u64) -> bool {
 
 /// Restore a chat from trash. Returns false when it was not deleted.
 pub fn restore_deleted_thread(thread: &mut ChatThread) -> bool {
-    if thread.deleted_at.take().is_none() {
-        return false;
-    }
-    true
+    thread.deleted_at.take().is_some()
 }
 
 /// Drop soft-deleted chats older than `retain_ms`. Returns the purged rows so
