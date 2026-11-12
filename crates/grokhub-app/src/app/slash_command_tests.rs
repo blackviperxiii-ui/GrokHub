@@ -539,8 +539,7 @@ fn scratch_btw_worktree_and_plan() {
     cabin.run_slash_line("/worktree");
     assert_eq!(
         cabin.status,
-        "There is no /worktree command. Chats run in the bound project folder; only helpers \
-         work in worktrees of their own"
+        "Worktrees were a grok CLI feature; chats run in the bound project folder"
     );
     cabin.threads[cabin.thread_idx].grok_session = Some("sess-harbor".into());
     let (count, idx) = (cabin.threads.len(), cabin.thread_idx);
@@ -549,9 +548,7 @@ fn scratch_btw_worktree_and_plan() {
     assert_eq!(cabin.thread_idx, idx);
     assert!(!cabin.threads[idx].grok_fork);
     assert_eq!(
-        cabin.status,
-        "There is no /worktree command. Chats run in the bound project folder; only helpers \
-         work in worktrees of their own",
+        cabin.status, "Worktrees were a grok CLI feature; chats run in the bound project folder",
         "/fork leaves the status alone"
     );
     cabin.threads[cabin.thread_idx].plan_body = "harbor steps".into();
