@@ -84,6 +84,7 @@ mod span;
 mod span_search;
 mod span_tail;
 mod trail;
+pub mod weekly_review;
 
 pub use access::{always_does_not_imply_full, AccessMode};
 pub use approval::{
