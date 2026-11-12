@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use grokhub_agent::harness::{self as hx, ParkRequest};
 use grokhub_core::battlenet::{self as bnet, BnetGame, WowFlavor};
+use grokhub_core::brand;
 use grokhub_core::eso_addon::{self as eso, AddonState as EsoAddonState};
 use grokhub_core::game_watch_wow as wow_watch;
 use grokhub_core::gw2_api::{self as gw2, FetchError, GetError, Gw2Account};
@@ -62,11 +63,16 @@ pub struct WowFlavorRow {
 }
 
 fn wow_addon_line(addon: &WowAddonState) -> String {
+    let product = brand::product_name();
     match addon {
-        WowAddonState::NotInstalled => "Loadout addon not installed".into(),
-        WowAddonState::Current { version } => format!("Loadout addon {version}"),
-        WowAddonState::Outdated { version } => format!("Loadout addon {version}, update ready"),
-        WowAddonState::Foreign => "Another addon named Loadout is installed".into(),
+        WowAddonState::NotInstalled => format!("{product} addon not installed"),
+        WowAddonState::Current { version } => format!("{product} addon {version}"),
+        WowAddonState::Outdated { version } => {
+            format!("{product} addon {version}, update ready")
+        }
+        WowAddonState::Foreign => {
+            format!("Another addon named {} is installed", wow_addon::FOLDER)
+        }
     }
 }
 
@@ -157,14 +163,14 @@ pub fn wow_view_from(
         None
     } else if let Some(dir) = running_dir {
         let on = wow_watch::logging_since(dir, now - Duration::from_secs(600));
-        Some(
-            if on {
-                "Combat log on: finished keys and boss pulls post to Pulse."
-            } else {
-                "Combat log off: type /combatlog in game so Loadout can follow keys and pulls."
-            }
-            .to_string(),
-        )
+        Some(if on {
+            "Combat log on: finished keys and boss pulls post to Pulse.".into()
+        } else {
+            format!(
+                "Combat log off: type /combatlog in game so {} can follow keys and pulls.",
+                brand::product_name()
+            )
+        })
     } else {
         None
     };
@@ -262,9 +268,15 @@ pub fn wow_addon_action(
                 results
                     .into_iter()
                     .find_map(|(_, r)| r.err())
-                    .unwrap_or_else(|| "Couldn't install the Loadout addon.".into())
+                    .unwrap_or_else(|| {
+                        format!("Couldn't install the {} addon.", brand::product_name())
+                    })
             } else {
-                "Installed the Loadout addon for WoW. Quit and restart WoW so it loads; then open the minimap menu or type /loadout.".into()
+                format!(
+                    "Installed the {} addon for WoW. Quit and restart WoW so it loads; then open the minimap menu or type /{}.",
+                    brand::product_name(),
+                    wow_addon::FOLDER.to_ascii_lowercase()
+                )
             };
             Ok(view)
         }
@@ -275,8 +287,10 @@ pub fn wow_addon_action(
             wow_addon::install(install, &dir)?;
             let mut view = wow_view(true);
             view.note = format!(
-                "Installed the Loadout addon for WoW {}. Quit and restart WoW so it loads; then open the minimap menu or type /loadout.",
-                flavor.label()
+                "Installed the {} addon for WoW {}. Quit and restart WoW so it loads; then open the minimap menu or type /{}.",
+                brand::product_name(),
+                flavor.label(),
+                wow_addon::FOLDER.to_ascii_lowercase()
             );
             Ok(view)
         }
@@ -287,7 +301,8 @@ pub fn wow_addon_action(
             wow_addon::remove(&dir)?;
             let mut view = wow_view(true);
             view.note = format!(
-                "Removed the Loadout addon from WoW {}. What it saved stays in WoW's WTF folder.",
+                "Removed the {} addon from WoW {}. What it saved stays in WoW's WTF folder.",
+                brand::product_name(),
                 flavor.label()
             );
             Ok(view)
@@ -619,7 +634,9 @@ fn eso_status(state: &EsoAddonState, label: &str) -> String {
             format!("ESO addon{label}: {version}, an update is ready.")
         }
         EsoAddonState::Foreign => format!(
-            "ESO{label}: an addon named Loadout that Loadout didn't install is there, so it's left alone."
+            "ESO{label}: an addon named {} that {} didn't install is there, so it's left alone.",
+            eso::FOLDER,
+            brand::product_name()
         ),
     }
 }
@@ -677,7 +694,10 @@ pub fn eso_addon_action(server_dir: &Path, install: bool) -> Result<EsoView, Str
     };
     let note = match result {
         Ok(()) if install => {
-            "Installed. Turn on Loadout in ESO's Add-Ons menu, then it saves when you log out or reload the UI.".into()
+            format!(
+                "Installed. Turn on {} in ESO's Add-Ons menu, then it saves when you log out or reload the UI.",
+                brand::product_name()
+            )
         }
         Ok(()) => "Removed.".into(),
         Err(e) => return Err(e),
@@ -809,7 +829,10 @@ fn osrs_fetch(config_dir: &Path, name: &str, kind: AccountType) -> Result<OsrsSt
             kind.label().to_lowercase()
         ),
         grokhub_core::http::Error::Status { code, .. } => {
-            format!("The hiscores answered {code}; Loadout tries again later.")
+            format!(
+                "The hiscores answered {code}; {} tries again later.",
+                brand::product_name()
+            )
         }
         _ => "Couldn't reach Jagex's hiscores.".into(),
     })?;
