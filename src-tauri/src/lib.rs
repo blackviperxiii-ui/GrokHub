@@ -1423,9 +1423,7 @@ async fn chat_tab_restore_deleted(
 }
 
 #[tauri::command]
-async fn get_hangout_mode(
-    state: State<'_, ShellState>,
-) -> Result<chat_tabs::HangoutMode, String> {
+async fn get_hangout_mode(state: State<'_, ShellState>) -> Result<chat_tabs::HangoutMode, String> {
     let dir = state.config_dir.clone();
     off_main(move || chat_tabs::get_hangout_mode(&dir)).await
 }
@@ -2067,11 +2065,7 @@ struct MemoryFileSaved {
 }
 
 #[tauri::command]
-fn save_memory_file(
-    name: String,
-    text: String,
-    base: String,
-) -> Result<MemoryFileSaved, String> {
+fn save_memory_file(name: String, text: String, base: String) -> Result<MemoryFileSaved, String> {
     let (files, redacted) = memory::save_file(&name, &text, &base)?;
     Ok(MemoryFileSaved { files, redacted })
 }
@@ -2086,10 +2080,7 @@ fn reflect_memory(
     state: State<'_, ShellState>,
     conversation_id: Option<String>,
 ) -> Result<memory::ReflectResult, String> {
-    memory::reflect(
-        &state.config_dir,
-        conversation_id.as_deref(),
-    )
+    memory::reflect(&state.config_dir, conversation_id.as_deref())
 }
 
 #[tauri::command]
