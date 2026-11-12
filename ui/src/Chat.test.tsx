@@ -47,6 +47,10 @@ const api = vi.hoisted(() => ({
   revealSaved: vi.fn(),
   quickChips: vi.fn<(surface: string, id?: string, draft?: string, mode?: SessionMode) => Promise<QuickChip[]>>(),
   chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
+  decisionInbox: vi.fn(() => Promise.resolve([])),
+  answerInbox: vi.fn(() => Promise.resolve("answered")),
+  replyPick: vi.fn(() => Promise.resolve()),
+  listChats: vi.fn(() => Promise.resolve([])),
   goalAct: vi.fn(() => Promise.resolve({ board: { today: [], mine: [], suggested: [], season: { label: "", done: 0, trophies: [], badges: [] } } })),
   getHangoutMode: vi.fn(() => Promise.resolve("type" as const)),
   setHangoutMode: vi.fn((mode: "talk" | "type") => Promise.resolve(mode)),
@@ -91,6 +95,10 @@ vi.mock("./api", () => ({
   revealSaved: api.revealSaved,
   quickChips: api.quickChips,
   chipOutcome: api.chipOutcome,
+  decisionInbox: api.decisionInbox,
+  answerInbox: api.answerInbox,
+  replyPick: api.replyPick,
+  listChats: api.listChats,
   goalAct: api.goalAct,
   getHangoutMode: api.getHangoutMode,
   setHangoutMode: api.setHangoutMode,
@@ -296,6 +304,79 @@ describe("Chat", () => {
     emit(id, { kind: "done", stop: "end_turn" });
     finish();
     await waitFor(() => expect(api.sendChat).toHaveBeenLastCalledWith(id, "Run this: ls", undefined));
+  });
+
+  it("a findings pill fills the composer without sending", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("scan it");
+    emit(id, { kind: "text", text: "Scan complete." });
+    emit(id, {
+      kind: "findings",
+      items: [{ severity: "high", text: "Port 53 is taken" }],
+      fixes: [{ label: "Fix port 53 conflict", prompt: "Fix port 53 conflict: Stop the other service" }],
+      doAll: null,
+    });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await userEvent.click(screen.getByRole("button", { name: "Fix port 53 conflict" }));
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue(
+      "Fix port 53 conflict: Stop the other service",
+    );
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a recap card swaps the Finished block out of the bubble", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("do the work");
+    emit(id, { kind: "text", text: "Fixed it.\n\nFinished\n- Done: Read the file" });
+    emit(id, {
+      kind: "recap",
+      body: "Fixed it.",
+      lines: [{ status: "done", text: "Read the file" }],
+      needsYou: [],
+      undo: [],
+      steps: [{ title: "read_file", failed: false }],
+    });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    expect(screen.getByText("1 of 1 done")).toBeVisible();
+    const bubble = document.querySelector('[data-role="assistant"]');
+    expect(bubble?.textContent).toBe("Fixed it.");
+    await userEvent.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByText("read_file")).toBeVisible();
+  });
+
+  it("a plan card's chips fill its reply box or answer it, and picks are remembered", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("plan it");
+    emit(id, {
+      kind: "elicit",
+      id: "plan-1",
+      server: "Plan",
+      message: "1. Read the file",
+      mode: "form",
+      url: "",
+      fieldName: "reply",
+      fieldTitle: "Reply",
+      secret: false,
+      options: [],
+      chips: [
+        { key: "plan:go", label: "Yes, go", act: "send", text: "Go ahead with the plan." },
+        { key: "plan:change", label: "Change this", act: "prefill", text: "Change the plan: " },
+      ],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Change this" }));
+    expect(screen.getByLabelText("Reply")).toHaveValue("Change the plan: ");
+    expect(api.answerElicit).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Yes, go" }));
+    await waitFor(() =>
+      expect(api.answerElicit).toHaveBeenCalledWith(id, "plan-1", "accept", "reply", "Go ahead with the plan."),
+    );
+    await waitFor(() => expect(api.replyPick).toHaveBeenCalledWith("plan:go"));
+    finish();
   });
 
   it("opening the chat that is already open keeps what is typed in the box", async () => {

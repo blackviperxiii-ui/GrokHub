@@ -59,6 +59,7 @@ mod home_updates;
 #[cfg(desktop)]
 pub mod hub_share;
 pub mod imagine;
+pub mod inbox;
 pub mod interests;
 pub mod journal;
 pub mod know_me;
@@ -738,6 +739,7 @@ async fn chat_turn(
             files,
             route,
             Box::new(move |event| {
+                inbox::note(&id, &event);
                 #[cfg(desktop)]
                 os_extras::on_chat_event(&app, &id, &event);
                 let _ = app.emit(
@@ -804,7 +806,7 @@ fn answer_permission(
     answer: String,
 ) -> Result<(), String> {
     let answer = agent::parse_answer(&answer)?;
-    helper_asks::answered(&conversation_id, &call_id);
+    inbox::answered(&conversation_id, &call_id);
     let session = state
         .chats
         .lock()
@@ -838,7 +840,7 @@ fn answer_elicit(
     if !matches!(action.as_str(), "accept" | "decline" | "cancel") {
         return Err(format!("unknown answer: {action}"));
     }
-    helper_asks::answered(&conversation_id, &id);
+    inbox::answered(&conversation_id, &id);
     let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
     let session = chats
         .get(&conversation_id)
@@ -856,6 +858,78 @@ fn answer_elicit(
 #[tauri::command]
 fn helper_questions(conversation_id: String) -> Vec<agent::UiEvent> {
     helper_asks::waiting(&conversation_id)
+}
+
+/// Every decision waiting on the person, in one list: the decision inbox.
+#[tauri::command]
+fn decision_inbox(state: State<'_, ShellState>) -> Vec<inbox::Decision> {
+    inbox::decisions(&state.config_dir)
+}
+
+/// Answers one inbox decision through the same path as its card. A
+/// permission takes Allow or Deny (the inbox never offers Always); an
+/// elicit's Approve opens its chat instead — the page returns
+/// `open:<chat id>` and answers nothing — and its Deny cancels the ask; a
+/// park is answered in the harness park store.
+#[tauri::command]
+fn answer_inbox(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    id: String,
+    kind: String,
+    approve: bool,
+) -> Result<String, String> {
+    match kind.as_str() {
+        "park" => {
+            grokhub_agent::harness::answer_park(&state.config_dir, &id, approve)?;
+            Ok("answered".to_string())
+        }
+        "permission" => {
+            let answer = if approve {
+                grokhub_agent::PermAnswer::Allow
+            } else {
+                grokhub_agent::PermAnswer::Deny
+            };
+            inbox::answered(&conversation_id, &id);
+            let session = state
+                .chats
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&conversation_id)
+                .cloned()
+                .ok_or_else(|| "That chat is closed.".to_string())?;
+            #[cfg(desktop)]
+            os_extras::answered_in_window(&app, &conversation_id, &id, || {
+                session.answer(&id, answer)
+            });
+            #[cfg(mobile)]
+            {
+                let _ = app;
+                session.answer(&id, answer);
+            }
+            Ok("answered".to_string())
+        }
+        "elicit" => {
+            if approve {
+                return Ok(format!("open:{conversation_id}"));
+            }
+            inbox::answered(&conversation_id, &id);
+            let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
+            let session = chats
+                .get(&conversation_id)
+                .ok_or_else(|| "That chat is closed.".to_string())?;
+            session.answer_elicit(&id, "cancel", None, "");
+            Ok("answered".to_string())
+        }
+        _ => Err(format!("unknown decision kind: {kind}")),
+    }
+}
+
+/// Remembers a picked reply chip, so the next waiting card ranks it higher.
+#[tauri::command]
+fn reply_pick(state: State<'_, ShellState>, key: String) {
+    agent::note_reply_pick(&state.config_dir, &key);
 }
 
 #[tauri::command]
@@ -1194,6 +1268,7 @@ fn drop_worker(state: &ShellState, conversation_id: &str) {
         session.cancel();
     }
     helper_asks::chat_ended(conversation_id);
+    inbox::chat_ended(conversation_id);
 }
 
 /// The input kinds of the model a chat starts at, for the chips' notes.
@@ -5345,6 +5420,27 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
         "get_background" => out(get_background(state)?),
+        // A browser sees inbox rows only for the chats it started; parks
+        // belong to the desktop and never cross.
+        "decision_inbox" => {
+            let rows: Vec<inbox::Decision> = inbox::decisions(&state.config_dir)
+                .into_iter()
+                .filter(|row| !row.chat_id.is_empty() && web.owns(&row.chat_id))
+                .collect();
+            out(rows)
+        }
+        "answer_inbox" => out(answer_inbox(
+            app.clone(),
+            state,
+            drive(args)?,
+            arg(args, "id")?,
+            arg(args, "kind")?,
+            arg(args, "approve")?,
+        )?),
+        "reply_pick" => {
+            reply_pick(state, arg(args, "key")?);
+            Ok(Value::Null)
+        }
         _ => Err(remote::refused()),
     }
 }
@@ -5888,6 +5984,9 @@ pub fn run() {
             answer_permission,
             answer_elicit,
             helper_questions,
+            decision_inbox,
+            answer_inbox,
+            reply_pick,
             cancel_chat,
             steer_chat,
             turns::read_turn,
