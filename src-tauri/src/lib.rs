@@ -54,6 +54,7 @@ pub mod hub_share;
 pub mod imagine;
 pub mod interests;
 pub mod journal;
+pub mod know_me;
 pub mod library;
 pub mod local_ai;
 pub mod local_engine;
@@ -5497,6 +5498,7 @@ pub fn run() {
             scopes::allow_scope,
             scopes::revoke_scope,
             scopes::pick_scope_folder,
+            scopes::forget_scope_facts,
             add_permission_rule,
             remove_permission_rule,
             remember_grant,
@@ -5527,6 +5529,12 @@ pub fn run() {
             get_interests,
             add_interest,
             interest_act,
+            know_me::get_know_me,
+            know_me::set_know_me_on,
+            know_me::set_know_me_signal,
+            know_me::know_me_scan,
+            know_me::know_me_delete,
+            know_me::know_me_wipe,
             get_pulse,
             pulse_act,
             pulse_discuss,

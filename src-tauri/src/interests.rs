@@ -189,6 +189,19 @@ pub fn seed_once(config_dir: &Path, now_ms: u64) -> Result<usize, String> {
     Ok(added)
 }
 
+/// Change the topics under the store lock; saved when `f` says it changed them.
+pub(crate) fn update(
+    config_dir: &Path,
+    f: impl FnOnce(&mut InterestProfile) -> bool,
+) -> Result<(), String> {
+    let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut profile = interests::load(&path(config_dir));
+    if f(&mut profile) {
+        interests::save(&path(config_dir), &profile)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

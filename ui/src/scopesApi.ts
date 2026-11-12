@@ -7,6 +7,16 @@ export interface GrantedScope {
   hint: string;
   /** The whole folder path, for hover. */
   detail: string | null;
+  /** What it taught the app, and whether "Forget these" shows. */
+  learned: Learned;
+}
+
+export interface Learned {
+  head: string | null;
+  lines: string[];
+  more: string | null;
+  note: string | null;
+  canForget: boolean;
 }
 
 export interface ScopeRow {
@@ -36,3 +46,4 @@ export const allowScope = (kind: string, value: string) =>
   call<ScopeAnswer>("allow_scope", { kind, value });
 export const revokeScope = (id: string) => call<ScopeAnswer>("revoke_scope", { id });
 export const pickScopeFolder = () => call<string | null>("pick_scope_folder");
+export const forgetScopeFacts = (id: string) => call<ScopeAnswer>("forget_scope_facts", { id });

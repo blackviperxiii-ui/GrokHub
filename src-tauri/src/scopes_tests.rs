@@ -205,3 +205,72 @@ fn a_locked_ledger_grants_nothing() {
         .contains("Nothing was deleted."));
     assert_eq!(allow(&config, None, "mail", ""), v.locked.clone().unwrap());
 }
+
+fn fact(id: &str, line: &str) -> grokhub_agent::indexers::IndexedFact {
+    grokhub_agent::indexers::IndexedFact {
+        id: id.into(),
+        line: line.into(),
+    }
+}
+
+#[test]
+fn learned_lists_three_facts_then_and_n_more_with_forget_these() {
+    let facts = [
+        fact("scope-000000000001", "Notes: a.md"),
+        fact("scope-000000000002", "Notes: b.md"),
+        fact("scope-000000000003", "Notes: c.md"),
+        fact("scope-000000000004", "Notes: d.md"),
+        fact("scope-000000000005", "Notes: e.md"),
+    ];
+    let l = learned("files:/srv/notes", &facts);
+    assert_eq!(
+        l.head.as_deref(),
+        Some("Learned 5 things, sealed on this computer:")
+    );
+    assert_eq!(l.lines, ["Notes: a.md", "Notes: b.md", "Notes: c.md"]);
+    assert_eq!(l.more.as_deref(), Some("and 2 more"));
+    assert_eq!(l.note, None);
+    assert!(l.can_forget);
+    let one = learned("apps", &facts[..1]);
+    assert_eq!(
+        one.head.as_deref(),
+        Some("Learned 1 thing, sealed on this computer:")
+    );
+    assert_eq!(one.more, None);
+    assert_eq!(FORGET_THESE, "Forget these");
+}
+
+#[test]
+fn learned_says_why_nothing_shows() {
+    let product = grokhub_core::brand::product_name();
+    // No reader: the row's hint says so, nothing more under it.
+    assert_eq!(learned("mail", &[]), Learned::default());
+    assert_eq!(
+        learned("calendar", &[fact("scope-000000000001", "x")]),
+        Learned::default()
+    );
+    let empty = learned("apps", &[]);
+    assert_eq!(
+        empty.note,
+        Some(format!("Nothing learned to show. {product} reads it on a heartbeat, never on battery or in quiet hours."))
+    );
+    assert_eq!(empty.head, None);
+    assert!(!empty.can_forget);
+}
+
+#[test]
+fn a_new_grant_shows_nothing_learned_and_forget_keeps_it_allowed() {
+    let config = dir("forget");
+    let home = Path::new("/home/you");
+    allow(&config, Some(home), "apps", "");
+    let v = view(&config, 2_000);
+    let g = row(&v, "apps").granted[0].clone();
+    assert_eq!(g.learned.lines, Vec::<String>::new());
+    assert!(!g.learned.can_forget);
+    assert_eq!(
+        forget(&config, &g.id),
+        "Forgot 0 things learned from Installed apps. It stays allowed; revoke it to stop reading."
+    );
+    assert_eq!(row(&view(&config, 3_000), "apps").granted.len(), 1);
+    assert_eq!(forget(&config, "nope"), "That grant is already gone.");
+}

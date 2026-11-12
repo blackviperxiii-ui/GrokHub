@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useState, type MouseEvent } from "react";
+import { ConfirmRow } from "./ui";
 import {
   allowScope,
+  forgetScopeFacts,
   getScopes,
   pickScopeFolder,
   revokeScope,
@@ -10,12 +12,15 @@ import {
 } from "./scopesApi";
 
 export const CHOOSE_FOLDER = "Choose folder…";
+export const FORGET_THESE = "Forget these";
 export const NO_FOLDER_DIALOG = "No folder dialog opened on this computer. Type the folder's path instead.";
 
 /** Every row the same width, its words and fields on the left, its pill on the right. */
 const ROW = { alignSelf: "stretch", maxWidth: "none", alignItems: "center" } as const;
 const BODY = { flex: 1, minWidth: 0, display: "grid", gap: 6 } as const;
 const HINT = { margin: 0 } as const;
+/** One learned fact: a single line, cut with an ellipsis like the cabin's. */
+const FACT = { margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
 
 /** A dialog that answers this fast never opened. */
 const NO_DIALOG_WITHIN_MS = 400;
@@ -34,6 +39,7 @@ export function Scopes() {
   const [browser, setBrowser] = useState("firefox");
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [forgetting, setForgetting] = useState<string | null>(null);
 
   useEffect(() => {
     getScopes().then(setView, (err) => setStatus(String(err)));
@@ -41,6 +47,7 @@ export function Scopes() {
 
   async function run(work: () => Promise<ScopeAnswer>, after?: () => void) {
     setBusy(true);
+    setForgetting(null);
     try {
       const got = await work();
       setView(got.view);
@@ -104,8 +111,49 @@ export function Scopes() {
                   <p className="note" style={HINT} title={g.detail ?? undefined}>
                     {g.hint}
                   </p>
+                  {g.learned.note && (
+                    <p className="note" style={HINT}>
+                      {g.learned.note}
+                    </p>
+                  )}
+                  {g.learned.head && (
+                    <div aria-label={`Learned from ${g.title}`}>
+                      <p style={HINT}>{g.learned.head}</p>
+                      {g.learned.lines.map((l) => (
+                        <p key={l} className="note" style={FACT}>
+                          {l}
+                        </p>
+                      ))}
+                      {g.learned.more && (
+                        <p className="note" style={HINT}>
+                          {g.learned.more}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {forgetting === g.id && (
+                    <ConfirmRow
+                      question={`Forget what ${g.title} taught?`}
+                      detail="It stays allowed; revoke it to stop reading."
+                      action="Forget"
+                      busy={busy}
+                      onConfirm={() => void run(() => forgetScopeFacts(g.id))}
+                      onCancel={() => setForgetting(null)}
+                    />
+                  )}
                 </div>
                 <div className="card-buttons">
+                  {g.learned.canForget && forgetting !== g.id && (
+                    <button
+                      type="button"
+                      className="quiet"
+                      disabled={busy || locked}
+                      title={hover}
+                      onClick={() => setForgetting(g.id)}
+                    >
+                      {FORGET_THESE}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="quiet"
