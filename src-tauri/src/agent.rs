@@ -1627,6 +1627,7 @@ mod tests {
             voice: String::new(),
             voice_session: None,
             suggestions: true,
+            lead: false,
         };
         let runner = Arc::clone(&session);
         let result = std::thread::spawn(move || {
