@@ -9,6 +9,7 @@ pub mod activity;
 pub mod deploy;
 pub mod files;
 pub mod repo;
+pub mod rollback;
 pub mod runs;
 pub mod secrets;
 pub mod ship;

@@ -19,6 +19,7 @@ mod brand_guard;
 pub mod capabilities;
 pub mod changes;
 pub mod chips;
+mod code_rollback;
 mod code_sessions;
 pub mod command_box;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
@@ -5562,6 +5563,9 @@ pub fn run() {
             code_ship_run,
             code_new_branch,
             code_activity_list,
+            code_rollback::code_revert_list,
+            code_rollback::code_revert_plan,
+            code_rollback::code_revert_run,
             code_secret_list,
             code_secret_set,
             code_secret_delete,

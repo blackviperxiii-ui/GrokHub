@@ -84,6 +84,7 @@ vi.mock("./Agents", () => ({
 }));
 // The terminal has its own tests; here it would only pull in its screen widget.
 vi.mock("./CodeTerminal", () => ({ default: () => null }));
+vi.mock("./CodeRevert", () => ({ CodeRevert: () => null }));
 // The project bar has its own tests; here it is buttons that call back, and
 // it shows what the tab tells it.
 vi.mock("./CodeProjects", () => ({
