@@ -18,6 +18,7 @@ import {
   deleteChat,
   exportChat,
   forgetMessage,
+  getHangoutMode,
   getLastChat,
   getSettings,
   helperQuestions,
@@ -28,12 +29,14 @@ import {
   runSlash,
   saveSettings,
   sendChat,
+  setHangoutMode,
   sideChat,
   steerChat,
   tellMain,
   type Answer,
   type ChatEvent,
   type ElicitAction,
+  type HangoutMode,
   type SavedFile,
   type SessionMode,
   type Settings,
@@ -44,6 +47,7 @@ import {
   type TurnRead,
 } from "./api";
 import { ChipRow, useChipRow } from "./Chips";
+import { ChatTabs, HangoutHeader } from "./ChatTabs";
 import { GoalAsk } from "./Goals";
 import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
 import {
@@ -596,6 +600,8 @@ export function Chat({
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState("");
+  /** Hangout TALK / TYPE — keeps the draft when switching (card 732). */
+  const [hangoutMode, setHangout] = useState<HangoutMode>("type");
   /** Older lines of a reopened chat not shown yet. */
   const [earlier, setEarlier] = useState(0);
   /** The person already moved on, so the last chat must not land on top. */
@@ -730,6 +736,16 @@ export function Chat({
       () => {},
     );
   }, [remote, embedded]);
+
+  useEffect(() => {
+    if (remote || embedded) return;
+    getHangoutMode().then(setHangout, () => {});
+  }, [remote, embedded]);
+
+  function pickHangout(mode: HangoutMode) {
+    setHangout(mode);
+    setHangoutMode(mode).catch((err) => setError(String(err)));
+  }
 
   useEffect(() => {
     onConversation?.(conversationId);
@@ -1407,6 +1423,32 @@ export function Chat({
       onDrop={attach.onDrop}
     >
       {nyx && !embedded && <NyxDock url={nyx.url} mood={nyx.mood} />}
+      {!remote && !embedded && (
+        <>
+          <ChatTabs
+            activeId={conversationId}
+            draftEmpty={items.length === 0}
+            onSwitch={(id) => {
+              if (id === conversationId) return;
+              if (busyRef.current) {
+                setError(OPEN_BUSY);
+                return;
+              }
+              touched.current = true;
+              closeChat(conversationId).catch(() => {});
+              loadChat(id).then(show, (err) => setError(String(err)));
+            }}
+            onNew={startOver}
+            onClear={() => {
+              const id = conversationId;
+              touched.current = true;
+              deleteChat(id).then(startFresh, (err) => setError(String(err)));
+            }}
+            onError={setError}
+          />
+          <HangoutHeader mode={hangoutMode} onMode={pickHangout} />
+        </>
+      )}
       {/* Focusable so the keyboard can scroll a long conversation. */}
       <div className="log" role="log" aria-live="polite" tabIndex={0}>
         {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (

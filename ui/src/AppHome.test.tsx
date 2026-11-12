@@ -51,7 +51,10 @@ const api = vi.hoisted(() => {
   };
 });
 
-vi.mock("./api", () => api);
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return { ...chatTabApiStubs(), ...api };
+});
 vi.mock("./Chat", () => ({
   newConversationId: () => "shell-new",
   Chat: ({ onOpenView }: { onOpenView?: (view: string) => void }) => (
