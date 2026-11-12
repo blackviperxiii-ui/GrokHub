@@ -106,6 +106,20 @@ if [[ "$SYSTEM" -eq 1 && "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+cd "$ROOT"
+if [[ "$SWITCH" -eq 0 ]]; then
+  # The remembered channel must match the checkout, or the build is labeled
+  # for one channel while it holds the other and Update then refuses the clone.
+  # Run this before the shell dep check so a wrong-channel clone still gets the
+  # channel refusal (not a webkit/npm missing-deps message).
+  CUR="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"
+  if [[ ( "$CUR" == main || "$CUR" == beta ) && "$CUR" != "$BRANCH" ]]; then
+    if [[ "$CUR" == beta ]]; then OTHER=beta; else OTHER=stable; fi
+    echo "error: $ROOT is on $CUR but the $CHANNEL channel builds $BRANCH; run with --channel $OTHER to switch, or git checkout $BRANCH" >&2
+    exit 1
+  fi
+fi
+
 # The shell builds its web UI with npm and links the system webview. Stop
 # before git or cargo when either is missing, rather than halfway through.
 missing=()
@@ -120,17 +134,7 @@ if [[ "${#missing[@]}" -gt 0 ]]; then
   exit 1
 fi
 
-cd "$ROOT"
-if [[ "$SWITCH" -eq 0 ]]; then
-  # The remembered channel must match the checkout, or the build is labeled
-  # for one channel while it holds the other and Update then refuses the clone.
-  CUR="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"
-  if [[ ( "$CUR" == main || "$CUR" == beta ) && "$CUR" != "$BRANCH" ]]; then
-    if [[ "$CUR" == beta ]]; then OTHER=beta; else OTHER=stable; fi
-    echo "error: $ROOT is on $CUR but the $CHANNEL channel builds $BRANCH; run with --channel $OTHER to switch, or git checkout $BRANCH" >&2
-    exit 1
-  fi
-fi
+
 if [[ "$SWITCH" -eq 1 ]]; then
   CHANGED="$(git status --porcelain --untracked-files=no)"
   if [[ "$CHANGED" == " M Cargo.lock" ]]; then
