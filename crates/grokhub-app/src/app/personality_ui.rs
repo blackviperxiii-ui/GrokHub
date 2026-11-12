@@ -69,7 +69,7 @@ pub(super) struct ShownFace {
 
 /// This frame's shown personality. Before the first publish it is the companion.
 pub(super) fn shown_face(ctx: &egui::Context) -> ShownFace {
-    ctx.data(|d| d.get_temp::<ShownFace>(egui::Id::new(SHOWN_FACE)))
+    ctx.data(|d| d.get_temp::<ShownFace>(egui::Id::unique(SHOWN_FACE)))
         .unwrap_or_else(|| ShownFace {
             art: true,
             name: grokhub_core::brand::companion_name().to_string(),
@@ -342,7 +342,7 @@ impl Cabin {
             art: wears_companion_art(&p.id),
             name: p.name,
         };
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(SHOWN_FACE), face));
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique(SHOWN_FACE), face));
         super::loadout_home::nyx_wardrobe::publish_explicit_ok(ctx, self.explicit_art_ok());
     }
 
@@ -1071,7 +1071,7 @@ impl Cabin {
         let mut all = false;
         let mut close = false;
         let width = sheet_width(ctx.content_rect().width());
-        let modal = egui::Modal::new(egui::Id::new("personality-sheet"))
+        let modal = egui::Modal::new(egui::Id::unique("personality-sheet"))
             .backdrop_color(egui::Color32::from_black_alpha(153))
             .frame(
                 egui::Frame::NONE
@@ -1564,7 +1564,7 @@ fn paint_detail_panel(
             let talk_clicked = if loadout {
                 crate::ui_kit::recipe::button(
                     ui,
-                    Some(egui::Id::new(("personality-talk", p.id.as_str()))),
+                    Some(egui::Id::unique(("personality-talk", p.id.as_str()))),
                     &talk,
                     true,
                     egui::vec2(talk_w, 36.0),

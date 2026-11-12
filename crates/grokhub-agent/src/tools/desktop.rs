@@ -98,6 +98,20 @@ pub fn schemas() -> Vec<Value> {
     out
 }
 
+/// [`super::LOOK_AT_SCREEN`]: look at the screen without desktop control.
+pub fn look_schema() -> Value {
+    tool(
+        super::LOOK_AT_SCREEN,
+        "See the screen as an image, on any desktop, no desktop control needed. Use this, \
+         never shell screenshot commands.",
+        json!({ "monitor": {
+            "type": "string",
+            "description": "Monitor id or \"all\" (default)."
+        }}),
+        &[],
+    )
+}
+
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
         "type": "function",

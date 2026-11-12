@@ -217,7 +217,7 @@ impl Cabin {
         let screen = ctx.content_rect();
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Foreground,
-            egui::Id::new("cabin-drop-hint"),
+            egui::Id::unique("cabin-drop-hint"),
         ));
         painter.rect_filled(screen, 0.0, crate::theme::bg().gamma_multiply(0.72));
         let font = egui::FontId::proportional(crate::theme::FONT_SECTION);
@@ -395,7 +395,7 @@ impl Cabin {
         if let Some(target) = self.plus_menu {
             let mut picked = None;
             let mut menu_rect = egui::Rect::NOTHING;
-            egui::Area::new(egui::Id::new("plus-menu"))
+            egui::Area::new(egui::Id::unique("plus-menu"))
                 .fixed_pos(self.plus_anchor + egui::vec2(0.0, 6.0))
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {

@@ -23,10 +23,15 @@ import { GrokSignIn } from "./GrokSignIn";
 import { Labs } from "./Labs";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
+import { KnowMe } from "./KnowMe";
+import { PulseSources } from "./PulseSources";
 import { AiModels } from "./AiModels";
 import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
+import { GameWatch } from "./GameWatch";
 import { PcHelpers } from "./PcHelpers";
+import { ScreenshotExplain } from "./ScreenshotExplain";
+import { SteamPulseSources } from "./SteamPulseSources";
 import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
 import { Learned } from "./Learned";
@@ -42,6 +47,8 @@ import {
 import { Toggle } from "./Toggle";
 import { Updates } from "./Updates";
 import { WebAccess } from "./WebAccess";
+import { ChatArchive } from "./ChatArchive";
+import { MemoryRetention } from "./MemoryRetention";
 import { WorkboardTidy } from "./WorkboardTidy";
 import { LOGO_MARK_URL, PRODUCT_NAME, TAGLINE } from "./brand";
 import { StatusLine, useNote } from "./ui";
@@ -263,6 +270,10 @@ export function Settings({
                 onCloseToTray={(closeToTray) => setSettings({ ...loaded, closeToTray })}
               />
             )}
+            {section === "behavior" && <ScreenshotExplain />}
+            {section === "behavior" && <GameWatch />}
+            {section === "behavior" && <MemoryRetention />}
+            {section === "behavior" && <ChatArchive />}
             {section === "behavior" && <WorkboardTidy />}
             {section === "appearance" && (
               <Appearance
@@ -281,6 +292,9 @@ export function Settings({
             {section === "pcHelpers" && caps.autoSetup && <PcHelpers />}
             {section === "code" && caps.code && <CodeSettings />}
             {section === "pulse" && caps.pulse && <Interests />}
+            {section === "pulse" && caps.pulse && <SteamPulseSources />}
+            {section === "pulse" && caps.pulse && <KnowMe />}
+            {section === "pulse" && caps.pulse && <PulseSources />}
             {section === "localAi" && caps.localAi && <LocalAi />}
             {section === "aiModels" && caps.localAi && <AiModels />}
             {section === "webAccess" && caps.webAccess && <WebAccess />}

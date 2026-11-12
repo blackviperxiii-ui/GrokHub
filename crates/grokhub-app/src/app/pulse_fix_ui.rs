@@ -232,7 +232,7 @@ impl Cabin {
         let mut close = false;
         let mut warn = (sheet.gpu_warn, sheet.cpu_warn);
         let mut save_warn = false;
-        let modal = egui::Modal::new(egui::Id::new("pulse-fix-sheet"))
+        let modal = egui::Modal::new(egui::Id::unique("pulse-fix-sheet"))
             .backdrop_color(egui::Color32::from_black_alpha(153))
             .frame(
                 egui::Frame::NONE

@@ -1,0 +1,1 @@
+- Settings → Privacy & data → Storage: one Open per folder, where local models sit, Reset to default, and Bring them over from the folders older versions used, which names each source and destination and asks first.

@@ -282,12 +282,30 @@ function WorkConfirm({
   );
 }
 
-/** The open chat's to-dos and background tasks, each task with a Stop (the
- * cabin's Queue). It reads them every {@link POLL_MS} while it is open and
+/** A job waiting on the Queue (src-tauri/src/queue.rs `Job`, the cabin's
+ * `AgentJob`). Run sends its prompt to Chat as a normal turn. */
+export interface QueuedJob {
+  title: string;
+  status: string;
+  prompt: string;
+  /** The chat it belongs to; empty for the open one. */
+  threadId: string;
+}
+
+/** The queued jobs in a read of the queue. A desktop older than this page
+ * sends none. */
+export function queuedJobs(queue: Queue | null): QueuedJob[] {
+  const jobs = (queue as { jobs?: unknown } | null)?.jobs;
+  return Array.isArray(jobs) ? (jobs as QueuedJob[]) : [];
+}
+
+/** The open chat's to-dos and background tasks, each task with a Stop, and
+ * the queued jobs, each with a Run (the cabin's Queue). It reads them every {@link POLL_MS} while it is open and
  * the window is in view; a live panel reads when the session's tasks change. */
 export function Agents({
   conversationId,
   onOpenChat,
+  onRun,
   active = true,
   live = false,
 }: {
@@ -300,10 +318,15 @@ export function Agents({
   active?: boolean;
   /** Read on the session's change event, not on the {@link POLL_MS} timer. */
   live?: boolean;
+  /** Run on a queued job: Chat opens and sends its prompt in its chat. The
+   * Code tab's panel has no Run. */
+  onRun?: (prompt: string, threadId: string) => void;
 }) {
   const [queue, setQueue] = useState<Queue | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Jobs started from here, by position, shown as running (the cabin's Run). */
+  const [started, setStarted] = useState<number[]>([]);
   /** The helper whose details window is open. */
   const [detail, setDetail] = useState<string | null>(null);
   /** The helper work a confirm window asks about, and the step it asks for. */
@@ -467,6 +490,7 @@ export function Agents({
 
   const tasks = queue?.tasks ?? [];
   const todos = queue?.todos ?? [];
+  const jobs = onRun ? queuedJobs(queue) : [];
   const work = queue?.work ?? [];
   // Work that waits for a click, from any launch. What a helper of this
   // launch made also shows on its own row.
@@ -489,6 +513,11 @@ export function Agents({
   const progressOf = (id?: string) => (panel ? tasks.find((task) => task.id === id)?.progress : undefined);
   // Beside the agent window the lead's tasks come first, then what runs for them.
   const hubTitle = onOpenChat ? "Tasks" : "Helpers and commands";
+
+  function run(i: number, job: QueuedJob) {
+    setStarted((now) => (now.includes(i) ? now : [...now, i]));
+    onRun?.(job.prompt, job.threadId);
+  }
 
   return (
     <section
@@ -521,8 +550,26 @@ export function Agents({
       )}
       {!conversationId && <p className="empty">{AGENTS_NO_CHAT}</p>}
       {conversationId && queue === null && !note && <p className="empty">Loading jobs…</p>}
-      {queue && tasks.length === 0 && todos.length === 0 && waiting.length === 0 && !queue.workError && !said && (
+      {queue && tasks.length === 0 && todos.length === 0 && jobs.length === 0 && waiting.length === 0 && !queue.workError && !said && (
         <p className="empty">{onOpenChat ? AGENTS_EMPTY : TASKS_EMPTY}</p>
+      )}
+      {jobs.length > 0 && (
+        <>
+          <h2>Queued</h2>
+          <ul className="rows" aria-label="Queued">
+            {jobs.map((job, i) => (
+              <li key={`${i}-${job.title}`} className="card agent" aria-label={job.title}>
+                <div className="card-title">{job.title}</div>
+                <div className="card-status">{started.includes(i) ? "running" : job.status}</div>
+                <div className="card-buttons">
+                  <button type="button" className="quiet" onClick={() => run(i, job)}>
+                    Run
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
       {!onOpenChat && todos.length > 0 && (
         <>

@@ -17,8 +17,12 @@ pub mod bg_runs;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
+pub mod change_rows;
 pub mod changes;
+pub mod chat_tabs;
 pub mod chips;
+mod code_agent;
+mod code_rollback;
 mod code_sessions;
 pub mod command_box;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
@@ -31,12 +35,17 @@ pub use grokhub_code::runs as code_runs;
 pub use grokhub_code::secrets as code_secrets;
 pub use grokhub_code::ship as code_ship;
 pub use grokhub_code::term as code_term;
+pub mod battlenet;
 pub mod connectors;
 pub mod credential;
+#[cfg(desktop)]
+pub mod desktop_nyx;
 pub mod diagnostics;
 pub mod episode;
 pub mod export;
 pub mod game_companion;
+pub mod game_watch;
+pub mod games;
 pub mod goals;
 mod helper_asks;
 #[cfg(desktop)]
@@ -50,8 +59,10 @@ mod home_updates;
 #[cfg(desktop)]
 pub mod hub_share;
 pub mod imagine;
+pub mod inbox;
 pub mod interests;
 pub mod journal;
+pub mod know_me;
 mod lead;
 pub mod library;
 pub mod local_ai;
@@ -63,6 +74,8 @@ mod md_fixtures;
 pub mod memory;
 mod mission;
 pub mod model_library;
+pub mod mods;
+pub mod mods_install;
 #[cfg(desktop)]
 mod net_watch;
 mod nudges;
@@ -84,6 +97,7 @@ pub mod privacy;
 pub mod proactive;
 pub mod projects;
 pub mod pulse;
+pub mod pulse_digests;
 pub mod pulse_feed;
 pub mod queue;
 pub mod remote;
@@ -91,13 +105,17 @@ pub mod remote_devices;
 pub mod remote_tls;
 #[cfg(desktop)]
 pub mod scheduler;
+pub mod scopes;
 pub mod screen_record;
+pub mod screenshot_offer;
+pub mod self_improve;
 pub mod settings;
 pub mod shell_update;
 pub mod skills;
 pub mod slash;
 pub mod slash_ops;
 mod steam_checks;
+pub mod storage;
 mod task_feed;
 mod turns;
 pub mod voice;
@@ -690,9 +708,14 @@ async fn chat_turn(
     let config_dir = state.config_dir.clone();
     // A Code tab session works in its own project's folder, not the app's.
     let own_folder = state.code_sessions.of(&conversation_id);
+    // Its agent pushes through the Code tab's push guard and codes with the
+    // bundled skills always on.
+    code_agent::bind(&state.config_dir, &conversation_id, own_folder.is_some());
     if capabilities::current().pulse {
         // What the person says in chat steers the Feed writer's taste note.
         pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
+        // Typed asks also feed the repeated-ask automate offers.
+        pulse_digests::note_ask(&config_dir, &text, grokhub_core::now_ms());
     }
     tauri::async_runtime::spawn_blocking(move || {
         let mut route = route(&settings, mode, &config_dir)?;
@@ -729,6 +752,7 @@ async fn chat_turn(
             files,
             route,
             Box::new(move |event| {
+                inbox::note(&id, &event);
                 #[cfg(desktop)]
                 os_extras::on_chat_event(&app, &id, &event);
                 let _ = app.emit(
@@ -795,7 +819,7 @@ fn answer_permission(
     answer: String,
 ) -> Result<(), String> {
     let answer = agent::parse_answer(&answer)?;
-    helper_asks::answered(&conversation_id, &call_id);
+    inbox::answered(&conversation_id, &call_id);
     let session = state
         .chats
         .lock()
@@ -829,7 +853,7 @@ fn answer_elicit(
     if !matches!(action.as_str(), "accept" | "decline" | "cancel") {
         return Err(format!("unknown answer: {action}"));
     }
-    helper_asks::answered(&conversation_id, &id);
+    inbox::answered(&conversation_id, &id);
     let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
     let session = chats
         .get(&conversation_id)
@@ -847,6 +871,78 @@ fn answer_elicit(
 #[tauri::command]
 fn helper_questions(conversation_id: String) -> Vec<agent::UiEvent> {
     helper_asks::waiting(&conversation_id)
+}
+
+/// Every decision waiting on the person, in one list: the decision inbox.
+#[tauri::command]
+fn decision_inbox(state: State<'_, ShellState>) -> Vec<inbox::Decision> {
+    inbox::decisions(&state.config_dir)
+}
+
+/// Answers one inbox decision through the same path as its card. A
+/// permission takes Allow or Deny (the inbox never offers Always); an
+/// elicit's Approve opens its chat instead — the page returns
+/// `open:<chat id>` and answers nothing — and its Deny cancels the ask; a
+/// park is answered in the harness park store.
+#[tauri::command]
+fn answer_inbox(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    id: String,
+    kind: String,
+    approve: bool,
+) -> Result<String, String> {
+    match kind.as_str() {
+        "park" => {
+            grokhub_agent::harness::answer_park(&state.config_dir, &id, approve)?;
+            Ok("answered".to_string())
+        }
+        "permission" => {
+            let answer = if approve {
+                grokhub_agent::PermAnswer::Allow
+            } else {
+                grokhub_agent::PermAnswer::Deny
+            };
+            inbox::answered(&conversation_id, &id);
+            let session = state
+                .chats
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&conversation_id)
+                .cloned()
+                .ok_or_else(|| "That chat is closed.".to_string())?;
+            #[cfg(desktop)]
+            os_extras::answered_in_window(&app, &conversation_id, &id, || {
+                session.answer(&id, answer)
+            });
+            #[cfg(mobile)]
+            {
+                let _ = app;
+                session.answer(&id, answer);
+            }
+            Ok("answered".to_string())
+        }
+        "elicit" => {
+            if approve {
+                return Ok(format!("open:{conversation_id}"));
+            }
+            inbox::answered(&conversation_id, &id);
+            let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
+            let session = chats
+                .get(&conversation_id)
+                .ok_or_else(|| "That chat is closed.".to_string())?;
+            session.answer_elicit(&id, "cancel", None, "");
+            Ok("answered".to_string())
+        }
+        _ => Err(format!("unknown decision kind: {kind}")),
+    }
+}
+
+/// Remembers a picked reply chip, so the next waiting card ranks it higher.
+#[tauri::command]
+fn reply_pick(state: State<'_, ShellState>, key: String) {
+    agent::note_reply_pick(&state.config_dir, &key);
 }
 
 #[tauri::command]
@@ -1169,6 +1265,7 @@ fn end_chat(state: &ShellState, conversation_id: &str) {
         lead::closed(&state.config_dir, conversation_id);
     }
     state.code_sessions.forget(conversation_id);
+    code_agent::bind(&state.config_dir, conversation_id, false);
     if current(state).last_chat == conversation_id {
         set_last_chat(state, "");
     }
@@ -1187,6 +1284,7 @@ fn drop_worker(state: &ShellState, conversation_id: &str) {
         session.cancel();
     }
     helper_asks::chat_ended(conversation_id);
+    inbox::chat_ended(conversation_id);
 }
 
 /// The input kinds of the model a chat starts at, for the chips' notes.
@@ -1337,6 +1435,106 @@ async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), Str
     off_main(move || history::delete(&dir, &doomed)).await??;
     end_chat(&state, &id);
     Ok(())
+}
+
+/// Tab strip: live chats (not archived / not soft-deleted).
+#[tauri::command]
+async fn list_chat_tabs(state: State<'_, ShellState>) -> Result<Vec<chat_tabs::ChatTab>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::list_tabs(&dir)).await
+}
+
+#[tauri::command]
+async fn list_archived_chats(
+    state: State<'_, ShellState>,
+) -> Result<Vec<chat_tabs::ChatTab>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::list_archived(&dir)).await
+}
+
+#[tauri::command]
+async fn list_deleted_chats(
+    state: State<'_, ShellState>,
+) -> Result<Vec<chat_tabs::ChatTab>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::list_deleted(&dir)).await
+}
+
+#[tauri::command]
+async fn chat_tab_switch(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::switch_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_pin(state: State<'_, ShellState>, id: String) -> Result<bool, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::pin_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_rename(
+    state: State<'_, ShellState>,
+    id: String,
+    title: String,
+) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::rename_tab(&dir, &id, &title)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_archive(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::archive_tab(&dir, &id, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn chat_tab_unarchive(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::unarchive_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn chat_tab_soft_delete(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::soft_delete_tab(&dir, &id, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn chat_tab_restore_deleted(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<chat_tabs::ChatTab, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::restore_deleted_tab(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn get_hangout_mode(state: State<'_, ShellState>) -> Result<chat_tabs::HangoutMode, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_tabs::get_hangout_mode(&dir)).await
+}
+
+#[tauri::command]
+async fn set_hangout_mode(
+    state: State<'_, ShellState>,
+    mode: String,
+) -> Result<chat_tabs::HangoutMode, String> {
+    let dir = state.config_dir.clone();
+    let parsed = chat_tabs::HangoutMode::parse(&mode)?;
+    off_main(move || chat_tabs::set_hangout_mode(&dir, parsed)).await?
 }
 
 /// Where History's Delete all is armed; the second click inside its window
@@ -2008,6 +2206,72 @@ fn export_personal() -> Result<String, String> {
 #[tauri::command]
 fn wipe_personal(state: State<'_, ShellState>) -> Result<memory::Wiped, String> {
     memory::wipe(&workspace(&state))
+}
+
+#[tauri::command]
+fn get_memory_files() -> Result<memory::MemoryFiles, String> {
+    memory::load_files()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryFileSaved {
+    files: memory::MemoryFiles,
+    redacted: bool,
+}
+
+#[tauri::command]
+fn save_memory_file(name: String, text: String, base: String) -> Result<MemoryFileSaved, String> {
+    let (files, redacted) = memory::save_file(&name, &text, &base)?;
+    Ok(MemoryFileSaved { files, redacted })
+}
+
+#[tauri::command]
+fn restore_memory_file(name: String) -> Result<memory::MemoryFiles, String> {
+    memory::restore_file(&name)
+}
+
+#[tauri::command]
+fn reflect_memory(
+    state: State<'_, ShellState>,
+    conversation_id: Option<String>,
+) -> Result<memory::ReflectResult, String> {
+    memory::reflect(&state.config_dir, conversation_id.as_deref())
+}
+
+#[tauri::command]
+fn tidy_memory_ledger() -> Result<memory::MemoryFiles, String> {
+    memory::tidy_ledger()
+}
+
+#[tauri::command]
+fn apply_memory_raw_tidy() -> Result<memory::MemoryFiles, String> {
+    memory::apply_raw_tidy()
+}
+
+#[tauri::command]
+fn dismiss_memory_raw_tidy() -> Result<memory::MemoryFiles, String> {
+    memory::dismiss_raw_tidy()
+}
+
+#[tauri::command]
+fn get_memory_retention() -> memory::RetentionSetting {
+    memory::retention_setting()
+}
+
+#[tauri::command]
+fn set_memory_retention(days: u32) -> Result<memory::RetentionSetting, String> {
+    memory::set_retention(days)
+}
+
+#[tauri::command]
+fn get_chat_archive() -> memory::ArchiveSetting {
+    memory::archive_setting()
+}
+
+#[tauri::command]
+fn set_chat_archive(days: u32) -> Result<memory::ArchiveSetting, String> {
+    memory::set_archive(days)
 }
 
 /// Every connector call can wait on a server's slot while chat or a check
@@ -3082,6 +3346,97 @@ fn nyx_tiles(state: State<'_, ShellState>, ids: Vec<String>) -> HashMap<String, 
     nyx::tiles(&ids, current(&state).adults_on())
 }
 
+/// Labs / dock: desktop companion state (switch, undock, wardrobe, effects).
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_get(state: State<'_, ShellState>) -> desktop_nyx::State {
+    desktop_nyx::state_of(&current(&state), desktop_nyx::wayland_now())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_set(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    patch: desktop_nyx::Patch,
+) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::apply_patch(current(&state), patch);
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    desktop_nyx::show_window(&app, &next)?;
+    let _ = desktop_nyx::apply_behind(&app, next.desktop_nyx_behind);
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_undock(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+) -> Result<desktop_nyx::State, String> {
+    let mut next = current(&state);
+    if !next.desktop_nyx {
+        next.desktop_nyx = true;
+    }
+    next.desktop_nyx_undocked = true;
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    desktop_nyx::show_window(&app, &next)?;
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_dock(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::apply_patch(
+        current(&state),
+        desktop_nyx::Patch {
+            undocked: Some(false),
+            ..desktop_nyx::Patch::default()
+        },
+    );
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    desktop_nyx::hide_window(&app)?;
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_set_outfit(
+    state: State<'_, ShellState>,
+    id: Option<String>,
+) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::set_outfit(current(&state), id)?;
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_save_pos(
+    state: State<'_, ShellState>,
+    x: f64,
+    y: f64,
+    monitor_w: f64,
+    monitor_h: f64,
+) -> Result<desktop_nyx::State, String> {
+    let next = desktop_nyx::save_pos(current(&state), [x, y], [monitor_w, monitor_h]);
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_set_passthrough(app: AppHandle, ignore: bool) -> Result<(), String> {
+    desktop_nyx::set_passthrough(&app, ignore)
+}
+
 #[tauri::command]
 async fn get_playbooks(state: State<'_, ShellState>) -> Result<playbooks::Page, String> {
     let dir = state.config_dir.clone();
@@ -3218,6 +3573,337 @@ async fn library_play(app_id: u32) -> Result<String, String> {
     off_main(move || library::play(grokhub_core::steam::detect_root().as_deref(), app_id)).await?
 }
 
+#[tauri::command]
+async fn get_battlenet() -> Result<battlenet::Page, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(battlenet::page).await
+}
+
+#[tauri::command]
+async fn battlenet_play(product: String) -> Result<String, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || {
+        let games = grokhub_core::battlenet::detect();
+        battlenet::play(&games, &product)
+    })
+    .await?
+}
+
+#[tauri::command]
+async fn battlenet_open_folder(product: String) -> Result<String, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || {
+        let games = grokhub_core::battlenet::detect();
+        battlenet::open_folder(&games, &product)
+    })
+    .await?
+}
+
+#[tauri::command]
+async fn companion_frame(
+    state: State<'_, ShellState>,
+    note_id: u32,
+    last_played: u64,
+    steam_app_id: Option<u32>,
+) -> Result<game_companion::Frame, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let news = steam_app_id.and_then(|id| game_companion::steam_news(id, last_played));
+        game_companion::frame(&dir, note_id, steam_app_id, news)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn companion_set_note(
+    state: State<'_, ShellState>,
+    app_id: u32,
+    text: String,
+) -> Result<String, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || game_companion::set_note(&dir, app_id, &text)).await?
+}
+
+#[tauri::command]
+async fn get_game_watch(state: State<'_, ShellState>) -> Result<game_watch::GameWatch, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || game_watch::read(&dir)).await
+}
+
+#[tauri::command]
+async fn set_game_watch(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<game_watch::GameWatch, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || game_watch::set(&dir, on, None, grokhub_core::game_watch_gsi::GSI_PORT))
+        .await?
+}
+
+#[tauri::command]
+async fn get_steam_pulse(state: State<'_, ShellState>) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::pulse_status(&dir)).await
+}
+
+#[tauri::command]
+async fn set_steam_achievements(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::set_achievements(&dir, on)).await?
+}
+
+#[tauri::command]
+async fn set_steam_wishlist(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::set_wishlist(&dir, on)).await?
+}
+
+#[tauri::command]
+async fn set_steam_wishlist_threshold(
+    state: State<'_, ShellState>,
+    threshold: String,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::set_threshold(&dir, &threshold)).await?
+}
+
+#[tauri::command]
+async fn save_steam_id(
+    state: State<'_, ShellState>,
+    draft: String,
+    use_local: bool,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::save_id(&dir, &draft, use_local)).await?
+}
+
+#[tauri::command]
+async fn forget_steam_id(state: State<'_, ShellState>) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::forget_id(&dir)).await?
+}
+
+#[tauri::command]
+async fn steam_check_now(
+    state: State<'_, ShellState>,
+    module: String,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::check_now(&dir, &module)).await?
+}
+
+#[tauri::command]
+async fn game_wow(state: State<'_, ShellState>) -> Result<games::WowView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::wow_view(game_watch::is_on(&dir))).await
+}
+
+#[tauri::command]
+async fn game_wow_addon(
+    install: String,
+    flavor: String,
+    action: String,
+) -> Result<games::WowView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || games::wow_addon_action(Path::new(&install), &flavor, &action)).await?
+}
+
+#[tauri::command]
+async fn game_gw2(state: State<'_, ShellState>) -> Result<games::Gw2View, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::gw2_view(&dir, grokhub_core::now_ms())).await
+}
+
+#[tauri::command]
+async fn game_gw2_refresh(state: State<'_, ShellState>) -> Result<games::Gw2View, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::gw2_refresh(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_gw2_start_key(
+    state: State<'_, ShellState>,
+    key: String,
+) -> Result<games::Gw2KeyCard, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::gw2_start_key(&dir, key)).await?
+}
+
+#[tauri::command]
+async fn game_gw2_answer_key(
+    state: State<'_, ShellState>,
+    id: String,
+    approve: bool,
+) -> Result<games::Gw2View, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::gw2_answer_key(&dir, &id, approve, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_gw2_remove_key(state: State<'_, ShellState>) -> Result<games::Gw2View, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::gw2_remove_key(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_eso() -> Result<games::EsoView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(|| games::eso_view(grokhub_core::steam::detect_root().as_deref())).await
+}
+
+#[tauri::command]
+async fn game_eso_addon(dir: String, install: bool) -> Result<games::EsoView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || games::eso_addon_action(Path::new(&dir), install)).await?
+}
+
+#[tauri::command]
+async fn game_osrs(state: State<'_, ShellState>) -> Result<games::OsrsView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::osrs_view(&dir, grokhub_core::now_ms())).await
+}
+
+#[tauri::command]
+async fn game_osrs_save(
+    state: State<'_, ShellState>,
+    name: String,
+    kind: String,
+) -> Result<games::OsrsView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::osrs_save(&dir, &name, &kind, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_osrs_forget(state: State<'_, ShellState>) -> Result<games::OsrsView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::osrs_forget(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_osrs_refresh(state: State<'_, ShellState>) -> Result<games::OsrsView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::osrs_refresh(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_destiny(state: State<'_, ShellState>) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_view(&dir, grokhub_core::now_ms())).await
+}
+
+#[tauri::command]
+async fn game_destiny_refresh(state: State<'_, ShellState>) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_refresh(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_destiny_start_key(
+    state: State<'_, ShellState>,
+    key: String,
+) -> Result<games::DestinyKeyCard, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_start_key(&dir, key)).await?
+}
+
+#[tauri::command]
+async fn game_destiny_answer_key(
+    state: State<'_, ShellState>,
+    id: String,
+    approve: bool,
+) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_answer_key(&dir, &id, approve, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_destiny_save_name(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_save_name(&dir, &name, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_destiny_remove(state: State<'_, ShellState>) -> Result<games::DestinyView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::destiny_remove(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_poe(app_id: u32) -> Result<games::PoeView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || games::poe_view(app_id)).await
+}
+
+#[tauri::command]
+async fn game_elite() -> Result<games::EliteView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::elite_view).await
+}
+
+#[tauri::command]
+async fn game_factorio() -> Result<games::FactorioView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::factorio_view).await
+}
+
+#[tauri::command]
+async fn game_factorio_mod(dir: String, install: bool) -> Result<games::FactorioView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || games::factorio_mod_action(Path::new(&dir), install)).await?
+}
+
+#[tauri::command]
+async fn game_stardew() -> Result<games::StardewView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::stardew_view).await
+}
+
+#[tauri::command]
+async fn game_minecraft() -> Result<games::MinecraftView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::minecraft_view).await
+}
+
+#[tauri::command]
+async fn game_rl() -> Result<games::RocketLeagueView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(games::rocket_league_view).await
+}
+
 /// A Home tile's Turn on, for a switch that needs nothing else. The rest
 /// open their Settings row instead.
 #[tauri::command]
@@ -3336,6 +4022,190 @@ async fn library_steam_settings() -> Result<(), String> {
     off_main(move || library::open_settings(grokhub_core::steam::detect_root().as_deref())).await?
 }
 
+/// The Mods rail. Starts a discovery sweep and For you's due fetches in the
+/// background when they are due and Offline only is off.
+#[tauri::command]
+async fn mods_games(state: State<'_, ShellState>) -> Result<mods::GamesView, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    let adult_ok = current(&state).adults_on();
+    off_main(move || {
+        let now_ms = grokhub_core::now_ms();
+        let rail = mods::rail_now(now_ms);
+        let offline = grokhub_core::offline::enabled();
+        if !offline {
+            let client = mods::client(&dir);
+            mods::sweep_if_due(dir.clone(), client.clone(), &rail, now_ms);
+            mods::refresh_pools(dir.clone(), client, &rail, now_ms);
+        }
+        let store = grokhub_core::mods::discover::Store::load(&dir);
+        let prefs = grokhub_core::mods::suggest::Prefs::load(&dir);
+        mods::games_view(
+            &rail,
+            &store,
+            &prefs,
+            adult_ok,
+            offline,
+            mods::sweeping(),
+            now_ms / 1000,
+        )
+    })
+    .await
+}
+
+/// One page of a game's Popular, Trending or Updated list on one source.
+#[tauri::command]
+async fn mods_browse(
+    state: State<'_, ShellState>,
+    game: String,
+    source: String,
+    list: String,
+    page: u32,
+) -> Result<mods::PageView, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    let adult_ok = current(&state).adults_on();
+    off_main(move || {
+        let now_ms = grokhub_core::now_ms();
+        let (_, src) = mods::game_source(&mods::rail_now(now_ms), &game, &source)?;
+        let mut q = grokhub_core::mods::Query::browse(mods::browse_of(&list)?);
+        q.page = page;
+        let offline = grokhub_core::offline::enabled();
+        Ok(mods::search(
+            &mods::client(&dir),
+            &game,
+            src,
+            &q,
+            adult_ok,
+            offline,
+            now_ms,
+        ))
+    })
+    .await?
+}
+
+/// One page of a search for one game on one source.
+#[tauri::command]
+async fn mods_search(
+    state: State<'_, ShellState>,
+    game: String,
+    source: String,
+    text: String,
+    page: u32,
+) -> Result<mods::PageView, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    let adult_ok = current(&state).adults_on();
+    off_main(move || {
+        let now_ms = grokhub_core::now_ms();
+        let (_, src) = mods::game_source(&mods::rail_now(now_ms), &game, &source)?;
+        let mut q = grokhub_core::mods::Query::search(text.trim());
+        q.page = page;
+        let offline = grokhub_core::offline::enabled();
+        Ok(mods::search(
+            &mods::client(&dir),
+            &game,
+            src,
+            &q,
+            adult_ok,
+            offline,
+            now_ms,
+        ))
+    })
+    .await?
+}
+
+/// One page of a game's New finds; opening it marks them seen.
+#[tauri::command]
+async fn mods_new_finds(
+    state: State<'_, ShellState>,
+    game: String,
+    source: String,
+    page: u32,
+) -> Result<mods::PageView, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    let adult_ok = current(&state).adults_on();
+    off_main(move || {
+        let now_ms = grokhub_core::now_ms();
+        let (_, src) = mods::game_source(&mods::rail_now(now_ms), &game, &source)?;
+        Ok(mods::new_finds(
+            &dir,
+            &game,
+            src,
+            page,
+            adult_ok,
+            now_ms / 1000,
+        ))
+    })
+    .await?
+}
+
+/// The For you cards.
+#[tauri::command]
+async fn mods_for_you(state: State<'_, ShellState>) -> Result<Vec<mods::ForYouRow>, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    let adult_ok = current(&state).adults_on();
+    off_main(move || {
+        let now_ms = grokhub_core::now_ms();
+        let rail = mods::rail_now(now_ms);
+        let root = grokhub_core::steam::detect_root();
+        let client = mods::client(&dir);
+        let picked = mods::for_you(
+            &dir,
+            &client,
+            &rail,
+            adult_ok,
+            root.as_deref(),
+            now_ms / 1000,
+        );
+        mods::for_you_rows(&rail, &picked)
+    })
+    .await
+}
+
+/// "Not for me" on a For you card: that mod never shows there again.
+#[tauri::command]
+async fn mods_not_for_me(
+    state: State<'_, ShellState>,
+    source: String,
+    id: String,
+) -> Result<(), String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let src = grokhub_core::mods::Source::from_id(&source)
+            .ok_or_else(|| format!("No source {source}."))?;
+        mods::change_prefs(&dir, |p| {
+            p.not_interested
+                .insert(grokhub_core::mods::suggest::key(src, &id));
+        })
+    })
+    .await?
+}
+
+/// Hide or show For you's suggestions for one game.
+#[tauri::command]
+async fn mods_hide_game(
+    state: State<'_, ShellState>,
+    game: String,
+    hidden: bool,
+) -> Result<(), String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        mods::change_prefs(&dir, |p| {
+            if hidden {
+                p.hidden_games.insert(game);
+            } else {
+                p.hidden_games.remove(&game);
+            }
+        })
+    })
+    .await?
+}
+
 /// Home's Clips tile: play the clip at this place in its list.
 #[tauri::command]
 async fn home_open_clip(index: usize) -> Result<(), String> {
@@ -3364,6 +4234,25 @@ async fn learned_act(
 #[tauri::command]
 async fn learned_say(line: String) -> Result<String, String> {
     off_main(move || grokhub_core::learn::view::page_say(&line, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn get_pulse_sources(
+    state: State<'_, ShellState>,
+) -> Result<pulse_digests::SourcesView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || Ok(pulse_digests::sources_view(&dir))).await?
+}
+
+#[tauri::command]
+async fn save_pulse_sources(
+    state: State<'_, ShellState>,
+    view: pulse_digests::SourcesView,
+) -> Result<pulse_digests::SourcesView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse_digests::save_sources(&dir, view)).await?
 }
 
 #[tauri::command]
@@ -3825,6 +4714,65 @@ fn get_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices::Device
 #[tauri::command]
 fn forget_all_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices::DevicesView {
     web.forget_all()
+}
+
+/// The composer's screenshot offer: one look at the watched folders, off
+/// the main thread. Nothing is listed while Screenshot explain is off.
+#[tauri::command]
+async fn get_screenshot_offer(
+    state: State<'_, ShellState>,
+) -> Result<screenshot_offer::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let dirs = screenshot_offer::this_pc_dirs();
+        screenshot_offer::check(&dir, &dirs, grokhub_core::now_ms())
+    })
+    .await
+}
+
+/// Settings → Behavior → Screenshot explain.
+#[tauri::command]
+async fn set_screenshot_explain(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<screenshot_offer::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || screenshot_offer::set_enabled(&dir, on, grokhub_core::now_ms())).await?
+}
+
+/// The screenshot chip's Not now.
+#[tauri::command]
+async fn dismiss_screenshot_offer(
+    state: State<'_, ShellState>,
+) -> Result<screenshot_offer::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || screenshot_offer::dismiss(&dir)).await
+}
+
+/// The screenshot chip's Explain: the offered picture is read and attached
+/// off the main thread. Nothing is sent.
+#[tauri::command]
+async fn explain_screenshot_offer(
+    app: AppHandle,
+    conversation_id: String,
+) -> Result<attach::Outcome, String> {
+    off_main(move || {
+        let state = app.state::<ShellState>();
+        let dir = state.config_dir.clone();
+        screenshot_offer::explain(&dir, grokhub_core::now_ms(), |path| {
+            stage_paths(
+                &state,
+                &conversation_id,
+                std::iter::once(path.to_path_buf()),
+            )
+            .pop()
+            .unwrap_or(attach::Outcome {
+                staged: None,
+                error: Some(screenshot_offer::GONE.into()),
+            })
+        })
+    })
+    .await?
 }
 
 /// Settings → Your PC → PC helpers: the wellbeing and focus switches.
@@ -4423,6 +5371,21 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "text")?,
             arg(args, "group")?,
         )?),
+        "get_memory_files" => out(get_memory_files()?),
+        "save_memory_file" => out(save_memory_file(
+            arg(args, "name")?,
+            arg(args, "text")?,
+            arg(args, "base")?,
+        )?),
+        "restore_memory_file" => out(restore_memory_file(arg(args, "name")?)?),
+        "reflect_memory" => out(reflect_memory(state, arg(args, "conversationId")?)?),
+        "tidy_memory_ledger" => out(tidy_memory_ledger()?),
+        "apply_memory_raw_tidy" => out(apply_memory_raw_tidy()?),
+        "dismiss_memory_raw_tidy" => out(dismiss_memory_raw_tidy()?),
+        "get_memory_retention" => out(get_memory_retention()),
+        "set_memory_retention" => out(set_memory_retention(arg(args, "days")?)?),
+        "get_chat_archive" => out(get_chat_archive()),
+        "set_chat_archive" => out(set_chat_archive(arg(args, "days")?)?),
         "list_connectors" => out(block_on(list_connectors(state))?),
         "check_connectors" => out(block_on(check_connectors(state))?),
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
@@ -4546,6 +5509,27 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
         "get_background" => out(get_background(state)?),
+        // A browser sees inbox rows only for the chats it started; parks
+        // belong to the desktop and never cross.
+        "decision_inbox" => {
+            let rows: Vec<inbox::Decision> = inbox::decisions(&state.config_dir)
+                .into_iter()
+                .filter(|row| !row.chat_id.is_empty() && web.owns(&row.chat_id))
+                .collect();
+            out(rows)
+        }
+        "answer_inbox" => out(answer_inbox(
+            app.clone(),
+            state,
+            drive(args)?,
+            arg(args, "id")?,
+            arg(args, "kind")?,
+            arg(args, "approve")?,
+        )?),
+        "reply_pick" => {
+            reply_pick(state, arg(args, "key")?);
+            Ok(Value::Null)
+        }
         _ => Err(remote::refused()),
     }
 }
@@ -5033,6 +6017,11 @@ pub fn run() {
             proactive::start(app.state::<ShellState>().config_dir.clone());
             build_main_window(app)?;
             #[cfg(desktop)]
+            {
+                let settings = current(&app.state::<ShellState>());
+                let _ = desktop_nyx::show_window(app.handle(), &settings);
+            }
+            #[cfg(desktop)]
             build_tray(app)?;
             #[cfg(desktop)]
             watch_for_updates(app.handle().clone(), grokhub_agent::perm::config_dir());
@@ -5040,6 +6029,20 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
+                #[cfg(desktop)]
+                if window.label() == desktop_nyx::LABEL {
+                    let state = window.state::<ShellState>();
+                    let next = desktop_nyx::apply_patch(
+                        current(&state),
+                        desktop_nyx::Patch {
+                            undocked: Some(false),
+                            ..desktop_nyx::Patch::default()
+                        },
+                    );
+                    let _ = settings::save(&state.config_dir, &next);
+                    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+                    return;
+                }
                 let state = window.state::<ShellState>();
                 if current(&state).close_to_tray {
                     api.prevent_close();
@@ -5072,6 +6075,9 @@ pub fn run() {
             answer_permission,
             answer_elicit,
             helper_questions,
+            decision_inbox,
+            answer_inbox,
+            reply_pick,
             cancel_chat,
             steer_chat,
             turns::read_turn,
@@ -5099,6 +6105,18 @@ pub fn run() {
             view_read_only_chat,
             search_steps,
             delete_chat,
+            list_chat_tabs,
+            list_archived_chats,
+            list_deleted_chats,
+            chat_tab_switch,
+            chat_tab_pin,
+            chat_tab_rename,
+            chat_tab_archive,
+            chat_tab_unarchive,
+            chat_tab_soft_delete,
+            chat_tab_restore_deleted,
+            get_hangout_mode,
+            set_hangout_mode,
             forget_message,
             stage_attachment,
             stage_attachment_paths,
@@ -5124,6 +6142,17 @@ pub fn run() {
             add_personal_fact,
             export_personal,
             wipe_personal,
+            get_memory_files,
+            save_memory_file,
+            restore_memory_file,
+            reflect_memory,
+            tidy_memory_ledger,
+            apply_memory_raw_tidy,
+            dismiss_memory_raw_tidy,
+            get_memory_retention,
+            set_memory_retention,
+            get_chat_archive,
+            set_chat_archive,
             list_connectors,
             check_connectors,
             restart_connector,
@@ -5152,6 +6181,9 @@ pub fn run() {
             code_ship_run,
             code_new_branch,
             code_activity_list,
+            code_rollback::code_revert_list,
+            code_rollback::code_revert_plan,
+            code_rollback::code_revert_run,
             code_secret_list,
             code_secret_set,
             code_secret_delete,
@@ -5180,6 +6212,11 @@ pub fn run() {
             journal_act,
             journal_to_mission,
             get_permissions,
+            scopes::get_scopes,
+            scopes::allow_scope,
+            scopes::revoke_scope,
+            scopes::pick_scope_folder,
+            scopes::forget_scope_facts,
             add_permission_rule,
             remove_permission_rule,
             remember_grant,
@@ -5207,9 +6244,17 @@ pub fn run() {
             get_learned,
             learned_act,
             learned_say,
+            get_pulse_sources,
+            save_pulse_sources,
             get_interests,
             add_interest,
             interest_act,
+            know_me::get_know_me,
+            know_me::set_know_me_on,
+            know_me::set_know_me_signal,
+            know_me::know_me_scan,
+            know_me::know_me_delete,
+            know_me::know_me_wipe,
             get_pulse,
             pulse_act,
             pulse_discuss,
@@ -5275,6 +6320,20 @@ pub fn run() {
             os_extras::set_notifications,
             nyx_look,
             nyx_tiles,
+            #[cfg(desktop)]
+            desktop_nyx_get,
+            #[cfg(desktop)]
+            desktop_nyx_set,
+            #[cfg(desktop)]
+            desktop_nyx_undock,
+            #[cfg(desktop)]
+            desktop_nyx_dock,
+            #[cfg(desktop)]
+            desktop_nyx_set_outfit,
+            #[cfg(desktop)]
+            desktop_nyx_save_pos,
+            #[cfg(desktop)]
+            desktop_nyx_set_passthrough,
             get_queue,
             stop_task,
             merge_task_work,
@@ -5298,6 +6357,10 @@ pub fn run() {
             set_workboard_tidy,
             get_behavior,
             get_pc_helpers,
+            get_screenshot_offer,
+            set_screenshot_explain,
+            dismiss_screenshot_offer,
+            explain_screenshot_offer,
             set_pc_helper,
             set_pc_auto_sleep,
             forget_pc_rhythm,
@@ -5319,6 +6382,14 @@ pub fn run() {
             pc_speed_test,
             pc_net_csv,
             save_behavior,
+            self_improve::get_self_improve,
+            self_improve::set_self_improve_quiet,
+            self_improve::self_improve_revert,
+            self_improve::self_improve_issue,
+            change_rows::get_change_rows,
+            change_rows::change_row_undo,
+            change_rows::change_row_keep,
+            change_rows::change_row_restore,
             save_defaults,
             get_privacy,
             get_diagnostics,
@@ -5329,6 +6400,11 @@ pub fn run() {
             open_data_folder,
             open_files_folder,
             change_files_folder,
+            storage::get_storage,
+            storage::storage_change,
+            storage::storage_reset,
+            storage::storage_bring_over,
+            storage::storage_open,
             export_chat,
             open_saved,
             reveal_saved,
@@ -5341,9 +6417,64 @@ pub fn run() {
             get_library,
             library_cover,
             library_play,
+            get_battlenet,
+            battlenet_play,
+            battlenet_open_folder,
+            companion_frame,
+            companion_set_note,
+            get_game_watch,
+            set_game_watch,
+            get_steam_pulse,
+            set_steam_achievements,
+            set_steam_wishlist,
+            set_steam_wishlist_threshold,
+            save_steam_id,
+            forget_steam_id,
+            steam_check_now,
+            game_wow,
+            game_wow_addon,
+            game_gw2,
+            game_gw2_refresh,
+            game_gw2_start_key,
+            game_gw2_answer_key,
+            game_gw2_remove_key,
+            game_eso,
+            game_eso_addon,
+            game_osrs,
+            game_osrs_save,
+            game_osrs_forget,
+            game_osrs_refresh,
+            game_destiny,
+            game_destiny_refresh,
+            game_destiny_start_key,
+            game_destiny_answer_key,
+            game_destiny_save_name,
+            game_destiny_remove,
+            game_poe,
+            game_elite,
+            game_factorio,
+            game_factorio_mod,
+            game_stardew,
+            game_minecraft,
+            game_rl,
             home_open_clip,
             library_friends,
             library_steam_settings,
+            mods_games,
+            mods_browse,
+            mods_search,
+            mods_new_finds,
+            mods_for_you,
+            mods_not_for_me,
+            mods_hide_game,
+            mods_install::mods_files,
+            mods_install::mods_plan_install,
+            mods_install::mods_wait_for_browser,
+            mods_install::mods_pickup_download,
+            mods_install::mods_plan_uninstall,
+            mods_install::mods_confirm,
+            mods_install::mods_cancel,
+            mods_install::mods_installed,
             home_turn_on,
             home_setup,
             home_setup_steps,

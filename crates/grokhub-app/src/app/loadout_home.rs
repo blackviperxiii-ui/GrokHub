@@ -277,7 +277,7 @@ pub(super) fn xp_hover(s: &XpSummary) -> String {
 /// Drops the cached XP so the next frame reads the ledger again (after a
 /// goal paid XP).
 pub(super) fn forget_xp(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove::<(Instant, XpSummary)>(egui::Id::new(XP_SUMMARY_ID)));
+    ctx.data_mut(|d| d.remove::<(Instant, XpSummary)>(egui::Id::unique(XP_SUMMARY_ID)));
 }
 
 /// "Lvl 14 · Grinder", the line over every XP bar.
@@ -655,7 +655,7 @@ fn pedestal_preview_pinned() -> bool {
 /// The full companion cutout (`brand/companion.png`, transparent
 /// background) as a texture.
 pub(super) fn companion_cutout(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new("loadout-companion-cutout");
+    let id = egui::Id::unique("loadout-companion-cutout");
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return Some(tex);
     }
@@ -700,7 +700,7 @@ fn paint_pedestal_preview(ui: &mut egui::Ui, frame: egui::Rect) {
 
 /// Circular face crop of the companion for Hangout bubbles and the chat header.
 pub(super) fn companion_face(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new("loadout-companion-face");
+    let id = egui::Id::unique("loadout-companion-face");
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return Some(tex);
     }
@@ -1502,7 +1502,7 @@ impl Cabin {
 
     pub(super) fn dock_mission(&self, ctx: &egui::Context) -> Option<MissionView> {
         type Cached = (Instant, String, Option<MissionView>);
-        let id = egui::Id::new("loadout-mission");
+        let id = egui::Id::unique("loadout-mission");
         let trace = self.trace_id();
         if let Some((at, t, view)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
             if t == trace && at.elapsed() < MISSION_REFRESH {
@@ -1518,7 +1518,7 @@ impl Cabin {
     /// [`XP_REFRESH`]. The open chat's checked steps are banked on the way.
     pub(super) fn dock_xp(&self, ctx: &egui::Context) -> XpSummary {
         type Cached = (Instant, XpSummary);
-        let id = egui::Id::new(XP_SUMMARY_ID);
+        let id = egui::Id::unique(XP_SUMMARY_ID);
         if let Some((at, s)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
             if at.elapsed() < XP_REFRESH {
                 return s;
@@ -1641,7 +1641,7 @@ impl Cabin {
         let open = ui
             .interact(
                 resp.rect,
-                ui.id().with("loadout-pulse"),
+                ui.scope_id().with("loadout-pulse"),
                 egui::Sense::click(),
             )
             .on_hover_cursor(egui::CursorIcon::PointingHand)

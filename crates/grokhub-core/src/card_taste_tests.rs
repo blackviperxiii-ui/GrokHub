@@ -266,3 +266,105 @@ fn each_reaction_becomes_one_engine_signal_per_trait() {
     assert_eq!(trait_id("tópico:rust"), None);
     assert_eq!(trait_id("no colon"), None);
 }
+
+fn tagged(id: &str, at: u64, traits: &[&str]) -> crate::update_feed::UpdateCard {
+    let mut c = crate::update_feed::blank_card(
+        id.into(),
+        crate::update_feed::UpdateKind::Digest,
+        id.into(),
+        None,
+        at,
+    );
+    c.pulse.traits = traits.iter().map(|t| (*t).to_string()).collect();
+    c
+}
+
+fn trait_subject(key: &str) -> crate::learn::Subject {
+    let id = crate::learn::sources::trait_id(key).expect(key);
+    crate::learn::Subject::new("trait", &id).expect(key)
+}
+
+#[test]
+fn belief_rank_lifts_liked_traits_and_hides_the_worst() {
+    use crate::learn::Beliefs;
+    let now = 1_000_000u64;
+    let mut beliefs = Beliefs::default();
+    let liked = trait_subject("topic:rust");
+    for key in ["topic:spam", "tone:bad", "source:junk"] {
+        let hated = trait_subject(key);
+        for i in 0..8 {
+            beliefs.vote(&liked, true, now + i, "signals");
+            beliefs.vote(&hated, false, now + i, "signals");
+        }
+    }
+    let rust = tagged("rust", 100, &["topic:rust"]);
+    let spam = tagged("spam", 200, &["topic:spam", "tone:bad", "source:junk"]);
+    let plain = tagged("plain", 150, &["topic:other"]);
+    let order: Vec<String> = rank_from_beliefs(
+        vec![spam.clone(), plain.clone(), rust.clone()],
+        &beliefs,
+        now,
+    )
+    .into_iter()
+    .map(|c| c.id)
+    .collect();
+    assert_eq!(order, vec!["rust".to_string(), "plain".to_string()]);
+    assert!(
+        !order.iter().any(|id| id == "spam"),
+        "enough disliked traits leave the page: {order:?}"
+    );
+    let empty = Beliefs::default();
+    let kept: Vec<String> = rank_from_beliefs(vec![spam, plain, rust], &empty, now)
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(
+        kept,
+        vec!["spam".to_string(), "plain".to_string(), "rust".to_string()],
+        "no beliefs keeps the given order"
+    );
+}
+
+#[test]
+fn home_belief_boost_is_capped_and_quiet_without_the_hub() {
+    use crate::learn::Beliefs;
+    assert_eq!(home_belief_boost(&tagged("a", 1, &["topic:x"]), 1), 0.0);
+    let now = 50u64;
+    let mut beliefs = Beliefs::default();
+    let keys = ["topic:x", "tone:y", "source:z"];
+    for key in keys {
+        let sub = trait_subject(key);
+        for i in 0..12 {
+            beliefs.vote(&sub, true, now + i, "signals");
+        }
+    }
+    let traits: Vec<String> = keys.iter().map(|k| (*k).to_string()).collect();
+    let raw = score_from_beliefs(&beliefs, &traits, now);
+    assert!(raw > HOME_BELIEF_CAP, "raw {raw}");
+    assert_eq!(
+        raw.clamp(-HOME_BELIEF_CAP, HOME_BELIEF_CAP),
+        HOME_BELIEF_CAP
+    );
+}
+
+#[test]
+fn interest_and_automation_signals_are_hashed_traits() {
+    use crate::learn::signal::Kind;
+    use crate::learn::sources::{automation_toggle, interest_topic};
+    let liked = interest_topic("  Rust Lang ", true, 9);
+    assert_eq!(liked.len(), 1);
+    assert_eq!(liked[0].kind, Kind::Liked);
+    assert!(liked[0].subject.as_str().starts_with("trait:interest/"));
+    assert!(!liked[0].subject.as_str().contains("rust"));
+    let gone = interest_topic("Rust Lang", false, 9);
+    assert_eq!(gone[0].kind, Kind::Disliked);
+    assert_eq!(gone[0].subject, liked[0].subject);
+    let on = automation_toggle("auto-1", true, 3);
+    let off = automation_toggle("auto-1", false, 4);
+    assert_eq!(on[0].kind, Kind::Picked);
+    assert_eq!(off[0].kind, Kind::Declined);
+    assert_eq!(on[0].subject, off[0].subject);
+    assert!(on[0].subject.as_str().starts_with("trait:auto/"));
+    assert!(interest_topic("  ", true, 1).is_empty());
+    assert!(automation_toggle("", true, 1).is_empty());
+}

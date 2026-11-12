@@ -3062,9 +3062,24 @@ mod tests {
         assert_eq!(side.in_flight.load(Ordering::SeqCst), 0);
     }
 
+    /// Whether `pid` is a live process: there, and not a zombie waiting to
+    /// be reaped.
     #[cfg(target_os = "linux")]
     fn running(pid: u32) -> bool {
         std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|st| !st.contains(") Z "))
+    }
+
+    /// The same answer where there is no `/proc`: `ps` prints the state
+    /// letters of a process that is there, and fails for one that is not.
+    #[cfg(all(unix, not(target_os = "linux")))]
+    fn running(pid: u32) -> bool {
+        std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .is_ok_and(|out| {
+                out.status.success()
+                    && !String::from_utf8_lossy(&out.stdout).trim().starts_with('Z')
+            })
     }
 
     #[cfg(target_os = "linux")]

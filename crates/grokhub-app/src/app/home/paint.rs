@@ -138,7 +138,7 @@ fn paint_view(
                     if ui
                         .interact(
                             resp.rect,
-                            ui.id().with((name, &row.label)),
+                            ui.scope_id().with((name, &row.label)),
                             egui::Sense::click(),
                         )
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -189,7 +189,7 @@ fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::Response {
 /// The whole card is a button too, so a Small tile with no room for a pill
 /// still goes somewhere. Pills inside keep their own clicks.
 fn card_clicked(ui: &mut egui::Ui, resp: &egui::Response, salt: &str, tip: &str) -> bool {
-    ui.interact(resp.rect, ui.id().with(salt), egui::Sense::click())
+    ui.interact(resp.rect, ui.scope_id().with(salt), egui::Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(tip)
         .clicked()

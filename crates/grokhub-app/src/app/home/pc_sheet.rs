@@ -112,17 +112,17 @@ pub(super) fn pc_sheet_lines(p: &LocalProfile) -> Vec<(String, String)> {
 }
 
 pub(super) fn open_pc_sheet(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new(OPEN_ID), true));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(OPEN_ID), true));
 }
 
 /// Paint the sheet while it's open. Esc, the backdrop or × closes it.
 pub(super) fn show_pc_sheet(ctx: &egui::Context, profile: Option<&LocalProfile>) {
-    let id = egui::Id::new(OPEN_ID);
+    let id = egui::Id::unique(OPEN_ID);
     if !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
         return;
     }
     let mut close = false;
-    let modal = egui::Modal::new(egui::Id::new("home-pc-sheet"))
+    let modal = egui::Modal::new(egui::Id::unique("home-pc-sheet"))
         .backdrop_color(egui::Color32::from_black_alpha(153))
         .frame(
             egui::Frame::NONE

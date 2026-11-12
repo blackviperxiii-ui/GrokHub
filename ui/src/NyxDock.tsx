@@ -1,6 +1,14 @@
-import { memo, useSyncExternalStore } from "react";
+import { memo, useEffect, useState, useSyncExternalStore } from "react";
 import { COMPANION_NAME } from "./brand";
+import {
+  desktopNyxDock,
+  desktopNyxGet,
+  desktopNyxSetOutfit,
+  desktopNyxUndock,
+  type DesktopNyxState,
+} from "./desktopNyxApi";
 import { MOOD_LABEL, type Mood } from "./nyx";
+import { inShell } from "./transport";
 
 /** Narrower windows keep the whole width for the chat. Keep in step with the
  * `.chat.has-nyx` rule in styles.css. */
@@ -32,15 +40,66 @@ export function useWide(): boolean {
 }
 
 /** Nyx docked at the chat's right, in the pose for what the chat is doing.
- * A new pose fades in (instantly with reduced motion). */
+ * A new pose fades in (instantly with reduced motion). When Labs → Desktop
+ * companion is on, Put her on the desktop / Bring her back and the wardrobe. */
 export const NyxDock = memo(function NyxDock({ url, mood }: { url: string; mood: Mood }) {
   const wide = useWide();
+  const [desk, setDesk] = useState<DesktopNyxState | null>(null);
+
+  // Mount load only. Inlined like Memory: no refresh wrapper that setStates
+  // from the effect (react-hooks/set-state-in-effect). Off the shell, desk
+  // stays null; button handlers refresh via their own .then(setDesk).
+  useEffect(() => {
+    if (!inShell()) return;
+    void desktopNyxGet().then(setDesk, () => setDesk(null));
+  }, []);
+
   if (!wide) return null;
   const doing = MOOD_LABEL[mood] ?? MOOD_LABEL["hanging-out"];
+  const desktopOn = desk?.enabled === true;
+
   return (
     <aside className="card nyx-dock" aria-label={COMPANION_NAME}>
       <img key={url} src={url} alt={`${COMPANION_NAME}: ${doing}`} draggable={false} />
       <p className="note">{doing}</p>
+      {desktopOn && (
+        <div className="nyx-dock-desktop">
+          {desk.undocked ? (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void desktopNyxDock().then(setDesk)}
+            >
+              Bring her back
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void desktopNyxUndock().then(setDesk)}
+            >
+              Put her on the desktop
+            </button>
+          )}
+          <label className="nyx-dock-outfit">
+            Outfit
+            <select
+              value={desk.outfit ?? ""}
+              onChange={(e) => {
+                const id = e.target.value;
+                void desktopNyxSetOutfit(id === "" ? null : id).then(setDesk);
+              }}
+            >
+              <option value="">Pick for me</option>
+              {desk.outfits.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
     </aside>
   );
 });

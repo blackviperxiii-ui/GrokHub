@@ -286,7 +286,7 @@ mod tests {
     fn a_refused_save_keeps_the_editor_open_and_a_good_one_shows_as_edited() {
         let (_lock, _root, mut cabin) = cabin();
         cabin.reload_playbooks();
-        assert_eq!(cabin.playbooks.all.len(), 16);
+        assert_eq!(cabin.playbooks.all.len(), 17);
         assert_eq!(
             steps_line(&cabin.playbooks.all[0]),
             "3 steps, up to Safe, reversible"
@@ -408,6 +408,7 @@ mod tests {
                 ("plan-day", "Plan the day", Source::Shipped),
                 ("creative", "Creative draft", Source::Shipped),
                 ("pc-tuneup", "Check up this PC", Source::Shipped),
+                ("app-update", "Update an app", Source::Shipped),
                 ("task-general-copy", "Any job (copy)", Source::Yours)
             ]
         );

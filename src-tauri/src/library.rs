@@ -498,6 +498,52 @@ pub fn open_settings(steam_root: Option<&Path>) -> Result<(), String> {
     hand_to_steam(SETTINGS_URL, "Steam's settings")
 }
 
+/// Whether `text` names the game, ignoring case (On objective tab).
+pub fn names_game(text: &str, name: &str) -> bool {
+    let name = name.trim().to_lowercase();
+    !name.is_empty() && text.to_lowercase().contains(&name)
+}
+
+/// Steam games kept by the Library tab. `objective` is the open mission's
+/// words (title and checklist); Backlog is never played.
+pub fn filter_games<'a>(
+    games: &'a [Game],
+    tab: &str,
+    query: &str,
+    objective: &str,
+) -> Vec<&'a Game> {
+    let q = query.trim().to_lowercase();
+    games
+        .iter()
+        .filter(|g| match tab {
+            "installed" => g.installed,
+            "backlog" => g.playtime_min == 0 && g.last_played == 0,
+            "onObjective" => names_game(objective, &g.name),
+            _ => true,
+        })
+        .filter(|g| q.is_empty() || g.name.to_lowercase().contains(&q))
+        .collect()
+}
+
+/// Battle.net tiles kept by the tab. They sit out Backlog (no play time).
+pub fn filter_battlenet<'a>(
+    games: &'a [crate::battlenet::Game],
+    tab: &str,
+    query: &str,
+    objective: &str,
+) -> Vec<&'a crate::battlenet::Game> {
+    let q = query.trim().to_lowercase();
+    games
+        .iter()
+        .filter(|g| match tab {
+            "backlog" => false,
+            "onObjective" => names_game(objective, &g.name),
+            _ => true,
+        })
+        .filter(|g| q.is_empty() || g.name.to_lowercase().contains(&q))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -819,5 +865,43 @@ mod tests {
             Err("That game isn't in this computer's Steam library.".to_string())
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn on_objective_keeps_games_named_in_the_mission() {
+        let games = vec![
+            Game {
+                app_id: 620,
+                name: "Portal 2".into(),
+                installed: true,
+                last_played: 1,
+                playtime_min: 10,
+            },
+            Game {
+                app_id: 570,
+                name: "Dota 2".into(),
+                installed: true,
+                last_played: 2,
+                playtime_min: 20,
+            },
+        ];
+        let objective = "Finish Portal 2 co-op\n- beat the last chamber";
+        let kept = filter_games(&games, "onObjective", "", objective);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].name, "Portal 2");
+        assert!(names_game(objective, "Portal 2"));
+        assert!(!names_game(objective, "Dota 2"));
+
+        let bnet = vec![crate::battlenet::Game {
+            product: "wow".into(),
+            name: "World of Warcraft".into(),
+            install: "/home/user/Games/wow".into(),
+            prefix: None,
+            seed: 1,
+        }];
+        let wow_obj = "Level a World of Warcraft alt";
+        assert_eq!(filter_battlenet(&bnet, "onObjective", "", wow_obj).len(), 1);
+        assert!(filter_battlenet(&bnet, "backlog", "", "").is_empty());
+        assert_eq!(filter_battlenet(&bnet, "all", "diablo", "").len(), 0);
     }
 }

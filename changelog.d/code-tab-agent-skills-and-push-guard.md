@@ -1,0 +1,1 @@
+- Code tab chats now always load the built-in coding skills, and a push the agent runs from chat goes through the same push guard as the Push button: pushing to main or the default branch and force-pushing are refused in every mode, an app-made branch pushes on its own in Auto-beta, and everything else asks first.

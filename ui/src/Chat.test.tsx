@@ -48,7 +48,23 @@ const api = vi.hoisted(() => ({
   quickChips: vi.fn<(surface: string, id?: string, draft?: string, mode?: SessionMode) => Promise<QuickChip[]>>(),
   chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
   codeSessionPlan: vi.fn<(id: string) => Promise<string | null>>(),
+  decisionInbox: vi.fn(() => Promise.resolve([])),
+  answerInbox: vi.fn(() => Promise.resolve("answered")),
+  replyPick: vi.fn(() => Promise.resolve()),
+  listChats: vi.fn(() => Promise.resolve([])),
   goalAct: vi.fn(() => Promise.resolve({ board: { today: [], mine: [], suggested: [], season: { label: "", done: 0, trophies: [], badges: [] } } })),
+  getHangoutMode: vi.fn(() => Promise.resolve("type" as const)),
+  setHangoutMode: vi.fn((mode: "talk" | "type") => Promise.resolve(mode)),
+  listChatTabs: vi.fn(() => Promise.resolve([])),
+  listArchivedChats: vi.fn(() => Promise.resolve([])),
+  listDeletedChats: vi.fn(() => Promise.resolve([])),
+  chatTabSwitch: vi.fn(),
+  chatTabPin: vi.fn(),
+  chatTabRename: vi.fn(),
+  chatTabArchive: vi.fn(),
+  chatTabUnarchive: vi.fn(),
+  chatTabSoftDelete: vi.fn(),
+  chatTabRestoreDeleted: vi.fn(),
 }));
 
 // A chat line that asks for a setting is answered by auto setup.
@@ -80,8 +96,24 @@ vi.mock("./api", () => ({
   revealSaved: api.revealSaved,
   quickChips: api.quickChips,
   chipOutcome: api.chipOutcome,
+  decisionInbox: api.decisionInbox,
+  answerInbox: api.answerInbox,
+  replyPick: api.replyPick,
+  listChats: api.listChats,
   goalAct: api.goalAct,
   codeSessionPlan: api.codeSessionPlan,
+  getHangoutMode: api.getHangoutMode,
+  setHangoutMode: api.setHangoutMode,
+  listChatTabs: api.listChatTabs,
+  listArchivedChats: api.listArchivedChats,
+  listDeletedChats: api.listDeletedChats,
+  chatTabSwitch: api.chatTabSwitch,
+  chatTabPin: api.chatTabPin,
+  chatTabRename: api.chatTabRename,
+  chatTabArchive: api.chatTabArchive,
+  chatTabUnarchive: api.chatTabUnarchive,
+  chatTabSoftDelete: api.chatTabSoftDelete,
+  chatTabRestoreDeleted: api.chatTabRestoreDeleted,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
     return Promise.resolve(() => {});
@@ -240,6 +272,21 @@ describe("Chat", () => {
     expect(api.sendChat).not.toHaveBeenCalled();
   });
 
+  it("TALK and TYPE keep the draft in the box", async () => {
+    api.getHangoutMode.mockResolvedValue("type");
+    api.setHangoutMode.mockImplementation(async (mode) => mode);
+    render(<Chat onOpenSettings={() => {}} />);
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await userEvent.type(box, "keep me while switching");
+    expect(await screen.findByRole("group", { name: "Hangout mode" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "TALK" }));
+    await waitFor(() => expect(api.setHangoutMode).toHaveBeenCalledWith("talk"));
+    expect(box).toHaveValue("keep me while switching");
+    await userEvent.click(screen.getByRole("button", { name: "TYPE" }));
+    await waitFor(() => expect(api.setHangoutMode).toHaveBeenCalledWith("type"));
+    expect(box).toHaveValue("keep me while switching");
+  });
+
   it("a send prefill (the Command line's run) goes as a chat message, leaving the box alone", async () => {
     api.sendChat.mockResolvedValue("end_turn");
     const { rerender } = render(<Chat onOpenSettings={() => {}} />);
@@ -260,6 +307,79 @@ describe("Chat", () => {
     emit(id, { kind: "done", stop: "end_turn" });
     finish();
     await waitFor(() => expect(api.sendChat).toHaveBeenLastCalledWith(id, "Run this: ls", undefined));
+  });
+
+  it("a findings pill fills the composer without sending", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("scan it");
+    emit(id, { kind: "text", text: "Scan complete." });
+    emit(id, {
+      kind: "findings",
+      items: [{ severity: "high", text: "Port 53 is taken" }],
+      fixes: [{ label: "Fix port 53 conflict", prompt: "Fix port 53 conflict: Stop the other service" }],
+      doAll: null,
+    });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await userEvent.click(screen.getByRole("button", { name: "Fix port 53 conflict" }));
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue(
+      "Fix port 53 conflict: Stop the other service",
+    );
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a recap card swaps the Finished block out of the bubble", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("do the work");
+    emit(id, { kind: "text", text: "Fixed it.\n\nFinished\n- Done: Read the file" });
+    emit(id, {
+      kind: "recap",
+      body: "Fixed it.",
+      lines: [{ status: "done", text: "Read the file" }],
+      needsYou: [],
+      undo: [],
+      steps: [{ title: "read_file", failed: false }],
+    });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    expect(screen.getByText("1 of 1 done")).toBeVisible();
+    const bubble = document.querySelector('[data-role="assistant"]');
+    expect(bubble?.textContent).toBe("Fixed it.");
+    await userEvent.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByText("read_file")).toBeVisible();
+  });
+
+  it("a plan card's chips fill its reply box or answer it, and picks are remembered", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("plan it");
+    emit(id, {
+      kind: "elicit",
+      id: "plan-1",
+      server: "Plan",
+      message: "1. Read the file",
+      mode: "form",
+      url: "",
+      fieldName: "reply",
+      fieldTitle: "Reply",
+      secret: false,
+      options: [],
+      chips: [
+        { key: "plan:go", label: "Yes, go", act: "send", text: "Go ahead with the plan." },
+        { key: "plan:change", label: "Change this", act: "prefill", text: "Change the plan: " },
+      ],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Change this" }));
+    expect(screen.getByLabelText("Reply")).toHaveValue("Change the plan: ");
+    expect(api.answerElicit).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Yes, go" }));
+    await waitFor(() =>
+      expect(api.answerElicit).toHaveBeenCalledWith(id, "plan-1", "accept", "reply", "Go ahead with the plan."),
+    );
+    await waitFor(() => expect(api.replyPick).toHaveBeenCalledWith("plan:go"));
+    finish();
   });
 
   it("opening the chat that is already open keeps what is typed in the box", async () => {
@@ -804,9 +924,11 @@ describe("Chat", () => {
     api.sendChat.mockResolvedValue("end_turn");
     render(<Chat onOpenSettings={() => {}} />);
     const first = await startTurn("one");
-    await waitFor(() => expect(screen.getByRole("button", { name: "New chat" })).toBeEnabled());
+    const fresh = () =>
+      screen.getByRole("button", { name: "New chat" });
+    await waitFor(() => expect(fresh()).toBeEnabled());
 
-    await userEvent.click(screen.getByRole("button", { name: "New chat" }));
+    await userEvent.click(fresh());
     expect(api.closeChat).toHaveBeenCalledWith(first);
     expect(screen.queryByText("one")).toBeNull();
 
@@ -871,7 +993,8 @@ describe("Chat", () => {
 
   it("the conversation log takes keyboard focus, so a long one can be scrolled", async () => {
     render(<Chat onOpenSettings={() => {}} />);
-    await userEvent.tab();
+    // Hangout tab strip and TALK/TYPE sit above the log in tab order.
+    screen.getByRole("log").focus();
     expect(screen.getByRole("log")).toHaveFocus();
   });
 });

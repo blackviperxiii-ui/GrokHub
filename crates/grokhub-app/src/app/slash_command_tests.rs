@@ -31,10 +31,32 @@ fn tab_accept_stays_for_args() {
 
 #[test]
 fn slash_pick_resets_when_the_list_changes() {
-    assert_eq!(super::slash_pick_retain(2, true, 4), 0);
-    assert_eq!(super::slash_pick_retain(2, false, 4), 2);
-    assert_eq!(super::slash_pick_retain(9, false, 3), 2);
-    assert_eq!(super::slash_pick_retain(1, true, 0), 0);
+    // CompletionPopup owns selection now; keep the step clamp covered here.
+    assert_eq!(super::slash_pick_step(2, 4, 0), 2);
+    assert_eq!(super::slash_pick_step(9, 3, 0), 2);
+    assert_eq!(super::slash_pick_step(0, 0, 0), 0);
+}
+
+#[test]
+fn completion_popup_suggestions_only_for_slash_words() {
+    assert!(super::slash_completion_suggestions("help", &[]).is_empty());
+    let hits = super::slash_completion_suggestions("/he", &[]);
+    assert!(
+        hits.iter().any(|s| s.insert.starts_with("/help")),
+        "expected /help among CompletionPopup inserts"
+    );
+}
+
+#[test]
+fn completion_popup_accept_runs_on_pick_commands() {
+    let mut composer = "/he".into();
+    let run = super::slash_completion_run(&mut composer, "/help", &[]);
+    assert_eq!(run.as_deref(), Some("/help"));
+    assert!(composer.is_empty());
+    let mut composer = "/proj".into();
+    let run = super::slash_completion_run(&mut composer, "/project bind ", &[]);
+    assert!(run.is_none());
+    assert_eq!(composer, "/project bind ");
 }
 
 #[test]
@@ -1052,9 +1074,7 @@ fn slash_pick_fills_or_returns_the_command() {
     assert_eq!(super::slash_pick_step(2, 3, 1), 2);
     assert_eq!(super::slash_pick_step(0, 3, -1), 0);
     assert_eq!(super::slash_pick_step(0, 0, 1), 0);
-
-    assert_eq!(super::slash_pick_retain(2, true, 5), 0);
-    assert_eq!(super::slash_pick_retain(2, false, 5), 2);
+    assert_eq!(super::slash_pick_step(2, 5, 0), 2);
 }
 
 // Landed from PR #175.

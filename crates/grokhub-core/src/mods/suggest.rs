@@ -113,6 +113,61 @@ pub struct Have {
     pub needed: HashSet<String>,
 }
 
+impl Have {
+    /// Count the categories of the pool's mods this game already has (by key
+    /// or name), for "Like mods you have".
+    pub fn count_categories(&mut self, game: &str, pool: &[Candidate]) {
+        for c in pool.iter().filter(|c| c.game == game) {
+            if self.keys.contains(&key(c.source, &c.m.id))
+                || self.names.contains(&c.m.name.to_lowercase())
+            {
+                for cat in &c.m.categories {
+                    *self.categories.entry(cat.to_lowercase()).or_default() += 1;
+                }
+            }
+        }
+    }
+
+    /// Fold one game's [`Have`] into the whole PC's.
+    pub fn absorb(&mut self, other: Have) {
+        self.keys.extend(other.keys);
+        self.names.extend(other.names);
+        self.needed.extend(other.needed);
+        for (k, v) in other.categories {
+            *self.categories.entry(k).or_default() += v;
+        }
+    }
+}
+
+/// The pool For you ranks: discovery's finds first (so a mod keeps when it
+/// was found), then each game's cached Popular and Trending pages
+/// (`(game, source, trending, page)`).
+pub fn pool(
+    finds: Vec<(String, super::discover::Find)>,
+    pages: impl IntoIterator<Item = (String, Source, bool, super::Page)>,
+) -> Vec<Candidate> {
+    let mut out: Vec<Candidate> = finds
+        .into_iter()
+        .map(|(game, f)| Candidate {
+            game,
+            source: f.source(),
+            trending: f.trending,
+            found: f.first_seen,
+            m: f.m,
+        })
+        .collect();
+    for (game, source, trending, page) in pages {
+        out.extend(page.mods.into_iter().map(|m| Candidate {
+            game: game.clone(),
+            source,
+            m,
+            trending,
+            found: 0,
+        }));
+    }
+    out
+}
+
 /// Why a suggestion shows, in a few words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Why {

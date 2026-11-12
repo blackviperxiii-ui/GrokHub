@@ -48,11 +48,11 @@ enum IdeaAct {
 }
 
 fn action_edit_id(id: &str) -> egui::Id {
-    egui::Id::new(("idea-action", id))
+    egui::Id::unique(("idea-action", id))
 }
 
 fn chat_edit_id(id: &str) -> egui::Id {
-    egui::Id::new(("idea-chat", id))
+    egui::Id::unique(("idea-chat", id))
 }
 
 /// The opened card reads the same type, in the same color, as its row.

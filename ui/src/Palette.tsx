@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { Capabilities, QuickChip } from "./api";
+import { decisionInbox, type Capabilities, type QuickChip } from "./api";
 import {
   answersTo,
   chatRows,
@@ -37,6 +37,7 @@ export type View =
   | "connectors"
   | "settings"
   | "library"
+  | "mods"
   | "workboard"
   | "devices"
   | "updates";
@@ -112,6 +113,7 @@ export const VIEW_LABELS: Record<View, string> = {
   workboard: "Workboard",
   devices: "Devices",
   library: "Library",
+  mods: "Mods",
   updates: "Updates & Drivers",
 };
 
@@ -136,6 +138,7 @@ export function views(caps: Capabilities): View[] {
     "workboard",
     ...(caps.webAccess && !caps.remote ? (["devices"] as const) : []),
     ...(caps.library ? (["library"] as const) : []),
+    ...(caps.mods && !caps.remote ? (["mods"] as const) : []),
     "settings",
   ];
 }
@@ -227,7 +230,27 @@ export function Palette({
   const list = useRef<HTMLUListElement>(null);
   // The way the last arrow key moved, so only key moves (not hovers) scroll.
   const moved = useRef<1 | -1 | null>(null);
-  const rows = paletteRows(caps, query, { ...sources, ...found });
+  // The decision inbox (Order 733): while anything waits on you, the first
+  // row opens Chat, where the inbox sits.
+  const [waiting, setWaiting] = useState(0);
+  useEffect(() => {
+    let live = true;
+    Promise.resolve()
+      .then(() => decisionInbox())
+      .then((rows) => {
+        if (live) setWaiting(rows.length);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  const inboxLabel = `Decisions waiting · ${waiting}`;
+  const inboxRow: PaletteRow[] =
+    waiting > 0 && (!query.trim() || answersTo(inboxLabel, query.trim().toLowerCase()))
+      ? [{ label: inboxLabel, action: { kind: "view", view: "chat" } }]
+      : [];
+  const rows = [...inboxRow, ...paletteRows(caps, query, { ...sources, ...found })];
   const { onChip } = sources;
   const { chats: findChats, slash: findSlash } = sources;
   const at = Math.min(pick, rows.length - 1);

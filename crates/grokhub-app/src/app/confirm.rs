@@ -133,6 +133,10 @@ pub(super) enum ConfirmKind {
         name: String,
         label: String,
     },
+    /// Pulse Dismiss (absorbs Delete): the card leaves for good.
+    DismissPulse {
+        id: String,
+    },
 }
 
 impl ConfirmKind {
@@ -148,7 +152,8 @@ impl ConfirmKind {
             | Self::SleepPc
             | Self::ClearMainChat
             | Self::DeleteMessage { .. }
-            | Self::SaveKey { .. } => true,
+            | Self::SaveKey { .. }
+            | Self::DismissPulse { .. } => true,
         }
     }
 }
@@ -297,6 +302,15 @@ pub(super) fn last_run_spec() -> ConfirmSpec {
         consequence: "The last run failed.",
         primary: LAST_RUN_PRIMARY,
         danger: false,
+    }
+}
+
+pub(super) fn dismiss_pulse_spec() -> ConfirmSpec {
+    ConfirmSpec {
+        title: "Dismiss this post?",
+        consequence: "It won't come back.",
+        primary: "Dismiss",
+        danger: true,
     }
 }
 
@@ -477,6 +491,11 @@ impl Cabin {
                 format!("Save the key for {label}?"),
                 "The model never sees it, and the connector's entry only names it. Disconnect deletes it.".to_string(),
             ),
+            ConfirmKind::DismissPulse { .. } => (
+                dismiss_pulse_spec(),
+                dismiss_pulse_spec().title.to_string(),
+                dismiss_pulse_spec().consequence.to_string(),
+            ),
         };
         let overlay_open = self.palette_open || self.nav == Nav::Settings || self.find.focused;
         let steal = confirm_key(
@@ -487,7 +506,7 @@ impl Cabin {
             true,
         );
         let mut act = steal;
-        let id = egui::Id::new("cabin-confirm-sheet");
+        let id = egui::Id::unique("cabin-confirm-sheet");
         egui::Area::new(id)
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -534,6 +553,9 @@ impl Cabin {
                 self.delete_bubble_confirmed(&thread, mark, cut)
             }
             ConfirmKind::SaveKey { name, .. } => self.save_key_confirmed(&name),
+            ConfirmKind::DismissPulse { id } => {
+                self.pulse_dismiss(&id, &Self::local_day());
+            }
         }
     }
 

@@ -271,7 +271,7 @@ impl Cabin {
                                     .hint_text(crate::theme::hint(FOLDER_HINT))
                                     .desired_width(f32::INFINITY)
                                     .min_size(egui::vec2(0.0, 28.0))
-                                    .vertical_align(egui::Align::Center),
+                                    .align(egui::Align2::LEFT_CENTER),
                             );
                         });
                         if hit {

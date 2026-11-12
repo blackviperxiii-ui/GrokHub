@@ -105,6 +105,25 @@ pub struct ShellSettings {
     /// Settings → Code → Pushes and PRs. An unreadable block loads as Ask.
     #[serde(deserialize_with = "crate::code_ship::lenient")]
     pub code_ship: crate::code_ship::CodeShip,
+    /// Settings → Labs → Desktop companion. Off until the person turns it on.
+    /// Same camelCase key as the cabin (`desktopNyx`).
+    #[serde(default)]
+    pub desktop_nyx: bool,
+    /// She is popped out onto the desktop right now.
+    #[serde(default)]
+    pub desktop_nyx_undocked: bool,
+    /// Her window sits behind other windows instead of floating on top.
+    #[serde(default)]
+    pub desktop_nyx_behind: bool,
+    /// Where her window last settled, in points from the monitor's corner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_nyx_pos: Option<[i32; 2]>,
+    /// Adults-only outfits may show on the desktop. Off by default.
+    #[serde(default)]
+    pub desktop_nyx_adult: bool,
+    /// Outfit pinned from the wardrobe; `None` lets her default mode choose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_nyx_outfit: Option<String>,
 }
 
 /// A size this build doesn't offer reads as the step at or below it.
@@ -237,6 +256,12 @@ impl Default for ShellSettings {
             reduce_motion: false,
             notify_important: false,
             code_ship: crate::code_ship::CodeShip::default(),
+            desktop_nyx: false,
+            desktop_nyx_undocked: false,
+            desktop_nyx_behind: false,
+            desktop_nyx_pos: None,
+            desktop_nyx_adult: false,
+            desktop_nyx_outfit: None,
         }
     }
 }
@@ -396,6 +421,12 @@ mod tests {
                 reduce_motion: false,
                 notify_important: false,
                 code_ship: crate::code_ship::CodeShip::default(),
+                desktop_nyx: false,
+                desktop_nyx_undocked: false,
+                desktop_nyx_behind: false,
+                desktop_nyx_pos: None,
+                desktop_nyx_adult: false,
+                desktop_nyx_outfit: None,
             }
         );
     }
@@ -460,6 +491,12 @@ mod tests {
             reduce_motion: false,
             notify_important: false,
             code_ship: crate::code_ship::CodeShip::default(),
+            desktop_nyx: true,
+            desktop_nyx_undocked: true,
+            desktop_nyx_behind: false,
+            desktop_nyx_pos: Some([100, 200]),
+            desktop_nyx_adult: false,
+            desktop_nyx_outfit: Some("gaming".into()),
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -484,6 +521,9 @@ mod tests {
         assert!(raw.contains("\"pauseOverBudget\": true"), "{raw}");
         assert!(raw.contains("\"summonHotkey\": true"), "{raw}");
         assert!(raw.contains("\"notifications\": false"), "{raw}");
+        assert!(raw.contains("\"desktopNyx\": true"), "{raw}");
+        assert!(raw.contains("\"desktopNyxUndocked\": true"), "{raw}");
+        assert!(raw.contains("\"desktopNyxOutfit\": \"gaming\""), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -517,6 +557,12 @@ mod tests {
                 reduce_motion: false,
                 notify_important: false,
                 code_ship: crate::code_ship::CodeShip::default(),
+                desktop_nyx: false,
+                desktop_nyx_undocked: false,
+                desktop_nyx_behind: false,
+                desktop_nyx_pos: None,
+                desktop_nyx_adult: false,
+                desktop_nyx_outfit: None,
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -554,6 +600,12 @@ mod tests {
                 reduce_motion: false,
                 notify_important: false,
                 code_ship: crate::code_ship::CodeShip::default(),
+                desktop_nyx: false,
+                desktop_nyx_undocked: false,
+                desktop_nyx_behind: false,
+                desktop_nyx_pos: None,
+                desktop_nyx_adult: false,
+                desktop_nyx_outfit: None,
             }
         );
         save(&dir, &loaded).expect("save");

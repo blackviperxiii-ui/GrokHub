@@ -244,3 +244,47 @@ pub fn onboard_skipped(at_ms: u64) -> Vec<Signal> {
     push(&mut out, at_ms, Kind::Declined, "onboard", "skipped");
     out
 }
+
+/// An interest the person added (`Liked`) or removed (`Disliked`), as
+/// `trait:interest/<hash>` so Pulse ranking can share the same store.
+pub fn interest_topic(topic: &str, liked: bool, at_ms: u64) -> Vec<Signal> {
+    let topic = topic.trim().to_lowercase();
+    if topic.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if let Some(id) = trait_id(&format!("interest:{topic}")) {
+        push(
+            &mut out,
+            at_ms,
+            if liked { Kind::Liked } else { Kind::Disliked },
+            "trait",
+            &id,
+        );
+    }
+    out
+}
+
+/// An automation the person turned on (`Picked`) or off (`Declined`), as
+/// `trait:auto/<hash>` from the automation's app id (never its title).
+pub fn automation_toggle(id: &str, enabled: bool, at_ms: u64) -> Vec<Signal> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if let Some(tid) = trait_id(&format!("auto:{id}")) {
+        push(
+            &mut out,
+            at_ms,
+            if enabled {
+                Kind::Picked
+            } else {
+                Kind::Declined
+            },
+            "trait",
+            &tid,
+        );
+    }
+    out
+}

@@ -20,12 +20,8 @@ mod install;
 mod jobs;
 mod suggest;
 
-use std::path::{Path, PathBuf};
-
-use grokhub_core::battlenet::BnetGame;
-use grokhub_core::mods::allowlist::{self, Check, Entry, UNKNOWN_REASON};
+use grokhub_core::mods::allowlist::{self, Entry, UNKNOWN_REASON};
 use grokhub_core::mods::{Browse, ModSummary, Page, Query, Source};
-use grokhub_core::steam::SteamGame;
 
 use super::*;
 
@@ -35,132 +31,9 @@ const QUERY_WAIT_MS: u64 = 400;
 const RAIL_W: f32 = 230.0;
 const DRAWER_W: f32 = 340.0;
 
-/// A game Loadout may mod, as this PC has it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ModGame {
-    pub entry: &'static Entry,
-    pub last_played: u64,
-    pub playtime_min: u64,
-    /// Battle.net install folders (WoW's AddOns live under them).
-    pub installs: Vec<PathBuf>,
-}
-
-/// A game Loadout won't mod, and why.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct CantMod {
-    pub key: String,
-    pub name: String,
-    pub reason: String,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct Rail {
-    pub games: Vec<ModGame>,
-    pub cant: Vec<CantMod>,
-}
-
-impl Rail {
-    fn add(
-        &mut self,
-        check: Check,
-        key: String,
-        name: String,
-        played: (u64, u64),
-        install: Option<PathBuf>,
-    ) {
-        match check {
-            Check::Allowed(entry) => {
-                if let Some(g) = self.games.iter_mut().find(|g| g.entry.id == entry.id) {
-                    g.last_played = g.last_played.max(played.0);
-                    g.playtime_min += played.1;
-                    g.installs.extend(install);
-                } else {
-                    self.games.push(ModGame {
-                        entry,
-                        last_played: played.0,
-                        playtime_min: played.1,
-                        installs: install.into_iter().collect(),
-                    });
-                }
-            }
-            Check::Blocked(reason) => {
-                let (key, name) = match allowlist::by_id(&key) {
-                    Some(e) => (e.id.to_string(), e.name.to_string()),
-                    None => (key, name),
-                };
-                if !self.cant.iter().any(|c| c.key == key) {
-                    self.cant.push(CantMod { key, name, reason });
-                }
-            }
-        }
-    }
-}
-
-/// The rail: Library games the allowlist allows, most recently played then
-/// most played, and the rest under "Can't mod" by name.
-pub(super) fn mod_rail(steam: &[SteamGame], bnet: &[BnetGame], minecraft: bool) -> Rail {
-    let mut rail = Rail::default();
-    for g in steam {
-        let check = allowlist::check_steam(g.app_id);
-        let key = check
-            .entry()
-            .map(|e| e.id.to_string())
-            .or_else(|| allowlist::by_steam_app(g.app_id).map(|e| e.id.to_string()))
-            .unwrap_or_else(|| format!("steam:{}", g.app_id));
-        rail.add(
-            check,
-            key,
-            g.name.clone(),
-            (g.last_played, g.playtime_min),
-            None,
-        );
-    }
-    for g in bnet {
-        let check = allowlist::check_bnet(&g.product);
-        let key = allowlist::by_bnet_product(&g.product)
-            .map(|e| e.id.to_string())
-            .unwrap_or_else(|| format!("bnet:{}", g.product));
-        rail.add(check, key, g.name(), (0, 0), Some(g.install.clone()));
-    }
-    if minecraft {
-        rail.add(
-            allowlist::check("minecraft"),
-            "minecraft".into(),
-            "Minecraft".into(),
-            (0, 0),
-            None,
-        );
-    }
-    rail.games.sort_by(|a, b| {
-        b.last_played
-            .cmp(&a.last_played)
-            .then(b.playtime_min.cmp(&a.playtime_min))
-            .then(
-                a.entry
-                    .name
-                    .to_lowercase()
-                    .cmp(&b.entry.name.to_lowercase()),
-            )
-    });
-    rail.cant.sort_by_key(|c| c.name.to_lowercase());
-    rail
-}
-
-/// The Minecraft launcher's folder, when this PC has one.
-fn minecraft_dir() -> Option<PathBuf> {
-    let candidates = [
-        std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join(".minecraft")),
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".minecraft")),
-        std::env::var_os("HOME")
-            .map(|h| PathBuf::from(h).join("Library/Application Support/minecraft")),
-    ];
-    candidates.into_iter().flatten().find(|d| d.is_dir())
-}
-
-/// Results the page may show: adult mods only with 18+ on.
-pub(super) fn visible_mods(page: &Page, adult_ok: bool) -> Vec<&ModSummary> {
-    page.mods.iter().filter(|m| adult_ok || !m.adult).collect()
-}
+pub(super) use grokhub_core::mods::rail::{
+    installed_mods, minecraft_dir, mod_rail, visible_mods, CantMod, Installed, ModGame, Rail,
+};
 
 /// What the page lists under a game.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -199,52 +72,6 @@ impl Tab {
             Tab::NewFinds | Tab::Installed => None,
         }
     }
-}
-
-/// One mod already on this PC, read from the game's own folders.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Installed {
-    pub name: String,
-    pub detail: String,
-    pub link: Option<String>,
-}
-
-/// What a game has installed that Loadout didn't put there, read-only:
-/// Steam Workshop items and WoW addons.
-pub(super) fn installed_mods(game: &ModGame, steam_root: Option<&Path>) -> Vec<Installed> {
-    let mut out = Vec::new();
-    if let (Some(root), Some(app_id)) = (steam_root, game.entry.steam_app_id) {
-        if game.entry.sources.contains(&Source::Workshop) {
-            for item in grokhub_core::steam::workshop_items(root, app_id) {
-                out.push(Installed {
-                    name: format!("Workshop item {}", item.id),
-                    detail: format!("{:.1} MB, from Steam Workshop", item.size as f64 / 1e6),
-                    link: Some(grokhub_core::mods::workshop::item_url(&item.id.to_string())),
-                });
-            }
-        }
-    }
-    for install in &game.installs {
-        for flavor in grokhub_core::battlenet::wow_flavors(install) {
-            let addons = flavor.dir(install).join("Interface").join("AddOns");
-            let Ok(dir) = std::fs::read_dir(&addons) else {
-                continue;
-            };
-            let mut names: Vec<String> = dir
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .filter(|n| !n.starts_with("Blizzard_") && !n.starts_with('.'))
-                .collect();
-            names.sort_by_key(|n| n.to_lowercase());
-            out.extend(names.into_iter().map(|name| Installed {
-                name,
-                detail: format!("Addon, {}", flavor.label()),
-                link: None,
-            }));
-        }
-    }
-    out
 }
 
 /// Open a mod's page: its site over https, or the Steam client.
@@ -309,7 +136,7 @@ impl Cabin {
         let mut view = ModsView::default();
         view.pick(key);
         view.show_cant = true;
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(VIEW_ID), view));
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique(VIEW_ID), view));
         self.set_nav_id("mods");
     }
 
@@ -334,7 +161,7 @@ impl Cabin {
     }
 
     pub(super) fn ui_mods(&mut self, ui: &mut egui::Ui) {
-        let id = egui::Id::new(VIEW_ID);
+        let id = egui::Id::unique(VIEW_ID);
         let mut view: ModsView = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
         let (_, steam) = self.steam_library(now_ms());
         let steam = steam.to_vec();
@@ -1044,27 +871,7 @@ pub(super) fn new_badge(n: usize) -> String {
     }
 }
 
-/// One page of a game's new finds on one source, as a results page.
-pub(super) fn finds_page(
-    finds: &[grokhub_core::mods::discover::Find],
-    source: Source,
-    page: u32,
-) -> Page {
-    let per = grokhub_core::mods::source::PAGE_SIZE as usize;
-    let mine: Vec<ModSummary> = finds
-        .iter()
-        .filter(|f| f.source() == source)
-        .map(|f| f.m.clone())
-        .collect();
-    Page {
-        total: Some(mine.len() as u64),
-        mods: mine
-            .into_iter()
-            .skip(page as usize * per)
-            .take(per)
-            .collect(),
-    }
-}
+pub(super) use grokhub_core::mods::discover::finds_page;
 
 /// "1.2M", "34K", "980".
 pub(super) fn short_count(n: u64) -> String {
@@ -1138,12 +945,7 @@ fn mod_card(ui: &mut egui::Ui, m: &ModSummary, open: bool) -> bool {
 }
 
 fn pager(ui: &mut egui::Ui, view: &mut ModsView, page: &Page, shown: usize) {
-    let more = match page.total {
-        Some(total) => {
-            u64::from(view.page + 1) * u64::from(grokhub_core::mods::source::PAGE_SIZE) < total
-        }
-        None => page.mods.len() >= grokhub_core::mods::source::PAGE_SIZE as usize,
-    };
+    let more = page.has_more(view.page);
     ui.horizontal(|ui| {
         if view.page > 0 && crate::cards::ghost_pill(ui, "Previous") {
             view.page -= 1;

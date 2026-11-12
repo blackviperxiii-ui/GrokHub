@@ -61,6 +61,8 @@ export interface Capabilities {
   autoSetup?: boolean;
   /** The Code tab: this computer's repos (desktops). */
   code?: boolean;
+  /** The Mods page: this computer's moddable games (desktops). */
+  mods?: boolean;
 }
 
 /** Until the report loads, or if it fails, only the core features show. */
@@ -85,6 +87,26 @@ export function getCapabilities(): Promise<Capabilities> {
 export type Answer = "allow" | "always" | "deny";
 
 /** One engine event for a conversation, from `chat://event`. */
+/** One predicted reply for a card that waits on you (Order 733):
+ * `send` answers the card with `text`, `prefill` puts `text` in the box,
+ * `dismiss` sets the card aside. */
+export interface ReplyChipData {
+  key: string;
+  label: string;
+  act: "send" | "prefill" | "dismiss";
+  text: string;
+}
+
+/** One decision waiting in the decision inbox (Order 733). */
+export interface Decision {
+  id: string;
+  kind: "permission" | "elicit" | "park";
+  /** The chat the ask belongs to; empty for a harness park. */
+  chatId: string;
+  what: string;
+  hard: boolean;
+}
+
 export type ChatEvent =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; title: string; status: string; detail: string }
@@ -117,6 +139,38 @@ export type ChatEvent =
       secret: boolean;
       /** Answers to tap for the agent's question, the recommended one first. */
       options?: ElicitChoice[];
+      /** Predicted replies for this card, ranked by past picks. */
+      chips?: ReplyChipData[];
+    }
+  /** A report_findings card: one pill per fix; a pill fills the composer. */
+  | {
+      kind: "findings";
+      items: { severity: string; text: string }[];
+      fixes: { label: string; prompt: string }[];
+      doAll: string[] | null;
+    }
+  /** The reply's Finished block as a card; `body` replaces the block in the bubble. */
+  | {
+      kind: "recap";
+      body: string;
+      lines: { status: "done" | "partly" | "notDone"; text: string }[];
+      needsYou: string[];
+      undo: string[];
+      steps: { title: string; failed: boolean }[];
+    }
+  /** The evidence receipt for the turn that just ended. */
+  | {
+      kind: "evidence";
+      summary: string;
+      goal: string;
+      goalDetail: string;
+      plan: string[];
+      actions: string[];
+      checks: string[];
+      changes: string[];
+      confidence: string;
+      recovery: string;
+      toolRanNotVerified: boolean;
     };
 
 /** A quick chip: the cabin's engine picked it for this moment (`chips.rs`).
@@ -416,6 +470,27 @@ export function helperQuestions(conversationId: string): Promise<ChatEvent[]> {
   return invoke<ChatEvent[]>("helper_questions", { conversationId });
 }
 
+/** Every decision waiting on you, in one list (the decision inbox). */
+export function decisionInbox(): Promise<Decision[]> {
+  return invoke<Decision[]>("decision_inbox", {});
+}
+
+/** Answers one inbox decision through the same path as its card. Resolves
+ * "answered", or "open:<chat id>" when an elicit's Approve opens its chat. */
+export function answerInbox(
+  conversationId: string,
+  id: string,
+  kind: Decision["kind"],
+  approve: boolean,
+): Promise<string> {
+  return invoke<string>("answer_inbox", { conversationId, id, kind, approve });
+}
+
+/** Remembers a picked reply chip, so the next waiting card ranks it higher. */
+export function replyPick(key: string): Promise<void> {
+  return invoke<void>("reply_pick", { key });
+}
+
 export function cancelChat(conversationId: string): Promise<void> {
   return invoke<void>("cancel_chat", { conversationId });
 }
@@ -553,6 +628,67 @@ export function cancelDeleteAll(): Promise<void> {
 /** Deletes the saved chat; a reply still running in it stops. */
 export function deleteChat(id: string): Promise<void> {
   return invoke<void>("delete_chat", { id });
+}
+
+/** One row on the Hangout chat tab strip (or an Archived / Recently deleted menu). */
+export interface ChatTab {
+  id: string;
+  title: string;
+  pinned: boolean;
+  updated: number;
+  archivedAt?: number;
+  deletedAt?: number;
+}
+
+export type HangoutMode = "talk" | "type";
+
+/** Live tabs under the title bar (not archived, not soft-deleted). */
+export function listChatTabs(): Promise<ChatTab[]> {
+  return invoke<ChatTab[]>("list_chat_tabs");
+}
+
+export function listArchivedChats(): Promise<ChatTab[]> {
+  return invoke<ChatTab[]>("list_archived_chats");
+}
+
+export function listDeletedChats(): Promise<ChatTab[]> {
+  return invoke<ChatTab[]>("list_deleted_chats");
+}
+
+export function chatTabSwitch(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_switch", { id });
+}
+
+export function chatTabPin(id: string): Promise<boolean> {
+  return invoke<boolean>("chat_tab_pin", { id });
+}
+
+export function chatTabRename(id: string, title: string): Promise<void> {
+  return invoke<void>("chat_tab_rename", { id, title });
+}
+
+export function chatTabArchive(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_archive", { id });
+}
+
+export function chatTabUnarchive(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_unarchive", { id });
+}
+
+export function chatTabSoftDelete(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_soft_delete", { id });
+}
+
+export function chatTabRestoreDeleted(id: string): Promise<ChatTab> {
+  return invoke<ChatTab>("chat_tab_restore_deleted", { id });
+}
+
+export function getHangoutMode(): Promise<HangoutMode> {
+  return invoke<HangoutMode>("get_hangout_mode");
+}
+
+export function setHangoutMode(mode: HangoutMode): Promise<HangoutMode> {
+  return invoke<HangoutMode>("set_hangout_mode", { mode });
 }
 
 /** A chat export on disk (src-tauri/src/export.rs). Open and Show in folder
@@ -952,6 +1088,96 @@ export interface PersonalWiped {
 /** Deletes every learned line for good. Desktop only. */
 export function wipePersonal(): Promise<PersonalWiped> {
   return invoke<PersonalWiped>("wipe_personal");
+}
+
+/** SOUL / USER / MEMORY tabs in the config memory folder. */
+export interface MemoryFiles {
+  soul: string;
+  user: string;
+  memory: string;
+  soulPath: string;
+  userPath: string;
+  memoryPath: string;
+  soulPrev: boolean;
+  userPrev: boolean;
+  memoryPrev: boolean;
+  /** Old chat lines still in MEMORY.md, offered once for removal. */
+  rawLines: string[];
+  rawTidyDone: boolean;
+}
+
+export type MemoryTab = "SOUL.md" | "USER.md" | "MEMORY.md";
+
+export function getMemoryFiles(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("get_memory_files");
+}
+
+export function saveMemoryFile(
+  name: MemoryTab,
+  text: string,
+  base: string,
+): Promise<{ files: MemoryFiles; redacted: boolean }> {
+  return invoke("save_memory_file", { name, text, base });
+}
+
+export function restoreMemoryFile(name: MemoryTab): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("restore_memory_file", { name });
+}
+
+export interface ReflectResult {
+  status: string;
+  diff: string;
+  files: MemoryFiles;
+}
+
+/** Reflect over recent chat; returns what was written. */
+export function reflectMemory(conversationId?: string): Promise<ReflectResult> {
+  return invoke<ReflectResult>("reflect_memory", { conversationId });
+}
+
+export function tidyMemoryLedger(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("tidy_memory_ledger");
+}
+
+export function applyMemoryRawTidy(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("apply_memory_raw_tidy");
+}
+
+export function dismissMemoryRawTidy(): Promise<MemoryFiles> {
+  return invoke<MemoryFiles>("dismiss_memory_raw_tidy");
+}
+
+export interface DaysChoice {
+  days: number;
+  label: string;
+}
+
+export interface MemoryRetention {
+  days: number;
+  label: string;
+  choices: DaysChoice[];
+}
+
+export function getMemoryRetention(): Promise<MemoryRetention> {
+  return invoke<MemoryRetention>("get_memory_retention");
+}
+
+export function setMemoryRetention(days: number): Promise<MemoryRetention> {
+  return invoke<MemoryRetention>("set_memory_retention", { days });
+}
+
+export interface ChatArchive {
+  days: number;
+  label: string;
+  choices: DaysChoice[];
+}
+
+export function getChatArchive(): Promise<ChatArchive> {
+  return invoke<ChatArchive>("get_chat_archive");
+}
+
+export function setChatArchive(days: number): Promise<ChatArchive> {
+  return invoke<ChatArchive>("set_chat_archive", { days });
 }
 
 /** One MCP server from `mcp.json`, as the Connectors page shows it. */
@@ -2651,6 +2877,39 @@ export function interestAct(
   return invoke<InterestPage>("interest_act", { topic, act });
 }
 
+/** Settings → Pulse → Sources (src-tauri/src/pulse_digests.rs). */
+export interface DailyDropSettings {
+  enabled: boolean;
+  hackerNews: boolean;
+  reddit: boolean;
+  webSearch: boolean;
+  github: boolean;
+  youtube: boolean;
+  rss: boolean;
+}
+
+export interface HobbyPathSettings {
+  tips: boolean;
+  projects: boolean;
+}
+
+export interface PulseSourcesView {
+  dailyDrop: DailyDropSettings;
+  askOffersEnabled: boolean;
+  hobbyPaths: HobbyPathSettings;
+  releaseRadarOn: boolean;
+}
+
+export function getPulseSources(): Promise<PulseSourcesView> {
+  return invoke<PulseSourcesView>("get_pulse_sources");
+}
+
+export function savePulseSources(
+  view: PulseSourcesView,
+): Promise<PulseSourcesView> {
+  return invoke<PulseSourcesView>("save_pulse_sources", { view });
+}
+
 /** Settings → Permissions (src-tauri/src/permissions.rs). */
 export type RuleKind = "allow" | "ask" | "deny";
 
@@ -3087,6 +3346,357 @@ export function libraryCover(
 /** Ask Steam to start the game. Resolves to a line to show. */
 export function libraryPlay(appId: number): Promise<string> {
   return invoke<string>("library_play", { appId });
+}
+
+/** One Battle.net game tile (src-tauri/src/battlenet.rs). */
+export interface BattlenetGame {
+  product: string;
+  name: string;
+  install: string;
+  prefix?: string | null;
+  /** Painted cover colour seed. */
+  seed: number;
+}
+
+export interface BattlenetPage {
+  found: boolean;
+  games: BattlenetGame[];
+}
+
+export function getBattlenet(): Promise<BattlenetPage> {
+  return invoke<BattlenetPage>("get_battlenet");
+}
+
+/** Ask Battle.net to start the product. */
+export function battlenetPlay(product: string): Promise<string> {
+  return invoke<string>("battlenet_play", { product });
+}
+
+/** Open the install folder for a Battle.net product. */
+export function battlenetOpenFolder(product: string): Promise<string> {
+  return invoke<string>("battlenet_open_folder", { product });
+}
+
+/** Per-game companion frame: note, news since last play, guides link. */
+export interface CompanionNews {
+  title: string;
+  url: string;
+}
+
+export interface CompanionFrame {
+  note: string;
+  news: CompanionNews[];
+  guidesUrl: string | null;
+}
+
+export function companionFrame(
+  noteId: number,
+  lastPlayed: number,
+  steamAppId?: number | null,
+): Promise<CompanionFrame> {
+  return invoke<CompanionFrame>("companion_frame", {
+    noteId,
+    lastPlayed,
+    steamAppId: steamAppId ?? null,
+  });
+}
+
+export function companionSetNote(appId: number, text: string): Promise<string> {
+  return invoke<string>("companion_set_note", { appId, text });
+}
+
+/** Per-game companion screens (src-tauri/src/games.rs). */
+export interface WowFlavorRow {
+  install: string;
+  flavor: string;
+  label: string;
+  addonLine: string;
+  action: string | null;
+  characters: string[];
+  events: string[];
+  emptySaved: string | null;
+}
+
+export interface WowView {
+  title: string;
+  running: boolean;
+  caption: string;
+  logging: string | null;
+  watcherNote: string | null;
+  flavors: WowFlavorRow[];
+  installAll: string | null;
+  note: string;
+}
+
+export interface Gw2View {
+  status: string;
+  hasKey: boolean;
+  accountLine: string | null;
+  note: string;
+  keyHint: string;
+}
+
+export interface Gw2KeyCard {
+  id: string;
+  action: string;
+}
+
+export interface EsoServerRow {
+  dir: string;
+  label: string;
+  status: string;
+  action: string | null;
+}
+
+export interface EsoView {
+  servers: EsoServerRow[];
+  character: string | null;
+  note: string;
+  empty: string | null;
+}
+
+export interface OsrsView {
+  status: string;
+  gains: string | null;
+  hasPlayer: boolean;
+  name: string | null;
+  kind: string;
+  kinds: string[];
+  note: string;
+  nameHint: string;
+}
+
+export function gameWow(): Promise<WowView> {
+  return invoke<WowView>("game_wow");
+}
+
+export function gameWowAddon(
+  install: string,
+  flavor: string,
+  action: string,
+): Promise<WowView> {
+  return invoke<WowView>("game_wow_addon", { install, flavor, action });
+}
+
+export function gameGw2(): Promise<Gw2View> {
+  return invoke<Gw2View>("game_gw2");
+}
+
+export function gameGw2Refresh(): Promise<Gw2View> {
+  return invoke<Gw2View>("game_gw2_refresh");
+}
+
+export function gameGw2StartKey(key: string): Promise<Gw2KeyCard> {
+  return invoke<Gw2KeyCard>("game_gw2_start_key", { key });
+}
+
+export function gameGw2AnswerKey(id: string, approve: boolean): Promise<Gw2View> {
+  return invoke<Gw2View>("game_gw2_answer_key", { id, approve });
+}
+
+export function gameGw2RemoveKey(): Promise<Gw2View> {
+  return invoke<Gw2View>("game_gw2_remove_key");
+}
+
+export function gameEso(): Promise<EsoView> {
+  return invoke<EsoView>("game_eso");
+}
+
+export function gameEsoAddon(dir: string, install: boolean): Promise<EsoView> {
+  return invoke<EsoView>("game_eso_addon", { dir, install });
+}
+
+export function gameOsrs(): Promise<OsrsView> {
+  return invoke<OsrsView>("game_osrs");
+}
+
+export function gameOsrsSave(name: string, kind: string): Promise<OsrsView> {
+  return invoke<OsrsView>("game_osrs_save", { name, kind });
+}
+
+export function gameOsrsForget(): Promise<OsrsView> {
+  return invoke<OsrsView>("game_osrs_forget");
+}
+
+export function gameOsrsRefresh(): Promise<OsrsView> {
+  return invoke<OsrsView>("game_osrs_refresh");
+}
+
+export interface DestinyView {
+  status: string;
+  hasKey: boolean;
+  hasName: boolean;
+  bungieName: string | null;
+  profileLine: string | null;
+  note: string;
+  howTo: string;
+  keyHint: string;
+  nameHint: string;
+}
+
+export interface DestinyKeyCard {
+  id: string;
+  action: string;
+}
+
+export interface PoeView {
+  title: string;
+  appId: number;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface EliteView {
+  title: string;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface FactorioView {
+  status: string;
+  warning: string | null;
+  action: string | null;
+  note: string;
+  empty: string | null;
+  userDir: string | null;
+}
+
+export interface StardewView {
+  title: string;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface MinecraftView {
+  title: string;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface RocketLeagueView {
+  title: string;
+  status: string;
+  howTo: boolean;
+  iniLine: string;
+  note: string;
+}
+
+export function gameDestiny(): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny");
+}
+
+export function gameDestinyRefresh(): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_refresh");
+}
+
+export function gameDestinyStartKey(key: string): Promise<DestinyKeyCard> {
+  return invoke<DestinyKeyCard>("game_destiny_start_key", { key });
+}
+
+export function gameDestinyAnswerKey(id: string, approve: boolean): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_answer_key", { id, approve });
+}
+
+export function gameDestinySaveName(name: string): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_save_name", { name });
+}
+
+export function gameDestinyRemove(): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_remove");
+}
+
+export function gamePoe(appId: number): Promise<PoeView> {
+  return invoke<PoeView>("game_poe", { appId });
+}
+
+export function gameElite(): Promise<EliteView> {
+  return invoke<EliteView>("game_elite");
+}
+
+export function gameFactorio(): Promise<FactorioView> {
+  return invoke<FactorioView>("game_factorio");
+}
+
+export function gameFactorioMod(dir: string, install: boolean): Promise<FactorioView> {
+  return invoke<FactorioView>("game_factorio_mod", { dir, install });
+}
+
+export function gameStardew(): Promise<StardewView> {
+  return invoke<StardewView>("game_stardew");
+}
+
+export function gameMinecraft(): Promise<MinecraftView> {
+  return invoke<MinecraftView>("game_minecraft");
+}
+
+export function gameRl(): Promise<RocketLeagueView> {
+  return invoke<RocketLeagueView>("game_rl");
+}
+
+/** Settings → Behavior / Library companion: game watcher (`app.json` gameWatch). */
+export interface GameWatch {
+  on: boolean;
+  note: string;
+}
+
+export function getGameWatch(): Promise<GameWatch> {
+  return invoke<GameWatch>("get_game_watch");
+}
+
+export function setGameWatch(on: boolean): Promise<GameWatch> {
+  return invoke<GameWatch>("set_game_watch", { on });
+}
+
+/** Settings → Pulse: Steam achievement nudges and wishlist sale alerts. */
+export interface SteamPulseThreshold {
+  key: string;
+  label: string;
+}
+
+export interface SteamPulse {
+  achievementsOn: boolean;
+  wishlistOn: boolean;
+  threshold: string;
+  thresholds: SteamPulseThreshold[];
+  /** Sealed SteamID on disk — never the digits. */
+  hasId: boolean;
+  canUseLocal: boolean;
+  achNote: string;
+  wishNote: string;
+  achPrivate: boolean;
+  wishPrivate: boolean;
+}
+
+export function getSteamPulse(): Promise<SteamPulse> {
+  return invoke<SteamPulse>("get_steam_pulse");
+}
+
+export function setSteamAchievements(on: boolean): Promise<SteamPulse> {
+  return invoke<SteamPulse>("set_steam_achievements", { on });
+}
+
+export function setSteamWishlist(on: boolean): Promise<SteamPulse> {
+  return invoke<SteamPulse>("set_steam_wishlist", { on });
+}
+
+export function setSteamWishlistThreshold(threshold: string): Promise<SteamPulse> {
+  return invoke<SteamPulse>("set_steam_wishlist_threshold", { threshold });
+}
+
+export function saveSteamId(draft: string, useLocal: boolean): Promise<SteamPulse> {
+  return invoke<SteamPulse>("save_steam_id", { draft, useLocal });
+}
+
+export function forgetSteamId(): Promise<SteamPulse> {
+  return invoke<SteamPulse>("forget_steam_id");
+}
+
+export function steamCheckNow(module: "achievements" | "deals"): Promise<SteamPulse> {
+  return invoke<SteamPulse>("steam_check_now", { module });
 }
 
 /** A Home tile's Turn on, for a switch that needs nothing else. */
@@ -3730,4 +4340,117 @@ export function recordStatus(): Promise<RecordStatus> {
 /** The indicator's Stop. */
 export function recordStop(): Promise<boolean> {
   return invoke<boolean>("record_stop");
+}
+
+/** One source a game can be modded from (src-tauri/src/mods.rs). */
+export interface ModSource {
+  id: string;
+  label: string;
+}
+
+/** A game Loadout may mod. */
+export interface ModGame {
+  id: string;
+  name: string;
+  /** What Loadout mods there ("Singleplayer only" and the like). */
+  modeNote: string;
+  /** Preferred first. */
+  sources: ModSource[];
+  /** Unix seconds, 0 when never played. */
+  lastPlayed: number;
+  playtimeMin: number;
+  /** New finds not opened yet. */
+  newCount: number;
+  /** For you leaves this game out. */
+  suggestionsHidden: boolean;
+}
+
+/** A game Loadout won't mod, and why. */
+export interface CantModGame {
+  key: string;
+  name: string;
+  reason: string;
+}
+
+export interface ModGamesView {
+  /** Most recently played first. */
+  games: ModGame[];
+  /** Shown collapsed under "Can't mod". */
+  cant: CantModGame[];
+  /** What discovery is doing, one quiet line. */
+  status: string;
+  offline: boolean;
+}
+
+/** One mod in a list. */
+export interface ModRow {
+  id: string;
+  name: string;
+  author: string;
+  summary: string;
+  downloads: number;
+  likes: number;
+  /** Unix seconds, 0 when the source didn't say. */
+  updated: number;
+  /** The mod's page on the web. */
+  pageUrl: string;
+  iconUrl: string | null;
+  categories: string[];
+}
+
+export interface ModPage {
+  mods: ModRow[];
+  page: number;
+  more: boolean;
+  /** A plain line when the source failed or Offline only is on. */
+  note: string | null;
+  /** Shown from the cache rather than asked just now. */
+  cached: boolean;
+}
+
+/** The lists a game's page can show. */
+export type ModList = "popular" | "trending" | "updated";
+
+/** One For you card. */
+export interface ModSuggestion {
+  game: string;
+  gameName: string;
+  source: string;
+  /** The tab it opens on. */
+  tab: "newFinds" | "trending" | "popular";
+  /** Why it shows, in a few words. */
+  why: string;
+  mod: ModRow;
+}
+
+/** The Mods rail; also starts discovery when it is due. */
+export function modsGames(): Promise<ModGamesView> {
+  return invoke<ModGamesView>("mods_games");
+}
+
+export function modsBrowse(game: string, source: string, list: ModList, page: number): Promise<ModPage> {
+  return invoke<ModPage>("mods_browse", { game, source, list, page });
+}
+
+export function modsSearch(game: string, source: string, text: string, page: number): Promise<ModPage> {
+  return invoke<ModPage>("mods_search", { game, source, text, page });
+}
+
+/** A game's New finds; opening them marks them seen. */
+export function modsNewFinds(game: string, source: string, page: number): Promise<ModPage> {
+  return invoke<ModPage>("mods_new_finds", { game, source, page });
+}
+
+export function modsForYou(): Promise<ModSuggestion[]> {
+  return invoke<ModSuggestion[]>("mods_for_you");
+}
+
+/** That mod never shows in For you again. */
+export function modsNotForMe(source: string, id: string): Promise<void> {
+  return invoke<void>("mods_not_for_me", { source, id });
+}
+
+/** Hide or show For you's suggestions for one game. */
+export function modsHideGame(game: string, hidden: boolean): Promise<void> {
+  return invoke<void>("mods_hide_game", { game, hidden });
 }

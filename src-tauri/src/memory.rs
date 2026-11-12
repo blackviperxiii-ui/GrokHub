@@ -285,8 +285,32 @@ pub fn save(
     if body.len() as u64 > NOTES_CAP {
         return Err("Notes are limited to 1 MB. Nothing was saved.".into());
     }
-    std::fs::write(&path, body).map_err(|e| e.to_string())?;
+    write_notes_file(&path, &body)?;
     Ok((load(workspace)?, redacted))
+}
+
+/// Write `body` to `path`, keeping `{name}.prev` when the current file fits the
+/// notes cap — same safety as the cabin's `write_memory` (plain text already
+/// checked by the caller; no symlink follow on the replace).
+fn write_notes_file(path: &Path, body: &str) -> Result<(), String> {
+    if path
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return Err(linked());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        let prev = path.with_file_name(format!("{name}.prev"));
+        if path.exists()
+            && std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX) <= NOTES_CAP
+        {
+            let _ = std::fs::copy(path, &prev);
+        }
+    }
+    std::fs::write(path, body).map_err(|e| e.to_string())
 }
 
 /// Adds one line, like `/remember`. `global` files it in the global notes.
@@ -420,9 +444,14 @@ fn trial() -> Result<Trial, String> {
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     // A new folder only the owner can open; a name already taken is an error.
-    let mut folder = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+    let folder = {
+        let mut folder = std::fs::DirBuilder::new();
+        std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+        folder
+    };
+    #[cfg(not(unix))]
+    let folder = std::fs::DirBuilder::new();
     folder.create(&root).map_err(|e| e.to_string())?;
     let amr = root.join("amr");
     let source = config.join("amr");
@@ -631,14 +660,424 @@ pub fn forget(workspace: &Path, topic: Option<&str>) -> Result<String, String> {
 }
 
 /// Memory retention in days, from `app.json` (the cabin's setting). 0 keeps
-/// everything; the default is 90.
+/// everything; the default is 90. The cabin writes camelCase `amrRetentionDays`.
 pub fn retention_days() -> u64 {
+    retention_setting().days as u64
+}
+
+/// The cabin's Settings → Memory retention choices (days; 0 keeps everything).
+pub const RETENTION_CHOICES: [u32; 6] = [30, 60, 90, 180, 365, 0];
+/// The cabin's Settings → Auto-archive idle chats choices.
+pub const ARCHIVE_CHOICES: [u32; 5] = [0, 7, 14, 30, 90];
+const RETENTION_KEY: &str = "amrRetentionDays";
+const ARCHIVE_KEY: &str = "chatArchiveDays";
+const RAW_TIDY_KEY: &str = "memoryRawTidyDone";
+const MEMORY_SEED: &str = "# Memory\n\nLong-term notes.\n";
+const DEFAULT_RETENTION: u32 = 90;
+const DEFAULT_ARCHIVE: u32 = 14;
+
+fn app_u32(key: &str, snake: &str, default: u32) -> u32 {
+    let path = grokhub_agent::perm::config_dir().join("app.json");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return default;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return default;
+    };
+    v.get(key)
+        .or_else(|| v.get(snake))
+        .and_then(|n| n.as_i64())
+        .map(|n| n.clamp(0, 3650) as u32)
+        .unwrap_or(default)
+}
+
+fn app_bool(key: &str, default: bool) -> bool {
     let path = grokhub_agent::perm::config_dir().join("app.json");
     std::fs::read_to_string(path)
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get("amr_retention_days").and_then(|n| n.as_u64()))
-        .map_or(90, |n| n.min(3650))
+        .and_then(|v| v.get(key).and_then(|n| n.as_bool()))
+        .unwrap_or(default)
+}
+
+fn patch_app(pairs: &[(&str, serde_json::Value)]) -> Result<(), String> {
+    grokhub_core::app_json::patch(&grokhub_agent::perm::config_dir(), pairs)
+}
+
+fn retention_label(days: u32) -> String {
+    if days == 0 {
+        "Keep everything".into()
+    } else {
+        format!("{days} days")
+    }
+}
+
+fn archive_label(days: u32) -> String {
+    if days == 0 {
+        "Off".into()
+    } else {
+        format!("{days} days")
+    }
+}
+
+/// Settings → Behavior → Memory retention.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionSetting {
+    pub days: u32,
+    pub label: String,
+    pub choices: Vec<RetentionChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionChoice {
+    pub days: u32,
+    pub label: String,
+}
+
+pub fn retention_setting() -> RetentionSetting {
+    let days = app_u32(RETENTION_KEY, "amr_retention_days", DEFAULT_RETENTION);
+    RetentionSetting {
+        days,
+        label: retention_label(days),
+        choices: RETENTION_CHOICES
+            .iter()
+            .map(|&d| RetentionChoice {
+                days: d,
+                label: retention_label(d),
+            })
+            .collect(),
+    }
+}
+
+pub fn set_retention(days: u32) -> Result<RetentionSetting, String> {
+    if !RETENTION_CHOICES.contains(&days) {
+        return Err("Pick a Memory retention choice.".into());
+    }
+    patch_app(&[(RETENTION_KEY, days.into())])?;
+    Ok(retention_setting())
+}
+
+/// Settings → Behavior → Auto-archive idle chats.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveSetting {
+    pub days: u32,
+    pub label: String,
+    pub choices: Vec<RetentionChoice>,
+}
+
+pub fn archive_setting() -> ArchiveSetting {
+    let days = app_u32(ARCHIVE_KEY, "chat_archive_days", DEFAULT_ARCHIVE);
+    ArchiveSetting {
+        days,
+        label: archive_label(days),
+        choices: ARCHIVE_CHOICES
+            .iter()
+            .map(|&d| RetentionChoice {
+                days: d,
+                label: archive_label(d),
+            })
+            .collect(),
+    }
+}
+
+pub fn set_archive(days: u32) -> Result<ArchiveSetting, String> {
+    if !ARCHIVE_CHOICES.contains(&days) {
+        return Err("Pick an auto-archive choice.".into());
+    }
+    patch_app(&[(ARCHIVE_KEY, days.into())])?;
+    Ok(archive_setting())
+}
+
+fn memory_dir() -> std::path::PathBuf {
+    grokhub_agent::global_memory_path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| grokhub_agent::perm::config_dir().join("memory"))
+}
+
+fn tab_path(name: &str) -> Result<std::path::PathBuf, String> {
+    match name {
+        "SOUL.md" | "USER.md" | "MEMORY.md" => Ok(memory_dir().join(name)),
+        _ => Err("Pick SOUL.md, USER.md or MEMORY.md.".into()),
+    }
+}
+
+/// The three Memory page tabs (global config folder), plus the one-time tidy offer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryFiles {
+    pub soul: String,
+    pub user: String,
+    pub memory: String,
+    pub soul_path: String,
+    pub user_path: String,
+    pub memory_path: String,
+    pub soul_prev: bool,
+    pub user_prev: bool,
+    pub memory_prev: bool,
+    /// Old chat lines still in MEMORY.md, offered once for removal.
+    pub raw_lines: Vec<String>,
+    pub raw_tidy_done: bool,
+}
+
+fn prev_exists(name: &str) -> bool {
+    let path = memory_dir().join(format!("{name}.prev"));
+    std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() > 0)
+}
+
+pub fn load_files() -> Result<MemoryFiles, String> {
+    let soul = tab_path("SOUL.md")?;
+    let user = tab_path("USER.md")?;
+    let memory = tab_path("MEMORY.md")?;
+    let memory_body = read(&memory)?;
+    let mut raw_tidy_done = app_bool(RAW_TIDY_KEY, false);
+    let raw_lines = if raw_tidy_done {
+        Vec::new()
+    } else {
+        grokhub_core::learn_notes::raw_chat_lines(&memory_body, MEMORY_SEED)
+    };
+    // Nothing from the old reflect: never offer again for lines the user writes.
+    if raw_lines.is_empty() && !raw_tidy_done {
+        let _ = patch_app(&[(RAW_TIDY_KEY, true.into())]);
+        raw_tidy_done = true;
+    }
+    Ok(MemoryFiles {
+        soul: read(&soul)?,
+        user: read(&user)?,
+        memory: memory_body,
+        soul_path: soul.display().to_string(),
+        user_path: user.display().to_string(),
+        memory_path: memory.display().to_string(),
+        soul_prev: prev_exists("SOUL.md"),
+        user_prev: prev_exists("USER.md"),
+        memory_prev: prev_exists("MEMORY.md"),
+        raw_lines,
+        raw_tidy_done,
+    })
+}
+
+/// Save one Memory tab. `base` is the editor's starting text (stale-edit check).
+pub fn save_file(name: &str, text: &str, base: &str) -> Result<(MemoryFiles, bool), String> {
+    let path = tab_path(name)?;
+    if read(&path)? != base {
+        return Err(CHANGED.into());
+    }
+    let stored = grokhub_core::redact_secrets(text);
+    if !stored.is_empty() && !grokhub_core::is_plain_text(&stored) {
+        return Err("Notes must be plain text.".into());
+    }
+    let redacted = stored != text;
+    let mut body = stored.trim_end().to_string();
+    if !body.is_empty() {
+        body.push('\n');
+    }
+    if body.len() as u64 > NOTES_CAP {
+        return Err("Notes are limited to 1 MB. Nothing was saved.".into());
+    }
+    write_notes_file(&path, &body)?;
+    Ok((load_files()?, redacted))
+}
+
+/// Restore `{name}.prev` over the current tab file.
+pub fn restore_file(name: &str) -> Result<MemoryFiles, String> {
+    let path = tab_path(name)?;
+    let prev_path = memory_dir().join(format!("{name}.prev"));
+    let prev = read(&prev_path)?;
+    if prev.is_empty() {
+        return Err(format!("no {name}.prev"));
+    }
+    // Restore replaces the current body; keep a .prev of what was open first.
+    write_notes_file(&path, &prev)?;
+    load_files()
+}
+
+/// Move `pulse:` ledger lines still in MEMORY.md into `memory/pulse-ledger.md`.
+pub fn tidy_ledger() -> Result<MemoryFiles, String> {
+    use grokhub_core::pulse::{merge_ledger, split_ledger, LEDGER_FILE};
+    let memory_path = tab_path("MEMORY.md")?;
+    let ledger_path = memory_dir().join(LEDGER_FILE);
+    if memory_path
+        .symlink_metadata()
+        .ok()
+        .is_some_and(|m| m.len() > NOTES_CAP)
+        || ledger_path
+            .symlink_metadata()
+            .ok()
+            .is_some_and(|m| m.len() > NOTES_CAP)
+    {
+        return load_files();
+    }
+    let memory = read(&memory_path)?;
+    if !memory.contains("pulse:") {
+        return load_files();
+    }
+    let (kept, moved) = split_ledger(&memory);
+    if moved.is_empty() {
+        return load_files();
+    }
+    let ledger = read(&ledger_path).unwrap_or_default();
+    let mut merged = merge_ledger(&ledger, &moved);
+    while merged.len() as u64 > NOTES_CAP {
+        match merged.find('\n') {
+            Some(i) => {
+                merged.drain(..=i);
+            }
+            None => merged.clear(),
+        }
+    }
+    write_notes_file(&ledger_path, &merged)?;
+    write_notes_file(&memory_path, &kept)?;
+    load_files()
+}
+
+/// Drop the one-time raw-chat tidy offer without changing MEMORY.md.
+pub fn dismiss_raw_tidy() -> Result<MemoryFiles, String> {
+    patch_app(&[(RAW_TIDY_KEY, true.into())])?;
+    load_files()
+}
+
+/// Remove the offered raw chat lines from MEMORY.md (keeps `.prev`).
+pub fn apply_raw_tidy() -> Result<MemoryFiles, String> {
+    let path = tab_path("MEMORY.md")?;
+    if path
+        .symlink_metadata()
+        .ok()
+        .is_some_and(|m| m.len() > NOTES_CAP)
+    {
+        return Err("MEMORY.md is too large to tidy here. Nothing was changed.".into());
+    }
+    let body = read(&path)?;
+    let lines = grokhub_core::learn_notes::raw_chat_lines(&body, MEMORY_SEED);
+    patch_app(&[(RAW_TIDY_KEY, true.into())])?;
+    if lines.is_empty() {
+        return load_files();
+    }
+    let next = grokhub_core::learn_notes::without_lines(&body, &lines);
+    write_notes_file(&path, &next)?;
+    load_files()
+}
+
+/// What Reflect wrote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReflectResult {
+    pub status: String,
+    pub diff: String,
+    pub files: MemoryFiles,
+}
+
+/// Reflect over recent user lines in `chat_id` (or the last open chat): durable
+/// facts become AMR nodes when the memory repo is on, else learn_notes lines.
+pub fn reflect(config_dir: &Path, chat_id: Option<&str>) -> Result<ReflectResult, String> {
+    if !grokhub_agent::memory_writes_enabled() {
+        return Ok(ReflectResult {
+            status: "Not learning from chats. Nothing new is saved.".into(),
+            diff: String::new(),
+            files: load_files()?,
+        });
+    }
+    let id = chat_id
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            let chat = crate::settings::load(config_dir).last_chat;
+            (!chat.is_empty()).then_some(chat)
+        });
+    let pairs: Vec<(String, String)> = match &id {
+        Some(id) => crate::history::saved(config_dir, id)
+            .map(|info| grokhub_agent::transcript_pairs(&info))
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let facts = grokhub_core::reflect::fact_candidates(&pairs);
+    if facts.is_empty() {
+        return Ok(ReflectResult {
+            status: "Reflect: nothing new".into(),
+            diff: String::new(),
+            files: load_files()?,
+        });
+    }
+    if grokhub_agent::amr_enabled() {
+        let store = open_store()?;
+        let now = grokhub_core::now_ms();
+        let mut added = Vec::new();
+        for fact in &facts {
+            let write = grokhub_core::amr::LineWrite {
+                text: fact,
+                source: "reflect",
+                tags: Vec::new(),
+                confidence: 0.7,
+                revive: false,
+            };
+            if let Ok(grokhub_core::amr::Remembered::New(_)) =
+                grokhub_core::amr::remember_line(&store, &write, now)
+            {
+                added.push(format!("+ {fact}"));
+            }
+        }
+        let diff = added.join("\n");
+        let status = if diff.is_empty() {
+            "Reflect: nothing new".into()
+        } else {
+            format!(
+                "Reflect: {} new {}",
+                added.len(),
+                if added.len() == 1 { "note" } else { "notes" }
+            )
+        };
+        return Ok(ReflectResult {
+            status,
+            diff,
+            files: load_files()?,
+        });
+    }
+    let day: String = grokhub_core::oauth::unix_ms_to_rfc3339(grokhub_core::now_ms())
+        .chars()
+        .take(10)
+        .collect();
+    let notes: Vec<_> = facts
+        .iter()
+        .filter_map(|m| grokhub_core::learn_notes::note_from_message(m))
+        .collect();
+    if notes.is_empty() {
+        return Ok(ReflectResult {
+            status: "Reflect: nothing new".into(),
+            diff: String::new(),
+            files: load_files()?,
+        });
+    }
+    let mut diffs = Vec::new();
+    for file in [
+        grokhub_core::learn_notes::NoteFile::User,
+        grokhub_core::learn_notes::NoteFile::Soul,
+        grokhub_core::learn_notes::NoteFile::Memory,
+    ] {
+        if !notes.iter().any(|n| n.file == file) {
+            continue;
+        }
+        let name = file.file_name();
+        let path = tab_path(name)?;
+        let current = read(&path)?;
+        let edit = grokhub_core::learn_notes::apply_notes(&current, file, &notes, &day);
+        if edit.diff.is_empty() {
+            continue;
+        }
+        write_notes_file(&path, &edit.next)?;
+        diffs.push(edit.diff);
+    }
+    let diff = diffs.join("\n");
+    Ok(ReflectResult {
+        status: if diff.is_empty() {
+            "Reflect: nothing new".into()
+        } else {
+            "Reflect: notes updated".into()
+        },
+        diff,
+        files: load_files()?,
+    })
 }
 
 const PRUNE_OFF: &str = "Memory retention runs in memory repo mode only.";
@@ -1010,6 +1449,80 @@ mod tests {
         assert_eq!(
             add(&d.workspace, "   ", false),
             Err("Nothing to remember".to_string())
+        );
+    }
+
+    #[test]
+    fn each_tab_saves_its_own_file_with_the_stale_edit_check_and_a_prev_copy() {
+        let _d = dirs("tabs");
+        let (files, _) = save_file("SOUL.md", "Be brief.\n", "").unwrap();
+        assert_eq!(files.soul, "Be brief.\n");
+        let (files, _) = save_file("USER.md", "- Likes tea\n", "").unwrap();
+        assert_eq!(files.user, "- Likes tea\n");
+        let (files, _) = save_file("MEMORY.md", "- 2026-11-01: spare key\n", "").unwrap();
+        assert_eq!(files.memory, "- 2026-11-01: spare key\n");
+        // Second save of SOUL keeps a .prev of the first.
+        let (files, _) = save_file("SOUL.md", "Be brief and kind.\n", "Be brief.\n").unwrap();
+        assert_eq!(files.soul, "Be brief and kind.\n");
+        assert!(files.soul_prev);
+        assert_eq!(
+            save_file("SOUL.md", "stale\n", "Be brief.\n")
+                .unwrap_err()
+                .as_str(),
+            CHANGED
+        );
+        let restored = restore_file("SOUL.md").unwrap();
+        assert_eq!(restored.soul, "Be brief.\n");
+    }
+
+    #[test]
+    fn tidy_moves_fixture_ledger_lines_into_pulse_ledger() {
+        let _d = dirs("tidy");
+        let memory = "# Memory\n\nLong-term notes.\n- [2026-10-04] pulse: dismissed \"Standup\" reason=dismiss\n- 2026-10-05: the spare key is under the planter\n";
+        save_file("MEMORY.md", memory, "").unwrap();
+        let files = tidy_ledger().unwrap();
+        assert_eq!(
+            files.memory,
+            "# Memory\n\nLong-term notes.\n- 2026-10-05: the spare key is under the planter\n"
+        );
+        let ledger = std::fs::read_to_string(memory_dir().join("pulse-ledger.md")).unwrap();
+        assert!(
+            ledger.contains("pulse: dismissed \"Standup\" reason=dismiss"),
+            "{ledger}"
+        );
+        assert!(files.memory_prev, "the move keeps a copy");
+    }
+
+    #[test]
+    fn retention_and_archive_round_trip_through_app_json() {
+        let _d = dirs("retain");
+        assert_eq!(retention_setting().days, 90);
+        assert_eq!(archive_setting().days, 14);
+        assert_eq!(set_retention(180).unwrap().days, 180);
+        assert_eq!(set_archive(30).unwrap().days, 30);
+        let text =
+            std::fs::read_to_string(grokhub_agent::perm::config_dir().join("app.json")).unwrap();
+        assert!(text.contains("\"amrRetentionDays\": 180"), "{text}");
+        assert!(text.contains("\"chatArchiveDays\": 30"), "{text}");
+        assert_eq!(retention_days(), 180);
+        assert!(set_retention(11).is_err());
+        assert!(set_archive(11).is_err());
+    }
+
+    #[test]
+    fn reflect_with_no_chat_reports_nothing_new() {
+        let _d = dirs("reflect");
+        let done = reflect(&grokhub_agent::perm::config_dir(), None).unwrap();
+        assert_eq!(done.status, "Reflect: nothing new");
+        assert!(done.diff.is_empty());
+    }
+
+    #[test]
+    fn wipe_without_a_confirm_is_the_ui_s_job_and_restore_needs_a_prev() {
+        let _d = dirs("restore-miss");
+        assert_eq!(
+            restore_file("USER.md").unwrap_err().as_str(),
+            "no USER.md.prev"
         );
     }
 }

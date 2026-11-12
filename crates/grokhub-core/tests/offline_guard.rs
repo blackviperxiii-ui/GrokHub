@@ -90,7 +90,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/xai_keychain.rs", 1, "Sign in with Grok (desktop app and grokhub-hub --oauth) to xAI's auth host: guard_quiet (codes and tokens only); the test override is loopback only"),
     ("src-tauri/src/pulse_feed.rs", 2, "Pulse feed: guard_quiet + public_only_resolve; LoopbackNet is loopback only"),
     ("crates/grokhub-app/src/github.rs", 1, "GitHub tool: egress_ok"),
-    ("crates/grokhub-app/src/mods_fetch.rs", 1, "mod sources: offline::refuse + egress_ok on every hop"),
+    ("crates/grokhub-agent/src/mods_net.rs", 1, "mod sources (both shells): offline::refuse + guard_quiet on every hop"),
     ("crates/grokhub-app/src/driver_blocklist.rs", 1, "Microsoft's driver blocklist (Windows, monthly): offline::refuse + egress_ok on every hop, public_only"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
     ("crates/grokhub-app/src/app/library_ui/game_art.rs", 1, "store art: egress_ok"),
@@ -100,6 +100,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-app/src/app/destiny_ui.rs", 1, "Bungie.net API: egress_ok"),
     ("crates/grokhub-app/src/app/battlenet_ui.rs", 1, "Battle.net sign-in token and WoW profile API: egress_ok"),
     ("crates/grokhub-app/src/app/osrs_ui.rs", 1, "OSRS hiscores: egress_ok"),
+    ("src-tauri/src/games.rs", 3, "GW2, OSRS and Destiny companion refresh: guard_quiet before each GET/POST; Offline only maps to the cabin's game-specific refuse lines"),
     // MCP (HTTP transport + OAuth) and the MCP registry.
     ("crates/grokhub-agent/src/mcp/http.rs", 1, "connect / ping / call and OAuth sign-in (mcp/oauth.rs): egress guard; loopback servers still go"),
     ("crates/grokhub-core/src/mcp_catalog.rs", 1, "registry refresh: guard_mcp_registry_url refuses while on"),

@@ -1,0 +1,1 @@
+- Shell: clear clippy needless_lifetimes and field_reassign_with_default in the desktop Nyx module.

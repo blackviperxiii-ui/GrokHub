@@ -589,6 +589,131 @@ select:focus-visible {
   gap: 8px;
 }
 
+.chat-tabs {
+  border-bottom: 1px solid var(--border);
+  padding: 0 0 8px;
+}
+
+.chat-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  overflow: hidden;
+}
+
+.chat-tab {
+  flex: 1 1 0;
+  min-width: 96px;
+  max-width: 180px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--fg);
+  font-size: var(--font-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-tab[aria-selected="true"] {
+  border-color: var(--fg);
+  background: var(--bg);
+}
+
+.chat-tab.pinned .chat-tab-pin {
+  margin-right: 4px;
+  color: var(--muted);
+}
+
+.chat-tab-plus,
+.chat-tab-tools {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+}
+
+.chat-tab-plus:hover,
+.chat-tab-tools:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.chat-tab-rename {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+  margin-top: 8px;
+}
+
+.chat-tab-rename label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  font-size: var(--font-caption);
+  color: var(--muted);
+}
+
+.chat-tab-rename input {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--fg);
+}
+
+.hangout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 2px 8px;
+}
+
+.hangout-copy h2 {
+  margin: 0;
+  font-size: var(--font-prose);
+  font-weight: 600;
+}
+
+.hangout-copy p {
+  margin: 2px 0 0;
+  font-size: var(--font-caption);
+  color: var(--muted);
+}
+
+.hangout-modes {
+  display: flex;
+  gap: 8px;
+}
+
+.hangout-mode {
+  min-width: 64px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--font-body);
+  letter-spacing: 0.04em;
+}
+
+.hangout-mode.on,
+.hangout-mode[aria-pressed="true"] {
+  color: var(--fg);
+  border-color: var(--fg);
+  background: var(--bg);
+}
+
 .log {
   flex: 1;
   overflow-y: auto;
@@ -716,7 +841,183 @@ select:focus-visible {
     margin: 0;
     text-align: center;
   }
+
+  .nyx-dock-desktop {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .nyx-dock-outfit {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: var(--font-caption);
+    color: var(--muted);
+  }
+
+  .nyx-dock-outfit select {
+    width: 100%;
+  }
 }
+
+/* Desktop companion window (NyxDesk.tsx / nyx-desk.html). Transparent stage. */
+.nyx-desk {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+.nyx-desk-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.nyx-desk-stage > * {
+  pointer-events: auto;
+}
+
+.nyx-desk-pedestal {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 4%;
+  height: 42%;
+  pointer-events: auto;
+}
+
+.nyx-desk-disc {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8%;
+  height: 28%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(20, 16, 12, 0.85), rgba(0, 0, 0, 0.55));
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+
+.nyx-desk-cone {
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  bottom: 22%;
+  height: 70%;
+  background: linear-gradient(to top, rgba(255, 176, 0, 0.28), transparent 70%);
+  clip-path: polygon(10% 100%, 90% 100%, 70% 0, 30% 0);
+  filter: blur(0.5px);
+}
+
+.nyx-desk-ring {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  bottom: 10%;
+  height: 24%;
+  border-radius: 50%;
+  border: 1.5px dashed rgba(255, 176, 0, 0.55);
+  animation: nyx-desk-spin 14s linear infinite;
+}
+
+.nyx-desk-ring-inner {
+  left: 14%;
+  right: 14%;
+  bottom: 14%;
+  height: 16%;
+  border-color: rgba(255, 176, 0, 0.4);
+  animation-duration: 9s;
+  animation-direction: reverse;
+}
+
+@keyframes nyx-desk-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nyx-desk-ring {
+    animation: none;
+  }
+}
+
+.nyx-desk-figure {
+  position: relative;
+  z-index: 1;
+  max-width: 88%;
+  max-height: 86%;
+  object-fit: contain;
+  object-position: bottom center;
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.35));
+  animation: nyx-desk-bob 5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nyx-desk-figure {
+    animation: none;
+  }
+}
+
+@keyframes nyx-desk-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+.nyx-desk-menu {
+  position: fixed;
+  z-index: 5;
+  margin: 0;
+  padding: 8px;
+  list-style: none;
+  min-width: 170px;
+  background: var(--panel, #111113);
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+.nyx-desk-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.nyx-desk-menu button:hover {
+  background: var(--hover, #1c1c1f);
+}
+
+.nyx-desk-menu-label {
+  padding: 8px 12px 4px;
+  font-size: var(--font-caption);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.labs-desktop-nyx {
+  margin-bottom: 24px;
+}
+
 
 /* A reply's Markdown (Markdown.tsx). Theme tokens only, so contrast.test.ts covers it. */
 /* Like the cabin, a code block or a table takes the bubble's full width. */
@@ -1315,6 +1616,204 @@ button.danger {
    disabled one keeps the disabled fill. */
 button.danger:not(:disabled) {
   background: transparent;
+}
+
+/* Turn extras (Order 733): the findings, recap and evidence cards under a
+   finished reply, the reply chips on cards that wait, and the inbox. */
+.card.turn-extra {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.finding-items,
+.recap-lines,
+.recap-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.finding-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.severity {
+  font-size: var(--font-caption);
+  text-transform: capitalize;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 8px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.severity-high {
+  color: var(--danger-text);
+  border-color: var(--danger-text);
+}
+
+.severity-medium {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.fix-pills,
+.reply-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip.fix-pill.quiet,
+.chip.reply-chip.quiet {
+  color: var(--muted);
+}
+
+.recap-tally {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 8px;
+}
+
+.recap-line,
+.recap-step {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.recap-mark {
+  width: 1em;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.recap-line.done .recap-mark {
+  color: var(--accent);
+}
+
+.recap-line.partly .recap-mark {
+  color: var(--amber);
+}
+
+.recap-line.notDone .recap-mark,
+.recap-step.failed .recap-mark {
+  color: var(--danger-text);
+}
+
+.recap-fold {
+  align-self: flex-start;
+}
+
+.evidence-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
+.evidence-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evidence-title {
+  font-weight: 600;
+}
+
+.evidence-section ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.evidence-note {
+  color: var(--muted);
+  margin: 0;
+}
+
+/* The decision inbox: one line over the log, opening into a row per
+   decision that waits. */
+.inbox {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 12px;
+}
+
+.inbox-line {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+}
+
+.inbox-rows {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inbox-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.inbox-what {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  min-width: 0;
+}
+
+.inbox-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46ch;
+}
+
+.inbox-chat {
+  color: var(--muted);
+}
+
+.inbox-buttons {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.inbox-error {
+  color: var(--danger-text);
+  margin: 8px 0 0;
 }
 
 button.danger:hover:not(:disabled):not([role="menuitem"]) {
@@ -3484,6 +3983,127 @@ label.toggle-row {
   margin: 0;
 }
 
+.library-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.game-companion {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+}
+
+.game-companion-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--font-caption);
+  color: var(--muted, inherit);
+}
+
+.game-companion-note textarea {
+  resize: vertical;
+  min-height: 4.5rem;
+  font: inherit;
+  color: inherit;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.game-companion-news h3 {
+  margin: 0 0 4px;
+  font-size: var(--font-caption);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.game-companion-news ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.game-companion-slot {
+  margin-top: 4px;
+}
+
+.game-watch-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.steam-pulse-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.steam-pulse-sources h2 {
+  margin: 0;
+}
+
+.steam-source-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 0 0;
+  padding-left: 4px;
+}
+
+.steam-id-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.game-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.game-screen h3,
+.game-screen-title {
+  margin: 0;
+  font-size: var(--font-body);
+  letter-spacing: 0.04em;
+}
+
+.game-screen-running {
+  margin: 0;
+  color: #f0b429;
+  font-weight: 600;
+  font-size: var(--font-caption);
+}
+
+.game-screen-row,
+.game-screen-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.game-screen-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.game-screen-field input,
+.game-screen-field select {
+  max-width: 100%;
+}
+
 @media (max-width: 600px) {
   .library-body {
     grid-template-columns: minmax(0, 1fr);
@@ -5466,5 +6086,142 @@ fieldset.channel label {
     border-left: none;
     border-top: 1px solid var(--border);
     padding-top: var(--space-8);
+  }
+}
+
+/* Mods: the moddable games rail beside the picked game's lists. */
+.mods {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.mods-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.mods-rail {
+  overflow-y: auto;
+}
+
+.mods-rail ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mods-rail button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+}
+
+.mods-badge {
+  font-size: var(--font-caption);
+  opacity: 0.8;
+}
+
+.mods-cant {
+  margin-top: 12px;
+}
+
+.mods-cant li {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 8px;
+}
+
+.mods-main {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mods-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mods-head input {
+  flex: 0 1 260px;
+  min-width: 0;
+}
+
+.mods-foryou ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.mods-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mods-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.mods-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.mods-icon.placeholder {
+  background: var(--border);
+}
+
+.mods-row-body h3 {
+  margin: 0;
+}
+
+.mods-summary {
+  margin: 4px 0;
+}
+
+.mods-row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mods-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .mods-body {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

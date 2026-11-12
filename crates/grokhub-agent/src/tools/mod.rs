@@ -95,7 +95,16 @@ pub trait DesktopOps {
     fn hint(&self, _name: &str, args: &Value) -> Value {
         args.clone()
     }
+    /// [`LOOK_AT_SCREEN`]: a screenshot that only looks. It works with desktop
+    /// control off, so a wrapper that switches control off must still pass it.
+    fn look(&self, args: &Value) -> ToolOutput {
+        self.call("screenshot", args)
+    }
 }
+
+/// The look-only screenshot tool. It runs in the app, not the shell, so the
+/// shell sandbox never stands between the agent and the screen.
+pub const LOOK_AT_SCREEN: &str = "look_at_screen";
 
 pub struct ToolCtx<'a> {
     pub workspace: &'a Path,
@@ -230,6 +239,10 @@ pub fn dispatch_for_job(
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)
         }
+        LOOK_AT_SCREEN => match ctx.desktop {
+            Some(desktop) => fence_desktop("screenshot", desktop.look(&args)),
+            None => ToolOutput::err("There is no screen to look at here."),
+        },
         "screenshot" | "click" | "move" | "drag" | "scroll" | "type" | "key" => match ctx.desktop {
             Some(desktop) => fence_desktop(name, desktop.call(name, &args)),
             None => ToolOutput::err(*grokhub_core::desktop_mcp::OFF_MSG),
@@ -242,6 +255,9 @@ fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
     let typed = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
     if let Some(why) = shell::names_a_tool(typed) {
         return ToolOutput::err(why);
+    }
+    if shell::grabs_screen(typed) {
+        return ToolOutput::err(shell::USE_LOOK);
     }
     let background = args
         .get("is_background")
@@ -280,7 +296,9 @@ fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
 }
 
 pub fn desk_flags(name: &str, gate: &Gate, desktop: Option<&dyn DesktopOps>) -> Option<DeskFlags> {
-    if !gate::is_desktop(name) || !gate.desktop {
+    // A look needs no desktop control, but Halt and a locked screen still hold it.
+    let look = name == LOOK_AT_SCREEN;
+    if !look && (!gate::is_desktop(name) || !gate.desktop) {
         return None;
     }
     let desktop = desktop?;

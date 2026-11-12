@@ -365,7 +365,7 @@ pub(crate) fn paint_composer_glow_at(ui: &egui::Ui, pill: egui::Rect, streaming:
     let target_idle = 0.25_f32;
     let live_t = crate::theme::animate_selection_secs(
         ui,
-        egui::Id::new("composer-glow-stream"),
+        egui::Id::unique("composer-glow-stream"),
         streaming,
         grokhub_core::GLOW_SETTLE_SECS,
     );

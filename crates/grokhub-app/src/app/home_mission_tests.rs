@@ -206,6 +206,7 @@ fn home_texts(w: f32, h: f32, wheel: bool) -> Vec<(String, egui::Rect, egui::Rec
                     delta: egui::vec2(0.0, -300.0),
                     phase: egui::TouchPhase::Move,
                     modifiers: egui::Modifiers::NONE,
+                    source: egui::MouseWheelSource::Unknown,
                 },
             ];
         }

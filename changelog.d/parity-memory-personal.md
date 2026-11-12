@@ -1,0 +1,1 @@
+- Shell Memory matches the cabin: SOUL/USER/MEMORY tabs, Reflect, Restore, retention and chat-archive settings, and Pulse ledger tidy.

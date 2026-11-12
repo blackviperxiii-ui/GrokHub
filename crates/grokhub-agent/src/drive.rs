@@ -55,6 +55,9 @@ pub struct Drive {
     unresolved_at: Vec<(String, usize)>,
     /// Ids completed (with proof) or cancelled at the last stop.
     resolved: Vec<String>,
+    /// The person said go on ("continue"): the checklist the earlier run
+    /// left open is this run's work, so it drives from the first stop.
+    resumed: bool,
 }
 
 impl Drive {
@@ -71,7 +74,23 @@ impl Drive {
             stalls: 0,
             unresolved_at: Vec::new(),
             resolved: Vec::new(),
+            resumed: false,
         }
+    }
+
+    /// A run for "continue" (or another go-on): the earlier run's open items
+    /// drive it even before it touches the list, so a reply that only says
+    /// what it will do next doesn't end the turn.
+    pub fn resumed(start: &[TodoItem]) -> Self {
+        Self {
+            resumed: true,
+            ..Self::new(start)
+        }
+    }
+
+    /// The run hasn't changed the list it found, and wasn't told to go on with it.
+    fn untouched(&self, now: &[TodoItem]) -> bool {
+        !self.resumed && now == self.start.as_slice()
     }
 
     /// `now` is the checklist as the model left it; `evidence` counts tool
@@ -85,7 +104,7 @@ impl Drive {
     /// the same rule [`Drive::check_with`] uses so an earlier checklist cannot
     /// take over the next ask.
     pub fn open_ids(&self, now: &[TodoItem]) -> Vec<String> {
-        if now == self.start.as_slice() {
+        if self.untouched(now) {
             return Vec::new();
         }
         now.iter()
@@ -97,7 +116,7 @@ impl Drive {
     /// [`Drive::check`] plus what the run still owes beyond its checklist
     /// ([`crate::checkpoint`]): an unchecked change, the Brief's done items, a backup.
     pub fn check_with(&mut self, now: &[TodoItem], evidence: usize, gaps: &Gaps) -> Verdict {
-        let untouched = now == self.start.as_slice();
+        let untouched = self.untouched(now);
         let open: Vec<&TodoItem> = if untouched {
             Vec::new()
         } else {
@@ -324,6 +343,21 @@ mod tests {
             Drive::new(&[item("old", "completed")]).check(&[reused], 0),
             Verdict::Push("Marked completed without any check this run: \"firewall\". Run a check that shows each one before you finish.".into())
         );
+    }
+
+    #[test]
+    fn continue_picks_up_the_earlier_open_checklist_and_acts() {
+        let earlier = [item("a", "completed"), item("b", "pending")];
+        // The run only said what it would do: the open item sends it back.
+        assert_eq!(
+            Drive::resumed(&earlier).check(&earlier, 0),
+            Verdict::Push("Not done yet: \"check b\". Continue with the next open item. Mark an item completed only after a tool result shows it. If one is truly blocked (a hard approval was refused, hardware or access is missing, or every approach failed), mark it cancelled and say why.".into())
+        );
+        // Earlier work stays done, and finishing the rest ends the run.
+        let finished = [item("a", "completed"), item("b", "completed")];
+        let mut drive = Drive::resumed(&earlier);
+        assert!(matches!(drive.check(&earlier, 0), Verdict::Push(_)));
+        assert_eq!(drive.check(&finished, 1), Verdict::End);
     }
 
     #[test]

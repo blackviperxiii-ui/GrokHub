@@ -396,7 +396,6 @@ export function Pulse({
                 onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
                 onWhy={() => pulseWhy(post.id)}
                 onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
-                onDelete={() => void act(post.id, "delete", "Deleted.")}
                 onSave={() => void act(post.id, "save", "Saved. It's on the Saved page.")}
                 onChip={(c) => void chip(post.id, c)}
               />

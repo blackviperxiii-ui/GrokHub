@@ -104,7 +104,7 @@ pub struct Brief {
     pub mood: String,
     /// What the run checks before it calls the ask done.
     pub done: Vec<String>,
-    /// `system`, `code`, `files`, `desktop`, `web`, `media`, `gaming`,
+    /// `system`, `app-update`, `code`, `files`, `desktop`, `web`, `media`, `gaming`,
     /// `game-help`, `loadout`, `library`, `planning` or `general`.
     pub domain: String,
     /// `rules`, `local` (the in-process scorer), `model`, or `default`
@@ -790,6 +790,116 @@ fn any_phrase(t: &str, list: &[&str]) -> bool {
     list.iter().any(|p| t.contains(p))
 }
 
+const APP_UPDATE_VERBS: &[&str] = &["update", "upgrade", "install", "reinstall"];
+/// Names the thing as one program: "the grok bot app", "the discord client".
+const APP_WORDS: &[&str] = &[
+    "app",
+    "apps",
+    "application",
+    "program",
+    "client",
+    "launcher",
+    "appimage",
+];
+const VERSION_WORDS: &[&str] = &["version", "latest", "newest"];
+/// The machine or its package manager, not one app: these stay `system`.
+const NOT_ONE_APP: &[&str] = &[
+    "package",
+    "packages",
+    "apt",
+    "pacman",
+    "dnf",
+    "yum",
+    "driver",
+    "drivers",
+    "kernel",
+    "boot",
+    "bootloader",
+    "grub",
+    "bios",
+    "uefi",
+    "firmware",
+    "os",
+    "system",
+    "everything",
+    "all",
+    "computer",
+    "pc",
+    "laptop",
+    "machine",
+    "windows",
+    "linux",
+    "sudo",
+    "systemctl",
+    "systemd",
+    "service",
+    "services",
+    "daemon",
+];
+
+/// "update the grok bot app", "install the latest discord": bring one app to
+/// a newer version. Its own updater or official download comes first, so it
+/// gets that playbook instead of the screen-checking desktop one or a system
+/// fix's services and ports checks.
+fn is_app_update(ws: &[&str]) -> bool {
+    any_word(ws, APP_UPDATE_VERBS)
+        && (any_word(ws, APP_WORDS) || any_word(ws, VERSION_WORDS))
+        && !any_word(ws, NOT_ONE_APP)
+}
+
+/// "continue. Complete the goal fully. Act now": a nudge to carry on that
+/// names nothing new. It opens with a go-on word, and what follows, read on
+/// its own, is no ask the rules know.
+fn carries_on(t: &str, input: &BriefInput<'_>) -> bool {
+    const LEADS: &[&str] = &[
+        "continue",
+        "keep going",
+        "go on",
+        "carry on",
+        "resume",
+        "proceed",
+        "finish it",
+        "keep at it",
+    ];
+    let Some(lead) = LEADS.iter().find(|l| t.starts_with(**l)) else {
+        return false;
+    };
+    let rest = t[lead.len()..].trim_start_matches(|c: char| !c.is_alphanumeric());
+    rest.is_empty()
+        || rules(&BriefInput {
+            text: rest,
+            recent: &[],
+            anchor: None,
+            ..*input
+        })
+        .is_none()
+}
+
+/// "continue", "keep going, act now": the person asks to go on with the open
+/// work (not just "ok"), so a checklist left open stays the run's to finish.
+pub fn is_go_on(text: &str) -> bool {
+    carries_on(&text.trim().to_lowercase(), &BriefInput::default())
+}
+
+/// A line that only says go on: a bare follow-up, a go-ahead or a nudge.
+fn only_goes_on(t: &str, input: &BriefInput<'_>) -> bool {
+    FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim())
+        || go_ahead(&words(t))
+        || carries_on(t, input)
+}
+
+/// The newest earlier line that asks for something: lines that only say go
+/// on are skipped, so "continue" after "continue, act now" still means the
+/// ask before both.
+fn last_real_ask<'a>(input: &BriefInput<'a>) -> Option<&'a str> {
+    input
+        .recent
+        .iter()
+        .rev()
+        .map(String::as_str)
+        .find(|r| !only_goes_on(&r.trim().to_lowercase(), input))
+}
+
 /// The ask touches the machine itself: services, packages, boot, ports, permissions.
 fn system_change(t: &str, ws: &[&str]) -> bool {
     any_word(ws, SYSTEM_WORDS) || t.contains("/etc/")
@@ -814,6 +924,11 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
             "findings explained",
             "fixes ranked by impact",
             "nothing changed without a yes",
+        ],
+        (Intent::Task, "app-update") | (Intent::Repair, "app-update") => &[
+            "installed version found",
+            "official update applied",
+            "new version running",
         ],
         (Intent::Repair, "code") => &["it builds", "tests pass", "the error is gone"],
         (Intent::Repair, "gaming") | (Intent::Task, "gaming") => &[
@@ -941,6 +1056,8 @@ fn domain_of(
     {
         // A check-up, not a breakage or a change: the tune-up playbook.
         "pc-health"
+    } else if is_app_update(ws) {
+        "app-update"
     } else if system || any_word(ws, MACHINE_WORDS) {
         "system"
     } else if code {
@@ -1044,10 +1161,11 @@ fn small_talk(t: &str, ws: &[&str]) -> bool {
         || (about_you && ws.len() <= 8 && !any_word(ws, SUBJECT_WORDS))
 }
 
-/// "ok", "yes", "do it": a bare go-ahead that carries on the last ask.
+/// "ok", "yes", "do it", "continue, act now": a go-ahead or a nudge that
+/// carries on the last ask.
 pub fn is_follow_up(text: &str) -> bool {
     let t = text.trim().to_lowercase();
-    FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim()) || go_ahead(&words(&t))
+    only_goes_on(&t, &BriefInput::default())
 }
 
 /// "yeah could use that info": a go-ahead word, then nothing new named
@@ -1086,11 +1204,10 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     let bare_verb = TASK_VERBS.contains(&first) && !acted_on;
     if !input.background
         && !input.recent.is_empty()
-        && (FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim())
-            || go_ahead(&ws)
-            || (bare_verb && last_was_work()))
+        && (only_goes_on(&t, input) || (bare_verb && last_was_work()))
     {
-        let last = input.recent.last().map(String::as_str).unwrap_or_default();
+        // The latest real ask is the work; a nudge never starts a new one.
+        let last = last_real_ask(input).unwrap_or_default();
         return rules(&BriefInput {
             text: last,
             recent: &[],
@@ -1146,7 +1263,7 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         Intent::Image
     } else if repair {
         Intent::Repair
-    } else if feature {
+    } else if feature || is_app_update(&ws) {
         Intent::Task
     } else if any_word(&ws, CREATIVE_WORDS) {
         Intent::Creative
@@ -1731,6 +1848,76 @@ mod tests {
             short(&rules(&follow).unwrap()),
             (Intent::Repair, Care::Critical, "system", "calm")
         );
+    }
+
+    #[test]
+    fn an_app_update_gets_its_own_playbook_and_a_nudge_keeps_the_ask() {
+        // The chat that stalled: "update the grok bot app" landed on the
+        // desktop playbook (screenshots first), and the nudges after it were
+        // sorted as a repair with services and ports to check.
+        for text in [
+            "update the grok bot app",
+            "upgrade the discord client",
+            "install the latest obs",
+            "reinstall the newest version of steam",
+        ] {
+            let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: no brief"));
+            assert_eq!(
+                (b.intent, b.domain.as_str()),
+                (Intent::Task, "app-update"),
+                "{text}"
+            );
+            assert_eq!(
+                b.done,
+                [
+                    "installed version found",
+                    "official update applied",
+                    "new version running"
+                ]
+            );
+        }
+        // The machine, its packages or its drivers stay system work.
+        for text in [
+            "update my packages",
+            "upgrade the system",
+            "reinstall the nvidia drivers",
+            "update the bios",
+        ] {
+            let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: no brief"));
+            assert_eq!(b.domain, "system", "{text}");
+        }
+        let ask = "update the grok bot app".to_string();
+        let nudge = "continue. Complete the goal fully. Act now — no planning-only replies.";
+        let asked = rules(&input(&ask)).unwrap();
+        let b = rules(&BriefInput {
+            text: nudge,
+            recent: std::slice::from_ref(&ask),
+            ..Default::default()
+        })
+        .expect("a nudge carries on the ask");
+        assert_eq!(short(&b), short(&asked));
+        // A bare "continue" after the nudge still means the ask before both.
+        let recent = [ask.clone(), nudge.to_string()];
+        let b = rules(&BriefInput {
+            text: "continue",
+            recent: &recent,
+            ..Default::default()
+        })
+        .expect("continue carries on the ask");
+        assert_eq!(short(&b), short(&asked));
+        assert!(is_follow_up(nudge));
+        assert!(is_go_on(nudge) && is_go_on("Continue") && is_go_on("keep going!"));
+        assert!(!is_go_on("ok") && !is_go_on("yes"));
+        // "continue with" a new subject is that new ask.
+        let wifi = "continue with my wifi, it's broken";
+        let b = rules(&BriefInput {
+            text: wifi,
+            recent: &recent,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!((b.intent, b.domain.as_str()), (Intent::Repair, "general"));
+        assert!(!is_follow_up(wifi));
     }
 
     #[test]

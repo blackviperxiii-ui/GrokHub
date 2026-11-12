@@ -76,8 +76,12 @@ pub fn add(config_dir: &Path, text: &str) -> Result<Page, String> {
     }
     let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
     let mut profile = interests::load(&path(config_dir));
-    let note = if profile.add(&topic, InterestSource::Explicit, grokhub_core::now_ms()) {
+    let now_ms = grokhub_core::now_ms();
+    let note = if profile.add(&topic, InterestSource::Explicit, now_ms) {
         interests::save(&path(config_dir), &profile)?;
+        grokhub_core::learn::hub::note_all(grokhub_core::learn::sources::interest_topic(
+            &topic, true, now_ms,
+        ));
         format!("Pulse will look for {topic}.")
     } else {
         format!("{topic} is already on your list.")
@@ -145,6 +149,12 @@ pub fn act(config_dir: &Path, topic: &str, act: Act) -> Result<Page, String> {
         return Ok(page(&profile, String::new()));
     }
     interests::save(&path(config_dir), &profile)?;
+    if matches!(act, Act::Remove) {
+        let now_ms = grokhub_core::now_ms();
+        grokhub_core::learn::hub::note_all(grokhub_core::learn::sources::interest_topic(
+            topic, false, now_ms,
+        ));
+    }
     Ok(page(&profile, note))
 }
 
@@ -187,6 +197,19 @@ pub fn seed_once(config_dir: &Path, now_ms: u64) -> Result<usize, String> {
     );
     interests::save(&path(config_dir), &profile)?;
     Ok(added)
+}
+
+/// Change the topics under the store lock; saved when `f` says it changed them.
+pub(crate) fn update(
+    config_dir: &Path,
+    f: impl FnOnce(&mut InterestProfile) -> bool,
+) -> Result<(), String> {
+    let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut profile = interests::load(&path(config_dir));
+    if f(&mut profile) {
+        interests::save(&path(config_dir), &profile)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

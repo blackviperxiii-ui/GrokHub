@@ -278,7 +278,17 @@ fn write_post(
     let topics = profile.search_topics();
     let cache_path = config_dir.join(ps::CACHE_FILE);
     let mut cache = ps::load_cache(&cache_path);
-    let reqs = ps::requests_for(&source_settings(config_dir), &topics, cache.runs, now_ms);
+    let settings = source_settings(config_dir);
+    let mut reqs = ps::requests_for(&settings, &topics, cache.runs, now_ms);
+    // Drain More like this / Like related searches when a search kind is on.
+    if !cache.related.is_empty() {
+        let related_reqs = ps::related_requests(&settings, &cache.related, now_ms);
+        if !related_reqs.is_empty() {
+            reqs.extend(related_reqs);
+            cache.related.clear();
+            let _ = ps::save_cache(&cache_path, &cache);
+        }
+    }
     if reqs.is_empty() {
         return Ok(Outcome::Nothing(NOTHING_TO_READ.into()));
     }
@@ -470,6 +480,7 @@ fn tick(
     }
     let _ = run_once(config_dir, &model, client.as_ref(), net().as_ref(), now);
     let _ = run_ideas(config_dir, &model, client.as_ref(), now);
+    let _ = crate::pulse_digests::run_due(config_dir, now);
     RUNNING.store(false, Ordering::SeqCst);
 }
 

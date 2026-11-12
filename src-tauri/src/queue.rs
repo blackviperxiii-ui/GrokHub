@@ -1,7 +1,9 @@
 //! The Agents page, the cabin's Queue: the open chat's to-dos and its
-//! background commands, subagents and monitors, each with a Stop.
+//! background commands, subagents and monitors, each with a Stop, and the
+//! queued jobs, each with a Run.
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use grokhub_agent::{
     By, Counts, Ended, Held, Resume, TaskProgress, TaskRow, TaskState, Work, WorkState,
@@ -322,6 +324,17 @@ fn todo_state(
     }
 }
 
+/// A job waiting on the Queue: the cabin's `AgentJob`. Run sends `prompt`
+/// to Chat as a normal turn, in `thread_id` when it has one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Job {
+    pub title: String,
+    pub status: String,
+    pub prompt: String,
+    pub thread_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Queue {
@@ -333,6 +346,25 @@ pub struct Queue {
     /// Why the helper work list could not be read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work_error: Option<String>,
+    pub jobs: Vec<Job>,
+}
+
+/// The queued jobs, kept in memory for this run of the app as the cabin
+/// keeps its own. Like the cabin's, nothing adds to it yet.
+static JOBS: Mutex<Vec<Job>> = Mutex::new(Vec::new());
+
+fn jobs() -> std::sync::MutexGuard<'static, Vec<Job>> {
+    JOBS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Put a job on the Queue.
+pub fn queue_job(job: Job) {
+    jobs().push(job);
+}
+
+/// The jobs waiting on the Queue, oldest first.
+pub fn queued_jobs() -> Vec<Job> {
+    jobs().clone()
 }
 
 /// The cabin Queue's label rule: a finished task is done, a live task whose
@@ -411,6 +443,7 @@ pub fn queue(config_dir: &Path, conversation_id: &str) -> Queue {
         tasks,
         work,
         work_error,
+        jobs: queued_jobs(),
     }
 }
 
@@ -1260,7 +1293,7 @@ mod tests {
         let id = format!("queue-no-work-{}", grokhub_core::now_ms());
         assert_eq!(
             serde_json::to_string(&queue(&cfg, &id)).unwrap(),
-            r#"{"todos":[],"tasks":[],"work":[]}"#
+            r#"{"todos":[],"tasks":[],"work":[],"jobs":[]}"#
         );
         let _ = std::fs::remove_dir_all(&cfg);
     }
@@ -1527,5 +1560,31 @@ mod tests {
     fn a_stop_in_a_chat_with_no_tasks_names_the_task() {
         let id = format!("queue-none-{}", grokhub_core::now_ms());
         assert_eq!(stop(&id, Some("t1")), Err("task t1 not found".into()));
+    }
+
+    #[test]
+    fn a_queued_job_shows_with_its_prompt_and_thread() {
+        let cfg = scratch("jobs");
+        let id = format!("queue-jobs-{}", grokhub_core::now_ms());
+        let job = Job {
+            title: "Summarize the logs".into(),
+            status: "queued".into(),
+            prompt: "Summarize today's build logs".into(),
+            thread_id: "shell-t7".into(),
+        };
+        queue_job(job.clone());
+        let page = queue(&cfg, &id);
+        assert!(page.jobs.contains(&job), "{:?}", page.jobs);
+        let wire = serde_json::to_value(&page).unwrap();
+        assert!(wire["jobs"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!({
+                "title": "Summarize the logs",
+                "status": "queued",
+                "prompt": "Summarize today's build logs",
+                "threadId": "shell-t7"
+            })));
+        let _ = std::fs::remove_dir_all(&cfg);
     }
 }

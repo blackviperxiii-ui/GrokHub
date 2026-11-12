@@ -359,24 +359,70 @@ static COOLING: Mutex<BTreeMap<PathBuf, BTreeMap<String, u64>>> = Mutex::new(BTr
 /// How long a model that failed with an outage is routed around.
 pub(crate) const OUTAGE_COOL_MS: u64 = 60_000;
 
+/// How long a provider model that hit its rate limit (429) is routed around,
+/// unless the provider asked for longer. A minute was too short: a long step
+/// outlasted it and the next step hit the same wall.
+pub(crate) const LIMIT_COOL_MS: u64 = 5 * 60_000;
+/// How long a provider that ran out of credit, or refused its key, is routed
+/// around: the rest of the session. Neither clears by itself, so trying it
+/// again each step only costs a failed call and another switch line.
+pub(crate) const OUT_FOR_SESSION_MS: u64 = 12 * 60 * 60_000;
+
 /// `model` just failed with an outage at `now_ms`.
 pub(crate) fn cool_down(config_dir: &Path, model: &str, now_ms: u64) {
-    COOLING
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .entry(config_dir.to_path_buf())
-        .or_default()
-        .insert(model.to_string(), now_ms.saturating_add(OUTAGE_COOL_MS));
+    cool_until(config_dir, model, now_ms.saturating_add(OUTAGE_COOL_MS));
 }
 
-/// True while `model` is cooling after an outage.
+/// A provider model you added just failed with `err` at `now_ms`: route around
+/// it for as long as that kind of failure lasts. Out of credit takes the
+/// provider's other paid models out with it (one account pays for them all);
+/// its free models (`:free`) still answer.
+pub(crate) fn cool_down_for(config_dir: &Path, model: &str, err: &ClientError, now_ms: u64) {
+    let rule = super::handoff::stop_rule(err);
+    let ms = match rule {
+        "handoff:credit" | "handoff:auth" | "handoff:free_cap" => OUT_FOR_SESSION_MS,
+        "handoff:limit" => err
+            .retry_after_secs()
+            .map_or(0, |s| s.saturating_mul(1000))
+            .max(LIMIT_COOL_MS),
+        _ => OUTAGE_COOL_MS,
+    };
+    let until = now_ms.saturating_add(ms);
+    cool_until(config_dir, model, until);
+    if rule == "handoff:credit" {
+        if let Some(account) = account_key(model) {
+            cool_until(config_dir, &account, until);
+        }
+    }
+}
+
+/// The key that stands for every paid model on `model`'s provider account:
+/// `openrouter/vendor/x` → `openrouter/*`. A bare id (an xAI model) has none.
+fn account_key(model: &str) -> Option<String> {
+    let (provider, rest) = model.split_once('/')?;
+    (!provider.is_empty() && !rest.is_empty()).then(|| format!("{provider}/*"))
+}
+
+fn cool_until(config_dir: &Path, key: &str, until: u64) {
+    let mut cooling = COOLING.lock().unwrap_or_else(|e| e.into_inner());
+    let slot = cooling
+        .entry(config_dir.to_path_buf())
+        .or_default()
+        .entry(key.to_string())
+        .or_insert(0);
+    *slot = (*slot).max(until);
+}
+
+/// True while `model` is cooling after a failure, its own or (for a paid
+/// model) its account's being out of credit.
 pub(crate) fn cooling(config_dir: &Path, model: &str, now_ms: u64) -> bool {
-    COOLING
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(config_dir)
-        .and_then(|m| m.get(model))
-        .is_some_and(|until| now_ms < *until)
+    let cooling = COOLING.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(m) = cooling.get(config_dir) else {
+        return false;
+    };
+    let hot = |key: &str| m.get(key).is_some_and(|until| now_ms < *until);
+    hot(model)
+        || (!model.ends_with(":free") && account_key(model).is_some_and(|account| hot(&account)))
 }
 
 /// One request to `model` goes out now.
@@ -1368,6 +1414,13 @@ fn xai_outage(err: &ClientError) -> bool {
     err.is_retryable() || matches!(err, ClientError::IdleTimeout)
 }
 
+/// xAI can't take this turn: down, or the account is out of credit. Either
+/// way a provider you set up (or this computer's model) answers instead of
+/// the turn failing, so one empty wallet never stops the work.
+fn xai_cant_answer(err: &ClientError) -> bool {
+    xai_outage(err) || matches!(err, ClientError::PaymentRequired { .. })
+}
+
 /// A provider you added failed in a way another route can get past: a limit
 /// (429), out of credit (402), a server fault (5xx), a refused key, a dropped
 /// stream or the wire itself. A refusal about the prompt, a prompt too long
@@ -1883,10 +1936,11 @@ pub fn stream_routed(
         match out {
             Err(err) if provider_fallible(&err) => {
                 // The provider hit a limit, ran out of credit or fell over:
-                // cool it so the next pick, the resumed step included, skips
-                // it, and Grok takes this turn. The provider showed nothing,
+                // cool it (credit and a refused key for the session) so the
+                // next pick, the resumed step included, skips it, and Grok
+                // takes this turn. The provider showed nothing,
                 // so no work repeats.
-                cool_down(&dir, &model, now);
+                cool_down_for(&dir, &model, &err, now);
                 super::handoff::note_switch(&req.conversation_id, &model, &req.model, &err);
                 switch_line(&mut *sink, &err);
                 provider_failed = Some((model.clone(), err, started.elapsed()));
@@ -1928,7 +1982,7 @@ pub fn stream_routed(
         // failing that this computer's model (below). Only when xAI showed
         // nothing yet.
         let stand_in = match &out {
-            Err(err) if !streamed && xai_outage(err) => outage_stand_in(&dir, &call, now),
+            Err(err) if !streamed && xai_cant_answer(err) => outage_stand_in(&dir, &call, now),
             _ => None,
         };
         match out {
@@ -1960,7 +2014,7 @@ pub fn stream_routed(
                         // it isn't picked again, note it on its own health
                         // line, and this computer's model answers instead.
                         // The provider showed nothing, so no work repeats.
-                        cool_down(&dir, &m, now);
+                        cool_down_for(&dir, &m, &e2, now);
                         super::handoff::note_switch(
                             &req.conversation_id,
                             &m,
@@ -1992,7 +2046,7 @@ pub fn stream_routed(
                         // No local model to land on: the error stands, but
                         // the stand-in still cools so a resumed step doesn't
                         // re-pick the model that just failed.
-                        cool_down(&dir, &m, now);
+                        cool_down_for(&dir, &m, &e2, now);
                         stood_in = Some(m);
                         Err(e2)
                     }

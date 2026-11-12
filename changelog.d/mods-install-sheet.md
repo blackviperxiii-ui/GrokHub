@@ -1,0 +1,1 @@
+- Mods: open a mod to see its files, then install, update or uninstall it from a sheet that lists every file it writes, with an Installed tab per game.

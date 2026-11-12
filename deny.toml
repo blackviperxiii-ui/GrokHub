@@ -4,12 +4,20 @@
 [advisories]
 version = 2
 ignore = [
-    # paste is unmaintained. Build-time proc-macro only, pulled in by egui_dock
-    # 0.21.1 (U7f). No runtime code. Drop when egui_dock drops paste.
-    { id = "RUSTSEC-2024-0436", reason = "build-time only, via egui_dock 0.21" },
+    # paste is unmaintained. Build-time proc-macro only, pulled in by egui_stack
+    # 0.25 (U7f dock panels; continues egui_dock). No runtime code. Drop when
+    # egui_stack drops paste or the cabin crate goes. Re-checked 2026-11-12:
+    # egui_dock 0.21.1 is still upstream's newest (egui ^0.36); cabin uses
+    # egui_stack 0.25.9 on egui 0.37, which still depends on paste.
+    { id = "RUSTSEC-2024-0436", reason = "build-time only, via egui_stack 0.25" },
     # zvariant, zvariant_derive and zbus_names (zbus 5) are unmaintained. They come in through
     # ashpd (portal dialogs) and secret-service (keychain) on Linux. Drop these
     # when those crates move to zbus 6.
+    # Re-checked 2026-11-11: ashpd 0.14 and notify-rust 4.19 are on zbus 6, but
+    # zbus 5 is still required at the newest stable release of secret-service
+    # (5.2; 6.0 is only a release candidate), zbus-secret-service-keyring-store
+    # 1.0.1, ksni 0.3.7 and tauri-plugin-notification, -opener and
+    # -single-instance, so moving our own crates alone would not clear these.
     { id = "RUSTSEC-2026-0370", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
     { id = "RUSTSEC-2026-0371", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
     { id = "RUSTSEC-2026-0372", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
@@ -19,6 +27,12 @@ ignore = [
     # glib 0.18 has unsound Iterator impls. It comes in through gtk-rs 0.18, which
     # Tauri 2's Linux webview stack pins, and there is no patched 0.18 release.
     # Drop this when Tauri moves to gtk4.
+    # cargo-deny only reports unsound advisories for direct dependencies by
+    # default (`unsound = "workspace"`), and glib is transitive, so this entry is
+    # "not detected" in both lockfiles today. It stays as the written record of
+    # the accepted risk, and keeps the check green if that scope is widened.
+    # Re-checked 2026-11-11: gtk ^0.18 is still required at the newest stable
+    # tauri-runtime-wry (2.12.3), wry (0.57.2) and muda (0.21.2).
     { id = "RUSTSEC-2024-0429", reason = "gtk-rs 0.18 via Tauri 2 Linux webview; no fix in 0.18; drop with the gtk4 move" },
     # proc-macro-error is unmaintained. Build-time proc-macro only, pulled in by
     # glib-macros and gtk3-macros 0.18. No runtime code. Drop with the gtk4 move.

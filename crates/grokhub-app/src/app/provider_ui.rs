@@ -686,7 +686,7 @@ impl Cabin {
                     link.why
                 ),
             );
-            let id = ui.id().with("provider-by-hand-copy");
+            let id = ui.scope_id().with("provider-by-hand-copy");
             let label = crate::theme::copy_flash_label(ui.ctx(), id);
             if crate::cards::settings_action(ui, BY_HAND_ROW, &link.url, label) {
                 ui.ctx().copy_text(link.url.clone());

@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from "react";
-import type { ElicitAction, ElicitChoice } from "./api";
+import type { ElicitAction, ElicitChoice, ReplyChipData } from "./api";
 import { externalUrlOk } from "./external";
 import { PRODUCT_NAME } from "./brand";
 import { ExternalLink } from "./ui";
+import { ReplyChips } from "./ReplyChips";
 
 export type ElicitItem = {
   kind: "elicit";
@@ -15,6 +16,8 @@ export type ElicitItem = {
   fieldTitle: string;
   secret: boolean;
   options?: ElicitChoice[];
+  /** Predicted replies for this card, ranked by past picks (Order 733). */
+  chips?: ReplyChipData[];
   /** "ended": the turn stopped before anyone answered; "halted": Halt stopped it. */
   answer: ElicitAction | "ended" | "halted" | null;
   /** A helper asked; it waits past the end of the reply. */
@@ -51,6 +54,7 @@ export function ElicitCard({
   item,
   onAnswer,
   editable = false,
+  onChipPick,
 }: {
   item: ElicitItem;
   /** `field` names the answer when it is not the card's own field: "plan" for
@@ -58,6 +62,8 @@ export function ElicitCard({
   onAnswer: (action: ElicitAction, value: string, field?: string) => void;
   /** The agent window: the plan is a document to edit, approve or send back. */
   editable?: boolean;
+  /** A reply chip was picked; the shell remembers it for the next card. */
+  onChipPick?: (key: string) => void;
 }) {
   const [value, setValue] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
@@ -67,6 +73,21 @@ export function ElicitCard({
   const plan = item.server === "Plan";
   const editing = plan && editable;
   const options = item.options ?? [];
+  const chips = item.chips ?? [];
+
+  /** One predicted reply: Send answers the card with its text, Prefill
+   * puts its text in this card's box to finish, Dismiss declines. */
+  function pickChip(chip: ReplyChipData) {
+    onChipPick?.(chip.key);
+    if (chip.act === "send") {
+      if (!plan) setPicked(chip.text);
+      onAnswer("accept", chip.text);
+    } else if (chip.act === "prefill") {
+      setValue(chip.text);
+    } else {
+      onAnswer("decline", "");
+    }
+  }
   // The message lists the options as text for the cabin; here they are buttons.
   const message = options.length
     ? item.message
@@ -149,6 +170,23 @@ export function ElicitCard({
             Ask for changes
           </button>
         </form>
+      ) : plan && chips.length > 0 ? (
+        <>
+          <ReplyChips chips={chips} onPick={pickChip} />
+          <form className="card-buttons" onSubmit={send}>
+            <input
+              aria-label={item.fieldTitle || "Reply"}
+              placeholder="Or type your reply"
+              type="text"
+              autoComplete="off"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+            />
+            <button type="submit" disabled={Boolean(item.fieldName) && !value.trim()}>
+              Send
+            </button>
+          </form>
+        </>
       ) : plan ? (
         <div className="card-buttons">
           <button type="button" onClick={() => onAnswer("accept", "")}>
@@ -160,34 +198,37 @@ export function ElicitCard({
         </div>
       ) : (
         <>
-          {options.length > 0 && (
-            <div className="answer-options" role="group" aria-label="Options">
-              {options.map((option) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  className={option.recommended ? "choice" : "choice quiet"}
-                  onClick={() => {
-                    setPicked(option.label);
-                    onAnswer("accept", option.label);
-                  }}
-                >
-                  <span className="choice-label">
-                    {option.label}
-                    {option.recommended && (
-                      <>
-                        {" "}
-                        <span className="badge">Recommended</span>
-                      </>
+          {options.length > 0 &&
+            (chips.length > 0 ? (
+              <ReplyChips chips={chips} onPick={pickChip} />
+            ) : (
+              <div className="answer-options" role="group" aria-label="Options">
+                {options.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    className={option.recommended ? "choice" : "choice quiet"}
+                    onClick={() => {
+                      setPicked(option.label);
+                      onAnswer("accept", option.label);
+                    }}
+                  >
+                    <span className="choice-label">
+                      {option.label}
+                      {option.recommended && (
+                        <>
+                          {" "}
+                          <span className="badge">Recommended</span>
+                        </>
+                      )}
+                    </span>
+                    {option.description && (
+                      <span className="choice-detail">{option.description}</span>
                     )}
-                  </span>
-                  {option.description && (
-                    <span className="choice-detail">{option.description}</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
+                  </button>
+                ))}
+              </div>
+            ))}
           <form className="card-buttons" onSubmit={send}>
             {item.fieldName && (
               <input

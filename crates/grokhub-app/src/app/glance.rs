@@ -186,7 +186,7 @@ impl Cabin {
 }
 
 fn paint_frame_thumb(ui: &mut egui::Ui, url: &str) {
-    let id = egui::Id::new(("cabin-device-glance", url));
+    let id = egui::Id::unique(("cabin-device-glance", url));
     if let Some(tex) = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         ui.add(egui::Image::from_texture(&tex).fit_to_exact_size(egui::vec2(18.0, 18.0)));
         return;

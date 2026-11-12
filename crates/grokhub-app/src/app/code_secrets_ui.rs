@@ -38,7 +38,7 @@ pub(super) fn repo_key_of(ws: &Path) -> String {
 /// The Value field's id for one generation: a new generation is a field
 /// egui has never seen, with no undo history.
 fn value_id(generation: u64) -> egui::Id {
-    egui::Id::new(("code-secret-value", generation))
+    egui::Id::unique(("code-secret-value", generation))
 }
 
 /// Work for the worker thread. The value rides along only to the keychain.

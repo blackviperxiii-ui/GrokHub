@@ -1006,7 +1006,7 @@ fn composer_key_frame(
     modifiers: egui::Modifiers,
     keys: &[egui::Key],
 ) -> Vec<String> {
-    let id = egui::Id::new("composer-key-frame");
+    let id = egui::Id::unique("composer-key-frame");
     let mut events = vec![egui::Event::ModifiersChanged(modifiers)];
     events.extend(keys.iter().map(|&key| egui::Event::Key {
         key,

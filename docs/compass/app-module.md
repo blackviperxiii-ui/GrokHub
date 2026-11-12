@@ -9,7 +9,7 @@
 ## Key files
 - `crates/grokhub-app/src/app/mod.rs`: `Cabin` fields, `new`, `quiet_for_test`, the frame loop.
 - `crates/grokhub-app/src/app/tests.rs`: most cabin tests; `test_support_tests.rs` / `composer_attach_tests.rs` load via `#[path]` (stage 4–5).
-- `crates/grokhub-app/src/app/chat_ui.rs` (pane and composer), `chat_kick.rs` (send → `kick_native_turn`), and `dock_ui.rs` (optional egui_dock tabs; `dock.json`; `page_panel`).
+- `crates/grokhub-app/src/app/chat_ui.rs` (pane and composer), `chat_kick.rs` (send → `kick_native_turn`), and `dock_ui.rs` (optional egui_stack tabs; `dock.json`; `page_panel`).
 - `crates/grokhub-app/src/app/persist.rs` + `persist_service.rs`: one PersistService worker; FullSnap/settings/projects/window errors → `persist_err` (clears idle key); secrets/OAuth still Stage 7 spawns.
 ## Change recipe
 - New UI state: add a `Cabin` field and initialize it in both `new` and `quiet_for_test`.

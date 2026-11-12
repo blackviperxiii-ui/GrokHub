@@ -1,0 +1,1 @@
+- Library: On objective tab, Battle.net tiles beside Steam, and a per-game companion frame (notes, news since last play, guides, game-screen slot).

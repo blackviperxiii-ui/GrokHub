@@ -483,7 +483,7 @@ fn prepare(
             let dest = staging.join("download");
             let req = Request::get(source, url)
                 .header("User-Agent", &grokhub_core::mods::modrinth::user_agent());
-            crate::mods_fetch::ModsNet
+            super::jobs::mods_net()
                 .download(&req, &dest)
                 .map_err(|e| e.line())?;
             dest
@@ -666,7 +666,7 @@ pub(super) fn sheet(ctx: &egui::Context) {
     };
     let sheet = *sheet;
     let mut act = None;
-    egui::Modal::new(egui::Id::new("mods-install-sheet"))
+    egui::Modal::new(egui::Id::unique("mods-install-sheet"))
         .backdrop_color(egui::Color32::from_black_alpha(153))
         .frame(
             egui::Frame::NONE

@@ -223,7 +223,7 @@ impl Cabin {
         let amr = onboard::amr_on(&crate::config::config_dir());
         let mut know_me = self.know_me_on();
         let mut act = OnboardAct::None;
-        let modal = egui::Modal::new(egui::Id::new("onboard-identity"))
+        let modal = egui::Modal::new(egui::Id::unique("onboard-identity"))
             .backdrop_color(egui::Color32::from_black_alpha(153))
             .frame(
                 egui::Frame::NONE

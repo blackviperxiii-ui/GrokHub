@@ -2,20 +2,91 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CoverShape, LibraryGame, LibraryPage } from "./api";
+import type {
+  BattlenetGame,
+  BattlenetPage,
+  CompanionFrame,
+  CoverShape,
+  LibraryGame,
+  LibraryPage,
+  MissionPage,
+} from "./api";
 
 const api = vi.hoisted(() => ({
   getLibrary: vi.fn<() => Promise<LibraryPage>>(),
+  getBattlenet: vi.fn<() => Promise<BattlenetPage>>(),
+  getMission: vi.fn<() => Promise<MissionPage>>(),
   libraryCover: vi.fn<(appId: number, shape: CoverShape) => Promise<string | null>>(),
   libraryPlay: vi.fn<(appId: number) => Promise<string>>(),
+  battlenetPlay: vi.fn<(product: string) => Promise<string>>(),
+  battlenetOpenFolder: vi.fn<(product: string) => Promise<string>>(),
+  companionFrame: vi.fn<
+    (noteId: number, lastPlayed: number, steamAppId?: number | null) => Promise<CompanionFrame>
+  >(),
+  companionSetNote: vi.fn<(appId: number, text: string) => Promise<string>>(),
+  gameWow: vi.fn(),
+  gameWowAddon: vi.fn(),
+  gameGw2: vi.fn(),
+  gameGw2Refresh: vi.fn(),
+  gameGw2StartKey: vi.fn(),
+  gameGw2AnswerKey: vi.fn(),
+  gameGw2RemoveKey: vi.fn(),
+  gameEso: vi.fn(),
+  gameEsoAddon: vi.fn(),
+  gameOsrs: vi.fn(),
+  gameOsrsSave: vi.fn(),
+  gameOsrsForget: vi.fn(),
+  gameOsrsRefresh: vi.fn(),
+  gameDestiny: vi.fn(),
+  gameDestinyRefresh: vi.fn(),
+  gameDestinyStartKey: vi.fn(),
+  gameDestinyAnswerKey: vi.fn(),
+  gameDestinySaveName: vi.fn(),
+  gameDestinyRemove: vi.fn(),
+  gamePoe: vi.fn(),
+  gameElite: vi.fn(),
+  gameFactorio: vi.fn(),
+  gameFactorioMod: vi.fn(),
+  gameStardew: vi.fn(),
+  gameMinecraft: vi.fn(),
+  gameRl: vi.fn(),
+  getGameWatch: vi.fn<() => Promise<{ on: boolean; note: string }>>(),
+  setGameWatch: vi.fn<(on: boolean) => Promise<{ on: boolean; note: string }>>(),
 }));
 
 vi.mock("./api", () => api);
 
-import { filterGames, Library, NO_MATCH, NO_STEAM, playtimeLabel } from "./Library";
+import {
+  filterGames,
+  filterTiles,
+  Library,
+  NO_MATCH,
+  NO_OBJECTIVE,
+  NO_STEAM,
+  namesGame,
+  objectiveText,
+  playtimeLabel,
+} from "./Library";
 
 function game(over: Partial<LibraryGame> = {}): LibraryGame {
-  return { appId: 620, name: "Portal 2", installed: true, lastPlayed: 1_700_000_000, playtimeMin: 754, ...over };
+  return {
+    appId: 620,
+    name: "Portal 2",
+    installed: true,
+    lastPlayed: 1_700_000_000,
+    playtimeMin: 754,
+    ...over,
+  };
+}
+
+function bnet(over: Partial<BattlenetGame> = {}): BattlenetGame {
+  return {
+    product: "wow",
+    name: "World of Warcraft",
+    install: "/home/user/Games/wow",
+    seed: 42,
+    ...over,
+  };
 }
 
 const GAMES: LibraryGame[] = [
@@ -24,12 +95,24 @@ const GAMES: LibraryGame[] = [
   game({ appId: 413150, name: "Stardew Valley", lastPlayed: 0, playtimeMin: 0 }),
 ];
 
+const BNET: BattlenetGame[] = [bnet(), bnet({ product: "fenris", name: "Diablo IV", seed: 7 })];
+
+const EMPTY_XP = {
+  level: 1,
+  title: "Rookie",
+  xp: 0,
+  nextLevelXp: 100,
+  frac: 0,
+  today: 0,
+  week: { days: [false, false, false, false, false, false, false], today: 0, active: 0, target: 3, inARow: 0, played: 0, freezes: 0 },
+};
+
 function gridNames() {
   const grid = within(screen.getByRole("list", { name: "Games" }));
   return grid.getAllByRole("button").map((b) => b.getAttribute("aria-label"));
 }
 
-describe("filterGames", () => {
+describe("filterGames / filterTiles", () => {
   it("keeps installed games, never-played games or name matches", () => {
     const names = (gs: LibraryGame[]) => gs.map((g) => g.name);
     expect(names(filterGames(GAMES, "all", ""))).toEqual(["Portal 2", "Hades", "Stardew Valley"]);
@@ -37,6 +120,18 @@ describe("filterGames", () => {
     expect(names(filterGames(GAMES, "backlog", ""))).toEqual(["Stardew Valley"]);
     expect(names(filterGames(GAMES, "all", "  hAD "))).toEqual(["Hades"]);
     expect(names(filterGames(GAMES, "backlog", "portal"))).toEqual([]);
+  });
+
+  it("On objective keeps Steam and Battle.net games named in the mission", () => {
+    const objective = "Finish Portal 2\nLevel a World of Warcraft alt";
+    const tiles = filterTiles(GAMES, BNET, "onObjective", "", objective);
+    expect(tiles.map((t) => t.game.name)).toEqual(["Portal 2", "World of Warcraft"]);
+    expect(filterTiles(GAMES, BNET, "backlog", "", "").map((t) => t.game.name)).toEqual([
+      "Stardew Valley",
+    ]);
+    expect(namesGame(objective, "Portal 2")).toBe(true);
+    expect(namesGame(objective, "Diablo IV")).toBe(false);
+    expect(objectiveText(null)).toBe("");
   });
 
   it("says how long a game was played", () => {
@@ -50,6 +145,95 @@ describe("Library", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
     api.libraryCover.mockResolvedValue(null);
+    api.getBattlenet.mockResolvedValue({ found: false, games: [] });
+    api.getMission.mockResolvedValue({ mission: null, xp: EMPTY_XP });
+    api.companionFrame.mockResolvedValue({ note: "", news: [], guidesUrl: null });
+    api.getGameWatch.mockResolvedValue({ on: false, note: "" });
+    api.gameWow.mockResolvedValue({
+      title: "WORLD OF WARCRAFT",
+      running: false,
+      caption: "Retail · Battle.net",
+      logging: null,
+      watcherNote: null,
+      flavors: [],
+      installAll: null,
+      note: "",
+    });
+    api.gameGw2.mockResolvedValue({
+      status: "Guild Wars 2: add a read-only API key to read your account through ArenaNet's official API.",
+      hasKey: false,
+      accountLine: null,
+      note: "",
+      keyHint: "Make a key at account.arena.net",
+    });
+    api.gameEso.mockResolvedValue({
+      servers: [],
+      character: null,
+      note: "",
+      empty: "No Elder Scrolls Online add-on folders found on this computer.",
+    });
+    api.gameOsrs.mockResolvedValue({
+      status: "Old School RuneScape: add your display name to read Jagex's official hiscores.",
+      gains: null,
+      hasPlayer: false,
+      name: null,
+      kind: "Normal",
+      kinds: ["Normal", "Ironman", "Hardcore ironman", "Ultimate ironman"],
+      note: "",
+      nameHint: "Your display name on Jagex's public hiscores. No password or key.",
+    });
+    api.gameDestiny.mockResolvedValue({
+      status:
+        "Destiny 2: add your own Bungie.net API key and Bungie Name to read your public profile.",
+      hasKey: false,
+      hasName: false,
+      bungieName: null,
+      profileLine: null,
+      note: "",
+      howTo: "Register an application at bungie.net.",
+      keyHint: "From your Bungie.net application page.",
+      nameHint: "Your name with its code, like Guardian#1234.",
+    });
+    api.gamePoe.mockResolvedValue({
+      title: "Path of Exile",
+      appId: 238960,
+      status: "",
+      empty: "Play with the game watcher on.",
+      note: "",
+    });
+    api.gameElite.mockResolvedValue({
+      title: "Elite Dangerous",
+      status: "",
+      empty: "Play with the game watcher on.",
+      note: "",
+    });
+    api.gameFactorio.mockResolvedValue({
+      status: "",
+      warning: null,
+      action: null,
+      note: "",
+      empty: "Factorio hasn't written its user folder yet.",
+      userDir: null,
+    });
+    api.gameStardew.mockResolvedValue({
+      title: "Stardew Valley",
+      status: "",
+      empty: "No farm save read yet.",
+      note: "",
+    });
+    api.gameMinecraft.mockResolvedValue({
+      title: "Minecraft: Java Edition",
+      status: "",
+      empty: "Play with the game watcher on.",
+      note: "",
+    });
+    api.gameRl.mockResolvedValue({
+      title: "Rocket League",
+      status: "Rocket League's Stats API is off.",
+      howTo: true,
+      iniLine: "PacketSendRate=30",
+      note: "",
+    });
   });
 
   it("filters the grid by tab and search", async () => {
@@ -80,6 +264,77 @@ describe("Library", () => {
     expect(screen.queryByRole("list", { name: "Games" })).toBeNull();
   });
 
+  it("shows Battle.net tiles beside Steam and opens the companion frame", async () => {
+    api.getLibrary.mockResolvedValue({ steamFound: true, games: GAMES.slice(0, 1) });
+    api.getBattlenet.mockResolvedValue({ found: true, games: BNET });
+    render(<Library />);
+    await screen.findByRole("button", { name: "World of Warcraft" });
+    expect(gridNames()).toEqual(["Portal 2", "World of Warcraft", "Diablo IV"]);
+    await userEvent.click(screen.getByRole("button", { name: "World of Warcraft" }));
+    const detail = within(screen.getByRole("complementary", { name: "Game details" }));
+    expect(detail.getByRole("heading", { name: "World of Warcraft" })).toBeVisible();
+    expect(detail.getByText("Battle.net")).toBeVisible();
+    expect(detail.getByRole("region", { name: "Game companion" })).toBeVisible();
+    expect(api.companionFrame).toHaveBeenCalledWith(42, 0, null);
+    expect(await detail.findByRole("region", { name: "World of Warcraft" })).toBeVisible();
+    expect(api.gameWow).toHaveBeenCalled();
+  });
+
+  it("mounts GW2, ESO and OSRS screens for their Steam tiles", async () => {
+    api.getLibrary.mockResolvedValue({
+      steamFound: true,
+      games: [
+        game({ appId: 1284210, name: "Guild Wars 2" }),
+        game({ appId: 306130, name: "The Elder Scrolls Online" }),
+        game({ appId: 1343370, name: "Old School RuneScape" }),
+      ],
+    });
+    render(<Library />);
+    await screen.findByRole("button", { name: "Guild Wars 2" });
+    await userEvent.click(screen.getByRole("button", { name: "Guild Wars 2" }));
+    expect(
+      await screen.findByRole("region", { name: "Guild Wars 2" }),
+    ).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "The Elder Scrolls Online" }));
+    expect(
+      await screen.findByRole("region", { name: "The Elder Scrolls Online" }),
+    ).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Old School RuneScape" }));
+    expect(
+      await screen.findByRole("region", { name: "Old School RuneScape" }),
+    ).toBeVisible();
+  });
+
+  it("On objective filters by the open mission", async () => {
+    api.getLibrary.mockResolvedValue({ steamFound: true, games: GAMES });
+    api.getBattlenet.mockResolvedValue({ found: true, games: BNET });
+    api.getMission.mockResolvedValue({
+      mission: {
+        conversationId: "c1",
+        title: "Finish Portal 2",
+        status: "active",
+        steps: [{ id: "1", text: "beat the last chamber", status: "planned" }],
+        done: 0,
+        total: 1,
+        canAccept: false,
+        accepted: false,
+      },
+      xp: EMPTY_XP,
+    });
+    render(<Library />);
+    await screen.findByRole("list", { name: "Games" });
+    await userEvent.click(screen.getByRole("button", { name: "On objective" }));
+    expect(gridNames()).toEqual(["Portal 2"]);
+  });
+
+  it("On objective empty state when no mission names a game", async () => {
+    api.getLibrary.mockResolvedValue({ steamFound: true, games: GAMES });
+    render(<Library />);
+    await screen.findByRole("list", { name: "Games" });
+    await userEvent.click(screen.getByRole("button", { name: "On objective" }));
+    expect(screen.getByText(NO_OBJECTIVE)).toBeVisible();
+  });
+
   it("Play asks Steam to start the picked game", async () => {
     api.getLibrary.mockResolvedValue({ steamFound: true, games: GAMES });
     api.libraryPlay.mockResolvedValue("Asked Steam to start Hades.");
@@ -92,6 +347,20 @@ describe("Library", () => {
     expect(api.libraryPlay).toHaveBeenCalledWith(1145360);
     expect(api.libraryPlay).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole("status")).toHaveTextContent("Asked Steam to start Hades.");
+  });
+
+  it("Play asks Battle.net to start the picked game", async () => {
+    api.getLibrary.mockResolvedValue({ steamFound: true, games: [] });
+    api.getBattlenet.mockResolvedValue({ found: true, games: BNET });
+    api.battlenetPlay.mockResolvedValue("Asked Battle.net to start World of Warcraft.");
+    render(<Library />);
+    await userEvent.click(await screen.findByRole("button", { name: "World of Warcraft" }));
+    const detail = within(screen.getByRole("complementary", { name: "Game details" }));
+    await userEvent.click(detail.getByRole("button", { name: "Play" }));
+    expect(api.battlenetPlay).toHaveBeenCalledWith("wow");
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Asked Battle.net to start World of Warcraft.",
+    );
   });
 
   it("shows covers it gets and paints the rest", async () => {

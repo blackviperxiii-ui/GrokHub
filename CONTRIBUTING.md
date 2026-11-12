@@ -38,6 +38,7 @@ These rules apply to every contributor and every bot (Cursor, Claude, GrokHub). 
 
 - `./scripts/install.sh --user --channel beta` switches a Linux install to beta.
 - `./scripts/install.sh --user --channel stable` switches it back to `main`.
+- `./scripts/install.sh --user --app shell` (or `--app both`) builds the Tauri shell instead of (or beside) the cabin; with no `--app` it installs the cabin as before.
 - See the **Channels** section of [docs/REFERENCE.md](docs/REFERENCE.md) for details.
 
 ## Branch cleanup

@@ -552,7 +552,7 @@ impl Cabin {
             return;
         };
         let mut act: Option<bool> = None;
-        egui::Area::new(egui::Id::new("auto-setup-note"))
+        egui::Area::new(egui::Id::unique("auto-setup-note"))
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {

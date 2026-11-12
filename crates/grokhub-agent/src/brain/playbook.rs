@@ -333,7 +333,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (16, Source::Shipped, 0)
+            (17, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -376,6 +376,7 @@ mod tests {
                 ("plan-day", Source::Shipped),
                 ("creative", Source::Shipped),
                 ("pc-tuneup", Source::Shipped),
+                ("app-update", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -406,6 +407,7 @@ mod tests {
                 ("plan-day", Source::Shipped),
                 ("creative", Source::Shipped),
                 ("pc-tuneup", Source::Shipped),
+                ("app-update", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -469,7 +471,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 17);
+        assert_eq!(all.len(), 18);
         assert_eq!(
             problems,
             vec![

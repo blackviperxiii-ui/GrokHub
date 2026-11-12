@@ -49,7 +49,7 @@ impl BoardPage {
 
     fn rect(&self, key: (&str, &str)) -> egui::Rect {
         self.ctx
-            .read_response(egui::Id::new(key))
+            .read_response(egui::Id::unique(key))
             .unwrap_or_else(|| panic!("{key:?} is painted"))
             .rect
     }
@@ -179,7 +179,7 @@ fn workboard_cards_open_on_click_not_hover_and_fold_on_a_second_click_or_esc() {
 
     // With a text field focused, Esc leaves the field first; the card stays open.
     page.click(&mut cabin, card_a);
-    let field = egui::Id::new("board-click-open-field");
+    let field = egui::Id::unique("board-click-open-field");
     page.field = Some(field);
     page.step(&mut cabin, Vec::new());
     page.ctx.memory_mut(|m| m.request_focus(field));
@@ -220,7 +220,7 @@ fn workboard_cards_open_on_click_not_hover_and_fold_on_a_second_click_or_esc() {
     // A drag is not a click: card A moves to Doing and nothing opens.
     let doing = page
         .ctx
-        .read_response(egui::Id::new(("board-drop", 1_usize)))
+        .read_response(egui::Id::unique(("board-drop", 1_usize)))
         .expect("Doing column")
         .rect;
     // Just under the column title: the column below it grows and shrinks with the drag.

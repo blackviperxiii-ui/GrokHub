@@ -603,7 +603,7 @@ pub(super) fn click_pill(ui: &mut egui::Ui, label: &str) -> bool {
         false,
     );
     let enabled = resp.enabled();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     resp.clicked_by(egui::PointerButton::Primary)
 }
 

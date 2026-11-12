@@ -376,7 +376,7 @@ fn inbox_open_t(ui: &egui::Ui, open: bool) -> f32 {
         return if open { 1.0 } else { 0.0 };
     }
     ui.ctx().animate_bool_with_time_and_easing(
-        egui::Id::new("inbox-open"),
+        egui::Id::unique("inbox-open"),
         open,
         crate::motion::INBOX_SETTLE_SECS,
         egui::emath::easing::cubic_out,
@@ -386,8 +386,8 @@ fn inbox_open_t(ui: &egui::Ui, open: bool) -> f32 {
 /// Ids of a row's two buttons, so a key handler can tell when they have focus.
 pub(super) fn row_button_ids(key: InboxKey) -> (egui::Id, egui::Id) {
     (
-        egui::Id::new(("inbox-approve", key.id_key())),
-        egui::Id::new(("inbox-deny", key.id_key())),
+        egui::Id::unique(("inbox-approve", key.id_key())),
+        egui::Id::unique(("inbox-deny", key.id_key())),
     )
 }
 

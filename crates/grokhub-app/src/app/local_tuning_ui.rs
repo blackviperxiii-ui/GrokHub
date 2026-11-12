@@ -273,7 +273,7 @@ impl Cabin {
 
     /// The governor's three choices, kept in `{config}/local/governor.json`.
     fn ui_governor_rows(&mut self, ui: &mut egui::Ui) {
-        let id = egui::Id::new(GOV_ROW_ID);
+        let id = egui::Id::unique(GOV_ROW_ID);
         let mut row: GovRow = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
         let mut rules = row.rules.clone().unwrap_or_else(read_rules);
         let before = rules.clone();

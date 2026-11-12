@@ -1,5 +1,9 @@
+use std::path::PathBuf;
+
 use super::*;
+use grokhub_core::battlenet::BnetGame;
 use grokhub_core::mods::{Download, ModFile};
+use grokhub_core::steam::SteamGame;
 
 fn game(app_id: u32, name: &str, last_played: u64, playtime_min: u64) -> SteamGame {
     SteamGame {
@@ -191,7 +195,7 @@ fn mods_has_its_own_page_id() {
     cabin.show_in_mods(&ctx, 1172470);
     assert_eq!(cabin.nav, Nav::Mods);
     let view: ModsView = ctx
-        .data(|d| d.get_temp(egui::Id::new(VIEW_ID)))
+        .data(|d| d.get_temp(egui::Id::unique(VIEW_ID)))
         .expect("view");
     assert_eq!(view.picked.as_deref(), Some("apex"));
     assert!(view.show_cant, "a blocked pick opens Can't mod");

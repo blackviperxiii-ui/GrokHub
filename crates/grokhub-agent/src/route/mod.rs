@@ -344,7 +344,7 @@ pub fn call_model(
                 // next pick skips it, and Grok takes the turn. Only when the
                 // router rerouted this call away from the caller's own model:
                 // a caller that named the provider model gets its error.
-                live::cool_down(&dir, &sent.model, now);
+                live::cool_down_for(&dir, &sent.model, &err, now);
                 // Failover PR 7: the switch lands on this call's route
                 // record like the chat path's (no packet here: this path's
                 // callers re-plan their own retries).

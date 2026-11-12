@@ -473,7 +473,7 @@ impl Cabin {
             tip(ui, "What is it waiting on?");
             let field = ui.add(
                 egui::TextEdit::singleline(&mut text)
-                    .id(egui::Id::new(("board-block", id.as_str())))
+                    .id(egui::Id::unique(("board-block", id.as_str())))
                     .hint_text("Waiting on…")
                     .desired_width(f32::INFINITY),
             );
@@ -505,7 +505,7 @@ impl Cabin {
             );
             ui.add(
                 egui::TextEdit::multiline(&mut text)
-                    .id(egui::Id::new(("board-steps", id.as_str())))
+                    .id(egui::Id::unique(("board-steps", id.as_str())))
                     .desired_rows(4)
                     .desired_width(f32::INFINITY),
             );

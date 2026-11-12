@@ -1814,7 +1814,7 @@ pub(super) fn harness_card(
     } = text;
     let style = card_style(hard);
     ui.add_space(8.0);
-    let card_id = egui::Id::new(("harness-card", id.0, id.1));
+    let card_id = egui::Id::unique(("harness-card", id.0, id.1));
     let enter_t = crate::motion::approval_enter_t(ui, card_id, true);
     let y = crate::motion::approval_y(enter_t, false);
     let avail = ui.available_rect_before_wrap();
@@ -1903,7 +1903,7 @@ pub(super) fn remember_work_frame(
     rect: egui::Rect,
     size: [usize; 2],
 ) {
-    let id = egui::Id::new(("work-frame", card_id));
+    let id = egui::Id::unique(("work-frame", card_id));
     ui.ctx().data_mut(|d| d.insert_temp(id, (rect, size)));
 }
 
@@ -1978,7 +1978,7 @@ pub(super) fn paint_click_marker(ui: &egui::Ui, cards: &[&ToolCard]) {
     let Some(frame_card) = cards.iter().rev().find(|c| c.image_data_url.is_some()) else {
         return;
     };
-    let frame_id = egui::Id::new(("work-frame", frame_card.id.as_str()));
+    let frame_id = egui::Id::unique(("work-frame", frame_card.id.as_str()));
     let Some((rect, size)) = ui
         .ctx()
         .data(|d| d.get_temp::<(egui::Rect, [usize; 2])>(frame_id))
@@ -1994,7 +1994,7 @@ pub(super) fn paint_click_marker(ui: &egui::Ui, cards: &[&ToolCard]) {
     };
     let to = marker_pos(rect, size, x, y);
     let now = ui.ctx().input(|i| i.time);
-    let t_id = egui::Id::new(("work-click", click_card.id.as_str()));
+    let t_id = egui::Id::unique(("work-click", click_card.id.as_str()));
     let t0 = ui
         .ctx()
         .data_mut(|d| *d.get_temp_mut_or_insert_with(t_id, || now));

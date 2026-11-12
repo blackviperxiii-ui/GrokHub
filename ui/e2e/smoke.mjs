@@ -375,13 +375,14 @@ async function wd(method, path, body, retried = false) {
   });
   const json = await res.json();
   if (!res.ok) {
-    // WebKitGTK refuses a click on an element that is still moving (a page
-    // just opened, a post just landed, text reflowing) as "not interactable".
-    // Wait for it to sit still and click again; one that never does still fails.
-    const click = /^(\/session\/[^/]+)\/element\/([^/]+)\/click$/.exec(path);
-    if (click && json.value?.error === "element not interactable" && !retried) {
-      const [, s, el] = click;
-      await waitFor("the clicked element to sit still", async () => ((await settled(s, el)) ? true : null), 10000);
+    // WebKitGTK refuses a click or type on an element that is still moving (a
+    // page just opened, a post just landed, text reflowing) as "not
+    // interactable" / "not focusable". Wait for it to sit still and try
+    // again; one that never does still fails.
+    const act = /^(\/session\/[^/]+)\/element\/([^/]+)\/(click|value)$/.exec(path);
+    if (act && json.value?.error === "element not interactable" && !retried) {
+      const [, s, el] = act;
+      await waitFor("the element to sit still", async () => ((await settled(s, el)) ? true : null), 10000);
       return wd(method, path, body, true);
     }
     throw new Error(`${method} ${path}: ${JSON.stringify(json.value)}`);
@@ -653,8 +654,9 @@ async function automations(s, config) {
 // folder's MEMORY.md, then search for it the way chat recall would.
 async function memory(s, workspace) {
   await tab(s, "Personal");
-  await waitFor("the personal page", () => find(s, ".memory-files > summary"));
-  await click(s, ".memory-files > summary");
+  // Tabs + Reflect/Restore sit above the notes <details>; summary is nested.
+  await waitFor("the personal page", () => find(s, ".memory-files summary"));
+  await click(s, ".memory-files summary");
   const input = await waitFor("the notes files", () => find(s, "input[aria-label='New note']"));
   await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
   await click(s, ".memory-files form.add button[type='submit']");
@@ -807,12 +809,19 @@ async function pulse(s, config) {
   });
   await wd("POST", `${s}/element/${close[ELEMENT]}/click`, {});
 
-  // No menu: Dismiss, last in the row, takes the post away.
+  // No menu: Dismiss, last in the row, asks first then takes the post away.
   const dismiss = await wd("POST", `${s}/element`, {
     using: "xpath",
     value: `${post}//div[contains(@class,'card-row')]/button[last()][normalize-space()='Dismiss']`,
   });
   await wd("POST", `${s}/element/${dismiss[ELEMENT]}/click`, {});
+  const dismissConfirm = await waitFor("dismiss confirm", () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `${post}//div[@role='group' and @aria-label='Dismiss this post?']//button[normalize-space()='Dismiss']`,
+    }).catch(() => null),
+  );
+  await wd("POST", `${s}/element/${dismissConfirm[ELEMENT]}/click`, {});
   await waitFor("the dismissed post", async () => {
     const left = await wd("POST", `${s}/elements`, { using: "xpath", value: post });
     return left.length === 0;
@@ -854,7 +863,7 @@ async function pulse(s, config) {
   }
   await shot(s, "pulse-ideas");
   await wd("POST", `${s}/element/${rowButtons[0][ELEMENT]}/click`, {});
-  await waitFor("More like this kept", async () => {
+  await waitFor("Like kept for the next run", async () => {
     try {
       const state = JSON.parse(readFileSync(join(config, "pulse-ideas.json"), "utf8"));
       return state.moreLike?.[0] === PULSE_IDEA.title ? true : null;
@@ -864,7 +873,7 @@ async function pulse(s, config) {
   });
   console.log(`idea row: ${labels.join(", ")}; Like kept for the next run`);
 
-  // The rows stay disabled until More like this has returned, and the kept
+  // The rows stay disabled until Like has returned, and the kept
   // file is written before it does, so a click right away can land on a
   // disabled row and do nothing.
   const run = await waitFor("the idea row, enabled", async () => {

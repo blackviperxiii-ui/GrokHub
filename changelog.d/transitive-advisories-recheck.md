@@ -1,0 +1,1 @@
+- Supply chain: the accepted-risk notes in `deny.toml` for the remaining transitive advisories (paste via egui_dock, the zbus 5 helpers, glib 0.18 and proc-macro-error via Tauri's Linux stack) record which upstream releases still block each one and why the glib entry shows as not detected. No dependency or behaviour change.

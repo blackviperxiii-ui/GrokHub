@@ -405,7 +405,7 @@ fn only_a_bare_key_with_nothing_over_the_chat_answers_the_card() {
         let _ = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
             let ctx = ui.ctx().clone();
             if let Some(id) = area {
-                egui::Area::new(egui::Id::new(id))
+                egui::Area::new(egui::Id::unique(id))
                     .order(egui::Order::Foreground)
                     .show(&ctx, |ui| ui.label("menu"));
             }
