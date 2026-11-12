@@ -76,6 +76,7 @@ const loaders = {
   home: () => import("./Home").then((m) => ({ default: m.Home })),
   library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
+  mods: () => import("./Mods").then((m) => ({ default: m.Mods })),
   objectives: () => import("./Objectives").then((m) => ({ default: m.Objectives })),
   skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
@@ -93,6 +94,7 @@ const Code = lazy(loaders.code);
 const CommandBox = lazy(loaders.command);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
+const Mods = lazy(loaders.mods);
 const Objectives = lazy(loaders.objectives);
 const Pulse = lazy(loaders.pulse);
 const Skills = lazy(loaders.skills);
@@ -456,6 +458,13 @@ export function App() {
     setView("chat");
   }
 
+  /** Queue → Run: Chat opens in the job's chat and sends its prompt as a
+   * normal turn (the cabin's `start_queued_job`). */
+  function runQueued(prompt: string, threadId: string) {
+    setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true, ...(threadId ? { conversationId: threadId } : {}) }));
+    setView("chat");
+  }
+
   /** Text for the chat box; with `conversationId`, in that chat (a Pulse card's own). */
   function ask(text: string, conversationId?: string) {
     setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, ...(conversationId ? { conversationId } : {}) }));
@@ -787,6 +796,11 @@ export function App() {
           <Library />
         </Page>
       )}
+      {opened.has("mods") && caps.mods && !caps.remote && (
+        <Page shown={view === "mods"}>
+          <Mods />
+        </Page>
+      )}
       {opened.has("settings") && (
         <Page shown={view === "settings"}>
           <Settings
@@ -809,7 +823,11 @@ export function App() {
       )}
       {opened.has("agents") && (
         <Page shown={view === "agents"}>
-          <Agents conversationId={openChat} onOpenChat={() => setView("chat")} />
+          <Agents
+            conversationId={openChat}
+            onOpenChat={() => setView("chat")}
+            onRun={(prompt, threadId) => runQueued(prompt, threadId)}
+          />
         </Page>
       )}
     </div>

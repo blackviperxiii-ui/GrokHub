@@ -164,4 +164,39 @@ describe("Agents", () => {
     expect(await screen.findByText("Write the page")).toBeInTheDocument();
     expect(api.getQueue).toHaveBeenCalledTimes(1);
   });
+
+  it("a queued job shows with Run, and Run sends its prompt in its chat and shows it running", async () => {
+    const withJobs = {
+      tasks: [],
+      todos: [],
+      jobs: [{ title: "Summarize the logs", status: "queued", prompt: "Summarize today's build logs", threadId: "shell-t7" }],
+    } as Queue;
+    api.getQueue.mockResolvedValue(withJobs);
+    const onRun = vi.fn<(prompt: string, threadId: string) => void>();
+    render(<Agents conversationId="shell-c1" onOpenChat={() => {}} onRun={onRun} />);
+    const row = await screen.findByRole("listitem", { name: "Summarize the logs" });
+    expect(within(row).getByText("queued")).toBeInTheDocument();
+    expect(screen.queryByText(AGENTS_EMPTY)).toBeNull();
+    await userEvent.click(within(row).getByRole("button", { name: "Run" }));
+    expect(onRun).toHaveBeenCalledTimes(1);
+    expect(onRun).toHaveBeenCalledWith("Summarize today's build logs", "shell-t7");
+    expect(within(row).getByText("running")).toBeInTheDocument();
+  });
+
+  it("an empty queue (as in practice) shows no Queued list, and the Code panel never shows jobs", async () => {
+    api.getQueue.mockResolvedValue({ tasks: [], todos: [], jobs: [] } as Queue);
+    const { unmount } = render(<Agents conversationId="shell-c1" onOpenChat={() => {}} onRun={() => {}} />);
+    expect(await screen.findByText(AGENTS_EMPTY)).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Queued" })).toBeNull();
+    unmount();
+
+    api.getQueue.mockResolvedValue({
+      tasks: [],
+      todos: [],
+      jobs: [{ title: "Summarize the logs", status: "queued", prompt: "p", threadId: "" }],
+    } as Queue);
+    render(<Agents conversationId="shell-c1" />);
+    expect(await screen.findByText(TASKS_EMPTY)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
+  });
 });

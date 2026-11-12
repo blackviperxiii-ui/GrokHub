@@ -32,6 +32,7 @@ pub mod mcp;
 mod memory;
 mod memory_embed;
 mod models;
+pub mod mods_net;
 pub mod onboard;
 mod pace;
 pub mod package_age;

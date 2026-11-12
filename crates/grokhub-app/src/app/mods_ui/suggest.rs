@@ -9,8 +9,9 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 use eframe::egui;
+use grokhub_core::mods::rail::{pool_source as source_of, POOLS};
 use grokhub_core::mods::suggest::{self, Candidate, Have, Play, Prefs, Suggestion};
-use grokhub_core::mods::{Browse, Query, Source};
+use grokhub_core::mods::{Query, Source};
 
 use super::{discover, install, jobs, ModGame, ModsView, Rail, Tab};
 
@@ -54,28 +55,13 @@ fn change(f: impl FnOnce(&mut Prefs)) {
 }
 
 pub(super) fn plays(rail: &Rail) -> Vec<Play> {
-    rail.games
-        .iter()
-        .map(|g| Play {
-            game: g.entry.id.to_string(),
-            playtime_min: g.playtime_min,
-            last_played: g.last_played,
-            added: discover::added(g.entry.id),
-        })
-        .collect()
+    grokhub_core::mods::rail::plays(rail, discover::added)
 }
 
 /// Rank again on the next frame (discovery found something).
 pub(super) fn forget_ranking() {
     state().ranked = None;
 }
-
-/// The source a game's pool comes from: its preferred one.
-fn source_of(g: &ModGame) -> Option<Source> {
-    g.entry.sources.first().copied()
-}
-
-const POOLS: [(Browse, bool); 2] = [(Browse::Popular, false), (Browse::Trending, true)];
 
 /// Fetch the due games' pools on a thread, then mark them fetched.
 fn refresh(ctx: &egui::Context, rail: &Rail, due: Vec<String>) {
@@ -114,42 +100,23 @@ fn refresh(ctx: &egui::Context, rail: &Rail, due: Vec<String>) {
     }
 }
 
-/// What the user has for a game: Loadout's installs, Workshop items, WoW
-/// addons, and what the drawer showed those installs need.
+/// What the user has for a game, plus what the drawer showed its installs
+/// need.
 fn have(game: &ModGame, pool: &[Candidate]) -> Have {
-    let mut h = Have::default();
-    for m in install::installed_now(game.entry.id) {
+    let installs = install::installed_now(game.entry.id);
+    let mut needed = HashSet::new();
+    for m in &installs {
         if let Some((src, id)) = m.mod_key.split_once(':') {
             if let Some(source) = Source::from_id(src) {
                 for f in jobs::files_seen(game.entry.id, source, id) {
-                    h.needed
-                        .extend(f.deps.iter().map(|d| d.trim().to_lowercase()));
+                    needed.extend(f.deps.iter().map(|d| d.trim().to_lowercase()));
                 }
             }
         }
-        h.names.insert(m.name.to_lowercase());
-        h.keys.insert(m.mod_key);
     }
-    if let (Some(root), Some(app_id)) =
-        (grokhub_core::steam::detect_root(), game.entry.steam_app_id)
-    {
-        for item in grokhub_core::steam::workshop_items(&root, app_id) {
-            h.keys
-                .insert(suggest::key(Source::Workshop, &item.id.to_string()));
-        }
-    }
-    for row in super::installed_mods(game, None) {
-        h.names.insert(row.name.to_lowercase());
-    }
-    for c in pool.iter().filter(|c| c.game == game.entry.id) {
-        if h.keys.contains(&suggest::key(c.source, &c.m.id))
-            || h.names.contains(&c.m.name.to_lowercase())
-        {
-            for cat in &c.m.categories {
-                *h.categories.entry(cat.to_lowercase()).or_default() += 1;
-            }
-        }
-    }
+    let root = grokhub_core::steam::detect_root();
+    let mut h = grokhub_core::mods::rail::have(game, installs, root.as_deref(), pool);
+    h.needed.extend(needed);
     h
 }
 
@@ -181,51 +148,16 @@ pub(super) fn suggestions(
             return out.clone();
         }
     }
-    let games: Vec<String> = suggest::games(&plays, &p, now)
-        .into_iter()
-        .map(|(g, _)| g)
-        .collect();
-    // Discovery's finds first, so a mod keeps when it was found.
-    let mut pool: Vec<Candidate> = discover::finds_for(&games)
-        .into_iter()
-        .map(|(game, f)| Candidate {
-            game,
-            source: f.source(),
-            trending: f.trending,
-            found: f.first_seen,
-            m: f.m,
-        })
-        .collect();
-    for game in games {
-        let Some(g) = rail.games.iter().find(|x| x.entry.id == game) else {
-            continue;
-        };
-        let Some(source) = source_of(g) else {
-            continue;
-        };
-        for (browse, trending) in POOLS {
-            if let Some(page) = jobs::cached_page(g.entry.id, source, &Query::browse(browse)) {
-                pool.extend(page.mods.into_iter().map(|m| Candidate {
-                    game: game.clone(),
-                    source,
-                    m,
-                    trending,
-                    found: 0,
-                }));
-            }
-        }
-    }
-    let mut have_all = Have::default();
-    for g in &rail.games {
-        let h = have(g, &pool);
-        have_all.keys.extend(h.keys);
-        have_all.names.extend(h.names);
-        have_all.needed.extend(h.needed);
-        for (k, v) in h.categories {
-            *have_all.categories.entry(k).or_default() += v;
-        }
-    }
-    let out = suggest::pick(&suggest::rank(&pool, &plays, &have_all, &p, adult_ok, now));
+    let out = grokhub_core::mods::rail::for_you(
+        rail,
+        &plays,
+        &p,
+        discover::finds_for,
+        jobs::cached_page,
+        have,
+        adult_ok,
+        now,
+    );
     state().ranked = Some((stamp, now_ms, out.clone()));
     out
 }

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use eframe::egui;
-use grokhub_core::mods::{Keys, ModClient, ModDetail, ModFile, Page, Query, Source, SourceError};
+use grokhub_core::mods::{ModClient, ModDetail, ModFile, Page, Query, Source, SourceError};
 
 /// One lookup: the last value, whether it is still being asked, and the
 /// line to show when it failed.
@@ -45,32 +45,18 @@ fn jobs() -> std::sync::MutexGuard<'static, Jobs> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// The CurseForge key Loadout ships with, when the build has one.
-fn shipped_curseforge_key() -> Option<String> {
-    option_env!("CURSEFORGE_API_KEY")
-        .map(str::trim)
-        .filter(|k| !k.is_empty())
-        .map(str::to_owned)
-}
-
-/// The keys the sources may use: the user's sealed Nexus and Steam keys and
-/// the shipped CurseForge key.
-fn read_keys() -> Keys {
-    let dir = crate::config::config_dir();
-    Keys {
-        nexus: grokhub_agent::harness::open_mod_key(&dir, Source::Nexus.id()),
-        steam: grokhub_agent::harness::open_mod_key(&dir, Source::Workshop.id()),
-        curseforge: shipped_curseforge_key(),
-    }
+/// The dialer for the mod sources; a test build never dials.
+pub(super) fn mods_net() -> grokhub_agent::mods_net::ModsNet {
+    grokhub_agent::mods_net::ModsNet::new(crate::config::config_dir(), !cfg!(test))
 }
 
 fn client(j: &mut Jobs) -> Arc<ModClient> {
     j.client
         .get_or_insert_with(|| {
             Arc::new(ModClient::new(
-                Box::new(crate::mods_fetch::ModsNet),
+                Box::new(mods_net()),
                 &crate::config::config_dir(),
-                read_keys(),
+                grokhub_agent::mods_net::mod_keys(&crate::config::config_dir()),
             ))
         })
         .clone()

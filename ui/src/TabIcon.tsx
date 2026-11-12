@@ -22,6 +22,7 @@ const PATHS: Record<View, string> = {
   workboard: "M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z",
   updates: "M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14",
   library: "M6 7h12a4 4 0 0 1 4 4v2a3 3 0 0 1-5.4 1.8L15 13H9l-1.6 1.8A3 3 0 0 1 2 13v-2a4 4 0 0 1 4-4zM7 10v3M5.5 11.5h3M15.5 11h0M18 12h0",
+  mods: "M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z",
 };
 
 export function TabIcon({ view }: { view: View }) {

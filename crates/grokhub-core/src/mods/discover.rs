@@ -389,6 +389,86 @@ pub fn sweep_due(store: &Store, games: &[GameRef], now: u64) -> bool {
                 .any(|g| !g.sources.is_empty() && !store.seen.contains_key(&g.id)))
 }
 
+/// One page of a game's new finds on one source, as a results page.
+pub fn finds_page(finds: &[Find], source: Source, page: u32) -> Page {
+    let per = super::source::PAGE_SIZE as usize;
+    let mine: Vec<ModSummary> = finds
+        .iter()
+        .filter(|f| f.source() == source)
+        .map(|f| f.m.clone())
+        .collect();
+    Page {
+        total: Some(mine.len() as u64),
+        mods: mine
+            .into_iter()
+            .skip(page as usize * per)
+            .take(per)
+            .collect(),
+    }
+}
+
+/// One quiet line under the Mods title: what discovery is doing. `store` is
+/// `None` before it has loaded.
+pub fn status_line(store: Option<&Store>, offline: bool, running: bool, now: u64) -> String {
+    if offline {
+        return "Discovery waits while Offline only is on.".into();
+    }
+    if running {
+        return "Looking for new mods…".into();
+    }
+    let Some(store) = store else {
+        return String::new();
+    };
+    let fresh = store
+        .finds
+        .values()
+        .flatten()
+        .filter(|f| f.is_new(now))
+        .count();
+    summary_line(store.seen.len(), fresh)
+}
+
+fn summary_line(games: usize, fresh: usize) -> String {
+    let plural = |n: usize, one: &'static str, many: &'static str| if n == 1 { one } else { many };
+    match (games, fresh) {
+        (0, _) => "Loadout looks up mods for your games on its own.".into(),
+        (g, 0) => format!("Watching {g} {} for new mods.", plural(g, "game", "games")),
+        (g, f) => format!(
+            "{f} new {} across {g} {} in the last two weeks.",
+            plural(f, "find", "finds"),
+            plural(g, "game", "games")
+        ),
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[test]
+    fn the_status_line_reads_plainly() {
+        assert_eq!(
+            summary_line(0, 0),
+            "Loadout looks up mods for your games on its own."
+        );
+        assert_eq!(summary_line(1, 0), "Watching 1 game for new mods.");
+        assert_eq!(
+            summary_line(4, 1),
+            "1 new find across 4 games in the last two weeks."
+        );
+        assert_eq!(
+            summary_line(1, 37),
+            "37 new finds across 1 game in the last two weeks."
+        );
+        assert_eq!(
+            status_line(None, true, true, 0),
+            "Discovery waits while Offline only is on."
+        );
+        assert_eq!(status_line(None, false, true, 0), "Looking for new mods…");
+        assert_eq!(status_line(None, false, false, 0), "");
+    }
+}
+
 #[cfg(test)]
 #[path = "discover_tests.rs"]
 mod tests;

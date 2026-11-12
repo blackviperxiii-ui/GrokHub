@@ -64,6 +64,7 @@ mod md_fixtures;
 pub mod memory;
 mod mission;
 pub mod model_library;
+pub mod mods;
 #[cfg(desktop)]
 mod net_watch;
 mod nudges;
@@ -3406,6 +3407,190 @@ async fn library_steam_settings() -> Result<(), String> {
     off_main(move || library::open_settings(grokhub_core::steam::detect_root().as_deref())).await?
 }
 
+/// The Mods rail. Starts a discovery sweep and For you's due fetches in the
+/// background when they are due and Offline only is off.
+#[tauri::command]
+async fn mods_games(state: State<'_, ShellState>) -> Result<mods::GamesView, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    let adult_ok = current(&state).adults_on();
+    off_main(move || {
+        let now_ms = grokhub_core::now_ms();
+        let rail = mods::rail_now(now_ms);
+        let offline = grokhub_core::offline::enabled();
+        if !offline {
+            let client = mods::client(&dir);
+            mods::sweep_if_due(dir.clone(), client.clone(), &rail, now_ms);
+            mods::refresh_pools(dir.clone(), client, &rail, now_ms);
+        }
+        let store = grokhub_core::mods::discover::Store::load(&dir);
+        let prefs = grokhub_core::mods::suggest::Prefs::load(&dir);
+        mods::games_view(
+            &rail,
+            &store,
+            &prefs,
+            adult_ok,
+            offline,
+            mods::sweeping(),
+            now_ms / 1000,
+        )
+    })
+    .await
+}
+
+/// One page of a game's Popular, Trending or Updated list on one source.
+#[tauri::command]
+async fn mods_browse(
+    state: State<'_, ShellState>,
+    game: String,
+    source: String,
+    list: String,
+    page: u32,
+) -> Result<mods::PageView, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    let adult_ok = current(&state).adults_on();
+    off_main(move || {
+        let now_ms = grokhub_core::now_ms();
+        let (_, src) = mods::game_source(&mods::rail_now(now_ms), &game, &source)?;
+        let mut q = grokhub_core::mods::Query::browse(mods::browse_of(&list)?);
+        q.page = page;
+        let offline = grokhub_core::offline::enabled();
+        Ok(mods::search(
+            &mods::client(&dir),
+            &game,
+            src,
+            &q,
+            adult_ok,
+            offline,
+            now_ms,
+        ))
+    })
+    .await?
+}
+
+/// One page of a search for one game on one source.
+#[tauri::command]
+async fn mods_search(
+    state: State<'_, ShellState>,
+    game: String,
+    source: String,
+    text: String,
+    page: u32,
+) -> Result<mods::PageView, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    let adult_ok = current(&state).adults_on();
+    off_main(move || {
+        let now_ms = grokhub_core::now_ms();
+        let (_, src) = mods::game_source(&mods::rail_now(now_ms), &game, &source)?;
+        let mut q = grokhub_core::mods::Query::search(text.trim());
+        q.page = page;
+        let offline = grokhub_core::offline::enabled();
+        Ok(mods::search(
+            &mods::client(&dir),
+            &game,
+            src,
+            &q,
+            adult_ok,
+            offline,
+            now_ms,
+        ))
+    })
+    .await?
+}
+
+/// One page of a game's New finds; opening it marks them seen.
+#[tauri::command]
+async fn mods_new_finds(
+    state: State<'_, ShellState>,
+    game: String,
+    source: String,
+    page: u32,
+) -> Result<mods::PageView, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    let adult_ok = current(&state).adults_on();
+    off_main(move || {
+        let now_ms = grokhub_core::now_ms();
+        let (_, src) = mods::game_source(&mods::rail_now(now_ms), &game, &source)?;
+        Ok(mods::new_finds(
+            &dir,
+            &game,
+            src,
+            page,
+            adult_ok,
+            now_ms / 1000,
+        ))
+    })
+    .await?
+}
+
+/// The For you cards.
+#[tauri::command]
+async fn mods_for_you(state: State<'_, ShellState>) -> Result<Vec<mods::ForYouRow>, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    let adult_ok = current(&state).adults_on();
+    off_main(move || {
+        let now_ms = grokhub_core::now_ms();
+        let rail = mods::rail_now(now_ms);
+        let root = grokhub_core::steam::detect_root();
+        let client = mods::client(&dir);
+        let picked = mods::for_you(
+            &dir,
+            &client,
+            &rail,
+            adult_ok,
+            root.as_deref(),
+            now_ms / 1000,
+        );
+        mods::for_you_rows(&rail, &picked)
+    })
+    .await
+}
+
+/// "Not for me" on a For you card: that mod never shows there again.
+#[tauri::command]
+async fn mods_not_for_me(
+    state: State<'_, ShellState>,
+    source: String,
+    id: String,
+) -> Result<(), String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let src = grokhub_core::mods::Source::from_id(&source)
+            .ok_or_else(|| format!("No source {source}."))?;
+        mods::change_prefs(&dir, |p| {
+            p.not_interested
+                .insert(grokhub_core::mods::suggest::key(src, &id));
+        })
+    })
+    .await?
+}
+
+/// Hide or show For you's suggestions for one game.
+#[tauri::command]
+async fn mods_hide_game(
+    state: State<'_, ShellState>,
+    game: String,
+    hidden: bool,
+) -> Result<(), String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        mods::change_prefs(&dir, |p| {
+            if hidden {
+                p.hidden_games.insert(game);
+            } else {
+                p.hidden_games.remove(&game);
+            }
+        })
+    })
+    .await?
+}
+
 /// Home's Clips tile: play the clip at this place in its list.
 #[tauri::command]
 async fn home_open_clip(index: usize) -> Result<(), String> {
@@ -5487,6 +5672,13 @@ pub fn run() {
             home_open_clip,
             library_friends,
             library_steam_settings,
+            mods_games,
+            mods_browse,
+            mods_search,
+            mods_new_finds,
+            mods_for_you,
+            mods_not_for_me,
+            mods_hide_game,
             home_turn_on,
             home_setup,
             home_setup_steps,

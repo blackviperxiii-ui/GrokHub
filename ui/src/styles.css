@@ -5502,3 +5502,140 @@ fieldset.channel label {
     padding-top: var(--space-8);
   }
 }
+
+/* Mods: the moddable games rail beside the picked game's lists. */
+.mods {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.mods-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.mods-rail {
+  overflow-y: auto;
+}
+
+.mods-rail ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mods-rail button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+}
+
+.mods-badge {
+  font-size: var(--font-caption);
+  opacity: 0.8;
+}
+
+.mods-cant {
+  margin-top: 12px;
+}
+
+.mods-cant li {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 8px;
+}
+
+.mods-main {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mods-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mods-head input {
+  flex: 0 1 260px;
+  min-width: 0;
+}
+
+.mods-foryou ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.mods-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mods-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.mods-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.mods-icon.placeholder {
+  background: var(--border);
+}
+
+.mods-row-body h3 {
+  margin: 0;
+}
+
+.mods-summary {
+  margin: 4px 0;
+}
+
+.mods-row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mods-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .mods-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
