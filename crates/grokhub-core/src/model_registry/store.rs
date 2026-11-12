@@ -97,6 +97,9 @@ pub fn append_line<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
 
 /// The saved registry, or an empty one (a bad file is never fatal).
 pub fn load_registry(config_dir: &Path) -> Registry {
+    // The user's profile overrides ride with the registry: every refresh
+    // that follows a load fills from them.
+    super::builtin::install_overrides(config_dir);
     read_json(&registry_path(config_dir)).unwrap_or_default()
 }
 

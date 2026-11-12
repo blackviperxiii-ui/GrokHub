@@ -315,7 +315,7 @@ impl DataPolicy {
 
 /// The model card: everything the router knows about a model beyond its
 /// listing — its route, what it is good at, what it is for, and the
-/// priors the bundled table ([`super::card`]) ships for it. Listings
+/// priors the built-in profiles ([`super::builtin`]) ship for it. Listings
 /// never send this; refresh fills the unknown fields from the table and
 /// live measurement replaces priors as it accrues.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -345,6 +345,12 @@ pub struct ModelCard {
     /// Measured (or prior) time to first token, milliseconds.
     #[serde(default)]
     pub ttft_ms: Option<u64>,
+    /// Published intelligence index (0-100) from the built-in profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intelligence: Option<u8>,
+    /// The profile's tier: `frontier`, `flagship`, `workhorse`, `fast`, `paid`, `free`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
 }
 
 impl ModelCard {
@@ -358,6 +364,8 @@ impl ModelCard {
             && !self.probation
             && self.speed_tps.is_none()
             && self.ttft_ms.is_none()
+            && self.intelligence.is_none()
+            && self.tier.is_none()
     }
 
     /// Fill each unknown field from `other` (a bundled prior). Known
@@ -386,6 +394,12 @@ impl ModelCard {
         }
         if self.ttft_ms.is_none() {
             self.ttft_ms = other.ttft_ms;
+        }
+        if self.intelligence.is_none() {
+            self.intelligence = other.intelligence;
+        }
+        if self.tier.is_none() {
+            self.tier.clone_from(&other.tier);
         }
     }
 }

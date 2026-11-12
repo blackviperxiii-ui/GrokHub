@@ -1,0 +1,54 @@
+name: model-profiles
+# Weekly: compare the built-in model profiles (crates/grokhub-core/data/
+# model_profiles.toml) with OpenRouter's public model list and open a PR to
+# beta with the updated facts and any new free models. No secrets needed.
+# Schedules fire from the default branch, so the job checks out beta itself.
+on:
+  schedule:
+    - cron: "23 13 * * 1"
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: model-profiles
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: beta
+          sparse-checkout: |
+            .github/scripts
+            crates/grokhub-core/data
+            crates/grokhub-core/tests/fixtures
+      - name: Updater self-test
+        run: python3 .github/scripts/test_model_profiles.py
+      - name: Pull OpenRouter's list and update the profiles
+        run: python3 .github/scripts/model_profiles.py write
+      - name: Open a PR to beta when anything changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- crates/grokhub-core/data/model_profiles.toml; then
+            echo "No profile changes."; exit 0
+          fi
+          branch="bot/model-profiles-$(date -u +%Y%m%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add crates/grokhub-core/data/model_profiles.toml
+          git commit -m "Model profiles: weekly refresh from OpenRouter's model list"
+          git push -u origin "$branch"
+          python3 .github/scripts/model_profiles.py check > drift.md || true
+          gh pr create --base beta --head "$branch" \
+            --title "Model profiles: weekly refresh $(date -u +%Y-%m-%d)" \
+            --body-file drift.md
+          # A PR opened with the workflow token starts no CI by itself.
+          gh workflow run ci.yml --ref "$branch"
