@@ -1,0 +1,1 @@
+- Settings → Behavior: Quiet self-review, the self-improvement history with Revert, runs by area, and saved ideas with Copy as GitHub issue, read from the same files as the cabin.

@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
 import { getBehavior, saveBehavior, type Behavior as Shape, type BehaviorPage } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { SelfImprove } from "./SelfImprove";
 import { Toggle } from "./Toggle";
 
 export const AUTOCOMPLETE_NOTE =
@@ -160,6 +161,7 @@ export function Behavior({
         </>
       )}
       <p className="note">{SCHEDULE_NOTE}</p>
+      <SelfImprove />
       {note && (
         <p className="note" role="status">
           {note}

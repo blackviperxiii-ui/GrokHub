@@ -94,6 +94,7 @@ pub mod remote_tls;
 pub mod scheduler;
 pub mod screen_record;
 pub mod screenshot_offer;
+pub mod self_improve;
 pub mod settings;
 pub mod shell_update;
 pub mod skills;
@@ -5562,6 +5563,10 @@ pub fn run() {
             mods_for_you,
             mods_not_for_me,
             mods_hide_game,
+            self_improve::get_self_improve,
+            self_improve::set_self_improve_quiet,
+            self_improve::self_improve_revert,
+            self_improve::self_improve_issue,
             home_turn_on,
             home_setup,
             home_setup_steps,
