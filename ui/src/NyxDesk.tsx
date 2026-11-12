@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { COMPANION_NAME } from "./brand";
 import {
   desktopNyxDock,
@@ -31,13 +31,10 @@ export function NyxDesk() {
   const settle = useRef<number | null>(null);
   const dragging = useRef(false);
 
-  const refresh = useCallback(() => {
+  // Mount load only. Inlined like Memory / NyxDock (no refresh wrapper).
+  useEffect(() => {
     void desktopNyxGet().then(setState, () => setState(null));
   }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
 
   useEffect(() => {
     function onDoc() {
