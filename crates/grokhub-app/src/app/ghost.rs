@@ -327,10 +327,7 @@ pub(super) fn should_request(composer: &str, slash_open: bool, turn_running: boo
         return false;
     }
     let t = composer.trim();
-    if t.is_empty() || t.starts_with('/') || t.len() < MIN_DRAFT_CHARS {
-        return false;
-    }
-    true
+    !(t.is_empty() || t.starts_with('/') || t.len() < MIN_DRAFT_CHARS)
 }
 
 fn cursor_at_end(composer: &str, cursor_index: usize) -> bool {
