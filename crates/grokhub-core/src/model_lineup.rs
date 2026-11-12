@@ -83,7 +83,9 @@ impl Lineup {
 }
 
 /// Rough tok/s for `m` on `p` with the whole GPU free, the way hot-swap
-/// estimates it (`local_scale::est_tok_s`).
+/// estimates it (`local_scale::est_tok_s`). A model that fits the GPU starts
+/// from its profile's estimate for this GPU's tier, so the lineup is tuned to
+/// the card before any speed test runs.
 pub fn est_tok_s(p: &Profile, m: &LocalModel) -> u32 {
     let (mem, vram) = p.budget();
     match mem {
@@ -91,7 +93,8 @@ pub fn est_tok_s(p: &Profile, m: &LocalModel) -> u32 {
         Memory::System => m.tok_s.cpu,
         Memory::Gpu => {
             if m.run_mb <= vram {
-                return m.tok_s.gpu;
+                let tier = crate::autotune::Tier::of_vram(&p.gpus_vram_mb);
+                return m.profile.tok_s_tier.for_tier(tier).unwrap_or(m.tok_s.gpu);
             }
             if m.badges.contains(&"moe") && vram * 3 >= m.run_mb {
                 return m.tok_s.gpu * 2 / 3;
