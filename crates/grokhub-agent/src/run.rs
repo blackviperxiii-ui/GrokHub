@@ -1400,6 +1400,15 @@ fn run_turn(
                 input.workspace,
                 input.perms,
             );
+            // A Code tab session's own guard (its push guard) after the gate.
+            let base = crate::code_guard::apply(
+                input.conversation_id,
+                &call.name,
+                &call.arguments,
+                input.workspace,
+                input.perms,
+                base,
+            );
             let base_kind = safety_events::Kind::of(&base);
             let reviewed = crate::auto_review::review(&crate::auto_review::ReviewIn {
                 client: input.client,
@@ -2275,6 +2284,14 @@ fn run_readonly_tool_batch(
             desk,
             input.workspace,
             input.perms,
+        );
+        let base = crate::code_guard::apply(
+            input.conversation_id,
+            &call.name,
+            &call.arguments,
+            input.workspace,
+            input.perms,
+            base,
         );
         let reviewed = crate::auto_review::review(&crate::auto_review::ReviewIn {
             client: input.client,

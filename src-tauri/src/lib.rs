@@ -19,6 +19,7 @@ mod brand_guard;
 pub mod capabilities;
 pub mod changes;
 pub mod chips;
+mod code_agent;
 mod code_sessions;
 pub mod command_box;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
@@ -685,6 +686,9 @@ async fn chat_turn(
     let config_dir = state.config_dir.clone();
     // A Code tab session works in its own project's folder, not the app's.
     let own_folder = state.code_sessions.of(&conversation_id);
+    // Its agent pushes through the Code tab's push guard and codes with the
+    // bundled skills always on.
+    code_agent::bind(&state.config_dir, &conversation_id, own_folder.is_some());
     if capabilities::current().pulse {
         // What the person says in chat steers the Feed writer's taste note.
         pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
@@ -1160,6 +1164,7 @@ fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
 fn end_chat(state: &ShellState, conversation_id: &str) {
     drop_worker(state, conversation_id);
     state.code_sessions.forget(conversation_id);
+    code_agent::bind(&state.config_dir, conversation_id, false);
     if current(state).last_chat == conversation_id {
         set_last_chat(state, "");
     }
