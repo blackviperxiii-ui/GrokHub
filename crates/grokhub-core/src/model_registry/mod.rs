@@ -3,6 +3,7 @@
 //! traffic moves health ([`health`]); nothing here touches the network.
 //! Stored at `{config}/models/registry.json`.
 
+pub mod builtin;
 pub mod card;
 pub mod cost_class;
 pub mod discover;

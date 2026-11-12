@@ -1,0 +1,862 @@
+# Built-in model profiles: what Loadout's router knows about each cloud
+# model before it has measured anything. Prices are USD cents per 100M
+# tokens ($1 per 1M = 10_000). See docs/model-profiles.md. The weekly
+# updater (.github/scripts/model_profiles.py) rewrites this file in this
+# exact form, so keep notes in `note`, not in comments.
+
+schema = 1
+updated = "2026-11-12"
+
+[[model]]
+key = "grok-4.7"
+name = "Grok 4.7"
+provider = "xai"
+mirror = "x-ai/grok-4.7"
+tier = "flagship"
+intelligence = 35
+roles = ["long", "agentic", "failover_first"]
+caps = { chat = 95, code = 95, tools = 95, reasoning = 95, long_context = 90, vision = 90 }
+lane = { reasoning = 96, code = 80, long_context = 85, tools = 90 }
+prompt = 20_000
+cached = 5_000
+completion = 60_000
+prompt_long = 40_000
+completion_long = 120_000
+long_threshold = 200_000
+context = 500_000
+input = ["text", "image"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+efforts = ["low", "medium", "high", "xhigh"]
+default_effort = "high"
+cutoff = "2026-05"
+source = "docs.x.ai (models, pricing) + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps", "lane"]
+note = "Caps are the router's tuned priors; the intelligence index ranks it mid-pack, so live scores decide."
+
+[[model]]
+key = "grok-4.6"
+name = "Grok 4.6"
+provider = "xai"
+mirror = "x-ai/grok-4.6"
+tier = "flagship"
+lane = { reasoning = 90, code = 86 }
+prompt = 20_000
+cached = 5_000
+completion = 60_000
+prompt_long = 40_000
+completion_long = 120_000
+long_threshold = 200_000
+context = 500_000
+input = ["text", "image"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+efforts = ["low", "medium", "high", "xhigh"]
+default_effort = "high"
+cutoff = "2026-05"
+source = "docs.x.ai (models, pricing)"
+verified = "2026-11-12"
+estimate = ["lane"]
+note = "No card caps yet: the router learns it from live calls."
+
+[[model]]
+key = "grok-4.5"
+name = "Grok 4.5"
+provider = "xai"
+mirror = "x-ai/grok-4.5"
+aliases = ["grok-4.5-latest", "grok-build-latest"]
+tier = "flagship"
+roles = ["long", "agentic"]
+caps = { chat = 93, code = 93, tools = 93, reasoning = 93, long_context = 90, vision = 88 }
+lane = { reasoning = 84, code = 82, speed_floor = 55 }
+prompt = 20_000
+cached = 3_000
+completion = 60_000
+prompt_long = 40_000
+completion_long = 120_000
+long_threshold = 200_000
+context = 500_000
+input = ["text", "image"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+efforts = ["low", "medium", "high", "xhigh"]
+default_effort = "high"
+cutoff = "2026-05"
+source = "docs.x.ai (models, pricing)"
+verified = "2026-11-12"
+estimate = ["caps", "lane"]
+
+[[model]]
+key = "grok-4.3"
+name = "Grok 4.3"
+provider = "xai"
+aliases = ["grok-4.3-latest"]
+tier = "workhorse"
+roles = ["long", "long_context", "agentic"]
+caps = { chat = 93, code = 92, tools = 93, reasoning = 92, long_context = 100, vision = 88 }
+lane = { reasoning = 80, code = 99, tools = 95 }
+prompt = 12_500
+cached = 2_000
+completion = 25_000
+prompt_long = 25_000
+completion_long = 50_000
+long_threshold = 200_000
+context = 1_000_000
+input = ["text", "image"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+efforts = ["none", "low", "medium", "high", "xhigh"]
+default_effort = "low"
+source = "docs.x.ai (models, pricing)"
+verified = "2026-11-12"
+estimate = ["caps", "lane"]
+
+[[model]]
+key = "grok-4.20-0309-reasoning"
+name = "Grok 4.20 (reasoning)"
+provider = "xai"
+tier = "workhorse"
+prompt = 12_500
+cached = 2_000
+completion = 25_000
+prompt_long = 25_000
+completion_long = 50_000
+long_threshold = 200_000
+context = 1_000_000
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+source = "docs.x.ai (models, pricing)"
+verified = "2026-11-12"
+note = "Lane numbers come from the 4.20 family rule in capabilities.rs."
+
+[[model]]
+key = "grok-4.20-0309-non-reasoning"
+name = "Grok 4.20 (non-reasoning)"
+provider = "xai"
+tier = "fast"
+prompt = 12_500
+cached = 2_000
+completion = 25_000
+prompt_long = 25_000
+completion_long = 50_000
+long_threshold = 200_000
+context = 1_000_000
+output = ["text"]
+tools = true
+structured = true
+reasoning = false
+source = "docs.x.ai (models, pricing)"
+verified = "2026-11-12"
+
+[[model]]
+key = "grok-4.20-multi-agent-0309"
+name = "Grok 4.20 Multi-Agent"
+provider = "xai"
+tier = "workhorse"
+prompt = 12_500
+cached = 2_000
+completion = 25_000
+prompt_long = 25_000
+completion_long = 50_000
+long_threshold = 200_000
+output = ["text"]
+source = "docs.x.ai (models, pricing)"
+verified = "2026-11-12"
+note = "Price verified; window and tool support not stated in the docs read."
+
+[[model]]
+key = "grok-build-0.1"
+name = "Grok Build 0.1"
+provider = "xai"
+aliases = ["grok-code-fast-1", "grok-code-fast", "grok-code-fast-1-0825"]
+tier = "fast"
+prompt = 10_000
+cached = 2_000
+completion = 20_000
+context = 256_000
+output = ["text"]
+source = "docs.x.ai (models, pricing)"
+verified = "2026-11-12"
+note = "Coding model behind Grok Build; no batch pricing."
+
+[[model]]
+key = "claude-fable-5.2"
+name = "Claude Fable 5.2"
+provider = "anthropic"
+mirror = "anthropic/claude-fable-5.2"
+aliases = ["claude-fable-5-2"]
+tier = "frontier"
+intelligence = 64
+roles = ["escalation", "never_default"]
+caps = { chat = 97, code = 98, tools = 96, reasoning = 99, long_context = 100, vision = 95 }
+prompt = 80_000
+cached = 2_000
+cache_write = 100_000
+completion = 400_000
+context = 1_000_000
+max_output = 128_000
+output = ["text"]
+tools = true
+reasoning = true
+default_effort = "high"
+cutoff = "2026-06"
+source = "platform.claude.com (models, pricing) + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+note = "Adaptive thinking is always on."
+
+[[model]]
+key = "claude-opus-5.5"
+name = "Claude Opus 5.5"
+provider = "anthropic"
+mirror = "anthropic/claude-opus-5.5"
+aliases = ["claude-opus-5-5"]
+tier = "frontier"
+intelligence = 59
+roles = ["hardest", "escalation"]
+caps = { chat = 96, code = 99, tools = 96, reasoning = 99, long_context = 100, vision = 95 }
+prompt = 40_000
+cached = 2_000
+cache_write = 50_000
+completion = 200_000
+context = 1_000_000
+max_output = 128_000
+output = ["text"]
+tools = true
+reasoning = true
+default_effort = "medium"
+cutoff = "2026-06"
+source = "platform.claude.com (models, pricing) + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "claude-sonnet-5.5"
+name = "Claude Sonnet 5.5"
+provider = "anthropic"
+mirror = "anthropic/claude-sonnet-5.5"
+aliases = ["claude-sonnet-5-5"]
+tier = "flagship"
+intelligence = 54
+roles = ["hard_code", "long"]
+caps = { chat = 95, code = 98, tools = 95, reasoning = 95, long_context = 100, vision = 95 }
+prompt = 20_000
+cached = 1_000
+cache_write = 25_000
+completion = 100_000
+context = 1_000_000
+max_output = 128_000
+output = ["text"]
+tools = true
+reasoning = true
+default_effort = "high"
+cutoff = "2026-06"
+source = "platform.claude.com (models, pricing) + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "claude-haiku-5.5"
+name = "Claude Haiku 5.5"
+provider = "anthropic"
+mirror = "anthropic/claude-haiku-5.5"
+aliases = ["claude-haiku-5-5"]
+tier = "fast"
+intelligence = 36
+roles = ["cheap_fast", "tools", "vision"]
+caps = { chat = 85, code = 85, tools = 90, reasoning = 80, long_context = 100, vision = 90 }
+prompt = 1_000
+cached = 100
+cache_write = 1_250
+completion = 5_000
+prompt_long = 5_000
+completion_long = 25_000
+long_threshold = 100_000
+context = 1_000_000
+max_output = 128_000
+output = ["text"]
+tools = true
+reasoning = true
+default_effort = "medium"
+cutoff = "2026-06"
+source = "platform.claude.com (models, pricing) + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+note = "Prompts over 100k tokens bill at 5x."
+
+[[model]]
+key = "claude-fable-5.1"
+name = "Claude Fable 5.1"
+provider = "anthropic"
+mirror = "anthropic/claude-fable-5.1"
+aliases = ["claude-fable-5-1"]
+tier = "frontier"
+roles = ["escalation", "never_default"]
+caps = { chat = 96, code = 97, tools = 95, reasoning = 99, long_context = 100, vision = 95 }
+prompt = 100_000
+cached = 2_500
+cache_write = 125_000
+completion = 500_000
+context = 1_000_000
+max_output = 128_000
+output = ["text"]
+tools = true
+reasoning = true
+source = "platform.claude.com (models, pricing)"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "x-ai/grok-4.7"
+name = "xAI: Grok 4.7"
+provider = "openrouter"
+tier = "paid"
+roles = ["stand_in"]
+caps = { chat = 95, code = 95, tools = 95, reasoning = 95, long_context = 90, vision = 90 }
+prompt = 20_000
+cached = 5_000
+completion = 60_000
+prompt_long = 40_000
+completion_long = 120_000
+long_threshold = 200_000
+context = 500_000
+input = ["text", "image", "file"]
+output = ["text"]
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+estimate = ["caps"]
+note = "A stand-in at direct prices when xAI direct is down."
+
+[[model]]
+key = "deepseek/deepseek-v4.1-flash-1017"
+name = "DeepSeek V4.1 Flash"
+provider = "openrouter"
+tier = "paid"
+intelligence = 32
+roles = ["bulk", "cheap", "long_context"]
+caps = { chat = 75, code = 80, tools = 80, reasoning = 75, long_context = 100 }
+prompt = 1_500
+cached = 30
+completion = 6_000
+context = 1_048_576
+input = ["text", "image"]
+hosts = 40
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps", "hosts"]
+
+[[model]]
+key = "z-ai/glm-5.3-flash"
+name = "Z.ai: GLM 5.3 Flash"
+provider = "openrouter"
+tier = "paid"
+intelligence = 27
+roles = ["cheap_code"]
+caps = { chat = 70, code = 80, tools = 75, reasoning = 70 }
+prompt = 399
+cached = 300
+completion = 784
+input = ["text", "image", "video"]
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "z-ai/glm-5.3"
+name = "Z.ai: GLM 5.3"
+provider = "openrouter"
+tier = "paid"
+intelligence = 31
+caps = { chat = 72, code = 78, tools = 75, reasoning = 72 }
+prompt = 699
+completion = 14_000
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "minimax/minimax-m3.1-flash"
+name = "MiniMax M3.1 Flash"
+provider = "openrouter"
+tier = "paid"
+intelligence = 29
+roles = ["cheap", "ui", "vision"]
+caps = { chat = 70, code = 70, tools = 70, reasoning = 65, vision = 85 }
+prompt = 750
+cached = 75
+completion = 3_000
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "openai/gpt-6-luna"
+name = "OpenAI: GPT-6 Luna"
+provider = "openrouter"
+tier = "paid"
+intelligence = 27
+roles = ["classifier", "cheap"]
+caps = { chat = 60, code = 55, tools = 65, reasoning = 55 }
+prompt = 1_000
+cached = 100
+cache_write = 1_250
+completion = 5_000
+input = ["file", "image", "text"]
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "openai/gpt-6.1-terra"
+name = "OpenAI: GPT-6.1 Terra"
+provider = "openrouter"
+tier = "paid"
+intelligence = 51
+caps = { chat = 88, code = 88, tools = 85, reasoning = 88 }
+prompt = 10_000
+completion = 50_000
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "openai/gpt-6.1-sol"
+name = "OpenAI: GPT-6.1 Sol"
+provider = "openrouter"
+tier = "frontier"
+intelligence = 54
+roles = ["frontier"]
+caps = { chat = 95, code = 95, tools = 90, reasoning = 95, vision = 90 }
+prompt = 20_000
+cached = 1_000
+cache_write = 25_000
+completion = 100_000
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "openai/gpt-6-astra"
+name = "OpenAI: GPT-6 Astra"
+provider = "openrouter"
+tier = "frontier"
+intelligence = 56
+caps = { chat = 93, code = 93, tools = 90, reasoning = 94 }
+prompt = 100_000
+completion = 500_000
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "google/gemini-3.8-flash"
+name = "Google: Gemini 3.8 Flash"
+provider = "openrouter"
+tier = "paid"
+intelligence = 30
+roles = ["code", "agents", "mid_price"]
+caps = { chat = 85, code = 88, tools = 88, reasoning = 85, long_context = 90, vision = 90 }
+prompt = 8_250
+cached = 825
+completion = 41_250
+input = ["audio", "file", "image", "text", "video"]
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "google/gemini-3.5-flash-lite"
+name = "Google: Gemini 3.5 Flash Lite"
+provider = "openrouter"
+tier = "paid"
+intelligence = 11
+roles = ["backup", "low_latency"]
+caps = { chat = 75, code = 75, tools = 75, reasoning = 70, vision = 80 }
+prompt = 3_000
+cached = 300
+completion = 25_000
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "google/gemini-4-argon"
+name = "Google: Gemini 4 Argon"
+provider = "openrouter"
+tier = "frontier"
+intelligence = 50
+roles = ["documents", "vision", "long_context"]
+caps = { chat = 90, code = 85, tools = 85, reasoning = 90, long_context = 100, vision = 97 }
+prompt = 20_000
+cached = 1_000
+cache_write = 1_875
+completion = 100_000
+input = ["audio", "file", "image", "text", "video"]
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "google/gemini-4-carbon"
+name = "Google: Gemini 4 Carbon"
+provider = "openrouter"
+tier = "frontier"
+intelligence = 60
+caps = { chat = 92, code = 90, tools = 88, reasoning = 93, long_context = 100, vision = 97 }
+prompt = 20_000
+cached = 1_000
+cache_write = 1_875
+completion = 100_000
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "moonshotai/kimi-k3.1-pro"
+name = "MoonshotAI: Kimi K3.1 Pro"
+provider = "openrouter"
+tier = "paid"
+intelligence = 46
+roles = ["long_code"]
+caps = { chat = 85, code = 93, tools = 90, reasoning = 90, long_context = 95 }
+prompt = 2_375
+cached = 1_900
+completion = 87_856
+input = ["text", "image", "video"]
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "nvidia/nemotron-3.5-super-vl:free"
+name = "NVIDIA: Nemotron 3.5 Super VL (free)"
+provider = "openrouter"
+tier = "free"
+intelligence = 13
+roles = ["free_primary", "short_chat", "vision", "screenshots", "tools"]
+caps = { chat = 78, code = 75, tools = 85, reasoning = 75, long_context = 100, vision = 92 }
+prompt = 0
+cached = 0
+completion = 0
+context = 1_000_000
+input = ["text", "image", "video"]
+tools = true
+structured = true
+trains = true
+hosts = 1
+speed_tps = 96
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps", "speed_tps"]
+
+[[model]]
+key = "cohere/north-mini-code:free"
+name = "Cohere: North Mini Code (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["free_code", "private"]
+caps = { chat = 70, code = 80, tools = 75, reasoning = 70, long_context = 85 }
+prompt = 0
+cached = 0
+completion = 0
+context = 256_000
+tools = true
+trains = false
+retains = true
+moderated = true
+hosts = 1
+speed_tps = 136
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+estimate = ["caps", "speed_tps"]
+
+[[model]]
+key = "nvidia/nemotron-3.5-lightning:free"
+name = "NVIDIA: Nemotron 3.5 Lightning (free)"
+provider = "openrouter"
+tier = "free"
+intelligence = 5
+roles = ["fast_chat", "classification"]
+caps = { chat = 65, code = 60, tools = 65, reasoning = 40 }
+prompt = 0
+cached = 0
+completion = 0
+tools = true
+trains = true
+hosts = 1
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+name = "NVIDIA: Nemotron 3 Nano Omni (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["perception", "screenshots", "audio", "clips"]
+caps = { chat = 55, code = 45, tools = 55, reasoning = 35, vision = 80, audio = 85 }
+prompt = 0
+cached = 0
+completion = 0
+context = 256_000
+input = ["text", "audio", "image", "video"]
+trains = true
+hosts = 1
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "nvidia/nemotron-3-ultra-550b-a55b:free"
+name = "NVIDIA: Nemotron 3 Ultra (free)"
+provider = "openrouter"
+tier = "free"
+intelligence = 11
+roles = ["free_reasoning", "background", "long_free"]
+caps = { chat = 85, code = 85, tools = 80, reasoning = 92 }
+prompt = 0
+cached = 0
+completion = 0
+context = 1_000_000
+reasoning = true
+efforts = ["high", "medium", "none"]
+trains = true
+hosts = 1
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "nvidia/nemotron-3-super-120b-a12b:free"
+name = "NVIDIA: Nemotron 3 Super 120B (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["probation"]
+caps = { chat = 80, code = 78, tools = 78, reasoning = 82, long_context = 100 }
+prompt = 0
+cached = 0
+completion = 0
+context = 1_000_000
+trains = true
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+estimate = ["caps"]
+gone_since = "2026-11-12"
+
+[[model]]
+key = "thinkingmachines/inkling:free"
+name = "Thinking Machines: Inkling (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["probation"]
+prompt = 0
+cached = 0
+completion = 0
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+gone_since = "2026-11-12"
+note = "Replaced on OpenRouter by Inkling 2 Small."
+
+[[model]]
+key = "thinkingmachines/inkling-2-small:free"
+name = "Thinking Machines: Inkling 2 Small (free)"
+provider = "openrouter"
+tier = "free"
+intelligence = 30
+roles = ["probation"]
+prompt = 0
+cached = 0
+completion = 0
+context = 1_000_000
+input = ["text", "image"]
+tools = true
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
+verified = "2026-11-12"
+
+[[model]]
+key = "baidu/ernie-5.5-flash-preview:free"
+name = "Baidu: ERNIE 5.5 Flash Preview (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["probation"]
+prompt = 0
+cached = 0
+completion = 0
+tools = true
+structured = true
+reasoning = true
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+note = "Reasoning can't be turned off."
+
+[[model]]
+key = "poolside/laguna-s-2.1:free"
+name = "Poolside: Laguna S 2.1 (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["probation"]
+caps = { code = 78, tools = 80 }
+prompt = 0
+cached = 0
+completion = 0
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+estimate = ["caps"]
+gone_since = "2026-11-12"
+
+[[model]]
+key = "dots-studio/dots-3-note-preview:free"
+name = "Dots: Dots 3 Note Preview (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["code_fallback", "temporary"]
+caps = { chat = 60, code = 65, tools = 60, reasoning = 55 }
+prompt = 0
+cached = 0
+completion = 0
+input = ["text", "image"]
+expires = "2026-12-31"
+hosts = 1
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "recursive/flint-v1.0:free"
+name = "Recursive: Flint 1.0 (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["free_code", "unstable"]
+caps = { chat = 60, code = 65, tools = 60, reasoning = 55 }
+prompt = 0
+cached = 0
+completion = 0
+tools = true
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+estimate = ["caps"]
+
+[[model]]
+key = "stealth/crouton-alpha:free"
+name = "Stealth: Crouton Alpha (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["probation"]
+prompt = 0
+cached = 0
+completion = 0
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+gone_since = "2026-11-12"
+
+[[model]]
+key = "liquid/lfm-3-1.7b:free"
+name = "Liquid: LFM 3 1.7B (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["probation"]
+prompt = 0
+cached = 0
+completion = 0
+tools = true
+trains = true
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+
+[[model]]
+key = "liquid/lfm-2.5-2.6b:free"
+name = "Liquid: LFM 2.5 2.6B (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["probation"]
+prompt = 0
+cached = 0
+completion = 0
+trains = true
+expires = "2026-11-13"
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+
+[[model]]
+key = "xingchen-agi/xing4.0-29b-a4b:free"
+name = "Xingchen: Xing 4.0 (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["avoid"]
+caps = { chat = 30, code = 25, tools = 25, reasoning = 25 }
+prompt = 0
+cached = 0
+completion = 0
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+estimate = ["caps"]
+gone_since = "2026-11-12"
+
+[[model]]
+key = "google/gemma-4-31b-it:free"
+name = "Google: Gemma 4 31B (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["run_local"]
+caps = { chat = 70, code = 65, tools = 65, reasoning = 65, vision = 70 }
+prompt = 0
+cached = 0
+completion = 0
+input = ["image", "text", "video"]
+tools = true
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+estimate = ["caps"]
+note = "The free endpoint answered only 429s in testing; the priors are for running it locally."
+
+[[model]]
+key = "google/gemma-4-26b-a4b-it:free"
+name = "Google: Gemma 4 26B A4B (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["run_local"]
+caps = { chat = 68, code = 63, tools = 63, reasoning = 63, vision = 68 }
+prompt = 0
+cached = 0
+completion = 0
+input = ["image", "text", "video"]
+tools = true
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-12"
+estimate = ["caps"]
+note = "The free endpoint answered only 429s in testing; the priors are for running it locally."

@@ -513,15 +513,26 @@ pub fn apply_seed(id: &str, caps: &mut Caps) -> bool {
         return hit;
     }
 
-    // Known coding-strong mid family (xAI grok-4.3 line).
-    if stem == "grok-4.3" || stem.starts_with("grok-4.3-") {
-        set(&mut caps.code, 99, &mut hit);
-        set(&mut caps.reasoning, 80, &mut hit);
-        set(&mut caps.tools, 95, &mut hit);
+    // A family the built-in profiles seed (data/model_profiles.toml `lane`):
+    // grok-4.3 (coding-strong mid), 4.5, 4.6 and 4.7 (depth over raw code).
+    if let Some(lane) = grokhub_core::model_registry::builtin::lane_for(id) {
+        for (slot, to) in [
+            (&mut caps.reasoning, lane.reasoning),
+            (&mut caps.code, lane.code),
+            (&mut caps.long_context, lane.long_context),
+            (&mut caps.tools, lane.tools),
+        ] {
+            if let Some(to) = to {
+                set(slot, to, &mut hit);
+            }
+        }
+        if let Some(floor) = lane.speed_floor {
+            raise(&mut caps.speed, floor, &mut hit);
+        }
         return hit;
     }
 
-    // Newest flagship reasoning lines: depth over raw code. Newer minor wins.
+    // Lines with no profile yet: depth over raw code. Newer minor wins.
     if stem == "grok-4.8" || stem.starts_with("grok-4.8-") {
         set(&mut caps.reasoning, 98, &mut hit);
         set(&mut caps.code, 81, &mut hit);
@@ -529,27 +540,6 @@ pub fn apply_seed(id: &str, caps: &mut Caps) -> bool {
         set(&mut caps.tools, 91, &mut hit);
         return hit;
     }
-    if stem == "grok-4.7" || stem.starts_with("grok-4.7-") {
-        set(&mut caps.reasoning, 96, &mut hit);
-        set(&mut caps.code, 80, &mut hit);
-        set(&mut caps.long_context, 85, &mut hit);
-        set(&mut caps.tools, 90, &mut hit);
-        return hit;
-    }
-
-    if stem == "grok-4.6" || stem.starts_with("grok-4.6-") {
-        set(&mut caps.reasoning, 90, &mut hit);
-        set(&mut caps.code, 86, &mut hit);
-        return hit;
-    }
-
-    if stem == "grok-4.5" || stem.starts_with("grok-4.5-") {
-        set(&mut caps.reasoning, 84, &mut hit);
-        set(&mut caps.code, 82, &mut hit);
-        raise(&mut caps.speed, 55, &mut hit);
-        return hit;
-    }
-
     // Dated 4.20 reasoning: solid mid / balanced workhorse.
     if stem.contains("4.20") && lower.contains("reasoning") && !lower.contains("non-reasoning") {
         set(&mut caps.reasoning, 74, &mut hit);
