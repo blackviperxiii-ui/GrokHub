@@ -108,6 +108,8 @@ pub mod scopes;
 pub mod screen_record;
 pub mod screenshot_offer;
 pub mod self_improve;
+#[cfg(desktop)]
+pub mod self_review;
 pub mod settings;
 pub mod shell_update;
 pub mod skills;
@@ -5854,6 +5856,12 @@ pub fn run() {
             pulse_feed::start(config_dir.clone(), || {
                 let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
                 Ok((client, grokhub_agent::route::host::chat_start().0))
+            });
+            // The Sunday self-review, while the cabin is closed.
+            #[cfg(desktop)]
+            self_review::start(config_dir.clone(), || {
+                let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
+                Ok(client)
             });
             steam_checks::start(config_dir.clone());
             game_companion::start(config_dir.clone());
