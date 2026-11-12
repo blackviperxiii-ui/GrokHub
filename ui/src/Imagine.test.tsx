@@ -151,4 +151,33 @@ describe("Imagine", () => {
       "Sign in to Imagine in the cabin. Or sign in with Grok or add an xAI API key in Settings → Account.",
     );
   });
+
+  it("+ New project clears the prompt, the result line and the error, keeps the gallery and focuses the prompt", async () => {
+    api.getImagine.mockResolvedValue({ tiles: [tile()], ready: true });
+    api.imagineGenerate.mockResolvedValue({ page: { tiles: [tile()], ready: true }, made: 1, note: "" });
+    render(<Imagine />);
+    await screen.findByRole("list", { name: "Gallery" });
+    await userEvent.type(screen.getByLabelText("What to make"), "a red barn");
+    await userEvent.click(screen.getByRole("button", { name: "Make" }));
+    expect(await screen.findByText("Made 1.")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "+ New project" }));
+    expect(screen.getByLabelText("What to make")).toHaveValue("");
+    expect(screen.getByLabelText("What to make")).toHaveFocus();
+    expect(screen.queryByText("Made 1.")).toBeNull();
+    expect(screen.getByRole("list", { name: "Gallery" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Make" })).toBeDisabled();
+  });
+
+  it("+ New project clears an error", async () => {
+    api.getImagine.mockResolvedValue(EMPTY);
+    api.imagineGenerate.mockRejectedValue("The image service is busy. Try again.");
+    render(<Imagine />);
+    await screen.findByText(GALLERY_EMPTY);
+    await userEvent.type(screen.getByLabelText("What to make"), "a red barn");
+    await userEvent.click(screen.getByRole("button", { name: "Make" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The image service is busy. Try again.");
+    await userEvent.click(screen.getByRole("button", { name: "+ New project" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });
