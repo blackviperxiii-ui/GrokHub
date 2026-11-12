@@ -534,9 +534,13 @@ async function automations(s, config) {
 // folder's MEMORY.md, then search for it the way chat recall would.
 async function memory(s, workspace) {
   await tab(s, "Personal");
-  // Tabs + Reflect/Restore sit above the notes <details>; summary is nested.
+  // Tabs + Reflect/Restore sit above the notes <details>, which starts open
+  // since #1821: a click on its summary would close it, so open it only if shut.
   await waitFor("the personal page", () => find(s, ".memory-files summary"));
-  await click(s, ".memory-files summary");
+  await wd("POST", `${s}/execute/sync`, {
+    script: "const d = document.querySelector('.memory-files details'); if (d) d.open = true;",
+    args: [],
+  });
   const input = await waitFor("the notes files", () => find(s, "input[aria-label='New note']"));
   await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
   await click(s, ".memory-files form.add button[type='submit']");
