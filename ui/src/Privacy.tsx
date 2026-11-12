@@ -8,6 +8,7 @@ import {
   type PrivacyPage,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { Storage } from "./Storage";
 import { Toggle } from "./Toggle";
 
 export const OFFLINE_NOTE = `${PRODUCT_NAME} stays off the internet. Chat uses Local AI if it's set up; web search, cloud models and online connectors pause.`;
@@ -140,6 +141,7 @@ export function Privacy({ readOnly = false }: { readOnly?: boolean }) {
           </button>
         </div>
       )}
+      {page.canOpenFolder && <Storage key={page.filesFolder} />}
       <p className="note">
         Your data lives in <code>{page.dataFolder}</code>.
       </p>

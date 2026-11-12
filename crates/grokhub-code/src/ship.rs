@@ -662,7 +662,7 @@ struct Ctx {
 }
 
 /// Test seam: a local bare repo as origin stands in for this host and PR.
-type Probe = Option<(Host, Pr)>;
+pub(crate) type Probe = Option<(Host, Pr)>;
 
 /// The facts for the checked-out branch.
 fn context(dir: &Path, config_dir: &Path, probe: &Probe) -> Result<Ctx, Blocked> {
@@ -691,6 +691,33 @@ fn context(dir: &Path, config_dir: &Path, probe: &Probe) -> Result<Ctx, Blocked>
         },
         key,
     })
+}
+
+/// The facts and repo key for pushing `branch` from `dir`, checked out or
+/// not. The agent's own pushes from chat (`chat_push`) use this; `probe`
+/// stands in for the host and PR in tests.
+pub(crate) fn facts_for(
+    config_dir: &Path,
+    dir: &Path,
+    branch: &str,
+    probe: &Probe,
+) -> Result<(String, Facts), Blocked> {
+    branch_ok(branch)?;
+    let host = push_host(dir).ok_or(Blocked::NoRemote)?;
+    let (host, pr) = match probe {
+        Some((host, pr)) => (*host, pr.clone()),
+        None if host == Host::GitHub => (host, pr_of(dir, branch)),
+        None => (host, Pr::None),
+    };
+    let key = key_of(dir);
+    let facts = Facts {
+        app_made: app_made(config_dir, &key, branch),
+        default_branch: default_branch(dir),
+        branch: branch.to_string(),
+        host,
+        pr,
+    };
+    Ok((key, facts))
 }
 
 fn command_for(action: Action, cfg: &CodeShip, branch: &str) -> (&'static str, Vec<String>) {

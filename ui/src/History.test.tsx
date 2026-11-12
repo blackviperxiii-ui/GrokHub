@@ -41,7 +41,10 @@ const api = vi.hoisted(() => ({
   onFileDrop: vi.fn<() => Promise<() => void>>(),
 }));
 
-vi.mock("./api", () => api);
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return { ...chatTabApiStubs(), ...api };
+});
 vi.mock("./autoSetupApi", () => ({ settingAsk: () => Promise.resolve(null) }));
 
 import { Chat } from "./Chat";

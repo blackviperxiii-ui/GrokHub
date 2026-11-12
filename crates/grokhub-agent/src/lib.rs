@@ -7,6 +7,7 @@ pub mod cache_watch;
 mod checkpoint;
 mod client;
 mod close_check;
+pub mod code_guard;
 mod compact;
 mod config_file;
 mod denials;

@@ -100,7 +100,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-app/src/app/destiny_ui.rs", 1, "Bungie.net API: egress_ok"),
     ("crates/grokhub-app/src/app/battlenet_ui.rs", 1, "Battle.net sign-in token and WoW profile API: egress_ok"),
     ("crates/grokhub-app/src/app/osrs_ui.rs", 1, "OSRS hiscores: egress_ok"),
-    ("src-tauri/src/games.rs", 2, "GW2 and OSRS companion refresh: guard_quiet before each GET; Offline only maps to the cabin's game-specific refuse lines"),
+    ("src-tauri/src/games.rs", 3, "GW2, OSRS and Destiny companion refresh: guard_quiet before each GET/POST; Offline only maps to the cabin's game-specific refuse lines"),
     // MCP (HTTP transport + OAuth) and the MCP registry.
     ("crates/grokhub-agent/src/mcp/http.rs", 1, "connect / ping / call and OAuth sign-in (mcp/oauth.rs): egress guard; loopback servers still go"),
     ("crates/grokhub-core/src/mcp_catalog.rs", 1, "registry refresh: guard_mcp_registry_url refuses while on"),

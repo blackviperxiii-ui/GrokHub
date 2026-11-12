@@ -41,7 +41,11 @@ vi.mock("./Learned", () => ({ Learned: () => <p>Learned panel</p> }));
 vi.mock("./Permissions", () => ({ Permissions: () => <p>Permissions panel</p> }));
 // Behavior, Privacy and Background have their own tests.
 vi.mock("./WorkboardTidy", () => ({ WorkboardTidy: () => <p>Workboard tidy</p> }));
+vi.mock("./MemoryRetention", () => ({ MemoryRetention: () => <p>Memory retention</p> }));
+vi.mock("./ChatArchive", () => ({ ChatArchive: () => <p>Chat archive</p> }));
 vi.mock("./ScreenshotExplain", () => ({ ScreenshotExplain: () => <p>Screenshot explain row</p> }));
+vi.mock("./GameWatch", () => ({ GameWatch: () => <p>Game watcher row</p> }));
+vi.mock("./SteamPulseSources", () => ({ SteamPulseSources: () => <p>Steam Pulse sources</p> }));
 vi.mock("./Behavior", () => ({
   Behavior: ({ readOnly, onCloseToTray }: { readOnly?: boolean; onCloseToTray?: (on: boolean) => void }) =>
     readOnly ? (
@@ -356,12 +360,14 @@ describe("Settings", () => {
     await openSection("Behavior");
     expect(screen.getByRole("button", { name: "Behavior panel" })).toBeInTheDocument();
     expect(screen.getByText("Screenshot explain row")).toBeInTheDocument();
+    expect(screen.getByText("Game watcher row")).toBeInTheDocument();
     expect(screen.queryByLabelText("Work folder")).toBeNull();
 
     await openSection("Appearance");
     expect(screen.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("button", { name: "Behavior panel" })).toBeNull();
     expect(screen.queryByText("Screenshot explain row")).toBeNull();
+    expect(screen.queryByText("Game watcher row")).toBeNull();
 
     await openSection("Personality");
     expect(screen.getByText("Personality panel")).toBeInTheDocument();
@@ -391,11 +397,13 @@ describe("Settings", () => {
 
     await openSection("Pulse");
     expect(screen.getByText("Interests panel")).toBeInTheDocument();
+    expect(screen.getByText("Steam Pulse sources")).toBeInTheDocument();
     expect(screen.queryByText("Code panel")).toBeNull();
 
     await openSection("Local AI");
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();
     expect(screen.queryByText("Interests panel")).toBeNull();
+    expect(screen.queryByText("Steam Pulse sources")).toBeNull();
 
     await openSection("AI models");
     expect(screen.getByText("AI models panel")).toBeInTheDocument();
