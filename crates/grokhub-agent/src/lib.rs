@@ -26,6 +26,7 @@ pub mod harness;
 mod hooks;
 pub mod identity;
 mod image_budget;
+pub mod imagine_keychain;
 pub mod indexers;
 mod loopback;
 mod lru_map;
