@@ -533,8 +533,9 @@ async function automations(s, config) {
 // folder's MEMORY.md, then search for it the way chat recall would.
 async function memory(s, workspace) {
   await tab(s, "Personal");
-  await waitFor("the personal page", () => find(s, ".memory-files > summary"));
-  await click(s, ".memory-files > summary");
+  // Tabs + Reflect/Restore sit above the notes <details>; summary is nested.
+  await waitFor("the personal page", () => find(s, ".memory-files summary"));
+  await click(s, ".memory-files summary");
   const input = await waitFor("the notes files", () => find(s, "input[aria-label='New note']"));
   await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
   await click(s, ".memory-files form.add button[type='submit']");
