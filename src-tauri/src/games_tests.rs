@@ -161,7 +161,7 @@ fn eso_install_remove_and_status() {
     fs::create_dir_all(server_dir.join("AddOns")).expect("addons");
     fs::create_dir_all(server_dir.join("SavedVariables")).expect("sv");
 
-    let empty = eso_view_from(&[server_dir.clone()]);
+    let empty = eso_view_from(std::slice::from_ref(&server_dir));
     assert_eq!(empty.servers[0].status, "ESO addon: not installed.");
     assert_eq!(
         empty.servers[0].action.as_deref(),
@@ -169,7 +169,7 @@ fn eso_install_remove_and_status() {
     );
 
     eso::install(&server_dir).expect("install");
-    let installed = eso_view_from(&[server_dir.clone()]);
+    let installed = eso_view_from(std::slice::from_ref(&server_dir));
     assert!(installed.servers[0].status.contains("installed"));
     assert_eq!(
         installed.servers[0].action.as_deref(),

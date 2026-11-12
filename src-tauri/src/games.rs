@@ -264,9 +264,7 @@ pub fn wow_addon_action(
                     .find_map(|(_, r)| r.err())
                     .unwrap_or_else(|| "Couldn't install the Loadout addon.".into())
             } else {
-                format!(
-                    "Installed the Loadout addon for WoW. Quit and restart WoW so it loads; then open the minimap menu or type /loadout."
-                )
+                "Installed the Loadout addon for WoW. Quit and restart WoW so it loads; then open the minimap menu or type /loadout.".into()
             };
             Ok(view)
         }
