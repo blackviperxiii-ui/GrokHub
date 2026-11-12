@@ -78,6 +78,12 @@ pub fn system_prompt_for(
         rules.push_str("\n\n");
         rules.push_str(grokhub_core::CHIP_TRAILER_RULE);
     }
+    // A Code tab session (its push guard is on) codes with the bundled
+    // skills always loaded.
+    if grokhub_agent::code_guard::is_set(conversation_id) {
+        rules.push_str("\n\n");
+        rules.push_str(&crate::code_agent::skills_block());
+    }
     grokhub_agent::system_prompt_parts(&rules, &volatile, workspace)
 }
 
