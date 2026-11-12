@@ -134,6 +134,11 @@ pub struct Post {
     pub save: bool,
     /// Its link is already on the Saved page.
     pub saved: bool,
+    /// A weekly self-review card's Apply button ("Apply change", "Revert"
+    /// or "Save idea"). Empty on other posts.
+    pub review: String,
+    /// A code-idea card also offers Copy as GitHub issue.
+    pub issue: bool,
 }
 
 /// One update inside a digest card.
@@ -505,7 +510,9 @@ fn post(
             .unwrap_or_default(),
         loved: card.reaction == Some(CardReaction::Up),
         verdict: verdict(card),
-        more: report_more(card).unwrap_or_default(),
+        more: report_more(card)
+            .or_else(|| crate::review_cards::details(card))
+            .unwrap_or_default(),
         items: card
             .pulse
             .report
@@ -522,6 +529,8 @@ fn post(
         delete: offers.delete,
         save,
         saved,
+        review: crate::review_cards::label(card).to_string(),
+        issue: crate::review_cards::copies_issue(card),
     }
 }
 

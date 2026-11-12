@@ -1326,6 +1326,11 @@ export interface PulsePost {
   save: boolean;
   /** Already on the Saved page. */
   saved: boolean;
+  /** A weekly self-review card's Apply button: "Apply change", "Revert" or
+   * "Save idea". Empty on other posts. */
+  review?: string;
+  /** A code-idea card also offers Copy as GitHub issue. */
+  issue?: boolean;
 }
 
 /** A card kept with Save, on the Saved page. Stored apart from the feed
@@ -1486,6 +1491,22 @@ export function getPulse(): Promise<PulsePage> {
 
 export function pulseAct(id: string, act: PulseAct): Promise<PulsePage> {
   return invoke<PulsePage>("pulse_act", { id, act, day: localDay() });
+}
+
+/** A weekly self-review card's Apply change, Revert or Save idea: the
+ * status line and the page after it. */
+export interface PulseReviewDone {
+  line: string;
+  page: PulsePage;
+}
+
+export function pulseReviewApply(id: string): Promise<PulseReviewDone> {
+  return invoke<PulseReviewDone>("pulse_review_apply", { id, day: localDay() });
+}
+
+/** A code-idea card's Copy as GitHub issue: the redacted text and the note. */
+export function pulseReviewIssue(id: string): Promise<{ text: string; copied: string }> {
+  return invoke<{ text: string; copied: string }>("pulse_review_issue", { id });
 }
 
 /** Discuss: the card's own chat and the words for its box. */
