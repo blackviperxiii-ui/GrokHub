@@ -19,7 +19,7 @@ DRY_RUN=0
 APP=shell
 
 usage() {
-  echo "usage: $0 [--user|--system] [--prefix=DIR] [--channel beta|stable] [--app shell|cabin|both] [--dry-run]"
+  echo "usage: $0 [--user|--system] [--prefix=DIR] [--channel beta|stable] [--app cabin|shell|both] [--dry-run]"
 }
 
 set_channel() {
@@ -36,7 +36,7 @@ set_app() {
   case "$1" in
     cabin|shell|both) APP="$1" ;;
     *)
-      echo "error: --app takes shell, cabin or both, not '$1'" >&2
+      echo "error: --app takes cabin, shell or both, not '$1'" >&2
       exit 2
       ;;
   esac
@@ -59,7 +59,7 @@ while [[ $# -gt 0 ]]; do
     --app=*) set_app "${1#--app=}" ;;
     --app)
       if [[ $# -lt 2 ]]; then
-        echo "error: --app takes shell, cabin or both" >&2
+        echo "error: --app takes cabin, shell or both" >&2
         exit 2
       fi
       set_app "$2"
@@ -340,8 +340,6 @@ elif command -v dnf >/dev/null; then
   fi
 fi
 
-move_cabin_login
-
 if command -v systemctl >/dev/null && [[ "$SYSTEM" -eq 0 ]]; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   if [[ "$WANT_CABIN" -eq 1 ]]; then
@@ -349,6 +347,8 @@ if command -v systemctl >/dev/null && [[ "$SYSTEM" -eq 0 ]]; then
   fi
   systemctl --user enable --now grokhub-hub.service >/dev/null 2>&1 || true
 fi
+
+move_cabin_login
 
 mkdir -p "$CONFIG_DIR"
 printf '%s\n' "$ROOT" > "$CONFIG_DIR/source"
