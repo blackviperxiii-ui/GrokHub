@@ -213,11 +213,7 @@ pub fn archive_tab(config_dir: &Path, id: &str, now_ms: u64) -> Result<ChatTab, 
     if is_archived(&store, id) {
         return Err(ALREADY_ARCHIVED.into());
     }
-    store
-        .tabs
-        .entry(id.to_string())
-        .or_default()
-        .archived_at = Some(now_ms);
+    store.tabs.entry(id.to_string()).or_default().archived_at = Some(now_ms);
     save_store(config_dir, &store)?;
     let row = history::list(config_dir)
         .into_iter()
@@ -376,11 +372,7 @@ mod tests {
             "engine": "native",
             "renamed": true,
         });
-        std::fs::write(
-            sessions.join(format!("{id}.jsonl")),
-            format!("{line}\n"),
-        )
-        .expect("session");
+        std::fs::write(sessions.join(format!("{id}.jsonl")), format!("{line}\n")).expect("session");
     }
 
     #[test]
