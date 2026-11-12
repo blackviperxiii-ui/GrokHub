@@ -1167,6 +1167,10 @@ mod tests {
             "updates_page",
             "run_update_offer",
             "set_mission_done",
+            "get_self_improve",
+            "set_self_improve_quiet",
+            "self_improve_revert",
+            "self_improve_issue",
             // Provider keys, grants and spend limits stay on the computer.
             "get_ai_models",
             "add_ai_provider",

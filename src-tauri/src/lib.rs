@@ -95,6 +95,7 @@ pub mod remote_tls;
 pub mod scheduler;
 pub mod screen_record;
 pub mod screenshot_offer;
+pub mod self_improve;
 pub mod settings;
 pub mod shell_update;
 pub mod skills;
@@ -5629,6 +5630,10 @@ pub fn run() {
             pc_speed_test,
             pc_net_csv,
             save_behavior,
+            self_improve::get_self_improve,
+            self_improve::set_self_improve_quiet,
+            self_improve::self_improve_revert,
+            self_improve::self_improve_issue,
             save_defaults,
             get_privacy,
             get_diagnostics,
