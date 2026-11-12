@@ -224,9 +224,20 @@ fn smallest_below(
         .map(|(_, p)| p.clone())
 }
 
+/// What a game swaps `home` for: the smallest model on disk below it that
+/// its profile marks gaming-safe, else the smallest below it.
+fn gaming_below(home: &LocalModel, on_disk: &[(&'static LocalModel, PathBuf)]) -> Option<PathBuf> {
+    on_disk
+        .iter()
+        .filter(|(m, _)| m.run_mb < home.run_mb && m.profile.gaming_safe)
+        .min_by_key(|(m, _)| m.run_mb)
+        .map(|(_, p)| p.clone())
+        .or_else(|| smallest_below(home, on_disk))
+}
+
 /// The model a game would swap `home` for, if one is on disk.
 pub fn gaming_model(home: &Path, on_disk: &[(&'static LocalModel, PathBuf)]) -> Option<PathBuf> {
-    smallest_below(catalog_for(home)?, on_disk)
+    gaming_below(catalog_for(home)?, on_disk)
 }
 
 /// The model this request should run on, and why when it isn't the pick.
@@ -245,7 +256,8 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
         }
     }
     if n.scale.gaming {
-        return smallest().map_or((home_path, None), |p| (p, Some(StandIn::Gaming)));
+        return gaming_below(home, n.on_disk)
+            .map_or((home_path, None), |p| (p, Some(StandIn::Gaming)));
     }
     let resident = n
         .loaded

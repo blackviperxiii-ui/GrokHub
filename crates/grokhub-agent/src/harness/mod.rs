@@ -62,6 +62,7 @@ mod backend;
 mod brain_tune;
 mod canary;
 mod changes;
+pub mod chat_record;
 mod consent;
 mod cua;
 mod detect;
