@@ -861,7 +861,7 @@ fn source_of(source: &str) -> Result<Source, String> {
 /// The open mod's drawer: its files with what each offers, what the main
 /// file needs, and the description.
 #[tauri::command]
-pub async fn mods_files(
+pub(crate) async fn mods_files(
     state: State<'_, ShellState>,
     game: String,
     source: String,
@@ -916,7 +916,7 @@ pub async fn mods_files(
 /// Install or Update on a file with a direct link: download, check, unpack
 /// and plan. The sheet then waits for its button.
 #[tauri::command]
-pub async fn mods_plan_install(
+pub(crate) async fn mods_plan_install(
     app: AppHandle,
     state: State<'_, ShellState>,
     game: String,
@@ -940,7 +940,7 @@ pub async fn mods_plan_install(
 /// "Download on <site>": remember the file, so "I downloaded it" can take
 /// it from Downloads. Opening the page is the page's own link.
 #[tauri::command]
-pub async fn mods_wait_for_browser(
+pub(crate) async fn mods_wait_for_browser(
     state: State<'_, ShellState>,
     game: String,
     source: String,
@@ -967,7 +967,7 @@ pub async fn mods_wait_for_browser(
 /// "I downloaded it": take the browser's copy from Downloads and plan, or
 /// say it isn't there yet.
 #[tauri::command]
-pub async fn mods_pickup_download(
+pub(crate) async fn mods_pickup_download(
     app: AppHandle,
     state: State<'_, ShellState>,
     game: String,
@@ -1005,7 +1005,7 @@ pub async fn mods_pickup_download(
 
 /// Uninstall on an installed mod: what it would delete and put back.
 #[tauri::command]
-pub async fn mods_plan_uninstall(
+pub(crate) async fn mods_plan_uninstall(
     state: State<'_, ShellState>,
     game: String,
     key: String,
@@ -1028,7 +1028,10 @@ pub async fn mods_plan_uninstall(
 
 /// The sheet's primary button: write. The line says what happened.
 #[tauri::command]
-pub async fn mods_confirm(state: State<'_, ShellState>, token: u64) -> Result<String, String> {
+pub(crate) async fn mods_confirm(
+    state: State<'_, ShellState>,
+    token: u64,
+) -> Result<String, String> {
     capabilities::needs(capabilities::current().mods, "Mods")?;
     let dir = state.config_dir.clone();
     tauri::async_runtime::spawn_blocking(move || confirm(&dir, token))
@@ -1038,7 +1041,7 @@ pub async fn mods_confirm(state: State<'_, ShellState>, token: u64) -> Result<St
 
 /// The sheet's Cancel.
 #[tauri::command]
-pub fn mods_cancel(token: u64) -> Result<(), String> {
+pub(crate) fn mods_cancel(token: u64) -> Result<(), String> {
     capabilities::needs(capabilities::current().mods, "Mods")?;
     cancel(token);
     Ok(())
@@ -1046,7 +1049,7 @@ pub fn mods_cancel(token: u64) -> Result<(), String> {
 
 /// The Installed tab for one game.
 #[tauri::command]
-pub async fn mods_installed(
+pub(crate) async fn mods_installed(
     state: State<'_, ShellState>,
     game: String,
 ) -> Result<InstalledView, String> {
