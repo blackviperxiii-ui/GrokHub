@@ -90,11 +90,19 @@ function mockReply(callNumber, body) {
     if (!body.includes("smoke-agent-follow-up")) {
       return toolCall("smoke-agent-follow-up", "write", { path: AGENT_NOTE_2, content: AGENT_NOTE_TEXT });
     }
+    // The agent loop counts a write as unchecked until the file is read back,
+    // and re-plans a turn that ends without that check, so read it back.
+    if (!body.includes("smoke-agent-follow-up-read")) {
+      return toolCall("smoke-agent-follow-up-read", "read_file", { target_file: AGENT_NOTE_2 });
+    }
     return textReply(AGENT_REPLY_2);
   }
   if (body.includes(AGENT_PROMPT)) {
     if (!body.includes("smoke-agent-write")) {
       return toolCall("smoke-agent-write", "write", { path: AGENT_NOTE, content: AGENT_NOTE_TEXT });
+    }
+    if (!body.includes("smoke-agent-read")) {
+      return toolCall("smoke-agent-read", "read_file", { target_file: AGENT_NOTE });
     }
     if (!body.includes("smoke-agent-todo")) {
       return toolCall("smoke-agent-todo", "todo_write", {
@@ -373,6 +381,21 @@ async function settled(s, el) {
   return x === x2 && y === y2;
 }
 
+/** Types `text` into a text box and reads it back until the box holds exactly
+ * that. A chat's cards animate in a view transition, which commits a beat
+ * after it starts; a commit that lands mid-typing puts back the box's value
+ * and focus from when it started, so keystrokes go missing. Clear and type
+ * again until the text sticks. */
+async function typeInto(s, el, text) {
+  await waitFor(`the box to hold ${JSON.stringify(text)}`, async () => {
+    if (!(await settled(s, el))) return null;
+    await wd("POST", `${s}/element/${el}/clear`, {});
+    await wd("POST", `${s}/element/${el}/value`, { text });
+    await sleep(300);
+    return (await wd("GET", `${s}/element/${el}/property/value`)) === text ? true : null;
+  });
+}
+
 /** What sits on top of the element's middle, for a refused click. */
 async function onTop(s, el) {
   return wd("POST", `${s}/execute/sync`, {
@@ -503,7 +526,7 @@ function windowsEngineProof() {
 async function automations(s, config) {
   await tab(s, "Automations");
   const input = await waitFor("the automations page", () => find(s, "input[aria-label='New automation']"));
-  await wd("POST", `${s}/element/${input}/value`, { text: AUTOMATION });
+  await typeInto(s, input, AUTOMATION);
   await click(s, "form.add button[type='submit']");
   const summary = await waitFor("the new automation", async () => {
     const t = await textOf(s, ".card.automation .card-status");
@@ -542,7 +565,7 @@ async function memory(s, workspace) {
     args: [],
   });
   const input = await waitFor("the notes files", () => find(s, "input[aria-label='New note']"));
-  await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
+  await typeInto(s, input, MEMORY_NOTE);
   await click(s, ".memory-files form.add button[type='submit']");
   // Status is role=status; AMR-on installs also show a banner in p.note.
   await waitFor("the remembered note", async () => {
@@ -554,7 +577,7 @@ async function memory(s, workspace) {
   console.log(`note remembered: ${JSON.stringify(file)}`);
 
   const search = await find(s, "input[aria-label='Search memory']");
-  await wd("POST", `${s}/element/${search}/value`, { text: "kumquats" });
+  await typeInto(s, search, "kumquats");
   await click(s, ".memory-files form.add:last-of-type button[type='submit']");
   const hit = await waitFor("the search hit", async () => {
     const t = await textOf(s, ".card.hit .card-detail");
@@ -658,8 +681,7 @@ async function pulse(s, config) {
   await waitFor("the default instructions", async () =>
     (await wd("GET", `${s}/element/${prompt}/property/value`)) ? true : null,
   );
-  await wd("POST", `${s}/element/${prompt}/clear`, {});
-  await wd("POST", `${s}/element/${prompt}/value`, { text: "Smoke news, please." });
+  await typeInto(s, prompt, "Smoke news, please.");
   await shot(s, "pulse-instructions");
   const save = await wd("POST", `${s}/element`, {
     using: "xpath",
@@ -792,7 +814,7 @@ async function journal(s, config) {
   const input = await waitFor("the question box", () =>
     find(s, ".journal-add input"),
   );
-  await wd("POST", `${s}/element/${input}/value`, { text: JOURNAL_QUESTION });
+  await typeInto(s, input, JOURNAL_QUESTION);
   await click(s, ".journal-add button[type='submit']");
   const mission = await waitFor("the question's To mission", async () => {
     const el = await wd("POST", `${s}/element`, {
@@ -900,7 +922,7 @@ async function plan(s, workspace) {
   const [picker] = await wd("POST", `${s}/elements`, { using: "css selector", value: "[aria-label='Session mode']" });
   if (picker) throw new Error("the composer still shows a mode picker");
   const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
-  await wd("POST", `${s}/element/${box}/value`, { text: PLAN_PROMPT });
+  await typeInto(s, box, PLAN_PROMPT);
   await click(s, "form.composer button[type='submit']");
   const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"The plan\"]"));
   const shown = await cardText(s, card, (t) => t.includes(PLAN_TEXT));
@@ -1066,7 +1088,7 @@ async function localAi(s, config) {
   const input = await waitFor("the model file field", () =>
     find(s, "input[aria-label='Model file path']"),
   );
-  await wd("POST", `${s}/element/${input}/value`, { text: modelFile });
+  await typeInto(s, input, modelFile);
   await click(s, ".local-ai button.use-file");
   const notice = await waitFor("the model notice", async () => {
     const t = await textOf(s, ".local-ai .notice");
@@ -1118,7 +1140,7 @@ async function labs(s, config) {
   await tab(s, "Settings");
   await section(s, "Labs");
   const input = await waitFor("the install box", () => find(s, ".labs-row input"));
-  await wd("POST", `${s}/element/${input}/value`, { text: bundle });
+  await typeInto(s, input, bundle);
   await click(s, ".labs-row button[type='submit']");
   const step = async (label, state) => {
     const button = await waitFor(`the ${label} button`, async () => {
@@ -1187,7 +1209,7 @@ async function interests(s, config) {
   await tab(s, "Settings");
   await section(s, "Pulse");
   const input = await waitFor("the topic box", () => find(s, ".interests input"));
-  await wd("POST", `${s}/element/${input}/value`, { text: "air compressors" });
+  await typeInto(s, input, "air compressors");
   await click(s, ".interests button[type='submit']");
   const pin = await waitFor("the topic's Pin", async () => {
     const el = await wd("POST", `${s}/element`, {
@@ -1220,7 +1242,7 @@ async function permissions(s, config) {
   const gap = add.y - (box.y + box.height);
   if (gap > 60) throw new Error(`Add rule sits ${Math.round(gap)}px below the rule box`);
   await click(s, "[aria-label='Rule action'] button:nth-child(3)");
-  await wd("POST", `${s}/element/${input}/value`, { text: "WebFetch(domain:example.com)" });
+  await typeInto(s, input, "WebFetch(domain:example.com)");
   await click(s, ".permissions form:first-of-type button[type='submit']");
   await waitFor("the saved deny rule", async () => {
     if (!existsSync(rulesFile)) return null;
@@ -1363,7 +1385,7 @@ async function codeAgent(s, config, workspace) {
   let release = () => {};
   agentHold = new Promise((ok) => (release = ok));
   const box = await find(s, `${pane} textarea[aria-label='Message the agent']`);
-  await wd("POST", `${s}/element/${box}/value`, { text: AGENT_PROMPT });
+  await typeInto(s, box, AGENT_PROMPT);
   await click(s, `${pane} form.composer button[type='submit']`);
   await waitFor("the agent window's reply to start", async () =>
     (await xp("//aside[contains(@class,'code-agent')]//form[contains(@class,'composer')]//button[normalize-space()='Stop']"))[0],
@@ -1373,7 +1395,7 @@ async function codeAgent(s, config, workspace) {
   // The app moves to the second project while that reply waits on the model.
   await tab(s, "Chat");
   const chatBox = await find(s, "section[aria-label='Chat'] textarea[aria-label='Message']");
-  await wd("POST", `${s}/element/${chatBox}/value`, { text: `/project bind ${other}` });
+  await typeInto(s, chatBox, `/project bind ${other}`);
   await click(s, "section[aria-label='Chat'] form.composer button[type='submit']");
   await waitFor("the app in the second project", () => realpathSync(bound()) === realpathSync(other));
   await tab(s, "Code");
@@ -1428,7 +1450,7 @@ async function codeAgent(s, config, workspace) {
   // and the session still works in the first.
   if (realpathSync(bound()) !== realpathSync(other)) throw new Error("the app left the second project early");
   const again = await find(s, `${pane} textarea[aria-label='Message the agent']`);
-  await wd("POST", `${s}/element/${again}/value`, { text: AGENT_PROMPT_2 });
+  await typeInto(s, again, AGENT_PROMPT_2);
   await click(s, `${pane} form.composer button[type='submit']`);
   await wrote(AGENT_NOTE_2, AGENT_REPLY_2);
   await waitFor("the to-do in the Tasks panel", () =>
@@ -1554,7 +1576,7 @@ async function main() {
       wd("POST", `${s}/element`, { using: "css selector", value: "textarea[aria-label='Message']" }),
     );
     await skipFirstRun(s);
-    await wd("POST", `${s}/element/${box[ELEMENT]}/value`, { text: PROMPT });
+    await typeInto(s, box[ELEMENT], PROMPT);
     const send = await wd("POST", `${s}/element`, {
       using: "css selector",
       value: "form.composer button[type='submit']",
@@ -1721,7 +1743,7 @@ async function desktop(s, config) {
 
   await tab(s, "Chat");
   const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
-  await wd("POST", `${s}/element/${box}/value`, { text: DESK_PROMPT });
+  await typeInto(s, box, DESK_PROMPT);
   await click(s, "form.composer button[type='submit']");
   const card = await waitFor("the desktop permission card", async () => {
     const cards = await wd("POST", `${s}/elements`, {
@@ -1772,7 +1794,7 @@ async function episode(s, config) {
   });
   await shot(s, "episode-armed");
   const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
-  await wd("POST", `${s}/element/${box}/value`, { text: EP_PROMPT });
+  await typeInto(s, box, EP_PROMPT);
   await click(s, "form.composer button[type='submit']");
   await waitFor("the session's waiting card", async () => {
     const [el] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode .episode-park" });
