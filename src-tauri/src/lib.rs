@@ -4383,7 +4383,7 @@ async fn pulse_review_issue(
 #[tauri::command]
 async fn get_imagine(state: State<'_, ShellState>) -> Result<imagine::Page, String> {
     let dir = state.config_dir.clone();
-    off_main(move || imagine::load(&dir, imagine::ready())).await?
+    off_main(move || imagine::load(&dir, imagine::ready()).map(imagine::with_account)).await?
 }
 
 /// Makes images, or one video, through chat's guarded media tool. Resolves
@@ -4404,16 +4404,47 @@ async fn imagine_generate(
         kind,
     };
     off_main(move || {
-        let bearer = imagine::bearer()?;
+        let (bearer, own) = imagine::bearer()?;
         let run = imagine::start()?;
-        let api = grokhub_agent::imagine_client(&bearer);
-        imagine::generate(
-            &dir,
-            &req,
-            api.as_ref(),
-            &|| run.stopped(),
-            grokhub_core::now_ms(),
-        )
+        let make = |bearer: &str| {
+            let api = grokhub_agent::imagine_client(bearer);
+            imagine::generate(
+                &dir,
+                &req,
+                api.as_ref(),
+                &|| run.stopped(),
+                grokhub_core::now_ms(),
+            )
+        };
+        let first = make(&bearer);
+        imagine::retry_refused(own, first, imagine::shared_bearer, make).map(|mut made| {
+            made.page = imagine::with_account(made.page);
+            made
+        })
+    })
+    .await?
+}
+
+/// Imagine's own Sign in with Grok, step one: the code to type at x.ai.
+#[tauri::command]
+async fn imagine_sign_in_start() -> Result<oauth::Started, String> {
+    capabilities::needs(capabilities::current().grok_sign_in, "Sign in with Grok")?;
+    off_main(imagine::start_sign_in).await?
+}
+
+/// Step two, asked every few seconds by the Imagine page.
+#[tauri::command]
+async fn imagine_sign_in_poll() -> Result<oauth::Poll, String> {
+    off_main(imagine::poll_sign_in).await?
+}
+
+/// Signs out of Imagine only, and hands back the page.
+#[tauri::command]
+async fn imagine_sign_out(state: State<'_, ShellState>) -> Result<imagine::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        imagine::sign_out()?;
+        imagine::load(&dir, imagine::ready()).map(imagine::with_account)
     })
     .await?
 }
@@ -6244,6 +6275,9 @@ pub fn run() {
             imagine_generate,
             imagine_cancel,
             imagine_image,
+            imagine_sign_in_start,
+            imagine_sign_in_poll,
+            imagine_sign_out,
             get_ai_models,
             add_ai_provider,
             allow_ai_provider,

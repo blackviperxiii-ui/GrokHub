@@ -2,9 +2,10 @@
 //!
 //! Generation runs the chat's own media tool (`grokhub_agent::run_media_tool`):
 //! the same request builders, EgressGuard and download caps, so this page adds
-//! no HTTP client of its own. It signs with chat's bearer (Sign in with Grok,
-//! else the API key). Imagine's own sign-in lives in the cabin, so a missing
-//! or refused bearer points there.
+//! no HTTP client of its own. It signs the way the cabin did: Imagine's own
+//! sign-in first (`grokhub_agent::imagine_keychain`, the cabin's "Use a code",
+//! kept in the same keychain account), then chat's (Sign in with Grok, else
+//! the API key). A missing bearer shows the page's own sign-in.
 //!
 //! Results land in `{config}/imagine/` and are pinned to the cabin's wall file
 //! (`{config}/imagine-wall.json`), which is the page's gallery. The wall keeps
@@ -16,13 +17,20 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use grokhub_agent::imagine_keychain::{self as own, Keychain};
+use grokhub_agent::xai_keychain::{Poll, SignIn, SignedIn, Started};
 use grokhub_agent::ImagineApi;
 use grokhub_core::{ImagineWall, WallGif};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// What the page says when the key is missing or Imagine refuses it.
-pub const NEED_SIGNIN: &str = "Sign in to Imagine in the cabin.";
+pub const NEED_SIGNIN: &str = "Sign in to Imagine first.";
+/// Imagine's own sign-in can no longer be renewed, and chat has none to lend.
+pub const SIGN_IN_ENDED: &str = "Your Imagine sign-in ended. Sign out, then sign in again.";
+/// xAI refused Imagine's own sign-in, and chat has none to lend.
+pub const OWN_REFUSED: &str =
+    "xAI didn't let this Grok sign-in use Imagine. Add an xAI API key in Settings → Account.";
 pub const WALL_FILE: &str = "imagine-wall.json";
 /// The aspect chips, square first (the default).
 pub const ASPECTS: &[&str] = &["1:1", "2:3", "3:2", "9:16", "16:9"];
@@ -70,6 +78,10 @@ pub struct Page {
     pub tiles: Vec<Tile>,
     /// A Grok sign-in or a key is there to make something with.
     pub ready: bool,
+    /// Imagine's own sign-in, when there is one ([`with_account`]).
+    pub account: Option<SignedIn>,
+    /// This computer can show a sign-in code ([`with_account`]).
+    pub can_sign_in: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -105,7 +117,7 @@ fn key() -> Result<String, String> {
 
 /// The bearer chat would send: a live Grok sign-in first, else the API key.
 /// The loopback test bearer never goes to xAI.
-pub fn bearer() -> Result<String, String> {
+pub fn shared_bearer() -> Result<String, String> {
     if crate::credential::test_responses_url().is_some() {
         return Err(NEED_SIGNIN.into());
     }
@@ -116,12 +128,81 @@ pub fn bearer() -> Result<String, String> {
     }
 }
 
+/// The bearer for a Make, in the cabin's order: Imagine's own sign-in, then
+/// chat's ([`shared_bearer`]). `true` when it is Imagine's own.
+pub fn bearer() -> Result<(String, bool), String> {
+    if crate::credential::test_responses_url().is_some() {
+        return Err(NEED_SIGNIN.into());
+    }
+    pick_bearer(own::bearer(&Keychain), shared_bearer)
+}
+
+fn pick_bearer(
+    own: Result<Option<String>, String>,
+    shared: impl FnOnce() -> Result<String, String>,
+) -> Result<(String, bool), String> {
+    match own {
+        Ok(Some(bearer)) => Ok((bearer, true)),
+        Ok(None) => shared().map(|b| (b, false)),
+        Err(ended) => shared().map(|b| (b, false)).map_err(|_| {
+            if ended == grokhub_core::IMAGINE_SIGN_IN_AGAIN {
+                SIGN_IN_ENDED.to_string()
+            } else {
+                ended
+            }
+        }),
+    }
+}
+
+/// When xAI refuses Imagine's own sign-in, the Make runs once more with
+/// chat's bearer, as the cabin fell back to Settings → Account and the key.
+pub fn retry_refused(
+    own: bool,
+    first: Result<Made, String>,
+    shared: impl FnOnce() -> Result<String, String>,
+    make: impl FnOnce(&str) -> Result<Made, String>,
+) -> Result<Made, String> {
+    match first {
+        Err(err) if own && err == NEED_SIGNIN => match shared() {
+            Ok(bearer) => make(&bearer),
+            Err(_) => Err(OWN_REFUSED.into()),
+        },
+        done => done,
+    }
+}
+
 /// There is something to sign the call with. Reads the keychain only; no
 /// refresh goes out.
 pub fn ready() -> bool {
     crate::credential::test_responses_url().is_none()
-        && (crate::oauth::signed_in(&crate::oauth::Keychain).is_some()
+        && (own::signed_in(&Keychain).is_some()
+            || crate::oauth::signed_in(&crate::oauth::Keychain).is_some()
             || crate::credential::load_key().is_ok())
+}
+
+/// Imagine's own sign-in in progress. The device code stays here.
+static FLOW: SignIn = SignIn::new();
+
+/// The page with Imagine's own account and whether a code can be shown here.
+pub fn with_account(mut page: Page) -> Page {
+    page.account = own::signed_in(&Keychain);
+    page.can_sign_in = crate::capabilities::current().grok_sign_in;
+    page
+}
+
+/// Imagine's sign-in, step one: the code and xAI's page to type it at.
+pub fn start_sign_in() -> Result<Started, String> {
+    own::start(&FLOW)
+}
+
+/// Step two, asked every few seconds by the page.
+pub fn poll_sign_in() -> Result<Poll, String> {
+    own::poll(&FLOW, &Keychain)
+}
+
+/// Signs out of Imagine only; chat's sign-in and the key stay.
+pub fn sign_out() -> Result<(), String> {
+    own::sign_out(&FLOW, &Keychain)
 }
 
 /// Holds the wall file between its read and its write in this process; the
@@ -200,6 +281,8 @@ pub fn load(config_dir: &Path, ready: bool) -> Result<Page, String> {
     Ok(Page {
         tiles: tiles(config_dir, &wall),
         ready,
+        account: None,
+        can_sign_in: false,
     })
 }
 
@@ -641,6 +724,8 @@ mod tests {
                     tall: true,
                 }],
                 ready: false,
+                account: None,
+                can_sign_in: false,
             }
         );
 
@@ -714,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_refused_key_points_to_the_cabin() {
+    fn a_missing_or_refused_key_asks_to_sign_in() {
         let d = dirs("signin");
         let blocked = grokhub_agent::imagine_client("  ");
         let err = generate(
@@ -725,7 +810,7 @@ mod tests {
             NOW,
         )
         .unwrap_err();
-        assert_eq!(err, "Sign in to Imagine in the cabin.");
+        assert_eq!(err, "Sign in to Imagine first.");
         let refused = FakeImagine {
             fail: Some("HTTP 403 {\"error\":\"scope\"}"),
             ..Default::default()
@@ -738,7 +823,7 @@ mod tests {
             NOW,
         )
         .unwrap_err();
-        assert_eq!(err, "Sign in to Imagine in the cabin.");
+        assert_eq!(err, "Sign in to Imagine first.");
         let moderated = FakeImagine {
             fail: Some("image blocked by moderation"),
             ..Default::default()
@@ -752,6 +837,90 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, "image blocked by moderation");
+    }
+
+    fn made(n: usize) -> Made {
+        Made {
+            page: Page {
+                tiles: Vec::new(),
+                ready: true,
+                account: None,
+                can_sign_in: false,
+            },
+            made: n,
+            note: String::new(),
+        }
+    }
+
+    #[test]
+    fn imagine_own_sign_in_signs_first_then_chat_as_the_cabin_did() {
+        let never = || -> Result<String, String> { panic!("chat's bearer is not asked") };
+        assert_eq!(
+            pick_bearer(Ok(Some("own".into())), never),
+            Ok(("own".to_string(), true))
+        );
+        assert_eq!(
+            pick_bearer(Ok(None), || Ok("chat".into())),
+            Ok(("chat".to_string(), false))
+        );
+        assert_eq!(
+            pick_bearer(Err(grokhub_core::IMAGINE_SIGN_IN_AGAIN.into()), || Ok(
+                "key".into()
+            )),
+            Ok(("key".to_string(), false))
+        );
+        assert_eq!(
+            pick_bearer(Err(grokhub_core::IMAGINE_SIGN_IN_AGAIN.into()), || Err(
+                NEED_SIGNIN.into()
+            )),
+            Err("Your Imagine sign-in ended. Sign out, then sign in again.".to_string())
+        );
+        assert_eq!(
+            pick_bearer(Ok(None), || Err(NEED_SIGNIN.into())),
+            Err("Sign in to Imagine first.".to_string())
+        );
+    }
+
+    #[test]
+    fn a_refused_own_sign_in_tries_chat_once_and_says_why_when_there_is_none() {
+        let again = retry_refused(
+            true,
+            Err(NEED_SIGNIN.into()),
+            || Ok("chat".into()),
+            |b| {
+                assert_eq!(b, "chat");
+                Ok(made(2))
+            },
+        );
+        assert_eq!(again.map(|m| m.made), Ok(2));
+        let none = retry_refused(
+            true,
+            Err(NEED_SIGNIN.into()),
+            || Err(NEED_SIGNIN.into()),
+            |_| panic!("no second call without a bearer"),
+        );
+        assert_eq!(
+            none.map(|m| m.made),
+            Err("xAI didn't let this Grok sign-in use Imagine. Add an xAI API key in Settings → Account.".to_string())
+        );
+        // Chat's own refusal, or any other error, is not retried.
+        let chat = retry_refused(
+            false,
+            Err(NEED_SIGNIN.into()),
+            || panic!("not asked"),
+            |_| panic!("not made"),
+        );
+        assert_eq!(chat.map(|m| m.made), Err(NEED_SIGNIN.to_string()));
+        let other = retry_refused(
+            true,
+            Err("image blocked by moderation".into()),
+            || panic!("not asked"),
+            |_| panic!("not made"),
+        );
+        assert_eq!(
+            other.map(|m| m.made),
+            Err("image blocked by moderation".to_string())
+        );
     }
 
     #[test]

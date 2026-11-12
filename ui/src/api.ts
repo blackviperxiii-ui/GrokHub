@@ -1573,6 +1573,10 @@ export interface ImaginePage {
   tiles: ImagineTile[];
   /** A Grok sign-in or a key is there, so Make can run. */
   ready: boolean;
+  /** Imagine's own sign-in, when there is one. */
+  account: SignedIn | null;
+  /** This computer can show a sign-in code. */
+  canSignIn: boolean;
 }
 
 export interface ImagineMade {
@@ -1608,6 +1612,20 @@ export function imagineCancel(): Promise<boolean> {
 /** A gallery file as a data URL, by its bare name. */
 export function imagineImage(name: string): Promise<string> {
   return invoke<string>("imagine_image", { name });
+}
+
+/** Imagine's own Sign in with Grok (the cabin's "Use a code"), step one. */
+export function imagineSignInStart(): Promise<GrokSignInStart> {
+  return invoke<GrokSignInStart>("imagine_sign_in_start");
+}
+
+export function imagineSignInPoll(): Promise<GrokSignInPoll> {
+  return invoke<GrokSignInPoll>("imagine_sign_in_poll");
+}
+
+/** Signs out of Imagine only; chat's sign-in and the key stay. */
+export function imagineSignOut(): Promise<ImaginePage> {
+  return invoke<ImaginePage>("imagine_sign_out");
 }
 
 /** One decision journal question (src-tauri/src/journal.rs). */
