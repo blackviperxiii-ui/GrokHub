@@ -620,7 +620,7 @@ fn run_within(mut cmd: Command, feed: Option<Feed<'_>>, limit: Duration) -> Resu
     let stderr = child.stderr.take();
     let child = Arc::new(Mutex::new(child));
     let kill = |child: &Mutex<std::process::Child>| {
-        let _ = child.lock().unwrap_or_else(|err| err.into_inner()).kill();
+        kill_git(&mut child.lock().unwrap_or_else(|err| err.into_inner()));
     };
 
     let late = Arc::new(AtomicBool::new(false));
@@ -631,7 +631,7 @@ fn run_within(mut cmd: Command, feed: Option<Feed<'_>>, limit: Duration) -> Resu
         std::thread::spawn(move || {
             if wait_done.recv_timeout(limit) == Err(RecvTimeoutError::Timeout) {
                 late.store(true, Ordering::SeqCst);
-                let _ = child.lock().unwrap_or_else(|err| err.into_inner()).kill();
+                kill_git(&mut child.lock().unwrap_or_else(|err| err.into_inner()));
             }
         })
     };
@@ -679,6 +679,23 @@ fn run_within(mut cmd: Command, feed: Option<Feed<'_>>, limit: Duration) -> Resu
         stdout,
         stderr,
     })
+}
+
+/// Kills a git call and everything it started. On Windows `git` is a launcher
+/// that runs the real git as its own child, which holds the pipes: killing the
+/// launcher alone leaves that child reading and the call never ends.
+fn kill_git(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        let mut tree = Command::new("taskkill");
+        tree.args(["/F", "/T", "/PID", &child.id().to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        grokhub_core::proc_util::hide_windows_console(&mut tree);
+        let _ = tree.status();
+    }
+    let _ = child.kill();
 }
 
 /// Removes every `GIT_*` variable the app was started with, so no call made
