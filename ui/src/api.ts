@@ -3993,6 +3993,22 @@ export function codeSessionPlan(conversationId: string): Promise<string | null> 
   return invoke<string | null>("code_session_plan", { conversationId });
 }
 
+/** Where a Code tab session left off. Null when it has no checkpoint. */
+export interface CodeLeftOff {
+  goal: string;
+  next: string;
+  blocker: string;
+}
+
+export function codeSessionLeft(conversationId: string): Promise<CodeLeftOff | null> {
+  return invoke<CodeLeftOff | null>("code_session_left", { conversationId });
+}
+
+/** The message Resume sends for this session's checkpoint. */
+export function codeSessionResume(conversationId: string): Promise<string> {
+  return invoke<string>("code_session_resume", { conversationId });
+}
+
 export function codeRepo(): Promise<CodeRepo> {
   return invoke<CodeRepo>("code_repo");
 }

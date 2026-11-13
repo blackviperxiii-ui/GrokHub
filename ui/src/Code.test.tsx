@@ -37,6 +37,8 @@ const api = vi.hoisted(() => ({
   onCodeDeployRun: vi.fn(() => Promise.resolve(() => {})),
   codeSessionBind: vi.fn<(conversationId: string) => Promise<string>>(),
   codeSessionLead: vi.fn<(conversationId: string) => Promise<boolean>>(),
+  codeSessionLeft: vi.fn<(conversationId: string) => Promise<{ goal: string; next: string; blocker: string } | null>>(),
+  codeSessionResume: vi.fn<(conversationId: string) => Promise<string>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -135,7 +137,7 @@ vi.mock("./CodeProjects", () => ({
   ),
 }));
 
-import { AGENT_TITLE, Code, CODE_BUILTINS, CODE_CLEAN, CODE_CONFIRM, CODE_NOT_REPO, CODE_REVIEW_PROMPT, CODE_TESTS, overrideLabel } from "./Code";
+import { AGENT_TITLE, Code, CODE_BUILTINS, CODE_CLEAN, CODE_CONFIRM, CODE_NOT_REPO, CODE_REVIEW_PROMPT, CODE_TESTS, leftOffLine, overrideLabel, RESUME } from "./Code";
 
 function repo(over: Partial<CodeRepo> = {}): CodeRepo {
   return {
@@ -171,6 +173,9 @@ describe("Code tab", () => {
     api.codeSessionBind.mockResolvedValue("/work/demo");
     api.codeSessionLead.mockReset();
     api.codeSessionLead.mockResolvedValue(false);
+    api.codeSessionLeft.mockReset();
+    api.codeSessionLeft.mockResolvedValue(null);
+    api.codeSessionResume.mockReset();
     api.codeDiff.mockReset();
     api.codeBuiltins.mockReset();
     api.codeBuiltins.mockResolvedValue([]);
@@ -783,10 +788,28 @@ describe("Code tab", () => {
     expect(within(pane).getByTestId("agent-chat")).toHaveAttribute("data-embedded", "true");
     expect(api.codeSessionBind).toHaveBeenCalledWith("shell-first");
     expect(await within(pane).findByText("Works in demo")).toHaveAttribute("title", "/work/demo");
+    expect(leftOffLine({ goal: "Ship the note", next: "", blocker: "disk full" })).toBe("Blocked: disk full");
     // The Tasks panel follows the same session and has no link out of the tab.
     const tasks = within(pane).getByTestId("agent-tasks");
     expect(tasks).toHaveTextContent("tasks of shell-first");
     expect(tasks).toHaveAttribute("data-links", "false");
+  });
+
+  it("Resume sends the saved checkpoint in the open session", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.codeSessionLeft.mockResolvedValue({ goal: "Ship the note", next: "Write the note", blocker: "" });
+    const prompt = "Continue this Code tab session where it left off.\nGoal: Ship the note\nNext: Write the note";
+    api.codeSessionResume.mockResolvedValue(prompt);
+    render(<Code shown onOpenSettings={() => {}} />);
+    const pane = screen.getByRole("complementary", { name: "Agent window" });
+    expect(await within(pane).findByText("Next: Write the note")).toBeInTheDocument();
+    await userEvent.click(within(pane).getByRole("button", { name: RESUME }));
+    expect(api.codeSessionResume).toHaveBeenCalledWith("shell-first");
+    await waitFor(() => {
+      expect(within(pane).getByTestId("agent-chat")).toHaveTextContent(
+        "sent [Continue this Code tab session where it left off. Goal: Ship the note Next: Write the note]",
+      );
+    });
   });
 
   it("holds the project and the sessions while the agent replies, then reads the sessions again", async () => {
