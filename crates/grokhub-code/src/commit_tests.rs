@@ -1202,10 +1202,13 @@ fn a_commit_advances_head_by_one_with_the_reviewed_tree_and_leaves_a_clean_statu
     assert_eq!(git(&fx.project, &["status", "--porcelain"]), "");
 
     let review_head = before.clone();
+    // The record keeps git's own top folder, which on Windows is the long,
+    // forward-slash form of the temp path.
+    let top = git(&fx.project, &["rev-parse", "--show-toplevel"]);
     assert_eq!(
         shipped(&fx),
         Some(Shipped {
-            project: fx.project.to_string_lossy().into_owned(),
+            project: top,
             branch: "work/one".into(),
             sha: sha.clone(),
             parent: review_head,
