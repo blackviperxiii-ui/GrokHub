@@ -470,14 +470,31 @@ async function typeInto(s, el, text) {
  * where focus was, whether a listener took it, and the box's value after it. */
 const KEY_LOG_START = `
   const box = arguments[0];
-  const log = (window.__smokeKeys = []);
+  window.__smokeKeys = [];
+  const push = (row) => window.__smokeKeys.push(row);
   const at = () => { const a = document.activeElement; return a === box ? "box" : a ? a.tagName.toLowerCase() + "." + a.className : "none"; };
-  const note = (type) => (e) => log.push([type, e.key ?? e.inputType ?? "", e.data ?? "", at(), e.defaultPrevented ? "taken" : "", box.value.length]);
-  for (const type of ["keydown", "beforeinput", "input", "keyup", "compositionstart", "compositionend"]) {
-    window.addEventListener(type, (e) => queueMicrotask(() => note(type)(e)), true);
+  if (!window.__smokeKeyLog) {
+    window.__smokeKeyLog = true;
+    for (const type of ["keydown", "beforeinput", "input", "keyup", "compositionstart", "compositionend"]) {
+      window.addEventListener(type, (e) => queueMicrotask(() => push([type, e.key ?? e.inputType ?? "", e.data ?? "", at(), e.defaultPrevented ? "taken" : "", e.target.value?.length ?? ""])), true);
+    }
+    window.addEventListener("blur", () => push(["window-blur", "", "", at(), "", ""]), true);
   }
-  window.addEventListener("blur", () => log.push(["window-blur", "", "", at(), "", box.value.length]), true);
-  box.addEventListener("blur", () => log.push(["box-blur", "", "", at(), "", box.value.length]));
+  // A script write to the box's value (React putting back its state) logs
+  // where it came from; React's own value tracker stays in the chain.
+  if (!box.__smokeValueLog) {
+    box.__smokeValueLog = true;
+    const own = Object.getOwnPropertyDescriptor(box, "value") || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+    Object.defineProperty(box, "value", {
+      configurable: true,
+      get() { return own.get.call(this); },
+      set(v) {
+        const stack = (new Error().stack || "").split("\\n").slice(2, 14).map((l) => l.trim()).join(" < ");
+        push(["set", "", "", at(), stack, String(v).length]);
+        own.set.call(this, v);
+      },
+    });
+  }
 `;
 
 /** Prints the key log around the first character the box does not hold. */
@@ -487,7 +504,7 @@ async function logLostKey(s, text, got) {
   const log = await wd("POST", `${s}/execute/sync`, { script: "return window.__smokeKeys || [];", args: [] }).catch(() => []);
   // Each typed character shows up as keydown, beforeinput, input and keyup.
   const from = log.findIndex((row) => row[0] === "keydown" && row[5] >= i - 2);
-  const rows = log.slice(Math.max(0, from), from + 24).map((row) => row.join(" "));
+  const rows = log.slice(Math.max(0, from), from + 32).map((row) => row.join(" "));
   console.log(`typed text differs at ${i}: wanted ${JSON.stringify(text.slice(i - 3, i + 3))}, box has ${JSON.stringify(got.slice(i - 3, i + 3))}`);
   console.log(`key log from there:\n  ${rows.join("\n  ")}`);
 }
