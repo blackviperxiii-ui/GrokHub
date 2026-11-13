@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
+import { act } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -27,6 +28,7 @@ vi.mock("./api", () => api);
 vi.mock("./external", () => ({ openExternal: () => Promise.resolve() }));
 
 import { GALLERY_EMPTY, Imagine, makingLine, NEED_SIGNIN } from "./Imagine";
+import { requestImagine } from "./imagineAsk";
 
 function tile(over: Partial<ImagineTile> = {}): ImagineTile {
   return {
@@ -238,5 +240,22 @@ describe("Imagine", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("The image service is busy. Try again.");
     await userEvent.click(screen.getByRole("button", { name: "+ New project" }));
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a slash prompt makes one video at square", async () => {
+    api.getImagine.mockResolvedValue(EMPTY);
+    api.imagineGenerate.mockResolvedValue({
+      page: { tiles: [tile({ video: true })], ready: true, account: null, canSignIn: false },
+      made: 1,
+      note: "",
+    });
+    render(<Imagine />);
+    await screen.findByText(GALLERY_EMPTY);
+    act(() => {
+      requestImagine("video", "waves");
+    });
+    await waitFor(() => expect(api.imagineGenerate).toHaveBeenCalledWith("waves", "1:1", 1, "video"));
+    expect(await screen.findByText("Made 1.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Video" })).toHaveAttribute("aria-pressed", "true");
   });
 });

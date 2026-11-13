@@ -44,6 +44,7 @@ vi.mock("./api", async () => {
 });
 
 import { Chat, NO_PLAN, PLAN_NEXT, UNDO_NA } from "./Chat";
+import { subscribeImagine } from "./imagineAsk";
 import { isSlashCommand } from "./SlashMenu";
 
 const SETTINGS: Settings = {
@@ -380,6 +381,37 @@ describe("composer slash commands", () => {
     await userEvent.type(screen.getByLabelText("Message"), "/auto{Enter}");
     await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("settings"));
     expect(await screen.findByRole("status", { name: "/auto result" })).toHaveTextContent("Defaults");
+  });
+
+  it("/journal opens the journal, and /plugins opens Settings → Labs", async () => {
+    const onOpenView = vi.fn();
+    const onOpenSection = vi.fn();
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} onOpenSection={onOpenSection} />);
+    api.runSlash.mockResolvedValueOnce({ kind: "open", view: "journal" });
+    await userEvent.type(screen.getByLabelText("Message"), "/journal{Enter}");
+    await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("journal"));
+    api.runSlash.mockResolvedValueOnce({ kind: "openSection", section: "labs" });
+    await userEvent.type(screen.getByLabelText("Message"), "/plugins{Enter}");
+    await waitFor(() => expect(onOpenSection).toHaveBeenCalledWith("labs"));
+  });
+
+  it("/imagine-video opens Imagine and starts that prompt", async () => {
+    const onOpenView = vi.fn();
+    const seen: { kind: string; prompt: string }[] = [];
+    const stop = subscribeImagine((job) => seen.push({ kind: job.kind, prompt: job.prompt }));
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    api.runSlash.mockResolvedValueOnce({ kind: "imagine", media: "video", prompt: "waves" });
+    await userEvent.type(screen.getByLabelText("Message"), "/imagine-video waves{Enter}");
+    await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("imagine"));
+    expect(seen).toEqual([{ kind: "video", prompt: "waves" }]);
+    stop();
+  });
+
+  it("/learn posts the reflect line", async () => {
+    api.runSlash.mockResolvedValueOnce({ kind: "notice", text: "Reflect: nothing new" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/learn{Enter}");
+    expect(await screen.findByRole("status", { name: "/learn result" })).toHaveTextContent("Reflect: nothing new");
   });
 
   describe("while the list for the newest keystroke is still on its way", () => {
