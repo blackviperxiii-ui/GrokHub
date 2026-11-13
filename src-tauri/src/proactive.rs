@@ -330,9 +330,11 @@ pub fn is_quiet(behavior: &crate::settings::Behavior, hour: u32, minute: u32) ->
 
 /// The background thread: one look shortly after launch, then every 15
 /// minutes. It waits for the window's clock like the scheduler does.
+/// A posted card due within the hour goes to `remind` when reminder
+/// notifications are on; a crash card whose look is switched on gets it now.
 /// Desktop only: the scheduler clock it reads is not built on phones.
 #[cfg(desktop)]
-pub fn start(config_dir: PathBuf) {
+pub fn start(config_dir: PathBuf, remind: impl Fn(&str) + Send + 'static) {
     std::thread::spawn(move || {
         std::thread::sleep(FIRST_LOOK);
         loop {
@@ -343,9 +345,20 @@ pub fn start(config_dir: PathBuf) {
                 let quiet = is_quiet(&behavior, clock.hour, clock.minute);
                 // A game running counts as busy: nothing proactive goes up mid-game.
                 if !grokhub_desktop::game_guard::peek().gaming {
-                    let _ = tick(&config_dir, std::process::id(), now, quiet, clock.hour);
+                    let posted = tick(&config_dir, std::process::id(), now, quiet, clock.hour)
+                        .unwrap_or_default();
+                    let on = crate::auto_fixes::reminders_on(&config_dir);
+                    for card in &posted {
+                        if let Some(title) = crate::auto_fixes::reminder(card, now, on) {
+                            remind(&title);
+                        }
+                    }
                 }
-                let _ = crate::nudges::tick(&config_dir, std::process::id(), now, offset);
+                let crashes = crate::nudges::tick(&config_dir, std::process::id(), now, offset)
+                    .unwrap_or_default();
+                crate::auto_fixes::after_post(&config_dir, &crashes, now, &|name| {
+                    crate::auto_fixes::crash_look(&config_dir, name)
+                });
             }
             std::thread::sleep(EVERY);
         }

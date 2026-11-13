@@ -3964,6 +3964,32 @@ export function setGameWatch(on: boolean): Promise<GameWatch> {
   return invoke<GameWatch>("set_game_watch", { on });
 }
 
+/** Settings → Pulse: one kind of fix that may run without its tap (`app.json` autoFixes). */
+export interface PulseAutoFix {
+  id: string;
+  label: string;
+  note: string;
+  on: boolean;
+}
+
+/** Settings → Pulse: fixes that run on their own, and reminder notifications. */
+export interface PulseAuto {
+  fixes: PulseAutoFix[];
+  reminders: boolean;
+}
+
+export function getPulseAuto(): Promise<PulseAuto> {
+  return invoke<PulseAuto>("get_pulse_auto");
+}
+
+export function setPulseAutoFix(id: string, on: boolean): Promise<PulseAuto> {
+  return invoke<PulseAuto>("set_pulse_auto_fix", { id, on });
+}
+
+export function setProactiveReminders(on: boolean): Promise<PulseAuto> {
+  return invoke<PulseAuto>("set_proactive_reminders", { on });
+}
+
 /** Settings → Pulse: Steam achievement nudges and wishlist sale alerts. */
 export interface SteamPulseThreshold {
   key: string;
