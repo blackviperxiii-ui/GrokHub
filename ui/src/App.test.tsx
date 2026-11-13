@@ -160,7 +160,13 @@ vi.mock("./Automations", () => ({
   Automations: () => null,
   resultLine: (r: { text: string; error: string }) => r.error || r.text,
 }));
-vi.mock("./Memory", () => ({ Memory: () => null }));
+const memoryThrows = vi.hoisted(() => ({ current: false }));
+vi.mock("./Memory", () => ({
+  Memory: () => {
+    if (memoryThrows.current) throw new Error("Corrupt vector index");
+    return <p>Memory page</p>;
+  },
+}));
 vi.mock("./Code", () => ({
   Code: (p: {
     shown: boolean;
@@ -939,5 +945,26 @@ describe("App", () => {
       within(within(dock).getByRole("listitem", { name: "and tell me" })).getByRole("button", { name: "Remove" }),
     );
     expect(screen.getByText("Act remove 1")).toBeVisible();
+  });
+
+  it("catches a render throw in a tab and recovers on Try again without unmounting the shell", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    memoryThrows.current = true;
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      render(<App />);
+      await userEvent.click(await screen.findByRole("button", { name: "Personal" }));
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("This page hit a snag: Corrupt vector index");
+      expect(screen.getByRole("navigation", { name: "Views" })).toBeVisible();
+
+      memoryThrows.current = false;
+      await userEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+      expect(await screen.findByText("Memory page")).toBeVisible();
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      memoryThrows.current = false;
+      errSpy.mockRestore();
+    }
   });
 });

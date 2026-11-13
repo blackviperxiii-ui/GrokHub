@@ -1,11 +1,3 @@
-- Mods: an archive entry with a drive or stream name in any folder (`x/D:Games/a.dll`, `a.esp:s`), a trailing dot or space (`tool.exe.`) or a device name (`CON`, `NUL`, `COM1`) is refused with "a name Windows can't store", so on Windows a mod can't write outside its staging folder or slip a program past the check. `Zone.Identifier` sidecars from WSL copies are skipped.
-- Network errors no longer show a link's query string or a password in the address, so the Steam Web API key never reaches the Mods page, the chat or the model.
-- Memory recalled into a chat counts as personal again when a tool call would send it out; the prefix cache moved it where the egress check did not look.
-- An MCP input card names the server that asked, never a name the request carries.
-- Web access: a paired browser can't queue a Workboard card for the background runner, and the web app no longer shows Queue.
-- Imagine videos play in the shell and the web app (the page now allows data: media).
-- Phones and the web app: the views bar stays one row at the bottom instead of stacking its icons over the composer.
-- Sign in with Grok keeps waiting for your approval after you leave Settings and come back, at the pace xAI last asked for, with one request at a time.
-- A reply line with a link followed by thousands of `)` no longer freezes the chat.
-- A huge Retry-After or token lifetime from a server no longer overflows.
-- CI: the shell's connector key test names the macOS Keychain on macOS runners.
+- Desktop & web shell: wrap lazy views in a per-page error boundary with a "Try again" recovery card so a render error in one tab never blanks the app.
+- Mobile & narrow windows: give the chat composer's message box a full row above its buttons on phones (`<= 600px`), and tighten desktop view-tab spacing so more tabs fit per row.
+- Weekly self-review: write `self_review.json` atomically via a temporary file and release the night's claim if the weekly model call fails before posting any cards.
