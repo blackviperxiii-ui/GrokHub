@@ -66,16 +66,7 @@ impl Cabin {
 
     /// Scope keys you granted in Settings. Only these sources are read.
     fn proactive_granted(&mut self) -> Vec<&'static str> {
-        let ledger = self.consent();
-        [
-            (hx::Scope::Calendar, "calendar"),
-            (hx::Scope::Mail, "mail"),
-            (hx::Scope::SystemState, "system_state"),
-        ]
-        .into_iter()
-        .filter(|(scope, _)| ledger.scope_grant(scope).is_some())
-        .map(|(_, key)| key)
-        .collect()
+        self.consent().proactive_scopes()
     }
 
     /// Open board cards as the engine sees them.

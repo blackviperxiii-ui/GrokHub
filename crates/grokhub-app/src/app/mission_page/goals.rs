@@ -177,19 +177,17 @@ impl Cabin {
         now: u64,
     ) -> Vec<grokhub_core::proactive::Candidate> {
         let dir = crate::config::config_dir();
-        let due = objectives::due_follow_ups(&objectives::load(&dir), now);
-        let mut out = Vec::new();
-        for f in due {
-            match objectives::follow_up_candidate(&f) {
-                Some(c) => out.push(c),
-                None => {
-                    if objectives::change(&dir, |o| objectives::followed_up(o, &f.id, true, now))
-                        .is_ok_and(|(_, wrote)| wrote)
-                    {
-                        GOALS_CHANGED.store(true, Ordering::Relaxed);
-                    }
-                }
-            }
+        let nudges =
+            |o: &objectives::Objectives| -> usize { o.goals.iter().map(|g| g.nudges.len()).sum() };
+        let (_, (out, wrote)) = objectives::change(&dir, |o| {
+            let before = nudges(o);
+            let out = objectives::follow_up_candidates(o, now);
+            let wrote = nudges(o) != before;
+            (out, wrote)
+        })
+        .unwrap_or_default();
+        if wrote {
+            GOALS_CHANGED.store(true, Ordering::Relaxed);
         }
         out
     }
@@ -197,14 +195,7 @@ impl Cabin {
     /// A follow-up card about the goal titled `topic` went up.
     pub(in crate::app) fn note_goal_follow_up(&self, topic: &str, now: u64) {
         let dir = crate::config::config_dir();
-        let wrote = objectives::change(&dir, |o| {
-            let id = o
-                .tracking()
-                .into_iter()
-                .find(|g| goal_title(g) == topic)
-                .map(|g| g.id.clone());
-            id.is_some_and(|id| objectives::followed_up(o, &id, false, now))
-        });
+        let wrote = objectives::change(&dir, |o| objectives::posted_follow_up(o, topic, now));
         if wrote.is_ok_and(|(_, w)| w) {
             GOALS_CHANGED.store(true, Ordering::Relaxed);
         }

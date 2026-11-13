@@ -12,8 +12,6 @@ use grokhub_core::LocalClock;
 
 /// Typing within this long counts the current minute as active.
 const ACTIVE_WINDOW: Duration = Duration::from_secs(120);
-/// A proactive candidate at or over this value goes up even in an away hour.
-pub(super) const NUDGE_URGENT_VALUE: f64 = 0.9;
 const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 fn rhythm_path() -> std::path::PathBuf {
@@ -94,7 +92,7 @@ impl Cabin {
     /// True when this is a learned away hour and nothing ranked is urgent, so
     /// the nudges wait in the quiet queue for the next usually-active hour.
     pub(super) fn rhythm_holds(&mut self, ranked: &[Candidate], hour: u32) -> bool {
-        self.rhythm_now().usually_away(hour) && ranked.iter().all(|c| c.value < NUDGE_URGENT_VALUE)
+        self.rhythm_now().holds(ranked, hour)
     }
 
     /// The brief's hour gate for `tick_feed_pulse`.

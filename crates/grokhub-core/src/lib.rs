@@ -226,6 +226,7 @@ pub mod verify;
 pub mod voice;
 pub mod voice_engine;
 pub mod voice_flow;
+pub mod voice_live;
 pub mod voice_turn;
 pub mod watch_learn;
 pub mod week_recap;
