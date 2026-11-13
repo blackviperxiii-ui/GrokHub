@@ -217,6 +217,8 @@ pub struct RowAsk<'a> {
     pub weekday: u8,
     pub quiet_hours: bool,
     pub now_ms: u64,
+    /// Feature chips (focus help) prepended into the pool.
+    pub extra: &'a [QuickChip],
 }
 
 /// What a row keeps in this process between showing it and the tap: the
@@ -296,7 +298,7 @@ fn pool(mem: &ChipMemory, ask: &RowAsk<'_>) -> Vec<QuickChip> {
             quiet_hours: ask.quiet_hours,
             ..ChipSignals::default()
         },
-        extra: &[],
+        extra: ask.extra,
     })
 }
 
@@ -509,6 +511,7 @@ mod tests {
             weekday: 2,
             quiet_hours: false,
             now_ms: 1_000,
+            extra: &[],
         };
         let shown = row(&dir, &rows, ask());
         assert!(

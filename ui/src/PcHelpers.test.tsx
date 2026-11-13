@@ -14,7 +14,7 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 vi.mock("./PcFiles", () => ({ PcFiles: () => <p>Files panel</p> }));
 
-import { PcHelpers, WIND_BLIND_NOTE } from "./PcHelpers";
+import { FOCUS_NOTE, PcHelpers, WIND_BLIND_NOTE } from "./PcHelpers";
 
 const FRESH: Shape = {
   focusHelp: false,
@@ -46,6 +46,8 @@ describe("PcHelpers", () => {
     expect(screen.queryByRole("group", { name: "Sleep after" })).toBeNull();
     expect(screen.getByText("Still learning. A few days of use fills this in.")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Forget my rhythm" })).toBeNull();
+    expect(screen.getByText(FOCUS_NOTE)).toBeVisible();
+    expect(FOCUS_NOTE).not.toMatch(/doesn't show|don't show/i);
   });
 
   it("saves a switch and shows what the shell kept", async () => {

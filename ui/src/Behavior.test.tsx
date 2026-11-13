@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { Behavior, SCHEDULE_NOTE, SUGGESTIONS_NOTE } from "./Behavior";
+import { AUTOCOMPLETE_NOTE, Behavior, SCHEDULE_NOTE, SUGGESTIONS_NOTE } from "./Behavior";
 
 const OFF: Shape = {
   autocomplete: false,
@@ -59,6 +59,8 @@ describe("Behavior", () => {
     expect(screen.getByLabelText("Quiet hours end")).toHaveValue("");
     expect(screen.queryByLabelText("Pause scheduled work over budget")).toBeNull();
     expect(screen.getByText(SCHEDULE_NOTE)).toBeInTheDocument();
+    expect(screen.getByText(AUTOCOMPLETE_NOTE)).toBeInTheDocument();
+    expect(AUTOCOMPLETE_NOTE).not.toMatch(/doesn't show|don't show/i);
   });
 
   it("suggestions start on, and turning them off saves at once", async () => {

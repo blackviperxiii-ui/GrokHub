@@ -11,7 +11,7 @@ import { PcFiles } from "./PcFiles";
 import { Toggle } from "./Toggle";
 
 export const FOCUS_NOTE =
-  "When you come back, the first suggestion fits the app you left (Blender, a slicer, a game, an editor). Reads only that app's process name, once, never window titles or contents. Off by default. Saved for this app; its suggestions don't show it yet.";
+  "When you come back, the first suggestion fits the app you left (Blender, a slicer, a game, an editor). Reads only that app's process name, once, never window titles or contents. Off by default.";
 export const WIND_NOTE =
   "Sleep the PC after it sits idle the time you pick. Never during a game, a fullscreen app, a render, a download or an agent task.";
 export const WIND_BLIND_NOTE =

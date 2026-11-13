@@ -10,6 +10,7 @@ mod broker;
 mod capture;
 #[cfg(target_os = "linux")]
 mod fallback;
+pub mod foreground;
 pub mod game_guard;
 mod harness_gate;
 pub mod host;

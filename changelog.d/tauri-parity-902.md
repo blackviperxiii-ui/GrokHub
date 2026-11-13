@@ -1,0 +1,1 @@
+- Tauri: sentence autocomplete (ghost text) and focus-help chip/context for the Behavior and PC helper switches.

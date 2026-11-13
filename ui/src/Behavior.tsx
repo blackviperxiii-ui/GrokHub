@@ -6,7 +6,7 @@ import { SelfImprove } from "./SelfImprove";
 import { Toggle } from "./Toggle";
 
 export const AUTOCOMPLETE_NOTE =
-  "Muted ghost text finishes your line in the composer; Tab accepts. Saved for this app's composer, which doesn't show it yet.";
+  "Muted ghost text finishes your line in the composer; Tab accepts. Off by default.";
 export const SUGGESTIONS_NOTE =
   "A few next steps to tap, under the box, on Home and after replies. They learn from what you pick.";
 export const QUIET_NOTE = "Leave both empty for no quiet hours.";

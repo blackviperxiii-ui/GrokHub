@@ -93,6 +93,9 @@ pub mod pc_files;
 #[cfg(desktop)]
 pub mod pc_files_run;
 pub mod pc_helpers;
+#[cfg(desktop)]
+mod focus_help;
+mod composer_ghost;
 pub mod permissions;
 pub mod personality;
 pub mod playbooks;
@@ -177,6 +180,9 @@ struct ShellState {
     card_carry: Mutex<HashMap<String, String>>,
     /// The folder each Code tab session works in.
     code_sessions: code_sessions::Folders,
+    /// Focus help: the app the user was just in (chip + one context line).
+    #[cfg(desktop)]
+    focus_help: Mutex<focus_help::FocusHelp>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -649,6 +655,20 @@ async fn send_chat(
     let text = match carry {
         Some(context) => format!("{}{text}", grokhub_core::card_report::card_carry(&context)),
         None => text,
+    };
+    // Focus help: one context line on the next turn after returning from an app.
+    #[cfg(desktop)]
+    let text = {
+        let on = pc_helpers::read(&state.config_dir).focus_help;
+        let focus = state
+            .focus_help
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take_context(on);
+        match focus {
+            Some(line) => format!("{line}\n{text}"),
+            None => text,
+        }
     };
     let turn = Turn {
         text,
@@ -1878,6 +1898,24 @@ fn chip_row(
             &settings.behavior.quiet_end,
         );
     let first_run = chat.is_empty() && history::list(dir).is_empty();
+    #[cfg(desktop)]
+    let focus_extra: Vec<_> = {
+        let on = pc_helpers::read(dir).focus_help;
+        state
+            .focus_help
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .chip(on)
+            .into_iter()
+            .collect()
+    };
+    #[cfg(not(desktop))]
+    let focus_extra: Vec<grokhub_core::QuickChip> = Vec::new();
+    let extra = if surface == chips::COMPOSER {
+        focus_extra.as_slice()
+    } else {
+        &[]
+    };
     chips::row(
         dir,
         &state.chip_rows,
@@ -1897,6 +1935,7 @@ fn chip_row(
             weekday: local.weekday,
             quiet_hours: quiet,
             now_ms: local.now_ms,
+            extra,
         },
     )
 }
@@ -5147,6 +5186,21 @@ async fn get_pc_helpers(state: State<'_, ShellState>) -> Result<pc_helpers::PcHe
     off_main(move || pc_helpers::read(&dir)).await
 }
 
+/// Sentence autocomplete: a short continuation for the composer draft.
+#[tauri::command]
+async fn composer_ghost_suggest(
+    state: State<'_, ShellState>,
+    draft: String,
+) -> Result<String, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let (client, _) = model_client()?;
+        let model = grokhub_agent::DEFAULT_MODEL.to_string();
+        composer_ghost::suggest(&dir, &draft, &client, &model)
+    })
+    .await?
+}
+
 /// Turn one PC helper switch on or off (`focusHelp`, `windDown`, `rhythm`,
 /// `rhythmGames`).
 #[tauri::command]
@@ -5156,7 +5210,17 @@ async fn set_pc_helper(
     on: bool,
 ) -> Result<pc_helpers::PcHelpers, String> {
     let dir = state.config_dir.clone();
-    off_main(move || pc_helpers::set_switch(&dir, &key, on)).await?
+    let key_for_clear = key.clone();
+    let page = off_main(move || pc_helpers::set_switch(&dir, &key, on)).await?;
+    #[cfg(desktop)]
+    if key_for_clear == "focusHelp" && !on {
+        state
+            .focus_help
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+    page
 }
 
 /// Wind-down's idle time, one of the offered choices.
@@ -6339,6 +6403,8 @@ pub fn run() {
                 auto: Mutex::default(),
                 card_carry: Mutex::default(),
                 code_sessions,
+                #[cfg(desktop)]
+                focus_help: Mutex::new(focus_help::FocusHelp::default()),
             });
             if let Some(window) = app.get_webview_window("main") {
                 if text_size != 100 {
@@ -6403,6 +6469,18 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            #[cfg(desktop)]
+            if let WindowEvent::Focused(focused) = event {
+                if window.label() == "main" {
+                    let state = window.state::<ShellState>();
+                    let on = pc_helpers::read(&state.config_dir).focus_help;
+                    state
+                        .focus_help
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .tick(*focused, on);
+                }
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 #[cfg(desktop)]
                 if window.label() == desktop_nyx::LABEL {
@@ -6757,6 +6835,7 @@ pub fn run() {
             set_workboard_tidy,
             get_behavior,
             get_pc_helpers,
+            composer_ghost_suggest,
             get_screenshot_offer,
             set_screenshot_explain,
             dismiss_screenshot_offer,
