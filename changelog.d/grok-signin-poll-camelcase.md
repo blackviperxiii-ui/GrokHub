@@ -1,0 +1,1 @@
+- Sign in with Grok: serialize the ready poll's account as `signedIn` so Settings no longer shows a TypeError after a successful sign-in.

@@ -57,6 +57,26 @@ describe("Sign in with Grok", () => {
     expect(signedInAs({ name: "Sam", email: "sam@example.com" })).toBe("Sam (sam@example.com)");
     expect(signedInAs({ name: null, email: "sam@example.com" })).toBe("sam@example.com");
     expect(signedInAs({ name: null, email: null })).toBe("your Grok account");
+    expect(signedInAs(undefined)).toBe("your Grok account");
+    expect(signedInAs(null)).toBe("your Grok account");
+  });
+
+  it("a ready poll with no signedIn still shows Signed in as, not a TypeError", async () => {
+    // Reproduces the wire shape when Rust sent `signed_in` and the UI expected
+    // `signedIn`: status ready, account missing.
+    api.pollGrokSignIn.mockResolvedValue({ status: "ready" } as GrokSignInPoll);
+    const after = { ...SETTINGS, signedIn: { name: "Sam", email: "sam@example.com" } };
+    api.getSettings.mockResolvedValue(after);
+    const onChange = vi.fn();
+    render(<GrokSignIn signedIn={null} onChange={onChange} />);
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(after));
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Signed in as your Grok account.");
+    expect(status.textContent).not.toMatch(/TypeError|undefined is not an object/);
   });
 
   it("shows the code with Open x.ai, waits, then shows the account", async () => {
