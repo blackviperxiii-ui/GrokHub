@@ -290,12 +290,13 @@ body {
   scrollbar-color: var(--selected) transparent;
 }
 
+/* Default = red outline (Loadout primary). One amber CTA per screen uses .cta. */
 button {
   font: inherit;
   font-weight: 500;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--accent-text);
+  border: 1.5px solid var(--red);
+  background: transparent;
+  color: var(--text);
   border-radius: var(--radius-sm);
   padding: 8px 16px;
   cursor: pointer;
@@ -308,7 +309,9 @@ button {
 }
 
 button:hover:not(:disabled) {
-  filter: brightness(1.08);
+  filter: none;
+  background: var(--red-wash);
+  box-shadow: var(--red-glow);
 }
 
 button:active:not(:disabled) {
@@ -316,18 +319,42 @@ button:active:not(:disabled) {
   filter: brightness(0.96);
 }
 
-/* A solid ring: at least 3:1 against every surface in every theme. */
+/* Red focus ring: at least 3:1 against every surface in every theme. */
 button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--red);
   outline-offset: 2px;
 }
 
-/* A disabled button goes quiet and neutral; fading the accent fill turns amber to mud. */
+/* A disabled button goes quiet and neutral. */
 button:disabled {
   background: var(--hover);
   border-color: var(--border);
   color: var(--muted);
   cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* The one primary action per view: amber fill (locked #FF9F1A). */
+button.cta,
+button.primary {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--void, #0a0a0b);
+}
+
+button.cta:hover:not(:disabled),
+button.primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  background: var(--amber);
+  box-shadow: 0 0 0 1px rgb(255 159 26 / 0.18), 0 0 18px rgb(255 159 26 / 0.22);
+}
+
+button.cta:disabled,
+button.primary:disabled {
+  background: var(--hover);
+  border-color: var(--border);
+  color: var(--muted);
+  box-shadow: none;
 }
 
 /* Outlined and link-style controls keep their look and just fade. */
@@ -371,9 +398,11 @@ button.quiet:hover:not(:disabled),
 .switch button[aria-pressed="true"],
 .settings-nav button[aria-pressed="true"],
 .settings-tabs button[aria-pressed="true"] {
+  /* Solid red selected chrome — amber stays on the one CTA fill (color-share). */
   border-color: var(--red);
-  background: var(--red-wash);
-  box-shadow: inset 0 -2px 0 var(--amber);
+  background: var(--red);
+  color: #ffffff;
+  box-shadow: none;
 }
 
 button.link {
@@ -1718,15 +1747,24 @@ button.md-copy {
   opacity: 0.8;
 }
 
-button.danger {
-  color: var(--danger-text);
-  border-color: var(--danger-text);
+/* Destructive: red fill + bright label + "!" so it is not primary-by-color-alone. */
+button.danger:not(:disabled) {
+  background: var(--red);
+  border-color: var(--red);
+  color: #ffffff;
 }
 
-/* Outlined like a quiet button: danger text on the accent fill is 1.5:1. A
-   disabled one keeps the disabled fill. */
-button.danger:not(:disabled) {
-  background: transparent;
+button.danger:not(:disabled)::before {
+  content: "! ";
+  color: #ff4d5e;
+  font-weight: 600;
+}
+
+button.danger:hover:not(:disabled):not([role="menuitem"]) {
+  filter: none;
+  background: var(--red-hover, #e8384f);
+  border-color: var(--red-hover, #e8384f);
+  box-shadow: var(--red-glow);
 }
 
 /* Turn extras (Order 733): the findings, recap and evidence cards under a
@@ -1927,10 +1965,6 @@ button.danger:not(:disabled) {
   margin: 8px 0 0;
 }
 
-button.danger:hover:not(:disabled):not([role="menuitem"]) {
-  filter: none;
-  background: var(--hover);
-}
 
 .automations,
 .memory,
@@ -2720,8 +2754,9 @@ textarea.code {
 
 .chip[aria-pressed="true"] {
   border-color: var(--red);
-  background: var(--red-wash);
-  box-shadow: inset 0 -2px 0 var(--amber);
+  background: var(--red);
+  color: #ffffff;
+  box-shadow: none;
   font-weight: 600;
 }
 
@@ -2762,8 +2797,15 @@ span.chip.quiet {
 }
 
 .quick-chip.primary {
-  border-color: var(--accent);
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--void, #0a0a0b);
   font-weight: 600;
+}
+
+.quick-chip.primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  background: var(--amber);
 }
 
 .quick-chip:hover:not(:disabled) {

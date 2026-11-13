@@ -458,7 +458,7 @@ function PermissionCard({
         <p className="card-answer">{ANSWERED[item.answer]}</p>
       ) : (
         <div className="card-buttons">
-          <button type="button" onClick={() => onAnswer("allow")}>
+          <button type="button" className="cta" onClick={() => onAnswer("allow")}>
             Allow once
           </button>
           {!merge && (
@@ -1823,7 +1823,7 @@ export function Chat({
             </button>
           </>
         ) : (
-          <button type="submit" disabled={!draft.trim() && (busy || attach.files.length === 0)}>
+          <button type="submit" className="cta" disabled={!draft.trim() && (busy || attach.files.length === 0)}>
             Send
           </button>
         )}
