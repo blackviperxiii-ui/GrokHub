@@ -86,6 +86,9 @@ mod net_watch;
 mod nudges;
 pub mod nyx;
 pub use grokhub_agent::xai_keychain as oauth;
+mod composer_ghost;
+#[cfg(desktop)]
+mod focus_help;
 pub mod onboard;
 pub mod opener;
 #[cfg(desktop)]
@@ -94,9 +97,6 @@ pub mod pc_files;
 #[cfg(desktop)]
 pub mod pc_files_run;
 pub mod pc_helpers;
-#[cfg(desktop)]
-mod focus_help;
-mod composer_ghost;
 pub mod permissions;
 pub mod personality;
 pub mod playbooks;
