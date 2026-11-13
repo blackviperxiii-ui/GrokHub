@@ -2,7 +2,7 @@
 //! where no reader sees it (macOS, and Wayland compositors other than
 //! Hyprland and Sway). Never a window title.
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use std::process::{Command, Stdio};
 
 /// The foreground app's process name. Opt-in callers (focus help) read this
