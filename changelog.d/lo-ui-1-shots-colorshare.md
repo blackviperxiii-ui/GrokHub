@@ -1,0 +1,1 @@
+Add a Tauri UI screenshot and color-share harness (`npm run shots` / `npm run colorshare`) for Chat, Home, Pulse, Code and Settings.

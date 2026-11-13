@@ -508,6 +508,42 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # LO-UI-1: Vite + stubbed Tauri screenshots and color-share. Non-required —
+  # today's amber-accent UI fails the share thresholds until LO-UI-2 lands.
+  ui-shots:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: ui-shots
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci --prefix ui
+      - name: Install Chromium
+        run: ui/node_modules/.bin/playwright install --with-deps chromium
+      - name: Shots
+        run: npm run shots --prefix ui
+      # Amber-accent UI fails share until LO-UI-2; keep the table as an artifact.
+      - name: Color-share
+        continue-on-error: true
+        run: npm run colorshare --prefix ui
+      - name: Upload shots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-shots
+          path: ui/e2e/shots/
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Phone builds of the shell (cross-platform Phase 4). A smoke build carries
   # the mock model's loopback URL and drives one chat itself
   # (ui/src/phoneSmoke.ts); ui/e2e/phone.mjs serves the mock, installs the app
