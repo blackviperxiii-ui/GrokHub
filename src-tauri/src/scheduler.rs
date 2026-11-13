@@ -132,9 +132,14 @@ pub fn tick_with_check(
     }
 }
 
-/// What a scheduled run needs: the model client, model and work folder from
-/// the current settings, or why there is none (no API key).
-pub type Route = (Arc<dyn ModelClient + Send + Sync>, String, PathBuf);
+/// What a scheduled run needs: the model client, model, work folder and gate
+/// from the current settings, or why there is none (no API key).
+pub type Route = (
+    Arc<dyn ModelClient + Send + Sync>,
+    String,
+    PathBuf,
+    crate::unattended::RunGate,
+);
 
 /// The background thread: a tick every 30 seconds, and once right after a
 /// laptop wakes, since the sleep ends then. Missed slots fire once.
@@ -152,8 +157,8 @@ pub fn start(
         };
         let clock = || local_clock(grokhub_core::now_ms(), offset);
         let mut run = |job: &Automation| match route() {
-            Ok((client, model, workspace)) => {
-                automations::execute(&config_dir, job, client, &model, workspace)
+            Ok((client, model, workspace, gate)) => {
+                automations::execute(&config_dir, job, client, &model, workspace, gate)
             }
             Err(error) => RunResult {
                 text: String::new(),
@@ -495,7 +500,17 @@ mod tests {
             requests: Mutex::new(Vec::new()),
         });
         let fired = tick(&dir, &at(FRI_8AM + HOUR), PID, &mut |job| {
-            automations::execute(&dir, job, client.clone(), "grok-4.7", workspace.clone())
+            // Approvals on Ask: a scheduled run stays read-only.
+            let ask =
+                crate::unattended::RunGate::scheduled(grokhub_agent::PermMode::Ask, false, None);
+            automations::execute(
+                &dir,
+                job,
+                client.clone(),
+                "grok-4.7",
+                workspace.clone(),
+                ask,
+            )
         })
         .expect("tick");
         assert!(!workspace.join("out.txt").exists());

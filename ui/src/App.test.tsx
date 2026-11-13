@@ -257,6 +257,7 @@ vi.mock("./Settings", () => ({
 }));
 
 import { App } from "./App";
+import { dispatch } from "./transport";
 import { HALT_DONE } from "./Halt";
 
 const DESKTOP: Capabilities = {
@@ -378,12 +379,13 @@ describe("App", () => {
     expect(await screen.findByText("Workboard page without Resume")).toBeVisible();
   });
 
-  it("Resume on the Workboard puts the draft in the card's chat", async () => {
+  it("Resume on the Workboard sends the resume block once in the card's chat", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Workboard" }));
     await userEvent.click(await screen.findByRole("button", { name: "Resume" }));
     expect(screen.getByText("Chat page: Resume the work card in chat-w1")).toBeVisible();
+    expect(screen.getByText("Sends Resume the work card")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -875,6 +877,16 @@ describe("App", () => {
     await userEvent.click(within(menu).getByRole("button", { name: "Find the cause" }));
     expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
     expect(screen.getByText(/^Chat page: The "board" automation failed: API key rejected/)).toBeVisible();
+  });
+
+  it("an auto-resume that stopped for the day lands in the bell", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Notifications" });
+    const text = "Auto-resume stopped: Morning digest. Resume it from the Workboard.";
+    act(() => dispatch(`data: ${JSON.stringify({ event: "workboard://auto-resume", payload: { cardId: "w-1", text } })}`));
+    await userEvent.click(screen.getByRole("button", { name: "Notifications, 1 new" }));
+    expect(screen.getByRole("region", { name: "Notifications" })).toHaveTextContent(text);
   });
 
   it("an update found in the background lands in the bell", async () => {

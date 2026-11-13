@@ -28,9 +28,8 @@ use grokhub_core::work_file::{
     board_stamp, delete_archived_board, read_board, read_tidy, read_work_log_tail,
     set_auto_delete_days, sweep_board, update_board, TidyRun,
 };
-use grokhub_core::work_item::{
-    clip_line, remove_work_log, DAY_MS, IDLE_ARCHIVE_MS, SWEEP_EVERY_MS,
-};
+use grokhub_core::work_item::{remove_work_log, DAY_MS, IDLE_ARCHIVE_MS, SWEEP_EVERY_MS};
+use grokhub_core::work_resume as res;
 use grokhub_core::work_triage::{self as wt, end_rank, in_column};
 use grokhub_core::{
     BoardCard, BoardStatus, KanbanColumn, StepStatus, WorkKind, WorkLogEvent, WorkOrigin,
@@ -45,9 +44,6 @@ const DETAIL_MAX: usize = 2000;
 pub const LOG_LINES: usize = 20;
 /// Most of a progress log the page reads: its tail, never the whole file.
 pub const LOG_READ_MAX: u64 = 32 * 1024;
-/// Longest Resume draft. KB-04's `RESUME_BLOCK_MAX` (1,200 B) caps the real
-/// resume block KB-03 sends; the draft stays inside the same cap.
-pub const RESUME_DRAFT_MAX: usize = 1200;
 pub const GONE: &str = "That card is gone. It may have been removed in the cabin.";
 
 pub fn path(config_dir: &Path) -> PathBuf {
@@ -259,14 +255,18 @@ pub struct Work {
     pub page: Page,
 }
 
-/// What Resume puts in the chat box, and the chat it goes to.
+/// What Resume started: the resume block sent once in the card's chat, or an
+/// unattended run on the card.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Resume {
-    /// The chat to open: the card's own, else the new one passed in.
+    /// The chat to open: the card's own, else the new one passed in. Empty
+    /// for a run that resumed in the background.
     pub conversation_id: String,
-    /// The first message, put in the chat box for you to send.
+    /// The resume block, which the page sends in that chat once.
     pub prompt: String,
+    /// It resumed as an unattended run on its card: no chat opens.
+    pub background: bool,
     pub page: Page,
 }
 
@@ -311,7 +311,7 @@ fn left_off(card: &BoardCard) -> Option<String> {
         .filter(|t| !t.is_empty())
 }
 
-fn can_resume(card: &BoardCard) -> bool {
+pub(crate) fn can_resume(card: &BoardCard) -> bool {
     card.status == BoardStatus::Blocked
         && (card.run || card.checkpoint.as_ref().is_some_and(|c| !c.is_empty()))
 }
@@ -836,57 +836,72 @@ pub fn make_recurring(
     Ok(owned?.1)
 }
 
-/// The first message Resume puts in the chat box: the card and where it left
-/// off, within [`RESUME_DRAFT_MAX`].
-fn resume_draft(card: &BoardCard) -> String {
-    let mut text = format!("Resume the work card \"{}\".", clip_line(&card.title, 120));
-    if let Some(next) = left_off(card) {
-        text.push_str(&format!("\nLeft off: {}", clip_line(&next, 200)));
-    }
-    if let Some(blocker) = card
-        .checkpoint
-        .as_ref()
-        .map(|c| c.blocker.trim())
-        .filter(|b| !b.is_empty())
-    {
-        text.push_str(&format!("\nBlocked on: {}", clip_line(blocker, 160)));
-    }
-    cap_bytes(&text, RESUME_DRAFT_MAX)
-}
-
-fn cap_bytes(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_string();
-    }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_string()
-}
-
-/// Resume a paused or interrupted run. Today this marks the card touched and
-/// drafts the first message in its chat, the way the cabin's stub continues in
-/// the card's chat. KB-03 replaces this body with the real resume (the capped
-/// resume block sent in the turn input); the command and its reply stay.
-pub fn resume(config_dir: &Path, id: &str, new_conversation: &str) -> Result<Resume, String> {
+/// Resume a paused or interrupted run in its chat (KB-03). The card goes back
+/// to Doing as a run on that chat, and the page sends the card's resume block
+/// there once, as the resume turn's input (at most 1,200 bytes, from the
+/// checkpoint and steps only); when the turn ends the card settles, as a
+/// queued card's does. The card's own chat continues; a card with no chat of
+/// this app starts the new one passed in with only the block. The run records
+/// `mode` as it started in, never looser than before, and this app as its host,
+/// so a restart under it interrupts it. An automation's or a background run's
+/// card resumes unattended instead (`run_resume`).
+pub fn resume(
+    config_dir: &Path,
+    id: &str,
+    new_conversation: &str,
+    mode: grokhub_core::wire::PermissionMode,
+) -> Result<Resume, String> {
+    use grokhub_core::work_run as wr;
     let now = grokhub_core::now_ms();
-    let ((conversation_id, prompt), page) = change(config_dir, |cards| {
+    let ((conversation_id, prompt, same, attempt, kept), page) = change(config_dir, |cards| {
         let i = find(cards, id)?;
         if !can_resume(&cards[i]) {
             return Err("Only a paused or interrupted run can resume.".into());
         }
-        let conversation = cards[i]
+        let own = cards[i]
             .thread_id
-            .clone()
-            .unwrap_or_else(|| new_conversation.trim().to_string());
-        let prompt = resume_draft(&cards[i]);
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| crate::card_chat::ours(t))
+            .map(str::to_string);
+        let conversation = match &own {
+            Some(chat) => chat.clone(),
+            None if crate::card_chat::ours(new_conversation.trim()) => {
+                new_conversation.trim().to_string()
+            }
+            None => return Err("That chat isn't one of this app's chats.".into()),
+        };
+        // The block names the cut, so it is built before the resume clears it.
+        let prompt = res::resume_block(&cards[i]);
         grokhub_core::mark_touched(cards, id, now);
-        Ok((conversation, prompt))
+        grokhub_core::resume_inflight_card(cards, id, &conversation);
+        let c = &mut cards[i];
+        let kept = res::resume_mode(&c.run_state.mode, mode);
+        res::begin_resume(c, now);
+        let kind = c.kind;
+        wr::begin_run(c, kind, &conversation, "", now);
+        res::claim_run(c, res::HOST_SHELL, kept);
+        let attempt = c.checkpoint.as_ref().map(|cp| cp.attempt).unwrap_or(1);
+        Ok((conversation, prompt, own.is_some(), attempt, kept))
     })?;
+    // Its turn's end settles the card, and that turn runs no looser than kept.
+    crate::card_chat::note_card_chat(&conversation_id);
+    crate::card_chat::keep_mode(&conversation_id, kept);
+    let note = if same {
+        "resume: same chat"
+    } else {
+        "resume: new chat"
+    };
+    let log = |kind: &str, text: &str| {
+        let _ =
+            grokhub_core::work_item::append_work_log(&work_dir(config_dir), id, now, kind, text);
+    };
+    log(wr::LOG_NOTE, note);
+    log(wr::LOG_START, &format!("attempt {attempt}"));
     Ok(Resume {
         conversation_id,
         prompt,
+        background: false,
         page,
     })
 }
@@ -1234,7 +1249,8 @@ mod tests {
         assert!(add(&dir, "New", "").is_err());
         assert!(act(&dir, "w-1", Act::Archive).is_err());
         assert!(work(&dir, "w-1").is_err());
-        assert!(resume(&dir, "w-1", "x").is_err());
+        let ask = grokhub_core::wire::PermissionMode::Ask;
+        assert!(resume(&dir, "w-1", "shell-x", ask).is_err());
         assert_eq!(
             std::fs::read_to_string(path(&dir)).expect("kept"),
             "[{not json"
@@ -1527,32 +1543,110 @@ mod tests {
     }
 
     #[test]
-    fn resume_drafts_the_message_in_the_cards_chat() {
+    fn resume_sends_the_cards_block_once_in_its_chat_and_takes_it_to_doing() {
         let config = temp_dir("resume");
+        let mut mine = paused("p");
+        mine.thread_id = Some("shell-p".into());
+        mine.run_state.mode = "ask".into();
         let mut no_chat = paused("q");
         no_chat.thread_id = None;
-        cabin_writes(
-            &config,
-            &[paused("p"), no_chat, board_card("t", BoardStatus::Todo)],
-        );
-        let r = resume(&config, "p", "shell-new").unwrap();
-        assert_eq!(r.conversation_id, "chat-p");
-        assert_eq!(
-            r.prompt,
-            "Resume the work card \"Card p\".\nLeft off: Finish the lexer\nBlocked on: Which grammar?"
-        );
-        assert!(on_disk(&config)[0].touched);
-        assert_eq!(
-            resume(&config, "q", "shell-new").unwrap().conversation_id,
-            "shell-new"
-        );
-        assert_eq!(
-            resume(&config, "t", "x").unwrap_err(),
-            "Only a paused or interrupted run can resume."
-        );
+        // A chat the cabin made is not one of this app's: it gets a new one.
+        let cabin_chat = paused("c");
         let mut huge = paused("h");
         huge.title = "t".repeat(5000);
-        assert!(resume_draft(&huge).len() <= RESUME_DRAFT_MAX);
+        huge.steps = (0..40)
+            .map(|n| WorkStep {
+                text: format!("step {n} {}", "x".repeat(150)),
+                status: StepStatus::Planned,
+            })
+            .collect();
+        cabin_writes(
+            &config,
+            &[
+                mine,
+                no_chat,
+                cabin_chat,
+                board_card("t", BoardStatus::Todo),
+                huge,
+            ],
+        );
+        let always = grokhub_core::wire::PermissionMode::AlwaysApprove;
+        let r = resume(&config, "p", "shell-new", always).unwrap();
+        assert_eq!(
+            (r.conversation_id.as_str(), r.background),
+            ("shell-p", false)
+        );
+        assert_eq!(
+            r.prompt,
+            "Resuming workboard card p \"Card p\", from its checkpoint.\n\
+             Goal: Parse .tsa files\nNext: Finish the lexer\nBlocked by: Which grammar?\n\
+             Steps:\n1. [done] Read the spec\n2. [doing] Write the parser\n3. [planned] Test it\n\
+             Pick up at Next and do not redo done steps. Check the card with work_get and \
+             checkpoint it with work_update (load them by name)."
+        );
+        let p = on_disk(&config).into_iter().find(|c| c.id == "p").unwrap();
+        assert_eq!(p.status, BoardStatus::InProgress);
+        assert_eq!(p.thread_id.as_deref(), Some("shell-p"));
+        assert!(p.touched);
+        // A run of this app's, in the mode it started in (never looser), on
+        // a new attempt with the old blocker cleared.
+        assert_eq!(
+            (p.run_state.host.as_str(), p.run_state.mode.as_str()),
+            ("shell", "ask")
+        );
+        let cp = p.checkpoint.as_ref().unwrap();
+        assert_eq!((cp.attempt, cp.blocker.as_str()), (1, ""));
+        let notes: Vec<String> = log_tail(&config, "p").into_iter().map(|e| e.text).collect();
+        assert_eq!(notes, ["resume: same chat", "attempt 1"]);
+        // Once: it runs now, so a second Resume is refused.
+        assert_eq!(
+            resume(&config, "p", "shell-x", always).unwrap_err(),
+            "Only a paused or interrupted run can resume."
+        );
+        // Its resume turn runs no looser than Ask, though Approvals is Always.
+        use grokhub_agent::PermMode;
+        assert_eq!(
+            crate::card_chat::turn_mode("shell-p", PermMode::Always),
+            PermMode::Ask
+        );
+        // The turn's end settles the card, as a queued card's does.
+        assert!(crate::card_chat::turn_ended(
+            &config,
+            "shell-p",
+            &Ok("end_turn".into())
+        ));
+        assert_eq!(
+            crate::card_chat::turn_mode("shell-p", PermMode::Always),
+            PermMode::Always
+        );
+        let p = on_disk(&config).into_iter().find(|c| c.id == "p").unwrap();
+        assert_eq!(p.status, BoardStatus::Done);
+
+        assert_eq!(
+            resume(&config, "q", "shell-new", always)
+                .unwrap()
+                .conversation_id,
+            "shell-new"
+        );
+        let notes: Vec<String> = log_tail(&config, "q").into_iter().map(|e| e.text).collect();
+        assert_eq!(notes, ["resume: new chat", "attempt 1"]);
+        assert_eq!(
+            resume(&config, "c", "shell-c2", always)
+                .unwrap()
+                .conversation_id,
+            "shell-c2"
+        );
+        assert_eq!(
+            resume(&config, "t", "shell-t", always).unwrap_err(),
+            "Only a paused or interrupted run can resume."
+        );
+        let long = resume(&config, "h", "shell-h", always).unwrap().prompt;
+        assert!(
+            long.len() <= grokhub_core::work_resume::RESUME_BLOCK_MAX,
+            "{}",
+            long.len()
+        );
+        assert!(long.contains("Next: Finish the lexer"), "{long}");
     }
 
     #[test]

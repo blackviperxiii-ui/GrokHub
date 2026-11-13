@@ -1885,9 +1885,12 @@ export interface BoardWork {
 }
 
 /** What Resume puts in the chat box, and the chat it goes to. */
+/** What Resume started: the resume block to send once in the card's chat,
+ * or (`background`) an unattended run on the card, with no chat to open. */
 export interface BoardResume {
   conversationId: string;
   prompt: string;
+  background: boolean;
   page: BoardPage;
 }
 
