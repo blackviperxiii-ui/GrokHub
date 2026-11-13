@@ -1414,11 +1414,29 @@ fn xai_outage(err: &ClientError) -> bool {
     err.is_retryable() || matches!(err, ClientError::IdleTimeout)
 }
 
-/// xAI can't take this turn: down, or the account is out of credit. Either
-/// way a provider you set up (or this computer's model) answers instead of
-/// the turn failing, so one empty wallet never stops the work.
+/// xAI can't take this turn: down, out of credit, or the sign-in / key was
+/// refused. A provider you set up (or this computer's model) answers instead
+/// of the turn failing, so a dead Grok credential never blocks chat when
+/// something else can answer.
 fn xai_cant_answer(err: &ClientError) -> bool {
-    xai_outage(err) || matches!(err, ClientError::PaymentRequired { .. })
+    xai_outage(err)
+        || matches!(
+            err,
+            ClientError::PaymentRequired { .. }
+                | ClientError::Auth { .. }
+                | ClientError::KeyOffer { .. }
+        )
+}
+
+/// xAI failed in a way this computer's model can take over when no provider
+/// stood in: outage, refused sign-in / key, or offline refusal.
+fn xai_falls_to_local(err: &ClientError) -> bool {
+    xai_outage(err)
+        || matches!(err, ClientError::Auth { .. } | ClientError::KeyOffer { .. })
+        || matches!(
+            err,
+            ClientError::Transport(m) if grokhub_core::offline::is_refusal(m)
+        )
 }
 
 /// A provider you added failed in a way another route can get past: a limit
@@ -1895,6 +1913,12 @@ pub fn stream_routed(
     // Grok took a turn a provider failed: the turn is logged as Grok's.
     let mut grok_took_turn = false;
     let out = if on_device {
+        // Missing Grok creds already chose the device (`local:no_keys`): say so.
+        if !class.trim().starts_with("background:") && super::local::fallback_active() {
+            sink(StreamEvent::ReasoningDelta(
+                super::local::LOCAL_FALLBACK_MSG.into(),
+            ));
+        }
         // A model that isn't loaded yet (unloaded for a game, or idle) loads
         // again by itself; the chat shows why the answer takes a moment.
         if !class.trim().starts_with("background:") && super::local::warm_runtime().is_none() {
@@ -1988,6 +2012,14 @@ pub fn stream_routed(
         match out {
             Err(err) if stand_in.is_some() => {
                 let m = stand_in.unwrap_or_default();
+                // Refused sign-in / key: cool Grok for the session so a later
+                // pick doesn't send the same bad credential again.
+                if matches!(
+                    &err,
+                    ClientError::Auth { .. } | ClientError::KeyOffer { .. }
+                ) {
+                    cool_down_for(&dir, &model, &err, now);
+                }
                 super::handoff::note_switch(&req.conversation_id, &model, &m, &err);
                 switch_line(&mut *sink, &err);
                 xai_failed = Some((err, started.elapsed()));
@@ -2057,23 +2089,42 @@ pub fn stream_routed(
                 }
             }
             // An ordinary turn falls back to this computer's model when xAI is
-            // down and no provider could take it. Only when xAI showed nothing
-            // yet: a half-streamed xAI answer is never finished by another model.
+            // down, the sign-in was refused, or the wire is offline and no
+            // provider could take it. Only when xAI showed nothing yet: a
+            // half-streamed xAI answer is never finished by another model.
             Err(err)
                 if !streamed
                     && !matches!(err, ClientError::Cancelled)
                     && super::local::available()
-                    && (xai_outage(&err)
-                        || matches!(&err, ClientError::Transport(m)
-                            if grokhub_core::offline::is_refusal(m))) =>
+                    && xai_falls_to_local(&err) =>
             {
+                let auth_miss = matches!(
+                    &err,
+                    ClientError::Auth { .. } | ClientError::KeyOffer { .. }
+                );
+                // A refused key / sign-in cools the model for the session so
+                // the next pick skips Grok until you reconnect. (Outages already
+                // cool above.)
+                if auth_miss {
+                    cool_down_for(&dir, &model, &err, now);
+                }
                 super::handoff::note_switch(
                     &req.conversation_id,
                     &model,
                     super::local::live_tier(),
                     &err,
                 );
-                switch_line(&mut *sink, &err);
+                if auth_miss {
+                    // Card 900.5: plain notice when Grok isn't connected.
+                    if !class.trim().starts_with("background:") {
+                        sink(StreamEvent::ReasoningDelta(
+                            super::local::LOCAL_FALLBACK_MSG.into(),
+                        ));
+                    }
+                    super::local::note_fallback(true);
+                } else {
+                    switch_line(&mut *sink, &err);
+                }
                 xai_failed = Some((err, started.elapsed()));
                 on_device = true;
                 if asks_route {

@@ -2118,12 +2118,97 @@ fn an_18_plus_chat_goes_straight_to_the_local_model_and_a_clean_one_does_not() {
     // A banned ask is held before any model sees it: the notice is the answer.
     let banned = send(&["nsfw schoolgirl roleplay"]).unwrap();
     assert_eq!(banned.text, grokhub_core::adult_guard::HELD_NOTICE);
-    let clean = send(&["fix my wifi"]);
-    assert!(
-        matches!(clean, Err(ClientError::Auth { .. })),
-        "only 18+ chats fall back here: {clean:?}"
-    );
+    // Card 900.5: a refused Grok sign-in also falls back when Local AI is ready.
+    let clean = send(&["fix my wifi"]).unwrap();
+    assert_eq!(clean.text, "local here");
     assert_eq!(wire.n(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Card 900.5: a 401 on Grok retries the turn on this computer's model once,
+/// with the plain "Grok not connected" notice.
+#[test]
+fn a_refused_grok_key_retries_the_turn_on_the_local_model() {
+    let (dir, _wire) = setup("auth-local-retry");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let mut thought = String::new();
+    let out = live::stream_routed(
+        &XaiSignedOut,
+        &chat("auth-local-1", &["hey"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::ReasoningDelta(t) = ev {
+                thought.push_str(&t);
+            }
+        },
+        "chat:default",
+    )
+    .expect("local takes the turn");
+    assert_eq!(out.text, "local here");
+    assert!(
+        thought.contains(super::local::LOCAL_FALLBACK_MSG),
+        "notice missing: {thought:?}"
+    );
+    assert!(
+        super::local::fallback_active(),
+        "Grok refusal marks the local fallback chip"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Card 900.5: with no local model, a refused Grok key still surfaces as Auth.
+#[test]
+fn a_refused_grok_key_keeps_the_auth_error_when_no_local_model() {
+    let (dir, _wire) = setup("auth-no-local");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    // Local AI off / no runtime: ForceOn is not set.
+    let out = live::stream_routed(
+        &XaiSignedOut,
+        &chat("auth-no-local-1", &["hey"]),
+        &CancelToken::new(),
+        &mut |_| {},
+        "chat:default",
+    );
+    assert!(
+        matches!(out, Err(ClientError::Auth { status: 401, .. })),
+        "{out:?}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Card 900.5: with no Grok credential and Local AI ready, chat goes local
+/// up front (`local:no_keys`) and shows the same notice.
+#[test]
+fn missing_grok_creds_route_chat_to_the_local_model() {
+    let (dir, wire) = setup("no-keys-local");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    let mut reg = fleet();
+    reg.entitlement.credential = Credential::None;
+    save_registry(&dir, &reg).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let mut thought = String::new();
+    // A client that would blow up if xAI were tried.
+    let out = live::stream_routed(
+        &XaiSignedOut,
+        &chat("no-keys-1", &["hey"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::ReasoningDelta(t) = ev {
+                thought.push_str(&t);
+            }
+        },
+        "chat:default",
+    )
+    .expect("local answers with no Grok key");
+    assert_eq!(out.text, "local here");
+    assert_eq!(wire.n(), 0, "xAI must not be called");
+    assert!(
+        thought.contains(super::local::LOCAL_FALLBACK_MSG),
+        "notice missing: {thought:?}"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -2753,13 +2838,15 @@ fn xai_down_hands_an_ordinary_turn_to_a_provider_then_to_this_computer() {
         (rec.used.provider.as_str(), rec.used.model.as_str()),
         ("openrouter", OR_MODEL)
     );
-    // A signed-out xAI is no outage: nothing stands in for it.
-    let (out, _) = send(&XaiSignedOut, 4, &["fix my wifi"]);
-    assert!(matches!(out, Err(ClientError::Auth { .. })), "{out:?}");
+    // A signed-out xAI hands off like an outage: the provider you set up answers.
+    let (out, shown) = send(&XaiSignedOut, 4, &["fix my wifi"]);
+    assert_eq!(out.unwrap().text, "hello from the provider");
+    assert_eq!(shown, "hello from the provider");
+    assert_eq!(wire.n(), 2);
     // An 18+ chat never goes to the provider: this computer's model answers.
     let (out, _) = send(&XaiDown, 5, &["talk dirty to me, I'm horny"]);
     assert_eq!(out.unwrap().text, "local here");
-    assert_eq!(wire.n(), 1, "nothing more reached the provider");
+    assert_eq!(wire.n(), 2, "nothing more reached the provider");
     let _ = std::fs::remove_dir_all(dir);
 }
 
