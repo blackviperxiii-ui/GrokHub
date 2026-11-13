@@ -229,6 +229,38 @@ describe("VoiceSession", () => {
     expect(r.states.at(-1)).toBe("listening");
   });
 
+  it("a piece that fails to speak quiets only that reply; the next reply and the next session speak", async () => {
+    const r = rig();
+    await r.session.start();
+    await r.hear({ kind: "turn", ms: 1500 });
+    api.voiceSpeak.mockRejectedValueOnce(new Error("Text to speech failed (HTTP 503)."));
+    api.voiceReplyFinish.mockResolvedValueOnce(["One.", "Two."]);
+    r.session.replyDone("One. Two.");
+    await flush();
+    expect(r.notes).toEqual(["Text to speech failed (HTTP 503)."]);
+    // "Two." was already on its way when "One." failed.
+    expect(r.played).toEqual(["Two."]);
+    r.ends[0]();
+    await flush();
+    expect(r.states.at(-1)).toBe("listening");
+    await r.hear({ kind: "turn", ms: 1500 });
+    api.voiceReplyFinish.mockResolvedValueOnce(["Three."]);
+    r.session.replyDone("Three.");
+    await flush();
+    expect(r.played.at(-1)).toBe("Three.");
+    r.ends.at(-1)!();
+    await flush();
+    // Off and on again: a fresh session says a new failure again.
+    await r.session.stop();
+    await r.session.start();
+    await r.hear({ kind: "turn", ms: 1500 });
+    api.voiceSpeak.mockRejectedValueOnce(new Error("The on-device voice timed out."));
+    api.voiceReplyFinish.mockResolvedValueOnce(["Four."]);
+    r.session.replyDone("Four.");
+    await flush();
+    expect(r.notes).toEqual(["Text to speech failed (HTTP 503).", "The on-device voice timed out."]);
+  });
+
   it("a quiet minute checks in, then turns voice mode off", async () => {
     const r = rig();
     await r.session.start();

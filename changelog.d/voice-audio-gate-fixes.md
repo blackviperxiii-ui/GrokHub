@@ -1,0 +1,3 @@
+- Voice: the mic is filtered before it drops to 16 kHz, so sounds above 8 kHz no longer fold back into speech, and voice mode keeps every sample at block edges.
+- Voice mode: one spoken piece that fails no longer silences spoken replies until the chat is reopened; the next reply tries again.
+- On-device voice: pieces spoken side by side each write their own new file, and a reply line that starts with "--" is spoken instead of read as an engine setting.
