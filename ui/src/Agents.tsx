@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  codeNewBranch,
   codeTestPlan,
   codeTestRun,
   discardTaskWork,
@@ -8,7 +9,9 @@ import {
   onEventGap,
   onTasksChanged,
   resumeTaskWork,
+  shipCommit,
   shipStatus,
+  shipWaive,
   stopTask,
   type HelperWork,
   type Queue,
@@ -21,6 +24,7 @@ import {
   type TestsCheck,
   type TodoState,
 } from "./api";
+import { CodeShip } from "./CodeShip";
 import { TaskDetailWindow } from "./TaskDetail";
 import { inShell } from "./transport";
 import { useModalFocus } from "./ui";
@@ -231,8 +235,12 @@ export function reviewLine(review: Review): string {
   if (notes > 0 || parts.length === 0) parts.push(counted(notes, "note"));
   const plan = review.planGiven ? "" : " · no plan";
   const cut = review.cut ? " · only part of the change was shown" : "";
-  return `Reviewed: ${parts.join(", ")}${plan}${cut}`;
+  const waived = review.waived?.length ? ` · ${review.waived.length} waived` : "";
+  return `Reviewed: ${parts.join(", ")}${waived}${plan}${cut}`;
 }
+
+/** What the confirm before Waive asks. */
+export const WAIVE_QUESTION = "Ship with this finding open?";
 
 /** The review read another change: a file, HEAD or a commit differs now. */
 export const REVIEW_STALE = "Stale: files or commits changed since the review";
@@ -274,9 +282,46 @@ const SECRETS_SHOWN = 20;
 /** "src/client.ts:12 · looks like a key or a password". The place only,
  * never the line's text. */
 export function secretLine(hit: SecretHit): string {
-  const place = hit.line === null ? hit.path : `${hit.path}:${hit.line}`;
   const commit = hit.commit ? ` · in commit ${hit.commit.slice(0, 8)}` : "";
-  return `${place} · ${SECRET_LABELS[hit.kind]}${commit}`;
+  const allowed = hit.allowed ? " · allowed" : "";
+  return `${secretPlace(hit)} · ${SECRET_LABELS[hit.kind]}${commit}${allowed}`;
+}
+
+/** `path:line`, as Allow names a flagged line. */
+export function secretPlace(hit: SecretHit): string {
+  return hit.line === null ? hit.path : `${hit.path}:${hit.line}`;
+}
+
+/** How the app is told a flagged line is allowed: `path:line@<tree id>`.
+ * The tree id names every file's content, so the Allow holds only while the
+ * folder is what the person looked at (crates/grokhub-code/src/commit.rs). */
+export function allowKey(hit: SecretHit, tree: string): string {
+  return `${secretPlace(hit)}@${tree}`;
+}
+
+/** What the app says about the commit message. They are read again on the
+ * Commit click, so a message the person changed since is not held back by
+ * what was said about the last one. */
+export const MESSAGE_BLOCKS = [
+  "Write a commit message.",
+  "The first line of the commit message is longer than 200 characters.",
+  "The commit message holds a NUL character.",
+];
+
+/** What the checks say when the change is committed. */
+export const NOTHING_TO_COMMIT = "There is nothing to commit.";
+
+export const COMMIT_TITLE = "Commit";
+export const COMMIT_QUESTION = "Commit this change?";
+
+/** "2 commits were made during this session and will be pushed with this one." */
+export function sessionCommitsLine(count: number): string {
+  return `${counted(count, "commit")} ${count === 1 ? "was" : "were"} made during this session and will be pushed with this one.`;
+}
+
+/** What the Commit section says once the change is committed. */
+export function committedLine(sha: string): string {
+  return `Committed ${sha.slice(0, 8)}. Nothing is left to commit.`;
 }
 
 type WorkAction = "merge" | "finish" | "putBack" | "discard";
@@ -395,6 +440,7 @@ export function Agents({
   active = true,
   live = false,
   onAsk,
+  onShipped,
 }: {
   /** The chat the window last heard from; none before the first message. */
   conversationId?: string;
@@ -411,6 +457,9 @@ export function Agents({
   /** Sends a message to the session's lead. With it the Tasks panel has a
    * Review section. */
   onAsk?: (text: string) => void;
+  /** Told after a commit, push or pull request made from the Tasks panel, so
+   * the Code tab reads the repo again. */
+  onShipped?: () => void;
 }) {
   const [queue, setQueue] = useState<Queue | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -440,6 +489,22 @@ export function Agents({
   const [testing, setTesting] = useState(false);
   /** How the last test run from this panel ended. */
   const [testSaid, setTestSaid] = useState<string | null>(null);
+  /** The blocker a Waive confirm asks about, by its place in the findings,
+   * and the review it was shown in, by that review's time. */
+  const [waiveAsk, setWaiveAsk] = useState<{ at: number; atMs: number } | null>(null);
+  /** The flagged lines the person allowed, as `path:line@<tree id>`. */
+  const [allowed, setAllowed] = useState<string[]>([]);
+  /** The commit message the person typed; null for the default. */
+  const [message, setMessage] = useState<string | null>(null);
+  /** The message changed since the checks last read one. */
+  const [messageEdited, setMessageEdited] = useState(false);
+  /** The name typed for New branch. */
+  const [branchName, setBranchName] = useState("");
+  /** The confirm text a Commit confirm window shows. */
+  const [commitAsk, setCommitAsk] = useState<string | null>(null);
+  const [committing, setCommitting] = useState(false);
+  /** What the last Commit or Waive click did. */
+  const [commitSaid, setCommitSaid] = useState<string | null>(null);
   const section = useRef<HTMLElement>(null);
   const saidLine = useRef<HTMLParagraphElement>(null);
   // A different chat starts from nothing, not from the last chat's queue.
@@ -458,6 +523,13 @@ export function Agents({
     setShipNote(null);
     setTestAsk(null);
     setTestSaid(null);
+    setWaiveAsk(null);
+    setAllowed([]);
+    setMessage(null);
+    setMessageEdited(false);
+    setBranchName("");
+    setCommitAsk(null);
+    setCommitSaid(null);
   }
   /** The chat on screen now, for a call that answers after a switch. */
   const onScreen = useRef(conversationId);
@@ -566,18 +638,27 @@ export function Agents({
     !onOpenChat && onAsk && queue && inShell() && (queue.review || queue.reviewError || queue.todos.length > 0)
       ? JSON.stringify([
           queue.review?.atMs ?? null,
+          queue.review?.waived ?? [],
           queue.working ?? false,
           (queue.work ?? []).map((row) => [row.key, row.state]),
         ])
       : null;
+  const allowedKey = allowed.join("\n");
   useEffect(() => {
     if (!conversationId || !active || shipKey === null) return;
     let gone = false;
-    shipStatus(conversationId).then(
+    const lines = allowedKey ? allowedKey.split("\n") : [];
+    (lines.length > 0 ? shipStatus(conversationId, { allowed: lines }) : shipStatus(conversationId)).then(
       (status) => {
         if (gone) return;
         setShip({ key: shipKey, status });
         setShipNote(null);
+        // An Allow given for other files than these holds nothing: drop it.
+        const tree = status.commit?.tree;
+        setAllowed((now) => {
+          const kept = tree ? now.filter((one) => one.endsWith(`@${tree}`)) : [];
+          return kept.length === now.length ? now : kept;
+        });
       },
       (err) => {
         if (!gone) setShipNote(String(err));
@@ -586,7 +667,76 @@ export function Agents({
     return () => {
       gone = true;
     };
-  }, [conversationId, active, shipKey, shipAsk]);
+  }, [conversationId, active, shipKey, shipAsk, allowedKey]);
+
+  /** Commit: the checks are read again for the message and the allowed
+   * lines, and their exact confirm text is asked; the yes commits. */
+  async function commitNow(confirmed?: string) {
+    if (!conversationId || committing || shipKey === null) return;
+    const id = conversationId;
+    const key = shipKey;
+    const text = message ?? ship?.status.commit?.message ?? "";
+    setCommitAsk(null);
+    setCommitSaid(null);
+    setCommitting(true);
+    try {
+      if (confirmed === undefined) {
+        const next = await shipStatus(id, { message: text, allowed });
+        if (onScreen.current !== id) return;
+        setShip({ key, status: next });
+        setMessageEdited(false);
+        const confirm = next.commit?.confirm;
+        if (next.blocked.length === 0 && confirm) setCommitAsk(confirm);
+        return;
+      }
+      const done = await shipCommit(id, text, allowed, confirmed);
+      if (onScreen.current !== id) return;
+      setShip({ key, status: done.status });
+      setCommitSaid(done.said);
+      setMessage(null);
+      setMessageEdited(false);
+      setAllowed([]);
+      onShipped?.();
+    } catch (err) {
+      if (onScreen.current === id) setCommitSaid(String(err));
+    } finally {
+      setCommitting(false);
+    }
+  }
+
+  /** Waive: the person ships with this blocker open. The call names the
+   * review the confirm showed, by its tree and its time. */
+  async function waiveNow(at: number, atMs: number) {
+    const tree = queue?.review?.tree;
+    if (!conversationId || tree === undefined) return;
+    const id = conversationId;
+    setWaiveAsk(null);
+    setCommitSaid(null);
+    try {
+      const next = await shipWaive(id, tree, atMs, at);
+      if (onScreen.current === id) setQueue(next);
+    } catch (err) {
+      if (onScreen.current === id) setCommitSaid(String(err));
+    }
+  }
+
+  /** New branch: the session's folder moves to a new branch at HEAD, with
+   * its files, so the change can be committed there. */
+  async function makeBranch() {
+    const name = branchName.trim();
+    if (!conversationId || !name) return;
+    const id = conversationId;
+    setCommitSaid(null);
+    try {
+      const made = await codeNewBranch(name, id);
+      if (onScreen.current !== id) return;
+      setBranchName("");
+      setCommitSaid(`On ${made} now.`);
+      setShipAsk((n) => n + 1);
+    } catch (err) {
+      if (onScreen.current === id) setCommitSaid(String(err));
+    }
+  }
 
   /** Runs the session's test command in its folder. The first run of a
    * command asks with the exact command. */
@@ -690,7 +840,20 @@ export function Agents({
   const asking = askedOn === queue || !!queue?.working;
   const checks = ship?.status.checks;
   // Only a read of the state on screen says the review is stale.
-  const stale = !!ship && ship.key === shipKey && checks?.review.state === "stale";
+  const current = !!ship && ship.key === shipKey;
+  const stale = current && checks?.review.state === "stale";
+  // A blocker is waived only while the checks say this review's blockers
+  // are what is open, and no turn runs.
+  const canWaive = desktop && current && checks?.review.state === "blockers" && !queue?.working;
+  const waivedAt = new Set(review?.waived ?? []);
+  const plan = ship?.status.commit ?? null;
+  const shipped = ship?.status.shipped ?? null;
+  // What is in the way now: what was said about the last message goes once
+  // the person changes it, and once the change is committed, that nothing
+  // is left to commit is no hindrance.
+  const inTheWay = (ship?.status.blocked ?? []).filter(
+    (why) => !(messageEdited && MESSAGE_BLOCKS.includes(why)) && !(shipped && why === NOTHING_TO_COMMIT),
+  );
   /** A helper's progress by its task id; only the Tasks panel shows it. */
   const progressOf = (id?: string) => (panel ? tasks.find((task) => task.id === id)?.progress : undefined);
   // Beside the agent window the lead's tasks come first, then what runs for them.
@@ -931,7 +1094,22 @@ export function Agents({
               {review.findings.map((finding, at) => (
                 <li key={at} className={`card agent finding ${finding.severity}`}>
                   <div className="card-title">{finding.text}</div>
-                  <div className="card-status">{FINDING_LABELS[finding.severity]}</div>
+                  <div className="card-status">
+                    {FINDING_LABELS[finding.severity]}
+                    {waivedAt.has(at) ? " · waived" : ""}
+                  </div>
+                  {canWaive && finding.severity === "high" && !waivedAt.has(at) && (
+                    <div className="card-buttons">
+                      <button
+                        type="button"
+                        className="quiet"
+                        aria-label={`Waive ${finding.text}`}
+                        onClick={() => setWaiveAsk({ at, atMs: review.atMs })}
+                      >
+                        Waive
+                      </button>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
@@ -988,7 +1166,22 @@ export function Agents({
                 {checks.secrets?.length === 0 && <div className="card-status">Nothing flagged.</div>}
                 {checks.secrets?.slice(0, SECRETS_SHOWN).map((hit, at) => (
                   <div key={at} className="card-status">
-                    {secretLine(hit)}
+                    <span>{secretLine(hit)}</span>
+                    {hit.kind === "shape" && hit.commit === null && plan && (
+                      <button
+                        type="button"
+                        className="quiet"
+                        aria-label={`${hit.allowed ? "Undo allow" : "Allow"} ${secretPlace(hit)}`}
+                        onClick={() => {
+                          const key = allowKey(hit, plan.tree);
+                          setAllowed((now) =>
+                            hit.allowed ? now.filter((one) => one !== key) : [...now.filter((one) => one !== key), key],
+                          );
+                        }}
+                      >
+                        {hit.allowed ? "Undo" : "Allow"}
+                      </button>
+                    )}
                   </div>
                 ))}
                 {checks.secrets && checks.secrets.length > SECRETS_SHOWN && (
@@ -998,16 +1191,33 @@ export function Agents({
               <li className="card agent" aria-label="Branch">
                 <div className="card-title">Branch</div>
                 <div className="card-status">{checks.branch ?? "Detached HEAD"}</div>
+                {checks.newBranch && !shipped && (
+                  <div className="code-test-row">
+                    <label>
+                      New branch
+                      <input
+                        value={branchName}
+                        spellCheck={false}
+                        autoComplete="off"
+                        placeholder="code/my-change"
+                        onChange={(e) => setBranchName(e.target.value)}
+                      />
+                    </label>
+                    <button type="button" onClick={() => void makeBranch()} disabled={!branchName.trim()}>
+                      Make branch
+                    </button>
+                  </div>
+                )}
               </li>
             </ul>
           )}
-          {ship && ship.status.blocked.length > 0 && (
+          {ship && inTheWay.length > 0 && (
             <>
               <p className="status" role="status">
                 {CHECKS_BLOCKED}
               </p>
               <ul className="rows" aria-label="In the way of a commit">
-                {ship.status.blocked.map((why, at) => (
+                {inTheWay.map((why, at) => (
                   <li key={at} className="card agent">
                     <div className="card-status">{why}</div>
                   </li>
@@ -1015,7 +1225,7 @@ export function Agents({
               </ul>
             </>
           )}
-          {ship && ship.status.blocked.length === 0 && (
+          {ship && inTheWay.length === 0 && !shipped && (
             <p className="status" role="status">
               {CHECKS_PASS}
             </p>
@@ -1025,6 +1235,88 @@ export function Agents({
               Check again
             </button>
           </div>
+          {plan && (plan.files.length > 0 || shipped) && (
+            <>
+              <h2>{COMMIT_TITLE}</h2>
+              {shipped && !commitSaid && (
+                <p className="status" role="status">
+                  {committedLine(shipped)}
+                </p>
+              )}
+              {plan.files.length > 0 && (
+                <>
+                  <ul className="rows" aria-label="Changed files">
+                    {plan.files.map((file) => (
+                      <li key={file.path} className="card agent">
+                        <div className="card-status">
+                          {file.status} {file.path}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  {plan.more > 0 && <p className="note">and {plan.more} more</p>}
+                  {plan.commits.length > 0 && (
+                    <>
+                      <p className="note">{sessionCommitsLine(plan.commits.length)}</p>
+                      <ul className="rows" aria-label="Session commits">
+                        {plan.commits.map((one) => (
+                          <li key={one.sha} className="card agent">
+                            <div className="card-status">
+                              {one.sha.slice(0, 8)} {one.subject}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  <textarea
+                    aria-label="Commit message"
+                    rows={3}
+                    value={message ?? plan.message}
+                    onChange={(e) => {
+                      setMessage(e.target.value);
+                      setMessageEdited(true);
+                    }}
+                  />
+                  <p className="note">
+                    Branch: {checks?.branch ?? "Detached HEAD"}
+                    {plan.author ? ` · Author: ${plan.author}` : ""}
+                  </p>
+                  {plan.notices.map((notice) => (
+                    <p key={notice} className="note">
+                      {notice}
+                    </p>
+                  ))}
+                  <div className="card-buttons">
+                    <button
+                      type="button"
+                      disabled={!current || !ship || inTheWay.length > 0 || committing}
+                      onClick={() => void commitNow()}
+                    >
+                      {committing ? "Committing…" : "Commit"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+          {commitSaid && (
+            <p className="status" role="status">
+              {commitSaid}
+            </p>
+          )}
+          {shipped && conversationId && (
+            // The commit made here is pushed by its id, after the app's
+            // checks, and every push and PR asks with the exact command.
+            <CodeShip
+              conversationId={conversationId}
+              refreshKey={shipAsk}
+              onShipped={() => {
+                setShipAsk((n) => n + 1);
+                onShipped?.();
+              }}
+            />
+          )}
         </>
       )}
       {onOpenChat && todos.length > 0 && (
@@ -1073,6 +1365,30 @@ export function Agents({
           danger={false}
           onConfirm={() => void runTests(testAsk)}
           onClose={() => setTestAsk(null)}
+        />
+      )}
+      {waiveAsk !== null && review?.atMs === waiveAsk.atMs && review.findings[waiveAsk.at] && (
+        // Shown only while the review on screen is the one Waive was pressed
+        // in: a new review closes it.
+        <WorkConfirm
+          question={WAIVE_QUESTION}
+          text={review.findings[waiveAsk.at].text}
+          yes="Waive"
+          no="Cancel"
+          danger
+          onConfirm={() => void waiveNow(waiveAsk.at, waiveAsk.atMs)}
+          onClose={() => setWaiveAsk(null)}
+        />
+      )}
+      {commitAsk !== null && (
+        <WorkConfirm
+          question={COMMIT_QUESTION}
+          text={commitAsk}
+          yes="Commit"
+          no="Cancel"
+          danger={false}
+          onConfirm={() => void commitNow(commitAsk)}
+          onClose={() => setCommitAsk(null)}
         />
       )}
       {panel && conversationId && detail && (

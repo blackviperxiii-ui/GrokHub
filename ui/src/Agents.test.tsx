@@ -1,7 +1,21 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodeTestPlan, CodeTestResult, HelperWork, Queue, Review, ShipStatus, TaskDetail } from "./api";
+import type {
+  CodeActivityEntry,
+  CodeShipAction,
+  CodeShipPlan,
+  CodeShipped,
+  CodeTestPlan,
+  CodeTestResult,
+  Committed,
+  HelperWork,
+  Queue,
+  Review,
+  ShipDraft,
+  ShipStatus,
+  TaskDetail,
+} from "./api";
 
 const api = vi.hoisted(() => ({
   getQueue: vi.fn<(conversationId: string) => Promise<Queue>>(),
@@ -12,9 +26,18 @@ const api = vi.hoisted(() => ({
   mergeTaskWork: vi.fn<(conversationId: string, key: string) => Promise<Queue>>(),
   resumeTaskWork: vi.fn<(conversationId: string, key: string, finish: boolean) => Promise<Queue>>(),
   discardTaskWork: vi.fn<(conversationId: string, key: string) => Promise<Queue>>(),
-  shipStatus: vi.fn<(conversationId: string) => Promise<ShipStatus>>(),
+  shipStatus: vi.fn<(conversationId: string, draft?: ShipDraft) => Promise<ShipStatus>>(),
+  shipCommit: vi.fn<(conversationId: string, message: string, allowed: string[], command: string) => Promise<Committed>>(),
+  shipWaive: vi.fn<(conversationId: string, tree: string, atMs: number, index: number) => Promise<Queue>>(),
   codeTestPlan: vi.fn<(command?: string | null, conversationId?: string) => Promise<CodeTestPlan>>(),
   codeTestRun: vi.fn<(command: string, confirmed: boolean, conversationId?: string) => Promise<CodeTestResult>>(),
+  codeShipPlan: vi.fn<(action: CodeShipAction, conversationId?: string) => Promise<CodeShipPlan>>(),
+  codeShipRun:
+    vi.fn<
+      (action: CodeShipAction, confirmed: boolean, command?: string | null, conversationId?: string) => Promise<CodeShipped>
+    >(),
+  codeNewBranch: vi.fn<(name: string, conversationId?: string) => Promise<string>>(),
+  codeActivity: vi.fn<(conversationId?: string) => Promise<CodeActivityEntry[]>>(),
 }));
 /** Whether the page runs in the desktop app; a paired browser does not. */
 const shell = vi.hoisted(() => ({ desktop: true }));
@@ -40,6 +63,8 @@ import {
   CHECKS_BLOCKED,
   CHECKS_NOTE,
   CHECKS_PASS,
+  COMMIT_QUESTION,
+  committedLine,
   FIX_ASK,
   LEAD_LABELS,
   LIVE_FALLBACK_MS,
@@ -50,11 +75,13 @@ import {
   REVIEW_STALE,
   reviewLine,
   secretLine,
+  sessionCommitsLine,
   taskProgress,
   TASKS_EMPTY,
   TASKS_NOTE,
   TESTS_CHANGED_FILES,
   testsLine,
+  WAIVE_QUESTION,
   WORK_DESKTOP_ONLY,
   WORK_NOTE,
   workLine,
@@ -144,12 +171,34 @@ const REVIEW: Review = {
   blockers: 1,
   atMs: 1_700_000_000_000,
   planGiven: true,
+  tree: "3333333333333333333333333333333333333333",
 };
 
 /** A lead session whose one task is done. */
 const LEAD_QUEUE: Queue = {
   tasks: [],
   todos: [{ id: "task-1", content: "Add the parser", status: "completed", state: "done" }],
+};
+
+/** The confirm text of the change below, with the message it starts with. */
+const CONFIRM = 'commit 333333333333 to work/one on 22222222: "Change made in this session"';
+
+/** What a commit of the change below would be. */
+const PLAN = {
+  tree: "3333333333333333333333333333333333333333",
+  head: "2222222222222222222222222222222222222222",
+  files: [
+    { status: "A", path: "src/a.rs" },
+    { status: "M", path: "README" },
+  ],
+  more: 0,
+  commits: [],
+  author: "user <user@example.com>",
+  message: "Change made in this session",
+  notices: ["Every changed file in this folder is included.", "Hooks are not run, and the commit is not signed."],
+  waived: 0,
+  allowed: 0,
+  confirm: CONFIRM,
 };
 
 /** A change with nothing in the way: reviewed clean, tested, on a work branch. */
@@ -161,6 +210,8 @@ const SHIP_READY: ShipStatus = {
     tests: { state: "passed", command: "cargo test" },
     secrets: [],
   },
+  commit: PLAN,
+  shipped: null,
 };
 
 /** The same change before its tests ran, with a blocker and two flagged places. */
@@ -179,6 +230,37 @@ const SHIP_BLOCKED: ShipStatus = {
       { path: ".env", line: null, kind: "name", commit: "0123456789abcdef0123456789abcdef01234567" },
     ],
   },
+  commit: { ...PLAN, confirm: null },
+  shipped: null,
+};
+
+/** The commit the Tasks panel made, and the push of it the app would run. */
+const SHIPPED_SHA = "4444444444444444444444444444444444444444";
+const PUSH_COMMAND = `git push --porcelain --no-recurse-submodules --no-signed origin ${SHIPPED_SHA}:refs/heads/work/one`;
+const PR_COMMAND = "gh pr create --base beta --head work/one --fill";
+
+function pushPlan(action: CodeShipAction, over: Partial<CodeShipPlan> = {}): CodeShipPlan {
+  return {
+    action,
+    branch: "work/one",
+    command: action === "push" ? PUSH_COMMAND : PR_COMMAND,
+    needsConfirm: true,
+    blocked: null,
+    mode: "ask",
+    autoBase: "beta",
+    appMade: false,
+    prUrl: null,
+    skipsHook: false,
+    ...over,
+  };
+}
+
+/** The change after the commit from the Tasks panel: nothing left to commit. */
+const SHIP_COMMITTED: ShipStatus = {
+  ...SHIP_READY,
+  blocked: ["There is nothing to commit."],
+  commit: { ...PLAN, files: [], confirm: null },
+  shipped: SHIPPED_SHA,
 };
 
 /** The text of each row of the list with this name. */
@@ -220,6 +302,8 @@ describe("Agents", () => {
       return Promise.resolve(feed.unlistenGap);
     });
     api.shipStatus.mockResolvedValue(SHIP_READY);
+    api.codeShipPlan.mockImplementation((action) => Promise.resolve(pushPlan(action)));
+    api.codeActivity.mockResolvedValue([]);
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -1179,7 +1263,7 @@ describe("Agents", () => {
     expect(screen.getByText(CHECKS_NOTE)).toBeInTheDocument();
     expect(rowsOf("Checks")).toEqual([
       "TestsNot run: cargo testRun",
-      "Secret scansrc/client.ts:12 · looks like a key or a password.env · a file that holds secrets · in commit 01234567",
+      "Secret scansrc/client.ts:12 · looks like a key or a passwordAllow.env · a file that holds secrets · in commit 01234567",
       "Branchwork/one",
     ]);
     expect(screen.getByText(CHECKS_BLOCKED)).toBeInTheDocument();
@@ -1192,8 +1276,9 @@ describe("Agents", () => {
     expect(screen.queryByText(CHECKS_PASS)).toBeNull();
     expect(screen.getByText("Reviewed: 1 blocker, 2 notes")).toBeInTheDocument();
     expect(api.shipStatus.mock.calls).toEqual([["shell-c1"]]);
-    // Nothing on the panel commits or pushes.
-    expect(screen.queryByRole("button", { name: /commit|push/i })).toBeNull();
+    // Commit waits while anything is in the way, and nothing here pushes.
+    expect(screen.getByRole("button", { name: "Commit" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /push/i })).toBeNull();
   });
 
   it("a change with nothing in the way says every check passes", async () => {
@@ -1209,6 +1294,7 @@ describe("Agents", () => {
   it("a review of an earlier state of the files reads Stale in place of its count", async () => {
     api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
     api.shipStatus.mockResolvedValue({
+      ...SHIP_READY,
       blocked: ["Files or commits changed since the review. Review again."],
       checks: { ...SHIP_READY.checks!, review: { state: "stale" } },
     });
@@ -1224,6 +1310,7 @@ describe("Agents", () => {
   it("a new review is not called stale by the checks read for the one before", async () => {
     api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
     api.shipStatus.mockResolvedValueOnce({
+      ...SHIP_READY,
       blocked: ["Files or commits changed since the review. Review again."],
       checks: { ...SHIP_READY.checks!, review: { state: "stale" } },
     });
@@ -1243,7 +1330,12 @@ describe("Agents", () => {
 
   it("a project that can't be read lists the reason and no checks", async () => {
     api.getQueue.mockResolvedValue(LEAD_QUEUE);
-    api.shipStatus.mockResolvedValue({ blocked: ["This folder is not a git repository."], checks: null });
+    api.shipStatus.mockResolvedValue({
+      blocked: ["This folder is not a git repository."],
+      checks: null,
+      commit: null,
+      shipped: null,
+    });
     render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
     expect(await screen.findByRole("list", { name: "In the way of a commit" })).toBeInTheDocument();
     expect(rowsOf("In the way of a commit")).toEqual(["This folder is not a git repository."]);
@@ -1268,6 +1360,7 @@ describe("Agents", () => {
   it("a scan that could not run says so, a long list is counted, and no command has no Run", async () => {
     api.getQueue.mockResolvedValue(LEAD_QUEUE);
     api.shipStatus.mockResolvedValue({
+      ...SHIP_BLOCKED,
       blocked: ["The secret scan could not run: git diff-tree failed"],
       checks: { branch: null, review: { state: "none" }, tests: { state: "noCommand" }, secrets: null },
     });
@@ -1288,6 +1381,7 @@ describe("Agents", () => {
       commit: null,
     }));
     api.shipStatus.mockResolvedValue({
+      ...SHIP_BLOCKED,
       blocked: ["The secret scan flagged 23 places in the change."],
       checks: { ...SHIP_READY.checks!, secrets: many },
     });
@@ -1394,6 +1488,383 @@ describe("Agents", () => {
     api.shipStatus.mockRejectedValue("the window is closing");
     await userEvent.click(screen.getByRole("button", { name: "Check again" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The checks can't be read: the window is closing");
+  });
+
+  it("Commit lists the changed files first, asks with the exact confirm text, and commits on yes", async () => {
+    const clean: Review = { ...REVIEW, findings: [{ severity: "info", text: "README:1 reads well" }], blockers: 0 };
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: clean });
+    const onShipped = vi.fn();
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} onShipped={onShipped} />);
+
+    const files = await screen.findByRole("list", { name: "Changed files" });
+    expect(screen.getByRole("heading", { level: 2, name: "Commit" })).toBeInTheDocument();
+    expect(rowsOf("Changed files")).toEqual(["A src/a.rs", "M README"]);
+    const box = screen.getByRole("textbox", { name: "Commit message" });
+    expect(box).toHaveValue("Change made in this session");
+    // The files come before everything else the commit shows.
+    expect(files.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Branch: work/one · Author: user <user@example.com>")).toBeInTheDocument();
+    expect(screen.getByText("Every changed file in this folder is included.")).toBeInTheDocument();
+    expect(screen.getByText("Hooks are not run, and the commit is not signed.")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Session commits" })).toBeNull();
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "Add the parser");
+    const asked = 'commit 333333333333 to work/one on 22222222: "Add the parser"';
+    api.shipStatus.mockResolvedValue({ ...SHIP_READY, commit: { ...PLAN, message: "Add the parser", confirm: asked } });
+    await userEvent.click(screen.getByRole("button", { name: "Commit" }));
+    const ask = await screen.findByRole("alertdialog", { name: COMMIT_QUESTION });
+    expect(COMMIT_QUESTION).toBe("Commit this change?");
+    expect(within(ask).getByText(asked)).toBeInTheDocument();
+    expect(api.shipStatus.mock.calls.at(-1)).toEqual(["shell-c1", { message: "Add the parser", allowed: [] }]);
+    // Cancel commits nothing.
+    await userEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(api.shipCommit).not.toHaveBeenCalled();
+    expect(onShipped).not.toHaveBeenCalled();
+
+    const sha = "4444444444444444444444444444444444444444";
+    api.shipCommit.mockResolvedValue({
+      sha,
+      said: "Committed 44444444 to work/one.",
+      status: {
+        ...SHIP_READY,
+        blocked: ["There is nothing to commit."],
+        commit: { ...PLAN, files: [], confirm: null },
+        shipped: sha,
+      },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Commit" }));
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog", { name: COMMIT_QUESTION })).getByRole("button", { name: "Commit" }),
+    );
+    expect(api.shipCommit.mock.calls).toEqual([["shell-c1", "Add the parser", [], asked]]);
+    expect(await screen.findByText("Committed 44444444 to work/one.")).toBeInTheDocument();
+    // The Code tab is told, so its files list is read again.
+    expect(onShipped).toHaveBeenCalledTimes(1);
+    // One line says it, and nothing to commit is not listed as in the way.
+    expect(screen.queryByText(committedLine(sha))).toBeNull();
+    expect(committedLine(sha)).toBe("Committed 44444444. Nothing is left to commit.");
+    expect(screen.queryByRole("list", { name: "In the way of a commit" })).toBeNull();
+    expect(screen.queryByText(CHECKS_PASS)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Commit" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Changed files" })).toBeNull();
+  });
+
+  it("Commit waits while anything is in the way, and a refused commit says why", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    api.shipStatus.mockResolvedValue(SHIP_BLOCKED);
+    const view = render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Commit" })).toBeDisabled();
+    view.unmount();
+
+    api.shipStatus.mockResolvedValue(SHIP_READY);
+    const onShipped = vi.fn();
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} onShipped={onShipped} />);
+    const commit = await screen.findByRole("button", { name: "Commit" });
+    expect(commit).toBeEnabled();
+    // The read for the message finds something in the way: no confirm.
+    api.shipStatus.mockResolvedValue({
+      ...SHIP_READY,
+      blocked: ["Write a commit message."],
+      commit: { ...PLAN, message: "", confirm: null },
+    });
+    await userEvent.clear(screen.getByRole("textbox", { name: "Commit message" }));
+    await userEvent.click(commit);
+    expect(await screen.findByText("Write a commit message.")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Commit" })).toBeDisabled();
+
+    // The yes reaches a commit that the checks refuse again.
+    api.shipStatus.mockResolvedValue(SHIP_READY);
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Commit message" }), "Fix it");
+    await userEvent.click(await screen.findByRole("button", { name: "Commit" }));
+    api.shipCommit.mockRejectedValue("Nothing was committed: the branch moved since the checks ran.");
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog", { name: COMMIT_QUESTION })).getByRole("button", { name: "Commit" }),
+    );
+    expect(await screen.findByText("Nothing was committed: the branch moved since the checks ran.")).toBeInTheDocument();
+    expect(api.shipCommit.mock.calls).toEqual([["shell-c1", "Fix it", [], CONFIRM]]);
+    expect(onShipped).not.toHaveBeenCalled();
+  });
+
+  it("Waive asks once, names the finding, and is offered only on a blocker the checks count as open", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    api.shipStatus.mockResolvedValue(SHIP_BLOCKED);
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+
+    await screen.findByRole("list", { name: "Checks" });
+    const list = screen.getByRole("list", { name: "Review findings" });
+    const rows = within(list).getAllByRole("listitem");
+    const waiveIt = { name: "Waive src/a.rs:3 the total is off by one" };
+    expect(within(rows[0]).getByRole("button", waiveIt)).toHaveTextContent("Waive");
+    expect(within(rows[1]).queryByRole("button", { name: /^Waive/ })).toBeNull();
+    expect(within(rows[2]).queryByRole("button", { name: /^Waive/ })).toBeNull();
+
+    await userEvent.click(within(rows[0]).getByRole("button", waiveIt));
+    const ask = await screen.findByRole("alertdialog", { name: WAIVE_QUESTION });
+    expect(WAIVE_QUESTION).toBe("Ship with this finding open?");
+    expect(within(ask).getByText("src/a.rs:3 the total is off by one")).toBeInTheDocument();
+    await userEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+    expect(api.shipWaive).not.toHaveBeenCalled();
+
+    const waived: Queue = { ...LEAD_QUEUE, review: { ...REVIEW, waived: [0] } };
+    api.shipWaive.mockResolvedValue(waived);
+    api.getQueue.mockResolvedValue(waived);
+    api.shipStatus.mockResolvedValue({ ...SHIP_READY, commit: { ...PLAN, waived: 1 } });
+    await userEvent.click(within(rows[0]).getByRole("button", waiveIt));
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog", { name: WAIVE_QUESTION })).getByRole("button", { name: "Waive" }),
+    );
+    expect(api.shipWaive.mock.calls).toEqual([
+      ["shell-c1", "3333333333333333333333333333333333333333", 1_700_000_000_000, 0],
+    ]);
+    expect(await screen.findByText("Reviewed: 1 blocker, 2 notes · 1 waived")).toBeInTheDocument();
+    expect(rowsOf("Review findings")[0]).toBe("src/a.rs:3 the total is off by oneBlocker · waived");
+    expect(screen.queryByRole("button", { name: /^Waive/ })).toBeNull();
+    // The waiver changed what the checks read, so they are read again.
+    expect(await screen.findByRole("button", { name: "Commit" })).toBeEnabled();
+  });
+
+  it("Allow lets one flagged line through and the checks are read for it; Undo takes it back", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    api.shipStatus.mockResolvedValue(SHIP_BLOCKED);
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    const scan = within(await screen.findByRole("list", { name: "Checks" })).getByRole("listitem", {
+      name: "Secret scan",
+    });
+    // Only a shape hit in the uncommitted change can be allowed.
+    expect(within(scan).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Allow src/client.ts:12",
+    ]);
+
+    const allowedHit = { path: "src/client.ts", line: 12, kind: "shape" as const, commit: null, allowed: true };
+    api.shipStatus.mockResolvedValue({
+      ...SHIP_READY,
+      checks: { ...SHIP_READY.checks!, secrets: [allowedHit] },
+      commit: { ...PLAN, allowed: 1 },
+    });
+    await userEvent.click(within(scan).getByRole("button", { name: "Allow src/client.ts:12" }));
+    expect(await within(scan).findByText("src/client.ts:12 · looks like a key or a password · allowed")).toBeInTheDocument();
+    // The Allow names the files it was given for, by their tree id.
+    const key = `src/client.ts:12@${PLAN.tree}`;
+    expect(api.shipStatus.mock.calls.at(-1)).toEqual(["shell-c1", { allowed: [key] }]);
+
+    // The commit is asked for and made with the allowed line.
+    await userEvent.click(await screen.findByRole("button", { name: "Commit" }));
+    expect(api.shipStatus.mock.calls.at(-1)).toEqual([
+      "shell-c1",
+      { message: "Change made in this session", allowed: [key] },
+    ]);
+    api.shipCommit.mockRejectedValue("stop here");
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog", { name: COMMIT_QUESTION })).getByRole("button", { name: "Commit" }),
+    );
+    expect(api.shipCommit.mock.calls).toEqual([["shell-c1", "Change made in this session", [key], CONFIRM]]);
+
+    api.shipStatus.mockResolvedValue(SHIP_BLOCKED);
+    await userEvent.click(within(scan).getByRole("button", { name: "Undo allow src/client.ts:12" }));
+    expect(await within(scan).findByRole("button", { name: "Allow src/client.ts:12" })).toBeInTheDocument();
+    expect(api.shipStatus.mock.calls.at(-1)).toEqual(["shell-c1"]);
+  });
+
+  it("an Allow is dropped once the files change, so a new value on that line is flagged again", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    api.shipStatus.mockResolvedValue(SHIP_BLOCKED);
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    const scan = within(await screen.findByRole("list", { name: "Checks" })).getByRole("listitem", {
+      name: "Secret scan",
+    });
+    const allowedHit = { path: "src/client.ts", line: 12, kind: "shape" as const, commit: null, allowed: true };
+    api.shipStatus.mockResolvedValue({
+      ...SHIP_READY,
+      checks: { ...SHIP_READY.checks!, secrets: [allowedHit] },
+      commit: { ...PLAN, allowed: 1 },
+    });
+    await userEvent.click(within(scan).getByRole("button", { name: "Allow src/client.ts:12" }));
+    await within(scan).findByText("src/client.ts:12 · looks like a key or a password · allowed");
+
+    // Another value is written on the line and a new review arrives: the
+    // checks read other files, and the Allow given for the first goes.
+    const tree = "7777777777777777777777777777777777777777";
+    const other = { ...SHIP_BLOCKED, commit: { ...PLAN, tree, confirm: null } };
+    api.shipStatus.mockResolvedValue(other);
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: { ...REVIEW, atMs: 1_700_000_000_001, tree } });
+    await act(async () => feed.changed("shell-c1"));
+    await waitFor(() => expect(api.shipStatus.mock.calls.at(-1)).toEqual(["shell-c1"]));
+    expect(await within(scan).findByRole("button", { name: "Allow src/client.ts:12" })).toBeInTheDocument();
+  });
+
+  it("a fixed message opens Commit again with no Check again", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    api.shipStatus.mockResolvedValue(SHIP_READY);
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    const commit = await screen.findByRole("button", { name: "Commit" });
+    api.shipStatus.mockResolvedValue({
+      ...SHIP_READY,
+      blocked: ["Write a commit message."],
+      commit: { ...PLAN, message: "", confirm: null },
+    });
+    await userEvent.clear(screen.getByRole("textbox", { name: "Commit message" }));
+    await userEvent.click(commit);
+    expect(await screen.findByText("Write a commit message.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Commit" })).toBeDisabled();
+
+    await userEvent.type(screen.getByRole("textbox", { name: "Commit message" }), "Fix it");
+    expect(screen.getByRole("button", { name: "Commit" })).toBeEnabled();
+    expect(screen.queryByText("Write a commit message.")).toBeNull();
+    // The click reads the checks again for the new message.
+    api.shipStatus.mockResolvedValue(SHIP_READY);
+    await userEvent.click(screen.getByRole("button", { name: "Commit" }));
+    expect(api.shipStatus.mock.calls.at(-1)).toEqual(["shell-c1", { message: "Fix it", allowed: [] }]);
+    expect(await screen.findByRole("alertdialog", { name: COMMIT_QUESTION })).toBeInTheDocument();
+  });
+
+  it("each Waive names its finding, and a new review closes an open Waive confirm", async () => {
+    const two: Review = {
+      ...REVIEW,
+      findings: [
+        { severity: "high", text: "src/a.rs:3 the total is off by one" },
+        { severity: "high", text: "src/b.rs:1 the key is logged" },
+      ],
+      blockers: 2,
+    };
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: two });
+    api.shipStatus.mockResolvedValue({ ...SHIP_BLOCKED, checks: { ...SHIP_BLOCKED.checks!, review: { state: "blockers", count: 2 } } });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    await screen.findByRole("list", { name: "Checks" });
+    expect(screen.getAllByRole("button", { name: /^Waive/ }).map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Waive src/a.rs:3 the total is off by one",
+      "Waive src/b.rs:1 the key is logged",
+    ]);
+
+    await userEvent.click(screen.getByRole("button", { name: "Waive src/a.rs:3 the total is off by one" }));
+    expect(await screen.findByRole("alertdialog", { name: WAIVE_QUESTION })).toBeInTheDocument();
+    // "Review again" with no file changed: the same tree, a new review.
+    const again: Review = {
+      ...two,
+      findings: [{ severity: "high", text: "src/c.rs:5 SQL injection" }],
+      blockers: 1,
+      atMs: 1_700_000_000_002,
+    };
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: again });
+    await act(async () => feed.changed("shell-c1"));
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: WAIVE_QUESTION })).toBeNull());
+    expect(api.shipWaive).not.toHaveBeenCalled();
+  });
+
+  it("on a branch that takes no commit the checks offer New branch, which works in the session", async () => {
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    api.shipStatus.mockResolvedValue({
+      ...SHIP_READY,
+      blocked: ["main is the main or default branch. The app never commits to it; make a branch first."],
+      checks: { ...SHIP_READY.checks!, branch: "main", newBranch: true },
+      commit: { ...PLAN, confirm: null },
+    });
+    api.codeNewBranch.mockResolvedValue("code/my-change");
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    const branch = within(await screen.findByRole("list", { name: "Checks" })).getByRole("listitem", { name: "Branch" });
+    await userEvent.type(within(branch).getByLabelText("New branch"), "code/my-change");
+    const reads = api.shipStatus.mock.calls.length;
+    api.shipStatus.mockResolvedValue(SHIP_READY);
+    await userEvent.click(within(branch).getByRole("button", { name: "Make branch" }));
+    expect(api.codeNewBranch.mock.calls).toEqual([["code/my-change", "shell-c1"]]);
+    expect(await screen.findByText("On code/my-change now.")).toBeInTheDocument();
+    await waitFor(() => expect(api.shipStatus.mock.calls.length).toBeGreaterThan(reads));
+    expect(await screen.findByRole("button", { name: "Commit" })).toBeEnabled();
+    // A work branch offers none.
+    expect(screen.queryByLabelText("New branch")).toBeNull();
+  });
+
+  it("commits made during the session are listed with the one that will join them", async () => {
+    expect(sessionCommitsLine(1)).toBe("1 commit was made during this session and will be pushed with this one.");
+    expect(sessionCommitsLine(2)).toBe("2 commits were made during this session and will be pushed with this one.");
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: REVIEW });
+    api.shipStatus.mockResolvedValue({
+      ...SHIP_READY,
+      commit: {
+        ...PLAN,
+        more: 3,
+        commits: [
+          { sha: "5555555555555555555555555555555555555555", subject: "Keep the notes" },
+          { sha: "6666666666666666666666666666666666666666", subject: "Start" },
+        ],
+      },
+    });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    expect(await screen.findByText(sessionCommitsLine(2))).toBeInTheDocument();
+    expect(rowsOf("Session commits")).toEqual(["55555555 Keep the notes", "66666666 Start"]);
+    expect(screen.getByText("and 3 more")).toBeInTheDocument();
+  });
+
+  it("after the commit, Push asks with the exact command of the commit made here and pushes in the session", async () => {
+    const clean: Review = { ...REVIEW, findings: [{ severity: "info", text: "README:1 reads well" }], blockers: 0 };
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: clean });
+    api.shipStatus.mockResolvedValue(SHIP_COMMITTED);
+    // Even a plan that says no confirm is asked about here.
+    api.codeShipPlan.mockImplementation((action) =>
+      Promise.resolve(
+        action === "push"
+          ? pushPlan("push", { needsConfirm: false })
+          : pushPlan("pr", { blocked: "Push the commit first: the pull request is opened for it." }),
+      ),
+    );
+    api.codeShipRun.mockResolvedValue({
+      command: PUSH_COMMAND,
+      exit: 0,
+      output: "To /home/user/origin.git\n",
+      summary: "Pushed 44444444 to work/one on origin.",
+    });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+
+    const push = await screen.findByRole("button", { name: "Push work/one" });
+    expect(screen.getByText(committedLine(SHIPPED_SHA))).toBeInTheDocument();
+    expect(api.codeShipPlan.mock.calls).toEqual([
+      ["push", "shell-c1"],
+      ["pr", "shell-c1"],
+    ]);
+    expect(api.codeActivity.mock.calls).toEqual([["shell-c1"]]);
+    await userEvent.click(push);
+    const card = await screen.findByRole("group", { name: "Push this branch?" });
+    expect(within(card).getByLabelText("Command to run")).toHaveTextContent(PUSH_COMMAND);
+    expect(api.codeShipRun).not.toHaveBeenCalled();
+    await userEvent.click(within(card).getByRole("button", { name: "Push" }));
+    expect(api.codeShipRun.mock.calls).toEqual([["push", true, PUSH_COMMAND, "shell-c1"]]);
+    expect(await screen.findByText("Pushed 44444444 to work/one on origin.")).toBeInTheDocument();
+  });
+
+  it("Open PR in the Tasks panel says why it waits, then asks with the gh command, and Cancel opens nothing", async () => {
+    const clean: Review = { ...REVIEW, findings: [{ severity: "info", text: "README:1 reads well" }], blockers: 0 };
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: clean });
+    api.shipStatus.mockResolvedValue(SHIP_COMMITTED);
+    api.codeShipPlan.mockImplementation((action) =>
+      Promise.resolve(pushPlan(action, action === "pr" ? { blocked: "Push the commit first: the pull request is opened for it." } : {})),
+    );
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open PR into beta" }));
+    expect(await screen.findByText("Push the commit first: the pull request is opened for it.")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Open this PR?" })).toBeNull();
+
+    // Once the push went through, the PR asks with the exact command.
+    api.codeShipPlan.mockImplementation((action) => Promise.resolve(pushPlan(action)));
+    await userEvent.click(screen.getByRole("button", { name: "Open PR into beta" }));
+    const card = await screen.findByRole("group", { name: "Open this PR?" });
+    expect(within(card).getByLabelText("Command to run")).toHaveTextContent(PR_COMMAND);
+    await userEvent.click(within(card).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("group", { name: "Open this PR?" })).toBeNull();
+    expect(api.codeShipRun).not.toHaveBeenCalled();
+    expect(api.codeShipPlan.mock.calls.every(([, id]) => id === "shell-c1")).toBe(true);
+  });
+
+  it("there is no Push before the commit is made", async () => {
+    const clean: Review = { ...REVIEW, findings: [{ severity: "info", text: "README:1 reads well" }], blockers: 0 };
+    api.getQueue.mockResolvedValue({ ...LEAD_QUEUE, review: clean });
+    render(<Agents conversationId="shell-c1" live onAsk={() => {}} />);
+    await screen.findByRole("list", { name: "Changed files" });
+    expect(screen.queryByRole("button", { name: /^Push/ })).toBeNull();
+    expect(api.codeShipPlan).not.toHaveBeenCalled();
   });
 
   it("a paired browser, a session with no lead and the Agents page read no checks", async () => {

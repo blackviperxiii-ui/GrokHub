@@ -248,6 +248,7 @@ describe("Episode", () => {
     expect(classWords("money")).toBe("Spend money");
     expect(classWords("credentials")).toBe("Password or key");
     expect(classWords("merge_work")).toBe("Merge helper work");
+    expect(classWords("ship")).toBe("Push, PR, GitHub API call or ship button");
   });
 
   it("an Allow a running reply picks up, and a Deny, send nothing", async () => {

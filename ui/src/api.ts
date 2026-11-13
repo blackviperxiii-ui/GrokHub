@@ -3222,6 +3222,10 @@ export interface Review {
   planGiven: boolean;
   /** True when the helper was shown only part of the change. Left out when not. */
   cut?: boolean;
+  /** The places in `findings` of the blockers the person waived. Left out when none. */
+  waived?: number[];
+  /** The tree id the review read, which Waive names. */
+  tree: string;
 }
 
 export function getQueue(conversationId: string): Promise<Queue> {
@@ -3255,15 +3259,43 @@ export interface SecretHit {
   kind: "name" | "held" | "shape";
   /** The session commit that added it; none for the uncommitted change. */
   commit: string | null;
+  /** The person allowed this line (a shape hit only). Left out when not. */
+  allowed?: boolean;
 }
 
 export interface ShipChecks {
   /** None on a detached HEAD. */
   branch: string | null;
+  /** The branch takes no commit from the app (default, protected, detached,
+   * or no default branch on record): the page offers New branch. Left out when not. */
+  newBranch?: boolean;
   review: ReviewCheck;
   tests: TestsCheck;
   /** None when the scan could not run. */
   secrets: SecretHit[] | null;
+}
+
+/** What a commit of the session's change would be. */
+export interface CommitPlan {
+  /** The working folder's tree id: what the commit holds. */
+  tree: string;
+  /** The commit HEAD names: the commit's parent. */
+  head: string;
+  /** Every changed file, the first 200 of them; status is A, M, D or T. */
+  files: { status: string; path: string }[];
+  /** How many changed files are not listed. */
+  more: number;
+  /** Commits made since the session began, newest first. */
+  commits: { sha: string; subject: string }[];
+  /** "name <email>", when both are set. */
+  author: string | null;
+  /** The message the confirm text is for. */
+  message: string;
+  notices: string[];
+  waived: number;
+  allowed: number;
+  /** The exact text the person confirms; none while anything is in the way. */
+  confirm: string | null;
 }
 
 /** Whether the session's change could be committed
@@ -3273,11 +3305,53 @@ export interface ShipStatus {
   blocked: string[];
   /** None when the project could not be read at all. */
   checks: ShipChecks | null;
+  /** None when the project could not be read at all. */
+  commit: CommitPlan | null;
+  /** The commit made from the Tasks panel, while it is HEAD and nothing is left to commit. */
+  shipped: string | null;
 }
 
-/** Tasks: the checks on the session's change. Read only; desktop only. */
-export function shipStatus(conversationId: string): Promise<ShipStatus> {
-  return invoke<ShipStatus>("ship_status", { conversationId });
+/** What the Commit card holds: its message and the flagged lines allowed. */
+export interface ShipDraft {
+  message?: string | null;
+  /** `path:line@<tree id>` of each shape hit the person allowed. */
+  allowed?: string[];
+}
+
+/** Tasks: the checks on the session's change, for the Commit card's draft
+ * when one is given. Read only; desktop only. */
+export function shipStatus(conversationId: string, draft?: ShipDraft): Promise<ShipStatus> {
+  return invoke<ShipStatus>("ship_status", {
+    conversationId,
+    message: draft?.message ?? null,
+    allowed: draft?.allowed ?? null,
+  });
+}
+
+/** A commit made from the Tasks panel. */
+export interface Committed {
+  sha: string;
+  /** "Committed 0123abcd to work/one.", and what is left to do when a step failed. */
+  said: string;
+  status: ShipStatus;
+}
+
+/** Tasks → Commit: every check runs again, then the change becomes one
+ * commit. `command` must be the exact confirm text the person said yes to.
+ * Desktop only. */
+export function shipCommit(
+  conversationId: string,
+  message: string,
+  allowed: string[],
+  command: string,
+): Promise<Committed> {
+  return invoke<Committed>("ship_commit", { conversationId, message, allowed, confirmed: true, command });
+}
+
+/** Tasks → Waive: ships with the blocker at `index` of the review of `tree`
+ * written at `atMs` open. Desktop only. */
+export function shipWaive(conversationId: string, tree: string, atMs: number, index: number): Promise<Queue> {
+  return invoke<Queue>("ship_waive", { conversationId, tree, atMs, index });
 }
 
 /** Merges a helper's work into the project folder, as uncommitted changes.
@@ -4237,7 +4311,9 @@ export interface CodeActivityEntry {
     | "deploy"
     | "secret"
     | "edit"
-    | "terminal";
+    | "terminal"
+    | "commit"
+    | "review";
   repoKey: string;
   host: string;
   branch: string;
@@ -4248,8 +4324,15 @@ export interface CodeActivityEntry {
   summary: string;
 }
 
-export function codeShipPlan(action: CodeShipAction): Promise<CodeShipPlan> {
-  return invoke<CodeShipPlan>("code_ship_plan", { action });
+/** The session a push card belongs to: the agent window's Tasks panel,
+ * which pushes the commit made there, always asks, and works in that
+ * session's folder. Left out, the Code tab's own card. */
+function forSession(conversationId?: string): { conversationId?: string } {
+  return conversationId === undefined ? {} : { conversationId };
+}
+
+export function codeShipPlan(action: CodeShipAction, conversationId?: string): Promise<CodeShipPlan> {
+  return invoke<CodeShipPlan>("code_ship_plan", { action, ...forSession(conversationId) });
 }
 
 /** `command` is the command the confirm card showed; the app refuses when it would now run a different one. */
@@ -4257,20 +4340,24 @@ export function codeShipRun(
   action: CodeShipAction,
   confirmed: boolean,
   command?: string | null,
+  conversationId?: string,
 ): Promise<CodeShipped> {
   return invoke<CodeShipped>("code_ship_run", {
     action,
     confirmed,
     command: command ?? null,
+    ...forSession(conversationId),
   });
 }
 
-export function codeNewBranch(name: string): Promise<string> {
-  return invoke<string>("code_new_branch", { name });
+export function codeNewBranch(name: string, conversationId?: string): Promise<string> {
+  return invoke<string>("code_new_branch", { name, ...forSession(conversationId) });
 }
 
-export function codeActivity(): Promise<CodeActivityEntry[]> {
-  return invoke<CodeActivityEntry[]>("code_activity_list");
+export function codeActivity(conversationId?: string): Promise<CodeActivityEntry[]> {
+  return conversationId === undefined
+    ? invoke<CodeActivityEntry[]>("code_activity_list")
+    : invoke<CodeActivityEntry[]>("code_activity_list", { conversationId });
 }
 
 export function getCodeShip(): Promise<CodeShipSettings> {

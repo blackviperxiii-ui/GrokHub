@@ -168,14 +168,18 @@ fn reviewed(fx: &Fixture, blockers: u32) {
         head: snap.head.clone(),
         commits: commits.into_iter().map(|commit| commit.sha).collect(),
         tree: snap.tree.clone(),
-        at_ms: 1_700_000_000_000,
+        at_ms: REVIEWED_AT,
         plan_given: true,
         body,
         blockers,
         cut: false,
+        waived: Vec::new(),
     };
     record(fx, "review.json", &serde_json::to_string(&review).unwrap());
 }
+
+/// When [`reviewed`] says the review was written.
+const REVIEWED_AT: u64 = 1_700_000_000_000;
 
 /// Runs `command` as the project's tests, confirmed, through the real runner.
 fn run_tests(fx: &Fixture, command: &str) -> runs::RunResult {
@@ -216,27 +220,58 @@ fn hit(path: &str, line: Option<u32>, kind: SecretKind, commit: Option<&str>) ->
         line,
         kind,
         commit: commit.map(str::to_string),
+        allowed: false,
     }
 }
 
 // -- the whole status ---------------------------------------------------------
 
+/// The tree id of the fixture's README and a `src/a.txt` that holds "one".
+const READY_TREE: &str = "eccf684b923fb80e723a1ef1cfc1f703070b1084";
+
 #[test]
 fn a_reviewed_and_tested_change_on_a_work_branch_has_nothing_in_the_way() {
     let fx = ready("clean");
+    let head = git(&fx.project, &["rev-parse", "HEAD"]);
     let got = status(&fx);
+    let confirm = format!(
+        "commit {} to work/one on {}: \"Change made in this session\"",
+        &READY_TREE[..12],
+        &head[..8]
+    );
     assert_eq!(
         got,
         ShipStatus {
             blocked: vec![],
             checks: Some(Checks {
                 branch: Some("work/one".into()),
+                new_branch: false,
                 review: ReviewCheck::Clean,
                 tests: TestsCheck::Passed {
                     command: "echo ok".into()
                 },
                 secrets: Some(vec![]),
             }),
+            commit: Some(CommitPlan {
+                tree: READY_TREE.into(),
+                head: head.clone(),
+                files: vec![FileRow {
+                    status: "A".into(),
+                    path: "src/a.txt".into()
+                }],
+                more: 0,
+                commits: vec![],
+                author: Some("test <test@example.com>".into()),
+                message: "Change made in this session".into(),
+                notices: vec![
+                    "Every changed file in this folder is included.".into(),
+                    "Hooks are not run, and the commit is not signed.".into(),
+                ],
+                waived: 0,
+                allowed: 0,
+                confirm: Some(confirm.clone()),
+            }),
+            shipped: None,
         }
     );
     assert_eq!(
@@ -249,6 +284,23 @@ fn a_reviewed_and_tested_change_on_a_work_branch_has_nothing_in_the_way() {
                 "tests": {"state": "passed", "command": "echo ok"},
                 "secrets": [],
             },
+            "commit": {
+                "tree": READY_TREE,
+                "head": head,
+                "files": [{"status": "A", "path": "src/a.txt"}],
+                "more": 0,
+                "commits": [],
+                "author": "test <test@example.com>",
+                "message": "Change made in this session",
+                "notices": [
+                    "Every changed file in this folder is included.",
+                    "Hooks are not run, and the commit is not signed.",
+                ],
+                "waived": 0,
+                "allowed": 0,
+                "confirm": confirm,
+            },
+            "shipped": null,
         })
     );
 }
@@ -341,6 +393,8 @@ fn a_folder_that_is_no_repository_is_one_sentence_and_no_checks() {
         ShipStatus {
             blocked: vec!["This folder is not a git repository.".into()],
             checks: None,
+            commit: None,
+            shipped: None,
         }
     );
 }
@@ -360,6 +414,8 @@ fn a_program_named_in_the_repositorys_own_config_stops_the_read() {
                     .into()
             ],
             checks: None,
+            commit: None,
+            shipped: None,
         }
     );
 }
@@ -509,7 +565,23 @@ fn a_detached_head_takes_no_commit() {
         got.blocked,
         ["Check out a branch first; the app doesn't commit on a detached HEAD."]
     );
-    assert_eq!(got.checks.expect("checks").branch, None);
+    let checks = got.checks.expect("checks");
+    assert_eq!(checks.branch, None);
+    // Quality minor 1: the page offers New branch for it.
+    assert!(checks.new_branch);
+}
+
+#[test]
+fn the_main_branch_offers_new_branch_and_a_work_branch_does_not() {
+    let fx = ready("new-branch-offer");
+    let offer = |fx: &Fixture| status(fx).checks.expect("checks").new_branch;
+    assert!(!offer(&fx));
+    git(&fx.project, &["branch", "-M", "main"]);
+    assert!(offer(&fx));
+    let json = serde_json::to_value(status(&fx)).unwrap();
+    assert_eq!(json["checks"]["newBranch"], true);
+    ship::new_branch(&fx.cfg, &fx.project, &CodeShip::default(), "work/two").unwrap();
+    assert!(!offer(&fx));
 }
 
 #[test]
@@ -519,10 +591,12 @@ fn with_no_default_branch_on_record_only_a_branch_the_app_made_takes_a_commit() 
         &fx.project,
         &["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"],
     );
+    let got = status(&fx);
     assert_eq!(
-        status(&fx).blocked,
+        got.blocked,
         ["This project's default branch is not known. Use New branch."]
     );
+    assert!(got.checks.expect("checks").new_branch);
     // New branch keeps the files and HEAD, and the app remembers making it.
     ship::new_branch(&fx.cfg, &fx.project, &CodeShip::default(), "work/two").unwrap();
     let got = status(&fx);
@@ -1004,4 +1078,607 @@ fn a_repository_with_no_author_or_that_signs_its_commits_is_blocked() {
         status(&fx).blocked,
         ["This repository signs its commits, which the app cannot do; commit from your terminal."]
     );
+}
+
+// -- gate 11: the message -----------------------------------------------------
+
+fn draft(message: &str, allowed: &[&str]) -> Draft {
+    Draft {
+        message: Some(message.to_string()),
+        allowed: allowed.iter().map(|place| place.to_string()).collect(),
+    }
+}
+
+/// How the page allows `place` while the folder is as it is now.
+fn allowed_now(fx: &Fixture, place: &str) -> String {
+    allow_key(place, &ship_tree::tree_id(&fx.project).unwrap())
+}
+
+fn status_of(fx: &Fixture, draft: &Draft) -> ShipStatus {
+    status_for(
+        &fx.cfg,
+        &fx.project,
+        &fx.session,
+        &CodeShip::default(),
+        &MemVault::default(),
+        draft,
+    )
+}
+
+fn commit_of(
+    fx: &Fixture,
+    draft: &Draft,
+    confirmed: bool,
+    command: Option<&str>,
+) -> Result<Committed, String> {
+    commit_with(
+        &fx.cfg,
+        &fx.project,
+        &fx.session,
+        &CodeShip::default(),
+        &MemVault::default(),
+        draft,
+        confirmed,
+        command,
+    )
+}
+
+/// The confirm text the status offers for `draft`.
+fn confirm_of(fx: &Fixture, draft: &Draft) -> String {
+    let got = status_of(fx, draft);
+    assert_eq!(got.blocked, Vec::<String>::new());
+    got.commit.expect("a plan").confirm.expect("a confirm")
+}
+
+fn head(fx: &Fixture) -> String {
+    git(&fx.project, &["rev-parse", "HEAD"])
+}
+
+fn shipped(fx: &Fixture) -> Option<Shipped> {
+    let _config = ConfigGuard::set(&fx.cfg);
+    review::shipped_for(&fx.session).unwrap()
+}
+
+#[test]
+fn a_message_with_no_first_line_a_long_one_or_a_nul_is_refused() {
+    let fx = ready("message");
+    for (message, why) in [
+        ("", "Write a commit message."),
+        ("   \nbody", "Write a commit message."),
+        ("a\0b", "The commit message holds a NUL character."),
+    ] {
+        assert_eq!(
+            status_of(&fx, &draft(message, &[])).blocked,
+            [why],
+            "{message:?}"
+        );
+    }
+    let long = "x".repeat(201);
+    assert_eq!(
+        status_of(&fx, &draft(&long, &[])).blocked,
+        ["The first line of the commit message is longer than 200 characters."]
+    );
+    let most = "é".repeat(200);
+    assert_eq!(
+        status_of(&fx, &draft(&format!("{most}\n\nbody"), &[])).blocked,
+        Vec::<String>::new()
+    );
+}
+
+// -- the commit ---------------------------------------------------------------
+
+#[test]
+fn a_commit_advances_head_by_one_with_the_reviewed_tree_and_leaves_a_clean_status() {
+    let fx = ready("commit");
+    let before = head(&fx);
+    let message = draft("Add the total\n\nWith a test.\n", &[]);
+    let confirm = confirm_of(&fx, &message);
+    assert_eq!(
+        confirm,
+        format!(
+            "commit {} to work/one on {}: \"Add the total\"",
+            &READY_TREE[..12],
+            &before[..8]
+        )
+    );
+
+    let done = commit_of(&fx, &message, true, Some(&confirm)).unwrap();
+    let sha = head(&fx);
+    assert_eq!(done.sha, sha);
+    assert_eq!(done.said, format!("Committed {} to work/one.", &sha[..8]));
+    assert_eq!(
+        git(
+            &fx.project,
+            &["rev-list", "--count", &format!("{before}..HEAD")]
+        ),
+        "1"
+    );
+    assert_eq!(git(&fx.project, &["rev-parse", "HEAD^{tree}"]), READY_TREE);
+    assert_eq!(git(&fx.project, &["rev-parse", "HEAD^"]), before);
+    assert_eq!(
+        git(&fx.project, &["log", "-1", "--format=%s / %b"]),
+        "Add the total / With a test."
+    );
+    assert_eq!(git(&fx.project, &["status", "--porcelain"]), "");
+
+    let review_head = before.clone();
+    assert_eq!(
+        shipped(&fx),
+        Some(Shipped {
+            project: fx.project.to_string_lossy().into_owned(),
+            branch: "work/one".into(),
+            sha: sha.clone(),
+            parent: review_head,
+            tree: READY_TREE.into(),
+            base: before.clone(),
+            commits: vec![sha.clone()],
+            allowed: vec![],
+            pushed: false,
+        })
+    );
+    // After it: nothing to commit, the review is of what was committed, and
+    // the page names the commit.
+    assert_eq!(done.status.blocked, ["There is nothing to commit."]);
+    assert_eq!(done.status.shipped, Some(sha.clone()));
+    let checks = done.status.checks.clone().expect("checks");
+    assert_eq!(checks.review, ReviewCheck::Clean);
+    assert_eq!(
+        checks.tests,
+        TestsCheck::Passed {
+            command: "echo ok".into()
+        }
+    );
+    assert_eq!(status(&fx), done.status);
+
+    let log = code_activity::list(&fx.cfg, 10);
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].kind, code_activity::Kind::Commit);
+    assert_eq!(log[0].command, confirm);
+    assert_eq!(log[0].approved_by, "user");
+    assert_eq!(log[0].branch, "work/one");
+    assert_eq!(log[0].host, "other");
+    assert_eq!(log[0].exit, Some(0));
+    assert_eq!(log[0].summary, format!("Committed {}", &sha[..8]));
+}
+
+#[test]
+fn a_commit_with_no_yes_or_with_another_confirm_text_commits_nothing() {
+    let fx = ready("unconfirmed");
+    let before = head(&fx);
+    let first = draft("First", &[]);
+    let confirm = confirm_of(&fx, &first);
+    assert_eq!(
+        commit_of(&fx, &first, false, Some(&confirm)),
+        Err("Confirm the commit first.".to_string())
+    );
+    assert_eq!(
+        commit_of(&fx, &first, true, None),
+        Err("The change is not the one the confirm showed. Look again.".to_string())
+    );
+    // A yes given for one message is no yes for another.
+    assert_eq!(
+        commit_of(&fx, &draft("Second", &[]), true, Some(&confirm)),
+        Err("The change is not the one the confirm showed. Look again.".to_string())
+    );
+    // A yes given before a file changed is no yes for the files there now.
+    write(&fx, "src/a.txt", "one\ntwo\n");
+    write(&fx, "src/a.txt", "one\n");
+    write(&fx, "src/b.txt", "two\n");
+    assert_eq!(
+        commit_of(&fx, &first, true, Some(&confirm)),
+        Err("Files or commits changed since the review. Review again. \
+             Files changed since the tests ran. Run them again."
+            .to_string())
+    );
+    assert_eq!(head(&fx), before);
+    assert_eq!(shipped(&fx), None);
+    assert!(code_activity::list(&fx.cfg, 10).is_empty());
+}
+
+#[test]
+fn a_change_that_is_in_the_way_commits_nothing_and_says_why() {
+    let fx = fixture("blocked-commit");
+    write(&fx, "src/a.txt", "one\n");
+    let before = head(&fx);
+    assert_eq!(
+        commit_of(&fx, &Draft::default(), true, Some("commit")),
+        Err("The change has not been reviewed.".to_string())
+    );
+    assert_eq!(head(&fx), before);
+    assert_eq!(git(&fx.project, &["status", "--porcelain"]), "?? src/");
+}
+
+#[test]
+fn a_commit_made_after_the_confirm_was_shown_blocks_the_commit_and_moves_nothing() {
+    let fx = ready("moved");
+    write(&fx, "notes.txt", "kept\n");
+    reviewed(&fx, 0);
+    assert_eq!(run_tests(&fx, "echo ok").exit, 0);
+    let confirm = confirm_of(&fx, &Draft::default());
+    // The agent commits by its own route while the person reads the card.
+    let theirs = commit(&fx, "notes.txt", "agent");
+    assert_eq!(
+        commit_of(&fx, &Draft::default(), true, Some(&confirm)),
+        Err("Files or commits changed since the review. Review again.".to_string())
+    );
+    assert_eq!(head(&fx), theirs);
+    assert_eq!(shipped(&fx), None);
+}
+
+/// Attack B1: a commit of `.env` made with `commit-tree` and `update-ref`
+/// after the review, which leaves the working folder as it was.
+#[test]
+fn a_secrets_file_put_on_the_branch_by_plumbing_after_the_review_blocks_as_stale() {
+    let fx = ready("b1-plumbing");
+    let confirm = confirm_of(&fx, &Draft::default());
+    let blob = git_in(&fx.project, &["hash-object", "-w", "--stdin"], "TOKEN=1\n");
+    let index = fx.base.join("other-index");
+    let plumb = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&fx.project)
+            .args(args)
+            .env("GIT_INDEX_FILE", &index)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    plumb(&["read-tree", "HEAD"]);
+    plumb(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("100644,{blob},.env"),
+    ]);
+    let tree = plumb(&["write-tree"]);
+    let sneaked = plumb(&["commit-tree", &tree, "-p", "HEAD", "-m", "config"]);
+    plumb(&["update-ref", "refs/heads/work/one", &sneaked]);
+
+    let got = status(&fx);
+    assert!(
+        got.blocked
+            .contains(&"Files or commits changed since the review. Review again.".to_string()),
+        "{:?}",
+        got.blocked
+    );
+    assert!(got
+        .checks
+        .expect("checks")
+        .secrets
+        .expect("a scan")
+        .contains(&hit(".env", None, SecretKind::Name, Some(&sneaked))),);
+    assert!(commit_of(&fx, &Draft::default(), true, Some(&confirm)).is_err());
+    assert_eq!(head(&fx), sneaked);
+}
+
+#[test]
+fn earlier_session_commits_are_listed_counted_in_the_confirm_and_kept_for_the_push() {
+    let fx = fixture("earlier");
+    write(&fx, "notes.txt", "kept\n");
+    let earlier = commit(&fx, "notes.txt", "Keep the notes");
+    write(&fx, "src/a.txt", "one\n");
+    reviewed(&fx, 0);
+    let got = status(&fx);
+    let plan = got.commit.expect("a plan");
+    assert_eq!(
+        plan.commits,
+        [CommitRow {
+            sha: earlier.clone(),
+            subject: "Keep the notes".into()
+        }]
+    );
+    let confirm = plan.confirm.expect("a confirm");
+    assert!(
+        confirm.ends_with(": \"Change made in this session\", 1 earlier commit, no tests run"),
+        "{confirm}"
+    );
+    let done = commit_of(&fx, &Draft::default(), true, Some(&confirm)).unwrap();
+    let kept = shipped(&fx).expect("a record");
+    assert_eq!(kept.commits, [done.sha.clone(), earlier.clone()]);
+    assert_eq!(kept.parent, earlier);
+    assert_eq!(done.status.blocked, ["There is nothing to commit."]);
+    assert_eq!(
+        done.status.checks.expect("checks").review,
+        ReviewCheck::Clean
+    );
+}
+
+// -- waive and allow ----------------------------------------------------------
+
+#[test]
+fn a_waived_blocker_opens_the_commit_and_is_named_in_the_confirm_and_the_log() {
+    let fx = fixture("waive");
+    write(&fx, "src/a.txt", "one\n");
+    reviewed(&fx, 1);
+    assert_eq!(status(&fx).blocked, ["The review found 1 blocker."]);
+    let tree = ship_tree::tree_id(&fx.project).unwrap();
+    let waive_at = |tree: &str, at_ms: u64| {
+        waive(
+            &fx.cfg,
+            &fx.project,
+            &fx.session,
+            &CodeShip::default(),
+            tree,
+            at_ms,
+            0,
+        )
+    };
+    assert_eq!(
+        waive_at(&"0".repeat(40), REVIEWED_AT),
+        Err("The review changed since it was shown. Look again.".to_string())
+    );
+    // The same tree, but the time of another review.
+    assert_eq!(
+        waive_at(&tree, REVIEWED_AT - 1),
+        Err("The review changed since it was shown. Look again.".to_string())
+    );
+    waive_at(&tree, REVIEWED_AT).unwrap();
+    // A second click, a retry or a double click, logs nothing more.
+    waive_at(&tree, REVIEWED_AT).unwrap();
+
+    let got = status(&fx);
+    assert_eq!(got.blocked, Vec::<String>::new());
+    assert_eq!(got.checks.expect("checks").review, ReviewCheck::Clean);
+    let plan = got.commit.expect("a plan");
+    assert_eq!(plan.waived, 1);
+    let confirm = plan.confirm.expect("a confirm");
+    assert!(
+        confirm.ends_with(": \"Change made in this session\", 1 finding waived, no tests run"),
+        "{confirm}"
+    );
+    let log = code_activity::list(&fx.cfg, 10);
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].kind, code_activity::Kind::Review);
+    assert_eq!(log[0].approved_by, "user");
+    assert_eq!(log[0].branch, "work/one");
+    assert_eq!(
+        log[0].command,
+        format!("waive finding 1 of the review of {}", &tree[..12])
+    );
+    assert_eq!(
+        log[0].summary,
+        "Waived: src/a.txt:1 the total is off by one"
+    );
+
+    // A new review takes the waiver back.
+    reviewed(&fx, 1);
+    assert_eq!(status(&fx).blocked, ["The review found 1 blocker."]);
+}
+
+#[test]
+fn a_shape_hit_the_person_allowed_is_named_in_the_confirm_and_stays_allowed_in_the_commit() {
+    let fx = fixture("allow");
+    write(
+        &fx,
+        "src/client.txt",
+        "first\nsecond\nkey = \"sk-abcdefghijklmnopqrstuv\"\n",
+    );
+    reviewed(&fx, 0);
+    let key = allowed_now(&fx, "src/client.txt:3");
+    let allowed = draft("Add the client", &[&key]);
+    let got = status_of(&fx, &allowed);
+    assert_eq!(got.blocked, Vec::<String>::new());
+    let shape = SecretHit {
+        allowed: true,
+        ..hit("src/client.txt", Some(3), SecretKind::Shape, None)
+    };
+    assert_eq!(
+        got.checks.as_ref().expect("checks").secrets,
+        Some(vec![shape.clone()])
+    );
+    assert_eq!(
+        serde_json::to_string(&shape).unwrap(),
+        r#"{"path":"src/client.txt","line":3,"kind":"shape","commit":null,"allowed":true}"#
+    );
+    let plan = got.commit.expect("a plan");
+    assert_eq!(plan.allowed, 1);
+    let confirm = plan.confirm.expect("a confirm");
+    assert!(
+        confirm.ends_with(": \"Add the client\", 1 flagged line allowed, no tests run"),
+        "{confirm}"
+    );
+    // Another line's place allows nothing, and neither does the place
+    // with no tree id or with another one.
+    for other in [
+        allowed_now(&fx, "src/client.txt:2"),
+        "src/client.txt:3".to_string(),
+        allow_key("src/client.txt:3", &"0".repeat(40)),
+    ] {
+        assert_eq!(
+            status_of(&fx, &draft("Add the client", &[&other])).blocked,
+            ["The secret scan flagged 1 place in the change."],
+            "{other}"
+        );
+    }
+
+    let done = commit_of(&fx, &allowed, true, Some(&confirm)).unwrap();
+    assert_eq!(
+        shipped(&fx).expect("a record").allowed,
+        [AllowedLine {
+            commit: done.sha.clone(),
+            place: "src/client.txt:3".into()
+        }]
+    );
+    // The line is in the commit now, and stays allowed there.
+    assert_eq!(done.status.blocked, ["There is nothing to commit."]);
+    assert_eq!(
+        done.status.checks.expect("checks").secrets,
+        Some(vec![SecretHit {
+            allowed: true,
+            ..hit(
+                "src/client.txt",
+                Some(3),
+                SecretKind::Shape,
+                Some(&done.sha)
+            )
+        }])
+    );
+    let log = code_activity::list(&fx.cfg, 10);
+    assert_eq!(
+        log[0].summary,
+        format!("Committed {}; allowed src/client.txt:3", &done.sha[..8])
+    );
+    assert!(!log[0].command.contains("abcdefghij"));
+}
+
+#[test]
+fn a_secrets_file_a_held_secret_and_a_shape_hit_in_a_session_commit_are_never_allowed() {
+    let fx = fixture("never-allowed");
+    write(&fx, ".env", "PORT=3000\n");
+    reviewed(&fx, 0);
+    let key = allowed_now(&fx, ".env");
+    assert_eq!(
+        status_of(&fx, &draft("x", &[&key])).blocked,
+        ["The secret scan flagged 1 place in the change."]
+    );
+
+    let fx = fixture("never-allowed-commit");
+    write(
+        &fx,
+        "src/k.txt",
+        "a\ntoken = \"sk-abcdefghijklmnopqrstuv\"\n",
+    );
+    commit(&fx, "src/k.txt", "add");
+    write(&fx, "src/a.txt", "one\n");
+    reviewed(&fx, 0);
+    let key = allowed_now(&fx, "src/k.txt:2");
+    assert_eq!(
+        status_of(&fx, &draft("x", &[&key])).blocked,
+        ["The secret scan flagged 1 place in the change."]
+    );
+
+    let fx = fixture("never-allowed-held");
+    let vault = MemVault::default();
+    let value = "plain-words-nobody-would-flag";
+    secrets::set(
+        &fx.cfg,
+        &vault,
+        &runs::project_key(&fx.project),
+        "DEPLOY_TOKEN",
+        value,
+    )
+    .unwrap();
+    write(&fx, "src/a.txt", &format!("one\nsend {value} along\n"));
+    reviewed(&fx, 0);
+    let key = allowed_now(&fx, "src/a.txt:2");
+    let got = status_for(
+        &fx.cfg,
+        &fx.project,
+        &fx.session,
+        &CodeShip::default(),
+        &vault,
+        &draft("x", &[&key]),
+    );
+    assert_eq!(
+        got.blocked,
+        ["The secret scan flagged 1 place in the change."]
+    );
+}
+
+// -- what an Allow and a message are bound to ---------------------------------
+
+/// Trust M3, correctness m1, quality M1: an Allow given for one value on a
+/// line does not allow another value written on that line later, after a
+/// new review, though the page sends the same allowed list again.
+#[test]
+fn an_allow_given_for_one_value_does_not_allow_another_written_on_that_line() {
+    let fx = fixture("allow-bound");
+    write(&fx, "src/a.txt", "key = \"sk-abcdefghijklmnopqrstuv\"\n");
+    reviewed(&fx, 0);
+    let key = allowed_now(&fx, "src/a.txt:1");
+    let allowed = draft("Add", &[&key]);
+    assert_eq!(status_of(&fx, &allowed).blocked, Vec::<String>::new());
+
+    write(
+        &fx,
+        "src/a.txt",
+        "key = \"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"\n",
+    );
+    reviewed(&fx, 0);
+    let got = status_of(&fx, &allowed);
+    assert_eq!(
+        got.blocked,
+        ["The secret scan flagged 1 place in the change."]
+    );
+    assert_eq!(
+        got.checks.expect("checks").secrets,
+        Some(vec![hit("src/a.txt", Some(1), SecretKind::Shape, None)])
+    );
+    assert_eq!(got.commit.expect("a plan").confirm, None);
+    let before = head(&fx);
+    assert_eq!(
+        commit_of(&fx, &allowed, true, Some("commit")),
+        Err("The secret scan flagged 1 place in the change.".to_string())
+    );
+    assert_eq!(head(&fx), before);
+    assert_eq!(shipped(&fx), None);
+}
+
+/// Correctness M1: a line allowed in the commit made here stays allowed in
+/// that commit after more files change, so the session's next change can
+/// be committed; and it stays allowed after that second commit too.
+#[test]
+fn a_line_allowed_in_the_commit_made_here_stays_allowed_after_more_changes() {
+    let fx = fixture("allow-later");
+    write(
+        &fx,
+        "src/client.txt",
+        "first\nsecond\nkey = \"sk-abcdefghijklmnopqrstuv\"\n",
+    );
+    reviewed(&fx, 0);
+    let first = draft("Add the client", &[&allowed_now(&fx, "src/client.txt:3")]);
+    let confirm = confirm_of(&fx, &first);
+    let one = commit_of(&fx, &first, true, Some(&confirm)).unwrap();
+
+    write(&fx, "src/b.txt", "two\n");
+    reviewed(&fx, 0);
+    let got = status(&fx);
+    assert_eq!(got.blocked, Vec::<String>::new());
+    let allowed_in = |sha: &str| SecretHit {
+        allowed: true,
+        ..hit("src/client.txt", Some(3), SecretKind::Shape, Some(sha))
+    };
+    assert_eq!(
+        got.checks.expect("checks").secrets,
+        Some(vec![allowed_in(&one.sha)])
+    );
+    let confirm = got.commit.expect("a plan").confirm.expect("a confirm");
+    assert!(
+        confirm.ends_with(": \"Change made in this session\", 1 earlier commit, no tests run"),
+        "{confirm}"
+    );
+    let two = commit_of(&fx, &Draft::default(), true, Some(&confirm)).unwrap();
+    assert_eq!(
+        shipped(&fx).expect("a record").allowed,
+        [AllowedLine {
+            commit: one.sha.clone(),
+            place: "src/client.txt:3".into()
+        }]
+    );
+    assert_eq!(two.status.blocked, ["There is nothing to commit."]);
+    assert_eq!(
+        two.status.checks.expect("checks").secrets,
+        Some(vec![allowed_in(&one.sha)])
+    );
+}
+
+/// Correctness m2: the confirm's subject is the committed subject, to the
+/// character.
+#[test]
+fn the_committed_message_is_the_one_the_confirm_names() {
+    let fx = ready("message-tidy");
+    let message = draft("   Fix it  \n\nWhy it was wrong.   \n\n", &[]);
+    let confirm = confirm_of(&fx, &message);
+    assert!(confirm.ends_with(": \"Fix it\""), "{confirm}");
+    assert_eq!(
+        status_of(&fx, &message).commit.expect("a plan").message,
+        "Fix it\n\nWhy it was wrong."
+    );
+    commit_of(&fx, &message, true, Some(&confirm)).unwrap();
+    assert_eq!(
+        git(&fx.project, &["log", "-1", "--format=%B"]),
+        "Fix it\n\nWhy it was wrong."
+    );
+    assert_eq!(git(&fx.project, &["log", "-1", "--format=%s"]), "Fix it");
 }

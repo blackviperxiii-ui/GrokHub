@@ -85,6 +85,8 @@ pub(super) fn activity_line(e: &activity::Entry) -> String {
         activity::Kind::Secret => "Secret",
         activity::Kind::Edit => "Edit",
         activity::Kind::Terminal => "Terminal",
+        activity::Kind::Commit => "Commit",
+        activity::Kind::Review => "Review",
     };
     let mut parts = vec![kind.to_string()];
     if !e.branch.trim().is_empty() {

@@ -6,10 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeActivityEntry, CodeShipPlan } from "./api";
 
 const api = vi.hoisted(() => ({
-  codeShipPlan: vi.fn<(action: "push" | "pr") => Promise<CodeShipPlan>>(),
-  codeShipRun: vi.fn<(action: "push" | "pr", confirmed: boolean, command?: string | null) => Promise<{ command: string; exit: number; output: string; summary: string }>>(),
-  codeNewBranch: vi.fn<(name: string) => Promise<string>>(),
-  codeActivity: vi.fn<() => Promise<CodeActivityEntry[]>>(),
+  codeShipPlan: vi.fn<(action: "push" | "pr", conversationId?: string) => Promise<CodeShipPlan>>(),
+  codeShipRun: vi.fn<(action: "push" | "pr", confirmed: boolean, command?: string | null, conversationId?: string) => Promise<{ command: string; exit: number; output: string; summary: string }>>(),
+  codeNewBranch: vi.fn<(name: string, conversationId?: string) => Promise<string>>(),
+  codeActivity: vi.fn<(conversationId?: string) => Promise<CodeActivityEntry[]>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -61,6 +61,50 @@ describe("Code tab → Push and PR", () => {
       output: "To github.com:o/r.git\n",
       summary: "Pushed code/fix to origin.",
     });
+  });
+
+  it("in the agent window every call names the session, and a push asks even when the plan needs no confirm", async () => {
+    const sha = "4444444444444444444444444444444444444444";
+    const command = `git push --porcelain --no-recurse-submodules --no-signed origin ${sha}:refs/heads/code/fix`;
+    api.codeShipPlan.mockImplementation((action) =>
+      Promise.resolve(action === "push" ? plan("push", { command, needsConfirm: false }) : plan("pr")),
+    );
+    api.codeShipRun.mockResolvedValue({ command, exit: 0, output: "", summary: "Pushed 44444444 to code/fix on origin." });
+    api.codeNewBranch.mockResolvedValue("code/two");
+    render(<CodeShip conversationId="shell-c1" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Push code/fix" }));
+    const card = await screen.findByRole("group", { name: SHIP_CONFIRM_PUSH });
+    expect(within(card).getByLabelText("Command to run")).toHaveTextContent(command);
+    expect(api.codeShipRun).not.toHaveBeenCalled();
+    await userEvent.click(within(card).getByRole("button", { name: "Push" }));
+    expect(api.codeShipRun.mock.calls).toEqual([["push", true, command, "shell-c1"]]);
+    expect(await screen.findByText("Pushed 44444444 to code/fix on origin.")).toBeInTheDocument();
+
+    // The PR asks with its command and Cancel runs nothing.
+    await userEvent.click(screen.getByRole("button", { name: "Open PR into beta" }));
+    const pr = await screen.findByRole("group", { name: SHIP_CONFIRM_PR });
+    expect(within(pr).getByLabelText("Command to run")).toHaveTextContent("gh pr create --base beta --head code/fix --fill");
+    await userEvent.click(within(pr).getByRole("button", { name: "Cancel" }));
+    expect(api.codeShipRun).toHaveBeenCalledTimes(1);
+
+    // The commit made in the Tasks panel is pushed on its own branch, so the
+    // card offers no other: a new branch would leave the commit behind.
+    expect(screen.queryByLabelText("New branch")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Make branch" })).toBeNull();
+    expect(api.codeNewBranch).not.toHaveBeenCalled();
+    await settle();
+    expect(api.codeShipPlan.mock.calls.length).toBeGreaterThan(0);
+    expect(api.codeShipPlan.mock.calls.every((call) => call[1] === "shell-c1")).toBe(true);
+    expect(api.codeActivity.mock.calls.every((call) => call[0] === "shell-c1")).toBe(true);
+  });
+
+  it("on the Code tab the calls name no session, as before", async () => {
+    render(<CodeShip />);
+    await userEvent.click(await screen.findByRole("button", { name: "Push code/fix" }));
+    expect(api.codeShipPlan.mock.calls.slice(0, 2)).toEqual([["push"], ["pr"]]);
+    expect(api.codeActivity.mock.calls[0]).toEqual([]);
+    expect(screen.getByLabelText("New branch")).toBeInTheDocument();
   });
 
   it("says on the push card when the repo's pre-push hook will not run", async () => {

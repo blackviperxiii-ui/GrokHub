@@ -5785,6 +5785,16 @@ fieldset.channel label {
   }
 }
 
+/* The agent window's Tasks panel is as narrow as a phone at any window size. */
+.code-agent .code-activity-row {
+  grid-template-columns: 5rem minmax(0, 1fr);
+}
+
+.code-agent .code-activity-summary {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+
 /* Code tab editor and terminal. */
 .code-editor,
 .code-terminal {

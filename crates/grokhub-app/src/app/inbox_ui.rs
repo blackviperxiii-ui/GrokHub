@@ -131,6 +131,7 @@ pub(super) fn hard_words(class: HardClass, tool: &str, action: &str, held: &[Str
         HardClass::AgentConfig => format!("Change agent instructions: {action}"),
         HardClass::Automation => format!("Add an automation: {action}"),
         HardClass::MergeWork => format!("Merge helper work: {action}"),
+        HardClass::Ship => format!("Push, PR, GitHub API call or ship button: {action}"),
         HardClass::OutsideValue => format!("Uses a value from outside text: {action}"),
         HardClass::RunsLater => format!("Changes a file that runs later: {action}"),
         HardClass::FlaggedDriver => {

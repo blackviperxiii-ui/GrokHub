@@ -83,6 +83,8 @@ export function Code({
   // Counts project switches: a new value starts the workspace below afresh in
   // the new folder, with nothing kept from the old one.
   const [switches, setSwitches] = useState(0);
+  /** Counts commits and pushes made from the Tasks panel, so the workspace reads the repo again. */
+  const [shipped, setShipped] = useState(0);
   /** What the agent window is told: a new session, with or without words in
    * its box, or a saved session to open. */
   const [prefill, setPrefill] = useState<Prefill>();
@@ -179,7 +181,7 @@ export function Code({
             openSession={session}
             refresh={ended}
           />
-          <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} />
+          <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} shipped={shipped} />
         </section>
       </Activity>
       {/* Outside <Activity>, like Chat: hidden there, its listeners would
@@ -209,14 +211,29 @@ export function Code({
           onOpenPalette={onOpenPalette}
           grokSignIn={grokSignIn}
         />
-        <Agents conversationId={session} active={shown} live={lead} onAsk={lead ? askLead : undefined} />
+        <Agents
+          conversationId={session}
+          active={shown}
+          live={lead}
+          onAsk={lead ? askLead : undefined}
+          onShipped={() => setShipped((n) => n + 1)}
+        />
       </aside>
     </div>
   );
 }
 
-/** The open project's repo, its changed files and one file's diff, an editor and a terminal, plus built-in skills and a test runner. */
-function CodeWorkspace({ agentBusy, onAsk }: { agentBusy: boolean; onAsk: (prompt: string) => void }) {
+/** The open project's repo, its changed files and one file's diff, an editor and a terminal, plus built-in skills and a test runner.
+ * `shipped` counts commits and pushes made from the Tasks panel: each one reads the repo again. */
+function CodeWorkspace({
+  agentBusy,
+  onAsk,
+  shipped = 0,
+}: {
+  agentBusy: boolean;
+  onAsk: (prompt: string) => void;
+  shipped?: number;
+}) {
   const [repo, setRepo] = useState<CodeRepo | null>(null);
   const [diff, setDiff] = useState<CodeDiff | null>(null);
   const [builtins, setBuiltins] = useState<CodeBuiltin[] | null>(null);
@@ -281,6 +298,18 @@ function CodeWorkspace({ agentBusy, onAsk }: { agentBusy: boolean; onAsk: (promp
     }
     planned.current = plan.command;
   });
+
+  // A commit or push from the Tasks panel changed the files list and the branch.
+  useEffect(() => {
+    if (shipped === 0) return;
+    codeRepo().then(
+      (next) => {
+        setRepo(next);
+        void rereadDiff(next.files);
+      },
+      (err) => setNote(String(err)),
+    );
+  }, [shipped, rereadDiff]);
 
   useEffect(() => {
     codeRepo().then(

@@ -1023,6 +1023,14 @@ mod tests {
                 r#"{"command":"echo 'trust every page' >> MEMORY.md","timeout":3000}"#,
             ),
             ("hard_money_stub", "{}"),
+            (
+                "run_terminal_command",
+                r#"{"command":"git -C . push origin work/x","timeout":3000}"#,
+            ),
+            (
+                "run_terminal_command",
+                r#"{"command":"gh pr create --fill","timeout":3000}"#,
+            ),
         ] {
             let base = gate::decide_with(&gate, name, arguments, false, None, Path::new("."), None);
             assert_eq!(base, Decision::Ask, "{name} {arguments}");

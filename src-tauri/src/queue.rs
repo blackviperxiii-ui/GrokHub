@@ -380,6 +380,11 @@ pub struct ReviewView {
     /// True when the helper was shown only part of the change.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub cut: bool,
+    /// The places in `findings` of the blockers the person waived.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub waived: Vec<u32>,
+    /// The tree id the review read, which Waive names.
+    pub tree: String,
 }
 
 /// The session's review record as the page shows it.
@@ -408,6 +413,8 @@ fn review_view(conversation_id: &str) -> Result<Option<ReviewView>, String> {
         at_ms: review.at_ms,
         plan_given: review.plan_given,
         cut: review.cut,
+        waived: review.waived,
+        tree: review.tree,
     }))
 }
 
@@ -1404,6 +1411,8 @@ mod tests {
                 at_ms: 1_700_000_000_000,
                 plan_given: true,
                 cut: false,
+                waived: vec![],
+                tree: "3333333333333333333333333333333333333333".into(),
             })
         );
         assert_eq!(
@@ -1416,6 +1425,7 @@ mod tests {
                 "blockers": 1,
                 "atMs": 1_700_000_000_000u64,
                 "planGiven": true,
+                "tree": "3333333333333333333333333333333333333333",
             })
         );
         // A review of a change too long to show whole says so.
@@ -1445,6 +1455,37 @@ mod tests {
                 "atMs": 1_700_000_000_000u64,
                 "planGiven": false,
                 "cut": true,
+                "tree": "3333333333333333333333333333333333333333",
+            })
+        );
+        // A blocker the person waived is named by its place.
+        let waived = format!("queue-review-waived-{}", grokhub_core::now_ms());
+        save_review(
+            &cfg,
+            &waived,
+            &serde_json::json!({
+                "project": "/home/user/my-app",
+                "base": "1111111111111111111111111111111111111111",
+                "head": "1111111111111111111111111111111111111111",
+                "commits": [],
+                "tree": "3333333333333333333333333333333333333333",
+                "atMs": 1700000000000u64,
+                "planGiven": true,
+                "body": "Findings from this run\n\n- High: src/a.rs:3 the total is off by one",
+                "blockers": 1,
+                "waived": [0],
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            serde_json::to_value(super::queue(&cfg, &waived)).unwrap()["review"],
+            serde_json::json!({
+                "findings": [{"severity": "high", "text": "src/a.rs:3 the total is off by one"}],
+                "blockers": 1,
+                "atMs": 1_700_000_000_000u64,
+                "planGiven": true,
+                "waived": [0],
+                "tree": "3333333333333333333333333333333333333333",
             })
         );
         let _ = std::fs::remove_dir_all(&cfg);
