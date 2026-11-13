@@ -14,7 +14,7 @@
 - `crates/grokhub-core/src/feel.rs`: `ALWAYS_SETTLE_SECS`, `GLOW_SETTLE_SECS`, and the other motion timings.
 - `crates/grokhub-core/src/appearance.rs`: Settings theme ids (`ops-dark`, `oled-black`, `soft-charcoal`, classic `dark` / `light` / `system`) and `resolve_palette`.
 - `crates/grokhub-core/src/paths.rs`: `user_home`. `diagnostics.rs`: About clipboard + Labs Desktop zip (`DiagnosticsExport`, `write_diagnostics_zip`).
-- `crates/grokhub-core/src/wire.rs`: chat wire types (`AcpEvent`, `ToolCard`, `PermissionAsk`, `ElicitAsk`, `SessionMode`, `PermissionMode`, `GrokUsage`). `crates/grokhub-core/src/proc_util.rs`: `hide_windows_console`, kill_pid, `is_sigterm_status`.
+- `crates/grokhub-core/src/wire.rs`: chat wire types (`AcpEvent`, `ToolCard`, `PermissionAsk`, `ElicitAsk`, `SessionMode`, `PermissionMode`, `GrokUsage`). `crates/grokhub-core/src/proc_util.rs`: `hide_windows_console`, `kill_pid`, `is_sigterm_status`, `run_night_check_command`.
 ## Change recipe
 - New helper: write it in its module with a literal-value test, then add it to that module's `pub use` block in `lib.rs`; grokhub-app imports flat names (`use grokhub_core::{...}`).
 - New module: `pub mod x;` in `lib.rs` plus its re-exports. Keep it free of egui; an HTTP call goes through `http.rs`, and any network exit is listed in `offline_guard.rs`. Outside tests only `update.rs` spawns a process (`git`).

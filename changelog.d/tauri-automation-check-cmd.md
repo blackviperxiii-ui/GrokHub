@@ -1,0 +1,1 @@
+- Shell: automations gated by a check command run the check, then fire from the tray scheduler the way the cabin does.

@@ -1,0 +1,1 @@
+- The new app's proactive cards now match the classic app's: a source behind a connector grant (calendar, mail, system state) is read only when you granted it, goals left a few days get the same gentle follow-up card, categories you quieted stay quiet, a learned away hour holds all but urgent cards, and nothing goes up while a game runs.

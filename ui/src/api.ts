@@ -439,6 +439,75 @@ export function transcribe(wav: string): Promise<string> {
   return invoke<string>("transcribe", { wav });
 }
 
+/** What the open mic heard, as voice mode's backend reports it. */
+export type LiveEvent =
+  | { kind: "started" }
+  | { kind: "turn"; ms: number }
+  | { kind: "nothing" }
+  | { kind: "check_in" }
+  | { kind: "pause" };
+
+/** One spoken piece: base64 audio and its type. */
+export interface Spoken {
+  mime: string;
+  audio: string;
+}
+
+/** Voice mode on: one open mic, listening for the first turn. */
+export function voiceLiveStart(): Promise<void> {
+  return invoke<void>("voice_live_start");
+}
+
+/** Voice mode off; drops any turn or reply under way. */
+export function voiceLiveStop(): Promise<void> {
+  return invoke<void>("voice_live_stop");
+}
+
+/** One 16 kHz mono s16le block (base64); what the open mic heard. */
+export function voiceLivePush(block: string): Promise<LiveEvent[]> {
+  return invoke<LiveEvent[]>("voice_live_push", { block });
+}
+
+/** Listen for the next turn; `playing` while a reply is spoken. */
+export function voiceLiveListen(playing: boolean): Promise<void> {
+  return invoke<void>("voice_live_listen", { playing });
+}
+
+/** A reply started or stopped playing. */
+export function voiceLivePlaying(playing: boolean): Promise<void> {
+  return invoke<void>("voice_live_playing", { playing });
+}
+
+/** End the turn now (the person tapped to say they're done). */
+export function voiceLiveFinish(): Promise<void> {
+  return invoke<void>("voice_live_finish");
+}
+
+/** The finished turn as text; empty when nothing was said. */
+export function voiceLiveHear(): Promise<string> {
+  return invoke<string>("voice_live_hear");
+}
+
+/** More of the reply; the pieces ready to speak. */
+export function voiceReplyFeed(delta: string): Promise<string[]> {
+  return invoke<string[]>("voice_reply_feed", { delta });
+}
+
+/** The reply is complete; the rest to speak. */
+export function voiceReplyFinish(whole: string): Promise<string[]> {
+  return invoke<string[]>("voice_reply_finish", { whole });
+}
+
+/** Say no more of this reply. */
+export function voiceReplyHush(): Promise<void> {
+  return invoke<void>("voice_reply_hush");
+}
+
+/** One piece of the reply as speech, in the chat's voice. */
+export function voiceSpeak(text: string): Promise<Spoken> {
+  return invoke<Spoken>("voice_speak", { text });
+}
+
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */
 export function answerElicit(
   conversationId: string,
@@ -795,8 +864,6 @@ export interface AutomationRow {
   health: string | null;
   /** The words for the Edit box; null when words can't say the schedule. */
   describe: string | null;
-  /** It has a check command, so only the cabin runs it. */
-  cabinOnly: boolean;
 }
 
 export interface RunResult {
@@ -1726,8 +1793,11 @@ export interface BoardCard {
   progress: [number, number];
   /** A paused or interrupted run: Resume and Hand back apply. */
   canResume: boolean;
-  /** The cabin chat that works it. */
+  /** The chat that works it: one of this app's chats ("shell-…"), which
+   * the card's own chat shows, or a cabin chat. */
   chat: string | null;
+  /** Its chat runs a turn now: the card shows Stop. */
+  running: boolean;
   updatedMs: number;
   /** When it was archived; 0 for a card on the board. */
   archivedMs: number;
@@ -1755,7 +1825,8 @@ export interface BoardPage {
   stamp: number;
   /** The last sweep's notice, until Undo or Dismiss: "Archived 2 finished cards". */
   swept: BoardSwept | null;
-  /** Cards wait in the queue and the cabin, which starts them, is closed. */
+  /** Why the next queued card waits ("Waits for the open chat to finish."),
+   * while the app's queue starts them; null when nothing waits. */
   queueNote: string | null;
 }
 
@@ -1840,6 +1911,23 @@ export function workboardAdd(
 
 export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
   return invoke<BoardPage>("workboard_act", { id, act });
+}
+
+/** Say on a card: the chat it works in and the message to send there. */
+export interface BoardSay {
+  conversationId: string;
+  message: string;
+  page: BoardPage;
+}
+
+/** Say on card `id`. A card with no chat of this app gets `conversationId`
+ * and starts working; the page then sends `message` in the returned chat. */
+export function workboardSay(
+  id: string,
+  text: string,
+  conversationId: string,
+): Promise<BoardSay> {
+  return invoke<BoardSay>("workboard_say", { id, text, conversationId });
 }
 
 export function workboardWork(id: string): Promise<BoardWork> {
@@ -3972,6 +4060,22 @@ export function codeSessionLead(conversationId: string): Promise<boolean> {
 /** The session's saved plan, as last shown or edited; null when it has none. */
 export function codeSessionPlan(conversationId: string): Promise<string | null> {
   return invoke<string | null>("code_session_plan", { conversationId });
+}
+
+/** Where a Code tab session left off. Null when it has no checkpoint. */
+export interface CodeLeftOff {
+  goal: string;
+  next: string;
+  blocker: string;
+}
+
+export function codeSessionLeft(conversationId: string): Promise<CodeLeftOff | null> {
+  return invoke<CodeLeftOff | null>("code_session_left", { conversationId });
+}
+
+/** The message Resume sends for this session's checkpoint. */
+export function codeSessionResume(conversationId: string): Promise<string> {
+  return invoke<string>("code_session_resume", { conversationId });
 }
 
 export function codeRepo(): Promise<CodeRepo> {

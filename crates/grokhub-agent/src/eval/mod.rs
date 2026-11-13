@@ -30,6 +30,7 @@ pub mod care_first;
 pub mod close_check;
 pub mod efficiency;
 pub mod live;
+pub mod live_guard;
 pub mod live_shape;
 pub mod longmem;
 pub mod memory_index;

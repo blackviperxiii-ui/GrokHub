@@ -1,0 +1,3 @@
+- Workboard (app): each card has its own chat inside the card. Say sends a message to that card's agent (Work on it for a card with no chat yet), Stop ends its turn, and an ask for your OK shows there with Allow and Deny.
+- Workboard (app): queued cards start on their own when nothing else runs, one at a time, and the board says why the next one waits. While the cabin is open it still starts them.
+- A card's chat is an ordinary chat in History. A Stop or a failed turn moves the card to Needs Attention; a finished turn moves it to Done.

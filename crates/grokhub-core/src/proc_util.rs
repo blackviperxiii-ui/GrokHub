@@ -1,9 +1,48 @@
 //! Small child-process helpers: hide Windows consoles, read a SIGTERM exit,
-//! run a probe with a deadline.
+//! run a probe with a deadline, and run an automation check command.
 
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+
+/// How long an automation `checkCommand` may run before it is treated as a skip.
+pub const NIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(20);
+/// Cap on check-command stdout kept in the receipt.
+const NIGHT_CHECK_STDOUT_CAP: u64 = 64 * 1024;
+
+/// Run `cmd` the way the cabin's night gate does, and return a host receipt
+/// that [`crate::skip_night_check_receipt`] can read. A forbidden command, a
+/// non-zero exit, a timeout, or a spawn failure become a failing receipt so
+/// the job is skipped.
+pub fn run_night_check_command(cmd: &str) -> String {
+    if crate::forbidden_reason(cmd).is_some() {
+        return format!("$ {cmd}\nexit 1 · 0ms\n");
+    }
+    let start = Instant::now();
+    let mut shell = night_check_shell(cmd);
+    match output_within(&mut shell, NIGHT_CHECK_TIMEOUT, NIGHT_CHECK_STDOUT_CAP) {
+        Some(stdout) => format!(
+            "$ {cmd}\nexit 0 · {}ms\n{stdout}",
+            start.elapsed().as_millis()
+        ),
+        None => format!("$ {cmd}\nexit 1 · {}ms\n", start.elapsed().as_millis()),
+    }
+}
+
+fn night_check_shell(cmd: &str) -> Command {
+    #[cfg(windows)]
+    {
+        let mut c = Command::new("powershell.exe");
+        c.args(["-NoProfile", "-NonInteractive", "-NoLogo", "-Command", cmd]);
+        c
+    }
+    #[cfg(not(windows))]
+    {
+        let mut c = Command::new("bash");
+        c.arg("-lc").arg(cmd);
+        c
+    }
+}
 
 /// Hide a Windows console for spawned console tools (powershell, MCP servers).
 ///
@@ -160,6 +199,36 @@ mod tests {
             start.elapsed()
         );
     }
+    #[test]
+    fn run_night_check_command_passes_when_stdout_is_ready() {
+        let receipt = run_night_check_command("echo ready-for-night");
+        assert!(!crate::skip_night_check_receipt(&receipt), "{receipt}");
+        assert!(receipt.contains("ready-for-night"), "{receipt}");
+    }
+
+    #[test]
+    fn run_night_check_command_skips_on_empty_success_and_on_fail() {
+        #[cfg(windows)]
+        let empty_ok = "Write-Output ''";
+        #[cfg(not(windows))]
+        let empty_ok = "true";
+        assert!(
+            crate::skip_night_check_receipt(&run_night_check_command(empty_ok)),
+            "empty stdout must skip"
+        );
+        #[cfg(windows)]
+        let fail = "exit 1";
+        #[cfg(not(windows))]
+        let fail = "false";
+        assert!(
+            crate::skip_night_check_receipt(&run_night_check_command(fail)),
+            "non-zero exit must skip"
+        );
+        assert!(crate::skip_night_check_receipt(&run_night_check_command(
+            "cat ~/.ssh/id_rsa"
+        )));
+    }
+
     #[test]
     fn windows_hard_errors_are_silenced_with_set_error_mode() {
         let src = include_str!("proc_util.rs");

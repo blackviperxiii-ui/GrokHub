@@ -63,7 +63,8 @@ pub fn ask_once(
     })
 }
 
-fn live_count() -> usize {
+/// Background runs going now (the Workboard queue waits for room).
+pub fn live_count() -> usize {
     runs()
         .iter()
         .filter(|r| matches!(r.phase, Phase::Running))

@@ -9,9 +9,11 @@
 //! (`shell_may_fire`), and the card budget lives in `proactive.json`, the same
 //! file the cabin keeps, so the two apps never double a card.
 //!
-//! Not read here: connector grants (calendar, mail, system state) and the
-//! goal follow-ups stay with the cabin, so nothing behind a consent grant is
-//! touched from this app.
+//! The same inputs as the cabin: a source behind a connector grant
+//! (calendar, mail, system state) is read only with that grant in the
+//! consent ledger, goal follow-ups come from Objectives, your reactions
+//! weigh each category, a learned away hour holds all but the urgent, and
+//! nothing goes up while a game runs.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -111,8 +113,49 @@ fn mind_key(topic: &str) -> String {
     )
 }
 
-/// The ranked candidates now, from what needs no grant.
-pub fn candidates(config_dir: &Path, cards: &[UpdateCard], now_ms: u64) -> Vec<Candidate> {
+/// Candidates already worked out, read as one source.
+struct Listed(pro::CandidateSource, Vec<Candidate>);
+
+impl pro::GrantedSource for Listed {
+    fn source(&self) -> pro::CandidateSource {
+        self.0
+    }
+
+    fn read(&self) -> Vec<Candidate> {
+        self.1.clone()
+    }
+}
+
+/// Goal follow-ups due now. A last "I'll stop asking" line is written as
+/// gone out instead (it shows on Home and Objectives).
+fn goal_follow_ups(config_dir: &Path, now_ms: u64) -> Vec<Candidate> {
+    grokhub_core::objectives::change(config_dir, |o| {
+        grokhub_core::objectives::follow_up_candidates(o, now_ms)
+    })
+    .map(|(_, out)| out)
+    .unwrap_or_default()
+}
+
+/// The ranked candidates now, from every source you allow (what `tick` reads).
+#[cfg(test)]
+fn candidates(config_dir: &Path, cards: &[UpdateCard], now_ms: u64) -> Vec<Candidate> {
+    let goals = Listed(
+        pro::CandidateSource::Objectives,
+        goal_follow_ups(config_dir, now_ms),
+    );
+    gather(config_dir, cards, now_ms, &[&goals], &[])
+}
+
+/// The rules over the board, the automations and `sources`. A source behind
+/// a connector grant is read only when `granted` names its scope; then your
+/// reactions weigh each category (a quiet one is dropped).
+fn gather(
+    config_dir: &Path,
+    cards: &[UpdateCard],
+    now_ms: u64,
+    sources: &[&dyn pro::GrantedSource],
+    granted: &[&str],
+) -> Vec<Candidate> {
     let work = work_items(config_dir);
     let health: Vec<grokhub_core::AutomationAlert> = crate::automations::load(config_dir)
         .unwrap_or_default()
@@ -126,22 +169,47 @@ pub fn candidates(config_dir: &Path, cards: &[UpdateCard], now_ms: u64) -> Vec<C
         failed: &[],
         needs: &[],
     };
-    pro::ProactiveEngine::new(Arc::new(move || now_ms)).gather(&watch, &[], &[])
+    let ranked =
+        pro::ProactiveEngine::new(Arc::new(move || now_ms)).gather(&watch, sources, granted);
+    grokhub_core::reactions::load(&config_dir.join(grokhub_core::reactions::FILE_NAME))
+        .weigh(ranked)
 }
 
-/// One look. Returns the cards it posted. The cabin holding the lease, or a
-/// quiet hour, posts nothing (quiet hours queue the best for later).
+/// One look at `hour` on the local clock. Returns the cards it posted. The
+/// cabin holding the lease, or a quiet hour, posts nothing (quiet hours, and
+/// a learned away hour with nothing urgent, queue the best for later).
 pub fn tick(
     config_dir: &Path,
     pid: u32,
     now_ms: u64,
     quiet: bool,
+    hour: u32,
 ) -> Result<Vec<UpdateCard>, String> {
     if !shell_may_fire(read_lease(config_dir).as_ref(), pid, now_ms) {
         return Ok(Vec::new());
     }
+    let goals = Listed(
+        pro::CandidateSource::Objectives,
+        goal_follow_ups(config_dir, now_ms),
+    );
+    // Only the connector scopes you granted in Settings are read.
+    let granted = hx::ConsentLedger::load(config_dir).proactive_scopes();
+    look(config_dir, pid, now_ms, quiet, hour, &[&goals], &granted)
+}
+
+fn look(
+    config_dir: &Path,
+    pid: u32,
+    now_ms: u64,
+    quiet: bool,
+    hour: u32,
+    sources: &[&dyn pro::GrantedSource],
+    granted: &[&str],
+) -> Result<Vec<UpdateCard>, String> {
     let on_page = crate::pulse::cards(config_dir)?;
-    let ranked = candidates(config_dir, &on_page, now_ms);
+    let ranked = gather(config_dir, &on_page, now_ms, sources, granted);
+    let rhythm = grokhub_core::rhythm::load(&config_dir.join(grokhub_core::rhythm::FILE_NAME));
+    let quiet = quiet || rhythm.holds(&ranked, hour);
     // The budget lock is never held across a Pulse store call: a click's
     // feedback takes the store first and the budget second.
     let surfaced = {
@@ -168,7 +236,14 @@ pub fn tick(
         }
         let card = pro::proactive_card(c, route, now_ms);
         match crate::pulse::add_post(config_dir, card.clone()) {
-            Ok(true) => posted.push(card),
+            Ok(true) => {
+                if c.source == pro::CandidateSource::Objectives {
+                    let _ = grokhub_core::objectives::change(config_dir, |o| {
+                        grokhub_core::objectives::posted_follow_up(o, &c.topic, now_ms)
+                    });
+                }
+                posted.push(card);
+            }
             Ok(false) => {}
             Err(e) => {
                 failed = Some(e);
@@ -266,7 +341,10 @@ pub fn start(config_dir: PathBuf) {
                 let clock = crate::scheduler::local_clock(now, offset);
                 let behavior = crate::settings::load(&config_dir).behavior;
                 let quiet = is_quiet(&behavior, clock.hour, clock.minute);
-                let _ = tick(&config_dir, std::process::id(), now, quiet);
+                // A game running counts as busy: nothing proactive goes up mid-game.
+                if !grokhub_desktop::game_guard::peek().gaming {
+                    let _ = tick(&config_dir, std::process::id(), now, quiet, clock.hour);
+                }
                 let _ = crate::nudges::tick(&config_dir, std::process::id(), now, offset);
             }
             std::thread::sleep(EVERY);
@@ -324,7 +402,7 @@ mod tests {
     /// One look on the blocked board, then a click on the card it posted.
     fn posted_then(dir: &Path, act: crate::pulse::Act) -> UpdateCard {
         blocked_board(dir);
-        let card = tick(dir, PID, NOW, false).expect("tick").remove(0);
+        let card = tick(dir, PID, NOW, false, 8).expect("tick").remove(0);
         crate::pulse::act(dir, &card.id, act, &day(), NOW + MIN).expect("act");
         card
     }
@@ -355,7 +433,7 @@ mod tests {
     fn a_blocked_card_becomes_one_proactive_card() {
         let dir = temp_dir("blocked");
         blocked_board(&dir);
-        let posted = tick(&dir, PID, NOW, false).expect("tick");
+        let posted = tick(&dir, PID, NOW, false, 8).expect("tick");
         assert_eq!(posted.len(), 1);
         let meta = posted[0].pulse.proactive.clone().expect("proactive meta");
         assert_eq!(meta.topic, "Renew the domain");
@@ -371,20 +449,20 @@ mod tests {
         let dir = temp_dir("cabin");
         blocked_board(&dir);
         lease(&dir, LeaseOwner::Cabin, 77, NOW - 30_000);
-        assert!(tick(&dir, PID, NOW, false).expect("tick").is_empty());
+        assert!(tick(&dir, PID, NOW, false, 8).expect("tick").is_empty());
         assert!(crate::pulse::cards(&dir).expect("cards").is_empty());
         assert!(!budget_path(&dir).exists(), "the budget stays untouched");
         // Once the beat is stale (three missed beats) the shell takes over.
         let later = NOW + 2 * MIN;
-        assert_eq!(tick(&dir, PID, later, false).expect("tick").len(), 1);
+        assert_eq!(tick(&dir, PID, later, false, 8).expect("tick").len(), 1);
     }
 
     #[test]
     fn a_second_tick_does_not_double_the_card() {
         let dir = temp_dir("twice");
         blocked_board(&dir);
-        assert_eq!(tick(&dir, PID, NOW, false).expect("one").len(), 1);
-        assert!(tick(&dir, PID, NOW + 15 * MIN, false)
+        assert_eq!(tick(&dir, PID, NOW, false, 8).expect("one").len(), 1);
+        assert!(tick(&dir, PID, NOW + 15 * MIN, false, 8)
             .expect("two")
             .is_empty());
         assert_eq!(crate::pulse::cards(&dir).expect("cards").len(), 1);
@@ -400,7 +478,7 @@ mod tests {
         let route = pro::route(&ranked[0], false).expect("route");
         let theirs = pro::proactive_card(&ranked[0], route, NOW - 20 * MIN);
         assert!(crate::pulse::add_post(&dir, theirs).expect("post"));
-        assert!(tick(&dir, PID, NOW, false).expect("tick").is_empty());
+        assert!(tick(&dir, PID, NOW, false, 8).expect("tick").is_empty());
         assert_eq!(crate::pulse::cards(&dir).expect("cards").len(), 1);
     }
 
@@ -408,14 +486,14 @@ mod tests {
     fn quiet_hours_queue_the_card_and_post_none() {
         let dir = temp_dir("quiet");
         blocked_board(&dir);
-        assert!(tick(&dir, PID, NOW, true).expect("tick").is_empty());
+        assert!(tick(&dir, PID, NOW, true, 8).expect("tick").is_empty());
         assert!(crate::pulse::cards(&dir).expect("cards").is_empty());
         let budget = load_budget(&dir);
         assert_eq!(budget.queue.len(), 1);
         assert_eq!(budget.queue[0].topic, "Renew the domain");
         // The window ends: the queued card goes up.
         assert_eq!(
-            tick(&dir, PID, NOW + 8 * 60 * MIN, false)
+            tick(&dir, PID, NOW + 8 * 60 * MIN, false, 8)
                 .expect("tick")
                 .len(),
             1
@@ -426,7 +504,7 @@ mod tests {
     fn dismissing_the_card_keeps_its_topic_off_for_a_day() {
         let dir = temp_dir("dismiss");
         blocked_board(&dir);
-        let posted = tick(&dir, PID, NOW, false).expect("tick");
+        let posted = tick(&dir, PID, NOW, false, 8).expect("tick");
         card_acted(&dir, &posted[0], Feedback::Dismiss, NOW + MIN);
         let budget = load_budget(&dir);
         assert_eq!(budget.dismiss_streak, 1);
@@ -434,7 +512,7 @@ mod tests {
         assert!(!budget.muted("Renew the domain", NOW + 25 * 60 * MIN));
         // A tick with the card gone from the page still posts nothing.
         std::fs::remove_file(dir.join("updates.json")).ok();
-        assert!(tick(&dir, PID, NOW + 20 * MIN, false)
+        assert!(tick(&dir, PID, NOW + 20 * MIN, false, 8)
             .expect("tick")
             .is_empty());
     }
@@ -452,7 +530,7 @@ mod tests {
                 !budget.muted("Renew the domain", NOW + 25 * 60 * MIN),
                 "{act:?}"
             );
-            let again = tick(&dir, PID, NOW + 20 * MIN, false).expect("tick");
+            let again = tick(&dir, PID, NOW + 20 * MIN, false, 8).expect("tick");
             assert_eq!(again, Vec::new(), "{act:?}");
             let live: Vec<UpdateCard> = crate::pulse::cards(&dir)
                 .expect("cards")
@@ -471,7 +549,7 @@ mod tests {
         posted_then(&dir, crate::pulse::Act::Dislike);
         for later in [20 * MIN, 40 * MIN] {
             assert_eq!(
-                tick(&dir, PID, NOW + later, false).expect("tick"),
+                tick(&dir, PID, NOW + later, false, 8).expect("tick"),
                 Vec::new()
             );
         }
@@ -488,7 +566,7 @@ mod tests {
         let _config = grokhub_agent::perm::ConfigGuard::set(dir.to_path_buf());
         let card = posted_then(&dir, crate::pulse::Act::Snooze);
         assert_eq!(
-            tick(&dir, PID, NOW + 20 * MIN, false).expect("tick"),
+            tick(&dir, PID, NOW + 20 * MIN, false, 8).expect("tick"),
             Vec::new()
         );
         let budget = load_budget(&dir);
@@ -508,10 +586,10 @@ mod tests {
         let dir = temp_dir("remind");
         let _config = grokhub_agent::perm::ConfigGuard::set(dir.to_path_buf());
         blocked_board(&dir);
-        let card = tick(&dir, PID, NOW, false).expect("tick").remove(0);
+        let card = tick(&dir, PID, NOW, false, 8).expect("tick").remove(0);
         crate::pulse::remind(&dir, &card.id, &day(), NOW + MIN).expect("remind");
         assert_eq!(
-            tick(&dir, PID, NOW + 20 * MIN, false).expect("tick"),
+            tick(&dir, PID, NOW + 20 * MIN, false, 8).expect("tick"),
             Vec::new()
         );
         let budget = load_budget(&dir);
@@ -524,7 +602,7 @@ mod tests {
     fn a_card_that_does_not_land_costs_no_budget() {
         let dir = temp_dir("tombstone");
         blocked_board(&dir);
-        let card = tick(&dir, PID, NOW, false).expect("tick").remove(0);
+        let card = tick(&dir, PID, NOW, false, 8).expect("tick").remove(0);
         // The cabin's Delete: a tombstone on the page, and the budget not told.
         let mut cards = crate::pulse::cards(&dir).expect("cards");
         assert!(grokhub_core::dismiss_update_at(
@@ -539,7 +617,7 @@ mod tests {
         .expect("write");
         for later in [20 * MIN, 40 * MIN] {
             assert_eq!(
-                tick(&dir, PID, NOW + later, false).expect("tick"),
+                tick(&dir, PID, NOW + later, false, 8).expect("tick"),
                 Vec::new()
             );
         }
@@ -551,7 +629,7 @@ mod tests {
         let dir = temp_dir("failed-click");
         let _config = grokhub_agent::perm::ConfigGuard::set(dir.to_path_buf());
         blocked_board(&dir);
-        let card = tick(&dir, PID, NOW, false).expect("tick").remove(0);
+        let card = tick(&dir, PID, NOW, false, 8).expect("tick").remove(0);
         // Card taste cannot be saved: a folder sits where its file goes.
         let taste = grokhub_core::card_taste::path(&dir);
         std::fs::create_dir_all(taste.join("in-the-way")).expect("folder");
@@ -591,10 +669,10 @@ mod tests {
         // The feed cannot be saved: a folder sits where its temp file goes.
         let tmp = dir.join(format!("updates.json.shell-{}.tmp", std::process::id()));
         std::fs::create_dir_all(&tmp).expect("folder");
-        assert!(tick(&dir, PID, NOW, false).is_err());
+        assert!(tick(&dir, PID, NOW, false, 8).is_err());
         assert_eq!(load_budget(&dir).shown, Vec::<u64>::new());
         std::fs::remove_dir_all(&tmp).expect("clear");
-        let posted = tick(&dir, PID, NOW + 15 * MIN, false).expect("tick");
+        let posted = tick(&dir, PID, NOW + 15 * MIN, false, 8).expect("tick");
         assert_eq!(posted.len(), 1);
         assert_eq!(load_budget(&dir).shown, vec![NOW + 15 * MIN]);
     }
@@ -604,7 +682,7 @@ mod tests {
         let dir = temp_dir("streak");
         let card = {
             blocked_board(&dir);
-            tick(&dir, PID, NOW, false).expect("tick").remove(0)
+            tick(&dir, PID, NOW, false, 8).expect("tick").remove(0)
         };
         card_acted(&dir, &card, Feedback::Dismiss, NOW);
         card_acted(&dir, &card, Feedback::Used, NOW);
@@ -650,5 +728,106 @@ mod tests {
         assert_eq!(load_budget(&dir), ProactiveBudget::default());
         std::fs::write(budget_path(&dir), vec![b' '; (BUDGET_CAP + 1) as usize]).expect("write");
         assert_eq!(load_budget(&dir), ProactiveBudget::default());
+    }
+
+    /// A mail source the way a granted connector would feed the engine.
+    struct Mail;
+
+    impl pro::GrantedSource for Mail {
+        fn source(&self) -> pro::CandidateSource {
+            pro::CandidateSource::Mail
+        }
+
+        fn read(&self) -> Vec<Candidate> {
+            vec![Candidate::soft(
+                pro::CandidateSource::Mail,
+                "sum up today's mail",
+                "today's mail",
+                0.7,
+                0.8,
+                "New mail came in.",
+            )]
+        }
+    }
+
+    #[test]
+    fn a_connector_source_is_read_only_behind_its_grant() {
+        let dir = temp_dir("grant");
+        assert!(look(&dir, PID, NOW, false, 8, &[&Mail], &[])
+            .expect("no grant")
+            .is_empty());
+        assert!(look(&dir, PID, NOW, false, 8, &[&Mail], &["calendar"])
+            .expect("another grant")
+            .is_empty());
+        let posted = look(&dir, PID, NOW + MIN, false, 8, &[&Mail], &["mail"]).expect("granted");
+        assert_eq!(posted.len(), 1);
+        assert_eq!(posted[0].title, "I can sum up today's mail");
+        let meta = posted[0].pulse.proactive.clone().expect("proactive meta");
+        assert_eq!(meta.topic, "today's mail");
+    }
+
+    /// A tracked Elden Ring goal, last touched at `at`.
+    fn elden_ring_goal(dir: &Path, at: u64) {
+        let mut o = grokhub_core::objectives::Objectives::default();
+        o.add(
+            grokhub_core::objectives::parse_goal(
+                "finish elden ring",
+                &[grokhub_core::objectives::KnownGame {
+                    name: "Elden Ring",
+                    steam_app_id: Some(1_245_620),
+                    source: None,
+                }],
+            ),
+            at,
+        )
+        .expect("add goal");
+        grokhub_core::objectives::save(dir, &o).expect("save goals");
+    }
+
+    #[test]
+    fn a_goal_left_a_few_days_gets_one_question_card_a_week() {
+        let dir = temp_dir("goal");
+        elden_ring_goal(&dir, NOW);
+        let later = NOW + 4 * pro::DAY_MS;
+        let posted = tick(&dir, PID, later, false, 8).expect("tick");
+        assert_eq!(posted.len(), 1);
+        assert_eq!(
+            posted[0].title,
+            "Want to pick a night for your next Elden Ring session?"
+        );
+        assert!(posted[0].idea_action().starts_with("Help me pick a night"));
+        let saved = grokhub_core::objectives::load(&dir);
+        assert_eq!(saved.goals[0].nudges.len(), 1, "written as gone out");
+        assert_eq!(
+            grokhub_core::objectives::shown_follow_up(&saved, later).map(|f| f.line),
+            Some(posted[0].title.clone()),
+            "and it shows on Home"
+        );
+        assert!(tick(&dir, PID, later + 15 * MIN, false, 8)
+            .expect("again")
+            .is_empty());
+        assert_eq!(
+            grokhub_core::objectives::load(&dir).goals[0].nudges.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_category_you_quieted_posts_nothing() {
+        let dir = temp_dir("quieted");
+        blocked_board(&dir);
+        let mut learned = grokhub_core::reactions::Reactions::default();
+        for _ in 0..grokhub_core::reactions::QUIET_AFTER_IGNORES {
+            learned.record(
+                grokhub_core::reactions::Outcome::Ignored,
+                "coding next step",
+                "proactive",
+                NOW,
+            );
+        }
+        grokhub_core::reactions::save(&dir.join(grokhub_core::reactions::FILE_NAME), &learned)
+            .expect("save reactions");
+        assert!(tick(&dir, PID, NOW, false, 8).expect("tick").is_empty());
+        assert!(crate::pulse::cards(&dir).expect("cards").is_empty());
     }
 }
