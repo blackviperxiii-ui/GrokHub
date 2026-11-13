@@ -21,6 +21,34 @@ export function signedInAs(who: SignedIn): string {
   return who.name ?? who.email ?? "your Grok account";
 }
 
+/** One device-code sign-in: Settings → Account's, or Imagine's own. */
+export interface SignInFlow {
+  /** The heading, also the region's name. */
+  title: string;
+  /** The line under the button before a code is asked for. */
+  note: string;
+  /** What the status line says once signed out. */
+  signedOut: string;
+  start: () => Promise<GrokSignInStart>;
+  poll: () => Promise<GrokSignInPoll>;
+  /** After xAI says yes: show the new account wherever it shows. */
+  done: () => Promise<void>;
+  signOut: () => Promise<void>;
+}
+
+/** Settings → Account's sign-in; `onChange` gets the settings after a change. */
+export function settingsFlow(onChange: (settings: Settings) => void): SignInFlow {
+  return {
+    title: "Sign in with Grok",
+    note: SIGN_IN_NOTE,
+    signedOut: "Signed out of Grok.",
+    start: () => startGrokSignIn(),
+    poll: () => pollGrokSignIn(),
+    done: async () => onChange(await getSettings()),
+    signOut: async () => onChange(await grokSignOut()),
+  };
+}
+
 /** Whether a code good until `deadline` (ms on this computer's clock) ran out. */
 function ranOut(deadline: number): boolean {
   return Date.now() >= deadline;
@@ -30,14 +58,17 @@ function ranOut(deadline: number): boolean {
  * code with Copy and Open x.ai, asks xAI every few seconds, and shows the
  * account once it says yes. A check xAI did not answer leaves the code up and
  * is asked again, until the code's own time is up. `onChange` gets the settings after
- * a change. */
+ * a change; `flow` swaps in another sign-in (Imagine's own). */
 export function GrokSignIn({
   signedIn,
   onChange,
+  flow,
 }: {
   signedIn: SignedIn | null | undefined;
-  onChange: (settings: Settings) => void;
+  onChange?: (settings: Settings) => void;
+  flow?: SignInFlow;
 }) {
+  const f = flow ?? settingsFlow(onChange ?? (() => {}));
   const [code, setCode] = useState<GrokSignInStart | null>(null);
   const [busy, setBusy] = useState(false);
   // Why the last poll failed, while the page is still asking.
@@ -81,7 +112,7 @@ export function GrokSignIn({
     polling.current = true;
     let got: GrokSignInPoll;
     try {
-      got = await pollGrokSignIn();
+      got = await f.poll();
     } catch (err) {
       // A check the shell could not make or finish (it holds no code, or xAI
       // said yes and the sign-in could not be kept): asking again can't help.
@@ -110,7 +141,7 @@ export function GrokSignIn({
     } else {
       setCode(null);
       try {
-        onChange(await getSettings());
+        await f.done();
         ok(`Signed in as ${signedInAs(got.signedIn)}.`);
       } catch (err) {
         fail(err);
@@ -139,7 +170,7 @@ export function GrokSignIn({
     clear();
     setBusy(true);
     try {
-      const got = await startGrokSignIn();
+      const got = await f.start();
       // Never 0 while a code is up: a poll still out waits this long too.
       interval.current = got.interval;
       deadline.current = Date.now() + got.expiresIn * 1000;
@@ -161,8 +192,8 @@ export function GrokSignIn({
 
   async function signOut() {
     try {
-      onChange(await grokSignOut());
-      ok("Signed out of Grok.");
+      await f.signOut();
+      ok(f.signedOut);
     } catch (err) {
       fail(err);
     }
@@ -178,8 +209,8 @@ export function GrokSignIn({
   }
 
   return (
-    <div className="grok-sign-in" role="region" aria-label="Sign in with Grok">
-      <h2>Sign in with Grok</h2>
+    <div className="grok-sign-in" role="region" aria-label={f.title}>
+      <h2>{f.title}</h2>
       {signedIn ? (
         <>
           <p>Signed in as {signedInAs(signedIn)}.</p>
@@ -217,7 +248,7 @@ export function GrokSignIn({
         </>
       ) : (
         <>
-          <p className="note">{SIGN_IN_NOTE}</p>
+          <p className="note">{f.note}</p>
           <button type="button" disabled={busy} onClick={() => void start()}>
             Sign in with Grok
           </button>

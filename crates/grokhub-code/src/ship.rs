@@ -277,12 +277,18 @@ pub fn host_of(url: &str) -> Host {
     }
 }
 
-fn protected(cfg: &CodeShip, f: &Facts) -> Result<(), Blocked> {
-    branch_ok(&f.branch)?;
-    if f.branch == ALWAYS_PROTECTED || f.default_branch.as_deref() == Some(f.branch.as_str()) {
+/// A branch the app never pushes or commits to: `main`, the repo's default
+/// branch, and the ones protected in Settings.
+pub(crate) fn protected(
+    cfg: &CodeShip,
+    branch: &str,
+    default_branch: Option<&str>,
+) -> Result<(), Blocked> {
+    branch_ok(branch)?;
+    if branch == ALWAYS_PROTECTED || default_branch == Some(branch) {
         return Err(Blocked::DefaultBranch);
     }
-    if cfg.extra_protected.iter().any(|p| p == &f.branch) {
+    if cfg.extra_protected.iter().any(|p| p == branch) {
         return Err(Blocked::Protected);
     }
     Ok(())
@@ -314,7 +320,7 @@ fn auto_ok(cfg: &CodeShip, f: &Facts) -> bool {
 
 /// The push guard.
 pub fn guard(cfg: &CodeShip, f: &Facts) -> Result<Go, Blocked> {
-    protected(cfg, f)?;
+    protected(cfg, &f.branch, f.default_branch.as_deref())?;
     host_on(cfg, f.host)?;
     let pr_fits = match &f.pr {
         Pr::None => true,
@@ -330,7 +336,7 @@ pub fn guard(cfg: &CodeShip, f: &Facts) -> Result<Go, Blocked> {
 
 /// The PR guard: a PR from this branch into the auto base, GitHub only.
 pub fn pr_guard(cfg: &CodeShip, f: &Facts) -> Result<Go, Blocked> {
-    protected(cfg, f)?;
+    protected(cfg, &f.branch, f.default_branch.as_deref())?;
     host_on(cfg, f.host)?;
     if f.host != Host::GitHub {
         return Err(Blocked::PrNeedsGitHub);
@@ -937,7 +943,7 @@ pub fn new_branch(
         host: Host::GitHub,
         pr: Pr::None,
     };
-    protected(cfg, &facts).map_err(|b| b.message(name))?;
+    protected(cfg, &facts.branch, facts.default_branch.as_deref()).map_err(|b| b.message(name))?;
     if name == cfg.auto_base {
         return Err(format!(
             "{name} is the PR base. Pick another name for your work."

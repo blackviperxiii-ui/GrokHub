@@ -1,4 +1,4 @@
-import { Activity, lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Activity, Component, lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CORE_ONLY,
   getCapabilities,
@@ -109,13 +109,38 @@ function preloadViews() {
   for (const load of Object.values(loaders)) void load().catch(() => {});
 }
 
+class PageBoundary extends Component<{ shown?: boolean; children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      if (this.props.shown === false) return null;
+      return (
+        <div role="alert" className="card">
+          <p>This page hit a snag: {this.state.error.message || "Unexpected error"}</p>
+          <button type="button" className="quiet" onClick={() => this.setState({ error: null })}>
+            Try again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /** A page that stays mounted once it has opened. Hidden, it keeps its state
  * (a half-typed form stays) and its effects stop; they run again when it
  * shows, so its lists reload. */
 function Page({ shown, children }: { shown: boolean; children: ReactNode }) {
   return (
     <Activity mode={shown ? "visible" : "hidden"}>
-      <Suspense fallback={null}>{children}</Suspense>
+      <PageBoundary>
+        <Suspense fallback={null}>{children}</Suspense>
+      </PageBoundary>
     </Activity>
   );
 }
@@ -730,20 +755,22 @@ export function App() {
       )}
       {/* Code hides its own pages: its agent window stays mounted like Chat. */}
       {opened.has("code") && !caps.remote && (
-        <Suspense fallback={null}>
-          <Code
-            shown={view === "code"}
-            onOpenSettings={() => setView("settings")}
-            onSignIn={() => run({ kind: "settings", section: "account" })}
-            onOpenView={openView}
-            onOpenPalette={() => setPalette(true)}
-            grokSignIn={Boolean(caps.grokSignIn)}
-            chatSession={chatSession}
-            onShowChat={() => setView("chat")}
-            onSession={onAgentSession}
-            deleted={deleted}
-          />
-        </Suspense>
+        <PageBoundary shown={view === "code"}>
+          <Suspense fallback={null}>
+            <Code
+              shown={view === "code"}
+              onOpenSettings={() => setView("settings")}
+              onSignIn={() => run({ kind: "settings", section: "account" })}
+              onOpenView={openView}
+              onOpenPalette={() => setPalette(true)}
+              grokSignIn={Boolean(caps.grokSignIn)}
+              chatSession={chatSession}
+              onShowChat={() => setView("chat")}
+              onSession={onAgentSession}
+              deleted={deleted}
+            />
+          </Suspense>
+        </PageBoundary>
       )}
       {opened.has("command") && !caps.remote && (
         <Page shown={view === "command"}>

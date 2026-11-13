@@ -3,7 +3,14 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { act } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ImagineKind, ImagineMade, ImaginePage, ImagineTile } from "./api";
+import type {
+  GrokSignInPoll,
+  GrokSignInStart,
+  ImagineKind,
+  ImagineMade,
+  ImaginePage,
+  ImagineTile,
+} from "./api";
 
 const api = vi.hoisted(() => ({
   getImagine: vi.fn<() => Promise<ImaginePage>>(),
@@ -12,9 +19,13 @@ const api = vi.hoisted(() => ({
   imagineCancel: vi.fn<() => Promise<boolean>>(),
   imagineImage: vi.fn<(name: string) => Promise<string>>(),
   pulseImage: vi.fn<(name: string) => Promise<string>>(),
+  imagineSignInStart: vi.fn<() => Promise<GrokSignInStart>>(),
+  imagineSignInPoll: vi.fn<() => Promise<GrokSignInPoll>>(),
+  imagineSignOut: vi.fn<() => Promise<ImaginePage>>(),
 }));
 
 vi.mock("./api", () => api);
+vi.mock("./external", () => ({ openExternal: () => Promise.resolve() }));
 
 import { GALLERY_EMPTY, Imagine, makingLine, NEED_SIGNIN } from "./Imagine";
 import { requestImagine } from "./imagineAsk";
@@ -32,7 +43,7 @@ function tile(over: Partial<ImagineTile> = {}): ImagineTile {
   };
 }
 
-const EMPTY: ImaginePage = { tiles: [], ready: true };
+const EMPTY: ImaginePage = { tiles: [], ready: true, account: null, canSignIn: false };
 
 describe("Imagine", () => {
   beforeEach(() => {
@@ -68,7 +79,7 @@ describe("Imagine", () => {
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
 
     finish({
-      page: { tiles: [tile({ id: "gen-2", name: "gen-2_a.png" }), tile()], ready: true },
+      page: { tiles: [tile({ id: "gen-2", name: "gen-2_a.png" }), tile()], ready: true, account: null, canSignIn: false },
       made: 2,
       note: "",
     });
@@ -108,7 +119,7 @@ describe("Imagine", () => {
   });
 
   it("the lightbox opens a tile with Download and closes", async () => {
-    api.getImagine.mockResolvedValue({ tiles: [tile()], ready: true });
+    api.getImagine.mockResolvedValue({ tiles: [tile()], ready: true, account: null, canSignIn: false });
     render(<Imagine />);
     await userEvent.click(await screen.findByRole("button", { name: "Open snowy cabin" }));
     const box = await screen.findByRole("dialog", { name: "Image" });
@@ -125,6 +136,8 @@ describe("Imagine", () => {
     api.getImagine.mockResolvedValue({
       tiles: [tile({ id: "gen-3", name: "gen-3_a.mp4", title: "waves", video: true })],
       ready: true,
+      account: null,
+      canSignIn: false,
     });
     api.imagineImage.mockResolvedValue("data:video/mp4;base64,AAAA");
     render(<Imagine />);
@@ -134,8 +147,54 @@ describe("Imagine", () => {
     expect(api.imagineImage).toHaveBeenCalledTimes(1);
   });
 
-  it("with no key it points to the cabin's sign-in and Make waits", async () => {
-    api.getImagine.mockResolvedValue({ tiles: [], ready: false });
+  it("with no sign-in it asks for one on the page, and a code signs Imagine in", async () => {
+    api.getImagine
+      .mockResolvedValueOnce({ tiles: [], ready: false, account: null, canSignIn: true })
+      .mockResolvedValueOnce({
+        tiles: [],
+        ready: true,
+        account: { name: null, email: "sam@example.com" },
+        canSignIn: true,
+      });
+    api.imagineSignInStart.mockResolvedValue({
+      userCode: "ABCD-EFGH",
+      verificationUri: "https://accounts.x.ai/device",
+      verificationUriComplete: null,
+      interval: 0.01,
+      expiresIn: 600,
+    });
+    api.imagineSignInPoll.mockResolvedValue({
+      status: "ready",
+      signedIn: { name: "Sam", email: "sam@example.com" },
+    });
+    render(<Imagine />);
+    const box = await screen.findByRole("region", { name: "Imagine sign-in" });
+    await userEvent.click(within(box).getByRole("button", { name: "Sign in with Grok" }));
+    expect(api.imagineSignInStart).toHaveBeenCalledTimes(1);
+    expect(await within(box).findByLabelText("Sign-in code")).toHaveTextContent("ABCD-EFGH");
+    expect(await within(box).findByText("Signed in as sam@example.com.")).toBeInTheDocument();
+    expect(api.getImagine).toHaveBeenCalledTimes(2);
+    await userEvent.type(screen.getByLabelText("What to make"), "a cabin");
+    expect(screen.getByRole("button", { name: "Make" })).toBeEnabled();
+  });
+
+  it("Imagine's own sign-in can be signed out here; a chat sign-in alone shows nothing", async () => {
+    api.getImagine.mockResolvedValue({
+      tiles: [],
+      ready: true,
+      account: { name: null, email: "sam@example.com" },
+      canSignIn: true,
+    });
+    api.imagineSignOut.mockResolvedValue({ tiles: [], ready: true, account: null, canSignIn: true });
+    render(<Imagine />);
+    const box = await screen.findByRole("region", { name: "Imagine sign-in" });
+    await userEvent.click(within(box).getByRole("button", { name: "Sign out" }));
+    expect(api.imagineSignOut).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Imagine sign-in" })).toBeNull());
+  });
+
+  it("with no key it asks to sign in and Make waits", async () => {
+    api.getImagine.mockResolvedValue({ tiles: [], ready: false, account: null, canSignIn: false });
     render(<Imagine />);
     expect(await screen.findByRole("alert")).toHaveTextContent(NEED_SIGNIN);
     await userEvent.type(screen.getByLabelText("What to make"), "a cabin");
@@ -150,13 +209,13 @@ describe("Imagine", () => {
     await userEvent.type(screen.getByLabelText("What to make"), "a cabin");
     await userEvent.click(screen.getByRole("button", { name: "Make" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Sign in to Imagine in the cabin. Or sign in with Grok or add an xAI API key in Settings → Account.",
+      "Sign in to Imagine first. Sign in with Grok here, or add an xAI API key in Settings → Account.",
     );
   });
 
   it("+ New project clears the prompt, the result line and the error, keeps the gallery and focuses the prompt", async () => {
-    api.getImagine.mockResolvedValue({ tiles: [tile()], ready: true });
-    api.imagineGenerate.mockResolvedValue({ page: { tiles: [tile()], ready: true }, made: 1, note: "" });
+    api.getImagine.mockResolvedValue({ tiles: [tile()], ready: true, account: null, canSignIn: false });
+    api.imagineGenerate.mockResolvedValue({ page: { tiles: [tile()], ready: true, account: null, canSignIn: false }, made: 1, note: "" });
     render(<Imagine />);
     await screen.findByRole("list", { name: "Gallery" });
     await userEvent.type(screen.getByLabelText("What to make"), "a red barn");
@@ -185,7 +244,11 @@ describe("Imagine", () => {
 
   it("a slash prompt makes one video at square", async () => {
     api.getImagine.mockResolvedValue(EMPTY);
-    api.imagineGenerate.mockResolvedValue({ page: { tiles: [tile({ video: true })], ready: true }, made: 1, note: "" });
+    api.imagineGenerate.mockResolvedValue({
+      page: { tiles: [tile({ video: true })], ready: true, account: null, canSignIn: false },
+      made: 1,
+      note: "",
+    });
     render(<Imagine />);
     await screen.findByText(GALLERY_EMPTY);
     act(() => {

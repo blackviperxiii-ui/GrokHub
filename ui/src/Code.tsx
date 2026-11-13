@@ -5,6 +5,7 @@ import {
   codeRepo,
   codeRunStop,
   codeSessionBind,
+  codeSessionLead,
   codeTestPlan,
   codeTestRun,
   onCodeRun,
@@ -89,6 +90,8 @@ export function Code({
   /** The session in the agent window, and the folder it works in. */
   const [session, setSession] = useState<string>();
   const [folder, setFolder] = useState("");
+  /** The session started here, so it has a lead and its plan can be edited. */
+  const [lead, setLead] = useState(false);
   const [busy, setBusy] = useState(false);
   /** Counts replies ended, so the Sessions list reads again. */
   const [ended, setEnded] = useState(0);
@@ -102,6 +105,12 @@ export function Code({
     const id = newConversationId();
     const show = () => setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, conversationId: id }));
     codeSessionBind(id).then(show, show);
+  }, []);
+
+  /** A message to the lead, sent in the session the agent window shows. */
+  const askLead = useCallback((text: string) => {
+    const id = sessionNow.current;
+    if (id) setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, send: true, conversationId: id }));
   }, []);
 
   /** A saved session. The Chat tab keeps the one it has open; any other
@@ -121,12 +130,18 @@ export function Code({
       setSession(id);
       onSession?.(id);
       setFolder("");
-      codeSessionBind(id).then(
-        (dir) => {
+      setLead(false);
+      codeSessionBind(id)
+        .then((dir) => {
           if (sessionNow.current === id) setFolder(dir);
-        },
-        () => {},
-      );
+          return codeSessionLead(id);
+        })
+        .then(
+          (is) => {
+            if (sessionNow.current === id) setLead(is);
+          },
+          () => {},
+        );
     },
     [onSession],
   );
@@ -180,6 +195,7 @@ export function Code({
         </header>
         <Chat
           embedded
+          lead={lead}
           active={shown}
           prefill={prefill}
           open={open}
@@ -193,7 +209,7 @@ export function Code({
           onOpenPalette={onOpenPalette}
           grokSignIn={grokSignIn}
         />
-        <Agents conversationId={session} active={shown} />
+        <Agents conversationId={session} active={shown} live={lead} onAsk={lead ? askLead : undefined} />
       </aside>
     </div>
   );

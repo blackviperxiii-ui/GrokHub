@@ -156,6 +156,9 @@ pub fn run_pass(
     let pass = match call(config_dir, &stats, brain.as_ref(), now) {
         Ok(pass) => pass,
         Err(e) => {
+            if posted == 0 {
+                wr::unclaim_week(config_dir, today);
+            }
             eprintln!("self-review: weekly call held: {e}");
             return posted;
         }

@@ -19,6 +19,7 @@ use crate::gate::{Gate, PermitWait};
 use crate::run::{HaltCheck, LoopEvent, LoopIn, SteerQueue, StopReason};
 use crate::tasks::TaskHub;
 use crate::tools::{DesktopOps, ToolOutput};
+use crate::work::{self, root_session, Work};
 use crate::{CancelToken, InputItem, ModelClient, Usage};
 
 const DEPTH_LIMIT: u32 = 2;
@@ -89,11 +90,6 @@ pub fn requeue_side_events(events: Vec<SideEvent>) {
     }
 }
 
-/// `root/s1/s2` -> `root`. Child conversation ids nest under the root session.
-fn root_session(session: &str) -> &str {
-    session.split('/').next().unwrap_or(session)
-}
-
 pub fn drain_side_events() -> Vec<SideEvent> {
     side_queue()
         .lock()
@@ -104,7 +100,7 @@ pub fn drain_side_events() -> Vec<SideEvent> {
 
 pub fn spawn_schema() -> Value {
     // One fixed text, so a setting never rewrites the cached tool list.
-    let description = "Start a helper; do small or sequential work yourself. type explore: read-only, wide reading. general: your permissions. isolation worktree. background: task id.";
+    let description = "Start a helper; do small or sequential work yourself. type explore: read-only, wide reading. review: read-only check of the change. general: your permissions. isolation worktree; redo: work key to redo. background: task id.";
     json!({
         "type": "function",
         "name": "spawn_subagent",
@@ -119,7 +115,8 @@ pub fn spawn_schema() -> Value {
                 "persona": {"type": "string"},
                 "background": {"type": "boolean"},
                 "run_in_background": {"type": "boolean"},
-                "isolation": {"type": "string"}
+                "isolation": {"type": "string"},
+                "redo": {"type": "string"}
             },
             "required": ["prompt"],
             "additionalProperties": false
@@ -176,8 +173,13 @@ struct Spec {
     description: String,
     persona: String,
     explore: bool,
+    /// A review helper: an explore helper that is given the session's change
+    /// and whose findings are recorded.
+    review: bool,
     background: bool,
     worktree: bool,
+    /// The key of the helper work this worktree helper redoes.
+    redo: Option<String>,
 }
 
 fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
@@ -203,6 +205,23 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         Ok(spec) => spec,
         Err(err) => return (ToolOutput::err(err), Usage::default()),
     };
+    if spec.worktree && call.depth > 0 {
+        return (
+            ToolOutput::err("a helper cannot start worktree helpers; ask the lead to start it"),
+            Usage::default(),
+        );
+    }
+    // A review reads the whole change, so it waits for every helper's work.
+    if spec.review {
+        if let Err(open) = work::open_work(call.session) {
+            return (
+                ToolOutput::err(format!(
+                    "{open} Start the review once all helper work is merged or discarded."
+                )),
+                Usage::default(),
+            );
+        }
+    }
     // Item 34: with boundary routing on, a general helper needs a brief and
     // runs fresh on the cheap lane rather than forking the chat.
     let briefed = !spec.explore
@@ -232,13 +251,10 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     };
     let child_cancel = CancelToken::child_of(call.cancel);
     let steer = SteerQueue::new();
-    let wt_cell: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
     let id_cell = Arc::new(Mutex::new(String::new()));
     let kill_cancel = child_cancel.clone();
-    let kill_wt = Arc::clone(&wt_cell);
     let kill_id = Arc::clone(&id_cell);
     let kill_hub = Arc::clone(&tasks);
-    let parent_ws = call.workspace.to_path_buf();
     let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         kill_cancel.cancel();
         let id = kill_id
@@ -248,13 +264,6 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         if !id.is_empty() {
             kill_hub.kill_owner(&id);
         }
-        if let Some(path) = kill_wt
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clone()
-        {
-            remove_worktree(&parent_ws, &path);
-        }
     });
     let id = match tasks.register_agent(call.agent_id.map(str::to_string), &spec.description, kill)
     {
@@ -263,13 +272,35 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     };
     *id_cell.lock().unwrap_or_else(|err| err.into_inner()) = id.clone();
     remember_steer(&steer_key(&tasks, &id), steer.clone());
-    let worktree = if spec.worktree {
-        prune_old_worktrees(call.workspace, &crate::perm::config_dir().join("worktrees"));
-        match prepare_worktree(call.workspace, call.session, &id) {
-            Ok(path) => {
-                *wt_cell.lock().unwrap_or_else(|err| err.into_inner()) = Some(path.clone());
-                Some(path)
-            }
+    let title = title_of(&spec.description, &spec.prompt);
+    // A worktree helper works in its own tree of the project. What it
+    // changes there is sealed when it ends and kept until the person merges
+    // or discards it.
+    let opened = if spec.worktree {
+        let root = work::root();
+        work::prune(&root);
+        // A redo is given what the old work changed, as text after its task.
+        // Work that can't be redone starts no helper and makes no tree.
+        let redo = spec.redo.as_deref();
+        let made = redo
+            .map(|key| work::redo_note(&root, call.session, key))
+            .transpose()
+            .and_then(|note| {
+                let opened = work::open(
+                    &root,
+                    call.workspace,
+                    call.session,
+                    tasks.nonce(),
+                    &id,
+                    &title,
+                    spec.description.trim(),
+                    redo,
+                )?;
+                // Fenced only now: a refused start leaves this run unmarked.
+                Ok((opened, note.map(|note| note.text())))
+            });
+        match made {
+            Ok(made) => Some(made),
             Err(err) => {
                 forget_steer(&steer_key(&tasks, &id));
                 let _ = tasks.kill(&id);
@@ -279,17 +310,26 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     } else {
         None
     };
-    let title = title_of(&spec.description, &spec.prompt);
+    let (opened, redo_note) = match opened {
+        Some((opened, note)) => (Some(opened), note),
+        None => (None, None),
+    };
     (call.on_event)(LoopEvent::Task {
         id: id.clone(),
         title: title.clone(),
         done: false,
     });
-    let workspace = worktree
-        .clone()
-        .unwrap_or_else(|| call.workspace.to_path_buf());
+    let running = running_text(&id, opened.as_ref().map(|opened| &opened.work));
+    let (workspace, job_work) = match opened {
+        Some(opened) => (opened.workspace, Some((opened.work, opened.live))),
+        None => (call.workspace.to_path_buf(), None),
+    };
     let conversation_id = format!("{}/{}", call.session, id);
-    let kind_name = if spec.explore { "explore" } else { "general" };
+    let kind_name = match (spec.review, spec.explore) {
+        (true, _) => "review",
+        (false, true) => "explore",
+        (false, false) => "general",
+    };
     // A plain general child of the chat forks it: same system, tools and
     // history, so its first request reuses the chat's cached prefix. An
     // explore child (other tools), a persona or a worktree starts fresh.
@@ -297,10 +337,30 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         && !briefed
         && !spec.explore
         && spec.persona.trim().is_empty()
-        && worktree.is_none())
+        && job_work.is_none())
     .then(|| parent_request(call.session))
     .flatten()
     .filter(|req| req.model == call.model);
+    let prompt = if fork.is_some() {
+        fork_task(&spec.prompt)
+    } else {
+        let task = match redo_note {
+            Some(note) => format!("{}\n\n{note}", spec.prompt),
+            None => spec.prompt,
+        };
+        match parent_request(call.session).and_then(|req| known_context(&req.input)) {
+            Some(known) => format!("{task}\n\n{known}"),
+            None => task,
+        }
+    };
+    // A review helper has no shell: it is handed the approved plan and the
+    // session's change, with the lead's own words last.
+    let (prompt, review) = if spec.review {
+        let (task, run) = crate::review::begin(call.session, call.workspace, &prompt);
+        (task, Some(run))
+    } else {
+        (prompt, None)
+    };
     let job = ChildJob {
         client: Arc::clone(&client),
         permits: call
@@ -328,14 +388,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         policy: call.policy.cloned(),
         depth: call.depth.saturating_add(1),
         tasks: Arc::clone(&tasks),
-        prompt: if fork.is_some() {
-            fork_task(&spec.prompt)
-        } else {
-            match parent_request(call.session).and_then(|req| known_context(&req.input)) {
-                Some(known) => format!("{}\n\n{known}", spec.prompt),
-                None => spec.prompt,
-            }
-        },
+        prompt,
         agent_id: id.clone(),
         kind_name: kind_name.to_string(),
         title: title.clone(),
@@ -347,13 +400,12 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         config: crate::perm::pinned_config(),
         class: child_class(crate::route::live::current_class(), briefed),
         ticket,
+        work: job_work,
+        review,
     };
     if spec.background {
         thread::spawn(move || run_job(job, None));
-        return (
-            ToolOutput::ok(running_text(&id, worktree.as_deref())),
-            Usage::default(),
-        );
+        return (ToolOutput::ok(running), Usage::default());
     }
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || run_job(job, Some(tx)));
@@ -381,6 +433,8 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             usage: Usage::default(),
             text: "subagent ended without a result".into(),
             looked_at: Vec::new(),
+            work: None,
+            findings: Vec::new(),
         }
     });
     (call.on_event)(LoopEvent::Task {
@@ -388,21 +442,12 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         title,
         done: true,
     });
-    // A worktree the helper left clean is removed; one with changes stays for
-    // the parent to look at and copy from.
-    let kept = worktree.filter(|path| {
-        let changed = worktree_changed(path);
-        if !changed {
-            remove_worktree(call.workspace, path);
-        }
-        changed
-    });
     // The helper fenced its result on its own thread; this run has now read
     // it, and what the helper read from outside with it.
     if crate::tools::fence::holds_outside(&done.text) {
         crate::tools::fence::note_untrusted_seen();
     }
-    let text = format_result(&done.text, &id, kept.as_deref(), &done.stop);
+    let text = format_result(&done.text, &id, done.work.as_deref(), &done.stop);
     (ToolOutput::ok(text), done.usage)
 }
 
@@ -483,6 +528,11 @@ struct ChildJob {
     class: Option<&'static str>,
     /// Its place in the spawn policy's counts, freed when the job ends.
     ticket: crate::subagent_policy::Ticket,
+    /// A worktree helper's record and the lock on its tree, held until its
+    /// work is sealed.
+    work: Option<(Work, work::Live)>,
+    /// A review helper's run, ended when the helper does.
+    review: Option<crate::review::Run>,
 }
 
 struct ChildDone {
@@ -491,6 +541,10 @@ struct ChildDone {
     text: String,
     /// Files and pages the helper read, for the parent to check its claims.
     looked_at: Vec<String>,
+    /// A worktree helper's record once its work is sealed.
+    work: Option<Box<Work>>,
+    /// Every findings card a review helper reported, in order.
+    findings: Vec<String>,
 }
 
 enum ChildNote {
@@ -508,11 +562,47 @@ impl HaltCheck for HubHalt {
     }
 }
 
-fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
+fn run_job(mut job: ChildJob, tx: Option<Sender<ChildNote>>) {
     let _origin = crate::harness::OriginScope::enter(job.origin);
     let _trace = crate::tools::fence::enter(&job.fence);
     let _config = job.config.clone().map(crate::perm::ConfigGuard::set);
     let mut done = run_child_retrying(&job, &tx);
+    // A worktree helper's work is sealed however the helper ended, once its
+    // background commands and its own helpers are dead.
+    let work_line = job.work.take().map(|(record, live)| {
+        job.tasks.kill_owner(&job.agent_id);
+        let tree = record.tree.clone();
+        let ended = ended_of(&done.stop);
+        match work::settle(&work::root(), &job.parent_session, record, ended, live) {
+            Ok(settled) => {
+                let line = work::result_line(&settled);
+                done.work = Some(Box::new(settled));
+                line
+            }
+            Err(err) => format!(
+                "held (the seal could not be recorded: {err}): the worktree is kept at {}.",
+                tree.display()
+            ),
+        }
+    });
+    // A review is recorded only when it ended on the change it began on.
+    // Its findings go to the lead with the helper's own words, whether or
+    // not they were recorded: the helper's last message need not repeat them.
+    let review_line = job.review.take().and_then(|run| {
+        let findings = crate::review::merged(&done.findings);
+        let line = run.end(
+            &job.parent_session,
+            &job.parent_workspace,
+            findings.as_deref(),
+            &done.stop,
+        );
+        if let Some(findings) = findings {
+            done.text = format!("{}\n\n{findings}", done.text.trim_end())
+                .trim_start()
+                .to_string();
+        }
+        line
+    });
     job.ticket.spent(
         done.usage
             .input_tokens
@@ -536,7 +626,15 @@ fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
             done.text.push_str(&listed);
         }
     }
+    // What became of the work is the last line, outside the fence.
+    if let Some(line) = work_line.or(review_line) {
+        if !done.text.is_empty() {
+            done.text.push('\n');
+        }
+        done.text.push_str(&line);
+    }
     let cancelled = matches!(done.stop, StopReason::Cancelled | StopReason::Halted);
+    job.tasks.note_end(&job.agent_id, &done.usage);
     if cancelled {
         let _ = job.tasks.append_output(&job.agent_id, &done.text);
         let _ = job.tasks.kill(&job.agent_id);
@@ -571,9 +669,13 @@ fn run_child_retrying(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDo
             usage: Usage::default(),
             text: String::new(),
             looked_at: Vec::new(),
+            work: None,
+            findings: Vec::new(),
         },
         Err(_) => attempt().unwrap_or_else(|_| ChildDone {
             looked_at: Vec::new(),
+            work: None,
+            findings: Vec::new(),
             stop: StopReason::Error(CRASHED_TWICE.into()),
             usage: Usage::default(),
             text: String::new(),
@@ -639,7 +741,16 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     };
     let background = job.background;
     let parent_session = job.parent_session.clone();
+    // A review helper's findings are kept for its record, every card of them.
+    let findings = std::cell::RefCell::new(Vec::new());
+    let keep = |ev: &LoopEvent| {
+        if let (Some(_), LoopEvent::Findings(body)) = (&job.review, ev) {
+            findings.borrow_mut().push(body.clone());
+        }
+    };
     let mut out = crate::run_loop(&input, &mut history, &job.prompt, None, &mut |ev| {
+        job.tasks.note_step(&agent_id, &ev);
+        keep(&ev);
         emit_child(ev, background, &parent_session, tx)
     });
     let blocked =
@@ -647,6 +758,8 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     // A SubagentStop hook that blocks sends the helper on once with its reason.
     if let Some(reason) = blocked.filter(|_| matches!(out.stop, StopReason::EndTurn)) {
         let again = crate::run_loop(&input, &mut history, &reason, None, &mut |ev| {
+            job.tasks.note_step(&agent_id, &ev);
+            keep(&ev);
             emit_child(ev, background, &parent_session, tx)
         });
         let _ = crate::hooks::on_subagent_stop(
@@ -671,6 +784,8 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         usage: out.usage,
         text: child_text(&history[own..]),
         looked_at: looked_at(&history[own..]),
+        work: None,
+        findings: findings.into_inner(),
     }
 }
 
@@ -794,11 +909,22 @@ fn parse_spec(workspace: &Path, arguments: &str) -> Result<Spec, String> {
         other => return Err(format!("unknown isolation `{other}`")),
     };
     let explore = kind_is_explore(&value);
+    let review = kind_is_review(&value);
     if explore && worktree {
         return Err(
             "explore subagents are read-only and do not use worktree isolation; omit isolation or use type general"
                 .into(),
         );
+    }
+    if value
+        .get("redo")
+        .is_some_and(|key| !key.is_string() && !key.is_null())
+    {
+        return Err("redo must be a work key, as text".into());
+    }
+    let redo = Some(text_field(&value, &["redo"])).filter(|key| !key.is_empty());
+    if redo.is_some() && !worktree {
+        return Err("redo needs isolation worktree: the work is redone in a new worktree".into());
     }
     let mut persona = text_field(&value, &["persona"]);
     if let Some(body) = crate::plugins::persona_body(workspace, &persona) {
@@ -811,13 +937,19 @@ fn parse_spec(workspace: &Path, arguments: &str) -> Result<Spec, String> {
             }
         }
     }
+    // The built-in reviewer, whatever persona was named.
+    if review {
+        persona = crate::review::REVIEW_PERSONA.to_string();
+    }
     Ok(Spec {
         prompt,
         description: text_field(&value, &["description"]),
         persona,
         explore,
+        review,
         background: bool_field(&value, &["background", "run_in_background"]),
         worktree,
+        redo,
     })
 }
 
@@ -830,16 +962,16 @@ fn named_kind(value: &Value) -> String {
         .to_string()
 }
 
+/// An explore helper is read-only. A review helper is one too.
 fn kind_is_explore(value: &Value) -> bool {
-    let raw = ["type", "subagent_type", "agent_type"]
-        .iter()
-        .find_map(|key| value.get(*key).and_then(|item| item.as_str()));
     matches!(
-        raw.map(str::trim)
-            .map(|text| text.to_ascii_lowercase())
-            .as_deref(),
-        Some("explore")
+        named_kind(value).to_ascii_lowercase().as_str(),
+        "explore" | "review"
     )
+}
+
+fn kind_is_review(value: &Value) -> bool {
+    named_kind(value).eq_ignore_ascii_case("review")
 }
 
 fn text_field(value: &Value, keys: &[&str]) -> String {
@@ -1010,10 +1142,14 @@ fn title_of(description: &str, prompt: &str) -> String {
     }
 }
 
-fn running_text(id: &str, worktree: Option<&Path>) -> String {
+fn running_text(id: &str, work: Option<&Work>) -> String {
     let mut text = format!("task id: {id}\nstatus: running");
-    if let Some(path) = worktree {
-        text.push_str(&format!("\nworktree: {}", path.display()));
+    if let Some(work) = work {
+        text.push_str(&format!(
+            "\nworktree: {}\nwork: {}",
+            work.tree.display(),
+            work.key
+        ));
     }
     text
 }
@@ -1046,7 +1182,19 @@ fn guard_result(workspace: &Path, session: &str, id: &str, text: &str) -> String
     crate::tools::fence::fence_helper_result(&body)
 }
 
-fn format_result(text: &str, id: &str, worktree: Option<&Path>, stop: &StopReason) -> String {
+/// How a worktree helper's record says the helper ended. A foreground helper
+/// past its time arrives here as cancelled.
+fn ended_of(stop: &StopReason) -> work::Ended {
+    match stop {
+        StopReason::EndTurn => work::Ended::Done,
+        StopReason::MaxTurns => work::Ended::StepLimit,
+        StopReason::Cancelled => work::Ended::Stopped,
+        StopReason::Halted => work::Ended::Halted,
+        StopReason::Error(err) => work::Ended::Failed(err.clone()),
+    }
+}
+
+fn format_result(text: &str, id: &str, work: Option<&Work>, stop: &StopReason) -> String {
     let mut out = text.trim().to_string();
     if !out.is_empty() {
         out.push('\n');
@@ -1054,9 +1202,14 @@ fn format_result(text: &str, id: &str, worktree: Option<&Path>, stop: &StopReaso
     out.push_str(&format!("status: {}", status_line(stop)));
     out.push('\n');
     out.push_str(&format!("task id: {id}"));
-    if let Some(path) = worktree {
+    if let Some(work) = work {
+        // An empty work's tree is gone.
+        if work.state != work::WorkState::Empty {
+            out.push('\n');
+            out.push_str(&format!("worktree: {}", work.tree.display()));
+        }
         out.push('\n');
-        out.push_str(&format!("worktree: {}", path.display()));
+        out.push_str(&format!("work: {}", work.key));
     }
     out
 }
@@ -1079,118 +1232,6 @@ fn usage_empty(usage: &Usage) -> bool {
         && usage.output_tokens == 0
         && usage.reasoning_tokens == 0
         && usage.cost_in_usd_ticks == 0
-}
-
-fn path_part(raw: &str) -> String {
-    let mut out: String = raw
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .take(80)
-        .collect();
-    if out.is_empty() {
-        out.push_str("session");
-    }
-    out
-}
-
-fn prepare_worktree(workspace: &Path, session: &str, id: &str) -> Result<PathBuf, String> {
-    let inside = git(workspace, &["rev-parse", "--is-inside-work-tree"])?;
-    let stderr = String::from_utf8_lossy(&inside.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&inside.stdout).trim().to_string();
-    if !inside.status.success() || stdout != "true" {
-        if stderr.is_empty() || stderr.contains("not a git repository") {
-            return Err(
-                "workspace is not a git repository; worktree isolation was not used".into(),
-            );
-        }
-        return Err(format!("git worktree isolation failed: {stderr}"));
-    }
-    let dest = crate::perm::config_dir()
-        .join("worktrees")
-        .join(path_part(session))
-        .join(id);
-    if dest.exists() {
-        return Err(format!("worktree path already exists: {}", dest.display()));
-    }
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| format!("worktree dir: {err}"))?;
-    }
-    let added = git(
-        workspace,
-        &["worktree", "add", "--detach", &dest.display().to_string()],
-    )?;
-    if !added.status.success() {
-        let err = String::from_utf8_lossy(&added.stderr).trim().to_string();
-        let _ = std::fs::remove_dir_all(&dest);
-        return Err(format!("git worktree add failed: {err}"));
-    }
-    Ok(dest)
-}
-
-fn remove_worktree(workspace: &Path, dest: &Path) {
-    let _ = git(
-        workspace,
-        &["worktree", "remove", "--force", &dest.display().to_string()],
-    );
-    let _ = std::fs::remove_dir_all(dest);
-}
-
-/// True when the helper changed, added or removed a file in its worktree.
-/// A worktree git can't read counts as changed, so nothing is lost.
-fn worktree_changed(path: &Path) -> bool {
-    match git(path, &["status", "--porcelain"]) {
-        Ok(out) if out.status.success() => !out.stdout.iter().all(u8::is_ascii_whitespace),
-        _ => true,
-    }
-}
-
-/// Helper worktrees older than this are removed when the next one is made.
-const WORKTREE_KEEP: Duration = Duration::from_secs(3 * 24 * 60 * 60);
-
-/// `root/<session>/<id>` folders untouched for [`WORKTREE_KEEP`] are removed,
-/// and git forgets them.
-fn prune_old_worktrees(workspace: &Path, root: &Path) {
-    let Ok(sessions) = std::fs::read_dir(root) else {
-        return;
-    };
-    let mut removed = false;
-    for session in sessions.flatten() {
-        let Ok(children) = std::fs::read_dir(session.path()) else {
-            continue;
-        };
-        for child in children.flatten() {
-            let old = child
-                .metadata()
-                .and_then(|meta| meta.modified())
-                .ok()
-                .and_then(|at| at.elapsed().ok())
-                .is_some_and(|age| age > WORKTREE_KEEP);
-            if old {
-                remove_worktree(workspace, &child.path());
-                removed = true;
-            }
-        }
-    }
-    if removed {
-        let _ = git(workspace, &["worktree", "prune"]);
-    }
-}
-
-fn git(workspace: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    // Hooks and fsmonitor off: a sandboxed command can plant either in the
-    // workspace's repository, and this runs with no sandbox.
-    grokhub_core::git_cmd::git()
-        .arg("-C")
-        .arg(workspace)
-        .args(args)
-        .output()
-        .map_err(|err| format!("git failed to start: {err}"))
 }
 
 fn side_queue() -> &'static Mutex<std::collections::VecDeque<SideEvent>> {
@@ -1396,6 +1437,7 @@ mod tests {
     }
     use crate::gate::{ClosedPermits, Decision, Gate, PermAnswer, PermMode, PermitWait, Waited};
     use crate::tools::{self, READ_ONLY_PHASE};
+    use crate::work::test_support::git_repo;
     use crate::{ClientError, FunctionCall, InputItem, ResponsesRequest, TurnOutput};
     use std::collections::{HashMap, VecDeque};
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -1794,6 +1836,7 @@ mod tests {
             "send_subagent_message",
             "screenshot",
             "kill_command_or_subagent",
+            "merge_subagent_work",
         ] {
             assert!(!names.iter().any(|name| name == banned), "{names:?}");
         }
@@ -2682,6 +2725,23 @@ mod tests {
             "from-child"
         );
         assert!(wt.exists(), "a successful subagent keeps its worktree");
+        // The work is sealed and waits for the person.
+        let key = task_line(&text, "work:").expect(&text);
+        let records = work::work_for(&sid).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].key, key);
+        assert_eq!(records[0].state, work::WorkState::Ready);
+        assert_eq!(records[0].ended, Some(work::Ended::Done));
+        assert_eq!(records[0].files, ["child.txt"]);
+        assert_eq!(records[0].tree, wt);
+        assert!(
+            text.contains(&format!(
+                "ready to merge: 1 file (1 new, 0 changed, 0 deleted). work: {key}. The \
+                 person merges it from the Tasks panel, or call merge_subagent_work with work \
+                 {key}; they will be asked."
+            )),
+            "{text}"
+        );
 
         let sid = session("wtcancel");
         let parent_id = sid.clone();
@@ -2699,6 +2759,17 @@ mod tests {
             }
             if depth == 0 {
                 return Ok(text_turn("done", Usage::default()));
+            }
+            // The helper writes a file first and then never finishes.
+            if n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "w",
+                        "write",
+                        r#"{"path":"child.txt","content":"half-done"}"#,
+                    )],
+                    Usage::default(),
+                ));
             }
             block_until_cancel(cancel, &AtomicBool::new(false))
         });
@@ -2719,42 +2790,655 @@ mod tests {
             "worktree should exist while the child runs"
         );
         let id = task_line(&text, "task id:").expect(&text);
-        let hub = crate::tasks::hub_for(&sid);
-        hub.kill(&id).expect("kill");
+        let key = task_line(&text, "work:").expect(&text);
         let start = Instant::now();
-        while doomed.exists() && start.elapsed() < Duration::from_secs(5) {
+        while !doomed.join("child.txt").exists() && start.elapsed() < Duration::from_secs(5) {
             thread::sleep(Duration::from_millis(20));
         }
-        assert!(!doomed.exists(), "cancel removes the worktree");
+        let hub = crate::tasks::hub_for(&sid);
+        hub.kill(&id).expect("kill");
+        // A stopped helper's work is sealed and kept: only the person
+        // removes it.
+        let record = || {
+            work::work_for(&sid)
+                .unwrap()
+                .into_iter()
+                .find(|record| record.key == key)
+                .expect("the record")
+        };
+        let start = Instant::now();
+        while record().ended.is_none() && start.elapsed() < Duration::from_secs(20) {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let stopped = record();
+        assert_eq!(
+            stopped.state,
+            work::WorkState::Held {
+                why: work::Held::Partial
+            }
+        );
+        assert_eq!(stopped.ended, Some(work::Ended::Stopped));
+        assert_eq!(stopped.files, ["child.txt"]);
+        assert_eq!(stopped.tree, doomed);
+        assert!(stopped.tip.is_some());
+        assert_eq!(
+            std::fs::read_to_string(doomed.join("child.txt")).unwrap(),
+            "half-done",
+            "a stop keeps the worktree"
+        );
+        let line = format!(
+            "partial (it was stopped), not merged: 1 file kept. work: {key}. Only the person \
+             can merge partial work."
+        );
+        let start = Instant::now();
+        let mut output = String::new();
+        while !output.contains(&line) && start.elapsed() < Duration::from_secs(5) {
+            output = hub.read_output(&id, 0).unwrap_or_default();
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(output.contains(&line), "{output}");
         assert!(!dir.join("child.txt").exists());
         let _ = std::fs::remove_dir_all(&wt);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
-    fn git_repo(dir: &Path) {
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .arg("-c")
-                .arg("safe.directory=*")
+    #[test]
+    fn redo_is_a_work_key_and_only_goes_with_a_worktree() {
+        let parse = |args: &str| parse_spec(Path::new("."), args).map(|spec| spec.redo);
+        assert_eq!(
+            parse(r#"{"prompt":"again","isolation":"worktree","redo":" mb3x9k2a-7q1z "}"#),
+            Ok(Some("mb3x9k2a-7q1z".to_string()))
+        );
+        assert_eq!(
+            parse(r#"{"prompt":"again","isolation":"worktree"}"#),
+            Ok(None)
+        );
+        assert_eq!(
+            parse(r#"{"prompt":"again","isolation":"worktree","redo":"  "}"#),
+            Ok(None)
+        );
+        for args in [
+            r#"{"prompt":"again","redo":"mb3x9k2a-7q1z"}"#,
+            r#"{"prompt":"again","isolation":"none","redo":"mb3x9k2a-7q1z"}"#,
+        ] {
+            assert_eq!(
+                parse(args),
+                Err("redo needs isolation worktree: the work is redone in a new worktree".into())
+            );
+        }
+        // A value that is not text is refused, not dropped: the helper would
+        // start as a plain one, with no diff.
+        for args in [
+            r#"{"prompt":"again","isolation":"worktree","redo":123}"#,
+            r#"{"prompt":"again","isolation":"worktree","redo":["mb3x9k2a-7q1z"]}"#,
+        ] {
+            assert_eq!(parse(args), Err("redo must be a work key, as text".into()));
+        }
+        assert_eq!(
+            parse(r#"{"prompt":"again","isolation":"worktree","redo":null}"#),
+            Ok(None)
+        );
+        assert_eq!(
+            spawn_schema()["parameters"]["properties"]["redo"],
+            json!({"type": "string"})
+        );
+    }
+
+    /// The first user message of a request: a helper's task.
+    fn task_of(req: &ResponsesRequest) -> String {
+        req.input
+            .iter()
+            .find_map(|item| match item {
+                InputItem::Message { role, .. } if role == "user" => {
+                    Some(crate::compact::message_text(item))
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    fn one(id: &str, name: &str, args: &str) -> Result<TurnOutput, ClientError> {
+        Ok(calls_turn(vec![call(id, name, args)], Usage::default()))
+    }
+
+    fn redo_args(work: &str) -> String {
+        json!({
+            "prompt": "again",
+            "description": "again",
+            "isolation": "worktree",
+            "redo": work,
+        })
+        .to_string()
+    }
+
+    /// A project where two worktree helpers changed one line of `a.txt`,
+    /// the first is merged and the second is a conflict. With `marked`, the
+    /// project's mark list names `a.txt` from the start. Returns the
+    /// project, the config folder with its guard, the chat and the
+    /// conflicted record.
+    fn conflict_to_redo(
+        tag: &str,
+        marked: bool,
+    ) -> (
+        PathBuf,
+        PathBuf,
+        crate::perm::ConfigGuard,
+        String,
+        work::Work,
+    ) {
+        let dir = scratch(tag);
+        git_repo(&dir);
+        std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        if marked {
+            std::fs::create_dir_all(dir.join(".grokhub")).unwrap();
+            std::fs::write(dir.join(".grokhub/tainted-files"), "a.txt\n").unwrap();
+        }
+        for args in [&["add", "."][..], &["commit", "-m", "a"]] {
+            let done = std::process::Command::new("git")
                 .arg("-C")
-                .arg(dir)
+                .arg(&dir)
                 .args(args)
                 .output()
                 .expect("git");
-            assert!(
-                out.status.success(),
-                "{args:?} {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
+            assert!(done.status.success(), "{args:?}");
+        }
+        let cfg = scratch(&format!("{tag}cfg"));
+        let guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session(tag);
+
+        let parent_id = sid.clone();
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            match (depth, n) {
+                (0, 0) => one(
+                    "s1",
+                    "spawn_subagent",
+                    &spawn_args("first", "general", false, "worktree"),
+                ),
+                (0, 1) => one(
+                    "s2",
+                    "spawn_subagent",
+                    &spawn_args("second", "general", false, "worktree"),
+                ),
+                (1, 0) => {
+                    let who = if task_of(req).starts_with("first") {
+                        "first"
+                    } else {
+                        "second"
+                    };
+                    let content = format!("one\nTWO {who}\nthree\n");
+                    one(
+                        "w",
+                        "write",
+                        &json!({"path": "a.txt", "content": content}).to_string(),
+                    )
+                }
+                _ => Ok(text_turn("done", Usage::default())),
+            }
+        });
+        run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let made = work::work_for(&sid).unwrap();
+        assert_eq!(
+            made.iter().map(|work| &work.title).collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        let merged = work::merge_work(&sid, &made[0].key, work::By::Person).unwrap();
+        assert_eq!(merged.state, work::WorkState::Merged);
+        let old = work::merge_work(&sid, &made[1].key, work::By::Person).unwrap();
+        assert_eq!(
+            old.state,
+            work::WorkState::Conflict {
+                files: vec!["a.txt".into()]
+            }
+        );
+        (dir, cfg, guard, sid, old)
+    }
+
+    /// Two helpers change one line, the first is merged, the second is a
+    /// conflict. The lead then starts a helper that redoes the second.
+    #[test]
+    fn a_redo_helper_gets_the_project_as_it_is_now_and_the_old_work_s_diff() {
+        let (dir, cfg, _guard, sid, old) = conflict_to_redo("redo", false);
+        let key = old.key.clone();
+
+        // The lead first names work this chat does not have, then the
+        // conflicted work. The helper tries to read the old worktree.
+        let helper_task = Arc::new(Mutex::new(String::new()));
+        let refusal = Arc::new(Mutex::new(String::new()));
+        let old_tree_read = Arc::new(Mutex::new(String::new()));
+        let (task, heard, read) = (
+            Arc::clone(&helper_task),
+            Arc::clone(&refusal),
+            Arc::clone(&old_tree_read),
+        );
+        let (parent_id, redo_key) = (sid.clone(), key.clone());
+        let old_file = old.tree.join("a.txt");
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            match (depth, n) {
+                (0, 0) => one("r0", "spawn_subagent", &redo_args("zz")),
+                (0, 1) => {
+                    *heard.lock().unwrap() = last_output(req);
+                    one("r1", "spawn_subagent", &redo_args(&redo_key))
+                }
+                (1, 0) => {
+                    *task.lock().unwrap() = task_of(req);
+                    one(
+                        "r",
+                        "read_file",
+                        &json!({"target_file": old_file.to_string_lossy()}).to_string(),
+                    )
+                }
+                (1, 1) => {
+                    *read.lock().unwrap() = last_output(req);
+                    one("w", "write", r#"{"path":"note.txt","content":"redone"}"#)
+                }
+                _ => Ok(text_turn("done", Usage::default())),
+            }
+        });
+        run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+
+        assert_eq!(
+            *refusal.lock().unwrap(),
+            "there is no helper work zz in this chat"
+        );
+        let told = helper_task.lock().unwrap().clone();
+        let start = format!(
+            "again\n\nThis task redoes helper work {key} (second), which was made on an older \
+             copy of the project and is not merged. Your worktree is a fresh copy of the \
+             project as it is now. Make that work's change here so that it fits the project \
+             as it is now.\n\
+             Files that conflicted: a.txt.\n\
+             The old work's changes as a diff:\n<<<UNTRUSTED source=subagent:local nonce="
+        );
+        assert!(told.starts_with(&start), "{told}");
+        assert!(
+            told.contains(
+                "\n--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO second\n three\n"
+            ),
+            "{told}"
+        );
+        // The helper is not sent to the old worktree: the file tools open
+        // only its own.
+        assert!(!told.contains(&old.tree.display().to_string()), "{told}");
+        assert_eq!(*old_tree_read.lock().unwrap(), "path escapes the workspace");
+
+        // One new record, for the redo: the refused call made none. Its
+        // tree was cut from the project as the first merge left it.
+        let records = work::work_for(&sid).unwrap();
+        assert_eq!(records.len(), 3);
+        let redone = &records[2];
+        assert_eq!(redone.redo_of.as_deref(), Some(key.as_str()));
+        assert_eq!(redone.state, work::WorkState::Ready);
+        // The old helper's run read no outside text, so its diff marks
+        // nobody and the redo's work is the one file it wrote.
+        assert_eq!(redone.files, ["note.txt"]);
+        assert_eq!(
+            std::fs::read_to_string(redone.tree.join("a.txt")).unwrap(),
+            "one\nTWO first\nthree\n"
+        );
+        // The old work is as the conflict left it, tree and record.
+        assert_eq!(records[1], old);
+        assert_eq!(
+            std::fs::read_to_string(old.tree.join("a.txt")).unwrap(),
+            "one\nTWO second\nthree\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\nTWO first\nthree\n"
+        );
+        assert!(!dir.join("note.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    /// The old work changed a file on the mark list, so its diff is outside
+    /// text. The lead's run is marked by it only once a helper starts.
+    #[test]
+    fn a_refused_redo_marks_nobody_and_a_started_one_reads_marked_work_as_outside_text() {
+        let (dir, cfg, _guard, sid, old) = conflict_to_redo("redomark", true);
+        let key = old.key.clone();
+        let list = dir.join(".grokhub/tainted-files");
+        // Both helpers rewrote the whole file in runs that had read no
+        // outside text, which took its mark away; the merge landed that.
+        assert_eq!(std::fs::read_to_string(&list).unwrap(), "");
+
+        // The project is in the middle of a merge for the first call.
+        let merge_head = dir.join(".git/MERGE_HEAD");
+        std::fs::write(&merge_head, "0000000000000000000000000000000000000000\n").unwrap();
+        let helper_task = Arc::new(Mutex::new(String::new()));
+        let refusal = Arc::new(Mutex::new(String::new()));
+        let (task, heard) = (Arc::clone(&helper_task), Arc::clone(&refusal));
+        let (parent_id, redo_key) = (sid.clone(), key.clone());
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            match (depth, n) {
+                (0, 0) => one("r0", "spawn_subagent", &redo_args(&redo_key)),
+                (0, 1) => {
+                    *heard.lock().unwrap() = last_output(req);
+                    std::fs::remove_file(&merge_head).unwrap();
+                    one("w", "write", r#"{"path":"lead.txt","content":"mine"}"#)
+                }
+                (0, 2) => one("r1", "spawn_subagent", &redo_args(&redo_key)),
+                (1, 0) => {
+                    *task.lock().unwrap() = task_of(req);
+                    one("w", "write", r#"{"path":"note.txt","content":"redone"}"#)
+                }
+                _ => Ok(text_turn("done", Usage::default())),
+            }
+        });
+        run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+
+        assert_eq!(
+            *refusal.lock().unwrap(),
+            "the project is in the middle of a merge or rebase, or has unresolved conflicts. \
+             Finish or abort it, then try again."
+        );
+        // The refused start left the lead's run unmarked: the file it wrote
+        // next is not on the project's mark list.
+        assert_eq!(
+            std::fs::read_to_string(dir.join("lead.txt")).unwrap(),
+            "mine"
+        );
+        assert_eq!(std::fs::read_to_string(&list).unwrap(), "");
+
+        let told = helper_task.lock().unwrap().clone();
+        assert!(
+            told.contains(
+                "\nThe old work's changes as a diff:\n<<<UNTRUSTED source=subagent nonce="
+            ),
+            "{told}"
+        );
+        // The helper that read it is marked, so the file it wrote is too.
+        let records = work::work_for(&sid).unwrap();
+        assert_eq!(records.len(), 3);
+        let redone = &records[2];
+        assert_eq!(redone.redo_of.as_deref(), Some(key.as_str()));
+        assert_eq!(redone.files, [".grokhub/tainted-files", "note.txt"]);
+        assert_eq!(
+            std::fs::read_to_string(redone.tree.join(".grokhub/tainted-files")).unwrap(),
+            "note.txt\n"
+        );
+        assert_eq!(records[1], old);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_merge_request_changes_the_project_only_after_a_yes() {
+        let dir = scratch("mergeask");
+        git_repo(&dir);
+        let cfg = scratch("mergeaskcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .expect("git");
+            String::from_utf8_lossy(&out.stdout).into_owned()
         };
-        git(&["init"]);
-        git(&["config", "user.email", "test@example.com"]);
-        git(&["config", "user.name", "test"]);
-        git(&["config", "commit.gpgsign", "false"]);
-        std::fs::write(dir.join("README"), "hi\n").unwrap();
-        git(&["add", "README"]);
-        git(&["commit", "-m", "init"]);
+        let head = git(&["rev-parse", "HEAD"]);
+        let sid = session("mergeask");
+        let parent_id = sid.clone();
+        let project = dir.clone();
+        // What the helper heard back, and what the lead saw after the no.
+        let helper_heard = Arc::new(Mutex::new(String::new()));
+        let after_no = Arc::new(Mutex::new(None::<(String, bool)>));
+        let (heard, seen) = (Arc::clone(&helper_heard), Arc::clone(&after_no));
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            let one = |id: &str, name: &str, args: &str| {
+                Ok(calls_turn(vec![call(id, name, args)], Usage::default()))
+            };
+            if depth >= 1 {
+                return match n {
+                    0 => one(
+                        "w",
+                        "write",
+                        r#"{"path":"child.txt","content":"from-child"}"#,
+                    ),
+                    1 => one("hm", "merge_subagent_work", r#"{"work":"mb3x9k2a-7q1z"}"#),
+                    _ => {
+                        if n == 2 {
+                            *heard.lock().unwrap() = last_output(req);
+                        }
+                        Ok(text_turn("done", Usage::default()))
+                    }
+                };
+            }
+            match n {
+                0 => one(
+                    "s",
+                    "spawn_subagent",
+                    &spawn_args("write", "general", false, "worktree"),
+                ),
+                1 | 2 => {
+                    if n == 2 {
+                        *seen.lock().unwrap() =
+                            Some((last_output(req), project.join("child.txt").exists()));
+                    }
+                    let key = req
+                        .input
+                        .iter()
+                        .find_map(|item| match item {
+                            InputItem::FunctionCallOutput { output, .. } => {
+                                task_line(output, "work:")
+                            }
+                            _ => None,
+                        })
+                        .expect("the spawn result names the work");
+                    one(
+                        if n == 1 { "m1" } else { "m2" },
+                        "merge_subagent_work",
+                        &json!({ "work": key }).to_string(),
+                    )
+                }
+                _ => Ok(text_turn("done", Usage::default())),
+            }
+        });
+        let asks = Arc::new(SeqPerm {
+            answers: Mutex::new(VecDeque::from([PermAnswer::Deny, PermAnswer::Allow])),
+            asks: AtomicUsize::new(0),
+        });
+        let permits: Arc<dyn PermitWait + Send + Sync> = Arc::clone(&asks) as _;
+        let mut cards = Vec::new();
+        // Always: the helper's write runs unasked, the merge still asks.
+        let (_out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &permits,
+            &CancelToken::new(),
+            &mut |event| {
+                if let LoopEvent::Permission { name, action, .. } = event {
+                    cards.push((name, action));
+                }
+            },
+        );
+        let text = joined_outputs(&history);
+        let records = work::work_for(&sid).unwrap();
+        assert_eq!(records.len(), 1, "{text}");
+        let record = &records[0];
+
+        // The helper's own request was refused and put no card up.
+        assert_eq!(
+            *helper_heard.lock().unwrap(),
+            "only the lead can ask for a merge"
+        );
+        assert_eq!(asks.asks.load(Ordering::SeqCst), 2, "{text}");
+        let card = (
+            "merge_subagent_work".to_string(),
+            format!(
+                "1 file (1 new, 0 changed, 0 deleted) into {}: write",
+                record.project.display()
+            ),
+        );
+        assert_eq!(cards, [card.clone(), card]);
+
+        // After the no: the refusal, and nothing in the project.
+        let (refusal, landed) = after_no.lock().unwrap().clone().expect("a second turn");
+        assert_eq!(
+            refusal,
+            "User rejected the execution for tool `merge_subagent_work`"
+        );
+        assert!(!landed, "a refused merge wrote the project");
+
+        // After the yes: the file is in the project, uncommitted.
+        assert!(text.ends_with("merged: 1 file into the project"), "{text}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("child.txt")).unwrap(),
+            "from-child"
+        );
+        assert_eq!(record.state, work::WorkState::Merged);
+        assert_eq!(git(&["rev-parse", "HEAD"]), head);
+        assert_eq!(git(&["status", "--porcelain"]), "?? child.txt\n");
+        assert_eq!(git(&["diff", "--cached", "--name-only"]), "");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn an_always_on_a_merge_card_is_for_that_merge_and_merged_work_asks_nothing() {
+        let dir = scratch("mergealways");
+        git_repo(&dir);
+        let cfg = scratch("mergealwayscfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("mergealways");
+        let parent_id = sid.clone();
+        let again = Arc::new(Mutex::new(String::new()));
+        let heard = Arc::clone(&again);
+        let client = fake(&sid, move |req, _cancel, n| {
+            let one = |id: &str, name: &str, args: &str| {
+                Ok(calls_turn(vec![call(id, name, args)], Usage::default()))
+            };
+            if depth_of(&parent_id, &req.conversation_id) >= 1 {
+                return match n {
+                    0 => one(
+                        "w",
+                        "write",
+                        r#"{"path":"child.txt","content":"from-child"}"#,
+                    ),
+                    _ => Ok(text_turn("done", Usage::default())),
+                };
+            }
+            let key = || {
+                req.input
+                    .iter()
+                    .find_map(|item| match item {
+                        InputItem::FunctionCallOutput { output, .. } => task_line(output, "work:"),
+                        _ => None,
+                    })
+                    .expect("the spawn result names the work")
+            };
+            match n {
+                0 => one(
+                    "s",
+                    "spawn_subagent",
+                    &spawn_args("write", "general", false, "worktree"),
+                ),
+                // One reply with both calls: an "Always" lasts for a reply.
+                1 => Ok(calls_turn(
+                    vec![
+                        call(
+                            "m1",
+                            "merge_subagent_work",
+                            &json!({ "work": key() }).to_string(),
+                        ),
+                        call(
+                            "lw",
+                            "write",
+                            r#"{"path":"lead.txt","content":"from-lead"}"#,
+                        ),
+                    ],
+                    Usage::default(),
+                )),
+                2 => one(
+                    "m2",
+                    "merge_subagent_work",
+                    &json!({ "work": key() }).to_string(),
+                ),
+                _ => {
+                    if n == 3 {
+                        *heard.lock().unwrap() = last_output(req);
+                    }
+                    Ok(text_turn("done", Usage::default()))
+                }
+            }
+        });
+        // The spawn, the helper's write, the merge, then the lead's own write.
+        let asks = Arc::new(SeqPerm {
+            answers: Mutex::new(VecDeque::from([
+                PermAnswer::Allow,
+                PermAnswer::Allow,
+                PermAnswer::Always,
+                PermAnswer::Deny,
+            ])),
+            asks: AtomicUsize::new(0),
+        });
+        let permits: Arc<dyn PermitWait + Send + Sync> = Arc::clone(&asks) as _;
+        let mut cards = Vec::new();
+        let (_out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Ask, false, true),
+            &permits,
+            &CancelToken::new(),
+            &mut |event| {
+                if let LoopEvent::Permission { name, .. } = event {
+                    cards.push(name);
+                }
+            },
+        );
+        let text = joined_outputs(&history);
+        // "Always" on the merge card merged the work...
+        assert_eq!(
+            std::fs::read_to_string(dir.join("child.txt")).unwrap(),
+            "from-child",
+            "{text}"
+        );
+        // ...and the lead's next write still asked, and was refused.
+        // Work that is already merged is then refused with no card at all.
+        assert_eq!(
+            cards,
+            ["spawn_subagent", "write", "merge_subagent_work", "write"]
+        );
+        assert_eq!(asks.asks.load(Ordering::SeqCst), 4, "{text}");
+        assert!(!dir.join("lead.txt").exists(), "{text}");
+        assert_eq!(
+            *again.lock().unwrap(),
+            "this work is partial or held; the person merges it from the Tasks panel"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
     }
 
     #[test]
@@ -3148,8 +3832,20 @@ mod tests {
         );
         let text = joined_outputs(&history);
         assert_eq!(task_line(&text, "worktree:"), None, "{text}");
-        let id = task_line(&text, "task id:").expect(&text);
-        let made = cfg.join("worktrees").join(path_part(&sid)).join(&id);
+        assert!(
+            text.lines().any(|line| line.trim() == "no changes"),
+            "{text}"
+        );
+        let key = task_line(&text, "work:").expect(&text);
+        let records = work::work_for(&sid).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].key, key);
+        assert_eq!(records[0].state, work::WorkState::Empty);
+        let made = cfg
+            .join("helper-work")
+            .join(work::path_part(&sid))
+            .join(&key);
+        assert_eq!(records[0].tree, made);
         assert!(
             !made.exists(),
             "a clean worktree is removed: {}",
@@ -3159,8 +3855,79 @@ mod tests {
             !stale.exists(),
             "a worktree older than three days is pruned"
         );
+        assert_eq!(
+            std::fs::read_dir(cfg.join("helper-work").join("oldsession"))
+                .unwrap()
+                .count(),
+            0,
+            "and it is gone from where it was moved to"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_helper_that_asks_for_a_worktree_helper_is_refused() {
+        let dir = scratch("wtnested");
+        git_repo(&dir);
+        let cfg = scratch("wtnestedcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("wtnested");
+        let parent_id = sid.clone();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let child_saw = Arc::clone(&seen);
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            let isolation = if depth == 0 { "none" } else { "worktree" };
+            if depth <= 1 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("write", "general", false, isolation),
+                    )],
+                    Usage::default(),
+                ));
+            }
+            if depth == 1 {
+                // What the helper was told when it asked.
+                child_saw
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push(last_output(req));
+            }
+            Ok(text_turn("done", Usage::default()))
+        });
+        let (_out, _history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let outputs = seen.lock().unwrap_or_else(|err| err.into_inner()).clone();
+        assert_eq!(
+            outputs,
+            ["a helper cannot start worktree helpers; ask the lead to start it"]
+        );
+        assert_eq!(work::work_for(&sid), Ok(Vec::new()));
+        assert!(!cfg.join("helper-work").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn each_way_a_helper_stops_is_recorded_as_how_it_ended() {
+        assert_eq!(ended_of(&StopReason::EndTurn), work::Ended::Done);
+        assert_eq!(ended_of(&StopReason::MaxTurns), work::Ended::StepLimit);
+        assert_eq!(ended_of(&StopReason::Cancelled), work::Ended::Stopped);
+        assert_eq!(ended_of(&StopReason::Halted), work::Ended::Halted);
+        assert_eq!(
+            ended_of(&StopReason::Error(CRASHED_TWICE.into())),
+            work::Ended::Failed("the helper crashed twice and stopped".into())
+        );
     }
 
     #[test]
@@ -3183,6 +3950,8 @@ mod tests {
                 usage: Usage::default(),
                 text: "found two of three".into(),
                 looked_at: Vec::new(),
+                work: None,
+                findings: Vec::new(),
             }));
         });
         let past = std::time::Instant::now();
@@ -3190,6 +3959,389 @@ mod tests {
         assert!(timed_out);
         assert!(child.is_cancelled());
         assert_eq!(done.map(|d| d.text).as_deref(), Some("found two of three"));
+    }
+
+    #[test]
+    fn a_review_helper_is_read_only_and_always_the_built_in_reviewer() {
+        let spec = parse_spec(
+            Path::new("."),
+            r#"{"prompt":"check it","type":"Review","persona":"be kind"}"#,
+        )
+        .unwrap();
+        assert!(spec.review);
+        assert!(spec.explore);
+        assert_eq!(spec.persona, crate::review::REVIEW_PERSONA);
+        for key in ["subagent_type", "agent_type"] {
+            let args = json!({"prompt": "x", key: " review "}).to_string();
+            assert!(parse_spec(Path::new("."), &args).unwrap().review, "{key}");
+            assert!(spawn_is_explore("spawn_subagent", &args), "{key}");
+        }
+        let explore = parse_spec(Path::new("."), r#"{"prompt":"x","type":"explore"}"#).unwrap();
+        assert!(explore.explore && !explore.review);
+        assert_eq!(explore.persona, "");
+        let general = parse_spec(Path::new("."), r#"{"prompt":"x","type":"reviewer"}"#).unwrap();
+        assert!(!general.explore && !general.review);
+        let err = parse_spec(
+            Path::new("."),
+            &spawn_args("look", "review", false, "worktree"),
+        )
+        .err()
+        .unwrap_or_default();
+        assert!(err.contains("do not use worktree isolation"), "{err}");
+        // It starts in a read-only session, as an explore helper does.
+        let decision = crate::gate::decide_with(
+            &Gate::phase_readonly(),
+            "spawn_subagent",
+            r#"{"prompt":"look","type":"review"}"#,
+            false,
+            None,
+            Path::new("."),
+            None,
+        );
+        assert!(matches!(decision, Decision::Run));
+        assert!(spawn_schema()["description"]
+            .as_str()
+            .unwrap()
+            .contains(" review: read-only check of the change."));
+    }
+
+    /// What a review run leaves: the lead's tool outputs, what the helper
+    /// was sent on its first call (its tools, then each message), and the
+    /// session's review record.
+    struct Reviewed {
+        outputs: String,
+        tools: Vec<String>,
+        sent: Vec<String>,
+        review: Option<crate::review::Review>,
+        head: String,
+        project: PathBuf,
+    }
+
+    /// A lead in a project with one commit and one new file starts a review
+    /// helper. `helper(n, project)` is the helper's nth answer.
+    fn run_review(
+        tag: &str,
+        helper: impl Fn(u32, &Path) -> TurnOutput + Send + Sync + 'static,
+    ) -> Reviewed {
+        use crate::work::test_support::{git, git_repo};
+        let base = crate::work::test_support::scratch(tag);
+        let _config = crate::perm::ConfigGuard::set(base.join("cfg"));
+        let project = base.join("my-app");
+        std::fs::create_dir_all(&project).unwrap();
+        git_repo(&project);
+        let head = git(&project, &["rev-parse", "HEAD"]).trim().to_string();
+        let sid = session(tag);
+        crate::review::note_base(&sid, &project);
+        crate::review::save_plan(&sid, "Add a total.", "");
+        std::fs::write(project.join("total.txt"), "41\n").unwrap();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&sent);
+        let parent_id = sid.clone();
+        let folder = project.clone();
+        let client = fake(&sid, move |req, _cancel, n| {
+            if req.conversation_id != parent_id {
+                if n == 0 {
+                    *seen.lock().unwrap() = req
+                        .input
+                        .iter()
+                        .map(|item| crate::compact::message_text(item).to_string())
+                        .collect();
+                }
+                return Ok(helper(n, &folder));
+            }
+            if n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        r#"{"prompt":"CHECK-THE-TOTAL","type":"review","persona":"be kind"}"#,
+                    )],
+                    Usage::default(),
+                ));
+            }
+            Ok(text_turn("done", Usage::default()))
+        });
+        let (_out, history) = run_parent(
+            &client,
+            &project,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let tools = client.child_tools.lock().unwrap()[0].clone();
+        let sent = sent.lock().unwrap().clone();
+        Reviewed {
+            outputs: joined_outputs(&history),
+            tools,
+            sent,
+            review: crate::review::review_for(&sid).unwrap(),
+            head,
+            project,
+        }
+    }
+
+    fn report(findings: Value) -> TurnOutput {
+        calls_turn(
+            vec![call(
+                "f",
+                "report_findings",
+                &json!({ "findings": findings }).to_string(),
+            )],
+            Usage::default(),
+        )
+    }
+
+    fn one_blocker() -> TurnOutput {
+        report(json!([
+            {"severity": "low", "text": "README:1 says hi"},
+            {"severity": "high", "text": "total.txt:1 the total is 41, the plan says 42"},
+        ]))
+    }
+
+    #[test]
+    fn a_review_helper_gets_the_plan_and_the_change_and_its_findings_are_recorded() {
+        let ran = run_review("review-ok", |n, _project| match n {
+            // It may not write or run a command.
+            0 => calls_turn(
+                vec![
+                    call("w", "write", r#"{"path":"sneak.txt","content":"no"}"#),
+                    call(
+                        "c",
+                        "run_terminal_command",
+                        r#"{"command":"git commit -am x"}"#,
+                    ),
+                ],
+                Usage::default(),
+            ),
+            1 => one_blocker(),
+            _ => text_turn("One thing must be fixed.", Usage::default()),
+        });
+        for banned in ["write", "search_replace", "run_terminal_command"] {
+            assert!(
+                !ran.tools.iter().any(|name| name == banned),
+                "{:?}",
+                ran.tools
+            );
+        }
+        for kept in ["read_file", "grep", "report_findings"] {
+            assert!(ran.tools.iter().any(|name| name == kept), "{:?}", ran.tools);
+        }
+        assert!(!ran.project.join("sneak.txt").exists());
+        assert!(ran.outputs.contains(READ_ONLY_PHASE), "{}", ran.outputs);
+        // The persona is the built-in one, and the task ends with the lead's words.
+        let all = ran.sent.join("\n---\n");
+        assert!(all.contains(crate::review::REVIEW_PERSONA), "{all}");
+        assert!(!all.contains("be kind"), "{all}");
+        let task = ran.sent.last().expect("the task");
+        assert!(
+            task.starts_with(
+                "Approved plan:\nAdd a total.\n\nCommits made since this session began: none\n\n\
+                 Changed files (1):\nA total.txt\n\n\
+                 The change as a diff from the commit this session began at:\n"
+            ),
+            "{task}"
+        );
+        assert!(task.contains("\n+41\n"), "{task}");
+        assert!(
+            task.ends_with("\n\nNote from the lead:\nCHECK-THE-TOTAL"),
+            "{task}"
+        );
+        // The lead gets the helper's words and its findings in one fence.
+        assert!(
+            ran.outputs.contains("\nOne thing must be fixed.\n"),
+            "{}",
+            ran.outputs
+        );
+        assert!(
+            ran.outputs.contains(
+                "\n\nFindings from this run\n\n\
+                 - High: total.txt:1 the total is 41, the plan says 42\n\
+                 - Low: README:1 says hi\n<<<END_UNTRUSTED"
+            ),
+            "{}",
+            ran.outputs
+        );
+        assert!(
+            !ran.outputs.contains("No review was recorded"),
+            "{}",
+            ran.outputs
+        );
+        let review = ran.review.expect("a review");
+        assert_eq!(review.head, ran.head);
+        assert_eq!(review.base, ran.head);
+        assert_eq!(review.commits, Vec::<String>::new());
+        assert_eq!(review.blockers, 1);
+        assert!(review.plan_given);
+        assert_eq!(
+            review.body,
+            "Findings from this run\n\n\
+             - High: total.txt:1 the total is 41, the plan says 42\n\
+             - Low: README:1 says hi"
+        );
+        assert_eq!(
+            review.tree,
+            crate::ship_tree::tree_id(&ran.project).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_second_findings_card_adds_to_the_first_and_the_lead_gets_them_all() {
+        // The helper reports twice and ends with a few words that name no
+        // finding.
+        let ran = run_review("review-twice", |n, _project| match n {
+            0 => one_blocker(),
+            1 => report(json!([{"severity": "info", "text": "README:1 the rest is fine"}])),
+            _ => text_turn("Reported.", Usage::default()),
+        });
+        let all = "Findings from this run\n\n\
+                   - High: total.txt:1 the total is 41, the plan says 42\n\
+                   - Low: README:1 says hi\n\
+                   - Info: README:1 the rest is fine";
+        let review = ran.review.expect("a review");
+        assert_eq!(review.blockers, 1);
+        assert_eq!(review.body, all);
+        assert!(
+            ran.outputs
+                .contains(&format!("\nReported.\n\n{all}\n<<<END_UNTRUSTED")),
+            "{}",
+            ran.outputs
+        );
+        assert!(
+            !ran.outputs.contains("No review was recorded"),
+            "{}",
+            ran.outputs
+        );
+    }
+
+    #[test]
+    fn a_review_waits_for_helper_work_that_is_not_merged_yet() {
+        use crate::work::test_support::git_repo;
+        let base = crate::work::test_support::scratch("review-open-work");
+        let _config = crate::perm::ConfigGuard::set(base.join("cfg"));
+        let project = base.join("my-app");
+        std::fs::create_dir_all(&project).unwrap();
+        git_repo(&project);
+        let sid = session("review-open-work");
+        crate::review::note_base(&sid, &project);
+        let parent_id = sid.clone();
+        let helpers = Arc::new(Mutex::new(Vec::new()));
+        let started = Arc::clone(&helpers);
+        let client = fake(&sid, move |req, _cancel, n| {
+            if req.conversation_id != parent_id {
+                // A worktree helper writes a file and ends; a review helper
+                // would report.
+                started.lock().unwrap().push(req.conversation_id.clone());
+                return Ok(match n {
+                    0 => calls_turn(
+                        vec![call(
+                            "w",
+                            "write",
+                            r#"{"path":"new.txt","content":"new\n"}"#,
+                        )],
+                        Usage::default(),
+                    ),
+                    _ => text_turn("wrote it", Usage::default()),
+                });
+            }
+            Ok(match n {
+                0 => calls_turn(
+                    vec![call(
+                        "a",
+                        "spawn_subagent",
+                        &spawn_args("write new.txt", "general", false, "worktree"),
+                    )],
+                    Usage::default(),
+                ),
+                1 => calls_turn(
+                    vec![call(
+                        "b",
+                        "spawn_subagent",
+                        r#"{"prompt":"check it","type":"review"}"#,
+                    )],
+                    Usage::default(),
+                ),
+                _ => text_turn("done", Usage::default()),
+            })
+        });
+        let (_out, history) = run_parent(
+            &client,
+            &project,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let outputs = joined_outputs(&history);
+        assert!(
+            outputs.contains(
+                "Helper work is waiting to be merged. Start the review once all helper work is \
+                 merged or discarded."
+            ),
+            "{outputs}"
+        );
+        // Only the worktree helper ran.
+        let mut ran = helpers.lock().unwrap().clone();
+        ran.dedup();
+        assert_eq!(ran, [format!("{sid}/s1")]);
+        assert_eq!(crate::review::review_for(&sid), Ok(None));
+    }
+
+    #[test]
+    fn a_review_helper_that_reports_nothing_leaves_no_record() {
+        let ran = run_review("review-silent", |_n, _project| {
+            text_turn("Looks fine to me.", Usage::default())
+        });
+        assert_eq!(ran.review, None);
+        assert!(
+            ran.outputs.contains(
+                "\nNo review was recorded: the helper reported no findings.\nstatus: done\n"
+            ),
+            "{}",
+            ran.outputs
+        );
+    }
+
+    #[test]
+    fn a_file_changed_while_the_review_ran_leaves_no_record() {
+        let ran = run_review("review-edit", |n, project| match n {
+            0 => {
+                std::fs::write(project.join("total.txt"), "42\n").unwrap();
+                one_blocker()
+            }
+            _ => text_turn("Reviewed.", Usage::default()),
+        });
+        assert_eq!(ran.review, None);
+        assert!(
+            ran.outputs.contains(
+                "\nNo review was recorded: files changed while the review ran.\nstatus: done\n"
+            ),
+            "{}",
+            ran.outputs
+        );
+    }
+
+    #[test]
+    fn a_commit_made_while_the_review_ran_leaves_no_record() {
+        let ran = run_review("review-commit", |n, project| match n {
+            0 => {
+                use crate::work::test_support::git;
+                git(project, &["add", "total.txt"]);
+                git(project, &["commit", "-m", "sneaked in"]);
+                one_blocker()
+            }
+            _ => text_turn("Reviewed.", Usage::default()),
+        });
+        assert_eq!(ran.review, None);
+        assert!(
+            ran.outputs.contains(
+                "\nNo review was recorded: the branch moved while the review ran.\nstatus: done\n"
+            ),
+            "{}",
+            ran.outputs
+        );
     }
 
     #[test]

@@ -394,6 +394,7 @@ fn the_run_box_keeps_typed_text_and_asks_again_after_an_edit() {
         exit: 3,
         output: "failed\n".into(),
         cut: true,
+        changed_files: false,
     })));
     assert_eq!(tab.run_note.as_deref(), Some("Tests exited with 3."));
     assert_eq!(tab.log, format!("failed\n{OUTPUT_CUT}"));
@@ -632,6 +633,7 @@ fn stop_ends_a_running_test_and_the_next_run_can_start() {
         exit: 2,
         output: String::new(),
         cut: false,
+        changed_files: false,
     })));
     assert_eq!(tab.run_note.as_deref(), Some("Tests exited with 2."));
     let _ = std::fs::remove_dir_all(&config);
@@ -651,6 +653,7 @@ fn a_run_that_passed_after_stop_was_pressed_still_says_passed() {
         exit: 0,
         output: String::new(),
         cut: false,
+        changed_files: false,
     })));
     assert_eq!(tab.run_note.as_deref(), Some("Tests passed."));
     assert!(!tab.stopping);

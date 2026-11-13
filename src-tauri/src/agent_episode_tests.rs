@@ -174,6 +174,7 @@ fn route(client: Arc<Model>, mode: PermMode) -> Route {
         voice: String::new(),
         voice_session: None,
         suggestions: false,
+        lead: false,
     }
 }
 

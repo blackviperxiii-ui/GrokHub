@@ -134,6 +134,7 @@ pub fn reserved(name: &str) -> bool {
             | "search_replace"
             | "run_terminal_command"
             | "kill_command_or_subagent"
+            | "merge_subagent_work"
             | "monitor"
             | "scheduler_create"
             | "scheduler_delete"
@@ -151,4 +152,16 @@ pub fn reserved(name: &str) -> bool {
             | "skill"
             | "use_tool"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_server_can_claim_the_merge_tool() {
+        assert!(reserved("merge_subagent_work"));
+        assert!(reserved("kill_command_or_subagent"));
+        assert!(!reserved("merge_work"));
+    }
 }

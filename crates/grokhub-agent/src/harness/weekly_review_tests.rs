@@ -68,6 +68,16 @@ fn a_night_the_cabin_already_started_is_not_claimed_again() {
     let fresh = dir("no-file");
     assert!(claim_week(&fresh, "2026-11-15", &clock(0, 5), 3));
     assert_eq!(last_day(&fresh).as_deref(), Some("2026-11-15"));
+    assert!(!fresh
+        .join(format!("{SELF_REVIEW_FILE}.{}.tmp", std::process::id()))
+        .exists());
+    // Releasing tonight's claim lets a later tick claim it again, without
+    // touching a claim from another day.
+    unclaim_week(&fresh, "2026-11-08");
+    assert_eq!(last_day(&fresh).as_deref(), Some("2026-11-15"));
+    unclaim_week(&fresh, "2026-11-15");
+    assert_eq!(last_day(&fresh), None);
+    assert!(claim_week(&fresh, "2026-11-15", &clock(0, 6), 3));
     let _ = std::fs::remove_dir_all(&d);
     let _ = std::fs::remove_dir_all(&fresh);
 }

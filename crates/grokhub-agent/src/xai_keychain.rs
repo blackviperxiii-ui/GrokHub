@@ -155,9 +155,18 @@ pub struct SignIn {
     pending: Mutex<Option<Pending>>,
 }
 
-struct Endpoints {
+impl SignIn {
+    /// No sign-in in progress; usable in a `static`.
+    pub const fn new() -> Self {
+        Self {
+            pending: Mutex::new(None),
+        }
+    }
+}
+
+pub(crate) struct Endpoints {
     device: String,
-    token: String,
+    pub(crate) token: String,
     userinfo: String,
 }
 
@@ -236,7 +245,7 @@ fn get_json(url: &str, bearer: Option<&str>) -> Result<Value, CallError> {
 /// POSTs a form. `false` with the error body when xAI answers with an error.
 /// A server error (5xx), or "too many requests" with no error of xAI's own,
 /// says nothing about the request, so it is [`CallError::NoAnswer`].
-fn post_form(url: &str, pairs: &[(&str, &str)]) -> Result<(bool, Value), CallError> {
+pub(crate) fn post_form(url: &str, pairs: &[(&str, &str)]) -> Result<(bool, Value), CallError> {
     guard(url)?;
     let body = pairs
         .iter()
@@ -290,7 +299,7 @@ fn error_text(v: &Value, fallback: &str) -> String {
 }
 
 /// xAI's endpoints from discovery, each checked to be on xAI's auth host.
-fn endpoints() -> Result<Endpoints, CallError> {
+pub(crate) fn endpoints() -> Result<Endpoints, CallError> {
     if let Some(base) = test_base() {
         return Ok(Endpoints {
             device: format!("{base}/device"),
@@ -334,14 +343,16 @@ pub fn signed_in(store: &dyn Store) -> Option<SignedIn> {
 impl SignIn {
     /// Asks xAI for a device code. The page and code go to the UI.
     pub fn start(&self) -> Result<Started, String> {
+        self.start_with(&[("scope", XAI_OAUTH_SCOPE)])
+    }
+
+    /// [`start`](Self::start) asking for `extra` (the scope, and anything
+    /// else xAI's device page takes) after the client id.
+    pub(crate) fn start_with(&self, extra: &[(&str, &str)]) -> Result<Started, String> {
         let ends = endpoints()?;
-        let (ok, v) = post_form(
-            &ends.device,
-            &[
-                ("client_id", XAI_OAUTH_CLIENT_ID),
-                ("scope", XAI_OAUTH_SCOPE),
-            ],
-        )?;
+        let mut pairs = vec![("client_id", XAI_OAUTH_CLIENT_ID)];
+        pairs.extend_from_slice(extra);
+        let (ok, v) = post_form(&ends.device, &pairs)?;
         if !ok {
             return Err(error_text(&v, "xAI didn't start the sign-in."));
         }
@@ -371,7 +382,15 @@ impl SignIn {
     /// Asks once whether the code was approved. On approval the tokens go to
     /// `store`, with the name and email when xAI gives them.
     pub fn poll(&self, store: &dyn Store) -> Result<Poll, String> {
-        match self.ask(store) {
+        self.poll_with(&|tokens| save(store, tokens))
+    }
+
+    /// [`poll`](Self::poll) handing the approved tokens to `keep`.
+    pub(crate) fn poll_with(
+        &self,
+        keep: &dyn Fn(&XaiOAuthTokens) -> Result<(), String>,
+    ) -> Result<Poll, String> {
+        match self.ask_with(keep) {
             Err(CallError::NoAnswer(error)) => Ok(Poll::NoAnswer { error }),
             other => Ok(other?),
         }
@@ -381,6 +400,13 @@ impl SignIn {
     /// error says whether the call got no answer (the code is still good) or
     /// failed some other way.
     pub fn ask(&self, store: &dyn Store) -> Result<Poll, CallError> {
+        self.ask_with(&|tokens| save(store, tokens))
+    }
+
+    fn ask_with(
+        &self,
+        keep: &dyn Fn(&XaiOAuthTokens) -> Result<(), String>,
+    ) -> Result<Poll, CallError> {
         let (device_code, interval) = {
             let held = self.pending.lock().unwrap_or_else(|e| e.into_inner());
             let p = held.as_ref().ok_or_else(|| NOT_STARTED.to_string())?;
@@ -432,7 +458,7 @@ impl SignIn {
                 if tokens.connected_at == 0 {
                     tokens.connected_at = grokhub_core::now_ms();
                 }
-                save(store, &tokens)?;
+                keep(&tokens)?;
                 self.cancel();
                 Ok(Poll::Ready {
                     signed_in: SignedIn {

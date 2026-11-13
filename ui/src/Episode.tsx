@@ -38,6 +38,7 @@ export const CLASS_WORDS: Record<string, string> = {
   system_admin: "Admin rights or system protection",
   agent_config: "Agent instructions and settings",
   automation: "New automation",
+  merge_work: "Merge helper work",
   outside_value: "Value from outside text",
   runs_later: "File that runs code later",
   flagged_driver: "Driver anti-cheats block",

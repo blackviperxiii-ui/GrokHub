@@ -328,6 +328,7 @@ fn a_finished_run_replaces_the_streamed_log_and_marks_a_cut() {
         exit: 2,
         output: "full output".into(),
         cut: true,
+        changed_files: false,
     })));
     assert!(!panel.busy);
     assert!(
@@ -474,6 +475,7 @@ fn a_running_deploy_keeps_its_panel_until_it_ends() {
         exit: 0,
         output: "step 1\nstep 2\n".into(),
         cut: false,
+        changed_files: false,
     })));
     assert!(panel.follow(b));
     assert_eq!(panel.note, None);
@@ -534,6 +536,7 @@ fn stop_ends_a_running_deploy_and_says_so() {
         exit: 2,
         output: String::new(),
         cut: false,
+        changed_files: false,
     })));
     assert_eq!(panel.note.as_deref(), Some("Deploy exited with 2."));
 }
