@@ -61,10 +61,13 @@ function ranOut(deadline: number): boolean {
  * a change; `flow` swaps in another sign-in (Imagine's own). */
 export function GrokSignIn({
   signedIn,
+  planNote,
   onChange,
   flow,
 }: {
   signedIn: SignedIn | null | undefined;
+  /** The SuperGrok pool's room or the plan gate's refusal, under the account. */
+  planNote?: string | null;
   onChange?: (settings: Settings) => void;
   flow?: SignInFlow;
 }) {
@@ -214,6 +217,7 @@ export function GrokSignIn({
       {signedIn ? (
         <>
           <p>Signed in as {signedInAs(signedIn)}.</p>
+          {planNote ? <p className="home-muted">{planNote}</p> : null}
           <button type="button" className="quiet" onClick={() => void signOut()}>
             Sign out
           </button>

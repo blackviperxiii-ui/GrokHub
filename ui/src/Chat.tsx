@@ -90,6 +90,8 @@ import { ScreenshotOffer } from "./ScreenshotOffer";
 import { openImport } from "./onboardApi";
 import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
+import { modelResume, onModelBack, type ModelResume } from "./modelWait";
+import { BudgetCard } from "./BudgetCard";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -1028,12 +1030,14 @@ export function Chat({
   /** Sends `text` and `files`. `as` (`/plan <text>`, a plan's follow-up chip)
    * names how it runs; otherwise `/plan` or `/chat` before it did, or the app
    * reads the message. `fromDraft` empties the box and its files; a tapped
-   * chip leaves them. */
+   * chip leaves them. `again` sends a paused ask once more: it is already
+   * on screen, so it adds no line. */
   async function deliver(
     text: string,
     files: typeof attach.files,
     fromDraft: boolean,
     as?: SessionMode,
+    again = false,
   ) {
     if ((!text && files.length === 0) || busy) return;
     touched.current = true;
@@ -1044,7 +1048,7 @@ export function Chat({
       return;
     }
     const said = [text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
-    setItems((now) => [...now, { kind: "user", text: said }]);
+    if (!again) setItems((now) => [...now, { kind: "user", text: said }]);
     if (fromDraft) {
       setDraft("");
       attach.clear();
@@ -1085,6 +1089,38 @@ export function Chat({
       setDraft((now) => withQueued(now, waiting));
     }
   }
+
+  // No model in your plan answered: once one is back, this chat's paused
+  // ask goes again by itself, once, with a quiet note naming who answers.
+  const [modelBack, setModelBack] = useState(0);
+  const resumeAsk = useEffectEvent((back: ModelResume) => {
+    void deliver(back.ask, [], false, undefined, true);
+    setAck(back.note);
+  });
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onModelBack(() => setModelBack((n) => n + 1)).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, []);
+  useEffect(() => {
+    if (busy) return;
+    let dropped = false;
+    modelResume(conversationId)
+      .then((back) => {
+        if (!dropped && back) resumeAsk(back);
+      })
+      .catch(() => {});
+    return () => {
+      dropped = true;
+    };
+  }, [modelBack, conversationId, busy]);
 
   // Voice mode: what it hears goes as a message, or waits behind a running
   // reply; what it has to say shows where errors do.
@@ -1798,6 +1834,7 @@ export function Chat({
       {goalAsk && !busy ? (
         <GoalAsk key={goalAsk.id} id={goalAsk.id} title={goalAsk.title} onDone={() => setGoalAsk(null)} />
       ) : null}
+      {!remote && <BudgetCard busy={busy} onOpenSettings={onOpenSettings} />}
       <ChipRow chips={row.chips} busy={busy} keys={active} onTap={tapChip} onHide={row.hide} />
     </section>
   );

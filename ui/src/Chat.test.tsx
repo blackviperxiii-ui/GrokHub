@@ -82,6 +82,21 @@ const api = vi.hoisted(() => ({
   chatTabRestoreDeleted: vi.fn(),
 }));
 
+// The router's no-route wait: the test says when a model is back.
+const wait = vi.hoisted(() => ({
+  back: null as (() => void) | null,
+  modelResume: vi.fn<(id: string) => Promise<{ conversationId: string; ask: string; note: string } | null>>(
+    () => Promise.resolve(null),
+  ),
+}));
+vi.mock("./modelWait", () => ({
+  modelResume: wait.modelResume,
+  onModelBack: (handler: () => void) => {
+    wait.back = handler;
+    return Promise.resolve(() => {});
+  },
+}));
+
 // A chat line that asks for a setting is answered by auto setup.
 const auto = vi.hoisted(() => ({
   settingAsk: vi.fn<(text: string) => Promise<string | null>>(() => Promise.resolve(null)),
@@ -317,6 +332,30 @@ describe("Chat", () => {
     act(() => api.gap?.());
     expect(screen.getByText(EVENTS_LOST)).toBeVisible();
     finish();
+  });
+
+  it("a turn no model answered goes again once by itself when one is back, with the note", async () => {
+    const paused = "protocol error: No model in your plan is answering right now.";
+    api.sendChat.mockRejectedValueOnce(paused).mockResolvedValueOnce("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("Summarize inbox");
+    expect(await screen.findByText(paused)).toBeVisible();
+
+    wait.modelResume.mockImplementation((asked) =>
+      Promise.resolve(
+        asked === id
+          ? { conversationId: id, ask: "Summarize inbox", note: "xAI is answering again; resumed: Summarize inbox" }
+          : null,
+      ),
+    );
+    act(() => wait.back?.());
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1].slice(0, 2)).toEqual([id, "Summarize inbox"]);
+    expect(await screen.findByText("xAI is answering again; resumed: Summarize inbox")).toBeVisible();
+    // The ask is on screen once: going again adds no second line.
+    expect(screen.getAllByText("Summarize inbox")).toHaveLength(1);
+    expect(screen.queryByText(paused)).toBeNull();
+    wait.modelResume.mockReset().mockResolvedValue(null);
   });
 
   it("puts a prefill in the box without sending it, and a new one replaces it", async () => {

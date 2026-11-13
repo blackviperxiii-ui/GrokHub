@@ -381,7 +381,7 @@ export function Settings({
   function account() {
     return (
       <>
-        {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} onChange={show} />}
+        {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} planNote={loaded.planNote} onChange={show} />}
         <div className="key">
           <h2>{caps.grokSignIn ? "Or use an xAI API key" : "xAI API key"}</h2>
           <p>{loaded.hasApiKey ? "A key is saved." : "No key saved yet."}</p>
