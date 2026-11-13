@@ -1,4 +1,14 @@
-import { Activity, lazy, Suspense, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import {
+  Activity,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   codeBuiltins,
   codeDiff,
@@ -26,6 +36,32 @@ import { CodeShip } from "./CodeShip";
 import { CodeRevert } from "./CodeRevert";
 import { inShell } from "./transport";
 import { useCardFocus } from "./ui";
+
+/** Right-column panes (former under-stack panels). */
+export type CodeSideTab = "editor" | "tests" | "skills";
+
+export const CODE_SIDE_TABS: { id: CodeSideTab; label: string }[] = [
+  { id: "editor", label: "Editor" },
+  { id: "tests", label: "Tests" },
+  { id: "skills", label: "Skills" },
+];
+
+/** Remembered agent column width (% of the Code tab). Default ~62%. */
+export const CODE_AGENT_WIDTH_KEY = "code.agentWidthPct";
+export const CODE_AGENT_WIDTH_DEFAULT = 62;
+export const CODE_AGENT_WIDTH_MIN = 48;
+export const CODE_AGENT_WIDTH_MAX = 72;
+
+export function readAgentWidthPct(): number {
+  try {
+    const raw = localStorage.getItem(CODE_AGENT_WIDTH_KEY);
+    const n = raw == null ? NaN : Number(raw);
+    if (!Number.isFinite(n)) return CODE_AGENT_WIDTH_DEFAULT;
+    return Math.min(CODE_AGENT_WIDTH_MAX, Math.max(CODE_AGENT_WIDTH_MIN, n));
+  } catch {
+    return CODE_AGENT_WIDTH_DEFAULT;
+  }
+}
 
 // CodeMirror and xterm load only when the tab first shows them.
 const CodeEditor = lazy(() => import("./CodeEditor"));
@@ -112,6 +148,10 @@ export function Code({
   const sessionNow = useRef<string>(undefined);
   const busyNow = useRef(false);
   const appFolder = useRef<string>(undefined);
+  const [sideTab, setSideTab] = useState<CodeSideTab>("editor");
+  const [agentPct, setAgentPct] = useState(readAgentWidthPct);
+  const tabRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ startX: number; startPct: number } | null>(null);
 
   /** A new session, with `text` waiting in its box. It has its folder
    * before the agent window shows it. */
@@ -213,22 +253,49 @@ export function Code({
     [startSession],
   );
 
+  function onSplitDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    drag.current = { startX: event.clientX, startPct: agentPct };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function onSplitMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const start = drag.current;
+    const root = tabRef.current;
+    if (!start || !root) return;
+    const width = root.getBoundingClientRect().width;
+    if (width < 1) return;
+    const deltaPct = ((event.clientX - start.startX) / width) * 100;
+    const next = Math.min(CODE_AGENT_WIDTH_MAX, Math.max(CODE_AGENT_WIDTH_MIN, start.startPct + deltaPct));
+    setAgentPct(next);
+  }
+
+  function onSplitUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!drag.current) return;
+    drag.current = null;
+    try {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    } catch {
+      /* already released */
+    }
+    setAgentPct((pct) => {
+      try {
+        localStorage.setItem(CODE_AGENT_WIDTH_KEY, String(Math.round(pct * 10) / 10));
+      } catch {
+        /* private mode */
+      }
+      return pct;
+    });
+  }
+
   return (
-    <div className="code-tab" hidden={!shown}>
-      <Activity mode={shown ? "visible" : "hidden"}>
-        <section className="code" aria-label="Code">
-          <CodeProjects
-            onSwitched={() => setSwitches((n) => n + 1)}
-            onNewSession={() => startSession("")}
-            onOpenSession={openSession}
-            onFolder={onFolder}
-            agentBusy={busy}
-            openSession={session}
-            refresh={ended}
-          />
-          <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} shipped={shipped} />
-        </section>
-      </Activity>
+    <div
+      ref={tabRef}
+      className="code-tab"
+      hidden={!shown}
+      style={{ ["--code-agent-pct" as string]: `${agentPct}%` }}
+    >
       {/* Outside <Activity>, like Chat: hidden there, its listeners would
           stop and a reply landing on another tab would be lost. */}
       <aside className="code-agent" aria-label="Agent window">
@@ -274,6 +341,71 @@ export function Code({
           onShipped={() => setShipped((n) => n + 1)}
         />
       </aside>
+      <div
+        className="code-split-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize agent and editor"
+        aria-valuenow={Math.round(agentPct)}
+        aria-valuemin={CODE_AGENT_WIDTH_MIN}
+        aria-valuemax={CODE_AGENT_WIDTH_MAX}
+        tabIndex={0}
+        onPointerDown={onSplitDown}
+        onPointerMove={onSplitMove}
+        onPointerUp={onSplitUp}
+        onPointerCancel={onSplitUp}
+        onKeyDown={(e) => {
+          if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+          e.preventDefault();
+          const step = e.key === "ArrowLeft" ? -2 : 2;
+          setAgentPct((pct) => {
+            const next = Math.min(CODE_AGENT_WIDTH_MAX, Math.max(CODE_AGENT_WIDTH_MIN, pct + step));
+            try {
+              localStorage.setItem(CODE_AGENT_WIDTH_KEY, String(next));
+            } catch {
+              /* private mode */
+            }
+            return next;
+          });
+        }}
+      />
+      <Activity mode={shown ? "visible" : "hidden"}>
+        <section className="code code-side" aria-label="Code">
+          <CodeProjects
+            onSwitched={() => setSwitches((n) => n + 1)}
+            onNewSession={() => startSession("")}
+            onOpenSession={openSession}
+            onFolder={onFolder}
+            agentBusy={busy}
+            openSession={session}
+            refresh={ended}
+          />
+          <div className="code-side-tabs" role="tablist" aria-label="Code panels">
+            {CODE_SIDE_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                id={`code-side-tab-${tab.id}`}
+                aria-selected={sideTab === tab.id}
+                aria-controls={`code-side-panel-${tab.id}`}
+                tabIndex={sideTab === tab.id ? 0 : -1}
+                onClick={() => setSideTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div
+            className="code-side-panel"
+            role="tabpanel"
+            id={`code-side-panel-${sideTab}`}
+            aria-labelledby={`code-side-tab-${sideTab}`}
+          >
+            <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} shipped={shipped} tab={sideTab} />
+          </div>
+        </section>
+      </Activity>
     </div>
   );
 }
@@ -284,10 +416,12 @@ function CodeWorkspace({
   agentBusy,
   onAsk,
   shipped = 0,
+  tab,
 }: {
   agentBusy: boolean;
   onAsk: (prompt: string) => void;
   shipped?: number;
+  tab: CodeSideTab;
 }) {
   const [repo, setRepo] = useState<CodeRepo | null>(null);
   const [diff, setDiff] = useState<CodeDiff | null>(null);
@@ -486,74 +620,8 @@ function CodeWorkspace({
   }
 
   const sync = repo && (repo.ahead || repo.behind) ? ` · ${repo.ahead} ahead, ${repo.behind} behind` : "";
-  return (
-    <>
-      <header className="code-head">
-        <div>
-          {repo?.isRepo && (
-            <div className="note">
-              {repo.branch ? `On ${repo.branch}` : "Detached HEAD"}
-              {repo.upstream ? ` → ${repo.upstream}` : ""}
-              {sync}
-            </div>
-          )}
-        </div>
-        <div className="card-buttons">
-          <button type="button" onClick={() => void load()} disabled={busy}>
-            {busy ? "Refreshing…" : "Refresh"}
-          </button>
-          {repo?.isRepo && repo.files.length > 0 && (
-            <button type="button" disabled={agentBusy} onClick={() => onAsk(CODE_REVIEW_PROMPT)}>
-              Ask the agent to review
-            </button>
-          )}
-        </div>
-      </header>
-      {note && (
-        <p className="note" role="status">
-          {note}
-        </p>
-      )}
-      {repo === null && !note && <p className="empty">Loading the workspace…</p>}
-      {repo && !repo.isRepo && <p className="empty">{CODE_NOT_REPO}</p>}
-      {repo?.isRepo && repo.files.length === 0 && (
-        <p className={builtins && builtins.length > 0 ? "note" : "empty"}>{CODE_CLEAN}</p>
-      )}
-      {repo?.isRepo && repo.files.length > 0 && (
-        <div className="code-split">
-          <ul className="rows code-changed" aria-label="Changed files">
-            {repo.files.map((f) => (
-              <li key={f.path}>
-                <button
-                  type="button"
-                  className={`code-file quiet ${f.status}`}
-                  aria-pressed={diff?.path === f.path}
-                  onClick={() => void open(f.path)}
-                >
-                  <span className="code-status">{f.status}</span> {f.path}
-                  {f.staged && <span className="note"> (staged)</span>}
-                </button>
-              </li>
-            ))}
-            {repo.more && <li className="note">More files changed than this list shows.</li>}
-          </ul>
-          {diff && (
-            <pre className="code-diff" tabIndex={0} role="region" aria-label={`Diff of ${diff.path}`}>
-              {diff.text || "No text changes (binary or mode change)."}
-              {diff.cut && "\n… cut here; the file's diff is too long to show in full."}
-            </pre>
-          )}
-        </div>
-      )}
-      {repo !== null &&
-        (inShell() ? (
-          <Suspense fallback={<p className="note">Loading the editor and terminal…</p>}>
-            <CodeEditor refresh={refreshes} />
-            <CodeTerminal />
-          </Suspense>
-        ) : (
-          <p className="note">{CODE_DESKTOP_ONLY}</p>
-        ))}
+  if (tab === "tests") {
+    return (
       <div className="code-tests">
         <h3>{CODE_TESTS}</h3>
         <div className="code-test-row">
@@ -612,6 +680,108 @@ function CodeWorkspace({
           <p className="note">The first run of this command will ask before it starts.</p>
         )}
       </div>
+    );
+  }
+
+  if (tab === "skills") {
+    if (!builtins) return <p className="empty">Loading skills…</p>;
+    if (builtins.length === 0) return <p className="empty">No built-in skills in this project.</p>;
+    return (
+      <div className="code-skills">
+        <h3>{CODE_BUILTINS}</h3>
+        <div className={openSkill ? "code-split" : undefined}>
+          <ul className="rows" aria-label={CODE_BUILTINS}>
+            {builtins.map((skill) => (
+              <li key={skill.name}>
+                <button
+                  type="button"
+                  className="code-skill quiet"
+                  aria-pressed={openSkill?.name === skill.name}
+                  onClick={() => setOpenSkill(skill)}
+                >
+                  <span className="card-title">{skill.name}</span>
+                  {skill.description && <span className="note">{skill.description}</span>}
+                  {skill.overriddenBy && <span className="note">{overrideLabel(skill.overriddenBy)}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {openSkill && (
+            <pre className="code-diff" tabIndex={0} role="region" aria-label={`Built-in skill ${openSkill.name}`}>
+              {openSkill.body}
+            </pre>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <header className="code-head">
+        <div>
+          {repo?.isRepo && (
+            <div className="note">
+              {repo.branch ? `On ${repo.branch}` : "Detached HEAD"}
+              {repo.upstream ? ` → ${repo.upstream}` : ""}
+              {sync}
+            </div>
+          )}
+        </div>
+        <div className="card-buttons">
+          <button type="button" onClick={() => void load()} disabled={busy}>
+            {busy ? "Refreshing…" : "Refresh"}
+          </button>
+          {repo?.isRepo && repo.files.length > 0 && (
+            <button type="button" disabled={agentBusy} onClick={() => onAsk(CODE_REVIEW_PROMPT)}>
+              Ask the agent to review
+            </button>
+          )}
+        </div>
+      </header>
+      {note && (
+        <p className="note" role="status">
+          {note}
+        </p>
+      )}
+      {repo === null && !note && <p className="empty">Loading the workspace…</p>}
+      {repo && !repo.isRepo && <p className="empty">{CODE_NOT_REPO}</p>}
+      {repo?.isRepo && repo.files.length === 0 && <p className="empty">{CODE_CLEAN}</p>}
+      {repo?.isRepo && repo.files.length > 0 && (
+        <div className="code-split">
+          <ul className="rows code-changed" aria-label="Changed files">
+            {repo.files.map((f) => (
+              <li key={f.path}>
+                <button
+                  type="button"
+                  className={`code-file quiet ${f.status}`}
+                  aria-pressed={diff?.path === f.path}
+                  onClick={() => void open(f.path)}
+                >
+                  <span className="code-status">{f.status}</span> {f.path}
+                  {f.staged && <span className="note"> (staged)</span>}
+                </button>
+              </li>
+            ))}
+            {repo.more && <li className="note">More files changed than this list shows.</li>}
+          </ul>
+          {diff && (
+            <pre className="code-diff" tabIndex={0} role="region" aria-label={`Diff of ${diff.path}`}>
+              {diff.text || "No text changes (binary or mode change)."}
+              {diff.cut && "\n… cut here; the file's diff is too long to show in full."}
+            </pre>
+          )}
+        </div>
+      )}
+      {repo !== null &&
+        (inShell() ? (
+          <Suspense fallback={<p className="note">Loading the editor and terminal…</p>}>
+            <CodeEditor refresh={refreshes} />
+            <CodeTerminal />
+          </Suspense>
+        ) : (
+          <p className="note">{CODE_DESKTOP_ONLY}</p>
+        ))}
       {repo?.isRepo && <CodeShip refreshKey={activityKey} onShipped={() => void load()} />}
       {repo?.isRepo && (
         <CodeRevert
@@ -623,36 +793,6 @@ function CodeWorkspace({
         />
       )}
       {repo?.isRepo && <CodeDeploy onDeployed={() => setActivityKey((n) => n + 1)} />}
-      {builtins && builtins.length > 0 && (
-        <div className="code-skills">
-          <h3>{CODE_BUILTINS}</h3>
-          <div className={openSkill ? "code-split" : undefined}>
-            <ul className="rows" aria-label={CODE_BUILTINS}>
-              {builtins.map((skill) => (
-                <li key={skill.name}>
-                  <button
-                    type="button"
-                    className="code-skill quiet"
-                    aria-pressed={openSkill?.name === skill.name}
-                    onClick={() => setOpenSkill(skill)}
-                  >
-                    <span className="card-title">{skill.name}</span>
-                    {skill.description && <span className="note">{skill.description}</span>}
-                    {skill.overriddenBy && (
-                      <span className="note">{overrideLabel(skill.overriddenBy)}</span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-            {openSkill && (
-              <pre className="code-diff" tabIndex={0} role="region" aria-label={`Built-in skill ${openSkill.name}`}>
-                {openSkill.body}
-              </pre>
-            )}
-          </div>
-        </div>
-      )}
     </>
   );
 }

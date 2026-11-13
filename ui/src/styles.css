@@ -6233,25 +6233,20 @@ fieldset.channel label {
   margin-top: var(--space-4);
 }
 
-/* Code tab: the project and its workspace on the left, the agent window and
-   its tasks down the right. Each side scrolls by itself. */
+/* Code tab: agent LEFT (wide), editor/side tabs RIGHT (narrow), drag handle. */
 .code-tab {
-  gap: var(--space-8);
-}
-
-.code-tab > .code {
-  min-width: 0;
+  gap: 0;
+  align-items: stretch;
 }
 
 .code-agent {
-  flex: 0 0 clamp(340px, 46%, 560px);
-  min-width: 0;
+  flex: 1 1 var(--code-agent-pct, 62%);
+  min-width: 420px;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-8);
-  padding-left: var(--space-8);
-  border-left: 1px solid var(--border);
+  padding-right: var(--space-8);
 }
 
 .code-agent > .code-head {
@@ -6262,8 +6257,61 @@ fieldset.channel label {
   margin: 0;
 }
 
-/* In the narrow column the message box takes a row of its own, with the
-   buttons under it. */
+.code-split-handle {
+  flex: 0 0 6px;
+  margin: 0 2px;
+  border-radius: 999px;
+  background: var(--red-dim);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.code-split-handle:hover,
+.code-split-handle:focus-visible {
+  background: var(--red);
+  outline: none;
+}
+
+.code-tab > .code-side {
+  flex: 1 1 calc(100% - var(--code-agent-pct, 62%));
+  min-width: 300px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding-left: var(--space-8);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.code-side-tabs {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.code-side-tabs [role="tab"] {
+  min-height: 32px;
+  padding: 4px 12px;
+}
+
+.code-side-tabs [role="tab"][aria-selected="true"] {
+  border-color: var(--red);
+  background: var(--red);
+  color: #ffffff;
+}
+
+.code-side-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Wide agent column: composer stays one row when there is room. */
 .chat.embedded .composer {
   flex-wrap: wrap;
 }
@@ -6293,21 +6341,28 @@ fieldset.channel label {
   margin: 0;
 }
 
-/* A narrow window stacks them: the agent window under the workspace. */
+/* A narrow window stacks them: agent on top, side column under. */
 @media (max-width: 899px) {
   .app > .code-tab:not([hidden]) {
     flex-direction: column;
     overflow-y: auto;
   }
 
-  .code-tab > .code {
-    flex: 0 0 auto;
-    overflow-y: visible;
-  }
-
   .code-agent {
     flex: 0 0 auto;
-    min-height: 70vh;
+    min-width: 0;
+    min-height: 55vh;
+    padding-right: 0;
+  }
+
+  .code-split-handle {
+    display: none;
+  }
+
+  .code-tab > .code-side {
+    flex: 0 0 auto;
+    min-width: 0;
+    overflow-y: visible;
     padding-left: 0;
     border-left: none;
     border-top: 1px solid var(--border);
