@@ -22,9 +22,7 @@ fn a_known_app_puts_one_chip_and_one_context_line() {
     assert_eq!(chip.id, "focus:coding:cursor");
     assert_eq!(
         help.take_context(true).as_deref(),
-        Some(
-            "[Context: the user was just in Cursor (coding). Use it only if it fits the ask.]"
-        )
+        Some("[Context: the user was just in Cursor (coding). Use it only if it fits the ask.]")
     );
     assert_eq!(help.take_context(true), None, "once per return");
 }
@@ -44,8 +42,10 @@ fn an_unknown_app_or_turning_it_off_clears_the_hint() {
 
 #[test]
 fn blur_while_on_schedules_a_read_slot() {
-    let mut help = FocusHelp::default();
-    help.was_focused = true;
+    let mut help = FocusHelp {
+        was_focused: true,
+        ..Default::default()
+    };
     help.tick(false, true);
     // The spawn sleeps READ_DELAY; give it a moment then confirm the slot
     // can be written (process name may be None on this CI host).

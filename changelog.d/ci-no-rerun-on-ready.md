@@ -1,0 +1,1 @@
+- CI: marking a pull request ready no longer reruns the whole gate; the draft's green run stands. Two MCP stdio tests no longer fail in a single-threaded `cargo test` after a test that removed its workspace.

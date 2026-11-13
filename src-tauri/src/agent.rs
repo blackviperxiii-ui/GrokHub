@@ -984,14 +984,14 @@ impl Drop for Session {
 
 /// The real desktop tools behind the hard gate, with the shell as their host.
 #[cfg(desktop)]
-fn native_desktop() -> Box<dyn DesktopOps> {
+pub(crate) fn native_desktop() -> Box<dyn DesktopOps> {
     Box::new(grokhub_desktop::NativeDesktop::new())
 }
 
 /// Phones have no desktop tools; the capability report keeps them unoffered,
 /// and a call that slips through is refused.
 #[cfg(mobile)]
-fn native_desktop() -> Box<dyn DesktopOps> {
+pub(crate) fn native_desktop() -> Box<dyn DesktopOps> {
     struct NoDesktop;
     impl DesktopOps for NoDesktop {
         fn halted(&self) -> bool {

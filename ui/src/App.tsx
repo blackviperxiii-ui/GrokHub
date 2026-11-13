@@ -30,6 +30,7 @@ import {
 import { ActivityDock } from "./ActivityDock";
 import { Automations, resultLine, type RunNotice } from "./Automations";
 import { NoticeBell } from "./NoticeBell";
+import { onAutoResumeStopped } from "./autoResume";
 import {
   chatFrom,
   clearNotices,
@@ -421,6 +422,20 @@ export function App() {
     const timer = window.setInterval(share, CLOCK_SHARE_MS);
     return () => window.clearInterval(timer);
   }, []);
+  // An auto-resume stopped for the day: the card waits in Blocked, and the
+  // bell says so.
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onAutoResumeStopped(({ text }) => notify("info", text, undefined, "Workboard")).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, [notify]);
   // A scheduled run ended: the bell keeps the result and the Activity Dock
   // shows it for a while.
   useEffect(() => {
@@ -747,7 +762,8 @@ export function App() {
             onCards={setCardChats}
             onSwept={noteSweep}
             onResume={({ prompt, conversationId }) => {
-              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
+              // The resume block goes once, as the resume turn's input.
+              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true, conversationId }));
               setView("chat");
             }}
           />

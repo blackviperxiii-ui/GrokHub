@@ -7,8 +7,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use grokhub_agent::PermMode;
-use grokhub_agent::{AuthKind, CancelToken, ModelClient, UnattendedDone, UnattendedRun};
+use grokhub_agent::{CancelToken, ModelClient, UnattendedDone};
 use grokhub_core::{bg_task_prompt, bg_task_title, BgEnd, BG_TASK_MAX};
 
 #[derive(Clone)]
@@ -32,7 +31,7 @@ fn runs() -> std::sync::MutexGuard<'static, Vec<Run>> {
     RUNS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// One unattended prompt, read-only, in Ask mode.
+/// One unattended prompt, read-only, in Ask mode, with its job's tool set.
 pub fn ask_once(
     client: Arc<dyn ModelClient + Send + Sync>,
     model: &str,
@@ -41,24 +40,15 @@ pub fn ask_once(
     prompt: String,
     cancel: CancelToken,
 ) -> UnattendedDone {
-    let system = crate::agent::system_prompt(&workspace, false, "");
-    grokhub_agent::run_unattended(UnattendedRun {
+    crate::unattended::run(crate::unattended::Job {
         client,
-        workspace,
         model: model.to_string(),
-        effort: None,
-        system,
+        workspace,
         session_id,
-        auth_kind: AuthKind::ApiKey,
         prompt,
-        image: None,
-        mode: PermMode::Ask,
-        readonly_session: true,
-        desktop: false,
+        tools_from: None,
+        gate: crate::unattended::RunGate::BACKGROUND,
         cancel,
-        halt: Box::new(crate::agent::NeverHalted),
-        desktop_ops: None,
-        imagine_bearer: String::new(),
         resume: false,
     })
 }
@@ -91,7 +81,8 @@ pub fn start(
             .iter()
             .filter(|r| matches!(r.phase, Phase::Running))
             .count();
-        if live >= BG_TASK_MAX {
+        // Resumed run cards take the same room.
+        if live + crate::run_resume::live_count() >= BG_TASK_MAX {
             return Err(format!(
                 "{BG_TASK_MAX} background tasks are already running. Stop one first."
             ));
@@ -139,11 +130,13 @@ fn finish(id: u64, end: BgEnd, reply: &str) {
 /// Bare `/bg`: what is running and what ended.
 pub fn status() -> String {
     let all = runs();
-    if all.is_empty() {
+    let resumed = crate::run_resume::status_lines();
+    if all.is_empty() && resumed.is_empty() {
         return "No background tasks. /bg <task> starts one.".into();
     }
-    all.iter()
-        .map(|r| match &r.phase {
+    resumed
+        .into_iter()
+        .chain(all.iter().map(|r| match &r.phase {
             Phase::Running => format!("Running · {}", r.title),
             Phase::Ended(end, body) => {
                 let head = match end {
@@ -157,15 +150,16 @@ pub fn status() -> String {
                     format!("{head} · {}\n{body}", r.title)
                 }
             }
-        })
+        }))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-/// `/bg stop`: cancels every run that is going. How many it stopped.
+/// `/bg stop`: cancels every run that is going, resumed Workboard runs too.
+/// How many it stopped.
 pub fn stop_all() -> usize {
     let mut all = runs();
-    let mut stopped = 0;
+    let mut stopped = crate::run_resume::stop_all();
     for run in all.iter_mut().filter(|r| matches!(r.phase, Phase::Running)) {
         run.stop_asked = true;
         run.cancel.cancel();

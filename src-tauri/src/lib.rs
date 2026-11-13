@@ -86,6 +86,9 @@ mod net_watch;
 mod nudges;
 pub mod nyx;
 pub use grokhub_agent::xai_keychain as oauth;
+mod composer_ghost;
+#[cfg(desktop)]
+mod focus_help;
 pub mod onboard;
 pub mod opener;
 #[cfg(desktop)]
@@ -94,9 +97,6 @@ pub mod pc_files;
 #[cfg(desktop)]
 pub mod pc_files_run;
 pub mod pc_helpers;
-#[cfg(desktop)]
-mod focus_help;
-mod composer_ghost;
 pub mod permissions;
 pub mod personality;
 pub mod playbooks;
@@ -112,6 +112,7 @@ pub mod remote;
 pub mod remote_devices;
 pub mod remote_tls;
 pub mod review_cards;
+pub mod run_resume;
 #[cfg(desktop)]
 pub mod scheduler;
 pub mod scopes;
@@ -131,6 +132,7 @@ mod steam_checks;
 pub mod storage;
 mod task_feed;
 mod turns;
+pub mod unattended;
 pub mod voice;
 mod voice_live;
 pub mod workboard;
@@ -630,6 +632,13 @@ fn route(
     })
 }
 
+/// An unattended run's gate from a turn's route: your Approvals, and the
+/// desktop while control is on and no game holds it.
+fn run_gate(route: &agent::Route) -> unattended::RunGate {
+    let game = route.desktop.then(unattended::game_hold).flatten();
+    unattended::RunGate::scheduled(route.mode, route.desktop, game.as_deref())
+}
+
 /// Runs one prompt through the agent loop. Text, tool cards and permission
 /// asks arrive as `chat://event`; this resolves with the stop reason.
 #[tauri::command]
@@ -766,6 +775,8 @@ async fn chat_turn(
     chat_trials::said(&config_dir, &conversation_id, &text, started);
     let stop = tauri::async_runtime::spawn_blocking(move || {
         let mut route = route(&settings, mode, &config_dir)?;
+        // A resumed card's turn runs no looser than its run started.
+        route.mode = card_chat::turn_mode(&conversation_id, route.mode);
         if let Some(dir) = own_folder {
             route.workspace = dir;
         }
@@ -841,9 +852,10 @@ async fn chat_turn(
     .map_err(|e| e.to_string())
     .and_then(|stop| stop);
     // A card's run settles on its card, however the turn ended.
-    card_chat::turn_ended(&ended_dir, &ended_chat, &stop);
-    // No model in your plan answered: the chat waits and sends again on its own.
-    if let Err(err) = &stop {
+    let card = card_chat::turn_ended(&ended_dir, &ended_chat, &stop);
+    // No model in your plan answered: the chat waits and sends again on its
+    // own. A card's chat does not: its card settled already.
+    if let (Err(err), false) = (&stop, card) {
         model_wait::turn_failed(&ended_dir, &ended_chat, &asked, err, grokhub_core::now_ms());
     }
     if coding {
@@ -2163,12 +2175,14 @@ async fn run_automation_now(
     let config_dir = state.config_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let route = route(&settings, agent::SessionMode::Chat, &config_dir)?;
+        let gate = run_gate(&route);
         automations::run_now(
             &config_dir,
             &id,
             route.client,
             &grokhub_agent::route::host::chat_start().0,
             route.workspace,
+            gate,
         )
     })
     .await
@@ -3305,15 +3319,130 @@ async fn workboard_log(
     off_main(move || workboard::log_tail(&dir, &id)).await
 }
 
-/// Resume a paused run. A stub until KB-03 fills in the real resume.
+/// Resume a paused or interrupted run from its checkpoint (KB-03). An
+/// automation's or a background run's card resumes as an unattended run on
+/// that card; any other card sends its resume block once in its chat. A
+/// resumed step that may drive the desktop asks the game guard first.
 #[tauri::command]
 async fn workboard_resume(
     state: State<'_, ShellState>,
     id: String,
     conversation_id: String,
 ) -> Result<workboard::Resume, String> {
+    let settings = current(&state);
     let dir = state.config_dir.clone();
-    off_main(move || workboard::resume(&dir, &id, &conversation_id)).await?
+    // The chats the page sends into: the card's, and the open one.
+    let busy: std::collections::HashSet<String> = state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(_, s)| s.busy())
+        .map(|(id, _)| id.clone())
+        .collect();
+    off_main(move || {
+        let card =
+            grokhub_core::work_run::read_board_file(&grokhub_core::work_run::board_path(&dir))?
+                .into_iter()
+                .find(|c| c.id == id)
+                .ok_or_else(|| workboard::GONE.to_string())?;
+        if grokhub_core::work_resume::resume_touches_desktop(&card, settings.desktop_control) {
+            if let Some(why) = unattended::game_hold() {
+                return Err(why);
+            }
+        }
+        if !run_resume::unattended_card(&card) {
+            // The page sends the block into the chat; a busy chat would drop it.
+            let into = [
+                card.thread_id.as_deref().unwrap_or_default(),
+                conversation_id.as_str(),
+                settings.last_chat.as_str(),
+            ];
+            if into.iter().any(|c| busy.contains(*c)) {
+                return Err("Wait for the chat to finish its answer first.".into());
+            }
+            let mode =
+                unattended::RunGate::scheduled(settings.approvals.mode(), false, None).wire();
+            return workboard::resume(&dir, &id, &conversation_id, mode);
+        }
+        resume_in_background(&dir, &settings, &id, false)?;
+        Ok(workboard::Resume {
+            conversation_id: String::new(),
+            prompt: String::new(),
+            background: true,
+            page: workboard::load(&dir)?,
+        })
+    })
+    .await?
+}
+
+/// Start an unattended resume of card `id`: the card goes to Doing now, and
+/// the run goes on its own thread.
+fn resume_in_background(
+    dir: &Path,
+    settings: &ShellSettings,
+    id: &str,
+    auto: bool,
+) -> Result<(), String> {
+    let route = route(settings, agent::SessionMode::Chat, dir)?;
+    let (model, _) = grokhub_agent::route::host::chat_start();
+    let gate = run_gate(&route);
+    let job = run_resume::prepare(
+        dir,
+        id,
+        &model,
+        gate,
+        auto,
+        &grokhub_agent::session_intact,
+        bg_runs::live_count(),
+        grokhub_core::now_ms(),
+    )?;
+    let (dir, client, workspace) = (dir.to_path_buf(), route.client, route.workspace);
+    std::thread::spawn(move || {
+        run_resume::run(&dir, job, client, &model, workspace);
+    });
+    Ok(())
+}
+
+/// Every five seconds: the agent's own interrupted automation and background
+/// cards resume once per interruption, twice a day at most; past that they
+/// wait in Blocked and the bell says so. While runs are full, the agent is
+/// signed out or a game holds the desktop, a card waits, its try unspent.
+#[cfg(desktop)]
+fn start_auto_resume(app: AppHandle) {
+    use grokhub_core::work_resume::AutoResume;
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(5));
+        let state = app.state::<ShellState>();
+        let dir = state.config_dir.clone();
+        let now = grokhub_core::now_ms();
+        for (card, decision) in run_resume::auto_picks(&dir, now) {
+            match decision {
+                AutoResume::GiveUp => {
+                    if let Some(stopped) = run_resume::give_up(&dir, &card.id, now) {
+                        os_extras::auto_resume_stopped(&app, &stopped.text);
+                        let _ = app.emit(run_resume::AUTO_RESUME_EVENT, &stopped);
+                    }
+                }
+                AutoResume::Go => {
+                    let settings = current(&state);
+                    let game = unattended::game_hold();
+                    let waits = run_resume::waits(
+                        &card,
+                        bg_runs::live_count(),
+                        settings.desktop_control,
+                        game.as_deref(),
+                    );
+                    if waits || chat_client().is_err() {
+                        continue;
+                    }
+                    if let Err(why) = resume_in_background(&dir, &settings, &card.id, true) {
+                        run_resume::auto_failed(&dir, &card.id, &why, now);
+                    }
+                }
+            }
+        }
+    });
 }
 
 /// Workboard → a card's own chat: Say gives the card its chat (the page's
@@ -3351,7 +3480,7 @@ fn start_card_queue(app: AppHandle) {
                 .any(|s| s.busy());
             let gate = grokhub_core::work_triage::QueueGate {
                 foreground,
-                bg_live: bg_runs::live_count(),
+                bg_live: bg_runs::live_count() + run_resume::live_count(),
                 game: grokhub_core::work_chat::queue_game_wait(&grokhub_desktop::game_guard::peek()),
                 ..Default::default()
             };
@@ -6062,7 +6191,8 @@ fn start_scheduler(app: &tauri::App) {
             let settings = settings::load(&config_dir);
             let route = route(&settings, agent::SessionMode::Chat, &config_dir)?;
             let (model, _) = grokhub_agent::route::host::chat_start();
-            Ok((route.client, model, route.workspace))
+            let gate = run_gate(&route);
+            Ok((route.client, model, route.workspace, gate))
         },
         move |fired| {
             let _ = handle.emit(scheduler::RAN_EVENT, fired);
@@ -6540,6 +6670,9 @@ pub fn run() {
             // Queued Workboard cards start on their own, while the cabin is closed.
             #[cfg(desktop)]
             start_card_queue(app.handle().clone());
+            // The agent's own interrupted runs resume from their checkpoints.
+            #[cfg(desktop)]
+            start_auto_resume(app.handle().clone());
             // The proactive engine and nudge watchers, while the cabin is closed.
             #[cfg(desktop)]
             proactive::start(app.state::<ShellState>().config_dir.clone());
