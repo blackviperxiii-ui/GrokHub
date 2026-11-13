@@ -4,9 +4,10 @@
 //! last: "I'll stop asking about Elden Ring, just say the word." Any progress
 //! on the goal (a +1, a reading from game data, a line in chat) starts it over.
 //!
-//! The desktop app sends follow-ups through the proactive engine, so its
-//! budget, quiet hours, busy (a game running counts) and Not this all apply.
-//! The shell has no engine: it shows the follow-up on Home and Objectives.
+//! Both apps send follow-ups through the proactive engine
+//! ([`follow_up_candidates`], then [`posted_follow_up`] once a card is up), so
+//! its budget, quiet hours, busy (a game running counts) and Not this all
+//! apply. The shell also shows the follow-up on Home and Objectives.
 //! The words never mention how long it has been.
 
 use serde::Serialize;
@@ -167,6 +168,36 @@ pub fn follow_up_candidate(f: &FollowUp) -> Option<Candidate> {
     Some(c)
 }
 
+/// Follow-ups due now, as proactive candidates. A last "I'll stop asking"
+/// line is no offer: it is written as gone out here instead, and shows on
+/// Home and Objectives.
+pub fn follow_up_candidates(o: &mut Objectives, now: u64) -> Vec<Candidate> {
+    let mut out = Vec::new();
+    for f in due_follow_ups(o, now) {
+        match follow_up_candidate(&f) {
+            Some(c) => out.push(c),
+            None => {
+                followed_up(o, &f.id, true, now);
+            }
+        }
+    }
+    out
+}
+
+/// A follow-up card about the tracked goal titled `topic` went up: written
+/// as gone out. False when no tracked goal has that title.
+pub fn posted_follow_up(o: &mut Objectives, topic: &str, now: u64) -> bool {
+    let Some(id) = o
+        .tracking()
+        .into_iter()
+        .find(|g| goal_title(g) == topic)
+        .map(|g| g.id.clone())
+    else {
+        return false;
+    };
+    followed_up(o, &id, false, now)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +330,37 @@ mod tests {
         );
         assert_eq!(card.idea_action(), f.prompt);
         assert_eq!(crate::pulse::i_can_title(&card), card.title);
+    }
+
+    #[test]
+    fn the_engine_gets_offers_and_the_stop_line_is_written_not_offered() {
+        let mut o = Objectives::default();
+        let id = goal(&mut o, "Elden Ring", "Finish", NOW);
+        let at = NOW + 3 * DAY_MS;
+        let cands = follow_up_candidates(&mut o, at);
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].topic, "Elden Ring · Finish");
+        assert!(
+            o.goals[0].nudges.is_empty(),
+            "an offer is written once it is up"
+        );
+        assert!(posted_follow_up(&mut o, "Elden Ring · Finish", at));
+        assert!(
+            !posted_follow_up(&mut o, "Hades · Finish", at),
+            "no such goal"
+        );
+        assert_eq!(o.goals[0].nudges.len(), 1);
+        followed_up(&mut o, &id, false, at + 7 * DAY_MS);
+        let last = at + 14 * DAY_MS;
+        assert!(
+            follow_up_candidates(&mut o, last).is_empty(),
+            "the last line is a note"
+        );
+        assert_eq!(o.goals[0].nudges.len(), 3);
+        assert!(o.goals[0].nudges[2].stop, "written as gone out");
+        assert_eq!(
+            shown_follow_up(&o, last).map(|f| f.line),
+            Some("I'll stop asking about Elden Ring, just say the word.".to_string())
+        );
     }
 }

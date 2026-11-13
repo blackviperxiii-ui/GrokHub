@@ -81,18 +81,7 @@ impl Cabin {
     /// Proactive candidates scaled by how the user reacts to their category;
     /// a quiet category's candidates are dropped. Order is ranked again.
     pub(super) fn weigh_candidates(&mut self, cands: Vec<Candidate>) -> Vec<Candidate> {
-        let r = self.reactions_now().clone();
-        let weighed: Vec<Candidate> = cands
-            .into_iter()
-            .filter_map(|mut c| {
-                let w = r.weight(reactions::source_category(c.source));
-                (w > 0.0).then(|| {
-                    c.value = (c.value * w).min(1.0);
-                    c
-                })
-            })
-            .collect();
-        grokhub_core::proactive::rank_candidates(weighed)
+        self.reactions_now().weigh(cands)
     }
 
     /// The outcome a Pulse act means for learning, recorded before the act runs.
