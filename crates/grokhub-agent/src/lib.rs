@@ -27,6 +27,7 @@ mod hooks;
 pub mod identity;
 mod image_budget;
 pub mod imagine_keychain;
+pub mod keyring_blob;
 pub mod indexers;
 mod lead;
 mod loopback;

@@ -39,30 +39,23 @@ pub trait Store: Sync {
 /// The system keychain, under the same service as the API key.
 pub struct Keychain;
 
-fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(grokhub_core::brand::INTERNAL_ID, ACCOUNT).map_err(keychain_message)
-}
-
 fn keychain_message(err: keyring::Error) -> String {
     format!("The system keychain is not available: {err}")
 }
 
+fn backend() -> crate::keyring_blob::OsBackend {
+    crate::keyring_blob::OsBackend::new(grokhub_core::brand::INTERNAL_ID, keychain_message)
+}
+
 impl Store for Keychain {
     fn get(&self) -> Result<Option<String>, String> {
-        match entry()?.get_password() {
-            Ok(v) if !v.trim().is_empty() => Ok(Some(v)),
-            Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
-            Err(err) => Err(keychain_message(err)),
-        }
+        crate::keyring_blob::get(&backend(), ACCOUNT)
     }
     fn set(&self, value: &str) -> Result<(), String> {
-        entry()?.set_password(value).map_err(keychain_message)
+        crate::keyring_blob::set(&backend(), ACCOUNT, value)
     }
     fn delete(&self) -> Result<(), String> {
-        match entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(err) => Err(keychain_message(err)),
-        }
+        crate::keyring_blob::delete(&backend(), ACCOUNT)
     }
 }
 
