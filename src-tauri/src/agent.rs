@@ -921,6 +921,11 @@ impl Session {
         true
     }
 
+    /// A prompt runs now.
+    pub fn busy(&self) -> bool {
+        self.busy.load(Ordering::SeqCst)
+    }
+
     /// Stops the running prompt. A tool that waits for an answer is cancelled
     /// and does not run.
     pub fn cancel(&self) {

@@ -2,7 +2,8 @@
 //! `workboard.json`, with the same `grokhub_core::workboard` types and rules,
 //! so a card added or moved in either shows in both. Work puts the card's
 //! first message in the main chat box and moves the card to Doing; nothing
-//! is sent for you. The in-card chat (Say, Stop) stays in the cabin.
+//! is sent for you. Each card also has its own chat (Say, Stop), and queued
+//! cards start on their own once nothing else runs (`card_chat.rs`).
 //!
 //! Every change goes through `grokhub_core::work_file`: the one board lock
 //! that the cabin, the shell and the agent's `work_*` tools all take, a
@@ -48,10 +49,6 @@ pub const LOG_READ_MAX: u64 = 32 * 1024;
 /// resume block KB-03 sends; the draft stays inside the same cap.
 pub const RESUME_DRAFT_MAX: usize = 1200;
 pub const GONE: &str = "That card is gone. It may have been removed in the cabin.";
-
-/// The page's line while cards wait in the queue and the cabin is closed.
-pub const QUEUE_WAITS_FOR_CABIN: &str =
-    "Queued cards start in the cabin once it is open and nothing else is running.";
 
 pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join(FILE)
@@ -138,8 +135,11 @@ pub struct Card {
     pub progress: [u32; 2],
     /// A paused or interrupted run: Resume and Hand back apply.
     pub can_resume: bool,
-    /// The cabin chat that works it.
+    /// The chat that works it: this app's own when `card_chat::ours`, else
+    /// the cabin's.
     pub chat: Option<String>,
+    /// Its chat runs a turn now: the card shows Stop.
+    pub running: bool,
     pub updated_ms: u64,
     /// When it was archived; 0 for a card on the board.
     pub archived_ms: u64,
@@ -176,7 +176,8 @@ pub struct Page {
     /// The shell's last sweep archived these cards and you have not undone or
     /// dismissed it. Only cards still archived count.
     pub swept: Option<Swept>,
-    /// Cards wait in the queue and the cabin, which starts them, is closed.
+    /// Why the next queued card waits, while the cabin is closed (it starts
+    /// them itself while open).
     pub queue_note: Option<String>,
 }
 
@@ -227,7 +228,7 @@ pub enum Act {
     Restore,
     /// For good, with its progress log. The UI asks first.
     Delete,
-    /// Agent: do this → Queue. The cabin starts it once nothing else runs.
+    /// Agent: do this → Queue. It starts on its own once nothing else runs.
     Queue,
     Unqueue,
     /// "high", "normal" or "low".
@@ -374,6 +375,10 @@ fn card(c: &BoardCard, all: &[BoardCard], outcomes: &crate::mission::Outcomes) -
         progress: progress(c),
         can_resume: can_resume(c),
         chat: c.thread_id.clone(),
+        running: c
+            .thread_id
+            .as_deref()
+            .is_some_and(crate::card_chat::running),
         updated_ms: c.updated_ms.max(c.active_ms),
         archived_ms: c.archived_ms,
         queued: wt::queue_place(all, &c.id).map(wt::queue_label),
@@ -430,7 +435,7 @@ pub fn sweep_text(report: &grokhub_core::SweepReport) -> Option<String> {
 
 /// True while the cabin is open: its scheduler beat is fresh. The cabin runs
 /// the sweep then, so the shell leaves it.
-fn cabin_open(config_dir: &Path, now: u64) -> bool {
+pub(crate) fn cabin_open(config_dir: &Path, now: u64) -> bool {
     read_lease(config_dir).is_some_and(|l| l.owner == LeaseOwner::Cabin && lease_fresh(&l, now))
 }
 
@@ -568,9 +573,10 @@ fn page(config_dir: &Path, cards: &[BoardCard], stamp: u64) -> Page {
             .collect(),
         stamp,
         swept: swept_for(config_dir, cards),
-        queue_note: (cards.iter().any(wt::is_queued)
+        queue_note: (crate::card_chat::any_queued(cards)
             && !cabin_open(config_dir, grokhub_core::now_ms()))
-        .then(|| QUEUE_WAITS_FOR_CABIN.to_string()),
+        .then(crate::card_chat::queue_wait)
+        .flatten(),
     }
 }
 
@@ -596,7 +602,7 @@ pub fn log_tail(config_dir: &Path, id: &str) -> Vec<WorkLogEvent> {
 }
 
 /// One read-change-write under the board lock; the page as it is on disk after.
-fn change<R>(
+pub(crate) fn change<R>(
     config_dir: &Path,
     edit: impl FnOnce(&mut Vec<BoardCard>) -> Result<R, String>,
 ) -> Result<(R, Page), String> {
@@ -1686,7 +1692,7 @@ mod tests {
     }
 
     #[test]
-    fn a_card_queued_here_waits_for_the_cabin() {
+    fn a_queued_card_shows_why_it_waits_until_the_cabin_opens() {
         use grokhub_core::scheduler_lease::{write_lease, SchedulerLease};
         let config = temp_dir("queue");
         let mut agent = board_card("a", BoardStatus::Todo);
@@ -1696,7 +1702,24 @@ mod tests {
         let a = &lane(&page, Lane::Todo)[0];
         assert_eq!(a.queued.as_deref(), Some("Queued"));
         assert_eq!(a.owner, "You", "a card you hand over is yours");
-        assert_eq!(page.queue_note.as_deref(), Some(QUEUE_WAITS_FOR_CABIN));
+        assert_eq!(page.queue_note, None, "no word until the queue looks");
+        crate::card_chat::clear_for_test();
+        let (ready, chat) = (|| true, || "shell-t".to_string());
+        let busy = crate::card_chat::Look {
+            now: grokhub_core::now_ms(),
+            gate: grokhub_core::work_triage::QueueGate {
+                foreground: true,
+                ..Default::default()
+            },
+            ready: &ready,
+            new_chat: &chat,
+            mode: grokhub_core::wire::PermissionMode::Ask,
+        };
+        assert_eq!(crate::card_chat::Queue::default().tick(&config, busy), None);
+        assert_eq!(
+            load(&config).unwrap().queue_note.as_deref(),
+            Some("Waits for the open chat to finish.")
+        );
         assert!(
             act(&config, "b", Act::Queue).is_err(),
             "a done card is not queued"

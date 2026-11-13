@@ -28,6 +28,7 @@ import {
 } from "./api";
 import { cardsByChat } from "./activity";
 import { newConversationId } from "./Chat";
+import { CardChat } from "./WorkboardChat";
 import { CardTriage, priorityChip } from "./WorkboardTriage";
 
 export const BOARD_EMPTY = "No cards yet. A chat run files one here, or add your own.";
@@ -341,6 +342,7 @@ export function Workboard({
                         )
                       }
                       onNow={() => setNow(Date.now())}
+                      onPage={setPage}
                       onError={(err) => setNote(String(err))}
                     />
                   ))}
@@ -584,6 +586,7 @@ function CardDetail({
   onPlaybook,
   onRecur,
   onNow,
+  onPage,
   onError,
 }: {
   card: BoardCard;
@@ -599,6 +602,7 @@ function CardDetail({
   onPlaybook: (id: string, name: string) => void;
   onRecur: (choice: number) => void;
   onNow: () => void;
+  onPage: (page: BoardPage) => void;
   onError: (err: unknown) => void;
 }) {
   const [log, setLog] = useState<WorkLogLine[] | null>(null);
@@ -666,6 +670,9 @@ function CardDetail({
             </>
           )}
         </dl>
+      )}
+      {resumable && lane !== "followUp" && (
+        <CardChat card={card} done={lane === "done"} onPage={onPage} onError={onError} />
       )}
       <div className="card-buttons">
         {card.canResume && (
@@ -753,6 +760,7 @@ function BoardCardRow({
   onPlaybook,
   onRecur,
   onNow,
+  onPage,
   onError,
 }: {
   card: BoardCard;
@@ -775,6 +783,7 @@ function BoardCardRow({
   onPlaybook: (id: string, name: string) => void;
   onRecur: (choice: number) => void;
   onNow: () => void;
+  onPage: (page: BoardPage) => void;
   onError: (err: unknown) => void;
 }) {
   const [editing, setEditing] = useState<{ title: string; detail: string } | null>(null);
@@ -910,6 +919,7 @@ function BoardCardRow({
           onPlaybook={onPlaybook}
           onRecur={onRecur}
           onNow={onNow}
+          onPage={onPage}
           onError={onError}
         />
       )}

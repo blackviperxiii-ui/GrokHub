@@ -1721,8 +1721,11 @@ export interface BoardCard {
   progress: [number, number];
   /** A paused or interrupted run: Resume and Hand back apply. */
   canResume: boolean;
-  /** The cabin chat that works it. */
+  /** The chat that works it: one of this app's chats ("shell-…"), which
+   * the card's own chat shows, or a cabin chat. */
   chat: string | null;
+  /** Its chat runs a turn now: the card shows Stop. */
+  running: boolean;
   updatedMs: number;
   /** When it was archived; 0 for a card on the board. */
   archivedMs: number;
@@ -1750,7 +1753,8 @@ export interface BoardPage {
   stamp: number;
   /** The last sweep's notice, until Undo or Dismiss: "Archived 2 finished cards". */
   swept: BoardSwept | null;
-  /** Cards wait in the queue and the cabin, which starts them, is closed. */
+  /** Why the next queued card waits ("Waits for the open chat to finish."),
+   * while the app's queue starts them; null when nothing waits. */
   queueNote: string | null;
 }
 
@@ -1835,6 +1839,23 @@ export function workboardAdd(
 
 export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
   return invoke<BoardPage>("workboard_act", { id, act });
+}
+
+/** Say on a card: the chat it works in and the message to send there. */
+export interface BoardSay {
+  conversationId: string;
+  message: string;
+  page: BoardPage;
+}
+
+/** Say on card `id`. A card with no chat of this app gets `conversationId`
+ * and starts working; the page then sends `message` in the returned chat. */
+export function workboardSay(
+  id: string,
+  text: string,
+  conversationId: string,
+): Promise<BoardSay> {
+  return invoke<BoardSay>("workboard_say", { id, text, conversationId });
 }
 
 export function workboardWork(id: string): Promise<BoardWork> {
