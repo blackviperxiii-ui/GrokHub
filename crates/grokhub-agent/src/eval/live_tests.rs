@@ -1,6 +1,7 @@
 use super::*;
 use crate::client::{ContentPart, InputItem};
 use crate::eval::live_shape::BOUNDARY_ROUTING;
+use std::sync::atomic::AtomicU32;
 
 /// Answers each request from a fixed table keyed by the last user text, and
 /// charges the same cost for every response.
@@ -248,6 +249,9 @@ fn pass_hat_k_needs_every_try() {
         compactions: 0,
         calls: 1,
         safety: None,
+        round: 0,
+        effort_range: ("low", "medium"),
+        picks: Vec::new(),
     };
     let tries = vec![
         a("x", true),
@@ -951,6 +955,9 @@ fn the_report_sums_each_probe() {
         compactions: 0,
         calls: 1,
         safety: Some(safety),
+        round: 0,
+        effort_range: ("low", "medium"),
+        picks: Vec::new(),
     };
     let tries = vec![
         a(true, SafetyScore::default()),
@@ -1024,6 +1031,9 @@ fn dream_lessons_pass_only_when_they_solve_more_or_cost_less() {
         compactions: 0,
         calls: 1,
         safety: None,
+        round: 0,
+        effort_range: ("low", "medium"),
+        picks: Vec::new(),
     };
     let report = |ab: &str, attempts: Vec<Attempt>| LiveReport {
         model: "m".into(),
@@ -1036,6 +1046,10 @@ fn dream_lessons_pass_only_when_they_solve_more_or_cost_less() {
         budget_ticks: 1,
         billed_errors: 0,
         stopped_by_budget: false,
+        stopped: None,
+        planned: 0,
+        retries: 0,
+        done: true,
     };
     let tasks = ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"];
     let better: Vec<Attempt> = tasks
@@ -1112,4 +1126,288 @@ fn the_talk_cases_fail_a_bot_sounding_reply() {
         !check(&callback, "Something light, like a sandwich.", ws),
         "forgot the DLC"
     );
+}
+
+/// Hangs on its first `stalls` calls until cancelled, like a stream that
+/// stops sending, then answers as `Fixed` does. Counts every call.
+struct Stalling {
+    inner: Fixed,
+    stalls: AtomicU32,
+    calls: AtomicU32,
+}
+
+impl Stalling {
+    fn new(stalls: u32) -> Self {
+        Self {
+            inner: Fixed {
+                answers: vec![("exactly the word READY", "READY")],
+                cost: 1_000_000,
+            },
+            stalls: AtomicU32::new(stalls),
+            calls: AtomicU32::new(0),
+        }
+    }
+}
+
+impl ModelClient for Stalling {
+    fn stream(
+        &self,
+        req: &ResponsesRequest,
+        cancel: &CancelToken,
+        sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let stall = self
+            .stalls
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if stall {
+            while !cancel.is_cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            return Err(ClientError::Cancelled);
+        }
+        self.inner.stream(req, cancel, sink)
+    }
+}
+
+/// Every call fails the way an expired sign-in does.
+struct SignedOut;
+
+impl ModelClient for SignedOut {
+    fn stream(
+        &self,
+        _req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        _sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        Err(ClientError::Auth {
+            status: 401,
+            message: "the sign-in expired".into(),
+        })
+    }
+}
+
+fn quick(k: u32) -> LiveOpts {
+    LiveOpts {
+        k,
+        effort: Some("low".into()),
+        only: Some("exact-word".into()),
+        call_timeout: std::time::Duration::from_millis(100),
+        retry: RetryPolicy {
+            retries: 2,
+            base: std::time::Duration::from_millis(1),
+        },
+        ..LiveOpts::new("grok-4.3")
+    }
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("gh-live-progress-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn a_stalled_call_is_cut_retried_and_the_try_still_passes() {
+    let client = Arc::new(Stalling::new(1));
+    let report = run_live(client.clone(), &quick(1), parse_budget("1").unwrap());
+    assert_eq!(report.attempts.len(), 1);
+    let a = &report.attempts[0];
+    assert!(a.pass, "{:?}", a.error);
+    assert_eq!(report.retries, 1);
+    // The cut call reached the model, so it is paid for at its input's price.
+    assert_eq!(report.billed_errors, 1);
+    assert_eq!(client.calls.load(Ordering::SeqCst), 2);
+    assert!(report.done);
+    assert!(render_live(&report).contains("| calls retried | 1 |"));
+}
+
+#[test]
+fn every_try_writes_the_report_so_far_and_a_row_that_reads_back() {
+    let dir = scratch("write");
+    let (md, jsonl) = (dir.join("rt05.md"), dir.join("rt05.md.jsonl"));
+    let mut seen = Vec::new();
+    let report = run_live_with(
+        Arc::new(Stalling::new(0)),
+        &quick(3),
+        parse_budget("1").unwrap(),
+        &mut |so_far, last| {
+            seen.push((so_far.attempts.len(), so_far.done));
+            write_progress(&md, &jsonl, so_far, last).unwrap();
+        },
+    );
+    assert_eq!(seen, vec![(1, false), (2, false), (3, false)]);
+    // The last snapshot is the report of all three tries, marked as so far.
+    let text = std::fs::read_to_string(&md).unwrap();
+    assert!(text.contains("partial: 3 of 3 tries so far"), "{text}");
+    assert!(
+        text.contains("| pass@1 (all tries) | 100% (3/3) |"),
+        "{text}"
+    );
+    assert!(!dir.join("rt05.md.part").exists());
+    // A kill mid-write leaves half a line: it is skipped.
+    let mut raw = std::fs::read_to_string(&jsonl).unwrap();
+    raw.push_str("{\"task\":\"exact-wo");
+    let rows = read_progress(&raw);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows.iter().map(|r| r.round).collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    let back = rows[0].to_attempt(&tasks()).unwrap();
+    assert_eq!(back.task, "exact-word");
+    assert_eq!(back.usage, report.attempts[0].usage);
+    assert_eq!(back.picks, report.attempts[0].picks);
+    // The finished report no longer says partial.
+    assert!(!render_live(&report).contains("partial"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_resumed_run_makes_only_the_tries_it_lacks_and_counts_their_spend() {
+    let first = run_live(
+        Arc::new(Stalling::new(0)),
+        &quick(2),
+        parse_budget("1").unwrap(),
+    );
+    let rows: Vec<AttemptRow> = first.attempts.iter().map(AttemptRow::of).collect();
+    let client = Arc::new(Stalling::new(0));
+    let opts = LiveOpts {
+        resume: rows,
+        ..quick(3)
+    };
+    let report = run_live(client.clone(), &opts, parse_budget("1").unwrap());
+    assert_eq!(report.attempts.len(), 3);
+    assert_eq!(client.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(report.attempts[2].round, 2);
+    assert_eq!(report.spent_ticks, first.spent_ticks * 3 / 2);
+    assert!(!render_live(&report).contains("partial"));
+}
+
+#[test]
+fn a_dead_sign_in_ends_the_run_and_the_report_says_where_it_stopped() {
+    let report = run_live(Arc::new(SignedOut), &quick(3), parse_budget("1").unwrap());
+    assert_eq!(report.attempts.len(), 1);
+    assert!(!report.attempts[0].pass);
+    assert_eq!(report.retries, 0);
+    let why = report.stopped.clone().unwrap();
+    assert!(why.contains("sign-in"), "{why}");
+    let md = render_live(&report);
+    assert!(
+        md.contains("stopped early: the key or sign-in stopped working"),
+        "{md}"
+    );
+    assert!(md.contains("partial: 1 of 3 tries"), "{md}");
+}
+
+#[test]
+fn no_try_starts_after_the_deadline() {
+    let client = Arc::new(Stalling::new(0));
+    let opts = LiveOpts {
+        deadline: Some(Instant::now()),
+        ..quick(3)
+    };
+    let report = run_live(client.clone(), &opts, parse_budget("1").unwrap());
+    assert!(report.attempts.is_empty());
+    assert_eq!(client.calls.load(Ordering::SeqCst), 0);
+    assert!(report.stopped.unwrap().contains("deadline"));
+}
+
+#[test]
+fn every_task_has_an_effort_range_on_the_ladder() {
+    for t in tasks() {
+        let (lo, hi) = t.effort;
+        let lo = crate::route::ladder::rung(lo).unwrap_or_else(|| panic!("{}: {lo}", t.id));
+        let hi = crate::route::ladder::rung(hi).unwrap_or_else(|| panic!("{}: {hi}", t.id));
+        assert!(lo <= hi, "{}", t.id);
+    }
+}
+
+#[test]
+fn each_call_is_scored_against_its_tasks_effort_range() {
+    let report = run_live(
+        Arc::new(Stalling::new(0)),
+        &quick(1),
+        parse_budget("1").unwrap(),
+    );
+    let a = &report.attempts[0];
+    assert!(!a.picks.is_empty());
+    assert!(a.picks.iter().all(|p| p.effort.as_deref() == Some("low")));
+    assert_eq!(a.effort_range, ("none", "low"));
+    let md = render_live(&report);
+    assert!(md.contains("## Routing (RT-05)"), "{md}");
+    assert!(md.contains("| effort in range | 100% "), "{md}");
+    assert!(md.contains("| under-effort (quality risk) | 0% "), "{md}");
+}
+
+#[test]
+fn the_routing_score_counts_in_under_over_and_prices_the_flagship() {
+    assert_eq!(
+        effort_fit(Some("low"), ("low", "medium")),
+        Some(EffortFit::InRange)
+    );
+    assert_eq!(
+        effort_fit(Some("minimal"), ("low", "medium")),
+        Some(EffortFit::Under)
+    );
+    assert_eq!(
+        effort_fit(Some("high"), ("low", "medium")),
+        Some(EffortFit::Over)
+    );
+    assert_eq!(effort_fit(None, ("low", "medium")), None);
+    assert_eq!(effort_fit(Some("turbo"), ("low", "medium")), None);
+    let pick = |effort: Option<&str>| Pick {
+        model: "grok-4.3".into(),
+        effort: effort.map(str::to_string),
+        input_tokens: 1_000_000,
+        cost_ticks: 2_000_000_000,
+        ..Pick::default()
+    };
+    let attempt = |pass: bool, picks: Vec<Pick>| Attempt {
+        task: "x",
+        set: TaskSet::Capability,
+        recall: false,
+        pass,
+        usage: Usage {
+            cost_in_usd_ticks: picks.iter().map(|p| p.cost_ticks).sum(),
+            ..Usage::default()
+        },
+        wall_ms: 1,
+        error: None,
+        arm: None,
+        asks: 0,
+        compactions: 0,
+        calls: picks.len() as u32,
+        safety: None,
+        round: 0,
+        effort_range: ("low", "medium"),
+        picks,
+    };
+    let tries = vec![
+        attempt(true, vec![pick(Some("low")), pick(Some("medium"))]),
+        attempt(
+            false,
+            vec![pick(Some("minimal")), pick(Some("xhigh")), pick(None)],
+        ),
+    ];
+    let s = routing_score(&tries);
+    assert_eq!(
+        (s.scored, s.in_range, s.under, s.over, s.unset),
+        (4, 2, 1, 1, 1)
+    );
+    assert_eq!(s.solved, 1);
+    assert_eq!(s.per_solved_ticks, Some(5 * 2_000_000_000));
+    assert_eq!(s.cost_ticks, 5 * 2_000_000_000);
+    // The same million input tokens on grok-4.7, five times over.
+    let one = turn_cost(
+        FLAGSHIP_MODEL,
+        &Usage {
+            input_tokens: 1_000_000,
+            ..Usage::default()
+        },
+    );
+    assert_eq!(s.flagship_ticks, 5 * one);
+    assert!(s.reasoning_est < s.reasoning_high_est);
 }
