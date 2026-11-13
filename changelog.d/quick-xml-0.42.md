@@ -1,0 +1,1 @@
+- Depend on quick-xml 0.42 and migrate XML readers to the UTF-8 `&str` event API.

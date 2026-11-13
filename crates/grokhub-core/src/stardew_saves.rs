@@ -93,7 +93,7 @@ pub fn parse_save_info(xml: &str) -> Option<StardewFarm> {
         match reader.read_event().ok()? {
             Event::Start(e) => {
                 depth += 1;
-                let name = String::from_utf8_lossy(e.local_name().as_ref()).to_string();
+                let name = e.local_name().as_ref().to_string();
                 if depth == 1 {
                     if name != "Farmer" {
                         return None;
@@ -105,21 +105,17 @@ pub fn parse_save_info(xml: &str) -> Option<StardewFarm> {
                 }
             }
             Event::Text(t) if depth == 2 => {
-                if let Ok(s) = t.decode() {
-                    text.push_str(&s);
-                }
+                text.push_str(t.as_ref());
             }
             Event::GeneralRef(r) if depth == 2 => {
-                if let Ok(name) = r.decode() {
-                    text.push_str(match name.as_ref() {
-                        "amp" => "&",
-                        "lt" => "<",
-                        "gt" => ">",
-                        "quot" => "\"",
-                        "apos" => "'",
-                        _ => "",
-                    });
-                }
+                text.push_str(match r.as_ref() {
+                    "amp" => "&",
+                    "lt" => "<",
+                    "gt" => ">",
+                    "quot" => "\"",
+                    "apos" => "'",
+                    _ => "",
+                });
             }
             Event::End(_) => {
                 if depth == 2 {

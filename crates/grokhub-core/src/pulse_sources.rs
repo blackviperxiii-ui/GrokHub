@@ -811,19 +811,13 @@ fn parse_feed(req: &SourceReq, body: &str) -> Vec<SourceItem> {
                 }
             }
             Event::Text(t) => {
-                if let Ok(s) = t.decode() {
-                    text.push_str(&s);
-                }
+                text.push_str(t.as_ref());
             }
             Event::CData(c) => {
-                if let Ok(s) = c.decode() {
-                    text.push_str(&s);
-                }
+                text.push_str(c.as_ref());
             }
             Event::GeneralRef(r) => {
-                if let Ok(name) = r.decode() {
-                    text.push_str(&entity(&name));
-                }
+                text.push_str(&entity(r.as_ref()));
             }
             Event::End(_) => {
                 let name = stack.pop().unwrap_or_default();
@@ -864,15 +858,15 @@ fn parse_feed(req: &SourceReq, body: &str) -> Vec<SourceItem> {
     out
 }
 
-fn local(name: &[u8]) -> String {
-    String::from_utf8_lossy(name).to_string()
+fn local(name: &str) -> String {
+    name.to_string()
 }
 
 fn attr(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
     e.attributes()
         .flatten()
-        .find(|a| a.key.local_name().as_ref() == key.as_bytes())
-        .map(|a| decode_entities(&String::from_utf8_lossy(&a.value)))
+        .find(|a| a.key.local_name().as_ref() == key)
+        .map(|a| decode_entities(a.value.as_ref()))
 }
 
 fn take_attrs(cur: &mut Entry, name: &str, e: &quick_xml::events::BytesStart<'_>) {
