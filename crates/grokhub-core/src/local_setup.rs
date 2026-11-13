@@ -175,6 +175,10 @@ pub struct LocalModel {
     pub min_llama_build: Option<u32>,
     /// Offered, never picked for the user.
     pub optional: bool,
+    /// Listed in Download models. `offered = false` keeps a row out of the
+    /// list (and "Download all") until it is on disk, for a model nothing
+    /// in the app uses yet.
+    pub offered: bool,
     /// A speculative-decoding drafter, not a model to chat with.
     pub is_drafter: bool,
     /// What the model is for.
@@ -269,6 +273,8 @@ struct CatalogRow {
     min_llama_build: Option<u32>,
     #[serde(default)]
     optional: bool,
+    #[serde(default = "offered_default")]
+    offered: bool,
     #[serde(default)]
     role: Option<String>,
     #[serde(default)]
@@ -315,6 +321,10 @@ struct AbliterationRow {
 }
 
 const CATALOG_TOML: &str = include_str!("../data/local_catalog.toml");
+
+fn offered_default() -> bool {
+    true
+}
 
 fn leak(s: String) -> &'static str {
     s.leak()
@@ -367,6 +377,7 @@ fn to_model(r: CatalogRow) -> Option<LocalModel> {
         needs_avx2: r.needs_avx2,
         min_llama_build: r.min_llama_build,
         optional: r.optional,
+        offered: r.offered,
         is_drafter: kind == ModelKind::Drafter,
         kind,
         pairs_with: r.pairs_with.map(leak),

@@ -661,6 +661,7 @@ mod tests {
             needs_avx2: false,
             min_llama_build: None,
             optional: false,
+            offered: true,
             is_drafter: false,
             kind: crate::local_setup::ModelKind::Chat,
             pairs_with: None,
