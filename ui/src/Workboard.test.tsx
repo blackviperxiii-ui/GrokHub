@@ -45,6 +45,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 vi.mock("./Chat", () => ({ newConversationId: () => "shell-new" }));
+vi.mock("./WorkboardChat", () => ({ CardChat: () => null }));
 
 import {
   BOARD_EMPTY,
@@ -78,6 +79,7 @@ function card(over: Partial<BoardCard> = {}): BoardCard {
     checkpoint: null,
     progress: [0, 4],
     canResume: false,
+    running: false,
     chat: null,
     updatedMs: 0,
     archivedMs: 0,
