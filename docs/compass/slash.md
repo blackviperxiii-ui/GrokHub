@@ -32,4 +32,4 @@
 - `run_slash` calls `dispatch_native_slash` first on every thread. It returns false off native (Lab) threads; on them Remember, Dream, Inspect, Rewind, Usage and Workflow return true and skip the cabin match.
 - `/rewind step` / `/rewind step <n>` (`Slash::RewindStep`) lists or restores `file_checkpoint` steps for the thread's `grok_session`; bare `/rewind` stays N/A on native.
 ## See also
-- [amr](amr.md), [app-module](app-module.md), [grokhub-agent](grokhub-agent.md)
+- [amr](amr.md), [app-module](app-module.md), [grokhub-agent](grokhub-agent.md). The desktop composer (src-tauri/src/slash.rs) runs /imagine, /imagine-video, /journal, /learn, /mcps, /plugins and /resume: Imagine and the journal open those pages, /learn reflects the chat, /mcps opens Connectors, /plugins opens Settings → Labs, and /resume opens History.

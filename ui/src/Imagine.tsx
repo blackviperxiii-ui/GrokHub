@@ -13,6 +13,7 @@ import {
 } from "./api";
 import { Lightbox } from "./FeedCard";
 import { GrokSignIn, type SignInFlow } from "./GrokSignIn";
+import { subscribeImagine } from "./imagineAsk";
 
 /** What the shell says when there is no key, or Imagine refuses it. */
 export const NEED_SIGNIN = "Sign in to Imagine first.";
@@ -118,6 +119,35 @@ export function Imagine() {
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<ImagineTile | null>(null);
   const promptBox = useRef<HTMLTextAreaElement>(null);
+
+  // `/imagine` and `/imagine-video`: the page opens on that kind, and a
+  // prompt starts the same make the form does.
+  useEffect(() => {
+    return subscribeImagine((job) => {
+      setKind(job.kind);
+      setPrompt(job.prompt);
+      const text = job.prompt.trim();
+      if (!text) {
+        promptBox.current?.focus();
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      setStatus(makingLine(job.kind, 1));
+      imagineGenerate(text, "1:1", 1, job.kind).then(
+        (made) => {
+          setPage(made.page);
+          setStatus(madeLine(made.made, made.note));
+          setBusy(false);
+        },
+        (err) => {
+          setStatus(null);
+          setError(String(err));
+          setBusy(false);
+        },
+      );
+    });
+  }, []);
 
   useEffect(() => {
     getImagine().then(setPage, (err) => setError(String(err)));
