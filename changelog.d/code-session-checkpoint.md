@@ -1,0 +1,1 @@
+- A Code tab session keeps its project folder across a restart, and Resume sends it on from the saved goal and next step.
