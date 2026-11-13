@@ -98,6 +98,13 @@ function mockReply(callNumber, body) {
     return textReply(AGENT_REPLY_2);
   }
   if (body.includes(AGENT_PROMPT)) {
+    // A new agent-window session is a lead: it plans first and stays
+    // read-only until its plan is approved.
+    if (!body.includes("smoke-agent-plan")) {
+      return toolCall("smoke-agent-plan", "exit_plan_mode", {
+        plan: `1. Write ${AGENT_NOTE}\n2. Tick the to-do`,
+      });
+    }
     if (!body.includes("smoke-agent-write")) {
       return toolCall("smoke-agent-write", "write", { path: AGENT_NOTE, content: AGENT_NOTE_TEXT });
     }
@@ -1414,6 +1421,14 @@ async function codeAgent(s, config, workspace) {
     const note = join(workspace, file);
     await waitFor(`${file} in the session's own project`, async () => {
       if (existsSync(note)) return true;
+      // The lead's first message plans: approve its plan card.
+      const [approve] = await xp(
+        "//aside[contains(@class,'code-agent')]//div[contains(@class,'elicit')]//button[normalize-space()='Approve plan'][not(@disabled)]",
+      );
+      if (approve && (await settled(s, approve[ELEMENT]))) {
+        await wd("POST", `${s}/element/${approve[ELEMENT]}/click`, {}).catch(() => {});
+        return null;
+      }
       // Ask me first: the write waits on its card in the agent window.
       const cards = await wd("POST", `${s}/elements`, {
         using: "css selector",

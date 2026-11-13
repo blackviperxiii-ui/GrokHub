@@ -2150,6 +2150,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "tungstenite",
  "webpki-roots 1.0.11",

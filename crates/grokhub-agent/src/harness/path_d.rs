@@ -146,6 +146,7 @@ pub fn unasked_title(class: HardClass) -> String {
         HardClass::FlaggedDriver => "install a driver that anti-cheats block",
         HardClass::SystemAdmin => "use admin rights or change system protection",
         HardClass::Automation => "add an automation",
+        HardClass::MergeWork => "merge a helper's work",
     };
     format!(
         "{} tried to {what} without asking",
@@ -309,6 +310,10 @@ mod tests {
         assert_eq!(
             unasked_title(HardClass::Send),
             "Loadout tried to send something without asking"
+        );
+        assert_eq!(
+            unasked_title(HardClass::MergeWork),
+            "Loadout tried to merge a helper's work without asking"
         );
         assert_eq!(
             unasked_title(HardClass::Credentials),

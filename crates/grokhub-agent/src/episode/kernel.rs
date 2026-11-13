@@ -67,6 +67,10 @@ const LOOP_ONLY: &[&str] = &[
     "enter_plan_mode",
     "exit_plan_mode",
 ];
+/// What a desktop task gets for a merge request. Helpers belong to a chat's
+/// lead, and only its card says whose work goes where.
+const MERGE_NOT_HERE: &str =
+    "a desktop task can't ask for a merge: helper work is merged from the chat's Tasks panel";
 
 /// Where hard steps wait for the user. The cabin answers them on its card.
 pub trait Parks {
@@ -1155,6 +1159,11 @@ impl Run<'_, '_> {
 
     /// [`Self::verdict`] on args already hinted ([`Self::hinted`]).
     fn verdict_on(&self, call: &FunctionCall, hinted: Option<&Value>) -> GateOutcome {
+        if call.name == tools::control::MERGE_WORK {
+            return GateOutcome::Refuse {
+                reason: MERGE_NOT_HERE.into(),
+            };
+        }
         let hard = harness::decide(Step::Tool {
             name: &call.name,
             arguments: &call.arguments,

@@ -75,6 +75,28 @@ pub fn kill_schema() -> Value {
     })
 }
 
+/// The lead's request to merge a worktree helper's work.
+pub const MERGE_WORK: &str = "merge_subagent_work";
+/// What a helper that calls it gets back.
+pub(crate) const ONLY_LEAD: &str = "only the lead can ask for a merge";
+const NO_WORK_KEY: &str = "work is required";
+
+pub fn merge_schema() -> Value {
+    json!({
+        "type": "function",
+        "name": MERGE_WORK,
+        "description": "Ask the person to merge a worktree helper's finished work into the project folder. work: the key on the helper's result line (work: <key>). The person is asked every time; nothing is merged without their yes. Only finished work that is ready to merge, or was in conflict, can be merged this way. The merge leaves uncommitted changes in the project.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "work": {"type": "string"}
+            },
+            "required": ["work"],
+            "additionalProperties": false
+        }
+    })
+}
+
 pub fn monitor_schema() -> Value {
     json!({
         "type": "function",
@@ -173,6 +195,43 @@ pub fn kill(tasks: Option<&Arc<TaskHub>>, args: &Value) -> ToolOutput {
         Ok(text) => ToolOutput::ok(text),
         Err(err) => ToolOutput::err(with_id_hint(err)),
     }
+}
+
+/// Merges a helper's work for the lead. The gate has already asked the
+/// person: this tool is a hard class, so the call only gets here on a yes.
+pub fn merge(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
+    if ctx.owner.is_some() {
+        return ToolOutput::err(ONLY_LEAD);
+    }
+    let Some(session) = ctx.session else {
+        return ToolOutput::err("helper work is not available on this run");
+    };
+    let Some(key) = text_field(args, "work") else {
+        return ToolOutput::err(NO_WORK_KEY);
+    };
+    match crate::work::merge_work(session, &key, crate::work::By::Lead) {
+        Ok(work) => {
+            let line = crate::work::result_line(&work);
+            match work.state {
+                crate::work::WorkState::Merged => ToolOutput::ok(line),
+                crate::work::WorkState::Held { .. } => {
+                    ToolOutput::err(format!("{}. {line}", crate::work::LEAD_MAY_NOT))
+                }
+                _ => ToolOutput::err(line),
+            }
+        }
+        Err(err) => ToolOutput::err(err),
+    }
+}
+
+/// The line the approval card of the lead's merge request shows. `Err` is
+/// the refusal the request would get after a yes, to give without asking.
+pub(crate) fn merge_card(session: &str, arguments: &str) -> Result<String, String> {
+    let args: Value = serde_json::from_str(arguments).unwrap_or_default();
+    let Some(key) = text_field(&args, "work") else {
+        return Err(NO_WORK_KEY.into());
+    };
+    crate::work::lead_card(session, &key)
 }
 
 pub fn monitor(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
@@ -708,5 +767,78 @@ mod tests {
         assert_eq!(interval_minutes("60s").unwrap(), 1);
         assert_eq!(interval_minutes("1d").unwrap(), 24 * 60);
         assert!(interval_minutes("2d").is_err());
+    }
+
+    fn merge_ctx<'a>(
+        dir: &'a std::path::Path,
+        owner: Option<&'a str>,
+        session: Option<&'a str>,
+    ) -> ToolCtx<'a> {
+        ToolCtx {
+            workspace: dir,
+            desktop: None,
+            stop: &|| false,
+            tasks: None,
+            owner,
+            session,
+        }
+    }
+
+    #[test]
+    fn a_helper_cannot_ask_for_a_merge() {
+        let dir = scratch("merge-helper");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let args = r#"{"work":"mb3x9k2a-7q1z"}"#;
+        let out = dispatch(
+            &merge_ctx(&dir, Some("s1"), Some("chat/s1")),
+            MERGE_WORK,
+            args,
+        );
+        assert!(out.failed);
+        assert_eq!(out.text, "only the lead can ask for a merge");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_merge_request_needs_a_key_this_chat_has() {
+        let dir = scratch("merge-key");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let lead = merge_ctx(&dir, None, Some("chat"));
+        let none = dispatch(&lead, MERGE_WORK, "{}");
+        assert!(none.failed);
+        assert_eq!(none.text, "work is required");
+        // A task id is not a key, and neither is a path.
+        let task = dispatch(&lead, MERGE_WORK, r#"{"work":"s2"}"#);
+        assert!(task.failed);
+        assert_eq!(task.text, "there is no helper work s2 in this chat");
+        let path = dispatch(&lead, MERGE_WORK, r#"{"work":"../chat-2/k1"}"#);
+        assert!(path.failed);
+        assert_eq!(path.text, "not a helper work key: ../chat-2/k1");
+        let unknown = dispatch(&lead, MERGE_WORK, r#"{"work":"mb3x9k2a-7q1z"}"#);
+        assert!(unknown.failed);
+        assert_eq!(
+            unknown.text,
+            "there is no helper work mb3x9k2a-7q1z in this chat"
+        );
+        // The card is not shown for any of these: each is refused first.
+        let card = |args: &str| merge_card("chat", args).unwrap_err();
+        assert_eq!(card("{}"), "work is required");
+        assert_eq!(card("not json"), "work is required");
+        assert_eq!(
+            card(r#"{"work":"s2"}"#),
+            "there is no helper work s2 in this chat"
+        );
+        assert_eq!(
+            card(r#"{"work":"../chat-2/k1"}"#),
+            "not a helper work key: ../chat-2/k1"
+        );
+        let off = dispatch(
+            &merge_ctx(&dir, None, None),
+            MERGE_WORK,
+            r#"{"work":"mb3x9k2a-7q1z"}"#,
+        );
+        assert!(off.failed);
+        assert_eq!(off.text, "helper work is not available on this run");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

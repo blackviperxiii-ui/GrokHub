@@ -874,6 +874,7 @@ mod tests {
             voice: String::new(),
             voice_session: None,
             suggestions: true,
+            lead: false,
         };
         assert_eq!(
             session.prompt(text, Vec::new(), route, Box::new(|_| {})),
@@ -982,6 +983,7 @@ mod tests {
             voice: String::new(),
             voice_session: None,
             suggestions: true,
+            lead: false,
         };
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&events);

@@ -265,3 +265,45 @@ fn the_local_day_key_matches_the_cabins_last_day() {
     assert_eq!(local_day(SUN_3AM, -360), "2026-11-14");
     assert_eq!(local_day(SAT_11PM, 60), "2026-11-15");
 }
+
+#[test]
+fn a_failed_model_call_releases_the_claim_so_the_next_tick_retries() {
+    let dir = temp_dir("retry-call");
+    write_skill(&dir, "report", "1. open report.md\n");
+    for k in 0..3u64 {
+        skill_run(&dir, "report", k, false, SUN_3AM - (k + 1) * DAY / 2);
+    }
+    let calls = Cell::new(0);
+    let call = |_: &Path, _: &[sr::SkillStats], _: Option<&hx::BrainAsk>, _: u64| {
+        calls.set(calls.get() + 1);
+        if calls.get() == 1 {
+            return Err("network offline".into());
+        }
+        Ok(WeeklyPass {
+            kept: vec![RankedProposal {
+                skill: "report".into(),
+                snippet: false,
+                title: "Retry worked".into(),
+                steps: "1. open report.md 2. save".into(),
+                numbers: "3 of 3 report runs needed a fix".into(),
+                failures: 3,
+            }],
+            ..Default::default()
+        })
+    };
+    let feed = Feed::new();
+    assert_eq!(
+        look(&dir, PID, SUN_3AM, Some(0), &call, &|f| feed.edit(f)),
+        Look::Ran { posted: 0 }
+    );
+    assert_eq!(wr::last_day(&dir), None);
+    assert_eq!(
+        look(&dir, PID, SUN_3AM + 5 * 60_000, Some(0), &call, &|f| feed
+            .edit(f)),
+        Look::Ran { posted: 1 }
+    );
+    assert_eq!(calls.get(), 2);
+    assert_eq!(feed.titles(), vec!["Retry worked"]);
+    assert_eq!(wr::last_day(&dir).as_deref(), Some("2026-11-15"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1,17 +1,16 @@
 import {
   memo,
-  startTransition,
   useEffect,
   useEffectEvent,
   useRef,
   useState,
-  ViewTransition,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
 import {
   addAutomation,
   answerElicit,
+  codeSessionPlan,
   answerPermission,
   cancelChat,
   closeChat,
@@ -414,6 +413,10 @@ const ToolCard = memo(function ToolCard({
   );
 });
 
+/** The lead's request to merge a helper's work. It asks every time, so its
+ * card has no button that says it will stop asking. */
+const MERGE_TOOL = "merge_subagent_work";
+
 function PermissionCard({
   item,
   onAnswer,
@@ -424,10 +427,17 @@ function PermissionCard({
   /** Allow this and ask less from now on; absent when it can't change here. */
   onStopAsking?: () => void;
 }) {
+  const merge = item.title === MERGE_TOOL;
   return (
     <div className="card permission" role="group" aria-label={`Approve ${item.title}`}>
       <div className="card-title">
-        {PRODUCT_NAME} wants to run <code>{item.title}</code>
+        {merge ? (
+          `${PRODUCT_NAME} wants to merge a helper's work into the project`
+        ) : (
+          <>
+            {PRODUCT_NAME} wants to run <code>{item.title}</code>
+          </>
+        )}
       </div>
       {item.action && <pre className="card-action">{item.action}</pre>}
       {item.reason && <p className="card-reason">{item.reason}</p>}
@@ -438,13 +448,15 @@ function PermissionCard({
           <button type="button" onClick={() => onAnswer("allow")}>
             Allow once
           </button>
-          <button type="button" className="quiet" onClick={() => onAnswer("always")}>
-            Always allow
-          </button>
+          {!merge && (
+            <button type="button" className="quiet" onClick={() => onAnswer("always")}>
+              Always allow
+            </button>
+          )}
           <button type="button" className="quiet danger" onClick={() => onAnswer("deny")}>
             Deny
           </button>
-          {onStopAsking && (
+          {!merge && onStopAsking && (
             <button
               type="button"
               className="link"
@@ -475,15 +487,18 @@ function LogItem({
   onFix,
   onChipPick,
   nyxUrl,
+  editable,
 }: {
   item: Item;
   busy: boolean;
+  /** The agent window: a plan card can be edited and sent back. */
+  editable: boolean;
   /** The bubble's Delete message… menu; absent where it can't be offered. */
   onMenu?: MenuAt;
   /** Nyx's face beside each reply, when Nyx is on. */
   nyxUrl?: string;
   onAnswer: (id: string, answer: Answer) => void;
-  onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string) => void;
+  onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string, field?: string) => void;
   /** Yes or Cancel on a slash command's question. */
   onConfirm: (item: Item, yes: boolean) => void;
   /** Stop asking me on a permission card, while the setting is Ask me first. */
@@ -509,50 +524,31 @@ function LogItem({
       return <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} onMenu={menu} />;
     }
     case "tool":
-      return (
-        <ViewTransition>
-          <ToolCard title={item.title} status={item.status} detail={item.detail} />
-        </ViewTransition>
-      );
+      return <ToolCard title={item.title} status={item.status} detail={item.detail} />;
     case "permission":
       return (
-        <ViewTransition>
-          <PermissionCard
-            item={item}
-            onAnswer={(a) => onAnswer(item.id, a)}
-            onStopAsking={onStopAsking && (() => onStopAsking(item.id))}
-          />
-        </ViewTransition>
+        <PermissionCard
+          item={item}
+          onAnswer={(a) => onAnswer(item.id, a)}
+          onStopAsking={onStopAsking && (() => onStopAsking(item.id))}
+        />
       );
     case "elicit":
       return (
-        <ViewTransition>
-          <ElicitCard
-            key={item.id}
-            item={item}
-            onAnswer={(action, value) => onAnswerCard(item, action, value)}
-            onChipPick={onChipPick}
-          />
-        </ViewTransition>
+        <ElicitCard
+          key={item.id}
+          item={item}
+          editable={editable}
+          onAnswer={(action, value, field) => onAnswerCard(item, action, value, field)}
+          onChipPick={onChipPick}
+        />
       );
     case "findings":
-      return (
-        <ViewTransition>
-          <FindingsCard event={item} onFix={onFix} />
-        </ViewTransition>
-      );
+      return <FindingsCard event={item} onFix={onFix} />;
     case "recap":
-      return (
-        <ViewTransition>
-          <RecapCard event={item} />
-        </ViewTransition>
-      );
+      return <RecapCard event={item} />;
     case "evidence":
-      return (
-        <ViewTransition>
-          <EvidenceCard event={item} />
-        </ViewTransition>
-      );
+      return <EvidenceCard event={item} />;
     case "slash":
       return (
         <div className="card notice slash-notice" role="status" aria-label={`${item.command} result`}>
@@ -620,6 +616,7 @@ export function Chat({
   remote = false,
   grokSignIn = false,
   embedded = false,
+  lead = false,
   onConversation,
   onBusy,
   onRan,
@@ -648,6 +645,8 @@ export function Chat({
   /** The Code tab's agent window: it starts on a new session instead of the
    * last chat, has no dock, and names itself Agent. */
   embedded?: boolean;
+  /** The agent window's session has a lead: its plan card can be edited. */
+  lead?: boolean;
   /** The conversation on screen, at the start and each time it changes. */
   onConversation?: (conversationId: string) => void;
   /** A reply started or ended. */
@@ -914,7 +913,7 @@ export function Chat({
       }
       // A helper's question shows whether or not a reply runs.
       if (helper) {
-        if (id === conversationId) startTransition(() => setItems((now) => withHelperAsk(now, event)));
+        if (id === conversationId) setItems((now) => withHelperAsk(now, event));
         return;
       }
       // An event that lands after the turn ended must not reopen it.
@@ -924,8 +923,9 @@ export function Chat({
       else if (event.kind === "goal") setGoalAsk({ id: event.id, title: event.title });
       else if (event.kind === "done") setItems(event.stop === HALTED_STOP ? settleHalted : settle);
       else if (event.kind === "text") setItems((now) => applyEvent(now, event));
-      // A card is a transition, so the webview can fade it in; text streams as is.
-      else startTransition(() => setItems((now) => applyEvent(now, event)));
+      // Not a transition: one would hold the page's next updates while the
+      // card eases in, and typing in the box then loses its first letters.
+      else setItems((now) => applyEvent(now, event));
     }).then((unlisten) => {
       if (dropped) unlisten();
       else stop = unlisten;
@@ -1090,7 +1090,7 @@ export function Chat({
     }
   }
 
-  async function answerCard(item: ElicitItem, action: ElicitAction, value: string) {
+  async function answerCard(item: ElicitItem, action: ElicitAction, value: string, field?: string) {
     const mark = (from: ElicitAction | null, to: ElicitAction | null) =>
       setItems((now) =>
         now.map((it) =>
@@ -1099,7 +1099,7 @@ export function Chat({
       );
     mark(null, action);
     try {
-      await answerElicit(conversationId, item.id, action, item.fieldName, value);
+      await answerElicit(conversationId, item.id, action, field ?? item.fieldName, value);
     } catch (err) {
       // It never reached the agent, which is still asking: give the card back.
       mark(action, null);
@@ -1287,10 +1287,10 @@ export function Chat({
         break;
       case "viewPlan": {
         const plan = [...items].reverse().find((it) => it.kind === "elicit" && it.server === "Plan");
-        setItems((now) => [
-          ...now,
-          { kind: "slash", command, text: plan?.kind === "elicit" ? plan.message : NO_PLAN },
-        ]);
+        const shown = plan?.kind === "elicit" ? plan.message : NO_PLAN;
+        // The agent window's plan is saved with the session, edits included.
+        const saved = embedded ? await codeSessionPlan(conversationId).catch(() => null) : null;
+        setItems((now) => [...now, { kind: "slash", command, text: saved || shown }]);
         break;
       }
       case "loop":
@@ -1552,6 +1552,7 @@ export function Chat({
             nyxUrl={nyx?.url}
             onAnswer={answer}
             onAnswerCard={answerCard}
+            editable={embedded && lead}
             onConfirm={settleConfirm}
             onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
             onFix={(text) => setDraft(text)}
