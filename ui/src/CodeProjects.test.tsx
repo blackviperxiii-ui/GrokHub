@@ -195,7 +195,9 @@ describe("CodeProjects", () => {
     expect(await screen.findByRole("button", { name: /Chat z/ })).toBeInTheDocument();
     expect(api.listChats).toHaveBeenCalledTimes(2);
     expect(api.codeProjects).toHaveBeenCalledTimes(2);
-    expect(onFolder).toHaveBeenLastCalledWith("/work/dawn");
+    // The folder is reported from an effect after the project list lands, which
+    // can commit after the chat list, so wait for it rather than read it once.
+    await waitFor(() => expect(onFolder).toHaveBeenLastCalledWith("/work/dawn"));
     expect(calls.onSwitched).not.toHaveBeenCalled();
   });
 });
