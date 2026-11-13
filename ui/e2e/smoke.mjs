@@ -1108,7 +1108,7 @@ async function localAi(s, config) {
       console.log("Get engine absent; download skipped, shot the state as found");
     }
 
-    // 4) Gemma 4 12B → Install and run draft model offer (E2B not on disk).
+    // 4) Gemma 4 12B → Install and run draft model offer (its paired 12B drafter not on disk).
     await click(s, ".local-ai button.mode-manual");
     const showAll = await wd("POST", `${s}/elements`, {
       using: "css selector",
@@ -1131,7 +1131,8 @@ async function localAi(s, config) {
     await wd("POST", `${s}/element/${gemma}/click`, {});
     const offer = await waitFor("the Gemma 4 12B draft offer", async () => {
       const t = await textOf(s, ".local-ai .local-draft-offer");
-      return /Install and run draft model/i.test(t) && /Gemma 4 E2B/i.test(t) ? t : null;
+      const paired = /Gemma 4 12B draft model makes Gemma 4 12B/.test(t);
+      return /Install and run draft model/i.test(t) && paired ? t : null;
     });
     await scrollIntoView(s, ".local-ai .local-draft-offer");
     await shot(s, "settings-local-ai-gemma-draft-offer");
