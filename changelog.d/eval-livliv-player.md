@@ -1,0 +1,1 @@
+- Evaluate `@livliv-dev/player` for live TTS lip-synced Nyx (license, stack/CSP fit, size/perf, rigging feasibility, and scoped spike recommendation) in `research/livliv-player-eval.md`.
