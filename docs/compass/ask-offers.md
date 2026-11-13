@@ -10,8 +10,8 @@
 
 ## Key files
 - `crates/grokhub-core/src/ask_offers.rs`: `append_ask`, `cluster_asks`, `offer_preview`, `build_offer_card`, `tick`, `dismiss_cluster`.
-- `crates/grokhub-app/src/app/ask_offers_ui.rs`: `note_ask_offer`, `tick_ask_offers`, `ask_offer_dismissed`.
-- Hooks: `chat_ui.rs` (`send_from_composer`), `feed_ui.rs` (`accept_automate_offer`), `pulse_ui.rs` (`pulse_dismiss`).
+- `crates/grokhub-core/src/pulse.rs`: where the offer cards meet the Pulse feed.
+- Hooks: `chat_ui.rs` (send_from_composer), `feed_ui.rs` (accept_automate_offer), `pulse_ui.rs` (pulse_dismiss).
 
 ## Change recipe
 - Threshold or copy: edit core constants / `suggestion_title` / `offer_preview` with fixture tests.
@@ -22,7 +22,7 @@
 - Skipping `dismiss_cluster` on Dismiss: the cluster can return after `last_offered` clears.
 
 ## What depends on it
-- Pulse Automate Accept (`commit_schedule`) and Skill Apply (`apply_idea`).
+- Pulse Automate Accept (`commit_schedule`) and Skill Apply (apply_idea).
 - `same_topic` / `is_one_off_ask` (`ideas.rs`); `parse_nl_automation` (`automation.rs`).
 
 ## Non-obvious
@@ -30,4 +30,4 @@
 - Dismiss is permanent for that cluster key. `tick_ask_offers` runs from `tick_feed_pulse`.
 
 ## See also
-- [nudge-watchers](nudge-watchers.md), [heartbeat](heartbeat.md), [app-module](app-module.md)
+- [nudge-watchers](nudge-watchers.md), [heartbeat](heartbeat.md), app-module

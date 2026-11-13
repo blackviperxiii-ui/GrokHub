@@ -11,12 +11,12 @@
 ## Key files
 - `crates/grokhub-core/src/nudge_watchers.rs`: detect, cooldown, daily cap, card shape.
 - `crates/grokhub-core/src/know_me.rs`: optional tag load.
-- `crates/grokhub-app/src/app/nudge_watchers_ui.rs`: `tick_nudge_watchers`, Settings UI.
-- `crates/grokhub-app/src/config.rs`: `nudge_watchers` in `app.json`.
+- the retired cabin's nudge_watchers_ui.rs: tick_nudge_watchers, Settings UI.
+- the retired cabin's config.rs: `nudge_watchers` in `app.json`.
 
 ## Change recipe
 - New watcher: extend `WatcherId`, snapshot field, `detect_*`, Settings toggle, collector, fixture test in `nudge_watchers.rs`.
-- Posting uses `post_feed_card`; dismiss calls `nudge_watcher_dismissed` from `pulse_dismiss`.
+- Posting uses post_feed_card; dismiss calls nudge_watcher_dismissed from pulse_dismiss.
 
 ## What breaks it
 - Cooldown and snooze keys use `dedupe_key`; changing them re-nags users.
@@ -26,8 +26,8 @@
 - Pulse Feed only; no harness auto-act. GPU offers need `nudge-gpu-offer.json` from a future feed fetch.
 
 ## Non-obvious
-- `tick_nudge_watchers` runs from `tick_feed_pulse` at most every `TICK_EVERY_MS`.
+- tick_nudge_watchers runs from `tick_feed_pulse` at most every `TICK_EVERY_MS`.
 - Steam patch nudges need a second news gid per app after the ledger seeds the first.
 
 ## See also
-- [grokhub-core](grokhub-core.md), [app-module](app-module.md)
+- [grokhub-core](grokhub-core.md), app-module

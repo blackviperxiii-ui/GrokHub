@@ -13,13 +13,13 @@
 - `crates/grokhub-core/src/hobby_paths.rs`: tags → hobbies, catalog, feedback, `tick`.
 - `crates/grokhub-core/src/know_me.rs`: fixture tags via `load_tags`.
 - `crates/grokhub-core/src/focus_app.rs`: last app prefers a matching hobby tip.
-- `crates/grokhub-app/src/app/hobby_paths_ui.rs`: Settings UI, tick, Done/Skip feedback.
-- `crates/grokhub-app/src/config.rs`: `hobby_paths` in `app.json`.
+- the retired cabin's hobby_paths_ui.rs: Settings UI, tick, Done/Skip feedback.
+- the retired cabin's config.rs: `hobby_paths` in `app.json`.
 
 ## Change recipe
 - New hobby: extend `HobbyId`, settings fields, `catalog` steps, tag/app words, Settings checkbox.
 - Feedback stays local (`PathFeedback`); do not raise difficulty past 0..=2.
-- Posting uses `post_feed_card`; Pulse paints pills from `HobbyPathMeta`.
+- Posting uses post_feed_card; Pulse paints pills from `HobbyPathMeta`.
 
 ## What breaks it
 - Cooldown keys use `HobbyId::key`; renaming re-nags users. `HobbyPathMeta` needs serde defaults; keep `app/mod.rs` at budget.
@@ -32,4 +32,4 @@
 - Focus preference maps FocusApp display names back to process fragments.
 
 ## See also
-- [nudge-watchers](nudge-watchers.md), [grokhub-core](grokhub-core.md), [app-module](app-module.md)
+- [nudge-watchers](nudge-watchers.md), [grokhub-core](grokhub-core.md), app-module

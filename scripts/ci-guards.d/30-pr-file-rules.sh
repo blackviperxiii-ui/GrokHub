@@ -70,19 +70,13 @@ inno_version_line() {
   grep -E '^[[:space:]]*#define[[:space:]]+MyAppVersion[[:space:]]' "$file" | head -n1 || true
 }
 
-cabin_reports_version_line() {
-  local file="$1"
-  [[ -f "$file" ]] || { echo ""; return; }
-  grep -E 'assert_eq!\(env!\("CARGO_PKG_VERSION"\),' "$file" | head -n1 || true
-}
-
 grokhub_lock_versions() {
   local file="$1"
   [[ -f "$file" ]] || { echo ""; return; }
   python3 - "$file" <<'PY'
 import sys
 text = open(sys.argv[1], encoding="utf-8").read().splitlines()
-want = {"grokhub-app", "grokhub-agent", "grokhub-core", "grokhub-hub", "grokhub-proto"}
+want = {"grokhub-agent", "grokhub-core", "grokhub-hub", "grokhub-proto"}
 out = []
 i = 0
 while i < len(text):
@@ -231,20 +225,6 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
         fail=1
       elif [[ "$old_line" != "$new_line" ]]; then
         version_hits+=("packaging/windows/grokhub.iss (MyAppVersion)")
-      fi
-    fi
-
-    if printf '%s\n' "${pr_changed[@]+"${pr_changed[@]}"}" | grep -qx 'crates/grokhub-app/src/cli.rs'; then
-      old_cli=$(mktemp)
-      git show "$pr_merge_base:crates/grokhub-app/src/cli.rs" >"$old_cli" 2>/dev/null || true
-      old_line=$(cabin_reports_version_line "$old_cli")
-      new_line=$(cabin_reports_version_line "crates/grokhub-app/src/cli.rs")
-      rm -f "$old_cli"
-      if [[ -z "$old_line" || -z "$new_line" ]]; then
-        echo "ci-guards: could not find the cabin_reports_version line in cli.rs (old/new)" >&2
-        fail=1
-      elif [[ "$old_line" != "$new_line" ]]; then
-        version_hits+=("crates/grokhub-app/src/cli.rs (cabin_reports_version)")
       fi
     fi
 

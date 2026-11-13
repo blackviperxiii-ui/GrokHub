@@ -87,11 +87,6 @@ fn bump_check(root: &Path) -> Result<(), String> {
         "packaging/windows/grokhub.iss",
         &format!("#define MyAppVersion \"{version}\""),
     )?;
-    check_contains(
-        root,
-        "crates/grokhub-app/src/cli.rs",
-        &format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{version}\");"),
-    )?;
     check_contains(root, SHELL_TOML, &shell_toml_line(&version))?;
     check_contains(root, SHELL_CONF, &shell_conf_line(&version))?;
     check_reference(root, &version)?;
@@ -154,8 +149,7 @@ fn check_reference_text(text: &str, version: &str) -> Result<(), String> {
     Ok(())
 }
 
-const LOCK_PACKAGES: [&str; 8] = [
-    "grokhub-app",
+const LOCK_PACKAGES: [&str; 7] = [
     "grokhub-agent",
     "grokhub-code",
     "grokhub-core",
@@ -278,11 +272,6 @@ fn plan_bump(root: &Path, new_version: &str, today: &str) -> Result<BumpPlan, St
             "packaging/windows/grokhub.iss",
             format!("#define MyAppVersion \"{old}\""),
             format!("#define MyAppVersion \"{new_version}\""),
-        ),
-        (
-            "crates/grokhub-app/src/cli.rs",
-            format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{old}\");"),
-            format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{new_version}\");"),
         ),
         (
             SHELL_TOML,
@@ -609,7 +598,7 @@ mod tests {
 
     const OLD: &str = "3.0.2";
     const NEW: &str = "3.1.0";
-    const FILES: [&str; 12] = [
+    const FILES: [&str; 11] = [
         "VERSION",
         "Cargo.toml",
         "Cargo.lock",
@@ -619,7 +608,6 @@ mod tests {
         "packaging/PKGBUILD",
         "packaging/aur/PKGBUILD",
         "packaging/windows/grokhub.iss",
-        "crates/grokhub-app/src/cli.rs",
         "docs/REFERENCE.md",
         "CHANGELOG.md",
     ];
@@ -657,10 +645,6 @@ mod tests {
             fx.put(
                 "packaging/windows/grokhub.iss",
                 &format!("#define MyAppVersion \"{OLD}\"\n"),
-            );
-            fx.put(
-                "crates/grokhub-app/src/cli.rs",
-                &format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{OLD}\");\n"),
             );
             fx.put(
                 SHELL_TOML,

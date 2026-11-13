@@ -30,7 +30,7 @@ image = { workspace = true }
 rusqlite = { workspace = true, features = ["hooks"] }
 # Spike-4b learned tier at rest. All three are already in Cargo.lock and build
 # on Windows CI today: ring (ChaCha20-Poly1305) via rustls/ureq 3, zeroize via
-# rustls, keyring 4 via grokhub-app (Secret Service / Credential Manager / Keychain).
+# rustls, keyring 4 (Secret Service / Credential Manager / Keychain).
 ring = "0.17"
 zeroize = "1"
 keyring = { workspace = true }

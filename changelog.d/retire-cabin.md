@@ -1,0 +1,1 @@
+- The egui cabin is retired: the Tauri desktop app and the hub are what ships. Releases no longer carry the cabin's Linux tarball, Windows Setup or Windows zip, and `install.sh --app cabin` now says the cabin was retired.

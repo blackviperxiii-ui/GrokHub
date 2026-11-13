@@ -69,7 +69,6 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 | Workflow | Runs on |
 |---|---|
 | `pii-guard.yml` (required `pii-guard`) | PR, Queue, push to `beta` and `main`. Superseded PR and beta runs are cancelled. |
-| `deck-shots.yml` | Manual only. Windows screenshots (deck shots and web search shots). 20-minute job; deck shots stop after 6 minutes. Pick shots with the `only` input. |
 | `auto-merge.yml` | PR events into `beta`. Turns on squash auto-merge. Builds nothing. |
 | `retarget.yml` | PRs opened against `main`. Moves them to `beta`. Builds nothing. |
 | `cards-sync.yml`, `claude.yml` | Bot workflows: schedule, issue, review and manual triggers. They build nothing. |

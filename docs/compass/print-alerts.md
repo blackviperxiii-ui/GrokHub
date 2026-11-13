@@ -9,8 +9,8 @@
 
 ## Key files
 - `crates/grokhub-core/src/print_alerts.rs`: parse, `observe`, `alert_card`, control paths.
-- `crates/grokhub-app/src/app/print_alerts_ui.rs`: discover, poll, Settings, approval park.
-- `crates/grokhub-app/src/app/heartbeat_gate.rs`: `tick_housekeep` calls `tick_print_alerts`.
+- `crates/grokhub-core/src/pulse.rs`: alert cards land in the Pulse feed.
+- `crates/grokhub-core/src/update_feed.rs`: feed wiring that names print alerts.
 
 ## Change recipe
 - New printer API: add a pure parse fn + fixture test, then a cabin fetch branch.
@@ -19,10 +19,10 @@
 ## What breaks it
 - Shipping host IPs or API keys in the repo or changelog.
 - Calling poll/discover when `print_alerts.enabled` is false.
-- Raising `mod.rs` past the ci-guards budget — keep Housekeep in `tick_housekeep`.
+- Raising `mod.rs` past the ci-guards budget — keep Housekeep in tick_housekeep.
 
 ## What depends on it
-- Pulse Feed via `post_feed_card`; Settings → Pulse; hard park Approve runs `execute_print_control`.
+- Pulse Feed via post_feed_card; Settings → Pulse; hard park Approve runs execute_print_control.
 
 ## Non-obvious
 - First sample never alerts (missed mid-print); cooldown is `ALERT_COOLDOWN_MS`.
