@@ -161,12 +161,13 @@ const LOCK_PACKAGES: [&str; 7] = [
 
 /// The Tauri shell (`src-tauri/`) is its own Cargo workspace, so its lockfile
 /// holds its own copies of the grokhub-* crates it builds on, plus the shell.
-const SHELL_LOCK_PACKAGES: [&str; 7] = [
+const SHELL_LOCK_PACKAGES: [&str; 8] = [
     "grokhub-agent",
     "grokhub-code",
     "grokhub-core",
     "grokhub-desktop",
     "grokhub-fps-probe",
+    "grokhub-hub",
     "grokhub-proto",
     "grokhub-shell",
 ];
@@ -746,6 +747,7 @@ mod tests {
              [[package]]\nname = \"grokhub-core\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-desktop\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-fps-probe\"\nversion = \"3.1.0\"\n\n\
+             [[package]]\nname = \"grokhub-hub\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-proto\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-shell\"\nversion = \"3.1.0\"\n\n"
         );

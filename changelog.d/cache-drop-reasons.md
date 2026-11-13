@@ -1,1 +1,0 @@
-- A cache drop on the usage line now says why in plain words (old tool output trimmed, model changed, chat compacted and so on), the route log records where the prompt changed, memory recall is checked to pull nothing in for off-topic asks, and a test keeps fields xAI ignores out of every request.

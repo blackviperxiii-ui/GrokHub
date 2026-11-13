@@ -1,1 +1,0 @@
-- A new model from OpenRouter or Claude now runs a two-week tryout on small turns first, with a few free test calls a day and a small share of low-risk turns. It graduates on its record, or steps out for two weeks if it keeps failing or does worse than the models it would replace.

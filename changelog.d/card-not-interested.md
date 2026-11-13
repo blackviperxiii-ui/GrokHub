@@ -1,1 +1,0 @@
-- Cards: Not interested is now the one dislike button on every Pulse card (I don't like is gone, and source posts no longer show a second Not interested). It trains card taste, small at first and stronger with repeats; on ideas it also feeds card taste.

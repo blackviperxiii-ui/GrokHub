@@ -1,2 +1,0 @@
-- The window app can save a chat now. Type /export, or pick Export from a chat's ⋯ menu in History, and the chat is saved as Markdown in your Chats folder (Documents/Loadout/Chats unless you moved it). A card says where it went, with Open, Show in folder and Copy path. A chat with nothing in it yet says so and saves nothing.
-- Settings → Privacy & data shows where your files go, with Open and Change…. The cabin and the window app share the setting.

@@ -1,1 +1,0 @@
-- History, Journal, Queue, Memory and Devices now scroll under a fixed header instead of running off the bottom of the window. The Memory editor fills the page and scrolls inside itself, so Save and the file tabs stay put on a long MEMORY.md.

@@ -1,1 +1,0 @@
-- The desktop app's Windows installer and macOS app now include grokhub-hub next to the app, the same helper the Linux packages ship, and CI runs the desktop shell checks when crates/grokhub-code changes.

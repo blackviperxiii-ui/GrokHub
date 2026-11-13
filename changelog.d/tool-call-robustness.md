@@ -1,1 +1,0 @@
-- Tool calls hold up better: garbled tool arguments get two retries before the run stops with a note, an MCP tool whose schema the provider refuses is sent with no parameters instead of failing every turn, and a dropped call to a read-only or idempotent MCP tool is sent once more.

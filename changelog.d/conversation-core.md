@@ -1,2 +1,0 @@
-- Chat: every personality now sits on one conversation core, so replies lead with the answer, match your length and energy, stay in full natural sentences and keep their warmth through tool work and errors; a reply that slips (stock opener, "the user", checklist talk, clipped notes) gets named once in the next turn's note so the voice corrects itself.
-- Eval: a before/after naturalness set built from real flat replies, plus four live `talk-*` cases that fail a bot-sounding reply.

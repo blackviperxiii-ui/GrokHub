@@ -1,1 +1,0 @@
-- Habit chips: a skill you usually run at the same time of day shows up as a quick chip then. Three taps and it has earned its place; a hide rests it for a month. It goes through the decision engine, so `/learned decisions` says why it showed.

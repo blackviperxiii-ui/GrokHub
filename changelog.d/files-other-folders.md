@@ -1,3 +1,0 @@
-- Your other files now sit together in `Documents/Loadout`: diagnostics zips in Diagnostics (still kept off cloud-synced folders), screen recordings in Recordings, Imagine saves in Images, and the internet log CSV and week recap image in Reports. Older recordings in `~/GrokHub/recordings` can still be deleted from their cards.
-- Saving the internet log twice in a day, or an Imagine image with the same prompt, no longer replaces the earlier file, and the log's save shows Show in folder in the bell.
-- The Skills page shows the real skills folder on every OS.

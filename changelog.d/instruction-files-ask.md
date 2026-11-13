@@ -1,1 +1,0 @@
-- The agent writing to `AGENTS.md`, `CLAUDE.md`, `MEMORY.md` or a skill file now always shows you the change first, even on Always, so a web page can't leave standing instructions for every later chat. Secrets in a `MEMORY.md` write are redacted.

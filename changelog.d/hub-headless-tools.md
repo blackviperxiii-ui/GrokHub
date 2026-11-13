@@ -1,2 +1,0 @@
-- `grokhub-hub` now carries the headless tools the desktop shell has no console for: `--mcp-self` (the agent's skill, connection and automation tools for MCP clients), `bench local` and the `sudo` helper (`--askpass`), plus `--hub` as another name for the hub. The `grokhub-self` server moved into the agent crate; the classic app's flags still work.
-- The desktop shell answers `--version` and `--help`, and treats the classic app's `--agent` and `--tray` like a login start, so old service files and scripts keep working.

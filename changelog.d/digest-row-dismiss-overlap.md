@@ -1,1 +1,0 @@
-- Pulse (cabin): Dismiss stays pinned at the right of a post's row and no longer sits on top of Not interested when the row is too long, as on the daily digest; the rest of the row scrolls sideways beside it.

@@ -1,2 +1,0 @@
-- The weekly self-review now also reads what the app measured about itself: a skill or a model that keeps failing, and an area whose own changes you kept less than before.
-- `/learned report` shows a fault report for the developers, in ids and counts only and without your skill names. Nothing is sent; you copy it if you want to.

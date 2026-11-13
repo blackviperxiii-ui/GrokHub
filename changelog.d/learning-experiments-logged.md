@@ -1,1 +1,0 @@
-- A deliberate try now shows on the list of decisions (`/learned decisions` and the desktop page), once, with why it was shown.

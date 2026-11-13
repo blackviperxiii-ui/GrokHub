@@ -1,2 +1,0 @@
-- Home's Playbooks rows run their playbook: a tap starts it on a new Workboard card and puts the ask in the chat box, so nothing runs until you send it and the usual approvals still apply.
-- Home's Clips tile with no clips yet opens Steam's Settings, where Game Recording turns on. On a PC without Steam, Clips, Squad and the game tiles offer Steam's download page instead of a page or chat ask that couldn't help.

@@ -1,1 +1,0 @@
-- During a live Riot match (League of Legends, VALORANT, 2XKO), asks for gameplay tips get one plain line instead of an answer, because Riot's rules ban live coaching. Settings help and a look back at the match still work.

@@ -1,1 +1,0 @@
-- Wider autonomy: when Loadout is very sure (0.9 or more, seen 10 times or more) it can patch one of its own skills without asking, at most once a day, with Undo on the Done-for-you card. Sending, paying, deleting, secrets and permissions still always ask.

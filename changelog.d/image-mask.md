@@ -1,1 +1,0 @@
-- Screenshot-heavy chats send far less: only the newest 3 images stay whole, and older ones become a short note that asks for a fresh screenshot if one is needed. Old images are dropped three at a time, or along with any other history trim, so the prompt cache breaks once per batch. Set `keep_recent_images` in `history_trim.toml` to keep more; `age_out = false` keeps every image.

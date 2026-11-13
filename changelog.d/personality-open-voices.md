@@ -1,3 +1,0 @@
-- Every voice now talks with you like an adult friend: most subjects are fine, mature ones included, it can match your swearing, and it skips the lectures and disclaimers. It still turns sincere for grief, health or real distress.
-- Nyx flirts back playfully and suggestively, never explicitly.
-- Groundwork for the 18+ heat dial: with adults-only on, every voice can tell crude jokes at Cheeky, Spicy or Filthy (jokes, never sex chat), and Spicy and up only go to providers that allow adult chat.

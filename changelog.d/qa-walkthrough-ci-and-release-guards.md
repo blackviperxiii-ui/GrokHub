@@ -1,4 +1,0 @@
-- CI: a failed `changes` job now fails the required `linux` and `windows` checks instead of letting them skip, and a change to Markdown that is compiled into the app or read by a test runs the tests.
-- Release: a pushed tag must match `VERSION` before anything is built or signed, and the unsigned Windows staging files can no longer be merged into a release.
-- Cards sync: only an issue the sync opened or one of the project's own people opened can close a card.
-- Guards: the pinned-actions check also reads quoted `uses` keys, and new guards cover the release downloads, the tag check call and embedded Markdown.

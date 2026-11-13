@@ -1,5 +1,0 @@
-- Quick chips are bigger and easier to read: 48 px tall, 16 px text, 8 px apart.
-- Alt+1, Alt+2 and Alt+3 pick a chip; Tab, the arrow keys and Enter work too.
-- Every chip follows one tap rule for its kind: ask, open, run with Undo, or show first. Snoozing backup reminders or adding a release reminder from a chip now offers Undo for 30 seconds.
-- A reply's follow-up chips are saved with the chat, come back after a restart, and run in the mode (Chat, Plan or Ask) of the turn they came from.
-- One switch, Settings → Behavior → Suggestions, turns chips off everywhere; off, replies no longer ask for follow-ups either.

@@ -1,1 +1,0 @@
-- When a chat that xAI compacted on the server moves to OpenRouter or the local model, those models now get a clipped text copy of the earlier conversation instead of losing it.

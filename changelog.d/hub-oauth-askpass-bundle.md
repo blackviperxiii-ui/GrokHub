@@ -1,1 +1,0 @@
-- The desktop app's Linux packages now include grokhub-hub, so sudo prompts from agent commands ask through the system dialog and the Cua gate starts with it, and `grokhub-hub --oauth` signs in with Grok into the same keychain entry the app reads.

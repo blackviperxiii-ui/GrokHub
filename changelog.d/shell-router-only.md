@@ -1,3 +1,0 @@
-- Shell: every chat step goes through the router, which picks xAI, a provider you set up, or Local AI, and the model and effort; with no sign-in or key, a ready Local AI answers.
-- Shell: no model or effort shows or can be picked anywhere: the model picker, the Model and Effort chips, the Defaults model row and `/model` are gone. Ask in chat to hear which model and effort answered.
-- Shell: Settings keep setting up your xAI key or sign-in and Local AI; a model saved by an older version is dropped.

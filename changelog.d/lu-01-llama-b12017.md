@@ -1,1 +1,0 @@
-- Local AI engine updated to llama.cpp b12017; local models only get reasoning levels they support.

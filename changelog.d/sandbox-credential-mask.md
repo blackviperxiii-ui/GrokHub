@@ -1,1 +1,0 @@
-- Sandbox (Linux and macOS): tokens in the app's environment reach sandboxed commands only as stand-ins; the egress proxy puts the real token back in request headers only for that token's own hosts (GitHub, GitLab, npm, crates.io, Hugging Face, xAI), over HTTPS it ends with a session CA limited to those hosts. `--doctor` counts masked tokens.

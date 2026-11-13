@@ -1,1 +1,0 @@
-- Download models: the Voice tab no longer offers the on-device speech-to-text model, since nothing transcribes with it yet. A copy already downloaded still shows so it can be removed.

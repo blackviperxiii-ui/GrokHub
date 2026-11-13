@@ -1,1 +1,0 @@
-- Loadout never opens a process with memory-read access, never treats a reused pid as its own, and CI now fails on any API anti-cheats flag.

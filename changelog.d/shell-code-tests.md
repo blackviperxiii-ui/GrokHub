@@ -1,1 +1,0 @@
-- Shell: the Code tab can run a project's tests. The first run shows the exact command and asks before running; after that, the same command is remembered until you change it or forget it in Settings.

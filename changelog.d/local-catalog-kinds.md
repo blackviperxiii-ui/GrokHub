@@ -1,1 +1,0 @@
-- The on-device model catalog says what each model is for (chat, draft, vision, image, voice and other kinds), who made it uncensored and how, and caps the standard chat models at 25; draft, vision, image, voice and other specialty models don't count toward the 25. No model claims vision until its image reader downloads with it.

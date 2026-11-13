@@ -1,1 +1,0 @@
-- Memory recall now finds notes by meaning as well as by words, using a small local embedding model (potion-base-8M, about 30 MB, fetched once in the background and checked against a pinned hash). "Which GPU do I have" finds "graphics card is an RTX 4080". Replaced facts are never recalled. Set `"memory_embeddings": false` in app.json for word search only.

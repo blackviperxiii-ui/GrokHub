@@ -1,1 +1,0 @@
-- A run no longer pauses after about 1M input tokens. It keeps going until the task is done, and stops only when its steps keep failing or repeating with no new work: first it gets a nudge to try a different way, then it stops and says so.

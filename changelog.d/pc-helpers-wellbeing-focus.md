@@ -1,1 +1,0 @@
-- Settings → Your PC gets a PC helpers page with the wellbeing and focus switches the cabin has: help with the app you were just in, sleep when idle (15 minutes to 4 hours) and the daily rhythm. They save in the same files, so both apps agree, and the app now counts rhythm minutes and sleeps an idle PC while the cabin is closed.

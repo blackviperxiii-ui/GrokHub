@@ -1,1 +1,0 @@
-- Every image and video prompt now passes the hard-ban check before it goes to Grok Imagine, from chat, the Imagine page and the Tauri app alike: a prompt about minors or age-play, non-consent, real people in sexual content, or animals is never sent, and an 18+ prompt stays off online services (18+ images will come from on-device image making). Each says so in place of a result.

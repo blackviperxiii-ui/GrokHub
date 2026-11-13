@@ -1,1 +1,0 @@
-- Desktop app: /recall, /forget, /memory prune and dream, /dream, /learned, /skill, /skills changes, undo and restore, /connections changes, /automations changes, /privacy, /brief and /health now run in the composer, and the forgetting ones show what goes before they ask.

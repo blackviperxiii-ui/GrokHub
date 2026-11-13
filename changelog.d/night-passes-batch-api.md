@@ -1,1 +1,0 @@
-- On an API key, the nightly memory dream and the weekly self-review now go through xAI's Batch API at 20% off. A pass waits up to three hours for its answer and falls back to a normal call. `"batch_background": false` in app.json turns it off.

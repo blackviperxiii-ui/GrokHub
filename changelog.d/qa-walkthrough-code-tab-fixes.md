@@ -1,6 +1,0 @@
-- Code tab editor: a save is refused when it would go through a dangling link (outside the project or into `.git`) or into another project after the project folder changed, a file with Windows line endings keeps them, a slow open or a late save can no longer replace or mark the wrong file, and the changed-files list no longer draws on top of the editor.
-- Code tab terminal: a large paste can no longer freeze the app (the terminal says it is busy instead), a shell that ended is noticed while a job still holds the terminal, the first output of a new shell is no longer lost, a key split across two reads stays hidden, ordinary file and branch names are no longer shown as `[redacted]`, and the colours follow the theme.
-- Code tab tests and deploys: output hides the project's secret values also on long lines, across stdout and stderr and for multi-line values, and a running test or deploy has a Stop button that ends everything it started.
-- Code tab push: a tag with the branch's name can no longer bend the push target, and the confirm card says when the repo's pre-push hook will not run.
-- Web access: a request that is only half sent is closed as idle.
-- CI: the desktop shell's lockfile now gets the same supply-chain check as the rest.

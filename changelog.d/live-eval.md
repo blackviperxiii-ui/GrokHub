@@ -1,1 +1,0 @@
-- New live eval for the agent: 20 real tasks (PC diagnostics, settings, mods, memory recall, small edits, the no-cheat line) run several times against a real model under a hard dollar cap, reporting pass^k, recall, cost, cached share and latency.

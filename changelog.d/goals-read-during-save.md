@@ -1,1 +1,0 @@
-- Goals no longer read as empty for a moment on Windows while they're being saved.

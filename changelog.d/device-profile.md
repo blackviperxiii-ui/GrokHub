@@ -1,1 +1,0 @@
-- Loadout reads this PC once at launch in both apps: graphics card, memory, battery, screen, and the Windows or Linux text size, motion, contrast and dark mode settings. The local AI is sized to the hardware and the router steps down on a low battery at every launch, not only when setup is opened, and the desktop app now hands the hardware to the local model launcher too.

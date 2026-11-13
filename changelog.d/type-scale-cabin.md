@@ -1,1 +1,0 @@
-- Text size: one type scale across the app (12 caption, 14 body, 16 prose, 20 section, 24 headline, 32 display), each on a 4px line grid. Chat replies and the composer read at 16px with 1.5x line height, markdown headings stop shouting, page titles step down on narrow windows, and a guard test keeps text on the scale.

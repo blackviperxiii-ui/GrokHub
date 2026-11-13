@@ -1,1 +1,0 @@
-- Stores: a JSON store another program is holding for a moment (a Windows replace, a virus scanner) is read again for up to half a second, and is never moved aside as broken. Before, a read that raced a save could quarantine a live store, which showed up as lost Pulse cards and a flaky Windows test.

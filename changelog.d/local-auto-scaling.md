@@ -1,4 +1,0 @@
-- The on-device model now sizes itself to each task from what is free right now: free VRAM (NVIDIA and AMD), free RAM, CPU load, battery and a running game. There is no setting for it; the running-model row shows the mode.
-- Balanced (the default) runs your pick, or a lighter model while the computer saves power or memory, or while less is free than the pick needs.
-- Gaming runs the lightest model on the CPU with half the threads, so a game keeps the GPU and its frame rate.
-- Performance: on AC power with the CPU mostly idle, a hard task (code, debugging, planning, reasoning or a long paste) steps up to the biggest downloaded model that fits with room to spare and still runs fast. The reply starts on the model already loaded; the bigger one loads once the chat goes quiet, and steps back down when the computer gets busy or a game starts.

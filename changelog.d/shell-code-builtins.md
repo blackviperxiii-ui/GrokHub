@@ -1,1 +1,0 @@
-- Shell: the Code tab lists the app's built-in skills, read only. A built-in shadowed by a project or user skill of the same name is marked as overridden, and comes back when that skill is removed.

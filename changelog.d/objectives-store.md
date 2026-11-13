@@ -1,1 +1,0 @@
-- Your own goals now have a home: a goal store shared by the desktop app, web and phone, with goals linked to a game, a bar that starts where you really are, and XP at each quarter of the way (50) and when it's done (200, or 300 for finishing a game or a skill to 99). Suggested goals wait for Track or Not now, which hides one for 30 days.

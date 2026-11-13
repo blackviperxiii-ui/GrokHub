@@ -1,1 +1,0 @@
-- Shell: a Code tab shows the workspace's repo, its changed files and each file's diff (read only), and can hand a review to the agent. First slice of the coding toolkit.

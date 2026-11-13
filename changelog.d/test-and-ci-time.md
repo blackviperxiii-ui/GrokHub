@@ -1,4 +1,0 @@
-- Tests: the Grok Build deny-rule tests compile each rule's pattern once instead of once per rule per command (the three `gb_` tests: 48 s → 6 s locally; they were the slowest in the suite).
-- Tests: the UI suite runs in vitest's `vmThreads` pool, so each worker loads vitest, jsdom and the test libraries once instead of once per file; every file still gets a fresh jsdom window (`npm test`: about 40 s → 17 s locally).
-- CI: the serial `channel_tip_tests` start first in nextest, so they no longer run one at a time at the end of the Windows job.
-- Docs: the compass says CI runs nextest, and that core has one HTTP client (`http.rs`).

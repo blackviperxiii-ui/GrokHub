@@ -1,2 +1,0 @@
-- Mods finds new mods on its own: a game that shows up on this PC gets its mods looked up right away, every game gets its top mods weekly, and a deeper page a day keeps variety coming, all from the sanctioned mod sites with no AI calls. New finds get their own tab and a count on each game.
-- For you on Mods now shows five picks, at most two per game, in a cleaner row of cards.

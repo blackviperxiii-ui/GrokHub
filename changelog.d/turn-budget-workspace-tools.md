@@ -1,2 +1,0 @@
-- Agent: a run learns how many steps its kind of task usually takes from past successful runs and gets one note to step back and finish when it reaches that many, plus one note to wrap up at 80% of its token budget, before anything stops it.
-- Agent: each workspace's up-front tool list follows what its sessions actually use: tools unused there for ten sessions wait in the deferred index, and deferred tools used in most sessions load up front. The list stays fixed for a session, so the prompt cache holds.

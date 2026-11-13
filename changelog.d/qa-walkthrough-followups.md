@@ -1,5 +1,0 @@
-- Mods: crash recovery keeps a mod folder whose install record can't be read, along with the backups of the game files it replaced, and says so.
-- Home: with system checks off, the Updates & Drivers tile checks again once a minute instead of starting a read on every repaint.
-- Shell: an approval or question card whose answer didn't reach the agent shows its buttons again.
-- Shell: web access serves only the app's own files, even in a dev build.
-- Shell: the Nyx dock shows when the window widens, even if it widens right after Chat opens (a flaky test traced to this).

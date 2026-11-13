@@ -1,1 +1,0 @@
-- Each local chat model now gets a refusal check on your PC: while the computer sits idle, it answers a fixed set of everyday asks (like killing a stuck process or a safe medicine dose) once, and Running now shows how many it answered and which one it turned down. It runs after the draft model's speed test and stops the moment you send a reply.

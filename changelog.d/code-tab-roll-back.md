@@ -1,1 +1,0 @@
-- Code tab → Roll back: the branch's newest commits, each with Revert. A revert is a new commit that undoes the old one, then the push goes through the push guard. It always asks first and shows both commands, in every mode; it never resets, rewrites history or force-pushes, a conflict stops it with nothing changed, and main or the default branch is never reverted and pushed.

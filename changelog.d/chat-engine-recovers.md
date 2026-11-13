@@ -1,1 +1,0 @@
-- A chat whose engine crashed or quit mid-reply now starts a fresh engine on its own, picks the reply back up once, and keeps answering new messages instead of failing with "sending on a closed channel" or dropping them. Engine crashes are written to `logs/engine-crash.log` in the config folder.

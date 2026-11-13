@@ -1,3 +1,0 @@
-- The cabin's routing commands are gone: `/model`, `/m`, `/mode`, `/models`, `/effort` and `/why` (with `/why models`, `/why table` and `/why local`) now answer "Unknown command" like any retired command, and nothing lists them in `/help` or the command picker. Auto alone picks the model and effort; ask in chat to hear which answered.
-- What `/why local` showed lives in Settings → AI models → Local AI: whether the on-device model can take work, the governor's level and reason, the tier, heavy steps waiting for idle time, and where the governor log is.
-- The prompt-cache share stays on Home's AI usage tile, and the diagnostics export is unchanged.

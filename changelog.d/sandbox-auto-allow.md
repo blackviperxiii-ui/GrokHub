@@ -1,1 +1,0 @@
-- In Auto mode, ordinary shell commands that the sandbox fully holds (Linux with Landlock and its own network, or macOS) now run without the judge call or a card. Hard classes, `outside_sandbox`, privilege raising, dangerous commands and your Ask rules still ask; Supervised still asks every time; `auto_allow = false` in `shell_sandbox.toml` turns it off.

@@ -1,5 +1,0 @@
-- Quick chips come to the desktop and web app: one row of up to three next steps under the chat box, on Home, and in the empty command palette, from the same engine the cabin uses.
-- A reply's own follow-ups join the row under the box, and a tap sends them in the mode the reply was written in.
-- Every chip has a × to hide it, a tip that says why it is there, and Alt+1 to Alt+3 to tap it; what you pick and hide teaches the row.
-- Taking a Pulse idea on Home now counts as accepting it.
-- New Settings → Behavior → Suggestions switch, on by default.

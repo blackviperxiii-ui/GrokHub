@@ -1,3 +1,0 @@
-- Auto routing: every chat turn is now read on your PC for what kind of ask it is (a quick hello, a code fix, a debug, a plan, math and more). That read picks the right model lane and how hard to think, so easy turns stay cheap and hard ones get full reasoning.
-- Long chats keep the same model between turns so the prompt cache stays warm. Effort still changes turn by turn.
-- Ask "what model are you?" or "what effort?" in chat and you get the real answer for that turn. Nothing shows it anywhere else.

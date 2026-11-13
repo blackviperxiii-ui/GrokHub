@@ -1,1 +1,0 @@
-- Docs: reorganize README.md with installation, build, usage, configuration, architecture, documentation, and contributing sections.

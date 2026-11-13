@@ -1,1 +1,0 @@
-- WebSocket mode opens within 3 seconds or hands the turn to HTTP, Stop works while it opens, a socket the server closed between turns reopens cleanly, idle sockets close after 10 minutes, and a request the server already took is never quietly sent again over HTTP.

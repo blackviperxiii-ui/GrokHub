@@ -1,2 +1,0 @@
-- Pictures on your own PC have a second model, Chroma1-HD, in the Image tab of Models. It's used when Z-Image Turbo isn't downloaded.
-- Macs with Apple silicon can now make pictures on the device too: the picture engine downloads for macOS and runs on the Mac's graphics chip.

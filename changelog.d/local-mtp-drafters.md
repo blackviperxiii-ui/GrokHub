@@ -1,1 +1,0 @@
-- Every on-device model now has its own uncensored draft model: the matching abliterated multi-token-prediction heads from its own Hugging Face repo, pinned by hash. It downloads right after the model when the drive has room, and the speed test still decides whether it stays on. Draft model messages no longer mention a Manual draft setting.

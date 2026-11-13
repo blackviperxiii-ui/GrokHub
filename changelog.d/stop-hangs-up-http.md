@@ -1,1 +1,0 @@
-- Stop now hangs up the connection right away, even while the model is still thinking with nothing shown yet, so the server stops generating and billing, and a local model gives the GPU back at once.

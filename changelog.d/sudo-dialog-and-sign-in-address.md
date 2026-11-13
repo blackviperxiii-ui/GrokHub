@@ -1,5 +1,0 @@
-- A sudo password dialog closes when the command that asked is stopped or times out, and a password is remembered only once it reached a `sudo` that was still running.
-- Without a session runtime folder (`XDG_RUNTIME_DIR`), the sudo helper is kept in the config folder, not in a temp folder that sandboxed commands may write.
-- Sign in with Grok refuses a page or endpoint address whose real host is not xAI's (`https://not-xai.example?.x.ai/device` passed the check before); the profile photo check reads the host the same way.
-- The sign-in test override (`GROKHUB_SHELL_OAUTH_URL`) is taken only when the host the request would reach is this computer; an address with `@`, `\`, `?` or `#` is ignored.
-- `grokhub-hub --oauth` asks again when a poll gets no answer (a dropped connection) while the code is still good, and says why once.

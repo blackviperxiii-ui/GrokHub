@@ -1,2 +1,0 @@
-- Chat: after a turn that found nothing, the next turn knows it, so a "thanks" no longer gets "glad it helped"; a reply that takes the credit anyway is sent back once to say it came up empty.
-- Chat: small talk no longer shows the model-switch line or thoughts that talk about the app's own tools, terminal, browser tool, rules or routing; work turns keep them. The per-turn steps note the model reads no longer says "playbook" or "cabin", so models stop echoing those words.

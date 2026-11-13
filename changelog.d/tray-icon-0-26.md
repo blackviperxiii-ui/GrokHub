@@ -1,1 +1,0 @@
-- Internal: updated the Windows tray icon library to 0.26, which also drops the unused Linux GTK 0.18 packages from the lockfile. The tray icon and its menu work the same as before.

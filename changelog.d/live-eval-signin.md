@@ -1,1 +1,0 @@
-- Live eval: `--auth signin` runs on the app's saved Grok sign-in (SuperGrok pool) instead of an API key; read-only, never refreshes or writes the keychain.

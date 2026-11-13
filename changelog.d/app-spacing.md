@@ -1,1 +1,0 @@
-- Spacing: the cabin uses one spacing scale (2, 4, 8, 12, 16, 24, 32 and up), so gaps, card padding and page margins line up across every page; pages tighten to a 16px margin on narrow windows, every control is at least 24px tall, and card corners match the new app.

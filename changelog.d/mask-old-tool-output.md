@@ -1,1 +1,0 @@
-- Long agent runs keep the newest ten tool results whole and fold older big ones into a short note with the call, a summary and a path to re-read them, so long chats send far fewer tokens.

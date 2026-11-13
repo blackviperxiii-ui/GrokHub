@@ -1,1 +1,0 @@
-- Docs: the Pulse section of the reference now covers card reports and Show the full report, the chips and Remind me later, card chat, how a fix runs (receipts, the live checklist, the all-off switches), and the fan, driver and clock rules.

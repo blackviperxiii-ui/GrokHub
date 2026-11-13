@@ -1,3 +1,0 @@
-- Show in folder now opens the folder with the file selected (Explorer on Windows, Finder on macOS, your file manager on Linux); diagnostics use it.
-- One place picks the app's data folder for every part of the app; the LAN hub now uses `%APPDATA%\GrokHub` on Windows and brings over its old state once.
-- A `folders.json` setting remembers where your own files go (`Documents/Loadout` by default), ready for exports and Settings.

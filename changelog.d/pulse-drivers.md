@@ -1,3 +1,0 @@
-- Driver updates on Linux are checked twice before anything changes: the update list must name a newer GPU driver or firmware package, and the installed and repo versions, read again just before the fix, must match it. Any mismatch and nothing runs.
-- A driver update runs only when there is a way back: a system snapshot, or the old package still in pacman's cache or offered by apt. Undo puts the old driver back. Never while a game runs.
-- On Arch the update is a full system update from the package lists already on disk, because Arch doesn't support updating one package alone. On Windows the card points to the GPU maker's own app or Windows Update.

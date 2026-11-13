@@ -1,1 +1,0 @@
-- Shell: Settings → Account offers Sign in with Grok (device code) on desktop and iOS, so a Grok subscription works without an xAI API key. The sign-in is kept in the system keychain and used before a saved key; the key form stays below as the second option.

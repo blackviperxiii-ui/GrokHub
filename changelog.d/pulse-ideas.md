@@ -1,2 +1,0 @@
-- Pulse: ideas are about your games and PC now. Idea groups are Games, PC, Mods & builds, Deals and Automations, with "More for you" for the rest; ideas saved under the old groups move over on their own.
-- Pulse: idea runs read the games you play lately, the topics you follow and your newest open PC health findings, so ideas are grounded in your own setup. Game ideas stay read-only and allowed-data only.

@@ -1,1 +1,0 @@
-- Pulse cards now say what they found. A failing automation's card names it, says how many runs failed and what the last error was; a finished run's card leads with what its reply found instead of the automation's prompt; the quiet-hours digest keeps each update's own line; a crash card names the program it is about. Discuss starts the chat from the card's whole report.

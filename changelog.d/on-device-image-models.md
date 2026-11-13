@@ -1,2 +1,0 @@
-### Added
-- Download models → Image now offers Z-Image Turbo (about 6.4 GB with its text encoder and VAE) and the picture guard, Qwen3-VL 2B (about 2.2 GB), which will check every on-device picture against the hard bans before it's shown. Downloading Z-Image also fetches the stable-diffusion.cpp picture engine (Vulkan build, about 35 MB, Linux and Windows x64). Making pictures on device comes in the next update. The speech and picture engines now share one pinned, checked installer, in both the desktop app and the new shell.

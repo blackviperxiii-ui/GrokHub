@@ -1,1 +1,0 @@
-- Pulse: the quiet-hours roll-up lists every held update with what it said, and the systems digest names its wins, each failing service or automation and why, what is blocked, the ready update with a link to its release notes, and every next step in full.

@@ -1,2 +1,0 @@
-- Chats can now hand off between voices as the topic drifts: a build error mid-hangout brings in Chief Engineer, venting brings in Gentle Listener, and the chat eases back to its home voice after. A hand-picked voice or "talk like ..." holds it in place.
-- With 18+ on, a voice drops a quip now and then when the room is right, never on a frustrated or serious turn. "Roast me harder" and "ease off" move the heat for that chat.

@@ -1,4 +1,0 @@
-- Auto routing now learns from your own chats: when an answer worked (you moved on or copied its code) or didn't (you asked again, or its tools kept failing), the router leans toward the model and effort that served you best for that kind of ask, at the lowest cost that holds up.
-- The router only tries something new on easy, everyday turns, and only a stronger or equal option; hard, high-stakes, agentic and safety-routed turns keep the usual route.
-- Router tuning runs silently: the weekly router suggestion cards are gone, and a change is kept only when your own logged turns show it does no worse. Old router cards are cleared from Home.
-- What the router learns stays on this device and holds only ids, counts and probabilities, never your text.

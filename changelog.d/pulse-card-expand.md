@@ -1,1 +1,0 @@
-- A Pulse card shows its short summary, and Full report opens the whole report right on the card. The quiet-hours digest opens to each update's summary, and each one opens its own card.

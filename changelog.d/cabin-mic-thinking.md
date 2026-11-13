@@ -1,1 +1,0 @@
-- Voice mode: while it works on an answer, the mic shows three dots circling it, so Thinking no longer looks like it's still listening. Still under reduced motion.

@@ -1,1 +1,0 @@
-- Shell: snap the desktop Nyx dock and desk menu padding and type onto the design scales.

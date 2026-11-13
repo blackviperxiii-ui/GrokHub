@@ -1,1 +1,0 @@
-- Exporting a chat now always says where it went. It saves to `Documents/Loadout/Chats` (then the Desktop, then the app folder if that can't be written), shows "Saved <file> to Chats" with a card that opens the file, shows it in its folder, or copies its path, and says why in plain words with Try again when it fails. History exports no longer overwrite an older file.

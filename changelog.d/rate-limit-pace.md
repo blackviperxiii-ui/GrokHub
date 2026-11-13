@@ -1,1 +1,0 @@
-- When xAI says to slow down, Loadout waits at most 30 seconds and says so in the thinking line. Calls to each model are paced under xAI's per-second limit, so parallel tools and subagents don't pile into rate limits.

@@ -1,1 +1,0 @@
-- Voice mode in the app: one tap and you talk hands-free; it hears when you finish, sends what you said, and speaks the reply sentence by sentence as it streams (xAI voice with a key, the on-device voice without). Talk over the reply or tap to stop it.

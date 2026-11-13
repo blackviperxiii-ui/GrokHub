@@ -1,1 +1,0 @@
-- A quip bank for casual chat: example jokes at each heat (clean, cheeky, spicy, filthy) that a voice riffs on with the real moment instead of pasting. Quips come at most every 4 to 6 turns (every 3 at Filthy), never during a fix, money, settings or a rough mood, back off when you don't laugh, and rotate so they don't repeat. "Roast me harder" and "ease off" are understood.

@@ -1,2 +1,0 @@
-- Pulse PC health cards that run hot now offer "Run the fans at full speed". The app saves each fan's setting first, checks the fans read full speed after, and Undo fix puts every fan back with its own step. It never runs during a game, under CoolerControl, or on Windows.
-- The PC health sheet's footer now says what the app may change: fans only with a backup, drivers only from the official source after a double check, and never clock speeds or a running game.

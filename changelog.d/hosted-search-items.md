@@ -1,1 +1,0 @@
-- Grok's hosted web and X search: its search calls now go back with the next request (xAI asks for every output item), the pages a reply cites are kept, and each call's record counts the searches billed. Search rounds per reply are capped by what the turn is for: 2 for chat, 3 for a task, 5 for research.

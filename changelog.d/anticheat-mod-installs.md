@@ -1,1 +1,0 @@
-- Mod installs now know the game's anti-cheat. Loadout reads it from the game folder and the running services (names only), refuses anything that turns an anti-cheat off, and offers a mod with a proxy-DLL loader or ReShade as offline only, with a plain note on the card and on the installed mod.

@@ -1,1 +1,0 @@
-- Linux: installing from a clone (`scripts/install.sh`) now builds the Tauri desktop app and the hub by default. A cabin install that started at login now starts the new app at login instead; `--app cabin` still builds the old cabin for now.

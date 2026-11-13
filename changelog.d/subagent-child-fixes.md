@@ -1,2 +1,0 @@
-- Helpers are steadier: one that crashes gets one fresh try, a helper keeps its chat's background or quick route, a SubagentStop hook can send a helper back once, its result says plainly how it ended, and a worktree it didn't change is removed (old ones are tidied after three days).
-- A helper's question shows in the app window even after the reply ended, stays until answered, and two helpers asking at once each get their own answer.

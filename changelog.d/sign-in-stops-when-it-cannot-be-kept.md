@@ -1,1 +1,0 @@
-- Sign in with Grok in the desktop app stops and says why when xAI said yes but the sign-in could not be kept (a keychain that is not available), instead of waiting on a code that was already used.

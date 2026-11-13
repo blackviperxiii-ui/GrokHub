@@ -1,1 +1,0 @@
-- When a provider you added hits a limit, runs out of credit (a 402 now counts as out of credit, not a mystery failure) or falls over, the turn no longer dies there: that model rests for a minute and Grok takes the turn instead; if Grok was already down and its stand-in provider fails the same way, the on-device model answers.

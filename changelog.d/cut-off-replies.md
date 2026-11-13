@@ -1,1 +1,0 @@
-- A reply that drops partway is no longer sent again, so its text doesn't show twice or get billed twice. The turn stops with what showed, and that text stays in the chat.

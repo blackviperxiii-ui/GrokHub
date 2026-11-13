@@ -1,2 +1,0 @@
-- Settings → Personality has a Dynamic chat switch (on by default) and, with adults-only on, a Heat dial: Cheeky, Spicy or Filthy. The 18+ check now says plainly what turning it on changes.
-- When another voice steps in for part of a chat, the chat's personality pill shows it, and the switch sheet offers Keep to stay in that voice.

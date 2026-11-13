@@ -1,1 +1,0 @@
-- Sandbox (Linux): a model-written command gets its own network namespace whose only way out is the egress proxy, a seccomp filter against new Unix sockets, vsock and io_uring, and empty stand-ins for secret folders (SSH and GPG keys, cloud and registry credentials, browser profiles, the sign-in folder, the config folder). `--doctor` reports how commands are confined.

@@ -1,1 +1,0 @@
-- Cards: each Pulse post's ··· is back with one item, Why I created this. Snooze and Delete now sit in the button row when they suit the card (Snooze for time-bound cards, Delete for stale, repeated or finished ones, both when unsure), between the card's own buttons and I don't like.

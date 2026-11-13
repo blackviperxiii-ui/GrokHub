@@ -1,1 +1,0 @@
-- Stop now ends a waiting reply within about a second instead of up to two minutes. A long quiet think at high or xhigh effort gets 300 seconds before it counts as stalled.

@@ -1,1 +1,0 @@
-- Tests: copies of the cabin tests that cover shared core and agent logic now live in those crates, so the coverage stays when the cabin is retired.

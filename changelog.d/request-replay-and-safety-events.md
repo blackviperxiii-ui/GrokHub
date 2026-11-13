@@ -1,2 +1,0 @@
-- Every model request is now kept sealed on this computer by content hash for 14 days, so a turn can be replayed byte for byte (`examples/replay_request`). A chat's shared prefix is stored once, and `request_replay.toml` (`enabled`, `keep_days`) turns it off or changes the window.
-- Each tool call a rule, the Auto judge, a hook or the sandbox stopped or asked about now leaves one sealed safety event (who decided, what the person answered, and the request that produced the call), with no arguments or refusal text.

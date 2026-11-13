@@ -1,1 +1,0 @@
-- Home: one shared tile model (what a tile shows, its state, its buttons, how often it refreshes and when it counts as stale) and one set of tile words for storage, updates, game mode, connection, AI usage and GPU temperature, so every Home surface says the same thing. A saved layout that puts a module in a size it can't draw now falls back to the default for that slot.

@@ -1,1 +1,0 @@
-- Backup and move for everything the app learned: `/learned backup` saves it to one file in the config folder, `/learned import` takes that file on a reinstall or a second PC, and `/learned restore` puts back what was there before the import.

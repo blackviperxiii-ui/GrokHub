@@ -1,1 +1,0 @@
-- After a long chat compacts, the rules you gave earlier ("never push to main", "always run fmt first") and the safety rules are re-sent word for word, so they don't fade. The app's own nudges are tagged so they're never mistaken for your words.

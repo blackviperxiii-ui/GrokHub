@@ -1,4 +1,0 @@
-- A message typed in one chat while another chat's reply runs now waits for its own chat. It never sends into whichever chat is open when the other reply ends, and it goes once you open its chat again. Activity shows which chat each waiting message is for.
-- Stop hands back only the open chat's waiting messages; another chat's keep waiting. Steer now only joins a message to its own chat's reply, and a retry after a failed step only ever sends to the chat it came from.
-- Send and Stop belong to each chat: only the chat whose reply is running shows Stop, its glow and thinking rim. New chat never reopens the chat whose reply is still starting.
-- In the desktop shell, Clear chat or deleting the open chat while a reply runs opens a chat that shows Send. The old chat's waiting messages go back in the box instead of sending into the new one, and what you type in the new chat goes there.

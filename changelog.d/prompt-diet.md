@@ -1,1 +1,0 @@
-- A lean fixed prompt and every-tenth-line `read_file` numbers are built behind `prompt_diet.toml` (both off) and wired into the A/B eval, so the paired eval can decide whether either ships.

@@ -1,1 +1,0 @@
-- When xAI is down, overloaded or unreachable, an ordinary chat turn is answered by a provider you set up (Grok on it first), and failing that by this computer's model, instead of ending in an error. 18+ chats still go only to this computer's model.

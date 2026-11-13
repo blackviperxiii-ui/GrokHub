@@ -1,3 +1,0 @@
-- Shell: streamed reply text no longer re-renders the whole app on every chunk (100 chunks: 100 app renders before, at most 2 now); the Activity Dock still updates on tool steps, asks and the end of a turn.
-- Shell on phones: scrolling re-renders the app only when the bottom bar actually slides, not on every touch-scroll event (a 60-step swipe: 59 renders before, at most 2 now).
-- Shell: loading settings, which reads the keychain, runs off the main thread, so the window isn't held up while it first paints.

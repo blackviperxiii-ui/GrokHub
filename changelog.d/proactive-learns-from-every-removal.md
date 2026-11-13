@@ -1,5 +1,0 @@
-- Pulse: a suggestion you Delete, Ignore, Snooze or mark Not interested stays away instead of coming back on the next look, and a suggestion that never reached the page no longer uses up the suggestion budget.
-- Pulse: Delete or Ignore on a nudge rests that watcher for a week, as Dismiss does.
-- `/goal` saves through the same lock as the app's other settings changes, keeps a goal to 200 characters and refuses one that holds a key or password.
-- Nudges: a crash or update check that hangs is stopped after 10 seconds, the crash watcher reads only the newest 500 error lines, and the GPU driver watcher no longer probes the hardware when no driver is on offer.
-- Workboards: a board with several running or blocked cards reads the outcomes log once per page instead of once per card.

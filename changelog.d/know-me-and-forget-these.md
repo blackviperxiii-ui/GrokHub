@@ -1,1 +1,0 @@
-- Settings → Pulse → Know me: the opt-in scan of names and counts on this computer, a switch per signal, Scan now, and "What I know about you" with Delete per tag and Wipe all, both asking first. Settings → Permissions: each allowed scope lists what it taught, with "Forget these".

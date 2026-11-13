@@ -1,1 +1,0 @@
-- Activity in the titlebar always keeps its spot, closes on Esc or a click outside, lists background runs you started, and the chat no longer repeats its waiting count.

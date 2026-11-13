@@ -1,1 +1,0 @@
-- A helper's result now lists the files and pages it read, a fresh helper is told what the chat already read so it doesn't read it again, and the same task can't be handed to a second helper while the first still runs.

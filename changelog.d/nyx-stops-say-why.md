@@ -1,4 +1,0 @@
-- A stopped reply now says why it stopped ("Stopped: the model changed mid-run", "Stopped: you sent a new message"), and the app log records each halt's cause with the chat and model.
-- When the router switches models in the middle of a chat reply, the reply picks itself back up on the new model (up to twice in a row) instead of waiting for a Workboard resume.
-- "yeah could use that info" and other go-aheads that name nothing new carry on the last ask, research included, instead of turning into small talk.
-- When a turn's talk style or playbook changes, its notes say the earlier turns' notes are old, so an old research playbook can't steer a new turn.

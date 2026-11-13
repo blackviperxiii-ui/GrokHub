@@ -1,2 +1,0 @@
-- Pulse: scrolling past posts or ideas no longer silences a whole category. Untouched cards only lower its score a little; ignored proactive cards still go quiet, and that quiet now lifts on its own after two weeks. Categories an older build quieted from skips come back.
-- Pulse: a Like now lifts ideas on the same topic in the ranking.

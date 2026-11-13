@@ -1,1 +1,0 @@
-- Settings → Privacy & data has an Offline only switch, and the status chip shows when it's on.

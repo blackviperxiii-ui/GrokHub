@@ -1,1 +1,0 @@
-- Objectives no longer shows a Workboards button. Workboards stays on its own rail row and tab.

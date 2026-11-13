@@ -1,2 +1,0 @@
-- Desktop shell Settings: the same top row of category buttons (Account, Look & feel, AI & chat, Your PC, Privacy & safety, Help & updates) with a page menu on the right that follows the chosen category. On a phone the page menu becomes a row above the page.
-- Desktop shell Settings: a big Back button names the page you came from (Back to Chat, Back to Pulse). Every setting works as before.

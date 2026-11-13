@@ -1,1 +1,0 @@
-- Shell: signed self-updates for the AppImage and the Windows installer, with a Stable or Beta channel in Settings > About; releases now ship a minisign-signed latest.json (LU-06).

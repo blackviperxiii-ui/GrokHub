@@ -1,1 +1,0 @@
-- Agent shells drop BASH_ENV and ENV, interpreter start-up variables like NODE_OPTIONS ask first, MCP server lists count as agent settings, a tool hook that can't run asks instead of letting the call through, an MCP server can't grow memory with an endless line, and after reading outside text an edit to a build script, package script or editor task asks first.

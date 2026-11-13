@@ -1,4 +1,0 @@
-- XP no longer moves backwards: earned XP is kept in its own ledger, so old logs rotating away or switching chats can't lower it, and checked steps count once each.
-- Levels come faster at first (level 2 at 200 XP) and settle at 500 per level, with a title beside the level (Rookie, Regular, Grinder, Veteran, Elite, Legend). No one drops a level.
-- The weekly streak is now weeks in a row: a week counts if you earn any XP in it, two freezes cover missed weeks, and a weekly target of active days tunes itself from your own weeks and pays a bonus that grows the longer the run.
-- A big day is never capped: past 150 XP a day, card and day XP counts half.

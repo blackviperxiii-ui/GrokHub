@@ -1,1 +1,0 @@
-- Model-written shell commands now run in a sandbox on Linux: writes land only in the workspace, temp folders and tool caches (Landlock), and network goes through the egress guard's local proxy. Commands that raise privileges or were approved on a hard card run on the whole machine; `outside_sandbox` asks first. Turn it off or widen it in `shell_sandbox.toml`.

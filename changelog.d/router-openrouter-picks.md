@@ -1,3 +1,0 @@
-- Auto picks OpenRouter models itself from OpenRouter's model list, read at most once a day: only models that take tools on agent steps and reasoning on thinking steps, fit the chat, answer in text, sit under your price ceiling and aren't being retired. OpenRouter's own auto router is never used.
-- Every OpenRouter call now names a backup model from the same picks, keeps one chat on the same endpoint, sends the thinking level the step needs, and goes only to endpoints that support everything the call asks for. By default no OpenRouter endpoint that may keep or train on your prompts gets them.
-- When xAI is down and another provider you added stands in, one that has been busy or much slower lately waits behind a healthy one.

@@ -1,1 +1,0 @@
-- The screenshot Explain offer now uses the same pills as the composer chips and no longer reads its file on every frame.

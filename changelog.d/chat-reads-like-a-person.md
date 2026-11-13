@@ -1,1 +1,0 @@
-- The chat no longer narrates its own machinery: progress and "not done yet" notes show as quiet status lines instead of replies, it never names talk styles, playbooks or checklist ids, and it treats the app's notes as the app's, not yours. Wrap-ups are full sentences, and a thought no longer shows twice in a row.

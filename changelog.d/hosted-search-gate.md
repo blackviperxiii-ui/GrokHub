@@ -1,1 +1,0 @@
-- Agent: Grok's hosted web and X search now follows your permission rules. It is off in plan, btw and other read-only turns, in runs nobody is watching, offline, when a rule denies or asks for search, and when the chat carries recalled memory lines. In those cases the cabin's own search tool takes over where it is allowed, with its card and send check.

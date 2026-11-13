@@ -1,1 +1,0 @@
-- Taste learning: Pulse card taste now also learns lightly from Read it, Discuss and fixes (engagement), Snooze and Remind me later (wanted, not now), and Delete on a fresh card (a little less of this; deleting stale or finished cards teaches nothing). Like and I don't like still count most; Dismiss carries no weight.

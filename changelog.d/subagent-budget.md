@@ -1,1 +1,0 @@
-- Subagents now trim, compact and stop before Grok's 200k long-context price step the same way your chat does, and one stops after sending about 400k tokens (200k a level further down), handing back what it found.

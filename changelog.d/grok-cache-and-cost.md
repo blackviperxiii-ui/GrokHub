@@ -1,3 +1,0 @@
-- Grok chats keep the model's sealed reasoning between steps and pin each chat to one prompt cache, so more of every request is billed at the cached rate.
-- A Grok chat now compacts before its prompt reaches 200k tokens, where xAI doubles the price of the whole request.
-- Fast mode on grok-4.3 can turn reasoning fully off.

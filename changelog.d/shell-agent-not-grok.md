@@ -1,1 +1,0 @@
-- The shell app calls the agent Loadout too: chat box, mode tips, plan card, desktop-control switch and the palette's Ask row no longer say Grok.
