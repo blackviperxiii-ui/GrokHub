@@ -1,0 +1,1 @@
+- Fix: on Windows, a chat's goals no longer read as empty when another program holds the file for an instant while it is saved.
