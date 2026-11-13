@@ -119,12 +119,14 @@ describe("theme contrast", () => {
       const vars = theme(rules, id);
       return Number(contrast(resolve(vars, "danger-text"), resolve(vars, "accent")).toFixed(2));
     });
-    expect(ratios).toEqual([1.5, 1.5, 1.5, 2.32]);
+    expect(ratios).toEqual([1.53, 1.53, 1.63, 2.32]);
   });
 
   it("reads the real themes, not an empty table", () => {
     const vars = theme(rules, "ops-dark");
     expect(resolve(vars, "bg")).toBe("#0b0b0d");
-    expect(resolve(vars, "accent")).toBe("#ffb000");
+    expect(resolve(vars, "accent")).toBe("#d7263d");
+    expect(resolve(vars, "amber")).toBe("#ff9f1a");
+    expect(resolve(vars, "line")).toBe("#3a161d");
   });
 });

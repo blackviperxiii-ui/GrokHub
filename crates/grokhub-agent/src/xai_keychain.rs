@@ -82,7 +82,11 @@ pub struct Started {
 
 /// One poll's answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "status", rename_all = "camelCase")]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Poll {
     /// Not approved yet; poll again after `interval` seconds.
     Pending {
@@ -897,5 +901,22 @@ pub(crate) mod tests {
         let _on = grokhub_core::offline::force_for_thread(true);
         let err = SignIn::default().start().expect_err("refused");
         assert!(err.contains("Offline only"), "{err}");
+    }
+
+    #[test]
+    fn ready_poll_serializes_signed_in_as_camel_case() {
+        // `rename_all` alone only renames the variant; fields need
+        // `rename_all_fields` or the UI reads `signedIn` as undefined.
+        let json = serde_json::to_value(Poll::Ready {
+            signed_in: SignedIn {
+                name: Some("Sam".into()),
+                email: Some("sam@example.com".into()),
+            },
+        })
+        .expect("serialize");
+        assert_eq!(json["status"], "ready");
+        assert!(json.get("signed_in").is_none(), "{json}");
+        assert_eq!(json["signedIn"]["name"], "Sam");
+        assert_eq!(json["signedIn"]["email"], "sam@example.com");
     }
 }
