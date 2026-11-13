@@ -38,8 +38,9 @@ pub use chat::{
     Marker, MarkerFilter, TurnGoals, GOAL_MARKER_RULE,
 };
 pub use follow_up::{
-    due_follow_ups, follow_up_candidate, followed_up, shown_follow_up, take_follow_up, FollowUp,
-    FOLLOW_UPS_PER_WEEK, FOLLOW_UP_IDLE_MS, FOLLOW_UP_SHOWN_MS, IGNORED_BEFORE_STOP,
+    due_follow_ups, follow_up_candidate, follow_up_candidates, followed_up, posted_follow_up,
+    shown_follow_up, take_follow_up, FollowUp, FOLLOW_UPS_PER_WEEK, FOLLOW_UP_IDLE_MS,
+    FOLLOW_UP_SHOWN_MS, IGNORED_BEFORE_STOP,
 };
 pub use game_data::{
     apply_game_data, goal_steam_games, match_finished, refresh_from_games, GameData,

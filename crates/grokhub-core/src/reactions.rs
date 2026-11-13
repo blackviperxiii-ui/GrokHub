@@ -15,7 +15,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::proactive::CandidateSource;
+use crate::proactive::{rank_candidates, Candidate, CandidateSource};
 use crate::pulse::{card_category, is_idea_card};
 use crate::pulse_sources::is_source_post;
 use crate::update_feed::{UpdateCard, UpdateStatus};
@@ -174,6 +174,22 @@ impl Reactions {
             return 0.0;
         }
         1.0 + f64::from(self.score(category)) / (2.0 * f64::from(SCORE_MAX))
+    }
+
+    /// Proactive candidates scaled by how the user reacts to their category;
+    /// a quiet category's candidates are dropped. Ranked again.
+    pub fn weigh(&self, cands: Vec<Candidate>) -> Vec<Candidate> {
+        let weighed = cands
+            .into_iter()
+            .filter_map(|mut c| {
+                let w = self.weight(source_category(c.source));
+                (w > 0.0).then(|| {
+                    c.value = (c.value * w).min(1.0);
+                    c
+                })
+            })
+            .collect();
+        rank_candidates(weighed)
     }
 
     /// More like this: lifts the score and takes the category out of quiet.
