@@ -1,0 +1,1 @@
+- Chat: a chat picked right after a reply finishes opens as soon as the app has wrapped up that reply, instead of showing "A reply is still running". That message also clears itself once the reply ends.
