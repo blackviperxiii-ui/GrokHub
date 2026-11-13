@@ -98,7 +98,9 @@ fn fit_of(b: Bucket) -> Fit {
 }
 
 /// Every catalog row in catalog order. A draft model fits as its chat model
-/// does; other specialty models fit when the disk has room.
+/// does; other specialty models fit when the disk has room. The on-device
+/// speech-to-text model shows only once it is on disk (so it can be removed):
+/// nothing transcribes with it yet, so the list doesn't offer it.
 pub fn rows(p: &Profile, bench: &BenchCache, on_disk: impl Fn(&LocalModel) -> bool) -> Vec<Row> {
     rows_from(ls::local_models(), p, bench, on_disk)
 }
@@ -113,7 +115,9 @@ fn rows_from(
     let pick = |id: &str| picks.iter().find(|x| x.model.id == id);
     catalog
         .iter()
-        .map(|m| {
+        .map(|m| (m, on_disk(m)))
+        .filter(|&(m, on_disk)| on_disk || m.kind != ModelKind::SpeechToText)
+        .map(|(m, on_disk)| {
             let (fit, why) = if let Some(x) = pick(m.id) {
                 (fit_of(x.bucket), x.reason.clone())
             } else if let Some(x) = m.pairs_with.and_then(pick) {
@@ -133,7 +137,7 @@ fn rows_from(
                 model: m,
                 fit,
                 why,
-                on_disk: on_disk(m),
+                on_disk,
             }
         })
         .collect()
@@ -301,7 +305,8 @@ mod tests {
     #[test]
     fn every_row_is_on_its_tab_and_a_draft_model_fits_as_its_chat_model_does() {
         let rows = rows(&pc(8_192, 500_000), &BenchCache::new(), |_| false);
-        assert_eq!(rows.len(), ls::local_models().len());
+        // Every row but the speech-to-text model, which isn't offered.
+        assert_eq!(rows.len(), ls::local_models().len() - 1);
         let draft = by_id(&rows, MID_DRAFT);
         assert_eq!(draft.tab(), ModelTab::Drafts);
         assert_eq!(draft.fit, by_id(&rows, MID).fit);
@@ -314,6 +319,26 @@ mod tests {
             3
         );
         assert!(empty_tab_line(ModelTab::Image).starts_with("No image models yet"));
+    }
+
+    #[test]
+    fn the_speech_to_text_model_shows_only_once_it_is_on_disk() {
+        const STT: &str = "parakeet-tdt-0.6b-v3-int8";
+        const TTS: &str = "kokoro-82m-multi-lang-v1_0";
+        let p = pc(8_192, 500_000);
+        let fresh = rows(&p, &BenchCache::new(), |_| false);
+        assert!(fresh.iter().all(|r| r.model.id != STT));
+        // Spoken replies still offer their model on the Voice tab.
+        assert_eq!(by_id(&fresh, TTS).tab(), ModelTab::Voice);
+        let voice: Vec<&str> = queue(&fresh, Some(ModelTab::Voice), None)
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(voice, [TTS]);
+        // A copy downloaded earlier still lists, so it can be removed.
+        let kept = rows(&p, &BenchCache::new(), |m| m.id == STT);
+        assert!(by_id(&kept, STT).on_disk);
+        assert_eq!(by_id(&kept, STT).tab(), ModelTab::Voice);
     }
 
     #[test]
