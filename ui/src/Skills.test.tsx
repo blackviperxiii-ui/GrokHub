@@ -1,13 +1,23 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SkillPage, SkillRow, SkillSource } from "./api";
+import type { SkillDetail, SkillPage, SkillRow, SkillSource } from "./api";
 
 const api = vi.hoisted(() => ({
   getSkills: vi.fn<() => Promise<SkillPage>>(),
   openSkillFolder:
     vi.fn<(source: SkillSource, name: string) => Promise<void>>(),
   setSkillOn: vi.fn<(name: string, on: boolean) => Promise<SkillPage>>(),
+  createSkill: vi.fn<(name: string, what: string) => Promise<SkillPage>>(),
+  getSkillDetail: vi.fn<(name: string) => Promise<SkillDetail>>(),
+  editSkill: vi.fn<
+    (
+      name: string,
+      description: string,
+      trigger: string,
+      instructions: string,
+    ) => Promise<SkillPage>
+  >(),
 }));
 
 vi.mock("./api", () => api);
@@ -199,6 +209,116 @@ describe("Skills", () => {
     expect(screen.queryByRole("button", { name: "Open folder" })).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.getAllByRole("button", { name: "Use" })).toHaveLength(3);
+  });
+
+  it("New skill saves a name and what it should do, then lists it", async () => {
+    api.getSkills.mockResolvedValue({ rows: ROWS });
+    api.createSkill.mockResolvedValue({
+      rows: [
+        ...ROWS,
+        row({ name: "Clip Trimmer", description: "Trim my last game clip" }),
+      ],
+    });
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} />);
+
+    await screen.findByRole("listitem", { name: "deploy-site" });
+    await userEvent.click(screen.getByRole("button", { name: "New skill" }));
+    const form = screen.getByRole("form", { name: "New skill" });
+    await userEvent.type(within(form).getByLabelText("Name"), "Clip Trimmer");
+    await userEvent.type(
+      within(form).getByLabelText("What it should do"),
+      "Trim my last game clip",
+    );
+    await userEvent.click(
+      within(form).getByRole("button", { name: "Save skill" }),
+    );
+    expect(api.createSkill).toHaveBeenCalledWith(
+      "Clip Trimmer",
+      "Trim my last game clip",
+    );
+    expect(
+      await screen.findByRole("listitem", { name: "Clip Trimmer" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "New skill" })).toBeNull();
+  });
+
+  it("a New skill the shell refuses stays open with the reason", async () => {
+    api.getSkills.mockResolvedValue({ rows: ROWS });
+    api.createSkill.mockRejectedValue("There's already a skill called tidy.");
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} />);
+
+    await screen.findByRole("listitem", { name: "deploy-site" });
+    await userEvent.click(screen.getByRole("button", { name: "New skill" }));
+    const form = screen.getByRole("form", { name: "New skill" });
+    await userEvent.type(within(form).getByLabelText("Name"), "tidy");
+    await userEvent.type(
+      within(form).getByLabelText("What it should do"),
+      "Tidy again",
+    );
+    await userEvent.click(
+      within(form).getByRole("button", { name: "Save skill" }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "There's already a skill called tidy.",
+    );
+    expect(screen.getByRole("form", { name: "New skill" })).toBeInTheDocument();
+  });
+
+  it("Edit is a cabin-only button and saves the three fields", async () => {
+    api.getSkills.mockResolvedValue({ rows: ROWS });
+    api.getSkillDetail.mockResolvedValue({
+      name: "deploy-site",
+      description: "Ship the site",
+      trigger: "deploy the site",
+      instructions: "1. build\n2. ship",
+    });
+    const edited = ROWS.map((r) =>
+      r.name === "deploy-site" ? { ...r, description: "Ship the whole site" } : r,
+    );
+    api.editSkill.mockResolvedValue({ rows: edited });
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} />);
+
+    const deploy = await screen.findByRole("listitem", { name: "deploy-site" });
+    const lint = screen.getByRole("listitem", { name: "lint-fix" });
+    expect(within(lint).queryByRole("button", { name: "Edit" })).toBeNull();
+    await userEvent.click(within(deploy).getByRole("button", { name: "Edit" }));
+    expect(api.getSkillDetail).toHaveBeenCalledWith("deploy-site");
+
+    const form = await screen.findByRole("form", { name: "Edit deploy-site" });
+    expect(within(form).getByLabelText("What it does")).toHaveValue(
+      "Ship the site",
+    );
+    expect(within(form).getByLabelText("When to use it")).toHaveValue(
+      "deploy the site",
+    );
+    expect(within(form).getByLabelText("Steps")).toHaveValue("1. build\n2. ship");
+    await userEvent.clear(within(form).getByLabelText("What it does"));
+    await userEvent.type(
+      within(form).getByLabelText("What it does"),
+      "Ship the whole site",
+    );
+    await userEvent.click(
+      within(form).getByRole("button", { name: "Save changes" }),
+    );
+    expect(api.editSkill).toHaveBeenCalledWith(
+      "deploy-site",
+      "Ship the whole site",
+      "deploy the site",
+      "1. build\n2. ship",
+    );
+    expect(
+      await screen.findByRole("listitem", { name: "deploy-site" }),
+    ).toHaveTextContent("Ship the whole site");
+    expect(screen.queryByRole("form", { name: "Edit deploy-site" })).toBeNull();
+  });
+
+  it("the web app gets no New skill and no Edit", async () => {
+    api.getSkills.mockResolvedValue({ rows: ROWS });
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} remote />);
+
+    await screen.findByRole("listitem", { name: "deploy-site" });
+    expect(screen.queryByRole("button", { name: "New skill" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   });
 
   it("says so when there are none, refreshes, and links to Connectors", async () => {

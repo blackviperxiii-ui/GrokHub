@@ -341,8 +341,8 @@ fn create_private(path: &Path) -> std::io::Result<fs::File> {
 }
 
 /// A private temp file, fsync, then a rename, like the cabin's `atomic_write`.
-/// Shared by the work board and the chip store.
-pub(crate) fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+/// Shared by the work board, the chip store and the agent's skill writes.
+pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path.parent().ok_or("the file needs a folder")?;
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let name = path
