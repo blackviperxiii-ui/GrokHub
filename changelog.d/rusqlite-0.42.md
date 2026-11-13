@@ -1,0 +1,1 @@
+- Depend on rusqlite 0.42 (bundled SQLite 3.54.1) in the workspace and refresh both Cargo lockfiles.
