@@ -22,9 +22,7 @@ fn a_known_app_puts_one_chip_and_one_context_line() {
     assert_eq!(chip.id, "focus:coding:cursor");
     assert_eq!(
         help.take_context(true).as_deref(),
-        Some(
-            "[Context: the user was just in Cursor (coding). Use it only if it fits the ask.]"
-        )
+        Some("[Context: the user was just in Cursor (coding). Use it only if it fits the ask.]")
     );
     assert_eq!(help.take_context(true), None, "once per return");
 }
