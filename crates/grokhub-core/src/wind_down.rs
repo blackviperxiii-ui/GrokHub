@@ -112,6 +112,41 @@ impl Machine {
     }
 }
 
+/// GPU busy by others from `nvidia-smi` util CSV and optional `pmon` text.
+/// When `own_pid` is set and the total is above the governor's busy line,
+/// `pmon` (if present) subtracts this process's share. No util text → `None`.
+pub fn external_gpu_from_nvidia(
+    util_csv: &str,
+    pmon: Option<&str>,
+    own_pid: Option<u32>,
+) -> Option<u8> {
+    use crate::local_governor::{external_gpu, parse_nvidia_pmon, parse_nvidia_util, GPU_BUSY_PCT};
+    let total = parse_nvidia_util(util_csv)?;
+    let own = match own_pid {
+        Some(pid) if total > GPU_BUSY_PCT => pmon.map(|t| parse_nvidia_pmon(t, pid)).unwrap_or(0),
+        Some(_) | None => 0,
+    };
+    Some(external_gpu(total, own))
+}
+
+/// Busiest AMD `gpu_busy_percent` reading. Empty input → `None`.
+pub fn external_gpu_from_amd_busy<'a>(texts: impl IntoIterator<Item = &'a str>) -> Option<u8> {
+    texts
+        .into_iter()
+        .filter_map(crate::pc_health::parse_amdgpu_busy)
+        .max()
+}
+
+/// Windows PDH `\GPU Engine(*)\Utilization Percentage` rows with this
+/// process left out. Empty rows → `None` (no reading), never an idle zero
+/// invented from silence.
+pub fn external_gpu_from_pdh(rows: &[(String, f64)], own_pid: Option<u32>) -> Option<u8> {
+    if rows.is_empty() {
+        return None;
+    }
+    Some(crate::local_governor::gpu_from_pdh(rows, own_pid))
+}
+
 /// What the once-a-minute read should do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -415,6 +450,33 @@ mod tests {
         ] {
             assert_eq!(m.busy(), Some(Busy::Unknown), "{m:?}");
         }
+    }
+
+    #[test]
+    fn a_fixed_gpu_fixture_leaves_out_our_share_and_picks_the_busiest_amd_card() {
+        let pmon = "# gpu         pid   type     sm    mem\n    0       4242     C     80     40\n";
+        assert_eq!(
+            external_gpu_from_nvidia("85\n12\n", Some(pmon), Some(4242)),
+            Some(5),
+            "85 total minus our 80"
+        );
+        assert_eq!(
+            external_gpu_from_nvidia("50\n", None, Some(4242)),
+            Some(50),
+            "below the busy line: no pmon needed"
+        );
+        assert_eq!(external_gpu_from_nvidia("", None, None), None);
+        assert_eq!(
+            external_gpu_from_amd_busy(["12\n", "77\n", "not-a-number"]),
+            Some(77)
+        );
+        assert_eq!(external_gpu_from_amd_busy(std::iter::empty::<&str>()), None);
+        let rows = vec![
+            ("pid_100_eng_0".into(), 20.0),
+            ("pid_200_eng_0".into(), 70.0),
+        ];
+        assert_eq!(external_gpu_from_pdh(&rows, Some(100)), Some(70));
+        assert_eq!(external_gpu_from_pdh(&[], Some(100)), None);
     }
 
     #[test]
