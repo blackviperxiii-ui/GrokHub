@@ -712,6 +712,20 @@ select:focus-visible {
   color: var(--muted);
 }
 
+/* Main: always first, never closed. A small house mark in the primary red. */
+.chat-tab.main {
+  flex: 0 0 auto;
+  min-width: 72px;
+}
+
+.chat-tab-main-mark {
+  width: 11px;
+  height: 11px;
+  margin-right: 4px;
+  vertical-align: -1px;
+  color: var(--red);
+}
+
 .chat-tab-plus,
 .chat-tab-tools {
   flex: 0 0 auto;

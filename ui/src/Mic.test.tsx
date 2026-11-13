@@ -15,7 +15,7 @@ vi.mock("./api", async () => {
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
   // No chat saved from an earlier launch.
-  getLastChat: () => Promise.resolve(null),
+  getStartChat: () => Promise.resolve(null),
   loadChat: vi.fn(),
   transcribe: api.transcribe,
   sendChat: api.sendChat,

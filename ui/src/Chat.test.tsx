@@ -50,10 +50,10 @@ const api = vi.hoisted(() => ({
     vi.fn<(id: string, sideId: string, question: string, ask: string, soFar: string) => Promise<string>>(),
   tellMain: vi.fn<(id: string, question: string, answer: string) => Promise<{ text: string; steered: boolean }>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
-  deleteChat: vi.fn<(id: string) => Promise<void>>(),
+  clearChat: vi.fn<(id: string) => Promise<Transcript | null>>(),
   forgetMessage:
     vi.fn<(id: string, cut: { reply: boolean; text: string | null; later: number }) => Promise<boolean>>(),
-  getLastChat: vi.fn<() => Promise<Transcript | null>>(),
+  getStartChat: vi.fn<() => Promise<Transcript | null>>(),
   loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
   slashHits: vi.fn(() => Promise.resolve([])),
   runSlash: vi.fn(),
@@ -117,9 +117,9 @@ vi.mock("./api", () => ({
   sideChat: api.sideChat,
   tellMain: api.tellMain,
   closeChat: api.closeChat,
-  deleteChat: api.deleteChat,
+  clearChat: api.clearChat,
   forgetMessage: api.forgetMessage,
-  getLastChat: api.getLastChat,
+  getStartChat: api.getStartChat,
   loadChat: api.loadChat,
   slashHits: api.slashHits,
   runSlash: api.runSlash,
@@ -272,7 +272,7 @@ describe("Chat", () => {
     }
     // The real call always answers with a promise; the page handles its refusal.
     api.closeChat.mockResolvedValue();
-    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.getStartChat.mockReset().mockResolvedValue(null);
     api.quickChips.mockReset().mockResolvedValue([]);
     api.chipOutcome.mockReset().mockResolvedValue(true);
     api.getSettings.mockReset().mockResolvedValue(SETTINGS);
@@ -1322,7 +1322,7 @@ describe("Chat history", () => {
     for (const fn of [api.sendChat, api.closeChat, api.cancelChat, api.loadChat]) fn.mockReset();
     api.closeChat.mockResolvedValue();
     api.getSettings.mockReset().mockResolvedValue(SETTINGS);
-    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.getStartChat.mockReset().mockResolvedValue(null);
     api.handler = null;
   });
 
@@ -1335,7 +1335,7 @@ describe("Chat history", () => {
   });
 
   it("reopens the last chat on mount, and the next message carries it on", async () => {
-    api.getLastChat.mockResolvedValue(SAVED);
+    api.getStartChat.mockResolvedValue(SAVED);
     api.sendChat.mockResolvedValue("end_turn");
     render(<Chat onOpenSettings={() => {}} />);
     expect(await screen.findByText("pick a paint colour")).toHaveAttribute("data-role", "user");
@@ -1348,12 +1348,12 @@ describe("Chat history", () => {
   it("the web app never asks for the desktop's last chat", async () => {
     render(<Chat onOpenSettings={() => {}} remote />);
     await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
-    expect(api.getLastChat).not.toHaveBeenCalled();
+    expect(api.getStartChat).not.toHaveBeenCalled();
   });
 
   it("a last chat that arrives after the person started typing away stays out", async () => {
     let arrive: (t: Transcript) => void = () => {};
-    api.getLastChat.mockReturnValue(new Promise((resolve) => (arrive = resolve)));
+    api.getStartChat.mockReturnValue(new Promise((resolve) => (arrive = resolve)));
     api.sendChat.mockResolvedValue("end_turn");
     render(<Chat onOpenSettings={() => {}} />);
     const id = await startTurn("fresh question");
@@ -1393,7 +1393,7 @@ describe("Chat history", () => {
   });
 
   it("deleting the open chat in History starts a new one; another chat's delete changes nothing", async () => {
-    api.getLastChat.mockResolvedValue(SAVED);
+    api.getStartChat.mockResolvedValue(SAVED);
     api.sendChat.mockResolvedValue("end_turn");
     const { rerender } = render(<Chat onOpenSettings={() => {}} />);
     await screen.findByText("pick a paint colour");
@@ -1406,21 +1406,33 @@ describe("Chat history", () => {
   });
 
   it("Clear chat deletes the open chat's saved history and starts a new one", async () => {
-    api.getLastChat.mockResolvedValue(SAVED);
-    api.deleteChat.mockResolvedValue();
+    api.getStartChat.mockResolvedValue(SAVED);
+    api.clearChat.mockResolvedValue(null);
     api.sendChat.mockResolvedValue("end_turn");
     const { rerender } = render(<Chat onOpenSettings={() => {}} />);
     await screen.findByText("pick a paint colour");
     rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
     await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
-    expect(api.deleteChat).toHaveBeenCalledWith("shell-saved");
+    expect(api.clearChat).toHaveBeenCalledWith("shell-saved");
     const id = await startTurn("new start");
     expect(id).not.toBe("shell-saved");
   });
 
+  it("Clear chat on Main opens the empty Main the backend hands back", async () => {
+    api.getStartChat.mockResolvedValue({ ...SAVED, id: "shell-main-1", title: "Main" });
+    api.clearChat.mockReset().mockResolvedValue({ id: "shell-main-2", title: "Main", lines: [], earlier: 0 });
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
+    expect(api.clearChat).toHaveBeenCalledWith("shell-main-1");
+    expect(await startTurn("fresh start")).toBe("shell-main-2");
+  });
+
   it("Clear chat keeps the chat on screen when the delete fails", async () => {
-    api.getLastChat.mockResolvedValue(SAVED);
-    api.deleteChat.mockRejectedValue("disk is read-only");
+    api.getStartChat.mockResolvedValue(SAVED);
+    api.clearChat.mockRejectedValue("disk is read-only");
     const { rerender } = render(<Chat onOpenSettings={() => {}} />);
     await screen.findByText("pick a paint colour");
     rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
@@ -1429,7 +1441,7 @@ describe("Chat history", () => {
   });
 
   it("a bubble's ··· deletes that message after asking, and a reply goes with its tools", async () => {
-    api.getLastChat.mockResolvedValue({
+    api.getStartChat.mockResolvedValue({
       ...SAVED,
       lines: [...SAVED.lines, { role: "user", text: "and the trim?" }, { role: "assistant", text: "White." }],
     });
@@ -1475,7 +1487,7 @@ describe("Chat history", () => {
   });
 
   it("a delete the saved chat refuses keeps the message and says why", async () => {
-    api.getLastChat.mockResolvedValue(SAVED);
+    api.getStartChat.mockResolvedValue(SAVED);
     api.forgetMessage.mockReset().mockRejectedValue("Wait for the reply to finish, then delete the message.");
     render(<Chat onOpenSettings={() => {}} />);
     fireEvent.contextMenu(await screen.findByText("pick a paint colour"));
@@ -1486,7 +1498,7 @@ describe("Chat history", () => {
   });
 
   it("the web app offers no message menu", async () => {
-    api.getLastChat.mockResolvedValue(SAVED);
+    api.getStartChat.mockResolvedValue(SAVED);
     api.sendChat.mockResolvedValue("end_turn");
     render(<Chat onOpenSettings={() => {}} remote />);
     await startTurn("hello from the phone");
@@ -1545,7 +1557,7 @@ describe("Chat history", () => {
   });
 
   it("Show earlier loads more of a long chat's start", async () => {
-    api.getLastChat.mockResolvedValue({ ...SAVED, earlier: 5 });
+    api.getStartChat.mockResolvedValue({ ...SAVED, earlier: 5 });
     api.loadChat.mockResolvedValue({
       ...SAVED,
       lines: [{ role: "user", text: "the very first ask" }, ...SAVED.lines],
@@ -1568,7 +1580,7 @@ describe("Chat queue", () => {
   }
 
   beforeEach(() => {
-    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.getStartChat.mockReset().mockResolvedValue(null);
     api.quickChips.mockReset().mockResolvedValue([]);
     api.chipOutcome.mockReset().mockResolvedValue(true);
     api.getSettings.mockReset().mockResolvedValue(SETTINGS);
@@ -1654,14 +1666,14 @@ describe("Chat queue", () => {
 
   it("Clear chat mid-reply opens a chat that shows Send, and the old chat's waiting words go back in the box", async () => {
     const ends = turns();
-    api.deleteChat.mockResolvedValue();
+    api.clearChat.mockResolvedValue(null);
     const { rerender } = render(<Chat onOpenSettings={() => {}} />);
     await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
     await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
     const old = api.sendChat.mock.calls[0][0];
     await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
     rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
-    await waitFor(() => expect(api.deleteChat).toHaveBeenCalledWith(old));
+    await waitFor(() => expect(api.clearChat).toHaveBeenCalledWith(old));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).toBeNull());
     expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
     // The old reply ends after the new chat is open: nothing of it sends here.
@@ -1670,15 +1682,31 @@ describe("Chat queue", () => {
     expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
   });
 
+  it("Clear chat on Main mid-reply puts the old Main's waiting words back in the box", async () => {
+    const ends = turns();
+    api.clearChat.mockResolvedValue({ id: "shell-main-2", title: "Main", lines: [], earlier: 0 });
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const old = api.sendChat.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(api.clearChat).toHaveBeenCalledWith(old));
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("then deploy"));
+    await act(async () => ends[0]("end_turn"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+  });
+
   it("a message typed in the new chat while the old reply ends goes to the new chat", async () => {
     const ends = turns();
-    api.deleteChat.mockResolvedValue();
+    api.clearChat.mockResolvedValue(null);
     const { rerender } = render(<Chat onOpenSettings={() => {}} />);
     await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
     await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
     const old = api.sendChat.mock.calls[0][0];
     rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
-    await waitFor(() => expect(api.deleteChat).toHaveBeenCalledWith(old));
+    await waitFor(() => expect(api.clearChat).toHaveBeenCalledWith(old));
     await userEvent.type(screen.getByLabelText("Message"), "fresh start");
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(api.sendChat).toHaveBeenCalledTimes(1);
@@ -1737,12 +1765,12 @@ describe("Chat queue", () => {
   });
 
   it("as the Code tab's agent window it starts on a new session, not the last chat", async () => {
-    api.getLastChat.mockResolvedValue(SAVED);
+    api.getStartChat.mockResolvedValue(SAVED);
     const onConversation = vi.fn();
     const onBusy = vi.fn();
     const view = render(<Chat onOpenSettings={() => {}} embedded onConversation={onConversation} onBusy={onBusy} />);
     await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
-    expect(api.getLastChat).not.toHaveBeenCalled();
+    expect(api.getStartChat).not.toHaveBeenCalled();
     expect(screen.queryByText("pick a paint colour")).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Agent" })).toHaveClass("chat", "embedded");
     expect(screen.getByText(AGENT_EMPTY)).toBeInTheDocument();

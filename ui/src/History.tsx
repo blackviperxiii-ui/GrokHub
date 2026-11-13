@@ -124,6 +124,7 @@ export function whenLabel(updated: number, now: Date = new Date()): string {
 function ChatMenu({
   title,
   pinned,
+  main,
   onPin,
   onRename,
   onExport,
@@ -131,6 +132,8 @@ function ChatMenu({
 }: {
   title: string;
   pinned: boolean;
+  /** Main stays put: only Export. */
+  main: boolean;
   onPin: () => void;
   onRename: () => void;
   onExport: () => void;
@@ -152,26 +155,30 @@ function ChatMenu({
       </button>
       {menu && (
         <div className="feed-menu" role="menu">
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setMenu(false);
-              onPin();
-            }}
-          >
-            {pinned ? "Unpin" : "Pin"}
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setMenu(false);
-              onRename();
-            }}
-          >
-            Rename
-          </button>
+          {!main && (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(false);
+                  onPin();
+                }}
+              >
+                {pinned ? "Unpin" : "Pin"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(false);
+                  onRename();
+                }}
+              >
+                Rename
+              </button>
+            </>
+          )}
           <button
             type="button"
             role="menuitem"
@@ -182,17 +189,19 @@ function ChatMenu({
           >
             Export
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="danger"
-            onClick={() => {
-              setMenu(false);
-              onDelete();
-            }}
-          >
-            Delete
-          </button>
+          {!main && (
+            <button
+              type="button"
+              role="menuitem"
+              className="danger"
+              onClick={() => {
+                setMenu(false);
+                onDelete();
+              }}
+            >
+              Delete
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -413,6 +422,7 @@ export function History({
           <ChatMenu
             title={row.title}
             pinned={!!row.pinned}
+            main={!!row.main}
             onPin={() => void act(async () => void (await pinChat(row.id)))}
             onRename={() => setRenaming({ id: row.id, title: row.title })}
             onExport={() => void saveCopy(row.id)}

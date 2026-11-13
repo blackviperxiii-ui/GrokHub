@@ -1550,16 +1550,43 @@ async fn load_chat(
     Ok(shown)
 }
 
-/// The chat open when the window last closed, if it is still saved.
+/// The chat the Chat tab opens at launch: Main, made first if there is none.
 #[tauri::command]
-async fn get_last_chat(
+async fn get_start_chat(state: State<'_, ShellState>) -> Result<history::Transcript, String> {
+    let dir = state.config_dir.clone();
+    let shown = off_main(move || {
+        let id = chat_tabs::ensure_main(&dir, grokhub_core::now_ms())?;
+        history::load(&dir, &id, history::LOAD_CAP)
+    })
+    .await??;
+    set_last_chat(&state, &shown.id);
+    Ok(shown)
+}
+
+/// Clear chat: a running reply stops and the chat's saved history goes.
+/// Main always stays, so clearing it swaps in an empty Main and returns it;
+/// any other chat returns nothing.
+#[tauri::command]
+async fn clear_chat(
     state: State<'_, ShellState>,
+    id: String,
 ) -> Result<Option<history::Transcript>, String> {
-    let (dir, id) = (state.config_dir.clone(), current(&state).last_chat);
-    if id.is_empty() {
-        return Ok(None);
+    let dir = state.config_dir.clone();
+    let doomed = id.clone();
+    let fresh = off_main(move || {
+        if chat_tabs::main_id(&dir).as_deref() == Some(doomed.trim()) {
+            let main = chat_tabs::clear_main(&dir, grokhub_core::now_ms())?;
+            history::load(&dir, &main, history::LOAD_CAP).map(Some)
+        } else {
+            history::delete(&dir, &doomed).map(|()| None)
+        }
+    })
+    .await??;
+    end_chat(&state, &id);
+    if let Some(shown) = &fresh {
+        set_last_chat(&state, &shown.id);
     }
-    off_main(move || history::load(&dir, &id, history::LOAD_CAP).ok()).await
+    Ok(fresh)
 }
 
 #[tauri::command]
@@ -6821,7 +6848,7 @@ pub fn run() {
             list_chats,
             search_chats,
             load_chat,
-            get_last_chat,
+            get_start_chat,
             rename_chat,
             delete_all_chats,
             cancel_delete_all,
@@ -6841,6 +6868,7 @@ pub fn run() {
             chat_tab_unarchive,
             chat_tab_soft_delete,
             chat_tab_restore_deleted,
+            clear_chat,
             get_hangout_mode,
             set_hangout_mode,
             forget_message,

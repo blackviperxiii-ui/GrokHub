@@ -41,6 +41,9 @@ pub struct ChatRow {
     /// The id of the project (`projects.json`) whose folder the chat works
     /// in, so History lists it under that project like the cabin does.
     pub project: Option<String>,
+    /// The permanent Main chat: always pinned, and History offers no pin,
+    /// rename or delete for it.
+    pub main: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -99,6 +102,7 @@ fn row(info: &SessionInfo) -> ChatRow {
         updated: updated_ms(info),
         pinned: false,
         project: None,
+        main: false,
     }
 }
 
@@ -116,6 +120,7 @@ pub fn pinned_ids(config_dir: &Path) -> Vec<String> {
 /// pinned now. A chat with no file yet can't be pinned.
 pub fn toggle_pin(config_dir: &Path, id: &str) -> Result<bool, String> {
     let id = shell_id(id)?;
+    crate::chat_tabs::refuse_main(config_dir, id)?;
     {
         let _config = ConfigGuard::set(config_dir);
         grokhub_agent::load_session(id)?;
@@ -145,10 +150,12 @@ fn shell_sessions() -> Vec<(ChatRow, SessionInfo)> {
         .collect();
     let config_dir = grokhub_agent::perm::config_dir();
     let pins = pinned_ids(&config_dir);
+    let main = crate::chat_tabs::main_id(&config_dir);
     let nodes = crate::projects::load(&config_dir).unwrap_or_default();
     let home = std::env::var("HOME").ok();
     for (row, info) in &mut found {
-        row.pinned = pins.contains(&row.id);
+        row.main = main.as_deref() == Some(row.id.as_str());
+        row.pinned = row.main || pins.contains(&row.id);
         row.project = project_of(&nodes, &info.cwd, home.as_deref());
     }
     found.sort_by(|(a, _), (b, _)| {
@@ -259,6 +266,7 @@ pub fn load(config_dir: &Path, id: &str, limit: usize) -> Result<Transcript, Str
 /// Renames a saved chat. A chat with no file yet can't be renamed.
 pub fn rename(config_dir: &Path, id: &str, title: &str) -> Result<(), String> {
     let id = shell_id(id)?;
+    crate::chat_tabs::refuse_main(config_dir, id)?;
     if title.trim().is_empty() {
         return Err(NO_NAME.into());
     }
@@ -271,6 +279,7 @@ pub fn rename(config_dir: &Path, id: &str, title: &str) -> Result<(), String> {
 /// written back. `/bg` and scheduled forks of it go with it.
 pub fn delete(config_dir: &Path, id: &str) -> Result<(), String> {
     let id = shell_id(id)?;
+    crate::chat_tabs::refuse_main(config_dir, id)?;
     match delete_chats(config_dir, &[id.to_string()]).failed {
         Some(why) => Err(why),
         None => Ok(()),
@@ -460,7 +469,13 @@ fn delete_all_with(
     // Only the click is decided under the lock: the listing before it and
     // the deleting after it read and write the disk, and Cancel (a
     // main-thread command) takes the same lock.
-    let listed: Vec<String> = list(config_dir).into_iter().map(|r| r.id).collect();
+    // Main always stays, so Delete all never names it.
+    let main = crate::chat_tabs::main_id(config_dir);
+    let listed: Vec<String> = list(config_dir)
+        .into_iter()
+        .map(|r| r.id)
+        .filter(|id| Some(id) != main.as_ref())
+        .collect();
     let named = {
         let mut arm = arm.lock().unwrap_or_else(|e| e.into_inner());
         match arm.click(now) {

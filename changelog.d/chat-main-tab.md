@@ -1,0 +1,1 @@
+- Chat: a permanent Main tab sits first in the tab strip and opens at launch. It can't be archived, deleted, renamed or unpinned (Delete all leaves it too); Clear empties it in place.
