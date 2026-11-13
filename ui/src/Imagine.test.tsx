@@ -163,15 +163,16 @@ describe("Imagine", () => {
       interval: 0.01,
       expiresIn: 600,
     });
-    api.imagineSignInPoll.mockResolvedValue({
-      status: "ready",
-      signedIn: { name: "Sam", email: "sam@example.com" },
-    });
+    // The poll answers only once the code has been seen: on a slow runner a
+    // poll that is ready at once replaces the code before the test looks.
+    let approve: (poll: { status: "ready"; signedIn: { name: string; email: string } }) => void = () => {};
+    api.imagineSignInPoll.mockReturnValue(new Promise((ok) => (approve = ok)));
     render(<Imagine />);
     const box = await screen.findByRole("region", { name: "Imagine sign-in" });
     await userEvent.click(within(box).getByRole("button", { name: "Sign in with Grok" }));
     expect(api.imagineSignInStart).toHaveBeenCalledTimes(1);
     expect(await within(box).findByLabelText("Sign-in code")).toHaveTextContent("ABCD-EFGH");
+    approve({ status: "ready", signedIn: { name: "Sam", email: "sam@example.com" } });
     expect(await within(box).findByText("Signed in as sam@example.com.")).toBeInTheDocument();
     expect(api.getImagine).toHaveBeenCalledTimes(2);
     await userEvent.type(screen.getByLabelText("What to make"), "a cabin");
