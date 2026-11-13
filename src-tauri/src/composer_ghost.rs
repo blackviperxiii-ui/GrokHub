@@ -29,10 +29,7 @@ pub fn suggest(
     }
     let messages = [
         ("system".to_string(), SYSTEM.to_string()),
-        (
-            "user".to_string(),
-            format!("Continue this draft:\n{draft}"),
-        ),
+        ("user".to_string(), format!("Continue this draft:\n{draft}")),
     ];
     let raw = ask(client, model, &messages)?;
     Ok(normalize_suggestion(&raw, draft))
