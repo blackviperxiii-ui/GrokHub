@@ -278,7 +278,7 @@ mod tests {
         let receipt = cfg.join("channel").display().to_string();
         let plan = |c: &str, b: &str, sw: u8| {
             format!(
-                "channel={c} branch={b} switch={sw} prefix=/tmp/gh-chan receipt={receipt} app=cabin"
+                "channel={c} branch={b} switch={sw} prefix=/tmp/gh-chan receipt={receipt} app=shell"
             )
         };
         assert_eq!(run(&["--user", "--dry-run"]).1, plan("stable", "main", 0));
@@ -317,11 +317,12 @@ mod tests {
     }
 
     /// `--app` picks which desktop app the clone install builds. No `--app`
-    /// stays on the cabin, so the cabin's own update (`install.sh --user`)
-    /// and a fresh install behave exactly as before the flag existed.
+    /// installs the shell, so a fresh install and the cabin's own update
+    /// (`install.sh --user`) both move to it; `--app cabin` still builds the
+    /// cabin while it is retired.
     #[cfg(unix)]
     #[test]
-    fn install_sh_app_flag_defaults_to_the_cabin() {
+    fn install_sh_app_flag_defaults_to_the_shell() {
         let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/install.sh");
         let cfg = std::env::temp_dir().join(format!("grokhub-app-sh-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&cfg);
@@ -348,9 +349,9 @@ mod tests {
         };
         assert_eq!(
             run(&["--user", "--dry-run"]),
-            (Some(0), plan("cabin"), String::new())
+            (Some(0), plan("shell"), String::new())
         );
-        assert_eq!(run(&["--dry-run"]).1, plan("cabin"));
+        assert_eq!(run(&["--dry-run"]).1, plan("shell"));
         assert_eq!(
             run(&["--user", "--app", "shell", "--dry-run"]).1,
             plan("shell")
@@ -374,7 +375,7 @@ mod tests {
             )
         );
         let sh = include_str!("../../../scripts/install.sh");
-        assert!(sh.contains("\nAPP=cabin\n"), "the default app is the cabin");
+        assert!(sh.contains("\nAPP=shell\n"), "the default app is the shell");
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
@@ -442,6 +443,13 @@ mod tests {
         let cargo = base.join("bin/cargo");
         std::fs::write(&cargo, "#!/bin/sh\necho cargo-stub \"$@\"\nexit 7\n").unwrap();
         std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The default install builds the shell, which first checks for npm
+        // and webkit2gtk; the cargo stub stops the run before either is used.
+        for tool in ["npm", "pkg-config"] {
+            let stub = base.join("bin").join(tool);
+            std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let git = |dir: &std::path::Path, args: &[&str]| {
             let out = std::process::Command::new("git")
                 .args(args)
@@ -530,7 +538,7 @@ mod tests {
             "{stdout}"
         );
         assert!(
-            lines.contains(&"cargo-stub build --release --locked -p grokhub-app -p grokhub-hub"),
+            lines.contains(&"cargo-stub build --release --locked -p grokhub-hub"),
             "{stdout}"
         );
         assert_eq!(

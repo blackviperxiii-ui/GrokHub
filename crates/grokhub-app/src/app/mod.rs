@@ -3697,6 +3697,7 @@ impl Cabin {
         }
         // After the beat, so the router state it reads (Local AI on) is current.
         self.sync_auth_notice();
+        self.post_shell_move_notice();
     }
 
     /// One governor beat: the queue of due jobs, highest priority first. Halt,

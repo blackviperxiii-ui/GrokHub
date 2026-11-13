@@ -1,22 +1,18 @@
 # GrokHub systemd user units
 
-## Cabin in the tray
+## Start at login
 
-Close on the window hides the cabin. The process keeps working (chat jobs, hub, idle reflect). Tray: **Show cabin**, **Halt**, **Quit**.
+The app starts at login through its own switch: **Settings → Start at login**
+(on Linux this writes an autostart entry that runs `grokhub-shell --autostart`,
+which opens in the tray). It needs no systemd unit.
 
-```bash
-mkdir -p ~/.config/systemd/user
-cp packaging/systemd/grokhub.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now grokhub.service
-```
-
-`grokhub --agent` is the same: window starts hidden, tray is up. `GROKHUB_TRAY=0` quits on close (no tray).
+`scripts/install.sh --user` moves an old cabin install over: when the cabin's
+`grokhub.service` was enabled, it is turned off and the shell's autostart entry
+is written in its place, so the switch shows as on.
 
 ## LAN hub only
 
-Optional. The cabin already embeds the hub when you click **Start share**.
-Use this when a box should keep `/v1` up without the GUI.
+Optional. Use this when a box should keep `/v1` up without the app open.
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -25,5 +21,5 @@ systemctl --user daemon-reload
 systemctl --user enable --now grokhub-hub.service
 ```
 
-Requires `grokhub` / `grokhub-hub` on `PATH` (`~/.local/bin` or `/usr/bin`).
-Desktop control is the cabin's own `grokhub-desktop` MCP. Halt on the tray stops the running turn.
+Requires `grokhub-hub` on `PATH` (`~/.local/bin` or `/usr/bin`).
+Halt on the tray stops the running turn.

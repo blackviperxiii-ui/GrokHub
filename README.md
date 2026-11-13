@@ -13,14 +13,14 @@ Loadout (formerly GrokHub) is a desktop assistant powered by Grok, for Windows a
 
 ## Get it
 
-- **Windows:** download the `GrokHub-Setup` installer from the [latest release](https://github.com/blackviperxiii-ui/GrokHub/releases/latest) and run it.
-- **Linux (Arch / CachyOS):** grab the Linux download from the [latest release](https://github.com/blackviperxiii-ui/GrokHub/releases/latest).
+- **Windows:** download the `GrokHub-Shell-Setup` installer from the [latest release](https://github.com/blackviperxiii-ui/GrokHub/releases/latest) and run it.
+- **Linux:** grab the `.AppImage` or `.deb` from the [latest release](https://github.com/blackviperxiii-ui/GrokHub/releases/latest). On Arch / CachyOS you can also build it from a clone with `./scripts/install.sh --user`.
 
 On first launch, sign in with your SuperGrok account and you're ready. Loadout keeps itself up to date.
 
 ## Beta
 
-Want new features early? On Linux, turn on **Settings → General → Labs → Beta channel** (it builds from a source clone; Windows stays on stable for now). You can switch back to stable anytime.
+Want new features early? On Linux, switch to **Beta** in **About → Updates** (it builds from a source clone; Windows stays on stable for now). You can switch back to stable anytime.
 
 ## More
 
