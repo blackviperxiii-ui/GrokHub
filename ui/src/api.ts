@@ -3507,6 +3507,11 @@ export function getBehavior(): Promise<BehaviorPage> {
   return invoke<BehaviorPage>("get_behavior");
 }
 
+/** Sentence autocomplete: a short continuation for the composer draft. */
+export function composerGhostSuggest(draft: string): Promise<string> {
+  return invoke<string>("composer_ghost_suggest", { draft });
+}
+
 export function saveBehavior(
   closeToTray: boolean,
   behavior: Behavior,

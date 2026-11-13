@@ -23,6 +23,21 @@ const api = vi.hoisted(() => ({
       (id: string, callId: string, action: ElicitAction, field?: string | null, value?: string) => Promise<void>
     >(),
   getSettings: vi.fn<() => Promise<Settings>>(),
+  getBehavior: vi.fn(() =>
+    Promise.resolve({
+      closeToTray: true,
+      behavior: {
+        autocomplete: false,
+        suggestions: true,
+        quietStart: "",
+        quietEnd: "",
+        dailyTokenBudget: 0,
+        pauseOverBudget: false,
+      },
+      budgets: [],
+    }),
+  ),
+  composerGhostSuggest: vi.fn<(draft: string) => Promise<string>>(() => Promise.resolve("")),
   saveSettings:
     vi.fn<
       (tray: boolean, ws: string, approvals: Approvals, desk: boolean) => Promise<Settings>
@@ -77,6 +92,8 @@ vi.mock("./api", () => ({
   sendChat: api.sendChat,
   answerElicit: api.answerElicit,
   getSettings: api.getSettings,
+  getBehavior: api.getBehavior,
+  composerGhostSuggest: api.composerGhostSuggest,
   saveSettings: api.saveSettings,
   answerPermission: api.answerPermission,
   cancelChat: api.cancelChat,
@@ -244,8 +261,51 @@ describe("Chat", () => {
     api.quickChips.mockReset().mockResolvedValue([]);
     api.chipOutcome.mockReset().mockResolvedValue(true);
     api.getSettings.mockReset().mockResolvedValue(SETTINGS);
+    api.getBehavior.mockReset().mockResolvedValue({
+      closeToTray: true,
+      behavior: {
+        autocomplete: false,
+        suggestions: true,
+        quietStart: "",
+        quietEnd: "",
+        dailyTokenBudget: 0,
+        pauseOverBudget: false,
+      },
+      budgets: [],
+    });
+    api.composerGhostSuggest.mockReset().mockResolvedValue("");
     api.handler = null;
     api.gap = null;
+  });
+
+  it("Tab accepts a ghost suggestion when slash is closed; typing clears it", async () => {
+    api.getBehavior.mockResolvedValue({
+      closeToTray: true,
+      behavior: {
+        autocomplete: true,
+        suggestions: true,
+        quietStart: "",
+        quietEnd: "",
+        dailyTokenBudget: 0,
+        pauseOverBudget: false,
+      },
+      budgets: [],
+    });
+    api.composerGhostSuggest.mockResolvedValue(" world");
+    render(<Chat onOpenSettings={() => {}} />);
+    const box = await screen.findByRole("textbox", { name: "Message" });
+    await userEvent.type(box, "hello");
+    await waitFor(() => expect(api.composerGhostSuggest).toHaveBeenCalledWith("hello"), {
+      timeout: 1000,
+    });
+    await waitFor(() => expect(document.querySelector(".composer-ghost-sug")?.textContent).toBe(" world"));
+    fireEvent.keyDown(box, { key: "Tab" });
+    expect(box).toHaveValue("hello world");
+    expect(document.querySelector(".composer-ghost-sug")).toBeNull();
+
+    api.composerGhostSuggest.mockClear().mockResolvedValue(" again");
+    await userEvent.type(box, "!");
+    expect(document.querySelector(".composer-ghost-sug")).toBeNull();
   });
 
   it("says part of the reply may be missing after a gap in the web app's events", async () => {

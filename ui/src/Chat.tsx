@@ -17,6 +17,8 @@ import {
   deleteChat,
   exportChat,
   forgetMessage,
+  composerGhostSuggest,
+  getBehavior,
   getHangoutMode,
   getLastChat,
   getSettings,
@@ -73,6 +75,13 @@ import { Orb, orbFor, orbLabel } from "./Orb";
 import { activityOf, useNyx } from "./nyx";
 import { PRODUCT_NAME } from "./brand";
 import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
+import {
+  acceptSuggestion,
+  cursorAtEnd,
+  draftKey,
+  GHOST_DEBOUNCE_MS,
+  shouldRequest,
+} from "./composerGhost";
 import { needsSettings } from "./ui";
 import { SavedCard } from "./SavedCard";
 import { settingAsk } from "./autoSetupApi";
@@ -704,6 +713,12 @@ export function Chat({
   /** The game goal the last reply noticed, asked about under it. */
   const [goalAsk, setGoalAsk] = useState<{ id: string; title: string } | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  /** Behavior → Sentence autocomplete; off until the page says otherwise. */
+  const [autocomplete, setAutocomplete] = useState(false);
+  const [ghost, setGhost] = useState("");
+  const ghostGen = useRef(0);
+  const ghostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const attach = useAttachments(conversationId, { remote, active });
   const { rows: slashRows, fresh: slashFresh } = useSlashHits(draft);
   const [slashAt, setSlashAt] = useState(0);
@@ -728,6 +743,47 @@ export function Chat({
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
   }, [active]);
+
+  useEffect(() => {
+    if (!active) return;
+    getBehavior().then(
+      (page) => setAutocomplete(page.behavior.autocomplete),
+      () => setAutocomplete(false),
+    );
+  }, [active]);
+
+  // Debounced ghost suggestion while autocomplete is on.
+  useEffect(() => {
+    if (ghostTimer.current) {
+      clearTimeout(ghostTimer.current);
+      ghostTimer.current = null;
+    }
+    setGhost("");
+    if (!autocomplete || !shouldRequest(draft, slashOpen, busyHere)) {
+      ghostGen.current += 1;
+      return;
+    }
+    const el = composerRef.current;
+    const cursor = el ? el.selectionStart : draft.length;
+    if (!cursorAtEnd(draft, cursor)) return;
+    const key = draftKey(draft, cursor);
+    const gen = ++ghostGen.current;
+    ghostTimer.current = setTimeout(() => {
+      void composerGhostSuggest(draft).then(
+        (suggestion) => {
+          if (gen !== ghostGen.current) return;
+          if (draftKey(draft, composerRef.current?.selectionStart ?? draft.length) !== key) return;
+          setGhost(suggestion);
+        },
+        () => {
+          if (gen === ghostGen.current) setGhost("");
+        },
+      );
+    }, GHOST_DEBOUNCE_MS);
+    return () => {
+      if (ghostTimer.current) clearTimeout(ghostTimer.current);
+    };
+  }, [autocomplete, draft, slashOpen, busyHere]);
 
   /** A bubble's open menu, and the delete waiting on its confirm. */
   const [msgMenu, setMsgMenu] = useState<{ i: number; at: { x: number; y: number } } | null>(null);
@@ -1471,6 +1527,17 @@ export function Chat({
           return;
         }
       }
+    } else if (event.key === "Tab" && !event.shiftKey && ghost) {
+      event.preventDefault();
+      setDraft(acceptSuggestion(draft, ghost));
+      setGhost("");
+      ghostGen.current += 1;
+      return;
+    } else if (event.key === "Escape" && ghost) {
+      event.preventDefault();
+      setGhost("");
+      ghostGen.current += 1;
+      return;
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -1671,22 +1738,33 @@ export function Chat({
         {!remote && (
           <AttachButton onPick={() => void attach.pick()} busy={busy} full={attach.files.length >= ATTACH_MAX} />
         )}
-        <textarea
-          aria-label={embedded ? AGENT_PLACEHOLDER : "Message"}
-          placeholder={embedded ? AGENT_PLACEHOLDER : PLACEHOLDER}
-          value={draft}
-          rows={2}
-          role={slashOpen ? "combobox" : undefined}
-          aria-expanded={slashOpen ? true : undefined}
-          aria-controls={slashOpen ? "slash-menu" : undefined}
-          aria-activedescendant={slashOpen ? `slash-row-${slashPick}` : undefined}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setSlashAt(0);
-          }}
-          onKeyDown={onKeyDown}
-          onPaste={attach.onPaste}
-        />
+        <div className="composer-ghost-wrap">
+          {ghost ? (
+            <div className="composer-ghost" aria-hidden="true">
+              <span className="composer-ghost-draft">{draft}</span>
+              <span className="composer-ghost-sug">{ghost}</span>
+            </div>
+          ) : null}
+          <textarea
+            ref={composerRef}
+            aria-label={embedded ? AGENT_PLACEHOLDER : "Message"}
+            placeholder={embedded ? AGENT_PLACEHOLDER : PLACEHOLDER}
+            value={draft}
+            rows={2}
+            role={slashOpen ? "combobox" : undefined}
+            aria-expanded={slashOpen ? true : undefined}
+            aria-controls={slashOpen ? "slash-menu" : undefined}
+            aria-activedescendant={slashOpen ? `slash-row-${slashPick}` : undefined}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setSlashAt(0);
+              setGhost("");
+              ghostGen.current += 1;
+            }}
+            onKeyDown={onKeyDown}
+            onPaste={attach.onPaste}
+          />
+        </div>
         {!remote && (
           <>
             <Mic onText={(words) => setDraft((now) => appendDraft(now, words))} onError={setError} busy={busy} active={active} />

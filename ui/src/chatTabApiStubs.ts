@@ -21,5 +21,20 @@ export function chatTabApiStubs() {
     chatTabUnarchive: () => Promise.resolve({ ...emptyTab }),
     chatTabSoftDelete: () => Promise.resolve({ ...emptyTab }),
     chatTabRestoreDeleted: () => Promise.resolve({ ...emptyTab }),
+    // Sentence autocomplete stays off in tests unless a suite turns it on.
+    getBehavior: () =>
+      Promise.resolve({
+        closeToTray: true,
+        behavior: {
+          autocomplete: false,
+          suggestions: true,
+          quietStart: "",
+          quietEnd: "",
+          dailyTokenBudget: 0,
+          pauseOverBudget: false,
+        },
+        budgets: [] as { value: number; label: string }[],
+      }),
+    composerGhostSuggest: () => Promise.resolve(""),
   };
 }
