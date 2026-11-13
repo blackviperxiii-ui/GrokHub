@@ -775,6 +775,8 @@ async fn chat_turn(
     chat_trials::said(&config_dir, &conversation_id, &text, started);
     let stop = tauri::async_runtime::spawn_blocking(move || {
         let mut route = route(&settings, mode, &config_dir)?;
+        // A resumed card's turn runs no looser than its run started.
+        route.mode = card_chat::turn_mode(&conversation_id, route.mode);
         if let Some(dir) = own_folder {
             route.workspace = dir;
         }
@@ -850,9 +852,10 @@ async fn chat_turn(
     .map_err(|e| e.to_string())
     .and_then(|stop| stop);
     // A card's run settles on its card, however the turn ended.
-    card_chat::turn_ended(&ended_dir, &ended_chat, &stop);
-    // No model in your plan answered: the chat waits and sends again on its own.
-    if let Err(err) = &stop {
+    let card = card_chat::turn_ended(&ended_dir, &ended_chat, &stop);
+    // No model in your plan answered: the chat waits and sends again on its
+    // own. A card's chat does not: its card settled already.
+    if let (Err(err), false) = (&stop, card) {
         model_wait::turn_failed(&ended_dir, &ended_chat, &asked, err, grokhub_core::now_ms());
     }
     if coding {
@@ -3328,12 +3331,15 @@ async fn workboard_resume(
 ) -> Result<workboard::Resume, String> {
     let settings = current(&state);
     let dir = state.config_dir.clone();
-    let chat_busy = state
+    // The chats the page sends into: the card's, and the open one.
+    let busy: std::collections::HashSet<String> = state
         .chats
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .values()
-        .any(|s| s.busy());
+        .iter()
+        .filter(|(_, s)| s.busy())
+        .map(|(id, _)| id.clone())
+        .collect();
     off_main(move || {
         let card =
             grokhub_core::work_run::read_board_file(&grokhub_core::work_run::board_path(&dir))?
@@ -3347,18 +3353,17 @@ async fn workboard_resume(
         }
         if !run_resume::unattended_card(&card) {
             // The page sends the block into the chat; a busy chat would drop it.
-            if chat_busy {
-                return Err("Finish the open chat first.".into());
+            let into = [
+                card.thread_id.as_deref().unwrap_or_default(),
+                conversation_id.as_str(),
+                settings.last_chat.as_str(),
+            ];
+            if into.iter().any(|c| busy.contains(*c)) {
+                return Err("Wait for the chat to finish its answer first.".into());
             }
             let mode =
                 unattended::RunGate::scheduled(settings.approvals.mode(), false, None).wire();
             return workboard::resume(&dir, &id, &conversation_id, mode);
-        }
-        if bg_runs::live_count() + run_resume::live_count() >= grokhub_core::BG_TASK_MAX {
-            return Err(format!(
-                "{} background tasks are already running. Stop one first.",
-                grokhub_core::BG_TASK_MAX
-            ));
         }
         resume_in_background(&dir, &settings, &id, false)?;
         Ok(workboard::Resume {
@@ -3389,6 +3394,7 @@ fn resume_in_background(
         gate,
         auto,
         &grokhub_agent::session_intact,
+        bg_runs::live_count(),
         grokhub_core::now_ms(),
     )?;
     let (dir, client, workspace) = (dir.to_path_buf(), route.client, route.workspace);

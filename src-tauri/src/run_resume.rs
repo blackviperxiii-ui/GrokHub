@@ -11,9 +11,9 @@
 //! agent's own interrupted cards resume by themselves once per interruption,
 //! twice a day at most; past that they wait in Blocked and the bell says so.
 
+use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use grokhub_agent::{CancelToken, ModelClient};
 use grokhub_core::work_item::{append_work_log, clip_line, CHECKPOINT_BLOCKER_MAX};
@@ -28,8 +28,12 @@ use crate::unattended::{self, RunGate};
 /// Tells the window an auto-resume stopped for the day.
 pub const AUTO_RESUME_EVENT: &str = "workboard://auto-resume";
 
-/// Resumed runs going now.
-static LIVE: AtomicUsize = AtomicUsize::new(0);
+/// Resumed runs going now: card id to its title and the run's stop.
+static LIVE: Mutex<BTreeMap<String, (String, CancelToken)>> = Mutex::new(BTreeMap::new());
+
+fn live() -> MutexGuard<'static, BTreeMap<String, (String, CancelToken)>> {
+    LIVE.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// An automation's or a background run's card resumes unattended.
 pub fn unattended_card(card: &BoardCard) -> bool {
@@ -38,7 +42,25 @@ pub fn unattended_card(card: &BoardCard) -> bool {
 
 /// Resumed runs going now.
 pub fn live_count() -> usize {
-    LIVE.load(Ordering::SeqCst)
+    live().len()
+}
+
+/// `/bg`'s lines for resumed runs going now.
+pub fn status_lines() -> Vec<String> {
+    live()
+        .values()
+        .map(|(title, _)| format!("Running · Resumed: {title}"))
+        .collect()
+}
+
+/// `/bg stop`: stops every resumed run; each card goes back to Blocked with
+/// its checkpoint. How many it stopped.
+pub fn stop_all() -> usize {
+    let all = live();
+    for (_, stop) in all.values() {
+        stop.cancel();
+    }
+    all.len()
 }
 
 fn note(how: &ResumeSession) -> &'static str {
@@ -69,16 +91,20 @@ pub struct Prepared {
     /// The one input the run gets.
     pub block: String,
     pub gate: RunGate,
+    /// The attempt this resume started, so a late end leaves a newer one alone.
+    attempt: u32,
     _running: Option<Running>,
-    /// Counted from the claim on, so a second resume sees the room it takes.
-    _live: Live,
+    /// Held from the claim on, so the card can't resume twice and a second
+    /// resume sees the room this one takes.
+    live: Live,
 }
 
 /// Take card `id` from Blocked into Doing for an unattended resume on `model`.
 /// `gate` is the gate a run would get now; the run keeps the mode it started
 /// in when that is stricter. `intact` says whether a session file still reads.
 /// `auto` spends the interruption's one auto-resume, and refuses a card whose
-/// automation is gone or turned off.
+/// automation is turned off. `others` counts the `/bg` runs going now: with
+/// resumed runs they share [`grokhub_core::BG_TASK_MAX`].
 pub fn prepare(
     config_dir: &Path,
     id: &str,
@@ -86,6 +112,7 @@ pub fn prepare(
     gate: RunGate,
     auto: bool,
     intact: &dyn Fn(&str) -> bool,
+    others: usize,
     now: u64,
 ) -> Result<Prepared, String> {
     let card = read_card(config_dir, id)?;
@@ -98,9 +125,15 @@ pub fn prepare(
             .find(|a| a.id == job),
         None => None,
     };
-    if auto && card.automation.is_some() && !automation.as_ref().is_some_and(|a| a.enabled) {
-        return Err("Its automation is off or gone.".into());
+    if card.automation.is_some() && automation.is_none() {
+        // Its tools came from the automation's instructions; without them it
+        // would run with every tool.
+        return Err("Its automation was removed, so its run can't resume.".into());
     }
+    if auto && automation.as_ref().is_some_and(|a| !a.enabled) {
+        return Err("Its automation is off.".into());
+    }
+    let live = Live::claim(id, &card.title, others)?;
     let running = match &automation {
         Some(job) => Some(Running::claim(&job.id)?),
         None => None,
@@ -136,7 +169,6 @@ pub fn prepare(
         let attempt = c.checkpoint.as_ref().map(|cp| cp.attempt).unwrap_or(1);
         Ok((block, session_id, resume, gate.in_mode(mode), how, attempt))
     })??;
-    let live = Live::start();
     let (block, session_id, resume, gate, how, attempt) = taken;
     log(config_dir, id, now, wr::LOG_NOTE, note(&how));
     log(
@@ -153,24 +185,44 @@ pub fn prepare(
         resume,
         block,
         gate,
+        attempt,
         _running: running,
-        _live: live,
+        live,
     })
 }
 
-/// Counts a resumed run while it goes.
-struct Live;
+/// Card `id`'s resumed run, held while it goes.
+struct Live {
+    id: String,
+    stop: CancelToken,
+}
 
 impl Live {
-    fn start() -> Self {
-        LIVE.fetch_add(1, Ordering::SeqCst);
-        Self
+    /// Claim card `id` for a resumed run, when it has none going and there is
+    /// room beside `others` background runs.
+    fn claim(id: &str, title: &str, others: usize) -> Result<Self, String> {
+        let mut all = live();
+        if all.contains_key(id) {
+            return Err("That run is already going.".into());
+        }
+        if others + all.len() >= grokhub_core::BG_TASK_MAX {
+            return Err(format!(
+                "{} background tasks are already running. /bg stop stops them.",
+                grokhub_core::BG_TASK_MAX
+            ));
+        }
+        let stop = CancelToken::new();
+        all.insert(id.to_string(), (clip_line(title.trim(), 80), stop.clone()));
+        Ok(Self {
+            id: id.to_string(),
+            stop,
+        })
     }
 }
 
 impl Drop for Live {
     fn drop(&mut self) {
-        LIVE.fetch_sub(1, Ordering::SeqCst);
+        live().remove(&self.id);
     }
 }
 
@@ -193,7 +245,7 @@ pub fn run(
         // An automation's run keeps the tools its instructions declare.
         tools_from: job.automation.as_ref().map(|a| a.instructions.clone()),
         gate: job.gate,
-        cancel: CancelToken::new(),
+        cancel: job.live.stop.clone(),
         resume: job.resume,
     });
     let result = RunResult {
@@ -201,39 +253,58 @@ pub fn run(
         error: done.error,
         stop: done.stop_reason,
     };
-    match &job.automation {
-        Some(auto) => {
+    let end = end_of(&result);
+    match (&job.automation, &end) {
+        (Some(auto), RunEnd::Done | RunEnd::Failed(_)) => {
             crate::automations::board_run_end(config_dir, auto, Some(&job.card_id), &result)
         }
-        None => settle(config_dir, &job.card_id, &result),
+        _ => settle(config_dir, &job.card_id, job.attempt, &end, &result.text),
     }
     result
 }
 
-/// A background card's end, as its first run settles it.
-fn settle(config_dir: &Path, id: &str, done: &RunResult) {
+/// How a resumed run ended: `/bg stop` or Halt stops it, so its card waits in
+/// Blocked rather than resuming on its own.
+fn end_of(done: &RunResult) -> RunEnd {
+    match done.stop.as_str() {
+        "cancelled" | "halted" => RunEnd::Stopped,
+        _ if done.failed() => RunEnd::Failed(done.error.clone()),
+        _ => RunEnd::Done,
+    }
+}
+
+/// A background card's end, as its first run settles it. A card you moved
+/// out of Doing on this attempt meanwhile keeps where you put it.
+fn settle(config_dir: &Path, id: &str, attempt: u32, end: &RunEnd, text: &str) {
     let now = grokhub_core::now_ms();
-    let end = if done.failed() {
-        RunEnd::Failed(done.error.clone())
-    } else {
-        RunEnd::Done
-    };
-    let cut = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
-        let cut = cards
-            .iter_mut()
-            .find(|c| c.id == id)
-            .is_some_and(|c| res::interrupt_failed(c, &end, now));
+    let settled = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
+        let c = cards.iter_mut().find(|c| {
+            c.id == id
+                && c.status == grokhub_core::BoardStatus::InProgress
+                && c.checkpoint.as_ref().map(|cp| cp.attempt) == Some(attempt)
+        })?;
+        let cut = res::interrupt_failed(c, end, now);
         if !cut {
-            wr::set_run_result(cards, id, &done.text, None, now);
-            wr::finish_run_card(cards, id, &end, now);
+            wr::set_run_result(cards, id, text, None, now);
+            wr::finish_run_card(cards, id, end, now);
         }
-        cut
+        Some(cut)
     })
-    .unwrap_or(false);
-    let line = if cut {
-        format!("interrupted: {}", done.error.trim())
-    } else {
-        end.log_text()
+    .ok()
+    .flatten();
+    let Some(cut) = settled else {
+        log(
+            config_dir,
+            id,
+            now,
+            wr::LOG_NOTE,
+            "resume ended after the card moved",
+        );
+        return;
+    };
+    let line = match end {
+        RunEnd::Failed(why) if cut => format!("interrupted: {}", why.trim()),
+        _ => end.log_text(),
     };
     log(config_dir, id, now, wr::LOG_END, &line);
 }

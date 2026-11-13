@@ -28,7 +28,7 @@ import {
 } from "./api";
 import { cardsByChat } from "./activity";
 import { newConversationId } from "./Chat";
-import { CardChat } from "./WorkboardChat";
+import { CardChat, ownChat } from "./WorkboardChat";
 import { CardTriage, priorityChip } from "./WorkboardTriage";
 
 export const BOARD_EMPTY = "No cards yet. A chat run files one here, or add your own.";
@@ -227,7 +227,8 @@ export function Workboard({
   async function resume(card: BoardCard) {
     setBusy(true);
     try {
-      const started = await workboardResume(card.id, card.chat ?? newConversationId());
+      // A cabin chat is not one of this app's: the card resumes in a new one.
+      const started = await workboardResume(card.id, ownChat(card) ?? newConversationId());
       setPage(started.page);
       if (started.background) {
         setNote("Resumed in the background from where it left off.");

@@ -12,7 +12,7 @@
 //! Token budget: the queue's look is local (the board file and a few flags);
 //! a card's turn is the same one turn the person would have sent from Chat.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -26,11 +26,13 @@ use serde::Serialize;
 
 use crate::workboard::{self, Page};
 
-/// Chats that belong to a card, and the ones running a turn now.
+/// Chats that belong to a card, the ones running a turn now, and the mode a
+/// resumed card's next turn may not run looser than.
 #[derive(Default)]
 struct Chats {
     cards: HashSet<String>,
     running: HashSet<String>,
+    kept: HashMap<String, PermissionMode>,
 }
 
 static CHATS: Mutex<Option<Chats>> = Mutex::new(None);
@@ -67,6 +69,34 @@ pub(crate) fn note_card_chat(chat: &str) {
     });
 }
 
+/// A card resumed in `chat` keeps the mode its run started in: the chat's next
+/// turn runs no looser than `mode`.
+pub(crate) fn keep_mode(chat: &str, mode: PermissionMode) {
+    with_chats(|c| {
+        c.kept.insert(chat.to_string(), mode);
+    });
+}
+
+/// `mode` for a turn in `chat`, no looser than a resumed card's kept mode.
+pub fn turn_mode(chat: &str, mode: grokhub_agent::PermMode) -> grokhub_agent::PermMode {
+    use grokhub_agent::PermMode as P;
+    let rank = |m: P| match m {
+        P::Ask => 0,
+        P::Auto => 1,
+        P::Always => 2,
+    };
+    let kept = match with_chats(|c| c.kept.get(chat).copied()) {
+        Some(PermissionMode::Ask) => P::Ask,
+        Some(PermissionMode::Auto) => P::Auto,
+        Some(PermissionMode::AlwaysApprove) | None => return mode,
+    };
+    if rank(kept) < rank(mode) {
+        kept
+    } else {
+        mode
+    }
+}
+
 /// A turn starts in `chat`: a card's chat counts as running until it ends.
 pub fn turn_began(chat: &str) {
     with_chats(|c| {
@@ -77,14 +107,17 @@ pub fn turn_began(chat: &str) {
 }
 
 /// A turn in `chat` ended with `stop`: a card's run settles on its card
-/// (Done, or Blocked after a Stop or a failure) and the end is logged.
-pub fn turn_ended(config_dir: &Path, chat: &str, stop: &Result<String, String>) {
+/// (Done, or Blocked after a Stop or a failure) and the end is logged. True
+/// when `chat` is a card's: its failed ask is not sent again on its own, since
+/// the card already settled; Resume picks it up.
+pub fn turn_ended(config_dir: &Path, chat: &str, stop: &Result<String, String>) -> bool {
     let ours = with_chats(|c| {
         c.running.remove(chat);
+        c.kept.remove(chat);
         c.cards.contains(chat)
     });
     if !ours {
-        return;
+        return false;
     }
     let end = wc::turn_end(stop);
     let now = grokhub_core::now_ms();
@@ -100,6 +133,7 @@ pub fn turn_ended(config_dir: &Path, chat: &str, stop: &Result<String, String>) 
             &end.log_text(),
         );
     }
+    true
 }
 
 /// What Say sends, the chat to send it in, and the board after.

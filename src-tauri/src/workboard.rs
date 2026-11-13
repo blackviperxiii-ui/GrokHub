@@ -853,7 +853,7 @@ pub fn resume(
 ) -> Result<Resume, String> {
     use grokhub_core::work_run as wr;
     let now = grokhub_core::now_ms();
-    let ((conversation_id, prompt, same, attempt), page) = change(config_dir, |cards| {
+    let ((conversation_id, prompt, same, attempt, kept), page) = change(config_dir, |cards| {
         let i = find(cards, id)?;
         if !can_resume(&cards[i]) {
             return Err("Only a paused or interrupted run can resume.".into());
@@ -882,10 +882,11 @@ pub fn resume(
         wr::begin_run(c, kind, &conversation, "", now);
         res::claim_run(c, res::HOST_SHELL, kept);
         let attempt = c.checkpoint.as_ref().map(|cp| cp.attempt).unwrap_or(1);
-        Ok((conversation, prompt, own.is_some(), attempt))
+        Ok((conversation, prompt, own.is_some(), attempt, kept))
     })?;
-    // Its turn's end settles the card.
+    // Its turn's end settles the card, and that turn runs no looser than kept.
     crate::card_chat::note_card_chat(&conversation_id);
+    crate::card_chat::keep_mode(&conversation_id, kept);
     let note = if same {
         "resume: same chat"
     } else {
@@ -1602,8 +1603,22 @@ mod tests {
             resume(&config, "p", "shell-x", always).unwrap_err(),
             "Only a paused or interrupted run can resume."
         );
+        // Its resume turn runs no looser than Ask, though Approvals is Always.
+        use grokhub_agent::PermMode;
+        assert_eq!(
+            crate::card_chat::turn_mode("shell-p", PermMode::Always),
+            PermMode::Ask
+        );
         // The turn's end settles the card, as a queued card's does.
-        crate::card_chat::turn_ended(&config, "shell-p", &Ok("end_turn".into()));
+        assert!(crate::card_chat::turn_ended(
+            &config,
+            "shell-p",
+            &Ok("end_turn".into())
+        ));
+        assert_eq!(
+            crate::card_chat::turn_mode("shell-p", PermMode::Always),
+            PermMode::Always
+        );
         let p = on_disk(&config).into_iter().find(|c| c.id == "p").unwrap();
         assert_eq!(p.status, BoardStatus::Done);
 

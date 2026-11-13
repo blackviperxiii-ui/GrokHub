@@ -130,11 +130,13 @@ fn finish(id: u64, end: BgEnd, reply: &str) {
 /// Bare `/bg`: what is running and what ended.
 pub fn status() -> String {
     let all = runs();
-    if all.is_empty() {
+    let resumed = crate::run_resume::status_lines();
+    if all.is_empty() && resumed.is_empty() {
         return "No background tasks. /bg <task> starts one.".into();
     }
-    all.iter()
-        .map(|r| match &r.phase {
+    resumed
+        .into_iter()
+        .chain(all.iter().map(|r| match &r.phase {
             Phase::Running => format!("Running · {}", r.title),
             Phase::Ended(end, body) => {
                 let head = match end {
@@ -148,15 +150,16 @@ pub fn status() -> String {
                     format!("{head} · {}\n{body}", r.title)
                 }
             }
-        })
+        }))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-/// `/bg stop`: cancels every run that is going. How many it stopped.
+/// `/bg stop`: cancels every run that is going, resumed Workboard runs too.
+/// How many it stopped.
 pub fn stop_all() -> usize {
     let mut all = runs();
-    let mut stopped = 0;
+    let mut stopped = crate::run_resume::stop_all();
     for run in all.iter_mut().filter(|r| matches!(r.phase, Phase::Running)) {
         run.stop_asked = true;
         run.cancel.cancel();

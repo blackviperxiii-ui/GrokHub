@@ -92,7 +92,7 @@ fn an_automation_card_continues_its_session_with_the_block_and_keeps_ask() {
     c.automation = Some(job.clone());
     seed(&dir, vec![c]);
 
-    let p = prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, NOW).expect("prepared");
+    let p = prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, 0, NOW).expect("prepared");
     assert_eq!((p.session_id.as_str(), p.resume), ("s-1", true));
     // Started in Ask: the resume stays in Ask though Approvals is Always now.
     assert_eq!(p.gate.mode, PermMode::Ask);
@@ -111,16 +111,17 @@ fn an_automation_card_continues_its_session_with_the_block_and_keeps_ask() {
     assert_eq!(now.checkpoint.as_ref().map(|cp| cp.attempt), Some(2));
     assert_eq!(notes(&dir, "a-1"), ["resume: same session", "attempt 2"]);
 
-    // Its automation is running now: a second resume is refused.
+    // It runs now: a second resume is refused.
     assert_eq!(
-        prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, NOW)
+        prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, 0, NOW)
             .err()
             .as_deref(),
-        Some("That automation is already running.")
+        Some("That run is already going.")
     );
+    assert!(crate::automations::is_running(&job));
     drop(p);
     assert_eq!(
-        prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, NOW)
+        prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, 0, NOW)
             .err()
             .as_deref(),
         Some("Only a paused or interrupted run can resume.")
@@ -138,19 +139,19 @@ fn another_model_or_a_lost_session_starts_fresh_and_a_chat_card_is_not_unattende
             interrupted("t-1", WorkKind::Task, PermissionMode::Ask),
         ],
     );
-    let p = prepare(&dir, "b-1", "grok-5", ALWAYS, false, &intact_s1, NOW).expect("b-1");
+    let p = prepare(&dir, "b-1", "grok-5", ALWAYS, false, &intact_s1, 0, NOW).expect("b-1");
     assert!(!p.resume);
     assert_eq!(p.session_id, format!("shell-resume-b-1-{NOW}"));
     assert_eq!(p.gate.mode, PermMode::Always);
     assert_eq!(notes(&dir, "b-1"), ["resume: fresh session", "attempt 2"]);
 
     let gone = |_: &str| false;
-    let p = prepare(&dir, "b-2", "grok-4.7", ALWAYS, false, &gone, NOW).expect("b-2");
+    let p = prepare(&dir, "b-2", "grok-4.7", ALWAYS, false, &gone, 0, NOW).expect("b-2");
     assert!(!p.resume);
     assert_eq!(p.gate.mode, PermMode::Auto);
 
     assert_eq!(
-        prepare(&dir, "t-1", "grok-4.7", ALWAYS, false, &intact_s1, NOW)
+        prepare(&dir, "t-1", "grok-4.7", ALWAYS, false, &intact_s1, 0, NOW)
             .err()
             .as_deref(),
         Some("Only an automation's or a background run's card resumes on its own.")
@@ -198,7 +199,7 @@ fn a_resumed_run_settles_its_card_done_or_interrupted_again() {
         ],
     );
     let never = |_: &str| false;
-    let p = prepare(&dir, "b-1", "grok-4.7", ALWAYS, false, &never, NOW).expect("b-1");
+    let p = prepare(&dir, "b-1", "grok-4.7", ALWAYS, false, &never, 0, NOW).expect("b-1");
     let done = run(&dir, p, Arc::new(Answers), "grok-4.7", workspace.clone());
     assert_eq!(
         (done.text.as_str(), done.error.as_str()),
@@ -213,7 +214,7 @@ fn a_resumed_run_settles_its_card_done_or_interrupted_again() {
     assert_eq!(notes(&dir, "b-1").last().map(String::as_str), Some("done"));
     assert_eq!(live_count(), 0);
 
-    let p = prepare(&dir, "b-2", "grok-4.7", ALWAYS, false, &never, NOW).expect("b-2");
+    let p = prepare(&dir, "b-2", "grok-4.7", ALWAYS, false, &never, 0, NOW).expect("b-2");
     // The run takes its room from the claim on, before it starts.
     assert_eq!(live_count(), 1);
     let failed = run(&dir, p, Arc::new(Stalls), "grok-4.7", workspace);
@@ -252,7 +253,7 @@ fn the_agents_cards_auto_resume_twice_a_day_then_wait_with_a_bell() {
     assert_eq!(picks(NOW), [("b-1".to_string(), AutoResume::Go)]);
 
     for (n, at) in [(1, NOW), (2, NOW + HOUR)] {
-        let p = prepare(&dir, "b-1", "grok-4.7", ALWAYS, true, &never, at).expect("resume");
+        let p = prepare(&dir, "b-1", "grok-4.7", ALWAYS, true, &never, 0, at).expect("resume");
         drop(p);
         // The run was cut again.
         wr::edit_board_file(&wr::board_path(&dir), at, |cards| {
@@ -339,17 +340,17 @@ fn an_auto_resume_skips_a_card_whose_automation_is_off() {
     c.automation = Some(job);
     seed(&dir, vec![c]);
     assert_eq!(
-        prepare(&dir, "a-1", "grok-4.7", ALWAYS, true, &intact_s1, NOW)
+        prepare(&dir, "a-1", "grok-4.7", ALWAYS, true, &intact_s1, 0, NOW)
             .err()
             .as_deref(),
-        Some("Its automation is off or gone.")
+        Some("Its automation is off.")
     );
     // Nothing was spent or moved.
     let a1 = card(&dir, "a-1");
     assert_eq!(a1.status, BoardStatus::Blocked);
     assert!(a1.run_state.auto_resumes.is_empty());
     // You can still resume it by hand.
-    assert!(prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, NOW).is_ok());
+    assert!(prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, 0, NOW).is_ok());
 }
 
 #[test]
@@ -364,7 +365,7 @@ fn a_late_tick_leaves_a_card_you_resumed_alone() {
         )],
     );
     // The tick read it Blocked, then you resumed it.
-    let p = prepare(&dir, "b-1", "grok-4.7", ALWAYS, false, &intact_s1, NOW).expect("resume");
+    let p = prepare(&dir, "b-1", "grok-4.7", ALWAYS, false, &intact_s1, 0, NOW).expect("resume");
     assert_eq!(give_up(&dir, "b-1", NOW), None);
     auto_failed(&dir, "b-1", "Sign in to xAI first.", NOW);
     let b1 = card(&dir, "b-1");
@@ -373,4 +374,134 @@ fn a_late_tick_leaves_a_card_you_resumed_alone() {
     assert_eq!(b1.checkpoint.map(|cp| cp.blocker).as_deref(), Some(""));
     assert_eq!(notes(&dir, "b-1"), ["resume: same session", "attempt 2"]);
     drop(p);
+}
+
+#[test]
+fn a_card_resumes_once_at_a_time_within_the_shared_room() {
+    let dir = temp_dir("room");
+    seed(
+        &dir,
+        vec![
+            interrupted("b-1", WorkKind::Background, PermissionMode::Ask),
+            interrupted("b-2", WorkKind::Background, PermissionMode::Ask),
+        ],
+    );
+    let never = |_: &str| false;
+    let p = prepare(&dir, "b-1", "grok-4.7", ALWAYS, false, &never, 0, NOW).expect("b-1");
+    assert_eq!(status_lines(), ["Running · Resumed: Card b-1"]);
+    // You moved it back to Blocked while it runs: it still can't run twice.
+    wr::edit_board_file(&wr::board_path(&dir), NOW, |cards| {
+        cards[0].status = BoardStatus::Blocked;
+    })
+    .expect("move");
+    assert_eq!(
+        prepare(&dir, "b-1", "grok-4.7", ALWAYS, false, &never, 0, NOW)
+            .err()
+            .as_deref(),
+        Some("That run is already going.")
+    );
+    // Two /bg runs and this one fill the room.
+    assert_eq!(
+        prepare(&dir, "b-2", "grok-4.7", ALWAYS, false, &never, 2, NOW)
+            .err()
+            .as_deref(),
+        Some("3 background tasks are already running. /bg stop stops them.")
+    );
+    assert_eq!(card(&dir, "b-2").status, BoardStatus::Blocked);
+    drop(p);
+    assert_eq!(live_count(), 0);
+    assert!(status_lines().is_empty());
+}
+
+#[test]
+fn a_removed_automation_s_card_never_resumes_with_every_tool() {
+    let dir = temp_dir("removed");
+    let mut c = interrupted("a-1", WorkKind::Automation, PermissionMode::AlwaysApprove);
+    c.automation = Some("gone-job".into());
+    seed(&dir, vec![c]);
+    assert_eq!(
+        prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, 0, NOW)
+            .err()
+            .as_deref(),
+        Some("Its automation was removed, so its run can't resume.")
+    );
+    assert_eq!(card(&dir, "a-1").status, BoardStatus::Blocked);
+    assert_eq!(live_count(), 0);
+}
+
+/// Waits until it is stopped.
+struct Hangs;
+
+impl ModelClient for Hangs {
+    fn stream(
+        &self,
+        _req: &ResponsesRequest,
+        cancel: &CancelToken,
+        _sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        while !cancel.is_cancelled() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Err(ClientError::Cancelled)
+    }
+}
+
+#[test]
+fn bg_stop_stops_a_resumed_run_and_its_card_waits_in_blocked() {
+    let (dir, workspace) = (temp_dir("stop-cfg"), temp_dir("stop-ws"));
+    seed(
+        &dir,
+        vec![interrupted(
+            "b-1",
+            WorkKind::Background,
+            PermissionMode::Ask,
+        )],
+    );
+    let never = |_: &str| false;
+    let p = prepare(&dir, "b-1", "grok-4.7", ALWAYS, false, &never, 0, NOW).expect("b-1");
+    let (d, w) = (dir.clone(), workspace.clone());
+    let going = std::thread::spawn(move || run(&d, p, Arc::new(Hangs), "grok-4.7", w));
+    while crate::bg_runs::status() != "Running · Resumed: Card b-1" {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(crate::bg_runs::stop_text(), "Stopped 1 background task");
+    let ended = going.join().expect("run");
+    assert_eq!(ended.stop, "halted", "{ended:?}");
+    // Stopped, not interrupted: it waits for you and never resumes on its own.
+    let b1 = card(&dir, "b-1");
+    assert_eq!(b1.status, BoardStatus::Blocked);
+    assert_eq!(b1.run_state.interrupted, None);
+    assert_eq!(
+        b1.checkpoint.map(|cp| cp.blocker).as_deref(),
+        Some(wr::STOPPED_BLOCKER)
+    );
+    assert!(auto_picks(&dir, NOW).is_empty());
+    assert_eq!(live_count(), 0);
+}
+
+#[test]
+fn a_run_whose_card_you_moved_leaves_it_where_you_put_it() {
+    let (dir, workspace) = (temp_dir("moved-cfg"), temp_dir("moved-ws"));
+    seed(
+        &dir,
+        vec![interrupted(
+            "b-1",
+            WorkKind::Background,
+            PermissionMode::Ask,
+        )],
+    );
+    let never = |_: &str| false;
+    let p = prepare(&dir, "b-1", "grok-4.7", ALWAYS, false, &never, 0, NOW).expect("b-1");
+    wr::edit_board_file(&wr::board_path(&dir), NOW, |cards| {
+        cards[0].status = BoardStatus::Todo;
+    })
+    .expect("move");
+    run(&dir, p, Arc::new(Answers), "grok-4.7", workspace);
+    let b1 = card(&dir, "b-1");
+    assert_eq!(b1.status, BoardStatus::Todo);
+    assert_eq!(b1.result, "");
+    assert_eq!(
+        notes(&dir, "b-1").last().map(String::as_str),
+        Some("resume ended after the card moved")
+    );
 }
