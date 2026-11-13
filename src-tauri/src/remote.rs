@@ -812,8 +812,9 @@ fn refuse(req: Request) {
 }
 
 /// The page may load only its own files and talk only to this desktop.
-/// `media-src data:` plays Imagine's videos, which come as data: URLs.
-const PAGE_CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+/// `media-src data:` plays Imagine's videos, which come as data: URLs; the
+/// GitHub origins stream Nyx's card clips from assets-nyx-anim-1.
+const PAGE_CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data: https://github.com https://objects.githubusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 /// The UI file a page path names. A path with an empty, `.` or `..` part, a
 /// backslash or a drive is no file of the UI and gets the app's page: a dev
@@ -1732,12 +1733,16 @@ mod tests {
             head.contains("Content-Security-Policy: default-src 'self'"),
             "{head}"
         );
-        // Imagine's videos are data: URLs; without this the page refuses them.
-        assert!(head.contains("media-src 'self' data:;"), "{head}");
+        // Imagine's videos are data: URLs; Nyx's card clips stream from GitHub
+        // releases. Only media-src allows those origins.
+        let expected_media =
+            "media-src 'self' data: https://github.com https://objects.githubusercontent.com;";
+        assert!(head.contains(expected_media), "{head}");
         // The desktop window's own CSP lives in tauri.conf.json: same rule.
         let conf: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let shell = conf["app"]["security"]["csp"].as_str().unwrap_or("");
-        assert!(shell.contains("media-src 'self' data:;"), "{shell}");
+        assert!(shell.contains(expected_media), "{shell}");
+        assert!(shell.contains("img-src 'self' data:;"), "{shell}");
         assert!(head.contains("X-Frame-Options: DENY"), "{head}");
         let (_, _, body) = http(port, "GET", "/memory", None, "");
         assert_eq!(body, "<html>app</html>");

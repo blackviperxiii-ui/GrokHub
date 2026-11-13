@@ -26,6 +26,7 @@ import { FollowUpRow } from "./Goals";
 import { HomeEdit } from "./HomeEdit";
 import { COMPANION_NAME } from "./brand";
 import { openExternal } from "./external";
+import { NyxCard } from "./NyxCard";
 import { artUrl } from "./nyx";
 import type { View } from "./Palette";
 import type { Section } from "./sections";
@@ -410,7 +411,7 @@ function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean, r
       const url = tile.picture ? artUrl(tile.picture) : null;
       const inner = (
         <>
-          {url && <img className="home-nyx" src={url} alt="" draggable={false} />}
+          {url && <NyxCard className="home-nyx" url={url} path={tile.picture} draggable={false} />}
           <span className="home-strong">{tile.name || "Default voice"}</span>
         </>
       );

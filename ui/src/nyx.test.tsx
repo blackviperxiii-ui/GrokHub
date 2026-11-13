@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatEnvelope, ChatEvent, PersonalityPage, Preset, Settings } from "./api";
@@ -64,7 +64,7 @@ vi.mock("./transport", () => ({
 
 import { CHAT_EMPTY, Chat } from "./Chat";
 import { Personality } from "./Personality";
-import { activityOf, artUrl, PoseCycle } from "./nyx";
+import { activityOf, artUrl, clipUrls, NYX_ANIM_BASE, PoseCycle } from "./nyx";
 
 const SETTINGS: Settings = {
   closeToTray: true,
@@ -93,7 +93,8 @@ function nyxLookCalls() {
 
 function dockPicture(): string {
   const dock = screen.getByRole("complementary", { name: "Nyx" });
-  return within(dock).getByRole("img").getAttribute("src") ?? "";
+  const media = dock.querySelector("video, img");
+  return media?.getAttribute("poster") ?? media?.getAttribute("src") ?? "";
 }
 
 function emit(conversationId: string, event: ChatEvent) {
@@ -144,6 +145,26 @@ describe("artUrl", () => {
     expect(artUrl("brand/nyx/actions/gaming/2.jpg")).toBeNull();
     expect(artUrl("brand/logo-mark.svg")).toBeNull();
     expect(artUrl("../../etc/passwd")).toBeNull();
+  });
+});
+
+describe("clipUrls", () => {
+  it("maps Nyx card paths to release webm and mp4 URLs", () => {
+    expect(clipUrls("brand/nyx-hanging-out.jpg")).toEqual({
+      webm: `${NYX_ANIM_BASE}/nyx-hanging-out.webm`,
+      mp4: `${NYX_ANIM_BASE}/nyx-hanging-out.mp4`,
+    });
+    expect(clipUrls("brand/nyx/actions/coding/2.jpg")).toEqual({
+      webm: `${NYX_ANIM_BASE}/nyx__actions__coding__2.webm`,
+      mp4: `${NYX_ANIM_BASE}/nyx__actions__coding__2.mp4`,
+    });
+    expect(clipUrls("brand/nyx/defaults/pirate/1.jpg")).toEqual({
+      webm: `${NYX_ANIM_BASE}/nyx__defaults__pirate__1.webm`,
+      mp4: `${NYX_ANIM_BASE}/nyx__defaults__pirate__1.mp4`,
+    });
+    expect(clipUrls("brand/logo-mark.svg")).toBeNull();
+    expect(clipUrls("../../etc/passwd")).toBeNull();
+    expect(clipUrls(null)).toBeNull();
   });
 });
 
@@ -276,10 +297,10 @@ describe("Personality tiles", () => {
     render(<Personality />);
     const pirate = await screen.findByRole("listitem", { name: "Pirate" });
     await waitFor(() => expect(pirate.querySelector(".persona-thumb")).not.toBeNull());
-    expect(pirate.querySelector(".persona-thumb")?.getAttribute("src")).toContain("pirate/1.jpg");
-    expect(
-      screen.getByRole("listitem", { name: "Nyx" }).querySelector(".persona-thumb")?.getAttribute("src"),
-    ).toContain("nyx-hanging-out.jpg");
+    const pirateThumb = pirate.querySelector(".persona-thumb");
+    expect(pirateThumb?.getAttribute("poster") ?? pirateThumb?.getAttribute("src")).toContain("pirate/1.jpg");
+    const nyxThumb = screen.getByRole("listitem", { name: "Nyx" }).querySelector(".persona-thumb");
+    expect(nyxThumb?.getAttribute("poster") ?? nyxThumb?.getAttribute("src")).toContain("nyx-hanging-out.jpg");
     expect(screen.getByRole("listitem", { name: "Pirate copy" }).querySelector(".persona-thumb")).toBeNull();
   });
 });

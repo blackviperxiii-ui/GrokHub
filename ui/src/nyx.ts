@@ -3,8 +3,11 @@
 // nyx_look); this file turns the set's repo paths into bundled image URLs
 // and keeps the pose still until what the chat does changes.
 import { useEffect, useRef, useState } from "react";
+import { NYX_ANIM_BASE } from "./brand";
 import type { Item } from "./Chat";
 import { call } from "./transport";
+
+export { NYX_ANIM_BASE };
 
 /** What the chat can be doing. The shell watches no games, so no Gaming. */
 export type Mood = "working" | "doctor" | "reading" | "writing" | "thinking" | "hanging-out";
@@ -16,11 +19,24 @@ export interface NyxLook {
   explicit: boolean;
 }
 
-/** The picture on show, and the mood it was picked for. */
+/** Animated clip URLs for a Nyx card (AV1 WebM primary, H.264 MP4 fallback). */
+export interface NyxClip {
+  webm: string;
+  mp4: string;
+}
+
+/** The picture on show, its repo path, and the mood it was picked for. */
 export interface NyxShown {
   url: string;
+  path: string;
   set: string;
   mood: Mood;
+}
+
+/** A Personality card's bundled still image URL and repo path. */
+export interface NyxTileMedia {
+  url: string;
+  path: string;
 }
 
 export const MOOD_LABEL: Record<Mood, string> = {
@@ -48,6 +64,18 @@ const ART = import.meta.glob<string>(
 /** The bundled URL for a repo path, or null for anything not bundled. */
 export function artUrl(path: string): string | null {
   return Object.hasOwn(ART, `../../${path}`) ? ART[`../../${path}`] : null;
+}
+
+/** Streamed WebM/MP4 clip URLs for a Nyx card repo path, or null if not a Nyx card. */
+export function clipUrls(path: string | null | undefined): NyxClip | null {
+  if (!path || !path.endsWith(".jpg")) return null;
+  if (!path.startsWith("brand/nyx-") && !path.startsWith("brand/nyx/")) return null;
+  if (path.includes("..") || path.includes("\\")) return null;
+  const name = path.slice("brand/".length, -".jpg".length).replaceAll("/", "__");
+  return {
+    webm: `${NYX_ANIM_BASE}/${name}.webm`,
+    mp4: `${NYX_ANIM_BASE}/${name}.mp4`,
+  };
 }
 
 /** What the chat is doing, as one string that changes only when the activity
@@ -111,8 +139,9 @@ export function useNyx(activity: string, refresh: unknown = null): NyxShown | nu
           return;
         }
         const i = cycle.current.pick(look.set, look.mood, look.poses.length);
-        const url = artUrl(look.poses[i]);
-        if (live) setShown(url ? { url, set: look.set, mood: look.mood } : null);
+        const path = look.poses[i];
+        const url = artUrl(path);
+        if (live) setShown(url ? { url, path, set: look.set, mood: look.mood } : null);
       } catch {
         if (live) setShown(null);
       }
@@ -124,10 +153,10 @@ export function useNyx(activity: string, refresh: unknown = null): NyxShown | nu
   return shown;
 }
 
-/** Settings → Personality's pictures as URLs, by preset id. Asked again when
- * the presets or the adults-only gate change. */
-export function useNyxTiles(ids: string[] | null, gate: boolean): Record<string, string> {
-  const [urls, setUrls] = useState<Record<string, string>>({});
+/** Settings → Personality's pictures as URLs + repo paths, by preset id.
+ * Asked again when the presets or the adults-only gate change. */
+export function useNyxTiles(ids: string[] | null, gate: boolean): Record<string, NyxTileMedia> {
+  const [tiles, setTiles] = useState<Record<string, NyxTileMedia>>({});
   const key = ids?.join("\n") ?? null;
   useEffect(() => {
     if (key === null) return;
@@ -135,19 +164,19 @@ export function useNyxTiles(ids: string[] | null, gate: boolean): Record<string,
     void (async () => {
       try {
         const paths = await nyxTiles(key ? key.split("\n") : []);
-        const next: Record<string, string> = {};
+        const next: Record<string, NyxTileMedia> = {};
         for (const [id, path] of Object.entries(paths)) {
           const url = artUrl(path);
-          if (url) next[id] = url;
+          if (url) next[id] = { url, path };
         }
-        if (live) setUrls(next);
+        if (live) setTiles(next);
       } catch {
-        if (live) setUrls({});
+        if (live) setTiles({});
       }
     })();
     return () => {
       live = false;
     };
   }, [key, gate]);
-  return urls;
+  return tiles;
 }
