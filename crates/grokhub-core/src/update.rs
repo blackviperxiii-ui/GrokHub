@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 pub fn is_grokhub_source(dir: &Path) -> bool {
     dir.join("Cargo.toml").is_file()
         && dir.join("scripts/install.sh").is_file()
-        && dir.join("crates/grokhub-app").is_dir()
+        && dir.join("crates/grokhub-core").is_dir()
 }
 
 pub fn walk_up_source(start: &Path) -> Option<PathBuf> {
@@ -1103,13 +1103,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("grokhub-src-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("scripts")).unwrap();
-        fs::create_dir_all(root.join("crates/grokhub-app")).unwrap();
+        fs::create_dir_all(root.join("crates/grokhub-core")).unwrap();
         fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
         fs::write(root.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
         assert!(is_grokhub_source(&root));
         assert!(!is_grokhub_source(&std::env::temp_dir()));
         assert_eq!(
-            walk_up_source(&root.join("crates/grokhub-app")),
+            walk_up_source(&root.join("crates/grokhub-core")),
             Some(root.clone())
         );
         assert_eq!(discover_source(&[root.join("crates")]), Some(root.clone()));
@@ -1161,7 +1161,7 @@ mod tests {
 
     fn seed_git_source(root: &std::path::Path, branch: &str) {
         fs::create_dir_all(root.join("scripts")).unwrap();
-        fs::create_dir_all(root.join("crates/grokhub-app")).unwrap();
+        fs::create_dir_all(root.join("crates/grokhub-core")).unwrap();
         fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
         fs::write(root.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
         let run = |args: &[&str]| {
@@ -1874,10 +1874,10 @@ mod channel_tip_tests {
             let _ = std::fs::remove_dir_all(&base);
             let (origin, work) = (base.join("origin.git"), base.join("work"));
             std::fs::create_dir_all(work.join("scripts")).unwrap();
-            std::fs::create_dir_all(work.join("crates/grokhub-app")).unwrap();
+            std::fs::create_dir_all(work.join("crates/grokhub-core")).unwrap();
             std::fs::write(work.join("Cargo.toml"), "[workspace]\n").unwrap();
             std::fs::write(work.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
-            std::fs::write(work.join("crates/grokhub-app/lib.rs"), "\n").unwrap();
+            std::fs::write(work.join("crates/grokhub-core/lib.rs"), "\n").unwrap();
             git_ok(&base, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
             git_ok(&work, &["init", "-q", "-b", "main"]);
             git_ok(&work, &["config", "user.email", "cabin@test"]);

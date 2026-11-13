@@ -317,9 +317,8 @@ mod tests {
     }
 
     /// `--app` picks which desktop app the clone install builds. No `--app`
-    /// installs the shell, so a fresh install and the cabin's own update
-    /// (`install.sh --user`) both move to it; `--app cabin` still builds the
-    /// cabin while it is retired.
+    /// installs the shell, so a fresh install and an old cabin's own update
+    /// (`install.sh --user`) both move to it; the retired cabin is refused.
     #[cfg(unix)]
     #[test]
     fn install_sh_app_flag_defaults_to_the_shell() {
@@ -356,23 +355,24 @@ mod tests {
             run(&["--user", "--app", "shell", "--dry-run"]).1,
             plan("shell")
         );
-        assert_eq!(run(&["--app=both", "--dry-run"]).1, plan("both"));
-        assert_eq!(run(&["--app", "cabin", "--dry-run"]).1, plan("cabin"));
+        let retired = (
+            Some(2),
+            String::new(),
+            "error: the cabin was retired; --app takes only shell".to_string(),
+        );
+        assert_eq!(run(&["--app=both", "--dry-run"]), retired);
+        assert_eq!(run(&["--app", "cabin", "--dry-run"]), retired);
         assert_eq!(
             run(&["--app", "tauri", "--dry-run"]),
             (
                 Some(2),
                 String::new(),
-                "error: --app takes cabin, shell or both, not 'tauri'".into()
+                "error: --app takes shell, not 'tauri'".into()
             )
         );
         assert_eq!(
             run(&["--app"]),
-            (
-                Some(2),
-                String::new(),
-                "error: --app takes cabin, shell or both".into()
-            )
+            (Some(2), String::new(), "error: --app takes shell".into())
         );
         let sh = include_str!("../../../scripts/install.sh");
         assert!(sh.contains("\nAPP=shell\n"), "the default app is the shell");
@@ -856,7 +856,7 @@ pub fn channel_switch_preflight(
 fn is_source_tree(dir: &std::path::Path) -> bool {
     dir.join("Cargo.toml").is_file()
         && dir.join("scripts/install.sh").is_file()
-        && dir.join("crates/grokhub-app").is_dir()
+        && dir.join("crates/grokhub-core").is_dir()
 }
 
 #[cfg(test)]

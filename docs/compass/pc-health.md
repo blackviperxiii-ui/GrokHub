@@ -9,7 +9,7 @@
 
 ## Key files
 - `crates/grokhub-core/src/pc_health.rs`: parsers, `observe`, `summarize`, `summary_card`.
-- `crates/grokhub-app/src/app/pc_health_ui.rs`: `tick_pc_health`, Settings toggle.
+- the retired cabin's pc_health_ui.rs: tick_pc_health, Settings toggle.
 - `crates/grokhub-core/src/local_governor.rs`: `game_in_processes` (card 16.1 detection).
 
 ## Change recipe
@@ -21,7 +21,7 @@
 - Renaming `SOURCE_PREFIX` (`pchealth:`) breaks card identity.
 
 ## What depends on it
-- Pulse Feed via `post_feed_card`; `tick_housekeep` in `heartbeat_gate.rs` calls `tick_pc_health`.
+- Pulse Feed via post_feed_card; tick_housekeep in `heartbeat_gate.rs` calls tick_pc_health.
 
 ## Non-obvious
 - Game-up uses `game_in_processes` plus GPU util ≥ `GPU_BUSY_GAME_PCT` (same idea as the local governor).

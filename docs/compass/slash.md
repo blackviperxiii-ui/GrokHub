@@ -9,13 +9,13 @@
 ## Key files
 - `crates/grokhub-core/src/slash/mod.rs`: `Slash`, `parse_slash`, `slash_kind`, `SLASH_COMMANDS` (picker rows), `slash_help`, `unknown_cabin_slash`, `is_cabin_slash_turn`.
 - `crates/grokhub-core/src/slash/registry.rs` and `crates/grokhub-core/src/slash/cmds/`: every command, declared with `register_slash!` and listed in `SLASH_REGISTRY`; `parse_slash` (`crates/grokhub-core/src/slash/parser.rs`) splits the line and looks the command word up there. `crates/grokhub-core/src/slash/effect.rs`: `slash_effect` (Local, AgentTurn, Action) and one sample line per variant.
-- `crates/grokhub-app/src/app/slash.rs`: `run_slash` (one match arm per variant), `dispatch_native_slash`, `apply_unparsed_native_slash`.
-- `crates/grokhub-app/src/app/chat_kick.rs`: the send path that tries `parse_slash`, then `unknown_cabin_slash`, then native parity, then the model.
+- the retired cabin's slash.rs: `run_slash` (one match arm per variant), dispatch_native_slash, apply_unparsed_native_slash.
+- the retired cabin's chat_kick.rs: the send path that tries `parse_slash`, then `unknown_cabin_slash`, then native parity, then the model.
 - `crates/grokhub-agent/src/slash_parity.rs`: every Grok CLI builtin but `model` and `effort`, and what a native thread does with it.
 ## Change recipe
 - Add a `Slash` variant, `slash_kind`, `SLASH_COMMANDS` row, and `slash_help` line in `crates/grokhub-core/src/slash/mod.rs`, and a `register_slash!` entry in a `crates/grokhub-core/src/slash/cmds/` file listed in `SLASH_REGISTRY` (e.g. `/brief` → `Slash::Brief` in `cmds/views.rs`).
-- Pick its `slash_effect` and add a `SLASH_SAMPLES` line. An `Action` needs a gate row in `crates/grokhub-app/src/app/slash_gate_tests.rs` naming its confirm, consent or permission path.
-- Handle it in `run_slash` (`crates/grokhub-app/src/app/slash.rs`); map habits in `home_slash_cmd` (`chips.rs`) only when needed.
+- Pick its `slash_effect` and add a `SLASH_SAMPLES` line. An `Action` needs a gate row in the retired cabin's slash_gate_tests.rs naming its confirm, consent or permission path.
+- Handle it in `run_slash` (the retired cabin's slash.rs); map habits in `home_slash_cmd` (`chips.rs`) only when needed.
 ## What breaks it
 - Renaming a `slash_kind` string: it is the input to `home_slash_cmd`, so home habits stop counting.
 - Claiming a skill verb: unknown slashes and skill slashes such as `/create-skill` must still go to the native engine as a turn (`unknown_cabin_slash`). Only retired verbs are rejected locally: `/approve`, `/project binding`, and the routing verbs `/model`, `/m`, `/mode`, `/models`, `/effort` and `/why`, because the router alone picks the model and effort.
@@ -25,11 +25,11 @@
 ## Non-obvious
 - `/learn` belongs to the cabin: a Grok extra with the same verb must not become an insert-only chip.
 - `/workflow pause|resume|stop` with no target is `WorkflowUsage` and is not forwarded; any other first word is a launch name.
-- `/btw` keeps persist id `ask`; `/bg` with no task moves the live reply to the background, except under Ask, where it shows `BG_ASK_OFF`.
+- `/btw` keeps persist id `ask`; `/bg` with no task moves the live reply to the background, except under Ask, where it shows BG_ASK_OFF.
 - Slash results are stored with `SLASH_RESULT_PREFIX` so they stay on the pane. `message_origin` reads that tag (never the text) and makes them `ChatKind::Result`, which keeps one bubble as it ages and never folds into a thought (GL-05).
-- `/skills changes|undo|restore` parse in `parse_skills_arg` (`crates/grokhub-core/src/slash/cmds/changes.rs`); any other `/skills` word stays `GrokSkills`. Undo and restore run only from the user's typing (`typed_send`) or a row click in `crates/grokhub-app/src/app/skill_undo.rs`; from a night job, automation, Pulse run, or idea they only show the rows.
-- `/privacy` is a cabin view (`run_privacy`) and shadows the Grok CLI pager builtin. Slash text never writes a grant; only a Settings click in `ui_privacy_rows` or `ui_scope_rows` does. Its ghost Revoke rows (`paint_privacy_revokes`) answer a pointer click only.
-- `run_slash` calls `dispatch_native_slash` first on every thread. It returns false off native (Lab) threads; on them Remember, Dream, Inspect, Rewind, Usage and Workflow return true and skip the cabin match.
-- `/rewind step` / `/rewind step <n>` (`Slash::RewindStep`) lists or restores `file_checkpoint` steps for the thread's `grok_session`; bare `/rewind` stays N/A on native.
+- `/skills changes|undo|restore` parse in `parse_skills_arg` (`crates/grokhub-core/src/slash/cmds/changes.rs`); any other `/skills` word stays `GrokSkills`. Undo and restore run only from the user's typing (typed_send) or a row click in the retired cabin's skill_undo.rs; from a night job, automation, Pulse run, or idea they only show the rows.
+- `/privacy` is a cabin view (run_privacy) and shadows the Grok CLI pager builtin. Slash text never writes a grant; only a Settings click in ui_privacy_rows or ui_scope_rows does. Its ghost Revoke rows (paint_privacy_revokes) answer a pointer click only.
+- `run_slash` calls dispatch_native_slash first on every thread. It returns false off native (Lab) threads; on them Remember, Dream, Inspect, Rewind, Usage and Workflow return true and skip the cabin match.
+- `/rewind step` / `/rewind step <n>` (`Slash::RewindStep`) lists or restores `file_checkpoint` steps for the thread's grok_session; bare `/rewind` stays N/A on native.
 ## See also
-- [amr](amr.md), [app-module](app-module.md), [grokhub-agent](grokhub-agent.md). The desktop composer (src-tauri/src/slash.rs) runs /imagine, /imagine-video, /journal, /learn, /mcps, /plugins and /resume: Imagine and the journal open those pages, /learn reflects the chat, /mcps opens Connectors, /plugins opens Settings → Labs, and /resume opens History.
+- [amr](amr.md), [grokhub-agent](grokhub-agent.md). The desktop composer (src-tauri/src/slash.rs) runs /imagine, /imagine-video, /journal, /learn, /mcps, /plugins and /resume: Imagine and the journal open those pages, /learn reflects the chat, /mcps opens Connectors, /plugins opens Settings → Labs, and /resume opens History.

@@ -1,6 +1,6 @@
 # GrokHub repo gates
 
-Native Rust cabin (`crates/`). These rules apply to every Cursor, Claude, and Grok chat working here. `.cursor/rules/repo-gates.mdc` holds the same rules.
+Rust crates (`crates/`) and the Tauri desktop app (`src-tauri/`, `ui/`). These rules apply to every Cursor, Claude, and Grok chat working here. `.cursor/rules/repo-gates.mdc` holds the same rules.
 
 ## Branches, merges, releases
 - **Beta first.** Every new feature and fix PR from every bot (Cursor, Claude, GrokHub) branches off `beta` and targets `beta`. `beta` moves to `main` only with the maintainer's approval, as one squash-merged `beta` → `main` PR. Hotfixes go to `main` only with the maintainer's approval, and then `main` is merged back into `beta` (a merge commit, no force). Never push straight to `main` or `beta`, never force-push, never delete branches unless user asks.
@@ -26,7 +26,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 - A full local `cargo test` can touch the real `~/.grok` and `~/.config/GrokHub`. Set `GROKHUB_CONFIG` to a temp dir, run only the crate or test you changed, or rely on CI.
 - **Test shape:** assert literal expected values, no tautologies (would it still pass if the code returned a default or stub?). Never skip, `#[ignore]`, delete, or loosen a test to get green; fix the code and report suspect tests. Don't add `#[allow(dead_code)]`; delete dead code.
 - Don't mass `cargo fmt`. Format only the lines you touch.
-- `chat_composer_pins_stop_on_the_right` (`crates/grokhub-app/src/app/tests.rs`) reads a 15,000-byte window after `ComposerStackSlot::Pill =>` in `chat_ui.rs`. The last string it checks for must stay inside that window (tighter with Windows CRLF). Don't grow the Pill arm before the Stop handler. Move code into helpers instead of widening the window.
 
 ## How bots work
 - **Proof of work:** every PR body names the real run path exercised and what was seen (CI green is the floor, not the proof), plus a **Skipped / not verified** line.
@@ -38,8 +37,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Commits, PRs, versions
 - Titles: a plain sentence for PRs into `beta`. A PR that bumps (a promotion or a hotfix) uses `Cabin X.Y.Z: <what changed>`, or a plain sentence ending in `(X.Y.Z)`. Add a short bullet body and the PR number when merged.
-- **Versions:** PRs into `beta` don't bump the version. Add a fragment under `changelog.d/<slug>.md` (see `changelog.d/README.md`); do not edit `CHANGELOG.md` or the version files. Semver: **PATCH** (`x.y.Z`) is a fix or polish rollout; **MINOR** (`x.Y.0`, patch back to 0) is a promotion with at least one new user-facing feature; **MAJOR** (`X.0.0`) is a big milestone, only with the maintainer's approval. No cap on any part (`2.10.99` was followed by `2.11.0` because it added features, not because of a cap). Each `beta` → `main` promotion carries exactly one bump (PATCH or MINOR by that rule) and one release. A hotfix to `main` is a PATCH bump and is merged back into `beta`. Beta builds carry `-beta.N` (e.g. `2.11.0-beta.3`) so beta never burns release numbers: `VERSION` stays plain and `crates/grokhub-app/build.rs` labels `GrokHub X.Y.Z-beta.N (beta @ sha)` with N = commits since the newest stable `vX.Y.Z` tag; never edit the Cargo version for it.
-- A promotion or hotfix labels the PR `release` and runs `cargo xtask bump <X.Y.Z>`, which updates the same files as #453 (`VERSION`, `Cargo.toml` `[workspace.package] version`, the `grokhub-*` entries in `Cargo.lock`, `docs/REFERENCE.md` headline/Latest/`--version` examples; `README.md` has no version strings), `packaging/PKGBUILD`, `packaging/aur/PKGBUILD`, `packaging/windows/grokhub.iss`, and `cabin_reports_version` in `crates/grokhub-app/src/cli.rs`) and folds `changelog.d/*.md` plus any leftover `## Unreleased` bullets into a dated `CHANGELOG.md` section with Linux and Windows artifact lines. `scripts/ci-guards.sh` keeps copies in lockstep (`cargo xtask bump --check`) and fails a non-`release` PR that touches those version files.
+- **Versions:** PRs into `beta` don't bump the version. Add a fragment under `changelog.d/<slug>.md` (see `changelog.d/README.md`); do not edit `CHANGELOG.md` or the version files. Semver: **PATCH** (`x.y.Z`) is a fix or polish rollout; **MINOR** (`x.Y.0`, patch back to 0) is a promotion with at least one new user-facing feature; **MAJOR** (`X.0.0`) is a big milestone, only with the maintainer's approval. No cap on any part (`2.10.99` was followed by `2.11.0` because it added features, not because of a cap). Each `beta` → `main` promotion carries exactly one bump (PATCH or MINOR by that rule) and one release. A hotfix to `main` is a PATCH bump and is merged back into `beta`. Beta builds carry `-beta.N` (e.g. `2.11.0-beta.3`) so beta never burns release numbers: `VERSION` stays plain and `src-tauri/build.rs` labels `X.Y.Z-beta.N` with N = commits since the newest stable `vX.Y.Z` tag; never edit the Cargo version for it.
+- A promotion or hotfix labels the PR `release` and runs `cargo xtask bump <X.Y.Z>`, which updates the same files as #453 (`VERSION`, `Cargo.toml` `[workspace.package] version`, the `grokhub-*` entries in `Cargo.lock`, `docs/REFERENCE.md` headline/Latest/`--version` examples; `README.md` has no version strings), `packaging/PKGBUILD`, `packaging/aur/PKGBUILD`, and `packaging/windows/grokhub.iss`) and folds `changelog.d/*.md` plus any leftover `## Unreleased` bullets into a dated `CHANGELOG.md` section with Linux and Windows artifact lines. `scripts/ci-guards.sh` keeps copies in lockstep (`cargo xtask bump --check`) and fails a non-`release` PR that touches those version files.
 - Don't bump the Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, or `packaging/grokhub.desktop` `Version=`.
 
 ## Branch cleanup
@@ -56,7 +55,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 Grok Build 1.0.49+ ships explore / plan / implementer (and reviewer, test-writer, …) under `~/.grok/bundled/roles/`. There is no separate "build" role name — use **implementer** for build/code. Invoke with `grok --agent <role>` or project agent config when spawning subagents. Do not invent custom role TOML unless user asks.
 
 ## Cross-platform recode
-- user approved Tauri 2 + React + TS for the cross-platform shell (2026-10-23). "No Electron. No Tauri." now covers only the egui cabin, which keeps shipping until parity. Electron stays out.
+- user approved Tauri 2 + React + TS for the cross-platform shell (2026-10-23); it replaced the egui cabin. Electron stays out.
 - Squash-merge into `beta` on green; only `beta` → `main`, tags, and releases need the maintainer. Plan, phases and open decisions: `docs/cross-platform/README.md`.
 
 ## Semgrep + dyl-review + Continual Learning

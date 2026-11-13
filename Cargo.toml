@@ -4,7 +4,6 @@ members = [
     "crates/grokhub-proto",
     "crates/grokhub-core",
     "crates/grokhub-hub",
-    "crates/grokhub-app",
     "crates/grokhub-agent",
     "crates/grokhub-code",
     "crates/grokhub-desktop",
@@ -29,7 +28,7 @@ sha2 = "0.11"
 # implements ureq's resolver and connector traits, which ureq exempts from semver.
 # `rustls` = rustls with the ring provider and webpki roots (no aws-lc-rs).
 ureq = { version = "~3.5", default-features = false, features = ["rustls"] }
-# Shared codecs; app adds webp/ico/bmp on top via its own features line.
+# Shared codecs.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # keyring 4 requires the `v1` (or `cli`) feature; `v1` enables each OS store and
 # the crates themselves are target-gated, so Linux still only compiles Secret Service.
@@ -38,7 +37,7 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 
 # Edition 2024 turns clippy's collapsible_if on for nested `if let`s (it asks
 # for let chains). Rewriting the existing ones is out of LU-09's scope; core,
-# agent and app opt in here so new code may use let chains and old code stays
+# and agent opt in here so new code may use let chains and old code stays
 # as written. Drop this with a deliberate let-chain sweep.
 [workspace.lints.clippy]
 collapsible_if = "allow"

@@ -14,7 +14,7 @@
 - `crates/grokhub-core/src/feel.rs`: `ALWAYS_SETTLE_SECS`, `GLOW_SETTLE_SECS`, and the other motion timings.
 - `crates/grokhub-core/src/appearance.rs`: Settings theme ids (`ops-dark`, `oled-black`, `soft-charcoal`, classic `dark` / `light` / `system`) and `resolve_palette`.
 - `crates/grokhub-core/src/paths.rs`: `user_home`. `diagnostics.rs`: About clipboard + Labs Desktop zip (`DiagnosticsExport`, `write_diagnostics_zip`).
-- `crates/grokhub-core/src/wire.rs`: chat wire types (`AcpEvent`, `ToolCard`, `PermissionAsk`, `ElicitAsk`, `SessionMode`, `PermissionMode`, `GrokUsage`). `crates/grokhub-core/src/proc_util.rs`: `hide_windows_console`, `kill_pid`, `is_sigterm_status`, `run_night_check_command`.
+- `crates/grokhub-core/src/wire.rs`: chat wire types (`AcpEvent`, `ToolCard`, `PermissionAsk`, `ElicitAsk`, `SessionMode`, `PermissionMode`, `GrokUsage`). `crates/grokhub-core/src/proc_util.rs`: `hide_windows_console`, `output_within`, `is_sigterm_status`, `run_night_check_command`.
 ## Change recipe
 - New helper: write it in its module with a literal-value test, then add it to that module's `pub use` block in `lib.rs`; grokhub-app imports flat names (`use grokhub_core::{...}`).
 - New module: `pub mod x;` in `lib.rs` plus its re-exports. Keep it free of egui; an HTTP call goes through `http.rs`, and any network exit is listed in `offline_guard.rs`. Outside tests only `update.rs` spawns a process (`git`).
@@ -29,7 +29,7 @@
 - `crates/grokhub-core/src/goal.rs` stores per-chat intentions next to `ThreadGoal`. `set_intention_status` changes status only.
 - `state_for_disk` strips the live frame before `hub-state.json` is written (`disk_omits_frame`); writes are 0600 / user-only DACL (`win_acl` on Windows).
 - Some modules assert on their own source with `include_str!` (`chips.rs`, `state.rs`, `update.rs`); a reworded string or moved fn can fail a test.
-- `crates/grokhub-core/src/imagine_auth.rs` only re-exports `xai_signin`; keychain storage for Imagine is `crates/grokhub-app/src/imagine_auth.rs`.
+- `crates/grokhub-core/src/imagine_auth.rs` only re-exports `xai_signin`; keychain storage for Imagine is the retired cabin's imagine_auth.rs.
 - The harness is not here: it lives in `crates/grokhub-agent/src/harness/mod.rs`.
 ## See also
 - [amr](amr.md), [slash](slash.md), [desktop-mcp](desktop-mcp.md), [grokhub-hub](grokhub-hub.md), [install-scripts](install-scripts.md)

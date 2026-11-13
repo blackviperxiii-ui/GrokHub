@@ -45,11 +45,7 @@ mod tests {
     fn native_sources_never_name_cli_auth_files() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         walk(root);
-        let extra = [
-            include_str!("../../grokhub-app/src/app/native_engine.rs"),
-            include_str!("../../grokhub-app/src/engine_handle.rs"),
-            include_str!("../../grokhub-core/src/xai_signin.rs"),
-        ];
+        let extra = [include_str!("../../grokhub-core/src/xai_signin.rs")];
         for text in extra {
             for banned in banned() {
                 assert!(!text.contains(banned), "{banned}");

@@ -2,7 +2,7 @@
 
 ## Owns
 - `grokhub --mcp-desktop`: a stdio JSON-RPC MCP server the native engine reaches as `grokhub-desktop` (tools appear as `grokhub-desktop__<tool>`): `list_monitors`, `screenshot`, `click`, `move`, `drag`, `scroll`, `type`, `key`, `open_app`, `focus_window`, `delete_files`.
-- Pure protocol, geometry, and key parsing in grokhub-core; the OS backends (X11, Wayland/KDE portal + libei, uinput, ydotool fallback, Windows SendInput + xcap) in grokhub-desktop. The app that hosts them installs a `host::Host` (config folder, switches, lock titles, click target): the cabin in `crates/grokhub-app/src/desktop_mcp.rs`, the Tauri shell in `src-tauri/src/lib.rs` with the readers in `crates/grokhub-desktop/src/screen.rs`.
+- Pure protocol, geometry, and key parsing in grokhub-core; the OS backends (X11, Wayland/KDE portal + libei, uinput, ydotool fallback, Windows SendInput + xcap) in grokhub-desktop. The app that hosts them installs a `host::Host` (config folder, switches, lock titles, click target): the cabin in the retired cabin's desktop_mcp.rs, the Tauri shell in `src-tauri/src/lib.rs` with the readers in `crates/grokhub-desktop/src/screen.rs`.
 - Spike-2a: `grokhub --mcp-cua` (`run_cua_stdio`), registered as `grokhub-cua` only while desktop control and the `cuaDriver` flag in `app.json` are both on (Linux; `cua_wanted`). It starts the pinned `cua-driver mcp --socket <config>/cua/driver.sock` child in `bounded` mode with the cabin manifest, and gates every call in `crates/grokhub-agent/src/harness/cua.rs` before forwarding.
 ## Quick commands
 - `cargo test -p grokhub-core desktop_mcp` (pure JSON-RPC, geometry, key combos)
@@ -28,7 +28,7 @@
 - `desktop_control` is re-read from `app.json` for every call, so the Settings switch takes effect without restarting the server. Halt is a stamp file compared with the process start time (`stamp_halts`).
 - Coordinates are pixels in the last screenshot of that monitor (or `all`), not physical pixels; before any screenshot they are the monitor's native pixels (`COORD_NOTE`).
 - On Linux the cabin holds the portal session and lock; the MCP process talks to it over `desk.sock` (broker), and a second process cannot open another session.
-- An update can move the exe, so `sync_native_cua` re-reads the current exe path whenever the desktop switch or the engine starts.
+- An update can move the exe, so sync_native_cua re-reads the current exe path whenever the desktop switch or the engine starts.
 - Unattended Ask denies desktop tools (`Gate` `attended: false`); Plan and btw deny them even on Auto or Always.
 ## See also
-- [harness](harness.md), [grokhub-agent](grokhub-agent.md), [grokhub-app](grokhub-app.md)
+- [harness](harness.md), [grokhub-agent](grokhub-agent.md), grokhub-app

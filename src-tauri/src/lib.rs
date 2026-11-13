@@ -1,6 +1,5 @@
-//! GrokHub's Tauri desktop shell: chat, settings and tray (cross-platform
-//! recode, Phase 2). The egui cabin in `crates/grokhub-app` keeps shipping
-//! until this shell reaches parity.
+//! GrokHub's Tauri desktop app: chat, settings and tray. It replaced the egui
+//! cabin.
 
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 

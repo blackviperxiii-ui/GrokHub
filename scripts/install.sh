@@ -2,9 +2,8 @@
 # Install the Tauri shell (grokhub-shell) + grokhub-hub from this clone.
 #   --channel beta    fetch origin, check out the beta branch, build, install
 #   --channel stable  same for main (stable = main)
-#   --app shell       the Tauri shell (grokhub-shell) plus the hub; the default
-#   --app cabin       the old egui cabin (grokhub) plus the hub
-#   --app both        both apps plus the hub
+#   --app shell       the Tauri shell (grokhub-shell) plus the hub; the only
+#                     app since the egui cabin was retired
 # The channel is remembered in $GROKHUB_CONFIG/channel (the install receipt),
 # so a plain ./scripts/install.sh --user and the in-app Update stay on it.
 set -euo pipefail
@@ -14,12 +13,12 @@ PREFIX="${PREFIX:-$HOME/.local}"
 SYSTEM=0
 CHANNEL=""
 DRY_RUN=0
-# Which app to build. No --app installs the shell and the hub, and moves a
-# cabin install over to the shell (see move_cabin_login below).
+# Which app to build: the shell and the hub. An old cabin install moves over
+# to the shell (see move_cabin_login below).
 APP=shell
 
 usage() {
-  echo "usage: $0 [--user|--system] [--prefix=DIR] [--channel beta|stable] [--app cabin|shell|both] [--dry-run]"
+  echo "usage: $0 [--user|--system] [--prefix=DIR] [--channel beta|stable] [--app shell] [--dry-run]"
 }
 
 set_channel() {
@@ -34,9 +33,13 @@ set_channel() {
 
 set_app() {
   case "$1" in
-    cabin|shell|both) APP="$1" ;;
+    shell) APP="$1" ;;
+    cabin|both)
+      echo "error: the cabin was retired; --app takes only shell" >&2
+      exit 2
+      ;;
     *)
-      echo "error: --app takes cabin, shell or both, not '$1'" >&2
+      echo "error: --app takes shell, not '$1'" >&2
       exit 2
       ;;
   esac
@@ -59,7 +62,7 @@ while [[ $# -gt 0 ]]; do
     --app=*) set_app "${1#--app=}" ;;
     --app)
       if [[ $# -lt 2 ]]; then
-        echo "error: --app takes cabin, shell or both" >&2
+        echo "error: --app takes shell" >&2
         exit 2
       fi
       set_app "$2"
@@ -92,13 +95,6 @@ else
   esac
 fi
 if [[ "$CHANNEL" == beta ]]; then BRANCH=beta; else BRANCH=main; fi
-WANT_CABIN=0
-WANT_SHELL=0
-case "$APP" in
-  cabin) WANT_CABIN=1 ;;
-  shell) WANT_SHELL=1 ;;
-  both) WANT_CABIN=1; WANT_SHELL=1 ;;
-esac
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "channel=$CHANNEL branch=$BRANCH switch=$SWITCH prefix=$PREFIX receipt=$RECEIPT app=$APP"
@@ -124,20 +120,18 @@ if [[ "$SWITCH" -eq 0 ]]; then
   fi
 fi
 
-if [[ "$WANT_SHELL" -eq 1 ]]; then
-  # The shell builds its web UI with npm and links the system webview. Stop
-  # before git or cargo when either is missing, rather than halfway through.
-  missing=()
-  command -v npm >/dev/null 2>&1 || missing+=(npm)
-  if command -v pkg-config >/dev/null 2>&1 && ! pkg-config --exists webkit2gtk-4.1; then
-    missing+=(webkit2gtk-4.1)
-  fi
-  if [[ "${#missing[@]}" -gt 0 ]]; then
-    echo "error: --app $APP builds the shell, which needs: ${missing[*]}" >&2
-    echo "  Arch: sudo pacman -S --needed nodejs npm webkit2gtk-4.1" >&2
-    echo "  Debian/Ubuntu: sudo apt-get install nodejs npm libwebkit2gtk-4.1-dev" >&2
-    exit 1
-  fi
+# The shell builds its web UI with npm and links the system webview. Stop
+# before git or cargo when either is missing, rather than halfway through.
+missing=()
+command -v npm >/dev/null 2>&1 || missing+=(npm)
+if command -v pkg-config >/dev/null 2>&1 && ! pkg-config --exists webkit2gtk-4.1; then
+  missing+=(webkit2gtk-4.1)
+fi
+if [[ "${#missing[@]}" -gt 0 ]]; then
+  echo "error: the shell needs: ${missing[*]}" >&2
+  echo "  Arch: sudo pacman -S --needed nodejs npm webkit2gtk-4.1" >&2
+  echo "  Debian/Ubuntu: sudo apt-get install nodejs npm libwebkit2gtk-4.1-dev" >&2
+  exit 1
 fi
 
 if [[ "$SWITCH" -eq 1 ]]; then
@@ -186,27 +180,19 @@ if [[ "$SWITCH" -eq 1 ]]; then
   echo "channel $CHANNEL: $(git rev-parse --short=7 HEAD) on $BRANCH"
 fi
 
-if [[ "$WANT_CABIN" -eq 1 ]]; then
-  GROKHUB_CHANNEL="$CHANNEL" cargo build --release --locked -p grokhub-app -p grokhub-hub
-else
-  GROKHUB_CHANNEL="$CHANNEL" cargo build --release --locked -p grokhub-hub
-fi
+GROKHUB_CHANNEL="$CHANNEL" cargo build --release --locked -p grokhub-hub
 TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
-if [[ "$WANT_SHELL" -eq 1 ]]; then
-  # src-tauri is its own workspace, so its build lands in src-tauri/target
-  # unless CARGO_TARGET_DIR points both builds at one folder.
-  npm ci --prefix "$ROOT/ui"
-  GROKHUB_CHANNEL="$CHANNEL" "$ROOT/ui/node_modules/.bin/tauri" build --no-bundle -- --locked
-  SHELL_TARGET="${CARGO_TARGET_DIR:-$ROOT/src-tauri/target}"
-fi
+# src-tauri is its own workspace, so its build lands in src-tauri/target
+# unless CARGO_TARGET_DIR points both builds at one folder.
+npm ci --prefix "$ROOT/ui"
+GROKHUB_CHANNEL="$CHANNEL" "$ROOT/ui/node_modules/.bin/tauri" build --no-bundle -- --locked
+SHELL_TARGET="${CARGO_TARGET_DIR:-$ROOT/src-tauri/target}"
 
-if [[ "$WANT_CABIN" -eq 1 ]]; then
-  install -Dm755 "$TARGET/release/grokhub" "$PREFIX/bin/grokhub"
-fi
 install -Dm755 "$TARGET/release/grokhub-hub" "$PREFIX/bin/grokhub-hub"
-if [[ "$WANT_SHELL" -eq 1 ]]; then
-  install -Dm755 "$SHELL_TARGET/release/grokhub-shell" "$PREFIX/bin/grokhub-shell"
-fi
+# The renamed-binary shim: old `grokhub --mcp-*` / `--doctor` configs keep
+# working for at least one release. It replaces an old cabin binary here.
+install -Dm755 "$TARGET/release/grokhub" "$PREFIX/bin/grokhub"
+install -Dm755 "$SHELL_TARGET/release/grokhub-shell" "$PREFIX/bin/grokhub-shell"
 install_desktop_entry() {
   local src="$1"
   local dst="$2"
@@ -220,18 +206,10 @@ install_desktop_entry() {
   install -Dm644 "$tmp" "$dst"
   rm -f "$tmp"
 }
-if [[ "$WANT_CABIN" -eq 1 ]]; then
-  install_desktop_entry \
-    "$ROOT/packaging/grokhub.desktop" \
-    "$PREFIX/share/applications/grokhub.desktop" \
-    "$PREFIX/bin/grokhub"
-fi
-if [[ "$WANT_SHELL" -eq 1 ]]; then
-  install_desktop_entry \
-    "$ROOT/packaging/grokhub-shell.desktop" \
-    "$PREFIX/share/applications/grokhub-shell.desktop" \
-    "$PREFIX/bin/grokhub-shell"
-fi
+install_desktop_entry \
+  "$ROOT/packaging/grokhub-shell.desktop" \
+  "$PREFIX/share/applications/grokhub-shell.desktop" \
+  "$PREFIX/bin/grokhub-shell"
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
 fi
@@ -249,7 +227,7 @@ fi
 # binary stays where it is. Only for a shell-only user install.
 move_cabin_login() {
   local unit="$HOME/.config/systemd/user/grokhub.service"
-  [[ "$SYSTEM" -eq 0 && "$WANT_SHELL" -eq 1 && "$WANT_CABIN" -eq 0 ]] || return 0
+  [[ "$SYSTEM" -eq 0 ]] || return 0
   [[ -f "$unit" ]] || return 0
   local enabled=0
   if [[ -e "$HOME/.config/systemd/user/graphical-session.target.wants/grokhub.service" ]]; then
@@ -277,12 +255,8 @@ move_cabin_login() {
 if [[ "$SYSTEM" -eq 0 ]]; then
   install -Dm644 "$ROOT/packaging/systemd/grokhub-hub.service" \
     "$HOME/.config/systemd/user/grokhub-hub.service"
-  # The cabin's login unit. The shell starts at login through its own
-  # Settings switch (the autostart plugin), so it gets no unit here.
-  if [[ "$WANT_CABIN" -eq 1 ]]; then
-    install -Dm644 "$ROOT/packaging/systemd/grokhub.service" \
-      "$HOME/.config/systemd/user/grokhub.service"
-  fi
+  # The shell starts at login through its own Settings switch (the autostart
+  # plugin), so it gets no unit here.
 fi
 
 # Overlay-safe package install. Never fail the overlay if sudo/pkg is
@@ -345,9 +319,6 @@ fi
 
 if command -v systemctl >/dev/null && [[ "$SYSTEM" -eq 0 ]]; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true
-  if [[ "$WANT_CABIN" -eq 1 ]]; then
-    systemctl --user enable grokhub.service >/dev/null 2>&1 || true
-  fi
   systemctl --user enable --now grokhub-hub.service >/dev/null 2>&1 || true
 fi
 
@@ -362,13 +333,9 @@ if [[ "$SWITCH" -eq 1 ]]; then
   rm -f "$CONFIG_DIR/channel.beta-since"
 fi
 
-if [[ "$WANT_CABIN" -eq 1 ]]; then
-  echo "installed $PREFIX/bin/grokhub ($("$PREFIX/bin/grokhub" --version 2>/dev/null || echo "channel $CHANNEL"))"
-fi
-if [[ "$WANT_SHELL" -eq 1 ]]; then
-  echo "installed $PREFIX/bin/grokhub-shell (channel $CHANNEL)"
-fi
+echo "installed $PREFIX/bin/grokhub-shell (channel $CHANNEL)"
 echo "installed $PREFIX/bin/grokhub-hub"
+echo "installed $PREFIX/bin/grokhub (renamed-binary shim)"
 if [[ "$SYSTEM" -eq 0 ]]; then
   echo "ensure $PREFIX/bin is on PATH"
 fi
