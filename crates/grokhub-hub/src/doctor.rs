@@ -60,14 +60,21 @@ pub fn cabin_auth(dir: &Path) -> bool {
 }
 
 /// The shell's console key or Grok sign-in in the system keychain. A
-/// keychain that can't be reached counts as no entry.
+/// keychain that can't be reached counts as no entry. Sign-in may be split
+/// across numbered entries when the JSON exceeds Windows' blob limit.
 fn shell_auth() -> bool {
+    fn map_err(_: keyring::Error) -> String {
+        String::new()
+    }
+    let backend =
+        grokhub_agent::keyring_blob::OsBackend::new(grokhub_core::brand::INTERNAL_ID, map_err);
     [SHELL_KEY_ACCOUNT, SHELL_SIGN_IN_ACCOUNT]
         .iter()
         .any(|account| {
-            keyring::Entry::new(grokhub_core::brand::INTERNAL_ID, account)
-                .and_then(|e| e.get_password())
-                .is_ok_and(|v| !v.trim().is_empty())
+            grokhub_agent::keyring_blob::get(&backend, account)
+                .ok()
+                .flatten()
+                .is_some_and(|v| !v.trim().is_empty())
         })
 }
 

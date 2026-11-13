@@ -28,6 +28,7 @@ pub mod identity;
 mod image_budget;
 pub mod imagine_keychain;
 pub mod indexers;
+pub mod keyring_blob;
 mod lead;
 mod loopback;
 mod lru_map;
