@@ -1248,6 +1248,16 @@ button.md-copy {
   border-color: currentColor;
 }
 
+/* Voice mode: on, it reads as on. */
+.composer .voice-mode {
+  min-height: 52px;
+  white-space: nowrap;
+}
+
+.composer .voice-mode[aria-pressed="true"] {
+  border-color: currentColor;
+}
+
 .composer textarea {
   flex: 1;
   min-height: 52px;

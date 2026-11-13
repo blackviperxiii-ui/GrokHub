@@ -145,6 +145,12 @@ fn home(config_dir: &Path, settings: &ShellSettings) -> Personality {
     personality::gated(p, settings.adults_on())
 }
 
+/// The xAI voice spoken replies use: the stored default's voice hint when it
+/// names a voice xAI has, else the default voice (as the cabin picks it).
+pub fn speech_voice(config_dir: &Path, settings: &ShellSettings) -> &'static str {
+    grokhub_core::tts_voice(home(config_dir, settings).voice_hint.as_deref())
+}
+
 /// The block a chat's system prompt carries for the stored default. With 18+
 /// on, every voice jokes at the chosen heat. Empty only when that preset's
 /// tone rules are empty. The safety closer comes after the whole volatile

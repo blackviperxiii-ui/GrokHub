@@ -226,6 +226,7 @@ pub mod verify;
 pub mod voice;
 pub mod voice_engine;
 pub mod voice_flow;
+pub mod voice_live;
 pub mod voice_turn;
 pub mod watch_learn;
 pub mod week_recap;
@@ -606,6 +607,7 @@ pub use proactive_auto::{
     PillMode, AUTO_CONFIDENCE_MIN, AUTO_PER_DAY, AUTO_P_MIND_MAX, AUTO_RESTORE_PER_DAY,
     AUTO_REVERSIBILITY,
 };
+pub use proc_util::{run_night_check_command, NIGHT_CHECK_TIMEOUT};
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,
     expand_project_root, folder_choices, host_cmd_leaves_project, host_hour_blocked,

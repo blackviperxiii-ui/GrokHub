@@ -6,6 +6,9 @@ import {
   codeRunStop,
   codeSessionBind,
   codeSessionLead,
+  codeSessionLeft,
+  codeSessionResume,
+  type CodeLeftOff,
   codeTestPlan,
   codeTestRun,
   onCodeRun,
@@ -34,6 +37,14 @@ export const AGENT_TITLE = "Agent";
 /** Under the agent window's title: the folder its session works in. */
 export function worksIn(folder: string): string {
   return `Works in ${folderName(folder)}`;
+}
+export const RESUME = "Resume";
+
+/** The one line under the agent title for a saved checkpoint. */
+export function leftOffLine(left: CodeLeftOff): string {
+  if (left.next) return `Next: ${left.next}`;
+  if (left.blocker) return `Blocked: ${left.blocker}`;
+  return `Goal: ${left.goal}`;
 }
 export const CODE_DESKTOP_ONLY = "The editor and terminal are only in the desktop app.";
 export const CODE_REVIEW_PROMPT = "Review the uncommitted changes in this workspace: what changed, anything risky, and what to test before committing.";
@@ -94,6 +105,7 @@ export function Code({
   const [folder, setFolder] = useState("");
   /** The session started here, so it has a lead and its plan can be edited. */
   const [lead, setLead] = useState(false);
+  const [left, setLeft] = useState<CodeLeftOff | null>(null);
   const [busy, setBusy] = useState(false);
   /** Counts replies ended, so the Sessions list reads again. */
   const [ended, setEnded] = useState(0);
@@ -133,6 +145,7 @@ export function Code({
       onSession?.(id);
       setFolder("");
       setLead(false);
+      setLeft(null);
       codeSessionBind(id)
         .then((dir) => {
           if (sessionNow.current === id) setFolder(dir);
@@ -141,12 +154,31 @@ export function Code({
         .then(
           (is) => {
             if (sessionNow.current === id) setLead(is);
+            return codeSessionLeft(id);
+          },
+          () => codeSessionLeft(id),
+        )
+        .then(
+          (row) => {
+            if (sessionNow.current === id) setLeft(row);
           },
           () => {},
         );
     },
     [onSession],
   );
+
+  const resume = useCallback(() => {
+    const id = sessionNow.current;
+    if (!id || busyNow.current) return;
+    codeSessionResume(id).then(
+      (text) => {
+        if (sessionNow.current !== id) return;
+        setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, send: true, conversationId: id }));
+      },
+      () => {},
+    );
+  }, []);
 
   const onRan = useCallback(() => setEnded((n) => n + 1), []);
 
@@ -155,6 +187,19 @@ export function Code({
     setBusy(now);
     if (!now) setEnded((n) => n + 1);
   }, []);
+
+  // A finished turn writes a new checkpoint. Read it again for the session
+  // still on screen.
+  useEffect(() => {
+    const id = session;
+    if (!id || ended === 0) return;
+    codeSessionLeft(id).then(
+      (row) => {
+        if (sessionNow.current === id) setLeft(row);
+      },
+      () => {},
+    );
+  }, [ended, session]);
 
   // The app works in another folder than when this tab last looked (a switch
   // here, or a project bound in chat): the agent window starts a session
@@ -193,6 +238,16 @@ export function Code({
             <span className="note" title={folder}>
               {worksIn(folder)}
             </span>
+          )}
+          {left && (
+            <span className="note" title={left.goal}>
+              {leftOffLine(left)}
+            </span>
+          )}
+          {left && (
+            <button type="button" className="quiet" disabled={busy} onClick={resume}>
+              {RESUME}
+            </button>
           )}
         </header>
         <Chat

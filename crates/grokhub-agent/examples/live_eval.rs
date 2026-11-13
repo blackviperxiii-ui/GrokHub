@@ -36,6 +36,30 @@
 //! `boundary_routing.toml`, only when that file isn't there yet, so a choice
 //! you made by hand stands.
 //!
+//! Stalls and cut-short runs: every model call has a wall-clock limit
+//! (`--call-timeout-secs`, default 240) and is tried again up to `--retries`
+//! times (default 2) with a growing wait (2 s, 4 s, ... at most 60 s). A key or
+//! sign-in that stops working ends the run. `--deadline-mins` starts no new try
+//! after that many minutes, so set it under any outer hard stop. With `--out`,
+//! the report is rewritten after every try and each try is added to
+//! `<out>.jsonl`, so a run that is killed still leaves its data; `--resume`
+//! reads that file back and makes only the tries it lacks (the cap counts what
+//! the earlier run spent).
+//!
+//! RT-05 (routing eval) on a machine signed in to Grok in the app. Open the app
+//! first so the sign-in is fresh, then run each arm (k is 3 by default; each
+//! arm has its own $5 cap):
+//!
+//! cargo run --release -p grokhub-agent --example live_eval -- --auth signin \
+//!     --budget-usd 5 --deadline-mins 150 --out rt05-armA.md
+//! cargo run --release -p grokhub-agent --example live_eval -- --auth signin \
+//!     --model grok-build-0.1 --budget-usd 5 --deadline-mins 150 --out rt05-armB.md
+//!
+//! If a run stops early (deadline or sign-in), open the app again and rerun
+//! the same command with `--resume`. The report's Routing section gives
+//! effort in range, under and over effort, cost per solved try and cost
+//! against always sending the flagship.
+//!
 //! Run it before changing a default; it is never part of pull-request CI.
 //! Apart from those two writes it runs against a throwaway config folder, so your
 //! own rules, grants, memory and logs are never read or written.
@@ -60,6 +84,7 @@ fn main() {
     let mut provider_model = None;
     let mut out = None;
     let mut signin = false;
+    let mut resume = false;
     let mut i = 0;
     while i < args.len() {
         let value = args.get(i + 1).cloned().unwrap_or_default();
@@ -89,6 +114,35 @@ fn main() {
             "--provider" => opts.provider = Provider::parse(&value).unwrap_or_else(|e| fail(&e)),
             "--provider-model" => provider_model = Some(value),
             "--out" => out = Some(value),
+            "--call-timeout-secs" => {
+                let secs: u64 = value
+                    .parse()
+                    .ok()
+                    .filter(|s| (10..=3600).contains(s))
+                    .unwrap_or_else(|| fail("--call-timeout-secs takes 10 to 3600"));
+                opts.call_timeout = Duration::from_secs(secs);
+            }
+            "--retries" => {
+                opts.retry.retries = value
+                    .parse()
+                    .ok()
+                    .filter(|n| *n <= 5)
+                    .unwrap_or_else(|| fail("--retries takes 0 to 5"));
+            }
+            "--deadline-mins" => {
+                let mins: u64 = value
+                    .parse()
+                    .ok()
+                    .filter(|m| *m > 0)
+                    .unwrap_or_else(|| fail("--deadline-mins takes a whole number above 0"));
+                opts.deadline =
+                    Some(std::time::Instant::now() + Duration::from_secs(mins.saturating_mul(60)));
+            }
+            "--resume" => {
+                resume = true;
+                i += 1;
+                continue;
+            }
             "--auth" => {
                 signin = match value.as_str() {
                     "signin" => true,
@@ -144,7 +198,43 @@ fn main() {
         }
         opts.lessons = Some(lessons.clone());
     }
-    let report = grokhub_agent::run_live(client, &opts, budget);
+    let progress_file = out
+        .as_ref()
+        .map(|path| std::path::PathBuf::from(format!("{path}.jsonl")));
+    if resume {
+        let Some(file) = &progress_file else {
+            fail("--resume needs --out (it reads <out>.jsonl)");
+        };
+        let text = std::fs::read_to_string(file)
+            .unwrap_or_else(|e| fail(&format!("--resume: could not read {}: {e}", file.display())));
+        opts.resume = grokhub_agent::read_live_progress(&text);
+        eprintln!("resuming: {} tries already made", opts.resume.len());
+    } else if let Some(file) = &progress_file {
+        // A fresh run starts a fresh progress file.
+        let _ = std::fs::remove_file(file);
+    }
+    let md_path = out.as_ref().map(std::path::PathBuf::from);
+    let report = grokhub_agent::run_live_with(client, &opts, budget, &mut |so_far, last| {
+        eprintln!(
+            "try {}/{}: {} {}{}",
+            so_far.attempts.len(),
+            so_far.planned,
+            last.task,
+            if last.pass { "pass" } else { "fail" },
+            last.error
+                .as_deref()
+                .map(|e| format!(" ({e})"))
+                .unwrap_or_default()
+        );
+        if let (Some(md), Some(jsonl)) = (&md_path, &progress_file) {
+            if let Err(err) = grokhub_agent::write_live_progress(md, jsonl, so_far, last) {
+                eprintln!("could not write progress: {err}");
+            }
+        }
+    });
+    if let Some(why) = &report.stopped {
+        eprintln!("stopped early: {why}; rerun with --resume to finish");
+    }
     if grokhub_agent::dream_lessons_passed(&report) {
         let now = std::fs::read_to_string(lessons.join("SKILL.md")).ok();
         if now.is_some() && now == tested {
@@ -166,8 +256,8 @@ fn main() {
         }
     }
     let md = grokhub_agent::render_live(&report);
-    if let Some(path) = out {
-        if let Err(err) = std::fs::write(&path, md.as_bytes()) {
+    if let Some(path) = &md_path {
+        if let Err(err) = grokhub_agent::write_live_atomic(path, md.as_bytes()) {
             fail(&format!("could not write report: {err}"));
         }
     }
@@ -223,6 +313,7 @@ fn signin_access(real_config: &std::path::Path) -> String {
             if grokhub_core::imagine_access_usable(&t, now)
                 && !grokhub_core::imagine_needs_refresh(&t, now) =>
         {
+            note_time_left("Imagine sign-in", t.expires_at, &t.access_token, now);
             return t.access_token.trim().to_string();
         }
         Ok(Some(_)) => stale.push("Imagine sign-in"),
@@ -236,6 +327,7 @@ fn signin_access(real_config: &std::path::Path) -> String {
     ] {
         let Some(t) = tokens else { continue };
         if grokhub_core::oauth_access_live(&t, now) && !grokhub_core::token_needs_refresh(&t, now) {
+            note_time_left(name, t.expires_at, &t.access_token, now);
             return t.access_token.trim().to_string();
         }
         stale.push(name);
@@ -247,6 +339,18 @@ fn signin_access(real_config: &std::path::Path) -> String {
         "--auth signin: expired or about to expire: {}; open the app once so it renews, then rerun",
         stale.join(", ")
     ));
+}
+
+/// Says how long the sign-in has left, so a long run can be planned around
+/// it (the eval never renews it). Prints no part of the token.
+fn note_time_left(name: &str, expires_at: Option<u64>, access: &str, now: u64) {
+    match expires_at.or_else(|| grokhub_core::jwt_exp_ms(access)) {
+        Some(exp) => eprintln!(
+            "using the {name}: about {} minutes left on it",
+            exp.saturating_sub(now) / 60_000
+        ),
+        None => eprintln!("using the {name}: its expiry isn't known"),
+    }
 }
 
 /// The shell's own keychain sign-in, if any.

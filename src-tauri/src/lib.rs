@@ -24,6 +24,7 @@ pub mod chat_tabs;
 pub mod chat_trials;
 pub mod chips;
 mod code_agent;
+mod code_keep;
 mod code_rollback;
 mod code_sessions;
 pub mod command_box;
@@ -127,6 +128,7 @@ pub mod storage;
 mod task_feed;
 mod turns;
 pub mod voice;
+mod voice_live;
 pub mod workboard;
 
 use std::collections::HashMap;
@@ -721,7 +723,8 @@ async fn chat_turn(
     let own_folder = state.code_sessions.of(&conversation_id);
     // Its agent pushes through the Code tab's push guard and codes with the
     // bundled skills always on.
-    code_agent::bind(&state.config_dir, &conversation_id, own_folder.is_some());
+    let coding = own_folder.is_some();
+    code_agent::bind(&state.config_dir, &conversation_id, coding);
     if capabilities::current().pulse {
         // What the person says in chat steers the Feed writer's taste note.
         pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
@@ -810,6 +813,14 @@ async fn chat_turn(
     .and_then(|stop| stop);
     // A card's run settles on its card, however the turn ended.
     card_chat::turn_ended(&ended_dir, &ended_chat, &stop);
+    if coding {
+        let why = match &stop {
+            Err(err) => Some(err.as_str()),
+            Ok(s) if s == "error" => Some(code_keep::TURN_ERROR),
+            Ok(_) => None,
+        };
+        code_keep::record(&ended_dir, &ended_chat, why);
+    }
     stop
 }
 
@@ -1283,10 +1294,13 @@ fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
 
 fn end_chat(state: &ShellState, conversation_id: &str) {
     drop_worker(state, conversation_id);
-    if state.code_sessions.holds(conversation_id) {
+    // Drop the saved folder first, so a session with no turns can leave an
+    // empty directory for `closed` to remove.
+    let coding = state.code_sessions.holds(conversation_id);
+    state.code_sessions.forget(conversation_id);
+    if coding {
         lead::closed(&state.config_dir, conversation_id);
     }
-    state.code_sessions.forget(conversation_id);
     code_agent::bind(&state.config_dir, conversation_id, false);
     if current(state).last_chat == conversation_id {
         set_last_chat(state, "");
@@ -2611,6 +2625,26 @@ fn code_session_lead(state: State<'_, ShellState>, conversation_id: String) -> b
 #[tauri::command]
 fn code_session_plan(state: State<'_, ShellState>, conversation_id: String) -> Option<String> {
     lead::read_plan(&state.config_dir, &conversation_id)
+}
+
+/// Code tab: where this session left off, or nothing when it has no checkpoint.
+#[tauri::command]
+fn code_session_left(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+) -> Option<code_keep::LeftOff> {
+    code_keep::read(&state.config_dir, &conversation_id)
+}
+
+/// Code tab: the message Resume sends, from the saved checkpoint.
+#[tauri::command]
+fn code_session_resume(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+) -> Result<String, String> {
+    let left = code_keep::read(&state.config_dir, &conversation_id)
+        .ok_or("This session has no checkpoint to resume.")?;
+    Ok(code_keep::resume_prompt(&left))
 }
 
 /// Code tab: the workspace's repo, read only.
@@ -6242,6 +6276,7 @@ pub fn run() {
             #[cfg(desktop)]
             os_extras::setup(app.handle(), &loaded);
             let text_size = loaded.text_size;
+            let code_sessions = code_sessions::Folders::open(config_dir.clone());
             app.manage(ShellState {
                 config_dir,
                 settings: Mutex::new(loaded),
@@ -6256,7 +6291,7 @@ pub fn run() {
                 notified: os_extras::Pending::default(),
                 auto: Mutex::default(),
                 card_carry: Mutex::default(),
-                code_sessions: code_sessions::Folders::default(),
+                code_sessions,
             });
             if let Some(window) = app.get_webview_window("main") {
                 if text_size != 100 {
@@ -6365,6 +6400,17 @@ pub fn run() {
             grok_sign_out,
             send_chat,
             transcribe,
+            voice_live::voice_live_start,
+            voice_live::voice_live_stop,
+            voice_live::voice_live_push,
+            voice_live::voice_live_listen,
+            voice_live::voice_live_playing,
+            voice_live::voice_live_finish,
+            voice_live::voice_live_hear,
+            voice_live::voice_reply_feed,
+            voice_live::voice_reply_finish,
+            voice_live::voice_reply_hush,
+            voice_live::voice_speak,
             answer_permission,
             answer_elicit,
             helper_questions,
@@ -6498,6 +6544,8 @@ pub fn run() {
             code_session_bind,
             code_session_lead,
             code_session_plan,
+            code_session_left,
+            code_session_resume,
             get_code_ship,
             save_code_ship,
             get_journal,
