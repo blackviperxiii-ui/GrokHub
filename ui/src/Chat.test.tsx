@@ -1392,6 +1392,142 @@ describe("Chat history", () => {
     finish();
   });
 
+  it("a chat picked after the reply's done opens as soon as the reply settles, with no error", async () => {
+    const finish = holdTurn();
+    api.loadChat.mockResolvedValue(SAVED);
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("test");
+    emit(id, { kind: "text", text: "Test back at ya. What's good?" });
+    emit(id, { kind: "done", stop: "end_turn" });
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(screen.queryByText(OPEN_BUSY)).toBeNull();
+    // The app's wrap-up after done finishes before the old chat closes.
+    expect(api.closeChat).not.toHaveBeenCalled();
+    await act(async () => finish());
+    expect(await screen.findByText("pick a paint colour")).toBeVisible();
+    expect(api.closeChat).toHaveBeenCalledWith(id);
+    expect(api.loadChat).toHaveBeenCalledWith("shell-saved");
+    expect(screen.queryByText("Test back at ya. What's good?")).toBeNull();
+    expect(screen.queryByText(OPEN_BUSY)).toBeNull();
+  });
+
+  it("a failed reply's error stays with its chat when another chat was picked after done", async () => {
+    let fail: (why: string) => void = () => {};
+    api.sendChat.mockImplementation(() => new Promise<string>((_, reject) => (fail = reject)));
+    api.loadChat.mockResolvedValue(SAVED);
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("test");
+    emit(id, { kind: "error", message: "The model stopped answering." });
+    emit(id, { kind: "done", stop: "error" });
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    await act(async () => fail("The model stopped answering."));
+    expect(await screen.findByText("pick a paint colour")).toBeVisible();
+    expect(screen.queryByText(/The model stopped answering/)).toBeNull();
+  });
+
+  it("a message queued after the pick goes in the reply's chat, and the pick is dropped", async () => {
+    const ends = (() => {
+      const all: ((stop: string) => void)[] = [];
+      api.sendChat.mockReset().mockImplementation(() => new Promise<string>((resolve) => all.push(resolve)));
+      return all;
+    })();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("first");
+    emit(id, { kind: "done", stop: "end_turn" });
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    await act(async () => ends[0]("end_turn"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1].slice(0, 2)).toEqual([id, "then deploy"]);
+    expect(api.loadChat).not.toHaveBeenCalled();
+    expect(api.closeChat).not.toHaveBeenCalled();
+    await act(async () => ends[1]("end_turn"));
+  });
+
+  it("a waiting pick is dropped by picking the open chat again, or by a refused mission", async () => {
+    const finish = holdTurn();
+    api.loadChat.mockResolvedValue(SAVED);
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("test");
+    emit(id, { kind: "done", stop: "end_turn" });
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    rerender(<Chat onOpenSettings={() => {}} open={{ id, n: 2 }} />);
+    await act(async () => finish());
+    expect(screen.getByText("test")).toBeVisible();
+    expect(api.loadChat).not.toHaveBeenCalled();
+
+    const finishTwo = holdTurn();
+    await startTurn("again");
+    emit(id, { kind: "done", stop: "end_turn" });
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 3 }} />);
+    rerender(
+      <Chat
+        onOpenSettings={() => {}}
+        open={{ id: "shell-saved", n: 3 }}
+        prefill={{ text: "Mission", n: 1, conversationId: "shell-m1" }}
+      />,
+    );
+    expect(screen.getByText(MISSION_BUSY)).toBeVisible();
+    await act(async () => finishTwo());
+    expect(screen.getByText("again")).toBeVisible();
+    expect(api.loadChat).not.toHaveBeenCalled();
+  });
+
+  it("a waiting pick says the reply still runs when the wrap-up is slow", async () => {
+    const finish = holdTurn();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("test");
+    emit(id, { kind: "done", stop: "end_turn" });
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(screen.queryByText(OPEN_BUSY)).toBeNull();
+    expect(await screen.findByText(OPEN_BUSY, {}, { timeout: 3000 })).toBeVisible();
+    api.loadChat.mockResolvedValue(SAVED);
+    await act(async () => finish());
+    expect(await screen.findByText("pick a paint colour")).toBeVisible();
+    expect(screen.queryByText(OPEN_BUSY)).toBeNull();
+  });
+
+  it("a reply past its done still holds the chat while a queued message waits", async () => {
+    const finish = holdTurn();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("first");
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    emit(id, { kind: "done", stop: "end_turn" });
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(screen.getByText(OPEN_BUSY)).toBeVisible();
+    expect(api.loadChat).not.toHaveBeenCalled();
+    await act(async () => finish());
+  });
+
+  it("the still-running error goes once the reply ends", async () => {
+    const finish = holdTurn();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await startTurn("hello");
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(screen.getByText(OPEN_BUSY)).toBeVisible();
+    await act(async () => finish());
+    await waitFor(() => expect(screen.queryByText(OPEN_BUSY)).toBeNull());
+  });
+
+  it("a reply that ends with no done event, or with an error, lets the next chat open", async () => {
+    api.loadChat.mockResolvedValue(SAVED);
+    const finish = holdTurn();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await startTurn("hello");
+    await act(async () => finish());
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(await screen.findByText("pick a paint colour")).toBeVisible();
+    expect(screen.queryByText(OPEN_BUSY)).toBeNull();
+
+    api.sendChat.mockReset().mockRejectedValue("The model stopped answering.");
+    await userEvent.type(screen.getByLabelText("Message"), "again{Enter}");
+    expect(await screen.findByText(/The model stopped answering/)).toBeVisible();
+    api.loadChat.mockResolvedValue({ ...SAVED, id: "shell-two", lines: [{ role: "user", text: "second chat" }] });
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-two", n: 2 }} />);
+    expect(await screen.findByText("second chat")).toBeVisible();
+    expect(screen.queryByText(OPEN_BUSY)).toBeNull();
+  });
+
   it("deleting the open chat in History starts a new one; another chat's delete changes nothing", async () => {
     api.getStartChat.mockResolvedValue(SAVED);
     api.sendChat.mockResolvedValue("end_turn");
