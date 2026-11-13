@@ -3,6 +3,7 @@
 # sourced in name order, so a new guard is a new file instead of an edit to a
 # shared one. A guard sets fail=1 to fail the job. Today's guards fail CI when:
 #   10) conflict markers are committed
+#   15) a scratch test file (`tests/zz_*`, `ui/src/zz_*`) is committed
 #   20) god-file line budgets are exceeded (ratchet; raise only when intentional)
 #   30) a PR edits Cargo.lock without a Cargo.toml dep edit or the dependencies
 #       label, or a non-release PR touches version lockstep files

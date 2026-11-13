@@ -98,9 +98,9 @@ fn fit_of(b: Bucket) -> Fit {
 }
 
 /// Every catalog row in catalog order. A draft model fits as its chat model
-/// does; other specialty models fit when the disk has room. The on-device
-/// speech-to-text model shows only once it is on disk (so it can be removed):
-/// nothing transcribes with it yet, so the list doesn't offer it.
+/// does; other specialty models fit when the disk has room. A row the
+/// catalog marks `offered = false` shows only once it is on disk (so it can
+/// be removed).
 pub fn rows(p: &Profile, bench: &BenchCache, on_disk: impl Fn(&LocalModel) -> bool) -> Vec<Row> {
     rows_from(ls::local_models(), p, bench, on_disk)
 }
@@ -116,7 +116,7 @@ fn rows_from(
     catalog
         .iter()
         .map(|m| (m, on_disk(m)))
-        .filter(|&(m, on_disk)| on_disk || m.kind != ModelKind::SpeechToText)
+        .filter(|&(m, on_disk)| on_disk || m.offered)
         .map(|(m, on_disk)| {
             let (fit, why) = if let Some(x) = pick(m.id) {
                 (fit_of(x.bucket), x.reason.clone())
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn every_row_is_on_its_tab_and_a_draft_model_fits_as_its_chat_model_does() {
         let rows = rows(&pc(8_192, 500_000), &BenchCache::new(), |_| false);
-        // Every row but the speech-to-text model, which isn't offered.
+        // Every row but the speech-to-text model, which the catalog doesn't offer.
         assert_eq!(rows.len(), ls::local_models().len() - 1);
         let draft = by_id(&rows, MID_DRAFT);
         assert_eq!(draft.tab(), ModelTab::Drafts);
@@ -322,10 +322,13 @@ mod tests {
     }
 
     #[test]
-    fn the_speech_to_text_model_shows_only_once_it_is_on_disk() {
+    fn a_row_not_offered_shows_only_once_it_is_on_disk() {
         const STT: &str = "parakeet-tdt-0.6b-v3-int8";
         const TTS: &str = "kokoro-82m-multi-lang-v1_0";
         let p = pc(8_192, 500_000);
+        // The catalog marks it `offered = false`; rows default to offered.
+        assert!(!ls::model_by_id(STT).unwrap().offered);
+        assert!(ls::model_by_id(TTS).unwrap().offered);
         let fresh = rows(&p, &BenchCache::new(), |_| false);
         assert!(fresh.iter().all(|r| r.model.id != STT));
         // Spoken replies still offer their model on the Voice tab.

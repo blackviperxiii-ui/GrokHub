@@ -970,10 +970,12 @@ tok_s = { gpu = 0, unified = 0, cpu = 0 }
 # sherpa-onnx int8 export. It runs in the speech engine (`voice_engine.rs`)
 # once per clip, so nothing stays loaded. Its four files go in their own
 # folder under the voice folder; the token list is a small git file, checked
-# by its git oid. Not a chat model, so no `abliterated`.
+# by its git oid. Not a chat model, so no `abliterated`. Not offered in
+# Download models until the app transcribes with it.
 
 [[model]]
 id = "parakeet-tdt-0.6b-v3-int8"
+offered = false
 name = "Parakeet v3 speech to text"
 repo = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
 file = "parakeet-tdt-0.6b-v3-int8/encoder.int8.onnx"
