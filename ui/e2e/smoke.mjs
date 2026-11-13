@@ -449,13 +449,47 @@ async function settled(s, el) {
  * and focus from when it started, so keystrokes go missing. Clear and type
  * again until the text sticks. */
 async function typeInto(s, el, text) {
+  let logged = false;
   await waitFor(`the box to hold ${JSON.stringify(text)}`, async () => {
     if (!(await settled(s, el))) return null;
     await wd("POST", `${s}/element/${el}/clear`, {});
+    await wd("POST", `${s}/execute/sync`, { script: KEY_LOG_START, args: [{ [ELEMENT]: el }] });
     await wd("POST", `${s}/element/${el}/value`, { text });
     await sleep(300);
-    return (await wd("GET", `${s}/element/${el}/property/value`)) === text ? true : null;
+    const got = await wd("GET", `${s}/element/${el}/property/value`);
+    if (got === text) return true;
+    if (!logged) {
+      logged = true;
+      await logLostKey(s, text, got);
+    }
+    return null;
   });
+}
+
+/** Records what the page saw for each key while `typeInto` types: the key,
+ * where focus was, whether a listener took it, and the box's value after it. */
+const KEY_LOG_START = `
+  const box = arguments[0];
+  const log = (window.__smokeKeys = []);
+  const at = () => { const a = document.activeElement; return a === box ? "box" : a ? a.tagName.toLowerCase() + "." + a.className : "none"; };
+  const note = (type) => (e) => log.push([type, e.key ?? e.inputType ?? "", e.data ?? "", at(), e.defaultPrevented ? "taken" : "", box.value.length]);
+  for (const type of ["keydown", "beforeinput", "input", "keyup", "compositionstart", "compositionend"]) {
+    window.addEventListener(type, (e) => queueMicrotask(() => note(type)(e)), true);
+  }
+  window.addEventListener("blur", () => log.push(["window-blur", "", "", at(), "", box.value.length]), true);
+  box.addEventListener("blur", () => log.push(["box-blur", "", "", at(), "", box.value.length]));
+`;
+
+/** Prints the key log around the first character the box does not hold. */
+async function logLostKey(s, text, got) {
+  let i = 0;
+  while (i < text.length && text[i] === got[i]) i++;
+  const log = await wd("POST", `${s}/execute/sync`, { script: "return window.__smokeKeys || [];", args: [] }).catch(() => []);
+  // Each typed character shows up as keydown, beforeinput, input and keyup.
+  const from = log.findIndex((row) => row[0] === "keydown" && row[5] >= i - 2);
+  const rows = log.slice(Math.max(0, from), from + 24).map((row) => row.join(" "));
+  console.log(`typed text differs at ${i}: wanted ${JSON.stringify(text.slice(i - 3, i + 3))}, box has ${JSON.stringify(got.slice(i - 3, i + 3))}`);
+  console.log(`key log from there:\n  ${rows.join("\n  ")}`);
 }
 
 /** What sits on top of the element's middle, for a refused click. */
