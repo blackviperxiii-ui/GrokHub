@@ -1450,6 +1450,14 @@ async function codeAgent(s, config, workspace) {
   const other = join(config, "second-project");
   const pane = "aside.code-agent";
   const name = workspace.split(/[\\/]/).filter(Boolean).pop();
+  const bind = `/project bind ${other}`;
+
+  // The bind line is typed before the reply starts and only sent while it
+  // waits: on Windows the Chat box drops a key now and then while the agent
+  // window's reply runs, so typing it then never held the whole path.
+  await tab(s, "Chat");
+  const chatBox = await find(s, "section[aria-label='Chat'] textarea[aria-label='Message']");
+  await typeInto(s, chatBox, bind);
 
   await tab(s, "Code");
   await waitFor("the session's folder under the agent window's title", async () =>
@@ -1469,8 +1477,8 @@ async function codeAgent(s, config, workspace) {
 
   // The app moves to the second project while that reply waits on the model.
   await tab(s, "Chat");
-  const chatBox = await find(s, "section[aria-label='Chat'] textarea[aria-label='Message']");
-  await typeInto(s, chatBox, `/project bind ${other}`);
+  const held = await wd("GET", `${s}/element/${chatBox}/property/value`);
+  if (held !== bind) throw new Error(`the Chat box lost its draft while the reply ran: ${JSON.stringify(held)}`);
   await click(s, "section[aria-label='Chat'] form.composer button[type='submit']");
   await waitFor("the app in the second project", () => realpathSync(bound()) === realpathSync(other));
   await tab(s, "Code");

@@ -178,7 +178,7 @@ export function CardChat({
               Stop
             </button>
           ) : (
-            <button type="submit" disabled={Boolean(chat) && !draft.trim()}>
+            <button type="submit" className="cta" disabled={Boolean(chat) && !draft.trim()}>
               {chat ? "Send" : "Work on it"}
             </button>
           )}

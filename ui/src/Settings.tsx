@@ -338,7 +338,9 @@ export function Settings({
           </Toggle>
           {desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
           {globalHalt !== null && <p className="note">{globalHalt ? HALT_KEYS_NOTE : HALT_KEYS_LOCAL}</p>}
-          <button type="submit">Save settings</button>
+          <button type="submit" className="cta">
+            Save settings
+          </button>
         </form>
         {onThisComputer}
       </>
@@ -395,7 +397,7 @@ export function Settings({
             value={key}
             onChange={(e) => setKey(e.target.value)}
           />
-          <button type="button" onClick={saveKey} disabled={!key.trim()}>
+          <button type="button" className="cta" onClick={saveKey} disabled={!key.trim()}>
             Save key
           </button>
           {loaded.hasApiKey && (
