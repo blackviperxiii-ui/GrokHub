@@ -450,8 +450,9 @@ pub fn local_verify_failed() -> bool {
 
 static FALLBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// What the cabin shows while online calls fall back to the device.
-pub const LOCAL_FALLBACK_MSG: &str = "Using local: no cloud model is answering";
+/// What chat shows while a turn answers on this computer because Grok has no
+/// usable credential (missing or a 401 / refused sign-in).
+pub const LOCAL_FALLBACK_MSG: &str = "Using local model, Grok not connected";
 
 /// Live path: the last routed call went to the device because no cloud model could take it.
 ///
