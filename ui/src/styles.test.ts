@@ -127,10 +127,11 @@ describe("styles.css views bar in a narrow window", () => {
   it("gives the phone composer textarea a full row above its buttons", () => {
     const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
     const phone = mediaBlocks(CSS, "(max-width: 600px)").find((b) => b.includes(".composer {")) ?? "";
-    expect(bare.indexOf(phone)).toBeGreaterThan(bare.indexOf(".composer textarea {"));
+    expect(bare.indexOf(phone)).toBeGreaterThan(bare.indexOf(".composer-ghost-wrap {"));
     expect(rule(phone, ".composer {")).toContain("flex-wrap: wrap;");
-    expect(rule(phone, ".composer textarea {")).toContain("order: -1;");
-    expect(rule(phone, ".composer textarea {")).toContain("flex: 1 0 100%;");
+    // Textarea lives inside .composer-ghost-wrap; the wrap takes the full row.
+    expect(rule(phone, ".composer-ghost-wrap {")).toContain("order: -1;");
+    expect(rule(phone, ".composer-ghost-wrap {")).toContain("flex: 1 0 100%;");
   });
 });
 

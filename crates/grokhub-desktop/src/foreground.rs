@@ -35,15 +35,14 @@ fn wayland() -> bool {
 /// Hyprland, then Sway. Other Wayland compositors give no hint.
 #[cfg(target_os = "linux")]
 fn compositor_hint() -> Option<String> {
-    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
-        if let Some(j) = run("hyprctl", &["activewindow", "-j"]) {
-            return grokhub_core::local_governor::parse_hyprctl_active(&j).1;
-        }
+    if let Some(j) = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")
+        .and_then(|_| run("hyprctl", &["activewindow", "-j"]))
+    {
+        return grokhub_core::local_governor::parse_hyprctl_active(&j).1;
     }
-    if std::env::var_os("SWAYSOCK").is_some() {
-        if let Some(j) = run("swaymsg", &["-t", "get_tree"]) {
-            return grokhub_core::local_governor::parse_sway_tree(&j).1;
-        }
+    if let Some(j) = std::env::var_os("SWAYSOCK").and_then(|_| run("swaymsg", &["-t", "get_tree"]))
+    {
+        return grokhub_core::local_governor::parse_sway_tree(&j).1;
     }
     None
 }
@@ -53,9 +52,7 @@ fn x11_front() -> Option<String> {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
 
-    if std::env::var_os("DISPLAY").is_none() {
-        return None;
-    }
+    std::env::var_os("DISPLAY")?;
     let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None).ok()?;
     let root = conn.setup().roots.get(screen)?.root;
     let atom = |name: &[u8]| Some(conn.intern_atom(false, name).ok()?.reply().ok()?.atom);
