@@ -1882,6 +1882,8 @@ mod tests {
     fn a_pasted_stdio_connector_starts_with_the_key_saved_for_it() {
         let dir = crate::harness::test_dir("mcp-import-save-start");
         let _guard = ConfigGuard::set(&dir);
+        // The probe starts in the workspace: an earlier test's may be gone.
+        super::set_workspace(&dir);
         super::invalidate();
         let (entry, seen) = env_probe(&dir, "BRAVE_API_KEY", "brave-search");
         let pasted = json!({"mcpServers": {"brave-search": entry}});
@@ -1907,6 +1909,8 @@ mod tests {
     #[test]
     fn an_imported_stdio_entry_never_starts_with_another_entrys_key() {
         let (dir, _guard) = sealed_cfg("mcp-import-other-env");
+        // The probe starts in the workspace: an earlier test's may be gone.
+        super::set_workspace(&dir);
         let (entry, seen) = env_probe(&dir, "NOTES_KEY", "github");
         let pasted = json!({"mcpServers": {"notes": entry}});
         import_documents(&[pasted.to_string()]).unwrap();
