@@ -4,7 +4,7 @@
 
 export type HangoutModeStub = "talk" | "type";
 
-const emptyTab = { id: "", title: "", pinned: false, updated: 0 };
+const emptyTab = { id: "", title: "", pinned: false, updated: 0, main: false };
 
 /** Plain promise stubs — safe inside `vi.mock` factories (no vi.fn required). */
 export function chatTabApiStubs() {
@@ -21,6 +21,7 @@ export function chatTabApiStubs() {
     chatTabUnarchive: () => Promise.resolve({ ...emptyTab }),
     chatTabSoftDelete: () => Promise.resolve({ ...emptyTab }),
     chatTabRestoreDeleted: () => Promise.resolve({ ...emptyTab }),
+    clearChat: () => Promise.resolve(null),
     // Sentence autocomplete stays off in tests unless a suite turns it on.
     getBehavior: () =>
       Promise.resolve({

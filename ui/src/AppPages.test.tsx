@@ -19,7 +19,7 @@ const api = vi.hoisted(() => ({
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
   getSettings: vi.fn<() => Promise<Settings>>(),
   getMemory: vi.fn<() => Promise<MemoryNotes>>(),
-  getLastChat: vi.fn<() => Promise<null>>(),
+  getStartChat: vi.fn<() => Promise<null>>(),
   // False for a plain browser, true for the desktop app's own window.
   shell: false,
 }));
@@ -34,7 +34,7 @@ vi.mock("./api", async () => {
   return {
   ...chatTabApiStubs(),
   // No chat saved from an earlier launch.
-  getLastChat: api.getLastChat,
+  getStartChat: api.getStartChat,
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
   loadChat: vi.fn(),
@@ -110,11 +110,11 @@ describe("App pages", () => {
     api.getCapabilities.mockReset().mockResolvedValue(api.CORE_ONLY);
     api.getSettings.mockReset().mockResolvedValue(settings());
     api.getMemory.mockReset();
-    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.getStartChat.mockReset().mockResolvedValue(null);
     api.shell = false;
   });
 
-  // The desktop refuses get_last_chat from a browser, so the web app must not
+  // The desktop refuses get_start_chat from a browser, so the web app must not
   // ask for it, not even in the render before its capabilities arrive.
   it("a browser never asks the desktop for the last chat", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, pulse: true, remote: true });
@@ -122,16 +122,16 @@ describe("App pages", () => {
     await waitFor(() => expect(api.getCapabilities).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole("navigation", { name: "Views" })).toBeInTheDocument();
     await act(() => new Promise<void>((done) => setTimeout(done, 0)));
-    expect(api.getLastChat).toHaveBeenCalledTimes(0);
+    expect(api.getStartChat).toHaveBeenCalledTimes(0);
   });
 
   it("the desktop app asks for the last chat once", async () => {
     api.shell = true;
     render(<App />);
     expect(await screen.findByRole("navigation", { name: "Views" })).toBeInTheDocument();
-    await waitFor(() => expect(api.getLastChat).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.getStartChat).toHaveBeenCalledTimes(1));
     await act(() => new Promise<void>((done) => setTimeout(done, 0)));
-    expect(api.getLastChat).toHaveBeenCalledTimes(1);
+    expect(api.getStartChat).toHaveBeenCalledTimes(1);
   });
 
   it("Settings keeps an unsaved edit after Chat, and an untouched field takes the fresh value", async () => {

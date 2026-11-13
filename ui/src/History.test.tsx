@@ -31,7 +31,7 @@ const api = vi.hoisted(() => ({
   deleteAllChats: vi.fn<() => Promise<DeleteAllResult>>(),
   cancelDeleteAll: vi.fn<() => Promise<void>>(),
   // What the Chat page calls when it mounts ("Delete all and the open chat").
-  getLastChat: vi.fn<() => Promise<Transcript | null>>(),
+  getStartChat: vi.fn<() => Promise<Transcript | null>>(),
   getSettings: vi.fn<() => Promise<Settings>>(),
   quickChips: vi.fn<() => Promise<QuickChip[]>>(),
   slashHits: vi.fn<() => Promise<never[]>>(),
@@ -390,6 +390,23 @@ describe("Projects tree, Pinned group and read-only chats", () => {
     expect(screen.getByRole("menuitem", { name: "Pin" })).toBeVisible();
   });
 
+  it("Main's menu only exports: no pin, rename or delete", async () => {
+    api.listChats.mockResolvedValue([
+      { id: "shell-main-1", title: "Main", created: TODAY.created, updated: TODAY.updated, pinned: true, main: true },
+      TODAY,
+    ]);
+    render(<History onOpen={() => {}} onDeleted={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "More for Main" }));
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Export"]);
+    await userEvent.click(screen.getByRole("button", { name: "More for Fix the build" }));
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Pin",
+      "Rename",
+      "Export",
+      "Delete",
+    ]);
+  });
+
   it("Delete all arms first and deletes nothing until the second click", async () => {
     const onDeleted = vi.fn();
     api.listChats.mockResolvedValue([TODAY, WEEK]);
@@ -738,7 +755,7 @@ describe("Delete all and the open chat", () => {
 
   it("closes the open chat when it was the newest of several, not only when it was the last row", async () => {
     // The open chat is the newest, so History lists it first.
-    api.getLastChat.mockResolvedValue({
+    api.getStartChat.mockResolvedValue({
       id: "shell-a",
       title: "Fix the build",
       lines: [

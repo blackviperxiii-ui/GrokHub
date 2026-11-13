@@ -94,7 +94,7 @@ const EMPTY_TRANSCRIPT = {
   earlier: 0,
 };
 
-const EMPTY_TAB = { id: "shot-chat", title: "Hangout", pinned: false, updated: 0 };
+const EMPTY_TAB = { id: "shot-chat", title: "Hangout", pinned: false, updated: 0, main: false };
 
 const EMPTY_MEMORY = {
   global: "",
@@ -488,7 +488,7 @@ export function initScript(theme = "ops-dark") {
         case "list_archived_chats":
         case "list_deleted_chats":
           return emptyList;
-        case "get_last_chat":
+        case "get_start_chat":
         case "load_chat":
           return fix.chat;
         case "chat_tab_switch":

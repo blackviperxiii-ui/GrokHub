@@ -31,7 +31,7 @@ vi.mock("./api", async () => {
   answerElicit: vi.fn(),
   saveSettings: vi.fn(),
   answerPermission: vi.fn(),
-  getLastChat: () => Promise.resolve(null),
+  getStartChat: () => Promise.resolve(null),
   loadChat: vi.fn(),
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
