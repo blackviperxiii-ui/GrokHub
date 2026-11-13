@@ -36,6 +36,7 @@ vi.mock("./Personality", () => ({ Personality: () => <p>Personality panel</p> })
 vi.mock("./Playbooks", () => ({ Playbooks: () => <p>Playbooks panel</p> }));
 vi.mock("./Interests", () => ({ Interests: () => <p>Interests panel</p> }));
 vi.mock("./PulseSources", () => ({ PulseSources: () => <p>Pulse sources panel</p> }));
+vi.mock("./PulseAuto", () => ({ PulseAuto: () => <p>Pulse fixes panel</p> }));
 vi.mock("./PcHelpers", () => ({ PcHelpers: () => <p>PC helpers panel</p> }));
 vi.mock("./CodeSettings", () => ({ CodeSettings: () => <p>Code panel</p> }));
 vi.mock("./Learned", () => ({ Learned: () => <p>Learned panel</p> }));
@@ -401,6 +402,7 @@ describe("Settings", () => {
     expect(screen.getByText("Interests panel")).toBeInTheDocument();
     expect(screen.getByText("Steam Pulse sources")).toBeInTheDocument();
     expect(screen.getByText("Know me panel")).toBeInTheDocument();
+    expect(screen.getByText("Pulse fixes panel")).toBeInTheDocument();
     expect(screen.queryByText("Code panel")).toBeNull();
 
     await openSection("Local AI");
@@ -408,6 +410,7 @@ describe("Settings", () => {
     expect(screen.queryByText("Interests panel")).toBeNull();
     expect(screen.queryByText("Steam Pulse sources")).toBeNull();
     expect(screen.queryByText("Know me panel")).toBeNull();
+    expect(screen.queryByText("Pulse fixes panel")).toBeNull();
 
     await openSection("AI models");
     expect(screen.getByText("AI models panel")).toBeInTheDocument();

@@ -9,6 +9,7 @@ pub mod ai_models;
 mod app_guard;
 pub mod attach;
 pub mod audio_check;
+pub mod auto_fixes;
 pub mod auto_setup;
 pub mod automations;
 pub mod background;
@@ -4174,6 +4175,32 @@ async fn set_game_watch(
         .await?
 }
 
+/// Settings → Pulse: fixes that run on their own and reminder notifications.
+#[tauri::command]
+async fn get_pulse_auto(state: State<'_, ShellState>) -> Result<auto_fixes::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || auto_fixes::view(&dir)).await
+}
+
+#[tauri::command]
+async fn set_pulse_auto_fix(
+    state: State<'_, ShellState>,
+    id: String,
+    on: bool,
+) -> Result<auto_fixes::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || auto_fixes::set_fix(&dir, &id, on)).await?
+}
+
+#[tauri::command]
+async fn set_proactive_reminders(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<auto_fixes::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || auto_fixes::set_reminders(&dir, on)).await?
+}
+
 #[tauri::command]
 async fn get_steam_pulse(state: State<'_, ShellState>) -> Result<steam_checks::SteamPulse, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
@@ -6675,7 +6702,13 @@ pub fn run() {
             start_auto_resume(app.handle().clone());
             // The proactive engine and nudge watchers, while the cabin is closed.
             #[cfg(desktop)]
-            proactive::start(app.state::<ShellState>().config_dir.clone());
+            {
+                let pinged = app.handle().clone();
+                proactive::start(
+                    app.state::<ShellState>().config_dir.clone(),
+                    move |title: &str| os_extras::proactive_reminder(&pinged, title),
+                );
+            }
             start_budget_tally(app.handle().clone());
             // A no-route pause re-checks on a backoff and resumes its chat.
             let told = app.handle().clone();
@@ -7135,6 +7168,9 @@ pub fn run() {
             companion_set_note,
             get_game_watch,
             set_game_watch,
+            get_pulse_auto,
+            set_pulse_auto_fix,
+            set_proactive_reminders,
             get_steam_pulse,
             set_steam_achievements,
             set_steam_wishlist,
