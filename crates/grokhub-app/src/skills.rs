@@ -1,14 +1,11 @@
 use grokhub_core::{
-    interpret_verify, parse_skill_md, render_skill_md, skill_dir_name, skill_safe,
-    verify_script_path, SkillMd, VerifyResult,
+    interpret_verify, parse_skill_md, skill_dir_name, skill_safe, verify_script_path, SkillMd,
+    VerifyResult,
 };
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
-
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 use crate::config;
 use grokhub_agent::harness::{self as hx, Origin};
@@ -59,29 +56,10 @@ pub fn set_skill_on(name: &str, on: bool) -> Result<(), String> {
 
 /// A skill made on the Skills tab from a name and what it should do. The
 /// words become its description, when to use it and its steps; Edit adds more.
+/// The write path itself lives in `grokhub_agent::skill_write`, shared with
+/// the shell's Skills page.
 pub fn new_skill(name: &str, what: &str) -> Result<SkillMd, String> {
-    let name = name.trim();
-    let what = what.trim();
-    if name.is_empty() {
-        return Err("Give the skill a name.".into());
-    }
-    if what.is_empty() {
-        return Err("Say what the skill should do.".into());
-    }
-    if skill_folder(name).join("SKILL.md").exists() {
-        return Err(format!("There's already a skill called {name}."));
-    }
-    let folder = skill_dir_name(name);
-    let skill = SkillMd {
-        name: name.to_string(),
-        description: what.to_string(),
-        slash: format!("/{folder}"),
-        trigger: what.to_string(),
-        instructions: what.to_string(),
-        ..SkillMd::default()
-    };
-    save_skill_logged(&skill, Origin::User, "made on the Skills tab")?;
-    Ok(skill)
+    grokhub_agent::skill_write::new_skill(&config::config_dir(), name, what)
 }
 
 /// Remove a skill from the Skills tab. Its folder moves to
@@ -167,22 +145,14 @@ pub fn retire_junk_skills() -> Vec<String> {
 }
 
 pub fn save_skill(s: &SkillMd) -> Result<PathBuf, String> {
-    if !skill_safe(&s.instructions) || !skill_safe(&s.pitfalls) {
-        return Err("Secrets never in markdown".into());
-    }
-    let dir = skills_dir().join(skill_dir_name(&s.name));
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join("SKILL.md");
-    crate::config::atomic_write(&path, render_skill_md(s).as_bytes())?;
-    write_verify_scripts(&dir, &s.verify)?;
-    Ok(path)
+    grokhub_agent::skill_write::save_skill(&config::config_dir(), s)
 }
 
 /// `save_skill` with the ChangeLedger around it: the version it replaces is
 /// kept and the write is logged, so `/skills undo` can put it back. For
 /// writes GrokHub makes on its own (`Origin::SelfManage`) and Suggested Add.
 pub fn save_skill_logged(s: &SkillMd, origin: Origin, reason: &str) -> Result<(), String> {
-    save_skill_versioned(s, origin, reason).map(|_| ())
+    grokhub_agent::skill_write::save_skill_logged(&config::config_dir(), s, origin, reason)
 }
 
 /// [`save_skill_logged`], returning the ledger line (`None` when the bytes
@@ -192,93 +162,21 @@ pub fn save_skill_versioned(
     origin: Origin,
     reason: &str,
 ) -> Result<Option<hx::Change>, String> {
-    hx::record_skill_change(
-        &config::config_dir(),
-        &skills_dir(),
-        &s.name,
-        origin,
-        reason,
-        || save_skill(s).map(|_| ()),
-    )
+    grokhub_agent::skill_write::save_skill_versioned(&config::config_dir(), s, origin, reason)
 }
 
 /// After an undo or restore put `SKILL.md` back byte for byte, its verify
 /// scripts follow the `## Verify` it now holds.
 pub fn rewrite_verify_scripts(s: &SkillMd) -> Result<(), String> {
-    write_verify_scripts(&skill_folder(&s.name), &s.verify)
-}
-
-fn write_verify_scripts(dir: &std::path::Path, verify: &str) -> Result<(), String> {
-    if let Some(script) = verify_as_script(verify) {
-        let scripts = dir.join("scripts");
-        fs::create_dir_all(&scripts).map_err(|e| e.to_string())?;
-        let sh = scripts.join("verify.sh");
-        fs::write(&sh, script).map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        {
-            let _ = fs::set_permissions(&sh, fs::Permissions::from_mode(0o755));
-        }
-        if let Some(cmd) = verify_as_cmd(verify) {
-            fs::write(scripts.join("verify.cmd"), cmd).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
-}
-
-fn verify_as_script(verify: &str) -> Option<String> {
-    let t = verify.trim();
-    if t.is_empty() {
-        return None;
-    }
-    if t.contains("#!/") {
-        return Some(t.to_string());
-    }
-    let first = t.lines().next().unwrap_or("").trim();
-    if first.starts_with("test ")
-        || first.starts_with('[')
-        || first.starts_with("ls")
-        || first.starts_with("exit")
-        || first.contains("grokhub")
-        || first.starts_with("echo ")
-    {
-        Some(format!("#!/bin/sh\nset -e\n{t}\n"))
-    } else {
-        None
-    }
-}
-
-/// Windows verify must not spawn WSL/`bash`. `test -f FILE` becomes `if exist`.
-fn verify_as_cmd(verify: &str) -> Option<String> {
-    let first = verify.trim().lines().next()?.trim();
-    let file = first
-        .strip_prefix("test -f ")
-        .or_else(|| first.strip_prefix("test -e "))?
-        .trim()
-        .trim_matches('"');
-    if file.is_empty()
-        || file
-            .bytes()
-            .any(|b| matches!(b, b'&' | b'|' | b'>' | b'<' | b'%'))
-    {
-        return None;
-    }
-    Some(format!(
-        "@echo off\r\nif exist \"{file}\" (exit /b 0) else (exit /b 1)\r\n"
-    ))
+    grokhub_agent::skill_write::rewrite_verify_scripts(&config::config_dir(), s)
 }
 
 pub fn skill_folder(name: &str) -> PathBuf {
-    skills_dir().join(skill_dir_name(name))
+    grokhub_agent::skill_write::skill_folder(&config::config_dir(), name)
 }
 
 pub fn skill_updated_at(name: &str) -> u64 {
-    let path = skill_folder(name).join("SKILL.md");
-    fs::metadata(&path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    grokhub_agent::skill_write::skill_updated_at(&config::config_dir(), name)
 }
 
 pub fn run_verify(name: &str, cwd: Option<&str>) -> Option<VerifyResult> {
@@ -402,23 +300,6 @@ mod tests {
         assert!(hit.ok, "verify must run in the bound project: {hit:?}");
         let _ = fs::remove_dir_all(&root);
         unsafe { std::env::remove_var("GROKHUB_CONFIG") };
-    }
-
-    #[test]
-    fn verify_as_cmd_translates_test_f() {
-        assert_eq!(
-            verify_as_cmd("test -f grokhub-verify-marker"),
-            Some(
-                "@echo off\r\nif exist \"grokhub-verify-marker\" (exit /b 0) else (exit /b 1)\r\n"
-                    .into()
-            )
-        );
-        assert_eq!(
-            verify_as_cmd("test -e notes.md"),
-            Some("@echo off\r\nif exist \"notes.md\" (exit /b 0) else (exit /b 1)\r\n".into())
-        );
-        assert!(verify_as_cmd("lsblk").is_none());
-        assert!(verify_as_cmd("test -f file & calc").is_none());
     }
 
     #[test]

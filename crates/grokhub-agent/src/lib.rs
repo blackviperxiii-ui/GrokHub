@@ -60,6 +60,7 @@ pub mod self_manage;
 mod session;
 mod session_tools;
 pub mod ship_tree;
+pub mod skill_write;
 mod skills;
 mod slash_parity;
 mod sse;

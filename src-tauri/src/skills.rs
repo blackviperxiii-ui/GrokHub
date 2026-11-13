@@ -3,8 +3,9 @@
 //! `{config}/skills/*/SKILL.md`; the rest come from the native engine's own
 //! discovery (project, user and plugin skills). Built-in skills live in the
 //! Code tab, so they are not listed here, though they still run by name.
-//! Creating or editing skills stays in the cabin, and a skill's verify
-//! script never runs from here.
+//! Creating and editing cabin skills happens here too, through the write
+//! path both apps share (`grokhub_agent::skill_write`), and a skill's
+//! verify script never runs from here.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -197,6 +198,95 @@ pub fn folder(
         .1
         .filter(|dir| dir.is_dir())
         .ok_or_else(|| format!("{name} has no folder to open."))
+}
+
+/// The fields Edit changes on a cabin skill, in the cabin tab's words:
+/// what it does, when to use it, and its steps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Detail {
+    pub name: String,
+    pub description: String,
+    pub trigger: String,
+    pub instructions: String,
+}
+
+/// The listed cabin skill `name`, read back and parsed — the same skill
+/// Edit starts from in the cabin. A skill from any other source, or one
+/// that can't be read back whole, is refused.
+fn cabin_skill(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    name: &str,
+) -> Result<grokhub_core::SkillMd, String> {
+    let (_, dir) = gather(config_dir, workspace, home)
+        .into_iter()
+        .find(|(row, _)| row.source == Source::Cabin && row.name == name)
+        .ok_or_else(|| format!("{name} isn't one of this computer's skills."))?;
+    let dir = dir.ok_or_else(|| format!("{name} has no folder to edit."))?;
+    let raw = read_capped(&dir.join("SKILL.md"))
+        .filter(|raw| grokhub_core::skill_safe(raw))
+        .ok_or_else(|| format!("{name} couldn't be read back."))?;
+    let skill = grokhub_core::parse_skill_md(&raw);
+    if skill.name.trim().is_empty() {
+        return Err(format!("{name} couldn't be read back."));
+    }
+    Ok(skill)
+}
+
+/// What Edit shows for the cabin skill `name`.
+pub fn detail(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    name: &str,
+) -> Result<Detail, String> {
+    let skill = cabin_skill(config_dir, workspace, home, name)?;
+    Ok(Detail {
+        name: skill.name,
+        description: skill.description,
+        trigger: skill.trigger,
+        instructions: skill.instructions,
+    })
+}
+
+/// Make a cabin skill from a name and what it should do, then list again.
+pub fn create(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    name: &str,
+    what: &str,
+) -> Result<Page, String> {
+    grokhub_agent::skill_write::new_skill(config_dir, name, what)?;
+    Ok(load(config_dir, workspace, home))
+}
+
+/// Edit a cabin skill's description, trigger and steps — the cabin tab's
+/// three fields, trimmed the same way, saved through the ChangeLedger so
+/// Undo can put the old version back. Everything else (slash, pitfalls,
+/// verify, runs) stays as it was.
+pub fn edit(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    name: &str,
+    description: &str,
+    trigger: &str,
+    instructions: &str,
+) -> Result<Page, String> {
+    let mut skill = cabin_skill(config_dir, workspace, home, name)?;
+    skill.description = description.trim().to_string();
+    skill.trigger = trigger.trim().to_string();
+    skill.instructions = instructions.trim().to_string();
+    grokhub_agent::skill_write::save_skill_logged(
+        config_dir,
+        &skill,
+        grokhub_agent::harness::Origin::User,
+        "edited on the Skills tab",
+    )?;
+    Ok(load(config_dir, workspace, home))
 }
 
 /// Shows `dir` in the system file manager. `dir` comes from [`folder`].
@@ -440,5 +530,103 @@ mod tests {
             folder(&cfg, &ws, Some(&home), Source::Builtin, "qa-walkthrough"),
             Err("qa-walkthrough has no folder to open.".to_string())
         );
+    }
+
+    #[test]
+    fn create_makes_a_cabin_skill_the_page_lists() {
+        let root = scratch("create");
+        let (cfg, home, ws) = (root.join("cfg"), root.join("home"), root.join("ws"));
+
+        let page = create(
+            &cfg,
+            &ws,
+            Some(&home),
+            "Clip Trimmer",
+            "Trim my last game clip to 30 seconds",
+        )
+        .expect("create");
+        let row = find(&page, "Clip Trimmer");
+        assert_eq!(row.source, Source::Cabin);
+        assert_eq!(row.description, "Trim my last game clip to 30 seconds");
+        assert_eq!(
+            row.folder,
+            cfg.join("skills")
+                .join("clip-trimmer")
+                .display()
+                .to_string()
+        );
+        // The file on disk is the one the cabin would write.
+        let raw = fs::read_to_string(cfg.join("skills/clip-trimmer/SKILL.md")).unwrap();
+        let parsed = grokhub_core::parse_skill_md(&raw);
+        assert_eq!(parsed.slash, "/clip-trimmer");
+        assert_eq!(
+            parsed.instructions.trim(),
+            "Trim my last game clip to 30 seconds"
+        );
+
+        let detail = detail(&cfg, &ws, Some(&home), "Clip Trimmer").expect("detail");
+        assert_eq!(detail.name, "Clip Trimmer");
+        assert_eq!(detail.description, "Trim my last game clip to 30 seconds");
+        assert_eq!(detail.trigger, "Trim my last game clip to 30 seconds");
+        assert_eq!(
+            detail.instructions.trim(),
+            "Trim my last game clip to 30 seconds"
+        );
+
+        assert!(create(&cfg, &ws, Some(&home), "clip trimmer", "again").is_err());
+        assert!(create(&cfg, &ws, Some(&home), "", "x").is_err());
+        assert!(create(&cfg, &ws, Some(&home), "x", " ").is_err());
+    }
+
+    #[test]
+    fn edit_changes_the_three_fields_and_keeps_the_rest() {
+        let root = scratch("edit");
+        let (cfg, home, ws) = (root.join("cfg"), root.join("home"), root.join("ws"));
+        write(
+            &ws.join(".grok/skills/lint-fix/SKILL.md"),
+            skill("lint-fix", "Fix lint warnings").as_bytes(),
+        );
+        grokhub_agent::skill_write::save_skill(
+            &cfg,
+            &grokhub_core::SkillMd {
+                name: "flash-pi".into(),
+                description: "write an image".into(),
+                slash: "/flash".into(),
+                trigger: "flash the pi".into(),
+                instructions: "1. dd the image".into(),
+                pitfalls: "do not wipe the boot disk".into(),
+                verify: "lsblk".into(),
+                runs: 3,
+            },
+        )
+        .expect("seed");
+
+        let page = edit(
+            &cfg,
+            &ws,
+            Some(&home),
+            "flash-pi",
+            "  write a new image  ",
+            "flash the pi again",
+            "1. dd the newer image",
+        )
+        .expect("edit");
+        assert_eq!(find(&page, "flash-pi").description, "write a new image");
+
+        let after = grokhub_core::parse_skill_md(
+            &fs::read_to_string(cfg.join("skills/flash-pi/SKILL.md")).unwrap(),
+        );
+        assert_eq!(after.description, "write a new image");
+        assert_eq!(after.trigger, "flash the pi again");
+        assert_eq!(after.instructions.trim(), "1. dd the newer image");
+        assert_eq!(after.slash, "/flash");
+        assert_eq!(after.pitfalls.trim(), "do not wipe the boot disk");
+        assert_eq!(after.verify, "lsblk");
+        assert_eq!(after.runs, 3);
+
+        // Only cabin skills are edited here; the rest are refused.
+        assert!(edit(&cfg, &ws, Some(&home), "lint-fix", "d", "t", "i").is_err());
+        assert!(detail(&cfg, &ws, Some(&home), "lint-fix").is_err());
+        assert!(edit(&cfg, &ws, Some(&home), "no-such-skill", "d", "t", "i").is_err());
     }
 }

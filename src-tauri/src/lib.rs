@@ -3639,6 +3639,54 @@ async fn set_skill_on(
     off_main(move || skills::set_on(&dir, &workspace, home.as_deref(), &name, on)).await?
 }
 
+/// Make a cabin skill from a name and what it should do. Desktop only.
+#[tauri::command]
+async fn create_skill(
+    state: State<'_, ShellState>,
+    name: String,
+    what: String,
+) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::create(&dir, &workspace, home.as_deref(), &name, &what)).await?
+}
+
+/// The fields Edit shows for a cabin skill. Desktop only.
+#[tauri::command]
+async fn get_skill_detail(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<skills::Detail, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::detail(&dir, &workspace, home.as_deref(), &name)).await?
+}
+
+/// Edit a cabin skill's description, trigger and steps. Desktop only.
+#[tauri::command]
+async fn edit_skill(
+    state: State<'_, ShellState>,
+    name: String,
+    description: String,
+    trigger: String,
+    instructions: String,
+) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || {
+        skills::edit(
+            &dir,
+            &workspace,
+            home.as_deref(),
+            &name,
+            &description,
+            &trigger,
+            &instructions,
+        )
+    })
+    .await?
+}
+
 /// The page names the skill; the shell finds its folder itself.
 #[tauri::command]
 async fn open_skill_folder(
@@ -6441,6 +6489,9 @@ pub fn run() {
             get_skills,
             open_skill_folder,
             set_skill_on,
+            create_skill,
+            get_skill_detail,
+            edit_skill,
             get_learned,
             learned_act,
             learned_say,
