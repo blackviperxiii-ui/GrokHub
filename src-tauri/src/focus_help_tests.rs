@@ -44,7 +44,7 @@ fn an_unknown_app_or_turning_it_off_clears_the_hint() {
 fn blur_while_on_schedules_a_read_slot() {
     let mut help = FocusHelp {
         was_focused: true,
-        ..FocusHelp::default()
+        ..Default::default()
     };
     help.tick(false, true);
     // The spawn sleeps READ_DELAY; give it a moment then confirm the slot
