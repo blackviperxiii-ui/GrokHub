@@ -3,9 +3,10 @@
 //! the cabin is not running: the cabin beats `scheduler-lease.json` from its
 //! pulse, and the shell defers while that beat is fresh.
 //!
-//! A due job is claimed first (its last run, count and next run are saved),
-//! then it runs unattended and read-only, as Run now does, whatever the
-//! approvals setting. Jobs gated by a check command stay with the cabin.
+//! A due job gated by a check command runs that command first; only a passing
+//! check is claimed and fired. Other due jobs are claimed first (last run,
+//! count and next run saved), then run unattended and read-only, as Run now
+//! does, whatever the approvals setting.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -66,12 +67,27 @@ pub fn local_clock(now_ms: u64, offset_min: i32) -> LocalClock {
 
 /// One look for due jobs. With the lease, each due job is claimed and then
 /// handed to `run`, one at a time, at most once per tick. The lease is checked
-/// again before each claim, so a cabin that opens mid-tick takes over.
+/// again before each claim, so a cabin that opens mid-tick takes over. Jobs
+/// with a check command run that check first via `check`; a failing receipt
+/// advances the next run without firing.
 pub fn tick(
     config_dir: &Path,
     clock: &dyn Fn() -> LocalClock,
     pid: u32,
     run: &mut dyn FnMut(&Automation) -> RunResult,
+) -> Result<Vec<Fired>, String> {
+    tick_with_check(config_dir, clock, pid, run, &mut |cmd| {
+        grokhub_core::run_night_check_command(cmd)
+    })
+}
+
+/// `tick`, with a custom check-command runner (for tests).
+pub fn tick_with_check(
+    config_dir: &Path,
+    clock: &dyn Fn() -> LocalClock,
+    pid: u32,
+    run: &mut dyn FnMut(&Automation) -> RunResult,
+    check: &mut dyn FnMut(&str) -> String,
 ) -> Result<Vec<Fired>, String> {
     let mut fired = Vec::new();
     let mut seen = HashSet::new();
@@ -86,6 +102,17 @@ pub fn tick(
             beat_ms: now.now_ms,
         };
         write_lease(config_dir, &beat)?;
+        // Check-gated jobs: run the gate before claiming a successful run.
+        if let Some(pending) = automations::next_due(config_dir, now, &seen)? {
+            if let Some(cmd) = grokhub_core::night_check_command(&pending.check_command) {
+                let receipt = check(cmd);
+                if grokhub_core::skip_night_check_receipt(&receipt) {
+                    automations::settle_skip(config_dir, &pending.id, now)?;
+                    seen.insert(pending.id);
+                    continue;
+                }
+            }
+        }
         let Some(job) = automations::claim_due(config_dir, now, &seen)? else {
             return Ok(fired);
         };
@@ -346,25 +373,60 @@ mod tests {
     }
 
     #[test]
-    fn a_job_with_a_check_command_is_left_to_the_cabin() {
-        let dir = temp_dir("check");
+    fn a_failing_check_command_skips_without_firing() {
+        let dir = temp_dir("check-skip");
         let nine = FRI_8AM + HOUR;
         std::fs::write(
             automations::path(&dir),
             format!(
-                r#"[{{"id":"auto-gated","name":"tidy","schedule":"daily","time":"09:00","instructions":"tidy downloads","checkCommand":"test -d ~/Downloads","enabled":true,"nextRun":{nine}}}]"#
+                r#"[{{"id":"auto-gated","name":"tidy","schedule":"daily","time":"09:00","instructions":"tidy downloads","checkCommand":"git status --porcelain","enabled":true,"nextRun":{nine}}}]"#
             ),
         )
         .expect("seed");
-        let before = std::fs::read_to_string(automations::path(&dir)).expect("before");
-        let fired = tick(&dir, &at(nine), PID, &mut |_| ok("")).expect("tick");
+        let mut runs = 0;
+        let fired = tick_with_check(
+            &dir,
+            &at(nine),
+            PID,
+            &mut |_| {
+                runs += 1;
+                ok("should not run")
+            },
+            &mut |_cmd| "$ git status --porcelain\nexit 0 · 3ms\n".into(),
+        )
+        .expect("tick");
         assert_eq!(fired, Vec::new());
+        assert_eq!(runs, 0);
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.run_count, 0);
+        assert!(row.next_run.unwrap() > nine);
+    }
+
+    #[test]
+    fn a_passing_check_command_lets_the_shell_fire() {
+        let dir = temp_dir("check-pass");
+        let nine = FRI_8AM + HOUR;
+        std::fs::write(
+            automations::path(&dir),
+            format!(
+                r#"[{{"id":"auto-gated","name":"tidy","schedule":"daily","time":"09:00","instructions":"tidy downloads","checkCommand":"git status --porcelain","enabled":true,"nextRun":{nine}}}]"#
+            ),
+        )
+        .expect("seed");
+        let mut checks = Vec::new();
+        let fired = tick_with_check(&dir, &at(nine), PID, &mut |_| ok("cleaned"), &mut |cmd| {
+            checks.push(cmd.to_string());
+            "$ git status --porcelain\nexit 0 · 3ms\n M downloads\n".into()
+        })
+        .expect("tick");
+        assert_eq!(checks, vec!["git status --porcelain".to_string()]);
         assert_eq!(
-            std::fs::read_to_string(automations::path(&dir)).expect("after"),
-            before
+            fired.iter().map(|f| f.id.clone()).collect::<Vec<_>>(),
+            vec!["auto-gated".to_string()]
         );
-        let rows = automations::rows(&automations::load(&dir).expect("load"), at(nine)());
-        assert!(rows[0].cabin_only);
+        assert_eq!(fired[0].result.text, "cleaned");
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.run_count, 1);
     }
 
     #[test]

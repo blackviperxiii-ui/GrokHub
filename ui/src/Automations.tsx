@@ -146,15 +146,7 @@ export function Automations({
         {rows?.map((row) => (
           <li key={row.id} className="card automation" aria-label={row.name}>
             <div className="card-title">{row.name}</div>
-            <div className="card-status">
-              {row.summary}
-              {row.cabinOnly && (
-                <>
-                  {" "}
-                  <span className="badge">Runs in the cabin</span>
-                </>
-              )}
-            </div>
+            <div className="card-status">{row.summary}</div>
             {row.health && <div className="card-health">{row.health}</div>}
             {results[row.id] && <pre className="card-detail">{results[row.id]}</pre>}
             {editing?.id === row.id && (
