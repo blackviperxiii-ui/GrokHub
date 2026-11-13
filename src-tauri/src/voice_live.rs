@@ -255,12 +255,15 @@ fn speak_on_device(
         return None;
     }
     let model = ve::voice_model(models_dir)?;
-    let out = std::env::temp_dir().join(format!(
-        "grokhub-speak-{}-{}.wav",
-        std::process::id(),
-        grokhub_core::now_ms()
-    ));
-    let args = ve::speak_args(models_dir, model, voice, text, &out)?;
+    // Pieces are spoken side by side: each one writes its own new file.
+    let out = match ve::claim_speak_file(&std::env::temp_dir()) {
+        Ok(out) => out,
+        Err(_) => return Some(Err("The on-device voice had nowhere to write.".into())),
+    };
+    let Some(args) = ve::speak_args(models_dir, model, voice, text, &out) else {
+        let _ = std::fs::remove_file(&out);
+        return None;
+    };
     let mut cmd = Command::new(ve::tts_path(config_dir));
     cmd.args(&args)
         .stdin(Stdio::null())

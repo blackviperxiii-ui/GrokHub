@@ -164,8 +164,46 @@ pub fn speak_args(
         format!("--sid={}", kokoro_speaker(voice)),
         format!("--num-threads={THREADS}"),
         arg("output-filename", out.to_path_buf()),
-        text.to_string(),
+        text_arg(text),
     ])
+}
+
+/// The text as the engine's last argument. Its option parser takes an
+/// argument that starts with `--` as a setting, so a reply line like
+/// "--sid=7 first item." would fail to speak or change a setting. A leading
+/// space keeps it text; the engine ignores the space.
+fn text_arg(text: &str) -> String {
+    if text.starts_with('-') {
+        format!(" {text}")
+    } else {
+        text.to_string()
+    }
+}
+
+/// A new, empty WAV file in `dir` for one spoken piece. Pieces are spoken
+/// side by side, so each gets its own name, and the file is created fresh
+/// (never opened through a file or link already at that name).
+pub fn claim_speak_file(dir: &Path) -> std::io::Result<PathBuf> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    claim_in(dir, &NEXT)
+}
+
+fn claim_in(dir: &Path, next: &std::sync::atomic::AtomicU64) -> std::io::Result<PathBuf> {
+    let mut last = None;
+    for _ in 0..64 {
+        let n = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = dir.join(format!("grokhub-speak-{}-{n}.wav", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free name")))
 }
 
 /// The transcript in the engine's output: its result line is JSON with a
@@ -241,6 +279,56 @@ mod tests {
     }
 
     #[test]
+    fn each_spoken_piece_gets_its_own_new_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-claim-speak-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let claims: Vec<PathBuf> = std::thread::scope(|s| {
+            let jobs: Vec<_> = (0..8)
+                .map(|_| s.spawn(|| claim_speak_file(&dir).unwrap()))
+                .collect();
+            jobs.into_iter().map(|j| j.join().unwrap()).collect()
+        });
+        let mut names: Vec<_> = claims
+            .iter()
+            .map(|p| p.file_name().unwrap().to_owned())
+            .collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 8, "{claims:?}");
+        for p in &claims {
+            assert_eq!(p.parent(), Some(dir.as_path()));
+            assert_eq!(std::fs::metadata(p).unwrap().len(), 0);
+        }
+        // A name already taken (a leftover, or a link planted in a shared
+        // temp folder) is skipped, and what it points at is left alone.
+        let pid = std::process::id();
+        let dir = dir.join("planted");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("keep.txt");
+        std::fs::write(&target, "mine").unwrap();
+        let taken = dir.join(format!("grokhub-speak-{pid}-0.wav"));
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &taken).unwrap();
+        #[cfg(not(unix))]
+        std::fs::write(&taken, "mine").unwrap();
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        assert_eq!(
+            claim_in(&dir, &counter).unwrap(),
+            dir.join(format!("grokhub-speak-{pid}-1.wav"))
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "mine");
+        assert_eq!(
+            claim_speak_file(&dir.join("missing")).map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::NotFound)
+        );
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
     fn the_kokoro_row_turns_into_the_speaking_command() {
         let models = Path::new("/m");
         let k = crate::local_setup::local_models()
@@ -259,6 +347,18 @@ mod tests {
         assert_eq!(args[4], "--sid=16");
         assert_eq!(args[6], "--output-filename=/t/out.wav");
         assert_eq!(args.last().unwrap(), "Hello there.");
+        // A reply line that looks like a setting stays the text to speak.
+        let dashed = speak_args(
+            models,
+            k,
+            "leo",
+            "--sid=7 first item.",
+            Path::new("/t/o.wav"),
+        )
+        .unwrap();
+        assert_eq!(dashed.last().unwrap(), " --sid=7 first item.");
+        assert_eq!(dashed[4], "--sid=16");
+        assert_eq!(dashed.iter().filter(|a| a.starts_with("--sid=")).count(), 1);
         // No espeak-ng data: sherpa-onnx v2 ignores it.
         assert!(!args.iter().any(|a| a.contains("data-dir")));
         assert_eq!(voice_model(Path::new("/nowhere")), None);
