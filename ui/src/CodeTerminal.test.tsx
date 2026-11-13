@@ -305,7 +305,7 @@ describe("Code tab → Terminal", () => {
     render(<CodeTerminal />);
     await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
     await userEvent.click(await screen.findByRole("button", { name: "Close terminal" }));
-    paint("#121215", "#f2f2f4", "#ffb000");
+    paint("#121215", "#f2f2f4", "#d7263d");
     await userEvent.click(screen.getByRole("button", { name: "Start a new shell" }));
     await screen.findByRole("button", { name: "Close terminal" });
     expect(xterm.state.resets).toBe(1);
@@ -313,7 +313,7 @@ describe("Code tab → Terminal", () => {
       background: "#121215",
       foreground: "#f2f2f4",
       cursor: "#f2f2f4",
-      selectionBackground: "#ffb00047",
+      selectionBackground: "#d7263d47",
     });
   });
 
@@ -332,18 +332,18 @@ describe("Code tab → Terminal", () => {
 
     // Settings → Appearance, with the Code page hidden behind it.
     rerender(<Page shown={false} />);
-    paint("#121215", "#f2f2f4", "#ffb000");
+    paint("#121215", "#f2f2f4", "#d7263d");
     document.documentElement.dataset.theme = "ops-dark";
     rerender(<Page shown />);
     expect(xterm.state.options.theme).toEqual({
       background: "#121215",
       foreground: "#f2f2f4",
       cursor: "#f2f2f4",
-      selectionBackground: "#ffb00047",
+      selectionBackground: "#d7263d47",
     });
 
     // And one made while the terminal is on screen.
-    paint("#050506", "#f2f2f4", "#ffb000");
+    paint("#050506", "#f2f2f4", "#d7263d");
     document.documentElement.dataset.theme = "oled-black";
     await waitFor(() => expect((xterm.state.options.theme as { background: string }).background).toBe("#050506"));
     expect(xterm.state.resets).toBe(0);
@@ -365,13 +365,13 @@ describe("Code tab → Terminal", () => {
     await screen.findByRole("button", { name: "Close terminal" });
     expect(asked).toEqual(["(prefers-color-scheme: dark)"]);
     expect(flips).toHaveLength(1);
-    paint("#121215", "#f2f2f4", "#ffb000");
+    paint("#121215", "#f2f2f4", "#d7263d");
     act(() => flips.forEach((fn) => fn()));
     expect(xterm.state.options.theme).toEqual({
       background: "#121215",
       foreground: "#f2f2f4",
       cursor: "#f2f2f4",
-      selectionBackground: "#ffb00047",
+      selectionBackground: "#d7263d47",
     });
     unmount();
     expect(flips).toHaveLength(0);

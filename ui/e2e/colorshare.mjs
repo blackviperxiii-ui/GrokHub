@@ -35,7 +35,7 @@ const BASELINE = process.argv.includes("--baseline")
 const RED = { r: 215, g: 38, b: 61 }; // #D7263D
 const RED_HOVER = { r: 232, g: 56, b: 79 }; // #E8384F
 const AMBER = { r: 255, g: 159, b: 26 }; // #FF9F1A
-const AMBER_OLD = { r: 255, g: 176, b: 0 }; // #FFB000 (current --accent)
+const AMBER_OLD = { r: 255, g: 176, b: 0 }; // #FFB000 (pre-LO-UI-2 accent)
 const GRAY = { r: 35, g: 36, b: 40 }; // #232428
 const BLACK = { r: 11, g: 11, b: 13 }; // #0B0B0D
 
@@ -56,10 +56,9 @@ function classify(r, g, b) {
   // Red-tinted line (#3A161D) still counts as red family for the share check.
   if (r > g + 20 && r > b + 20 && dRed <= 70) return "red";
   if (dAmber <= 55 && r > 180 && g > 100 && b < 120) return "amber";
-  // Neutral gray hairlines: low chroma, mid-dark.
-  if (dGray <= 40 || (Math.abs(r - g) < 12 && Math.abs(g - b) < 12 && r > 20 && r < 80)) {
-    return "gray";
-  }
+  // Neutral-gray *outline* pixels only (old hairline #232428 ± a few).
+  // Raised #18191C is ~20 away and must stay out of this bucket.
+  if (dGray <= 12) return "gray";
   return "other";
 }
 
@@ -101,9 +100,7 @@ async function countPng(browser, file) {
         const dGray = dist(p, GRAY);
         if (r > g + 20 && r > b + 20 && dRed <= 70) return "red";
         if (dAmber <= 55 && r > 180 && g > 100 && b < 120) return "amber";
-        if (dGray <= 40 || (Math.abs(r - g) < 12 && Math.abs(g - b) < 12 && r > 20 && r < 80)) {
-          return "gray";
-        }
+        if (dGray <= 12) return "gray";
         return "other";
       };
       const counts = { red: 0, amber: 0, gray: 0, black: 0, other: 0, total: 0 };
