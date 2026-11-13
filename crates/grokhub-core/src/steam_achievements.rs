@@ -176,7 +176,7 @@ pub fn parse_player(body: &str) -> Option<Player> {
     while let Ok(event) = reader.read_event() {
         match event {
             Event::Start(e) => {
-                let name = String::from_utf8_lossy(e.local_name().as_ref()).to_string();
+                let name = e.local_name().as_ref().to_string();
                 if root.is_none() {
                     root = Some(name.clone());
                 }
@@ -184,8 +184,8 @@ pub fn parse_player(body: &str) -> Option<Player> {
                     let closed = e
                         .attributes()
                         .flatten()
-                        .find(|a| a.key.local_name().as_ref() == b"closed")
-                        .is_some_and(|a| a.value.as_ref() == b"1");
+                        .find(|a| a.key.local_name().as_ref() == "closed")
+                        .is_some_and(|a| a.value.as_ref() == "1");
                     cur = Some(Achievement {
                         api: String::new(),
                         name: String::new(),
@@ -196,26 +196,20 @@ pub fn parse_player(body: &str) -> Option<Player> {
                 text.clear();
             }
             Event::Text(t) => {
-                if let Ok(s) = t.decode() {
-                    text.push_str(&s);
-                }
+                text.push_str(t.as_ref());
             }
             Event::CData(c) => {
-                if let Ok(s) = c.decode() {
-                    text.push_str(&s);
-                }
+                text.push_str(c.as_ref());
             }
             Event::GeneralRef(r) => {
-                if let Ok(name) = r.decode() {
-                    text.push_str(match name.as_ref() {
-                        "amp" => "&",
-                        "lt" => "<",
-                        "gt" => ">",
-                        "quot" => "\"",
-                        "apos" => "'",
-                        _ => "",
-                    });
-                }
+                text.push_str(match r.as_ref() {
+                    "amp" => "&",
+                    "lt" => "<",
+                    "gt" => ">",
+                    "quot" => "\"",
+                    "apos" => "'",
+                    _ => "",
+                });
             }
             Event::End(_) => {
                 let name = stack.pop().unwrap_or_default();
