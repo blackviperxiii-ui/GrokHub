@@ -268,8 +268,36 @@ pub struct LocalClock {
 }
 
 impl LocalClock {
+    /// The local wall clock at `now_ms` for a UTC offset in minutes.
+    /// 1 Jan 1970 was a Thursday.
+    pub fn at_offset(now_ms: u64, offset_min: i32) -> Self {
+        let local = (now_ms / 60_000) as i64 + i64::from(offset_min);
+        let (day, tod) = (local.div_euclid(1440), local.rem_euclid(1440));
+        Self {
+            now_ms,
+            weekday: (day + 4).rem_euclid(7) as u8,
+            hour: (tod / 60) as u32,
+            minute: (tod % 60) as u32,
+        }
+    }
+
     pub fn hm(&self) -> String {
         format!("{:02}:{:02}", self.hour, self.minute)
+    }
+
+    /// Minutes east of UTC this clock reads at, in 15-minute steps. The
+    /// hour and minute alone leave the day open (22:00 local at 08:00 UTC is
+    /// UTC-10 or UTC+14), so the weekday (Sunday 0) picks the offset.
+    pub fn utc_offset_min(&self) -> i32 {
+        let guess = crate::pulse_writer::utc_offset_min(self.hour, self.minute, self.now_ms);
+        [guess, guess - 1440, guess + 1440]
+            .into_iter()
+            .filter(|o| (-720..=840).contains(o))
+            .find(|&o| {
+                let day = ((self.now_ms / 60_000) as i64 + i64::from(o)).div_euclid(1440);
+                (day + 4).rem_euclid(7) == i64::from(self.weekday % 7)
+            })
+            .unwrap_or(guess)
     }
 }
 
@@ -378,6 +406,22 @@ pub fn quiet_hours_menu(start: &str, end: &str) -> Vec<(String, String, String)>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_weekday_picks_the_offset_when_the_hour_fits_two() {
+        // Monday 2 Nov 2026, 08:00 UTC.
+        let at = 1_793_606_400_000;
+        let clock = |weekday, hour| LocalClock {
+            now_ms: at,
+            weekday,
+            hour,
+            minute: 0,
+        };
+        assert_eq!(clock(0, 22).utc_offset_min(), -600);
+        assert_eq!(clock(1, 22).utc_offset_min(), 840);
+        assert_eq!(clock(1, 9).utc_offset_min(), 60);
+        assert_eq!(clock(1, 3).utc_offset_min(), -300);
+    }
 
     #[test]
     fn settings_fields_keep_the_old_value_when_the_typing_is_nonsense() {

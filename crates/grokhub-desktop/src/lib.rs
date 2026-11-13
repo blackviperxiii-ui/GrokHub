@@ -10,6 +10,7 @@ mod broker;
 mod capture;
 #[cfg(target_os = "linux")]
 mod fallback;
+pub mod foreground;
 pub mod game_guard;
 mod harness_gate;
 pub mod host;
@@ -24,6 +25,9 @@ mod pixels;
 mod portal;
 #[cfg(target_os = "linux")]
 pub mod screen;
+pub mod signals;
+#[cfg(windows)]
+mod uia;
 #[cfg(target_os = "linux")]
 mod uinput_dev;
 #[cfg(unix)]
@@ -33,7 +37,7 @@ mod windows;
 #[cfg(unix)]
 mod x11;
 
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::sync::{mpsc, Mutex};
 
 use grokhub_core::desktop_mcp::{stamp_halts, CallGate, DesktopBackend, DesktopServer};
@@ -141,10 +145,12 @@ fn cua_line<C: grokhub_agent::harness::CuaChild>(
     if gate.halted {
         proxy.halt();
     }
-    if gate.enabled && gate.flag && !proxy.is_halted() {
-        if let Some(reply) = guard_refusal_line(line, guard()) {
-            return Some(reply);
-        }
+    if gate.enabled
+        && gate.flag
+        && !proxy.is_halted()
+        && let Some(reply) = guard_refusal_line(line, guard())
+    {
+        return Some(reply);
     }
     proxy.handle_line(line, gate, dir, halted)
 }
@@ -182,36 +188,7 @@ fn emit(line: &str) {
     let _ = out.flush();
 }
 
-pub fn read_line_capped(reader: &mut impl BufRead, cap: usize) -> Result<Option<String>, String> {
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        let n = reader.read(&mut byte).map_err(|e| format!("stdin: {e}"))?;
-        if n == 0 {
-            if buf.is_empty() {
-                return Ok(None);
-            }
-            break;
-        }
-        if byte[0] == b'\n' {
-            break;
-        }
-        if byte[0] == b'\r' {
-            continue;
-        }
-        if buf.len() >= cap {
-            loop {
-                let n = reader.read(&mut byte).map_err(|e| format!("stdin: {e}"))?;
-                if n == 0 || byte[0] == b'\n' {
-                    break;
-                }
-            }
-            return Err("line longer than 1 MiB".into());
-        }
-        buf.push(byte[0]);
-    }
-    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
-}
+pub use grokhub_core::desktop_mcp::read_line_capped;
 
 pub fn encode_rgba(rgba: &[u8], w: u32, h: u32) -> Result<(Vec<u8>, String, u32, u32), String> {
     if w == 0 || h == 0 {
@@ -246,18 +223,43 @@ pub fn encode_rgba(rgba: &[u8], w: u32, h: u32) -> Result<(Vec<u8>, String, u32,
     Ok((png, "image/png".into(), nw, nh))
 }
 
-pub fn write_halt_stamp() {
-    let path = crate::host::config_dir().join("desktop-halt.stamp");
+/// A chat's Stop: desktop control and that chat's run stop.
+const HALT_STAMP: &str = grokhub_core::desktop_mcp::HALT_STAMP_FILE;
+/// Halt everything (tray, hotkey, quit): background runs and loops stop too.
+const HALT_ALL_STAMP: &str = "halt-all.stamp";
+
+fn write_stamp(name: &str) {
+    let path = crate::host::config_dir().join(name);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(path, grokhub_core::now_ms().to_string());
 }
 
-pub fn read_halt_stamp() -> Option<u64> {
-    let path = crate::host::config_dir().join("desktop-halt.stamp");
+fn read_stamp(name: &str) -> Option<u64> {
+    let path = crate::host::config_dir().join(name);
     let text = std::fs::read_to_string(path).ok()?;
     text.trim().parse().ok()
+}
+
+pub fn write_halt_stamp() {
+    write_stamp(HALT_STAMP);
+}
+
+pub fn read_halt_stamp() -> Option<u64> {
+    read_stamp(HALT_STAMP)
+}
+
+/// Halt everything. A chat's Stop doesn't write this, so a background run
+/// or loop that reads only it keeps going when one chat is stopped. It
+/// writes the desktop stamp too, so desktop control stops as well.
+pub fn write_halt_all_stamp() {
+    write_stamp(HALT_STAMP);
+    write_stamp(HALT_ALL_STAMP);
+}
+
+pub fn read_halt_all_stamp() -> Option<u64> {
+    read_stamp(HALT_ALL_STAMP)
 }
 
 /// A program on PATH or in the usual install places.
@@ -415,7 +417,7 @@ static TEST_RX: Mutex<Option<mpsc::Receiver<String>>> = Mutex::new(None);
 pub fn request_desktop_test(enabled: bool) -> String {
     if !enabled {
         set_desktop_enabled(false);
-        return grokhub_core::desktop_mcp::OFF_MSG.to_string();
+        return (*grokhub_core::desktop_mcp::OFF_MSG).to_string();
     }
     let halted = read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms()));
     match desktop_test_hold(halted, game_guard::current) {
@@ -631,10 +633,14 @@ impl DesktopBackend for LiveBackend {
     fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
         trash_paths(paths)
     }
-    // Spike-2b: AT-SPI on Linux. Windows keeps the default (unknown): no UIA reader (D3).
+    // Spike-2b: AT-SPI on Linux, UI Automation on Windows. Both capped at 300 ms.
     #[cfg(target_os = "linux")]
     fn target_at(&mut self, x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
         crate::host::target_at(x, y)
+    }
+    #[cfg(windows)]
+    fn target_at(&mut self, x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
+        crate::uia::target_at(x, y)
     }
     fn game_guard(&mut self) -> game_guard::GameGuard {
         game_guard::current()

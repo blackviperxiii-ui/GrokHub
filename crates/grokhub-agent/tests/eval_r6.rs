@@ -18,8 +18,8 @@ fn empty_home() -> PathBuf {
     let home = std::env::temp_dir().join(format!("gh-eval-r6-home-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).expect("home");
-    std::env::set_var("HOME", &home);
-    std::env::set_var("USERPROFILE", &home);
+    unsafe { std::env::set_var("HOME", &home) };
+    unsafe { std::env::set_var("USERPROFILE", &home) };
     home
 }
 
@@ -92,17 +92,26 @@ fn r6_technique_matrix_matches_golden_and_measures_requests() {
     assert_eq!(summaries.input_tokens, base.input_tokens);
     assert_eq!(summaries.cost_ticks, base.cost_ticks);
 
-    // R2 prefix cache: the follow-up fixture's second turn carries the volatile
-    // block in the user message, so the system prompt is not rewritten mid-session.
-    let prefix = &arm(&report, Technique::PrefixCache).metrics;
-    assert_eq!(prefix.model_calls, base.model_calls);
+    // The prompt diet sends a leaner fixed prompt on every request. Its replay
+    // shows only the byte saving; the paired live eval judges the quality.
+    let diet = &arm(&report, Technique::PromptDiet).metrics;
     assert!(
-        prefix.prefix_stable_ratio() > base.prefix_stable_ratio(),
-        "prefix cache {} vs baseline {}",
-        prefix.prefix_stable_ratio(),
+        diet.input_tokens < base.input_tokens,
+        "diet {} vs baseline {}",
+        diet.input_tokens,
+        base.input_tokens
+    );
+    assert_eq!(diet.model_calls, base.model_calls);
+
+    // The stable prompt prefix is on in every arm: the follow-up fixture's
+    // second turn carries its notes in the user message, so the system
+    // prompt is never rewritten mid-session.
+    // Rewriting it would drop the baseline to about 96% (the old cache-off arm).
+    assert!(
+        base.prefix_stable_ratio() > 0.98,
+        "baseline prefix-stable {}",
         base.prefix_stable_ratio()
     );
-    assert!(prefix.cached_tokens > base.cached_tokens);
 
     // Byte-stable: a second run renders the same report.
     let rendered = render_markdown(&report);

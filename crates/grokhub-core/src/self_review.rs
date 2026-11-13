@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use crate::organs::LocalClock;
 use crate::outcome::{OutcomeResult, TaskOutcome, REASON_FINDING};
 use crate::protected_surface::{ProtectedSurface, TuneTarget};
-use crate::redact::redact_secrets;
+use crate::redact::{redact_secrets, redact_token_shapes};
 use crate::run_metrics::RunMetrics;
 
 /// At most this many proposal cards a week.
@@ -627,9 +627,10 @@ pub fn issue_text(title: &str, text: &str, version: &str, home: Option<&str>) ->
     redact_for_issue(&body, home)
 }
 
-/// [`redact_secrets`], then home folders as `~` and email addresses as `[email]`.
+/// [`redact_token_shapes`] and [`redact_secrets`], then home folders as `~`
+/// and email addresses as `[email]`.
 pub fn redact_for_issue(text: &str, home: Option<&str>) -> String {
-    let mut out = redact_secrets(text);
+    let mut out = redact_secrets(&redact_token_shapes(text));
     if let Some(home) = home
         .map(|h| h.trim_end_matches(['/', '\\']))
         .filter(|h| h.len() > 1)
@@ -935,9 +936,14 @@ pub fn revert_source(skill: &str) -> String {
     format!("{CARD_SOURCE_PREFIX}revert:{skill}")
 }
 
-/// A router tuning change that would cost more money (Router R3a).
-pub fn router_source(candidate: &str) -> String {
-    format!("{CARD_SOURCE_PREFIX}router:{candidate}")
+/// A Home card the weekly pass no longer posts: the router's cost-raising
+/// Suggestion cards and its weekly review line. The router tunes itself
+/// silently now, so a feed that still holds one drops it.
+pub fn retired_card_source(source_id: &str) -> bool {
+    source_id == "router-review"
+        || source_id
+            .strip_prefix(CARD_SOURCE_PREFIX)
+            .is_some_and(|rest| rest.starts_with("router:"))
 }
 
 /// What a self-review card's source id stands for.
@@ -946,8 +952,6 @@ pub enum CardTarget {
     Patch(String),
     Draft(String),
     Revert(String),
-    /// A router candidate id: Accept applies it through the ChangeLedger.
-    Router(String),
     /// A chat note in `tunable/`: Apply writes it and puts it on trial.
     Snippet(String),
     /// A code-change idea: Save keeps it locally; nothing is applied.
@@ -962,7 +966,6 @@ pub fn card_target(source_id: &str) -> Option<CardTarget> {
         "patch" => Some(CardTarget::Patch(name)),
         "draft" => Some(CardTarget::Draft(name)),
         "revert" => Some(CardTarget::Revert(name)),
-        "router" => Some(CardTarget::Router(name)),
         "snippet" => Some(CardTarget::Snippet(name)),
         "code" => Some(CardTarget::Code(name)),
         _ => None,
@@ -1346,6 +1349,12 @@ mod tests {
             Some(CardTarget::Revert("z".into()))
         );
         assert_eq!(card_target("situation:x"), None);
+        // The router's old Accept cards and weekly line are retired: no target.
+        assert_eq!(card_target("self-review:router:chat:default#2"), None);
+        assert!(retired_card_source("self-review:router:chat:default#2"));
+        assert!(retired_card_source("router-review"));
+        assert!(!retired_card_source(&patch_source("weekly-report")));
+        assert!(!retired_card_source("route:fallback"));
     }
 
     #[test]
@@ -1469,6 +1478,25 @@ mod tests {
         );
         assert!(!out.contains("user"));
         assert!(!out.contains("sk-abcdefghijklmnopqrstuv"));
+    }
+
+    #[test]
+    fn an_issue_copy_drops_bare_token_shapes_too() {
+        assert_eq!(
+            // The fake key is written in two parts, so no scanner reads this
+            // file as holding one.
+            redact_for_issue(
+                concat!(
+                    "Evidence: push failed with xoxb-0000-FAKE-fake-token, ",
+                    "hf_",
+                    "abcdefghijklmnopqrstuvwxyzABCDEFGH and ",
+                    "https://app:hunter2fake@example.com/repo.git; npm_config_cache stays",
+                ),
+                None
+            ),
+            "Evidence: push failed with [redacted], [redacted] and \
+             https://app:[redacted]@example.com/repo.git; npm_config_cache stays"
+        );
     }
 
     #[test]

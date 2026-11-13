@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { Profiler } from "react";
 import { act, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NEAR_TOP, SHOWN, THRESHOLD, USER_WINDOW_MS, onScroll, useHidingBar } from "./tabBar";
@@ -80,6 +81,22 @@ describe("useHidingBar", () => {
     expect(view.getByTestId("bar")).toHaveTextContent("away");
     swipe(page, 50);
     expect(view.getByTestId("bar")).toHaveTextContent("shown");
+  });
+
+  it("re-renders only when the bar moves, not on every scroll", () => {
+    phone(true);
+    let renders = 0;
+    const view = render(
+      <Profiler id="bar" onRender={() => (renders += 1)}>
+        <Probe pinned={false} />
+      </Profiler>,
+    );
+    const page = view.getByTestId("page");
+    const before = renders;
+    for (let top = 40; top < 40 + 60 * 5; top += 5) swipe(page, top);
+    expect(view.getByTestId("bar")).toHaveTextContent("away");
+    // The flip, plus at most one render React may spend before it bails out.
+    expect(renders - before).toBeLessThanOrEqual(2);
   });
 
   it("comes back when a field or the bar gets focus", () => {

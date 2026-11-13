@@ -26,6 +26,9 @@ index.sqlite is a full-text index of the plain nodes. Delete it any time; it is 
 const RECALL_CAP: usize = 20;
 const SEALED_EXT: &str = "sealed";
 const TOMBSTONE_EXT: &str = "tombstone";
+/// `nodes/<id>.paused`: the user said not to use this line. It stays on disk
+/// and on Personal, but recall, the USER block and dreams skip it.
+const PAUSED_EXT: &str = "paused";
 
 /// Associated data for one sealed node: it can't be renamed to another id.
 fn node_aad(id: &str) -> String {
@@ -179,7 +182,7 @@ impl AmrStore {
         for node in loaded
             .nodes
             .iter()
-            .filter(|n| !superseded.contains(&n.id) && !is_proposed(n))
+            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
         {
             hits.extend(match_lines(node, &query));
         }
@@ -190,6 +193,103 @@ impl AmrStore {
             .map(|(id, _, line)| NodeHit { id, line })
             .collect();
         report
+    }
+
+    /// Lines that hold any of `words` (lowercase, case-insensitive
+    /// substring), best first: the most distinct words matched, then the most
+    /// recently updated node, then id and line order. At most 20 hits. Same
+    /// filters as [`Self::recall`]: no tombstoned, superseded, or proposed
+    /// node, and sealed nodes only when they open.
+    pub fn recall_ranked(&self, words: &[String]) -> Vec<NodeHit> {
+        let words: Vec<String> = words
+            .iter()
+            .map(|w| w.trim().to_ascii_lowercase())
+            .filter(|w| !w.is_empty())
+            .collect();
+        if words.is_empty() {
+            return Vec::new();
+        }
+        let loaded = self.load_live();
+        let superseded = self.superseded_ids();
+        let mut hits: Vec<(usize, &str, &str, usize, String)> = Vec::new();
+        for node in loaded
+            .nodes
+            .iter()
+            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
+        {
+            for (seq, (count, line)) in score_lines(node, &words).into_iter().enumerate() {
+                hits.push((count, node.updated.as_str(), node.id.as_str(), seq, line));
+            }
+        }
+        hits.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| b.1.cmp(a.1))
+                .then_with(|| a.2.cmp(b.2))
+                .then_with(|| a.3.cmp(&b.3))
+        });
+        hits.truncate(RECALL_CAP);
+        hits.into_iter()
+            .map(|(_, _, id, _, line)| NodeHit {
+                id: id.to_string(),
+                line,
+            })
+            .collect()
+    }
+
+    /// Lines found by meaning (HX-12): for each live node that isn't
+    /// superseded or proposed, its body line closest to `query` by `encode`
+    /// cosine, when that is at least `floor`. Best first, then newest, then
+    /// id; at most `cap`. Superseded nodes stay on disk with their edge, so a
+    /// replaced fact is never recalled but is never deleted either.
+    pub fn recall_semantic(
+        &self,
+        query: &[f32],
+        encode: &dyn Fn(&str) -> Option<Vec<f32>>,
+        floor: f32,
+        cap: usize,
+    ) -> Vec<NodeHit> {
+        if query.is_empty() || cap == 0 {
+            return Vec::new();
+        }
+        let loaded = self.load_live();
+        let superseded = self.superseded_ids();
+        let mut hits: Vec<(f32, &str, &str, String)> = Vec::new();
+        for node in loaded
+            .nodes
+            .iter()
+            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
+        {
+            let best = node
+                .body
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .filter_map(|line| {
+                    let v = encode(line)?;
+                    Some((crate::static_embed::cosine(query, &v), line))
+                })
+                .max_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((cos, line)) = best.filter(|(cos, _)| *cos >= floor) {
+                hits.push((
+                    cos,
+                    node.updated.as_str(),
+                    node.id.as_str(),
+                    line.to_string(),
+                ));
+            }
+        }
+        hits.sort_by(|a, b| {
+            b.0.total_cmp(&a.0)
+                .then_with(|| b.1.cmp(a.1))
+                .then_with(|| a.2.cmp(b.2))
+        });
+        hits.truncate(cap);
+        hits.into_iter()
+            .map(|(_, _, id, line)| NodeHit {
+                id: id.to_string(),
+                line,
+            })
+            .collect()
     }
 
     /// True when `nodes/<id>.tombstone` is there.
@@ -262,6 +362,90 @@ impl AmrStore {
         }
         report.forgotten.sort();
         Ok(report)
+    }
+
+    /// True when the user paused this node on Personal.
+    pub fn is_paused(&self, id: &str) -> bool {
+        NodeId::parse(id)
+            .and_then(|id| self.node_path(&id))
+            .is_ok_and(|path| path.with_extension(PAUSED_EXT).is_file())
+    }
+
+    /// Pause a node (the agent stops using it) or let it be used again. The
+    /// node file is not rewritten, so a sealed note pauses too. Pausing twice
+    /// or resuming a live node is a no-op. Refuses scratch.
+    pub fn set_paused(&self, id: &str, paused: bool) -> Result<(), AmrError> {
+        if self.scratch {
+            return Err(AmrError::Scratch);
+        }
+        let id = NodeId::parse(id)?;
+        if !self.node_exists(&id)? {
+            return Err(AmrError::MissingNode(id.as_str().to_string()));
+        }
+        let marker = self.node_path(&id)?.with_extension(PAUSED_EXT);
+        if paused {
+            if !marker.is_file() {
+                fs::write(&marker, "paused: you asked\n").map_err(io_err)?;
+            }
+            return self.unindex(id.as_str());
+        }
+        match fs::remove_file(&marker) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(io_err(err)),
+        }
+        if self.index_path().is_file() && !self.is_sealed(&id) {
+            if let Some(node) = self
+                .load_live()
+                .nodes
+                .into_iter()
+                .find(|n| n.id == id.as_str())
+            {
+                if !is_proposed(&node) {
+                    AmrIndex::open(&self.index_path())?.add(&node)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete a node for good: its file, sealed copy, tombstone and pause
+    /// marker, and its index row. Only Personal's Wipe calls this, after the
+    /// user confirmed. No file is a no-op. Refuses scratch.
+    pub fn purge(&self, id: &str) -> Result<(), AmrError> {
+        if self.scratch {
+            return Err(AmrError::Scratch);
+        }
+        let id = NodeId::parse(id)?;
+        let path = self.node_path(&id)?;
+        for ext in ["md", SEALED_EXT, TOMBSTONE_EXT, PAUSED_EXT] {
+            match fs::remove_file(path.with_extension(ext)) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(io_err(err)),
+            }
+        }
+        self.unindex(id.as_str())
+    }
+
+    /// A node recall leaves out though it is live: proposed or paused.
+    fn held_back(&self, node: &Node) -> bool {
+        is_proposed(node) || self.is_paused(&node.id)
+    }
+
+    /// Every user-model node on disk, forgotten ones too, for Wipe. Sealed
+    /// nodes that can't be opened are counted, not listed.
+    pub(super) fn user_model_ids_on_disk(&self) -> (Vec<String>, usize) {
+        let live = self.load_live();
+        let gone = self.load_forgotten();
+        let ids = live
+            .nodes
+            .iter()
+            .chain(gone.nodes.iter())
+            .filter(|n| n.node_type.is_user_model())
+            .map(|n| n.id.clone())
+            .collect();
+        (ids, live.locked + gone.locked)
     }
 
     /// Lift a tombstone so an explicit remember of the same line counts again.
@@ -409,7 +593,7 @@ impl AmrStore {
         let nodes = loaded
             .nodes
             .into_iter()
-            .filter(|n| !superseded.contains(&n.id) && !is_proposed(n))
+            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
             .collect();
         (nodes, loaded.locked)
     }
@@ -699,23 +883,10 @@ fn is_proposed(node: &Node) -> bool {
     node.tags.iter().any(|tag| tag == "proposed")
 }
 
-/// Replace `path` with `tmp`. Unix rename replaces. Windows cannot, so the
-/// destination is removed first.
+/// Replace `path` with `tmp`. std's rename replaces an existing file on
+/// Windows too, so there is never a moment with no file at `path`.
 fn replace_file(tmp: &Path, path: &Path) -> Result<(), AmrError> {
-    #[cfg(unix)]
-    {
-        fs::rename(tmp, path).map_err(io_err)
-    }
-    #[cfg(windows)]
-    {
-        fs::remove_file(path).map_err(io_err)?;
-        fs::rename(tmp, path).map_err(io_err)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (tmp, path);
-        Err(AmrError::Io("amr resave needs unix or windows".into()))
-    }
+    fs::rename(tmp, path).map_err(io_err)
 }
 
 /// Publish `tmp` as `path` only when `path` does not already exist.
@@ -788,6 +959,36 @@ fn frontmatter_safe(label: &str, value: &str) -> Result<(), AmrError> {
 
 /// Body lines first, then tags. The id is the line only when neither matched,
 /// so a body hit is not repeated as `amr:<id>: <id>`.
+/// [`match_lines`] for several words at once: each matching line with the
+/// number of distinct `words` it holds.
+fn score_lines(node: &Node, words: &[String]) -> Vec<(usize, String)> {
+    let count = |text: &str| {
+        let lower = text.to_ascii_lowercase();
+        words.iter().filter(|w| lower.contains(w.as_str())).count()
+    };
+    let mut out: Vec<(usize, String)> = Vec::new();
+    for line in node.body.lines() {
+        let trimmed = line.trim();
+        let n = count(trimmed);
+        if n > 0 {
+            out.push((n, trimmed.to_string()));
+        }
+    }
+    for tag in &node.tags {
+        let n = count(tag);
+        if n > 0 && !out.iter().any(|(_, line)| line == tag) {
+            out.push((n, tag.clone()));
+        }
+    }
+    if out.is_empty() {
+        let n = count(&node.id);
+        if n > 0 {
+            out.push((n, node.id.clone()));
+        }
+    }
+    out
+}
+
 fn match_lines(node: &Node, query: &str) -> Vec<(String, usize, String)> {
     let mut out = Vec::new();
     let mut seq = 0usize;

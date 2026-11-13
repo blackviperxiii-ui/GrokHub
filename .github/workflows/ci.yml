@@ -2,8 +2,10 @@ name: CI
 
 on:
   # Push to beta runs only the light gate (changes, fmt, guards, linux,
-  # windows; pii-guard lives in pii-guard.yml). Heavy jobs run on push to main,
-  # v* tags, the nightly schedule (which checks out beta) and manual runs.
+  # windows; pii-guard lives in pii-guard.yml). Push to main adds shell
+  # (ubuntu + windows) and deny; macOS jobs run on v* tags, the nightly
+  # schedule (which checks out beta) and manual runs; windows-release runs
+  # only on the nightly and manual runs (release.yml builds tags).
   push:
     branches: [main, beta]
     tags: ["v*"]
@@ -17,7 +19,8 @@ on:
   # Nightly full run on beta (~3 AM America/Chicago): everything PRs and beta
   # pushes skip (cross-check, shell, phones, windows-release, deny). Schedules
   # fire from the default branch (main), so every checkout below uses
-  # SOURCE_REF to build beta instead.
+  # SOURCE_REF to build beta instead. When beta's HEAD already had a green
+  # nightly, the build jobs skip (see `changes` and `nightly-green`).
   schedule:
     - cron: "0 8 * * *"
 
@@ -41,17 +44,21 @@ env:
   SOURCE_REF: ${{ github.event_name == 'schedule' && 'beta' || '' }}
 
 # PRs run the fast gate: fmt, guards, changes, linux (clippy + tests in one
-# build) and windows (same), plus path-filtered shell and phone-android. The
-# slow jobs (cross-check, macOS shell, phone-ios, windows-release, and deny
-# unless Cargo.lock or deny.toml changed) run on push to main, v* tags,
-# nightly (on beta) and on manual runs. Push to beta runs only the gate. Every gate is a job-level `if:`, never a workflow-level
-# path filter, so a skipped job still reports and required checks never hang.
+# build) and windows (same, skipped when a PR only touches ui/ or workflows
+# other than this one), plus path-filtered shell (ubuntu only) and
+# phone-android. Push to main adds deny, shell on ubuntu + windows and
+# path-filtered phone-android. The macOS jobs (cross-check, macOS shell,
+# phone-ios) run on v* tags, nightly (on beta) and manual runs;
+# windows-release only on nightly and manual runs. Push to beta runs only the
+# gate. Every gate is a job-level `if:`, never a workflow-level path filter,
+# so a skipped job still reports and required checks never hang.
 # Each job restores its own build cache; caches save only from pushes to beta
 # and main, so PRs start warm from their base branch.
 jobs:
   # Decides whether the build jobs run. A PR that only touches docs, Markdown,
   # screenshots or research skips them; a skipped job counts as passed for
-  # required checks. Pushes to beta and main and manual runs always build.
+  # required checks. Markdown compiled into the binaries counts as code (the
+  # `embedded` filter). Pushes to beta and main and manual runs always build.
   # The Electron guard runs here so it covers every change, docs-only ones
   # included.
   changes:
@@ -63,19 +70,41 @@ jobs:
     # pull_request and push use paths-filter. merge_group has no filter base,
     # so it counts as code=true; schedule and workflow_dispatch run everything.
     outputs:
-      code: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
+      # A nightly on a beta SHA that already had a green nightly builds nothing.
+      code: ${{ steps.dedup.outputs.cache-hit != 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' || steps.paths.outputs.embedded == 'true') }}
+      skip: ${{ steps.dedup.outputs.cache-hit == 'true' }}
+      sha: ${{ steps.sha.outputs.sha }}
       # Heavy outputs are false on push to beta; nightly covers beta instead.
       # merge_group always runs deny: queued PRs get the supply-chain check.
       deny: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && steps.paths.outputs.deny == 'true') }}
-      cross: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || ((github.event_name == 'push' && github.ref == 'refs/heads/main') && steps.paths.outputs.cross == 'true') }}
+      # macOS (cross-check, phone-ios, macOS shell): nightly, manual and tags only.
+      cross: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
       phone_android: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'merge_group' || ((github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.paths.outputs.phone == 'true') }}
-      phone_ios: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || ((github.event_name == 'push' && github.ref == 'refs/heads/main') && steps.paths.outputs.phone == 'true') }}
-      release: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+      phone_ios: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
+      # windows-release: nightly and manual only. release.yml's shell-bundles
+      # builds the Windows installer for every tag and beta push.
+      release: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+      # windows on PRs: skipped (still reports, so the required check passes)
+      # when the PR only touches ui/, docs, or workflows other than this one.
+      windows: ${{ github.event_name != 'pull_request' || steps.filter.outputs.windows == 'true' || steps.paths.outputs.ci_workflow == 'true' || steps.paths.outputs.embedded == 'true' }}
       shell_os: ${{ steps.shell.outputs.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
+      - name: Source SHA
+        id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # nightly-green saves this key after a green nightly; a hit means beta
+      # has not moved since, so the build jobs skip.
+      - name: Nightly already green on this SHA
+        id: dedup
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .nightly-green
+          key: ci-nightly-green-${{ steps.sha.outputs.sha }}
+          lookup-only: true
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         if: github.event_name == 'pull_request'
@@ -88,6 +117,23 @@ jobs:
               - '!**/*.md'
               - '!screenshots/**'
               - '!research/**'
+            windows:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!screenshots/**'
+              - '!research/**'
+              - '!ui/**'
+              - '!.github/**'
+      # `embedded` is the Markdown that include_str! compiles into the binaries
+      # (the agent prompt and built-in skills, and PRIVACY.md in a test), plus
+      # the docs that tests read from disk when they run: docs/compass/
+      # (compass_paths.rs) and docs/eval/ (eval_r6.rs). The filter above drops
+      # every *.md and all of docs/ and can't take one back, so this one
+      # turns `code` and `windows` on again.
+      # scripts/ci-guards.d/90-embedded-markdown.sh fails when a new embedded
+      # file falls outside it. It cannot see a file a test opens when it
+      # runs, so add that path here and in the guard by hand.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: paths
         if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
@@ -95,16 +141,16 @@ jobs:
           filters: |
             deny:
               - 'Cargo.lock'
+              - 'src-tauri/Cargo.lock'
               - 'deny.toml'
-            cross:
-              - 'crates/grokhub-proto/**'
-              - 'crates/grokhub-core/**'
-              - 'crates/grokhub-hub/**'
-              - 'crates/grokhub-agent/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'rust-toolchain.toml'
+            ci_workflow:
               - '.github/workflows/ci.yml'
+            embedded:
+              - 'crates/**/*.md'
+              - 'src-tauri/**/*.md'
+              - 'PRIVACY.md'
+              - 'docs/compass/**'
+              - 'docs/eval/**'
             phone:
               - 'ui/**'
               - 'src-tauri/**'
@@ -114,12 +160,20 @@ jobs:
               - 'src-tauri/**'
               - 'crates/grokhub-core/**'
               - 'crates/grokhub-agent/**'
+              - 'crates/grokhub-code/**'
               - 'crates/grokhub-desktop/**'
+              - 'crates/grokhub-fps-probe/**'
+              - 'crates/grokhub-hub/**'
               - 'crates/grokhub-proto/**'
+              - 'Cargo.toml'
+              - 'scripts/shell-fps-probe.mjs'
+              - 'scripts/stage-hub-sidecar.mjs'
               - '.github/workflows/ci.yml'
-      # Shell matrix: PRs run ubuntu + windows only when shell/UI paths change;
-      # merge_group runs ubuntu + windows; push to beta runs none (nightly covers
-      # it); push to main, tags, nightly and manual add macOS.
+              - '.github/workflows/release.yml'
+      # Shell matrix: PRs run ubuntu only, when shell/UI paths change (the
+      # Windows WebView2 smoke runs on merge_group, push to main, tags, nightly
+      # and manual); push to beta runs none (nightly covers it); tags, nightly
+      # and manual add macOS.
       - name: Shell matrix
         id: shell
         env:
@@ -128,10 +182,10 @@ jobs:
           SHELL_PATHS: ${{ steps.paths.outputs.shell }}
         run: |
           if [ "$EVENT" = pull_request ]; then
-            if [ "$SHELL_PATHS" = true ]; then os='["ubuntu-latest","windows-latest"]'; else os='[]'; fi
+            if [ "$SHELL_PATHS" = true ]; then os='["ubuntu-latest"]'; else os='[]'; fi
           elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/beta ]; then
             os='[]'
-          elif [ "$EVENT" = merge_group ]; then
+          elif [ "$EVENT" = merge_group ] || { [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; }; then
             os='["ubuntu-latest","windows-latest"]'
           else
             os='["ubuntu-latest","windows-latest","macos-latest"]'
@@ -198,6 +252,19 @@ jobs:
           workspaces: ". -> target"
       - name: Guard fail-closed tests
         run: bash scripts/test-ci-guards.sh
+      - name: Shell update manifest test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          bash scripts/test-shell-update-manifest.sh
+      - name: Release tag check test
+        run: bash scripts/test-release-tag-check.sh
+      - name: Cards sync test
+        run: python3 .github/scripts/test_cards_sync.py
+      - name: Model profiles updater test
+        run: python3 .github/scripts/test_model_profiles.py
+      - name: Local model profiles are up to date
+        run: python3 .github/scripts/test_local_profiles.py
       - name: Repo friction guards
         env:
           # Live label fetch for the Cargo.lock escape hatch (gh / API).
@@ -206,12 +273,17 @@ jobs:
         run: bash scripts/ci-guards.sh
 
   # Clippy and tests in one job so they share one build and one cache.
+  # A required check that is skipped counts as passed, so when `changes` does
+  # not succeed this job still runs and fails in its first step.
   linux:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
+      - name: changes job must succeed
+        if: needs.changes.result != 'success'
+        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
@@ -235,16 +307,16 @@ jobs:
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: nextest
       # Each test runs in its own process (see .config/nextest.toml), so they
       # run in parallel. nextest skips doctests; `cargo test --doc` runs them.
       - run: cargo nextest run --workspace --locked --profile ci
       - run: cargo test --doc --workspace --locked
-      - run: cargo build -p grokhub-app -p grokhub-hub
-      - name: Cabin binary exists
-        run: test -x target/debug/grokhub && test -x target/debug/grokhub-hub
+      - run: cargo build -p grokhub-hub
+      - name: Hub and shim binaries exist
+        run: test -x target/debug/grokhub-hub && test -x target/debug/grokhub
   # Supply chain: known advisories (RustSec), licenses, wildcard deps and
   # crate sources, per deny.toml.
   deny:
@@ -259,10 +331,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: cargo-deny
       - run: cargo deny --locked check
+      # The desktop shell is its own workspace with its own lockfile.
+      - run: cargo deny --manifest-path src-tauri/Cargo.toml --locked check
 
   # Cross-platform recode, Phase 1 (docs/cross-platform/README.md): the
   # non-UI crates must stay portable to the Tauri targets. Check-only (clippy,
@@ -317,6 +391,12 @@ jobs:
           echo "AR_aarch64_linux_android=$bin/llvm-ar" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
       - run: cargo clippy --locked ${{ matrix.crates }} --target ${{ matrix.target }} -- -D warnings
+      # The agent's sandbox tests on the runner's own macOS (Apple silicon):
+      # the only place the Seatbelt profile runs for real. Off PRs, like the
+      # rest of this job.
+      - name: Sandbox tests (macOS)
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: cargo test --locked -p grokhub-agent --lib sandbox
 
   # The Tauri desktop shell (src-tauri/ + ui/, cross-platform Phase 2). It is
   # its own Cargo workspace, so only this job needs the webview libraries.
@@ -332,14 +412,14 @@ jobs:
         os: ${{ fromJSON(needs.changes.outputs.shell_os) }}
     name: shell (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -356,7 +436,17 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev webkit2gtk-driver xvfb
+          # Ubuntu 26.04 renamed the WebKit driver package; take whichever exists.
+          driver=webkit2gtk-driver
+          apt-cache policy "$driver" | grep -q 'Candidate: [0-9]' || driver=webkitgtk-webdriver
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev "$driver" xvfb
+      # Windows and macOS bundle grokhub-hub as a sidecar
+      # (src-tauri/tauri.{windows,macos}.conf.json). Tauri's build script
+      # checks the staged binary exists, so it goes in before any src-tauri
+      # cargo step. Linux ships it as a package file instead.
+      - name: Stage the grokhub-hub sidecar
+        if: runner.os != 'Linux'
+        run: node scripts/stage-hub-sidecar.mjs
       - run: npm ci --prefix ui
       - run: npm run lint --prefix ui
       - run: npm test --prefix ui
@@ -414,7 +504,7 @@ jobs:
           name: smoke-shots-${{ runner.os }}
           path: smoke-shots/
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7
 
   # Phone builds of the shell (cross-platform Phase 4). A smoke build carries
   # the mock model's loopback URL and drives one chat itself
@@ -434,10 +524,10 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: ui/package-lock.json
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: 17
@@ -455,7 +545,7 @@ jobs:
       # The Gradle and Xcode projects call the CLI back while they build. The
       # npm CLI records a path relative to where it ran, which they can't
       # find, so the phone jobs use cargo's.
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: tauri-cli@2.12.4
       - name: Smoke build
@@ -494,7 +584,7 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -530,12 +620,16 @@ jobs:
         run: node ui/e2e/phone.mjs ios "$APP"
 
   # Clippy and tests in one job so they share one build and one cache.
+  # Like linux, it runs and fails when `changes` did not succeed.
   windows:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || (needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true')) }}
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
+      - name: changes job must succeed
+        if: needs.changes.result != 'success'
+        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
@@ -551,7 +645,7 @@ jobs:
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: nextest
       - run: cargo nextest run --workspace --locked --profile ci
@@ -561,7 +655,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.release == 'true'
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -574,43 +668,11 @@ jobs:
           shared-key: windows-release
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
-      - run: cargo build --release --locked -p grokhub-app -p grokhub-hub
-      - name: Cabin binaries exist
+      - run: cargo build --release --locked -p grokhub-hub
+      - name: Hub binary exists
         shell: pwsh
         run: |
-          if (-not (Test-Path target/release/grokhub.exe)) { throw 'missing grokhub.exe' }
           if (-not (Test-Path target/release/grokhub-hub.exe)) { throw 'missing grokhub-hub.exe' }
-      # Deck-match evidence: grokhub.exe beside deck slides 02 and 20 (chrome)
-      # plus settings/upgrade captures from the widget recipe work. Evidence
-      # only, so it never fails the check.
-      - name: Deck shots
-        continue-on-error: true
-        shell: pwsh
-        run: ./scripts/deck-shots.ps1 -Slide 02
-      - name: Upload deck shots
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: deck-shots
-          path: target/deck-shots/
-          if-no-files-found: ignore
-          retention-days: 14
-      # Free web_search proof: live DDG Lite cites in OpenRouter + local chats
-      # at HARD DONE sizes. Evidence only — never fails the check.
-      - name: Web search shots
-        continue-on-error: true
-        shell: pwsh
-        run: ./scripts/web-search-shots.ps1
-      - name: Upload web search shots
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-search-shots
-          path: target/web-search-shots/
-          if-no-files-found: ignore
-          retention-days: 14
       - name: Pack script locks
         shell: pwsh
         run: ./scripts/make-windows-release.tests.ps1
@@ -619,3 +681,25 @@ jobs:
         run: |
           if (Test-Path package.json) { throw 'electron leftover' }
           if (Test-Path desktop) { throw 'electron leftover' }
+
+  # Marks a green nightly so the next one skips the build jobs while beta's
+  # HEAD stays the same. Any failed or cancelled job leaves no mark.
+  nightly-green:
+    needs: [changes, fmt, guards, linux, deny, cross-check, shell, phone-android, phone-ios, windows, windows-release]
+    if: >-
+      !cancelled() && github.event_name == 'schedule' &&
+      needs.changes.outputs.skip != 'true' && needs.changes.outputs.sha != '' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mark
+        env:
+          SHA: ${{ needs.changes.outputs.sha }}
+        run: |
+          mkdir -p .nightly-green
+          echo "$SHA" > .nightly-green/sha
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .nightly-green
+          key: ci-nightly-green-${{ needs.changes.outputs.sha }}

@@ -144,7 +144,15 @@ fn parse_block(tokens: &[Tok], pos: &mut usize) -> Vec<(String, Vdf)> {
                         let block = parse_block(tokens, pos);
                         items.push((key.clone(), Vdf::Block(block)));
                     }
-                    _ => return items,
+                    // A key with no value ends this block. Take its `}` too,
+                    // or the parent block ends on it and drops every later
+                    // sibling (most games' play stats, in localconfig.vdf).
+                    _ => {
+                        if matches!(tokens.get(*pos), Some(Tok::Close)) {
+                            *pos += 1;
+                        }
+                        return items;
+                    }
                 }
             }
         }
@@ -211,6 +219,25 @@ impl CoverKind {
             CoverKind::Wide => "header.jpg",
         }
     }
+
+    /// Every name the Steam client may cache this shape under, best first:
+    /// the store names, the 2x tall copy, and the capsule and hero art newer
+    /// clients keep when the main file is missing.
+    pub fn local_names(self) -> &'static [&'static str] {
+        match self {
+            CoverKind::Tall => &[
+                "library_600x900.jpg",
+                "library_600x900_2x.jpg",
+                "library_capsule.jpg",
+            ],
+            CoverKind::Wide => &[
+                "header.jpg",
+                "capsule_616x353.jpg",
+                "library_hero.jpg",
+                "capsule_231x87.jpg",
+            ],
+        }
+    }
 }
 
 /// The public store CDN URL for one game's art (no key needed). Newer games
@@ -225,27 +252,55 @@ pub fn cover_url(app_id: u32, kind: CoverKind) -> String {
 /// Art the Steam client already saved on this PC, in
 /// `appcache/librarycache`: the old flat `{id}_library_600x900.jpg` names, or
 /// the newer `{id}/library_600x900.jpg`, sometimes one hashed folder deeper.
+/// Each name in [`CoverKind::local_names`] is tried in order, in every layout.
 pub fn local_cover(root: &Path, app_id: u32, kind: CoverKind) -> Option<PathBuf> {
     let cache = root.join("appcache").join("librarycache");
-    let flat = cache.join(format!("{app_id}_{}", kind.file()));
-    if flat.is_file() {
-        return Some(flat);
-    }
     let dir = cache.join(app_id.to_string());
-    let direct = dir.join(kind.file());
-    if direct.is_file() {
-        return Some(direct);
-    }
     let mut subs: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
     subs.sort();
-    subs.into_iter()
-        .map(|d| d.join(kind.file()))
-        .find(|p| p.is_file())
+    kind.local_names().iter().find_map(|name| {
+        std::iter::once(cache.join(format!("{app_id}_{name}")))
+            .chain(std::iter::once(dir.join(name)))
+            .chain(subs.iter().map(|d| d.join(name)))
+            .find(|p| p.is_file())
+    })
+}
+
+/// The store's own details for one game. Newer games keep their art under
+/// hashed paths that only this answer names.
+pub fn store_details_url(app_id: u32) -> String {
+    format!("https://store.steampowered.com/api/appdetails?appids={app_id}&filters=basic")
+}
+
+/// The header art a store details answer names, best first (`header_image`,
+/// then `capsule_image`). Only an https link on Steam's own image hosts is
+/// returned, so a strange answer can't send the fetch anywhere else.
+pub fn store_art_urls(details: &[u8], app_id: u32) -> Vec<String> {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(details) else {
+        return Vec::new();
+    };
+    let data = &v[app_id.to_string()]["data"];
+    ["header_image", "capsule_image"]
+        .iter()
+        .filter_map(|k| data[*k].as_str())
+        .filter(|u| steam_image_url(u))
+        .map(str::to_string)
+        .collect()
+}
+
+fn steam_image_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    !host.contains(['@', ':']) && host.ends_with(".steamstatic.com")
 }
 
 /// Steam's own runtimes and redistributables are not games.
@@ -317,6 +372,106 @@ pub fn installed_games(root: &Path) -> Vec<SteamGame> {
     games.into_values().collect()
 }
 
+/// The `appmanifest_<id>.acf` for one game, from any library folder, and
+/// the folder it is in.
+fn app_manifest(root: &Path, app_id: u32) -> Option<(PathBuf, Vdf)> {
+    library_folders(root).into_iter().find_map(|folder| {
+        let text = std::fs::read_to_string(
+            folder
+                .join("steamapps")
+                .join(format!("appmanifest_{app_id}.acf")),
+        )
+        .ok()?;
+        Some((folder, parse_vdf(&text)))
+    })
+}
+
+/// Where Steam installed one game (`steamapps/common/<installdir>`).
+pub fn install_dir(root: &Path, app_id: u32) -> Option<PathBuf> {
+    let (folder, vdf) = app_manifest(root, app_id)?;
+    let dir = vdf
+        .get("AppState")?
+        .get("installdir")?
+        .str()?
+        .trim()
+        .to_string();
+    if dir.is_empty() || dir.contains(['/', '\\']) || dir == ".." {
+        return None;
+    }
+    Some(folder.join("steamapps").join("common").join(dir))
+}
+
+/// The game's current build (`buildid`), which changes with every update.
+pub fn build_id(root: &Path, app_id: u32) -> Option<String> {
+    let (_, vdf) = app_manifest(root, app_id)?;
+    vdf.get("AppState")?
+        .get("buildid")?
+        .str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// One Workshop item Steam has downloaded for a game.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkshopItem {
+    pub id: u64,
+    /// Bytes on disk.
+    pub size: u64,
+    /// Unix seconds of the item's last update, 0 when unknown.
+    pub updated: u64,
+}
+
+/// The items one `appworkshop_<appid>.acf` lists as installed, newest first.
+pub fn parse_workshop_acf(text: &str) -> Vec<WorkshopItem> {
+    let vdf = parse_vdf(text);
+    let Some(items) = vdf
+        .get("AppWorkshop")
+        .and_then(|w| w.get("WorkshopItemsInstalled"))
+    else {
+        return Vec::new();
+    };
+    let num = |v: &Vdf, key: &str| {
+        v.get(key)
+            .and_then(Vdf::str)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
+    };
+    let mut out: Vec<WorkshopItem> = items
+        .entries()
+        .iter()
+        .filter_map(|(id, item)| {
+            Some(WorkshopItem {
+                id: id.parse().ok()?,
+                size: num(item, "size"),
+                updated: num(item, "timeupdated"),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
+    out
+}
+
+/// Workshop items installed for one game, from every library folder. Only
+/// reads Steam's own files.
+pub fn workshop_items(root: &Path, app_id: u32) -> Vec<WorkshopItem> {
+    let mut out: Vec<WorkshopItem> = Vec::new();
+    for folder in library_folders(root) {
+        let file = folder
+            .join("steamapps")
+            .join("workshop")
+            .join(format!("appworkshop_{app_id}.acf"));
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        for item in parse_workshop_acf(&text) {
+            if !out.iter().any(|i| i.id == item.id) {
+                out.push(item);
+            }
+        }
+    }
+    out
+}
+
 /// A game from one parsed `appmanifest_*.acf`.
 pub fn manifest_game(vdf: &Vdf) -> Option<SteamGame> {
     let state = vdf.get("AppState")?;
@@ -336,6 +491,49 @@ pub fn manifest_game(vdf: &Vdf) -> Option<SteamGame> {
         last_played,
         playtime_min: 0,
     })
+}
+
+/// `StateFlags` bits for an update Steam has to fetch or is fetching:
+/// UpdateRequired, UpdateRunning, UpdatePaused, UpdateStarted.
+const UPDATE_FLAGS: u64 = 2 | 256 | 512 | 1024;
+
+/// Steam marked this installed game as needing (or mid-way through) an update.
+pub fn manifest_needs_update(vdf: &Vdf) -> bool {
+    vdf.get("AppState")
+        .and_then(|s| s.get("StateFlags"))
+        .and_then(Vdf::str)
+        .and_then(|f| f.trim().parse::<u64>().ok())
+        .is_some_and(|f| f & UPDATE_FLAGS != 0)
+}
+
+/// Names of installed games Steam says need an update, read from the
+/// `appmanifest_*.acf` files Steam keeps (never from the game or its process).
+pub fn games_needing_update(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for folder in library_folders(root) {
+        let Ok(dir) = std::fs::read_dir(folder.join("steamapps")) else {
+            continue;
+        };
+        for entry in dir.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !(name.starts_with("appmanifest_") && name.ends_with(".acf")) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            let vdf = parse_vdf(&text);
+            if manifest_needs_update(&vdf) {
+                if let Some(g) = manifest_game(&vdf) {
+                    if !out.contains(&g.name) {
+                        out.push(g.name);
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Last played and playtime per app from each account's `localconfig.vdf`.
@@ -375,6 +573,35 @@ pub fn merge_stats(vdf: &Vdf, out: &mut BTreeMap<u32, (u64, u64)>) {
         slot.0 = slot.0.max(last);
         slot.1 = slot.1.max(minutes);
     }
+}
+
+/// How many friends one parsed `localconfig.vdf` lists. Steam saves each
+/// friend under their numeric account id with a `name`; other keys in that
+/// block are settings. Only the count is read.
+pub fn count_friends(vdf: &Vdf) -> usize {
+    vdf.at(&["UserLocalConfigStore", "friends"])
+        .map(|f| {
+            f.entries()
+                .iter()
+                .filter(|(k, v)| k.parse::<u64>().is_ok() && v.get("name").is_some())
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// The most friends any Steam account on this PC has saved, or `None`
+/// when there is no Steam account here to read.
+pub fn friend_count(root: &Path) -> Option<usize> {
+    let users = std::fs::read_dir(root.join("userdata")).ok()?;
+    let mut best = None;
+    for user in users.flatten() {
+        let file = user.path().join("config").join("localconfig.vdf");
+        if let Ok(text) = std::fs::read_to_string(&file) {
+            let n = count_friends(&parse_vdf(&text));
+            best = Some(best.unwrap_or(0).max(n));
+        }
+    }
+    best
 }
 
 /// Active games first: most recently played, then most played, then the rest
@@ -508,6 +735,17 @@ pub fn feeding<'a>(games: &'a [SteamGame], prefs: &SteamPrefs) -> Vec<&'a SteamG
     games.iter().filter(|g| !prefs.is_muted(g.app_id)).collect()
 }
 
+/// Names of the games that feed Pulse and have been played, most recent
+/// first, for idea prompts. Never-played library games are left out.
+pub fn played_names(games: &[SteamGame], prefs: &SteamPrefs, max: usize) -> Vec<String> {
+    feeding(games, prefs)
+        .into_iter()
+        .filter(|g| g.last_played > 0)
+        .take(max)
+        .map(|g| g.name.clone())
+        .collect()
+}
+
 /// This check's Steam news fetches. Each one carries its game as the topic,
 /// so Pulse's interest ranking and feedback apply to it.
 pub fn requests(games: &[SteamGame], prefs: &SteamPrefs, max: usize) -> Vec<SourceReq> {
@@ -569,6 +807,122 @@ pub fn status_line(games: &[SteamGame], prefs: &SteamPrefs, found: bool) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_saved_friends_and_skips_the_friends_settings() {
+        let text = r#""UserLocalConfigStore"
+        {
+            "friends"
+            {
+                "PersonaName" "me"
+                "11111" { "name" "Ally" }
+                "22222" { "name" "Bo" "NameHistory" { "0" "Bob" } }
+                "33333" { "avatar" "x" }
+                "communitypreferences" "x"
+            }
+        }"#;
+        assert_eq!(count_friends(&parse_vdf(text)), 2);
+        assert_eq!(count_friends(&parse_vdf("\"a\" {}")), 0);
+    }
+
+    #[test]
+    fn workshop_acf_lists_installed_items_newest_first() {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/mods/appworkshop_294100.acf"),
+        )
+        .unwrap();
+        let items = parse_workshop_acf(&text);
+        assert_eq!(
+            items,
+            vec![
+                WorkshopItem {
+                    id: 818773962,
+                    size: 87294118,
+                    updated: 1759000000
+                },
+                WorkshopItem {
+                    id: 2009463077,
+                    size: 4210112,
+                    updated: 1757000000
+                },
+            ]
+        );
+        assert!(parse_workshop_acf("\"AppWorkshop\" { }").is_empty());
+        let root = temp_root("workshop");
+        let dir = root.join("steamapps/workshop");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("appworkshop_294100.acf"), &text).unwrap();
+        assert_eq!(workshop_items(&root, 294100).len(), 2);
+        assert!(workshop_items(&root, 255710).is_empty());
+        std::fs::write(
+            root.join("steamapps/appmanifest_294100.acf"),
+            "\"AppState\" { \"appid\" \"294100\" \"installdir\" \"RimWorld\" \"buildid\" \"20555\" }",
+        )
+        .unwrap();
+        assert_eq!(
+            install_dir(&root, 294100),
+            Some(root.join("steamapps/common/RimWorld"))
+        );
+        assert_eq!(build_id(&root, 294100).as_deref(), Some("20555"));
+        assert_eq!(install_dir(&root, 1), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn other_cached_names_count_when_the_main_file_is_missing() {
+        let root = std::env::temp_dir().join(format!("gh-steam-alt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let cache = root.join("appcache/librarycache");
+        std::fs::create_dir_all(cache.join("50/9f2e")).unwrap();
+        std::fs::create_dir_all(cache.join("60")).unwrap();
+        std::fs::write(cache.join("50/9f2e/library_capsule.jpg"), b"x").unwrap();
+        std::fs::write(cache.join("60/library_hero.jpg"), b"x").unwrap();
+        std::fs::write(cache.join("60_capsule_231x87.jpg"), b"x").unwrap();
+        assert_eq!(
+            local_cover(&root, 50, CoverKind::Tall),
+            Some(cache.join("50/9f2e/library_capsule.jpg"))
+        );
+        // The hero beats the small capsule, wherever each one sits.
+        assert_eq!(
+            local_cover(&root, 60, CoverKind::Wide),
+            Some(cache.join("60/library_hero.jpg"))
+        );
+        // The main name still wins over a fallback once it is there.
+        std::fs::write(cache.join("60/header.jpg"), b"x").unwrap();
+        assert_eq!(
+            local_cover(&root, 60, CoverKind::Wide),
+            Some(cache.join("60/header.jpg"))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn store_details_name_hashed_art_only_on_steams_image_hosts() {
+        let body = br#"{"1172470":{"success":true,"data":{
+            "header_image":"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1172470/abc123/header.jpg?t=1",
+            "capsule_image":"https://cdn.akamai.steamstatic.com/steam/apps/1172470/capsule_231x87.jpg"}}}"#;
+        assert_eq!(
+            store_art_urls(body, 1172470),
+            vec![
+                "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1172470/abc123/header.jpg?t=1".to_string(),
+                "https://cdn.akamai.steamstatic.com/steam/apps/1172470/capsule_231x87.jpg".to_string(),
+            ]
+        );
+        let odd = br#"{"5":{"success":true,"data":{
+            "header_image":"http://shared.akamai.steamstatic.com/x.jpg",
+            "capsule_image":"https://evil.example/steamstatic.com/x.jpg"}}}"#;
+        assert!(store_art_urls(odd, 5).is_empty());
+        let sneaky =
+            br#"{"6":{"data":{"header_image":"https://me@x.steamstatic.com.evil.example/a.jpg"}}}"#;
+        assert!(store_art_urls(sneaky, 6).is_empty());
+        assert!(store_art_urls(br#"{"7":{"success":false}}"#, 7).is_empty());
+        assert!(store_art_urls(b"not json", 7).is_empty());
+        assert_eq!(
+            store_details_url(7),
+            "https://store.steampowered.com/api/appdetails?appids=7&filters=basic"
+        );
+    }
 
     #[test]
     fn covers_come_from_the_store_cdn_or_the_local_library_cache() {
@@ -643,6 +997,19 @@ mod tests {
 }
 "#;
 
+    #[test]
+    fn steam_state_flags_mark_games_with_an_update_waiting() {
+        let m = |flags: u32| {
+            parse_vdf(&format!(
+                "\"AppState\"\n{{\n\t\"appid\"\t\"730\"\n\t\"name\"\t\"Counter-Strike 2\"\n\t\"StateFlags\"\t\"{flags}\"\n}}\n"
+            ))
+        };
+        assert!(!manifest_needs_update(&m(4)), "fully installed");
+        assert!(manifest_needs_update(&m(6)), "installed + update required");
+        assert!(manifest_needs_update(&m(1026)), "update started");
+        assert!(!manifest_needs_update(&parse_vdf("\"AppState\"\n{\n}\n")));
+    }
+
     fn manifest(id: u32, name: &str, last: u64) -> String {
         format!(
             "\"AppState\"\n{{\n\t\"appid\"\t\t\"{id}\"\n\t\"name\"\t\t\"{name}\"\n\t\"LastPlayed\"\t\t\"{last}\"\n}}\n"
@@ -713,6 +1080,36 @@ mod tests {
                 .at(&["libraryfolders", "0", "path"])
                 .and_then(Vdf::str),
             Some("C:\\Program Files (x86)\\Steam")
+        );
+    }
+
+    #[test]
+    fn a_key_with_no_value_ends_only_its_own_block() {
+        // Steam writes `"LastPlayed"` with no value for a game it never
+        // launched; the siblings after it must still parse.
+        let vdf = parse_vdf(
+            "\"UserLocalConfigStore\" { \"Software\" { \"Valve\" { \"Steam\" { \"apps\" { \"570\" { \"LastPlayed\" } \"1091500\" { \"LastPlayed\" \"1700000000\" \"Playtime\" \"90\" } \"620\" { \"Playtime\" \"5\" } } } } } }",
+        );
+        let path = ["UserLocalConfigStore", "Software", "Valve", "Steam", "apps"];
+        let apps = vdf.at(&path).expect("apps block");
+        let ids: Vec<&str> = apps.entries().iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(ids, ["570", "1091500", "620"]);
+        assert_eq!(
+            apps.at(&["1091500", "LastPlayed"]).and_then(Vdf::str),
+            Some("1700000000")
+        );
+        let mut stats = BTreeMap::new();
+        merge_stats(&vdf, &mut stats);
+        assert_eq!(
+            stats.into_iter().collect::<Vec<_>>(),
+            [(570, (0, 0)), (620, (0, 5)), (1091500, (1_700_000_000, 90))]
+        );
+        // A key with no value right before the end of input parses too.
+        assert_eq!(
+            parse_vdf("\"a\" { \"b\" \"1\" \"c\"")
+                .at(&["a", "b"])
+                .and_then(Vdf::str),
+            Some("1")
         );
     }
 
@@ -814,6 +1211,18 @@ mod tests {
             last_played: last,
             playtime_min: minutes,
         }
+    }
+
+    #[test]
+    fn played_names_skip_muted_and_never_played_games() {
+        let games = vec![
+            game(1, "Helldivers 2", 30, 90),
+            game(2, "Muted", 20, 60),
+            game(3, "Never", 0, 0),
+        ];
+        let mut prefs = SteamPrefs::default();
+        prefs.set_muted(2, true);
+        assert_eq!(played_names(&games, &prefs, 8), vec!["Helldivers 2"]);
     }
 
     #[test]

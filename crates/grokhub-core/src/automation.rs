@@ -139,6 +139,31 @@ pub fn automation_health_line(a: &Automation) -> Option<String> {
     })
 }
 
+/// A failing automation by name: what its Pulse card is about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomationAlert {
+    pub name: String,
+    pub fail_streak: u32,
+    pub error: String,
+}
+
+/// `None` while healthy. A nameless job reads as "An automation".
+pub fn automation_alert(a: &Automation) -> Option<AutomationAlert> {
+    if !a.health.failing() {
+        return None;
+    }
+    let error = if a.health.error.is_empty() {
+        "Run failed".to_string()
+    } else {
+        a.health.error.clone()
+    };
+    Some(AutomationAlert {
+        name: a.name.trim().to_string(),
+        fail_streak: a.health.fail_streak.max(1),
+        error,
+    })
+}
+
 fn default_enabled() -> bool {
     true
 }
@@ -457,6 +482,85 @@ fn schedule_name(before: &str, after_needle: &str) -> String {
     joined.trim().to_string()
 }
 
+/// The plain words [`parse_nl_automation`] reads back into this job's schedule,
+/// for an edit box: "every weekday at 9am summarize my inbox". A job made from
+/// such words gets them back as typed. `None` when the words cannot say the
+/// schedule (weekly, monthly, once, or more than one time a day).
+pub fn describe_automation(a: &Automation) -> Option<String> {
+    let when = describe_when(a)?;
+    let ask = a.instructions.trim();
+    let Some(parsed) = parse_nl_automation(ask) else {
+        let ask = if ask.is_empty() { a.name.trim() } else { ask };
+        return Some(format!("{when} {ask}").trim().to_string());
+    };
+    if describe_when(&parsed).as_deref() == Some(when.as_str()) {
+        return Some(ask.to_string());
+    }
+    // The words say another schedule than the job keeps (it was changed in the
+    // cabin): keep the ask, swap the when.
+    let rest = if parsed.schedule == "heartbeat" {
+        drop_interval(&parsed.name)
+    } else {
+        parsed.name.clone()
+    };
+    Some(format!("{when} {rest}").trim().to_string())
+}
+
+fn describe_when(a: &Automation) -> Option<String> {
+    if a.schedule == "heartbeat" {
+        return Some(format!(
+            "heartbeat every {} min",
+            a.heartbeat_every_min.max(1)
+        ));
+    }
+    let word = match a.schedule.as_str() {
+        "weekdays" => "every weekday at",
+        "daily" => "every day at",
+        _ => return None,
+    };
+    let times = normalize_times(&a.time, &a.times);
+    let [slot] = times.as_slice() else {
+        return None;
+    };
+    Some(format!("{word} {}", short_clock(hm_min(slot)?)))
+}
+
+/// "9am", "9:30pm", "12pm": what someone types, and what [`parse_clock_token`] reads.
+fn short_clock(tod_min: u32) -> String {
+    let (h24, m) = (tod_min / 60, tod_min % 60);
+    let half = if h24 < 12 { "am" } else { "pm" };
+    let h12 = match h24 % 12 {
+        0 => 12,
+        h => h,
+    };
+    if m == 0 {
+        format!("{h12}{half}")
+    } else {
+        format!("{h12}:{m:02}{half}")
+    }
+}
+
+/// A heartbeat's name keeps its interval ("30 min check the build"); the ask is the rest.
+fn drop_interval(name: &str) -> String {
+    let mut words = name.split_whitespace().peekable();
+    let interval = |w: &&str| {
+        w.trim_end_matches("mins")
+            .trim_end_matches("min")
+            .parse::<u32>()
+            .is_ok()
+    };
+    if words.peek().is_some_and(interval) {
+        words.next();
+        if words
+            .peek()
+            .is_some_and(|w| matches!(*w, "min" | "mins" | "minutes"))
+        {
+            words.next();
+        }
+    }
+    words.collect::<Vec<_>>().join(" ")
+}
+
 /// Which scheduler owns a scheduling ask.
 ///
 /// A clock time ("every weekday at 9") is a cabin automation in `automations.json`; the
@@ -554,9 +658,41 @@ pub fn automation_summary_line(a: &Automation, clock: LocalClock) -> String {
     } else if let Some(next) = a.next_run {
         bits.push(format!("next {}", relative_when(next, clock)));
     }
+    if let Some(words) = last_result_words(a.health.outcome) {
+        bits.push(words.into());
+    }
     if a.run_count > 0 {
-        let plural = if a.run_count == 1 { "" } else { "s" };
-        bits.push(format!("{} run{plural}", a.run_count));
+        bits.push(runs_label(a.run_count));
+    }
+    bits.join(" · ")
+}
+
+/// How the last run went, in plain words. A failure gets the red line under
+/// the row instead, and a run that never reported back says nothing.
+fn last_result_words(outcome: AutoOutcome) -> Option<&'static str> {
+    match outcome {
+        AutoOutcome::Ok => Some("last run went fine"),
+        AutoOutcome::Stopped => Some("you stopped the last run"),
+        AutoOutcome::None | AutoOutcome::Started | AutoOutcome::Failed => None,
+    }
+}
+
+fn runs_label(count: u32) -> String {
+    let plural = if count == 1 { "" } else { "s" };
+    format!("{count} run{plural}")
+}
+
+/// The line under a repeating job: "every 30m · next today 9:30 AM · 3 runs".
+/// A job that is off says "paused" and no next run.
+pub fn loop_summary_line(l: &crate::grok_loop::GrokLoop, clock: LocalClock) -> String {
+    let mut bits = vec![format!("every {}", l.interval)];
+    if !l.enabled {
+        bits.push("paused".into());
+    } else if let Some(next) = l.next_run {
+        bits.push(format!("next {}", relative_when(next, clock)));
+    }
+    if l.run_count > 0 {
+        bits.push(runs_label(l.run_count));
     }
     bits.join(" · ")
 }
@@ -755,6 +891,14 @@ mod tests {
                 prompt: "summarize commits".into()
             })
         );
+        // The hint on the Automations page must be a line that works.
+        assert_eq!(
+            route_schedule("every 30 minutes check the deploy"),
+            Some(ScheduleRoute::Interval {
+                interval: "30m".into(),
+                prompt: "check the deploy".into()
+            })
+        );
         assert_eq!(route_schedule("what is rust"), None);
     }
 
@@ -804,6 +948,18 @@ mod tests {
         assert!(automation_summary_line(&a, morning).ends_with("· 1 run"));
         a.run_count = 4;
         assert!(automation_summary_line(&a, morning).ends_with("· 4 runs"));
+        a.health.outcome = AutoOutcome::Ok;
+        assert_eq!(
+            automation_summary_line(&a, morning),
+            "weekdays at 09:00 · next today 7:30 AM · last run went fine · 4 runs"
+        );
+        a.health.outcome = AutoOutcome::Stopped;
+        assert!(automation_summary_line(&a, morning).contains("you stopped the last run"));
+        a.health.outcome = AutoOutcome::Failed;
+        assert!(
+            !automation_summary_line(&a, morning).contains("last run"),
+            "a failure gets the red line, not the summary"
+        );
         a.enabled = false;
         let paused = automation_summary_line(&a, morning);
         assert!(
@@ -824,6 +980,29 @@ mod tests {
             minute: 0,
         };
         assert!(automation_summary_line(&due, later).contains("next now"));
+    }
+
+    #[test]
+    fn a_repeating_job_says_when_it_runs_next() {
+        let clock = LocalClock {
+            now_ms: 0,
+            weekday: 3,
+            hour: 9,
+            minute: 0,
+        };
+        let mut l = crate::grok_loop::new_loop("30m".into(), "check deploy".into(), 0);
+        l.next_run = Some(30 * 60_000);
+        assert_eq!(
+            loop_summary_line(&l, clock),
+            "every 30m · next today 9:30 AM"
+        );
+        l.run_count = 3;
+        assert_eq!(
+            loop_summary_line(&l, clock),
+            "every 30m · next today 9:30 AM · 3 runs"
+        );
+        l.enabled = false;
+        assert_eq!(loop_summary_line(&l, clock), "every 30m · paused · 3 runs");
     }
 
     #[test]
@@ -1265,5 +1444,98 @@ mod tests {
         let long = mark_automation_failed(job("b"), &"x".repeat(500));
         assert_eq!(long.health.error.chars().count(), AUTO_ERROR_CHARS);
         assert!(long.health.error.ends_with('…'));
+    }
+
+    /// The fields an edit re-parses: what the schedule is and what the job asks.
+    fn schedule_of(a: &Automation) -> (String, String, u32, String, String) {
+        (
+            a.schedule.clone(),
+            a.time.clone(),
+            a.heartbeat_every_min,
+            a.name.clone(),
+            a.instructions.clone(),
+        )
+    }
+
+    #[test]
+    fn describe_round_trips_typed_jobs_through_the_parser() {
+        for typed in [
+            "every weekday at 9am summarize my inbox",
+            "every day at 9:30 pm back up the notes",
+            "heartbeat every 30 min check the build",
+        ] {
+            let job = parse_nl_automation(typed).expect("typed");
+            let text = describe_automation(&job).expect("describable");
+            assert_eq!(text, typed);
+            let again = parse_nl_automation(&text).expect("again");
+            assert_eq!(schedule_of(&again), schedule_of(&job), "{typed}");
+        }
+    }
+
+    #[test]
+    fn describe_writes_the_when_for_a_cabin_job() {
+        let mut board = job("a");
+        board.schedule = "weekdays".into();
+        board.time = "13:05".into();
+        let text = describe_automation(&board).expect("weekday");
+        assert_eq!(text, "every weekday at 1:05pm summarize the board");
+        assert_eq!(
+            schedule_of(&parse_nl_automation(&text).expect("parse")),
+            (
+                "weekdays".to_string(),
+                "13:05".to_string(),
+                0,
+                "summarize the board".to_string(),
+                "every weekday at 1:05pm summarize the board".to_string()
+            )
+        );
+
+        let mut midnight = job("b");
+        midnight.time = "00:00".into();
+        assert_eq!(
+            describe_automation(&midnight).as_deref(),
+            Some("every day at 12am summarize the board")
+        );
+        assert_eq!(
+            parse_nl_automation("every day at 12am summarize the board")
+                .expect("midnight")
+                .time,
+            "00:00"
+        );
+
+        let mut beat = job("c");
+        beat.schedule = "heartbeat".into();
+        beat.heartbeat_every_min = 45;
+        let text = describe_automation(&beat).expect("heartbeat");
+        assert_eq!(text, "heartbeat every 45 min summarize the board");
+        let again = parse_nl_automation(&text).expect("parse");
+        assert_eq!(
+            (again.schedule.as_str(), again.heartbeat_every_min),
+            ("heartbeat", 45)
+        );
+    }
+
+    #[test]
+    fn describe_swaps_a_stale_when_and_skips_what_words_cannot_say() {
+        // Typed for 9am, moved to 7am in the cabin: the box says 7am once.
+        let mut moved = parse_nl_automation("every weekday at 9am summarize my inbox").expect("a");
+        moved.time = "07:00".into();
+        assert_eq!(
+            describe_automation(&moved).as_deref(),
+            Some("every weekday at 7am summarize my inbox")
+        );
+        let mut slower = parse_nl_automation("heartbeat every 30 min check the build").expect("b");
+        slower.heartbeat_every_min = 60;
+        assert_eq!(
+            describe_automation(&slower).as_deref(),
+            Some("heartbeat every 60 min check the build")
+        );
+
+        let mut weekly = job("w");
+        weekly.schedule = "weekly".into();
+        assert_eq!(describe_automation(&weekly), None);
+        let mut twice = job("t");
+        twice.times = vec!["07:00".into(), "19:00".into()];
+        assert_eq!(describe_automation(&twice), None);
     }
 }

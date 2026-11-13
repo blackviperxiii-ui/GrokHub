@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::web_fetch::{public_only_resolve, PageFetch};
+use super::web_fetch::PageFetch;
 use super::ToolOutput;
 
 const MAX_RESULTS: usize = 8;
@@ -333,20 +333,21 @@ fn search_brave(
         MAX_RESULTS
     );
     guard_hop(&url, stop)?;
-    // Brave needs an API key header; PageFetch::get has no headers. Use ureq directly
-    // with the same public-only resolver as web_fetch.
+    // Brave needs an API key header; PageFetch::get has no headers. Use the HTTP
+    // facade directly with the same public-only resolver as web_fetch.
     let _ = fetch; // SSRF path still goes through guard_hop + public host below.
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .redirects(0)
-        .resolver(public_only_resolve)
-        .build();
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(10),
+        overall: Some(Duration::from_secs(30)),
+        redirects: 0,
+        public_only: true,
+        ..Default::default()
+    });
     let resp = agent
         .get(&url)
-        .set("User-Agent", crate::USER_AGENT)
-        .set("Accept", "application/json")
-        .set("X-Subscription-Token", &key)
+        .header("User-Agent", crate::USER_AGENT)
+        .header("Accept", "application/json")
+        .header("X-Subscription-Token", &key)
         .call()
         .map_err(|e| format!("fetch failed: {e}"))?;
     if !(200..300).contains(&resp.status()) {

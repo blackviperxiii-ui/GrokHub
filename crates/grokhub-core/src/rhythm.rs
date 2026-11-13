@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::organs::LocalClock;
 
 pub const FILE_NAME: &str = "rhythm.json";
+/// A proactive candidate this valuable goes up even in a learned away hour.
+pub const NUDGE_URGENT_VALUE: f64 = 0.9;
 /// Weekdays (0 = Sunday) by hours.
 pub const SLOTS: usize = 7 * 24;
 /// Below this many active minutes the rhythm says nothing yet.
@@ -197,6 +199,12 @@ impl Rhythm {
         let hours = self.by_hour();
         let peak = hours.iter().copied().max().unwrap_or(0);
         hours[hour.min(23) as usize] * ACTIVE_SHARE >= peak
+    }
+
+    /// True when `hour` is a learned away hour and nothing ranked is urgent,
+    /// so the nudges wait in the quiet queue for a usually-active hour.
+    pub fn holds(&self, ranked: &[crate::proactive::Candidate], hour: u32) -> bool {
+        self.usually_away(hour) && ranked.iter().all(|c| c.value < NUDGE_URGENT_VALUE)
     }
 
     pub fn usually_away(&self, hour: u32) -> bool {

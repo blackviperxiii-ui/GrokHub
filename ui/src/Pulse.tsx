@@ -1,16 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   getFeedPrompt,
   getPulse,
+  openUrl,
   pulseAct,
   pulseDiscuss,
+  pulseOffer,
+  pulseRemind,
+  pulseReviewApply,
+  pulseReviewIssue,
   pulseWhy,
   saveFeedPrompt,
   type PulseAct,
+  type PulseChip,
   type PulseIdea,
   type PulsePage,
 } from "./api";
 import { FeedCard, IdeaRow, SkeletonRows } from "./FeedCard";
+import { SavedPage } from "./SavedPage";
+import { FixWindow } from "./PulseFix";
+import { StatusLine, useNote } from "./ui";
 
 export const FEED_EMPTY = "No posts yet. Tell me what your feed should cover with Edit feed instructions.";
 export const IDEAS_EMPTY = "Nothing for you yet. I'll add one when I spot something worth doing.";
@@ -18,14 +27,23 @@ export const PROMPT_LABEL = "What should your feed cover?";
 export const SAVED_NOTE = "Saved. A new post is on its way.";
 export const MORE_LIKE_NOTE = "Got it. More ideas like this next time.";
 export const NOT_INTERESTED_NOTE = "Got it. Fewer ideas like this.";
+export const DISLIKE_NOTE = "Got it. A few less like that.";
 export const FOR_YOU_LABEL = "For You";
+export const DAY_END = "That's all for today";
+export const ADD_INTERESTS = "Add interests";
+export const IGNORED_NOTE = "Hidden for now.";
+/** While Pulse is open, how often it looks for new posts. */
+export const REFRESH_MS = 60_000;
 /** Posts shown at first, and added each time the list's end scrolls into view. */
 export const PAGE_SIZE = 10;
+/** A dwell counts after the row stays this visible for this long, straight. */
+export const DWELL_MS = 8000;
+export const DWELL_RATIO = 0.6;
 /** After a save, how often and how many times to look for the new post. */
 const POLL_MS = 4000;
 const POLL_TRIES = 8;
 
-type Tab = "feed" | "ideas";
+type Tab = "feed" | "ideas" | "saved";
 
 /** The Feed instructions sheet: one free-text box, Cancel and Save. */
 function Instructions({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -33,9 +51,10 @@ function Instructions({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Runs each time Pulse shows; text typed here and not saved stays.
   useEffect(() => {
     getFeedPrompt().then(
-      (p) => setText(p.text),
+      (p) => setText((now) => now ?? p.text),
       (err) => setError(String(err)),
     );
   }, []);
@@ -80,56 +99,182 @@ function Instructions({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   );
 }
 
+/** Watch feed rows and send a quiet dwell after 8 s at ≥60% visible.
+ * Nothing while the document is hidden, and nothing without IntersectionObserver. */
+function useFeedDwell(listRef: { current: HTMLUListElement | null }, idsKey: string, enabled: boolean) {
+  const sent = useRef(new Set<string>());
+  useEffect(() => {
+    const root = listRef.current;
+    if (!enabled || !root || typeof IntersectionObserver === "undefined") return;
+    const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    const visible = new Set<string>();
+    const stop = (id: string) => {
+      const t = timers.get(id);
+      if (t !== undefined) clearTimeout(t);
+      timers.delete(id);
+    };
+    const start = (id: string) => {
+      if (sent.current.has(id) || timers.has(id)) return;
+      if (document.visibilityState === "hidden") return;
+      timers.set(
+        id,
+        setTimeout(() => {
+          timers.delete(id);
+          if (document.visibilityState === "hidden") return;
+          if (!visible.has(id)) return;
+          sent.current.add(id);
+          void pulseAct(id, "dwell").catch(() => {});
+        }, DWELL_MS),
+      );
+    };
+    const seen = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const id = (e.target as HTMLElement).dataset.cardId;
+          if (!id) continue;
+          const enough = e.isIntersecting && e.intersectionRatio >= DWELL_RATIO;
+          if (enough) {
+            visible.add(id);
+            start(id);
+          } else {
+            visible.delete(id);
+            stop(id);
+          }
+        }
+      },
+      { threshold: [0, DWELL_RATIO, 1] },
+    );
+    const onVis = () => {
+      if (document.visibilityState === "hidden") {
+        for (const id of [...timers.keys()]) stop(id);
+      } else {
+        for (const id of visible) start(id);
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    root.querySelectorAll<HTMLElement>("[data-card-id]").forEach((el) => seen.observe(el));
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      seen.disconnect();
+      for (const t of timers.values()) clearTimeout(t);
+    };
+  }, [idsKey, enabled, listRef]);
+}
+
 /** The cabin's Pulse: Feed first, Ideas second. `onRun` puts text in the
  * chat box (an idea's action, or a post to discuss); nothing runs until it
  * is sent there. */
-export function Pulse({ onRun }: { onRun: (text: string) => void }) {
+export function Pulse({
+  onRun,
+  onOpenInterests,
+}: {
+  /** `conversationId`: the card's own chat, opened (or reopened) first. */
+  onRun: (text: string, conversationId?: string) => void;
+  /** Settings → Pulse, where interests are added. */
+  onOpenInterests?: () => void;
+}) {
   const [page, setPage] = useState<PulsePage | null>(null);
   const [tab, setTab] = useState<Tab>("feed");
-  const [note, setNote] = useState<string | null>(null);
+  const { note, ok, fail, clear } = useNote();
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [shown, setShown] = useState(PAGE_SIZE);
+  const [paged, setPaged] = useState(PAGE_SIZE);
+  /** The PC health idea whose options window is open. */
+  const [fixing, setFixing] = useState<PulseIdea | null>(null);
   const end = useRef<HTMLLIElement>(null);
+  const feedList = useRef<HTMLUListElement>(null);
   const polls = useRef<ReturnType<typeof setTimeout>[]>([]);
+  /** Pulse has closed: a look still out must not start another. */
+  const closed = useRef(false);
+  /** A tap in flight: a background look must not overwrite its page. */
+  const acting = useRef(false);
 
   useEffect(() => {
-    getPulse().then(setPage, (err) => setNote(String(err)));
+    closed.current = false;
+    getPulse().then(setPage, fail);
     const timers = polls.current;
-    return () => timers.forEach(clearTimeout);
+    return () => {
+      closed.current = true;
+      timers.forEach(clearTimeout);
+    };
+  }, [fail]);
+
+  // New posts land in the background; look once a minute while Pulse is open.
+  useEffect(() => {
+    const every = setInterval(() => {
+      if (acting.current || document.visibilityState === "hidden") return;
+      getPulse().then(
+        (next) => {
+          if (!acting.current) setPage(next);
+        },
+        () => {},
+      );
+    }, REFRESH_MS);
+    return () => clearInterval(every);
   }, []);
 
   const total = page?.feed.length ?? 0;
+  const today = page?.today ?? 0;
+  // Without IntersectionObserver nothing can tell when the end is in view, so every post shows.
+  const shown = typeof IntersectionObserver === "undefined" ? total : paged;
   const more = tab === "feed" && shown < total;
   useEffect(() => {
     const el = end.current;
     if (!more || !el) return;
-    if (typeof IntersectionObserver === "undefined") {
-      setShown(total);
-      return;
-    }
     const seen = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) setShown((n) => n + PAGE_SIZE);
+      if (entries.some((e) => e.isIntersecting)) setPaged((n) => n + PAGE_SIZE);
     });
     seen.observe(el);
     return () => seen.disconnect();
-  }, [more, total, shown]);
+  }, [more, shown]);
+
+  const dwellIds = (page?.feed.slice(0, shown) ?? []).map((p) => p.id).join(",");
+  useFeedDwell(feedList, dwellIds, tab === "feed" && page !== null);
 
   async function act(id: string, what: PulseAct, done?: string) {
     setBusy(true);
+    acting.current = true;
     try {
       setPage(await pulseAct(id, what));
-      setNote(done ?? null);
+      ok(done ?? null);
       return true;
     } catch (err) {
-      setNote(String(err));
+      fail(err);
       // The card may be gone; show what is left. Wait for it, so a later
       // action can't be overwritten by this older page.
       await getPulse().then(setPage, () => {});
       return false;
     } finally {
+      acting.current = false;
       setBusy(false);
     }
+  }
+
+  /** A self-review card's Apply change, Revert or Save idea. */
+  async function review(id: string) {
+    setBusy(true);
+    acting.current = true;
+    try {
+      const done = await pulseReviewApply(id);
+      setPage(done.page);
+      ok(done.line);
+    } catch (err) {
+      fail(err);
+      await getPulse().then(setPage, () => {});
+    } finally {
+      acting.current = false;
+      setBusy(false);
+    }
+  }
+
+  function copyIssue(id: string) {
+    pulseReviewIssue(id).then(
+      async ({ text, copied }) => {
+        await navigator.clipboard.writeText(text);
+        ok(copied);
+      },
+      fail,
+    );
   }
 
   async function run(idea: PulseIdea) {
@@ -139,30 +284,55 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
   /** Ideas are written in the background, so the tab reads the page again. */
   function openIdeas() {
     setTab("ideas");
-    setNote(null);
+    clear();
     getPulse().then(setPage, () => {});
   }
 
   async function discuss(id: string) {
     try {
-      onRun(await pulseDiscuss(id));
+      const seed = await pulseDiscuss(id);
+      onRun(seed.text, seed.conversationId);
     } catch (err) {
-      setNote(String(err));
+      fail(err);
+    }
+  }
+
+  /** A chip under a post: a fix goes to the card's own chat (nothing runs
+   * until it is sent there), Ignore for now hides it, Remind me later brings
+   * it back at a time that fits the day. */
+  async function chip(id: string, c: PulseChip) {
+    if (c.act === "ignore") {
+      await act(id, "ignore", IGNORED_NOTE);
+      return;
+    }
+    try {
+      if (c.act === "offer") {
+        const seed = await pulseOffer(id, c.index);
+        onRun(seed.text, seed.conversationId);
+      } else if (c.act === "remind") {
+        const r = await pulseRemind(id);
+        setPage(r.page);
+        ok(r.note);
+      }
+    } catch (err) {
+      fail(err);
     }
   }
 
   /** The writer posts in the background: look again until the new post shows. */
   function watchForPost() {
     const before = new Set(page?.feed.map((p) => p.id));
+    // Emptied in place: the cleanup on close holds this same array.
     polls.current.forEach(clearTimeout);
-    polls.current = [];
+    polls.current.length = 0;
     const look = (left: number) => {
       polls.current.push(
         setTimeout(() => {
           getPulse().then(
             (next) => {
+              if (closed.current) return;
               setPage(next);
-              if (next.feed.some((p) => !before.has(p.id))) setNote(null);
+              if (next.feed.some((p) => !before.has(p.id))) clear();
               else if (left > 1) look(left - 1);
             },
             () => {},
@@ -181,13 +351,23 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
         <div className="switch" role="group" aria-label="Pulse view">
           <button type="button" aria-pressed={tab === "feed"} onClick={() => {
               setTab("feed");
-              setNote(null);
+              clear();
             }}
           >
             Feed
           </button>
           <button type="button" aria-pressed={tab === "ideas"} onClick={openIdeas}>
             {FOR_YOU_LABEL}
+          </button>
+          <button
+            type="button"
+            aria-pressed={tab === "saved"}
+            onClick={() => {
+              setTab("saved");
+              clear();
+            }}
+          >
+            Saved
           </button>
         </div>
         {tab === "feed" && (
@@ -219,29 +399,43 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
           onClose={() => setEditing(false)}
           onSaved={() => {
             setEditing(false);
-            setNote(SAVED_NOTE);
+            ok(SAVED_NOTE);
             watchForPost();
           }}
         />
       )}
-      {note && (
-        <p className="status" role="status">
-          {note}
-        </p>
-      )}
+      <StatusLine note={note} />
+      {tab === "saved" && <SavedPage onError={fail} />}
       {tab === "feed" && (
-        <ul className="rows feed" aria-busy={page === null}>
+        <ul className="rows feed" aria-busy={page === null} ref={feedList}>
           {page === null && !note && <SkeletonRows />}
-          {page?.feed.slice(0, shown).map((post) => (
-            <FeedCard
-              key={post.id}
-              post={post}
-              busy={busy}
-              onLove={() => void act(post.id, "love")}
-              onDiscuss={() => void discuss(post.id)}
-              onDelete={() => void act(post.id, "delete", "Deleted.")}
-              onWhy={() => pulseWhy(post.id)}
-            />
+          {page?.feed.slice(0, shown).map((post, i) => (
+            <Fragment key={post.id}>
+              <FeedCard
+                post={post}
+                busy={busy}
+                onLove={() => void act(post.id, post.loved ? "unlove" : "love")}
+                onDiscuss={() => void discuss(post.id)}
+                onOpen={() => {
+                  void openUrl(post.link).catch(fail);
+                  // Read it counts as engagement for card taste; quietly.
+                  void pulseAct(post.id, "opened").catch(() => {});
+                }}
+                onDislike={() => void act(post.id, "dislike", DISLIKE_NOTE)}
+                onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
+                onWhy={() => pulseWhy(post.id)}
+                onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
+                onSave={() => void act(post.id, "save", "Saved. It's on the Saved page.")}
+                onChip={(c) => void chip(post.id, c)}
+                onReview={() => void review(post.id)}
+                onIssue={() => copyIssue(post.id)}
+              />
+              {i === today - 1 && i < total - 1 && (
+                <li className="day-end" role="separator">
+                  {DAY_END}
+                </li>
+              )}
+            </Fragment>
           ))}
           {more && (
             <li ref={end} className="card post feed-card skeleton" aria-hidden="true">
@@ -251,7 +445,16 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
           )}
         </ul>
       )}
-      {page && tab === "feed" && total === 0 && <p className="empty">{FEED_EMPTY}</p>}
+      {page && tab === "feed" && total === 0 && (
+        <div className="feed-empty">
+          <p className="empty">{page.note || FEED_EMPTY}</p>
+          {onOpenInterests && (
+            <button type="button" className="quiet" onClick={onOpenInterests}>
+              {ADD_INTERESTS}
+            </button>
+          )}
+        </div>
+      )}
       {page && tab === "ideas" && (
         <>
           {ideaCount === 0 && <p className="empty">{IDEAS_EMPTY}</p>}
@@ -265,14 +468,36 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
                     idea={idea}
                     busy={busy}
                     onDo={() => void run(idea)}
-                    onMoreLike={() => void act(idea.id, "moreLike", MORE_LIKE_NOTE)}
+                    onFix={() => setFixing(idea)}
+                    onMoreLike={() =>
+                      void act(
+                        idea.id,
+                        idea.loved ? "unlove" : "moreLike",
+                        idea.loved ? undefined : MORE_LIKE_NOTE,
+                      )
+                    }
                     onNotInterested={() => void act(idea.id, "notInterested", NOT_INTERESTED_NOTE)}
+                    onDismiss={() => void act(idea.id, "dismiss", "Dismissed.")}
+                    onChip={(c) => void chip(idea.id, c)}
+                    onDiscuss={() => void discuss(idea.id)}
                   />
                 ))}
               </ul>
             </div>
           ))}
         </>
+      )}
+      {fixing && (
+        <FixWindow
+          id={fixing.id}
+          label={fixing.fix}
+          onClose={() => setFixing(null)}
+          onAsk={() => {
+            const idea = fixing;
+            setFixing(null);
+            void run(idea);
+          }}
+        />
       )}
     </section>
   );

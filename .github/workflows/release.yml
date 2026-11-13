@@ -9,7 +9,8 @@ name: Release
 # exists. Merges made with github.token start no push runs, so auto-merge needs
 # AUTO_MERGE_TOKEN (see auto-merge.yml) for its merges to publish.
 # Each release carries Linux and Windows builds, the Tauri shell's bundles
-# (Linux, Windows, macOS), `SHA256SUMS`, and
+# (Linux and Windows; macOS on tags, the nightly and manual runs, not on beta
+# pushes), `SHA256SUMS`, and
 # `SHA256SUMS.minisig` (minisign via `MINISIGN_SECRET_KEY`). The public key is
 # `packaging/minisign.pub`; the updater refuses unverified assets.
 
@@ -40,7 +41,8 @@ env:
   SOURCE_REF: ${{ github.event_name == 'schedule' && 'beta' || '' }}
 
 jobs:
-  # Decides whether to build. Tags always build. Beta pre-releases come from a
+  # Decides whether to build. A tag builds only when it is v<VERSION> or
+  # v<VERSION>-beta.N for the tagged commit. Beta pre-releases come from a
   # push to beta, the nightly or a manual run on beta; the nightly skips when
   # vX.Y.Z-beta.N already exists (no new beta commits since the last one).
   # Manual runs on other branches skip.
@@ -54,6 +56,9 @@ jobs:
       sha: ${{ steps.plan.outputs.sha }}
       # true for beta pushes, the nightly, manual beta runs and vX.Y.Z-beta.N tags.
       beta: ${{ github.ref_type != 'tag' || contains(github.ref_name, '-beta.') }}
+      # Shell bundle OSes. A beta push skips macOS (10x runner minutes for an
+      # unsigned .dmg); tags, the nightly and manual runs build all three.
+      shell_os: ${{ (github.ref_type == 'tag' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest","windows-latest","macos-latest"]' || '["ubuntu-latest","windows-latest"]' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,6 +73,8 @@ jobs:
         run: |
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # Before any build or signing: the tag must be this commit's VERSION.
+            bash scripts/release-tag-check.sh "$GITHUB_REF_NAME" || exit 1
             echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if [ "$EVENT" != schedule ] && [ "$REF" != refs/heads/beta ]; then
@@ -85,172 +92,14 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
-  linux-bundle:
-    needs: plan
-    if: needs.plan.outputs.build == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    # Builds run third-party build scripts; only publish writes the release.
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # Full history + tags: build.rs and the beta tag count commits since vX.Y.Z.
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          fetch-depth: 0
-      # The planned SHA checks out detached; name it beta so build.rs labels the
-      # binaries `X.Y.Z-beta.N (beta @ sha)` like a beta checkout would.
-      - name: Label the beta build
-        if: needs.plan.outputs.beta == 'true'
-        shell: bash
-        run: git switch -C beta
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          toolchain: stable
-      - name: Native GUI build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libgl1-mesa-dev libwayland-dev libasound2-dev
-      - run: ./scripts/make-release-bundle.sh
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: linux
-          path: dist-release/grokhub-linux-*.tar.gz
-          if-no-files-found: error
-
-  windows-installer:
-    needs: plan
-    if: needs.plan.outputs.build == 'true'
-    runs-on: windows-latest
-    # SignPath OSS approvals are manual; leave headroom when signing is on.
-    timeout-minutes: 120
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # Full history + tags: build.rs and the beta tag count commits since vX.Y.Z.
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          fetch-depth: 0
-      # The planned SHA checks out detached; name it beta so build.rs labels the
-      # binaries `X.Y.Z-beta.N (beta @ sha)` like a beta checkout would.
-      - name: Label the beta build
-        if: needs.plan.outputs.beta == 'true'
-        shell: bash
-        run: git switch -C beta
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          toolchain: stable
-      - name: Inno Setup
-        run: choco install innosetup --no-progress
-      - name: Package
-        shell: pwsh
-        run: ./scripts/make-windows-release.ps1
-      # Authenticode via SignPath Foundation. No-op until secrets/vars exist.
-      # Only tags are signed (every beta push would spam approvals).
-      - name: Detect SignPath configuration
-        id: signpath-config
-        shell: pwsh
-        env:
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-        run: |
-          $ver = (Get-Content VERSION -Raw).Trim()
-          "product-version=$ver" >> $env:GITHUB_OUTPUT
-          if ($env:GITHUB_REF_TYPE -ne "tag") {
-            "enabled=false" >> $env:GITHUB_OUTPUT
-            Write-Host "SignPath skipped: not a tag (beta branch pushes stay unsigned)."
-            exit 0
-          }
-          $missing = @()
-          foreach ($name in @(
-            "SIGNPATH_API_TOKEN",
-            "SIGNPATH_ORGANIZATION_ID",
-            "SIGNPATH_PROJECT_SLUG",
-            "SIGNPATH_SIGNING_POLICY_SLUG",
-            "SIGNPATH_ARTIFACT_CONFIGURATION_SLUG"
-          )) {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              $missing += $name
-            }
-          }
-          if ($missing.Count -gt 0) {
-            "enabled=false" >> $env:GITHUB_OUTPUT
-            Write-Host "::warning::SignPath skipped (unsigned Windows artifacts): missing $($missing -join ', '). See docs/CODE_SIGNING.md."
-            exit 0
-          }
-          "enabled=true" >> $env:GITHUB_OUTPUT
-          Write-Host "SignPath enabled for tag with policy '$env:SIGNPATH_SIGNING_POLICY_SLUG'."
-      - name: Upload unsigned Windows artifacts for SignPath
-        if: steps.signpath-config.outputs.enabled == 'true'
-        id: signpath-unsigned
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: windows-signpath-unsigned
-          path: |
-            dist-release/GrokHub-Setup-*.exe
-            dist-release/grokhub-windows-v*.zip
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-      - name: Submit SignPath signing request
-        if: steps.signpath-config.outputs.enabled == 'true'
-        id: signpath
-        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.signpath-unsigned.outputs.artifact-id }}
-          wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 3600
-          output-artifact-directory: signpath-signed
-          parameters: |
-            version: "${{ steps.signpath-config.outputs.product-version }}"
-      - name: Replace unsigned artifacts with SignPath-signed outputs
-        if: steps.signpath-config.outputs.enabled == 'true'
-        shell: pwsh
-        run: |
-          $downloadDir = Join-Path $PWD "signpath-signed"
-          if (-not (Test-Path $downloadDir)) {
-            throw "Signed artifact directory '$downloadDir' was not created."
-          }
-          $setup = Get-ChildItem $downloadDir -Recurse -File -Filter "GrokHub-Setup-*.exe" | Select-Object -First 1
-          $zip = Get-ChildItem $downloadDir -Recurse -File -Filter "grokhub-windows-v*.zip" | Select-Object -First 1
-          if (-not $setup) { throw "Signed GrokHub-Setup-*.exe was not found in '$downloadDir'." }
-          if (-not $zip) { throw "Signed grokhub-windows-v*.zip was not found in '$downloadDir'." }
-          $outDir = Join-Path $PWD "dist-release"
-          Copy-Item $setup.FullName (Join-Path $outDir $setup.Name) -Force
-          Copy-Item $zip.FullName (Join-Path $outDir $zip.Name) -Force
-          Write-Host "Replaced dist-release Windows artifacts with SignPath-signed outputs."
-          Write-Host "Signing request: ${{ steps.signpath.outputs.signing-request-web-url }}"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: windows
-          path: |
-            dist-release/GrokHub-Setup-*.exe
-            dist-release/grokhub-windows-v*.zip
-          if-no-files-found: error
-
-  # The Tauri shell (cross-platform recode, Phase 6) ships as Tauri's own
-  # bundles next to the cabin's builds; scripts/name-shell-bundles.sh gives
-  # them release names. The macOS .dmg is unsigned until Apple signing exists.
+  # The Tauri app ships as Tauri's own bundles; scripts/name-shell-bundles.sh
+  # gives them release names. The macOS .dmg is unsigned until Apple signing exists.
   shell-bundles:
     needs: plan
     if: needs.plan.outputs.build == 'true'
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ fromJSON(needs.plan.outputs.shell_os) }}
     name: shell bundles (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -258,21 +107,44 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Full history + tags: src-tauri/build.rs counts beta commits since
+        # vX.Y.Z, so the shell's version matches the release tag its
+        # self-updater compares against (LU-06).
         with:
           ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+          # Build scripts run here; keep the job token out of .git/config.
+          persist-credentials: false
+      - name: Label the beta build
+        if: needs.plan.outputs.beta == 'true'
+        shell: bash
+        run: git switch -C beta
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
-          cache: npm
+          node-version: 24
+          # Same rule as rust-cache: only beta pushes use a cache. Tags and the
+          # nightly can reach main's cache scope, so they never read or write one.
+          cache: ${{ github.ref == 'refs/heads/beta' && 'npm' || '' }}
           cache-dependency-path: ui/package-lock.json
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        if: github.ref == 'refs/heads/beta'
+        with:
+          workspaces: src-tauri
+          shared-key: shell-${{ matrix.os }}
       - name: Linux webview libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      # Windows and macOS bundle grokhub-hub as a sidecar
+      # (src-tauri/tauri.{windows,macos}.conf.json); it must exist before the
+      # src-tauri build. Linux ships it as a package file instead.
+      - name: Stage the grokhub-hub sidecar
+        if: runner.os != 'Linux'
+        run: node scripts/stage-hub-sidecar.mjs
       - run: npm ci --prefix ui
       - name: Bundles
         shell: bash
@@ -287,7 +159,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [plan, linux-bundle, windows-installer, shell-bundles]
+    needs: [plan, shell-bundles]
     if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -300,6 +172,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist-release
+          pattern: "shell-*"
           merge-multiple: true
       - name: Name the release
         id: name
@@ -330,6 +203,35 @@ jobs:
             echo "tag=v${ver}-beta.${n}" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
+      # The shell's self-updater (LU-06) installs only what this signs: the
+      # AppImage and the NSIS installer, listed in latest.json with their
+      # minisign signatures. No key, no manifest, so shells don't offer it.
+      - name: Sign the shell updates
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          TAG: ${{ steps.name.outputs.tag }}
+        shell: bash
+        run: |
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then
+            echo "::warning::MINISIGN_SECRET_KEY is not set: no latest.json, so shells won't offer this release as an update."
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          ver="$(tr -d '[:space:]' < VERSION)"
+          umask 077
+          key="$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          for f in "dist-release/grokhub-shell-v$ver-linux-amd64.AppImage" "dist-release/GrokHub-Shell-Setup-$ver.exe"; do
+            minisign -S -s "$key" -m "$f" -t "loadout shell $TAG"
+            minisign -V -p packaging/minisign.pub -m "$f"
+          done
+          rm -f "$key"
+          ./scripts/shell-update-manifest.sh dist-release "$TAG" "$GITHUB_REPOSITORY"
+      # The model catalog ships with every release, covered by the signed
+      # SHA256SUMS, so older apps pick up new models (catalog_update.rs).
+      - name: Ship the model catalog
+        run: cp crates/grokhub-core/data/local_catalog.toml dist-release/local_catalog.toml
       - name: Write SHA256SUMS
         working-directory: dist-release
         run: |
@@ -359,7 +261,7 @@ jobs:
             echo "::warning::packaging/minisign.pub is missing, so the signature was not checked against the shipped key."
           fi
       - name: Publish
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ steps.name.outputs.tag }}
           target_commitish: ${{ needs.plan.outputs.sha }}
@@ -370,15 +272,13 @@ jobs:
           fail_on_unmatched_files: true
           body: |
             ## Install
-            **Linux:** extract `grokhub-linux-v*.tar.gz` and run `./install.sh`,
-            or `cargo install --path crates/grokhub-app` from a clone.
+            **Linux:** `grokhub-shell-v*-linux-amd64.AppImage` or `.deb`, or
+            `./scripts/install.sh --user` from a clone.
 
-            **Windows:** run `GrokHub-Setup-*.exe` (no admin).
-            Installs to `%LOCALAPPDATA%\Programs\GrokHub`.
+            **Windows:** run `GrokHub-Shell-Setup-*.exe`.
 
-            **GrokHub Shell (preview, Tauri):** `grokhub-shell-v*-linux-amd64.deb` or
-            `.AppImage` on Linux, `GrokHub-Shell-Setup-*.exe` on Windows, and
-            `grokhub-shell-v*-macos-arm64.dmg` on Apple silicon Macs. The .dmg isn't
+            **macOS (Apple silicon):** `grokhub-shell-v*-macos-arm64.dmg` (tagged and
+            nightly releases; per-merge beta builds skip it). The .dmg isn't
             signed yet, so right-click the app and choose Open the first time.
 
             ## Verify

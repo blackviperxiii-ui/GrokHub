@@ -53,10 +53,20 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         Ok(path) => path,
         Err(err) => return ToolOutput::err(err),
     };
+    let redacted = crate::memory::redact_model_text(&path, &replacement);
+    let note = if redacted != replacement {
+        " (secrets redacted)"
+    } else {
+        ""
+    };
     crate::checkpoint::before_write(&path);
-    let replaced = with_file_lock(&path, || apply(&path, &needle, &replacement, replace_all));
+    let replaced = with_file_lock(&path, || apply(&path, &needle, &redacted, replace_all));
     match replaced {
-        Ok(n) => ToolOutput::ok(format!("replaced {n} in {raw}")),
+        Ok(n) => {
+            crate::memory::after_model_write(workspace, &path);
+            super::taint::after_write(workspace, &path, false);
+            ToolOutput::ok(format!("replaced {n} in {raw}{note}"))
+        }
         Err(err) => ToolOutput::err(err),
     }
 }

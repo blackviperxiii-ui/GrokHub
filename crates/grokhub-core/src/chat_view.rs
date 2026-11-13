@@ -578,7 +578,7 @@ fn emit_turn(out: &mut Vec<ChatView>, parts: Vec<crate::turn_timeline::TurnPart>
     flush(out, &mut tools);
 }
 
-fn is_protocol_line(line: &str) -> bool {
+pub(crate) fn is_protocol_line(line: &str) -> bool {
     let t = line.trim();
     t.starts_with("HOST_CMD")
         || t.starts_with("COMPUTER_CMD")
@@ -592,6 +592,7 @@ fn is_protocol_line(line: &str) -> bool {
         || t.starts_with("IMAGINE_PROMPT:")
         || t.starts_with("USER_FACT:")
         || t.starts_with("BACKGROUND_TASK:")
+        || crate::objectives::is_marker_line(t)
 }
 
 /// User-visible assistant prose. Thinking, protocol, replayed transcripts, and tool dumps do not count.
@@ -716,6 +717,8 @@ fn visible_assistant(text: &str) -> String {
     // Model-only untrusted fences (web_search / web_fetch / …) must never paint
     // in the user-facing bubble — drop open→close blocks and stray markers.
     let text = strip_untrusted_fences(text);
+    // LO-51: a tool call the model wrote as text is not for the user.
+    let text = crate::tool_tags::strip_tool_tags(&text);
     let mut lines: Vec<&str> = Vec::new();
     let mut skip_until: Option<String> = None;
     for line in text.lines() {
@@ -771,7 +774,7 @@ fn strip_untrusted_fences(text: &str) -> String {
 }
 
 /// `HOST_CMD: cat <<'EOF'` hides the script until `EOF`.
-fn host_cmd_heredoc_delim(line: &str) -> Option<String> {
+pub(crate) fn host_cmd_heredoc_delim(line: &str) -> Option<String> {
     let t = line.trim();
     let idx = t.find("<<")?;
     let rest = t[idx + 2..].trim_start();
@@ -793,9 +796,13 @@ fn host_cmd_heredoc_delim(line: &str) -> Option<String> {
 
 /// Drop “an image is attached” narration. Cabin eyes / a drop already sent the frame.
 pub fn scrub_thought(text: &str) -> String {
+    let text = crate::turn_timeline::thought_text(text);
     let mut out = String::new();
-    for chunk in split_thought_chunks(text) {
-        if thought_chunk_is_attach_noise(chunk) || thought_chunk_is_false_no_computer(chunk) {
+    for chunk in split_thought_chunks(&text) {
+        if thought_chunk_is_attach_noise(chunk)
+            || thought_chunk_is_false_no_computer(chunk)
+            || thought_chunk_is_mode_chatter(chunk)
+        {
             continue;
         }
         out.push_str(chunk);
@@ -807,7 +814,7 @@ pub fn scrub_thought(text: &str) -> String {
         .to_string()
 }
 
-fn split_thought_chunks(text: &str) -> Vec<&str> {
+pub(crate) fn split_thought_chunks(text: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
     let bytes = text.as_bytes();
@@ -824,6 +831,32 @@ fn split_thought_chunks(text: &str) -> Vec<&str> {
         out.push(&text[start..]);
     }
     out
+}
+
+/// The model talking about the app's own reply modes ("checklist mode does
+/// not apply", "stay in casual chat mode", "wait for a specific ask"). Those
+/// words come from its instructions, not from the person, so they never show.
+fn thought_chunk_is_mode_chatter(chunk: &str) -> bool {
+    const MODE: [&str; 16] = [
+        "checklist mode",
+        "chat mode",
+        "casual mode",
+        "task mode",
+        "repair mode",
+        "talk mode",
+        "talk style",
+        "reply mode",
+        "mode does not apply",
+        "mode doesn't apply",
+        "a specific ask",
+        "an explicit ask",
+        "no explicit task",
+        "no task was requested",
+        "rather than a task request",
+        "not a task request",
+    ];
+    let t = chunk.to_lowercase().replace('\u{2019}', "'");
+    MODE.iter().any(|p| t.contains(p))
 }
 
 fn thought_chunk_is_false_no_computer(chunk: &str) -> bool {
@@ -964,6 +997,67 @@ pub fn chat_find_label(pick: usize, len: usize, query: &str) -> String {
     }
 }
 
+/// What deleting one chat bubble takes out of a transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BubbleDelete {
+    /// The ask at message `at`. `later` counts the same ask (whitespace
+    /// aside) sent again after it, so the saved history finds this one.
+    Ask { at: usize, later: usize },
+    /// The whole reply to an ask: messages `from..to`, tool results and
+    /// cabin notes included. `ask` is the ask it answers, as `(at, later)`;
+    /// `None` is a reply before any ask.
+    Reply {
+        from: usize,
+        to: usize,
+        ask: Option<(usize, usize)>,
+    },
+}
+
+/// The messages behind bubble `view` of `views`, which [`visible_chat_refs`]
+/// built from `messages`. An ask is one message; any other bubble stands for
+/// the reply it is part of, up to the next ask.
+pub fn bubble_delete(
+    messages: &[(&str, &str)],
+    views: &[ChatView],
+    view: usize,
+) -> Option<BubbleDelete> {
+    let shown = views.get(view)?;
+    let asks: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, (role, content))| *role == "user" && !is_workload_user(content))
+        .map(|(i, _)| i)
+        .collect();
+    let later = |k: usize| {
+        let want = squash_ws(messages[asks[k]].1);
+        asks[k + 1..]
+            .iter()
+            .filter(|&&i| squash_ws(messages[i].1) == want)
+            .count()
+    };
+    let before = views[..view]
+        .iter()
+        .filter(|v| v.kind == ChatKind::User)
+        .count();
+    if shown.kind == ChatKind::User {
+        let at = *asks.get(before)?;
+        return Some(BubbleDelete::Ask {
+            at,
+            later: later(before),
+        });
+    }
+    let to = asks.get(before).copied().unwrap_or(messages.len());
+    let (from, ask) = match before.checked_sub(1) {
+        Some(k) => (asks.get(k)? + 1, Some((asks[k], later(k)))),
+        None => (0, None),
+    };
+    (from < to).then_some(BubbleDelete::Reply { from, to, ask })
+}
+
+fn squash_ws(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tail_tests {
     use super::*;
@@ -1005,6 +1099,56 @@ mod tests {
 
     fn kinds(v: &[ChatView]) -> Vec<ChatKind> {
         v.iter().map(|x| x.kind).collect()
+    }
+
+    #[test]
+    fn deleting_a_bubble_names_one_ask_or_the_whole_reply_after_it() {
+        let msgs: Vec<(&str, &str)> = vec![
+            ("assistant", "welcome back"),
+            ("user", "hi"),
+            ("assistant", "hello"),
+            ("user", "HOST_RESULT ok"),
+            ("assistant", "done that"),
+            ("user", "hi "),
+            ("assistant", "hey again"),
+            ("user", "bye"),
+        ];
+        let views = visible_chat_refs(msgs.iter().copied());
+        let at = |kind: ChatKind, body: &str| {
+            views
+                .iter()
+                .position(|v| v.kind == kind && v.body.contains(body))
+                .unwrap()
+        };
+        // The greeting before any ask is a reply with no ask.
+        assert_eq!(
+            bubble_delete(&msgs, &views, at(ChatKind::Assistant, "welcome")),
+            Some(BubbleDelete::Reply {
+                from: 0,
+                to: 1,
+                ask: None
+            })
+        );
+        // The first "hi" has one more "hi" after it, whitespace aside.
+        let first_hi = views.iter().position(|v| v.kind == ChatKind::User).unwrap();
+        assert_eq!(
+            bubble_delete(&msgs, &views, first_hi),
+            Some(BubbleDelete::Ask { at: 1, later: 1 })
+        );
+        // The reply to it runs through the tool result to the next real ask.
+        assert_eq!(
+            bubble_delete(&msgs, &views, at(ChatKind::Assistant, "done that")),
+            Some(BubbleDelete::Reply {
+                from: 2,
+                to: 5,
+                ask: Some((1, 1))
+            })
+        );
+        assert_eq!(
+            bubble_delete(&msgs, &views, at(ChatKind::User, "bye")),
+            Some(BubbleDelete::Ask { at: 7, later: 0 })
+        );
+        assert_eq!(bubble_delete(&msgs, &views, views.len()), None);
     }
 
     #[test]
@@ -1666,6 +1810,23 @@ mod tests {
             "Need a snapshot."
         );
         assert_eq!(scrub_thought("Need a snapshot."), "Need a snapshot.");
+        // Reply-mode chatter from the instructions never shows (Nov 10 log).
+        assert_eq!(
+            scrub_thought(
+                "The user is excited about new engines. This is a casual update rather than a task request, so the checklist mode does not apply."
+            ),
+            "The user is excited about new engines."
+        );
+        assert_eq!(
+            scrub_thought(
+                "The user wants to keep coding. No explicit task was requested. I\u{2019}ll stay in casual chat mode and wait for a specific ask."
+            ),
+            "The user wants to keep coding."
+        );
+        assert_eq!(
+            scrub_thought("They want a grocery checklist for Sunday."),
+            "They want a grocery checklist for Sunday."
+        );
         let kept = visible_chat(&[(
             "assistant".into(),
             "THINKING:\nThere is an image attached. Plan the reply.\n\nHello.".into(),

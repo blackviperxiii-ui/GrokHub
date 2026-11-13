@@ -133,6 +133,31 @@ async function sendChat({ conversationId, text }) {
 
 const COMMANDS = {
   get_settings: () => ({ ok: true, value: settings() }),
+  get_behavior: () => ({
+    ok: true,
+    value: {
+      closeToTray: true,
+      behavior: { autocomplete: false, quietStart: "", quietEnd: "", dailyTokenBudget: 0, pauseOverBudget: false },
+      budgets: [{ value: 0, label: "Off" }],
+    },
+  }),
+  get_privacy: () => ({
+    ok: true,
+    value: {
+      offlineOnly: false,
+      localReady: false,
+      sent: "0 calls sent off-device this week",
+      hosts: [],
+      encrypted: true,
+      encryptedNote: "Personal memory and the logs are sealed with your keyring.",
+      dataFolder: "/home/user/.config/GrokHub",
+      canOpenFolder: true,
+    },
+  }),
+  get_background: () => ({
+    ok: true,
+    value: { runner: "Here a job runs when you choose Run now.", nextDue: null, quiet: "No quiet hours", budget: "Daily token budget: Off", rows: [] },
+  }),
   send_chat: sendChat,
   answer_permission: ({ callId, answer }) => {
     if (STATE.permission?.id !== callId) return { ok: false, error: "no such approval" };
@@ -261,44 +286,76 @@ async function main() {
       screen: document.documentElement.clientWidth,
     }));
     check(wide.page <= wide.screen, `the chat is wider than a phone: ${JSON.stringify(wide)}`);
+    // The views bar sits over the bottom edge; Send must stay clickable. The
+    // page makes room for the bar with a short transition, so wait for it.
+    await page.waitForFunction(() => {
+      const room = parseFloat(getComputedStyle(document.querySelector(".app")).paddingBottom);
+      return room >= document.querySelector(".topbar").getBoundingClientRect().height;
+    });
+    const covered = await page.evaluate(() => {
+      const send = document.querySelector("form.composer button[type='submit']");
+      const r = send.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return send.contains(hit) ? "" : (hit?.outerHTML.slice(0, 80) ?? "nothing");
+    });
+    check(covered === "", `the views bar covers Send on a phone: ${covered}`);
+    // One row: no tab spills out of the bar over the page.
+    const spill = await page.evaluate(() => {
+      const bar = document.querySelector(".topbar").getBoundingClientRect();
+      return [...document.querySelectorAll("nav.tabs button")]
+        .map((b) => b.getBoundingClientRect())
+        .filter((r) => r.top < bar.top - 1 || r.bottom > bar.bottom + 1).length;
+    });
+    check(spill === 0, `${spill} tab(s) spill out of the phone's views bar`);
     await page.setViewportSize({ width: 1280, height: 720 });
 
     await page.locator("nav.tabs button", { hasText: "Pulse" }).click();
     const post = page.getByRole("listitem", { name: POST_TITLE });
     await post.getByRole("button", { name: "Open image 1" }).waitFor({ timeout: 30000 });
-    await post.getByRole("button", { name: "Love" }).click();
-    await post.locator("button[aria-label='Love'][aria-pressed='true']").waitFor({ timeout: 30000 });
-    check(STATE.loved, "Love never reached the desktop");
-    console.log("pulse: post with its image shown, Love sent");
+    await post.getByRole("button", { name: "Like", exact: true }).click();
+    await post.locator("button[aria-label='Like'][aria-pressed='true']").waitFor({ timeout: 30000 });
+    check(STATE.loved, "Like never reached the desktop");
+    console.log("pulse: post with its image shown, Like sent");
 
     await page.getByRole("button", { name: "For You", exact: true }).click();
     const idea = page.getByRole("listitem", { name: IDEA_TITLE });
-    await idea.getByRole("button", { name: "More" }).click();
-    const items = await idea.getByRole("menuitem").allTextContents();
-    check(
-      items.join("|") === "Let's do it|More like this|Not interested",
-      `the idea menu says ${JSON.stringify(items)}`,
+    await idea.locator(".card-row button").first().waitFor({ timeout: 30000 });
+    check((await idea.getByRole("button", { name: "More", exact: true }).count()) === 0, "the idea still has a menu");
+    const buttons = (await idea.locator(".card-row button").allTextContents()).map((t) =>
+      t.replace(/[\u2661\u2665]/g, "").trim(),
     );
-    await idea.getByRole("button", { name: "More" }).click();
+    check(
+      buttons.join("|") === "Like|Let's do it|Not interested|Dismiss",
+      `the idea buttons say ${JSON.stringify(buttons)}`,
+    );
     await idea.getByRole("button", { name: new RegExp(IDEA_TITLE) }).click();
     await page.getByRole("textbox", { name: "Message" }).waitFor({ timeout: 30000 });
     const typed = await page.getByRole("textbox", { name: "Message" }).inputValue();
     check(typed === IDEA_ACTION, `the chat box says ${JSON.stringify(typed)}`);
     check(STATE.acts.includes("web-idea:accept"), "Let's do it never reached the desktop");
-    console.log(`pulse: idea menu ${items.join(", ")}; the row filled the chat box`);
+    console.log(`pulse: idea buttons ${buttons.join(", ")}; the row filled the chat box`);
 
     // Every view renders on what the desktop sends; a missing field here
     // once blanked the whole page.
-    for (const view of ["Automations", "Connectors", "Memory"]) {
+    for (const view of ["Automations", "Connectors", "Personal"]) {
       await page.locator("nav.tabs button", { hasText: view }).click();
       await page.getByRole("button", { name: "Chat" }).waitFor({ timeout: 10000 });
     }
-    await page.getByRole("textbox", { name: "New note" }).waitFor({ timeout: 10000 });
-    console.log("automations, memory and connectors render");
+    await page.getByLabel("Add something about you").waitFor({ timeout: 10000 });
+    check((await page.getByRole("button", { name: "Wipe everything" }).count()) === 0, "the web app offered Wipe");
+    console.log("automations, personal and connectors render");
 
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByText("Change settings and the API key there.").waitFor();
     check((await page.getByLabel("API key").count()) === 0, "the web app offered to set the key");
+    await page.getByText("0 calls sent off-device this week").waitFor();
+    await page.getByText("No automation is on, so nothing is due.").waitFor();
+    check(
+      (await page.locator("section.settings").getByRole("switch").count()) === 0 &&
+        (await page.getByRole("button", { name: "Open data folder" }).count()) === 0,
+      "the web app offered to change Privacy & data",
+    );
+    console.log("settings: Defaults, Behavior, Privacy & data and Background read-only");
 
     const stores = await page.evaluate(async () => ({
       local: localStorage.length,

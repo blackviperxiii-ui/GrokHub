@@ -5,8 +5,8 @@ use serde_json::Value;
 use crate::gate::Gate;
 
 use super::{
-    connections, control, desktop, glob, grep, list_dir, local_ai, media, read_file,
-    search_replace, shell, show_panel, web_fetch, web_search, write,
+    connections, control, desktop, glob, grep, list_dir, local_ai, media, models_check, mods,
+    read_file, search_replace, shell, show_panel, web_fetch, web_search, write,
 };
 
 /// One row in the native catalog. When deferred loading is on, `defer` tools ship as
@@ -34,6 +34,21 @@ fn desktop_on(gate: &Gate) -> bool {
     gate.desktop
 }
 
+/// The look-only screenshot: any attended chat that may act, desktop control
+/// on or off. An unattended run has nobody to say yes to it.
+fn look_on(gate: &Gate) -> bool {
+    !gate.readonly_session && gate.attended
+}
+
+/// Mod tools only where the app hosts them, so other hosts' lists stay as they were.
+fn mods_on(_gate: &Gate) -> bool {
+    mods::available()
+}
+
+fn mods_action_on(gate: &Gate) -> bool {
+    not_readonly(gate) && mods::available()
+}
+
 fn generative_ui_on(_gate: &Gate) -> bool {
     show_panel::enabled(&crate::perm::config_dir())
 }
@@ -48,7 +63,7 @@ fn desktop_schema(i: usize) -> Value {
 
 /// Read-only tools, sent first. All eager except `scheduler_list`.
 pub fn read_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 9] = [
+    static DEFS: [ToolDef; 13] = [
         ToolDef {
             name: "read_file",
             blurb: "Read a workspace file",
@@ -107,10 +122,38 @@ pub fn read_defs() -> &'static [ToolDef] {
         },
         ToolDef {
             name: local_ai::STATUS,
-            blurb: "Report the on-device model's state and recent health",
+            blurb: "Diagnose the local model by reading its own folders",
             defer: true,
             schema: local_ai::status_schema,
             visible: always,
+        },
+        ToolDef {
+            name: models_check::NAME,
+            blurb: "Test the online model keys live",
+            defer: true,
+            schema: models_check::schema,
+            visible: always,
+        },
+        ToolDef {
+            name: mods::SEARCH,
+            blurb: "Search mods for a game on its sanctioned sources",
+            defer: true,
+            schema: mods::search_schema,
+            visible: mods_on,
+        },
+        ToolDef {
+            name: mods::DETAIL,
+            blurb: "Read one mod's description, files and requirements",
+            defer: true,
+            schema: mods::detail_schema,
+            visible: mods_on,
+        },
+        ToolDef {
+            name: mods::INSTALLED,
+            blurb: "List the mods installed for a game",
+            defer: true,
+            schema: mods::installed_schema,
+            visible: mods_on,
         },
     ];
     &DEFS
@@ -119,7 +162,7 @@ pub fn read_defs() -> &'static [ToolDef] {
 /// Mutating and gated tools. Edit and shell stay eager (the general coding set);
 /// scheduler, media, desktop, connection and the rest are deferred.
 pub fn action_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 21] = [
+    static DEFS: [ToolDef; 24] = [
         ToolDef {
             name: "send_subagent_message",
             blurb: "Send a message to a spawned subagent",
@@ -153,7 +196,7 @@ pub fn action_defs() -> &'static [ToolDef] {
             blurb: "Fetch a public URL",
             defer: true,
             schema: web_fetch::schema,
-            visible: not_readonly,
+            visible: always,
         },
         ToolDef {
             // Eager so OpenRouter / local always see the schema (research playbook
@@ -162,7 +205,7 @@ pub fn action_defs() -> &'static [ToolDef] {
             blurb: "Search the public web (free by default)",
             defer: false,
             schema: web_search::schema,
-            visible: not_readonly,
+            visible: always,
         },
         ToolDef {
             name: "image_generate",
@@ -207,6 +250,13 @@ pub fn action_defs() -> &'static [ToolDef] {
             visible: not_readonly,
         },
         ToolDef {
+            name: control::MERGE_WORK,
+            blurb: "Ask to merge a worktree helper's work",
+            defer: true,
+            schema: control::merge_schema,
+            visible: not_readonly,
+        },
+        ToolDef {
             name: "monitor",
             blurb: "Watch a background command",
             defer: true,
@@ -242,11 +292,25 @@ pub fn action_defs() -> &'static [ToolDef] {
             visible: not_readonly,
         },
         ToolDef {
+            name: mods::PREPARE,
+            blurb: "Put an Install card for a mod on the Mods page",
+            defer: true,
+            schema: mods::prepare_schema,
+            visible: mods_action_on,
+        },
+        ToolDef {
             name: show_panel::SHOW_PANEL,
             blurb: "Emit a validated generative UI panel spec",
             defer: true,
             schema: show_panel::schema,
             visible: generative_ui_on,
+        },
+        ToolDef {
+            name: super::LOOK_AT_SCREEN,
+            blurb: "Look at the screen (no desktop control needed)",
+            defer: false,
+            schema: desktop::look_schema,
+            visible: look_on,
         },
         ToolDef {
             name: "screenshot",

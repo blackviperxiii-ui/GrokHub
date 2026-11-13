@@ -6,7 +6,7 @@
 //! under the user's home become `/home/user`; tokens, emails, and credential-
 //! like strings are redacted before anything is written.
 
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -33,7 +33,8 @@ pub fn diagnostics_bundle(
     // The status line can echo a pasted key; it never leaves in the bundle.
     let notes = redact_secrets(&notes.chars().take(400).collect::<String>());
     format!(
-        "app GrokHub\nversion {version}\nos {} {}\nauth {}\nhub {hub_kind}\nskills {skill_count}\nlastHost {receipt}\nworkboardOpen {workboard_open}\nnotes {notes}\n",
+        "app {}\nversion {version}\nos {} {}\nauth {}\nhub {hub_kind}\nskills {skill_count}\nlastHost {receipt}\nworkboardOpen {workboard_open}\nnotes {notes}\n",
+        crate::brand::product_name(),
         std::env::consts::OS,
         std::env::consts::ARCH,
         if auth { "present" } else { "missing" },
@@ -194,7 +195,7 @@ pub struct DiagnosticsExport {
 impl DiagnosticsExport {
     pub fn with_defaults(version: &str, chat_id: &str, chat_title: &str) -> Self {
         Self {
-            app: "GrokHub".into(),
+            app: crate::brand::product_name().into(),
             version: version.into(),
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
@@ -222,12 +223,22 @@ pub fn desktop_dir() -> Option<PathBuf> {
 }
 
 /// The user's Downloads folder, found the same way as [`desktop_dir`].
-fn downloads_dir() -> Option<PathBuf> {
+pub fn downloads_dir() -> Option<PathBuf> {
     let home = user_home()?;
     let platform = dirs::download_dir()
         .filter(|_| dirs::home_dir().as_deref() == Some(home.as_path()))
         .filter(|d| d != &home);
     Some(platform.unwrap_or_else(|| home.join("Downloads")))
+}
+
+/// The user's Documents folder, found the same way as [`desktop_dir`]
+/// (OneDrive's when Windows moved it there; the translated name on Linux).
+pub fn documents_dir() -> Option<PathBuf> {
+    let home = user_home()?;
+    let platform = dirs::document_dir()
+        .filter(|_| dirs::home_dir().as_deref() == Some(home.as_path()))
+        .filter(|d| d != &home);
+    Some(platform.unwrap_or_else(|| home.join("Documents")))
 }
 
 /// Folders a sync client uploads: the OneDrive roots Windows names in the
@@ -239,6 +250,12 @@ fn sync_roots_from_env() -> Vec<PathBuf> {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .collect()
+}
+
+/// True when `dir` sits inside a folder a sync client uploads (OneDrive,
+/// Dropbox, Google Drive, iCloud Drive).
+pub fn dir_is_cloud_synced(dir: &Path) -> bool {
+    is_cloud_synced(dir, &sync_roots_from_env())
 }
 
 /// True when `dir` sits inside a cloud-synced folder: one of `sync_roots`,
@@ -293,6 +310,46 @@ pub fn diagnostics_zip_path(at: SystemTime) -> Result<PathBuf, String> {
     Ok(dir.join(diagnostics_zip_name(at)))
 }
 
+/// Where a diagnostics zip lands, for its status line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticsPlace {
+    /// The Diagnostics folder in your files (`Documents/Loadout/Diagnostics`).
+    Diagnostics,
+    /// The Desktop (your files sync to the cloud, the Desktop doesn't).
+    Desktop,
+    /// Downloads or home, because the others sync to the cloud.
+    Elsewhere,
+}
+
+/// Destination for a new export: the Diagnostics folder in your files
+/// (under `config`'s `folders.json`), unless that folder syncs to the cloud
+/// or can't be made; then [`diagnostics_zip_path`]'s Desktop chain. A bundle
+/// never uploads itself.
+pub fn diagnostics_zip_path_in(config: &Path, at: SystemTime) -> Result<PathBuf, String> {
+    let kind = crate::user_files::UserFolder::Diagnostics;
+    let planned = crate::user_files::folder_path(config, kind);
+    if !is_cloud_synced(&planned, &sync_roots_from_env()) {
+        if let Ok(dir) = crate::user_files::folder(config, kind) {
+            return Ok(dir.join(diagnostics_zip_name(at)));
+        }
+    }
+    diagnostics_zip_path(at)
+}
+
+/// Which [`DiagnosticsPlace`] `path` is in.
+pub fn diagnostics_place(config: &Path, path: &Path) -> DiagnosticsPlace {
+    let dir = path.parent();
+    let diagnostics =
+        crate::user_files::folder_path(config, crate::user_files::UserFolder::Diagnostics);
+    if dir == Some(diagnostics.as_path()) {
+        DiagnosticsPlace::Diagnostics
+    } else if dir.is_some() && dir == desktop_dir().as_deref() {
+        DiagnosticsPlace::Desktop
+    } else {
+        DiagnosticsPlace::Elsewhere
+    }
+}
+
 /// Redact secrets, bare token shapes (AWS, Slack, Stripe, Google, Notion,
 /// JWTs, URL passwords, PEM private keys), emails/PII, credential
 /// assignments (`DB_PASSWORD=…`, `"api_key": "…"`), and home-rooted paths
@@ -305,6 +362,64 @@ pub fn redact_for_diagnostics(input: &str, home: Option<&str>) -> String {
         s = redact_home_paths(&s, home);
     }
     s
+}
+
+/// How much of a log's end is read to show its last characters. Redacting
+/// takes time with every byte, and a log has no size limit.
+const LOG_READ: u64 = 64 * 1024;
+/// The redacted text that must stand before the tail shown when only the end
+/// of a log was read. A private key block that began before the part read is
+/// not redacted in it; this much text in front keeps what is left of the
+/// block out of the tail. A log so full of secrets that the part read
+/// redacts down to less is read whole instead.
+const LOG_LEAD: usize = 16_000;
+
+/// The last `most` bytes of a log, from the start of a line, and whether
+/// that is the whole log. A cut falls inside a line, maybe inside a key or a
+/// character, so what is left of that line is dropped.
+fn log_end(file: &mut (impl Read + Seek), most: u64) -> std::io::Result<(String, bool)> {
+    let len = file.seek(SeekFrom::End(0))?;
+    let from = len.saturating_sub(most);
+    file.seek(SeekFrom::Start(from))?;
+    let mut bytes = Vec::new();
+    file.take(most).read_to_end(&mut bytes)?;
+    if from > 0 {
+        let line = bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(bytes.len(), |at| at + 1);
+        bytes.drain(..line);
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    Ok((text, from == 0))
+}
+
+/// The last `tail` characters of the redacted log at `path`, for a
+/// diagnostics export; `None` when it can't be read as text. Redacted first,
+/// then cut: a key the cut lands inside is still a key.
+pub fn redacted_log_tail(path: &Path, home: Option<&str>, tail: usize) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let (text, whole) = log_end(&mut file, LOG_READ).ok()?;
+    let mut redacted = redact_for_diagnostics(&text, home);
+    if !whole && redacted.chars().count() < tail + LOG_LEAD {
+        let (text, _) = log_end(&mut file, u64::MAX).ok()?;
+        redacted = redact_for_diagnostics(&text, home);
+    }
+    let n = redacted.chars().count();
+    Some(redacted.chars().skip(n.saturating_sub(tail)).collect())
+}
+
+/// The first `max` characters of redacted `input`, the last one "…" when
+/// more was cut. Redacted first, then cut, as [`redacted_log_tail`] does.
+pub fn redacted_clip(input: &str, home: Option<&str>, max: usize) -> String {
+    let redacted = redact_for_diagnostics(input, home);
+    if redacted.chars().count() <= max {
+        return redacted;
+    }
+    let mut out: String = redacted.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 /// Apply [`redact_for_diagnostics`] to every string field on a turn,
@@ -375,6 +490,10 @@ const CREDENTIAL_KEYS: &[&str] = &[
     "api-key",
     "access_key",
     "accesskey",
+    "accountkey",
+    "account_key",
+    "account-key",
+    "storage_key",
     "private_key",
     "privatekey",
     "credential",
@@ -391,8 +510,69 @@ fn is_credential_key(key: &str) -> bool {
     CREDENTIAL_KEYS.iter().any(|k| key.contains(k))
 }
 
+/// The quote a header at `at` sits inside, if its line opened one before it
+/// (`curl -H 'Authorization: …'`).
+fn open_quote_before(b: &[u8], at: usize) -> Option<u8> {
+    let line = b[..at]
+        .iter()
+        .rposition(|c| *c == b'\n')
+        .map_or(0, |n| n + 1);
+    let mut open = None;
+    for c in &b[line..at] {
+        match open {
+            Some(q) if *c == q => open = None,
+            None if matches!(*c, b'"' | b'\'') => open = Some(*c),
+            _ => {}
+        }
+    }
+    open
+}
+
+/// How far an `Authorization` header's value runs past its scheme.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AuthReach {
+    /// `Basic dXNlcjpwYXNz`: the scheme and the one word after it.
+    Word,
+    /// `Digest username=…, response=…`: to the end of the line.
+    Line,
+}
+
+const AUTH_SCHEMES: &[(&str, AuthReach)] = &[
+    ("basic", AuthReach::Word),
+    ("bearer", AuthReach::Word),
+    ("token", AuthReach::Word),
+    ("digest", AuthReach::Line),
+    ("negotiate", AuthReach::Line),
+    ("ntlm", AuthReach::Line),
+    ("aws4-hmac-sha256", AuthReach::Line),
+];
+
+/// A blank between a header's scheme and its credential; a shell writes it
+/// `\ ` outside quotes.
+fn is_header_blank(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\\')
+}
+
+/// The scheme `value` starts with, when it is an `Authorization` header's
+/// value: how far the value runs, and where the credential starts. Text that
+/// only has the word before a colon (`the user's authorization: it is…`)
+/// starts with no scheme.
+fn auth_scheme(value: &str) -> Option<(AuthReach, usize)> {
+    let b = value.as_bytes();
+    let lead = b.iter().take_while(|c| is_header_blank(**c)).count();
+    AUTH_SCHEMES.iter().find_map(|(scheme, reach)| {
+        let end = lead + scheme.len();
+        let named = b.get(lead..end)?.eq_ignore_ascii_case(scheme.as_bytes());
+        let gap = b[end..].iter().take_while(|c| is_header_blank(**c)).count();
+        (named && gap > 0).then_some((*reach, end + gap))
+    })
+}
+
 /// Mask the value in `KEY=value`, `KEY: value` and `"key": "value"` when the
-/// key names a credential, numbers and escaped quotes included.
+/// key names a credential, numbers and escaped quotes included. An
+/// `Authorization` header's value is a scheme and then the credential
+/// (`Basic dXNlcjpwYXNz`), so the scheme does not stand in for the value:
+/// both are masked ([`AuthReach`]).
 fn redact_credential_values(input: &str) -> String {
     let b = input.as_bytes();
     let mut out = String::with_capacity(input.len());
@@ -431,10 +611,29 @@ fn redact_credential_values(input: &str) -> String {
             j += 1;
         }
         let vstart = j;
+        let header = quote.is_none()
+            && input[start..i]
+                .to_ascii_lowercase()
+                .contains("authorization");
+        let scheme = if header {
+            auth_scheme(&input[vstart..])
+        } else {
+            None
+        };
+        let closing = scheme.and_then(|_| open_quote_before(b, start));
+        if let Some((_, credential)) = scheme {
+            j = vstart + credential;
+        }
         while j < b.len()
-            && match quote {
-                Some(q) => b[j] != q && b[j] != b'\n',
-                None => !b[j].is_ascii_whitespace() && !matches!(b[j], b',' | b';' | b'}'),
+            && match (quote, scheme) {
+                (Some(q), _) => b[j] != q && b[j] != b'\n',
+                (None, Some((AuthReach::Line, _))) => {
+                    !matches!(b[j], b'\n' | b'\r') && Some(b[j]) != closing
+                }
+                (None, Some((AuthReach::Word, _))) => {
+                    !b[j].is_ascii_whitespace() && Some(b[j]) != closing
+                }
+                (None, None) => !b[j].is_ascii_whitespace() && !matches!(b[j], b',' | b';' | b'}'),
             }
         {
             // `\"` inside a quoted value is part of it.
@@ -452,6 +651,13 @@ fn redact_credential_values(input: &str) -> String {
         i = j;
     }
     out
+}
+
+/// True when `input` holds a credential assignment the bundle would mask:
+/// `API_KEY=…`, `--password=…`, `"token": "…"` or an `Authorization`
+/// header. For a caller that must not keep such a line.
+pub fn has_credential_value(input: &str) -> bool {
+    redact_credential_values(input) != input
 }
 
 /// Short reason line for intent (chat vs task and friends).
@@ -693,14 +899,15 @@ pub fn diagnostics_redaction_summary(markdown: &str) -> String {
 /// Status line after a successful write, naming the folder when it is not
 /// the Desktop (`on_desktop` false) (triggers a Saved toast; the chat's notice carries the Open
 /// folder action).
-pub fn diagnostics_saved_status(path: &Path, on_desktop: bool) -> String {
+pub fn diagnostics_saved_status(path: &Path, place: DiagnosticsPlace) -> String {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("diagnostics.zip");
-    match path.parent() {
-        Some(dir) if !on_desktop => format!(
-            "Saved {name} to {} (your Desktop syncs to the cloud, so it stays on this PC)",
+    match (place, path.parent()) {
+        (DiagnosticsPlace::Diagnostics, _) => format!("Saved {name} to Diagnostics"),
+        (DiagnosticsPlace::Elsewhere, Some(dir)) => format!(
+            "Saved {name} to {} (your Documents and Desktop sync to the cloud, so it stays on this PC)",
             dir.display()
         ),
         _ => format!("Saved {name} to your Desktop"),
@@ -786,7 +993,68 @@ fn redact_home_paths(input: &str, home: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+
+    /// A file that counts the bytes read from it.
+    struct Counted<R> {
+        inner: R,
+        read: usize,
+    }
+
+    impl<R: Read> Read for Counted<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.read += n;
+            Ok(n)
+        }
+    }
+
+    impl<R: Seek> Seek for Counted<R> {
+        fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(to)
+        }
+    }
+
+    #[test]
+    fn only_the_end_of_a_long_log_is_read_from_the_start_of_a_line() {
+        // 304,000 bytes of 19-byte lines. The last 65,536 bytes start 14
+        // bytes into a line; the 5 bytes left of it are dropped, and 3,449
+        // whole lines stay.
+        let line = "2026-01-01 step ok\n";
+        let log = line.repeat(16_000);
+        let mut file = Counted {
+            inner: std::io::Cursor::new(log.as_bytes()),
+            read: 0,
+        };
+        let (text, whole) = log_end(&mut file, LOG_READ).expect("read");
+        assert_eq!(
+            file.read, 65_536,
+            "a long log is not read whole to show its last characters"
+        );
+        assert!(!whole);
+        assert_eq!(text.len(), 65_531);
+        assert_eq!(text, line.repeat(3_449));
+
+        // A log shorter than that is read whole, from its first byte.
+        let mut short = Counted {
+            inner: std::io::Cursor::new("started\nready\n".as_bytes()),
+            read: 0,
+        };
+        assert_eq!(
+            log_end(&mut short, LOG_READ).expect("read"),
+            ("started\nready\n".to_string(), true)
+        );
+    }
+
+    #[test]
+    fn a_clip_redacts_before_it_cuts() {
+        // Cut first, the 160 characters would end nine characters into the
+        // key, and what is left of it is no longer a key to the redactor.
+        let lead = "x".repeat(150);
+        let text = format!("{lead}sk-abcdefghijklmnopqrstuv");
+        assert_eq!(redacted_clip(&text, None, 160), format!("{lead}[redacted]"));
+        assert_eq!(redacted_clip("short", None, 160), "short");
+        assert_eq!(redacted_clip("abcdef", None, 4), "abc…");
+    }
 
     #[test]
     fn no_secret_leak() {
@@ -929,7 +1197,7 @@ mod tests {
         assert!(md.contains("Length cap:"), "{md}");
         assert!(md.contains("Why chat vs task:"), "{md}");
         assert_eq!(
-            diagnostics_saved_status(&path, true),
+            diagnostics_saved_status(&path, DiagnosticsPlace::Desktop),
             "Saved loadout-diagnostics-20231114-221320.zip to your Desktop"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -953,6 +1221,134 @@ mod tests {
              api_key: \"[redacted]\" next\n\
              max_tokens: 4000\n\
              author: Pat"
+        );
+    }
+
+    #[test]
+    fn an_authorization_header_is_redacted_to_the_end_of_its_value() {
+        // The value is base64 of a made-up name and password.
+        let raw = concat!(
+            "Authorization: Basic ",
+            "YWRtaW46aHVudGVyMmZha2U=\n",
+            "Proxy-Authorization: Basic ",
+            "abc=\n",
+            "curl -H 'Authorization: Basic ",
+            "YWRtaW46aHVudGVyMmZha2U=' https://example.com\n",
+            "curl -H \"authorization: Digest username=user, response=",
+            "0a1b2c3d\" -v\n",
+            "{\"Authorization\": \"Basic ",
+            "YWRtaW46aHVudGVyMmZha2U=\", \"name\": \"harbor\"}\n",
+            "the line after stays"
+        );
+        assert_eq!(
+            redact_for_diagnostics(raw, None),
+            "Authorization: [redacted]\n\
+             Proxy-Authorization: [redacted]\n\
+             curl -H 'Authorization: [redacted]' https://example.com\n\
+             curl -H \"authorization: [redacted]\" -v\n\
+             {\"Authorization\": \"[redacted]\", \"name\": \"harbor\"}\n\
+             the line after stays"
+        );
+    }
+
+    #[test]
+    fn only_a_real_authorization_header_loses_the_rest_of_its_value() {
+        // Ordinary text with the word before a colon keeps its line: one
+        // word goes, as for any other credential key.
+        assert_eq!(
+            redact_for_diagnostics(
+                "We need the user's authorization: it is required before the deploy step runs, see notes.",
+                None
+            ),
+            "We need the user's authorization: [redacted] is required before the deploy step runs, see notes."
+        );
+        assert_eq!(
+            redact_for_diagnostics(
+                "authorization_endpoint: https://example.com/oauth/authorize and then other words here",
+                None
+            ),
+            "authorization_endpoint: [redacted] and then other words here"
+        );
+        assert_eq!(
+            redact_for_diagnostics(
+                "{\"authorization\": null, \"name\": \"harbor\", \"note\": \"kept?\"}",
+                None
+            ),
+            "{\"authorization\": [redacted], \"name\": \"harbor\", \"note\": \"kept?\"}"
+        );
+        // Basic, Bearer and Token: the scheme and the one word after it.
+        let raw = concat!(
+            "it's fine. Authorization: Basic ",
+            "YWRtaW46aHVudGVyMmZha2U= and it's done\n",
+            "AUTHORIZATION: BEARER ",
+            "abcdefghijklmnopqrstuvwxyz then the next step ran\n",
+            "Authorization: Token ",
+            "0a1b2c3d4e5f retry in 5 s\n",
+            "curl -H Authorization:\\ Basic\\ ",
+            "YWRtaW46aHVudGVyMmZha2U= https://example.com\n",
+            // Any other scheme this knows: to the end of the line.
+            "Authorization: Negotiate ",
+            "YIIFaAYGKwYBBQUCoIIFXDCC and more\n",
+            "Authorization: AWS4-HMAC-SHA256 Credential=FAKE/20260101/region/s3/aws4_request, Signature=",
+            "0a1b2c3d\n",
+            "the line after stays"
+        );
+        assert_eq!(
+            redact_for_diagnostics(raw, None),
+            "it's fine. Authorization: [redacted] and it's done\n\
+             AUTHORIZATION: [redacted] then the next step ran\n\
+             Authorization: [redacted] retry in 5 s\n\
+             curl -H Authorization:[redacted] https://example.com\n\
+             Authorization: [redacted]\n\
+             Authorization: [redacted]\n\
+             the line after stays"
+        );
+    }
+
+    #[test]
+    fn a_line_with_a_credential_assignment_is_told_from_one_without() {
+        for line in [
+            "export API_KEY=plainvalue123",
+            "mysql -u root --password=hunter2fake",
+            concat!(
+                "curl -H \"Authorization: Basic ",
+                "YWRtaW46aHVudGVyMmZha2U=\" https://example.com"
+            ),
+        ] {
+            assert!(has_credential_value(line), "{line}");
+        }
+        for line in [
+            "git status",
+            "cat docs/secret-santa.md",
+            "cargo run -- --max_tokens=4000",
+            "docker login --password-stdin",
+        ] {
+            assert!(!has_credential_value(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn storage_connection_string_keys_are_redacted() {
+        assert_eq!(
+            redact_for_diagnostics(
+                "AccountName=harbor;AccountKey=FAKEfakeFAKEfake+FAKE/fake==;EndpointSuffix=example.com \
+                 SharedAccessKey=FAKEfakeFAKEfake+FAKE/fake= accountkeeper: Pat",
+                None
+            ),
+            "AccountName=harbor;AccountKey=[redacted];EndpointSuffix=example.com \
+             SharedAccessKey=[redacted] accountkeeper: Pat"
+        );
+        // The same key as an environment variable, a config line and JSON.
+        assert_eq!(
+            redact_for_diagnostics(
+                "AZURE_STORAGE_ACCOUNT_KEY=FAKEfakeFAKEfake+FAKE/fake== \
+                 account_key: FAKEfakeFAKEfake+FAKE/fake== \
+                 \"account-key\": \"FAKEfakeFAKEfake+FAKE/fake==\" \
+                 AZURE_STORAGE_KEY=FAKEfakeFAKEfake+FAKE/fake== storage_class: hot",
+                None
+            ),
+            "AZURE_STORAGE_ACCOUNT_KEY=[redacted] account_key: [redacted] \
+             \"account-key\": \"[redacted]\" AZURE_STORAGE_KEY=[redacted] storage_class: hot"
         );
     }
 
@@ -1085,16 +1481,51 @@ mod tests {
     }
 
     #[test]
+    fn a_bundle_goes_to_diagnostics_unless_that_folder_syncs() {
+        let root = std::env::temp_dir().join(format!("gh-diag-in-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let config = root.join("cfg");
+        std::fs::create_dir_all(&config).unwrap();
+        let files = root.join("files");
+        crate::user_files::set_files_root(&config, &files).unwrap();
+        let at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let path = diagnostics_zip_path_in(&config, at).unwrap();
+        assert_eq!(path.parent(), Some(files.join("Diagnostics").as_path()));
+        assert_eq!(
+            diagnostics_place(&config, &path),
+            DiagnosticsPlace::Diagnostics
+        );
+        // A files folder inside OneDrive is skipped for the old chain.
+        let synced = root.join("OneDrive").join("Loadout");
+        crate::user_files::set_files_root(&config, &synced).unwrap();
+        if let Ok(other) = diagnostics_zip_path_in(&config, at) {
+            assert!(!other.starts_with(&synced), "{other:?}");
+        }
+        assert!(!synced.join("Diagnostics").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn saved_status_names_the_folder_when_it_is_not_the_desktop() {
         let zip = Path::new("/home/user/Downloads/a.zip");
         assert_eq!(
-            diagnostics_saved_status(Path::new("/home/user/Desktop/a.zip"), true),
+            diagnostics_saved_status(
+                Path::new("/home/user/Documents/Loadout/Diagnostics/a.zip"),
+                DiagnosticsPlace::Diagnostics
+            ),
+            "Saved a.zip to Diagnostics"
+        );
+        assert_eq!(
+            diagnostics_saved_status(
+                Path::new("/home/user/Desktop/a.zip"),
+                DiagnosticsPlace::Desktop
+            ),
             "Saved a.zip to your Desktop"
         );
         assert_eq!(
-            diagnostics_saved_status(zip, false),
+            diagnostics_saved_status(zip, DiagnosticsPlace::Elsewhere),
             format!(
-                "Saved a.zip to {} (your Desktop syncs to the cloud, so it stays on this PC)",
+                "Saved a.zip to {} (your Documents and Desktop sync to the cloud, so it stays on this PC)",
                 Path::new("/home/user/Downloads").display()
             )
         );
@@ -1108,8 +1539,8 @@ mod tests {
         std::fs::create_dir_all(home.join(".config")).unwrap();
         let old_home = std::env::var_os("HOME");
         let old_xdg = std::env::var_os("XDG_CONFIG_HOME");
-        std::env::set_var("HOME", &home);
-        std::env::remove_var("XDG_CONFIG_HOME");
+        unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         assert_eq!(desktop_dir(), Some(home.join("Desktop")));
         std::fs::write(
             home.join(".config/user-dirs.dirs"),
@@ -1118,11 +1549,11 @@ mod tests {
         .unwrap();
         assert_eq!(desktop_dir(), Some(home.join("Schreibtisch")));
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
         }
         if let Some(v) = old_xdg {
-            std::env::set_var("XDG_CONFIG_HOME", v);
+            unsafe { std::env::set_var("XDG_CONFIG_HOME", v) };
         }
         let _ = std::fs::remove_dir_all(&home);
     }

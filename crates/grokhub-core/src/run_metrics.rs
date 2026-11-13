@@ -166,6 +166,12 @@ pub fn retention_cutoff(now: u64, days: u32) -> u64 {
 /// drop every line that is; and cut the file to its newer half when it
 /// outgrew [`RUNS_MAX_BYTES`].
 pub fn append_run(config_dir: &Path, m: &RunMetrics, retention_days: u32) -> Result<(), String> {
+    crate::learn::hub::note_all(crate::learn::sources::run(m));
+    crate::learn::hub::note_all(crate::learn::sources::run_habit(
+        m,
+        crate::learn::hub::local_hour(m.at),
+        crate::learn::hub::now().gaming,
+    ));
     let line = serde_json::to_string(m).map_err(|e| e.to_string())?;
     let path = runs_path(config_dir);
     if let Some(dir) = path.parent() {

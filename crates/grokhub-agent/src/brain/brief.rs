@@ -1,5 +1,6 @@
-//! The Brief: plain rules on the ask, and one fast-model call only when the
-//! rules can't tell. The ask's text is read here and never stored: a Brief
+//! The Brief: plain rules on the ask, then a local scorer (`local_sort`) when
+//! the rules can't tell, and one fast-model call only when that scorer is
+//! unsure and the opt-in fallback is on. The ask's text is read here and never stored: a Brief
 //! holds only fixed words (intent, care, mood, domain, and a done list from a
 //! fixed table), so `brain/briefs.jsonl` carries nothing the user typed.
 
@@ -15,7 +16,7 @@ pub const BRIEF_CLASS: &str = "background:classify";
 /// The fallback call's instructions: a tiny JSON answer, nothing else.
 pub const BRIEF_PROMPT: &str = "Sort the user's request. Reply with one line of JSON and nothing else: \
 {\"intent\":\"chat|question|task|repair|creative|research|background\",\"care\":\"casual|careful|critical\",\
-\"mood\":\"calm|urgent|frustrated|low\",\"domain\":\"system|code|files|desktop|web|media|gaming|game-help|loadout|library|planning|general\"}";
+\"mood\":\"calm|urgent|frustrated|low\",\"domain\":\"system|pc-health|code|files|desktop|web|media|gaming|game-help|loadout|library|planning|general\"}";
 
 /// Lines kept in `briefs.jsonl`; older ones are dropped when it passes [`BRIEF_TRIM_AT`].
 const BRIEF_KEEP: usize = 400;
@@ -30,6 +31,9 @@ pub enum Intent {
     Task,
     Repair,
     Creative,
+    /// A clear ask for a new picture ("draw me a fox"): the run offers
+    /// `image_generate` up front and the model writes its prompt.
+    Image,
     Research,
     Background,
 }
@@ -42,6 +46,7 @@ impl Intent {
             Self::Task => "task",
             Self::Repair => "repair",
             Self::Creative => "creative",
+            Self::Image => "image",
             Self::Research => "research",
             Self::Background => "background",
         }
@@ -54,6 +59,7 @@ impl Intent {
             "task" => Self::Task,
             "repair" => Self::Repair,
             "creative" => Self::Creative,
+            "image" => Self::Image,
             "research" => Self::Research,
             "background" => Self::Background,
             _ => return None,
@@ -98,11 +104,17 @@ pub struct Brief {
     pub mood: String,
     /// What the run checks before it calls the ask done.
     pub done: Vec<String>,
-    /// `system`, `code`, `files`, `desktop`, `web`, `media`, `gaming`,
+    /// `system`, `app-update`, `code`, `files`, `desktop`, `web`, `media`, `gaming`,
     /// `game-help`, `loadout`, `library`, `planning` or `general`.
     pub domain: String,
-    /// `rules`, `model`, or `default` (unclear and no model call).
+    /// `rules`, `local` (the in-process scorer), `model`, or `default`
+    /// (unclear and no model call).
     pub by: String,
+    /// 0..=100: how sure the in-process sort is. The rules are 100; otherwise
+    /// it is the local scorer's lead over its runner-up, kept on a `model` or
+    /// `default` Brief too so a reader can see the guess was weak.
+    #[serde(default)]
+    pub confidence: u8,
 }
 
 impl Brief {
@@ -134,6 +146,11 @@ pub struct BriefInput<'a> {
     pub recent: &'a [String],
     /// A scheduled, proactive or `/bg` run.
     pub background: bool,
+    /// What this chat is about, when it was opened from a Pulse card: the
+    /// card's finding ("bluetoothd crashed several times recently"). A line
+    /// that points back at it ("check into it for me") is read as that ask,
+    /// and earlier small talk never makes it chat.
+    pub anchor: Option<&'a str>,
 }
 
 const SYSTEM_WORDS: &[&str] = &[
@@ -189,7 +206,6 @@ const REPAIR_PHRASES: &[&str] = &[
     "doesn't work",
     "stopped working",
     "can't start",
-    "health check",
 ];
 /// Diagnostics is repair work: the design's "repair/diagnostics" intent.
 const DIAGNOSE_WORDS: &[&str] = &["scan", "diagnose", "diagnostics", "troubleshoot", "checkup"];
@@ -202,10 +218,74 @@ const FEATURE_PHRASES: &[&str] = &[
     "i want it to",
     "add support",
     "feature",
+    "to the app",
+    "in the app",
 ];
 /// The machine as a whole: the system domain, without being a change to it.
 const MACHINE_WORDS: &[&str] = &[
     "computer", "pc", "laptop", "machine", "os", "windows", "linux",
+];
+/// A check-up of the machine as a whole: named on their own, these are
+/// always about this PC ("run a health check", "give it a tune-up").
+const PC_HEALTH_PHRASES: &[&str] = &[
+    "health check",
+    "checkup",
+    "check-up",
+    "check up",
+    "tune-up",
+    "tune up",
+    "tuneup",
+];
+/// With a machine word these make a check-up too ("why is my pc slow",
+/// "speed up my laptop", "optimize windows"); alone they're too vague.
+const PC_HEALTH_WORDS: &[&str] = &[
+    "tune",
+    "optimize",
+    "optimise",
+    "slow",
+    "slower",
+    "slowly",
+    "sluggish",
+    "laggy",
+    "lagging",
+    "bloat",
+    "bloated",
+    "bloatware",
+    "declutter",
+    "maintenance",
+    "healthy",
+    "health",
+    "cleanup",
+    "temps",
+    "temperatures",
+    "overheating",
+];
+const PC_HEALTH_MACHINE_PHRASES: &[&str] = &["speed up", "clean up", "running hot"];
+/// Freeing space is a check-up with or without a machine word.
+const STORAGE_PHRASES: &[&str] = &[
+    "free up storage",
+    "free up space",
+    "free up disk",
+    "free up some space",
+    "free up some storage",
+    "free up some disk",
+    "low on space",
+    "low on storage",
+    "out of space",
+    "out of storage",
+    "running out of space",
+    "running out of storage",
+    "clear up space",
+    "make some space",
+    "drive is full",
+    "disk is full",
+    "drive is almost full",
+    "disk is almost full",
+    "drive is nearly full",
+    "disk is nearly full",
+    "storage is full",
+    "storage is almost full",
+    "filling up my drive",
 ];
 const CREATIVE_WORDS: &[&str] = &[
     "poem",
@@ -221,6 +301,38 @@ const CREATIVE_WORDS: &[&str] = &[
     "haiku",
     "slogan",
     "wallpaper",
+];
+/// Draw a picture: these verbs ask for one when they lead the ask and act on
+/// something new ("draw me a fox", not "draw the curtains").
+const DRAW_VERBS: &[&str] = &["draw", "sketch", "paint"];
+/// These verbs ask for a picture when a picture word follows soon after
+/// ("make a picture of", "generate an image").
+const PICTURE_VERBS: &[&str] = &["make", "create", "generate", "render", "produce", "give"];
+const PICTURE_NOUNS: &[&str] = &[
+    "picture",
+    "pictures",
+    "pic",
+    "pics",
+    "image",
+    "images",
+    "photo",
+    "photos",
+    "drawing",
+    "drawings",
+    "illustration",
+    "illustrations",
+    "painting",
+    "portrait",
+    "wallpaper",
+];
+/// A line that opens with these asks about something, never for a picture.
+const ASKS_ABOUT: &[&str] = &[
+    "how", "why", "what", "what's", "where", "when", "which", "who", "is", "are", "does", "do",
+    "did",
+];
+/// A picture that is already there ("make the image bigger"): not a new one.
+const PICTURE_THERE: &[&str] = &[
+    "the", "this", "that", "these", "those", "my", "your", "it", "its", "our",
 ];
 const RESEARCH_WORDS: &[&str] = &[
     "research",
@@ -269,6 +381,26 @@ const SMALL_TALK_PHRASES: &[&str] = &[
 ];
 /// Words after a task verb that are nothing to act on: "turn around",
 /// "stop it lol", "make me laugh" are banter, "turn off the lights" is a task.
+/// Words that point back at what the chat is about.
+const POINT_BACK: &[&str] = &["it", "this", "that", "them", "these", "those"];
+/// "check into it", "look at that": asks to look at something already named.
+const LOOK_VERBS: &[&str] = &[
+    "check",
+    "look",
+    "dig",
+    "investigate",
+    "see",
+    "handle",
+    "deal",
+    "sort",
+    "try",
+];
+/// A thing that crashes or hangs with no other domain is the computer's.
+/// A program that keeps failing ("keeps crashing"). The nouns "crash" and
+/// "freeze" are left out: "fix the crash in the pulse feed" is about the app.
+const CRASH_WORDS: &[&str] = &[
+    "crashes", "crashed", "crashing", "freezes", "freezing", "frozen", "hangs",
+];
 const NOT_AN_OBJECT: &[&str] = &[
     "around", "it", "that", "this", "me", "you", "us", "talking", "joking", "kidding", "laughing",
     "laugh", "smile", "lying", "yapping", "being", "over", "already", "now", "please", "lol",
@@ -297,6 +429,73 @@ const FOLLOW_UPS: &[&str] = &[
     "continue",
     "try again",
     "again",
+    "go on",
+    "go ahead",
+    "keep going",
+    "carry on",
+];
+/// Words that open a go-ahead: "yeah could use that info".
+const GO_AHEAD_LEADS: &[&str] = &[
+    "yes", "yeah", "yea", "yep", "yup", "sure", "ok", "okay", "please", "continue",
+];
+/// What may follow a go-ahead lead and still name nothing new.
+const GO_AHEAD_FILLER: &[&str] = &[
+    "could",
+    "would",
+    "use",
+    "that",
+    "this",
+    "it",
+    "info",
+    "information",
+    "please",
+    "go",
+    "ahead",
+    "do",
+    "the",
+    "me",
+    "be",
+    "great",
+    "nice",
+    "good",
+    "helpful",
+    "help",
+    "keep",
+    "going",
+    "on",
+    "look",
+    "up",
+    "search",
+    "find",
+    "out",
+    "for",
+    "sure",
+    "i",
+    "id",
+    "i'd",
+    "that'd",
+    "love",
+    "like",
+    "want",
+    "need",
+    "yes",
+    "yeah",
+    "yep",
+    "ok",
+    "okay",
+    "pls",
+    "plz",
+    "lol",
+    "bro",
+    "dude",
+    "man",
+    "again",
+    "try",
+    "a",
+    "an",
+    "and",
+    "to",
+    "of",
 ];
 const POLITE: &[&str] = &[
     "please",
@@ -329,6 +528,14 @@ const DESKTOP_WORDS: &[&str] = &[
 /// `steam` alone stay out so a Pulse/library feature ask is not gaming.
 const GAMING_WORDS: &[&str] = &[
     "fps",
+    "stutter",
+    "stuttering",
+    // Finding people to play with.
+    "duo",
+    "squad",
+    "teammate",
+    "teammates",
+    "lfg",
     "game",
     "games",
     "gaming",
@@ -345,6 +552,30 @@ const GAMING_WORDS: &[&str] = &[
     "overwatch",
     "minecraft",
     "apex",
+    // MMOs and other lookup-heavy games.
+    "warcraft",
+    "mmo",
+    "mmorpg",
+    "ffxiv",
+    "runescape",
+    "osrs",
+    "diablo",
+    "destiny",
+    "hearthstone",
+    "dota",
+    "skyrim",
+    "pokemon",
+];
+/// Game titles of more than one word ("wow" alone is too often a gasp).
+const GAME_TITLE_PHRASES: &[&str] = &[
+    "in wow",
+    "wow classic",
+    "wow retail",
+    "world of warcraft",
+    "elden ring",
+    "league of legends",
+    "path of exile",
+    "baldur's gate",
 ];
 const GAMING_PHRASES: &[&str] = &[
     "frame rate",
@@ -378,8 +609,28 @@ const GAME_HELP_WORDS: &[&str] = &[
     "walkthrough",
     "guide",
     "guides",
+    // In-game lookups: where a quest, item or boss is.
+    "quest",
+    "quests",
+    "questline",
+    "boss",
+    "bosses",
+    "raid",
+    "dungeon",
+    "lore",
+    "vendor",
+    "reputation",
+    "achievement",
+    "farm",
 ];
 const GAME_HELP_PHRASES: &[&str] = &[
+    "where do i",
+    "where can i",
+    "where to",
+    "how to get",
+    "how do i get",
+    "turn in",
+    "turn them in",
     "how do i",
     "how do you",
     "how to",
@@ -399,6 +650,9 @@ const GAME_HELP_PHRASES: &[&str] = &[
 /// Phrases only: bare "loadout" is the cabin app name, not this playbook.
 const LOADOUT_PHRASES: &[&str] = &[
     "pc build",
+    "roast my build",
+    "rate my build",
+    "my build",
     "pc parts",
     "parts list",
     "build a pc",
@@ -444,6 +698,14 @@ const PLAN_DAY_PHRASES: &[&str] = &[
     "day plan",
     "today's plan",
     "todays plan",
+    "plan my week",
+    "plan the week",
+    "plan this week",
+    "plan my weekend",
+    "plan the weekend",
+    "plan this weekend",
+    "week plan",
+    "weekly plan",
 ];
 const URGENT_WORDS: &[&str] = &["asap", "urgent", "urgently", "quick", "quickly", "now"];
 const FRUSTRATED_WORDS: &[&str] = &["ugh", "wtf", "again", "still", "seriously", "annoying"];
@@ -472,7 +734,7 @@ const LOW_PHRASES: &[&str] = &[
 ];
 
 fn is_gaming(t: &str, ws: &[&str]) -> bool {
-    any_word(ws, GAMING_WORDS) || any_phrase(t, GAMING_PHRASES)
+    any_word(ws, GAMING_WORDS) || any_phrase(t, GAMING_PHRASES) || any_phrase(t, GAME_TITLE_PHRASES)
 }
 
 fn is_game_help(t: &str, ws: &[&str]) -> bool {
@@ -495,7 +757,26 @@ fn is_plan_day(t: &str) -> bool {
     any_phrase(t, PLAN_DAY_PHRASES)
 }
 
-fn words(t: &str) -> Vec<&str> {
+/// A check-up of this PC: a tune-up, a health check, "it's slow", freeing
+/// space. "check" counts only with a machine word right after it ("check this
+/// pc", not "check my email on this computer").
+fn is_pc_health(t: &str, ws: &[&str]) -> bool {
+    let machine = any_word(ws, MACHINE_WORDS);
+    let check_machine = ws.iter().enumerate().any(|(i, w)| {
+        *w == "check"
+            && ws
+                .iter()
+                .skip(i + 1)
+                .take(3)
+                .any(|n| MACHINE_WORDS.contains(n))
+    });
+    any_phrase(t, PC_HEALTH_PHRASES)
+        || any_phrase(t, STORAGE_PHRASES)
+        || check_machine
+        || (machine && (any_word(ws, PC_HEALTH_WORDS) || any_phrase(t, PC_HEALTH_MACHINE_PHRASES)))
+}
+
+pub(super) fn words(t: &str) -> Vec<&str> {
     t.split(|c: char| !(c.is_alphanumeric() || c == '\''))
         .filter(|w| !w.is_empty())
         .collect()
@@ -509,14 +790,146 @@ fn any_phrase(t: &str, list: &[&str]) -> bool {
     list.iter().any(|p| t.contains(p))
 }
 
+const APP_UPDATE_VERBS: &[&str] = &["update", "upgrade", "install", "reinstall"];
+/// Names the thing as one program: "the grok bot app", "the discord client".
+const APP_WORDS: &[&str] = &[
+    "app",
+    "apps",
+    "application",
+    "program",
+    "client",
+    "launcher",
+    "appimage",
+];
+const VERSION_WORDS: &[&str] = &["version", "latest", "newest"];
+/// The machine or its package manager, not one app: these stay `system`.
+const NOT_ONE_APP: &[&str] = &[
+    "package",
+    "packages",
+    "apt",
+    "pacman",
+    "dnf",
+    "yum",
+    "driver",
+    "drivers",
+    "kernel",
+    "boot",
+    "bootloader",
+    "grub",
+    "bios",
+    "uefi",
+    "firmware",
+    "os",
+    "system",
+    "everything",
+    "all",
+    "computer",
+    "pc",
+    "laptop",
+    "machine",
+    "windows",
+    "linux",
+    "sudo",
+    "systemctl",
+    "systemd",
+    "service",
+    "services",
+    "daemon",
+];
+
+/// "update the grok bot app", "install the latest discord": bring one app to
+/// a newer version. Its own updater or official download comes first, so it
+/// gets that playbook instead of the screen-checking desktop one or a system
+/// fix's services and ports checks.
+fn is_app_update(ws: &[&str]) -> bool {
+    any_word(ws, APP_UPDATE_VERBS)
+        && (any_word(ws, APP_WORDS) || any_word(ws, VERSION_WORDS))
+        && !any_word(ws, NOT_ONE_APP)
+}
+
+/// "continue. Complete the goal fully. Act now": a nudge to carry on that
+/// names nothing new. It opens with a go-on word, and what follows, read on
+/// its own, is no ask the rules know.
+fn carries_on(t: &str, input: &BriefInput<'_>) -> bool {
+    const LEADS: &[&str] = &[
+        "continue",
+        "keep going",
+        "go on",
+        "carry on",
+        "resume",
+        "proceed",
+        "finish it",
+        "keep at it",
+    ];
+    let Some(lead) = LEADS.iter().find(|l| t.starts_with(**l)) else {
+        return false;
+    };
+    let rest = t[lead.len()..].trim_start_matches(|c: char| !c.is_alphanumeric());
+    rest.is_empty()
+        || rules(&BriefInput {
+            text: rest,
+            recent: &[],
+            anchor: None,
+            ..*input
+        })
+        .is_none()
+}
+
+/// "continue", "keep going, act now": the person asks to go on with the open
+/// work (not just "ok"), so a checklist left open stays the run's to finish.
+pub fn is_go_on(text: &str) -> bool {
+    carries_on(&text.trim().to_lowercase(), &BriefInput::default())
+}
+
+/// A line that only says go on: a bare follow-up, a go-ahead or a nudge.
+fn only_goes_on(t: &str, input: &BriefInput<'_>) -> bool {
+    FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim())
+        || go_ahead(&words(t))
+        || carries_on(t, input)
+}
+
+/// The newest earlier line that asks for something: lines that only say go
+/// on are skipped, so "continue" after "continue, act now" still means the
+/// ask before both.
+fn last_real_ask<'a>(input: &BriefInput<'a>) -> Option<&'a str> {
+    input
+        .recent
+        .iter()
+        .rev()
+        .map(String::as_str)
+        .find(|r| !only_goes_on(&r.trim().to_lowercase(), input))
+}
+
 /// The ask touches the machine itself: services, packages, boot, ports, permissions.
 fn system_change(t: &str, ws: &[&str]) -> bool {
     any_word(ws, SYSTEM_WORDS) || t.contains("/etc/")
 }
 
+/// A system repair's done-list as its brief label reads, on this OS.
+#[cfg(test)]
+pub(crate) const SYSTEM_DONE_TEXT: &str = if cfg!(windows) {
+    "services, boot errors"
+} else {
+    "services, packages, boot errors, ports"
+};
+
 fn done_for(intent: Intent, domain: &str) -> Vec<String> {
     let list: &[&str] = match (intent, domain) {
+        // Windows has no packages or ports check, so a run there could only
+        // cancel those items.
+        (Intent::Repair, "system") if cfg!(windows) => &["services", "boot errors"],
         (Intent::Repair, "system") => &["services", "packages", "boot errors", "ports"],
+        (Intent::Repair, "pc-health") => &[
+            "read-only check run first",
+            "findings explained",
+            "fixes ranked by impact",
+            "nothing changed without a yes",
+        ],
+        (Intent::Task, "app-update") | (Intent::Repair, "app-update") => &[
+            "installed version found",
+            "official update applied",
+            "new version running",
+        ],
         (Intent::Repair, "code") => &["it builds", "tests pass", "the error is gone"],
         (Intent::Repair, "gaming") | (Intent::Task, "gaming") => &[
             "hardware read from this PC",
@@ -567,6 +980,7 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
             "claims cited",
         ],
         (Intent::Creative, _) => &["draft delivered", "one line after"],
+        (Intent::Image, _) => &["picture made or why not"],
         (Intent::Background, _) => &["job finished"],
         (Intent::Chat, _) => &["answered"],
     };
@@ -634,6 +1048,16 @@ fn domain_of(
         "gaming"
     } else if is_plan_day(t) {
         "planning"
+    } else if !system
+        && !feature_ask
+        && !any_word(ws, REPAIR_WORDS)
+        && !any_phrase(t, REPAIR_PHRASES)
+        && is_pc_health(t, ws)
+    {
+        // A check-up, not a breakage or a change: the tune-up playbook.
+        "pc-health"
+    } else if is_app_update(ws) {
+        "app-update"
     } else if system || any_word(ws, MACHINE_WORDS) {
         "system"
     } else if code {
@@ -644,11 +1068,71 @@ fn domain_of(
         "files"
     } else if intent == Intent::Research {
         "web"
-    } else if intent == Intent::Creative {
+    } else if matches!(intent, Intent::Creative | Intent::Image) {
         "media"
+    } else if intent == Intent::Repair && any_word(ws, CRASH_WORDS) {
+        // "bluetoothd keeps crashing": a program on this computer.
+        "system"
     } else {
         "general"
     }
+}
+
+/// A message that clearly asks for a new picture ([`Intent::Image`]).
+pub fn is_picture_ask(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    let mut rest = t.as_str();
+    for p in POLITE {
+        rest = rest.strip_prefix(p).map(str::trim_start).unwrap_or(rest);
+    }
+    picture_ask(&t, &words(rest))
+}
+
+/// A clear ask for a new picture. `ws` is the ask without its "can you"
+/// opener. "I like this picture", "describe the image" and "can you make
+/// images?" are not asks.
+fn picture_ask(t: &str, ws: &[&str]) -> bool {
+    // "how do I make a picture smaller?" asks about pictures, not for one.
+    if ws.first().is_some_and(|w| ASKS_ABOUT.contains(w)) {
+        return false;
+    }
+    let question = t.trim_end().ends_with('?');
+    // "draw me a fox", "i want you to sketch a castle".
+    let draw = ws.iter().enumerate().any(|(i, w)| {
+        DRAW_VERBS.contains(w)
+            && (i == 0 || matches!(ws[i - 1], "to" | "please" | "pls" | "and"))
+            && ws
+                .get(i + 1)
+                .is_some_and(|next| !PICTURE_THERE.contains(next))
+    });
+    // "make me a picture of a fox", "generate an image".
+    let make = ws.iter().enumerate().any(|(i, w)| {
+        PICTURE_VERBS.contains(w)
+            && ws
+                .iter()
+                .enumerate()
+                .skip(i + 1)
+                .take(4)
+                .take_while(|(_, n)| !PICTURE_THERE.contains(n))
+                .any(|(j, n)| PICTURE_NOUNS.contains(n) && (!question || j + 1 < ws.len()))
+    });
+    draw || make
+}
+
+/// "check into it for me", "why does it do that": a short ask whose only
+/// object is a pronoun, so it carries on what the chat is about.
+fn points_back(t: &str, ws: &[&str], rest: &[&str], input: &BriefInput<'_>) -> bool {
+    let first = rest.first().copied().unwrap_or_default();
+    let asks = any_word(ws, LOOK_VERBS)
+        || TASK_VERBS.contains(&first)
+        || QUESTION_WORDS.contains(&first)
+        || any_word(ws, REPAIR_WORDS)
+        || any_word(ws, DIAGNOSE_WORDS);
+    ws.len() <= 8
+        && asks
+        && any_word(ws, POINT_BACK)
+        && !small_talk(t, rest)
+        && domain_of(t, ws, input, Intent::Chat, false) == "general"
 }
 
 /// A task verb only makes a task when it has something to act on.
@@ -677,6 +1161,23 @@ fn small_talk(t: &str, ws: &[&str]) -> bool {
         || (about_you && ws.len() <= 8 && !any_word(ws, SUBJECT_WORDS))
 }
 
+/// "ok", "yes", "do it", "continue, act now": a go-ahead or a nudge that
+/// carries on the last ask.
+pub fn is_follow_up(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    only_goes_on(&t, &BriefInput::default())
+}
+
+/// "yeah could use that info": a go-ahead word, then nothing new named
+/// (LO-51). A new subject after it ("yeah what about the boss") is a new ask.
+fn go_ahead(ws: &[&str]) -> bool {
+    ws.len() <= 8
+        && ws.first().is_some_and(|w| GO_AHEAD_LEADS.contains(w))
+        && ws
+            .iter()
+            .all(|w| GO_AHEAD_FILLER.contains(w) || GO_AHEAD_LEADS.contains(w))
+}
+
 /// The rules' Brief, or `None` when they can't tell what the ask is.
 pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     let t = input.text.trim().to_lowercase();
@@ -689,7 +1190,7 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
                 recent: &[],
                 ..*input
             })
-            .is_some_and(|b| matches!(b.intent, Intent::Task | Intent::Repair))
+            .is_some_and(|b| matches!(b.intent, Intent::Task | Intent::Repair | Intent::Research))
         })
     };
     let mut rest = t.as_str();
@@ -703,21 +1204,33 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     let bare_verb = TASK_VERBS.contains(&first) && !acted_on;
     if !input.background
         && !input.recent.is_empty()
-        && (FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim())
-            || (bare_verb && last_was_work()))
+        && (only_goes_on(&t, input) || (bare_verb && last_was_work()))
     {
-        let last = input.recent.last().map(String::as_str).unwrap_or_default();
+        // The latest real ask is the work; a nudge never starts a new one.
+        let last = last_real_ask(input).unwrap_or_default();
         return rules(&BriefInput {
             text: last,
             recent: &[],
             ..*input
         });
     }
+    if !input.background && points_back(&t, &ws, &rest_words, input) {
+        let last_work = input.recent.last().filter(|_| last_was_work());
+        if let Some(back) = last_work.map(String::as_str).or(input.anchor) {
+            return rules(&BriefInput {
+                text: back,
+                recent: &[],
+                anchor: None,
+                ..*input
+            });
+        }
+    }
     if t.is_empty() && input.files == 0 {
         return None;
     }
-    // Hanging out, a plain line about nothing in particular stays chat.
-    let chatting = !input.background && hanging_out(input.recent);
+    // Hanging out, a plain line about nothing in particular stays chat. A
+    // chat opened from a card is about the card, whatever came before.
+    let chatting = !input.background && input.anchor.is_none() && hanging_out(input.recent);
     let topic = domain_of(&t, &ws, input, Intent::Chat, system);
     let generic = topic == "general";
     // "I'm crashing out" is a mood; "my game is crashing" is a repair.
@@ -742,16 +1255,21 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     let gaming_lag = gaming
         && (any_phrase(&t, &["low fps", "dropping frames", "stutter", "stuttering"])
             || any_word(&ws, &["lag", "laggy", "stutter", "choppy"]));
-    let repair = broken || gaming_lag || (any_word(&ws, DIAGNOSE_WORDS) && !feature);
+    let pc_health = !feature && !gaming && is_pc_health(&t, &ws);
+    let repair = broken || gaming_lag || pc_health || (any_word(&ws, DIAGNOSE_WORDS) && !feature);
     let intent = if input.background {
         Intent::Background
+    } else if !feature && picture_ask(&t, &rest_words) {
+        Intent::Image
     } else if repair {
         Intent::Repair
-    } else if feature {
+    } else if feature || is_app_update(&ws) {
         Intent::Task
     } else if any_word(&ws, CREATIVE_WORDS) {
         Intent::Creative
-    } else if any_word(&ws, RESEARCH_WORDS) || any_phrase(&t, RESEARCH_PHRASES) {
+    } else if !game_help && (any_word(&ws, RESEARCH_WORDS) || any_phrase(&t, RESEARCH_PHRASES)) {
+        // An in-game lookup ("aqir research tokens") is game help, which
+        // still searches, not the research playbook and its findings card.
         Intent::Research
     } else if is_plan_day(&t) {
         // "plan my day" / "what should I do today" → one plan, not a task dump.
@@ -778,14 +1296,7 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     } else {
         return None;
     };
-    let destructive = any_word(&ws, DESTRUCTIVE_WORDS) || t.contains("rm -rf");
-    let care = if system || intent == Intent::Repair || (destructive && intent == Intent::Task) {
-        Care::Critical
-    } else if matches!(intent, Intent::Task | Intent::Research) {
-        Care::Careful
-    } else {
-        Care::Casual
-    };
+    let care = care_for(intent, system, destructive(&t, &ws), false);
     let domain = domain_of(&t, &ws, input, intent, system);
     Some(Brief {
         intent,
@@ -794,8 +1305,31 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         done: done_for(intent, domain),
         domain: domain.into(),
         by: "rules".into(),
+        confidence: 100,
     })
 }
+
+fn destructive(t: &str, ws: &[&str]) -> bool {
+    any_word(ws, DESTRUCTIVE_WORDS) || t.contains("rm -rf")
+}
+
+/// How careful the run must be, on every path. A system change or a repair is
+/// critical, and so is a destructive word on a task. When the intent is only
+/// `guessed` (local scorer, model or default), a destructive word is critical
+/// whatever the guess, since the guess may be wrong.
+fn care_for(intent: Intent, system: bool, destructive: bool, guessed: bool) -> Care {
+    if system || intent == Intent::Repair || (destructive && (guessed || intent == Intent::Task)) {
+        Care::Critical
+    } else if matches!(intent, Intent::Task | Intent::Research) {
+        Care::Careful
+    } else {
+        Care::Casual
+    }
+}
+
+/// The local scorer leads its runner-up by at least this much before its
+/// guess is the Brief; under it the model (if on) or the default decides.
+const LOCAL_SURE: u8 = 60;
 
 /// The model's one-line JSON, checked word by word. Anything off is `None`.
 fn parse_model(reply: &str) -> Option<(Intent, Care, String, String)> {
@@ -818,17 +1352,44 @@ fn parse_model(reply: &str) -> Option<(Intent, Care, String, String)> {
     Some((intent, care, mood, domain))
 }
 
-/// Rules first. When they can't tell and `ask` is given, one call to it with
-/// [`BRIEF_PROMPT`] decides; a bad or failed answer gives the default Brief.
-/// The rules always catch a system change, so the model never rates one.
+/// Rules first, then the local scorer. When neither is sure and `ask` is
+/// given (the opt-in model fallback), one call to it with [`BRIEF_PROMPT`]
+/// decides; a bad or failed answer, or no `ask`, gives the default Brief.
+/// The rules always catch a system change, so neither the scorer nor the
+/// model ever rates one.
 pub fn classify(input: &BriefInput<'_>, ask: Option<AskModel<'_>>) -> Brief {
     if let Some(b) = rules(input) {
         return b;
     }
+    let t = input.text.trim().to_lowercase();
+    let ws = words(&t);
+    let destructive = destructive(&t, &ws);
+    let sorted = super::local_sort::sort(&t);
+    let confidence = sorted.map_or(0, |s| s.confidence);
+    if let Some(s) = sorted.filter(|s| s.confidence >= LOCAL_SURE) {
+        let domain = match domain_of(&t, &ws, input, s.intent, false) {
+            "general" => s.domain,
+            named => named,
+        };
+        return Brief {
+            intent: s.intent,
+            care: care_for(s.intent, false, destructive, true),
+            mood: mood_of(input.text, &ws).into(),
+            done: done_for(s.intent, domain),
+            domain: domain.into(),
+            by: "local".into(),
+            confidence,
+        };
+    }
+    // A guess still keeps the ask's subject ("my pc ..." stays system), so
+    // nothing downstream reads an unclear ask about the machine as small talk.
+    let guessed_domain = domain_of(&t, &ws, input, Intent::Chat, false);
     let fallback = || Brief {
+        care: care_for(Intent::Chat, false, destructive, true),
         mood: "calm".into(),
-        domain: "general".into(),
+        domain: guessed_domain.into(),
         by: "default".into(),
+        confidence,
         ..Default::default()
     };
     let Some(ask) = ask else {
@@ -840,11 +1401,13 @@ pub fn classify(input: &BriefInput<'_>, ask: Option<AskModel<'_>>) -> Brief {
     };
     Brief {
         intent,
-        care,
+        // The model may rate higher than the rules would, never lower.
+        care: care.max(care_for(intent, false, destructive, true)),
         mood,
         done: done_for(intent, &domain),
         domain,
         by: "model".into(),
+        confidence,
     }
 }
 
@@ -965,21 +1528,6 @@ pub fn brief_for_turn(config_dir: &Path, chat_id: &str, turn: u32) -> Option<Bri
         .into_iter()
         .rev()
         .find(|l| l.chat_id == chat_id && l.turn == turn)
-}
-
-/// `/why`'s first lines: the newest Brief and its policy row, and a note
-/// when the user's policy file is being ignored.
-pub fn why_lines(config_dir: &Path) -> Vec<String> {
-    let mut out = read_briefs(config_dir)
-        .pop()
-        .map(|l| l.lines())
-        .unwrap_or_default();
-    if let (_, Some(why)) = super::load_policy(config_dir) {
-        out.push(format!(
-            "Policy file ignored ({why}); using the shipped rows."
-        ));
-    }
-    out
 }
 
 #[cfg(test)]
@@ -1159,6 +1707,21 @@ mod tests {
                 "calm",
             ),
             (
+                // A WoW item named "research tokens" is a game lookup, not research.
+                "where do i turn aqir research tokens in at in wow",
+                Intent::Question,
+                Care::Casual,
+                "game-help",
+                "calm",
+            ),
+            (
+                "where can i find the raid boss for that quest in world of warcraft",
+                Intent::Question,
+                Care::Casual,
+                "game-help",
+                "calm",
+            ),
+            (
                 "how do I unlock the new Fortnite mythic without spoilers",
                 Intent::Question,
                 Care::Casual,
@@ -1254,7 +1817,7 @@ mod tests {
         let repair = rules(&input("the printer service won't start after the update")).unwrap();
         assert_eq!(
             repair.label(),
-            "repair × critical, done = services, packages, boot errors, ports"
+            format!("repair × critical, done = {SYSTEM_DONE_TEXT}")
         );
         assert_eq!(
             rules(&input("hi there")).unwrap().label(),
@@ -1285,6 +1848,119 @@ mod tests {
             short(&rules(&follow).unwrap()),
             (Intent::Repair, Care::Critical, "system", "calm")
         );
+    }
+
+    #[test]
+    fn an_app_update_gets_its_own_playbook_and_a_nudge_keeps_the_ask() {
+        // The chat that stalled: "update the grok bot app" landed on the
+        // desktop playbook (screenshots first), and the nudges after it were
+        // sorted as a repair with services and ports to check.
+        for text in [
+            "update the grok bot app",
+            "upgrade the discord client",
+            "install the latest obs",
+            "reinstall the newest version of steam",
+        ] {
+            let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: no brief"));
+            assert_eq!(
+                (b.intent, b.domain.as_str()),
+                (Intent::Task, "app-update"),
+                "{text}"
+            );
+            assert_eq!(
+                b.done,
+                [
+                    "installed version found",
+                    "official update applied",
+                    "new version running"
+                ]
+            );
+        }
+        // The machine, its packages or its drivers stay system work.
+        for text in [
+            "update my packages",
+            "upgrade the system",
+            "reinstall the nvidia drivers",
+            "update the bios",
+        ] {
+            let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: no brief"));
+            assert_eq!(b.domain, "system", "{text}");
+        }
+        let ask = "update the grok bot app".to_string();
+        let nudge = "continue. Complete the goal fully. Act now — no planning-only replies.";
+        let asked = rules(&input(&ask)).unwrap();
+        let b = rules(&BriefInput {
+            text: nudge,
+            recent: std::slice::from_ref(&ask),
+            ..Default::default()
+        })
+        .expect("a nudge carries on the ask");
+        assert_eq!(short(&b), short(&asked));
+        // A bare "continue" after the nudge still means the ask before both.
+        let recent = [ask.clone(), nudge.to_string()];
+        let b = rules(&BriefInput {
+            text: "continue",
+            recent: &recent,
+            ..Default::default()
+        })
+        .expect("continue carries on the ask");
+        assert_eq!(short(&b), short(&asked));
+        assert!(is_follow_up(nudge));
+        assert!(is_go_on(nudge) && is_go_on("Continue") && is_go_on("keep going!"));
+        assert!(!is_go_on("ok") && !is_go_on("yes"));
+        // "continue with" a new subject is that new ask.
+        let wifi = "continue with my wifi, it's broken";
+        let b = rules(&BriefInput {
+            text: wifi,
+            recent: &recent,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!((b.intent, b.domain.as_str()), (Intent::Repair, "general"));
+        assert!(!is_follow_up(wifi));
+    }
+
+    #[test]
+    fn a_go_ahead_with_nothing_new_carries_the_open_lookup() {
+        // LO-51: the stopped WoW lookup, then "yeah could use that info".
+        let recent = ["where do i turn aqir research tokens in at in wow".to_string()];
+        let asked = rules(&BriefInput {
+            text: "where do i turn aqir research tokens in at in wow",
+            ..Default::default()
+        })
+        .unwrap();
+        for text in [
+            "yeah could use that info",
+            "yes please look it up",
+            "keep going",
+            "ok do it",
+        ] {
+            assert!(is_follow_up(text), "{text}");
+            let b = rules(&BriefInput {
+                text,
+                recent: &recent,
+                ..Default::default()
+            })
+            .unwrap_or_else(|| panic!("{text}: no brief"));
+            assert_eq!(short(&b), short(&asked), "{text}");
+        }
+        // A new subject after the go-ahead is a new ask; thanks is a sign-off.
+        for text in [
+            "yeah what about the raid boss",
+            "ok thanks",
+            "yeah lol you're funny",
+        ] {
+            assert!(!is_follow_up(text), "{text}");
+        }
+        // "yeah" after hanging out stays hanging out.
+        let chat = ["haha you're funny".to_string()];
+        let b = rules(&BriefInput {
+            text: "yeah",
+            recent: &chat,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(b.intent, Intent::Chat);
     }
 
     #[test]
@@ -1393,14 +2069,9 @@ mod tests {
                     .to_string(),
             )
         };
-        let b = classify(
-            &input("the thing from yesterday, the spreadsheet one"),
-            Some(&mut ask),
-        );
-        assert_eq!(
-            calls,
-            vec!["the thing from yesterday, the spreadsheet one".to_string()]
-        );
+        // Nothing the rules or the local scorer know: the fallback is asked once.
+        let b = classify(&input("zxq blorp"), Some(&mut ask));
+        assert_eq!(calls, vec!["zxq blorp".to_string()]);
         assert_eq!(
             b,
             Brief {
@@ -1410,6 +2081,18 @@ mod tests {
                 done: vec!["files in place".into(), "nothing lost".into()],
                 domain: "files".into(),
                 by: "model".into(),
+                confidence: 3,
+            }
+        );
+        // Fallback off: the same ask gets the default Brief, with no call to make.
+        assert_eq!(
+            classify(&input("zxq blorp"), None),
+            Brief {
+                mood: "calm".into(),
+                domain: "general".into(),
+                by: "default".into(),
+                confidence: 3,
+                ..Default::default()
             }
         );
 
@@ -1420,16 +2103,125 @@ mod tests {
         };
         assert_eq!(classify(&input("hello"), Some(&mut count)).by, "rules");
         assert_eq!(n.get(), 0);
-        let bad = classify(&input("the thing from yesterday"), Some(&mut count));
+        // The rules can't tell, but the local scorer is sure: still no call.
+        assert_eq!(
+            classify(
+                &input("the thing from yesterday, the spreadsheet one"),
+                Some(&mut count)
+            ),
+            Brief {
+                intent: Intent::Task,
+                care: Care::Careful,
+                mood: "calm".into(),
+                done: vec!["files in place".into(), "nothing lost".into()],
+                domain: "files".into(),
+                by: "local".into(),
+                confidence: 100,
+            }
+        );
+        assert_eq!(n.get(), 0);
+        let bad = classify(&input("zxq blorp"), Some(&mut count));
         assert_eq!(n.get(), 1);
         assert_eq!(short(&bad), (Intent::Chat, Care::Casual, "general", "calm"));
         assert_eq!(bad.by, "default");
-        let none = classify(&input("the thing from yesterday"), None);
-        assert_eq!((none.intent, none.by.as_str()), (Intent::Chat, "default"));
         let mut fail = |_: &str| Err::<String, _>("offline".to_string());
+        assert_eq!(classify(&input("zxq blorp"), Some(&mut fail)).by, "default");
+    }
+
+    #[test]
+    fn a_destructive_word_is_critical_on_every_guessed_path() {
+        // Local: the scorer's guess, raised to critical by the word.
+        let wipe = classify(&input("wipe the old usb stick"), None);
+        assert_eq!((wipe.by.as_str(), wipe.care), ("local", Care::Critical));
+        // Model: a casual chat rating never lowers it.
+        let mut casual = |_: &str| {
+            Ok::<_, String>(
+                r#"{"intent":"chat","care":"casual","mood":"calm","domain":"general"}"#.to_string(),
+            )
+        };
+        let model = classify(&input("zxq bank blorp"), Some(&mut casual));
         assert_eq!(
-            classify(&input("the thing from yesterday"), Some(&mut fail)).by,
-            "default"
+            (model.by.as_str(), model.intent, model.care),
+            ("model", Intent::Chat, Care::Critical)
+        );
+        // Default: no model, still critical.
+        let none = classify(&input("zxq bank blorp"), None);
+        assert_eq!((none.by.as_str(), none.care), ("default", Care::Critical));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Unclear {
+        text: String,
+        intent: String,
+        care: String,
+    }
+
+    fn unclear_set() -> Vec<Unclear> {
+        include_str!("../../tests/fixtures/brief_unclear.jsonl")
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{l}: {e}")))
+            .collect()
+    }
+
+    #[test]
+    fn local_sort_matches_unclear_set() {
+        let set = unclear_set();
+        assert_eq!(set.len(), 60);
+        let examples: Vec<&str> = super::super::local_sort::EXEMPLARS
+            .iter()
+            .flat_map(|(_, _, texts)| texts.iter().copied())
+            .collect();
+        assert_eq!(examples.len(), 131);
+        let mut right = 0;
+        let mut misses = Vec::new();
+        let mut critical_misses = Vec::new();
+        for case in &set {
+            assert_eq!(
+                rules(&input(&case.text)),
+                None,
+                "{}: rules sorted it",
+                case.text
+            );
+            assert!(
+                !examples.contains(&case.text.as_str()),
+                "{}: also a scorer example",
+                case.text
+            );
+            let want_intent = Intent::parse(&case.intent).unwrap();
+            let want_care = Care::parse(&case.care).unwrap();
+            let b = classify(&input(&case.text), None);
+            if b.intent == want_intent {
+                right += 1;
+            } else {
+                misses.push(case.text.as_str());
+            }
+            if want_care == Care::Critical && b.care != Care::Critical {
+                critical_misses.push(case.text.as_str());
+            }
+        }
+        assert_eq!(critical_misses, Vec::<&str>::new());
+        // Pass bar is 85% (51 of 60); the shipped tables get 56.
+        assert!(
+            right * 100 >= set.len() * 85,
+            "{right}/60, missed {misses:?}"
+        );
+        assert_eq!(right, 56, "missed {misses:?}");
+    }
+
+    #[test]
+    fn a_thousand_unclear_asks_sort_fast() {
+        let set = unclear_set();
+        let _ = classify(&input(&set[0].text), None);
+        let started = std::time::Instant::now();
+        for case in set.iter().cycle().take(1_000) {
+            std::hint::black_box(classify(&input(&case.text), None));
+        }
+        let took = started.elapsed();
+        // Debug bar; about 120 ms measured. Release target is under 50 ms
+        // (about 13 ms measured).
+        assert!(
+            took < std::time::Duration::from_millis(500),
+            "1,000 classify calls took {took:?}"
         );
     }
 
@@ -1506,7 +2298,7 @@ mod tests {
     fn briefs_are_stored_without_the_ask_and_found_by_turn() {
         let dir = std::env::temp_dir().join(format!("gh-brief-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        assert!(why_lines(&dir).is_empty());
+        assert!(read_briefs(&dir).is_empty());
         let text = "the printer service won't start, my password is hunter2";
         let b = rules(&input(text)).unwrap();
         let policy = Some(super::super::PolicyPick {
@@ -1572,8 +2364,8 @@ mod tests {
         assert_eq!(brief_for_turn(&dir, "chat-1", 9), None);
         assert_eq!(brief_for_turn(&dir, "", 2), None);
         assert_eq!(
-            why_lines(&dir),
-            vec!["Brief: chat × casual, done = answered".to_string()]
+            read_briefs(&dir).last().map(|l| l.brief.label()).as_deref(),
+            Some("chat × casual, done = answered")
         );
         for i in 0..BRIEF_TRIM_AT as u64 {
             record_brief(
@@ -1591,5 +2383,152 @@ mod tests {
         assert_eq!(kept.len(), BRIEF_KEEP + 1);
         assert_eq!(kept.last().unwrap().at, 10 + BRIEF_TRIM_AT as u64 - 1);
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+#[cfg(test)]
+mod pc_health_tests {
+    use super::*;
+
+    fn sort(text: &str) -> Brief {
+        classify(
+            &BriefInput {
+                text,
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn home_buttons_and_chips_never_sort_as_small_talk() {
+        let mut asks: Vec<&str> = grokhub_core::home::BUTTON_ASKS.to_vec();
+        asks.extend(
+            grokhub_core::chips::SEED_CHIPS
+                .iter()
+                .map(|(_, label)| *label),
+        );
+        for ask in asks {
+            let b = sort(ask);
+            assert_eq!(b.by, "rules", "{ask}: {b:?}");
+            assert_ne!(b.intent, Intent::Chat, "{ask}: {b:?}");
+        }
+        for ask in [
+            grokhub_core::home::TUNE_UP_ASK,
+            grokhub_core::home::FREE_STORAGE_ASK,
+        ] {
+            let b = sort(ask);
+            assert_eq!(
+                (b.intent, b.domain.as_str()),
+                (Intent::Repair, "pc-health"),
+                "{ask}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_check_up_of_this_pc_is_a_pc_health_repair() {
+        for ask in [
+            "check my pc",
+            "check up on my pc please",
+            "why is my pc so slow",
+            "tune up my computer",
+            "speed up my laptop",
+            "clean up my pc",
+            "is my computer healthy?",
+            "run a health check",
+            "optimize windows",
+            "free up some disk space",
+            "my drive is almost full",
+            "my laptop is running hot",
+        ] {
+            let b = sort(ask);
+            assert_eq!(
+                (b.intent, b.domain.as_str(), b.by.as_str()),
+                (Intent::Repair, "pc-health", "rules"),
+                "{ask}"
+            );
+        }
+    }
+
+    #[test]
+    fn breakages_feature_asks_and_small_talk_stay_where_they_were() {
+        let cases: &[(&str, Intent, &str)] = &[
+            ("my pc keeps crashing", Intent::Repair, "system"),
+            ("the game stutters in ranked", Intent::Repair, "gaming"),
+            ("hey", Intent::Chat, "general"),
+            ("lol same, long day", Intent::Chat, "general"),
+            ("I'm so slow today lol", Intent::Chat, "general"),
+        ];
+        for (ask, intent, domain) in cases {
+            let b = sort(ask);
+            assert_eq!((b.intent, b.domain.as_str()), (*intent, *domain), "{ask}");
+        }
+        // A plain question about space is answered, not a tune-up.
+        let space = sort("how much disk space do I have");
+        assert_eq!(space.intent, Intent::Question);
+        assert_ne!(space.domain, "pc-health");
+        // Reading mail on this computer isn't a check of it.
+        assert_ne!(sort("check my email on this computer").domain, "pc-health");
+        // Asking for a feature is new work, never a check-up.
+        let feature = sort("can you add a tune-up button to the app");
+        assert_ne!(feature.intent, Intent::Repair);
+        assert_ne!(feature.domain, "pc-health");
+    }
+
+    #[test]
+    fn squads_stutters_and_week_plans_have_a_home() {
+        assert_eq!(sort("Find a duo tonight").domain, "gaming");
+        assert_eq!(sort("Fix my stutter").domain, "gaming");
+        assert_eq!(sort("Plan my week").domain, "planning");
+        assert_eq!(sort("Plan my weekend").domain, "planning");
+        assert_eq!(sort("Roast my build").domain, "loadout");
+    }
+
+    #[test]
+    fn a_guess_keeps_the_subject_of_the_ask() {
+        let b = sort("zxq my laptop blorp");
+        if b.by == "default" {
+            assert_eq!(b.domain, "system");
+        }
+        assert_eq!(sort("zxq blorp").domain, "general");
+    }
+    #[test]
+    fn a_clear_picture_ask_is_an_image_ask() {
+        for ask in [
+            "draw me a fox in the snow",
+            "make a picture of a castle at night",
+            "make an image of a red car",
+            "generate an image of a neon city skyline",
+            "can you draw me a dragon?",
+            "please create 3 pictures of my dog",
+            "i want you to sketch a lighthouse",
+            "give me a wallpaper of mountains",
+        ] {
+            assert!(is_picture_ask(ask), "{ask}");
+            let b = sort(ask);
+            assert_eq!(b.intent, Intent::Image, "{ask}");
+            assert_eq!(b.domain, "media", "{ask}");
+            assert_eq!(b.care, Care::Casual, "{ask}");
+        }
+        for not in [
+            "I like this picture",
+            "describe the image",
+            "what's in this image?",
+            "can you make images?",
+            "make the image bigger",
+            "how do I make a picture smaller?",
+            "draw the curtains",
+            "write me a poem about a fox",
+        ] {
+            assert!(!is_picture_ask(not), "{not}");
+            let intent = rules(&BriefInput {
+                text: not,
+                ..Default::default()
+            })
+            .map(|b| b.intent);
+            assert_ne!(intent, Some(Intent::Image), "{not}");
+        }
+        assert_eq!(Intent::parse("image"), Some(Intent::Image));
+        assert_eq!(Intent::Image.as_str(), "image");
     }
 }

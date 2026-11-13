@@ -79,6 +79,10 @@ static LIVE: AtomicU8 = AtomicU8::new(ConnectivityState::Unknown as u8);
 
 /// Process-wide live state (debounced). Cabin reads this; writers use [`Connectivity`].
 pub fn state() -> ConnectivityState {
+    // Offline only reads as Offline, so the router goes local and nothing probes.
+    if crate::offline::enabled() {
+        return ConnectivityState::Offline;
+    }
     ConnectivityState::from_u8(LIVE.load(Ordering::SeqCst))
 }
 
@@ -86,19 +90,21 @@ fn publish(s: ConnectivityState) {
     LIVE.store(s as u8, Ordering::SeqCst);
 }
 
-/// Classify a `reqwest` error for connectivity. **401 / 403 / 429 / 5xx never
-/// mean offline** — the cloud answered.
-pub fn classify_reqwest_error(err: &reqwest::Error) -> TransportHint {
-    if err.is_connect() || err.is_timeout() {
-        return TransportHint::OfflineCandidate;
+/// Classify an HTTP error for connectivity. **401 / 403 / 429 / 5xx never
+/// mean offline** — the cloud answered. No answer (DNS, connect, a read or
+/// write that failed) is an offline candidate; a bad URL or a malformed
+/// answer says nothing either way.
+pub fn classify_http_error(err: &crate::http::Error) -> TransportHint {
+    use crate::http::{Error, TransportKind};
+    match err {
+        Error::Status { code, .. } => classify_http_status(*code),
+        Error::Transport { kind, .. } => match kind {
+            TransportKind::Dns | TransportKind::Connect | TransportKind::Io => {
+                TransportHint::OfflineCandidate
+            }
+            TransportKind::Other => TransportHint::Inconclusive,
+        },
     }
-    if let Some(status) = err.status() {
-        return classify_http_status(status.as_u16());
-    }
-    if err.is_request() {
-        return TransportHint::OfflineCandidate;
-    }
-    TransportHint::Inconclusive
 }
 
 /// Table-driven status handling shared with tests.
@@ -107,25 +113,24 @@ pub fn classify_http_status(status: u16) -> TransportHint {
     TransportHint::CloudReachable
 }
 
-/// Apply explicit connect and total timeouts on a `reqwest` client builder.
-pub fn http_client_with_timeouts(
-    builder: reqwest::blocking::ClientBuilder,
+/// Agent options with explicit connect and total timeouts.
+pub fn http_opts_with_timeouts(
     connect_timeout: Duration,
     request_timeout: Duration,
-) -> reqwest::blocking::ClientBuilder {
-    builder
-        .connect_timeout(connect_timeout)
-        .timeout(request_timeout)
+) -> crate::http::Opts {
+    crate::http::Opts {
+        connect: connect_timeout,
+        overall: Some(request_timeout),
+        ..crate::http::Opts::default()
+    }
 }
 
-/// Build a client with [`DEFAULT_CONNECT_TIMEOUT`] and [`DEFAULT_REQUEST_TIMEOUT`].
-pub fn default_http_client() -> Result<reqwest::blocking::Client, reqwest::Error> {
-    http_client_with_timeouts(
-        reqwest::blocking::Client::builder(),
+/// An agent with [`DEFAULT_CONNECT_TIMEOUT`] and [`DEFAULT_REQUEST_TIMEOUT`].
+pub fn default_http_client() -> crate::http::Agent {
+    crate::http::agent(http_opts_with_timeouts(
         DEFAULT_CONNECT_TIMEOUT,
         DEFAULT_REQUEST_TIMEOUT,
-    )
-    .build()
+    ))
 }
 
 /// Debounced connectivity engine: OS signals + transport hints + HEAD re-probe.
@@ -194,11 +199,11 @@ impl Connectivity {
     }
 
     /// Classified provider / transport failure.
-    pub fn note_transport_error(&mut self, err: &reqwest::Error, now_ms: u64) {
-        self.note_transport_hint(classify_reqwest_error(err), now_ms);
+    pub fn note_transport_error(&mut self, err: &crate::http::Error, now_ms: u64) {
+        self.note_transport_hint(classify_http_error(err), now_ms);
     }
 
-    /// Classified provider / transport signal (reqwest, ureq, probes).
+    /// Classified provider / transport signal (HTTP errors, probes).
     pub fn note_transport_hint(&mut self, hint: TransportHint, now_ms: u64) {
         match hint {
             TransportHint::OfflineCandidate => {
@@ -278,15 +283,16 @@ impl Connectivity {
     /// [`http_client_with_timeouts`].
     pub fn run_probe_if_due(
         &mut self,
-        client: &reqwest::blocking::Client,
+        client: &crate::http::Agent,
         now_ms: u64,
-    ) -> Option<Result<(), reqwest::Error>> {
-        if !self.probe_due(now_ms) {
+    ) -> Option<Result<(), crate::http::Error>> {
+        if !self.probe_due(now_ms) || crate::offline::enabled() {
             return None;
         }
         let url = self.probe_url.clone().unwrap_or_default();
         self.probe_due_ms = 0;
-        let result = client.head(&url).send().map(|_| ());
+        // Any answer, 4xx/5xx included, means the cloud is reachable.
+        let result = client.head(&url).any_status().call().map(|_| ());
         match &result {
             Ok(()) => self.note_transport_success(now_ms),
             Err(e) => {
@@ -317,8 +323,8 @@ fn global_slot() -> &'static Mutex<Option<Arc<Mutex<Connectivity>>>> {
 }
 
 /// Feed transport errors into the installed global engine, if any.
-pub fn note_global_transport_error(err: &reqwest::Error, now_ms: u64) {
-    note_global_transport_hint(classify_reqwest_error(err), now_ms);
+pub fn note_global_transport_error(err: &crate::http::Error, now_ms: u64) {
+    note_global_transport_hint(classify_http_error(err), now_ms);
 }
 
 /// Feed a classified transport hint into the installed global engine, if any.
@@ -431,76 +437,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classifier_table_reqwest_shapes() {
-        let cases: &[(TransportHint, bool, bool, bool, Option<u16>)] = &[
-            (TransportHint::OfflineCandidate, true, false, false, None),
-            (TransportHint::OfflineCandidate, false, true, false, None),
-            (TransportHint::OfflineCandidate, false, false, true, None),
+    fn classifier_table_http_error_shapes() {
+        use crate::http::{Error, TransportKind};
+        let transport = |kind| Error::Transport {
+            kind,
+            message: String::new(),
+        };
+        let status = |code| Error::Status {
+            code,
+            body: String::new(),
+            retry_after: None,
+            message: String::new(),
+        };
+        let cases = [
             (
-                TransportHint::CloudReachable,
-                false,
-                false,
-                false,
-                Some(401),
+                TransportHint::OfflineCandidate,
+                transport(TransportKind::Dns),
             ),
             (
-                TransportHint::CloudReachable,
-                false,
-                false,
-                false,
-                Some(403),
+                TransportHint::OfflineCandidate,
+                transport(TransportKind::Connect),
             ),
             (
-                TransportHint::CloudReachable,
-                false,
-                false,
-                false,
-                Some(429),
+                TransportHint::OfflineCandidate,
+                transport(TransportKind::Io),
             ),
-            (
-                TransportHint::CloudReachable,
-                false,
-                false,
-                false,
-                Some(500),
-            ),
-            (
-                TransportHint::CloudReachable,
-                false,
-                false,
-                false,
-                Some(502),
-            ),
-            (
-                TransportHint::CloudReachable,
-                false,
-                false,
-                false,
-                Some(404),
-            ),
+            (TransportHint::Inconclusive, transport(TransportKind::Other)),
+            (TransportHint::CloudReachable, status(401)),
+            (TransportHint::CloudReachable, status(403)),
+            (TransportHint::CloudReachable, status(429)),
+            (TransportHint::CloudReachable, status(500)),
+            (TransportHint::CloudReachable, status(502)),
+            (TransportHint::CloudReachable, status(404)),
         ];
-        for (want, is_connect, is_timeout, is_request, status) in cases {
-            let got = classify_from_parts(*is_connect, *is_timeout, *is_request, *status);
-            assert_eq!(got, *want, "parts connect={is_connect} timeout={is_timeout} request={is_request} status={status:?}");
+        for (want, err) in &cases {
+            assert_eq!(classify_http_error(err), *want, "{err:?}");
         }
-    }
-
-    fn classify_from_parts(
-        is_connect: bool,
-        is_timeout: bool,
-        is_request: bool,
-        status: Option<u16>,
-    ) -> TransportHint {
-        if is_connect || is_timeout {
-            return TransportHint::OfflineCandidate;
-        }
-        if let Some(code) = status {
-            return classify_http_status(code);
-        }
-        if is_request {
-            return TransportHint::OfflineCandidate;
-        }
-        TransportHint::Inconclusive
     }
 
     #[test]
@@ -562,22 +534,55 @@ mod tests {
         assert_eq!(c.live(), ConnectivityState::Online);
     }
 
-    fn synthetic_connect_error() -> reqwest::Error {
-        reqwest::blocking::Client::builder()
-            .build()
-            .unwrap()
+    fn synthetic_connect_error() -> crate::http::Error {
+        crate::http::agent(crate::http::Opts::default())
             .get("http://127.0.0.1:1/")
-            .send()
-            .unwrap_err()
+            .call()
+            .err()
+            .unwrap()
     }
 
     #[test]
     fn http_client_timeouts_are_set() {
-        let b = http_client_with_timeouts(
-            reqwest::blocking::Client::builder(),
-            Duration::from_secs(3),
-            Duration::from_secs(9),
-        );
-        let _ = b.build().expect("client builds");
+        let o = http_opts_with_timeouts(Duration::from_secs(3), Duration::from_secs(9));
+        assert_eq!(o.connect, Duration::from_secs(3));
+        assert_eq!(o.overall, Some(Duration::from_secs(9)));
+        assert!(!o.reads_env_proxy());
+        let _ = default_http_client();
+    }
+
+    /// The re-probe counts any answer, 4xx/5xx included, as the cloud
+    /// answering, and no answer as a failure (loopback only).
+    #[test]
+    fn probe_counts_any_answer_as_reachable() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && sock.read(&mut byte).unwrap_or(0) == 1 {
+                head.push(byte[0]);
+            }
+            sock.write_all(
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+            String::from_utf8_lossy(&head).into_owned()
+        });
+        let client = default_http_client();
+        let mut c =
+            Connectivity::new(100).with_probe_url(format!("http://127.0.0.1:{port}/models"));
+        c.probe_due_ms = 1;
+        assert!(matches!(c.run_probe_if_due(&client, 10), Some(Ok(()))));
+        assert!(server
+            .join()
+            .unwrap()
+            .starts_with("HEAD /models HTTP/1.1\r\n"));
+        let mut c = Connectivity::new(100).with_probe_url("http://127.0.0.1:1/");
+        c.probe_due_ms = 1;
+        assert!(matches!(c.run_probe_if_due(&client, 10), Some(Err(_))));
     }
 }

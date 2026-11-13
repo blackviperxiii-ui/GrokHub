@@ -30,11 +30,11 @@ pub const DEFAULT_ICON: &str = "💡";
 
 /// The categories an idea may take, in the Ideas view's order.
 pub const CATEGORIES: [PulseCategory; 5] = [
-    PulseCategory::Productivity,
-    PulseCategory::Financial,
-    PulseCategory::Shopping,
-    PulseCategory::Relationships,
-    PulseCategory::Health,
+    PulseCategory::Games,
+    PulseCategory::Pc,
+    PulseCategory::Mods,
+    PulseCategory::Deals,
+    PulseCategory::Automations,
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +67,12 @@ impl IdeasState {
         push_front(&mut self.more_like, title, MORE_LIKE_MAX);
     }
 
+    /// Take a title off the more-like list when the like is taken back.
+    pub fn forget_more_like(&mut self, title: &str) {
+        let title = title.trim();
+        self.more_like.retain(|t| !t.eq_ignore_ascii_case(title));
+    }
+
     pub fn note_not_interested(&mut self, title: &str) {
         self.more_like
             .retain(|t| !t.eq_ignore_ascii_case(title.trim()));
@@ -90,14 +96,16 @@ static RULES: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
     crate::brand::filled("You suggest ideas for one person's Pulse in {product}, a desktop assistant on their own computer. \
 {product} can run commands and edit files, search the web, schedule automations, keep notes and drafts, and make images.
 
-Write at most 4 ideas, personal first: each one must come from their goals, topics, recent chats or feed posts below. \
+Write at most 4 ideas, personal first: each one must come from their games, PC, goals, topics, recent chats or feed posts below. \
+Most of them play games on this PC: ideas about their own games, their PC's health, their mods and builds, and deals on what they want come first. \
+Read-only for games: never suggest touching a running game, its memory or its anti-cheat. \
 No generic tips. If nothing fits, return [].
 
 Reply with only a JSON array. Each item:
 {\"title\": short name of the idea, at most 60 characters,
  \"description\": one line in your own voice that starts with \"I can\", at most 140 characters,
  \"emoji\": one emoji for its topic,
- \"category\": one of productivity, financial, shopping, relationships, health,
+ \"category\": one of games, pc, mods, deals, automations,
  \"action\": the exact message to send {product} to do it}
 
 Put the most personal ideas first. Do not repeat or overlap anything under Existing ideas or Turned down. \
@@ -108,6 +116,10 @@ When More like this lists ideas, write new ones in the same spirit.")
 #[derive(Debug, Clone, Default)]
 pub struct IdeaInput<'a> {
     pub goals: &'a [String],
+    /// Games they played lately, most recent first.
+    pub games: &'a [String],
+    /// One line per PC health finding (disk, drivers, temperatures).
+    pub pc: &'a [String],
     /// The interest topics section (`InterestProfile::prompt_section`).
     pub topics: &'a str,
     pub chats: &'a [String],
@@ -138,6 +150,8 @@ fn push_list(out: &mut String, head: &str, items: &[String], max: usize) {
 /// nothing personal to go on.
 pub fn idea_messages(input: &IdeaInput) -> Option<Vec<(String, String)>> {
     let mut user = String::new();
+    push_list(&mut user, "Games they play", input.games, 8);
+    push_list(&mut user, "Their PC", input.pc, 6);
     push_list(&mut user, "Their goals", input.goals, 8);
     let topics = input.topics.trim();
     if !topics.is_empty() && is_plain_text(topics) {
@@ -181,11 +195,12 @@ struct RawIdea {
 }
 
 /// One of the five categories, by key or by its label's first word
-/// ("Health & Fitness" is health). Anything else is refused.
+/// ("Mods & builds" is mods); an older key that maps to one of them counts
+/// ("shopping" is deals). Anything else is refused.
 pub fn category_of(raw: &str) -> Option<PulseCategory> {
     let lower = raw.trim().to_ascii_lowercase();
     let first = lower.split([' ', '&', '/']).next().unwrap_or("");
-    CATEGORIES.into_iter().find(|c| c.key() == first)
+    PulseCategory::parse(first).filter(|c| CATEGORIES.contains(c))
 }
 
 fn clean(s: &str) -> String {
@@ -279,6 +294,20 @@ pub fn post_ideas(cards: &mut Vec<UpdateCard>, ideas: &[MuseIdea], now_ms: u64) 
         .count()
 }
 
+/// The PC lines an idea run reads: the newest PC health findings still in
+/// the feed, by title.
+pub fn pc_lines(cards: &[UpdateCard]) -> Vec<String> {
+    let mut found: Vec<&UpdateCard> = cards
+        .iter()
+        .filter(|c| {
+            crate::pc_health::is_pc_health_card(c)
+                && c.status != crate::update_feed::UpdateStatus::Dismissed
+        })
+        .collect();
+    found.sort_by_key(|c| std::cmp::Reverse(c.created_at));
+    found.into_iter().take(6).map(|c| c.title.clone()).collect()
+}
+
 /// A card this job wrote.
 pub fn is_muse_idea(card: &UpdateCard) -> bool {
     card.kind == UpdateKind::Idea && card.source_id.starts_with(IDEA_SOURCE)
@@ -290,12 +319,12 @@ mod tests {
 
     const REPLY: &str = r#"Here you go:
 [
- {"title":"Cheaper groceries this week","description":"I can plan a week of meals around what's on sale near you.","emoji":"🛒","category":"shopping","action":"plan a week of meals from this week's grocery sales"},
+ {"title":"Helldivers 2 patch notes","description":"I can sum up each Helldivers 2 patch the day it lands.","emoji":"🎮","category":"games","action":"every day at 6pm, check Helldivers 2 patch notes and summarize what changed"},
  {"title":"Rust release notes","description":"I can sum up the Rust 1.99 release notes for your crates.","emoji":"🦀","category":"Productivity","action":"summarize the Rust 1.99 release notes for my crates"},
- {"title":"Budget check","description":"Let me look at your budget.","emoji":"💰","category":"financial","action":"review my budget"},
+ {"title":"Budget check","description":"Let me look at your budget.","emoji":"💰","category":"deals","action":"review my budget"},
  {"title":"Trivia night","description":"I can set up a trivia night for your friends.","emoji":"🎉","category":"fun","action":"plan a trivia night"},
- {"title":"Cheaper groceries again","description":"I can plan meals around what's on sale near you.","emoji":"🛒","category":"shopping","action":"plan meals from grocery sales"},
- {"title":"Morning run plan","description":"I can build a 5k plan around your mornings.","emoji":"","category":"Health & Fitness","action":"build me a 5k plan for weekday mornings"}
+ {"title":"Helldivers 2 patch notes again","description":"I can sum up Helldivers 2 patch notes for you.","emoji":"🎮","category":"games","action":"summarize Helldivers 2 patch notes"},
+ {"title":"GPU temp check","description":"I can check your GPU temps after each long session.","emoji":"","category":"PC & hardware","action":"after each gaming session, check GPU temperatures and tell me if they ran hot"}
 ]"#;
 
     #[test]
@@ -308,15 +337,15 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                ("Cheaper groceries this week", PulseCategory::Shopping, "🛒"),
-                ("Rust release notes", PulseCategory::Productivity, "🦀"),
-                ("Morning run plan", PulseCategory::Health, DEFAULT_ICON),
+                ("Helldivers 2 patch notes", PulseCategory::Games, "🎮"),
+                ("Rust release notes", PulseCategory::Automations, "🦀"),
+                ("GPU temp check", PulseCategory::Pc, DEFAULT_ICON),
             ],
             "no I can line, an unknown category and a repeat topic are dropped"
         );
         assert_eq!(
             got[0].action,
-            "plan a week of meals from this week's grocery sales"
+            "every day at 6pm, check Helldivers 2 patch notes and summarize what changed"
         );
         assert!(parse_ideas("no ideas today", &[], &[]).is_empty());
         assert!(parse_ideas("[]", &[], &[]).is_empty());
@@ -327,20 +356,23 @@ mod tests {
         let got = parse_ideas(
             REPLY,
             &["Rust release notes".to_string()],
-            &["Cheaper groceries this week".to_string()],
+            &["Helldivers 2 patch notes".to_string()],
         );
         let titles: Vec<&str> = got.iter().map(|i| i.title.as_str()).collect();
-        assert_eq!(titles, vec!["Morning run plan"]);
+        assert_eq!(titles, vec!["GPU temp check"]);
     }
 
     #[test]
     fn categories_take_keys_or_labels_and_only_the_five() {
-        assert_eq!(category_of("financial"), Some(PulseCategory::Financial));
+        assert_eq!(category_of("games"), Some(PulseCategory::Games));
+        assert_eq!(category_of("Mods & builds"), Some(PulseCategory::Mods));
+        assert_eq!(category_of("PC"), Some(PulseCategory::Pc));
         assert_eq!(
-            category_of("Financial Management"),
-            Some(PulseCategory::Financial)
+            category_of("shopping"),
+            Some(PulseCategory::Deals),
+            "an older key"
         );
-        assert_eq!(category_of("Health & Fitness"), Some(PulseCategory::Health));
+        assert_eq!(category_of("health"), None, "an older key that is now More");
         assert_eq!(category_of("more"), None);
         assert_eq!(category_of(""), None);
     }
@@ -350,16 +382,16 @@ mod tests {
         let idea = &parse_ideas(REPLY, &[], &[])[0];
         let card = muse_idea_card(idea, 1_000);
         assert_eq!(card.kind, UpdateKind::Idea);
-        assert_eq!(card.title, "Cheaper groceries this week");
+        assert_eq!(card.title, "Helldivers 2 patch notes");
         assert_eq!(
             card.body.as_deref(),
-            Some("I can plan a week of meals around what's on sale near you.")
+            Some("I can sum up each Helldivers 2 patch the day it lands.")
         );
-        assert_eq!(card.pulse.category.as_deref(), Some("shopping"));
-        assert_eq!(card.pulse.icon.as_deref(), Some("🛒"));
+        assert_eq!(card.pulse.category.as_deref(), Some("games"));
+        assert_eq!(card.pulse.icon.as_deref(), Some("🎮"));
         assert_eq!(
             card.idea_action(),
-            "plan a week of meals from this week's grocery sales"
+            "every day at 6pm, check Helldivers 2 patch notes and summarize what changed"
         );
         assert_eq!(card.expires_at, Some(1_000 + 14 * 24 * 60 * 60 * 1000));
         assert!(is_muse_idea(&card));
@@ -368,6 +400,48 @@ mod tests {
             post_ideas(&mut cards, &parse_ideas(REPLY, &[], &[]), 1_000),
             3
         );
+    }
+
+    #[test]
+    fn games_and_pc_lines_ground_a_run_on_their_own() {
+        let msgs = idea_messages(&IdeaInput {
+            games: &["Helldivers 2".to_string(), "Deep Rock Galactic".to_string()],
+            pc: &["Your C: drive is 94% full".to_string()],
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            msgs[1].1,
+            "Games they play:\n- Helldivers 2\n- Deep Rock Galactic\n\nTheir PC:\n- Your C: drive is 94% full\n"
+        );
+        assert!(msgs[0]
+            .1
+            .contains("one of games, pc, mods, deals, automations"));
+        assert!(msgs[0].1.contains("never suggest touching a running game"));
+    }
+
+    #[test]
+    fn pc_lines_are_the_newest_open_pc_health_findings() {
+        let card = |id: &str, title: &str, at: u64| {
+            let mut c = crate::update_feed::suggestion_card(
+                &format!("{}{id}", crate::pc_health::SOURCE_PREFIX),
+                title,
+                "",
+                at,
+            );
+            c.id = id.into();
+            c
+        };
+        let mut gone = card("c", "Fans ran loud", 3);
+        gone.status = crate::update_feed::UpdateStatus::Dismissed;
+        let other = crate::update_feed::suggestion_card("other", "Not PC", "", 9);
+        let cards = vec![
+            card("a", "GPU ran hot", 1),
+            card("b", "Disk almost full", 2),
+            gone,
+            other,
+        ];
+        assert_eq!(pc_lines(&cards), vec!["Disk almost full", "GPU ran hot"]);
     }
 
     #[test]
@@ -381,6 +455,11 @@ mod tests {
         s.note_more_like("Trivia night");
         s.note_more_like("Morning run plan");
         assert_eq!(s.more_like, vec!["Morning run plan", "Trivia night"]);
+        s.forget_more_like("Morning run plan");
+        assert_eq!(s.more_like, vec!["Trivia night"]);
+        s.forget_more_like("morning run plan");
+        assert_eq!(s.more_like, vec!["Trivia night"]);
+        s.note_more_like("Morning run plan");
         s.note_not_interested("Trivia night");
         assert_eq!(s.more_like, vec!["Morning run plan"]);
         assert_eq!(s.turned_down, vec!["Trivia night"]);

@@ -18,7 +18,7 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -38,6 +38,9 @@ const MAX_STREAMS: usize = 8;
 const PING: Duration = Duration::from_secs(15);
 /// Recent chat frames kept for a tab that reconnects; older ones are a gap.
 const REPLAY: usize = 4096;
+/// Frames one stream may have waiting: a whole catch-up and some more. A tab
+/// that stopped reading fills it and is dropped; it catches up when it reopens.
+const STREAM_QUEUE: usize = REPLAY + 64;
 /// Sent instead of the missed frames when they are older than [`REPLAY`].
 pub const GAP_EVENT: &str = "remote://gap";
 /// How long the pairing code lasts with no paired browser calling, opening a
@@ -53,29 +56,61 @@ pub fn refused() -> String {
 }
 pub const NOT_YOURS: &str = "That chat isn't open in this browser.";
 
+/// A Workboard change a browser may make. Queue hands the card to the
+/// cabin's background runner, which runs unattended and can hold the desktop
+/// tools, so like Resume it stays on this computer.
+pub fn web_may_act(act: &crate::workboard::Act) -> bool {
+    !matches!(act, crate::workboard::Act::Queue)
+}
+
 /// The web app's commands: chat with approvals, automations, memory,
-/// connectors and Pulse, and reading the settings.
+/// connectors, Pulse, Imagine, the Agents page and the workboard, reading the settings and the skills list, and which Nyx picture shows.
+/// Home and Objectives are read only, with only the browser's own chats.
 pub const WEB_COMMANDS: &[&str] = &[
     "get_settings",
     "send_chat",
     "answer_permission",
     "answer_elicit",
     "cancel_chat",
+    "steer_chat",
     "close_chat",
+    // The decision inbox: a browser sees and answers only its own chats' asks.
+    "decision_inbox",
+    "answer_inbox",
+    "reply_pick",
+    // Pasted or dropped files only; the picker and paths stay on the computer.
+    "stage_attachment",
+    "remove_attachment",
     "list_automations",
     "add_automation",
     "set_automation_enabled",
     "remove_automation",
+    "edit_automation",
     "run_automation",
     "get_memory",
     "save_memory",
     "add_memory",
     "search_memory",
     "edit_memory_row",
+    "slash_hits",
+    "run_slash",
     "forget_memory_row",
     "approve_memory_row",
     "reject_memory_row",
     "set_memory_writes",
+    "pause_memory_row",
+    "add_personal_fact",
+    "get_memory_files",
+    "save_memory_file",
+    "restore_memory_file",
+    "reflect_memory",
+    "tidy_memory_ledger",
+    "apply_memory_raw_tidy",
+    "dismiss_memory_raw_tidy",
+    "get_memory_retention",
+    "set_memory_retention",
+    "get_chat_archive",
+    "set_chat_archive",
     "list_connectors",
     "check_connectors",
     "restart_connector",
@@ -84,10 +119,50 @@ pub const WEB_COMMANDS: &[&str] = &[
     "get_pulse",
     "pulse_act",
     "pulse_discuss",
+    "pulse_offer",
+    "pulse_remind",
     "pulse_why",
+    "pulse_saved",
+    "pulse_unsave",
+    "pulse_fix",
     "get_feed_prompt",
     "save_feed_prompt",
     "pulse_image",
+    "get_imagine",
+    "imagine_generate",
+    "imagine_cancel",
+    "imagine_image",
+    "get_skills",
+    "nyx_look",
+    "get_queue",
+    "stop_task",
+    // The Workboard: every change goes through the shared board lock and merge.
+    // Resume stays in the desktop shell.
+    "get_workboard",
+    "workboard_stamp",
+    "workboard_log",
+    "workboard_add",
+    "workboard_act",
+    "workboard_work",
+    "workboard_recur",
+    "workboard_delete_archived",
+    "workboard_sweep_undo",
+    "workboard_sweep_dismiss",
+    "get_behavior",
+    "get_privacy",
+    "get_background",
+    // Accept as done (`set_mission_done`) stays on the computer; the layout
+    // is only which tiles show, so a paired phone may edit it.
+    "get_home",
+    "get_mission",
+    // Goals are the player's own list; a paired phone may add and move them.
+    "get_goals",
+    "goal_act",
+    "home_catalog",
+    "set_home_layout",
+    // Chips read and teach chip memory only; a tap acts on the page.
+    "quick_chips",
+    "chip_outcome",
 ];
 
 pub fn web_command(name: &str) -> bool {
@@ -197,7 +272,7 @@ type Shared = Arc<Mutex<Pairing>>;
 /// so a tab whose stream dropped gets what it missed when it reopens.
 #[derive(Default)]
 struct Hub {
-    txs: Vec<Sender<String>>,
+    txs: Vec<SyncSender<String>>,
     /// The last [`REPLAY`] frames, oldest first, by id.
     log: VecDeque<(u64, String)>,
     /// The id of the newest frame; 0 before the first.
@@ -211,8 +286,8 @@ impl Hub {
         self.log.clear();
     }
 
-    /// Numbers a frame, keeps it for replay and sends it to every stream.
-    /// True when some stream took it.
+    /// Numbers a frame, keeps it for replay and sends it to every stream. A
+    /// stream with no room left is dropped. True when some stream took it.
     fn send(&mut self, event: &str, payload: &Value) -> bool {
         self.last += 1;
         let text = frame(self.last, event, payload);
@@ -220,7 +295,7 @@ impl Hub {
             self.log.pop_front();
         }
         self.log.push_back((self.last, text.clone()));
-        self.txs.retain(|tx| tx.send(text.clone()).is_ok());
+        self.txs.retain(|tx| tx.try_send(text.clone()).is_ok());
         !self.txs.is_empty()
     }
 
@@ -246,6 +321,8 @@ impl Hub {
 struct Pairing {
     code: String,
     used: Instant,
+    /// The browsers using this code, for the Devices page; a new code starts empty.
+    browsers: crate::remote_devices::Browsers,
 }
 
 impl Pairing {
@@ -253,6 +330,7 @@ impl Pairing {
         Self {
             code: grokhub_core::new_token(),
             used: now,
+            browsers: Default::default(),
         }
     }
 
@@ -289,6 +367,16 @@ fn live<'a>(
         chats.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
     live
+}
+
+/// A conversation id as chats have them: 1 to 64 letters, digits, `-` and
+/// `_`, the same rule as its folder name (`attach.rs`).
+fn chat_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 #[derive(Default)]
@@ -387,6 +475,8 @@ impl WebAccess {
                 };
                 let accept = Arc::clone(&server);
                 std::thread::spawn(move || accept_loop(&accept, &job));
+                let kick = Arc::downgrade(&server);
+                std::thread::spawn(move || nudge_pool(&kick, inner));
                 *running = Some(Running {
                     pairing,
                     port,
@@ -444,6 +534,54 @@ impl WebAccess {
         }
     }
 
+    /// The Devices page: this computer, whether web access is on, and the
+    /// browsers paired with the live code. Read from memory only.
+    pub fn devices(&self) -> crate::remote_devices::DevicesView {
+        let running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        let (on, lan, browsers) = match running.as_ref() {
+            None => (false, String::new(), Vec::new()),
+            Some(run) => {
+                let browsers = live(&run.pairing, &self.streams, &self.chats, Instant::now())
+                    .browsers
+                    .views();
+                let (scheme, port) = match &run.front {
+                    Some((front, _)) => ("https", front.port),
+                    None => ("http", run.port),
+                };
+                let lan = lan_ip()
+                    .map(|ip| format!("{scheme}://{}", SocketAddr::new(ip, port)))
+                    .unwrap_or_default();
+                (true, lan, browsers)
+            }
+        };
+        crate::remote_devices::DevicesView {
+            computer: crate::remote_devices::computer_name(),
+            on,
+            lan,
+            browsers,
+        }
+    }
+
+    /// Signs out every browser: a new pairing code, so the old one gets a
+    /// 401, every event stream ends and the browsers' chats are forgotten.
+    /// Web access stays on. Off: no change.
+    pub fn forget_all(&self) -> crate::remote_devices::DevicesView {
+        if let Some(run) = self
+            .running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            *run.pairing.lock().unwrap_or_else(|e| e.into_inner()) = Pairing::new(Instant::now());
+            self.streams
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            self.chats.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        }
+        self.devices()
+    }
+
     /// A conversation a browser started.
     pub fn owns(&self, conversation_id: &str) -> bool {
         self.chats
@@ -452,12 +590,17 @@ impl WebAccess {
             .contains(conversation_id)
     }
 
-    /// A browser started (or continues) this conversation.
-    pub fn adopt(&self, conversation_id: &str) {
+    /// A browser started (or continues) this conversation. False, and not
+    /// kept, when the id isn't one a chat can have.
+    pub fn adopt(&self, conversation_id: &str) -> bool {
+        if !chat_id(conversation_id) {
+            return false;
+        }
         self.chats
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(conversation_id.to_string());
+        true
     }
 }
 
@@ -467,6 +610,18 @@ struct Job {
     chats: Chats,
     dispatch: Dispatch,
     assets: Assets,
+}
+
+impl Job {
+    fn browsers(&self, change: impl FnOnce(&mut crate::remote_devices::Browsers)) {
+        change(
+            &mut self
+                .pairing
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .browsers,
+        );
+    }
 }
 
 fn accept_loop(server: &Server, job: &Job) {
@@ -496,6 +651,27 @@ fn accept_loop(server: &Server, job: &Job) {
     }
 }
 
+/// How often the server pokes its own worker pool (see `nudge_pool`).
+const NUDGE_EVERY: Duration = Duration::from_millis(200);
+
+/// tiny_http 0.12 hands each connection to a worker pool that can miss a
+/// wakeup: when two connections land before a woken worker takes its task,
+/// the second one waits in the queue until another worker frees up or a new
+/// connection arrives. Keep-alive sockets hold workers, so a page's last
+/// file could wait for good. An empty connection now and then makes the pool
+/// start a worker, which runs anything left in the queue. Ends with the server.
+fn nudge_pool(server: &std::sync::Weak<Server>, addr: SocketAddr) {
+    let ip = match addr.ip() {
+        ip if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        ip => ip,
+    };
+    let addr = SocketAddr::new(ip, addr.port());
+    while server.upgrade().is_some() {
+        std::thread::sleep(NUDGE_EVERY);
+        let _ = std::net::TcpStream::connect_timeout(&addr, NUDGE_EVERY);
+    }
+}
+
 /// One call being handled; frees its place when the handler ends, even on a panic.
 struct Slot(Arc<AtomicUsize>);
 
@@ -511,8 +687,21 @@ fn handle(mut req: Request, job: &Job, slot: Slot) {
         .iter()
         .find(|h| h.field.equiv("Authorization"))
         .map(|h| h.value.as_str().to_string());
+    let agent = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("User-Agent"))
+        .map(|h| h.value.as_str().to_string())
+        .unwrap_or_default();
     let now = Instant::now();
-    let paired = live(&job.pairing, &job.streams, &job.chats, now).admit(auth.as_deref(), now);
+    let paired = {
+        let mut live = live(&job.pairing, &job.streams, &job.chats, now);
+        let paired = live.admit(auth.as_deref(), now);
+        if paired {
+            live.browsers.saw(&agent, grokhub_core::now_ms());
+        }
+        paired
+    };
     match route(req.method(), req.url()) {
         Route::Hello => send_json(req, 200, &json!({ "kind": KIND, "version": VERSION })),
         Route::Events if !paired => refuse(req),
@@ -548,10 +737,28 @@ fn handle(mut req: Request, job: &Job, slot: Slot) {
             let mut reply = match args {
                 Err(err) => json!({ "ok": false, "error": format!("Bad arguments: {err}") }),
                 Ok(_) if !web_command(&command) => json!({ "ok": false, "error": refused() }),
-                Ok(args) => match (job.dispatch)(&command, args) {
-                    Ok(value) => json!({ "ok": true, "value": value }),
-                    Err(error) => json!({ "ok": false, "error": error }),
-                },
+                Ok(args) => {
+                    let chat = (command == "send_chat")
+                        .then(|| args["conversationId"].as_str().map(str::to_string))
+                        .flatten();
+                    if let Some(chat) = &chat {
+                        job.browsers(|b| b.chat(&agent, chat, true));
+                    }
+                    let reply = match (job.dispatch)(&command, args) {
+                        Ok(value) => json!({ "ok": true, "value": value }),
+                        Err(error) => json!({ "ok": false, "error": error }),
+                    };
+                    // A chat the desktop kept for itself isn't this browser's.
+                    if let Some(chat) = &chat {
+                        let kept = job
+                            .chats
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .contains(chat);
+                        job.browsers(|b| b.chat(&agent, chat, kept));
+                    }
+                    reply
+                }
             };
             // The newest event id once the command ran: the page waits for
             // its stream to reach it, so a chat's events land before the
@@ -605,13 +812,25 @@ fn refuse(req: Request) {
 }
 
 /// The page may load only its own files and talk only to this desktop.
-const PAGE_CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+/// `media-src data:` plays Imagine's videos, which come as data: URLs.
+const PAGE_CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
+/// The UI file a page path names. A path with an empty, `.` or `..` part, a
+/// backslash or a drive is no file of the UI and gets the app's page: a dev
+/// build reads assets from disk and keeps `..`, which would reach any file.
+fn asset_name(path: &str) -> &str {
+    let file = path.trim_start_matches('/');
+    let odd =
+        file.contains(['\\', ':']) || file.split('/').any(|part| matches!(part, "" | "." | ".."));
+    if odd {
+        "index.html"
+    } else {
+        file
+    }
+}
 
 fn page(req: Request, path: &str, assets: &Assets) {
-    let file = match path.trim_start_matches('/') {
-        "" => "index.html",
-        file => file,
-    };
+    let file = asset_name(path);
     // An unknown path is the app's own route: the page handles it.
     let found = assets(file).or_else(|| assets("index.html"));
     match found {
@@ -637,11 +856,11 @@ fn page(req: Request, path: &str, assets: &Assets) {
 /// what it missed goes out first, under the same lock as new frames, so
 /// nothing is skipped or sent twice.
 fn stream(req: Request, streams: &Streams, since: Option<u64>) {
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::sync_channel::<String>(STREAM_QUEUE);
     {
         let mut hub = streams.lock().unwrap_or_else(|e| e.into_inner());
         hub.txs
-            .retain(|tx| tx.send(": ping\n\n".to_string()).is_ok());
+            .retain(|tx| tx.try_send(": ping\n\n".to_string()).is_ok());
         if hub.txs.len() >= MAX_STREAMS {
             drop(hub);
             return send_json(
@@ -656,7 +875,7 @@ fn stream(req: Request, streams: &Streams, since: Option<u64>) {
             None => vec![format!("id: {}\n\n", hub.last)],
         };
         for text in first {
-            let _ = tx.send(text);
+            let _ = tx.try_send(text);
         }
         hub.txs.push(tx);
     }
@@ -668,18 +887,24 @@ fn stream(req: Request, streams: &Streams, since: Option<u64>) {
         return;
     }
     loop {
-        let text = match rx.recv_timeout(PING) {
-            Ok(text) => text,
-            Err(RecvTimeoutError::Timeout) => ": ping\n\n".to_string(),
+        let Some(text) = next_frame(&rx, PING) else {
             // Web access went off: end the response, so the page knows.
-            Err(RecvTimeoutError::Disconnected) => {
-                let _ = out.write_all(b"0\r\n\r\n").and_then(|()| out.flush());
-                return;
-            }
+            let _ = out.write_all(b"0\r\n\r\n").and_then(|()| out.flush());
+            return;
         };
         if chunk(&mut out, &text).is_err() {
             return;
         }
+    }
+}
+
+/// What a stream writes next: the frame that came, or a ping once none came
+/// for `quiet`. `None` when web access went off.
+fn next_frame(rx: &mpsc::Receiver<String>, quiet: Duration) -> Option<String> {
+    match rx.recv_timeout(quiet) {
+        Ok(text) => Some(text),
+        Err(RecvTimeoutError::Timeout) => Some(": ping\n\n".to_string()),
+        Err(RecvTimeoutError::Disconnected) => None,
     }
 }
 
@@ -715,6 +940,25 @@ mod tests {
             Route::Page("/assets/index.js".into())
         );
         assert_eq!(route(&Method::Post, "/"), Route::Wrong(405));
+    }
+
+    #[test]
+    fn a_browser_never_halts_the_computer() {
+        for name in ["halt_desktop", "get_halt_keys"] {
+            assert!(!web_command(name), "{name} must stay on the desktop");
+        }
+    }
+
+    #[test]
+    fn a_browser_never_checks_installs_or_switches_shell_updates() {
+        for name in [
+            "get_update_status",
+            "set_update_channel",
+            "check_shell_update",
+            "install_shell_update",
+        ] {
+            assert!(!web_command(name), "{name} must stay on the desktop");
+        }
     }
 
     #[test]
@@ -757,7 +1001,7 @@ mod tests {
         let pairing: Shared = Arc::new(Mutex::new(Pairing::new(start)));
         let streams: Streams = Arc::default();
         let chats: Chats = Arc::default();
-        let (tx, rx) = mpsc::channel::<String>();
+        let (tx, rx) = mpsc::sync_channel::<String>(1);
         streams.lock().unwrap().txs.push(tx);
         chats.lock().unwrap().insert("web-chat".into());
 
@@ -789,36 +1033,89 @@ mod tests {
             "answer_permission",
             "answer_elicit",
             "get_settings",
+            "list_automations",
+            "add_automation",
+            "edit_automation",
+            "remove_automation",
             "get_memory",
             "edit_memory_row",
             "forget_memory_row",
             "approve_memory_row",
             "reject_memory_row",
             "set_memory_writes",
+            "pause_memory_row",
+            "add_personal_fact",
             "list_connectors",
             "get_pulse",
             "pulse_act",
             "pulse_discuss",
+            "pulse_offer",
+            "pulse_remind",
             "pulse_why",
+            "pulse_saved",
+            "pulse_unsave",
+            "pulse_fix",
             "get_feed_prompt",
             "save_feed_prompt",
             "pulse_image",
+            "get_imagine",
+            "imagine_generate",
+            "imagine_cancel",
+            "imagine_image",
+            "get_skills",
+            "nyx_look",
+            "get_queue",
+            "stop_task",
+            "get_workboard",
+            "workboard_add",
+            "workboard_act",
+            "workboard_work",
+            "stage_attachment",
+            "remove_attachment",
         ] {
             assert!(web_command(name), "{name}");
         }
         for name in [
+            // Export saves on the computer and Wipe can't be undone: desktop only.
+            "export_personal",
+            "wipe_personal",
             "save_settings",
             "set_theme",
+            "auto_setup",
             "set_api_key",
             "clear_api_key",
+            "code_secret_list",
+            "code_secret_set",
+            "code_secret_delete",
+            "code_files_list",
+            "code_file_read",
+            "code_file_write",
+            "code_term_open",
+            "code_term_write",
+            "code_term_resize",
+            "code_term_close",
+            "get_learned",
+            "learned_act",
+            "learned_say",
             "get_interests",
             "add_interest",
             "interest_act",
+            "get_know_me",
+            "set_know_me_on",
+            "set_know_me_signal",
+            "know_me_scan",
+            "know_me_delete",
+            "know_me_wipe",
             "get_journal",
             "journal_add",
             "journal_act",
             "journal_to_mission",
             "get_permissions",
+            "get_scopes",
+            "allow_scope",
+            "revoke_scope",
+            "pick_scope_folder",
+            "forget_scope_facts",
             "add_permission_rule",
             "remove_permission_rule",
             "remember_grant",
@@ -826,6 +1123,9 @@ mod tests {
             "get_personalities",
             "set_personality",
             "set_explicit_personalities",
+            "confirm_adult",
+            "set_quip_heat",
+            "set_dynamic_chat",
             "duplicate_personality",
             "save_personality",
             "delete_personality",
@@ -837,6 +1137,10 @@ mod tests {
             "plugin_act",
             "install_plugin",
             "fetch_plugin_market",
+            "open_skill_folder",
+            "create_skill",
+            "get_skill_detail",
+            "edit_skill",
             "get_local_ai",
             "save_local_ai",
             "start_local_engine_download",
@@ -847,9 +1151,348 @@ mod tests {
             "get_web_access",
             "set_web_access",
             "phone_smoke_report",
+            "stage_attachment_paths",
+            "pick_attachments",
+            "get_autostart",
+            "set_autostart",
+            "set_summon_hotkey",
+            "set_notifications",
+            "nyx_tiles",
+            "get_library",
+            "library_cover",
+            "library_play",
+            "get_battlenet",
+            "battlenet_play",
+            "battlenet_open_folder",
+            "companion_frame",
+            "companion_set_note",
+            "game_wow",
+            "game_wow_addon",
+            "game_gw2",
+            "game_gw2_refresh",
+            "game_gw2_start_key",
+            "game_gw2_answer_key",
+            "game_gw2_remove_key",
+            "game_eso",
+            "game_eso_addon",
+            "game_osrs",
+            "game_osrs_save",
+            "game_osrs_forget",
+            "game_osrs_refresh",
+            "game_destiny",
+            "game_destiny_refresh",
+            "game_destiny_start_key",
+            "game_destiny_answer_key",
+            "game_destiny_save_name",
+            "game_destiny_remove",
+            "game_poe",
+            "game_elite",
+            "game_factorio",
+            "game_factorio_mod",
+            "game_stardew",
+            "game_minecraft",
+            "game_rl",
+            "home_open_clip",
+            "library_friends",
+            "library_steam_settings",
+            "mods_games",
+            "mods_browse",
+            "mods_search",
+            "mods_new_finds",
+            "mods_for_you",
+            "mods_not_for_me",
+            "mods_hide_game",
+            "mods_files",
+            "mods_plan_install",
+            "mods_wait_for_browser",
+            "mods_pickup_download",
+            "mods_plan_uninstall",
+            "mods_confirm",
+            "mods_cancel",
+            "mods_installed",
+            "home_run_playbook",
+            "home_turn_on",
+            "home_setup",
+            "home_setup_steps",
+            "updates_page",
+            "run_update_offer",
+            "set_mission_done",
+            "get_self_improve",
+            "set_self_improve_quiet",
+            "self_improve_revert",
+            "self_improve_issue",
+            "get_change_rows",
+            "change_row_undo",
+            "change_row_keep",
+            "change_row_restore",
+            "pulse_review_apply",
+            "pulse_review_issue",
+            // Provider keys, grants and spend limits stay on the computer.
+            "get_ai_models",
+            "add_ai_provider",
+            "allow_ai_provider",
+            "answer_ai_models_card",
+            "remove_ai_provider",
+            "save_ai_spend",
+            "revoke_ai_premium",
         ] {
             assert!(!web_command(name), "{name}");
         }
+    }
+
+    /// Every Code tab command runs code, pushes, deploys or reads the project
+    /// on the computer: none is a web command. The names are read from the
+    /// window's own handler list, so a new one is covered the day it is added.
+    #[test]
+    fn no_code_tab_command_is_a_web_command() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let handlers = src
+            .split("generate_handler![")
+            .nth(1)
+            .and_then(|rest| rest.split("])").next())
+            .expect("the handler list in lib.rs");
+        let code: Vec<&str> = handlers
+            .split(',')
+            .map(str::trim)
+            .filter(|name| name.starts_with("code_") || name.ends_with("_code_ship"))
+            .collect();
+        // The list was really read: the commands that run things are in it.
+        for name in [
+            "code_test_run",
+            "code_run_stop",
+            "code_deploy_run",
+            "code_deploy_save",
+            "code_ship_run",
+            "code_new_branch",
+            "code_secret_set",
+            "code_file_write",
+            "code_term_open",
+            "save_code_ship",
+        ] {
+            assert!(code.contains(&name), "{name} is missing from {code:?}");
+        }
+        let on_the_web: Vec<&str> = code
+            .iter()
+            .copied()
+            .filter(|name| web_command(name))
+            .collect();
+        assert_eq!(on_the_web, Vec::<&str>::new());
+    }
+
+    /// The whole web list, reviewed name by name. A command is off the web
+    /// unless it is written here: a name added to [`WEB_COMMANDS`] fails this
+    /// test until this list names it too. The window's commands are read from
+    /// its own handler list, so a new one is refused the day it is added.
+    #[test]
+    fn only_the_reviewed_commands_are_on_the_web_list() {
+        const REVIEWED: [&str; 88] = [
+            "add_automation",
+            "add_memory",
+            "add_personal_fact",
+            "answer_elicit",
+            "answer_inbox",
+            "answer_permission",
+            "apply_memory_raw_tidy",
+            "approve_memory_row",
+            "cancel_chat",
+            "check_connectors",
+            "chip_outcome",
+            "close_chat",
+            "decision_inbox",
+            "disconnect_connector",
+            "dismiss_memory_raw_tidy",
+            "edit_automation",
+            "edit_memory_row",
+            "forget_memory_row",
+            "get_background",
+            "get_behavior",
+            "get_chat_archive",
+            "get_feed_prompt",
+            "get_goals",
+            "get_home",
+            "get_imagine",
+            "get_memory",
+            "get_memory_files",
+            "get_memory_retention",
+            "get_mission",
+            "get_privacy",
+            "get_pulse",
+            "get_queue",
+            "get_settings",
+            "get_skills",
+            "get_workboard",
+            "goal_act",
+            "home_catalog",
+            "imagine_cancel",
+            "imagine_generate",
+            "imagine_image",
+            "list_automations",
+            "list_connectors",
+            "nyx_look",
+            "pause_memory_row",
+            "pulse_act",
+            "pulse_discuss",
+            "pulse_fix",
+            "pulse_image",
+            "pulse_offer",
+            "pulse_remind",
+            "pulse_saved",
+            "pulse_unsave",
+            "pulse_why",
+            "quick_chips",
+            "reflect_memory",
+            "reject_memory_row",
+            "remove_attachment",
+            "remove_automation",
+            "reply_pick",
+            "restart_connector",
+            "restore_memory_file",
+            "run_automation",
+            "run_slash",
+            "save_feed_prompt",
+            "save_memory",
+            "save_memory_file",
+            "search_memory",
+            "send_chat",
+            "set_automation_enabled",
+            "set_chat_archive",
+            "set_home_layout",
+            "set_memory_retention",
+            "set_memory_writes",
+            "sign_out_connector",
+            "slash_hits",
+            "stage_attachment",
+            "steer_chat",
+            "stop_task",
+            "tidy_memory_ledger",
+            "workboard_act",
+            "workboard_add",
+            "workboard_delete_archived",
+            "workboard_log",
+            "workboard_recur",
+            "workboard_stamp",
+            "workboard_sweep_dismiss",
+            "workboard_sweep_undo",
+            "workboard_work",
+        ];
+        let mut listed = WEB_COMMANDS.to_vec();
+        listed.sort_unstable();
+        assert_eq!(listed, REVIEWED);
+
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let handlers: Vec<&str> = src
+            .split("generate_handler![")
+            .nth(1)
+            .and_then(|rest| rest.split("])").next())
+            .expect("the handler list in lib.rs")
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or("").trim())
+            .filter(|line| !line.starts_with("#["))
+            .flat_map(|line| line.split(','))
+            .map(|name| name.trim().rsplit("::").next().unwrap_or(""))
+            .filter(|name| !name.is_empty())
+            .collect();
+        // The list was really read: these run things on the computer.
+        for name in [
+            "episode_answer",
+            "pc_tidy_trash",
+            "command_box_approve",
+            "diagnostics_save",
+            "start_share",
+            "delete_all_chats",
+            "read_turn",
+            "ship_commit",
+            "ship_waive",
+        ] {
+            assert!(
+                handlers.contains(&name),
+                "{name} is missing from the handler list"
+            );
+        }
+        let unreviewed_on_the_web: Vec<&str> = handlers
+            .iter()
+            .copied()
+            .filter(|name| !REVIEWED.contains(name) && web_command(name))
+            .collect();
+        assert_eq!(unreviewed_on_the_web, Vec::<&str>::new());
+        let not_a_command: Vec<&str> = REVIEWED
+            .iter()
+            .copied()
+            .filter(|name| !handlers.contains(name))
+            .collect();
+        assert_eq!(not_a_command, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn the_web_has_the_workboard_but_not_resume() {
+        for name in [
+            "get_workboard",
+            "workboard_stamp",
+            "workboard_log",
+            "workboard_add",
+            "workboard_act",
+            "workboard_work",
+            "workboard_recur",
+            "workboard_delete_archived",
+            "workboard_sweep_undo",
+            "workboard_sweep_dismiss",
+        ] {
+            assert!(web_command(name), "{name}");
+        }
+        assert!(!web_command("workboard_resume"));
+        let act = |v: Value| serde_json::from_value::<crate::workboard::Act>(v).unwrap();
+        assert!(!web_may_act(&act(json!({"kind": "queue"}))));
+        assert!(web_may_act(&act(json!({"kind": "unqueue"}))));
+        assert!(web_may_act(&act(json!({"kind": "archive"}))));
+        assert!(web_may_act(&act(json!({"kind": "move", "to": "doing"}))));
+        // Playbooks live on the computer, so starting one stays there too.
+        assert!(!web_command("workboard_playbook"));
+        // The tidy setting stays on the computer, like the rest of Settings.
+        assert!(!web_command("set_workboard_tidy"));
+    }
+
+    #[test]
+    fn the_web_reads_behavior_privacy_and_background_but_changes_none() {
+        for name in ["get_behavior", "get_privacy", "get_background"] {
+            assert!(web_command(name), "{name}");
+        }
+        for name in [
+            "save_behavior",
+            "save_defaults",
+            "set_offline_only",
+            "open_data_folder",
+            "open_files_folder",
+            "change_files_folder",
+            "get_storage",
+            "storage_change",
+            "storage_reset",
+            "storage_bring_over",
+            "storage_open",
+        ] {
+            assert!(!web_command(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn saving_and_opening_chat_files_stay_on_this_computer() {
+        for name in ["export_chat", "open_saved", "reveal_saved"] {
+            assert!(!web_command(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_web_reads_home_and_objectives_but_never_accepts_a_mission() {
+        for name in [
+            "get_home",
+            "get_mission",
+            "get_goals",
+            "goal_act",
+            "home_catalog",
+            "set_home_layout",
+        ] {
+            assert!(web_command(name), "{name}");
+        }
+        assert!(!web_command("set_mission_done"));
     }
 
     #[test]
@@ -912,6 +1555,54 @@ mod tests {
     }
 
     #[test]
+    fn a_stream_that_stops_reading_is_dropped_when_its_queue_is_full() {
+        let mut hub = Hub::default();
+        let (tx, _unread) = mpsc::sync_channel::<String>(2);
+        hub.txs.push(tx);
+        assert!(hub.send("chat://event", &text(1)));
+        assert!(hub.send("chat://event", &text(2)));
+        assert!(!hub.send("chat://event", &text(3)));
+        assert_eq!(hub.txs.len(), 0);
+        // The frames are still kept for when the tab reopens its stream.
+        assert_eq!(hub.missed(0).len(), 3);
+    }
+
+    #[test]
+    fn a_quiet_stream_is_pinged_well_inside_the_fronts_idle_limit() {
+        let quiet = Duration::from_millis(20);
+        let (tx, rx) = mpsc::sync_channel::<String>(1);
+        // Nothing came: a ping goes out, so the connection isn't silent.
+        assert_eq!(next_frame(&rx, quiet).as_deref(), Some(": ping\n\n"));
+        tx.send("data: 1\n\n".to_string()).unwrap();
+        assert_eq!(next_frame(&rx, quiet).as_deref(), Some("data: 1\n\n"));
+        drop(tx);
+        assert_eq!(next_frame(&rx, quiet), None);
+        // The HTTPS front closes a connection with nothing sent for its idle
+        // limit; three pings fit inside, so one late ping doesn't end a stream.
+        assert!(crate::remote_tls::IDLE >= PING * 3);
+    }
+
+    #[test]
+    fn only_a_short_plain_id_can_be_a_browsers_chat() {
+        let access = WebAccess::default();
+        let long = "a".repeat(65);
+        for bad in ["", long.as_str(), "../x", "c 1", "c\n1", "caf\u{e9}"] {
+            assert!(!access.adopt(bad), "{bad:?}");
+            assert!(!access.owns(bad), "{bad:?}");
+        }
+        let longest = "a".repeat(64);
+        for good in [
+            "c1",
+            "shell-mh2k3j4f-ab12cd",
+            "pulse-post_1",
+            longest.as_str(),
+        ] {
+            assert!(access.adopt(good), "{good}");
+            assert!(access.owns(good), "{good}");
+        }
+    }
+
+    #[test]
     fn links_carry_the_code_in_the_fragment() {
         assert_eq!(
             link("https", "192.168.1.20".parse().expect("ip"), 4620, "abc"),
@@ -968,6 +1659,10 @@ mod tests {
         let assets: Assets = Arc::new(|path| match path {
             "index.html" => Some((b"<html>app</html>".to_vec(), "text/html".into())),
             "assets/app.js" => Some((b"js".to_vec(), "text/javascript".into())),
+            // A dev build reads assets from disk and keeps `..` in the path.
+            p if p.contains("..") => {
+                Some((b"a file outside the app".to_vec(), "text/plain".into()))
+            }
             _ => None,
         });
         let view = access
@@ -981,6 +1676,41 @@ mod tests {
             .and_then(|p| p.parse().ok())
             .expect("a localhost link");
         (port, view.code)
+    }
+
+    /// One keep-alive GET; whether its status line came back in time.
+    fn answered(sock: &mut TcpStream) -> bool {
+        write!(
+            sock,
+            "GET /assets/app.js HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n"
+        )
+        .expect("send");
+        sock.set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("timeout");
+        let mut line = String::new();
+        BufReader::new(sock.try_clone().expect("clone"))
+            .read_line(&mut line)
+            .is_ok_and(|_| line.starts_with("HTTP/1.1 200"))
+    }
+
+    #[test]
+    fn a_new_connection_is_answered_while_keep_alive_ones_hold_the_pool() {
+        // Three open keep-alive sockets leave the pool one idle worker, and
+        // two connections at once used to strand the second one unread.
+        for _ in 0..20 {
+            let access = WebAccess::default();
+            let (port, _) = serve(&access);
+            let connect = || TcpStream::connect(("127.0.0.1", port)).expect("connect");
+            let mut held: Vec<TcpStream> = (0..3).map(|_| connect()).collect();
+            assert!(held.iter_mut().all(answered));
+            std::thread::sleep(Duration::from_millis(50));
+            let (mut a, mut b) = (connect(), connect());
+            assert!(
+                answered(&mut a) && answered(&mut b),
+                "a page file never came back"
+            );
+            access.stop();
+        }
     }
 
     #[test]
@@ -1002,9 +1732,28 @@ mod tests {
             head.contains("Content-Security-Policy: default-src 'self'"),
             "{head}"
         );
+        // Imagine's videos are data: URLs; without this the page refuses them.
+        assert!(head.contains("media-src 'self' data:;"), "{head}");
+        // The desktop window's own CSP lives in tauri.conf.json: same rule.
+        let conf: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let shell = conf["app"]["security"]["csp"].as_str().unwrap_or("");
+        assert!(shell.contains("media-src 'self' data:;"), "{shell}");
         assert!(head.contains("X-Frame-Options: DENY"), "{head}");
         let (_, _, body) = http(port, "GET", "/memory", None, "");
         assert_eq!(body, "<html>app</html>");
+        for outside in [
+            "/../../home/user/.ssh/id_rsa",
+            "/assets/../../x",
+            "/a\\..\\x",
+            "/C:/x",
+        ] {
+            let (status, _, body) = http(port, "GET", outside, None, "");
+            assert_eq!(
+                (status, body.as_str()),
+                (200, "<html>app</html>"),
+                "{outside}"
+            );
+        }
         let (_, head, body) = http(port, "GET", "/assets/app.js", None, "");
         assert_eq!(body, "js");
         assert!(head.contains("Content-Type: text/javascript"), "{head}");
@@ -1151,5 +1900,195 @@ mod tests {
         );
         assert_eq!(parse(&body)["seq"], json!(3));
         access.stop();
+    }
+
+    const FIREFOX_ANDROID: &str =
+        "Mozilla/5.0 (Android 14; Mobile; rv:131.0) Gecko/131.0 Firefox/131.0";
+
+    /// A web call from a browser with this User-Agent: (status, body).
+    fn call_as(port: u16, command: &str, code: &str, agent: &str, body: &str) -> (u16, Value) {
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        write!(
+            sock,
+            "POST /remote/v1/call/{command} HTTP/1.1\r\nHost: x\r\nUser-Agent: {agent}\r\nAuthorization: Bearer {code}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .expect("send");
+        let mut raw = String::new();
+        sock.read_to_string(&mut raw).expect("read");
+        let (head, body) = raw.split_once("\r\n\r\n").expect("a response");
+        let status = head
+            .split(' ')
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .expect("status");
+        (status, parse(body))
+    }
+
+    #[test]
+    fn a_paired_browser_shows_as_one_device_with_its_chats() {
+        let access = WebAccess::default();
+        let off = access.devices();
+        assert_eq!(
+            (off.on, off.lan.as_str(), off.browsers.len()),
+            (false, "", 0)
+        );
+        assert!(!off.computer.is_empty());
+
+        let (port, code) = serve(&access);
+        // Wrong codes and the open hello don't pair anything.
+        assert_eq!(
+            call_as(port, "get_settings", "wrong", FIREFOX_ANDROID, "").0,
+            401
+        );
+        assert!(access.devices().browsers.is_empty());
+
+        let before = grokhub_core::now_ms();
+        assert_eq!(
+            call_as(port, "get_settings", &code, FIREFOX_ANDROID, "").0,
+            200
+        );
+        // A chat the browser started counts; one the window keeps doesn't.
+        access.adopt("c1");
+        let chat = r#"{"conversationId":"c1","text":"hi"}"#;
+        assert_eq!(
+            call_as(port, "send_chat", &code, FIREFOX_ANDROID, chat).1,
+            json!({ "ok": true, "value": "got hi", "seq": 0 })
+        );
+        let window = r#"{"conversationId":"window-1","text":"hi"}"#;
+        call_as(port, "send_chat", &code, FIREFOX_ANDROID, window);
+        let after = grokhub_core::now_ms();
+
+        let devices = access.devices();
+        assert!(devices.on);
+        assert_eq!(devices.browsers.len(), 1, "{devices:?}");
+        let browser = &devices.browsers[0];
+        assert_eq!(
+            (browser.name.as_str(), browser.chats),
+            ("Firefox on Android", 1)
+        );
+        assert!(before <= browser.first_seen && browser.first_seen <= browser.last_call);
+        assert!(browser.last_call <= after);
+        access.stop();
+        assert!(access.devices().browsers.is_empty());
+    }
+
+    #[test]
+    fn forget_all_changes_the_code_ends_streams_and_the_old_bearer_gets_401() {
+        let access = WebAccess::default();
+        let (port, code) = serve(&access);
+        assert_eq!(
+            call_as(port, "get_settings", &code, FIREFOX_ANDROID, "").0,
+            200
+        );
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(10)));
+        write!(
+            sock,
+            "GET /remote/v1/events HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {code}\r\n\r\n"
+        )
+        .expect("send");
+        let mut lines = BufReader::new(sock);
+        let mut line = String::new();
+        while line != ": open\n" {
+            line.clear();
+            lines.read_line(&mut line).expect("a line");
+        }
+        access.adopt("c1");
+
+        let after = access.forget_all();
+        assert!(after.on);
+        assert!(after.browsers.is_empty());
+        let fresh = access.view().code;
+        assert_ne!(fresh, code);
+        assert_eq!(fresh.len(), 48);
+        assert!(!access.owns("c1"));
+        // The open stream ends with the last chunk.
+        while line != "0\r\n" {
+            line.clear();
+            lines.read_line(&mut line).expect("a line");
+        }
+        let (status, body) = call_as(port, "get_settings", &code, FIREFOX_ANDROID, "");
+        assert_eq!(
+            (status, body),
+            (
+                401,
+                json!({ "ok": false, "error": "Pair this browser first." })
+            )
+        );
+        assert_eq!(
+            call_as(port, "get_settings", &fresh, FIREFOX_ANDROID, "").0,
+            200
+        );
+        assert_eq!(access.devices().browsers.len(), 1);
+        access.stop();
+        // Off, it changes nothing.
+        assert!(!access.forget_all().on);
+    }
+
+    #[test]
+    fn nothing_about_devices_is_written_to_disk() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-devices-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let access = WebAccess::default();
+        let view = access
+            .start(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                0,
+                Some(&dir),
+                Arc::new(|_, _| Ok(Value::Null)),
+                Arc::new(|_| None),
+            )
+            .expect("starts");
+        let port: u16 = view
+            .links
+            .last()
+            .and_then(|l| l.strip_prefix("http://127.0.0.1:"))
+            .and_then(|l| l.split('/').next())
+            .and_then(|p| p.parse().ok())
+            .expect("a localhost link");
+        assert_eq!(
+            call_as(port, "get_settings", &view.code, FIREFOX_ANDROID, "").0,
+            200
+        );
+        assert_eq!(access.devices().browsers.len(), 1);
+        access.forget_all();
+        access.stop();
+
+        let mut files: Vec<String> = Vec::new();
+        let mut walk = vec![dir.clone()];
+        while let Some(at) = walk.pop() {
+            for entry in std::fs::read_dir(&at).expect("readable").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk.push(path);
+                } else {
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    assert!(!text.contains("Firefox"), "{}", path.display());
+                    let name = path.strip_prefix(&dir).expect("inside");
+                    files.push(name.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        files.sort();
+        // Only the certificate the web access already keeps.
+        assert_eq!(
+            files,
+            [
+                "web-access/cert.pem",
+                "web-access/hosts",
+                "web-access/key.pem"
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_devices_page_stays_on_the_desktop() {
+        assert!(!web_command("get_devices"));
+        assert!(!web_command("forget_all_devices"));
     }
 }

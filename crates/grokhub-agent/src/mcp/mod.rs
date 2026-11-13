@@ -4,7 +4,9 @@
 mod browser;
 mod config;
 mod elicit;
+mod headers;
 mod http;
+mod idem;
 mod names;
 mod oauth;
 mod rpc;
@@ -31,10 +33,11 @@ use serde_json::{json, Value};
 
 use crate::gate::{self, Decision, Gate, PermMode};
 use crate::perm::{self, Action, Policy};
-use crate::tools::ToolOutput;
+use crate::tools::{fence, ToolOutput};
 
 use config::TransportDef;
 use rpc::RawTool;
+pub use rpc::{ToolHints, ToolIcon};
 
 /// Individual tool schemas at this count. Above it, `search_tool` and
 /// `use_tool`. Spike-2b: counts the native desktop tools and every MCP tool
@@ -133,9 +136,52 @@ struct ToolRec {
     server: String,
     raw: String,
     qualified: String,
+    title: Option<String>,
     description: String,
     schema: Value,
-    read_only: bool,
+    output_schema: Option<Value>,
+    hints: ToolHints,
+    icons: Vec<ToolIcon>,
+}
+
+/// One connected MCP tool as its server's `tools/list` describes it, for a
+/// connectors view. Every field is the server's word, so treat it as untrusted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolInfo {
+    pub server: String,
+    /// The server's own tool name.
+    pub name: String,
+    /// The `server__tool` name the model calls.
+    pub qualified: String,
+    pub title: Option<String>,
+    pub description: String,
+    pub hints: ToolHints,
+    pub icons: Vec<ToolIcon>,
+    pub output_schema: Option<Value>,
+}
+
+impl ToolInfo {
+    /// The tool's `title` when it has one, else its name.
+    pub fn display_name(&self) -> &str {
+        self.title.as_deref().unwrap_or(&self.name)
+    }
+}
+
+/// Every connected MCP tool (connecting servers that are not yet).
+pub fn tool_list() -> Vec<ToolInfo> {
+    current_tools()
+        .into_iter()
+        .map(|tool| ToolInfo {
+            server: tool.server,
+            name: tool.raw,
+            qualified: tool.qualified,
+            title: tool.title,
+            description: tool.description,
+            hints: tool.hints,
+            icons: tool.icons,
+            output_schema: tool.output_schema,
+        })
+        .collect()
 }
 
 struct SlotInner {
@@ -145,7 +191,13 @@ struct SlotInner {
     tools: Vec<ToolRec>,
     last_error: Option<String>,
     tried: bool,
+    /// A connect is running with the slot unlocked; its tools join when it ends.
+    connecting: bool,
+    /// Bumped per connect, so one that a restart or sign-out overtook is dropped.
+    attempt: u64,
     conn: Option<Conn>,
+    /// When `raw` was last listed, for the server's `ttlMs`.
+    listed_at: Option<std::time::Instant>,
 }
 
 impl SlotInner {
@@ -157,8 +209,20 @@ impl SlotInner {
             tools: Vec::new(),
             last_error: None,
             tried: false,
+            connecting: false,
+            attempt: 0,
             conn: None,
+            listed_at: None,
         }
+    }
+
+    /// The server's `ttlMs` ran out since its tools were listed.
+    fn list_expired(&self, now: std::time::Instant) -> bool {
+        let (Some(conn), Some(at)) = (&self.conn, self.listed_at) else {
+            return false;
+        };
+        conn.list_ttl()
+            .is_some_and(|ttl| now.saturating_duration_since(at) >= ttl)
     }
 }
 
@@ -172,12 +236,14 @@ impl Conn {
         &mut self,
         name: &str,
         args: &Value,
+        key: Option<&str>,
         timeout: std::time::Duration,
         stop: &dyn Fn() -> bool,
+        retry_safe: bool,
     ) -> Result<(String, bool), String> {
         match self {
-            Conn::Stdio(conn) => conn.call(name, args, timeout),
-            Conn::Http(conn) => conn.call(name, args, timeout, stop),
+            Conn::Stdio(conn) => conn.call(name, args, key, timeout),
+            Conn::Http(conn) => conn.call(name, args, key, timeout, stop, retry_safe),
         }
     }
 
@@ -187,14 +253,54 @@ impl Conn {
             Conn::Http(conn) => conn.ping(timeout),
         }
     }
+
+    fn list_ttl(&self) -> Option<std::time::Duration> {
+        match self {
+            Conn::Stdio(conn) => conn.list_ttl,
+            Conn::Http(conn) => conn.list_ttl,
+        }
+    }
+
+    fn relist(&mut self, timeout: std::time::Duration) -> Result<Vec<RawTool>, String> {
+        match self {
+            Conn::Stdio(conn) => stdio::relist(conn, timeout),
+            Conn::Http(conn) => http::relist(conn, timeout),
+        }
+    }
+}
+
+/// Longest wait for a re-list after a server's `ttlMs` ran out.
+const RELIST_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// List again the tools of each connected server whose `ttlMs` ran out. A
+/// failed re-list keeps the old tools and waits out another `ttlMs`.
+fn relist_expired(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) {
+    let now = std::time::Instant::now();
+    for slot in slots.values() {
+        let mut inner = lock_slot(slot);
+        if !inner.list_expired(now) {
+            continue;
+        }
+        let wait = inner.def.startup_timeout.min(RELIST_WAIT);
+        let Some(conn) = inner.conn.as_mut() else {
+            continue;
+        };
+        if let Ok(raw) = conn.relist(wait) {
+            inner.raw = raw;
+        }
+        inner.listed_at = Some(std::time::Instant::now());
+    }
 }
 
 struct State {
     path: PathBuf,
-    gen: u64,
+    r#gen: u64,
     mtime: Option<SystemTime>,
     /// Hash of enabled plugins. A disable or content change drops plugin servers.
     server_stamp: String,
+    /// Offline only when the slots were built: a flip drops every connection,
+    /// so a third-party stdio server stops and the rest reconnect.
+    offline: bool,
     loaded: bool,
     workspace: PathBuf,
     slots: BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>,
@@ -204,9 +310,10 @@ impl State {
     fn empty() -> Self {
         Self {
             path: PathBuf::new(),
-            gen: 0,
+            r#gen: 0,
             mtime: None,
             server_stamp: String::new(),
+            offline: false,
             loaded: false,
             workspace: PathBuf::new(),
             slots: BTreeMap::new(),
@@ -229,6 +336,16 @@ fn lock_slot(slot: &Mutex<SlotInner>) -> MutexGuard<'_, SlotInner> {
 
 pub fn set_workspace(path: &Path) {
     lock_state().workspace = path.to_path_buf();
+}
+
+/// Start every enabled server's connection on background threads at launch,
+/// so a chat's first request doesn't wait on them. A server still connecting
+/// when a chat starts joins that chat's tools at its next user turn.
+pub fn connect_in_background(workspace: &Path) {
+    set_workspace(workspace);
+    std::thread::spawn(|| {
+        let _ = current_tools();
+    });
 }
 
 pub fn shutdown_all() {
@@ -266,6 +383,13 @@ pub fn configured() -> Vec<DoctorRow> {
 pub fn doctor() -> Vec<DoctorRow> {
     let _ = current_tools();
     let slots = slots_now();
+    // A launch connect still running: give it a moment so the row is real.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < until && slots.values().any(|slot| lock_slot(slot).connecting)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    requalify(&slots);
     let mut rows = Vec::new();
     for (name, slot) in slots {
         let mut inner = lock_slot(&slot);
@@ -289,6 +413,14 @@ pub fn doctor() -> Vec<DoctorRow> {
         }
         let status = if inner.conn.is_some() && inner.last_error.is_none() {
             "connected"
+        } else if inner.connecting {
+            "connecting"
+        } else if inner
+            .last_error
+            .as_deref()
+            .is_some_and(grokhub_core::offline::is_refusal)
+        {
+            "paused"
         } else if inner.last_error.is_some() {
             "error"
         } else {
@@ -392,12 +524,61 @@ pub fn disconnect(name: &str) -> Result<String, String> {
         || crate::harness::ChangeTarget::put(&target, None),
     )?;
     if done.is_none() {
-        return Err(format!("{name} isn't one of this cabin's connections"));
+        return Err(format!(
+            "{name} isn't one of {}'s connections",
+            grokhub_core::brand::product_name()
+        ));
     }
     crate::harness::forget_connection_token(&config, name);
     invalidate();
     shutdown_all();
     Ok(format!("Disconnected {name}"))
+}
+
+/// Settings → Connectors switch: turn a server off (`enabled: false` in its
+/// `mcp.json` entry) or back on (the flag is dropped), through the
+/// ChangeLedger (origin user, so `/connections` can undo it). A server that
+/// is off is listed but never started. Desktop servers keep their lock.
+pub fn set_enabled(name: &str, on: bool) -> Result<String, String> {
+    if is_desktop_server(name) {
+        return Err(format!("{name} belongs to the desktop and stays on."));
+    }
+    let config = crate::perm::config_dir();
+    let path = config::config_file();
+    let target = crate::harness::McpFile { path: &path, name };
+    let cur = crate::harness::ChangeTarget::read(&target)?
+        .ok_or_else(|| format!("{name} isn't one of this cabin's connections"))?;
+    let mut entry: serde_json::Map<String, Value> =
+        serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
+    let was_on = entry
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let line = if on {
+        format!("Turned on {name}")
+    } else {
+        format!("Turned off {name}")
+    };
+    if was_on == on {
+        return Ok(line);
+    }
+    if on {
+        entry.remove("enabled");
+    } else {
+        entry.insert("enabled".into(), json!(false));
+    }
+    let bytes = serde_json::to_vec_pretty(&entry).map_err(|e| e.to_string())?;
+    let why = if on {
+        "turned on in Settings"
+    } else {
+        "turned off in Settings"
+    };
+    crate::harness::record_change(&config, &target, crate::harness::Origin::User, why, || {
+        crate::harness::ChangeTarget::put(&target, Some(&bytes))
+    })?;
+    invalidate();
+    shutdown_all();
+    Ok(line)
 }
 
 /// What [`install`] did.
@@ -511,6 +692,111 @@ pub(crate) fn schema_tools(native: usize) -> Vec<Value> {
     tools.iter().map(one_schema).collect()
 }
 
+/// The MCP schemas each chat was offered, so a server that connects mid-turn
+/// never rewrites the chat's tool list (a full prompt-cache miss). `refresh`
+/// is set at a user-turn boundary, the only time the list may change.
+struct Frozen {
+    schemas: Vec<Value>,
+    refresh: bool,
+    /// Tools a provider refused over their schema: sent with no parameters
+    /// for the rest of the chat, refresh included.
+    bare: std::collections::HashSet<String>,
+}
+
+/// Keep the record small: a long-lived cabin opens many chats. The least
+/// recently used one goes first, so the open chat keeps its list.
+const MAX_FROZEN_CHATS: usize = 256;
+
+fn frozen_chats() -> MutexGuard<'static, crate::lru_map::LruMap<Frozen>> {
+    static FROZEN: Mutex<crate::lru_map::LruMap<Frozen>> =
+        Mutex::new(crate::lru_map::LruMap::new(MAX_FROZEN_CHATS));
+    FROZEN.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+/// A new user turn in `session`: its next request may take in servers that
+/// connected since, at the end of its MCP tools.
+pub(crate) fn begin_turn(session: &str) {
+    if let Some(chat) = frozen_chats().get_mut(session) {
+        chat.refresh = true;
+    }
+}
+
+/// [`schema_tools`] frozen per chat: the first request's list holds for the
+/// rest of that user turn. At the next turn, tools the chat already had keep
+/// their place, gone ones leave and new ones join at the end. An empty
+/// `session` gets the live list.
+pub(crate) fn chat_schema_tools(session: &str, native: usize) -> Vec<Value> {
+    if session.is_empty() {
+        return schema_tools(native);
+    }
+    if let Some(chat) = frozen_chats().get(session) {
+        if !chat.refresh {
+            return chat.schemas.clone();
+        }
+    }
+    let now = schema_tools(native);
+    let mut chats = frozen_chats();
+    let chat = chats.get_or_insert_with(session, || Frozen {
+        schemas: Vec::new(),
+        refresh: true,
+        bare: Default::default(),
+    });
+    if chat.refresh {
+        chat.schemas = merge_frozen(&chat.schemas, now);
+        for tool in &mut chat.schemas {
+            if tool["name"].as_str().is_some_and(|n| chat.bare.contains(n)) {
+                tool["parameters"] = bare_parameters();
+            }
+        }
+        chat.refresh = false;
+    }
+    chat.schemas.clone()
+}
+
+fn bare_parameters() -> Value {
+    json!({"type": "object", "properties": {}})
+}
+
+/// The provider refused a request with `error`. When it names an MCP tool
+/// this chat offers with parameters, that tool is offered bare from now on
+/// (its server still checks the arguments) and this returns true, so the
+/// step can be sent once more instead of every turn failing on one schema.
+pub(crate) fn bare_schema_named_in(session: &str, error: &str) -> bool {
+    let mut chats = frozen_chats();
+    let Some(chat) = chats.get_mut(session) else {
+        return false;
+    };
+    let mut changed = false;
+    for tool in &mut chat.schemas {
+        let Some(name) = tool["name"].as_str().map(str::to_string) else {
+            continue;
+        };
+        if !name.contains("__") || !error.contains(&name) || chat.bare.contains(&name) {
+            continue;
+        }
+        tool["parameters"] = bare_parameters();
+        chat.bare.insert(name);
+        changed = true;
+    }
+    changed
+}
+
+/// `old`'s tools that are still offered, in `old`'s order with today's
+/// schema, then the new ones in the order `now` lists them.
+fn merge_frozen(old: &[Value], now: Vec<Value>) -> Vec<Value> {
+    let name = |tool: &Value| tool["name"].as_str().unwrap_or_default().to_string();
+    let mut merged: Vec<Value> = old
+        .iter()
+        .filter_map(|kept| now.iter().find(|tool| name(tool) == name(kept)).cloned())
+        .collect();
+    for tool in now {
+        if !merged.iter().any(|have| name(have) == name(&tool)) {
+            merged.push(tool);
+        }
+    }
+    merged
+}
+
 /// `stop` is the run's Stop / Halt: an egress park waiting on a card gives up
 /// when it turns true.
 pub(crate) fn try_dispatch(
@@ -546,9 +832,10 @@ pub(crate) fn search_output(args: &Value) -> ToolOutput {
     let tools = current_tools();
     let mut lines = Vec::new();
     for tool in &tools {
-        let hay = format!("{} {}", tool.qualified, tool.description).to_ascii_lowercase();
+        let about = model_description(tool, usize::MAX);
+        let hay = format!("{} {about}", tool.qualified).to_ascii_lowercase();
         if query.is_empty() || hay.contains(&query) {
-            lines.push(format!("{} — {}", tool.qualified, tool.description));
+            lines.push(format!("{} — {about}", tool.qualified));
         }
         if lines.len() == 50 {
             break;
@@ -562,7 +849,7 @@ pub(crate) fn search_output(args: &Value) -> ToolOutput {
 }
 
 enum Resolved {
-    Known(String),
+    Known { name: String, destructive: bool },
     Missing(String),
 }
 
@@ -575,51 +862,89 @@ pub(crate) fn permission(
 ) -> Option<Decision> {
     match resolve(name, arguments)? {
         Resolved::Missing(target) => Some(Decision::Refuse(format!("unknown tool `{target}`"))),
-        Resolved::Known(target) => Some(decide_mcp(gate, &target, latched_always, policy)),
+        Resolved::Known { name, destructive } => {
+            Some(decide_mcp(gate, &name, destructive, latched_always, policy))
+        }
     }
 }
 
 pub(crate) fn is_mcp_call(name: &str, arguments: &str) -> bool {
-    matches!(resolve(name, arguments), Some(Resolved::Known(_)))
+    matches!(resolve(name, arguments), Some(Resolved::Known { .. }))
+}
+
+/// An MCP call whose server marks the tool `destructiveHint: true`. The
+/// auto-review judge leaves its card to the user.
+pub(crate) fn is_destructive_call(name: &str, arguments: &str) -> bool {
+    matches!(
+        resolve(name, arguments),
+        Some(Resolved::Known {
+            destructive: true,
+            ..
+        })
+    )
 }
 
 pub(crate) fn has_ask_rule(policy: &Policy, name: &str, arguments: &str) -> bool {
-    let Some(Resolved::Known(target)) = resolve(name, arguments) else {
+    let Some(Resolved::Known { name: target, .. }) = resolve(name, arguments) else {
         return false;
     };
     rule(policy, &target, Action::Ask)
 }
 
-fn decide_mcp(gate: &Gate, name: &str, latched_always: bool, policy: Option<&Policy>) -> Decision {
+/// Why a destructive MCP tool did not run while nobody was there to approve it.
+fn destructive_unattended(name: &str) -> String {
+    format!(
+        "Tool `{name}` was not executed: its server marks it destructive, and nobody is here to approve it"
+    )
+}
+
+fn decide_mcp(
+    gate: &Gate,
+    name: &str,
+    destructive: bool,
+    latched_always: bool,
+    policy: Option<&Policy>,
+) -> Decision {
     // A server `readOnlyHint` does not grant a run. An allow rule does.
     if gate.readonly_session {
         return Decision::Refuse(gate::readonly_refusal(name));
     }
+    // Always (the mode or the card's latch) skips the card, except for a tool
+    // its server marks destructive: that one asks every time.
+    let always = !destructive && (gate.mode == PermMode::Always || latched_always);
+    let away = || {
+        if destructive {
+            Decision::Refuse(destructive_unattended(name))
+        } else {
+            Decision::Refuse(gate::mcp_policy_deny(name))
+        }
+    };
     if let Some(policy) = policy {
         if rule(policy, name, Action::Deny) {
             return Decision::Refuse(gate::mcp_policy_deny(name));
         }
         if rule(policy, name, Action::Ask) {
             // Always Allow: an ask rule is not a hard class, so it runs.
-            return if gate.attended && (gate.mode == PermMode::Always || latched_always) {
+            return if gate.attended && always {
                 Decision::Run
             } else if gate.attended {
                 Decision::Ask
             } else {
-                Decision::Refuse(gate::mcp_policy_deny(name))
+                away()
             };
         }
+        // The user's own allow rule for this tool is their standing approval.
         if rule(policy, name, Action::Allow) {
             return Decision::Run;
         }
     }
-    if gate.mode == PermMode::Always || latched_always {
+    if always {
         return Decision::Run;
     }
     if gate.attended {
         return Decision::Ask;
     }
-    Decision::Refuse(gate::mcp_policy_deny(name))
+    away()
 }
 
 fn rule(policy: &Policy, name: &str, action: Action) -> bool {
@@ -639,16 +964,21 @@ fn resolve(name: &str, arguments: &str) -> Option<Resolved> {
         if target.is_empty() {
             return Some(Resolved::Missing("use_tool".into()));
         }
-        if tools.iter().any(|tool| tool.qualified == target) {
-            return Some(Resolved::Known(target));
-        }
-        return Some(Resolved::Missing(target));
+        return Some(match tools.iter().find(|tool| tool.qualified == target) {
+            Some(tool) => Resolved::Known {
+                destructive: tool.hints.is_destructive(),
+                name: target,
+            },
+            None => Resolved::Missing(target),
+        });
     }
-    if tools.iter().any(|tool| tool.qualified == name) {
-        Some(Resolved::Known(name.to_string()))
-    } else {
-        None
-    }
+    tools
+        .iter()
+        .find(|tool| tool.qualified == name)
+        .map(|tool| Resolved::Known {
+            name: name.to_string(),
+            destructive: tool.hints.is_destructive(),
+        })
 }
 
 fn arg_name(arguments: &str) -> String {
@@ -705,35 +1035,107 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     let mut inner = lock_slot(&slot);
     let timeout = inner.def.tool_timeout;
     let Some(conn) = inner.conn.as_mut() else {
-        let err = inner
-            .last_error
-            .clone()
-            .unwrap_or_else(|| format!("MCP server `{}` stopped", rec.server));
-        return ToolOutput::err(err);
+        return match inner.last_error.as_deref() {
+            Some(err) => fenced_error(err),
+            None => ToolOutput::err(format!("MCP server `{}` stopped", rec.server)),
+        };
     };
-    match conn.call(&rec.raw, args, timeout, stop) {
-        Ok((text, true)) => ToolOutput::err(text),
-        Ok((text, false)) => ToolOutput::ok(crate::tools::fence::fence("mcp", &text)),
+    // Item 24: a call that can change things carries an idempotency key,
+    // the same one when it is resent after an answer that never came.
+    let keyed = idem::needs_key(&rec.hints).then(|| idem::fingerprint(&rec.server, &rec.raw, args));
+    let key = keyed.as_deref().map(idem::begin);
+    // A dropped HTTP call is sent once more only when running it twice is
+    // harmless: the server says the tool is read-only or idempotent.
+    let retry_safe = rec.hints.read_only || rec.hints.idempotent == Some(true);
+    let result = conn.call(&rec.raw, args, key.as_deref(), timeout, stop, retry_safe);
+    if let Some(print) = &keyed {
+        idem::end(
+            print,
+            result
+                .as_ref()
+                .map_or_else(|err| !idem::maybe_ran(err), |_| true),
+        );
+    }
+    // A browser that died at launch gets one isolated relaunch, then the
+    // model is pointed at web_fetch instead of a dead tool (LO-51).
+    let died = match &result {
+        Ok((text, true)) => browser::launch_died(text).then(|| text.clone()),
+        Err(err) => browser::launch_died(err).then(|| err.clone()),
+        Ok(_) => None,
+    };
+    let playwright = matches!(
+        &inner.def.transport,
+        TransportDef::Stdio { command, args, .. } if browser::is_playwright(command, args)
+    );
+    if let Some(text) = died.filter(|_| playwright) {
+        eprintln!("grokhub mcp `{}` browser launch died: {text}", rec.server);
+        inner.conn.take();
+        inner.last_error = Some(clip_err(&text));
+        drop(inner);
+        if browser::isolate(&rec.server) && restart(&rec.server).is_ok() {
+            return call_qualified(rec, args, stop);
+        }
+        let mut out = fenced_error(&text);
+        out.text = format!("{}\n{}", browser::CANT_START, out.text);
+        return out;
+    }
+    match result {
+        Ok((text, true)) => fenced_error(&text),
+        Ok((text, false)) => ToolOutput::ok(fence::fence("mcp", &text)),
         Err(err) => {
             inner.conn.take();
             inner.last_error = Some(clip_err(&err));
             // An expired sign-in: the next use reconnects, refreshing the token.
+            // Checked on the raw text, before it is fenced.
             if http::is_unauthorized(&err) {
                 inner.tried = false;
             }
-            ToolOutput::err(err)
+            let mut out = fenced_error(&err);
+            if keyed.is_some() && idem::maybe_ran(&err) {
+                out.text.push_str(idem::MAYBE_RAN);
+            }
+            out
         }
     }
 }
 
-fn one_schema(tool: &ToolRec) -> Value {
-    let mut description = clip_chars(&tool.description, 1024);
-    if tool.read_only {
+/// A failed MCP call for the model. The text can be the server's own words
+/// (an `isError` result, a JSON-RPC error message, a saved error), so it goes
+/// inside the untrusted fence behind a trusted lead, like a successful result.
+fn fenced_error(text: &str) -> ToolOutput {
+    ToolOutput::err(format!(
+        "{}\n{}",
+        fence::ERROR_LEAD,
+        fence::fence("mcp", text)
+    ))
+}
+
+/// `Title: description (server hint: …)` for the model, the description
+/// clipped to `max` chars.
+fn model_description(tool: &ToolRec, max: usize) -> String {
+    let body = clip_chars(&tool.description, max);
+    let mut description = match tool.title.as_deref() {
+        Some(title) if body.is_empty() => title.to_string(),
+        Some(title) if !body.starts_with(title) => format!("{title}: {body}"),
+        _ => body,
+    };
+    let mut hint = |note: &str| {
         if !description.is_empty() {
             description.push(' ');
         }
-        description.push_str("(server hint: read-only)");
+        description.push_str(note);
+    };
+    if tool.hints.read_only {
+        hint("(server hint: read-only)");
     }
+    if tool.hints.is_destructive() {
+        hint("(server hint: destructive; asks you every time)");
+    }
+    description
+}
+
+fn one_schema(tool: &ToolRec) -> Value {
+    let description = model_description(tool, 1024);
     let parameters = if tool.schema.is_object() {
         tool.schema.clone()
     } else {
@@ -786,9 +1188,32 @@ fn current_tools() -> Vec<ToolRec> {
         return tools;
     }
     let (slots, workspace) = load_slots();
-    for slot in slots.values() {
-        connect_if_needed(slot, &workspace);
+    let pending: Vec<_> = slots
+        .values()
+        .filter(|slot| {
+            let inner = lock_slot(slot);
+            inner.def.enabled && !inner.tried && inner.conn.is_none()
+        })
+        .collect();
+    // Servers nobody has started connect side by side, so the wait is the
+    // slowest one, not their sum. One a launch connect is still opening is
+    // not waited on.
+    // Tests pin config and Offline only per thread, so they connect in line.
+    let side_by_side = !cfg!(test) && pending.len() > 1;
+    match pending.as_slice() {
+        many if side_by_side => std::thread::scope(|scope| {
+            for slot in many {
+                let workspace = &workspace;
+                scope.spawn(move || connect_if_needed(slot, workspace));
+            }
+        }),
+        each => {
+            for slot in each {
+                connect_if_needed(slot, &workspace);
+            }
+        }
     }
+    relist_expired(&slots);
     requalify(&slots);
     flatten(&slots)
 }
@@ -812,10 +1237,12 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
     // Plugin state is read while this lock is held. Plugin code must not take it.
     let stamp = crate::plugins::listing_stamp(&workspace);
     let path = config::config_file();
-    let (gen, mtime) = fingerprint(&path);
+    let (r#gen, mtime) = fingerprint(&path);
+    let offline = grokhub_core::offline::enabled();
     if !held.loaded
+        || held.offline != offline
         || held.path != path
-        || held.gen != gen
+        || held.r#gen != r#gen
         || held.mtime != mtime
         || held.server_stamp != stamp
     {
@@ -835,33 +1262,50 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
         }
         held.loaded = true;
         held.path = path;
-        held.gen = gen;
+        held.r#gen = r#gen;
         held.mtime = mtime;
         held.server_stamp = stamp;
+        held.offline = offline;
     }
     (held.slots.clone(), workspace)
 }
 
 fn fingerprint(path: &Path) -> (u64, Option<SystemTime>) {
-    let gen = GEN.load(Ordering::Relaxed);
+    let r#gen = GEN.load(Ordering::Relaxed);
     let mtime = std::fs::metadata(path)
         .and_then(|meta| meta.modified())
         .ok();
-    (gen, mtime)
+    (r#gen, mtime)
 }
 
 fn connect_if_needed(slot: &Mutex<SlotInner>, workspace: &Path) {
+    let (name, def, attempt) = {
+        let mut inner = lock_slot(slot);
+        if !inner.def.enabled || inner.tried || inner.conn.is_some() {
+            return;
+        }
+        inner.tried = true;
+        inner.connecting = true;
+        inner.attempt = inner.attempt.wrapping_add(1);
+        (inner.name.clone(), inner.def.clone(), inner.attempt)
+    };
+    // Open without holding the slot: a reader sees no tools from it until it
+    // is up, instead of waiting on a slow server.
+    let opened = open_def(&name, &def, workspace);
     let mut inner = lock_slot(slot);
-    if !inner.def.enabled || inner.tried || inner.conn.is_some() {
+    if inner.attempt != attempt {
         return;
     }
-    inner.tried = true;
-    let name = inner.name.clone();
-    let def = inner.def.clone();
-    match open_def(&name, &def, workspace) {
+    inner.connecting = false;
+    if !inner.tried {
+        // Signed out or restarted while it opened: this connection is stale.
+        return;
+    }
+    match opened {
         Ok((conn, raw)) => {
             inner.raw = raw;
             inner.conn = Some(conn);
+            inner.listed_at = Some(std::time::Instant::now());
             inner.last_error = None;
         }
         Err(err) => {
@@ -873,6 +1317,13 @@ fn connect_if_needed(slot: &Mutex<SlotInner>, workspace: &Path) {
 }
 
 fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<RawTool>), String> {
+    // A key is saved under its connector's own name, so an entry that names
+    // any other key is asking for one it was never given.
+    if def.token_ref.as_deref().is_some_and(|key| key != name) {
+        return Err(format!(
+            "{name} names another connector's key, so it was not used: save a key for {name} in Settings, Connectors"
+        ));
+    }
     match &def.transport {
         TransportDef::Stdio {
             command,
@@ -880,6 +1331,16 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
             env,
             cwd,
         } => {
+            let exe = std::env::current_exe().ok();
+            if let Some(why) = offline_paused(
+                name,
+                command,
+                args,
+                exe.as_deref(),
+                grokhub_core::offline::enabled(),
+            ) {
+                return Err(why);
+            }
             let dir = stdio::workspace_or(cwd.clone(), workspace);
             let mut env = env.clone();
             if let (Some(token_name), Some(var)) = (&def.token_ref, &def.token_env) {
@@ -933,6 +1394,28 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
     }
 }
 
+/// The app's own stdio servers (`<this exe> --mcp-cua`, `--mcp-self`). They
+/// never reach the internet, so Offline only leaves them running.
+fn own_server(name: &str, command: &str, args: &[String], exe: Option<&Path>) -> bool {
+    [grokhub_core::CUA_MCP_SERVER, grokhub_core::SELF_MCP_SERVER].contains(&name)
+        && args.first().is_some_and(|a| a.starts_with("--mcp-"))
+        && exe.is_some_and(|exe| Path::new(command) == exe)
+}
+
+/// Offline only pauses a third-party stdio server: it can reach the internet
+/// on its own, so it doesn't start while the switch is on. Its row reads
+/// `paused` with [`grokhub_core::offline::OFFLINE_MSG`].
+fn offline_paused(
+    name: &str,
+    command: &str,
+    args: &[String],
+    exe: Option<&Path>,
+    on: bool,
+) -> Option<String> {
+    (on && !own_server(name, command, args, exe))
+        .then(|| grokhub_core::offline::OFFLINE_MSG.to_string())
+}
+
 fn requalify(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) {
     let mut guards = Vec::new();
     let mut pairs = Vec::new();
@@ -949,33 +1432,26 @@ fn requalify(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) {
         map.insert((item.server, item.tool), item.name);
     }
     for guard in &mut guards {
-        guard.tools.clear();
         let server = guard.name.clone();
-        let raw: Vec<(String, String, Value, bool)> = guard
+        let tools: Vec<ToolRec> = guard
             .raw
             .iter()
-            .map(|tool| {
-                (
-                    tool.name.clone(),
-                    clip_chars(&tool.description, 4000),
-                    tool.input_schema.clone(),
-                    tool.read_only,
-                )
+            .filter_map(|tool| {
+                let qname = map.get(&(server.clone(), tool.name.clone()))?;
+                Some(ToolRec {
+                    server: server.clone(),
+                    raw: tool.name.clone(),
+                    qualified: qname.clone(),
+                    title: tool.title.clone(),
+                    description: clip_chars(&tool.description, 4000),
+                    schema: tool.input_schema.clone(),
+                    output_schema: tool.output_schema.clone(),
+                    hints: tool.hints.clone(),
+                    icons: tool.icons.clone(),
+                })
             })
             .collect();
-        for (name, description, schema, read_only) in raw {
-            let Some(qname) = map.get(&(server.clone(), name.clone())) else {
-                continue;
-            };
-            guard.tools.push(ToolRec {
-                server: server.clone(),
-                raw: name,
-                qualified: qname.clone(),
-                description,
-                schema,
-                read_only,
-            });
-        }
+        guard.tools = tools;
     }
 }
 
@@ -987,12 +1463,7 @@ fn flatten(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) -> Vec<To
     out
 }
 
-fn clip_chars(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    text.chars().take(max).collect()
-}
+use crate::skills::clip_chars;
 
 fn clip_err(err: &str) -> String {
     clip_chars(err.trim(), 300)
@@ -1044,11 +1515,50 @@ pub(crate) fn install_test_tools(rows: &[(&str, &str, &str, bool)]) -> TestGuard
             server: item.server,
             raw: item.tool,
             qualified: item.name,
+            title: None,
             description,
             schema: json!({"type": "object", "properties": {}}),
-            read_only,
+            output_schema: None,
+            hints: ToolHints {
+                read_only,
+                ..ToolHints::default()
+            },
+            icons: Vec::new(),
         });
     }
+    install_test_recs(tools)
+}
+
+/// Test tools straight from one server's `tools/list` result.
+#[cfg(test)]
+pub(crate) fn install_test_listing(server: &str, listing: &Value) -> TestGuard {
+    let (raw, _) = rpc::parse_tools(listing);
+    let pairs: Vec<(String, String)> = raw
+        .iter()
+        .map(|tool| (server.to_string(), tool.name.clone()))
+        .collect();
+    let tools = names::qualify_all(&pairs)
+        .into_iter()
+        .filter_map(|item| {
+            let tool = raw.iter().find(|tool| tool.name == item.tool)?.clone();
+            Some(ToolRec {
+                server: item.server,
+                raw: tool.name,
+                qualified: item.name,
+                title: tool.title,
+                description: tool.description,
+                schema: tool.input_schema,
+                output_schema: tool.output_schema,
+                hints: tool.hints,
+                icons: tool.icons,
+            })
+        })
+        .collect();
+    install_test_recs(tools)
+}
+
+#[cfg(test)]
+fn install_test_recs(tools: Vec<ToolRec>) -> TestGuard {
     let prev = TEST_TOOLS.with(|slot| slot.borrow_mut().replace(tools));
     TestGuard { prev }
 }
@@ -1056,8 +1566,8 @@ pub(crate) fn install_test_tools(rows: &[(&str, &str, &str, bool)]) -> TestGuard
 #[cfg(test)]
 mod tests {
     use super::{
-        import_documents, install_test_tools, read_mcp_text, schema_tools, search_output,
-        try_dispatch,
+        bare_schema_named_in, begin_turn, chat_schema_tools, import_documents, install_test_tools,
+        read_mcp_text, schema_tools, search_output, try_dispatch,
     };
     use crate::gate::{decide, decide_with, mcp_policy_deny, Decision, Gate, PermMode};
     use crate::perm::ConfigGuard;
@@ -1090,6 +1600,43 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let guard = ConfigGuard::set(&dir);
         (dir, guard)
+    }
+
+    #[test]
+    fn set_enabled_writes_the_flag_and_doctor_skips_it() {
+        let (dir, _guard) = temp_cfg("set-enabled");
+        std::fs::write(
+            dir.join("mcp.json"),
+            r#"{"mcpServers":{"box":{"command":"definitely-not-a-real-binary-xyz"}}}"#,
+        )
+        .unwrap();
+        super::invalidate();
+        assert_eq!(
+            super::set_enabled("box", false),
+            Ok("Turned off box".into())
+        );
+        let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+        assert!(text.contains("\"enabled\": false"), "{text}");
+        let rows = super::doctor();
+        let row = rows.iter().find(|r| r.name == "box").expect("box row");
+        assert_eq!(row.status, "disabled");
+        assert_eq!(super::set_enabled("box", true), Ok("Turned on box".into()));
+        let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+        assert!(!text.contains("enabled"), "{text}");
+        assert_eq!(
+            super::configured()
+                .iter()
+                .find(|r| r.name == "box")
+                .map(|r| r.status.clone()),
+            Some("not checked".into())
+        );
+        assert_eq!(
+            super::set_enabled("nope", false),
+            Err("nope isn't one of this cabin's connections".into())
+        );
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1161,6 +1708,267 @@ mod tests {
         std::fs::write(&cred, "marker").unwrap();
         let err = read_mcp_text(&cred).unwrap_err();
         assert!(err.contains("refusing"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const FAKE_KEY: &str = "sk-abcdefghijklmnopqrstuv";
+
+    /// A loopback server that keeps each request's `Authorization` value and
+    /// answers 500.
+    struct AuthSeen {
+        port: u16,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl AuthSeen {
+        fn start() -> Self {
+            use std::io::{BufRead, Read, Write};
+            use std::sync::atomic::Ordering;
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (seen2, stop2) = (seen.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop2.load(Ordering::SeqCst) {
+                    let Ok((mut sock, _)) = listener.accept() else {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    };
+                    let _ = sock.set_nonblocking(false);
+                    let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+                    let mut reader = std::io::BufReader::new(sock.try_clone().unwrap());
+                    let (mut auth, mut len) = (None, 0usize);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                        if let Some((name, value)) = line.split_once(':') {
+                            match name.trim().to_ascii_lowercase().as_str() {
+                                "authorization" => auth = Some(value.trim().to_string()),
+                                "content-length" => len = value.trim().parse().unwrap_or(0),
+                                _ => {}
+                            }
+                        }
+                    }
+                    let mut body = vec![0u8; len];
+                    let _ = reader.read_exact(&mut body);
+                    seen2.lock().unwrap().push(auth);
+                    let _ = sock.write_all(
+                        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                }
+            });
+            Self { port, seen, stop }
+        }
+
+        fn url(&self) -> String {
+            format!("http://127.0.0.1:{}/mcp", self.port)
+        }
+
+        /// Each different `Authorization` value seen, `None` for a request without one.
+        fn auth_values(&self) -> Vec<Option<String>> {
+            let mut all = self.seen.lock().unwrap().clone();
+            all.sort();
+            all.dedup();
+            all
+        }
+    }
+
+    impl Drop for AuthSeen {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn sealed_cfg(label: &str) -> (PathBuf, ConfigGuard) {
+        let dir = crate::harness::test_dir(label);
+        let guard = ConfigGuard::set(&dir);
+        crate::harness::seal_connection_token(&dir, "github", FAKE_KEY).unwrap();
+        super::invalidate();
+        (dir, guard)
+    }
+
+    #[test]
+    fn an_imported_entry_cannot_name_a_saved_key() {
+        let (dir, _guard) = sealed_cfg("mcp-import-token-ref");
+        let server = AuthSeen::start();
+        let doc = json!({"mcpServers": {
+            "weather": {"url": server.url(), "tokenRef": "github"},
+            "notes": {"command": "notes-mcp", "tokenRef": "github", "tokenEnv": "NOTES_KEY", "enabled": false}
+        }});
+        let report = import_documents(&[doc.to_string()]).unwrap();
+        assert_eq!(
+            report.added,
+            vec!["notes".to_string(), "weather".to_string()]
+        );
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
+        assert_eq!(
+            saved["mcpServers"]["weather"],
+            json!({"url": server.url(), "type": "http"})
+        );
+        // The variable its key goes in stays; the key it named is gone.
+        assert_eq!(
+            saved["mcpServers"]["notes"],
+            json!({"command": "notes-mcp", "tokenEnv": "NOTES_KEY", "enabled": false})
+        );
+        super::doctor();
+        assert_eq!(server.auth_values(), vec![None]);
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_imported_entry_keeps_its_key_variable_for_the_key_saved_later() {
+        let dir = crate::harness::test_dir("mcp-import-token-env");
+        let _guard = ConfigGuard::set(&dir);
+        super::invalidate();
+        let pasted = json!({"mcpServers": {"brave-search": {
+            "command": "npx", "args": ["-y", "brave-search-mcp"],
+            "tokenRef": "brave-search", "tokenEnv": "BRAVE_API_KEY", "enabled": false
+        }}});
+        let report = import_documents(&[pasted.to_string()]).unwrap();
+        assert_eq!(report.added, vec!["brave-search".to_string()]);
+        let saved = || -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap()
+        };
+        assert_eq!(
+            saved()["mcpServers"]["brave-search"],
+            json!({
+                "command": "npx", "args": ["-y", "brave-search-mcp"],
+                "tokenEnv": "BRAVE_API_KEY", "enabled": false
+            })
+        );
+        assert_eq!(
+            super::save_key("brave-search", FAKE_KEY).unwrap(),
+            "Saved the key for brave-search"
+        );
+        assert_eq!(
+            saved()["mcpServers"]["brave-search"],
+            json!({
+                "command": "npx", "args": ["-y", "brave-search-mcp"],
+                "tokenRef": "brave-search", "tokenEnv": "BRAVE_API_KEY", "enabled": false
+            })
+        );
+        let def = &super::load_servers()["brave-search"];
+        assert_eq!(
+            (def.token_ref.as_deref(), def.token_env.as_deref()),
+            (Some("brave-search"), Some("BRAVE_API_KEY"))
+        );
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stdio entry whose program writes the value of `var` to a file as it
+    /// starts, and the file.
+    #[cfg(unix)]
+    fn env_probe(dir: &Path, var: &str, key_name: &str) -> (serde_json::Value, PathBuf) {
+        let seen = dir.join(format!("{var}.seen"));
+        let script = format!("printf '%s' \"${var}\" > '{}'", seen.display());
+        let entry = json!({
+            "command": "/bin/sh", "args": ["-c", script],
+            "tokenRef": key_name, "tokenEnv": var
+        });
+        (entry, seen)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pasted_stdio_connector_starts_with_the_key_saved_for_it() {
+        let dir = crate::harness::test_dir("mcp-import-save-start");
+        let _guard = ConfigGuard::set(&dir);
+        super::invalidate();
+        let (entry, seen) = env_probe(&dir, "BRAVE_API_KEY", "brave-search");
+        let pasted = json!({"mcpServers": {"brave-search": entry}});
+        import_documents(&[pasted.to_string()]).unwrap();
+        // No key saved yet: it starts without one.
+        super::doctor();
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "");
+        assert_eq!(
+            super::save_key("brave-search", FAKE_KEY).unwrap(),
+            "Saved the key for brave-search"
+        );
+        super::doctor();
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap(),
+            "sk-abcdefghijklmnopqrstuv"
+        );
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_imported_stdio_entry_never_starts_with_another_entrys_key() {
+        let (dir, _guard) = sealed_cfg("mcp-import-other-env");
+        let (entry, seen) = env_probe(&dir, "NOTES_KEY", "github");
+        let pasted = json!({"mcpServers": {"notes": entry}});
+        import_documents(&[pasted.to_string()]).unwrap();
+        super::doctor();
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "");
+        // Put back by hand, the name of github's key stops the start.
+        std::fs::remove_file(&seen).unwrap();
+        let by_hand = json!({"mcpServers": {"notes": env_probe(&dir, "NOTES_KEY", "github").0}});
+        std::fs::write(dir.join("mcp.json"), by_hand.to_string()).unwrap();
+        super::invalidate();
+        let rows = super::doctor();
+        assert_eq!(
+            rows.iter().find(|r| r.name == "notes").expect("row").last_error,
+            "notes names another connector's key, so it was not used: save a key for notes in Settings, Connectors"
+        );
+        assert!(!seen.exists());
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_entry_that_names_another_connectors_key_is_not_opened() {
+        let (dir, _guard) = sealed_cfg("mcp-other-token-ref");
+        let server = AuthSeen::start();
+        let doc = json!({"mcpServers": {
+            "weather": {"url": server.url(), "tokenRef": "github"},
+            "notes": {"command": "definitely-not-a-real-binary-xyz", "tokenRef": "github", "tokenEnv": "NOTES_KEY"}
+        }});
+        std::fs::write(dir.join("mcp.json"), doc.to_string()).unwrap();
+        super::invalidate();
+        let rows = super::doctor();
+        let row = |name: &str| rows.iter().find(|r| r.name == name).expect("row");
+        assert_eq!(row("weather").status, "error");
+        assert_eq!(
+            row("weather").last_error,
+            "weather names another connector's key, so it was not used: save a key for weather in Settings, Connectors"
+        );
+        assert_eq!(
+            row("notes").last_error,
+            "notes names another connector's key, so it was not used: save a key for notes in Settings, Connectors"
+        );
+        assert_eq!(server.auth_values(), Vec::<Option<String>>::new());
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_entry_sends_the_key_saved_under_its_own_name() {
+        let (dir, _guard) = sealed_cfg("mcp-own-token-ref");
+        let server = AuthSeen::start();
+        let doc = json!({"mcpServers": {"github": {"url": server.url(), "tokenRef": "github"}}});
+        std::fs::write(dir.join("mcp.json"), doc.to_string()).unwrap();
+        super::invalidate();
+        super::doctor();
+        assert_eq!(
+            server.auth_values(),
+            vec![Some("Bearer sk-abcdefghijklmnopqrstuv".to_string())]
+        );
+        super::shutdown_all();
+        super::invalidate();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1307,6 +2115,252 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn rich_listing() -> serde_json::Value {
+        json!({"tools": [
+            {
+                "name": "rebuild",
+                "title": "Rebuild Index",
+                "description": "Rebuild the search index",
+                "inputSchema": {"type": "object"},
+                "annotations": {"destructiveHint": true, "idempotentHint": false, "openWorldHint": false},
+                "icons": [{"src": "https://example.com/rebuild.png", "mimeType": "image/png"}, {"src": "http://example.com/x.png"}]
+            },
+            {
+                "name": "list",
+                "description": "List indexes",
+                "inputSchema": {"type": "object"},
+                "outputSchema": {"type": "object"},
+                "annotations": {"readOnlyHint": true, "destructiveHint": false}
+            }
+        ]})
+    }
+
+    #[test]
+    fn destructive_hint_asks_under_always_and_refuses_unattended() {
+        let _tools = super::install_test_listing("box", &rich_listing());
+        let ws = Path::new(".");
+        let decide = |mode, attended, latched, policy: Option<&Policy>| {
+            decide_with(
+                &gate(mode, false, attended),
+                "box__rebuild",
+                "{}",
+                latched,
+                None,
+                ws,
+                policy,
+            )
+        };
+        let away = Decision::Refuse(
+            "Tool `box__rebuild` was not executed: its server marks it destructive, and nobody is here to approve it"
+                .into(),
+        );
+        assert_eq!(decide(PermMode::Always, true, false, None), Decision::Ask);
+        assert_eq!(decide(PermMode::Ask, true, true, None), Decision::Ask);
+        assert_eq!(decide(PermMode::Always, false, false, None), away);
+        let ask = policy(&[("MCPTool(box__rebuild)", Action::Ask)]);
+        assert_eq!(
+            decide(PermMode::Always, true, false, Some(&ask)),
+            Decision::Ask
+        );
+        assert_eq!(decide(PermMode::Always, false, false, Some(&ask)), away);
+        let deny = policy(&[("MCPTool(box__rebuild)", Action::Deny)]);
+        assert_eq!(
+            decide(PermMode::Always, true, false, Some(&deny)),
+            Decision::Refuse(mcp_policy_deny("box__rebuild"))
+        );
+        // The user's own allow rule for the tool is their approval.
+        let allow = policy(&[("MCPTool(box__rebuild)", Action::Allow)]);
+        assert_eq!(
+            decide(PermMode::Ask, false, false, Some(&allow)),
+            Decision::Run
+        );
+        // `use_tool` resolves to the same tool and the same card.
+        assert_eq!(
+            decide_with(
+                &gate(PermMode::Always, false, true),
+                "use_tool",
+                r#"{"name":"box__rebuild"}"#,
+                false,
+                None,
+                ws,
+                None,
+            ),
+            Decision::Ask
+        );
+        // `destructiveHint: false` (and read-only) keeps Always as it was.
+        assert_eq!(
+            decide_with(
+                &gate(PermMode::Always, false, true),
+                "box__list",
+                "{}",
+                false,
+                None,
+                ws,
+                None,
+            ),
+            Decision::Run
+        );
+        // Auto mode's judge never sees it: the card stays the user's.
+        let judge = Scripted {
+            text: "sure, allow it".into(),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let cancel = crate::CancelToken::new();
+        let halt = || false;
+        let reviewed = crate::auto_review::review(&crate::auto_review::ReviewIn {
+            client: &judge,
+            cancel: &cancel,
+            halt: &halt,
+            gate: &gate(PermMode::Auto, false, true),
+            name: "box__rebuild",
+            arguments: "{}",
+            workspace: ws,
+            policy: None,
+            latched_always: false,
+            desk: None,
+            history: &[],
+            conversation_id: "s",
+            base: Decision::Ask,
+            timeout: std::time::Duration::from_secs(2),
+        });
+        assert_eq!(reviewed.decision, Decision::Ask);
+        assert_eq!(judge.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(super::is_destructive_call("box__rebuild", "{}"));
+        assert!(super::is_destructive_call(
+            "use_tool",
+            r#"{"name":"box__rebuild"}"#
+        ));
+        assert!(!super::is_destructive_call("box__list", "{}"));
+    }
+
+    #[test]
+    fn titles_hints_and_icons_reach_the_model_and_the_tool_list() {
+        let _tools = super::install_test_listing("box", &rich_listing());
+        let schemas = schema_tools(0);
+        let described: Vec<(&str, &str)> = schemas
+            .iter()
+            .map(|tool| {
+                (
+                    tool["name"].as_str().unwrap(),
+                    tool["description"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            described,
+            vec![
+                ("box__list", "List indexes (server hint: read-only)"),
+                (
+                    "box__rebuild",
+                    "Rebuild Index: Rebuild the search index (server hint: destructive; asks you every time)"
+                ),
+            ]
+        );
+        assert_eq!(
+            search_output(&json!({"query": "rebuild index"})).text,
+            "box__rebuild — Rebuild Index: Rebuild the search index (server hint: destructive; asks you every time)"
+        );
+        let listed = super::tool_list();
+        let rebuild = listed.iter().find(|t| t.name == "rebuild").unwrap();
+        assert_eq!(rebuild.display_name(), "Rebuild Index");
+        assert_eq!(rebuild.qualified, "box__rebuild");
+        assert_eq!(
+            rebuild.hints,
+            super::ToolHints {
+                read_only: false,
+                destructive: Some(true),
+                idempotent: Some(false),
+                open_world: Some(false),
+            }
+        );
+        assert_eq!(
+            rebuild.icons,
+            vec![super::ToolIcon {
+                src: "https://example.com/rebuild.png".into(),
+                mime_type: Some("image/png".into()),
+                sizes: Vec::new(),
+            }]
+        );
+        let list = listed.iter().find(|t| t.name == "list").unwrap();
+        assert_eq!(list.display_name(), "list");
+        assert_eq!(list.output_schema, Some(json!({"type": "object"})));
+    }
+
+    #[test]
+    fn a_chats_mcp_tools_hold_for_the_turn_and_new_ones_join_at_the_end() {
+        let names = |tools: &[serde_json::Value]| -> Vec<String> {
+            tools
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
+                .collect()
+        };
+        let session = format!("frozen-{}", std::process::id());
+        let first = install_test_tools(&[
+            ("box", "peek", "Peek", true),
+            ("box", "poke", "Poke", false),
+        ]);
+        let turn_one = chat_schema_tools(&session, 0);
+        assert_eq!(names(&turn_one), ["box__peek", "box__poke"]);
+        drop(first);
+        // A server connects mid-turn and one tool goes: the list holds.
+        let _later = install_test_tools(&[
+            ("aaa", "ask", "Ask", true),
+            ("box", "peek", "Peek again", true),
+        ]);
+        assert_eq!(chat_schema_tools(&session, 0), turn_one);
+        // Next user turn: kept tools keep their place, the new one joins last.
+        begin_turn(&session);
+        let turn_two = chat_schema_tools(&session, 0);
+        assert_eq!(names(&turn_two), ["box__peek", "aaa__ask"]);
+        assert!(turn_two[0]["description"]
+            .as_str()
+            .is_some_and(|d| d.contains("Peek again")));
+        // No chat: the live list.
+        assert_eq!(names(&chat_schema_tools("", 0)), ["aaa__ask", "box__peek"]);
+    }
+
+    #[test]
+    fn a_tool_the_provider_refuses_is_offered_bare_for_the_rest_of_the_chat() {
+        let session = format!("bare-{}", std::process::id());
+        let _tools = install_test_tools(&[
+            ("box", "peek", "Peek", true),
+            ("box", "poke", "Poke", false),
+        ]);
+        chat_schema_tools(&session, 0);
+        let strict = json!({"type": "object", "properties": {"n": {"type": "integer"}}});
+        for tool in &mut super::frozen_chats().get_mut(&session).unwrap().schemas {
+            tool["parameters"] = strict.clone();
+        }
+        assert!(!bare_schema_named_in(&session, "HTTP 400: bad request"));
+        assert!(bare_schema_named_in(
+            &session,
+            "HTTP 400: invalid parameters schema for function box__poke"
+        ));
+        // Named again: nothing new to strip, so no second retry.
+        assert!(!bare_schema_named_in(&session, "HTTP 400: box__poke"));
+        let params = |tools: &[serde_json::Value], name: &str| {
+            tools
+                .iter()
+                .find(|t| t["name"] == name)
+                .map(|t| t["parameters"].clone())
+                .unwrap()
+        };
+        let now = chat_schema_tools(&session, 0);
+        assert_eq!(params(&now, "box__peek"), strict);
+        assert_eq!(
+            params(&now, "box__poke"),
+            json!({"type": "object", "properties": {}})
+        );
+        // A new user turn rebuilds the list; the refused tool stays bare.
+        begin_turn(&session);
+        let next = chat_schema_tools(&session, 0);
+        assert_eq!(
+            params(&next, "box__poke"),
+            json!({"type": "object", "properties": {}})
+        );
+        assert!(!bare_schema_named_in("no-such-chat", "box__poke"));
+    }
+
     #[test]
     fn read_only_hint_does_not_skip_the_gate() {
         let _tools = install_test_tools(&[("box", "peek", "Peek a file", true)]);
@@ -1434,6 +2488,8 @@ mod tests {
     /// and a deferred hard tool still parks through `harness::decide`.
     #[test]
     fn native_desktop_and_mcp_tools_pass_forty_together_and_hard_use_tool_parks() {
+        // Full tool list: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let desk_on = Gate {
             desktop: true,
             ..gate(PermMode::Always, false, true)
@@ -1659,6 +2715,55 @@ mod tests {
         assert!(restart("linear")
             .unwrap_err()
             .ends_with("Sign in on its row under Native MCP"));
+        shutdown_all();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn offline_only_pauses_third_party_servers_and_keeps_the_apps_own() {
+        use super::{doctor, invalidate, offline_paused, shutdown_all};
+        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this.";
+        let exe = Path::new("/opt/loadout/grokhub");
+        let cua = vec!["--mcp-cua".to_string()];
+        let npx = vec!["-y".to_string(), "weather-mcp".to_string()];
+        assert_eq!(
+            offline_paused("grokhub-cua", "/opt/loadout/grokhub", &cua, Some(exe), true),
+            None
+        );
+        assert_eq!(
+            offline_paused("weather", "npx", &npx, Some(exe), true),
+            Some(MSG.to_string())
+        );
+        assert_eq!(
+            offline_paused("grokhub-cua", "/tmp/other", &cua, Some(exe), true),
+            Some(MSG.to_string()),
+            "the name alone doesn't make a server the app's own"
+        );
+        assert_eq!(
+            offline_paused("weather", "npx", &npx, Some(exe), false),
+            None
+        );
+
+        let dir = crate::harness::test_dir("mcp-offline-only");
+        let _guard = ConfigGuard::set(&dir);
+        let doc = r#"{"mcpServers": {
+            "weather": {"command": "definitely-not-a-real-mcp-binary", "args": ["--stdio"]},
+            "remote": {"url": "https://mcp.example.com/mcp", "type": "http"}
+        }}"#;
+        std::fs::write(dir.join("mcp.json"), doc).unwrap();
+        invalidate();
+        let _on = grokhub_core::offline::force_for_thread(true);
+        let rows: Vec<(String, String, String)> = doctor()
+            .into_iter()
+            .map(|r| (r.name, r.status, r.last_error))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("remote".to_string(), "paused".to_string(), MSG.to_string()),
+                ("weather".to_string(), "paused".to_string(), MSG.to_string()),
+            ]
+        );
         shutdown_all();
         let _ = std::fs::remove_dir_all(dir);
     }

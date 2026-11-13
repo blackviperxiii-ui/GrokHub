@@ -13,7 +13,9 @@ use grokhub_core::{
 };
 use serde_json::Value;
 
-use crate::client::{ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest};
+use crate::client::{
+    ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, TextFormat,
+};
 use crate::drive::Drive;
 use crate::session_tools::{todos_for, TodoItem};
 use crate::{CancelToken, Usage};
@@ -189,6 +191,7 @@ pub fn close_request(
     last_assistant: &str,
 ) -> ResponsesRequest {
     ResponsesRequest {
+        text_format: Some(CLOSE_FORMAT),
         model: model.to_string(),
         effort: Some("low".into()),
         input: vec![
@@ -211,6 +214,12 @@ pub fn close_request(
         call_timeout: Some(Duration::from_secs(30)),
     }
 }
+
+/// The close-check reply schema: the keys [`CLOSE_SYSTEM`] lists.
+pub(crate) const CLOSE_FORMAT: TextFormat = TextFormat {
+    name: "close_check_report",
+    schema: r#"{"type":"object","properties":{"need_met":{"type":"boolean"},"open":{"type":"array","items":{"type":"string"},"maxItems":20},"next_steps":{"type":"array","items":{"type":"string"},"maxItems":3},"status_updates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"status":{"type":"string","enum":["open","done","waiting"]}},"required":["id","status"],"additionalProperties":false}}},"required":["need_met","open","next_steps","status_updates"],"additionalProperties":false}"#,
+};
 
 pub(crate) const CLOSE_SYSTEM: &str = "\
 You check whether a multi-step chat is finished. \
@@ -429,14 +438,25 @@ fn step_label(step: &str) -> String {
     label.trim().to_string()
 }
 
-fn clip_chars(text: &str, max_chars: usize) -> String {
-    text.chars().take(max_chars).collect()
-}
+use crate::skills::clip_chars;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use grokhub_core::{Intention, IntentionStatus, Intentions};
+
+    #[test]
+    fn the_close_request_asks_for_the_strict_report_and_its_reply_parses() {
+        let req = close_request("grok-4.3", "c", &Intentions::default(), &[], "done");
+        assert_eq!(req.text_format, Some(CLOSE_FORMAT));
+        let report = parse_report(
+            r#"{"need_met":false,"open":["t1"],"next_steps":["run the tests"],"status_updates":[{"id":"t1","status":"open"}]}"#,
+        )
+        .unwrap();
+        assert!(!report.need_met);
+        assert_eq!(report.open, vec!["t1".to_string()]);
+        assert_eq!(report.next_steps, vec!["run the tests".to_string()]);
+    }
 
     fn item(id: &str, status: &str) -> TodoItem {
         TodoItem {

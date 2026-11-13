@@ -36,9 +36,6 @@ impl WorkflowVerb {
     }
 }
 
-/// What `/effort` says now. It changes nothing.
-pub const EFFORT_AUTO_MSG: &str = "Effort is automatic now, see /why";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Slash {
     Forget(Option<String>),
@@ -56,6 +53,9 @@ pub enum Slash {
     Compact,
     Skill(String),
     LearnReflect,
+    /// `/learned`, `/learned forget <id>`, `/learned wrong <id>`: what the
+    /// learning engine holds. The text after the command, as typed.
+    Learned(String),
     Update,
     Help,
     New,
@@ -85,14 +85,6 @@ pub enum Slash {
     /// `/audiocheck [input]`: list outputs and inputs, record a short clip and
     /// say what's wrong with it. Changes nothing.
     AudioCheck(String),
-    /// `/why`: the last 10 route reasons (Router R0, shadow). Read only.
-    Why,
-    /// `/why models`: one line per model with its state, usable, and reason.
-    WhyModels,
-    /// `/why table`: the routing table Auto picks models from (Router R2a).
-    WhyTable,
-    /// `/why local`: the on-device model's state, governor level and queue.
-    WhyLocal,
     Hub,
     Inhabit(String),
     Rewind,
@@ -109,21 +101,17 @@ pub enum Slash {
     Brief,
     Fix,
     Remember(String),
-    Mode(String),
     Dream,
     HostStatus,
     Import,
     Consult(String),
     Usage,
-    Models,
     Palette,
     Pin,
     Delete,
     Plan,
     AlwaysApprove,
     AutoPerm,
-    /// Effort is automatic since Router R1; this only says so.
-    Effort,
     Sessions,
     Inspect,
     Loop(String),
@@ -146,7 +134,6 @@ pub enum Slash {
     /// Empty `/workflow` and `/workflows`. Workflows were a CLI feature; the
     /// cabin answers that they are gone.
     GrokWorkflows,
-    Model(String),
     ImagineVideo(String),
     Goal(String),
     Workflow(String),
@@ -170,8 +157,10 @@ pub enum Slash {
     Queue(String),
 }
 
-/// Retired cabin-only slashes. Skill slashes (`/create-skill`) and engine
-/// builtins the cabin does not handle go to the engine as a turn.
+/// Retired cabin-only slashes. The router alone picks the model and effort, so
+/// the commands that once changed or showed them are retired too, engine
+/// builtins of the same name included. Skill slashes (`/create-skill`) and
+/// other engine builtins the cabin does not handle go to the engine as a turn.
 pub fn unknown_cabin_slash(line: &str) -> bool {
     let t = line.trim();
     if !t.starts_with('/') {
@@ -185,8 +174,13 @@ pub fn unknown_cabin_slash(line: &str) -> bool {
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
-    cmd == "/approve" || t.to_ascii_lowercase().starts_with("/project binding")
+    RETIRED_SLASH.contains(&cmd.as_str()) || t.to_ascii_lowercase().starts_with("/project binding")
 }
+
+/// Command words the cabin no longer has.
+const RETIRED_SLASH: &[&str] = &[
+    "/approve", "/model", "/m", "/mode", "/models", "/effort", "/why",
+];
 
 pub const SLASH_RESULT_PREFIX: &str = "SLASH_RESULT:";
 
@@ -195,22 +189,33 @@ pub fn mark_slash_result(body: &str) -> String {
 }
 
 pub fn strip_slash_result(text: &str) -> &str {
-    let t = text
-        .strip_prefix(SLASH_RESULT_PREFIX)
+    text.strip_prefix(SLASH_RESULT_PREFIX)
         .map(|s| s.strip_prefix('\n').unwrap_or(s))
-        .unwrap_or(text);
-    t
+        .unwrap_or(text)
 }
 
-/// Help / models / recall dumps stay on the pane and out of the next model kick.
+/// A saved message as the chat shows it: no findings-card tag and no turn
+/// labels. Exports and search read this, so a copied chat never carries the
+/// app's own markers.
+pub fn shown_text(text: &str) -> String {
+    let trimmed = text.trim_start();
+    let body = if trimmed.starts_with(SLASH_RESULT_PREFIX) {
+        strip_slash_result(trimmed)
+    } else {
+        text
+    };
+    crate::strip_turn_labels(body)
+}
+
+/// Help / recall dumps (and model catalogs saved by older builds) stay on the
+/// pane and out of the next model kick.
 pub fn is_cabin_slash_turn(role: &str, content: &str) -> bool {
     let t = content.trim_start();
     if t.starts_with(SLASH_RESULT_PREFIX) {
         return true;
     }
     if role == "user" {
-        return parse_slash(t)
-            .is_some_and(|s| matches!(s, Slash::Help | Slash::Models | Slash::Recall(_)));
+        return parse_slash(t).is_some_and(|s| matches!(s, Slash::Help | Slash::Recall(_)));
     }
     if role != "assistant" {
         return false;
@@ -234,6 +239,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Compact => "compact",
         Slash::Skill(_) => "skill",
         Slash::LearnReflect => "reflect",
+        Slash::Learned(_) => "learned",
         Slash::Update => "update",
         Slash::Help => "help",
         Slash::New => "new",
@@ -258,7 +264,6 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Record(_) => "record",
         Slash::RecordStop => "record_stop",
         Slash::AudioCheck(_) => "audiocheck",
-        Slash::Why | Slash::WhyModels | Slash::WhyTable | Slash::WhyLocal => "why",
         Slash::Hub => "hub",
         Slash::Inhabit(_) => "inhabit",
         Slash::Rewind => "rewind",
@@ -272,20 +277,17 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Brief => "brief",
         Slash::Fix => "fix",
         Slash::Remember(_) => "remember",
-        Slash::Mode(_) => "mode",
         Slash::Dream => "dream",
         Slash::HostStatus => "host_status",
         Slash::Import => "import",
         Slash::Consult(_) => "consult",
         Slash::Usage => "usage",
-        Slash::Models => "models",
         Slash::Palette => "palette",
         Slash::Pin => "pin",
         Slash::Delete => "delete",
         Slash::Plan => "plan",
         Slash::AlwaysApprove => "always_approve",
         Slash::AutoPerm => "auto_perm",
-        Slash::Effort => "effort",
         Slash::Sessions => "sessions",
         Slash::Inspect => "inspect",
         Slash::Loop(_) => "loop",
@@ -298,7 +300,6 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::GrokConnectors => "grok_connectors",
         Slash::GrokHooks => "grok_hooks",
         Slash::GrokWorkflows => "grok_workflows",
-        Slash::Model(_) => "model",
         Slash::ImagineVideo(_) => "imagine_video",
         Slash::Goal(_) => "goal",
         Slash::Workflow(_) => "workflow",
@@ -348,7 +349,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/compact",
-        hint: "Compact Grok context",
+        hint: "Compact the chat context",
         insert: "/compact",
         run_on_pick: true,
     },
@@ -389,16 +390,16 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
         run_on_pick: true,
     },
     SlashDef {
+        cmd: "/learned",
+        hint: "What the app learned, and how sure it is",
+        insert: "/learned",
+        run_on_pick: true,
+    },
+    SlashDef {
         cmd: "/learn reflect",
         hint: "Run self-improve reflect",
         insert: "/learn reflect",
         run_on_pick: true,
-    },
-    SlashDef {
-        cmd: "/mode",
-        hint: "Set mode…",
-        insert: "/mode ",
-        run_on_pick: false,
     },
     SlashDef {
         cmd: "/imagine",
@@ -516,7 +517,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/undo",
-        hint: "Rewind Grok conversation",
+        hint: "Rewind the conversation",
         insert: "/undo",
         run_on_pick: true,
     },
@@ -581,12 +582,6 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
         run_on_pick: true,
     },
     SlashDef {
-        cmd: "/why",
-        hint: "Why Auto would pick each model and effort",
-        insert: "/why",
-        run_on_pick: true,
-    },
-    SlashDef {
         cmd: "/send",
         hint: "Send a task to another computer",
         insert: "/send ",
@@ -594,7 +589,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/rewind",
-        hint: "Rewind Grok conversation",
+        hint: "Rewind the conversation",
         insert: "/rewind",
         run_on_pick: true,
     },
@@ -654,13 +649,13 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/inhabit",
-        hint: "Hand this Grok to another box",
+        hint: "Hand this chat to another box",
         insert: "/inhabit ",
         run_on_pick: false,
     },
     SlashDef {
         cmd: "/update",
-        hint: "Update CLI and cabin when newer",
+        hint: "Update the CLI and the app when newer",
         insert: "/update",
         run_on_pick: true,
     },
@@ -678,14 +673,8 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/usage",
-        hint: "Today's usage + Grok spend",
+        hint: "Today's usage + model spend",
         insert: "/usage",
-        run_on_pick: true,
-    },
-    SlashDef {
-        cmd: "/models",
-        hint: "Grok catalog",
-        insert: "/models",
         run_on_pick: true,
     },
     SlashDef {
@@ -702,7 +691,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/always-approve",
-        hint: "Skip Grok tool prompts",
+        hint: "Skip tool prompts",
         insert: "/always-approve",
         run_on_pick: true,
     },
@@ -726,7 +715,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/loop",
-        hint: "Schedule a Grok /loop…",
+        hint: "Schedule a /loop…",
         insert: "/loop ",
         run_on_pick: false,
     },
@@ -785,12 +774,6 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
         run_on_pick: true,
     },
     SlashDef {
-        cmd: "/model",
-        hint: "Set the chat model…",
-        insert: "/model ",
-        run_on_pick: false,
-    },
-    SlashDef {
         cmd: "/imagine-video",
         hint: "Open Imagine video",
         insert: "/imagine-video ",
@@ -798,7 +781,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/goal",
-        hint: "Pin a Grok goal…",
+        hint: "Pin a goal…",
         insert: "/goal ",
         run_on_pick: false,
     },
@@ -908,28 +891,14 @@ pub fn filter_slash_hits(draft: &str, extra: &[SlashHit]) -> Vec<SlashHit> {
     hits
 }
 
-pub fn resolve_mode_arg(arg: &str) -> Option<String> {
-    let a = arg.trim().to_ascii_lowercase();
-    let mapped = match a.as_str() {
-        "auto" | "adaptive" | "smart" => "auto",
-        "fast" => "fast",
-        "balance" | "balanced" => "balanced",
-        "think" | "thinking" | "expert" => "think",
-        "heavy" | "max" | "deep" => "max",
-        "build" => "think",
-        _ => return None,
-    };
-    Some(mapped.into())
-}
-
 pub fn slash_help() -> String {
     [
         "/help — this list",
         "/new — new chat (reuse empty draft; new session)",
         "/scratch — new scratch chat (no memory; /forget and Memory Save stay off)",
         "/clear — clear this chat",
-        "/compact — compact Grok context (also trims the painted pane)",
-        "/undo — rewind Grok conversation (alias /rewind)",
+        "/compact — compact the chat context (also trims the painted pane)",
+        "/undo — rewind the conversation (alias /rewind)",
         "/retry — re-send last user prompt",
         "/stop — halt the current turn",
         "/sh <cmd> — run a local shell (you, not the agent)",
@@ -937,23 +906,22 @@ pub fn slash_help() -> String {
         "/plan — plan mode",
         "/always-approve — skip tool permission prompts",
         "/auto — auto-approve safe tools",
-        "/effort — effort is automatic now (the Auto chip shows the current level); see /why",
         "/sessions — open History",
         "/resume — same as /sessions (Grok /resume)",
-        "/inspect — this chat's session: model, tools, MCP servers",
+        "/inspect — this chat's session: tools, MCP servers",
         "/loop [30m] <prompt> — interval scheduler",
         "every weekday at 9, <task> — clock job on Automations; saving it posts a schedule card on the home update feed",
-        "/skills — skills catalog: cabin skills and project and user skills",
+        "/skills — skills catalog: {product} skills and project and user skills",
         "/skills changes — what {product} changed in your skills on its own, each with Undo",
         "/skills undo <name> — put back the version before the newest change (typed by you or clicked; a removed skill comes back)",
         "/skills restore <name> — bring back a skill that was removed, from its kept copy",
         "/connections changes — connections {product} added, changed, or turned off on its own, each with Undo",
         "/automations changes — automations {product} made or changed on its own, each with Undo",
+        "/learned — what {product} learned from how you use it; /learned forget <id> or /learned wrong <id> to overrule a line",
         "/plugins /marketplace /mcps — connectors",
         "/hooks — open Connectors with the Hooks section in view",
-        "/model <id> — chat model for this cabin",
         "/imagine-video <prompt> — Imagine video",
-        "/goal <objective> — pin a Grok goal",
+        "/goal <objective> — pin a goal",
         "Skill slashes such as /create-skill run that skill in chat.",
         "/project bind <path> — bound tree is the world (the engine's working folder)",
         "/project new <name> — create a chat folder (stays on chat)",
@@ -972,21 +940,20 @@ pub fn slash_help() -> String {
         "/forget <topic> — drop memory lines that mention the topic (whole words)",
         "/imagine <prompt>",
         if cfg!(windows) {
-            "/update — the latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub when the cabin is newer, or anyway when Settings → Update or /update runs and the probe found nothing. A leftover clone (not main) uses the zip. A source clone on main overlays with install-windows.ps1. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
+            "/update — the latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub when {product} is newer, or anyway when Settings → Update or /update runs and the probe found nothing. A leftover clone (not main) uses the zip. A source clone on main overlays with install-windows.ps1. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
         } else {
-            "/update — overlay install when the cabin is newer, or anyway when Settings → Update or /update runs and the probe found nothing. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
+            "/update — overlay install when {product} is newer, or anyway when Settings → Update or /update runs and the probe found nothing. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
         },
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers (asks first unless Settings → Permissions allows it)",
         "/privacy — your grants, learning scopes (all off), and what left this computer",
-        "/why — the last 10 reasons the router gave for a model and effort (Auto picks both; a model you pin stays yours); /why models lists each model's state; /why table shows how Auto picks; /why local shows the on-device model",
         "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
         "/record — record the screen (up to 2:00) and diagnose it; /record stop ends it. Add what's wrong after it. Needs Screen recording in Settings → Defaults",
         "/audiocheck — list outputs and inputs, listen to the default input (or /audiocheck yeti) for 5 seconds, and name what's wrong: muted, silent, clipping, too quiet, dropouts or crackle. Changes nothing",
         "/hub — devices / pair",
-        "/inhabit <peer> — hand this Grok to another paired computer",
-        "/rewind — rewind Grok conversation; /rewind step lists agent file checkpoints and /rewind step <n> restores one; /rewind --files restores the last project snapshot",
-        "/btw — side ask. A live run keeps going; the question waits, then sends look-safe. Saved as ask.",
+        "/inhabit <peer> — hand this chat to another paired computer",
+        "/rewind — rewind the conversation; /rewind step lists agent file checkpoints and /rewind step <n> restores one; /rewind --files restores the last project snapshot",
+        "/btw — side ask. A live run keeps going; the answer shows beside it, read-only.",
         "/bg <task> — run a task in the background beside this chat (up to 3 at once); its reply posts here when it ends. Bare /bg moves the live reply to the background and frees the composer. /bg stop stops every background run.",
         "/queue <message> — hold a message until the live reply ends instead of steering it (Alt+Enter does the same).",
         "Typing while a reply runs steers it: Enter stops the turn where it is, keeps what it said and did, and carries on with your message folded in. Alt+Enter queues instead. Sending in another chat moves a running reply to the background instead of stopping it.",
@@ -1003,33 +970,31 @@ pub fn slash_help() -> String {
         "/brief — weekly systems briefing from local records",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
-        "/mode auto|fast|balance|think|max — legacy composer ladder (effort is automatic now)",
         "/dream — Imagine last night",
         "/tools — same as /host",
         "/import — OpenClaw workspace",
         "/consult <q> — one-shot consult",
-        "/usage — today's cabin buckets, tokens spent today, and the last turn",
-        "/models — Grok catalog",
+        "/usage — today's {product} buckets, tokens spent today, and the last turn",
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action.",
         "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / /send inherit Always until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats. Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers a Last you point when that marker exists.",
-        "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort is automatic: {product} picks how hard to think on each step, and the Auto chip shows the level. Say \"think hard\" or \"keep it quick\" to steer one task; /why shows the reasons. Default model is grok-4.7. Hover a composer pill for what it does. {product}'s own engine runs the agent.",
+        "No mode to pick: {product} reads each message. A big job plans first, anything else is answered; while a reply runs, a side question is answered beside it, a correction steers it and a new job waits. When the AI wants to change things (Ask / Auto / Always) lives in Settings → Defaults and stays as you set it; Stop asking me on a permission card moves it on. {product} picks the model and how hard to think on each step. Say \"think hard\" or \"keep it quick\" to steer one task; ask in chat which model and effort answered. {product}'s own engine runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it. A Quiet until chip shows on the titlebar only while that window is active. Signed-in empty home shows an update feed in the gap under the composer when a card is undismissed, and hides that slot when the feed is empty. A finished /loop posts automation_done from poll_grok_loop. Saving a schedule posts schedule_created. Cards stay until opened or dismissed. A device glance appears only when hub share or a last frame is bound; click opens Devices.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
-        "Appearance: Dark, Light, System. Ask permission shows Allow / Deny before each step that changes something. Auto and Always follow the PermissionMode pill, and `/compact` and `/rewind` honor that same pill. btw (saved as ask) is a side ask: a live run keeps going and the question waits, then sends read-only (no desktop-do-the-work). Idle btw sends that same read-only ask. Night, inbox, and anticipate runs are unattended: they inherit the pill, and Ask fails closed. Halt cancels the turn.",
+        "Appearance: Dark, Light, System. Ask permission shows Allow / Deny before each step that changes something. Auto and Always follow that setting, and `/compact` and `/rewind` honor it too. A side question asked while a run works gets its own read-only answer beside it (no desktop-do-the-work); the run keeps going. Night, inbox, and anticipate runs are unattended: they inherit the setting, and Ask fails closed. Halt cancels the turn.",
         "Voice: Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process). Same on Linux and Windows. While live, Listening / Speaking / Ready sits above the composer with Stop. The strip stays up while Listening or Speaking and auto-hides about a second after Ready. Stop, the live mic, or Ctrl+G / Super+G leave. Failed STT shows Ready, not Listening. Desktop control runs through the cabin's own desktop tools; Halt cancels the turn.",
         if cfg!(windows) {
             "First run is Get Started: Super Grok OAuth signs {product} in, and that sign-in stays with {product}. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. Acting on it takes the GitHub zip when there is no clone or the leftover clone is not main. A click when the probe found nothing still overlays."
         } else {
             "First run is Get Started: Super Grok OAuth signs {product} in, and that sign-in stays with {product}. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. A click when the probe found nothing still overlays."
         },
-        "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
+        "× to tray; a pinned taskbar click or second grokhub raises {product}.",
         "Pulse every 15s. Hidden idle waits for the pulse.",
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
         "Chat rail reuses one empty draft; after dialogue starts it opens a new chat. Old convos are sidebar History.",
         "Tool calls, diffs, and desk frames sit in a collapsed Work tree — expand to view. User and assistant chats are bubbles; thinking is faded thought process, not a bubble. A thought starts expanded. Collapse leaves one short row that opens again. Collapsing any thought folds the rest of that session; expanding one opens only that thought. That fold survives the live-to-stored handoff. The reply stays. A long user bubble wraps inside the row and keeps its leading gap. Copy and Reply under a user bubble stay inside the window. Permission prompts Allow / Deny — Enter allows and Esc denies when the composer is empty. User bubbles sit on the right.",
         "Shared buttons hover-scale to 1.035 and rise 1px over 120ms, shrink on press, and scale plus fill on keyboard focus. Chips, permission segments, and the rail share one highlight that glides. Card and wall hover stay inside the slot. Off-screen chat rows skip paint; height follows the pane width and each row keeps its id.",
-        "Account sets a display name and a local profile picture kept in cabin config. The avatar menu, rail, and connected hint do not show the email.",
+        "Account sets a display name and a local profile picture kept in your settings on this PC. The avatar menu, rail, and connected hint do not show the email.",
         "Five chips sit centered over the composer. The attach control is a paperclip. Ask anything is a faint placeholder centered with the mic and send. The home update feed is newest-first event cards (automation_done, schedule_created). Idea and digest cards share updates.json and do not use that three-card cap. Accept on an idea files a workboard Todo. No weather, mail, or calendar stubs.",
     ]
     .join("\n")
@@ -1115,6 +1080,12 @@ mod tests {
         assert_eq!(parse_slash("/learn reflect"), Some(Slash::LearnReflect));
         assert_eq!(parse_slash("/LEARN"), Some(Slash::LearnReflect));
         assert_eq!(parse_slash("/learn now"), Some(Slash::LearnReflect));
+        assert_eq!(parse_slash("/learned"), Some(Slash::Learned(String::new())));
+        assert_eq!(
+            parse_slash("/learned forget card:suggestion"),
+            Some(Slash::Learned("forget card:suggestion".into()))
+        );
+        assert_eq!(slash_kind(&Slash::Learned(String::new())), "learned");
         let learn = grok_command_hits(&["learn".into(), "create-skill".into()]);
         assert!(!learn.iter().any(|h| h.cmd == "/learn"), "{learn:?}");
         assert!(learn.iter().any(|h| h.cmd == "/create-skill"), "{learn:?}");
@@ -1201,14 +1172,6 @@ mod tests {
             .contains("/skills undo <name> — put back the version before the newest change"));
         assert_eq!(parse_slash("/mcps"), Some(Slash::GrokConnectors));
         assert_eq!(
-            parse_slash("/model grok-4.7").as_ref().map(slash_kind),
-            Some("model")
-        );
-        assert_eq!(
-            parse_slash("/m grok-4.5").as_ref().map(slash_kind),
-            Some("model")
-        );
-        assert_eq!(
             parse_slash("/imagine-video a cat").as_ref().map(slash_kind),
             Some("imagine_video")
         );
@@ -1269,19 +1232,6 @@ mod tests {
         assert_eq!(parse_slash("/delete"), Some(Slash::Delete));
         assert_eq!(parse_slash("/close"), Some(Slash::Delete));
         assert_eq!(parse_slash("/host"), Some(Slash::HostStatus));
-        assert_eq!(parse_slash("/mode max"), Some(Slash::Mode("max".into())));
-        assert_eq!(
-            parse_slash("/mode think"),
-            Some(Slash::Mode("think".into()))
-        );
-        assert_eq!(
-            parse_slash("/mode balance"),
-            Some(Slash::Mode("balanced".into()))
-        );
-        assert_eq!(
-            parse_slash("/mode balanced"),
-            Some(Slash::Mode("balanced".into()))
-        );
         assert_eq!(parse_slash("/dream"), Some(Slash::Dream));
         assert_eq!(parse_slash("/host off"), Some(Slash::HostStatus));
         assert_eq!(parse_slash("/tools off"), Some(Slash::HostStatus));
@@ -1293,7 +1243,6 @@ mod tests {
             Some(Slash::Consult("check the pi".into()))
         );
         assert_eq!(parse_slash("/usage"), Some(Slash::Usage));
-        assert_eq!(parse_slash("/models"), Some(Slash::Models));
         assert_eq!(parse_slash("/palette"), Some(Slash::Palette));
         assert!(slash_help().contains("nested files"));
         assert!(slash_help().contains("/import"));
@@ -1316,25 +1265,27 @@ mod tests {
             slash_help()
         );
         assert!(slash_help().contains("Desktop control runs through the cabin's own desktop tools"));
-        assert!(slash_help().contains("they inherit the pill, and Ask fails closed"));
+        assert!(slash_help().contains("they inherit the setting, and Ask fails closed"));
         assert!(!slash_help().contains("grok -p") && !slash_help().contains("ACP"));
         assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
-        assert!(slash_help().contains("Mode pill: Chat / Plan / btw"));
+        assert!(slash_help().contains("No mode to pick"));
         assert!(slash_help().contains("/view-plan"));
         assert!(slash_help().contains("/btw — side ask"));
         assert!(
             slash_help().contains("Ask permission shows Allow / Deny")
-                && slash_help().contains("btw (saved as ask) is a side ask")
+                && slash_help().contains("gets its own read-only answer beside it")
                 && slash_help().contains("Night, inbox, and anticipate runs are unattended")
-                && slash_help().contains("`/compact` and `/rewind` honor that same pill"),
+                && slash_help().contains("`/compact` and `/rewind` honor it too"),
             "{}",
             slash_help()
         );
         assert!(slash_help().contains(
-            "Effort is automatic: Loadout picks how hard to think on each step, and the Auto chip shows the level. Say \"think hard\" or \"keep it quick\" to steer one task; /why shows the reasons."
+            "Loadout picks the model and how hard to think on each step. Say \"think hard\" or \"keep it quick\" to steer one task; ask in chat which model and effort answered."
         ));
-        assert!(slash_help().contains("Default model is grok-4.7"));
-        assert!(slash_help().contains("Hover a composer pill for what it does"));
+        assert!(!slash_help().contains("Default model"));
+        assert!(!slash_help().contains("Auto chip"));
+        assert!(slash_help().contains("No mode to pick"));
+        assert!(!slash_help().contains("Mode pill"));
         assert!(slash_help().contains("centered over the composer"));
         assert!(slash_help().contains("Hidden idle waits for the pulse"));
         assert!(slash_help().contains("Chat rail reuses one empty draft"));
@@ -1381,7 +1332,7 @@ mod tests {
         assert!(slash_help().contains("leaves the rewind snapshot out"));
         assert!(slash_help().contains("History is the cabin's own chats"));
         assert!(slash_help().contains("Idle Stop and the idle mic sit still"));
-        assert!(slash_help().contains("compact Grok context"));
+        assert!(slash_help().contains("compact the chat context"));
         assert!(slash_help().contains("/forget and Memory Save stay off"));
         assert!(slash_help().contains("/learn — reflect this chat into MEMORY.md"));
         assert!(slash_help().contains("/skill <name> — run a skill"));
@@ -1521,18 +1472,51 @@ mod tests {
     }
 
     #[test]
-    fn why_slash_is_a_cabin_view_with_a_help_line() {
-        assert_eq!(parse_slash("/why"), Some(Slash::Why));
-        assert_eq!(parse_slash("/WHY models"), Some(Slash::WhyModels));
-        assert_eq!(parse_slash("/why table"), Some(Slash::WhyTable));
-        assert_eq!(parse_slash("/why local"), Some(Slash::WhyLocal));
-        assert_eq!(parse_slash("/why not"), None);
-        assert_eq!(parse_slash("/why").as_ref().map(slash_kind), Some("why"));
-        assert!(slash_help()
-            .contains("\n/why — the last 10 reasons the router gave for a model and effort"));
-        assert!(SLASH_COMMANDS
-            .iter()
-            .any(|d| d.cmd == "/why" && d.run_on_pick));
+    fn routing_commands_are_gone_and_answer_as_unknown() {
+        let lines = [
+            "/model grok-4.7",
+            "/model",
+            "/m grok-4.5",
+            "/mode fast",
+            "/mode",
+            "/models",
+            "/effort high",
+            "/effort",
+            "/why",
+            "/WHY models",
+            "/why table",
+            "/why local",
+            "/why not",
+        ];
+        for line in lines {
+            assert_eq!(parse_slash(line), None, "{line}");
+            assert!(unknown_cabin_slash(line), "{line}");
+        }
+        for word in ["/model", "/m", "/mode", "/models", "/effort", "/why"] {
+            assert!(registry::lookup(word).is_none(), "{word}");
+            assert!(
+                !SLASH_COMMANDS
+                    .iter()
+                    .any(|d| d.cmd.split_whitespace().next() == Some(word)),
+                "{word} is in the picker"
+            );
+            assert!(
+                filter_slash_commands(word)
+                    .iter()
+                    .all(|d| !d.cmd.starts_with(&format!("{word} ")) && d.cmd != word),
+                "{word} autocompletes"
+            );
+            assert!(
+                !slash_help()
+                    .lines()
+                    .any(|l| l.starts_with(&format!("{word} "))),
+                "{word} is in /help"
+            );
+        }
+        assert!(!slash_help().contains("/why"));
+        // A skill or another builtin still reaches the engine.
+        assert!(!unknown_cabin_slash("/memo"));
+        assert!(!unknown_cabin_slash("/create-skill"));
     }
 
     #[test]

@@ -162,22 +162,6 @@ fn fast_goes_to_a_live_waiting_turn_and_falls_back_to_grok_4_7_when_the_budget_i
         r.reason,
         "balanced · Medium: this week's budget is tight, so not grok-4.7-fast."
     );
-    // The toggle off: never.
-    let off = Spend {
-        settings: SpendSettings {
-            fast_when_waiting: false,
-            ..SpendSettings::default()
-        },
-        ..waiting()
-    };
-    let r = Router::choose(&ask("grok-4.7", off), &reg, &no_profiles(), &table(), NOW);
-    assert_eq!(
-        (
-            r.model.as_str(),
-            r.rule_ids.contains(&"fast:off".to_string())
-        ),
-        ("grok-4.7", true)
-    );
     // Nobody waiting: plain Grok 4.7.
     let r = Router::choose(
         &ask("grok-4.7", Spend::default()),
@@ -187,13 +171,6 @@ fn fast_goes_to_a_live_waiting_turn_and_falls_back_to_grok_4_7_when_the_budget_i
         NOW,
     );
     assert_eq!(r.model, "grok-4.7");
-    // A pin is kept as picked.
-    let mut pin = ask("grok-4.7", waiting());
-    pin.pinned = true;
-    assert_eq!(
-        Router::choose(&pin, &reg, &no_profiles(), &table(), NOW).model,
-        "grok-4.7"
-    );
     // Not entitled (GB's free tier drops it): never a candidate.
     let mut free = reg.clone();
     free.models.get_mut(FAST).unwrap().state = grokhub_core::model_registry::ModelState::NotInPlan;
@@ -208,20 +185,21 @@ fn fast_goes_to_a_live_waiting_turn_and_falls_back_to_grok_4_7_when_the_budget_i
         .model,
         "grok-4.7"
     );
-    // Grok 4.7 Fast is never in the pool on its own: a pin to it stands in.
-    let mut on_fast = ask(FAST, Spend::default());
-    on_fast.pinned = true;
-    let r = Router::choose(&on_fast, &reg, &no_profiles(), &table(), NOW);
-    assert_eq!(
-        (r.model.as_str(), r.rule_ids[0].as_str(), r.no_route),
-        ("grok-4.7", "pin:base", false)
+    // Grok 4.7 Fast is never in the pool on its own: a call on it gets the plain model.
+    let r = Router::choose(
+        &ask(FAST, Spend::default()),
+        &reg,
+        &no_profiles(),
+        &table(),
+        NOW,
     );
+    assert_eq!((r.model.as_str(), r.no_route), ("grok-4.7", false));
 }
 
 /// The live path, with the latency signals built from the call's origin and
 /// class the way the cabin sends them.
 #[test]
-fn fast_is_never_chosen_for_background_automation_or_proactive_and_the_toggle_turns_it_off() {
+fn fast_is_never_chosen_for_background_automation_or_proactive() {
     let dir = crate::harness::test_dir("r2b-fast-live");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet(Credential::Plan)).unwrap();
@@ -258,12 +236,6 @@ fn fast_is_never_chosen_for_background_automation_or_proactive_and_the_toggle_tu
         let r = picked(&call("chat:default", "ep-auto"));
         assert_eq!(r.model, "grok-4.7", "{origin:?}: {:?}", r.rule_ids);
     }
-    spend::set_spend(SpendSettings {
-        fast_when_waiting: false,
-        ..SpendSettings::default()
-    });
-    assert_eq!(picked(&call("chat:default", "ep-off")).model, "grok-4.7");
-    spend::set_spend(SpendSettings::default());
     // A long chain in one turn is latency-bound; a time box close to its end is at risk.
     let mut chain = call("chat:default", "ep-chain");
     for _ in 0..spend::CHAIN_LATENCY_STEPS {
@@ -339,7 +311,6 @@ fn no_premium_or_extra_spend_route_without_a_grant_over_random_signals() {
             .collect();
         let spend = Spend {
             settings: SpendSettings {
-                fast_when_waiting: rng.coin(),
                 weekly_cap_usd: 0.0,
                 ceiling_usd_per_m: *rng.pick(&[5.0, 15.0, 25.0, 40.0, 100.0]),
             },
@@ -362,7 +333,6 @@ fn no_premium_or_extra_spend_route_without_a_grant_over_random_signals() {
             provider,
             class: rng.pick(&classes),
             current_model: current,
-            pinned: rng.coin(),
             d: (rng.next() % 100) as f64 / 100.0,
             needs_tools: rng.coin(),
             episode_model: rng.coin().then(|| *rng.pick(&models)),
@@ -395,17 +365,13 @@ fn no_premium_or_extra_spend_route_without_a_grant_over_random_signals() {
                 );
             }
             CostClass::AutonomousPremium => {
-                assert!(
-                    !input.pinned && fast_verdict(&spend).is_ok() && r.base.is_some(),
-                    "{why}"
-                );
+                assert!(fast_verdict(&spend).is_ok() && r.base.is_some(), "{why}");
             }
             CostClass::Unknown => {
                 // Only the call's own model, kept because nothing native is included.
                 assert!(
                     r.model == current
                         && r.rule_ids.iter().any(|x| x == "cost:not_included"
-                            || x.starts_with("pin")
                             || x.starts_with("model:")
                             || x.starts_with("episode")),
                     "{why}"
@@ -434,18 +400,19 @@ fn a_premium_route_waits_for_your_grant_and_revoking_it_stops_the_next_one() {
     save_registry(&dir, &fleet(Credential::ApiKey)).unwrap();
     spend::set_spend(SpendSettings::default());
     let _ = live::take_premium_ask();
-    let call = RouteCall {
+    // A call that wants the premium model, in a fresh episode each time: a
+    // running episode keeps the model it stands on.
+    let call = |episode| RouteCall {
         provider: "xai",
         class: "chat:default",
         model: "grok-heavy",
-        episode: "ep-p",
+        episode,
         session: "s",
         text: "hi",
-        pinned: true,
         needs_tools: true,
         ..RouteCall::default()
     };
-    let first = live::decide(&dir, &call, NOW).route;
+    let first = live::decide(&dir, &call("ep-p1"), NOW).route;
     // Auto stands in with an included model while it asks; nothing pauses.
     assert_eq!(
         (first.model.as_str(), first.no_route, first.cost_class),
@@ -465,14 +432,16 @@ fn a_premium_route_waits_for_your_grant_and_revoking_it_stops_the_next_one() {
         Some("premium:grok-heavy")
     );
     let g = grant_premium(&dir, "premium:grok-heavy", UserClick::from_click()).unwrap();
-    let granted = live::decide(&dir, &call, NOW).route;
+    let granted = live::decide(&dir, &call("ep-p2"), NOW).route;
     assert_eq!(
         (granted.model.as_str(), granted.cost_class),
-        ("grok-heavy", CostClass::Premium)
+        ("grok-heavy", CostClass::Premium),
+        "{:?}",
+        granted.rule_ids
     );
     assert_eq!(live::take_premium_ask(), None);
     revoke_grant(&dir, &g.id).unwrap();
-    let after = live::decide(&dir, &call, NOW).route;
+    let after = live::decide(&dir, &call("ep-p3"), NOW).route;
     assert_eq!(after.model, "grok-4.3", "{:?}", after.rule_ids);
     assert_eq!(
         live::take_premium_ask().as_deref(),
@@ -543,5 +512,64 @@ fn at_100_percent_background_pauses_and_chat_asks_until_you_say_go_on() {
     assert!(live::decide(&dir, &call("background:summarize"), now).paused());
     spend::set_spend(SpendSettings::default());
     budget::forget_week();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_route_record_after_a_prefix_break_says_where_and_why() {
+    let dir = crate::harness::test_dir("r2b-prefix-break");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    let conv = format!("r2b-break-{}", std::process::id());
+    let call = RouteCall {
+        provider: "xai",
+        class: "chat:default",
+        model: "grok-4.3",
+        episode: &conv,
+        session: &conv,
+        text: "hi",
+        ..RouteCall::default()
+    };
+    let ok = RouteDone {
+        ok: true,
+        http: 200,
+        ..RouteDone::default()
+    };
+    let key = crate::prefix_guard::run_key(&conv, 0, None);
+    let msg = |text: &str| crate::client::InputItem::Message {
+        role: "system".into(),
+        content: vec![crate::client::ContentPart::InputText(text.into())],
+    };
+    let mut req = crate::client::ResponsesRequest {
+        model: "grok-4.3".into(),
+        conversation_id: conv.clone(),
+        input: vec![msg("S")],
+        text_format: None,
+        effort: None,
+        tools: Vec::new(),
+        hosted_search: false,
+        call_timeout: None,
+    };
+    crate::prefix_guard::observe(&key, &req);
+    let d = live::decide(&dir, &call, grokhub_core::now_ms());
+    let rec = live::route_log(&dir, &call, &d, &ok);
+    assert_eq!(rec.prefix_break, None, "the first request breaks nothing");
+    req.input = vec![msg("S2")];
+    crate::prefix_guard::note_trim(&key);
+    crate::prefix_guard::observe(&key, &req);
+    let rec = live::route_log(&dir, &call, &d, &ok);
+    let note = rec
+        .prefix_break
+        .clone()
+        .expect("the break is on the record");
+    assert_eq!((note.part.as_str(), note.index), ("system", 0));
+    assert!(!note.reason.is_empty());
+    let line = serde_json::to_string(&rec).unwrap();
+    assert!(line.contains("\"prefix_break\""), "{line}");
+    // Only the request that followed the break carries it.
+    let rec = live::route_log(&dir, &call, &d, &ok);
+    assert_eq!(rec.prefix_break, None);
+    assert!(!serde_json::to_string(&rec)
+        .unwrap()
+        .contains("prefix_break"));
     let _ = std::fs::remove_dir_all(dir);
 }

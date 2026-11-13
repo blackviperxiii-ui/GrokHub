@@ -9,8 +9,16 @@
 //! a canary on [`CANARY_SHARE`] of eligible low-risk steps, and is promoted
 //! only when quality holds and cost or latency improves by [`MIN_GAIN_PCT`].
 //! For [`WATCH_DAYS`] after promotion a regression rolls it back at once. A
-//! candidate that would cost more money is never applied here: it becomes a
-//! Suggestion card and waits for your Accept click.
+//! candidate that would cost more money takes the same guarded path, silently:
+//! it is promoted only when its quality gain is at least
+//! [`PRICIER_MIN_QUALITY_GAIN_PTS`] and its reward (quality less cost,
+//! [`Snap::reward`]) holds.
+//!
+//! C11: while a candidate is in shadow, its pick sits next to the live one in
+//! the learner's propensity log ([`super::bandit`]). Where the log covers the
+//! class, the shadow ends only when the candidate's doubly robust score
+//! ([`super::bandit::ope`]) is no worse than live by more than
+//! [`OPE_MAX_DROP`] over at least [`OPE_MIN_MATCHED`] matched turns.
 //!
 //! The tuner never touches floors, ceilings, cost classes, consent, the
 //! hard-class list, harness policy or the budget cap, and never lowers
@@ -49,10 +57,15 @@ pub const REJECT_DAYS: u64 = 14;
 pub const SCORECARD_DAYS: u64 = 28;
 /// Steps a model (or rung) needs on its scorecard before it can be a candidate.
 pub const CARD_MIN_N: u32 = 20;
-/// Cost-raising Suggestion cards a week (inside the self-review's 5).
-pub const ROUTER_CARDS_PER_WEEK: usize = 2;
-/// A cost-raising card needs this much better pass rate.
-pub const CARD_MIN_QUALITY_GAIN_PTS: f64 = 5.0;
+/// A cost-raising candidate needs this much better pass rate.
+pub const PRICIER_MIN_QUALITY_GAIN_PTS: f64 = 5.0;
+/// Logged turns where live picked what the candidate would: needed before
+/// the offline score judges a shadow.
+pub const OPE_MIN_MATCHED: u32 = 20;
+/// A shadow's offline score may trail live by at most this much reward.
+pub const OPE_MAX_DROP: f64 = 0.02;
+/// A shadow the log can't judge in this long goes on to its canary.
+pub const SHADOW_MAX_DAYS: u64 = 14;
 
 pub const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 pub const WEEK_MS: u64 = 7 * DAY_MS;
@@ -140,6 +153,11 @@ impl Snap {
     pub fn quality_fell(&self, base: &Snap) -> bool {
         base.pass_pct - self.pass_pct > QUALITY_MAX_DROP_PTS
             || self.rework_pct - base.rework_pct > REWORK_MAX_RISE_PTS
+    }
+
+    /// Pass rate less cost, on the learner's scale ([`super::bandit::LAMBDA_PER_USD`]).
+    pub fn reward(&self) -> f64 {
+        self.pass_pct / 100.0 - super::bandit::LAMBDA_PER_USD * self.cost_per_step
     }
 
     /// Percent cheaper per step than `base` (negative when pricier).
@@ -263,14 +281,13 @@ pub enum Stage {
     Canary,
     /// Promoted; watched for [`WATCH_DAYS`].
     Watch,
-    /// Watched a week with no regression.
+    /// Watched a week with no regression. (An accepted card of old reads as kept.)
+    #[serde(alias = "accepted")]
     Kept,
     /// Rolled back, failed its canary, or undone; not retried until `until`.
+    /// (A card of old that never got its click reads as rejected.)
+    #[serde(alias = "card")]
     Rejected,
-    /// Costs more money: a Suggestion card waits for your Accept.
-    Card,
-    /// You accepted the card.
-    Accepted,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -299,7 +316,7 @@ pub struct Candidate {
     /// The canary arm when it was promoted.
     #[serde(default)]
     pub promoted_snap: Option<Snap>,
-    /// For a card: about how much more it costs, percent.
+    /// A pricier candidate: about how much more it costs, percent.
     #[serde(default)]
     pub cost_rise_pct: Option<f64>,
     /// The tuning value this class had before the promotion (`None`: none).
@@ -410,9 +427,6 @@ pub struct TuneState {
     /// Registry and profile hashes the last pass saw (a change runs it again).
     #[serde(default)]
     pub inputs_hash: String,
-    /// When each cost-raising card went out.
-    #[serde(default)]
-    pub cards_at: Vec<u64>,
     #[serde(default)]
     pub seq: u64,
 }
@@ -436,7 +450,6 @@ impl TuneState {
         self.candidates.iter().any(|c| {
             c.class == class
                 && (c.active()
-                    || c.stage == Stage::Card && c.change.as_ref() == Some(change)
                     || c.stage == Stage::Rejected
                         && c.change.as_ref() == Some(change)
                         && c.until.is_some_and(|u| u > now_ms))
@@ -446,13 +459,12 @@ impl TuneState {
 
 /// A low-risk step the canary may serve: a soft class (not `prepare:hard`, not
 /// `repair:*`, not a hard tool step), not in the R1 holdout, not under a
-/// VerifyGate reject, not pinned by you.
+/// VerifyGate reject.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StepRisk<'a> {
     pub class: &'a str,
     pub holdout: bool,
     pub under_reject: bool,
-    pub pinned: bool,
     /// The step offers a send, delete, credential or other hard-class tool.
     pub hard_tool: bool,
 }
@@ -464,7 +476,6 @@ pub fn canary_eligible(r: &StepRisk<'_>) -> bool {
         && !class.starts_with("repair:")
         && !r.holdout
         && !r.under_reject
-        && !r.pinned
         && !r.hard_tool
 }
 
@@ -489,13 +500,11 @@ pub trait Filters {
     fn expected_cost(&self, class: &str, model: &str) -> Option<f64>;
 }
 
-/// What the weekly pass proposes.
+/// What the weekly pass proposes: every candidate goes to shadow on its own.
+/// A pricier one carries its `cost_rise_pct`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Proposals {
-    /// Cheaper or faster: they go to shadow on their own.
     pub auto: Vec<Candidate>,
-    /// Cost more money: Suggestion cards only.
-    pub cards: Vec<Candidate>,
 }
 
 fn effort_rung(e: &Option<String>) -> Option<usize> {
@@ -562,7 +571,7 @@ pub fn propose(
             };
             if rise > 0.0 {
                 let gain = snap.pass_pct - live.pass_pct;
-                if gain >= CARD_MIN_QUALITY_GAIN_PTS
+                if gain >= PRICIER_MIN_QUALITY_GAIN_PTS
                     && !snap.quality_fell(&live)
                     && pricier.is_none_or(|(g, _, _)| gain > g)
                 {
@@ -629,11 +638,11 @@ pub fn propose(
             }
         }
         if let Some((_, rise, m)) = pricier {
-            out.cards.push(new(
+            out.auto.push(new(
                 Change::Order {
                     model: m.to_string(),
                 },
-                Stage::Card,
+                Stage::Shadow,
                 id(class),
                 Some(rise),
             ));
@@ -647,12 +656,12 @@ pub fn propose(
             let higher = at(r);
             if higher.n >= CARD_MIN_N
                 && start.n >= CARD_MIN_N
-                && higher.pass_pct - start.pass_pct >= CARD_MIN_QUALITY_GAIN_PTS
+                && higher.pass_pct - start.pass_pct >= PRICIER_MIN_QUALITY_GAIN_PTS
                 && !state.blocked(class, &change, now_ms)
             {
                 let rise = (-higher.cost_gain_pct(&start)).max(0.0);
-                out.cards
-                    .push(new(change, Stage::Card, id(class), Some(rise)));
+                out.auto
+                    .push(new(change, Stage::Shadow, id(class), Some(rise)));
             }
         }
     }
@@ -678,12 +687,14 @@ pub enum Verdict {
     Keep,
 }
 
-/// Evidence for one candidate: shadow steps (and violations), its canary arm,
-/// the live arm over the same time, and the class since promotion.
+/// Evidence for one candidate: shadow steps (and violations), its offline
+/// score from the propensity log, its canary arm, the live arm over the same
+/// time, and the class since promotion.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Evidence {
     pub shadow_steps: u32,
     pub violations: u32,
+    pub ope: super::bandit::Ope,
     pub canary: Snap,
     pub live: Snap,
     pub since_promotion: Snap,
@@ -696,7 +707,29 @@ pub fn judge(c: &Candidate, ev: &Evidence, promotions_week: usize, now_ms: u64) 
             why: "it broke a routing filter in shadow".into(),
             rollback: false,
         },
-        Stage::Shadow if ev.shadow_steps >= SHADOW_MIN_STEPS => Verdict::StartCanary,
+        Stage::Shadow if ev.shadow_steps >= SHADOW_MIN_STEPS => {
+            let o = &ev.ope;
+            if o.n == 0 {
+                // The learner logs no turn of this class: the canary judges it.
+                Verdict::StartCanary
+            } else if o.matched < OPE_MIN_MATCHED {
+                if now_ms.saturating_sub(c.created_at) >= SHADOW_MAX_DAYS * DAY_MS {
+                    Verdict::StartCanary
+                } else {
+                    Verdict::Wait
+                }
+            } else if o.dr >= o.live - OPE_MAX_DROP {
+                Verdict::StartCanary
+            } else {
+                Verdict::Reject {
+                    why: format!(
+                        "its logged score fell short in shadow ({:.2} vs {:.2})",
+                        o.dr, o.live
+                    ),
+                    rollback: false,
+                }
+            }
+        }
         Stage::Canary => {
             if ev.canary.n >= ROLLBACK_MIN_N && ev.canary.quality_fell(&ev.live) {
                 return Verdict::Reject {
@@ -714,7 +747,16 @@ pub fn judge(c: &Candidate, ev: &Evidence, promotions_week: usize, now_ms: u64) 
                 ev.canary.cost_gain_pct(&ev.live),
                 ev.canary.latency_gain_pct(&ev.live),
             );
-            if cost < MIN_GAIN_PCT && lat < MIN_GAIN_PCT {
+            if c.cost_rise_pct.is_some() {
+                // Pricier: it must do clearly better, and better than it costs.
+                let gain = ev.canary.pass_pct - ev.live.pass_pct;
+                if gain < PRICIER_MIN_QUALITY_GAIN_PTS || ev.canary.reward() < ev.live.reward() {
+                    return Verdict::Reject {
+                        why: format!("it cost more and did only {gain:+.0} pts better"),
+                        rollback: false,
+                    };
+                }
+            } else if cost < MIN_GAIN_PCT && lat < MIN_GAIN_PCT {
                 return Verdict::Reject {
                     why: format!(
                         "it saved only {:.0}% cost and {:.0}% time",
@@ -752,176 +794,6 @@ pub fn judge(c: &Candidate, ev: &Evidence, promotions_week: usize, now_ms: u64) 
         }
         _ => Verdict::Wait,
     }
-}
-
-/// The weekly self-review's one router line, with real numbers.
-pub fn review_line(state: &TuneState, now_ms: u64) -> String {
-    let since = now_ms.saturating_sub(WEEK_MS);
-    let kept: Vec<&Candidate> = state
-        .candidates
-        .iter()
-        .filter(|c| {
-            matches!(c.stage, Stage::Watch | Stage::Kept)
-                && c.promoted_at.is_some_and(|t| t >= since)
-        })
-        .collect();
-    let rolled = state
-        .candidates
-        .iter()
-        .filter(|c| {
-            c.stage == Stage::Rejected
-                && c.promoted_at.is_some()
-                && c.ended_at.is_some_and(|t| t >= since)
-        })
-        .count();
-    let detail: Vec<String> = kept
-        .iter()
-        .map(|c| {
-            let plain = class_row(&c.class)
-                .map(|r| r.plain)
-                .unwrap_or(c.class.as_str());
-            let (p, b) = (
-                c.promoted_snap.unwrap_or_default(),
-                c.baseline.unwrap_or_default(),
-            );
-            let cost = p.cost_gain_pct(&b);
-            let lat = p.latency_gain_pct(&b);
-            let gain = if cost >= lat {
-                format!("\u{2212}{cost:.0}% cost")
-            } else {
-                format!("\u{2212}{lat:.0}% time")
-            };
-            let dq = p.pass_pct - b.pass_pct;
-            let quality = if dq.abs() < 0.5 {
-                "quality same".to_string()
-            } else {
-                format!("quality {dq:+.1} pts")
-            };
-            format!("{plain}: {gain}, {quality}")
-        })
-        .collect();
-    let changes = if kept.len() == 1 { "change" } else { "changes" };
-    if detail.is_empty() {
-        format!("Router: 0 changes kept, {rolled} rolled back.")
-    } else {
-        format!(
-            "Router: {} {changes} kept ({}), {rolled} rolled back.",
-            kept.len(),
-            detail.join("; ")
-        )
-    }
-}
-
-/// `/why table` lines for the tuner: the live tuning, any candidate and canary status.
-pub fn why_lines(
-    tuning: &Tuning,
-    version: u32,
-    state: &TuneState,
-    ev: &BTreeMap<String, Evidence>,
-) -> Vec<String> {
-    let mut out = vec![if tuning.is_empty() {
-        format!("Self-tuning v{version}: nothing tuned yet")
-    } else {
-        format!("Self-tuning v{version}:")
-    }];
-    for (class, e) in &tuning.starts {
-        out.push(format!(
-            "  {class} starts at {}",
-            grokhub_core::effort_label(e)
-        ));
-    }
-    for (class, m) in &tuning.orders {
-        out.push(format!("  {class} → {m} first"));
-    }
-    for c in state.candidates.iter().filter(|c| {
-        matches!(
-            c.stage,
-            Stage::Shadow | Stage::Canary | Stage::Watch | Stage::Card
-        )
-    }) {
-        let what = c.change.as_ref().map(Change::label).unwrap_or_default();
-        let e = ev.get(&c.id).copied().unwrap_or_default();
-        let status = match c.stage {
-            Stage::Shadow => format!("shadow, {}/{SHADOW_MIN_STEPS} steps", e.shadow_steps),
-            Stage::Canary => format!(
-                "canary on {:.0}% of steps, {}/{CANARY_MIN_N}, passed {:.0}% vs {:.0}% live",
-                CANARY_SHARE * 100.0,
-                e.canary.n,
-                e.canary.pass_pct,
-                e.live.pass_pct
-            ),
-            Stage::Watch => format!("live, watched {WATCH_DAYS} days"),
-            _ => "waiting on your OK (costs more)".into(),
-        };
-        out.push(format!("  candidate {}: {} ({status})", c.class, what));
-    }
-    out
-}
-
-/// The cost-raising card's words.
-pub fn card_text(c: &Candidate) -> (String, String) {
-    let plain = class_row(&c.class)
-        .map(|r| r.plain)
-        .unwrap_or(c.class.as_str());
-    let rise = c.cost_rise_pct.unwrap_or(0.0).round();
-    match &c.change {
-        Some(Change::Start { effort }) => {
-            let level = grokhub_core::effort_label(effort);
-            (format!("Start {plain} at {level}?"), format!("{plain} would do better at {level}, which costs about {rise:.0}% more. Start it at {level}?"))
-        }
-        Some(Change::Order { model }) => (format!("Use {model} for {plain}?"), format!("{plain} would do better on {model}, which costs about {rise:.0}% more. Use it first?")),
-        None => (String::new(), String::new()),
-    }
-}
-
-/// "Oct 6" (UTC) for a card.
-fn month_day(ms: u64) -> String {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(ms);
-    let month = stamp
-        .get(5..7)
-        .and_then(|m| m.parse::<usize>().ok())
-        .unwrap_or(1);
-    let day = stamp
-        .get(8..10)
-        .and_then(|d| d.parse::<u32>().ok())
-        .unwrap_or(1);
-    format!("{} {day}", MONTHS[month.clamp(1, 12) - 1])
-}
-
-/// The info-only "why this model" card for a promoted candidate, built from
-/// its canary and the live arm it beat: `(title, body)`. `None` until it was
-/// promoted. It asks nothing; the router keeps changing routes on its own.
-pub fn why_card_text(c: &Candidate) -> Option<(String, String)> {
-    let (change, at, won, beat) = (
-        c.change.as_ref()?,
-        c.promoted_at?,
-        c.promoted_snap?,
-        c.baseline?,
-    );
-    let plain = class_row(&c.class)
-        .map(|r| r.plain)
-        .unwrap_or(c.class.as_str());
-    let what = match change {
-        Change::Order { model } => model.clone(),
-        Change::Start { effort } => grokhub_core::effort_label(effort).to_string(),
-    };
-    let title = format!(
-        "Why {what} for {plain}: {:.0}% pass vs {:.0}%, promoted {}",
-        won.pass_pct,
-        beat.pass_pct,
-        month_day(at)
-    );
-    let body = format!(
-        "Auto now runs {plain} with {}: {:.0}% cheaper and {:.0}% faster over {} canary steps. Info only; Auto keeps tuning on its own.",
-        change.label(),
-        won.cost_gain_pct(&beat),
-        won.latency_gain_pct(&beat),
-        won.n
-    );
-    Some((title, body))
 }
 
 #[cfg(test)]

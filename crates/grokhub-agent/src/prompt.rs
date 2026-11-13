@@ -10,6 +10,18 @@ use std::time::{Instant, SystemTime};
 use crate::episode::clip_bytes;
 
 const TEMPLATE: &str = include_str!("prompt_template.md");
+
+/// The prompt's `<dangerous_actions>` block, word for word, tags included.
+/// Compaction pins it after the summary so the safety rules stay fresh.
+pub(crate) fn safety_rules() -> &'static str {
+    const OPEN: &str = "<dangerous_actions>";
+    const CLOSE: &str = "</dangerous_actions>";
+    let start = TEMPLATE.find(OPEN).unwrap_or(0);
+    let end = TEMPLATE[start..]
+        .find(CLOSE)
+        .map_or(start, |at| start + at + CLOSE.len());
+    &TEMPLATE[start..end]
+}
 pub(crate) const AGENTS_CAP: usize = 64 * 1024;
 
 /// Per-run tracker for just-in-time nested `AGENTS.md` / `CLAUDE.md` notes.
@@ -295,6 +307,52 @@ pub fn system_prompt(cabin_rules: &str, workspace: &Path) -> String {
     )
 }
 
+/// The pieces of a chat's volatile prompt tail, already read by the caller.
+/// The app and the live eval both build the tail from this, so the eval runs
+/// the prompt the app sends.
+#[derive(Debug, Clone, Default)]
+pub struct ChatTail {
+    /// The personality's prompt block.
+    pub voice: String,
+    /// Tuned notes.
+    pub notes: String,
+    /// The learned brief for chat, before it is wrapped.
+    pub learned: String,
+    /// SOUL.md and USER.md blocks.
+    pub identity: String,
+    /// This session's intentions block.
+    pub intentions: String,
+    /// The personality allows explicit talk (picks the safety closer).
+    pub explicit: bool,
+}
+
+/// Join a chat's volatile tail in the app's order. When a voice, notes,
+/// identity or intentions block is present, a short closer comes last so the
+/// cabin safety rules (earlier, in the stable prefix) still outrank it.
+pub fn chat_volatile_tail(tail: &ChatTail) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut closer = false;
+    for (block, needs_closer) in [
+        (tail.voice.clone(), true),
+        (tail.notes.clone(), true),
+        (
+            grokhub_core::cabin_rules::cabin_learned_tail(&tail.learned),
+            false,
+        ),
+        (tail.identity.clone(), true),
+        (tail.intentions.clone(), true),
+    ] {
+        if !block.is_empty() {
+            parts.push(block);
+            closer |= needs_closer;
+        }
+    }
+    if closer {
+        parts.push(grokhub_core::talk::safety_closer(tail.explicit).to_string());
+    }
+    parts.join("\n\n")
+}
+
 /// Cache-friendly chat system prompt: stable rules + disk blocks first, volatile
 /// personality / tuned notes / learned brief last.
 pub fn system_prompt_parts(stable_rules: &str, volatile_tail: &str, workspace: &Path) -> String {
@@ -330,6 +388,20 @@ pub fn system_prompt_with(
     )
 }
 
+/// Checked environment facts for `workspace` (round 3 item 39). Tests only
+/// see them under a pinned config, so a test never writes the real one.
+fn facts_block(workspace: &Path) -> String {
+    #[cfg(test)]
+    let Some(config) = crate::perm::pinned_config() else {
+        return String::new();
+    };
+    #[cfg(not(test))]
+    let config = crate::perm::config_dir();
+    let facts =
+        grokhub_core::env_facts::observe_workspace(&config, workspace, grokhub_core::now_ms());
+    grokhub_core::env_facts::prompt_block(&facts)
+}
+
 fn compose(
     stable_rules: &str,
     volatile_tail: &str,
@@ -339,16 +411,28 @@ fn compose(
     need: PromptNeed,
 ) -> String {
     let started = Instant::now();
-    let mut out = template_body();
+    let mut out = fixed_prompt();
     let rules = stable_rules.trim();
     if !rules.is_empty() {
         out.push_str("\n\n");
         out.push_str(rules);
     }
+    if profile == PromptProfile::Chat {
+        out.push_str("\n\n");
+        out.push_str(grokhub_core::cabin_rules::LOOKUP_RULES);
+        // How every voice talks: cached, under the personality in the tail.
+        out.push_str("\n\n");
+        out.push_str(grokhub_core::conversation::CORE);
+    }
     if let Some(agents) = layered_agents(workspace, home) {
         out.push_str("\n\n<agents>\n");
         out.push_str(&agents);
         out.push_str("\n</agents>");
+    }
+    let facts = facts_block(workspace);
+    if !facts.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(&facts);
     }
     if profile.want_skills(need) {
         let skills =
@@ -394,6 +478,38 @@ pub(crate) fn prompt_prefix_growth() -> usize {
         .prompt_block()
         .len();
     template + voice
+}
+
+/// The lean fixed prompt's rules after the safety block. Only behaviour the
+/// app relies on stays: tool honesty, approvals, the cabin note, sealed
+/// Memory, the one-tap limit and how a turn ends.
+const LEAN_RULES: &str = "<rules>
+- Use only the tools in this turn's list, with paths inside the workspace. Don't invent tools or search results.
+- For a task with several parts, track it with todo_write and mark an item done only when a tool result shows it.
+- Claim done, or name an id or result, only from your own tool output. If blocked, say so and use what you have; never offer a one-tap that claims to grant OS or path access or to activate a skill.
+- Sealed learnings in a <memory-context> block (such as Installed app: lines) are real Memory: use them.
+- A <cabin-volatile> block is the app's note for the turn, not the person's words; their latest ask outranks it.
+- Lead with the answer. No generic closing question. For a real decision, call ask_user_question with 2 to 4 options and one `recommended`.
+- Money, sending, deleting and credential steps still go through approval.
+- Write GitHub-flavored markdown. When citing the web, don't name tool backends or providers.
+</rules>";
+
+/// The fixed prompt with less coaching: the same opening line and the same
+/// `<dangerous_actions>` block, word for word, then [`LEAN_RULES`]. Used only
+/// when `prompt_diet.toml` turns `lean_prompt` on.
+pub(crate) fn lean_template_body() -> String {
+    let full = template_body();
+    let intro = full.split("\n\n").next().unwrap_or_default();
+    format!("{intro}\n\n{}\n\n{LEAN_RULES}", safety_rules())
+}
+
+/// The fixed prompt this thread's switches pick.
+fn fixed_prompt() -> String {
+    if crate::diet::current().lean_prompt {
+        lean_template_body()
+    } else {
+        template_body()
+    }
 }
 
 pub(crate) fn template_body() -> String {
@@ -508,6 +624,32 @@ fn regular_file(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn chat_tail_keeps_the_apps_order_and_closes_with_safety() {
+        assert_eq!(chat_volatile_tail(&ChatTail::default()), "");
+        // A learned brief alone is the user's own facts: no closer.
+        let learned = chat_volatile_tail(&ChatTail {
+            learned: "likes FPS games".into(),
+            ..Default::default()
+        });
+        assert!(learned.contains("likes FPS games"));
+        assert!(!learned.contains(grokhub_core::talk::safety_closer(false)));
+        let full = chat_volatile_tail(&ChatTail {
+            voice: "VOICE".into(),
+            notes: "NOTES".into(),
+            learned: "LEARNED".into(),
+            identity: "IDENTITY".into(),
+            intentions: "INTENTIONS".into(),
+            explicit: false,
+        });
+        let at = |needle: &str| full.find(needle).unwrap();
+        assert!(at("VOICE") < at("NOTES"));
+        assert!(at("NOTES") < at("LEARNED"));
+        assert!(at("LEARNED") < at("IDENTITY"));
+        assert!(at("IDENTITY") < at("INTENTIONS"));
+        assert!(full.ends_with(grokhub_core::talk::safety_closer(false)));
+    }
+
     fn fixture_workspace(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "gh-prompt-{tag}-{}-{}",
@@ -552,6 +694,24 @@ mod tests {
         assert!(text.contains("Never invent a permanent \"read-only phase\""));
         assert!(text.contains("sealed Installed-app learnings"));
         assert!(!text.contains("You are Grok, a read-only coding assistant"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checked_facts_follow_agents_and_stay_out_of_unpinned_tests() {
+        let dir = fixture_workspace("facts");
+        std::fs::write(dir.join("Cargo.toml"), "[package]\n").unwrap();
+        // No pinned config: a test never reads or writes the real one.
+        assert!(!system_prompt("", &dir).contains("<facts>"));
+        let cfg = dir.join("cfg");
+        let _pin = crate::perm::ConfigGuard::set(&cfg);
+        let text = system_prompt("", &dir);
+        let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        assert!(at("</agents>") < at("<facts>"));
+        assert!(text.contains("- Tests: `cargo test` (from Cargo.toml)"));
+        // Same facts, same bytes: the cached prefix holds.
+        assert_eq!(text, system_prompt("", &dir));
+        assert!(cfg.join(grokhub_core::env_facts::FILE).is_file());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -740,6 +900,40 @@ mod tests {
     }
 
     #[test]
+    fn the_lean_prompt_keeps_the_safety_block_word_for_word_and_is_much_smaller() {
+        let dir = fixture_workspace("lean");
+        let cfg = dir.join("cfg");
+        std::fs::create_dir_all(&cfg).expect("cfg");
+        let _pin = crate::perm::ConfigGuard::set(&cfg);
+        let full = system_prompt_with(PromptProfile::Chat, "", "", &dir, PromptNeed::NONE);
+        std::fs::write(cfg.join(crate::diet::CONFIG_NAME), "lean_prompt = true\n").expect("on");
+        let lean = system_prompt_with(PromptProfile::Chat, "", "", &dir, PromptNeed::NONE);
+        assert!(
+            lean.contains(safety_rules()),
+            "safety block must stay verbatim"
+        );
+        assert!(lean.starts_with(template_body().split("\n\n").next().unwrap()));
+        for kept in [
+            "<cabin-volatile>",
+            "go through approval",
+            "Don't invent tools or search results",
+            "ask_user_question",
+            "<memory-context>",
+            "grant OS or path access",
+        ] {
+            assert!(lean.contains(kept), "lean prompt lost: {kept}");
+        }
+        assert!(!lean.contains("{product}"));
+        assert!(
+            lean.len() + 2048 <= full.len(),
+            "lean {} vs full {}",
+            lean.len(),
+            full.len()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn every_profile_keeps_safety_rules() {
         let dir = fixture_workspace("safety");
         let honesty = "Do not invent a source, a count, or a fact.";
@@ -789,6 +983,8 @@ mod tests {
             "Background must drop skills by default: {}",
             background.len()
         );
+        assert!(chat.contains(grokhub_core::cabin_rules::LOOKUP_RULES));
+        assert!(!background.contains(grokhub_core::cabin_rules::LOOKUP_RULES));
         let chat_bytes = chat.len();
         let bg_bytes = background.len();
         let saved = chat_bytes.saturating_sub(bg_bytes);

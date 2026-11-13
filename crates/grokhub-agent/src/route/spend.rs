@@ -3,9 +3,8 @@
 //! Every candidate route has a cost class (`grokhub_core::model_registry::cost_class`).
 //! `included` routes are free to use. A Fast variant (`autonomous_premium`) is
 //! taken on Auto's own only while you wait and speed clearly matters
-//! ([`Latency`]), never for background, automation or proactive work, never
-//! with the Settings toggle off, and it falls back to the plain model when the
-//! week's budget is tight. A `premium` route needs your one-time click: a
+//! ([`Latency`]), never for background, automation or proactive work, and it
+//! falls back to the plain model when the week's budget is tight. A `premium` route needs your one-time click: a
 //! grant in the ConsentLedger (`premium:<model>`), which `harness::decide`
 //! asks for as hard class money. `extra_spend` has no path at all.
 //!
@@ -30,8 +29,6 @@ pub const PREMIUM_PREFIX: &str = "premium:";
 /// The cabin's spend settings. Only a Settings click changes them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpendSettings {
-    /// "Use Grok 4.7 Fast when you're waiting". On by default.
-    pub fast_when_waiting: bool,
     /// Weekly $ cap for an API key. 0 is no cap.
     pub weekly_cap_usd: f64,
     /// A key route over this $/M output price is premium.
@@ -41,7 +38,6 @@ pub struct SpendSettings {
 impl Default for SpendSettings {
     fn default() -> Self {
         Self {
-            fast_when_waiting: true,
             weekly_cap_usd: 0.0,
             ceiling_usd_per_m: DEFAULT_CEILING_USD_PER_M,
         }
@@ -144,9 +140,6 @@ pub fn fast_verdict(spend: &Spend) -> Result<&'static str, &'static str> {
     if spend.background {
         return Err("fast:background");
     }
-    if !spend.settings.fast_when_waiting {
-        return Err("fast:off");
-    }
     let Some(rule) = spend.latency.rule() else {
         return Err("fast:not_waiting");
     };
@@ -207,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_only_when_you_wait_with_the_toggle_on_and_room_in_the_budget() {
+    fn fast_only_when_you_wait_and_there_is_room_in_the_budget() {
         assert_eq!(fast_verdict(&waiting()), Ok("fast:waiting"));
         assert_eq!(fast_verdict(&Spend::default()), Err("fast:not_waiting"));
         assert_eq!(
@@ -217,14 +210,6 @@ mod tests {
             }),
             Err("fast:background")
         );
-        let off = Spend {
-            settings: SpendSettings {
-                fast_when_waiting: false,
-                ..SpendSettings::default()
-            },
-            ..waiting()
-        };
-        assert_eq!(fast_verdict(&off), Err("fast:off"));
         assert_eq!(
             fast_verdict(&Spend {
                 budget_tight: true,

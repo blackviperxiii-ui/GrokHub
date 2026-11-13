@@ -1,4 +1,4 @@
-//! Streamable HTTP and legacy SSE. Synchronous `ureq` only.
+//! Streamable HTTP and legacy SSE. Synchronous, on the `grokhub_core::http` facade.
 //!
 //! Requests send the `Authorization` header the caller hands in: the one on
 //! the server entry (`headers.Authorization`, `bearerToken` / `bearer_token`,
@@ -7,7 +7,7 @@
 //! as an `HTTP 401` error ([`is_unauthorized`]) so the caller can refresh or
 //! ask for a sign-in.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -17,7 +17,11 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::rpc::{self, RawTool};
+use grokhub_core::http;
+
+use super::headers::{self, ParamHeader};
+use super::rpc::{self, Era, RawTool};
+use super::stdio::{read_line_capped, MESSAGE_CAP};
 use crate::harness::egress_dest;
 
 const USER_AGENT: &str = concat!("GrokHub/", env!("CARGO_PKG_VERSION"));
@@ -39,13 +43,39 @@ struct Posted {
     body: Body,
 }
 
+/// A POST that got no 2xx: the status and body, or a transport failure.
+enum PostErr {
+    Status(u16, String),
+    Transport(String),
+}
+
+impl PostErr {
+    fn text(&self) -> String {
+        match self {
+            Self::Status(code, body) if body.is_empty() => format!("HTTP {code}"),
+            Self::Status(code, body) => format!("HTTP {code}: {body}"),
+            Self::Transport(err) => err.clone(),
+        }
+    }
+}
+
 pub(crate) struct HttpConn {
     server: String,
-    agent: ureq::Agent,
+    agent: http::Agent,
     /// Message URL. Legacy SSE replaces this with the `endpoint` event.
     post_url: String,
     headers: BTreeMap<String, String>,
     session_id: Option<String>,
+    /// The negotiated revision, sent as `MCP-Protocol-Version` on every request
+    /// after `initialize`. `None` until then. In the stateless era it is set
+    /// from the probe and also rides in every request's `_meta`.
+    protocol: Option<&'static str>,
+    /// Stateless era: no `Mcp-Session-Id`, `Mcp-Method` / `Mcp-Name` on each POST.
+    stateless: bool,
+    /// Stateless era: each tool's `x-mcp-header` annotations from `tools/list`.
+    param_headers: HashMap<String, Vec<ParamHeader>>,
+    /// How long the last `tools/list` may be reused (`ttlMs`); `None` keeps it.
+    pub(crate) list_ttl: Option<Duration>,
     next_id: u64,
     legacy: bool,
     legacy_rx: Option<Receiver<IoMsg>>,
@@ -73,6 +103,10 @@ pub(crate) fn connect(
         post_url: url.to_string(),
         headers: headers.clone(),
         session_id: None,
+        protocol: None,
+        stateless: false,
+        param_headers: HashMap::new(),
+        list_ttl: None,
         next_id: 0,
         legacy: sse,
         legacy_rx: None,
@@ -85,20 +119,40 @@ pub(crate) fn connect(
             guard_handshake(&conn.post_url)?;
         }
     }
-    let init = conn.roundtrip("initialize", rpc::initialize_params(), startup)?;
-    let _ = init;
-    conn.notify("notifications/initialized", json!({}))?;
+    // The deprecated HTTP+SSE transport is session era only.
+    let era = if sse {
+        Era::Session
+    } else {
+        conn.probe(startup)?
+    };
+    match era {
+        Era::Stateless(version) => {
+            conn.stateless = true;
+            conn.protocol = Some(version);
+        }
+        Era::Session => {
+            let init = conn.roundtrip("initialize", rpc::initialize_params(), startup)?;
+            conn.protocol = Some(rpc::negotiate(server, &init)?);
+            conn.notify("notifications/initialized", json!({}))?;
+        }
+    }
     let tools = list_tools(&mut conn, startup)?;
     Ok((conn, tools))
 }
 
 impl HttpConn {
+    /// Run tool `name`, sent once more when the answer never came and
+    /// `retry_safe` says a second run is harmless (`readOnlyHint` or
+    /// `idempotentHint`). The egress check runs once: a resend is the same
+    /// call, not a new one.
     pub(crate) fn call(
         &mut self,
         name: &str,
         args: &Value,
+        key: Option<&str>,
         timeout: Duration,
         stop: &dyn Fn() -> bool,
+        retry_safe: bool,
     ) -> Result<(String, bool), String> {
         // Tool args are chat, or personal when they carry a recall-pack line.
         // A hard Send waits on the cabin's card; Deny sends nothing.
@@ -106,17 +160,93 @@ impl HttpConn {
         let req = crate::harness::EgressReq::new(&self.post_url, data);
         let tool = format!("mcp:{}", self.server);
         crate::harness::guard_or_park(&crate::perm::config_dir(), &req, &tool, &mut || stop())?;
+        match self.send_call(name, args, key, timeout) {
+            Err(err) if retry_safe && super::idem::maybe_ran(&err) && !stop() => {
+                self.send_call(name, args, key, timeout)
+            }
+            other => other,
+        }
+    }
+
+    fn send_call(
+        &mut self,
+        name: &str,
+        args: &Value,
+        key: Option<&str>,
+        timeout: Duration,
+    ) -> Result<(String, bool), String> {
+        if self.stateless {
+            let server = self.server.clone();
+            return rpc::call_tool(&server, name, args, &mut |params| {
+                self.roundtrip("tools/call", rpc::with_key(params, key), timeout)
+            });
+        }
         let result = self.roundtrip(
             "tools/call",
-            json!({"name": name, "arguments": args}),
+            rpc::with_key(json!({"name": name, "arguments": args}), key),
             timeout,
         )?;
         Ok(rpc::tool_output(&result))
     }
 
+    /// `ping` in the session era; the stateless era dropped it, so `server/discover`.
     pub(crate) fn ping(&mut self, timeout: Duration) -> Result<(), String> {
         guard_handshake(&self.post_url)?;
-        self.roundtrip("ping", json!({}), timeout).map(|_| ())
+        let method = if self.stateless {
+            "server/discover"
+        } else {
+            "ping"
+        };
+        self.roundtrip(method, json!({}), timeout).map(|_| ())
+    }
+
+    /// POST `server/discover` as a stateless-era request and read the era
+    /// from the answer (Streamable HTTP "Backward Compatibility", MCP
+    /// 2026-07-28). A 4xx other than 401 / 403 is read by its body: a reserved
+    /// modern error keeps the stateless era, anything else falls back to
+    /// `initialize`. 401, 403, 5xx and transport errors end the connect, so a
+    /// sign-in still starts. A session id the probe got is not kept.
+    fn probe(&mut self, timeout: Duration) -> Result<Era, String> {
+        self.next_id = self.next_id.saturating_add(1);
+        let id = self.next_id;
+        let body = rpc::request(
+            id,
+            "server/discover",
+            rpc::with_meta(json!({}), rpc::STATELESS),
+        );
+        let mut extra = vec![(
+            "MCP-Protocol-Version".to_string(),
+            rpc::STATELESS.to_string(),
+        )];
+        extra.extend(headers::standard(&body));
+        let posted = post_value(
+            &self.agent,
+            &self.post_url,
+            &self.headers,
+            &extra,
+            &body,
+            timeout,
+        );
+        let reply = match posted {
+            Ok(Posted { body, .. }) => match body {
+                Body::Json(msg) => Some(msg),
+                Body::Empty => None,
+                Body::Stream(reader) => {
+                    let (tx, rx) = mpsc::channel();
+                    let _reader = thread_reader(reader, tx, self.stop.clone());
+                    Some(self.wait_rx(id, &rx, timeout)?)
+                }
+            },
+            Err(PostErr::Status(code, body))
+                if (400..500).contains(&code) && code != 401 && code != 403 =>
+            {
+                serde_json::from_str::<Value>(body.trim()).ok()
+            }
+            Err(err) => return Err(stopped(&self.server, &err.text())),
+        };
+        let reply = reply
+            .filter(|msg| rpc::id_matches(msg, id) || msg.get("id").is_none_or(Value::is_null));
+        rpc::pick_era(&self.server, reply.as_ref())
     }
 
     fn notify(&mut self, method: &str, params: Value) -> Result<(), String> {
@@ -134,33 +264,37 @@ impl HttpConn {
     ) -> Result<Value, String> {
         self.next_id = self.next_id.saturating_add(1);
         let id = self.next_id;
+        let params = match (self.stateless, self.protocol) {
+            (true, Some(version)) => rpc::with_meta(params, version),
+            _ => params,
+        };
         let posted = self.exchange(&rpc::request(id, method, params), timeout)?;
-        match posted {
+        let msg = match posted {
+            Body::Json(msg) if rpc::id_matches(&msg, id) => msg,
             Body::Json(msg) => {
-                if rpc::id_matches(&msg, id) {
-                    return take_result(&msg);
-                }
                 if let Some(reply) = super::elicit::answer_elicitation(&self.server, &msg) {
                     self.exchange(&reply, timeout)?;
                 }
-                Err(format!("MCP server `{}` stopped", self.server))
+                return Err(format!("MCP server `{}` stopped", self.server));
             }
             Body::Empty => {
                 if self.legacy {
-                    self.wait_legacy(id, timeout)
+                    self.wait_legacy(id, timeout)?
                 } else {
-                    Err(format!("MCP server `{}` stopped", self.server))
+                    return Err(format!("MCP server `{}` stopped", self.server));
                 }
             }
             Body::Stream(reader) => {
                 let (tx, rx) = mpsc::channel();
                 let stop = self.stop.clone();
                 let _reader = thread_reader(reader, tx, stop);
-                self.wait_rx(id, &rx, timeout)
+                self.wait_rx(id, &rx, timeout)?
             }
-        }
+        };
+        take_result(&msg)
     }
 
+    /// The reply message for `id` from the legacy SSE stream.
     fn wait_legacy(&mut self, id: u64, timeout: Duration) -> Result<Value, String> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -178,7 +312,7 @@ impl HttpConn {
             match msg {
                 Ok(IoMsg::Msg(msg)) => {
                     if rpc::id_matches(&msg, id) {
-                        return take_result(&msg);
+                        return Ok(msg);
                     }
                     if let Some(reply) = super::elicit::answer_elicitation(&self.server, &msg) {
                         let _ = self.exchange(&reply, left);
@@ -204,6 +338,7 @@ impl HttpConn {
         }
     }
 
+    /// The reply message for `id` from one POST's SSE stream.
     fn wait_rx(
         &mut self,
         id: u64,
@@ -219,7 +354,7 @@ impl HttpConn {
             match rx.recv_timeout(left.min(Duration::from_millis(200))) {
                 Ok(IoMsg::Msg(msg)) => {
                     if rpc::id_matches(&msg, id) {
-                        return take_result(&msg);
+                        return Ok(msg);
                     }
                     if let Some(reply) = super::elicit::answer_elicitation(&self.server, &msg) {
                         let _ = self.exchange(&reply, left);
@@ -248,32 +383,53 @@ impl HttpConn {
     }
 
     fn exchange(&mut self, body: &Value, timeout: Duration) -> Result<Body, String> {
+        let extra = self.protocol_headers(body);
         let posted = post_value(
             &self.agent,
             &self.post_url,
             &self.headers,
-            self.session_id.as_deref(),
+            &extra,
             body,
             timeout,
         )
-        .map_err(|err| stopped(&self.server, &err))?;
+        .map_err(|err| stopped(&self.server, &err.text()))?;
         if let Some(sid) = posted.session {
-            if self.session_id.is_none() {
+            if self.session_id.is_none() && !self.stateless {
                 self.session_id = Some(sid);
             }
         }
         Ok(posted.body)
     }
 
+    /// Session era: `Mcp-Session-Id` (once the server gave one) and the
+    /// negotiated `MCP-Protocol-Version`. Stateless era: the version, then
+    /// `Mcp-Method`, `Mcp-Name` and a tool's `Mcp-Param-*` headers; never a
+    /// session id.
+    fn protocol_headers(&self, body: &Value) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if let (Some(sid), false) = (&self.session_id, self.stateless) {
+            out.push(("Mcp-Session-Id".to_string(), sid.clone()));
+        }
+        if let Some(version) = self.protocol {
+            out.push(("MCP-Protocol-Version".to_string(), version.to_string()));
+        }
+        if self.stateless {
+            out.extend(headers::standard(body));
+            if body.get("method").and_then(Value::as_str) == Some("tools/call") {
+                let tool = body.pointer("/params/name").and_then(Value::as_str);
+                if let Some(wanted) = tool.and_then(|name| self.param_headers.get(name)) {
+                    let args = body.pointer("/params/arguments").unwrap_or(&Value::Null);
+                    out.extend(headers::param_values(wanted, args));
+                }
+            }
+        }
+        out
+    }
+
     fn open_legacy(&mut self, timeout: Duration) -> Result<(), String> {
         let base = self.post_url.clone();
-        let resp = open_get(
-            &self.agent,
-            &base,
-            &self.headers,
-            self.session_id.as_deref(),
-        )
-        .map_err(|err| stopped(&self.server, &err))?;
+        let resp = open_get(&self.agent, &base, &self.headers)
+            .map_err(|err| stopped(&self.server, &err))?;
         let (tx, rx) = mpsc::channel();
         let stop = self.stop.clone();
         self.reader = Some(thread_reader(resp.into_reader(), tx, stop));
@@ -321,17 +477,48 @@ pub(super) fn guard_handshake(url: &str) -> Result<(), String> {
     )
 }
 
+/// List the server's tools again, after its `ttlMs` ran out.
+pub(crate) fn relist(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
+    list_tools(conn, timeout)
+}
+
 fn list_tools(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
+    let mut all = list_pages(conn, timeout)?;
+    rpc::sort_tools(&mut all);
+    Ok(all)
+}
+
+fn list_pages(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
     let mut all = Vec::new();
     let mut cursor: Option<String> = None;
+    conn.list_ttl = None;
+    conn.param_headers.clear();
     for _ in 0..100 {
         let mut params = json!({});
         if let Some(token) = &cursor {
             params["cursor"] = json!(token);
         }
-        let result = conn.roundtrip("tools/list", params, timeout)?;
+        let mut result = conn.roundtrip("tools/list", params, timeout)?;
+        if conn.stateless {
+            result = rpc::complete(&conn.server, result)?;
+        }
+        if cursor.is_none() {
+            conn.list_ttl = rpc::list_ttl(&result);
+        }
         let (page, next) = rpc::parse_tools(&result);
-        all.extend(page);
+        for tool in page {
+            if conn.stateless {
+                // A tool with a bad `x-mcp-header` is left out; the rest still list.
+                match headers::param_headers(&tool.input_schema) {
+                    Ok(found) if found.is_empty() => {}
+                    Ok(found) => {
+                        conn.param_headers.insert(tool.name.clone(), found);
+                    }
+                    Err(_) => continue,
+                }
+            }
+            all.push(tool);
+        }
         match next {
             Some(token) => cursor = Some(token),
             None => return Ok(all),
@@ -340,61 +527,68 @@ fn list_tools(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, St
     Ok(all)
 }
 
-pub(super) fn agent(read: Duration) -> ureq::Agent {
+/// Tests reach a loopback server under a `.test` name, so the guard sees a
+/// real (non-loopback) destination. Production resolves as usual.
+#[cfg(test)]
+const RESOLVE: Option<http::Resolve> = Some(tests::resolve_test_host);
+#[cfg(not(test))]
+const RESOLVE: Option<http::Resolve> = None;
+
+pub(super) fn agent(read: Duration) -> http::Agent {
     let read = if read.is_zero() {
         Duration::from_secs(60)
     } else {
         read
     };
-    let builder = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(3600).max(read))
-        .timeout_write(Duration::from_secs(30))
-        .redirects(0);
-    // Tests reach a loopback server under a `.test` name, so the guard sees a
-    // real (non-loopback) destination. Production resolves as usual.
-    #[cfg(test)]
-    let builder = builder.resolver(tests::resolve_test_host);
-    builder.build()
+    http::agent(http::Opts {
+        connect: Duration::from_secs(10),
+        read: Some(Duration::from_secs(3600).max(read)),
+        write: Some(Duration::from_secs(30)),
+        redirects: 0,
+        resolve: RESOLVE,
+        ..Default::default()
+    })
 }
 
+/// The legacy SSE stream opens before `initialize`: no session or version yet.
 fn open_get(
-    agent: &ureq::Agent,
+    agent: &http::Agent,
     url: &str,
     headers: &BTreeMap<String, String>,
-    session: Option<&str>,
-) -> Result<ureq::Response, String> {
-    let mut req = agent.get(url);
-    req = apply_headers(req, headers, session);
-    req = req.set("Accept", "text/event-stream");
-    req = req.set("MCP-Protocol-Version", rpc::PROTOCOL);
+) -> Result<http::Response, String> {
+    let mut req = agent.get(url).any_status();
+    req = apply_headers(req, headers, &[]);
+    req = req.header("Accept", "text/event-stream");
     match req.call() {
+        Ok(resp) if resp.status() >= 400 => Err(http_err(resp)),
         Ok(resp) => Ok(resp),
-        Err(ureq::Error::Status(code, resp)) => Err(http_err(code, resp)),
-        Err(ureq::Error::Transport(err)) => Err(err.to_string()),
+        Err(err) => Err(err.to_string()),
     }
 }
 
 fn post_value(
-    agent: &ureq::Agent,
+    agent: &http::Agent,
     url: &str,
     headers: &BTreeMap<String, String>,
-    session: Option<&str>,
+    extra: &[(String, String)],
     body: &Value,
     timeout: Duration,
-) -> Result<Posted, String> {
-    let text = serde_json::to_string(body).map_err(|err| err.to_string())?;
-    let mut req = agent.post(url);
-    req = apply_headers(req, headers, session);
+) -> Result<Posted, PostErr> {
+    let text = serde_json::to_string(body).map_err(|err| PostErr::Transport(err.to_string()))?;
+    let mut req = agent.post(url).any_status();
+    req = apply_headers(req, headers, extra);
     req = req
-        .set("Content-Type", "application/json")
-        .set("Accept", "application/json, text/event-stream")
-        .set("MCP-Protocol-Version", rpc::PROTOCOL)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
         .timeout(timeout.max(Duration::from_secs(1)));
     let resp = match req.send_string(&text) {
+        Ok(resp) if resp.status() >= 400 => {
+            let code = resp.status();
+            let body = resp.into_string().unwrap_or_default();
+            return Err(PostErr::Status(code, body.trim().to_string()));
+        }
         Ok(resp) => resp,
-        Err(ureq::Error::Status(code, resp)) => return Err(http_err(code, resp)),
-        Err(ureq::Error::Transport(err)) => return Err(err.to_string()),
+        Err(err) => return Err(PostErr::Transport(err.to_string())),
     };
     let session = resp.header("mcp-session-id").map(str::to_string);
     let ctype = resp.content_type().to_ascii_lowercase();
@@ -412,25 +606,28 @@ fn post_value(
             body: Body::Empty,
         });
     }
-    let msg = serde_json::from_str(trimmed).map_err(|err| err.to_string())?;
+    let msg = serde_json::from_str(trimmed).map_err(|err| PostErr::Transport(err.to_string()))?;
     Ok(Posted {
         session,
         body: Body::Json(msg),
     })
 }
 
-/// User headers from the server entry (with the sign-in's bearer, if any), then the session id.
+/// User headers from the server entry (with the sign-in's bearer, if any),
+/// then the protocol's own ([`HttpConn::protocol_headers`]), which win over a
+/// same-named user header. Before `initialize` answers there is no version
+/// yet, so none is sent.
 fn apply_headers(
-    mut req: ureq::Request,
+    mut req: http::Request,
     headers: &BTreeMap<String, String>,
-    session: Option<&str>,
-) -> ureq::Request {
-    req = req.set("User-Agent", USER_AGENT);
+    extra: &[(String, String)],
+) -> http::Request {
+    req = req.header("User-Agent", USER_AGENT);
     for (key, value) in headers {
-        req = req.set(key, value);
+        req = req.header(key, value);
     }
-    if let Some(sid) = session {
-        req = req.set("Mcp-Session-Id", sid);
+    for (key, value) in extra {
+        req = req.header(key, value);
     }
     req
 }
@@ -440,7 +637,9 @@ pub(super) fn is_unauthorized(err: &str) -> bool {
     err.contains("HTTP 401")
 }
 
-fn http_err(code: u16, resp: ureq::Response) -> String {
+/// A 4xx/5xx answer (sent with `any_status`) as `HTTP {code}[: body]`.
+fn http_err(resp: http::Response) -> String {
+    let code = resp.status();
     let body = resp.into_string().unwrap_or_default();
     let body = body.trim();
     if body.is_empty() {
@@ -519,15 +718,12 @@ fn read_sse(reader: &mut impl BufRead) -> Result<Option<(String, String)>, Strin
     let mut data = String::new();
     loop {
         let mut line = String::new();
-        let n = reader.read_line(&mut line).map_err(|err| err.to_string())?;
+        let n = read_line_capped(reader, &mut line, MESSAGE_CAP)?;
         if n == 0 {
             if data.is_empty() && event.is_empty() {
                 return Ok(None);
             }
             break;
-        }
-        if line.len() > 8 * 1024 * 1024 {
-            return Err("message too large".into());
         }
         let line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
@@ -543,10 +739,14 @@ fn read_sse(reader: &mut impl BufRead) -> Result<Option<(String, String)>, Strin
         if let Some(rest) = line.strip_prefix("event:") {
             event = rest.trim().to_string();
         } else if let Some(rest) = line.strip_prefix("data:") {
+            let rest = rest.trim_start();
+            if data.len() + rest.len() + 1 > MESSAGE_CAP {
+                return Err("message too large".into());
+            }
             if !data.is_empty() {
                 data.push('\n');
             }
-            data.push_str(rest.trim_start());
+            data.push_str(rest);
         }
     }
     Ok(Some((event, data)))
@@ -559,7 +759,7 @@ fn http_origin(url: &str) -> Option<String> {
         .strip_prefix("https://")
         .map(|rest| ("https", rest))
         .or_else(|| url.strip_prefix("http://").map(|rest| ("http", rest)))?;
-    let authority = rest.split(['/', '?', '#']).next()?.trim();
+    let authority = rest.split(['/', '\\', '?', '#']).next()?.trim();
     if authority.is_empty() {
         return None;
     }
@@ -621,29 +821,72 @@ pub(crate) mod tests {
         netloc.to_socket_addrs().map(|a| a.collect())
     }
 
-    /// A Streamable HTTP MCP server that counts every request and each `tools/call`.
+    /// One request the mock saw: its JSON-RPC body and the MCP headers.
+    #[derive(Debug, Clone, Default)]
+    struct Req {
+        method: String,
+        protocol: Option<String>,
+        session: Option<String>,
+        mcp_method: Option<String>,
+        mcp_name: Option<String>,
+        /// `Mcp-Param-*` headers, names lowercased.
+        params: Vec<(String, String)>,
+        body: Value,
+    }
+
+    type Seen = Arc<std::sync::Mutex<Vec<Req>>>;
+
+    /// How the mock answers.
+    #[derive(Clone)]
+    enum Mode {
+        /// Session era: `initialize` answers this version; a request before it
+        /// gets the plain-text 400 older SDKs send.
+        Session(&'static str),
+        /// MCP 2026-07-28 only: `server/discover`, `_meta` on every request.
+        Stateless,
+        /// Every request gets this status and body.
+        Refuse(u16, &'static str),
+        /// Stateless, but `tools/list` adds tools with these schemas.
+        StatelessTools(Value),
+        /// Stateless, and the first `tools/call` gets its connection closed
+        /// with no answer.
+        DropFirstCall,
+    }
+
+    /// A Streamable HTTP MCP server that counts every request and each
+    /// `tools/call`, and records what it saw.
     struct Counting {
         port: u16,
         requests: Arc<AtomicUsize>,
         calls: Arc<AtomicUsize>,
+        seen: Seen,
         stop: Arc<AtomicBool>,
     }
 
     impl Counting {
         fn start() -> Self {
+            Self::answering(rpc::LATEST)
+        }
+
+        fn answering(version: &'static str) -> Self {
+            Self::with(Mode::Session(version))
+        }
+
+        fn with(mode: Mode) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
             let port = listener.local_addr().unwrap().port();
             let requests = Arc::new(AtomicUsize::new(0));
             let calls = Arc::new(AtomicUsize::new(0));
+            let seen = Seen::default();
             let stop = Arc::new(AtomicBool::new(false));
-            let (r, c, s) = (requests.clone(), calls.clone(), stop.clone());
+            let (r, c, w, s) = (requests.clone(), calls.clone(), seen.clone(), stop.clone());
             std::thread::spawn(move || {
                 while !s.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((sock, _)) => {
                             r.fetch_add(1, Ordering::SeqCst);
-                            answer(sock, &c);
+                            answer(sock, &c, &mode, &w);
                         }
                         Err(_) => std::thread::sleep(Duration::from_millis(5)),
                     }
@@ -653,6 +896,7 @@ pub(crate) mod tests {
                 port,
                 requests,
                 calls,
+                seen,
                 stop,
             }
         }
@@ -668,38 +912,120 @@ pub(crate) mod tests {
         }
     }
 
-    fn answer(mut sock: TcpStream, calls: &AtomicUsize) {
-        let _ = sock.set_nonblocking(false);
-        let _ = sock.set_read_timeout(Some(Duration::from_secs(3)));
-        let mut reader = BufReader::new(sock.try_clone().unwrap());
+    fn read_req(sock: &TcpStream) -> Option<Req> {
+        let mut reader = BufReader::new(sock.try_clone().ok()?);
         let mut len = 0usize;
+        let mut req = Req::default();
         loop {
             let mut line = String::new();
             if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                return;
+                return None;
             }
             let line = line.trim_end();
             if line.is_empty() {
                 break;
             }
-            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                len = v.trim().parse().unwrap_or(0);
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            let (name, value) = (name.trim().to_ascii_lowercase(), value.trim().to_string());
+            match name.as_str() {
+                "content-length" => len = value.parse().unwrap_or(0),
+                "mcp-protocol-version" => req.protocol = Some(value),
+                "mcp-session-id" => req.session = Some(value),
+                "mcp-method" => req.mcp_method = Some(value),
+                "mcp-name" => req.mcp_name = Some(value),
+                _ if name.starts_with("mcp-param-") => req.params.push((name, value)),
+                _ => {}
             }
         }
         let mut body = vec![0u8; len];
         let _ = reader.read_exact(&mut body);
-        let msg: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        let id = msg.get("id").cloned().unwrap_or(Value::Null);
-        let result = match msg["method"].as_str().unwrap_or("") {
+        req.body = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        req.method = req.body["method"].as_str().unwrap_or("").to_string();
+        Some(req)
+    }
+
+    fn reply(sock: &mut TcpStream, status: &str, ctype: &str, out: &str) {
+        let _ = write!(
+            sock,
+            "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nMcp-Session-Id: s-1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}",
+            out.len()
+        );
+    }
+
+    fn answer(mut sock: TcpStream, calls: &AtomicUsize, mode: &Mode, seen: &Seen) {
+        let _ = sock.set_nonblocking(false);
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(3)));
+        let Some(req) = read_req(&sock) else {
+            return;
+        };
+        seen.lock().unwrap().push(req.clone());
+        let id = req.body.get("id").cloned().unwrap_or(Value::Null);
+        let method = req.method.as_str();
+        let extra = match mode {
+            Mode::Refuse(code, body) => {
+                return reply(&mut sock, &format!("{code} Refused"), "text/plain", body);
+            }
+            Mode::Session(_) if method == "server/discover" => {
+                return reply(
+                    &mut sock,
+                    "400 Bad Request",
+                    "text/plain",
+                    "Bad Request: No valid session ID provided",
+                );
+            }
+            Mode::Session(_) => Value::Null,
+            Mode::Stateless => json!([]),
+            Mode::StatelessTools(tools) => tools.clone(),
+            Mode::DropFirstCall => json!([]),
+        };
+        let stateless = !extra.is_null();
+        let result = match method {
+            "initialize" if stateless => {
+                let err = json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "Method not found"}});
+                return reply(
+                    &mut sock,
+                    "404 Not Found",
+                    "application/json",
+                    &err.to_string(),
+                );
+            }
             "initialize" => {
-                json!({"protocolVersion": rpc::PROTOCOL, "capabilities": {}, "serverInfo": {"name": "count", "version": "0"}})
+                let Mode::Session(version) = mode else {
+                    return;
+                };
+                json!({"protocolVersion": version, "capabilities": {}, "serverInfo": {"name": "count", "version": "0"}})
+            }
+            "server/discover" => {
+                json!({"resultType": "complete", "supportedVersions": ["2026-07-28"], "capabilities": {"tools": {}}})
             }
             "tools/list" => {
-                json!({"tools": [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}]})
+                let mut tools = vec![
+                    json!({"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}),
+                ];
+                tools.extend(extra.as_array().cloned().unwrap_or_default());
+                json!({"tools": tools, "ttlMs": 60_000})
             }
             "tools/call" => {
-                calls.fetch_add(1, Ordering::SeqCst);
-                json!({"content": [{"type": "text", "text": "counted"}]})
+                let n = calls.fetch_add(1, Ordering::SeqCst);
+                if matches!(mode, Mode::DropFirstCall) && n == 0 {
+                    let _ = sock.shutdown(std::net::Shutdown::Both);
+                    return;
+                }
+                let asked = req.body.pointer("/params/arguments/ask").is_some();
+                let answered = req.body.pointer("/params/inputResponses").is_some();
+                if asked && !answered {
+                    json!({
+                        "resultType": "input_required",
+                        "inputRequests": {"note": {"method": "elicitation/create", "params": {"mode": "form", "message": "Need a value"}}},
+                        "requestState": "rs-1"
+                    })
+                } else if req.body.pointer("/params/arguments/odd").is_some() {
+                    json!({"resultType": "partial", "content": []})
+                } else {
+                    json!({"content": [{"type": "text", "text": "counted"}]})
+                }
             }
             _ => json!({}),
         };
@@ -713,11 +1039,7 @@ pub(crate) mod tests {
         } else {
             "200 OK"
         };
-        let _ = write!(
-            sock,
-            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nMcp-Session-Id: s-1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}",
-            out.len()
-        );
+        reply(&mut sock, status, "application/json", &out);
     }
 
     const MEMORY: &str = "the harbor ferry leaves at nine from pier four";
@@ -744,7 +1066,10 @@ pub(crate) mod tests {
         let server = Counting::start();
         let mut c = conn(&server);
         let handshake = server.requests.load(Ordering::SeqCst);
-        assert_eq!(handshake, 3, "initialize, initialized, tools/list");
+        assert_eq!(
+            handshake, 4,
+            "server/discover, initialize, initialized, tools/list"
+        );
         let log = hx::read_egress(&dir);
         assert_eq!(log.len(), 1, "one line for the handshake: {log:?}");
         assert_eq!(
@@ -756,7 +1081,14 @@ pub(crate) mod tests {
         let args = json!({"note": format!("remember: {MEMORY}")});
         let deny = hx::answer_next_park(dir.clone(), false);
         let err = c
-            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .call(
+                "echo",
+                &args,
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                false,
+            )
             .unwrap_err();
         let card = deny.join().unwrap().expect("a hard card was posted");
         assert_eq!((card.path.as_str(), card.class.as_str()), ("E", "send"));
@@ -772,7 +1104,14 @@ pub(crate) mod tests {
 
         let approve = hx::answer_next_park(dir.clone(), true);
         let (text, failed) = c
-            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .call(
+                "echo",
+                &args,
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                false,
+            )
             .unwrap();
         assert!(approve.join().unwrap().is_some());
         assert_eq!((text.as_str(), failed), ("counted", false));
@@ -811,7 +1150,7 @@ pub(crate) mod tests {
         // Nobody answers the card; Stop is already pressed.
         let started = std::time::Instant::now();
         let err = c
-            .call("echo", &args, Duration::from_secs(5), &|| true)
+            .call("echo", &args, None, Duration::from_secs(5), &|| true, false)
             .unwrap_err();
         assert!(
             started.elapsed() < Duration::from_secs(10),
@@ -860,6 +1199,86 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_backslash_cannot_hide_another_host_in_an_sse_endpoint() {
+        for (base, endpoint) in [
+            (
+                "http://mcp.evil.example/sse",
+                "http://127.0.0.1:6800\\@mcp.evil.example/jsonrpc",
+            ),
+            (
+                "http://mcp.evil.example/sse",
+                "http://127.0.0.1:6800\\@mcp.evil.example/../jsonrpc",
+            ),
+            (
+                "http://mcp.evil.example/sse",
+                "http://169.254.169.254\\@mcp.evil.example/x",
+            ),
+            (
+                "http://mcp.evil.example/sse",
+                "http://[::1]:6800\\@mcp.evil.example/x",
+            ),
+            (
+                "https://mcp.good.example/sse",
+                "https://collector.other.example\\@mcp.good.example/messages",
+            ),
+        ] {
+            assert_eq!(
+                resolve_endpoint(base, endpoint),
+                Err("MCP endpoint must stay on the same host".to_string()),
+                "{endpoint}"
+            );
+        }
+    }
+
+    /// Hands out `x` with no newline and counts the bytes it gave.
+    struct Flood {
+        left: usize,
+        pulled: usize,
+    }
+
+    impl Read for Flood {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = buf.len().min(self.left);
+            buf[..n].fill(b'x');
+            self.left -= n;
+            self.pulled += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn an_sse_line_with_no_newline_stops_at_the_message_cap() {
+        let mut reader = BufReader::with_capacity(
+            8192,
+            Flood {
+                left: 32 * 1024 * 1024,
+                pulled: 0,
+            },
+        );
+        assert_eq!(read_sse(&mut reader), Err("message too large".to_string()));
+        assert_eq!(reader.get_ref().pulled, 8 * 1024 * 1024 + 8192);
+    }
+
+    #[test]
+    fn sse_data_lines_that_add_up_past_the_message_cap_are_refused() {
+        let line = format!("data: {}\n", "x".repeat(1017));
+        assert_eq!(line.len(), 1024);
+        let stream = line.repeat(9 * 1024);
+        let mut reader = BufReader::new(stream.as_bytes());
+        let held = read_sse(&mut reader).map(|event| event.map(|(_, data)| data.len()));
+        assert_eq!(held, Err("message too large".to_string()));
+    }
+
+    #[test]
+    fn sse_data_lines_of_one_event_join_with_a_newline() {
+        let mut reader = BufReader::new("data: a\ndata: b\n\n".as_bytes());
+        assert_eq!(
+            read_sse(&mut reader),
+            Ok(Some((String::new(), "a\nb".to_string())))
+        );
+    }
+
+    #[test]
     fn mcp_chat_args_go_with_one_line_and_no_content() {
         let dir = hx::test_dir("mcp-chat");
         let _cfg = crate::perm::ConfigGuard::set(&dir);
@@ -867,7 +1286,14 @@ pub(crate) mod tests {
         let mut c = conn(&server);
         let args = json!({"q": "weather sk-abcdefghijklmnopqrstuv"});
         let (text, _) = c
-            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .call(
+                "echo",
+                &args,
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                false,
+            )
             .unwrap();
         assert_eq!(text, "counted");
         assert_eq!(server.calls.load(Ordering::SeqCst), 1);
@@ -885,6 +1311,393 @@ pub(crate) mod tests {
                 !text.contains("weather") && !text.contains("sk-abc") && !text.contains("/mcp"),
                 "{text}"
             );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn connect_to(server: &Counting) -> Result<(HttpConn, Vec<RawTool>), String> {
+        connect(
+            "box",
+            &server.url(),
+            false,
+            &BTreeMap::new(),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+    }
+
+    /// Each request's JSON-RPC method and its `MCP-Protocol-Version` header.
+    fn seen(server: &Counting) -> Vec<(String, Option<String>)> {
+        server
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| (r.method.clone(), r.protocol.clone()))
+            .collect()
+    }
+
+    fn reqs(server: &Counting) -> Vec<Req> {
+        server.seen.lock().unwrap().clone()
+    }
+
+    fn modern() -> Option<String> {
+        Some("2026-07-28".to_string())
+    }
+
+    #[test]
+    fn every_request_after_initialize_names_the_negotiated_version() {
+        let dir = hx::test_dir("mcp-version-new");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::answering("2025-11-25");
+        let (mut c, _) = connect_to(&server).unwrap();
+        assert_eq!(c.protocol, Some("2025-11-25"));
+        c.call(
+            "echo",
+            &json!({}),
+            None,
+            Duration::from_secs(5),
+            &|| false,
+            false,
+        )
+        .unwrap();
+        c.ping(Duration::from_secs(5)).unwrap();
+        let v = Some("2025-11-25".to_string());
+        assert_eq!(
+            seen(&server),
+            vec![
+                ("server/discover".to_string(), modern()),
+                ("initialize".to_string(), None),
+                ("notifications/initialized".to_string(), v.clone()),
+                ("tools/list".to_string(), v.clone()),
+                ("tools/call".to_string(), v.clone()),
+                ("ping".to_string(), v),
+            ]
+        );
+        // The probe's answer carried a session id too; only initialize's is kept.
+        let sessions: Vec<Option<String>> = reqs(&server).into_iter().map(|r| r.session).collect();
+        let s1 = Some("s-1".to_string());
+        assert_eq!(
+            sessions,
+            vec![None, None, s1.clone(), s1.clone(), s1.clone(), s1]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_older_server_gets_its_own_version_in_the_header() {
+        let dir = hx::test_dir("mcp-version-old");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::answering("2025-03-26");
+        let (mut c, tools) = connect_to(&server).unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(c.protocol, Some("2025-03-26"));
+        c.call(
+            "echo",
+            &json!({}),
+            None,
+            Duration::from_secs(5),
+            &|| false,
+            false,
+        )
+        .unwrap();
+        let headers: Vec<Option<String>> = seen(&server).into_iter().map(|(_, v)| v).collect();
+        let old = Some("2025-03-26".to_string());
+        assert_eq!(headers, vec![modern(), None, old.clone(), old.clone(), old]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_unknown_version_ends_the_connection_before_tools_list() {
+        let dir = hx::test_dir("mcp-version-unknown");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::answering("1999-01-01");
+        let err = connect_to(&server).err().unwrap();
+        assert_eq!(
+            err,
+            "MCP server `box` answered with MCP version 1999-01-01; this client speaks 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05"
+        );
+        assert_eq!(
+            seen(&server),
+            vec![
+                ("server/discover".to_string(), modern()),
+                ("initialize".to_string(), None)
+            ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn meta_version(req: &Req) -> Option<&str> {
+        req.body
+            .pointer("/params/_meta/io.modelcontextprotocol~1protocolVersion")
+            .and_then(Value::as_str)
+    }
+
+    #[test]
+    fn a_dropped_call_is_sent_again_only_when_the_tool_says_that_is_safe() {
+        let dir = hx::test_dir("mcp-drop-retry");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let call = |retry_safe: bool| {
+            let server = Counting::with(Mode::DropFirstCall);
+            let (mut c, _) = connect_to(&server).unwrap();
+            let out = c.call(
+                "echo",
+                &json!({"q": 1}),
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                retry_safe,
+            );
+            (out, server.calls.load(Ordering::SeqCst))
+        };
+        let (out, calls) = call(true);
+        assert_eq!(out.unwrap(), ("counted".to_string(), false));
+        assert_eq!(calls, 2, "a read-only or idempotent tool is sent once more");
+        let (out, calls) = call(false);
+        assert!(out.is_err(), "{out:?}");
+        assert_eq!(calls, 1, "a tool that may change things is never resent");
+    }
+
+    #[test]
+    fn a_stateless_server_gets_no_initialize_and_no_session_id() {
+        let dir = hx::test_dir("mcp-stateless");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::with(Mode::Stateless);
+        let (mut c, tools) = connect_to(&server).unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!((c.protocol, c.stateless), (Some("2026-07-28"), true));
+        let (text, failed) = c
+            .call(
+                "echo",
+                &json!({"q": 1}),
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                false,
+            )
+            .unwrap();
+        assert_eq!((text.as_str(), failed), ("counted", false));
+        c.ping(Duration::from_secs(5)).unwrap();
+        let seen = reqs(&server);
+        // (method, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Session-Id, _meta version)
+        type Row<'a> = (
+            &'a str,
+            Option<&'a str>,
+            Option<&'a str>,
+            Option<&'a str>,
+            Option<&'a str>,
+            Option<&'a str>,
+        );
+        let rows: Vec<Row> = seen
+            .iter()
+            .map(|r| {
+                (
+                    r.method.as_str(),
+                    r.protocol.as_deref(),
+                    r.mcp_method.as_deref(),
+                    r.mcp_name.as_deref(),
+                    r.session.as_deref(),
+                    meta_version(r),
+                )
+            })
+            .collect();
+        let v = Some("2026-07-28");
+        assert_eq!(
+            rows,
+            vec![
+                ("server/discover", v, Some("server/discover"), None, None, v),
+                ("tools/list", v, Some("tools/list"), None, None, v),
+                ("tools/call", v, Some("tools/call"), Some("echo"), None, v),
+                ("server/discover", v, Some("server/discover"), None, None, v),
+            ]
+        );
+        let meta = &seen[2].body["params"]["_meta"];
+        assert_eq!(
+            meta["io.modelcontextprotocol/clientCapabilities"],
+            json!({"elicitation": {"form": {}, "url": {}}})
+        );
+        assert_eq!(
+            meta["io.modelcontextprotocol/clientInfo"]["name"],
+            "GrokHub"
+        );
+        assert_eq!(seen[2].body["params"]["arguments"], json!({"q": 1}));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn tools_come_back_sorted_with_their_ttl_and_relist_asks_again() {
+        let dir = hx::test_dir("mcp-sorted-ttl");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::with(Mode::StatelessTools(json!([
+            {"name": "zeta", "inputSchema": {"type": "object"}},
+            {"name": "alpha", "inputSchema": {"type": "object"}}
+        ])));
+        let (mut c, tools) = connect_to(&server).unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "echo", "zeta"]);
+        assert_eq!(c.list_ttl, Some(Duration::from_secs(60)));
+        let before = server.requests.load(Ordering::SeqCst);
+        let again = relist(&mut c, Duration::from_secs(5)).unwrap();
+        assert_eq!(again.len(), 3);
+        assert!(server.requests.load(Ordering::SeqCst) > before);
+    }
+
+    #[test]
+    fn x_mcp_header_values_ride_as_param_headers_and_a_bad_tool_is_left_out() {
+        let dir = hx::test_dir("mcp-param-headers");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::with(Mode::StatelessTools(json!([
+            {"name": "execute_sql", "inputSchema": {"type": "object", "properties": {
+                "region": {"type": "string", "x-mcp-header": "Region"},
+                "query": {"type": "string"}
+            }}},
+            {"name": "bad", "inputSchema": {"type": "object", "properties": {
+                "tags": {"type": "array", "items": {"type": "string", "x-mcp-header": "Tag"}}
+            }}}
+        ])));
+        let (mut c, tools) = connect_to(&server).unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["echo", "execute_sql"]);
+        c.call(
+            "execute_sql",
+            &json!({"region": "us-west1", "query": "SELECT * FROM users"}),
+            None,
+            Duration::from_secs(5),
+            &|| false,
+            false,
+        )
+        .unwrap();
+        c.call(
+            "execute_sql",
+            &json!({"region": "Zürich"}),
+            None,
+            Duration::from_secs(5),
+            &|| false,
+            false,
+        )
+        .unwrap();
+        c.call(
+            "echo",
+            &json!({"region": "x"}),
+            None,
+            Duration::from_secs(5),
+            &|| false,
+            false,
+        )
+        .unwrap();
+        let params: Vec<Vec<(String, String)>> = reqs(&server)
+            .into_iter()
+            .filter(|r| r.method == "tools/call")
+            .map(|r| r.params)
+            .collect();
+        assert_eq!(
+            params,
+            vec![
+                vec![("mcp-param-region".to_string(), "us-west1".to_string())],
+                vec![(
+                    "mcp-param-region".to_string(),
+                    "=?base64?WsO8cmljaA==?=".to_string()
+                )],
+                vec![],
+            ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_input_required_result_is_answered_and_sent_again_with_the_request_state() {
+        let dir = hx::test_dir("mcp-mrtr");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::with(Mode::Stateless);
+        let (mut c, _) = connect_to(&server).unwrap();
+        // No elicit card on this thread: the question is declined, as unattended.
+        let (text, _) = c
+            .call(
+                "echo",
+                &json!({"ask": true}),
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                false,
+            )
+            .unwrap();
+        assert_eq!(text, "counted");
+        let calls: Vec<Value> = reqs(&server)
+            .into_iter()
+            .filter(|r| r.method == "tools/call")
+            .map(|r| r.body)
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["params"].get("inputResponses"), None);
+        assert_eq!(
+            calls[1]["params"]["inputResponses"],
+            json!({"note": {"action": "decline"}})
+        );
+        assert_eq!(calls[1]["params"]["requestState"], "rs-1");
+        assert_eq!(calls[1]["params"]["arguments"], json!({"ask": true}));
+        assert_ne!(calls[0]["id"], calls[1]["id"], "a retry is a new request");
+        let err = c
+            .call(
+                "echo",
+                &json!({"odd": 1}),
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                false,
+            )
+            .unwrap_err();
+        assert_eq!(err, "MCP server `box` sent a result of type partial");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_server_that_answers_neither_fails_after_one_initialize() {
+        let dir = hx::test_dir("mcp-neither");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::with(Mode::Refuse(404, "not here"));
+        let err = connect_to(&server).err().unwrap();
+        assert_eq!(err, "MCP server `box` stopped: HTTP 404: not here");
+        let methods: Vec<String> = seen(&server).into_iter().map(|(m, _)| m).collect();
+        assert_eq!(methods, vec!["server/discover", "initialize"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_401_on_the_probe_asks_for_sign_in_instead_of_falling_back() {
+        let dir = hx::test_dir("mcp-probe-401");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::with(Mode::Refuse(401, ""));
+        let err = connect_to(&server).err().unwrap();
+        assert_eq!(err, "MCP server `box` stopped: HTTP 401");
+        assert!(is_unauthorized(&err));
+        let methods: Vec<String> = seen(&server).into_iter().map(|(m, _)| m).collect();
+        assert_eq!(methods, vec!["server/discover"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_modern_error_on_the_probe_never_falls_back_to_initialize() {
+        let dir = hx::test_dir("mcp-probe-modern");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let unsupported = Counting::with(Mode::Refuse(
+            400,
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32022,"message":"Unsupported protocol version","data":{"supported":["2027-03-01"],"requested":"2026-07-28"}}}"#,
+        ));
+        assert_eq!(
+            connect_to(&unsupported).err().unwrap(),
+            "MCP server `box` speaks MCP versions 2027-03-01; this client speaks 2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05"
+        );
+        let mismatch = Counting::with(Mode::Refuse(
+            400,
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32020,"message":"Header mismatch"}}"#,
+        ));
+        assert_eq!(
+            connect_to(&mismatch).err().unwrap(),
+            "MCP server `box` refused the request: Header mismatch (-32020)"
+        );
+        for server in [&unsupported, &mismatch] {
+            let methods: Vec<String> = seen(server).into_iter().map(|(m, _)| m).collect();
+            assert_eq!(methods, vec!["server/discover"]);
         }
         let _ = std::fs::remove_dir_all(dir);
     }

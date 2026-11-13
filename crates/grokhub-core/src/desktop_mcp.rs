@@ -25,11 +25,17 @@ pub const CUA_MCP_RULE: &str = "MCPTool(grokhub-cua__*)";
 /// The cabin's own computer-use MCP servers. Both gate every call in the cabin.
 pub const CABIN_CU_SERVERS: &[&str] = &[DESKTOP_MCP_SERVER, CUA_MCP_SERVER];
 
-const PREFERRED_PROTOCOL: &str = "2025-06-18";
-const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+const PREFERRED_PROTOCOL: &str = PROTOCOLS[0];
+const PROTOCOLS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-pub const OFF_MSG: &str =
-    "Desktop control is off. Turn on Settings → Let Grok control the desktop.";
+/// Settings → Defaults: the desktop-control switch's label.
+pub static DESKTOP_CONTROL_ROW: std::sync::LazyLock<&'static str> =
+    std::sync::LazyLock::new(|| crate::brand::filled("Let {product} control the desktop"));
+pub static OFF_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    crate::brand::filled(
+        "Desktop control is off. Turn on Settings → Let {product} control the desktop.",
+    )
+});
 pub static HALT_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
     crate::brand::filled(
         "Desktop control was halted (Ctrl+Alt+H). Open {product} again to use the screen.",
@@ -216,6 +222,51 @@ pub fn fit_downscale(w: u32, h: u32) -> (u32, u32) {
 /// An equal stamp is not a halt (the server may have written nothing itself).
 pub fn stamp_halts(stamp_ms: u64, started_ms: u64) -> bool {
     stamp_ms > started_ms
+}
+
+/// The desktop halt stamp in the config dir (Stop, tray Halt, Halt everything).
+pub const HALT_STAMP_FILE: &str = "desktop-halt.stamp";
+
+/// The halt stamp under `config_dir`, if one was written.
+pub fn read_halt_stamp_in(config_dir: &std::path::Path) -> Option<u64> {
+    let text = std::fs::read_to_string(config_dir.join(HALT_STAMP_FILE)).ok()?;
+    text.trim().parse().ok()
+}
+
+/// One stdio JSON-RPC line, `\r` dropped. A line over `cap` bytes is read to
+/// its end and refused, so one huge line can't exhaust memory.
+pub fn read_line_capped(
+    reader: &mut impl std::io::BufRead,
+    cap: usize,
+) -> Result<Option<String>, String> {
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let n = reader.read(&mut byte).map_err(|e| format!("stdin: {e}"))?;
+        if n == 0 {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+        if byte[0] == b'\r' {
+            continue;
+        }
+        if buf.len() >= cap {
+            loop {
+                let n = reader.read(&mut byte).map_err(|e| format!("stdin: {e}"))?;
+                if n == 0 || byte[0] == b'\n' {
+                    break;
+                }
+            }
+            return Err("line longer than 1 MiB".into());
+        }
+        buf.push(byte[0]);
+    }
+    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -446,8 +497,9 @@ pub trait DesktopBackend {
         Err(TRASH_MSG.into())
     }
     /// Spike-2b: the accessible control at a screen point, read-only. `None`
-    /// means unknown (no reader, a timeout, or no control there). The
-    /// default (Windows, fakes) is unknown: no UIA reader (D3).
+    /// means unknown (no reader, a timeout, or no control there). The live
+    /// backend reads AT-SPI on Linux and UI Automation on Windows; the default
+    /// (fakes, macOS) is unknown.
     fn target_at(&mut self, x: i32, y: i32) -> Option<ClickTarget> {
         let _ = (x, y);
         None
@@ -658,7 +710,7 @@ impl<B: DesktopBackend> DesktopServer<B> {
         };
         if !gate.enabled {
             self.backend.suspend_input();
-            return tool_fail(id, OFF_MSG, false);
+            return tool_fail(id, *OFF_MSG, false);
         }
         if gate.halted {
             self.backend.release_input();
@@ -2211,6 +2263,18 @@ mod tests {
     }
 
     #[test]
+    fn server_discover_is_method_not_found_so_new_clients_fall_back_to_initialize() {
+        // Session era only: a 2026-07-28 dual-era client probes with
+        // `server/discover` and takes any non-modern error as "initialize".
+        let mut s = server();
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}"#;
+        let v = reply_of(&s.handle_line(line, on()));
+        assert_eq!(v["id"], 1);
+        assert_eq!(v["error"]["code"], -32601);
+        assert_eq!(v["error"]["message"], "Method not found");
+    }
+
+    #[test]
     fn initialize_negotiates_and_names_the_server() {
         let mut s = server();
         let line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#;
@@ -2234,8 +2298,14 @@ mod tests {
         );
         assert_eq!(
             reply_of(&unknown)["result"]["protocolVersion"],
-            "2025-06-18"
+            "2025-11-25"
         );
+        let newest = s.handle_line(
+            r#"{"jsonrpc":"2.0","id":6,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"t","version":"0"}}}"#,
+            on(),
+        );
+        assert_eq!(reply_of(&newest)["id"], 6);
+        assert_eq!(reply_of(&newest)["result"]["protocolVersion"], "2025-11-25");
         let bad = s.handle_line(
             r#"{"jsonrpc":"2.0","id":4,"method":"initialize","params":{}}"#,
             on(),
@@ -3181,7 +3251,7 @@ mod tests {
         );
         assert!(!off.ok);
         assert!(!off.exit);
-        assert_eq!(off.error.as_deref(), Some(OFF_MSG));
+        assert_eq!(off.error.as_deref(), Some(*OFF_MSG));
         assert_eq!(fake.suspended, 1);
         assert_eq!(fake.shots, 0);
 
@@ -3257,7 +3327,7 @@ mod tests {
         };
         let refused = call(&mut s, off, "open_app", json!({ "app": "firefox" }));
         assert_eq!(refused["isError"], true);
-        assert_eq!(refused["content"][0]["text"], OFF_MSG);
+        assert_eq!(refused["content"][0]["text"], *OFF_MSG);
         assert_eq!(
             s.backend_mut().log.len(),
             2,
@@ -3373,7 +3443,7 @@ mod tests {
             "set_window_geometry",
             json!({ "title": "notes", "x": 0, "y": 0, "width": 10, "height": 10 }),
         );
-        assert_eq!(off["content"][0]["text"], OFF_MSG);
+        assert_eq!(off["content"][0]["text"], *OFF_MSG);
         assert_eq!(
             s.backend_mut().window,
             Some(WindowGeom {
@@ -3440,7 +3510,7 @@ mod tests {
             "watch_events",
             json!({ "id": "w1" }),
         );
-        assert_eq!(off["content"][0]["text"], OFF_MSG);
+        assert_eq!(off["content"][0]["text"], *OFF_MSG);
         let stopped = call(&mut s, on(), "unwatch_path", json!({ "id": "w1" }));
         assert_eq!(
             stopped["content"][0]["text"],

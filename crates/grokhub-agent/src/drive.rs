@@ -55,6 +55,9 @@ pub struct Drive {
     unresolved_at: Vec<(String, usize)>,
     /// Ids completed (with proof) or cancelled at the last stop.
     resolved: Vec<String>,
+    /// The person said go on ("continue"): the checklist the earlier run
+    /// left open is this run's work, so it drives from the first stop.
+    resumed: bool,
 }
 
 impl Drive {
@@ -71,7 +74,23 @@ impl Drive {
             stalls: 0,
             unresolved_at: Vec::new(),
             resolved: Vec::new(),
+            resumed: false,
         }
+    }
+
+    /// A run for "continue" (or another go-on): the earlier run's open items
+    /// drive it even before it touches the list, so a reply that only says
+    /// what it will do next doesn't end the turn.
+    pub fn resumed(start: &[TodoItem]) -> Self {
+        Self {
+            resumed: true,
+            ..Self::new(start)
+        }
+    }
+
+    /// The run hasn't changed the list it found, and wasn't told to go on with it.
+    fn untouched(&self, now: &[TodoItem]) -> bool {
+        !self.resumed && now == self.start.as_slice()
     }
 
     /// `now` is the checklist as the model left it; `evidence` counts tool
@@ -85,7 +104,7 @@ impl Drive {
     /// the same rule [`Drive::check_with`] uses so an earlier checklist cannot
     /// take over the next ask.
     pub fn open_ids(&self, now: &[TodoItem]) -> Vec<String> {
-        if now == self.start.as_slice() {
+        if self.untouched(now) {
             return Vec::new();
         }
         now.iter()
@@ -97,7 +116,7 @@ impl Drive {
     /// [`Drive::check`] plus what the run still owes beyond its checklist
     /// ([`crate::checkpoint`]): an unchecked change, the Brief's done items, a backup.
     pub fn check_with(&mut self, now: &[TodoItem], evidence: usize, gaps: &Gaps) -> Verdict {
-        let untouched = now == self.start.as_slice();
+        let untouched = self.untouched(now);
         let open: Vec<&TodoItem> = if untouched {
             Vec::new()
         } else {
@@ -221,10 +240,27 @@ If {product} has no way to do it, mark it cancelled, say so once in plain words 
 /// The line a change request's reply gets when it claims the work is done
 /// but no tool ran this run: nothing backs the claim, so the turn says so.
 pub fn unbacked_done(reply: &str, evidence: usize) -> Option<&'static str> {
-    if evidence > 0 {
+    // A Finished recap sums up earlier turns' work, and the line would also
+    // break the recap card. A reply that says nothing needed doing claims
+    // no change at all.
+    if evidence > 0 || grokhub_core::recap::split_recap(reply).is_some() {
         return None;
     }
     let text = reply.to_lowercase();
+    if [
+        "no fix needed",
+        "no fix is needed",
+        "nothing to fix",
+        "no change needed",
+        "no changes needed",
+        "nothing needed",
+        "no action needed",
+    ]
+    .iter()
+    .any(|p| text.contains(p))
+    {
+        return None;
+    }
     let words: Vec<&str> = text
         .split(|c: char| !(c.is_alphanumeric() || c == '\''))
         .filter(|w| !w.is_empty())
@@ -307,6 +343,21 @@ mod tests {
             Drive::new(&[item("old", "completed")]).check(&[reused], 0),
             Verdict::Push("Marked completed without any check this run: \"firewall\". Run a check that shows each one before you finish.".into())
         );
+    }
+
+    #[test]
+    fn continue_picks_up_the_earlier_open_checklist_and_acts() {
+        let earlier = [item("a", "completed"), item("b", "pending")];
+        // The run only said what it would do: the open item sends it back.
+        assert_eq!(
+            Drive::resumed(&earlier).check(&earlier, 0),
+            Verdict::Push("Not done yet: \"check b\". Continue with the next open item. Mark an item completed only after a tool result shows it. If one is truly blocked (a hard approval was refused, hardware or access is missing, or every approach failed), mark it cancelled and say why.".into())
+        );
+        // Earlier work stays done, and finishing the rest ends the run.
+        let finished = [item("a", "completed"), item("b", "completed")];
+        let mut drive = Drive::resumed(&earlier);
+        assert!(matches!(drive.check(&earlier, 0), Verdict::Push(_)));
+        assert_eq!(drive.check(&finished, 1), Verdict::End);
     }
 
     #[test]
@@ -426,6 +477,14 @@ mod tests {
         );
         // "undone" is not "done".
         assert_eq!(unbacked_done("That change is undone.", 0), None);
+        // A Do all summary recaps earlier turns, and a no-op says nothing changed.
+        let recap = "All four fixes are through.\n\nFinished\n- Done: Restart stopped services\n- Done: Clear temp files";
+        assert!(grokhub_core::recap::split_recap(recap).is_some());
+        assert_eq!(unbacked_done(recap, 0), None);
+        assert_eq!(
+            unbacked_done("No fix needed: those warnings are harmless. Done.", 0),
+            None
+        );
     }
 
     #[test]

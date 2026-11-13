@@ -1,0 +1,60 @@
+{"text": "just made dinner, pasta again", "intent": "chat", "care": "casual"}
+{"text": "my dog stole a sock this morning", "intent": "chat", "care": "casual"}
+{"text": "finally friday", "intent": "chat", "care": "casual"}
+{"text": "that show ended on a cliffhanger, rude", "intent": "chat", "care": "casual"}
+{"text": "back from the store", "intent": "chat", "care": "casual"}
+{"text": "pretty chill day so far", "intent": "chat", "care": "casual"}
+{"text": "my brother got engaged last night", "intent": "chat", "care": "casual"}
+{"text": "sounds fair to me", "intent": "chat", "care": "casual"}
+{"text": "the weather here is so nice today", "intent": "chat", "care": "casual"}
+{"text": "had a great run this morning", "intent": "chat", "care": "casual"}
+{"text": "the meaning of carpe diem", "intent": "question", "care": "casual"}
+{"text": "cheese for cats, safe or not", "intent": "question", "care": "casual"}
+{"text": "the tallest mountain in africa", "intent": "question", "care": "casual"}
+{"text": "tomatoes, fruit or vegetable", "intent": "question", "care": "casual"}
+{"text": "the difference between weather and climate", "intent": "question", "care": "casual"}
+{"text": "honey and whether it ever expires", "intent": "question", "care": "casual"}
+{"text": "the speed of light in miles per second", "intent": "question", "care": "casual"}
+{"text": "the reason autumn leaves turn red", "intent": "question", "care": "casual"}
+{"text": "the fastest way to pick up a new language", "intent": "question", "care": "casual"}
+{"text": "post office hours on saturday", "intent": "question", "care": "casual"}
+{"text": "the thing from yesterday, the spreadsheet one", "intent": "task", "care": "careful"}
+{"text": "remind me to call the vet tomorrow", "intent": "task", "care": "careful"}
+{"text": "a to-do list for the move next month", "intent": "task", "care": "careful"}
+{"text": "need an email thanking my interviewer", "intent": "task", "care": "careful"}
+{"text": "gym session on my calendar monday 7am", "intent": "task", "care": "careful"}
+{"text": "a meal plan and shopping list for the week", "intent": "task", "care": "careful"}
+{"text": "my cover letter needs a stronger opening", "intent": "task", "care": "careful"}
+{"text": "the sales spreadsheet, grouped by region please", "intent": "task", "care": "careful"}
+{"text": "this email but in french", "intent": "task", "care": "careful"}
+{"text": "countdown for the pizza, 12 minutes", "intent": "task", "care": "careful"}
+{"text": "wipe the old usb stick", "intent": "task", "care": "critical"}
+{"text": "erase everything on the sd card", "intent": "task", "care": "critical"}
+{"text": "my bank statements from march, all of them", "intent": "task", "care": "critical"}
+{"text": "my earbuds drop audio every few seconds", "intent": "repair", "care": "critical"}
+{"text": "the wifi disconnects every night around ten", "intent": "repair", "care": "critical"}
+{"text": "speakers are silent even at full volume", "intent": "repair", "care": "critical"}
+{"text": "laptop is burning hot and the fan sounds like a jet", "intent": "repair", "care": "critical"}
+{"text": "my wireless mouse loses connection a lot", "intent": "repair", "care": "critical"}
+{"text": "the printer light flashes and nothing prints", "intent": "repair", "care": "critical"}
+{"text": "nobody can hear me on calls, my mic is silent", "intent": "repair", "care": "critical"}
+{"text": "pages take forever to load tonight", "intent": "repair", "care": "critical"}
+{"text": "the external display shows no signal", "intent": "repair", "care": "critical"}
+{"text": "videos pause every few seconds to load", "intent": "repair", "care": "critical"}
+{"text": "a limerick about my roommate's snoring", "intent": "creative", "care": "casual"}
+{"text": "something heartfelt to say at my best friend's wedding", "intent": "creative", "care": "casual"}
+{"text": "a punchy motto for my coffee shop", "intent": "creative", "care": "casual"}
+{"text": "a bedtime tale about a sleepy owl", "intent": "creative", "care": "casual"}
+{"text": "fun names for a pet hamster", "intent": "creative", "care": "casual"}
+{"text": "a sweet note for grandma's 90th birthday card", "intent": "creative", "care": "casual"}
+{"text": "a few bars about hating alarm clocks", "intent": "creative", "care": "casual"}
+{"text": "something witty to post with my beach pic", "intent": "creative", "care": "casual"}
+{"text": "a few words for my mom's retirement dinner", "intent": "creative", "care": "casual"}
+{"text": "induction vs gas stoves, the tradeoffs, cited", "intent": "research", "care": "careful"}
+{"text": "creatine benefits according to clinical trials", "intent": "research", "care": "careful"}
+{"text": "the full backstory of how the bicycle was invented, with references", "intent": "research", "care": "careful"}
+{"text": "best cheap headphones this year, reviewed", "intent": "research", "care": "careful"}
+{"text": "a survey of home battery storage options and prices", "intent": "research", "care": "careful"}
+{"text": "studies linking sleep and memory, summarized", "intent": "research", "care": "careful"}
+{"text": "highest rated air purifiers for allergies, with reviews", "intent": "research", "care": "careful"}
+{"text": "expert opinion on vitamin d supplements", "intent": "research", "care": "careful"}

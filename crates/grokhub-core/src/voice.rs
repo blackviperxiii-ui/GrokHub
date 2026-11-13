@@ -10,6 +10,8 @@ pub enum VoiceState {
     Idle,
     Ready,
     Listening,
+    /// The turn was heard; the reply is on its way.
+    Thinking,
     Speaking,
     Hands,
 }
@@ -35,7 +37,7 @@ pub enum HeyGrokRoute {
     None,
 }
 
-pub const DEFAULT_VOICE_MODEL: &str = "grok-voice-think-fast-2.0";
+pub const DEFAULT_VOICE_MODEL: &str = "grok-voice-3.0";
 /// xAI realtime `session.voice` and TTS `voice_id`. Cabin voice mode is Ara.
 pub const DEFAULT_VOICE: &str = "ara";
 /// TTS voices a personality's `voice_hint` can pick.
@@ -64,6 +66,7 @@ pub fn voice_mode_label(state: VoiceState) -> &'static str {
     match state {
         VoiceState::Idle | VoiceState::Ready | VoiceState::Hands => "Ready",
         VoiceState::Listening => "Listening",
+        VoiceState::Thinking => "Thinking",
         VoiceState::Speaking => "Speaking",
     }
 }
@@ -71,7 +74,9 @@ pub fn voice_mode_label(state: VoiceState) -> &'static str {
 /// Strip stays up while live. Ready auto-hides after [`VOICE_READY_HIDE_MS`].
 pub fn voice_strip_visible(state: VoiceState, ready_elapsed_ms: u64) -> bool {
     match state {
-        VoiceState::Listening | VoiceState::Speaking | VoiceState::Hands => true,
+        VoiceState::Listening | VoiceState::Thinking | VoiceState::Speaking | VoiceState::Hands => {
+            true
+        }
         VoiceState::Ready => ready_elapsed_ms < VOICE_READY_HIDE_MS,
         VoiceState::Idle => false,
     }
@@ -82,7 +87,8 @@ pub fn voice_state_after_ptt_stt(voice_on: bool, stt_ok: bool) -> VoiceState {
     match ptt_after_stt(voice_on, stt_ok) {
         PttLine::Leave => VoiceState::Idle,
         PttLine::Hold => VoiceState::Ready,
-        PttLine::Listen | PttLine::Chat => VoiceState::Listening,
+        PttLine::Listen => VoiceState::Listening,
+        PttLine::Chat => VoiceState::Thinking,
     }
 }
 
@@ -102,6 +108,10 @@ pub fn voice_session_url(model: &str) -> String {
     )
 }
 
+/// A quiet minute with nobody talking: voice mode pauses itself.
+pub const VOICE_PAUSED: &str =
+    "VOICE_RECEIPT: Voice paused after a quiet minute. Tap the mic to talk again.";
+
 pub fn is_voice_error(s: &str) -> bool {
     s.starts_with("VOICE_RECEIPT:")
 }
@@ -115,7 +125,9 @@ pub fn hey_grok_on_press(voice: VoiceState, hands_on: bool) -> HeyGrokAction {
     }
     match voice {
         VoiceState::Idle | VoiceState::Ready => HeyGrokAction::Start,
-        VoiceState::Listening | VoiceState::Speaking => HeyGrokAction::BargeIn,
+        VoiceState::Listening | VoiceState::Thinking | VoiceState::Speaking => {
+            HeyGrokAction::BargeIn
+        }
         VoiceState::Hands => HeyGrokAction::Halt,
     }
 }
@@ -213,6 +225,11 @@ pub fn hey_grok_route(has_api_key: bool, has_speech_auth: bool, has_local: bool)
         HeyGrokRoute::None
     }
 }
+
+/// Rides in front of a turn whose reply will be spoken aloud.
+pub const VOICE_TALK_STYLE: &str = "This reply will be spoken aloud. Open with one short \
+sentence that answers. Keep it brief and conversational, like talking across the room. \
+No lists, tables, headings, code, markdown or links; say numbers and times plainly.";
 
 /// TTS script for a chat complete. Thinking / `THINKING:` / protocol stay off the speaker.
 pub fn voice_tts_script(complete: &str) -> String {
@@ -560,7 +577,7 @@ mod tests {
             dedicated_voice_model("grok-3-mini-fast"),
             DEFAULT_VOICE_MODEL
         );
-        assert!(voice_session_url("").contains("grok-voice-think-fast-2.0"));
+        assert!(voice_session_url("").contains("grok-voice-3.0"));
         assert!(is_voice_error("VOICE_RECEIPT: arecord missing"));
         assert!(!is_voice_error("hey grok flash the pi"));
         assert_eq!(
@@ -680,6 +697,14 @@ mod tests {
         assert_eq!(voice_mode_label(VoiceState::Listening), "Listening");
         assert_eq!(voice_mode_label(VoiceState::Speaking), "Speaking");
         assert_eq!(voice_mode_label(VoiceState::Ready), "Ready");
+        assert_eq!(voice_mode_label(VoiceState::Thinking), "Thinking");
+        assert!(voice_strip_visible(VoiceState::Thinking, 5_000));
+        assert_eq!(
+            voice_state_after_ptt_stt(true, true),
+            VoiceState::Thinking,
+            "a heard turn shows Thinking until the reply speaks"
+        );
+        assert!(is_voice_error(VOICE_PAUSED));
         assert_eq!(
             hey_grok_on_press(VoiceState::Ready, false),
             HeyGrokAction::Start
@@ -691,7 +716,6 @@ mod tests {
         assert!(!voice_strip_visible(VoiceState::Ready, VOICE_READY_HIDE_MS));
         assert!(!voice_strip_visible(VoiceState::Idle, 0));
         assert_eq!(voice_state_after_ptt_stt(true, false), VoiceState::Ready);
-        assert_eq!(voice_state_after_ptt_stt(true, true), VoiceState::Listening);
         assert_eq!(voice_state_after_ptt_stt(false, false), VoiceState::Idle);
         let form = stt_multipart(b"RIFF", "grokhub-voice.wav", "bound");
         let s = String::from_utf8_lossy(&form);
@@ -701,10 +725,15 @@ mod tests {
 
     #[test]
     fn oauth_speech_and_api_key_realtime() {
-        assert_eq!(DEFAULT_VOICE_MODEL, "grok-voice-think-fast-2.0");
-        assert!(voice_session_url("").contains("grok-voice-think-fast-2.0"));
+        assert_eq!(DEFAULT_VOICE_MODEL, "grok-voice-3.0");
+        assert!(voice_session_url("").contains("grok-voice-3.0"));
         assert!(voice_session_url("grok-voice-latest").contains("grok-voice-latest"));
-        assert_eq!(dedicated_voice_model(""), "grok-voice-think-fast-2.0");
+        assert_eq!(dedicated_voice_model(""), "grok-voice-3.0");
+        assert_eq!(
+            dedicated_voice_model("grok-voice-think-fast-2.0"),
+            "grok-voice-think-fast-2.0",
+            "an explicit older voice model is kept"
+        );
         assert_eq!(hey_grok_route(true, true, false), HeyGrokRoute::PushToTalk);
         assert_eq!(hey_grok_route(true, false, false), HeyGrokRoute::PushToTalk);
         assert_eq!(hey_grok_route(false, true, false), HeyGrokRoute::PushToTalk);

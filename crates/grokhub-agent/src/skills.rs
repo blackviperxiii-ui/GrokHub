@@ -9,7 +9,7 @@
 //! QA / verify / follow-through). Same-name duplicates keep the winner; the walk
 //! order is sorted so the choice does not depend on directory iteration.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -213,7 +213,93 @@ fn discover_cache_key(
     keys
 }
 
+/// Skills switched off on the Skills tab are listed in `<skills dir>/.off`,
+/// one name per line. The dot name keeps it out of the skill walk and the
+/// discover cache key. Each fn takes the skills dir so the desktop app can
+/// pass its own (its tests pin a different config dir than this crate's).
+fn skills_off_file(skills_dir: &Path) -> PathBuf {
+    skills_dir.join(".off")
+}
+
+/// Names switched off, normalized the way the skill tool matches names
+/// ("Trim Clips" and "trim-clips" are one skill). A missing or unreadable
+/// file means every skill is on.
+pub fn skills_off_in(skills_dir: &Path) -> BTreeSet<String> {
+    fs::read_to_string(skills_off_file(skills_dir))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().starts_with('#'))
+        .map(normalize_name)
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// The key a skill name matches by, in the off list and the skill tool.
+pub fn skill_name_key(name: &str) -> String {
+    normalize_name(name)
+}
+
+/// Whether `name` is switched off in `skills_dir`.
+pub fn skill_is_off_in(skills_dir: &Path, name: &str) -> bool {
+    skills_off_in(skills_dir).contains(&normalize_name(name))
+}
+
+/// Switch a skill off (or back on). An off skill stays on disk and on the
+/// Skills tab, but chat never loads or matches it.
+pub fn set_skill_off_in(skills_dir: &Path, name: &str, off: bool) -> std::io::Result<()> {
+    let key = normalize_name(name);
+    if key.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "skill name is empty",
+        ));
+    }
+    let mut names = skills_off_in(skills_dir);
+    if off {
+        names.insert(key);
+    } else {
+        names.remove(&key);
+    }
+    fs::create_dir_all(skills_dir)?;
+    let mut body = String::new();
+    for n in &names {
+        body.push_str(n);
+        body.push('\n');
+    }
+    let path = skills_off_file(skills_dir);
+    let tmp = skills_dir.join(".off.tmp");
+    fs::write(&tmp, body)?;
+    fs::rename(&tmp, &path)
+}
+
 pub fn discover(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Skill> {
+    let mut skills = discover_all(workspace, home, plugin_dirs);
+    // A skill switched off on the Skills tab never loads. Checked past the
+    // cache so a switch takes hold on the next turn. Built-ins can't be off.
+    let off = skills_off_in(&cabin_skills_dir());
+    if !off.is_empty() {
+        skills.retain(|s| {
+            s.source == SkillSource::Builtin || !off.contains(&normalize_name(&s.name))
+        });
+    }
+    skills
+}
+
+/// Every skill chat could load, switched-off ones included, for a Skills page
+/// that lists an off skill so it can be switched back on.
+pub fn discover_all(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Skill> {
+    let mut skills = discover_cached(workspace, home, plugin_dirs);
+    // Dream lessons show only once a paired eval passed them as they stand
+    // (round 3 item 39). Checked past the cache so a pass shows at once.
+    skills.retain(|s| {
+        s.source != SkillSource::Cabin
+            || !s.name.eq_ignore_ascii_case(crate::dream_gate::LESSON_SKILL)
+            || crate::dream_gate::proven(&s.dir)
+    });
+    skills
+}
+
+fn discover_cached(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Skill> {
     let key = discover_cache_key(workspace, home, plugin_dirs);
     if let Ok(guard) = DISCOVER_CACHE.lock() {
         if let Some(cache) = guard.as_ref() {
@@ -876,6 +962,51 @@ mod tests {
             parse_skill("---\ndescription: no name\n---\nHello.\n", Some("Dir Name")).unwrap();
         assert_eq!(fallback.name, "dir-name");
         assert_eq!(fallback.description, "no name");
+    }
+
+    #[test]
+    fn a_skill_switched_off_is_not_discovered_until_it_is_back_on() {
+        let root = scratch("skills-off");
+        let repo = root.join("repo");
+        let home = root.join("home");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        let cfg = root.join("cfg");
+        fs::create_dir_all(&cfg).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        skill_md(
+            &cfg.join("skills/trim-clips"),
+            "---\nname: trim-clips\ndescription: Trim clips\n---\nTrim them.\n",
+        );
+        skill_md(
+            &repo.join(".grok/skills/notes"),
+            "---\nname: notes\ndescription: Notes\n---\nTake notes.\n",
+        );
+        let names =
+            |skills: Vec<Skill>| -> Vec<String> { skills.into_iter().map(|s| s.name).collect() };
+        assert!(names(discover(&repo, Some(&home), &[])).contains(&"trim-clips".to_string()));
+        set_skill_off_in(&cfg.join("skills"), "Trim Clips", true).unwrap();
+        set_skill_off_in(&cfg.join("skills"), "notes", true).unwrap();
+        assert!(skill_is_off_in(&cfg.join("skills"), "TRIM clips"));
+        let now = names(discover(&repo, Some(&home), &[]));
+        assert!(!now.contains(&"trim-clips".to_string()), "{now:?}");
+        assert!(!now.contains(&"notes".to_string()), "{now:?}");
+        let all = names(discover_all(&repo, Some(&home), &[]));
+        assert!(
+            all.contains(&"trim-clips".to_string()) && all.contains(&"notes".to_string()),
+            "the Skills page still lists an off skill so it can come back on: {all:?}"
+        );
+        let loaded = tool_run(&repo, &serde_json::json!({"name": "trim-clips"}));
+        assert!(
+            loaded.failed,
+            "an off skill can't be loaded: {}",
+            loaded.text
+        );
+        set_skill_off_in(&cfg.join("skills"), "trim-clips", false).unwrap();
+        let back = names(discover(&repo, Some(&home), &[]));
+        assert!(back.contains(&"trim-clips".to_string()), "{back:?}");
+        assert!(!back.contains(&"notes".to_string()), "{back:?}");
+        assert!(set_skill_off_in(&cfg.join("skills"), "  ", true).is_err());
     }
 
     #[test]

@@ -13,6 +13,10 @@
 //! a probe that needs admin is skipped with a note.
 
 mod apply;
+mod crash_ask;
+pub mod driver_update;
+mod drivers;
+mod fans;
 mod fix;
 mod interpret;
 mod probes;
@@ -26,8 +30,20 @@ use serde_json::{json, Value};
 use crate::harness::{self, AccessMode, ConsentLedger, GateOutcome, Origin, Scope, Span, Step};
 
 pub use apply::{
-    gb_prompt, step_ok, Action, ApplyCtx, ApplyRun, APPLY_TOOL, REPAIR_TOOL, RESTORE_TOOL,
-    STEP_FAILED, STEP_OK, UNATTENDED, UNDO_TOOL,
+    gb_prompt, step_ok, Action, ApplyCtx, ApplyRun, ChecklistLine, StepMark, APPLY_TOOL,
+    CHECK_LINE, REPAIR_TOOL, RESTORE_TOOL, STEP_FAILED, STEP_OK, UNATTENDED, UNDO_TOOL,
+};
+pub use crash_ask::{probes_for_named, program_in_ask};
+pub use drivers::{
+    apt_versions, candidate_spec, driver_plan, driver_rollback_plan, driver_updated,
+    driver_updates, installed_spec, is_driver_pkg, parse_candidate, parse_installed, rollback_cmd,
+    rollback_for, update_cmd, verify_driver, DriverBlock, DriverDoubt, DriverUpdate, Rollback,
+    VerifiedDriver, PACMAN_CACHE,
+};
+pub use fans::{
+    fan_backend, fans_at_full, fans_check, fans_restored, full_speed_plan, pwm_channels,
+    restore_fans_plan, save_fans, FanBackend, FanBlock, FanGoal, PwmChannel, SavedFan, HWMON_ROOT,
+    PWM_FULL, PWM_MANUAL,
 };
 pub(crate) use fix::repair_hit;
 pub use fix::{
@@ -35,12 +51,14 @@ pub use fix::{
     StepClass, FLOOR_GUIDANCE,
 };
 pub use interpret::{
-    interpret, Finding, ProbeOutput, Severity, DISK_CRIT_PCT, DISK_WARN_PCT, LOG_WARN_LINES,
-    MEM_WARN_PCT,
+    interpret, interpret_subject, pending_update_count, Finding, ProbeOutput, Severity,
+    DISK_CRIT_PCT, DISK_WARN_PCT, LOG_WARN_LINES, MEM_WARN_PCT,
 };
 pub use probes::{
-    on_path, probe_spec_with, read_only_violation, Os, PackageManager, ProbeId, ProbeSpec,
-    LINUX_PROBES, LOG_LINE_CAP, OUTPUT_CAP, PROBE_TIMEOUT, WINDOWS_PROBES,
+    on_path, probe_spec_with, read_only_violation, subject_probe_spec, windows_driver_titles_spec,
+    windows_update_titles_spec, Os, PackageManager, ProbeId, ProbeSpec, ProgramName, LINUX_PROBES,
+    LINUX_SUBJECT_PROBES, LOG_LINE_CAP, OUTPUT_CAP, PROBE_TIMEOUT, WINDOWS_PROBES,
+    WINDOWS_SUBJECT_PROBES,
 };
 pub use restore::{
     backup_dir, backup_files, detect_backends, restore_files, BackupEntry, FileBackup,
@@ -68,6 +86,8 @@ pub struct DiagnoseCtx<'a> {
     pub os: Os,
     pub has_bin: &'a dyn Fn(&str) -> bool,
     pub runner: &'a dyn Fn(&ProbeSpec) -> ProbeRun,
+    /// The program a card is about. Only with it do the crash probes run.
+    pub subject: Option<&'a ProgramName>,
 }
 
 /// The outcome of one diagnose run.
@@ -102,11 +122,18 @@ pub fn diagnose(ctx: &DiagnoseCtx<'_>, probes: &[ProbeId]) -> DiagnoseReport {
     } else {
         probes.to_vec()
     };
-    wanted.retain(|p| ProbeId::all(ctx.os).contains(p));
+    wanted.retain(|p| {
+        ProbeId::all(ctx.os).contains(p)
+            || (ctx.subject.is_some() && ProbeId::for_subject(ctx.os).contains(p))
+    });
     wanted.dedup();
     for id in wanted {
         let label = id.label();
-        let Some(spec) = probe_spec_with(id, ctx.os, ctx.has_bin) else {
+        let spec = match ctx.subject {
+            Some(name) if id.needs_subject() => subject_probe_spec(id, ctx.os, name),
+            _ => probe_spec_with(id, ctx.os, ctx.has_bin),
+        };
+        let Some(spec) = spec else {
             report.findings.push(note(
                 id,
                 format!("I couldn't check {label}: no supported tool for it is installed."),
@@ -167,7 +194,10 @@ pub fn diagnose(ctx: &DiagnoseCtx<'_>, probes: &[ProbeId]) -> DiagnoseReport {
                     stdout: redact_output(&stdout, id.is_log()),
                     stderr: redact_output(&stderr, id.is_log()),
                 };
-                let mut found = interpret(id, &out);
+                let mut found = match ctx.subject {
+                    Some(name) if id.needs_subject() => interpret_subject(id, &out, name.as_str()),
+                    _ => interpret(id, &out),
+                };
                 if found.is_empty() {
                     found.push(note(
                         id,
@@ -214,6 +244,12 @@ pub fn diagnose(ctx: &DiagnoseCtx<'_>, probes: &[ProbeId]) -> DiagnoseReport {
         .findings
         .sort_by_key(|f| std::cmp::Reverse(f.severity));
     report
+}
+
+/// Whether the user has granted `system_state`, so diagnose would run its
+/// probes instead of answering with [`SCOPE_ASK`].
+pub fn system_state_allowed(config_dir: &Path) -> bool {
+    decide_scope(&ConsentLedger::load(config_dir)).is_allow()
 }
 
 /// The scope check every diagnose run starts with.
@@ -344,6 +380,43 @@ fn names_code(lower: &str) -> bool {
             .is_some_and(|(stem, ext)| !stem.is_empty() && EXTS.contains(&ext));
         path || file
     })
+}
+
+/// In a chat opened from a card about one program: an ask to look into it,
+/// or one that names a crash, reads that program's crash history and the
+/// background services. `None` leaves the message to the usual paths.
+pub fn probes_for_subject(text: &str, os: Os) -> Option<Vec<ProbeId>> {
+    const LOOK: &[&str] = &[
+        "investigate",
+        "look into",
+        "looking into",
+        "look at it",
+        "check",
+        "dig into",
+        "find out",
+        "why",
+        "diagnose",
+        "what's wrong",
+        "what is wrong",
+        "crash",
+        "freez",
+        "keeps failing",
+        "keeps stopping",
+    ];
+    let lower = text.trim().to_lowercase().replace('\u{2019}', "'");
+    if lower.is_empty() || lower.len() > 160 || lower.starts_with('/') || names_code(&lower) {
+        return None;
+    }
+    if !LOOK.iter().any(|w| lower.contains(w)) {
+        return None;
+    }
+    let mut probes = ProbeId::for_subject(os).to_vec();
+    probes.push(if os == Os::Windows {
+        ProbeId::ServicesStoppedAuto
+    } else {
+        ProbeId::FailedServices
+    });
+    Some(probes)
 }
 
 /// Phrases that mean "check my computer". Some(probes) picks what to check;
@@ -510,6 +583,7 @@ pub(crate) fn tool_run(args: &Value) -> crate::tools::ToolOutput {
         os,
         has_bin: &on_path,
         runner: &run_spec,
+        subject: None,
     };
     let report = diagnose(&ctx, &probes);
     crate::tools::ToolOutput::ok(model_text(&report))

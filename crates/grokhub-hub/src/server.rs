@@ -90,18 +90,14 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     let method = req.method().clone();
     let url = req.url().to_string();
     let path = url_path(&url);
-    if method == Method::Options {
-        return send(req, 204, "text/plain", b"");
-    }
+    // No auth, so it says only that this is a hub: the computer's name is for paired callers.
     if method == Method::Get && (path == "/v1/health" || path == "/health") {
-        let name = lock(state).device_name.clone();
-        return send_json(
-            req,
-            200,
-            json!({ "ok": true, "kind": HUB_KIND, "name": name }),
-        );
+        return send_json(req, 200, json!({ "ok": true, "kind": HUB_KIND }));
     }
     if method == Method::Post && path == "/v1/pair" {
+        if from_web_page(&req) {
+            return reject_web_page(req);
+        }
         let body = match read_json(&mut req) {
             Ok(body) => body,
             Err(e) => return reject_body(req, e),
@@ -367,19 +363,27 @@ fn reject_body(req: Request, error: &str) -> Result<(), ()> {
     send_json(req, 400, json!({ "ok": false, "error": error }))
 }
 
-fn cors_headers() -> Vec<Header> {
-    [
-        ("access-control-allow-origin", "*"),
-        (
-            "access-control-allow-headers",
-            "authorization, content-type",
-        ),
-        ("access-control-allow-methods", "GET,POST,PUT,OPTIONS"),
-        ("cache-control", "no-store"),
-    ]
-    .into_iter()
-    .filter_map(|(k, v)| Header::from_bytes(k.as_bytes(), v.as_bytes()).ok())
-    .collect()
+/// A browser sends `Origin` with every POST a page makes; the app's own client never does.
+fn from_web_page(req: &Request) -> bool {
+    req.headers().iter().any(|h| h.field.equiv("Origin"))
+}
+
+/// The 403 for a pairing request a web page sent. Sent before the code is looked at, so a
+/// page cannot burn the code with wrong guesses.
+fn reject_web_page(req: Request) -> Result<(), ()> {
+    send_json(
+        req,
+        403,
+        json!({ "ok": false, "error": "Pairing is for the app on another computer, not a web page." }),
+    )
+}
+
+/// Every reply's headers. No `access-control-*`: no browser client exists for this API,
+/// so no web page is invited to read a reply.
+fn base_headers() -> Vec<Header> {
+    Header::from_bytes(&b"cache-control"[..], &b"no-store"[..])
+        .into_iter()
+        .collect()
 }
 
 fn send_json(req: Request, status: u16, body: impl Serialize) -> Result<(), ()> {
@@ -388,7 +392,7 @@ fn send_json(req: Request, status: u16, body: impl Serialize) -> Result<(), ()> 
 }
 
 fn send(req: Request, status: u16, ctype: &str, body: &[u8]) -> Result<(), ()> {
-    let mut headers = cors_headers();
+    let mut headers = base_headers();
     if let Ok(h) = Header::from_bytes(&b"content-type"[..], ctype.as_bytes()) {
         headers.push(h);
     }
@@ -462,6 +466,118 @@ mod tests {
         assert_eq!(frame["ok"], true);
         assert!(frame["frame"].is_object(), "{frame}");
         assert_eq!(hub_id, state.lock().unwrap().device_id);
+    }
+
+    /// No browser client exists for this API, so no reply invites a web page to read it.
+    #[test]
+    fn no_response_carries_access_control_headers() {
+        let (state, port) = hub();
+        let code = lock(&state).rotate_pair().code;
+        let origin = "Origin: https://evil.example\r\n";
+        let (status, head, _) = http(
+            port,
+            &format!("GET /v1/health HTTP/1.0\r\nHost: 127.0.0.1\r\n{origin}\r\n"),
+        );
+        assert_eq!(status, 200);
+        let head = head.to_ascii_lowercase();
+        assert!(!head.contains("access-control-"), "{head}");
+        assert!(head.contains("cache-control: no-store"), "{head}");
+
+        let (status, head, _) = http(
+            port,
+            &format!("GET /v1/status HTTP/1.0\r\nHost: 127.0.0.1\r\n{origin}\r\n"),
+        );
+        assert_eq!(status, 401);
+        assert!(
+            !head.to_ascii_lowercase().contains("access-control-"),
+            "{head}"
+        );
+
+        let body = format!(r#"{{"code":"{code}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#);
+        let (status, head, _) = http(
+            port,
+            &format!(
+                "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        assert_eq!(status, 200);
+        assert!(
+            !head.to_ascii_lowercase().contains("access-control-"),
+            "{head}"
+        );
+    }
+
+    #[test]
+    fn options_is_not_answered_204() {
+        let (_state, port) = hub();
+        let (status, head, body) = http(
+            port,
+            "OPTIONS /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nOrigin: https://evil.example\r\nAccess-Control-Request-Method: POST\r\n\r\n",
+        );
+        assert_eq!(status, 401, "{head}");
+        assert_eq!(
+            String::from_utf8_lossy(&body),
+            r#"{"error":"Pair this computer first (Settings → Devices).","ok":false}"#
+        );
+    }
+
+    #[test]
+    fn health_does_not_name_the_computer() {
+        let (state, port) = hub();
+        lock(&state).device_name = "study-pc".into();
+        for path in ["/v1/health", "/health"] {
+            let (status, _, body) = http(
+                port,
+                &format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n"),
+            );
+            assert_eq!(status, 200, "{path}");
+            assert_eq!(
+                String::from_utf8_lossy(&body),
+                r#"{"kind":"grokhub-hub-v1","ok":true}"#,
+                "{path}"
+            );
+        }
+    }
+
+    /// A web page's POST always carries `Origin`; the app's own client never does.
+    /// Refused before the code is looked at, so a page cannot burn it with wrong guesses.
+    #[test]
+    fn a_web_page_cannot_pair_or_burn_the_code() {
+        let (state, port) = hub();
+        let code = lock(&state).rotate_pair().code;
+        let from_page = |code: &str| {
+            let body = format!(r#"{{"code":"{code}","deviceId":"d-page","deviceName":"Laptop"}}"#);
+            http(
+                port,
+                &format!(
+                    "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nOrigin: https://evil.example\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+        for _ in 0..grokhub_core::pair::PAIR_MAX_TRIES {
+            let (status, _, body) = from_page("ZZZ-999");
+            assert_eq!(status, 403);
+            assert_eq!(
+                String::from_utf8_lossy(&body),
+                r#"{"error":"Pairing is for the app on another computer, not a web page.","ok":false}"#
+            );
+        }
+        assert_eq!(from_page(&code).0, 403);
+        assert!(lock(&state).peers.is_empty());
+        assert_eq!(lock(&state).pair.as_ref().map(|p| p.tries), Some(0));
+
+        // The other computer, with no Origin, still pairs with the same code.
+        let body = format!(r#"{{"code":"{code}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#);
+        let (status, _, _) = http(
+            port,
+            &format!(
+                "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        assert_eq!(status, 200);
     }
 
     /// The phone routes are gone. A paired caller gets the unknown-route 404 for each.

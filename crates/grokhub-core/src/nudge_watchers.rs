@@ -267,6 +267,50 @@ pub fn nudge_source_id(watcher: WatcherId, dedupe_key: &str) -> String {
     format!("{SOURCE_PREFIX}{}:{}", watcher.key(), dedupe_key.trim())
 }
 
+/// What a watcher found: its line, its numbers, and the program a crash card is about.
+fn watcher_report(result: &WatcherResult) -> crate::card_report::CardReport {
+    use crate::card_report::{CardReport, CardSubject, SubjectKind};
+    let subject = match result.id {
+        WatcherId::CrashSpike => result
+            .evidence
+            .iter()
+            .find_map(|e| e.strip_prefix("app="))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(|name| CardSubject {
+                kind: SubjectKind::Program,
+                name: name.to_string(),
+            }),
+        _ => None,
+    };
+    CardReport {
+        found: result.title.trim().to_string(),
+        summary: result.body.trim().to_string(),
+        evidence: result.evidence.clone(),
+        offers: crash_offers(result, subject.as_ref()),
+        subject,
+        ..Default::default()
+    }
+}
+
+/// What a crash card offers: a look into the crashes, with the watcher's own
+/// read-only prompt. Other watchers keep their single action.
+fn crash_offers(
+    result: &WatcherResult,
+    subject: Option<&crate::card_report::CardSubject>,
+) -> Vec<crate::card_report::FixOffer> {
+    let prompt = result.prompt.as_deref().map(str::trim).unwrap_or_default();
+    if result.id != WatcherId::CrashSpike || subject.is_none() || prompt.is_empty() {
+        return Vec::new();
+    }
+    vec![crate::card_report::FixOffer {
+        label: "Look into the crashes".into(),
+        prompt: prompt.to_string(),
+        kind: crate::card_report::OfferKind::Look,
+        fix_type: Some(crate::auto_fix::FixType::CrashCheck),
+    }]
+}
+
 pub fn nudge_watcher_card(result: &WatcherResult, now_ms: u64) -> UpdateCard {
     let source = nudge_source_id(result.id, &result.dedupe_key);
     let mut card = suggestion_card(&source, &result.title, &result.body, now_ms);
@@ -285,6 +329,7 @@ pub fn nudge_watcher_card(result: &WatcherResult, now_ms: u64) -> UpdateCard {
     }
     card.why = Some(why);
     card.pulse = PulseMeta {
+        report: Some(watcher_report(result)),
         because: Some(result.id.label().into()),
         nudge_watcher: Some(NudgeWatcherMeta {
             watcher: result.id.key().into(),
@@ -736,6 +781,44 @@ mod tests {
             .why
             .as_ref()
             .is_some_and(|w| w.contains("news_gid=101")));
+    }
+
+    #[test]
+    fn a_crash_card_names_the_program_it_is_about() {
+        let snap = WatcherSnapshot {
+            crashes: vec![CrashCount {
+                app: "bluetoothd".into(),
+                count: 4,
+            }],
+            ..Default::default()
+        };
+        let card = nudge_watcher_card(&detect_crash_spike(&snap).expect("spike"), 7);
+        let report = card.pulse.report.expect("report");
+        assert_eq!(report.found, "bluetoothd crashed several times recently");
+        assert_eq!(
+            report.summary,
+            "4 crash reports for bluetoothd in the last day (metadata only, no dump contents)."
+        );
+        assert_eq!(
+            report.evidence,
+            vec!["app=bluetoothd".to_string(), "crash_reports=4".to_string()]
+        );
+        assert_eq!(
+            report.subject,
+            Some(crate::card_report::CardSubject {
+                kind: crate::card_report::SubjectKind::Program,
+                name: "bluetoothd".into(),
+            })
+        );
+        assert_eq!(
+            report.offers,
+            vec![crate::card_report::FixOffer {
+                label: "Look into the crashes".into(),
+                prompt: "Help me investigate why bluetoothd keeps crashing (read crash logs metadata only).".into(),
+                kind: crate::card_report::OfferKind::Look,
+                fix_type: Some(crate::auto_fix::FixType::CrashCheck),
+            }]
+        );
     }
 
     #[test]

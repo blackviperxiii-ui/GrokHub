@@ -1,5 +1,6 @@
 //! One model's row in the registry: what its sources say (metadata), where it
-//! was seen, and its state. Unknown fields stay `None`; nothing is filled from code.
+//! was seen, and its state. Unknown fields stay `None`; only a row no xAI API
+//! listing describes takes the known prices and window from [`super::seed`].
 
 use std::collections::VecDeque;
 
@@ -100,6 +101,11 @@ pub struct Prices {
     pub prompt: Option<u64>,
     #[serde(default)]
     pub cached: Option<u64>,
+    /// Writing the prompt into the provider's cache (Anthropic bills it
+    /// above the prompt rate). `None` where no listing or table names one:
+    /// spend then prices writes at the prompt rate.
+    #[serde(default)]
+    pub cache_write: Option<u64>,
     #[serde(default)]
     pub completion: Option<u64>,
     #[serde(default)]
@@ -113,6 +119,59 @@ pub struct Prices {
 impl Prices {
     pub fn is_empty(&self) -> bool {
         self.prompt.is_none() && self.cached.is_none() && self.completion.is_none()
+    }
+
+    /// A prompt `prompt_tokens` long is at or past the long-context threshold.
+    fn long_at(&self, prompt_tokens: u64) -> bool {
+        self.long_context_threshold
+            .is_some_and(|t| t > 0 && prompt_tokens >= t)
+    }
+
+    /// The completion rate for a request whose prompt is `prompt_tokens`
+    /// long: the long rate at or past the threshold. Needs no prompt price.
+    pub fn completion_at(&self, prompt_tokens: u64) -> Option<u64> {
+        if self.long_at(prompt_tokens) {
+            self.completion_long.or(self.completion)
+        } else {
+            self.completion
+        }
+    }
+
+    /// (prompt, cached, completion) rates for a request whose prompt is
+    /// `prompt_tokens` long. At or past the long-context threshold every token
+    /// pays the long rate, cached ones too (scaled like the prompt). `None`
+    /// when the prompt or completion price is unknown.
+    pub fn rates_at(&self, prompt_tokens: u64) -> Option<(u64, u64, u64)> {
+        let (short, prompt, completion) = if self.long_at(prompt_tokens) {
+            (
+                self.prompt?,
+                self.prompt_long.or(self.prompt)?,
+                self.completion_long.or(self.completion)?,
+            )
+        } else {
+            (self.prompt?, self.prompt?, self.completion?)
+        };
+        let cached = match self.cached {
+            Some(c) if short > 0 => c * prompt / short,
+            Some(c) => c,
+            None => prompt,
+        };
+        Some((prompt, cached, completion))
+    }
+
+    /// The cache-write rate for a request whose prompt is `prompt_tokens`
+    /// long, scaled at the long step like the cached rate in
+    /// [`Prices::rates_at`]. `None` when no write rate is known.
+    pub fn cache_write_at(&self, prompt_tokens: u64) -> Option<u64> {
+        let write = self.cache_write?;
+        if self.long_at(prompt_tokens) {
+            match (self.prompt, self.prompt_long) {
+                (Some(short), Some(long)) if short > 0 => Some(write * long / short),
+                _ => Some(write),
+            }
+        } else {
+            Some(write)
+        }
     }
 }
 
@@ -128,6 +187,231 @@ impl Notice {
         self.severity.eq_ignore_ascii_case("critical")
             && self.text.to_ascii_lowercase().contains("retired")
     }
+}
+
+/// How a model is reached: the route a call to it travels. Derived from
+/// the model's sources and id at refresh (see [`route_for`]); the scorer
+/// weighs routes, not just models.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Route {
+    /// xAI direct: the signed-in plan pool or the user's own xAI key.
+    Xai,
+    /// An OpenRouter model on its free tier (`:free` or the free router).
+    OpenRouterFree,
+    /// An OpenRouter model that bills the account's credit.
+    OpenRouterPaid,
+    /// Anthropic direct, with the user's own API key.
+    Anthropic,
+    /// The on-device model.
+    Local,
+}
+
+impl Route {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Xai => "xai",
+            Self::OpenRouterFree => "openrouter-free",
+            Self::OpenRouterPaid => "openrouter-paid",
+            Self::Anthropic => "anthropic",
+            Self::Local => "local",
+        }
+    }
+}
+
+/// The route of a model with these sources: a provider you added decides
+/// it (Anthropic direct, else the OpenAI-compatible host — free when
+/// [`super::discover::is_free_model`] says so, paid otherwise), an
+/// on-device row is local, and anything else is xAI direct.
+pub fn route_for(id: &str, sources: &[SourceKind]) -> Route {
+    if sources.contains(&SourceKind::Anthropic) {
+        Route::Anthropic
+    } else if sources.contains(&SourceKind::OpenAiCompatible) {
+        if super::discover::is_free_model(id) {
+            Route::OpenRouterFree
+        } else {
+            Route::OpenRouterPaid
+        }
+    } else if sources.contains(&SourceKind::Local) {
+        Route::Local
+    } else {
+        Route::Xai
+    }
+}
+
+/// What a model is good at, 0–100 per axis. Day-one priors come from the
+/// bundled table ([`super::card`]); live measurement replaces them as it
+/// accrues. `None` where nothing is known.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilityScores {
+    #[serde(default)]
+    pub chat: Option<u8>,
+    #[serde(default)]
+    pub code: Option<u8>,
+    #[serde(default)]
+    pub tools: Option<u8>,
+    #[serde(default)]
+    pub reasoning: Option<u8>,
+    #[serde(default)]
+    pub long_context: Option<u8>,
+    #[serde(default)]
+    pub vision: Option<u8>,
+    #[serde(default)]
+    pub audio: Option<u8>,
+}
+
+impl CapabilityScores {
+    /// Fill each unknown score from `other`. Known scores stay.
+    pub fn merge_from(&mut self, other: &Self) {
+        for (a, b) in [
+            (&mut self.chat, other.chat),
+            (&mut self.code, other.code),
+            (&mut self.tools, other.tools),
+            (&mut self.reasoning, other.reasoning),
+            (&mut self.long_context, other.long_context),
+            (&mut self.vision, other.vision),
+            (&mut self.audio, other.audio),
+        ] {
+            if a.is_none() {
+                *a = b;
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// What the route does with prompts, as far as anyone has said. Sensitive
+/// turns skip routes that train (see the router's data policy setting).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataPolicy {
+    /// Prompts may train the provider's models.
+    #[serde(default)]
+    pub trains: Option<bool>,
+    /// Prompts are kept after the call (any retention, e.g. 30 days).
+    #[serde(default)]
+    pub retains: Option<bool>,
+    /// Prompts pass a moderation or human-review step.
+    #[serde(default)]
+    pub moderated: Option<bool>,
+}
+
+impl DataPolicy {
+    /// Fill each unknown fact from `other`. Known facts stay.
+    pub fn merge_from(&mut self, other: &Self) {
+        for (a, b) in [
+            (&mut self.trains, other.trains),
+            (&mut self.retains, other.retains),
+            (&mut self.moderated, other.moderated),
+        ] {
+            if a.is_none() {
+                *a = b;
+            }
+        }
+    }
+}
+
+/// The model card: everything the router knows about a model beyond its
+/// listing — its route, what it is good at, what it is for, and the
+/// priors the built-in profiles ([`super::builtin`]) ship for it. Listings
+/// never send this; refresh fills the unknown fields from the table and
+/// live measurement replaces priors as it accrues.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelCard {
+    #[serde(default)]
+    pub route: Option<Route>,
+    #[serde(default)]
+    pub caps: CapabilityScores,
+    /// What the model is for, as short tags (`long`, `free_code`, …).
+    #[serde(default)]
+    pub roles: Vec<String>,
+    #[serde(default)]
+    pub data_policy: DataPolicy,
+    /// The date (`YYYY-MM-DD`) the model is expected to leave, when one
+    /// is announced.
+    #[serde(default)]
+    pub expires: Option<String>,
+    /// How many hosts serve it, when a listing or the table says.
+    #[serde(default)]
+    pub hosts: Option<u32>,
+    /// Still in its first-weeks evaluation: priors are provisional.
+    #[serde(default)]
+    pub probation: bool,
+    /// Measured (or prior) output speed, tokens per second.
+    #[serde(default)]
+    pub speed_tps: Option<u64>,
+    /// Measured (or prior) time to first token, milliseconds.
+    #[serde(default)]
+    pub ttft_ms: Option<u64>,
+    /// Published intelligence index (0-100) from the built-in profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intelligence: Option<u8>,
+    /// The profile's tier: `frontier`, `flagship`, `workhorse`, `fast`, `paid`, `free`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+}
+
+impl ModelCard {
+    pub fn is_empty(&self) -> bool {
+        self.route.is_none()
+            && self.caps.is_empty()
+            && self.roles.is_empty()
+            && self.data_policy == DataPolicy::default()
+            && self.expires.is_none()
+            && self.hosts.is_none()
+            && !self.probation
+            && self.speed_tps.is_none()
+            && self.ttft_ms.is_none()
+            && self.intelligence.is_none()
+            && self.tier.is_none()
+    }
+
+    /// Fill each unknown field from `other` (a bundled prior). Known
+    /// fields stay: a listing, a refresh or a measurement outranks the
+    /// table.
+    pub fn merge_from(&mut self, other: &Self) {
+        if self.route.is_none() {
+            self.route = other.route;
+        }
+        self.caps.merge_from(&other.caps);
+        for role in &other.roles {
+            if !self.roles.contains(role) {
+                self.roles.push(role.clone());
+            }
+        }
+        self.data_policy.merge_from(&other.data_policy);
+        if self.expires.is_none() {
+            self.expires.clone_from(&other.expires);
+        }
+        if self.hosts.is_none() {
+            self.hosts = other.hosts;
+        }
+        self.probation = self.probation || other.probation;
+        if self.speed_tps.is_none() {
+            self.speed_tps = other.speed_tps;
+        }
+        if self.ttft_ms.is_none() {
+            self.ttft_ms = other.ttft_ms;
+        }
+        if self.intelligence.is_none() {
+            self.intelligence = other.intelligence;
+        }
+        if self.tier.is_none() {
+            self.tier.clone_from(&other.tier);
+        }
+    }
+}
+
+/// How a model has actually answered lately: the passive health window
+/// over the last 7 days. Rates are 0.0–1.0.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reliability {
+    pub calls: u32,
+    pub success_rate: f64,
+    /// The share of calls answered 429 or 503.
+    pub pressure_rate: f64,
 }
 
 /// What a source says about one model. Every field a source didn't send is `None`.
@@ -157,6 +441,10 @@ pub struct ModelMeta {
     pub output_modalities: Option<Vec<String>>,
     #[serde(default)]
     pub tool_calling: Option<bool>,
+    /// The listing names `reasoning` among the request fields the model takes
+    /// (OpenRouter's `supported_parameters`). `None` when it didn't say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
     #[serde(default)]
     pub structured_output: Option<bool>,
     /// `responses` or `chat_completions`, when the listing names its endpoints.
@@ -166,6 +454,12 @@ pub struct ModelMeta {
     pub deprecated: Option<bool>,
     #[serde(default)]
     pub notice: Option<Notice>,
+    /// The model card: route, capability priors, roles and data policy.
+    /// No listing sends it; [`super::card`] fills it at refresh. An
+    /// untouched card writes nothing, so a row no refresh has filled
+    /// serializes exactly as before.
+    #[serde(default, skip_serializing_if = "ModelCard::is_empty")]
+    pub card: ModelCard,
 }
 
 impl ModelMeta {
@@ -205,6 +499,7 @@ impl ModelMeta {
         take(&mut self.max_output, &other.max_output);
         take(&mut self.prices.prompt, &other.prices.prompt);
         take(&mut self.prices.cached, &other.prices.cached);
+        take(&mut self.prices.cache_write, &other.prices.cache_write);
         take(&mut self.prices.completion, &other.prices.completion);
         take(&mut self.prices.prompt_long, &other.prices.prompt_long);
         take(
@@ -222,10 +517,12 @@ impl ModelMeta {
         take(&mut self.input_modalities, &other.input_modalities);
         take(&mut self.output_modalities, &other.output_modalities);
         take(&mut self.tool_calling, &other.tool_calling);
+        take(&mut self.reasoning, &other.reasoning);
         take(&mut self.structured_output, &other.structured_output);
         take(&mut self.api_shape, &other.api_shape);
         take(&mut self.deprecated, &other.deprecated);
         take(&mut self.notice, &other.notice);
+        self.card.merge_from(&other.card);
     }
 }
 
@@ -300,6 +597,12 @@ pub struct ModelRecord {
     /// When it became retired or pruned (0 otherwise).
     #[serde(default)]
     pub tombstone_ms: u64,
+    /// Its two-week tryout, when it is or was a new model on one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probation: Option<super::probation::Probation>,
+    /// The expiry date a heads-up was already logged for.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub expiry_noted: String,
 }
 
 /// Strip trailing date / snapshot / `latest` tokens so `grok-4.7`,
@@ -318,6 +621,46 @@ pub fn model_id_stem(id: &str) -> String {
 }
 
 impl ModelRecord {
+    /// The route a call to this model travels: the card's route once a
+    /// refresh has stamped it, else derived from its sources on the spot.
+    pub fn route(&self) -> Route {
+        self.meta
+            .card
+            .route
+            .unwrap_or_else(|| route_for(&self.meta.id, &self.sources))
+    }
+
+    /// How this model has answered over the last 7 days, from its passive
+    /// health window (the last [`super::health::WINDOW_CALLS`] calls —
+    /// the only call history the registry keeps). `None` when no call in
+    /// the window is that fresh.
+    /// Its tryout failed: out of routing until the retry.
+    pub fn probation_failed(&self) -> bool {
+        self.probation
+            .as_ref()
+            .is_some_and(|p| p.stage == super::probation::Stage::Failed)
+    }
+
+    pub fn reliability(&self, now_ms: u64) -> Option<Reliability> {
+        let fresh: Vec<&CallMark> = self
+            .health
+            .recent
+            .iter()
+            .filter(|m| now_ms.saturating_sub(m.ts_ms) <= 7 * super::probe::DAY_MS)
+            .collect();
+        if fresh.is_empty() {
+            return None;
+        }
+        let calls = fresh.len() as u32;
+        let ok = fresh.iter().filter(|m| m.ok).count() as f64;
+        let pressure = fresh.iter().filter(|m| m.pressure).count() as f64;
+        Some(Reliability {
+            calls,
+            success_rate: ok / calls as f64,
+            pressure_rate: pressure / calls as f64,
+        })
+    }
+
     /// True when the response's `model` is this row: the id itself, an alias,
     /// or a dated / `latest` form of either (so `grok-4.7` answering as
     /// `grok-4.7-0414` is not a redirect).
@@ -332,5 +675,92 @@ impl ModelRecord {
         }
         model_id_stem(&self.meta.id) == stem
             || self.meta.aliases.iter().any(|a| model_id_stem(a) == stem)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(id: &str, sources: &[SourceKind]) -> ModelRecord {
+        ModelRecord {
+            meta: ModelMeta::bare(id),
+            sources: sources.to_vec(),
+            ..ModelRecord::default()
+        }
+    }
+
+    #[test]
+    fn route_comes_from_the_sources_and_the_free_suffix() {
+        assert_eq!(rec("grok-4.7", &[SourceKind::XaiApi]).route(), Route::Xai);
+        assert_eq!(
+            rec("grok-4.7", &[SourceKind::GrokBuild]).route(),
+            Route::Xai
+        );
+        assert_eq!(
+            rec("anthropic/claude-sonnet-5.5", &[SourceKind::Anthropic]).route(),
+            Route::Anthropic
+        );
+        assert_eq!(
+            rec("openrouter/vendor/x:free", &[SourceKind::OpenAiCompatible]).route(),
+            Route::OpenRouterFree
+        );
+        assert_eq!(
+            rec(
+                "openrouter/openrouter/free",
+                &[SourceKind::OpenAiCompatible]
+            )
+            .route(),
+            Route::OpenRouterFree
+        );
+        assert_eq!(
+            rec("openrouter/vendor/x", &[SourceKind::OpenAiCompatible]).route(),
+            Route::OpenRouterPaid
+        );
+        assert_eq!(
+            rec("local:tier", &[SourceKind::Local]).route(),
+            Route::Local
+        );
+        // A stamped card route wins over the derivation.
+        let mut stamped = rec("openrouter/vendor/x", &[SourceKind::OpenAiCompatible]);
+        stamped.meta.card.route = Some(Route::Anthropic);
+        assert_eq!(stamped.route(), Route::Anthropic);
+    }
+
+    #[test]
+    fn reliability_reads_the_health_window_and_ages_out() {
+        let now = 100 * super::super::probe::DAY_MS;
+        let mut r = rec("grok-4.7", &[SourceKind::XaiApi]);
+        assert_eq!(r.reliability(now), None);
+        let mark = |ts_ms, ok, pressure| CallMark {
+            ts_ms,
+            ok,
+            pressure,
+            latency_ms: 0,
+        };
+        r.health.recent.push_back(mark(now - 10, true, false));
+        r.health.recent.push_back(mark(now - 9, true, false));
+        r.health.recent.push_back(mark(now - 8, false, true));
+        r.health
+            .recent
+            .push_back(mark(now - 8 * super::super::probe::DAY_MS, false, true));
+        let rel = r.reliability(now).unwrap();
+        assert_eq!(rel.calls, 3, "the 8-day-old mark is out of the window");
+        assert!((rel.success_rate - 2.0 / 3.0).abs() < 1e-9);
+        assert!((rel.pressure_rate - 1.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cache_write_scales_at_the_long_step_and_stays_unknown_without_a_rate() {
+        let p = Prices {
+            prompt: Some(20_000),
+            cache_write: Some(25_000),
+            prompt_long: Some(40_000),
+            long_context_threshold: Some(200_000),
+            ..Prices::default()
+        };
+        assert_eq!(p.cache_write_at(199_999), Some(25_000));
+        assert_eq!(p.cache_write_at(200_000), Some(50_000));
+        assert_eq!(Prices::default().cache_write_at(0), None);
     }
 }

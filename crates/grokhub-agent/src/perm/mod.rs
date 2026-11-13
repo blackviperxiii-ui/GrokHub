@@ -24,10 +24,12 @@ pub use claude::{import_claude_json, load_project as load_claude_project};
 pub use rules::{parse_rule, Action, PatMode, Rule, RuleParseError, Tool};
 pub use split::{analyze, peeled_primary, Facts, Seg};
 
-pub(crate) use risk::{git_words_are_read_only_query, git_words_have_unsafe_query_option};
+pub(crate) use risk::{
+    git_words_are_read_only_query, git_words_have_unsafe_query_option, trusted_head,
+};
 pub use store::{
-    add_grant_at, config_dir, config_pinned, load_all_grants, load_grants, load_rules, project_key,
-    remember_grant, remove_grant, save_rules, ConfigGuard,
+    add_grant_at, config_dir, config_pinned, load_all_grants, load_grants, load_rules,
+    pinned_config, project_key, remember_grant, remove_grant, save_rules, ConfigGuard,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,11 +47,19 @@ impl Policy {
     }
 
     /// Saved rules, the project's `.claude/settings.json` permissions, and this project's grants.
+    /// The project file's allow rules count only in a folder the person trusted, like project
+    /// hooks: a cloned repo, or the agent itself, could otherwise write an allow-all file.
+    /// Its deny and ask rules always count, since they only tighten.
     pub fn load(workspace: &Path) -> Self {
         let dir = store::config_dir();
         let mut rules = store::load_rules(&dir);
         if let Some(imported) = claude::load_project(workspace) {
-            rules.extend(imported);
+            let trusted = crate::hooks::folder_trusted(workspace);
+            rules.extend(
+                imported
+                    .into_iter()
+                    .filter(|rule| trusted || rule.action != Action::Allow),
+            );
         }
         let grants = store::load_grants(&dir, workspace);
         Self { rules, grants }
@@ -123,6 +133,11 @@ pub fn govern(
             return Decision::Run;
         }
         if readonly_shell(&facts) {
+            return Decision::Run;
+        }
+        // Auto mode: an ordinary command the sandbox fully holds runs without
+        // the judge or a card. Supervised keeps asking.
+        if gate.mode == PermMode::Auto && sandbox_holds(name, arguments, workspace) {
             return Decision::Run;
         }
         return base;
@@ -261,6 +276,30 @@ pub fn websearch_matches(rule: &Rule) -> bool {
     matchers::tool_reaches(rule.tool, Tool::WebSearch)
 }
 
+/// Whether xAI's hosted `web_search` / `x_search` may ride this request.
+/// Hosted calls run on xAI's side, so the gate never sees their queries.
+/// They are offered only where the cabin's own `web_search` would run with no
+/// card: an attended, writable session, online, with no deny or ask rule for
+/// search, and no recalled memory lines in the chat (a hosted query could
+/// carry one out with no check). Otherwise the cabin `web_search` tool goes
+/// through the gate and the egress guard instead.
+pub fn hosted_search_allowed(gate: &Gate, rules: &[Rule], recalled: bool) -> bool {
+    gate.attended && !gate.readonly_session && !recalled && hosted_search_rules_allow(rules)
+}
+
+/// [`hosted_search_allowed`] for a background one-shot (the feed digest):
+/// online and no deny or ask rule for search in the saved rules.
+pub fn hosted_search_allowed_background() -> bool {
+    hosted_search_rules_allow(&store::load_rules(&store::config_dir()))
+}
+
+fn hosted_search_rules_allow(rules: &[Rule]) -> bool {
+    !grokhub_core::offline::enabled()
+        && !rules
+            .iter()
+            .any(|rule| rule.action != Action::Allow && websearch_matches(rule))
+}
+
 fn govern_search(base: Decision, gate: &Gate, policy: &Policy, always: bool) -> Decision {
     if policy
         .rules
@@ -361,6 +400,11 @@ fn tool_kind(name: &str) -> Option<Tool> {
         "write" | "search_replace" => Some(Tool::Edit),
         _ => None,
     }
+}
+
+fn sandbox_holds(name: &str, arguments: &str, workspace: &Path) -> bool {
+    serde_json::from_str::<serde_json::Value>(arguments)
+        .is_ok_and(|args| crate::sandbox::auto_allows(&config_dir(), name, &args, workspace))
 }
 
 fn command_arg(arguments: &str) -> Option<String> {

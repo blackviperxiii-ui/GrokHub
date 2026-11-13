@@ -162,6 +162,35 @@ Only list fixes a follow-up run can actually carry out."
     None
 }
 
+/// A "fix" that changes nothing ("No fix needed", "Ignore the warning",
+/// "Summary complete"). As a button it runs a whole turn to do nothing, and
+/// Do all counted it as a step.
+fn no_op_fix(label: &str, goal: &str) -> bool {
+    const NO_OPS: &[&str] = &[
+        "no fix needed",
+        "no fix required",
+        "no change",
+        "no action needed",
+        "no further action",
+        "nothing to fix",
+        "summary complete",
+        "all tasks complete",
+        "errors ignored",
+    ];
+    let label = label.trim().to_ascii_lowercase();
+    let goal = goal.trim().to_ascii_lowercase();
+    NO_OPS
+        .iter()
+        .any(|n| label.starts_with(n) || goal.starts_with(n))
+        || label.starts_with("ignore ")
+        || label == "ignore"
+}
+
+/// A fix the card leaves off: impossible for the agent, or one that does nothing.
+fn left_off(label: &str, goal: &str) -> bool {
+    impossible_host_fix_reason(label, goal).is_some() || no_op_fix(label, goal)
+}
+
 /// True when a one-tap label/goal (or open-todo text used as a goal) is an
 /// impossible host/OS ask the agent cannot fulfill.
 pub fn is_impossible_one_tap(label: &str, goal: &str) -> bool {
@@ -375,7 +404,7 @@ impl Findings {
                     "fix label `{label}` must be at most {LABEL_MAX} characters with no colon"
                 ));
             }
-            if impossible_host_fix_reason(&label, &goal).is_some() {
+            if left_off(&label, &goal) {
                 dropped.push(label);
                 continue;
             }
@@ -421,7 +450,7 @@ impl Findings {
             if in_fixes {
                 // Drop doom-loop pills that may already be on disk from older
                 // runs or from a fallback card that skipped from_json.
-                if impossible_host_fix_reason(head, rest).is_none() {
+                if !left_off(head, rest) {
                     fixes.push(Fix {
                         label: head.to_string(),
                         goal: rest.to_string(),
@@ -541,6 +570,28 @@ delete, overwrite or send something: Delete old journal logs.",
         ] {
             assert_eq!(card_with(&fixes).do_all(), None, "{fixes:?}");
         }
+    }
+
+    #[test]
+    fn a_fix_that_changes_nothing_is_left_off_the_card() {
+        let value = serde_json::json!({
+            "findings": [{"severity": "info", "text": "Event log has 3 old warnings."}],
+            "fixes": [
+                {"label": "No fix needed", "goal": "The warnings are harmless."},
+                {"label": "Ignore the warnings", "goal": "Leave the event log as it is."},
+                {"label": "Errors ignored", "goal": "Errors ignored, nothing to do."},
+                {"label": "Clear temp files", "goal": "Delete files in the user temp folder."},
+                {"label": "Restart Spooler", "goal": "Restart the print spooler service."},
+            ]
+        });
+        let (card, dropped) = Findings::from_json_dropping(&value).unwrap();
+        let labels: Vec<_> = card.fixes.iter().map(|f| f.label.as_str()).collect();
+        assert_eq!(labels, ["Clear temp files", "Restart Spooler"]);
+        assert_eq!(dropped.len(), 3);
+        // A card already saved with one paints without it.
+        let stored = format!("{}\n- No change: Leave it.", card.to_body());
+        let back = Findings::parse(&stored).unwrap();
+        assert_eq!(back.fixes.len(), 2);
     }
 
     #[test]

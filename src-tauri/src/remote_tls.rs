@@ -8,14 +8,16 @@
 //! the same hosts, so a browser that accepted it once doesn't warn again.
 //! Settings shows its SHA-256 fingerprint to compare with the browser's.
 
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{oneshot, Semaphore};
 use tokio_rustls::TlsAcceptor;
 
@@ -24,6 +26,12 @@ pub const DIR: &str = "web-access";
 /// TLS connections at once; past this a new one is closed. The plain server
 /// behind caps calls and streams on its own.
 const MAX_CONNECTIONS: usize = 64;
+/// How many of those one address may hold, so one device can't take them all.
+const MAX_PER_PEER: usize = 16;
+/// A connection is closed after this long with no whole request waiting and
+/// nothing sent back. An open event stream gets a ping every 15 s
+/// (`remote.rs`), so it stays.
+pub(crate) const IDLE: Duration = Duration::from_secs(60);
 /// A client that hasn't finished the handshake by then is dropped.
 const HANDSHAKE: Duration = Duration::from_secs(10);
 
@@ -41,7 +49,7 @@ impl Cert {
             .map_err(|e| format!("Couldn't make the web access certificate: {e}"))?;
         Ok(Cert {
             cert_pem: made.cert.pem(),
-            key_pem: made.key_pair.serialize_pem(),
+            key_pem: made.signing_key.serialize_pem(),
         })
     }
 
@@ -132,9 +140,142 @@ impl Drop for Front {
     }
 }
 
+/// The connections each address has open.
+type Peers = Arc<Mutex<HashMap<IpAddr, usize>>>;
+
+/// One address's place among its connections; dropping it gives the place back.
+struct PeerSlot {
+    peers: Peers,
+    ip: IpAddr,
+}
+
+impl PeerSlot {
+    /// None when `ip` already holds `most`.
+    fn take(peers: &Peers, ip: IpAddr, most: usize) -> Option<Self> {
+        let mut open = peers.lock().unwrap_or_else(|e| e.into_inner());
+        let held = open.get(&ip).copied().unwrap_or(0);
+        if held >= most {
+            return None;
+        }
+        open.insert(ip, held + 1);
+        Some(Self {
+            peers: Arc::clone(peers),
+            ip,
+        })
+    }
+}
+
+impl Drop for PeerSlot {
+    fn drop(&mut self) {
+        let mut open = self.peers.lock().unwrap_or_else(|e| e.into_inner());
+        match open.get_mut(&self.ip) {
+            Some(held) if *held > 1 => *held -= 1,
+            _ => {
+                open.remove(&self.ip);
+            }
+        }
+    }
+}
+
+/// Writes `bytes` to `out`. False when that failed or took longer than `idle`.
+async fn pass(out: &mut (impl AsyncWrite + Unpin), bytes: &[u8], idle: Duration) -> bool {
+    let sent = tokio::time::timeout(idle, async {
+        out.write_all(bytes).await?;
+        out.flush().await
+    });
+    matches!(sent.await, Ok(Ok(())))
+}
+
+/// Counts in `seen` how much of `\r\n\r\n`, the blank line that ends a
+/// request head, the browser's bytes have spelled so far. True when `bytes`
+/// finish it. `seen` is kept between reads: the four can arrive apart.
+fn ends_head(seen: &mut usize, bytes: &[u8]) -> bool {
+    for &byte in bytes {
+        *seen = match (*seen, byte) {
+            (0 | 2, b'\r') | (1 | 3, b'\n') => *seen + 1,
+            (_, b'\r') => 1,
+            _ => 0,
+        };
+        if *seen == 4 {
+            *seen = 0;
+            return true;
+        }
+    }
+    false
+}
+
+/// Copies both ways between the browser and the inner server until the
+/// server closes, either side fails, or `idle` passed since the server last
+/// sent anything. A whole request still waiting for the first byte of its
+/// reply is not idle: a chat turn holds its call open and silent until the
+/// whole reply is ready. A request whose head never ends is: its bytes are
+/// passed on but don't hold the connection open, however slowly they come.
+async fn pump<F, B>(front: F, back: B, idle: Duration)
+where
+    F: AsyncRead + AsyncWrite + Unpin,
+    B: AsyncRead + AsyncWrite + Unpin,
+{
+    let (mut front_in, mut front_out) = tokio::io::split(front);
+    let (mut back_in, mut back_out) = tokio::io::split(back);
+    let mut up = vec![0u8; 16 * 1024];
+    let mut down = vec![0u8; 16 * 1024];
+    let mut sending = true;
+    let mut awaiting = false;
+    let mut head = 0;
+    let mut quiet_from = tokio::time::Instant::now();
+    loop {
+        tokio::select! {
+            read = front_in.read(&mut up), if sending => match read {
+                // The browser is done sending; its reply may still be coming.
+                Ok(0) => {
+                    sending = false;
+                    if back_out.shutdown().await.is_err() {
+                        break;
+                    }
+                }
+                Ok(n) => {
+                    if !awaiting && ends_head(&mut head, &up[..n]) {
+                        awaiting = true;
+                    }
+                    if !pass(&mut back_out, &up[..n], idle).await {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            },
+            read = back_in.read(&mut down) => match read {
+                Ok(n) if n > 0 => {
+                    awaiting = false;
+                    head = 0;
+                    if !pass(&mut front_out, &down[..n], idle).await {
+                        break;
+                    }
+                    quiet_from = tokio::time::Instant::now();
+                }
+                _ => break,
+            },
+            () = tokio::time::sleep_until(quiet_from + idle), if !awaiting => break,
+        }
+    }
+    // Tells the browser the connection ended on purpose.
+    let _ = tokio::time::timeout(idle, front_out.shutdown()).await;
+}
+
 /// Accepts TLS on `bind` and passes each decrypted connection to `inner`.
 /// Binds before it returns, so a port in use is an error here.
 pub fn serve(bind: SocketAddr, inner: SocketAddr, cert: &Cert) -> Result<Front, String> {
+    serve_with(bind, inner, cert, MAX_PER_PEER, IDLE)
+}
+
+/// [`serve`] with its limits given: the connections one address may hold,
+/// and how long a connection may sit with nothing sent.
+fn serve_with(
+    bind: SocketAddr,
+    inner: SocketAddr,
+    cert: &Cert,
+    per_peer: usize,
+    idle: Duration,
+) -> Result<Front, String> {
     let acceptor = TlsAcceptor::from(cert.server_config()?);
     let listener = std::net::TcpListener::bind(bind)
         .map_err(|e| format!("Web access couldn't start on port {}: {e}", bind.port()))?;
@@ -154,32 +295,36 @@ pub fn serve(bind: SocketAddr, inner: SocketAddr, cert: &Cert) -> Result<Front, 
                     return;
                 };
                 let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+                let peers = Peers::default();
                 loop {
-                    let sock = tokio::select! {
+                    let (sock, peer) = tokio::select! {
                         _ = &mut stopped => return,
                         accepted = listener.accept() => match accepted {
-                            Ok((sock, _)) => sock,
+                            Ok(accepted) => accepted,
                             Err(_) => {
                                 tokio::time::sleep(Duration::from_millis(100)).await;
                                 continue;
                             }
                         },
                     };
+                    let Some(place) = PeerSlot::take(&peers, peer.ip(), per_peer) else {
+                        continue;
+                    };
                     let Ok(slot) = Arc::clone(&slots).try_acquire_owned() else {
                         continue;
                     };
                     let acceptor = acceptor.clone();
                     tokio::spawn(async move {
-                        let _slot = slot;
-                        let Ok(Ok(mut tls)) =
+                        let _held = (slot, place);
+                        let Ok(Ok(tls)) =
                             tokio::time::timeout(HANDSHAKE, acceptor.accept(sock)).await
                         else {
                             return;
                         };
-                        let Ok(mut back) = tokio::net::TcpStream::connect(inner).await else {
+                        let Ok(back) = tokio::net::TcpStream::connect(inner).await else {
                             return;
                         };
-                        let _ = tokio::io::copy_bidirectional(&mut tls, &mut back).await;
+                        pump(tls, back, idle).await;
                     });
                 }
             });
@@ -313,5 +458,237 @@ mod tests {
 
         drop(front);
         assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err());
+    }
+
+    type Tls = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
+
+    /// A browser's connection to the front, not yet shaken hands.
+    fn connect(port: u16, cert: &Cert) -> Tls {
+        let name = rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
+        let conn = rustls::ClientConnection::new(client(cert), name).unwrap();
+        let sock = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        rustls::StreamOwned::new(conn, sock)
+    }
+
+    /// Shakes hands and then says nothing, like a phone that left the Wi-Fi.
+    fn silent(port: u16, cert: &Cert) -> Tls {
+        let mut tls = connect(port, cert);
+        while tls.conn.is_handshaking() {
+            tls.conn.complete_io(&mut tls.sock).unwrap();
+        }
+        tls
+    }
+
+    /// Sends one request and reads to the end: what came back, and whether
+    /// the front closed the connection itself (no reset, no 10 s timeout).
+    fn get(mut tls: Tls) -> (String, bool) {
+        let _ = write!(tls, "GET /remote/v1/hello HTTP/1.1\r\nHost: x\r\n\r\n");
+        let mut reply = Vec::new();
+        let closed = tls.read_to_end(&mut reply).is_ok();
+        (String::from_utf8_lossy(&reply).into_owned(), closed)
+    }
+
+    /// An inner server that hands each connection to `answer` on its own thread.
+    fn inner_server(answer: fn(TcpStream)) -> SocketAddr {
+        let inner = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = inner.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for sock in inner.incoming().flatten() {
+                std::thread::spawn(move || answer(sock));
+            }
+        });
+        addr
+    }
+
+    fn front(inner: SocketAddr, cert: &Cert, per_peer: usize, idle: Duration) -> Front {
+        let bind = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        serve_with(bind, inner, cert, per_peer, idle).unwrap()
+    }
+
+    #[test]
+    fn one_address_holds_only_its_share_and_silent_connections_are_closed() {
+        let inner = inner_server(|mut sock| {
+            let mut buf = [0u8; 256];
+            let n = sock.read(&mut buf).unwrap_or(0);
+            let line = String::from_utf8_lossy(&buf[..n])
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string();
+            let _ = write!(
+                sock,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{line}",
+                line.len()
+            );
+        });
+        let cert = Cert::make(&hosts("192.168.1.20")).unwrap();
+        let front = front(inner, &cert, 2, Duration::from_secs(1));
+
+        let mut held = [silent(front.port, &cert), silent(front.port, &cert)];
+        // The address has its two; a third is closed unanswered.
+        assert!(!get(connect(front.port, &cert)).0.contains("200 OK"));
+
+        // Nothing moves on the two for a second, so the front closes them.
+        for tls in &mut held {
+            assert_eq!(tls.read(&mut [0u8; 16]).ok(), Some(0));
+        }
+        let (reply, closed) = get(connect(front.port, &cert));
+        assert!(
+            reply.ends_with("\r\n\r\nGET /remote/v1/hello HTTP/1.1"),
+            "{reply}"
+        );
+        assert!(closed);
+    }
+
+    #[test]
+    fn a_kept_alive_connection_carries_one_request_after_another() {
+        const REPLY: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+        let inner = inner_server(|mut sock| {
+            let mut buf = [0u8; 256];
+            while sock.read(&mut buf).is_ok_and(|n| n > 0) {
+                if sock.write_all(REPLY).is_err() {
+                    return;
+                }
+            }
+        });
+        let cert = Cert::make(&hosts("192.168.1.20")).unwrap();
+        let front = front(inner, &cert, 2, Duration::from_secs(60));
+        let mut tls = connect(front.port, &cert);
+        for path in ["/", "/assets/app.js"] {
+            write!(tls, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+            let mut reply = [0u8; REPLY.len()];
+            tls.read_exact(&mut reply).unwrap();
+            assert_eq!(reply, REPLY, "{path}");
+        }
+    }
+
+    #[test]
+    fn a_stream_that_keeps_sending_outlives_the_idle_limit() {
+        // Twelve lines 50 ms apart: 600 ms in all, with never 500 ms of quiet.
+        let inner = inner_server(|mut sock| {
+            let _ = sock.read(&mut [0u8; 256]);
+            for _ in 0..12 {
+                std::thread::sleep(Duration::from_millis(50));
+                if sock.write_all(b": ping\n").is_err() {
+                    return;
+                }
+            }
+        });
+        let cert = Cert::make(&hosts("192.168.1.20")).unwrap();
+        let front = front(inner, &cert, 2, Duration::from_millis(500));
+        assert_eq!(
+            get(connect(front.port, &cert)),
+            (": ping\n".repeat(12), true)
+        );
+
+        // A connection that goes quiet after its reply began is still closed.
+        let inner = inner_server(|mut sock| {
+            let _ = sock.read(&mut [0u8; 256]);
+            let _ = sock.write_all(b": open\n");
+            let _ = sock.read(&mut [0u8; 256]);
+        });
+        let front = self::front(inner, &cert, 2, Duration::from_millis(500));
+        assert_eq!(
+            get(connect(front.port, &cert)),
+            (": open\n".to_string(), true)
+        );
+    }
+
+    /// A chat turn holds its call open and silent until the reply is whole.
+    #[test]
+    fn a_call_waiting_for_its_reply_is_not_closed_as_idle() {
+        const REPLY: &str = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndone";
+        // The reply comes after three idle limits of silence.
+        let inner = inner_server(|mut sock| {
+            let _ = sock.read(&mut [0u8; 256]);
+            std::thread::sleep(Duration::from_millis(900));
+            let _ = sock.write_all(REPLY.as_bytes());
+        });
+        let cert = Cert::make(&hosts("192.168.1.20")).unwrap();
+        let front = front(inner, &cert, 2, Duration::from_millis(300));
+        assert_eq!(get(connect(front.port, &cert)), (REPLY.to_string(), true));
+    }
+
+    /// One byte, or headers with no blank line after them, is not a call: the
+    /// connection is closed like a silent one.
+    #[test]
+    fn a_half_sent_request_is_closed_as_idle() {
+        let inner = inner_server(|mut sock| {
+            let mut buf = [0u8; 256];
+            while sock.read(&mut buf).is_ok_and(|n| n > 0) {}
+        });
+        let cert = Cert::make(&hosts("192.168.1.20")).unwrap();
+        let front = front(inner, &cert, 2, Duration::from_millis(300));
+        for sent in [
+            "G",
+            "POST /remote/v1/call/get_behavior HTTP/1.1\r\nHost: x\r\n",
+        ] {
+            let mut tls = connect(front.port, &cert);
+            tls.write_all(sent.as_bytes()).unwrap();
+            tls.flush().unwrap();
+            assert_eq!(tls.read(&mut [0u8; 16]).ok(), Some(0), "{sent:?}");
+        }
+    }
+
+    /// A byte every 100 ms for three seconds never finishes the request, so
+    /// the 300 ms limit still closes the connection.
+    #[test]
+    fn a_dripped_request_head_does_not_extend_the_idle_limit() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let closed = runtime.block_on(async {
+            let (mut browser, front) = tokio::io::duplex(1024);
+            let (back, _inner) = tokio::io::duplex(1024);
+            tokio::spawn(async move {
+                for byte in b"GET /remote/v1/hello HTTP/1.1\r\n" {
+                    if browser.write_all(&[*byte]).await.is_err() {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            });
+            let pumped = pump(front, back, Duration::from_millis(300));
+            tokio::time::timeout(Duration::from_millis(1500), pumped)
+                .await
+                .is_ok()
+        });
+        assert!(closed);
+    }
+
+    /// The blank line that ends the request can come in a later read than the
+    /// rest; the call still waits out three idle limits for its reply.
+    #[test]
+    fn a_request_head_split_across_reads_still_waits_for_its_reply() {
+        const REPLY: &str = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndone";
+        let inner = inner_server(|mut sock| {
+            let mut head = Vec::new();
+            let mut buf = [0u8; 256];
+            while !head.ends_with(b"\r\n\r\n") {
+                match sock.read(&mut buf) {
+                    Ok(n) if n > 0 => head.extend_from_slice(&buf[..n]),
+                    _ => return,
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1500));
+            let _ = sock.write_all(REPLY.as_bytes());
+        });
+        let cert = Cert::make(&hosts("192.168.1.20")).unwrap();
+        let front = front(inner, &cert, 2, Duration::from_millis(500));
+        let mut tls = connect(front.port, &cert);
+        tls.write_all(b"GET /remote/v1/hello HTTP/1.1\r\nHost: x\r\n\r")
+            .unwrap();
+        tls.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        tls.write_all(b"\n").unwrap();
+        let mut reply = Vec::new();
+        let closed = tls.read_to_end(&mut reply).is_ok();
+        assert_eq!(
+            (String::from_utf8_lossy(&reply).into_owned(), closed),
+            (REPLY.to_string(), true)
+        );
     }
 }

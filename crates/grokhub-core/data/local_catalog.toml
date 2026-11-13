@@ -10,8 +10,13 @@
 # speed from public llama.cpp benchmarks; the speed test replaces it.
 #
 # `drafter` pairs a model with a speculative-decoding draft model
-# (`local_draft.rs`): it is only used when the tokenizers hash the same, the
-# engine has the flags, both fit, and the speed test finds it faster.
+# (`local_draft.rs`): it is only used when the engine has the flags, both fit,
+# and the speed test finds it faster. Each model's drafter is its own
+# abliterated MTP heads file (an id with "mtp"), trained for that one model,
+# so the tokenizer check that a separate small model needs doesn't apply.
+#
+# `remote_file` is the name in the repo when it differs from `file`, the name
+# on disk: every repo calls its MTP file the same, and they share a folder.
 #
 # Every model is an abliterated (refusal-removed) build: huihui-ai's Gemma 4
 # QAT abliterated GGUFs (Q4_K quants of Google's QAT q4_0 unquantized weights),
@@ -19,9 +24,117 @@
 # disk never matches a row. The banned-ask check (`adult_guard.rs` and the
 # agent's route screen) runs in front of these like any other model.
 #
+# `kind` says what a row is for: chat (the default), drafter,
+# vision-projector, image, image-guard, speech-to-text, text-to-speech, embed,
+# rerank, ocr or guard. Only chat rows count toward the 25 standard models
+# (`local_setup::STANDARD_MODEL_CAP`). A drafter or projector names its chat
+# model in `pairs_with`.
+#
+# `abliterated = { by, method }` is required on every chat row: who removed
+# the refusals and how (`abliteration` or `heretic`). `refusal_score` is the
+# share of the refusal check's prompts the model answered, once measured.
+#
 # Only the main GGUF downloads; the repos' vision projector
-# (`mmproj-model-bf16.gguf`) and MTP draft head (`mtp-ggml-model-bf16.gguf`)
-# are not fetched or pinned here.
+# (`mmproj-model-bf16.gguf`) isn't fetched yet, so no row claims vision.
+
+# `skills = { quality, chat, code, reason, write, long, adult }` on a chat
+# row: what it is good at, 0 to 100, from public results for its family
+# (`local_skills.rs`). The router picks the best model on disk per task with
+# them; a score left out is worked out from the tier and context size.
+
+# Raise with every change to this file: a release ships it signed, and an
+# older app swaps in a newer one (`catalog_update.rs`).#
+# Profile (chat rows; `.github/scripts/local_profiles.py`, docs/model-profiles.md):
+# `params_b` and `active_b` (billions of parameters, all and active per token)
+# and `ctx_max` (trained context, tokens) come from the base model's card.
+# `local_profiles.py write` derives `tok_s_tier` (tok/s on each hardware
+# tier's reference GPU, where it fits), `gaming_safe` (light and capable
+# enough to run beside a game) and `estimate` (fields nobody has measured;
+# list one in `measured` once it is). CI fails when they are stale.
+version = 4
+
+[[model]]
+id = "nvidia-nemotron3.5-lightning-30b-a3b-heretic-q4_k_m"
+name = "NVIDIA Nemotron 3.5 Lightning 30B-A3B"
+repo = "mlasli/Nemotron-3.5-Lightning-30B-A3B-Heretic-Uncensored-Q4_K_M-GGUF"
+file = "Nemotron-3.5-Lightning-30B-A3B-Heretic-Uncensored-Q4_K_M-GGUF.gguf"
+sha256 = "9d9558ddc6b0aea947eace48fa621d66e8da603ea0298e03fe4556859bd14e72"
+download_mb = 23379
+quant = "Q4_K_M"
+license = "NVIDIA Open Model License"
+kind = "chat"
+optional = true
+abliterated = { by = "mlasli", method = "heretic" }
+badges = ["tools", "moe", "reasoning"]
+skills = { quality = 74, chat = 72, code = 74, reason = 80, write = 68, long = 80, adult = 66 }
+tier = "T4"
+route = "local:small"
+ctx_default = 32768
+params_b = 31.6
+active_b = 3.6
+ctx_max = 1_048_576
+run_mb = 24279   # 23379 weights + 300 KV (hybrid Mamba-MoE, ~6 attn layers x 2 KV heads x hd128 (~6 KiB/tok) + SSM state; approx) + 600
+needs_avx2 = true
+min_llama_build = 10_326
+min_budget = { gpu = 8192, unified = 24576, cpu = 24576 }
+tok_s = { gpu = 45, unified = 30, cpu = 22 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max"]
+
+[[model]]
+id = "bytedance-seed-oss-36b-heretic-q4_k_m"
+name = "ByteDance Seed-OSS 36B"
+repo = "mradermacher/Seed-OSS-36B-Instruct-heretic-GGUF"
+file = "Seed-OSS-36B-Instruct-heretic.Q4_K_M.gguf"
+sha256 = "ee960faaa814989606c65e62c327273903e67399d3151f487cc71720fb95c9a4"
+download_mb = 20754
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "trohrbaugh", method = "heretic" }
+badges = ["tools", "reasoning"]
+skills = { quality = 74, chat = 70, code = 74, reason = 80, write = 70, long = 90, adult = 68 }
+tier = "T4"
+route = "local:small"
+ctx_default = 8192
+params_b = 36
+active_b = 36
+ctx_max = 524_288
+run_mb = 23402   # 20754 weights + 2048 KV (64 layers x 8 KV x hd128 = 256 KiB/tok; approx) + 600
+needs_avx2 = true
+min_budget = { gpu = 12288, unified = 23552 }
+tok_s = { gpu = 9, unified = 7, cpu = 2 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max"]
+
+[[model]]
+id = "qwen3.6-35b-a3b-heretic-q4_k_m"
+name = "Qwen3.6 35B-A3B"
+repo = "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF"
+file = "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf"
+sha256 = "fc89d92377b27fe0f80eb683a5105d0921234c24f7c1d70ecc2356ddf994d781"
+download_mb = 20771
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "llmfan46", method = "heretic" }
+badges = ["tools", "moe", "reasoning"]
+skills = { quality = 78, chat = 76, code = 85, reason = 82, write = 72, long = 80, adult = 70 }
+tier = "T4"
+route = "local:small"
+ctx_default = 32768
+params_b = 35
+active_b = 3
+ctx_max = 262_144
+run_mb = 22071   # 20771 weights + 700 KV (10 full-attn layers x 2 KV x hd256 (~20 KiB/tok) + DeltaNet state; approx) + 600
+needs_avx2 = true
+min_budget = { gpu = 8192, unified = 22528, cpu = 22528 }
+tok_s = { gpu = 50, unified = 35, cpu = 20 }
+tok_s_tier = { T4 = 200 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "gemma-4-31b-it-abliterated-q4_k"
@@ -32,16 +145,81 @@ sha256 = "01fa18ad51c7d31ce738ec8206add7326a96d8a2db044a88f8df05c678c0f8c0"
 download_mb = 17_821
 quant = "Q4_K"
 license = "Apache-2.0"
-badges = ["tools", "vision"]
+kind = "chat"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools"]
+skills = { quality = 76, chat = 82, code = 72, reason = 74, write = 85, long = 76, adult = 82 }
 tier = "T4"
 route = "local:small"
 ctx_default = 32_768
+params_b = 31
+active_b = 31
+ctx_max = 131_072
 run_mb = 19_799
 needs_avx2 = true
-# Speculative decoding with E2B (same family; the tokenizer gate checks it).
-drafter = "gemma-4-e2b-it-abliterated-q4_k"
+# Its own abliterated MTP draft heads, from the same repo.
+drafter = "gemma-4-31b-it-abliterated-mtp"
 min_budget = { gpu = 20_480, unified = 40_960 }
 tok_s = { gpu = 35, unified = 25, cpu = 2 }
+tok_s_tier = { T4 = 32 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "zai-glm4.7-flash-30b-a3b-heretic-q4_k_m"
+name = "Zhipu GLM-4.7-Flash 30B-A3B"
+repo = "Olafangensan/GLM-4.7-Flash-heretic-GGUF"
+file = "glm-4.7-flash-heretic.Q4_K_M.gguf"
+sha256 = "80a46bbb8f5d1bf5003a9e904fbe9e3b066f3faddcc0799eededa021bcd3029b"
+download_mb = 17293
+quant = "Q4_K_M"
+license = "MIT"
+kind = "chat"
+optional = true
+abliterated = { by = "Olafangensan", method = "heretic" }
+badges = ["tools", "moe", "reasoning"]
+skills = { quality = 72, chat = 70, code = 80, reason = 76, write = 66, long = 72, adult = 58 }
+tier = "T4"
+route = "local:small"
+ctx_default = 16384
+params_b = 30
+active_b = 3
+ctx_max = 131_072
+run_mb = 19493   # 17293 weights + 1600 KV (MLA (deepseek2 arch) ~100 KiB/tok in llama.cpp; approx) + 600
+needs_avx2 = true
+min_budget = { gpu = 8192, unified = 19968, cpu = 19968 }
+tok_s = { gpu = 40, unified = 28, cpu = 16 }
+tok_s_tier = { T4 = 217 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "qwen3.8-27b-heretic-q4_k_m"
+name = "Qwen3.8 27B"
+repo = "0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF"
+file = "RVN-Q4_K_M-multilingual-mtp.gguf"
+sha256 = "8b20771570e85d1988aa3d1574698370a8b79f746eb02b96f25bf05c48f14b95"
+download_mb = 16211
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "0bserverx (on trohrbaugh ARA base)", method = "heretic" }
+badges = ["tools", "reasoning"]
+skills = { quality = 80, chat = 76, code = 84, reason = 84, write = 74, long = 74, adult = 70 }
+tier = "T4"
+route = "local:small"
+ctx_default = 16384
+params_b = 27
+active_b = 27
+ctx_max = 262_144
+run_mb = 17835   # 16211 weights + 1024 KV (16 full-attn layers x 4 KV x hd256 = 64 KiB/tok (card arch table)) + 600
+needs_avx2 = true
+min_budget = { gpu = 12288, unified = 17920 }
+tok_s = { gpu = 12, unified = 10, cpu = 3 }
+tok_s_tier = { T4 = 35 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "gemma-4-26b-a4b-it-abliterated-q4_k"
@@ -52,18 +230,140 @@ sha256 = "4b4f9d4b448fca16230f08d50c18a95c81ecfaefede95d3bdfcf1880b4b620f5"
 download_mb = 16_018
 quant = "Q4_K"
 license = "Apache-2.0"
-badges = ["tools", "vision", "moe"]
+kind = "chat"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools", "moe"]
+skills = { quality = 72, chat = 78, code = 68, reason = 70, write = 80, long = 72, adult = 78 }
 tier = "T3"
 route = "local:small"
 ctx_default = 16_384
+params_b = 26
+active_b = 4
+ctx_max = 131_072
 run_mb = 17_400
 needs_avx2 = true
 # Mixture of experts (about 4B active): on a 16 GB GPU the experts that don't
 # fit run from RAM and it stays fast.
-# Speculative decoding with E2B (same family; the tokenizer gate checks it).
-drafter = "gemma-4-e2b-it-abliterated-q4_k"
+# Its own abliterated MTP draft heads, from the same repo.
+drafter = "gemma-4-26b-a4b-it-abliterated-mtp"
 min_budget = { gpu = 15_360, unified = 20_480 }
 tok_s = { gpu = 60, unified = 50, cpu = 6 }
+tok_s_tier = { T4 = 172 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "mistral-small3.2-24b-heretic-q4_k_m"
+name = "Mistral Small 3.2 24B"
+repo = "llmfan46/Mistral-Small-3.2-24B-Instruct-2506-ultra-uncensored-heretic-GGUF"
+file = "Mistral-Small-3.2-24B-Instruct-2506-ultra-uncensored-heretic-Q4_K_M.gguf"
+sha256 = "5b0e27f5e3c2e5ef1809115c26efe247d72b46c218025acf1673ccd0e6045c20"
+download_mb = 13670
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "llmfan46", method = "heretic" }
+badges = ["tools"]
+skills = { quality = 66, chat = 72, code = 62, reason = 62, write = 75, long = 64, adult = 74 }
+tier = "T3"
+route = "local:small"
+ctx_default = 12288
+params_b = 24
+active_b = 24
+ctx_max = 131_072
+run_mb = 16190   # 13670 weights + 1920 KV (40 layers x 8 KV x hd128 = 160 KiB/tok; ctx kept at 12288 to stay in 16 GB) + 600
+needs_avx2 = true
+min_budget = { gpu = 16384, unified = 16384 }
+tok_s = { gpu = 35, unified = 15, cpu = 5 }
+tok_s_tier = { T4 = 41 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "openai-gpt-oss-20b-heretic-mxfp4_moe"
+name = "OpenAI gpt-oss 20B"
+repo = "mradermacher/gpt-oss-20b-heretic-ara-v3-GGUF"
+file = "gpt-oss-20b-heretic-ara-v3.MXFP4_MOE.gguf"
+sha256 = "646e85a132eeb91cd4cc35c8258677e26af29546e7b52628ee2696ea189e9013"
+download_mb = 11549
+quant = "MXFP4_MOE"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "p-e-w", method = "heretic" }
+badges = ["tools", "moe", "reasoning"]
+skills = { quality = 70, chat = 66, code = 74, reason = 80, write = 55, long = 74, adult = 52 }
+tier = "T3"
+route = "local:small"
+ctx_default = 32768
+params_b = 21
+active_b = 3.6
+ctx_max = 131_072
+run_mb = 12917   # 11549 weights + 768 KV (12 full layers x 8 KV x hd64 (~24 KiB/tok) + 12 SWA-128 layers; approx) + 600
+needs_avx2 = true
+min_budget = { gpu = 13312, unified = 13312, cpu = 13312 }
+tok_s = { gpu = 110, unified = 50, cpu = 25 }
+tok_s_tier = { T3 = 141, T4 = 220 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "nous-hermes4-14b-abliterated-q4_k_m"
+name = "NousResearch Hermes 4 14B"
+repo = "mradermacher/Hermes-4-14B-BF16-abliterated-GGUF"
+file = "Hermes-4-14B-BF16-abliterated.Q4_K_M.gguf"
+sha256 = "99a393acafc4620ab4e8284f63692ef6ab49a54130fcdacf0e6705fa8d1f9827"
+download_mb = 8585
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "n0kovo", method = "abliteration" }
+badges = ["tools", "reasoning"]
+skills = { quality = 60, chat = 66, code = 56, reason = 62, write = 72, long = 50, adult = 85 }
+tier = "T3"
+route = "local:small"
+ctx_default = 8192
+params_b = 14.8
+active_b = 14.8
+ctx_max = 40_960
+run_mb = 10465   # 8585 weights + 1280 KV (Qwen3-14B arch: 40 layers x 8 KV x hd128 = 160 KiB/tok) + 600
+needs_avx2 = true
+min_budget = { gpu = 10752, unified = 10752, cpu = 10752 }
+tok_s = { gpu = 50, unified = 20, cpu = 8 }
+tok_s_tier = { T3 = 42, T4 = 66 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "mistral-ministral3-14b-reasoning-heretic-q4_k_m"
+name = "Mistral Ministral 3 14B Reasoning"
+repo = "coder3101/Ministral-3-14B-Reasoning-2512-heretic-GGUF"
+file = "Ministral-3-14B-Reasoning-2512-heretic-Q4_K_M.gguf"
+sha256 = "3b59f35c7f632cfe79107694a7095f2ad7db4655a6c64cb0afdbe8092a64cdce"
+download_mb = 7857
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "coder3101", method = "heretic" }
+badges = ["tools", "reasoning"]
+skills = { quality = 62, chat = 62, code = 60, reason = 70, write = 62, long = 52, adult = 62 }
+tier = "T3"
+route = "local:small"
+ctx_default = 8192
+params_b = 14
+active_b = 14
+ctx_max = 262_144
+run_mb = 9737   # 7857 weights + 1280 KV (40 layers x 8 KV x hd128 = 160 KiB/tok; approx) + 600
+needs_avx2 = true
+drafter = "mistral-ministral3-3b-heretic-drafter-q4_k_m"
+min_budget = { gpu = 10240, unified = 10240, cpu = 10240 }
+tok_s = { gpu = 50, unified = 22, cpu = 9 }
+tok_s_tier = { T3 = 46, T4 = 72 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "gemma-4-12b-it-abliterated-q4_k"
@@ -74,16 +374,167 @@ sha256 = "8cfe39c96b966b2bc99d908315404914e9128fb35e134ca36f1a199507d6da6b"
 download_mb = 7_039
 quant = "Q4_K"
 license = "Apache-2.0"
-badges = ["tools", "vision"]
+kind = "chat"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools"]
+skills = { quality = 62, chat = 68, code = 58, reason = 60, write = 70, long = 62, adult = 70 }
 tier = "T3"
 route = "local:small"
 ctx_default = 16_384
+params_b = 12
+active_b = 12
+ctx_max = 131_072
 run_mb = 8_399
 needs_avx2 = true
-# Speculative decoding with E2B (same family; the tokenizer gate checks it).
-drafter = "gemma-4-e2b-it-abliterated-q4_k"
+# Its own abliterated MTP draft heads, from the same repo.
+drafter = "gemma-4-12b-it-abliterated-mtp"
 min_budget = { gpu = 10_240, unified = 14_336 }
 tok_s = { gpu = 35, unified = 20, cpu = 3 }
+tok_s_tier = { T3 = 51, T4 = 80 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "deepseek-r1-0528-qwen3-8b-heretic-q4_k_m"
+name = "DeepSeek R1-0528 Qwen3 8B"
+repo = "richardyoung/DeepSeek-R1-0528-Qwen3-8B-heretic-GGUF"
+file = "DeepSeek-R1-0528-Qwen3-8B-heretic-Q4_K_M.gguf"
+sha256 = "f8f40f6c770a70cc30a41385a4c45f85120ec937cf7ab11e06cb1c2090055531"
+download_mb = 4795
+quant = "Q4_K_M"
+license = "MIT"
+kind = "chat"
+optional = true
+abliterated = { by = "richardyoung", method = "heretic" }
+badges = ["tools", "reasoning"]
+skills = { quality = 58, chat = 52, code = 60, reason = 72, write = 45, long = 58, adult = 44 }
+tier = "T2"
+route = "local:small"
+ctx_default = 16384
+params_b = 8.2
+active_b = 8.2
+ctx_max = 131_072
+run_mb = 7699   # 4795 weights + 2304 KV (Qwen3-8B arch: 36 layers x 8 KV x hd128 = 144 KiB/tok) + 600
+needs_avx2 = true
+min_budget = { gpu = 8192, unified = 8192, cpu = 8192 }
+tok_s = { gpu = 80, unified = 35, cpu = 14 }
+tok_s_tier = { T3 = 75, T4 = 117 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "ibm-granite4.2-8b-heretic-q4_k_m"
+name = "IBM Granite 4.2 8B"
+repo = "richardyoung/granite-4.2-8b-heretic-GGUF"
+file = "granite-4.2-8b-heretic-Q4_K_M.gguf"
+sha256 = "a1bb043db13950708af1216079ef584bc938528a05244962f3505b1b814b12e1"
+download_mb = 5100
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "richardyoung", method = "heretic" }
+badges = ["tools", "reasoning"]
+skills = { quality = 54, chat = 55, code = 56, reason = 56, write = 50, long = 56, adult = 46 }
+tier = "T2"
+route = "local:small"
+ctx_default = 12288
+params_b = 8
+active_b = 8
+ctx_max = 131_072
+run_mb = 7620   # 5100 weights + 1920 KV (assumed 40 layers x 8 KV x hd128 = 160 KiB/tok; arch not read, approx) + 600
+needs_avx2 = true
+drafter = "ibm-granite4.2-3b-heretic-drafter-q4_k_m"
+min_budget = { gpu = 7680, unified = 7680, cpu = 7680 }
+tok_s = { gpu = 80, unified = 35, cpu = 14 }
+tok_s_tier = { T3 = 71, T4 = 110 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "allenai-olmo3-7b-instruct-heretic-q4_k_s"
+name = "AllenAI OLMo 3 7B Instruct"
+repo = "ChiKoi7/Olmo-3-7B-Instruct-Heretic-GGUF"
+file = "Olmo-3-7B-Instruct-Heretic_Q4_K_S.gguf"
+sha256 = "2c8acaf5333bfc279bd38548f9d93e2498939555f480014eab5c33c47a652215"
+download_mb = 4051
+quant = "Q4_K_S"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "ChiKoi7", method = "heretic" }
+badges = ["tools"]
+skills = { quality = 50, chat = 54, code = 48, reason = 50, write = 54, long = 42, adult = 48 }
+tier = "T2"
+route = "local:small"
+ctx_default = 8192
+params_b = 7
+active_b = 7
+ctx_max = 65_536
+run_mb = 7211   # 4051 weights + 2560 KV (32 layers MHA 32 KV x hd128; assumes SWA-4096 on 3 of 4 layers (else ~4 GiB); approx) + 600
+needs_avx2 = true
+min_budget = { gpu = 7680, unified = 7680, cpu = 7680 }
+tok_s = { gpu = 85, unified = 40, cpu = 17 }
+tok_s_tier = { T2 = 42, T3 = 89, T4 = 139 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "qwen3.5-9b-heretic-q4_k_m"
+name = "Qwen3.5 9B"
+repo = "llmfan46/Qwen3.5-9B-Ultra-Uncensored-Heretic-GGUF"
+file = "Qwen3.5-9B-Ultra-Uncensored-Heretic-Q4_K_M.gguf"
+sha256 = "8d463c63e2c8759ad263cba59f1fa7a0be9a7cacb59b0fd0a787b7daa31597ad"
+download_mb = 5272
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "llmfan46", method = "heretic" }
+badges = ["tools", "reasoning"]
+skills = { quality = 60, chat = 60, code = 62, reason = 64, write = 58, long = 64, adult = 58 }
+tier = "T2"
+route = "local:small"
+ctx_default = 32768
+params_b = 9
+active_b = 9
+ctx_max = 262_144
+run_mb = 6896   # 5272 weights + 1024 KV (~8 full-attn layers x 4 KV x hd256 (~32 KiB/tok) + DeltaNet state; approx) + 600
+needs_avx2 = true
+drafter = "qwen3.5-0.8b-heretic-drafter-q4_k_m"
+min_budget = { gpu = 7168, unified = 7168, cpu = 7168 }
+tok_s = { gpu = 80, unified = 35, cpu = 14 }
+tok_s_tier = { T2 = 32, T3 = 68, T4 = 107 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "nvidia-nemotron3.5-bolt-e4b-heretic-q4_k_xl"
+name = "NVIDIA Nemotron 3.5 Bolt E4B"
+repo = "grumd0/Nemotron-3.5-Bolt-E4B-Heretic-GGUF"
+file = "Nemotron-3.5-Bolt-E4B-Heretic-UD-Q4_K_XL.gguf"
+sha256 = "9d88432dee2d885fe3bb2a68cbf6e76543ddd29609fcfb066dd653b383c0f63a"
+download_mb = 4796
+quant = "Q4_K_XL"
+license = "OpenMDW-1.1"
+kind = "chat"
+optional = true
+abliterated = { by = "grumd0", method = "heretic" }
+badges = ["tools"]
+skills = { quality = 52, chat = 54, code = 52, reason = 56, write = 50, long = 54, adult = 50 }
+tier = "T2"
+route = "local:small"
+ctx_default = 16384
+params_b = 8
+active_b = 4
+ctx_max = 131_072
+run_mb = 6516   # 4796 weights + 1120 KV (Gemma-4-E4B-style arch, ~70 KiB/tok; approx) + 600
+needs_avx2 = true
+min_budget = { gpu = 6656, unified = 6656, cpu = 6656 }
+tok_s = { gpu = 85, unified = 40, cpu = 16 }
+tok_s_tier = { T2 = 64, T3 = 137, T4 = 214 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "gemma-4-e4b-it-abliterated-q4_k"
@@ -94,16 +545,53 @@ sha256 = "64434f2da081f912729e5c4732def7303eb5244d3fee493b9675bc4e9af52d4c"
 download_mb = 5_057
 quant = "Q4_K"
 license = "Apache-2.0"
-badges = ["tools", "vision"]
+kind = "chat"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools"]
+skills = { quality = 54, chat = 60, code = 50, reason = 52, write = 60, long = 46, adult = 60 }
 tier = "T2"
 route = "local:small"
 ctx_default = 8_192
+params_b = 8
+active_b = 4
+ctx_max = 131_072
 run_mb = 5_868
 needs_avx2 = true
-# Speculative decoding with E2B (same family; the tokenizer gate checks it).
-drafter = "gemma-4-e2b-it-abliterated-q4_k"
+# Its own abliterated MTP draft heads, from the same repo.
+drafter = "gemma-4-e4b-it-abliterated-mtp"
 min_budget = { gpu = 6_144, unified = 8_192, cpu = 6_144 }
 tok_s = { gpu = 40, unified = 30, cpu = 5 }
+tok_s_tier = { T2 = 61, T3 = 130, T4 = 202 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "microsoft-phi4-mini-3.8b-heretic-q4_k_m"
+name = "Microsoft Phi-4-mini 3.8B"
+repo = "richardyoung/Phi-4-mini-instruct-heretic-GGUF"
+file = "Phi-4-mini-instruct-heretic-Q4_K_M.gguf"
+sha256 = "15b925dec5237c100597068357360d22750c6eee6fa02ba6bdb81fd564f0cbcf"
+download_mb = 2378
+quant = "Q4_K_M"
+license = "MIT"
+kind = "chat"
+optional = true
+abliterated = { by = "richardyoung", method = "heretic" }
+badges = ["tools"]
+skills = { quality = 44, chat = 44, code = 46, reason = 52, write = 40, long = 36, adult = 40 }
+tier = "T1"
+route = "local:tiny"
+ctx_default = 8192
+params_b = 3.8
+active_b = 3.8
+ctx_max = 131_072
+run_mb = 4002   # 2378 weights + 1024 KV (32 layers x 8 KV x hd128 = 128 KiB/tok) + 600
+needs_avx2 = true
+min_budget = { gpu = 4096, unified = 4096, cpu = 4096 }
+tok_s = { gpu = 120, unified = 50, cpu = 24 }
+tok_s_tier = { T1 = 45, T2 = 71, T3 = 152, T4 = 237 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "gemma-4-e2b-it-abliterated-q4_k"
@@ -114,13 +602,549 @@ sha256 = "6bc1f421ba870b01a2efbb6904a28bda0ae3ccde57b18eb5e9203c3db05effe9"
 download_mb = 3_258
 quant = "Q4_K"
 license = "Apache-2.0"
-badges = ["tools", "vision"]
+kind = "chat"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools"]
+skills = { quality = 42, chat = 48, code = 38, reason = 40, write = 48, long = 34, adult = 48 }
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8_192
+params_b = 5
+active_b = 2
+ctx_max = 131_072
 run_mb = 3_888
 # Runs on the AVX-only CPU build (the pinned llama.cpp ships sandybridge and
 # ivybridge CPU variants and loads the best one at start).
 needs_avx2 = false
+# Its own abliterated MTP draft heads, from the same repo.
+drafter = "gemma-4-e2b-it-abliterated-mtp"
 min_budget = { gpu = 3_072, unified = 3_072, cpu = 3_072 }
 tok_s = { gpu = 60, unified = 35, cpu = 7 }
+tok_s_tier = { T1 = 74, T2 = 115, T3 = 246, T4 = 384 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "mistral-ministral3-3b-reasoning-heretic-q4_k_m"
+name = "Mistral Ministral 3 3B Reasoning"
+repo = "coder3101/Ministral-3-3B-Reasoning-2512-heretic-GGUF"
+file = "Ministral-3-3B-Reasoning-2512-heretic-Q4_K_M.gguf"
+sha256 = "8bef6b3ea340189f142cb7165f6643427d18fed1c859af4b3e18656a0ef787b3"
+download_mb = 2047
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "coder3101", method = "heretic" }
+badges = ["tools", "reasoning"]
+skills = { quality = 42, chat = 42, code = 40, reason = 48, write = 42, long = 34, adult = 42 }
+tier = "T1"
+route = "local:tiny"
+ctx_default = 8192
+params_b = 3.4
+active_b = 3.4
+ctx_max = 262_144
+run_mb = 3479   # 2047 weights + 832 KV (26 layers x 8 KV x hd128 = 104 KiB/tok; approx) + 600
+needs_avx2 = true
+min_budget = { gpu = 3584, unified = 3584, cpu = 3584 }
+tok_s = { gpu = 130, unified = 55, cpu = 28 }
+tok_s_tier = { T1 = 53, T2 = 83, T3 = 176, T4 = 275 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "qwen3.5-4b-heretic-q4_k_m"
+name = "Qwen3.5 4B"
+repo = "mradermacher/Qwen3.5-4B-heretic-2.0-GGUF"
+file = "Qwen3.5-4B-heretic-2.0.Q4_K_M.gguf"
+sha256 = "b4d096b902e9768e63dc320a86d6232cd064319c40e9c1ad94751fedd13e7096"
+download_mb = 2583
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "p-e-w", method = "heretic" }
+badges = ["tools", "reasoning"]
+skills = { quality = 48, chat = 48, code = 48, reason = 52, write = 44, long = 36, adult = 44 }
+tier = "T1"
+route = "local:tiny"
+ctx_default = 8192
+params_b = 4
+active_b = 4
+ctx_max = 262_144
+run_mb = 3439   # 2583 weights + 256 KV (~8 full-attn layers x 4 KV x hd256 (~32 KiB/tok); approx) + 600
+needs_avx2 = true
+drafter = "qwen3.5-0.8b-heretic-drafter-q4_k_m"
+min_budget = { gpu = 3584, unified = 3584, cpu = 3584 }
+tok_s = { gpu = 120, unified = 50, cpu = 25 }
+tok_s_tier = { T1 = 42, T2 = 65, T3 = 140, T4 = 218 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "meta-llama3.2-3b-heretic-q4_k_m"
+name = "Meta Llama 3.2 3B"
+repo = "mradermacher/Llama-3.2-3B-Instruct-heretic-ablitered-uncensored-GGUF"
+file = "Llama-3.2-3B-Instruct-heretic-ablitered-uncensored.Q4_K_M.gguf"
+sha256 = "cc923c7f2a01b7ede0bf51043153b941cebc88085b040efab132e73fb8d95487"
+download_mb = 1926
+quant = "Q4_K_M"
+license = "Llama 3.2 Community License"
+kind = "chat"
+optional = true
+abliterated = { by = "DavidAU", method = "heretic" }
+badges = ["tools"]
+skills = { quality = 38, chat = 42, code = 34, reason = 34, write = 44, long = 34, adult = 42 }
+tier = "T1"
+route = "local:tiny"
+ctx_default = 8192
+params_b = 3.2
+active_b = 3.2
+ctx_max = 131_072
+run_mb = 3422   # 1926 weights + 896 KV (28 layers x 8 KV x hd128 = 112 KiB/tok) + 600
+needs_avx2 = true
+drafter = "meta-llama3.2-1b-heretic-drafter-q4_k_m"
+min_budget = { gpu = 3584, unified = 3584, cpu = 3584 }
+tok_s = { gpu = 140, unified = 60, cpu = 30 }
+tok_s_tier = { T1 = 56, T2 = 88, T3 = 187, T4 = 292 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "ibm-granite4.2-3b-heretic-q4_k_m"
+name = "IBM Granite 4.2 3B"
+repo = "richardyoung/granite-4.2-3b-heretic-GGUF"
+file = "granite-4.2-3b-heretic-Q4_K_M.gguf"
+sha256 = "198acf45f90e07463b8eeba1b6083bb675bfb83a0d9fd3cda5ccd850e4cbb23b"
+download_mb = 2140
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "richardyoung", method = "heretic" }
+badges = ["tools", "reasoning"]
+skills = { quality = 38, chat = 40, code = 38, reason = 40, write = 36, long = 34, adult = 26 }
+tier = "T1"
+route = "local:tiny"
+ctx_default = 8192
+params_b = 3
+active_b = 3
+ctx_max = 131_072
+run_mb = 3380   # 2140 weights + 640 KV (assumed 40 layers x 8 KV x hd64 = 80 KiB/tok; approx) + 600
+needs_avx2 = true
+min_budget = { gpu = 3584, unified = 3584, cpu = 3584 }
+tok_s = { gpu = 130, unified = 55, cpu = 28 }
+tok_s_tier = { T1 = 51, T2 = 79, T3 = 168, T4 = 263 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "hf-smollm3-3b-heretic-q4_k_m"
+name = "HuggingFace SmolLM3 3B"
+repo = "virtualdmns/SmolLM3-3B-Heretic-Uncensored-GGUF"
+file = "SmolLM3-3B-Heretic-Uncensored-Q4_K_M.gguf"
+sha256 = "1e6d9704247f41f786f47b885cbff846d70a931dbdc82562439670f43b3589d5"
+download_mb = 1827
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+optional = true
+abliterated = { by = "virtualdmns", method = "heretic" }
+badges = ["tools", "reasoning"]
+skills = { quality = 38, chat = 40, code = 36, reason = 40, write = 36, long = 34, adult = 36 }
+tier = "T1"
+route = "local:tiny"
+ctx_default = 8192
+params_b = 3
+active_b = 3
+ctx_max = 65_536
+run_mb = 3003   # 1827 weights + 576 KV (36 layers x 4 KV x hd128 = 72 KiB/tok) + 600
+needs_avx2 = true
+min_budget = { gpu = 3072, unified = 3072, cpu = 3072 }
+tok_s = { gpu = 140, unified = 60, cpu = 32 }
+tok_s_tier = { T1 = 59, T2 = 92, T3 = 197, T4 = 308 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+
+[[model]]
+id = "gemma-4-31b-it-abliterated-mtp"
+name = "Gemma 4 31B draft model"
+repo = "huihui-ai/Huihui-gemma-4-31B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its MTP file the same, so it lands under its own name.
+file = "Huihui-gemma-4-31B-it-abliterated-MTP-BF16.gguf"
+remote_file = "mtp-ggml-model-bf16.gguf"
+sha256 = "4aa111212c930e4850a960168eb08384eb7653e16a4d3def587f78caabc24db1"
+download_mb = 911
+quant = "BF16"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "gemma-4-31b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T4"
+route = "local:small"
+ctx_default = 32_768
+run_mb = 1_167
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "gemma-4-26b-a4b-it-abliterated-mtp"
+name = "Gemma 4 26B-A4B draft model"
+repo = "huihui-ai/Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its MTP file the same, so it lands under its own name.
+file = "Huihui-gemma-4-26B-A4B-it-abliterated-MTP-BF16.gguf"
+remote_file = "mtp-ggml-model-bf16.gguf"
+sha256 = "9c2424cef7469d01035a906e84f606d13fc44a5b48d54e4a8d1d30c2b19d2cb3"
+download_mb = 816
+quant = "BF16"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "gemma-4-26b-a4b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T3"
+route = "local:small"
+ctx_default = 16_384
+run_mb = 1_072
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "gemma-4-12b-it-abliterated-mtp"
+name = "Gemma 4 12B draft model"
+repo = "huihui-ai/Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its MTP file the same, so it lands under its own name.
+file = "Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf"
+remote_file = "mtp-ggml-model-bf16.gguf"
+sha256 = "c24069c9ea03da35c65cdf1d03d9f1dc3c69f962362bee02d79b51a0f4de2261"
+download_mb = 822
+quant = "BF16"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "gemma-4-12b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T3"
+route = "local:small"
+ctx_default = 16_384
+run_mb = 1_078
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "gemma-4-e4b-it-abliterated-mtp"
+name = "Gemma 4 E4B draft model"
+repo = "huihui-ai/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its MTP file the same, so it lands under its own name.
+file = "Huihui-gemma-4-E4B-it-abliterated-MTP-BF16.gguf"
+remote_file = "mtp-ggml-model-bf16.gguf"
+sha256 = "f784491087cdcbfdd2307648ccfc5af1c06d9aa17759587cd87078eb1c453c59"
+download_mb = 164
+quant = "BF16"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "gemma-4-e4b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T2"
+route = "local:small"
+ctx_default = 8_192
+run_mb = 420
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "gemma-4-e2b-it-abliterated-mtp"
+name = "Gemma 4 E2B draft model"
+repo = "huihui-ai/Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its MTP file the same, so it lands under its own name.
+file = "Huihui-gemma-4-E2B-it-abliterated-MTP-BF16.gguf"
+remote_file = "mtp-ggml-model-bf16.gguf"
+sha256 = "390b21c811bb43665183f0eb8dd5d101ff2b2078b294de785ce8c550623b0452"
+download_mb = 163
+quant = "BF16"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "gemma-4-e2b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T1"
+route = "local:tiny"
+ctx_default = 8_192
+run_mb = 419
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "qwen3.5-0.8b-heretic-drafter-q4_k_m"
+name = "Qwen3.5 0.8B (drafter)"
+repo = "tvall43/Qwen3.5-0.8B-heretic-gguf"
+file = "Qwen3.5-0.8B-heretic-Q4_K_M.gguf"
+sha256 = "32964a44c4c62645970600e074f5dbaadc53d16d6391b8daaca6b10b224003cb"
+download_mb = 503
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "qwen3.5-9b-heretic-q4_k_m"
+abliterated = { by = "tvall43", method = "heretic" }
+badges = []
+tier = "T2"
+route = "local:small"
+ctx_default = 8_192
+run_mb = 953   # 503 weights + ~150 KV + 300 overhead (shares the target's context)
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "meta-llama3.2-1b-heretic-drafter-q4_k_m"
+name = "Meta Llama 3.2 1B (drafter)"
+repo = "mradermacher/Llama-3.2-1B-Instruct-heretic-GGUF"
+file = "Llama-3.2-1B-Instruct-heretic.Q4_K_M.gguf"
+sha256 = "022b711ac0f62519fe4e5f221388f9cd2cf09e6ee56040060841fc3cd376b1b7"
+download_mb = 770
+quant = "Q4_K_M"
+license = "Llama 3.2 Community License"
+kind = "drafter"
+pairs_with = "meta-llama3.2-3b-heretic-q4_k_m"
+abliterated = { by = "saidutta69", method = "heretic" }
+badges = []
+tier = "T1"
+route = "local:tiny"
+ctx_default = 8_192
+run_mb = 1220   # 770 weights + ~150 KV + 300 overhead (shares the target's context)
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "mistral-ministral3-3b-heretic-drafter-q4_k_m"
+name = "Mistral Ministral 3 3B (drafter)"
+repo = "coder3101/Ministral-3-3B-Reasoning-2512-heretic-GGUF"
+file = "Ministral-3-3B-Reasoning-2512-heretic-Q4_K_M.gguf"
+sha256 = "8bef6b3ea340189f142cb7165f6643427d18fed1c859af4b3e18656a0ef787b3"
+download_mb = 2047
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "mistral-ministral3-14b-reasoning-heretic-q4_k_m"
+abliterated = { by = "coder3101", method = "heretic" }
+badges = []
+tier = "T3"
+route = "local:small"
+ctx_default = 8_192
+run_mb = 2497   # 2047 weights + ~150 KV + 300 overhead (shares the target's context)
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "ibm-granite4.2-3b-heretic-drafter-q4_k_m"
+name = "IBM Granite 4.2 3B (drafter)"
+repo = "richardyoung/granite-4.2-3b-heretic-GGUF"
+file = "granite-4.2-3b-heretic-Q4_K_M.gguf"
+sha256 = "198acf45f90e07463b8eeba1b6083bb675bfb83a0d9fd3cda5ccd850e4cbb23b"
+download_mb = 2140
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "ibm-granite4.2-8b-heretic-q4_k_m"
+abliterated = { by = "richardyoung", method = "heretic" }
+badges = []
+tier = "T2"
+route = "local:small"
+ctx_default = 8_192
+run_mb = 2590   # 2140 weights + ~150 KV + 300 overhead (shares the target's context)
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+# source: https://huggingface.co/richardyoung/granite-4.2-3b-heretic-GGUF/tree/main ; Same file as the 3B chat row; same Granite 4.2 family tokenizer (not byte-compared).
+
+# Speech to text: NVIDIA's Parakeet TDT 0.6B v3 (25 European languages), the
+# sherpa-onnx int8 export. It runs in the speech engine (`voice_engine.rs`)
+# once per clip, so nothing stays loaded. Its four files go in their own
+# folder under the voice folder; the token list is a small git file, checked
+# by its git oid. Not a chat model, so no `abliterated`.
+
+[[model]]
+id = "parakeet-tdt-0.6b-v3-int8"
+name = "Parakeet v3 speech to text"
+repo = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+file = "parakeet-tdt-0.6b-v3-int8/encoder.int8.onnx"
+remote_file = "encoder.int8.onnx"
+sha256 = "1afbe69c1ffdabee94755f42e4daf1d93549131a3da11356bda84fcef0f2c479"
+download_mb = 640
+quant = "int8"
+license = "CC-BY-4.0"
+kind = "speech-to-text"
+badges = []
+tier = "T1"
+route = "local:voice"
+ctx_default = 0
+run_mb = 1_024
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model.parts]]
+remote_file = "decoder.int8.onnx"
+file = "parakeet-tdt-0.6b-v3-int8/decoder.int8.onnx"
+sha256 = "0222a86147299d4dee90edf95b6d13827edb42ad8b7c9cf0b2582f030937c0b5"
+bytes = 11_845_274
+[[model.parts]]
+remote_file = "joiner.int8.onnx"
+file = "parakeet-tdt-0.6b-v3-int8/joiner.int8.onnx"
+sha256 = "cbd02f3696e9944970111fb439d9c3fd365a80374565f13f2b9c7007d253fc98"
+bytes = 6_355_277
+[[model.parts]]
+remote_file = "tokens.txt"
+file = "parakeet-tdt-0.6b-v3-int8/tokens.txt"
+git_oid = "fc43e1c723e262df60b70e1919614417162d1fe2"
+bytes = 93_939
+# Text to speech: Kokoro 82M (multi-language v1.0), the sherpa-onnx export,
+# spoken by the same engine as Parakeet (`sherpa-onnx-offline-tts`, one run
+# per sentence, so nothing stays loaded). sherpa-onnx v2 reads pronunciations
+# from the lexicon, so the espeak-ng data isn't needed. Each file is the one in
+# the release archive (kokoro-multi-lang-v1_0.tar.bz2, SHA-256 60703707...),
+# same bytes as the repo; the token list is a small git file.
+[[model]]
+id = "kokoro-82m-multi-lang-v1_0"
+name = "Kokoro text to speech"
+repo = "csukuangfj/kokoro-multi-lang-v1_0"
+file = "kokoro-multi-lang-v1_0/model.onnx"
+remote_file = "model.onnx"
+sha256 = "b40f62b166ac8164b0627ef48a0b358eda0985e272fb03ef5252e7206305da11"
+download_mb = 343
+quant = "fp32"
+license = "Apache-2.0"
+kind = "text-to-speech"
+badges = []
+tier = "T1"
+route = "local:voice"
+ctx_default = 0
+run_mb = 1_024
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model.parts]]
+remote_file = "voices.bin"
+file = "kokoro-multi-lang-v1_0/voices.bin"
+sha256 = "1c5a5b983d3d50d8586d437a51f3faa2da7919ce76a013c081e65671a3447c29"
+bytes = 28_200_960
+[[model.parts]]
+remote_file = "lexicon-us-en.txt"
+file = "kokoro-multi-lang-v1_0/lexicon-us-en.txt"
+sha256 = "7daaab53a181be9885b853a8582bf1838186317e5dadacbcef9c426d6fa0da14"
+bytes = 5_956_885
+[[model.parts]]
+remote_file = "tokens.txt"
+file = "kokoro-multi-lang-v1_0/tokens.txt"
+git_oid = "4c5460434a54a6ce2b3fb6133d79dbc24f183e23"
+bytes = 687
+
+# Pictures: Tongyi's Z-Image Turbo (6B, 8 steps), leejet's Q4_K GGUF for
+# stable-diffusion.cpp (`image_engine.rs`). It loads for one picture and
+# exits, so nothing stays in memory beside a game. Its text encoder (Qwen3
+# 4B) and its VAE are parts in the same folder. Not a chat model, so no
+# `abliterated`; every picture ask still passes the hard bans first.
+
+[[model]]
+id = "z-image-turbo-q4_k"
+name = "Z-Image Turbo pictures"
+repo = "leejet/Z-Image-Turbo-GGUF"
+file = "z-image-turbo/z_image_turbo-Q4_K.gguf"
+remote_file = "z_image_turbo-Q4_K.gguf"
+sha256 = "14b375ab4f226bc5378f68f37e899ef3c2242b8541e61e2bc1aff40976086fbd"
+download_mb = 6_387
+quant = "Q4_K"
+license = "Apache-2.0"
+kind = "image"
+badges = []
+tier = "T2"
+route = "local:image"
+ctx_default = 0
+run_mb = 7_168
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model.parts]]
+repo = "unsloth/Qwen3-4B-Instruct-2507-GGUF"
+remote_file = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+file = "z-image-turbo/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+sha256 = "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"
+bytes = 2_497_281_120
+[[model.parts]]
+repo = "Comfy-Org/z_image_turbo"
+remote_file = "split_files/vae/ae.safetensors"
+file = "z-image-turbo/ae.safetensors"
+sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+bytes = 335_304_388
+# A second picture model: Chroma1-HD (Apache-2.0, 8.9B, Flux-family), for
+# when Z-Image isn't on disk. Optional, so nothing pushes it. Its T5 text
+# encoder and the Flux VAE are parts in its own folder.
+[[model]]
+id = "chroma1-hd-q4_k_m"
+name = "Chroma1-HD pictures"
+repo = "silveroxides/Chroma1-HD-GGUF"
+file = "chroma1-hd/Chroma1-HD-Q4_K_M.gguf"
+remote_file = "Chroma1-HD-Q4_K_M.gguf"
+sha256 = "086f561e371d442b82b2c3689149da75046754c62a35293932cda397fc2bf9d2"
+download_mb = 8_859
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "image"
+optional = true
+badges = []
+tier = "T2"
+route = "local:image"
+ctx_default = 0
+run_mb = 8_192
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model.parts]]
+repo = "city96/t5-v1_1-xxl-encoder-gguf"
+remote_file = "t5-v1_1-xxl-encoder-Q5_K_M.gguf"
+file = "chroma1-hd/t5-v1_1-xxl-encoder-Q5_K_M.gguf"
+sha256 = "b51cbb10b1a7aac6dd1c3b62f0ed908bfd06e0b42d2f3577d43e061361f51dae"
+bytes = 3_386_856_640
+[[model.parts]]
+repo = "Comfy-Org/z_image_turbo"
+remote_file = "split_files/vae/ae.safetensors"
+file = "chroma1-hd/ae.safetensors"
+sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+bytes = 335_304_388
+
+# The picture guard: Qwen3-VL 2B looks at every finished local picture
+# against the hard bans before it is shown (llama.cpp with its image
+# reader). Local 18+ pictures wait until it is on disk.
+
+[[model]]
+id = "qwen3-vl-2b-guard-q8_0"
+name = "Picture guard (Qwen3-VL 2B)"
+repo = "ggml-org/Qwen3-VL-2B-Instruct-GGUF"
+file = "qwen3-vl-2b-guard/Qwen3-VL-2B-Instruct-Q8_0.gguf"
+remote_file = "Qwen3-VL-2B-Instruct-Q8_0.gguf"
+sha256 = "b7802e29f71a9e5b5e3f83f613df898a2204342dcea71a231ea501d481813c39"
+download_mb = 2_174
+quant = "Q8_0"
+license = "Apache-2.0"
+kind = "image-guard"
+badges = []
+tier = "T1"
+route = "local:image-guard"
+ctx_default = 4_096
+run_mb = 2_560
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model.parts]]
+remote_file = "mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf"
+file = "qwen3-vl-2b-guard/mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf"
+sha256 = "69066c8f279ec85ff48ab4059f6ebba0d2932ca57667f2bbdac7d9805bca9e7b"
+bytes = 445_053_056

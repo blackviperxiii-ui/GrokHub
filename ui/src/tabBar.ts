@@ -43,13 +43,22 @@ function usePhone(): boolean {
  * or the bar itself brings it back, so it stays reachable from the keyboard. */
 export function useHidingBar(pinned: boolean): boolean {
   const phone = usePhone();
-  const [state, setState] = useState(SHOWN);
+  const [hidden, setHidden] = useState(false);
+  const [wasPhone, setWasPhone] = useState(phone);
+  if (phone !== wasPhone) {
+    setWasPhone(phone);
+    setHidden(false);
+  }
 
   useEffect(() => {
-    if (!phone) {
-      setState(SHOWN);
-      return;
-    }
+    if (!phone) return;
+    // The scroll run lives here, not in state: a scroll that doesn't move the
+    // bar re-renders nothing. In state, every touch-scroll re-rendered App.
+    let bar = SHOWN;
+    const move = (next: BarState) => {
+      bar = next;
+      setHidden(next.hidden);
+    };
     const last = new WeakMap<Element, number>();
     let userAt = -Infinity;
     const user = () => {
@@ -62,10 +71,10 @@ export function useHidingBar(pinned: boolean): boolean {
       const before = last.get(el) ?? top;
       last.set(el, top);
       if (top > NEAR_TOP && performance.now() - userAt > USER_WINDOW_MS) return;
-      setState((now) => onScroll(now, top, top - before));
+      move(onScroll(bar, top, top - before));
     };
     const focus = (event: FocusEvent) => {
-      if (event.target instanceof Element && event.target.matches(SHOWS_BAR)) setState(SHOWN);
+      if (event.target instanceof Element && event.target.matches(SHOWS_BAR)) move(SHOWN);
     };
     const inputs = ["wheel", "touchstart", "touchmove", "keydown"] as const;
     for (const name of inputs) document.addEventListener(name, user, { capture: true, passive: true });
@@ -78,5 +87,5 @@ export function useHidingBar(pinned: boolean): boolean {
     };
   }, [phone]);
 
-  return phone && !pinned && state.hidden;
+  return phone && !pinned && hidden;
 }

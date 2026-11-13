@@ -5,8 +5,9 @@ use serde_json::Value;
 pub const XAI_MODELS_URL: &str = "https://api.x.ai/v1/models";
 
 /// Context window for `grok-4.7` when `/v1/models` omits `context_length`.
-/// This is the CLI fallback used when a model entry has no window.
-pub const GROK_47_CONTEXT_LENGTH: u64 = 256_000;
+/// This is the CLI fallback used when a model entry has no window and the
+/// seed ([`grokhub_core::model_registry::seed`]) doesn't know the model.
+pub const GROK_47_CONTEXT_LENGTH: u64 = 500_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListedModel {
@@ -44,8 +45,8 @@ pub fn parse_listed_models(body: &str) -> Result<Vec<ListedModel>, String> {
     Ok(listed)
 }
 
-/// `context_length` from a parsed `/v1/models` row.
-/// `grok-4.7` (and any other id with no positive length) uses [`GROK_47_CONTEXT_LENGTH`].
+/// `context_length` from a parsed `/v1/models` row, else the seed window
+/// (grok-4.3 holds 1M). Any other id with no positive length uses [`GROK_47_CONTEXT_LENGTH`].
 pub fn context_length_for(model: &str, listed: &[ListedModel]) -> u64 {
     let model = model.trim();
     let key = if model.is_empty() {
@@ -61,7 +62,7 @@ pub fn context_length_for(model: &str, listed: &[ListedModel]) -> u64 {
     {
         return len;
     }
-    GROK_47_CONTEXT_LENGTH
+    grokhub_core::model_registry::seed::seed_context(key).unwrap_or(GROK_47_CONTEXT_LENGTH)
 }
 
 /// An explicit pin wins. Otherwise prefer `grok-4.7` and skip proxy-only build ids.
@@ -118,6 +119,9 @@ mod tests {
         );
         assert_eq!(context_length_for("other", &listed), GROK_47_CONTEXT_LENGTH);
         assert_eq!(context_length_for("", &[]), GROK_47_CONTEXT_LENGTH);
+        assert_eq!(GROK_47_CONTEXT_LENGTH, 500_000);
+        assert_eq!(context_length_for("grok-4.3", &[]), 1_000_000);
+        assert_eq!(context_length_for("grok-4.5", &listed), 500_000);
         assert_eq!(
             parse_xai_models(body).unwrap(),
             vec!["grok-4.7", "grok-4", "other"]

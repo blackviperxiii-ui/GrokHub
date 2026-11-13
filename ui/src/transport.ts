@@ -85,7 +85,12 @@ export async function pair(code: string, base: string = window.location.origin):
   const stream = new AbortController();
   const first = await openStream(root, trimmed, stream.signal);
   if (first?.status === 401) throw new Error(CODE_REFUSED);
-  if (!first?.ok || !first.body) throw new Error(UNREACHABLE);
+  if (!first?.ok || !first.body) {
+    // The desktop says why it turned the stream away ("Too many open tabs.").
+    const said = first ? ((await first.json().catch(() => null)) as { error?: unknown } | null) : null;
+    stream.abort();
+    throw new Error(typeof said?.error === "string" && said.error ? said.error : UNREACHABLE);
+  }
   const now: Link = { base: root, code: trimmed, stream, seen: 0, waiting: new Set() };
   setLink(now);
   void keepStream(now, first);
@@ -159,14 +164,17 @@ function saw(now: Link, frame: string) {
   for (const wake of now.waiting) wake();
 }
 
-/** Resolves once this tab's stream has passed event `seq`, or after a while. */
-function caughtUp(now: Link, seq: number): Promise<void> {
-  if (now.seen >= seq) return Promise.resolve();
+/**
+ * Resolves once this tab's stream has passed event `seq`, or after a while.
+ * False means the wait ran out while still paired: the events never came.
+ */
+function caughtUp(now: Link, seq: number): Promise<boolean> {
+  if (now.seen >= seq) return Promise.resolve(true);
   return new Promise((done) => {
     const finish = () => {
       clearTimeout(timer);
       now.waiting.delete(check);
-      done();
+      done(now.seen >= seq || now.stream.signal.aborted);
     };
     const check = () => {
       if (now.seen >= seq || now.stream.signal.aborted) finish();
@@ -225,7 +233,11 @@ export async function call<T>(command: string, args?: Record<string, unknown>): 
   if (!reply) throw UNREACHABLE;
   // The events this call caused (a chat's reply) arrive on the stream; wait
   // for them, so a turn's text is shown before the call that ran it returns.
-  if (typeof reply.seq === "number") await caughtUp(now, reply.seq);
+  if (typeof reply.seq === "number" && !(await caughtUp(now, reply.seq)) && command === "send_chat") {
+    // Returning now ends the turn without them, so say they were lost. Any
+    // other call returning says nothing about a reply that is still running.
+    for (const fn of handlers.get(GAP_EVENT) ?? []) fn(null);
+  }
   if (!reply.ok) throw reply.error;
   return reply.value;
 }

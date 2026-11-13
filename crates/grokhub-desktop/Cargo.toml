@@ -15,7 +15,7 @@ image = { workspace = true }
 keyring = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-x11rb = { version = "0.13", default-features = false, features = ["randr", "xtest"] }
+x11rb = { version = "0.14", default-features = false, features = ["randr", "xtest"] }
 
 # Wayland portal input (Phase 2a). tokio matches the zbus runtime already in
 # the tree. reis stays blocking on that same worker; do not enable its tokio
@@ -31,7 +31,14 @@ evdev = { version = "0.13.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 xcap = "0.9.8"
-windows-sys = { version = "0.59", features = [
+# UI Automation for the control under a click (read-only). windows-sys has no
+# COM interfaces; this is the same crate version already in the tree.
+windows = { version = "0.62", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Accessibility",
+] }
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
@@ -42,4 +49,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Services",
+    "Win32_System_Power",
+    "Win32_System_SystemInformation",
+    "Win32_System_Performance",
 ] }

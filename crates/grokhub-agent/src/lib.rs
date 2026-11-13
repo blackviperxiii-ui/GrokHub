@@ -1,13 +1,22 @@
 //! Native engine. Sync HTTP, no CLI, no credential files.
 
 mod auto_review;
+pub mod batch;
 pub mod brain;
+pub mod cache_watch;
 mod checkpoint;
 mod client;
 mod close_check;
+pub mod code_guard;
 mod compact;
+mod config_file;
+mod denials;
+pub mod device;
+mod diet;
+pub mod dream_gate;
 mod dream_model;
 mod drive;
+pub mod elevate;
 pub mod episode;
 mod eval;
 mod events;
@@ -17,14 +26,24 @@ pub mod harness;
 mod hooks;
 pub mod identity;
 mod image_budget;
+pub mod imagine_keychain;
 pub mod indexers;
+mod lead;
 mod loopback;
+mod lru_map;
 pub mod mcp;
 mod memory;
+mod memory_embed;
 mod models;
+pub mod mods_net;
+pub mod onboard;
+mod pace;
+pub mod package_age;
 pub mod perm;
+pub mod plan_room;
 mod plan_skills;
 pub mod plugins;
+mod post_check;
 mod prefix_cache;
 pub mod prefix_guard;
 mod prompt;
@@ -32,30 +51,52 @@ mod recovery;
 pub mod repair;
 mod research;
 mod retry;
+pub mod review;
 pub mod route;
 mod run;
+pub mod sandbox;
 mod scan;
 pub mod self_manage;
 mod session;
 mod session_tools;
+pub mod ship_tree;
+pub mod skill_write;
 mod skills;
 mod slash_parity;
 mod sse;
+mod stall;
 mod subagent;
+mod subagent_policy;
 pub mod sudo_pass;
 pub mod tasks;
 pub mod timing;
 pub mod tokens;
 mod tools;
+mod turn_budget;
 mod unattended;
+pub mod voice_session;
+mod work;
+mod ws_mode;
+pub mod xai_keychain;
 
 pub use client::{
     map_http_status, request_headers, responses_body, AuthKind, CancelToken, ClientError,
-    ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput,
-    Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
+    ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent, TextFormat,
+    TurnOutput, Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
 pub use compact::{estimate_input_tokens, message_text};
+pub use config_file::config_warnings;
 pub use dream_model::sleep_dream;
+pub use eval::efficiency::{render_bench, run_bench, BenchRow};
+pub use eval::live::{
+    ab_flag as live_ab_flag, ab_passed as live_ab_passed, dream_lessons_passed,
+    parse_budget as parse_live_budget, read_progress as read_live_progress, render_live, run_live,
+    run_live_with, write_atomic as write_live_atomic, write_progress as write_live_progress,
+    LiveOpts, LiveReport, LocalClient as LiveLocalClient, OpenRouterClient as LiveOpenRouterClient,
+    Provider as LiveProvider, RetryPolicy as LiveRetryPolicy, AB_FLAGS as LIVE_AB_FLAGS,
+    DEFAULT_K as LIVE_DEFAULT_K,
+};
+pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
 pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{
     load_tasks, parse_args, reject_live, render_markdown, render_report, run_suite,
@@ -75,6 +116,7 @@ pub use hooks::{
     HookInfo, HookOrigin,
 };
 pub use identity::{identity_blocks, SOUL_BYTE_CAP, USER_BYTE_CAP};
+pub use lead::{lead_on, set_lead_session, LeadPhase};
 pub use mcp::{
     alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,
     restart, set_workspace, shutdown_all, unalias_elicit, DoctorRow, ElicitInbox, ElicitNote,
@@ -96,13 +138,9 @@ pub use plan_skills::{
     standing_reminder as plan_skills_standing, PlanSkillCtx, SkillMoment, AV_QA_WALKTHROUGH,
     CREATE_VERIFICATION, FOLLOW_THROUGH, MAINTAIN_VERIFICATION, QA_WALKTHROUGH,
 };
-pub use prefix_cache::{
-    enabled as prefix_cache_enabled, settings as prefix_cache_settings,
-    Settings as PrefixCacheSettings,
-};
 pub use prompt::{
-    prompt_need_from_job, system_prompt, system_prompt_parts, system_prompt_with,
-    tool_set_from_job, PromptNeed, PromptProfile,
+    chat_volatile_tail, prompt_need_from_job, system_prompt, system_prompt_parts,
+    system_prompt_with, tool_set_from_job, ChatTail, PromptNeed, PromptProfile,
 };
 pub use recovery::{
     project as project_recovery, state_for_rung, DriveFact, RecoveryFacts, RecoverySnapshot,
@@ -119,27 +157,37 @@ pub use run::{
     LoopOut, SteerQueue, StopReason, REPEAT_REPLAN, TRUNCATED_TOOL,
 };
 pub use session::{
-    attach_run, cancel_session, delete_session, export_markdown, fork_session, format_cost_ticks,
-    history_generation, list_sessions, load_session, local_title, merge_history, record_compaction,
-    record_turn, rename_session, resume_input, session_file, transcript_pairs, usage_label,
-    HistoryRow, RunGuard, SessionInfo,
+    attach_run, cancel_session, delete_forks_of, delete_session, export_markdown, forget_message,
+    fork_session, format_cost_ticks, history_generation, list_sessions, load_session, local_title,
+    merge_history, record_compaction, record_turn, rename_session, resume_input, session_file,
+    session_intact, transcript_pairs, usage_label, Forget, Forgotten, HistoryRow, RunGuard,
+    SessionInfo, FORGET_BUSY,
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{
-    builtin_names, discover as discover_skills, Skill, SkillSource, BUILTIN_SKILL_BODIES,
+    builtin_names, discover as discover_skills, discover_all as discover_all_skills,
+    set_skill_off_in, skill_is_off_in, skill_name_key, skills_off_in, Skill, SkillSource,
+    BUILTIN_SKILL_BODIES,
 };
 pub use slash_parity::{slash_parity, unparsed_native_slash, SlashParity, UnparsedSlash};
 pub use sse::SseParser;
 pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
 pub use tasks::{
-    forget_session, halt_all_sessions, halt_session, halt_tree, hub_for, link_child,
-    session_is_live, watch_cancel,
+    drain_task_changes, forget_session, halt_all_sessions, halt_session, halt_tree, hub_for,
+    link_child, session_is_live, set_task_watch, watch_cancel, TaskPeek, TaskProgress, TaskRow,
+    TaskState,
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
+pub use tools::mods::{set_host as set_mods_host, ModsOps};
 pub use tools::{
     brave_key_present, deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute,
-    is_readonly, public_only_resolve, schemas_for, schemas_for_job, seal_brave_key, tool_schemas,
-    tool_set_for_kind, tool_set_refusal, DeferredToolsSettings, DesktopOps, ToolOutput, ToolSet,
+    generative_ui_enabled, imagine_client, is_readonly, public_only_resolve, run_media_tool,
+    schemas_for, schemas_for_job, seal_brave_key, tool_schemas, tool_set_for_kind,
+    tool_set_refusal, DeferredToolsSettings, DesktopOps, ImagineApi, ToolOutput, ToolSet,
     WebSearchBackend, WebSearchSettings, READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};
+pub use work::{
+    discard_work, how_ended, merge_work, resume_work, settled, why_held, work_for, By, Counts,
+    Ended, Held, Landing, Resume, Work, WorkState,
+};

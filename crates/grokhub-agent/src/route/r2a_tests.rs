@@ -15,7 +15,7 @@ use grokhub_core::model_registry::{
     RegistryEvent, SourceKind,
 };
 
-use super::heal::{heal_messages, HealNotes, Tier};
+use super::heal::{heal_messages, HealNotes};
 use super::ladder::{rung, Pick};
 use super::table::{
     build_table, table_path, ClassTable, EvalCache, RoutingTable, SpeedQuality, TableInputs,
@@ -140,13 +140,12 @@ fn burst(model: &str, status: CallStatus, http: u16, n: u64, from: u64) -> Vec<O
         .collect()
 }
 
-fn ask<'a>(model: &'a str, pinned: bool) -> RouteInput<'a> {
+fn ask(model: &str) -> RouteInput<'_> {
     RouteInput {
         provider: "xai",
         class: "chat:default",
         current_model: model,
         current_effort: None,
-        pinned,
         d: 0.5,
         needs_tools: true,
         ..RouteInput::default()
@@ -154,18 +153,10 @@ fn ask<'a>(model: &'a str, pinned: bool) -> RouteInput<'a> {
 }
 
 type Apply = fn(&mut Registry, u64) -> Vec<RegistryEvent>;
-/// (fixture, the pin's state after, pinned route, its rule, the one message tier for a pin, for Auto)
-type Fixture = (
-    &'static str,
-    Apply,
-    ModelState,
-    &'static str,
-    &'static str,
-    Option<Tier>,
-    Option<Tier>,
-);
+/// (fixture, the model's state after, whether it posts one Home update)
+type Fixture = (&'static str, Apply, ModelState, bool);
 
-/// The pinned model in every fixture.
+/// The model every fixture breaks.
 const PIN: &str = "grok-4.6";
 
 fn storm(reg: &mut Registry, t: u64) -> Vec<RegistryEvent> {
@@ -206,183 +197,90 @@ fn placeholder(reg: &mut Registry, t: u64) -> Vec<RegistryEvent> {
 #[test]
 fn chaos_fixtures_heal_with_the_right_route_and_exactly_the_planned_messages() {
     let fixtures: &[Fixture] = &[
-        (
-            "404 storm",
-            storm,
-            ModelState::Ghost,
-            "grok-4.7",
-            "pin:fallback",
-            Some(Tier::HomeUpdate),
-            None,
-        ),
-        (
-            "429 burst",
-            busy,
-            ModelState::Degraded,
-            "grok-4.7",
-            "pin:fallback",
-            Some(Tier::WorkRow),
-            None,
-        ),
-        (
-            "503 flap",
-            flap,
-            ModelState::Quarantined,
-            "grok-4.7",
-            "pin:fallback",
-            Some(Tier::WorkRow),
-            None,
-        ),
-        (
-            "redirected slug",
-            redirect,
-            ModelState::Redirected,
-            "grok-4.7",
-            "pin:redirect",
-            Some(Tier::HomeUpdate),
-            None,
-        ),
-        (
-            "tier downgrade",
-            downgrade,
-            ModelState::NotInPlan,
-            "grok-4.7",
-            "pin:fallback",
-            Some(Tier::HomeUpdate),
-            Some(Tier::HomeUpdate),
-        ),
-        (
-            "placeholder row",
-            placeholder,
-            ModelState::Ghost,
-            "grok-4.7",
-            "pin:fallback",
-            Some(Tier::HomeUpdate),
-            None,
-        ),
+        ("404 storm", storm, ModelState::Ghost, false),
+        ("429 burst", busy, ModelState::Degraded, false),
+        ("503 flap", flap, ModelState::Quarantined, false),
+        ("redirected slug", redirect, ModelState::Redirected, false),
+        ("tier downgrade", downgrade, ModelState::NotInPlan, true),
+        ("placeholder row", placeholder, ModelState::Ghost, false),
     ];
-    for (name, apply, state, model, rule, pin_tier, auto_tier) in fixtures {
-        for pinned in [true, false] {
-            let (mut reg, profiles) = fleet();
-            let table = build_table(
-                &TableInputs {
-                    reg: &reg,
-                    profiles: &profiles,
-                },
-                &EvalCache::default(),
-                NOW,
-            );
-            let events = apply(&mut reg, NOW);
-            assert_eq!(reg.get(PIN).unwrap().state, *state, "{name}");
-            let route = Router::choose(&ask(PIN, pinned), &reg, &profiles, &table, NOW + 10);
-            assert!(!route.no_route, "{name}");
-            assert_ne!(route.model, PIN, "{name}: never the broken model");
-            if pinned {
-                assert_eq!(
-                    (route.model.as_str(), route.rule_ids[0].as_str()),
-                    (*model, *rule),
-                    "{name}"
-                );
-            }
-            let mut notes = HealNotes::default();
-            let pin = if pinned { PIN } else { "" };
-            let told = notes.admit(heal_messages(&events, &reg, &profiles, pin, NOW), NOW);
-            let tiers: Vec<Tier> = told.iter().map(|m| m.tier).collect();
-            let want = if pinned { pin_tier } else { auto_tier };
-            assert_eq!(
-                tiers,
-                want.iter().copied().collect::<Vec<_>>(),
-                "{name} pinned={pinned}: {told:?}"
-            );
-            // The incident goes on: nothing more is said.
-            let again = apply(&mut reg, NOW + 1_000);
-            assert!(
-                notes
-                    .admit(
-                        heal_messages(&again, &reg, &profiles, pin, NOW + 1_000),
-                        NOW + 1_000
-                    )
-                    .is_empty(),
-                "{name} pinned={pinned}"
-            );
-        }
+    for (name, apply, state, tells) in fixtures {
+        let (mut reg, profiles) = fleet();
+        let table = build_table(
+            &TableInputs {
+                reg: &reg,
+                profiles: &profiles,
+            },
+            &EvalCache::default(),
+            NOW,
+        );
+        let events = apply(&mut reg, NOW);
+        assert_eq!(reg.get(PIN).unwrap().state, *state, "{name}");
+        let route = Router::choose(&ask(PIN), &reg, &profiles, &table, NOW + 10);
+        assert!(!route.no_route, "{name}");
+        assert_ne!(route.model, PIN, "{name}: never the broken model");
+        let mut notes = HealNotes::default();
+        let told = notes.admit(heal_messages(&events, &reg, &profiles, NOW), NOW);
+        assert_eq!(told.len(), usize::from(*tells), "{name}: {told:?}");
+        // The incident goes on: nothing more is said.
+        let again = apply(&mut reg, NOW + 1_000);
+        assert!(
+            notes
+                .admit(
+                    heal_messages(&again, &reg, &profiles, NOW + 1_000),
+                    NOW + 1_000
+                )
+                .is_empty(),
+            "{name}"
+        );
     }
 }
 
 #[test]
-fn the_messages_read_as_the_plan_words_them() {
-    let (mut reg, profiles) = fleet();
-    let ev = busy(&mut reg, NOW);
-    let told = heal_messages(&ev, &reg, &profiles, PIN, NOW).msgs;
-    assert_eq!(
-        told[0].text,
-        "grok-4.6 isn't answering, so I'm using grok-4.7 for now. Your pick is saved."
-    );
+fn a_plan_change_reads_as_the_plan_words_it_and_names_no_model() {
     let (mut reg, profiles) = fleet();
     let ev = downgrade(&mut reg, NOW);
-    let told = heal_messages(&ev, &reg, &profiles, PIN, NOW).msgs;
+    let told = heal_messages(&ev, &reg, &profiles, NOW).msgs;
     assert_eq!(told.len(), 1);
+    assert_eq!(told[0].title, "Your plan changed");
     assert_eq!(
         told[0].text,
-        "Your plan changed, so grok-4.6 isn't included anymore. I'll use grok-4.7."
+        "Your plan no longer includes some of the AI models it had. Auto keeps going on the ones it still has."
     );
-    let (mut reg, profiles) = fleet();
-    let mut old = meta(PIN, true);
-    old.deprecated = Some(true);
-    let ev = reg.apply_refresh(
-        &[listing(
-            IDS.iter()
-                .map(|id| {
-                    if *id == PIN {
-                        old.clone()
-                    } else {
-                        meta(id, true)
-                    }
-                })
-                .collect(),
-            "SuperGrok Heavy",
-        )],
-        &[],
-        NOW,
-    );
-    let told = heal_messages(&ev, &reg, &profiles, PIN, NOW).msgs;
-    assert_eq!(told[0].text, "grok-4.6 was retired by xAI, so I'm using grok-4.7 where you picked it. Your pick shows (retired) until you choose another in Settings.");
-    assert_eq!(reg.pin_label(PIN), "grok-4.6 (retired)");
-    let r = Router::choose(
-        &ask(PIN, true),
-        &reg,
-        &profiles,
-        &RoutingTable::default(),
-        NOW,
-    );
+    let none_left = super::heal::plan_change_msg("SuperGrok", false);
     assert_eq!(
-        (r.model.as_str(), r.replaced.as_deref()),
-        ("grok-4.7", Some(PIN)),
-        "a retired pin falls back"
+        none_left.text,
+        "Your plan no longer includes some of the AI models it had, and none left in it can answer right now."
     );
+    for m in told.iter().chain([&none_left]) {
+        let shown = format!("{} {}", m.title, m.text).to_ascii_lowercase();
+        assert!(
+            !shown.contains("grok-") && !shown.contains("grok 4"),
+            "{shown}"
+        );
+    }
 }
 
 #[test]
-fn a_flap_tells_once_per_incident_and_again_after_it_recovers() {
+fn a_flap_says_nothing_and_its_recovery_ends_the_incident() {
     let (mut reg, profiles) = fleet();
-    let mut notes = HealNotes::default();
-    let mut told = 0;
-    for round in 0..3u64 {
-        let t = NOW + round * 10_000_000;
-        let ev = flap(&mut reg, t);
-        told += notes
-            .admit(heal_messages(&ev, &reg, &profiles, PIN, t), t)
-            .len();
-        // Its half-open check passes: healthy again, the incident ends.
-        let until = reg.get(PIN).unwrap().breaker.open_until_ms;
-        reg.mark_half_open(PIN);
-        let ev: Vec<RegistryEvent> = reg.half_open_result(PIN, true, until).into_iter().collect();
-        told += notes
-            .admit(heal_messages(&ev, &reg, &profiles, PIN, until), until)
-            .len();
-        assert_eq!(reg.get(PIN).unwrap().state, ModelState::Live);
-    }
-    assert_eq!(told, 3, "one row per incident");
+    let ev = flap(&mut reg, NOW);
+    let heard = heal_messages(&ev, &reg, &profiles, NOW);
+    assert!(heard.msgs.is_empty(), "{heard:?}");
+    // Its half-open check passes: healthy again, the incident ends.
+    let until = reg.get(PIN).unwrap().breaker.open_until_ms;
+    reg.mark_half_open(PIN);
+    let ev: Vec<RegistryEvent> = reg.half_open_result(PIN, true, until).into_iter().collect();
+    let heard = heal_messages(&ev, &reg, &profiles, until);
+    assert_eq!(reg.get(PIN).unwrap().state, ModelState::Live);
+    assert_eq!(
+        heard.cleared,
+        vec![
+            "unhealthy:grok-4.6".to_string(),
+            "noroute:grok-4.6".to_string()
+        ]
+    );
+    assert!(heard.msgs.is_empty());
 }
 
 #[test]
@@ -401,24 +299,22 @@ fn fallback_never_picks_a_route_that_is_not_included() {
     for id in IDS {
         reg.fold(&burst(id, CallStatus::Error, 500, 3, NOW));
     }
-    for pinned in [true, false] {
-        let r = Router::choose(
-            &ask(PIN, pinned),
-            &reg,
-            &profiles,
-            &RoutingTable::default(),
-            NOW + 1,
-        );
-        assert!(r.no_route, "pinned={pinned}: {:?}", r.rule_ids);
-        assert_ne!(r.model, "grok-4.8");
-    }
+    let r = Router::choose(
+        &ask(PIN),
+        &reg,
+        &profiles,
+        &RoutingTable::default(),
+        NOW + 1,
+    );
+    assert!(r.no_route, "{:?}", r.rule_ids);
+    assert_ne!(r.model, "grok-4.8");
     // R2b: a key at list price is included up to your $/M ceiling. grok-4.5
     // ($25/M out) is over the default $15/M, so it's premium: Auto stands in
     // with grok-4.3 ($15/M) and the cabin asks once.
     let (mut keyed, profiles) = fleet();
     keyed.entitlement.credential = Credential::ApiKey;
     let r = Router::choose(
-        &ask("grok-4.5", false),
+        &ask("grok-4.5"),
         &keyed,
         &profiles,
         &RoutingTable::default(),
@@ -437,7 +333,7 @@ fn fallback_never_picks_a_route_that_is_not_included() {
         (CostClass::Included, Some("premium:grok-4.5"))
     );
     // Under a $30/M ceiling it is included, and with no table row a key keeps the call's own model.
-    let mut wide = ask("grok-4.5", false);
+    let mut wide = ask("grok-4.5");
     wide.spend.settings.ceiling_usd_per_m = 30.0;
     let r = Router::choose(&wide, &keyed, &profiles, &RoutingTable::default(), NOW);
     assert_eq!(
@@ -451,7 +347,7 @@ fn fallback_never_picks_a_route_that_is_not_included() {
     // No sign-in: nothing native is included, the call keeps its own model.
     keyed.entitlement.credential = Credential::None;
     let r = Router::choose(
-        &ask("grok-4.5", false),
+        &ask("grok-4.5"),
         &keyed,
         &profiles,
         &RoutingTable::default(),
@@ -488,7 +384,7 @@ fn a_vision_step_never_picks_a_model_without_image_input() {
         ModelProfile::build(&text_only, ok_probe(), 2),
     );
     let table = top_first("grok-4.7");
-    let mut i = ask("grok-4.7", false);
+    let mut i = ask("grok-4.7");
     assert_eq!(
         Router::choose(&i, &reg, &profiles, &table, NOW).model,
         "grok-4.7"
@@ -540,7 +436,7 @@ pub(super) fn top_first(top: &str) -> RoutingTable {
 fn a_replan_steps_up_one_model_for_the_call_and_the_episode_drops_back_after() {
     let (reg, profiles) = fleet();
     let table = top_first("grok-4.7");
-    let mut i = ask("grok-4.7", false);
+    let mut i = ask("grok-4.7");
     i.episode_model = Some("grok-4.7");
     let before = Router::choose(&i, &reg, &profiles, &table, NOW);
     assert_eq!(before.model, "grok-4.7");
@@ -576,7 +472,7 @@ fn one_model_per_episode_over_fifty_episodes() {
     let tables = [top_first("grok-4.7"), top_first("grok-4.5")];
     let e2 = Pick {
         rung: rung("xhigh").unwrap(),
-        rules: vec!["E2".into(), "E2:next_model".into()],
+        rules: vec!["E2".into(), super::ladder::NEXT_MODEL.into()],
         ..Pick::default()
     };
     let mut per_episode = Vec::new();
@@ -597,7 +493,7 @@ fn one_model_per_episode_over_fifty_episodes() {
             }
             // Every eleventh episode the check rejects twice at the ceiling at step 4.
             let reject = ep % 11 == 5 && step == 4;
-            let mut i = ask("grok-4.7", false);
+            let mut i = ask("grok-4.7");
             i.episode_model = model.as_deref();
             i.pick = reject.then(|| e2.clone());
             let r = Router::choose(&i, &reg, &profiles, table, t);
@@ -654,6 +550,7 @@ impl ModelClient for Echo {
 
 fn req(model: &str, session: &str, text: &str) -> ResponsesRequest {
     ResponsesRequest {
+        text_format: None,
         model: model.into(),
         effort: None,
         input: vec![InputItem::Message {
@@ -699,10 +596,13 @@ fn the_live_path_keeps_an_episode_on_its_model_and_pauses_with_no_route() {
         .map(|_| echo.0.lock().unwrap().last().unwrap().model.clone())
     };
     // Auto: the table's top model, for every step of the episode.
-    assert_eq!(send("grok-4.7", "plan the trip").unwrap(), "grok-4.5");
+    assert_eq!(
+        send("grok-4.7", "chat with me about the trip").unwrap(),
+        "grok-4.5"
+    );
     write_table(&dir, &top_first("grok-4.3"), 20);
     assert_eq!(
-        send("grok-4.7", "plan the trip").unwrap(),
+        send("grok-4.7", "chat with me about the trip").unwrap(),
         "grok-4.5",
         "a table change waits for the next episode"
     );
@@ -711,10 +611,6 @@ fn the_live_path_keeps_an_episode_on_its_model_and_pauses_with_no_route() {
         "grok-4.3",
         "a new user message is a new episode"
     );
-    // A pin is kept while it answers.
-    live::set_pin("grok-4.6");
-    assert_eq!(send("grok-4.6", "and again").unwrap(), "grok-4.6");
-    live::set_pin("");
     // Nothing healthy: the call pauses, nothing is sent, and the cabin hears why.
     let mut dead = reg.clone();
     for id in IDS {
@@ -1033,4 +929,92 @@ fn only_five_old_tables_are_kept() {
 
 fn models_file(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
     grokhub_core::model_registry::store::models_dir(dir).join(name)
+}
+
+#[test]
+fn a_long_chat_keeps_its_pin_until_a_cheaper_model_pays_for_the_resend() {
+    assert_eq!(live::SESSION_KEEP_TOKENS, 16_000);
+    let (reg, profiles) = fleet();
+    let table = top_first("grok-4.3");
+    let mut i = ask("grok-4.7");
+    i.episode_model = Some("grok-4.7");
+    i.ctx_tokens = 20_000;
+    // One turn so far: one turn's saving is less than the history re-sent uncached.
+    i.pin_turns = Some(1);
+    let kept = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(kept.model, "grok-4.7");
+    assert!(
+        kept.rule_ids.contains(&"pin:keep".to_string())
+            && kept.rule_ids.contains(&"episode:keep".to_string()),
+        "{:?}",
+        kept.rule_ids
+    );
+    // Two turns so far: two more expected, and the saving beats the re-send.
+    i.pin_turns = Some(2);
+    let down = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(down.model, "grok-4.3");
+    assert!(
+        down.rule_ids.contains(&"pin:downgrade".to_string())
+            && !down.rule_ids.contains(&"episode:keep".to_string()),
+        "{:?}",
+        down.rule_ids
+    );
+    // Mid-turn (no pin) the episode keeps its model whatever it costs.
+    i.pin_turns = None;
+    let step = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(step.model, "grok-4.7");
+    assert!(
+        !step.rule_ids.iter().any(|r| r.starts_with("pin:")),
+        "{:?}",
+        step.rule_ids
+    );
+}
+
+#[test]
+fn a_pin_never_holds_back_a_turn_that_needs_a_stronger_model() {
+    let (reg, profiles) = fleet();
+    let table = top_first("grok-4.3");
+    let mut i = ask("grok-4.3");
+    i.episode_model = Some("grok-4.3");
+    i.ctx_tokens = 20_000;
+    i.pin_turns = Some(8);
+    i.steer = super::ladder::Steer::Harder;
+    let up = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(up.model, "grok-4.7");
+    assert!(
+        up.rule_ids.contains(&"pin:upgrade".to_string())
+            && up
+                .rule_ids
+                .contains(&"attn:escalate:steer:mid_flow".to_string()),
+        "{:?}",
+        up.rule_ids
+    );
+    // E15 on a pinned chat: the stronger step goes ahead and says so.
+    i.steer = super::ladder::Steer::default();
+    i.pick = Some(Pick {
+        rung: rung("xhigh").unwrap(),
+        rules: vec!["E2".into(), super::ladder::NEXT_MODEL.into()],
+        ..Pick::default()
+    });
+    let e15 = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(e15.model, "grok-4.7");
+    assert!(
+        e15.rule_ids.contains(&"model:stronger".to_string())
+            && e15.rule_ids.contains(&"pin:upgrade".to_string()),
+        "{:?}",
+        e15.rule_ids
+    );
+}
+
+#[test]
+fn a_chat_pin_counts_its_typed_turns_and_follows_the_latest_model() {
+    let key = "pin-count-chat";
+    assert_eq!(live::session_model(key), None);
+    live::keep_session_model(key, 11, "grok-4.7");
+    // Tool steps of the same turn don't count again.
+    live::keep_session_model(key, 11, "grok-4.7");
+    assert_eq!(live::session_model(key), Some(("grok-4.7".to_string(), 1)));
+    live::keep_session_model(key, 12, "grok-4.7");
+    live::keep_session_model(key, 13, "grok-4.3");
+    assert_eq!(live::session_model(key), Some(("grok-4.3".to_string(), 3)));
 }

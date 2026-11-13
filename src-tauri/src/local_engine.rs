@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use grokhub_agent::public_only_resolve;
 use grokhub_agent::route::local_sidecar;
 use grokhub_core::local_draft as ld;
 use grokhub_core::local_setup::{self as ls, LocalModel};
@@ -22,7 +21,7 @@ use tauri::{AppHandle, Emitter};
 pub const ENGINE_EVENT: &str = "local-ai-engine";
 pub const DRAFTER_EVENT: &str = "local-ai-drafter";
 
-const REDIRECTS_MAX: u32 = 8;
+const REDIRECTS_MAX: usize = 8;
 const MIB: u64 = 1_024 * 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -124,24 +123,24 @@ fn state() -> &'static Mutex<State> {
     })
 }
 
-/// Where new draft downloads land: beside the config models folder (same
-/// tree as the engine under `{config}/bin`).
-fn drafters_dir(config_dir: &Path) -> PathBuf {
+/// Where new draft downloads land: the shared `~/GrokHub/models/drafters`
+/// that the cabin uses and the engine searches (the config folder only when
+/// there is no home folder).
+pub(crate) fn drafters_dir(config_dir: &Path) -> PathBuf {
+    ld::drafters_root().unwrap_or_else(|| legacy_drafters_dir(config_dir))
+}
+
+/// Where this app downloaded drafters before they moved to the shared root.
+fn legacy_drafters_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("models").join(ld::DRAFTERS_DIR)
 }
 
-/// Config drafters first, then the home models tree — same places the
-/// picker discovers GGUFs.
+/// The shared root first, then the older config folder.
 fn drafter_dirs(config_dir: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![drafters_dir(config_dir)];
-    if let Some(home) = grokhub_core::paths::user_home() {
-        let alt = home
-            .join(grokhub_core::brand::INTERNAL_ID)
-            .join("models")
-            .join(ld::DRAFTERS_DIR);
-        if alt != dirs[0] {
-            dirs.push(alt);
-        }
+    let old = legacy_drafters_dir(config_dir);
+    if old != dirs[0] {
+        dirs.push(old);
     }
     dirs
 }
@@ -176,7 +175,7 @@ fn offer_for(config_dir: &Path, m: &LocalModel) -> Option<DraftOffer> {
         name: d.name.into(),
         size_label: ls::size_label(d.download_mb),
         line: format!(
-            "Optional: {} can draft replies for {}, which can make them faster on some machines. {} only downloads it if you ask, and keeps it only if the speed test finds it helps.",
+            "{} makes {}'s replies come faster. {} keeps it on only where the speed test finds it helps.",
             d.name,
             m.name,
             grokhub_core::brand::product_name()
@@ -196,7 +195,7 @@ pub fn draft_offer(config_dir: &Path, selected: &str) -> Option<DraftOffer> {
 pub fn draft_offers(config_dir: &Path) -> Vec<DraftOffer> {
     ls::local_models()
         .iter()
-        .filter(|m| !m.is_drafter)
+        .filter(|m| m.is_chat())
         .filter_map(|m| offer_for(config_dir, m))
         .collect()
 }
@@ -318,104 +317,121 @@ pub fn draft_progress() -> Option<DraftProgress> {
     })
 }
 
-struct HttpEngineFetch {
-    url: String,
-}
+/// The engine archive download; `download_engine` names each asset's URL.
+pub(crate) struct HttpEngineFetch;
 
-fn runtime_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .redirects(0)
-        .timeout_connect(Duration::from_secs(20))
-        .timeout_read(Duration::from_secs(120))
-        .resolver(public_only_resolve)
-        .build()
-}
-
-fn redirect_target(from: &str, location: &str) -> String {
-    if location.starts_with("https://") || location.starts_with("http://") {
-        return location.to_string();
-    }
-    let (scheme, rest) = from.split_once("://").unwrap_or(("https", from));
-    let host = rest.split('/').next().unwrap_or("");
-    if location.starts_with('/') {
-        format!("{scheme}://{host}{location}")
-    } else {
-        format!("{scheme}://{host}/{location}")
-    }
-}
-
-fn is_redirect(status: u16) -> bool {
-    matches!(status, 301 | 302 | 303 | 307 | 308)
+fn runtime_agent() -> grokhub_core::http::Agent {
+    // Redirects are followed by hand so every hop is checked; public IPs only.
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(20),
+        read: Some(Duration::from_secs(120)),
+        redirects: 0,
+        public_only: true,
+        ..Default::default()
+    })
 }
 
 impl rd::Fetch for HttpEngineFetch {
-    fn open(&self, offset: u64) -> Result<md::Opened, String> {
-        let mut url = self.url.clone();
-        for hop in 0..=REDIRECTS_MAX {
-            runtime_download_url_ok(&url)?;
-            let mut req = runtime_agent()
-                .get(&url)
-                .set("user-agent", grokhub_agent::USER_AGENT);
-            if hop == 0 && offset > 0 {
-                req = req.set("range", &format!("bytes={offset}-"));
-            }
-            let resp = match req.call() {
-                Ok(resp) => resp,
-                Err(ureq::Error::Status(status, resp)) if is_redirect(status) => {
-                    let loc = resp.header("location").ok_or_else(|| {
-                        format!("engine download redirect missing Location (HTTP {status})")
-                    })?;
-                    url = redirect_target(&url, loc);
-                    continue;
-                }
-                Err(e) => return Err(e.to_string()),
-            };
-            let status = resp.status();
-            if is_redirect(status) {
-                let loc = resp.header("location").ok_or_else(|| {
-                    format!("engine download redirect missing Location (HTTP {status})")
-                })?;
-                url = redirect_target(&url, loc);
-                continue;
-            }
-            let (start, total) = if resp.status() == 206 {
-                (
-                    offset,
-                    resp.header("content-range")
-                        .and_then(md::content_range_total),
-                )
-            } else {
-                (
-                    0,
-                    resp.header("content-length")
-                        .and_then(|v| v.trim().parse().ok()),
-                )
-            };
-            return Ok((Box::new(resp.into_reader()), start, total));
+    fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
+        let range = format!("bytes={offset}-");
+        let mut headers = vec![("user-agent", grokhub_agent::USER_AGENT)];
+        if offset > 0 {
+            headers.push(("range", range.as_str()));
         }
-        Err("too many redirects while downloading the engine".into())
+        let resp = grokhub_core::http::get_following(
+            &runtime_agent(),
+            url,
+            &headers,
+            REDIRECTS_MAX,
+            "while downloading the engine",
+            &runtime_download_url_ok,
+        )?;
+        let (start, total) = if resp.status() == 206 {
+            (
+                offset,
+                resp.header("content-range")
+                    .and_then(md::content_range_total),
+            )
+        } else {
+            (
+                0,
+                resp.header("content-length")
+                    .and_then(|v| v.trim().parse().ok()),
+            )
+        };
+        Ok((Box::new(resp.into_reader()), start, total))
     }
 }
 
-struct HfFetch;
+pub(crate) struct HfFetch;
 
-fn hf_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .try_proxy_from_env(true)
-        .timeout_connect(Duration::from_secs(15))
-        .timeout_read(Duration::from_secs(60))
-        .build()
+/// Hosts a draft model download may touch: the Hub and its LFS CDN, which the
+/// Hub redirects to (`cdn-lfs.hf.co`, `cdn-lfs-us-1.hf.co`, …).
+const MODEL_DOWNLOAD_HOSTS: &[&str] = &["huggingface.co", "hf.co"];
+
+/// Refuse non-HTTPS model downloads, loopback names, and hosts outside the
+/// Hugging Face Hub. Checked again on every redirect hop.
+fn model_download_url_ok(url: &str) -> Result<(), String> {
+    let url = url.trim();
+    let rest = url
+        .strip_prefix("https://")
+        .ok_or_else(|| "model download must use HTTPS".to_string())?;
+    let host = rest
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| "model download URL is missing a host".to_string())?;
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    let name = host.trim_end_matches('.').to_ascii_lowercase();
+    if grokhub_core::ssrf::host_name_blocked(&name) {
+        return Err(format!("model download host {host} is not allowed"));
+    }
+    let allowed = MODEL_DOWNLOAD_HOSTS
+        .iter()
+        .any(|h| name == *h || name.ends_with(&format!(".{h}")));
+    if !allowed {
+        return Err(format!(
+            "model download host {host} is not on the allowlist"
+        ));
+    }
+    Ok(())
+}
+
+/// Like [`runtime_agent`]: no automatic redirects, public addresses only.
+/// A public-only agent never dials an env proxy (the proxy, not the Hub,
+/// would reach the public-only resolver).
+fn hf_agent() -> grokhub_core::http::Agent {
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(15),
+        read: Some(Duration::from_secs(60)),
+        redirects: 0,
+        public_only: true,
+        ..Default::default()
+    })
+}
+
+/// GET `url`, following redirects by hand so every hop passes
+/// [`model_download_url_ok`]. A `range` goes to every hop, the CDN too.
+fn hf_get(url: &str, range: Option<&str>) -> Result<grokhub_core::http::Response, String> {
+    let mut headers = vec![("user-agent", grokhub_agent::USER_AGENT)];
+    if let Some(range) = range {
+        headers.push(("range", range));
+    }
+    grokhub_core::http::get_following(
+        &hf_agent(),
+        url,
+        &headers,
+        REDIRECTS_MAX,
+        "while downloading the model",
+        &model_download_url_ok,
+    )
 }
 
 impl md::Fetch for HfFetch {
     fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
-        let mut req = hf_agent()
-            .get(url)
-            .set("user-agent", grokhub_agent::USER_AGENT);
-        if offset > 0 {
-            req = req.set("range", &format!("bytes={offset}-"));
-        }
-        let resp = req.call().map_err(|e| e.to_string())?;
+        let range = (offset > 0).then(|| format!("bytes={offset}-"));
+        let resp = hf_get(url, range.as_deref())?;
         let (start, total) = if resp.status() == 206 {
             (
                 offset,
@@ -433,17 +449,15 @@ impl md::Fetch for HfFetch {
     }
 
     fn sha256(&self, repo: &str, file: &str) -> Result<String, String> {
-        let url = md::tree_url(repo);
-        let resp = hf_agent()
-            .get(&url)
-            .set("user-agent", grokhub_agent::USER_AGENT)
-            .call()
-            .map_err(|e| e.to_string())?;
-        let mut body = String::new();
-        resp.into_reader()
-            .read_to_string(&mut body)
-            .map_err(|e| e.to_string())?;
-        md::sha256_from_tree(&body, file).ok_or_else(|| format!("No SHA-256 for {file} in {repo}"))
+        md::sha256_lookup(repo, file, &mut |url| {
+            let resp = hf_get(url, None)?;
+            let link = resp.header("link").map(str::to_owned);
+            let mut body = String::new();
+            resp.into_reader()
+                .read_to_string(&mut body)
+                .map_err(|e| e.to_string())?;
+            Ok((body, link))
+        })
     }
 }
 
@@ -469,7 +483,66 @@ fn outcome_message(manifest: &Manifest, out: &EngineOutcome) -> String {
 }
 
 static ENGINE_BUSY: AtomicBool = AtomicBool::new(false);
-static DRAFTER_BUSY: AtomicBool = AtomicBool::new(false);
+pub(crate) static DRAFTER_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// One download at a time. The flag clears when the guard drops, so an early
+/// error before the worker thread starts (a poisoned lock, say) never leaves
+/// the button wedged on a job that isn't running.
+pub(crate) struct Busy(&'static AtomicBool);
+
+impl Busy {
+    /// `None` when a download already holds the flag.
+    pub(crate) fn claim(flag: &'static AtomicBool) -> Option<Self> {
+        flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+            .then_some(Busy(flag))
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Records the engine job in `st` while `busy` is held.
+fn claim_engine_job(
+    st: &Mutex<State>,
+    manifest: &Manifest,
+    ctl: &Arc<Control>,
+    done: u64,
+) -> Result<(), String> {
+    let mut s = st.lock().map_err(|e| e.to_string())?;
+    s.engine_error = None;
+    s.engine = Some(EngineJob {
+        ctl: ctl.clone(),
+        done,
+        total: Some(manifest.asset.size),
+        verifying: false,
+        version: manifest.version.clone(),
+    });
+    Ok(())
+}
+
+/// Records the drafter job in `st` while `busy` is held.
+fn claim_drafter_job(
+    st: &Mutex<State>,
+    d: &LocalModel,
+    ctl: &Arc<Control>,
+    done: u64,
+) -> Result<(), String> {
+    let mut s = st.lock().map_err(|e| e.to_string())?;
+    s.drafter_error = None;
+    s.drafter = Some(DrafterJob {
+        ctl: ctl.clone(),
+        id: d.id.into(),
+        name: d.name.into(),
+        done,
+        total: Some(d.download_mb * MIB),
+        verifying: false,
+    });
+    Ok(())
+}
 
 pub fn start_engine(app: AppHandle, config_dir: PathBuf) -> Result<EngineInfo, String> {
     if rd::engine_binary_available(&config_dir) {
@@ -478,25 +551,12 @@ pub fn start_engine(app: AppHandle, config_dir: PathBuf) -> Result<EngineInfo, S
     let manifest = rd::manifest_for_host().ok_or_else(|| {
         "There's no llama.cpp build for this computer. Install llama-server and put it on PATH, or set GROKHUB_LLAMA_SERVER to its path.".to_string()
     })?;
-    if !ENGINE_BUSY
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
-    {
+    let Some(busy) = Busy::claim(&ENGINE_BUSY) else {
         return Ok(engine_info(&config_dir));
-    }
+    };
     let ctl = Arc::new(Control::default());
     let done = rd::partial_bytes(&rd::bin_dir(&config_dir), &manifest.asset).unwrap_or(0);
-    {
-        let mut s = state().lock().map_err(|e| e.to_string())?;
-        s.engine_error = None;
-        s.engine = Some(EngineJob {
-            ctl: ctl.clone(),
-            done,
-            total: Some(manifest.asset.size),
-            verifying: false,
-            version: manifest.version.clone(),
-        });
-    }
+    claim_engine_job(state(), &manifest, &ctl, done)?;
     let _ = app.emit(
         ENGINE_EVENT,
         EngineEvent {
@@ -515,9 +575,7 @@ pub fn start_engine(app: AppHandle, config_dir: PathBuf) -> Result<EngineInfo, S
             message: None,
         },
     );
-    let fetch = HttpEngineFetch {
-        url: manifest.asset.url.clone(),
-    };
+    let fetch = HttpEngineFetch;
     let man = manifest.clone();
     let cfg = config_dir.clone();
     let app2 = app.clone();
@@ -578,7 +636,7 @@ pub fn start_engine(app: AppHandle, config_dir: PathBuf) -> Result<EngineInfo, S
             s.engine = None;
             s.engine_error = error.clone();
         }
-        ENGINE_BUSY.store(false, Ordering::SeqCst);
+        drop(busy);
         let _ = app2.emit(
             ENGINE_EVENT,
             EngineEvent {
@@ -611,27 +669,19 @@ pub fn start_drafter(
         .ok_or_else(|| {
             "That draft model is already installed, or this model has no draft pair.".to_string()
         })?;
-    if !DRAFTER_BUSY
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
-    {
+    let Some(busy) = Busy::claim(&DRAFTER_BUSY) else {
         return Ok(draft_offer(&config_dir, &target_id));
-    }
+    };
     let dir = drafters_dir(&config_dir);
+    if let Some(free) = crate::local_ai::free_disk_mb(&crate::local_ai::existing(&dir)) {
+        let need = ls::disk_needed_mb(d);
+        if free < need {
+            return Err(disk_short_line(d, free, need));
+        }
+    }
     let ctl = Arc::new(Control::default());
     let done = md::partial_bytes(&dir, d).unwrap_or(0);
-    {
-        let mut s = state().lock().map_err(|e| e.to_string())?;
-        s.drafter_error = None;
-        s.drafter = Some(DrafterJob {
-            ctl: ctl.clone(),
-            id: d.id.into(),
-            name: d.name.into(),
-            done,
-            total: Some(d.download_mb * MIB),
-            verifying: false,
-        });
-    }
+    claim_drafter_job(state(), d, &ctl, done)?;
     let _ = app.emit(
         DRAFTER_EVENT,
         DrafterEvent {
@@ -677,12 +727,12 @@ pub fn start_drafter(
                     "done",
                     None,
                     Some(format!(
-                        "Downloaded {} as a draft model. Test speed in Settings checks whether it makes replies faster; it only stays on if it does. The next chat turn uses it once that test keeps it (or Manual draft is On).",
+                        "Downloaded {}. Test speed in Settings checks whether it makes replies faster; it only stays on if it does.",
                         model.name
                     )),
                 )
             }
-            md::Outcome::Failed(e) => ("error", Some(e.clone()), Some(e.clone())),
+            md::Outcome::Failed { why, .. } => ("error", Some(why.clone()), Some(why.clone())),
             md::Outcome::BadChecksum => {
                 let msg = format!(
                     "{} didn't match its published checksum, so it was deleted. Try the download again.",
@@ -709,7 +759,7 @@ pub fn start_drafter(
             s.drafter = None;
             s.drafter_error = error.clone();
         }
-        DRAFTER_BUSY.store(false, Ordering::SeqCst);
+        drop(busy);
         let _ = app2.emit(
             DRAFTER_EVENT,
             DrafterEvent {
@@ -722,6 +772,16 @@ pub fn start_drafter(
         let _ = target;
     });
     Ok(draft_offer(&config_dir, &target_id))
+}
+
+/// Why a drafter download didn't start: not enough free disk.
+fn disk_short_line(d: &LocalModel, free_mb: u64, need_mb: u64) -> String {
+    format!(
+        "{} needs {} free, and this drive has {}. Free up some space and try again.",
+        d.name,
+        ls::size_label(need_mb),
+        ls::size_label(free_mb)
+    )
 }
 
 pub fn cancel_drafter() -> Result<(), String> {
@@ -737,23 +797,112 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_gemma_selected_offers_e2b_when_missing() {
+    fn a_gemma_selected_offers_its_own_draft_model_when_missing() {
         let dir = std::env::temp_dir().join(format!("gh-shell-offer-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(drafters_dir(&dir)).unwrap();
+        std::fs::create_dir_all(legacy_drafters_dir(&dir)).unwrap();
         let offer = draft_offer(&dir, "gemma-4-12b-it-abliterated-q4_k").expect("offer");
-        assert_eq!(offer.id, "gemma-4-e2b-it-abliterated-q4_k");
+        assert_eq!(offer.id, "gemma-4-12b-it-abliterated-mtp");
         assert!(offer.button.starts_with("Install and run draft model"));
         assert!(offer
             .line
-            .contains("Gemma 4 E2B can draft replies for Gemma 4 12B"));
+            .contains("Gemma 4 12B draft model makes Gemma 4 12B's replies come faster"));
         // A stock Gemma 4 id from the older catalog is offered nothing.
         assert!(draft_offer(&dir, "gemma-4-12b-it-q4_k_m").is_none());
-        let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").unwrap();
-        let dest = drafters_dir(&dir);
-        std::fs::write(dest.join(e2b.file), b"x").unwrap();
+        let mtp = ls::model_by_id("gemma-4-12b-it-abliterated-mtp").unwrap();
+        // A drafter left in the older config folder still counts as installed.
+        let dest = legacy_drafters_dir(&dir);
+        std::fs::write(dest.join(mtp.file), b"x").unwrap();
         assert!(draft_offer(&dir, "gemma-4-12b-it-abliterated-q4_k").is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_drafter_download_says_when_the_drive_is_too_full() {
+        let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").unwrap();
+        assert_eq!(
+            disk_short_line(e2b, 1_024, ls::disk_needed_mb(e2b)),
+            format!(
+                "Gemma 4 E2B needs {} free, and this drive has {}. Free up some space and try again.",
+                ls::size_label(e2b.download_mb + 2_048),
+                ls::size_label(1_024)
+            )
+        );
+    }
+
+    #[test]
+    fn a_draft_download_stays_on_the_hub_over_https() {
+        assert_eq!(
+            model_download_url_ok("https://huggingface.co/acme/test-GGUF/resolve/main/test.gguf"),
+            Ok(())
+        );
+        assert_eq!(
+            model_download_url_ok("https://cdn-lfs-us-1.hf.co/repos/ab/cd/ef?X-Amz=1"),
+            Ok(())
+        );
+        assert_eq!(
+            model_download_url_ok("https://HF.co./api/models/acme/x/tree/main"),
+            Ok(())
+        );
+        assert_eq!(
+            model_download_url_ok("http://huggingface.co/acme/x/resolve/main/x.gguf"),
+            Err("model download must use HTTPS".into())
+        );
+        assert_eq!(
+            model_download_url_ok("https://huggingface.co.evil.example/x.gguf"),
+            Err("model download host huggingface.co.evil.example is not on the allowlist".into())
+        );
+        assert_eq!(
+            model_download_url_ok("https://huggingface.co@evil.example/x.gguf"),
+            Err("model download host evil.example is not on the allowlist".into())
+        );
+        assert_eq!(
+            model_download_url_ok("https://localhost:8443/x.gguf"),
+            Err("model download host localhost is not allowed".into())
+        );
+        assert_eq!(
+            model_download_url_ok("https:///x.gguf"),
+            Err("model download URL is missing a host".into())
+        );
+    }
+
+    #[test]
+    fn the_busy_flag_clears_when_a_download_fails_to_start() {
+        static FLAG: AtomicBool = AtomicBool::new(false);
+        let first = Busy::claim(&FLAG).expect("free");
+        assert!(Busy::claim(&FLAG).is_none(), "one download at a time");
+        drop(first);
+        assert!(!FLAG.load(Ordering::SeqCst));
+
+        // A poisoned state lock fails the start; the flag must not stay set.
+        let poisoned = Mutex::new(State {
+            engine: None,
+            engine_error: None,
+            drafter: None,
+            drafter_error: None,
+        });
+        std::thread::scope(|s| {
+            let _ = s
+                .spawn(|| {
+                    let _held = poisoned.lock().unwrap();
+                    panic!("poison the lock");
+                })
+                .join();
+        });
+        let d = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").expect("catalog drafter");
+        let started = (|| -> Result<(), String> {
+            let _busy = Busy::claim(&FLAG).ok_or("busy")?;
+            claim_drafter_job(&poisoned, d, &Arc::new(Control::default()), 0)
+        })();
+        assert_eq!(
+            started,
+            Err("poisoned lock: another task failed inside".into())
+        );
+        assert!(
+            !FLAG.load(Ordering::SeqCst),
+            "busy flag wedged after a failed start"
+        );
+        assert!(Busy::claim(&FLAG).is_some());
     }
 
     #[test]

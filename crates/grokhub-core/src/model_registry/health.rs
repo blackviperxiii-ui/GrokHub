@@ -1,5 +1,6 @@
 //! Passive health: real calls move a model's state. No health probes.
-//! 403 content-safety and 429 `free-usage-exhausted` are not health signals.
+//! 403 content-safety, 429 `free-usage-exhausted` and 402 out-of-credit are
+//! not health signals: they are about the prompt or the account, not the model.
 //!
 //! R2a adds the breaker ([`breaker_observe`]): 3 hard failures in a row (5xx
 //! or a timeout) or a ghost strike quarantine a model. It stays out of routing
@@ -52,6 +53,9 @@ pub enum CallStatus {
     ContentSafety,
     /// 429 `free-usage-exhausted`: about the account, not the model.
     FreeUsageExhausted,
+    /// 402, or a 400 that says the account is out of credit: about the
+    /// account's money, not the model.
+    QuotaExhausted,
     /// 429 or 503.
     Pressure,
     Error,
@@ -62,6 +66,13 @@ pub fn classify_status(http: u16, message: &str) -> CallStatus {
     let m = message.to_ascii_lowercase();
     match http {
         200..=299 => CallStatus::Ok,
+        402 => CallStatus::QuotaExhausted,
+        // Anthropic answers an empty account with a 400, not a 402.
+        400 if m.contains("credit balance is too low")
+            || m.contains("specified api usage limits") =>
+        {
+            CallStatus::QuotaExhausted
+        }
         404 => CallStatus::NotFound,
         403 if m.contains("subscription") => CallStatus::NoSubscription,
         403 if m.contains("content")
@@ -123,7 +134,7 @@ pub fn degraded_reason(rec: &ModelRecord, now_ms: u64) -> Option<&'static str> {
     }
     let mut last: Vec<u64> = recent
         .iter()
-        .filter(|c| c.ok)
+        .filter(|c| c.ok && c.latency_ms > 0)
         .map(|c| c.latency_ms)
         .collect();
     let window_start = recent.front().map(|c| c.ts_ms).unwrap_or(now_ms);
@@ -151,7 +162,9 @@ pub fn observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -> bool {
     let before = rec.state;
     let now = obs.ts_ms;
     match obs.status {
-        CallStatus::ContentSafety | CallStatus::FreeUsageExhausted => return false,
+        CallStatus::ContentSafety | CallStatus::FreeUsageExhausted | CallStatus::QuotaExhausted => {
+            return false
+        }
         CallStatus::NoSubscription => {
             rec.state = ModelState::NotInPlan;
             rec.reason =
@@ -185,7 +198,10 @@ pub fn observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -> bool {
                 rec.reason = "It isn't listed, but it answers as itself.".into();
                 rec.not_found.clear();
             }
-            rec.health.latencies.push_back((now, obs.latency_ms));
+            // 0 is "no sample" (a batched call's wall time is queueing).
+            if obs.latency_ms > 0 {
+                rec.health.latencies.push_back((now, obs.latency_ms));
+            }
             while rec.health.latencies.len() > LATENCY_CAP {
                 rec.health.latencies.pop_front();
             }
@@ -334,9 +350,316 @@ pub fn half_open_due(rec: &ModelRecord, now_ms: u64) -> bool {
         && now_ms >= rec.breaker.open_until_ms
 }
 
+/// The span a model's request rate is counted over.
+pub const RATE_WINDOW_MS: u64 = 1_000;
+
+/// Requests a second xAI takes for a model (docs.x.ai rate limits): grok-4.7
+/// takes 150, grok-4.3 and grok-build 37. Dated and `-latest` ids share their
+/// model's limit; `None` when the limit isn't known.
+pub fn rate_limit_rps(id: &str) -> Option<usize> {
+    match super::record::model_id_stem(id).as_str() {
+        "grok-4.7" => Some(150),
+        "grok-4.3" | "grok-build" => Some(37),
+        _ => None,
+    }
+}
+
+/// Requests sent per model in the last [`RATE_WINDOW_MS`], so a model at its
+/// limit reads as busy before it answers 429 and failover takes the next one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pacer {
+    sent: std::collections::BTreeMap<String, std::collections::VecDeque<u64>>,
+}
+
+impl Pacer {
+    /// One request to `id` was sent at `now_ms`.
+    pub fn note(&mut self, id: &str, now_ms: u64) {
+        if rate_limit_rps(id).is_none() {
+            return;
+        }
+        let q = self.sent.entry(id.to_string()).or_default();
+        q.push_back(now_ms);
+        while q
+            .front()
+            .is_some_and(|t| now_ms.saturating_sub(*t) >= RATE_WINDOW_MS)
+        {
+            q.pop_front();
+        }
+    }
+
+    /// `id` already had its limit of requests in the last second.
+    pub fn at_limit(&self, id: &str, now_ms: u64) -> bool {
+        let (Some(limit), Some(q)) = (rate_limit_rps(id), self.sent.get(id)) else {
+            return false;
+        };
+        q.iter()
+            .filter(|t| now_ms.saturating_sub(**t) < RATE_WINDOW_MS)
+            .count()
+            >= limit
+    }
+}
+
+/// Mark a live model at its request limit busy for this pick: degraded, so
+/// the router takes a healthy model when there is one and keeps this one
+/// only when nothing else can answer.
+pub fn mark_busy(rec: &mut ModelRecord) {
+    if rec.state == ModelState::Live {
+        rec.state = ModelState::Degraded;
+        rec.reason = "It is at its request limit this second.".into();
+    }
+}
+
+/// The weight of the newest latency sample in a provider's moving average.
+pub const PROVIDER_EWMA_ALPHA: f64 = 0.2;
+/// A provider's health reads its models' calls from this recent span only, so
+/// one that rested after a busy spell is judged afresh.
+pub const PROVIDER_WINDOW_MS: u64 = 30 * 60 * 1000;
+/// Over this share of busy answers (429 or 503) in the span is a busy provider.
+pub const PROVIDER_BUSY_PCT: usize = DEGRADED_ERROR_PCT;
+/// A provider this many times slower than the fastest one (by the moving
+/// average) is a slow one.
+pub const PROVIDER_SLOW_FACTOR: f64 = 2.0;
+
+/// One provider's recent health, read from its models' recent calls
+/// ([`ModelRecord::health`]): no second record is kept.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ProviderHealth {
+    /// Calls inside [`PROVIDER_WINDOW_MS`].
+    pub calls: usize,
+    /// Of those, answered busy (429 or 503).
+    pub busy: usize,
+    /// The moving average of its answered calls' latency, oldest first. A
+    /// batched call keeps no sample (0), so queueing teaches it nothing.
+    pub latency_ewma_ms: Option<f64>,
+}
+
+impl ProviderHealth {
+    /// Over [`PROVIDER_BUSY_PCT`] busy answers, once it has
+    /// [`DEGRADED_MIN_CALLS`] calls to judge by.
+    pub fn is_busy(&self) -> bool {
+        self.calls >= DEGRADED_MIN_CALLS && self.busy * 100 > self.calls * PROVIDER_BUSY_PCT
+    }
+}
+
+/// Fold one provider's call marks into its health as of `now_ms`.
+pub fn provider_health<'a>(
+    marks: impl IntoIterator<Item = &'a CallMark>,
+    now_ms: u64,
+) -> ProviderHealth {
+    let mut recent: Vec<&CallMark> = marks
+        .into_iter()
+        .filter(|m| now_ms.saturating_sub(m.ts_ms) <= PROVIDER_WINDOW_MS)
+        .collect();
+    recent.sort_by_key(|m| m.ts_ms);
+    let mut h = ProviderHealth {
+        calls: recent.len(),
+        busy: recent.iter().filter(|m| m.pressure).count(),
+        latency_ewma_ms: None,
+    };
+    for m in recent.iter().filter(|m| m.ok && m.latency_ms > 0) {
+        let x = m.latency_ms as f64;
+        h.latency_ewma_ms = Some(match h.latency_ewma_ms {
+            Some(avg) => PROVIDER_EWMA_ALPHA * x + (1.0 - PROVIDER_EWMA_ALPHA) * avg,
+            None => x,
+        });
+    }
+    h
+}
+
+/// Each provider you added (`openrouter`, `anthropic`) and its health, from
+/// the recent calls of every model only its listing names.
+pub fn provider_healths(
+    reg: &super::Registry,
+    now_ms: u64,
+) -> std::collections::BTreeMap<String, ProviderHealth> {
+    let mut marks: std::collections::BTreeMap<&str, Vec<&CallMark>> = Default::default();
+    for (id, rec) in &reg.models {
+        let theirs = !rec.sources.is_empty() && rec.sources.iter().all(|s| s.is_new_provider());
+        if let Some((p, _)) = super::discover::split_provider_model(id).filter(|_| theirs) {
+            marks.entry(p).or_default().extend(rec.health.recent.iter());
+        }
+    }
+    marks
+        .into_iter()
+        .map(|(p, m)| (p.to_string(), provider_health(m, now_ms)))
+        .collect()
+}
+
+/// The providers a stand-in ranks after a healthy one: busy, or more than
+/// [`PROVIDER_SLOW_FACTOR`] times slower than the fastest provider that isn't busy.
+pub fn lagging_providers(
+    healths: &std::collections::BTreeMap<String, ProviderHealth>,
+) -> std::collections::BTreeSet<String> {
+    let fastest = healths
+        .values()
+        .filter(|h| !h.is_busy())
+        .filter_map(|h| h.latency_ewma_ms)
+        .fold(f64::INFINITY, f64::min);
+    healths
+        .iter()
+        .filter(|(_, h)| {
+            h.is_busy()
+                || h.latency_ewma_ms
+                    .is_some_and(|l| fastest.is_finite() && l > fastest * PROVIDER_SLOW_FACTOR)
+        })
+        .map(|(p, _)| p.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mark(ts_ms: u64, ok: bool, pressure: bool, latency_ms: u64) -> CallMark {
+        CallMark {
+            ts_ms,
+            ok,
+            pressure,
+            latency_ms,
+        }
+    }
+
+    #[test]
+    fn provider_health_averages_live_latency_and_counts_busy_answers() {
+        let now = PROVIDER_WINDOW_MS + 10_000;
+        // Out of order on purpose: the average runs oldest first.
+        let marks = [
+            mark(now - 1_000, true, false, 2_000),
+            mark(now - 2_000, true, false, 1_000),
+            // A batched call's 0 is no sample.
+            mark(now - 500, true, false, 0),
+            mark(now - 400, false, true, 300),
+            // Older than the window: not read.
+            mark(1, false, true, 90_000),
+        ];
+        let h = provider_health(&marks, now);
+        // 1000, then 0.2 * 2000 + 0.8 * 1000.
+        assert_eq!(
+            h,
+            ProviderHealth {
+                calls: 4,
+                busy: 1,
+                latency_ewma_ms: Some(1_200.0)
+            }
+        );
+        assert!(!h.is_busy(), "4 calls is too few to judge");
+        assert_eq!(PROVIDER_EWMA_ALPHA, 0.2);
+        let busy = [
+            mark(now - 5, false, true, 0),
+            mark(now - 4, false, true, 0),
+            mark(now - 3, true, false, 800),
+            mark(now - 2, true, false, 800),
+            mark(now - 1, true, false, 800),
+        ];
+        let h = provider_health(&busy, now);
+        assert_eq!((h.calls, h.busy, h.is_busy()), (5, 2, true));
+        // One busy answer in five is 20%: not over the line.
+        let h = provider_health(&busy[1..], now);
+        assert_eq!((h.calls, h.busy, h.is_busy()), (4, 1, false));
+    }
+
+    #[test]
+    fn a_busy_or_much_slower_provider_lags_a_healthy_one() {
+        let h = |calls, busy, l: Option<f64>| ProviderHealth {
+            calls,
+            busy,
+            latency_ewma_ms: l,
+        };
+        let all: std::collections::BTreeMap<String, ProviderHealth> = [
+            ("fast".to_string(), h(6, 0, Some(1_000.0))),
+            ("ok".to_string(), h(6, 0, Some(2_000.0))),
+            ("slow".to_string(), h(6, 0, Some(2_001.0))),
+            ("busy".to_string(), h(6, 3, Some(900.0))),
+            ("new".to_string(), h(0, 0, None)),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            lagging_providers(&all).into_iter().collect::<Vec<_>>(),
+            vec!["busy".to_string(), "slow".to_string()]
+        );
+    }
+
+    #[test]
+    fn provider_healths_group_only_provider_models_by_provider() {
+        use super::super::{Listing, ModelMeta, Registry, SourceKind};
+        let mut reg = Registry::default();
+        reg.apply_refresh(
+            &[
+                Listing::new(SourceKind::XaiApi, vec![ModelMeta::bare("grok-4.7")]),
+                Listing::new(
+                    SourceKind::OpenAiCompatible,
+                    vec![
+                        ModelMeta::bare("openrouter/vendor/a"),
+                        ModelMeta::bare("openrouter/vendor/b"),
+                    ],
+                ),
+            ],
+            &[],
+            1,
+        );
+        let now = 10_000;
+        for (id, ms) in [
+            ("openrouter/vendor/a", 500),
+            ("openrouter/vendor/b", 1_500),
+            ("grok-4.7", 9_000),
+        ] {
+            reg.models
+                .get_mut(id)
+                .unwrap()
+                .health
+                .recent
+                .push_back(mark(now - ms, true, false, ms));
+        }
+        let got = provider_healths(&reg, now);
+        assert_eq!(
+            got.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["openrouter"]
+        );
+        // b's call came first (1500 ms ago), then a's: 1500, then 0.2 * 500 + 0.8 * 1500.
+        assert_eq!(got["openrouter"].latency_ewma_ms, Some(1_300.0));
+        assert_eq!(got["openrouter"].calls, 2);
+    }
+
+    #[test]
+    fn a_model_at_its_request_limit_reads_busy_for_one_second() {
+        assert_eq!(rate_limit_rps("grok-4.7"), Some(150));
+        assert_eq!(rate_limit_rps("grok-4.7-0414"), Some(150));
+        assert_eq!(rate_limit_rps("grok-4.3"), Some(37));
+        assert_eq!(rate_limit_rps("grok-build"), Some(37));
+        assert_eq!(rate_limit_rps("grok-4.5"), None);
+        let mut p = Pacer::default();
+        for i in 0..36 {
+            p.note("grok-4.3", 1_000 + i);
+        }
+        assert!(!p.at_limit("grok-4.3", 1_036));
+        p.note("grok-4.3", 1_036);
+        assert!(p.at_limit("grok-4.3", 1_036));
+        assert!(!p.at_limit("grok-4.7", 1_036));
+        // The oldest send leaves the window a second later.
+        assert!(!p.at_limit("grok-4.3", 2_000));
+        assert!(p.at_limit("grok-4.3", 1_999));
+        // A model with no known limit is never counted.
+        for _ in 0..500 {
+            p.note("grok-4.5", 1_000);
+        }
+        assert!(!p.at_limit("grok-4.5", 1_000));
+        let mut rec = ModelRecord {
+            state: ModelState::Live,
+            ..ModelRecord::default()
+        };
+        mark_busy(&mut rec);
+        assert_eq!(
+            (rec.state, rec.reason.as_str()),
+            (
+                ModelState::Degraded,
+                "It is at its request limit this second."
+            )
+        );
+        rec.state = ModelState::Quarantined;
+        mark_busy(&mut rec);
+        assert_eq!(rec.state, ModelState::Quarantined);
+    }
     use crate::model_registry::record::ModelMeta;
 
     fn rec() -> ModelRecord {
@@ -382,6 +705,20 @@ mod tests {
         assert_eq!(classify_status(429, "slow down"), CallStatus::Pressure);
         assert_eq!(classify_status(503, ""), CallStatus::Pressure);
         assert_eq!(classify_status(500, ""), CallStatus::Error);
+        assert_eq!(
+            classify_status(402, "Insufficient credits"),
+            CallStatus::QuotaExhausted
+        );
+        // Anthropic's out-of-credit answer is a 400, not a 402.
+        assert_eq!(
+            classify_status(400, "Your credit balance is too low"),
+            CallStatus::QuotaExhausted
+        );
+        assert_eq!(
+            classify_status(400, "You have reached your specified API usage limits"),
+            CallStatus::QuotaExhausted
+        );
+        assert_eq!(classify_status(400, "Bad request"), CallStatus::Error);
     }
 
     #[test]
@@ -429,6 +766,8 @@ mod tests {
                 true,
                 &obs(CallStatus::FreeUsageExhausted, 1)
             ));
+            // Out of credit is the account's money, not the model's health.
+            assert!(!observe(&mut r, true, &obs(CallStatus::QuotaExhausted, 1)));
         }
         assert_eq!(r, before);
     }
@@ -498,6 +837,29 @@ mod tests {
             r.reason,
             "It is answering more than twice as slowly as its usual week."
         );
+    }
+
+    #[test]
+    fn a_call_with_no_time_is_no_speed_sample() {
+        let mut r = rec();
+        for t in 0..30 {
+            observe(&mut r, true, &obs(CallStatus::Ok, t));
+        }
+        // Batched calls: answered fine, wall time not a measure of the model.
+        for t in 30..40 {
+            let mut o = obs(CallStatus::Ok, t);
+            o.latency_ms = 0;
+            observe(&mut r, true, &o);
+        }
+        assert_eq!(r.state, ModelState::Live);
+        assert_eq!(r.health.latencies.len(), 30);
+        // A slow live stretch after them still degrades.
+        for t in 40..50 {
+            let mut o = obs(CallStatus::Ok, t);
+            o.latency_ms = 2_000;
+            observe(&mut r, true, &o);
+        }
+        assert_eq!(r.state, ModelState::Degraded);
     }
 
     fn hard(ts_ms: u64) -> Observation {

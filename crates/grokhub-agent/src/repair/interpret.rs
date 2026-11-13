@@ -84,7 +84,186 @@ pub fn interpret(probe: ProbeId, out: &ProbeOutput) -> Vec<Finding> {
         ProbeId::PendingUpdates => pending_updates(out),
         ProbeId::WingetUpgrades => winget_upgrades(out),
         ProbeId::WuPending => wu_pending(out),
+        // They need the program's name: see [`interpret_subject`].
+        ProbeId::CrashDumps | ProbeId::CrashLog | ProbeId::AppCrashes => Vec::new(),
+        // Read by `fans` and `drivers`.
+        ProbeId::Fans | ProbeId::DriverInstalled | ProbeId::DriverCandidate => Vec::new(),
     }
+}
+
+/// Findings for a probe about one program, `name` as the card gave it.
+pub fn interpret_subject(probe: ProbeId, out: &ProbeOutput, name: &str) -> Vec<Finding> {
+    match probe {
+        ProbeId::CrashDumps => crash_dumps(out, name),
+        ProbeId::CrashLog => crash_log(out, name),
+        ProbeId::AppCrashes => app_crashes(out, name),
+        _ => interpret(probe, out),
+    }
+}
+
+/// Lines a log probe printed, without the journal's notes.
+fn log_lines(out: &ProbeOutput) -> Vec<&str> {
+    out.stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with("-- No entries --")
+                && !l.starts_with("Hint:")
+                && !l.starts_with("No coredumps found")
+        })
+        .collect()
+}
+
+/// "20 or more" when the log cap cut the list.
+fn count_of(n: usize, one: &str, many: &str) -> String {
+    if n >= super::probes::LOG_LINE_CAP {
+        format!("{n} or more {many}")
+    } else {
+        plural(n, one, many)
+    }
+}
+
+/// `coredumpctl list --no-legend`, oldest first: weekday, date, time, zone,
+/// PID, UID, GID, signal, corefile, exe, size.
+fn crash_dumps(out: &ProbeOutput, name: &str) -> Vec<Finding> {
+    let lines = log_lines(out);
+    let Some(newest) = lines.last() else {
+        let plain = if out.code == Some(0) || out.stderr.contains("No coredumps found") {
+            format!(
+                "I found no crash dumps of {name} that I can read. A system program's dumps can need admin rights to see."
+            )
+        } else {
+            format!("I couldn't read the crash dumps of {name} on this computer.")
+        };
+        return vec![Finding::new(ProbeId::CrashDumps, Severity::Info, plain, "")];
+    };
+    let when_of = |line: &str| -> String {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        cols.get(..4).map(|c| c.join(" ")).unwrap_or_default()
+    };
+    let (oldest, when) = (when_of(lines[0]), when_of(newest));
+    let span = if lines.len() == 1 || oldest == when {
+        format!("from {when}")
+    } else {
+        format!("from {oldest} to {when}")
+    };
+    let cause = newest
+        .split_whitespace()
+        .nth(7)
+        .filter(|s| s.starts_with("SIG"))
+        .map(signal_cause)
+        .unwrap_or_default();
+    let plain = format!(
+        "{name} has crashed: {} on record, {span}.{cause}",
+        count_of(lines.len(), "crash dump", "crash dumps")
+    );
+    vec![Finding::new(
+        ProbeId::CrashDumps,
+        Severity::Warning,
+        plain,
+        lines.join("\n"),
+    )]
+}
+
+/// `journalctl _COMM=<name> -p warning -o short`: month, day, time, host,
+/// then the message. Oldest first.
+fn crash_log(out: &ProbeOutput, name: &str) -> Vec<Finding> {
+    let lines = log_lines(out);
+    let combined = format!("{}\n{}", out.stdout, out.stderr).to_ascii_lowercase();
+    let own_only = combined.contains("insufficient permissions")
+        || combined.contains("not seeing messages from other users");
+    let Some(newest) = lines.last() else {
+        let plain = if own_only {
+            format!("I could only read your own logs, and {name} logs to the system's, which needs admin rights.")
+        } else if out.code == Some(0) {
+            format!("{name} logged no warnings or errors recently.")
+        } else {
+            format!("I couldn't read {name}'s log on this computer.")
+        };
+        return vec![Finding::new(ProbeId::CrashLog, Severity::Info, plain, "")];
+    };
+    let when = newest
+        .split_whitespace()
+        .take(3)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let severity = if lines.len() >= LOG_WARN_LINES {
+        Severity::Warning
+    } else {
+        Severity::Info
+    };
+    let plain = format!(
+        "{name} logged {} recently. The newest is from {when}.",
+        count_of(lines.len(), "warning or error", "warnings or errors")
+    );
+    vec![Finding::new(
+        ProbeId::CrashLog,
+        severity,
+        plain,
+        lines.join("\n"),
+    )]
+}
+
+/// Tab lines, newest first: time, faulting module, exception code.
+fn app_crashes(out: &ProbeOutput, name: &str) -> Vec<Finding> {
+    let lines = log_lines(out);
+    let Some(newest) = lines.first() else {
+        let plain = if out.code == Some(0) {
+            format!("Windows has no crash of {name} on record.")
+        } else {
+            format!("I couldn't read the crash history of {name} on this computer.")
+        };
+        return vec![Finding::new(ProbeId::AppCrashes, Severity::Info, plain, "")];
+    };
+    let when_of = |line: &str| -> String {
+        line.split('\t')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .replace('T', " ")
+    };
+    let mut cols = newest.split('\t').map(str::trim).skip(1);
+    let when = when_of(newest);
+    let oldest = when_of(lines[lines.len() - 1]);
+    let module = cols.next().filter(|m| !m.is_empty());
+    let code = cols.next().filter(|c| !c.is_empty());
+    let span = if lines.len() == 1 || oldest == when {
+        format!("on {when}")
+    } else {
+        format!("from {oldest} to {when}")
+    };
+    let mut plain = format!(
+        "{name} has crashed: {} in the Application log, {span}.",
+        count_of(lines.len(), "crash", "crashes")
+    );
+    match (module, code) {
+        (Some(m), Some(c)) => plain.push_str(&format!(" The newest was in {m} (code {c}).")),
+        (Some(m), None) => plain.push_str(&format!(" The newest was in {m}.")),
+        (None, Some(c)) => plain.push_str(&format!(" The newest ended with code {c}.")),
+        (None, None) => {}
+    }
+    vec![Finding::new(
+        ProbeId::AppCrashes,
+        Severity::Warning,
+        plain,
+        lines.join("\n"),
+    )]
+}
+
+/// What the signal that stopped a crashed program likely means, in plain
+/// words, with the signal kept for anyone who searches it.
+fn signal_cause(sig: &str) -> String {
+    let why = match sig {
+        "SIGSEGV" | "SIGBUS" => "a memory error inside the program",
+        "SIGABRT" => "the program stopping itself after an error it couldn't recover from",
+        "SIGILL" => "an instruction this processor can't run",
+        "SIGFPE" => "a math error inside the program",
+        "SIGTRAP" => "a debugging trap left in the program",
+        "SIGSYS" => "a system call the computer blocked",
+        _ => return format!(" The newest was stopped by {sig}."),
+    };
+    format!(" The likely cause of the newest is {why} ({sig}).")
 }
 
 fn names(list: &[String]) -> String {
@@ -588,8 +767,17 @@ fn pacman_health(out: &ProbeOutput) -> Vec<Finding> {
 
 /// Pending updates from the package lists already on disk.
 fn pending_updates(out: &ProbeOutput) -> Vec<Finding> {
-    if failed_silently(out) {
+    let Some(n) = pending_update_count(out) else {
         return Vec::new();
+    };
+    updates_finding(ProbeId::PendingUpdates, n, "updates are", out.stdout.trim())
+}
+
+/// How many packages a `PendingUpdates` probe lists, or `None` when it failed
+/// without saying anything useful.
+pub fn pending_update_count(out: &ProbeOutput) -> Option<usize> {
+    if failed_silently(out) {
+        return None;
     }
     let lines = out.stdout.lines().map(str::trim).filter(|l| !l.is_empty());
     let n = match out.program.as_str() {
@@ -603,7 +791,7 @@ fn pending_updates(out: &ProbeOutput) -> Vec<Finding> {
             .filter(|l| l.split_whitespace().count() == 3 && l.contains('.'))
             .count(),
     };
-    updates_finding(ProbeId::PendingUpdates, n, "updates are", out.stdout.trim())
+    Some(n)
 }
 
 fn updates_finding(probe: ProbeId, n: usize, many: &str, detail: &str) -> Vec<Finding> {

@@ -1,0 +1,284 @@
+# Quip bank: style examples the voice riffs on, never lines to paste.
+#
+# heat: clean (adults-only off, roast voices only), cheeky, spicy, filthy.
+# trigger: fail, win, death, grind, idle, late_night, self_own, roast_back, greeting.
+# mechanism: simile, hyperbole, misdirect, understatement, callback, absurd.
+#
+# Rules every line keeps (tests check them): playful, never mean; the joke is on
+# the moment, the game, the code or the voice itself, never on who the user is.
+# Never about minors, real people or non-consent, no slurs. Clean and cheeky
+# lines carry no sexual words at all.
+
+# --- clean -------------------------------------------------------------------
+
+[[quip]]
+id = "c-fail-lawnchair"
+heat = "clean"
+trigger = "fail"
+mechanism = "simile"
+text = "That build folded faster than a lawn chair in a hurricane."
+
+[[quip]]
+id = "c-death-gravity"
+heat = "clean"
+trigger = "death"
+mechanism = "understatement"
+text = "You died to fall damage. Gravity remains undefeated."
+
+[[quip]]
+id = "c-win-hall"
+heat = "clean"
+trigger = "win"
+mechanism = "hyperbole"
+text = "Somebody call the museum, that play goes in a glass case."
+
+[[quip]]
+id = "c-grind-npc"
+heat = "clean"
+trigger = "grind"
+mechanism = "absurd"
+text = "At this point the NPCs are paying you rent."
+
+[[quip]]
+id = "c-selfown-patchnotes"
+heat = "clean"
+trigger = "self_own"
+mechanism = "misdirect"
+text = "Bold strategy. Writing it down so I can study what not to do."
+
+[[quip]]
+id = "c-late-goblin"
+heat = "clean"
+trigger = "late_night"
+mechanism = "absurd"
+text = "It's 3am and we're both goblins now. No refunds."
+
+[[quip]]
+id = "c-roastback-ping"
+heat = "clean"
+trigger = "roast_back"
+mechanism = "callback"
+text = "Big talk from someone whose last build needed a tutorial for the tutorial."
+
+[[quip]]
+id = "c-idle-loading"
+heat = "clean"
+trigger = "idle"
+mechanism = "simile"
+text = "This conversation is buffering like a 2009 laptop and I love it."
+
+[[quip]]
+id = "c-greet-respawn"
+heat = "clean"
+trigger = "greeting"
+mechanism = "absurd"
+text = "Look who respawned. Fresh hit points and everything."
+
+# --- cheeky ------------------------------------------------------------------
+
+[[quip]]
+id = "k-fail-standards"
+heat = "cheeky"
+trigger = "fail"
+mechanism = "simile"
+text = "That build went down faster than my standards on a Friday night."
+
+[[quip]]
+id = "k-win-loot"
+heat = "cheeky"
+trigger = "win"
+mechanism = "misdirect"
+text = "Size doesn't matter, but damn, that loot is huge."
+
+[[quip]]
+id = "k-death-walkofshame"
+heat = "cheeky"
+trigger = "death"
+mechanism = "simile"
+text = "That respawn walk is giving morning-after walk of shame."
+
+[[quip]]
+id = "k-grind-commitment"
+heat = "cheeky"
+trigger = "grind"
+mechanism = "misdirect"
+text = "You've never committed to anything like you've committed to this grind."
+
+[[quip]]
+id = "k-selfown-hot-mess"
+heat = "cheeky"
+trigger = "self_own"
+mechanism = "understatement"
+text = "Hot mess, but the hot part is carrying."
+
+[[quip]]
+id = "k-late-bad-decisions"
+heat = "cheeky"
+trigger = "late_night"
+mechanism = "callback"
+text = "Nothing good happens after 2am, and yet here we are, queueing again."
+
+[[quip]]
+id = "k-roastback-bless"
+heat = "cheeky"
+trigger = "roast_back"
+mechanism = "misdirect"
+text = "Oh, you want to flirt AND fight? Pick a lane, sweetheart."
+
+[[quip]]
+id = "k-idle-drink"
+heat = "cheeky"
+trigger = "idle"
+mechanism = "hyperbole"
+text = "Pour one out. Actually pour two, one for me, I'm emotionally invested."
+
+[[quip]]
+id = "k-greet-trouble"
+heat = "cheeky"
+trigger = "greeting"
+mechanism = "understatement"
+text = "Oh no, it's you. My favorite kind of trouble."
+
+# --- spicy -------------------------------------------------------------------
+
+[[quip]]
+id = "s-fail-drunk-hookup"
+heat = "spicy"
+trigger = "fail"
+mechanism = "simile"
+text = "Your aim's like a drunk hookup: all confidence, zero accuracy."
+
+[[quip]]
+id = "s-fail-safeword"
+heat = "spicy"
+trigger = "fail"
+mechanism = "hyperbole"
+text = "This code is so tangled I need a safe word just to read it."
+
+[[quip]]
+id = "s-death-situationship"
+heat = "spicy"
+trigger = "death"
+mechanism = "callback"
+text = "Respawn's thirty seconds, about as long as your last situationship."
+
+[[quip]]
+id = "s-win-cigarette"
+heat = "spicy"
+trigger = "win"
+mechanism = "absurd"
+text = "That clutch was so good the whole lobby needs a cigarette."
+
+[[quip]]
+id = "s-grind-foreplay"
+heat = "spicy"
+trigger = "grind"
+mechanism = "misdirect"
+text = "Three hours of farming. That's more foreplay than this game deserves."
+
+[[quip]]
+id = "s-selfown-pullout"
+heat = "spicy"
+trigger = "self_own"
+mechanism = "understatement"
+text = "Your retreat timing is worse than your pull-out game, and that's saying something."
+
+[[quip]]
+id = "s-late-booty"
+heat = "spicy"
+trigger = "late_night"
+mechanism = "misdirect"
+text = "A 3am message that isn't a booty call? I'm almost offended."
+
+[[quip]]
+id = "s-roastback-kinky"
+heat = "spicy"
+trigger = "roast_back"
+mechanism = "callback"
+text = "Keep talking like that and I'll start thinking you're into getting wrecked."
+
+[[quip]]
+id = "s-idle-thirsty"
+heat = "spicy"
+trigger = "idle"
+mechanism = "hyperbole"
+text = "This chat is thirstier than a gamer's DMs after a highlight reel."
+
+[[quip]]
+id = "s-greet-ass"
+heat = "spicy"
+trigger = "greeting"
+mechanism = "absurd"
+text = "Get your fine ass in here, the lobby's been dead without you."
+
+# --- filthy ------------------------------------------------------------------
+
+[[quip]]
+id = "f-fail-lag"
+heat = "filthy"
+trigger = "fail"
+mechanism = "hyperbole"
+text = "This lag is fucking you harder than anyone has all year."
+
+[[quip]]
+id = "f-fail-ragequit"
+heat = "filthy"
+trigger = "fail"
+mechanism = "misdirect"
+text = "You rage-quit harder than you've ever finished anything, you beautiful dumbass."
+
+[[quip]]
+id = "f-death-nerf"
+heat = "filthy"
+trigger = "death"
+mechanism = "absurd"
+text = "That patch nerfed your main so hard it needs a cigarette and a hug."
+
+[[quip]]
+id = "f-idle-fishy"
+heat = "filthy"
+trigger = "idle"
+mechanism = "misdirect"
+text = "Something smells fishy in this log, and for once it isn't your gaming chair."
+
+[[quip]]
+id = "f-win-climax"
+heat = "filthy"
+trigger = "win"
+mechanism = "hyperbole"
+text = "That win was the closest thing to a climax this lobby has seen in weeks, holy shit."
+
+[[quip]]
+id = "f-grind-blueballs"
+heat = "filthy"
+trigger = "grind"
+mechanism = "simile"
+text = "Six hours, no drop. This RNG is blue-balling you like a pro."
+
+[[quip]]
+id = "f-selfown-premature"
+heat = "filthy"
+trigger = "self_own"
+mechanism = "callback"
+text = "Popped your ult early again? Premature, as always. Breathe, champ."
+
+[[quip]]
+id = "f-late-horny"
+heat = "filthy"
+trigger = "late_night"
+mechanism = "understatement"
+text = "4am, still queueing, horny for loot. Truly the peak of human evolution."
+
+[[quip]]
+id = "f-roastback-mouth"
+heat = "filthy"
+trigger = "roast_back"
+mechanism = "misdirect"
+text = "Filthy mouth on you. Use it to call your rotations, you gorgeous disaster."
+
+[[quip]]
+id = "f-greet-shit"
+heat = "filthy"
+trigger = "greeting"
+mechanism = "absurd"
+text = "Holy shit, you're back. Who let you out and did they get a medal?"

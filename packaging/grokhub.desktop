@@ -2,14 +2,14 @@
 Type=Application
 Version=1.5
 Name=Loadout
-GenericName=Grok Agent Control Plane
-Comment=Grok-native Linux cabin — native Rust, no Electron
+GenericName=Gaming and PC companion
+Comment=Loadout: your gaming and PC companion, native Rust, no Electron
 Exec=grokhub
 TryExec=grokhub
 Icon=grokhub
 Terminal=false
 Categories=Utility;Development;Network;
-Keywords=grok;ai;agent;xai;hub;chat;cabin;rust;
+Keywords=loadout;gaming;pc;ai;agent;grok;chat;rust;
 StartupNotify=true
 StartupWMClass=grokhub
 SingleMainWindow=true

@@ -160,6 +160,15 @@ pub struct ElicitChoice {
     pub recommended: bool,
 }
 
+/// What one xAI server-side compaction did. Tokens are the cabin's estimate of the
+/// model input before and after; `dropped_message_count` is xAI's own count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CompactDetail {
+    pub tokens_before: u64,
+    pub tokens_after: u64,
+    pub dropped_message_count: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcpEvent {
     Ready {
@@ -188,7 +197,12 @@ pub enum AcpEvent {
         started: bool,
         usage: GrokUsage,
         error: Option<String>,
+        /// Set on the finish of a compaction xAI's server ran; `None` otherwise.
+        server: Option<CompactDetail>,
     },
+    /// Steers the run never read: sent after its last steer check, or left
+    /// from a run that already ended. The host sends each as its own turn.
+    Unsteered(Vec<String>),
     Done {
         stop_reason: String,
     },
@@ -915,11 +929,13 @@ pub fn parse_session_update(params: &Value) -> Option<AcpEvent> {
             started: true,
             usage: parse_usage(update),
             error: None,
+            server: None,
         }),
         "auto_compact_completed" => Some(AcpEvent::Compact {
             started: false,
             usage: parse_usage(update),
             error: None,
+            server: None,
         }),
         "auto_compact_failed" => {
             let msg = update
@@ -938,6 +954,7 @@ pub fn parse_session_update(params: &Value) -> Option<AcpEvent> {
                 } else {
                     msg
                 }),
+                server: None,
             })
         }
         "plan" => {
@@ -1417,6 +1434,25 @@ pub struct GrokUsage {
     /// Share of this turn's input served from the provider's prompt cache, 0-100.
     /// Set by the native engine; `None` when the turn reported no usage.
     pub turn_cache_pct: Option<u8>,
+    /// The previous turn's share when this turn's fell under the cache floor
+    /// right after it (a broken prompt prefix). Native engine only.
+    pub turn_cache_drop_from: Option<u8>,
+    /// Why the prompt prefix changed before that drop, as the engine's prefix
+    /// guard names it ("trim", "model_switch", ...). Native engine only.
+    pub turn_cache_drop_reason: Option<String>,
+}
+
+/// The plain words for a prefix guard reason, beside a cache drop.
+fn drop_cause(reason: &str) -> Option<&'static str> {
+    Some(match reason {
+        "trim" => "old tool output was trimmed",
+        "model_switch" => "the model changed",
+        "effort_switch" => "the thinking level changed",
+        "tools_appended" => "more tools were loaded",
+        "compaction" => "the chat was compacted",
+        "unexpected" => "the prompt was rewritten",
+        _ => return None,
+    })
 }
 
 /// Cached input as a whole percent of input. No input is 0%, never NaN.
@@ -1431,7 +1467,14 @@ pub fn cache_pct(cached: u64, input: u64) -> u8 {
 impl GrokUsage {
     /// "cache N%" for the usage line, when the turn carried a cache share.
     pub fn cache_note(&self) -> Option<String> {
-        self.turn_cache_pct.map(|pct| format!("cache {pct}%"))
+        let pct = self.turn_cache_pct?;
+        Some(match self.turn_cache_drop_from {
+            Some(prev) => match self.turn_cache_drop_reason.as_deref().and_then(drop_cause) {
+                Some(cause) => format!("cache {pct}%, down from {prev}%: {cause}"),
+                None => format!("cache {pct}%, down from {prev}%"),
+            },
+            None => format!("cache {pct}%"),
+        })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1488,6 +1531,8 @@ impl GrokUsage {
         }
         if other.turn_cache_pct.is_some() {
             self.turn_cache_pct = other.turn_cache_pct;
+            self.turn_cache_drop_from = other.turn_cache_drop_from;
+            self.turn_cache_drop_reason = other.turn_cache_drop_reason.clone();
         }
         if other.total_tokens > 0 {
             self.total_tokens = other.total_tokens;
@@ -1563,7 +1608,7 @@ pub fn turn_footer(stop_reason: &str, usage: &GrokUsage) -> String {
             "Done"
         }
         "cancelled" | "canceled" => "Cancelled",
-        "max_tokens" => "Truncated — Grok is continuing",
+        "max_tokens" => "Truncated — continuing",
         "max_turn_requests" | "max_turns_reached" => "Max turns",
         "refusal" => "Refused",
         other => other,
@@ -1584,6 +1629,11 @@ pub enum StreamErrorKind {
 }
 
 pub fn classify_stream_error(msg: &str) -> StreamErrorKind {
+    // An Offline only refusal is final and shows as is ("unavailable" in its
+    // reason must not read as a transient retry).
+    if crate::offline::is_refusal(msg) {
+        return StreamErrorKind::Fatal;
+    }
     let l = msg.to_ascii_lowercase();
     if l.contains("credit")
         || l.contains("quota")
@@ -1637,7 +1687,7 @@ pub fn retry_status_line(msg: &str) -> String {
 pub fn rewrite_truncation_error(msg: &str) -> String {
     match classify_stream_error(msg) {
         StreamErrorKind::TruncationContinue => {
-            "Output hit the token limit. Grok is continuing automatically.".into()
+            "Output hit the token limit. Continuing automatically.".into()
         }
         StreamErrorKind::CreditLimit => {
             "Credit limit reached. Try Again retries the last prompt.".into()
@@ -1647,7 +1697,7 @@ pub fn rewrite_truncation_error(msg: &str) -> String {
             if l.contains("unreachable") || l.contains("coordinator") {
                 "Subagent coordinator busy — retrying.".into()
             } else {
-                "Grok hit a transient inference error and is retrying.".into()
+                "The model hit a transient inference error and is retrying.".into()
             }
         }
         StreamErrorKind::Fatal => msg.to_string(),
@@ -1709,6 +1759,8 @@ pub fn parse_usage(v: &Value) -> GrokUsage {
         meter: json_str(body, &["meter"]),
         // The CLI reports cache reads but no per-turn share.
         turn_cache_pct: None,
+        turn_cache_drop_from: None,
+        turn_cache_drop_reason: None,
     };
     if u.num_turns == 0 {
         u.num_turns =
@@ -1824,6 +1876,56 @@ mod tests {
             Some(91),
             "an event without a share keeps the last one"
         );
+    }
+
+    #[test]
+    fn a_cache_drop_says_where_it_fell_from_and_the_next_turn_clears_it() {
+        let mut u = GrokUsage::default();
+        u.merge(&GrokUsage {
+            turn_cache_pct: Some(31),
+            turn_cache_drop_from: Some(92),
+            ..GrokUsage::default()
+        });
+        assert_eq!(u.cache_note().as_deref(), Some("cache 31%, down from 92%"));
+        u.merge(&GrokUsage {
+            turn_cache_pct: Some(88),
+            ..GrokUsage::default()
+        });
+        assert_eq!(u.cache_note().as_deref(), Some("cache 88%"));
+    }
+
+    #[test]
+    fn a_cache_drop_names_its_cause_in_plain_words() {
+        let mut u = GrokUsage::default();
+        u.merge(&GrokUsage {
+            turn_cache_pct: Some(31),
+            turn_cache_drop_from: Some(92),
+            turn_cache_drop_reason: Some("trim".into()),
+            ..GrokUsage::default()
+        });
+        assert_eq!(
+            u.cache_note().as_deref(),
+            Some("cache 31%, down from 92%: old tool output was trimmed")
+        );
+        for (reason, words) in [
+            ("model_switch", "the model changed"),
+            ("effort_switch", "the thinking level changed"),
+            ("tools_appended", "more tools were loaded"),
+            ("compaction", "the chat was compacted"),
+            ("unexpected", "the prompt was rewritten"),
+        ] {
+            u.turn_cache_drop_reason = Some(reason.into());
+            assert!(u.cache_note().unwrap().ends_with(words), "{reason}");
+        }
+        u.turn_cache_drop_reason = Some("something new".into());
+        assert_eq!(u.cache_note().as_deref(), Some("cache 31%, down from 92%"));
+        // The next turn without a drop clears the cause with the drop.
+        u.merge(&GrokUsage {
+            turn_cache_pct: Some(88),
+            ..GrokUsage::default()
+        });
+        assert_eq!(u.cache_note().as_deref(), Some("cache 88%"));
+        assert_eq!(u.turn_cache_drop_reason, None);
     }
 
     use super::*;
@@ -2249,5 +2351,20 @@ mod tests {
             "Email",
             &json!({ "type": "string" })
         ));
+    }
+
+    #[test]
+    fn an_offline_only_refusal_is_final_and_keeps_its_words() {
+        let msg = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this.";
+        let no_local = format!("Offline, local model unavailable: runtime missing. {msg}");
+        assert_eq!(classify_stream_error(&no_local), StreamErrorKind::Fatal);
+        assert_eq!(rewrite_truncation_error(&no_local), no_local);
+        assert_eq!(classify_stream_error(msg), StreamErrorKind::Fatal);
+        assert_eq!(rewrite_truncation_error(msg), msg);
+        // Without the refusal the same reason is still a transient retry.
+        assert_eq!(
+            classify_stream_error("Offline, local model unavailable: runtime missing"),
+            StreamErrorKind::Transient
+        );
     }
 }

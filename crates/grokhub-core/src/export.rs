@@ -262,6 +262,103 @@ pub fn chat_export_html<'a>(
     )
 }
 
+/// The whole chat as Markdown, in full: every message, and for an agent turn
+/// its thoughts and tool rows in the order they happened, then what it said.
+/// Nothing is cut. The app's own tags (turn labels, the findings-card tag)
+/// are left out so it reads as the chat did.
+pub fn chat_transcript_markdown<'a>(
+    title: &str,
+    messages: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> String {
+    let mut out = format!("# {title}\n\n");
+    for (role, content) in messages {
+        out.push_str(&format!("## {role}\n\n"));
+        let parts = (role == "assistant")
+            .then(|| crate::decode_turn(content))
+            .flatten();
+        match parts {
+            Some(parts) => {
+                for part in parts {
+                    match part {
+                        crate::TurnPart::Thought(body) => {
+                            out.push_str("Thought process\n\n");
+                            for line in body.lines() {
+                                out.push_str(&format!("> {line}\n").replace("> \n", ">\n"));
+                            }
+                            out.push('\n');
+                        }
+                        crate::TurnPart::Tool(row) => {
+                            out.push_str(&format!("Tool: {}", row.title));
+                            if !row.status.is_empty() {
+                                out.push_str(&format!(" ({})", row.status));
+                            }
+                            out.push('\n');
+                            if !row.detail.trim().is_empty() {
+                                out.push_str(&format!("{}\n", row.detail.trim_end()));
+                            }
+                            out.push('\n');
+                        }
+                        crate::TurnPart::Say(body) => {
+                            out.push_str(&format!("{}\n\n", crate::shown_text(&body)));
+                        }
+                    }
+                }
+            }
+            None if role == "assistant" => {
+                out.push_str(&format!("{}\n\n", crate::shown_text(content)));
+            }
+            None => out.push_str(&format!("{content}\n\n")),
+        }
+        if role == "assistant" {
+            if let Some(note) = app_answer_note(content) {
+                out.push_str(&format!("_{note}_\n\n"));
+            }
+        }
+    }
+    out
+}
+
+/// For a debug read of an export: a reply the app itself gave on this
+/// computer, so the turn has no thoughts or tool rows to show.
+fn app_answer_note(content: &str) -> Option<&'static str> {
+    use crate::adult_guard::{is_local_only_notice, HELD_NOTICE, REPLY_REPLACED};
+    let shown = crate::shown_text(content);
+    let shown = shown.trim();
+    if shown == HELD_NOTICE || is_local_only_notice(shown) {
+        Some("App note: the app's 18+ check answered this turn on this computer. No model ran, so it has no thoughts or tool calls.")
+    } else if shown.ends_with(REPLY_REPLACED) {
+        Some("App note: the model answered, and the app's hard-limit check hid the reply on this computer.")
+    } else {
+        None
+    }
+}
+
+/// A chat's title as a file name: letters, digits, spaces and dashes, short
+/// enough for any disk, "chat" when nothing is left.
+pub fn export_file_stem(title: &str) -> String {
+    let mut stem = String::new();
+    for c in title.chars() {
+        let c = if c.is_alphanumeric() || c == '-' {
+            c
+        } else {
+            ' '
+        };
+        if c == ' ' && (stem.is_empty() || stem.ends_with(' ')) {
+            continue;
+        }
+        stem.push(c);
+        if stem.chars().count() >= 48 {
+            break;
+        }
+    }
+    let stem = stem.trim_end();
+    if stem.is_empty() {
+        "chat".into()
+    } else {
+        stem.to_string()
+    }
+}
+
 /// The whole transcript, roles and all, as pretty JSON.
 pub fn chat_export_json<'a>(
     title: &str,
@@ -271,10 +368,18 @@ pub fn chat_export_json<'a>(
 ) -> String {
     let messages: Vec<serde_json::Value> = messages
         .into_iter()
-        .map(|(role, content)| serde_json::json!({ "role": role, "content": content }))
+        .map(|(role, content)| {
+            // The words as the chat showed them, without the app's markers.
+            let content = if role == "assistant" {
+                crate::shown_text(content)
+            } else {
+                content.to_string()
+            };
+            serde_json::json!({ "role": role, "content": content })
+        })
         .collect();
     let doc = serde_json::json!({
-        "app": "GrokHub",
+        "app": crate::brand::product_name(),
         "version": env!("CARGO_PKG_VERSION"),
         "title": title,
         "threadId": thread_id,
@@ -361,5 +466,74 @@ mod tests {
         assert_eq!(v["messages"].as_array().unwrap().len(), 3);
         assert_eq!(v["messages"][0]["content"], "hi \"there\"");
         assert_eq!(v["messages"][2]["role"], "system");
+    }
+
+    #[test]
+    fn the_markdown_transcript_keeps_every_thought_tool_and_reply_in_order() {
+        let turn = "TURN_THOUGHT:\nI'll run read-only checks first.\n\nThey look fine.\nTURN_TOOL: done\tRun terminal command\texit 0 FREE=5713272832\nTURN_SAY:\nPC checked.";
+        let card = crate::mark_slash_result("Findings from this run");
+        let long = "x".repeat(200_000);
+        let msgs = [
+            ("user", "hey mind taking a look at the pc"),
+            ("assistant", turn),
+            ("assistant", card.as_str()),
+            ("user", long.as_str()),
+        ];
+        let md = chat_transcript_markdown("Tune-up", msgs);
+        let thought = md
+            .find("Thought process\n\n> I'll run read-only checks first.\n>\n> They look fine.")
+            .expect(&md[..400]);
+        let tool = md
+            .find("Tool: Run terminal command (done)\nexit 0 FREE=5713272832")
+            .expect("tool row");
+        let say = md.find("PC checked.").expect("reply");
+        assert!(thought < tool && tool < say);
+        assert!(md.contains("Findings from this run"));
+        assert!(!md.contains("TURN_") && !md.contains("SLASH_RESULT"));
+        // The whole chat, nothing cut.
+        assert!(md.contains(&long));
+    }
+
+    #[test]
+    fn a_chat_title_becomes_a_safe_file_name() {
+        assert_eq!(
+            export_file_stem("hey: mind taking a look?"),
+            "hey mind taking a look"
+        );
+        assert_eq!(export_file_stem("../.."), "chat");
+        assert_eq!(export_file_stem(&"a".repeat(100)).len(), 48);
+    }
+
+    #[test]
+    fn json_shows_a_findings_card_without_its_tag() {
+        let card = crate::mark_slash_result("Findings from this run");
+        let msgs = [
+            ("user", "SLASH_RESULT: typed by hand"),
+            ("assistant", card.as_str()),
+        ];
+        let v: serde_json::Value =
+            serde_json::from_str(&chat_export_json("T", "t1", msgs, 1)).expect("valid json");
+        assert_eq!(v["messages"][1]["content"], "Findings from this run");
+        // The user's own words stay exactly as typed.
+        assert_eq!(v["messages"][0]["content"], "SLASH_RESULT: typed by hand");
+    }
+
+    #[test]
+    fn an_export_says_when_the_app_answered_a_turn_itself() {
+        let md = chat_transcript_markdown(
+            "Main",
+            [
+                ("user", "wanna have some sexy time"),
+                ("assistant", crate::adult_guard::HELD_NOTICE),
+                ("user", "hey"),
+                ("assistant", "Hey."),
+            ],
+        );
+        assert_eq!(
+            md.matches("App note: the app's 18+ check").count(),
+            1,
+            "{md}"
+        );
+        assert!(md.contains("No model ran"), "{md}");
     }
 }

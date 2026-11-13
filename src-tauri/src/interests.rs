@@ -76,8 +76,12 @@ pub fn add(config_dir: &Path, text: &str) -> Result<Page, String> {
     }
     let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
     let mut profile = interests::load(&path(config_dir));
-    let note = if profile.add(&topic, InterestSource::Explicit, grokhub_core::now_ms()) {
+    let now_ms = grokhub_core::now_ms();
+    let note = if profile.add(&topic, InterestSource::Explicit, now_ms) {
         interests::save(&path(config_dir), &profile)?;
+        grokhub_core::learn::hub::note_all(grokhub_core::learn::sources::interest_topic(
+            &topic, true, now_ms,
+        ));
         format!("Pulse will look for {topic}.")
     } else {
         format!("{topic} is already on your list.")
@@ -99,6 +103,20 @@ pub fn feedback(
     if !moved.is_empty() {
         interests::save(&path(config_dir), &profile)?;
     }
+    Ok(moved)
+}
+
+/// Take back a earlier idea More like this (or the same kind of signal).
+pub fn retract_feedback(
+    config_dir: &Path,
+    text: &str,
+    signal: interests::InterestSignal,
+    now_ms: u64,
+) -> Result<Vec<String>, String> {
+    let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut profile = interests::load(&path(config_dir));
+    let moved = profile.retract_feedback(text, signal, now_ms);
+    interests::save(&path(config_dir), &profile)?;
     Ok(moved)
 }
 
@@ -131,7 +149,67 @@ pub fn act(config_dir: &Path, topic: &str, act: Act) -> Result<Page, String> {
         return Ok(page(&profile, String::new()));
     }
     interests::save(&path(config_dir), &profile)?;
+    if matches!(act, Act::Remove) {
+        let now_ms = grokhub_core::now_ms();
+        grokhub_core::learn::hub::note_all(grokhub_core::learn::sources::interest_topic(
+            topic, false, now_ms,
+        ));
+    }
     Ok(page(&profile, note))
+}
+
+/// Most of a memory file seeding reads.
+const SEED_READ_CAP: u64 = 64 * 1024;
+
+/// The first Pulse run seeds topics from `memory/USER.md`, `memory/MEMORY.md`
+/// and loved posts, the same way the desktop app does. Runs once; topics the
+/// person removed never come back. Returns how many topics it added.
+pub fn seed_once(config_dir: &Path, now_ms: u64) -> Result<usize, String> {
+    let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut profile = interests::load(&path(config_dir));
+    if profile.seeded {
+        return Ok(0);
+    }
+    let read = |name: &str| {
+        use std::io::Read;
+        let mut text = String::new();
+        if let Ok(file) = std::fs::File::open(config_dir.join("memory").join(name)) {
+            let _ = file.take(SEED_READ_CAP).read_to_string(&mut text);
+        }
+        text
+    };
+    let user_md = read("USER.md");
+    let memory_md = read("MEMORY.md");
+    let saved_titles: Vec<String> = crate::pulse::cards(config_dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| c.reaction == Some(grokhub_core::CardReaction::Up))
+        .map(|c| c.title)
+        .collect();
+    let added = profile.seed(
+        &interests::SeedFrom {
+            user_md: &user_md,
+            memory_md: &memory_md,
+            chats: &[],
+            saved_titles: &saved_titles,
+        },
+        now_ms,
+    );
+    interests::save(&path(config_dir), &profile)?;
+    Ok(added)
+}
+
+/// Change the topics under the store lock; saved when `f` says it changed them.
+pub(crate) fn update(
+    config_dir: &Path,
+    f: impl FnOnce(&mut InterestProfile) -> bool,
+) -> Result<(), String> {
+    let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut profile = interests::load(&path(config_dir));
+    if f(&mut profile) {
+        interests::save(&path(config_dir), &profile)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -111,6 +111,32 @@ pub fn peek() -> GameGuard {
     last.map(|(_, g)| g).unwrap_or_default()
 }
 
+/// The Steam game running now, as Steam itself says: its launch wrapper's
+/// command line on Linux (or Steam's `registry.vdf`), `RunningAppID` on
+/// Windows. Reads process names and Steam's own files only; nothing opens
+/// or touches the game.
+pub fn steam_app_now() -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(id) =
+            processes().and_then(|p| grokhub_core::game_companion::running_from_cmdlines(&p))
+        {
+            return Some(id);
+        }
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+        let text = std::fs::read_to_string(home.join(".steam").join("registry.vdf")).ok()?;
+        grokhub_core::game_companion::running_from_registry_vdf(&text)
+    }
+    #[cfg(windows)]
+    {
+        steam_running_app().filter(|id| *id != 0)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        None
+    }
+}
+
 /// The governor's deny list ("always counts as a game"), lowercase.
 #[cfg(any(target_os = "linux", windows))]
 fn deny_list() -> Vec<String> {
@@ -222,6 +248,36 @@ pub fn windows_game_label() -> Option<String> {
         .map(|exe| grokhub_core::game_guard::game_label(&exe))
 }
 
+/// Every running process's name (the exe file name on Windows, `comm` on
+/// Linux), for Home's stream check. Empty where it can't be read.
+pub fn running_names() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        exe_names()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        processes()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(comm, _)| comm)
+            .collect()
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        Vec::new()
+    }
+}
+
+/// Every running process's exe file name, for the live-match check
+/// (`grokhub_core::game_profile::set_exe_probe`). Empty when the snapshot fails.
+#[cfg(windows)]
+pub fn exe_names() -> Vec<String> {
+    process_names()
+        .map(|all| all.into_iter().map(|(_, name)| name).collect())
+        .unwrap_or_default()
+}
+
 /// `(pid, exe file name)` of every process, from a Toolhelp32 snapshot.
 /// The snapshot is a kernel copy of the process list: no process is opened.
 #[cfg(windows)]
@@ -267,6 +323,19 @@ pub fn exe_name_of(pid: u32) -> Option<String> {
         .into_iter()
         .find(|(p, _)| *p == pid)
         .map(|(_, n)| n.to_ascii_lowercase())
+}
+
+/// Names of the running services and kernel drivers (empty off Windows),
+/// for the mod planner's anti-cheat profile. Asks the SCM only.
+pub fn service_names() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        running_services()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
 }
 
 /// Names of the running services and kernel drivers, from the Service
@@ -343,11 +412,15 @@ unsafe fn wide_ptr(p: *const u16) -> String {
     if p.is_null() {
         return String::new();
     }
-    let mut n = 0;
-    while *p.add(n) != 0 {
-        n += 1;
+    // SAFETY: the caller guarantees `p` points at a NUL-terminated UTF-16
+    // string, so every read up to and including the NUL is in bounds.
+    unsafe {
+        let mut n = 0;
+        while *p.add(n) != 0 {
+            n += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
     }
-    String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
 }
 
 /// Steam's `HKCU\Software\Valve\Steam\RunningAppID`: the running game's app
@@ -394,10 +467,10 @@ fn exclusive_fullscreen() -> bool {
 fn epic_game_exes() -> Vec<String> {
     static EPIC: Mutex<Option<(Instant, Vec<String>)>> = Mutex::new(None);
     let mut slot = EPIC.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((at, exes)) = slot.as_ref() {
-        if at.elapsed() < Duration::from_secs(60) {
-            return exes.clone();
-        }
+    if let Some((at, exes)) = slot.as_ref()
+        && at.elapsed() < Duration::from_secs(60)
+    {
+        return exes.clone();
     }
     let dir = std::env::var_os("ProgramData")
         .map(std::path::PathBuf::from)

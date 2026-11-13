@@ -5,7 +5,10 @@ use std::time::Duration;
 use crate::ClientError;
 
 pub const RATE_LIMIT_RETRY_THRESHOLD: u32 = 2;
-pub const DEFAULT_MAX_RETRIES: u32 = 15;
+/// Attempts per model call, the first included. Six keeps the worst silent
+/// wait near a minute (0.2 + 4 + 8 + 16 + 30 s) instead of about six minutes,
+/// and stops a dropped stream from being re-sent (and re-billed) 14 times.
+pub const DEFAULT_MAX_RETRIES: u32 = 6;
 pub const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(30);
 pub const TRANSPORT_REBUILD_BACKOFF: Duration = Duration::from_millis(200);
 
@@ -65,8 +68,10 @@ pub fn decide_retry(err: &ClientError, retry_count: u32, max_retries: u32) -> Op
             if next_attempt >= max_retries.min(RATE_LIMIT_RETRY_THRESHOLD) {
                 return None;
             }
+            // A long Retry-After is capped like any other wait; the chat says
+            // how long, and a Stop ends it.
             Some(match retry_after_secs.filter(|secs| *secs > 0) {
-                Some(secs) => Duration::from_secs(secs),
+                Some(secs) => Duration::from_secs(secs).min(MAX_RETRY_BACKOFF),
                 None => retry_backoff_with_jitter(next_attempt),
             })
         }
@@ -90,6 +95,23 @@ pub fn decide_retry(err: &ClientError, retry_count: u32, max_retries: u32) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failing_connection_gives_up_within_about_a_minute() {
+        let server = ClientError::Server {
+            status: 503,
+            message: "down".into(),
+            retry_after_secs: None,
+        };
+        let mut waited = Duration::ZERO;
+        let mut tries = 1u32;
+        while let Some(wait) = decide_retry(&server, tries - 1, DEFAULT_MAX_RETRIES) {
+            waited += wait;
+            tries += 1;
+        }
+        assert_eq!(tries, DEFAULT_MAX_RETRIES);
+        assert!(waited <= Duration::from_secs(75), "{waited:?}");
+    }
 
     #[test]
     fn resolve_max_retries_env_model_and_default() {
@@ -128,14 +150,22 @@ mod tests {
     }
 
     #[test]
-    fn retry_schedule_honors_retry_after_and_the_fifteen_try_cap() {
+    fn retry_schedule_honors_retry_after_up_to_the_cap_and_the_six_try_cap() {
         let limited = ClientError::RateLimited {
             retry_after_secs: Some(120),
             message: "slow".into(),
         };
         assert_eq!(
             decide_retry(&limited, 0, DEFAULT_MAX_RETRIES),
-            Some(Duration::from_secs(120))
+            Some(MAX_RETRY_BACKOFF)
+        );
+        let short = ClientError::RateLimited {
+            retry_after_secs: Some(7),
+            message: "slow".into(),
+        };
+        assert_eq!(
+            decide_retry(&short, 0, DEFAULT_MAX_RETRIES),
+            Some(Duration::from_secs(7))
         );
         assert!(decide_retry(&limited, 1, DEFAULT_MAX_RETRIES).is_none());
 
@@ -156,8 +186,8 @@ mod tests {
             first >= Duration::from_millis(160) && first <= Duration::from_millis(240),
             "{first:?}"
         );
-        assert!(decide_retry(&transport, 14, DEFAULT_MAX_RETRIES).is_none());
-        assert!(decide_retry(&transport, 13, DEFAULT_MAX_RETRIES).is_some());
+        assert!(decide_retry(&transport, 5, DEFAULT_MAX_RETRIES).is_none());
+        assert!(decide_retry(&transport, 4, DEFAULT_MAX_RETRIES).is_some());
 
         let oauth = ClientError::KeyOffer {
             status: 401,

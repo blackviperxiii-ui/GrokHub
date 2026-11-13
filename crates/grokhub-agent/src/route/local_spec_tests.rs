@@ -7,6 +7,7 @@ use grokhub_core::local_draft::Verdict;
 use grokhub_core::local_picker::CpuSimd;
 use grokhub_core::local_profile::{Backend, CpuInfo, Gpu, GpuVendor, PowerInfo, Thermal};
 
+/// Lines of llama.cpp b11602's `llama-server --help` (the build pinned before b12017).
 const B11602_HELP: &str = "\
 --spec-draft-n-max N                    number of tokens to draft for speculative decoding (default: 3)
 --spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N
@@ -14,6 +15,10 @@ const B11602_HELP: &str = "\
 --spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash
 --draft, --draft-n, --draft-max N       the argument has been removed. use --spec-draft-n-max or
 ";
+
+/// The whole `llama-server --help` of the pinned llama.cpp b12017.
+const B12017_HELP: &str =
+    include_str!("../../../grokhub-core/tests/fixtures/llama_server_help_b12017.txt");
 
 fn nvidia(vram_mb: u64, free: u64) -> Gpu {
     Gpu {
@@ -56,6 +61,11 @@ fn gemma_12b(tokenizer: Option<String>) -> GgufMeta {
         file_mb: 7_039,
         tokenizer,
         nextn_layers: 0,
+        sliding_window: 0,
+        swa_pattern: vec![],
+        kv_heads: vec![],
+        key_length_swa: 0,
+        value_length_swa: 0,
     }
 }
 
@@ -74,6 +84,11 @@ fn gemma_e2b() -> GgufMeta {
         file_mb: 3_100,
         tokenizer: None,
         nextn_layers: 0,
+        sliding_window: 0,
+        swa_pattern: vec![],
+        kv_heads: vec![],
+        key_length_swa: 0,
+        value_length_swa: 0,
     }
 }
 
@@ -240,7 +255,7 @@ impl Rig {
             meta,
             p,
             a,
-            flags: ld::parse_help(B11602_HELP),
+            flags: ld::parse_help(B12017_HELP),
         }
     }
 
@@ -254,6 +269,7 @@ impl Rig {
             args: &self.a,
             tune_dir: &self.dir,
             device: "NVIDIA GeForce RTX",
+            gaming: false,
         })
     }
 }
@@ -264,22 +280,23 @@ impl Drop for Rig {
     }
 }
 
-const E2B_FILE: &str = "Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
 const G12B_FILE: &str = "Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+const G12B_MTP: &str = "Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
 
 #[test]
 fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
-    let rig = Rig::new("pair", G12B_FILE, Some((E2B_FILE, VOCAB)));
-    let key = "NVIDIA GeForce RTX|Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf|Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+    let rig = Rig::new("pair", G12B_FILE, Some((G12B_MTP, VOCAB)));
+    let key = "NVIDIA GeForce RTX|Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf|Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
     let first = rig.plan(GovState::Normal);
     assert_eq!(first.decision, Decision::NeedsTest);
     assert_eq!(first.draft, None);
     assert_eq!(first.key.as_deref(), Some(key));
-    assert_eq!(first.name.as_deref(), Some("Gemma 4 E2B"));
+    assert_eq!(first.name.as_deref(), Some("Gemma 4 12B draft model"));
     let keep = Verdict {
         keep: true,
         acceptance: 0.6,
         gain: 1.3,
+        retest_at: None,
     };
     ld::save_verdict(&rig.dir, key, keep).unwrap();
     let on = rig.plan(GovState::Normal);
@@ -287,12 +304,20 @@ fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
     assert_eq!(
         on.draft,
         Some(DraftArgs {
-            kind: DraftKind::Simple,
-            model: Some(rig.dir.join("drafters").join(E2B_FILE)),
+            kind: DraftKind::Mtp,
+            model: Some(rig.dir.join("drafters").join(G12B_MTP)),
             on_gpu: true,
             flags: rig.flags.clone(),
         })
     );
+    // The heads file loads as the draft model and drafts four ahead.
+    let args = on.draft.unwrap().to_args();
+    assert!(args.windows(2).any(|w| w[1] == "draft-mtp"), "{args:?}");
+    assert!(
+        args.windows(2).any(|w| w[1].ends_with(G12B_MTP)),
+        "{args:?}"
+    );
+    assert!(args.windows(2).any(|w| w[1] == "4"), "{args:?}");
     assert_eq!(rig.plan(GovState::RampUp).decision, Decision::On);
     assert_eq!(
         rig.plan(GovState::Throttle).decision,
@@ -323,16 +348,15 @@ fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
 }
 
 #[test]
-fn a_drafter_with_another_vocabulary_is_refused() {
+fn mtp_heads_skip_the_tokenizer_check_a_separate_drafter_needs() {
+    // The heads carry no vocabulary of their own; they're trained for the
+    // one model, so a different (or missing) one doesn't refuse them.
     let rig = Rig::new(
         "vocab",
         G12B_FILE,
-        Some((E2B_FILE, &["<pad>", "<eos>", "<bos>", "hello", "world!"])),
+        Some((G12B_MTP, &["<pad>", "<eos>", "<bos>", "hello", "world!"])),
     );
-    assert_eq!(
-        rig.plan(GovState::Normal).decision,
-        Decision::Off("the draft model's tokenizer doesn't match the model")
-    );
+    assert_eq!(rig.plan(GovState::Normal).decision, Decision::NeedsTest);
 }
 
 #[test]
@@ -340,7 +364,8 @@ fn a_catalog_drafter_with_an_unreadable_header_is_not_used() {
     let rig = Rig::new("broken", G12B_FILE, None);
     let drafters = rig.dir.join("drafters");
     std::fs::create_dir_all(&drafters).unwrap();
-    std::fs::write(drafters.join(E2B_FILE), b"not a gguf").unwrap();
+    // Not the catalog's size either, so it isn't a heads file to trust.
+    std::fs::write(drafters.join(G12B_MTP), b"not a gguf").unwrap();
     let p = rig.plan(GovState::Normal);
     assert_eq!(p.decision, Decision::Off("no draft model is installed"));
     assert_eq!(p.draft, None);
@@ -443,5 +468,250 @@ fn the_speed_test_reads_speed_and_acceptance_from_the_server() {
     assert_eq!(
         measure(&bare, "sk-abcdefghijklmnopqrstuv"),
         Err("the server didn't report its speed".into())
+    );
+}
+
+/// The flags in `args` that `help` doesn't list as live: unknown, removed or
+/// deprecated. A value (a number, a path, `all`) is not a flag.
+fn not_live(help: &str, args: &[String]) -> Vec<String> {
+    let known = ld::help_flags(help);
+    args.iter()
+        .filter(|a| {
+            a.starts_with('-') && a[1..].starts_with(|c: char| c == '-' || c.is_ascii_alphabetic())
+        })
+        .filter(|a| known.get(a.as_str()) != Some(&false))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn every_launch_flag_is_live_in_the_pinned_engine() {
+    let flags = ld::parse_help(B12017_HELP);
+    let draft = |kind, model: Option<&str>| DraftArgs {
+        kind,
+        model: model.map(PathBuf::from),
+        on_gpu: true,
+        flags: flags.clone(),
+    };
+    let simple = draft(DraftKind::Simple, Some("/m/drafters/e2b.gguf"));
+    assert_eq!(
+        simple.to_args().join(" "),
+        "--spec-type draft-simple --spec-draft-model /m/drafters/e2b.gguf --spec-draft-ngl all --spec-draft-n-max 16"
+    );
+    // Every optional flag on: MoE offload, batch threads, mlock, a GPU split
+    // and each kind of draft.
+    let full = |d: DraftArgs| LaunchArgs {
+        backend: Backend::Vulkan,
+        ngl: 49,
+        all_layers: 49,
+        n_cpu_moe: Some(4),
+        ctx: 16_384,
+        kv: KvType::Q8,
+        threads: 8,
+        threads_batch: Some(16),
+        flash_attn: true,
+        mlock: true,
+        tensor_split: Some(vec![3, 1]),
+        draft: Some(Box::new(d)),
+        cpu_only: false,
+        run: Default::default(),
+    };
+    let launches = [
+        full(simple),
+        full(draft(DraftKind::Dflash, Some("/m/drafters/dflash.gguf"))),
+        full(draft(DraftKind::Mtp, None)),
+    ];
+    let model = Path::new("/m/model.gguf");
+    for a in &launches {
+        let line = crate::route::local_sidecar::llama_args_with_launch(model, "127.0.0.1", 4711, a);
+        assert_eq!(
+            not_live(B12017_HELP, &line),
+            Vec::<String>::new(),
+            "{line:?}"
+        );
+    }
+    assert_eq!(
+        crate::route::local_sidecar::llama_args_with_launch(model, "127.0.0.1", 4711, &launches[0])
+            .join(" "),
+        "-m /m/model.gguf --host 127.0.0.1 --port 4711 --reasoning-format deepseek -ngl 49 -c 16384 --threads 8 \
+--cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on --n-cpu-moe 4 --threads-batch 16 \
+--load-mode mmap+mlock --split-mode layer --tensor-split 3,1 --spec-type draft-simple \
+--spec-draft-model /m/drafters/e2b.gguf --spec-draft-ngl all --spec-draft-n-max 16 --cache-prompt"
+    );
+    // The one-shot defaults, with every optional flag on.
+    let perf = crate::route::local_perf::RuntimeDefaults {
+        n_gpu_layers: 99,
+        threads: 8,
+        ctx: 8_192,
+        flash_attn: true,
+        kv_cache_q8: true,
+        idle_unload_secs: 600,
+    };
+    let line = crate::route::local_sidecar::llama_args_with_perf(model, "127.0.0.1", 4711, &perf);
+    assert_eq!(
+        line.join(" "),
+        "-m /m/model.gguf --host 127.0.0.1 --port 4711 --reasoning-format deepseek -ngl 99 --threads 8 -c 8192 \
+--flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --cache-prompt"
+    );
+    assert_eq!(not_live(B12017_HELP, &line), Vec::<String>::new());
+}
+
+#[test]
+fn the_flags_b12017_removed_never_go_out() {
+    // An older engine's names would still be built for an older engine...
+    let old = ld::parse_help(
+        "-md,   --model-draft FNAME   draft model\n--draft-max, --draft, --draft-n N   tokens to draft\n",
+    );
+    let legacy = DraftArgs {
+        kind: DraftKind::Simple,
+        model: Some(PathBuf::from("d.gguf")),
+        on_gpu: false,
+        flags: old,
+    };
+    // ...and b12017 would refuse the draft length (`--model-draft` is still
+    // an alias there).
+    assert_eq!(not_live(B12017_HELP, &legacy.to_args()), ["--draft-max"]);
+    // The names read from b12017's own help are all live there.
+    let pinned = DraftArgs {
+        flags: ld::parse_help(B12017_HELP),
+        ..legacy
+    };
+    assert_eq!(
+        pinned.to_args().join(" "),
+        "--spec-type draft-simple --spec-draft-model d.gguf --spec-draft-ngl 0 --spec-draft-n-max 16"
+    );
+}
+
+#[test]
+fn a_drafter_in_another_download_folder_still_pairs() {
+    // The model sits in another app's folder; the drafter landed in the
+    // desktop app's older `{config}/models/drafters`. The plan finds it.
+    let mut rig = Rig::new("legacy-folder", G12B_FILE, None);
+    let elsewhere = rig.dir.join("lmstudio").join(G12B_FILE);
+    write_gguf(&elsewhere, "gemma4", VOCAB, 0);
+    rig.model = elsewhere;
+    write_gguf(
+        &rig.dir.join("models").join("drafters").join(G12B_MTP),
+        "gemma4",
+        VOCAB,
+        0,
+    );
+    let p = rig.plan(GovState::Normal);
+    assert_eq!(p.decision, Decision::NeedsTest);
+    assert_eq!(p.name.as_deref(), Some("Gemma 4 12B draft model"));
+}
+
+#[test]
+fn live_replies_that_keep_few_guesses_turn_the_drafter_off_until_a_retest() {
+    let rig = Rig::new("live", G12B_FILE, Some((G12B_MTP, VOCAB)));
+    let key = "NVIDIA GeForce RTX|Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf|Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
+    let keep = Verdict {
+        keep: true,
+        acceptance: 0.6,
+        gain: 1.3,
+        retest_at: None,
+    };
+    ld::save_verdict(&rig.dir, key, keep).unwrap();
+    let on = rig.plan(GovState::Normal);
+    assert_eq!(on.decision, Decision::On);
+    launched(&on, &rig.dir);
+    assert_eq!(
+        draft_status(),
+        Some(("Gemma 4 12B draft model".to_string(), Decision::On))
+    );
+    let poor = Timing {
+        tok_s: 30.0,
+        drafted: 40,
+        accepted: 8,
+    };
+    let now = now_secs();
+    for _ in 1..ld::LIVE_REPLIES {
+        assert_eq!(live_verdict(&poor, now), None);
+    }
+    let (dir, k, v) = live_verdict(&poor, now).expect("off after the window");
+    assert_eq!((dir.as_path(), k.as_str()), (rig.dir.as_path(), key));
+    assert_eq!(v.retest_at, Some(now + ld::RETEST_SECS));
+    assert_eq!(live_verdict(&poor, now), None, "said once");
+    assert_eq!(draft_status().map(|s| s.1), Some(Decision::Off(LIVE_OFF)));
+    ld::save_verdict(&rig.dir, key, v).unwrap();
+    assert_eq!(rig.plan(GovState::Normal).decision, Decision::Off(LIVE_OFF));
+    // Once the retest is due the speed test runs again.
+    ld::save_verdict(
+        &rig.dir,
+        key,
+        Verdict {
+            retest_at: Some(1),
+            ..v
+        },
+    )
+    .unwrap();
+    assert_eq!(rig.plan(GovState::Normal).decision, Decision::NeedsTest);
+    forget_running();
+    assert_eq!(draft_status(), None);
+}
+
+#[test]
+fn the_refusal_check_reads_the_reply_not_the_reasoning() {
+    let j = r#"{"choices":[{"message":{"role":"assistant","content":"  Use kill -9.  ","reasoning_content":"I can't..."}}]}"#;
+    assert_eq!(reply_text(j).as_deref(), Some("Use kill -9."));
+    let empty = r#"{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"thinking"}}]}"#;
+    assert_eq!(reply_text(empty), None, "an empty reply counts neither way");
+    assert_eq!(reply_text("not json"), None);
+}
+
+#[test]
+fn a_game_keeps_the_drafter_on_the_cpu_only_on_its_own_speed_test() {
+    let rig = Rig::new("gaming", G12B_FILE, Some((G12B_MTP, VOCAB)));
+    let cpu = crate::route::local_autoconfig::gaming_launch(&rig.a);
+    let at = |device: &str, gaming: bool| {
+        plan(&Launch {
+            flags: &rig.flags,
+            model: &rig.model,
+            meta: &rig.meta,
+            profile: &rig.p,
+            state: GovState::Throttle,
+            args: &cpu,
+            tune_dir: &rig.dir,
+            device,
+            gaming,
+        })
+    };
+    assert_eq!(
+        at("cpu", false).decision,
+        Decision::Off("the machine is busy, so the draft model is off"),
+        "a throttled machine outside a game still turns it off"
+    );
+    let first = at(GAMING_DEVICE, true);
+    assert_eq!(first.decision, Decision::NeedsTest, "no gaming verdict yet");
+    assert_eq!(first.draft, None, "the model runs alone until it's tested");
+    let key = first.key.expect("verdict key");
+    assert!(key.starts_with("cpu-gaming|"), "{key}");
+    let keep = Verdict {
+        keep: true,
+        acceptance: 0.6,
+        gain: 1.4,
+        retest_at: None,
+    };
+    ld::save_verdict(&rig.dir, &key, keep).unwrap();
+    let on = at(GAMING_DEVICE, true);
+    assert_eq!(on.decision, Decision::On);
+    assert_eq!(
+        on.draft.map(|d| d.on_gpu),
+        Some(false),
+        "the drafter stays off the GPU"
+    );
+    ld::save_verdict(
+        &rig.dir,
+        &key,
+        Verdict {
+            keep: false,
+            ..keep
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        at(GAMING_DEVICE, true).draft,
+        None,
+        "a lost test turns it off"
     );
 }

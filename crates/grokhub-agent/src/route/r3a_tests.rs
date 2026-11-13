@@ -1,7 +1,7 @@
 //! Router R3a acceptance on real files: DE2 from outcome records, one
 //! fixture run of shadow → canary → promote → rollback through the
-//! ChangeLedger, a cost-raising card that changes nothing until you accept
-//! it, Undo byte-identical, the stub refusal, and the local model: off by
+//! ChangeLedger, a cost-raising candidate that takes the same silent guarded
+//! path, Undo byte-identical, the stub refusal, and the local model: off by
 //! default, and with it forced on (fake runtime) only for background work.
 
 use std::collections::BTreeMap;
@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use grokhub_core::learn::decide;
 use grokhub_core::model_registry::cost_class::CostClass;
 use grokhub_core::model_registry::profile::ModelProfile;
 use grokhub_core::model_registry::{
@@ -24,6 +25,7 @@ use super::log::{Chosen, RouteOutcome, RouteRecord, RouteSignals, ROUTE_TRACE};
 use super::policy::class_row;
 use super::signals::{LedgerOutcomeSource, SpanVerifySource, StubSource};
 use super::table::RoutingTable;
+use super::trust::{self, Trust};
 use super::tune::{Candidate, Change, Stage, TuneState, Tuning, DAY_MS};
 use super::{RouteInput, Router};
 use crate::harness::{
@@ -97,7 +99,6 @@ fn seed(dir: &std::path::Path, c: Candidate) {
             super::table::profiles_hash(&BTreeMap::new())
         ),
         seq: 1,
-        ..TuneState::default()
     };
     grokhub_core::model_registry::store::write_json(&learn::state_path(dir), &state).unwrap();
 }
@@ -180,15 +181,25 @@ fn shadow_then_canary_then_promote_then_rollback_with_both_ledger_lines_and_undo
         promoted.contains("\"chat:default\": \"grok-4.6\""),
         "{promoted}"
     );
+    let promoted = &load_state(&dir).candidates[0];
     assert_eq!(
-        learn::review_line(&dir, t2),
-        "Router: 1 change kept (everyday chat: \u{2212}12% cost, quality same), 0 rolled back."
+        promoted
+            .promoted_snap
+            .unwrap()
+            .cost_gain_pct(&promoted.baseline.unwrap())
+            .round(),
+        12.0
     );
-    let why = learn::why_table_lines(&dir, t2).join("\n");
-    assert!(
-        why.contains("chat:default → grok-4.6 first")
-            && why.contains("candidate chat:default: grok-4.6 first (live, watched 7 days)"),
-        "{why}"
+    assert_eq!(
+        (promoted.id.as_str(), promoted.stage),
+        ("chat:default#1", Stage::Watch)
+    );
+    assert_eq!(
+        learn::load_tuning(&dir)
+            .orders
+            .get("chat:default")
+            .map(String::as_str),
+        Some("grok-4.6")
     );
     // After promotion: 30 steps at 80% passed (10 points down) roll it back at once.
     for i in 0..30u64 {
@@ -243,10 +254,7 @@ fn shadow_then_canary_then_promote_then_rollback_with_both_ledger_lines_and_undo
         (c.stage, c.until),
         (Stage::Rejected, Some(t3 + 14 * DAY_MS))
     );
-    assert_eq!(
-        learn::review_line(&dir, t3),
-        "Router: 0 changes kept, 1 rolled back."
-    );
+    assert!(c.promoted_at.is_some(), "rolled back after it went live");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -302,40 +310,54 @@ fn undo_of_a_promotion_restores_the_tuning_file_byte_identical_and_the_tuner_bac
 }
 
 #[test]
-fn a_cost_raising_card_changes_nothing_until_accepted_and_undo_puts_the_file_back() {
-    let dir = test_dir("r3a-card");
-    let card = Candidate {
+fn a_cost_raising_candidate_promotes_silently_on_its_canary_and_undo_puts_the_file_back() {
+    let dir = test_dir("r3a-pricier");
+    let pricier = Candidate {
         id: "chat:default#2".into(),
         class: "chat:default".into(),
         change: Some(Change::Start {
             effort: "high".into(),
         }),
-        stage: Stage::Card,
+        stage: Stage::Canary,
         created_at: T0,
+        canary_at: Some(T0),
         cost_rise_pct: Some(30.0),
         ..Candidate::default()
     };
-    seed(&dir, card);
-    let due = learn::cards_due(&dir, T0);
-    assert_eq!(due.len(), 1);
-    assert_eq!(due[0].0, "self-review:router:chat:default#2");
-    assert_eq!(
-        due[0].2,
-        "everyday chat would do better at High, which costs about 30% more. Start it at High?"
-    );
-    // No click: a tick never applies it.
-    tick(&dir, T0 + DAY_MS);
-    assert!(!tuning_path(&dir).exists());
-    assert_eq!(load_state(&dir).candidates[0].stage, Stage::Card);
-    // Two cards a week at most.
-    learn::cards_posted(&dir, 2, T0);
-    assert!(learn::cards_due(&dir, T0 + DAY_MS).is_empty());
-    assert_eq!(learn::cards_due(&dir, T0 + 8 * DAY_MS).len(), 1);
-    // Accept writes through the ledger; Undo removes the file again (it was not there).
-    assert_eq!(
-        learn::accept_card(&dir, "chat:default#2", T0).unwrap(),
-        "Router changed (everyday chat: start at High). /why table shows it."
-    );
+    seed(&dir, pricier);
+    // Live 80% passed at $0.0100 a step; the canary 95% at $0.0130.
+    for i in 0..400u64 {
+        let pass = if i % 5 == 4 { "reject" } else { "ok" };
+        log(
+            &dir,
+            T0 + 1 + i,
+            rec(
+                "grok-4.7",
+                "medium",
+                &format!("live-{i}"),
+                pass,
+                0.0100,
+                None,
+            ),
+        );
+    }
+    for i in 0..60u64 {
+        let pass = if i % 20 == 19 { "reject" } else { "ok" };
+        log(
+            &dir,
+            T0 + 500 + i,
+            rec(
+                "grok-4.7",
+                "high",
+                &format!("can-{i}"),
+                pass,
+                0.0130,
+                Some("canary:chat:default#2".into()),
+            ),
+        );
+    }
+    let run = tick(&dir, T0 + DAY_MS);
+    assert_eq!(run.promoted, vec!["chat:default#2".to_string()]);
     assert_eq!(
         learn::load_tuning(&dir)
             .starts
@@ -343,6 +365,7 @@ fn a_cost_raising_card_changes_nothing_until_accepted_and_undo_puts_the_file_bac
             .map(String::as_str),
         Some("high")
     );
+    assert_eq!(load_state(&dir).candidates[0].stage, Stage::Watch);
     let line = ChangeLedger::load_kind(&dir, ChangeKind::Model)
         .all()
         .last()
@@ -352,7 +375,7 @@ fn a_cost_raising_card_changes_nothing_until_accepted_and_undo_puts_the_file_bac
         (line.id.as_str(), line.reason.as_str()),
         (
             learn::TUNING_ID,
-            "you accepted: everyday chat: start at High"
+            "router tuned everyday chat: start at High (quality +15 pts for about 30% more cost)"
         )
     );
     undo_change(
@@ -364,10 +387,9 @@ fn a_cost_raising_card_changes_nothing_until_accepted_and_undo_puts_the_file_bac
     )
     .unwrap();
     assert!(!tuning_path(&dir).exists());
-    assert!(
-        learn::accept_card(&dir, "chat:default#2", T0).is_err(),
-        "a used card can't apply twice"
-    );
+    tick(&dir, T0 + 2 * DAY_MS);
+    let c = &load_state(&dir).candidates[0];
+    assert_eq!((c.stage, c.reason.as_str()), (Stage::Rejected, "undone"));
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -553,6 +575,7 @@ fn the_local_flag_is_off_by_default_and_no_route_picks_local_in_1000_random_inpu
             cloud_grant: x & 2 == 2,
             hard_tool: x & 4 == 4,
             offline: false,
+            offline_switch: false,
             local_verify_failed: false,
             capacity: local::LocalCapacity::now(),
         };
@@ -1005,4 +1028,402 @@ fn a_heavy_background_step_waits_for_ramp_up_and_a_pause_refuses_it() {
         Some(ClientError::Protocol(local::LOCAL_PAUSED_MSG.into()).to_string())
     );
     super::local_gov::reset_for_test();
+}
+
+#[test]
+fn a_tick_reads_the_chat_metrics_as_an_input() {
+    use super::session_metrics::{note_call, CallFacts, SessionSummary};
+    let dir = test_dir("r3a-sessions");
+    let up = vec!["model:stronger".to_string()];
+    let keep = vec!["episode:keep".to_string()];
+    let facts = |model, rule_ids, cached, ok| CallFacts {
+        model,
+        rule_ids,
+        prompt_tokens: 1_000,
+        cached_tokens: cached,
+        ok,
+    };
+    note_call(&dir, "ep-1", &facts("grok-4.3", &keep, 0, true), T0);
+    note_call(&dir, "ep-1", &facts("grok-4.7", &up, 500, true), T0 + 1);
+    note_call(&dir, "ep-2", &facts("grok-4.7", &up, 1_000, false), T0 + 2);
+    note_call(&dir, "ep-2", &facts("grok-4.7", &keep, 500, true), T0 + 3);
+    let run = tick(&dir, T0 + DAY_MS);
+    assert_eq!(
+        run.sessions,
+        SessionSummary {
+            chats: 2,
+            calls: 4,
+            cache_hit_pct: 50.0,
+            switches: 1,
+            switches_per_chat: 0.5,
+            escalations: 2,
+            escalation_pct: 50.0,
+            precision_pct: 50.0,
+        }
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A real decision state behind the tuner's gate, with nothing going on.
+struct Engine(std::cell::RefCell<decide::State>);
+
+impl Trust for Engine {
+    fn weigh(&self, p: &decide::Proposal, now_ms: u64) -> Option<decide::Decision> {
+        Some(
+            self.0
+                .borrow_mut()
+                .decide(p, decide::Situation::default(), now_ms),
+        )
+    }
+
+    fn outcome(
+        &self,
+        rule: &grokhub_core::learn::Subject,
+        outcome: decide::Outcome,
+        now_ms: u64,
+    ) -> Option<decide::Alarm> {
+        self.0.borrow_mut().outcome(rule, outcome, now_ms)
+    }
+}
+
+fn tick_under(dir: &std::path::Path, now: u64, engine: &Engine) -> learn::TuneRun {
+    let verify = SpanVerifySource {
+        config_dir: dir.to_path_buf(),
+        session: String::new(),
+    };
+    learn::tick_under(dir, &verify, &LedgerOutcomeSource::new(dir), now, engine).unwrap()
+}
+
+/// Candidate `n` in its canary since `T0`, with 60 canary steps 20% cheaper
+/// than live and every step passing.
+fn canary_ready(dir: &std::path::Path, n: u32) {
+    let mut c = order_candidate();
+    c.id = format!("chat:default#{n}");
+    c.stage = Stage::Canary;
+    c.canary_at = Some(T0);
+    seed(dir, c);
+    for i in 0..60u64 {
+        log(
+            dir,
+            T0 + 1 + i,
+            rec(
+                "grok-4.7",
+                "medium",
+                &format!("l{n}-{i}"),
+                "ok",
+                0.0100,
+                None,
+            ),
+        );
+        log(
+            dir,
+            T0 + 100 + i,
+            rec(
+                "grok-4.6",
+                "medium",
+                &format!("c{n}-{i}"),
+                "ok",
+                0.0080,
+                Some(format!("canary:chat:default#{n}")),
+            ),
+        );
+    }
+}
+
+#[test]
+fn the_trust_dial_holds_a_promotion_and_two_undos_turn_that_kind_of_change_off() {
+    let dir = test_dir("r3a-trust");
+    canary_ready(&dir, 1);
+    let engine = Engine(Default::default());
+    let rule = grokhub_core::learn::Subject::parse("rule:router/chat:default/order").unwrap();
+    let last = |e: &Engine| {
+        let s = e.0.borrow();
+        let d = s.log().last().unwrap();
+        (d.rule.clone(), d.area, d.verdict, d.reason)
+    };
+
+    // Offer only: the canary passed, and the change is not made.
+    engine
+        .0
+        .borrow_mut()
+        .set_dial(decide::Area::Router, decide::Dial::Offer);
+    let t1 = T0 + DAY_MS;
+    let run = tick_under(&dir, t1, &engine);
+    assert_eq!(
+        (run.held, run.promoted),
+        (vec!["chat:default#1".to_string()], vec![])
+    );
+    assert!(!tuning_path(&dir).exists());
+    let c = &load_state(&dir).candidates[0];
+    assert_eq!(
+        (c.stage, c.reason.as_str()),
+        (Stage::Canary, "waiting: This area is set to offer only.")
+    );
+    assert_eq!(
+        last(&engine),
+        (
+            rule.clone(),
+            decide::Area::Router,
+            decide::Verdict::Offer,
+            decide::Reason::DialOffer
+        )
+    );
+
+    // Back to act: the same candidate goes live with no yes answers, since
+    // the canary was its trial. It spends one of the day's five changes.
+    engine
+        .0
+        .borrow_mut()
+        .set_dial(decide::Area::Router, decide::Dial::Act);
+    let run = tick_under(&dir, t1 + 1, &engine);
+    assert_eq!(
+        (run.held, run.promoted),
+        (vec![], vec!["chat:default#1".to_string()])
+    );
+    let c = &load_state(&dir).candidates[0];
+    assert_eq!((c.stage, c.reason.as_str()), (Stage::Watch, ""));
+    assert_eq!(
+        last(&engine),
+        (
+            rule.clone(),
+            decide::Area::Router,
+            decide::Verdict::Act,
+            decide::Reason::Sure
+        )
+    );
+    assert_eq!(engine.0.borrow().budget_left(t1 + 1), 4);
+
+    // The user undoes it: the rule hears one undo, and the area's score
+    // has one outcome, a bad one.
+    let undo = || {
+        undo_change(
+            &dir,
+            &TuningFile {
+                path: &tuning_path(&dir),
+            },
+            UndoAsk::from_click(),
+        )
+        .unwrap();
+    };
+    undo();
+    let t2 = t1 + 2 * DAY_MS;
+    tick_under(&dir, t2, &engine);
+    assert_eq!(
+        engine
+            .0
+            .borrow()
+            .score()
+            .score(decide::Area::Router, t2)
+            .now,
+        Some(0)
+    );
+
+    // A second candidate of the same kind for the same class is promoted
+    // and undone too. A third is refused before it changes anything.
+    canary_ready(&dir, 2);
+    let t3 = t2 + 2 * DAY_MS;
+    assert_eq!(
+        tick_under(&dir, t3, &engine).promoted,
+        vec!["chat:default#2".to_string()]
+    );
+    undo();
+    let t4 = t3 + 2 * DAY_MS;
+    tick_under(&dir, t4, &engine);
+    // The undo of the first change to the file takes the file away again.
+    assert!(!tuning_path(&dir).exists());
+    canary_ready(&dir, 3);
+    let run = tick_under(&dir, t4 + 2 * DAY_MS, &engine);
+    assert_eq!(
+        (run.rejected, run.promoted),
+        (vec!["chat:default#3".to_string()], vec![])
+    );
+    let c = &load_state(&dir).candidates[0];
+    assert_eq!(
+        (c.stage, c.reason.as_str()),
+        (Stage::Rejected, "You undid this twice, so it stopped.")
+    );
+    assert!(!tuning_path(&dir).exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_held_promotion_goes_live_on_the_users_yes_and_ends_on_a_no() {
+    let dir = test_dir("r3a-say-yes");
+    canary_ready(&dir, 1);
+    let engine = Engine(Default::default());
+    let rule = grokhub_core::learn::Subject::parse("rule:router/chat:default/order").unwrap();
+    engine
+        .0
+        .borrow_mut()
+        .set_dial(decide::Area::Router, decide::Dial::Offer);
+    let t1 = T0 + DAY_MS;
+    assert_eq!(
+        tick_under(&dir, t1, &engine).held,
+        vec!["chat:default#1".to_string()]
+    );
+    assert_eq!(
+        engine.0.borrow().asks(t1),
+        vec![(rule.clone(), decide::Reason::DialOffer)]
+    );
+
+    // Yes: the next pass makes the change, with the dial still on offer.
+    assert!(engine.0.borrow_mut().answer(&rule, true, t1 + 1));
+    let run = tick_under(&dir, t1 + 2, &engine);
+    assert_eq!(
+        (run.held, run.promoted),
+        (vec![], vec!["chat:default#1".to_string()])
+    );
+    assert!(tuning_path(&dir).exists());
+    assert_eq!(load_state(&dir).candidates[0].stage, Stage::Watch);
+    {
+        let s = engine.0.borrow();
+        let d = s.log().last().unwrap();
+        assert_eq!(
+            (d.verdict, d.reason),
+            (decide::Verdict::Act, decide::Reason::YouSaidYes)
+        );
+        assert_eq!(s.budget_left(t1 + 2), decide::ACTS_PER_DAY);
+    }
+
+    // A second one of the same kind waits again. No: it ends, and the
+    // tuning file is as the first change left it.
+    let live = std::fs::read(tuning_path(&dir)).unwrap();
+    canary_ready(&dir, 2);
+    let t2 = t1 + DAY_MS;
+    assert_eq!(
+        tick_under(&dir, t2, &engine).held,
+        vec!["chat:default#2".to_string()]
+    );
+    assert!(engine.0.borrow_mut().answer(&rule, false, t2 + 1));
+    let run = tick_under(&dir, t2 + 2, &engine);
+    assert_eq!(
+        (run.rejected, run.promoted, run.held),
+        (vec!["chat:default#2".to_string()], vec![], vec![])
+    );
+    let state = load_state(&dir);
+    let c = state
+        .candidates
+        .iter()
+        .find(|c| c.id == "chat:default#2")
+        .unwrap();
+    assert_eq!(
+        (c.stage, c.reason.as_str()),
+        (Stage::Rejected, "You said no to this, so it waits a month.")
+    );
+    assert_eq!(std::fs::read(tuning_path(&dir)).unwrap(), live);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_promotion_is_weighed_by_what_it_gains_and_which_goal_it_serves() {
+    use super::tune::{Evidence, Snap};
+    let ev = Evidence {
+        canary: Snap {
+            n: 50,
+            pass_pct: 92.0,
+            ..Snap::default()
+        },
+        live: Snap {
+            n: 400,
+            pass_pct: 82.0,
+            ..Snap::default()
+        },
+        ..Evidence::default()
+    };
+    let cheaper = trust::promotion(&order_candidate(), &ev, 20.0, 12.0).unwrap();
+    assert_eq!(
+        cheaper,
+        decide::Proposal {
+            area: decide::Area::Router,
+            rule: grokhub_core::learn::Subject::parse("rule:router/chat:default/order").unwrap(),
+            confidence: 1.0,
+            evidence: 50.0,
+            undo: grokhub_core::learn::Undo::OneClick,
+            value: 0.2,
+            hard: false,
+            helps: Some(decide::Goal::Cheapest),
+            hurts: None,
+            tested: true,
+        }
+    );
+    let faster = trust::promotion(&order_candidate(), &ev, 5.0, 30.0).unwrap();
+    assert_eq!(
+        (faster.value, faster.helps, faster.hurts),
+        (0.3, Some(decide::Goal::Fastest), None)
+    );
+    // A pricier model is worth the quality it adds, and works against cost.
+    let pricier = Candidate {
+        cost_rise_pct: Some(40.0),
+        change: Some(Change::Start {
+            effort: "high".into(),
+        }),
+        ..order_candidate()
+    };
+    let p = trust::promotion(&pricier, &ev, -40.0, 0.0).unwrap();
+    assert_eq!(
+        (p.rule.as_str(), p.value, p.helps, p.hurts),
+        (
+            "rule:router/chat:default/start",
+            0.1,
+            Some(decide::Goal::BestQuality),
+            Some(decide::Goal::Cheapest)
+        )
+    );
+    // A candidate with no change has nothing to weigh.
+    let empty = Candidate {
+        change: None,
+        ..order_candidate()
+    };
+    assert_eq!(trust::promotion(&empty, &ev, 20.0, 12.0), None);
+}
+
+#[test]
+fn the_scoreboard_hears_a_rollback_and_a_change_that_was_kept() {
+    let dir = test_dir("r3a-trust-score");
+    let engine = Engine(Default::default());
+    let score = |at: u64| {
+        engine
+            .0
+            .borrow()
+            .score()
+            .score(decide::Area::Router, at)
+            .now
+    };
+    // Promoted, then one step in five fails where every step passed before:
+    // the tuner takes it back itself. That is a bad outcome for the area.
+    canary_ready(&dir, 1);
+    let t1 = T0 + DAY_MS;
+    assert_eq!(tick_under(&dir, t1, &engine).promoted.len(), 1);
+    assert_eq!(score(t1), None);
+    for i in 0..30u64 {
+        let pass = if i % 5 == 4 { "reject" } else { "ok" };
+        log(
+            &dir,
+            t1 + 1 + i,
+            rec("grok-4.6", "medium", &format!("p1-{i}"), pass, 0.0080, None),
+        );
+    }
+    let t2 = t1 + DAY_MS;
+    assert_eq!(
+        tick_under(&dir, t2, &engine).rolled_back,
+        vec!["chat:default#1".to_string()]
+    );
+    assert_eq!(score(t2), Some(0));
+    // It is not the user's undo: nothing is paused and the rule still acts.
+    assert!(!engine.0.borrow().paused(t2));
+    canary_ready(&dir, 2);
+    let t3 = t2 + DAY_MS;
+    assert_eq!(
+        tick_under(&dir, t3, &engine).promoted,
+        vec!["chat:default#2".to_string()]
+    );
+    // A week on with nothing wrong, the change is kept: one good outcome.
+    let t4 = t3 + 7 * DAY_MS;
+    tick_under(&dir, t4, &engine);
+    assert_eq!(load_state(&dir).candidates[0].stage, Stage::Kept);
+    assert_eq!(score(t4), Some(50));
+    // Kept is told once, not on every later pass.
+    tick_under(&dir, t4 + DAY_MS, &engine);
+    assert_eq!(score(t4 + DAY_MS), Some(50));
+    let _ = std::fs::remove_dir_all(dir);
 }

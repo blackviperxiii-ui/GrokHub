@@ -98,7 +98,31 @@ struct Queued {
     elevated: bool,
     /// The snapshot step: if it fails the file backup still holds.
     restore: bool,
+    mark: StepMark,
 }
+
+/// Where one step of a running fix stands, for the live checklist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepMark {
+    Pending,
+    Running,
+    /// Parked on its card, waiting for the person's OK.
+    NeedsOk,
+    Done,
+    Failed,
+    /// Never ran: the floor refused it, or the fix stopped before it.
+    Skipped,
+}
+
+/// One line of the live checklist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChecklistLine {
+    pub plain: String,
+    pub mark: StepMark,
+}
+
+/// The checklist's last line: the re-check.
+pub const CHECK_LINE: &str = "Check it worked.";
 
 /// One fix being applied.
 #[derive(Debug, Clone)]
@@ -162,6 +186,7 @@ impl ApplyRun {
                 plain: "Save a system snapshot first.".into(),
                 elevated: true,
                 restore: true,
+                mark: StepMark::Pending,
             });
         }
         for s in plan
@@ -175,6 +200,7 @@ impl ApplyRun {
                 plain: s.plain.clone(),
                 elevated: s.elevated,
                 restore: false,
+                mark: StepMark::Pending,
             });
         }
         let run = Self {
@@ -233,6 +259,43 @@ impl ApplyRun {
         self.phase == Phase::AwaitGb
     }
 
+    fn set_mark(&mut self, mark: StepMark) {
+        if let Some(q) = self.queue.get_mut(self.cursor) {
+            q.mark = mark;
+        }
+    }
+
+    /// Every step in order with where it stands, then the re-check. Steps the
+    /// fix never reached read Skipped once it is over.
+    pub fn checklist(&self) -> Vec<ChecklistLine> {
+        let over = self.phase == Phase::Done;
+        let mut lines: Vec<ChecklistLine> = self
+            .queue
+            .iter()
+            .map(|q| ChecklistLine {
+                plain: q.plain.clone(),
+                mark: match q.mark {
+                    StepMark::Pending | StepMark::Running | StepMark::NeedsOk if over => {
+                        StepMark::Skipped
+                    }
+                    m => m,
+                },
+            })
+            .collect();
+        let check = match (self.verified, self.phase) {
+            (Some(true), _) => StepMark::Done,
+            (Some(false), _) => StepMark::Failed,
+            (None, Phase::AwaitVerify) => StepMark::Running,
+            (None, Phase::Done) => StepMark::Skipped,
+            (None, _) => StepMark::Pending,
+        };
+        lines.push(ChecklistLine {
+            plain: CHECK_LINE.into(),
+            mark: check,
+        });
+        lines
+    }
+
     /// The next thing to do. Call it once the last action is answered.
     pub fn next_action(&mut self) -> Action {
         if self.stopped.is_some() || self.phase == Phase::Done {
@@ -243,7 +306,16 @@ impl ApplyRun {
         while let Some(q) = self.queue.get(self.cursor).cloned() {
             let n = self.cursor + 1;
             let args = json!({ "step": n, "command": q.command }).to_string();
-            match harness::decide(harness::Step::Repair { command: &q.gate }) {
+            let outcome = match harness::decide(harness::Step::Repair { command: &q.gate }) {
+                // The app's own snapshot step, made from no model text: the admin prompt
+                // Windows shows for it is the ask, so it does not park on a second one.
+                GateOutcome::Park {
+                    hard: Some(HardClass::SystemAdmin),
+                    ..
+                } if q.restore => GateOutcome::Allow,
+                outcome => outcome,
+            };
+            match outcome {
                 GateOutcome::Refuse { reason } => {
                     self.write(Span::deny(
                         &self.session_id,
@@ -252,12 +324,14 @@ impl ApplyRun {
                         &reason,
                         "floor",
                     ));
+                    self.set_mark(StepMark::Skipped);
                     self.cursor += 1;
                 }
                 GateOutcome::Park { hard, .. } if self.approved != Some(self.cursor) => {
                     let class = hard.unwrap_or(HardClass::IrreversibleOs);
                     self.write(Span::hard_park(&self.session_id, REPAIR_TOOL, &args, class));
                     self.phase = Phase::AwaitCard;
+                    self.set_mark(StepMark::NeedsOk);
                     return Action::Park {
                         class,
                         command: q.command,
@@ -284,6 +358,7 @@ impl ApplyRun {
                     }
                     self.write(span.on_path("B"));
                     self.phase = Phase::AwaitGb;
+                    self.set_mark(StepMark::Running);
                     return Action::Gb {
                         prompt: gb_prompt(&q.command, n, total, q.elevated),
                         command: q.command,
@@ -303,6 +378,7 @@ impl ApplyRun {
     /// Grok Build's reply to the step it was sent. False when it didn't work.
     pub fn step_finished(&mut self, reply: &str) -> bool {
         let ok = step_ok(reply);
+        self.set_mark(if ok { StepMark::Done } else { StepMark::Failed });
         if let Some(q) = self.queue.get(self.cursor).cloned() {
             let args = json!({ "step": self.cursor + 1, "command": q.command }).to_string();
             if !ok && q.restore {

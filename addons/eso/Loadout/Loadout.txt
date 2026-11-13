@@ -1,0 +1,10 @@
+## Title: Loadout
+## Description: Records your own characters' level, champion points, class, zone, gold, play time, deaths and achievements for the Loadout desktop app. Read-only: automates nothing.
+## Author: Loadout
+## Version: 1.0.0
+## AddOnVersion: 1
+## APIVersion: 101047 101048
+## SavedVariables: LoadoutDB
+## X-Loadout-App: 1
+
+Loadout.lua

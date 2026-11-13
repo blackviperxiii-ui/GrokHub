@@ -2,7 +2,9 @@
 //! Every Grok CLI builtin slash command, in pager menu order, and what a
 //! native thread does with it.
 //!
-//! The names are `builtin_commands()` in `xai-grok-pager` `slash/commands/mod.rs`.
+//! The names are `builtin_commands()` in `xai-grok-pager` `slash/commands/mod.rs`,
+//! less the model and effort commands: the router alone picks both, so the
+//! cabin answers those as unknown commands.
 //! A row is `native:` when the cabin handles it on a native thread, or `N/A:`
 //! when that command stays a pager or account feature. CLI threads never read
 //! this table.
@@ -24,9 +26,7 @@ const CLI_SLASH_COMMANDS: &[&str] = &[
     "btw",
     "voice",
     "new",
-    "effort",
     "context-window",
-    "model",
     "context",
     "compact",
     "fork",
@@ -104,12 +104,10 @@ const SLASH_PARITY: &[SlashParity] = &[
         "N/A: the cabin mic is separate from the CLI voice command",
     ),
     row("new", "native: new chat"),
-    row("effort", "native: effort picker"),
     row(
         "context-window",
         "native: context length in the status line",
     ),
-    row("model", "native: model catalog"),
     row("context", "native: turn and token status"),
     row("compact", "native: compact the native session"),
     row("fork", "N/A: fork is not in the cabin"),
@@ -212,8 +210,6 @@ pub fn unparsed_native_slash(line: &str) -> Option<UnparsedSlash> {
         "recap" => UnparsedSlash::Recap,
         "settings" => UnparsedSlash::Settings,
         "memory" => UnparsedSlash::Memory,
-        "model" => UnparsedSlash::ModelCatalog,
-        "effort" => UnparsedSlash::EffortHint,
         "remember" => UnparsedSlash::Note("native: /remember needs a note"),
         "rename" => UnparsedSlash::Note("native: /rename needs a title"),
         "queue" => UnparsedSlash::Note("native: /queue needs a message"),
@@ -259,8 +255,6 @@ pub enum UnparsedSlash {
     Recap,
     Settings,
     Memory,
-    ModelCatalog,
-    EffortHint,
     /// Show this disposition. It starts with `native:` or `N/A:`.
     Note(&'static str),
 }
@@ -273,7 +267,7 @@ mod tests {
     fn slash_table_covers_every_cli_command_once() {
         let rows = slash_parity();
         assert_eq!(rows.len(), CLI_SLASH_COMMANDS.len());
-        assert_eq!(rows.len(), 74);
+        assert_eq!(rows.len(), 72);
         let mut seen = std::collections::BTreeSet::new();
         for (row, expected) in rows.iter().zip(CLI_SLASH_COMMANDS.iter().copied()) {
             assert_eq!(row.command, expected);
@@ -298,6 +292,12 @@ mod tests {
         assert!(unparsed_native_slash("/bg write a file").is_none());
         assert!(unparsed_native_slash("/create-skill").is_none());
         assert!(unparsed_native_slash("hello").is_none());
+        for line in ["/model", "/model grok-4.7", "/effort", "/effort high"] {
+            assert!(unparsed_native_slash(line).is_none(), "{line}");
+        }
+        assert!(slash_parity()
+            .iter()
+            .all(|row| row.command != "model" && row.command != "effort"));
         assert_eq!(unparsed_native_slash("/flush"), Some(UnparsedSlash::Flush));
         assert_eq!(
             unparsed_native_slash("/flush now"),

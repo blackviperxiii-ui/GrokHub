@@ -1,4 +1,4 @@
-//! The `route` record on each model-call span, and `/why`.
+//! The `route` record on each model-call span.
 //! Records hold ids, counts and one plain sentence. Never prompt text, never secrets.
 
 use std::collections::BTreeMap;
@@ -8,16 +8,11 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use grokhub_core::model_registry::profile::RuntimeSettings;
-use grokhub_core::model_registry::Registry;
 
 use crate::harness::{span_path, Span, SpanTail};
 
 /// Span session for model calls (shared with [`super::cabin::MODEL_TRACE`]).
 pub const ROUTE_TRACE: &str = super::cabin::MODEL_TRACE;
-/// `/why` prints at most this many reasons.
-pub const WHY_LINES: usize = 10;
-/// Span lines `/why` reads from the end of the model-call log.
-pub const WHY_SCAN_LINES: usize = 400;
 
 /// Provider, model and effort.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,10 +55,20 @@ pub struct RouteOutcome {
     /// R2b: the call hit the plan's usage limit (429 `free-usage-exhausted`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub limit: bool,
+    /// Hosted search the reply ran and was billed for.
+    #[serde(default, skip_serializing_if = "crate::client::HostedUsage::is_empty")]
+    pub hosted: crate::client::HostedUsage,
+    /// Pages the reply cited.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sources: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// `{span_id, episode, step, class, d, ctx_tokens, signals, candidates_n,
-/// chosen, prev, rule_ids, reason, pinned, outcome}` plus `used` (what the call
+/// chosen, prev, rule_ids, reason, outcome}` plus `used` (what the call
 /// really sent) and `settings` (the profile's runtime settings for `chosen`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RouteRecord {
@@ -93,8 +98,6 @@ pub struct RouteRecord {
     pub rule_ids: Vec<String>,
     #[serde(default)]
     pub reason: String,
-    #[serde(default)]
-    pub pinned: bool,
     #[serde(default)]
     pub outcome: Option<RouteOutcome>,
     /// What the call actually sent.
@@ -130,6 +133,52 @@ pub struct RouteRecord {
     pub gov_state: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub tier: String,
+    /// This request rewrote the cached prompt prefix: where, and why. Its
+    /// cache share drops with it, so the cause sits next to the numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix_break: Option<BreakNote>,
+    /// The exact request this call sent, by hash (`harness::replay`); empty
+    /// when none was stored (no learned-tier key, the store switched off, or
+    /// an on-device step).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub request: String,
+    /// Failover PR 7: models that stopped inside this call and the ones that
+    /// took over, in order. Empty on any call that never switched.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handoffs: Vec<HandoffLine>,
+}
+
+/// One model switch inside a call (failover PR 7): the model that stopped,
+/// the one that took over, and the rule that names why it stopped
+/// (`handoff:limit`, `handoff:credit`, `handoff:outage`, …). Ids and a rule
+/// only — never prompt text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffLine {
+    pub from: String,
+    pub to: String,
+    pub rule: String,
+}
+
+/// Where a request first stopped repeating the one before it, and why
+/// ([`crate::prefix_guard::PrefixBreak`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BreakNote {
+    /// `system`, `tools` or `input`.
+    pub part: String,
+    /// Segment index in cache order.
+    pub index: u32,
+    /// `compaction`, `trim`, `model_switch`, `effort_switch`, `tools_appended` or `unexpected`.
+    pub reason: String,
+}
+
+impl From<&crate::prefix_guard::PrefixBreak> for BreakNote {
+    fn from(b: &crate::prefix_guard::PrefixBreak) -> Self {
+        Self {
+            part: b.part.as_str().to_string(),
+            index: u32::try_from(b.index).unwrap_or(u32::MAX),
+            reason: b.reason.as_str().to_string(),
+        }
+    }
 }
 
 // `d` and `cost_usd` are finite (rounded rules and token math), so equality is total.
@@ -171,126 +220,4 @@ pub fn with_route_records<R>(
     tail.refresh();
     let mut records = tail.newest_iter(lines.min(ROUTE_TAIL_LINES));
     f(&mut records)
-}
-
-/// Every route record in the scanned tail, oldest first.
-fn scanned_routes(config_dir: &Path) -> Vec<(u64, RouteRecord)> {
-    route_records(config_dir, WHY_SCAN_LINES)
-}
-
-/// The last [`WHY_LINES`] route records, oldest first.
-pub fn last_routes(config_dir: &Path) -> Vec<(u64, RouteRecord)> {
-    let mut out = scanned_routes(config_dir);
-    let skip = out.len().saturating_sub(WHY_LINES);
-    out.drain(..skip);
-    out
-}
-
-/// `cached_tokens / prompt_tokens` of the newest multi-turn episode, after
-/// its first call (which never has a cache), as a percent.
-pub fn episode_cache_pct(routes: &[(u64, RouteRecord)]) -> Option<(String, u64)> {
-    let newest = routes
-        .iter()
-        .rev()
-        .filter(|(_, r)| !r.episode.is_empty() && r.outcome.is_some())
-        .find_map(|(_, r)| {
-            let calls: Vec<&RouteRecord> = routes
-                .iter()
-                .map(|(_, x)| x)
-                .filter(|x| x.episode == r.episode && x.outcome.is_some())
-                .collect();
-            (calls.len() >= 2).then_some((r.episode.clone(), calls))
-        })?;
-    let (episode, calls) = newest;
-    let (cached, input) = calls[1..]
-        .iter()
-        .filter_map(|r| r.outcome.as_ref())
-        .fold((0, 0), |(c, i), o| {
-            (c + o.tokens.cached, i + o.tokens.input)
-        });
-    (input > 0).then(|| (episode, cached * 100 / input))
-}
-
-/// `/why`: one line per recent route, at most [`WHY_LINES`]. When the newest
-/// multi-turn task got less than [`CACHE_FLOOR_PCT`] of its prompt from the
-/// cache, the oldest line makes room for that flag.
-pub fn why_text(config_dir: &Path) -> String {
-    let brief = crate::brain::why_lines(config_dir);
-    let scanned = scanned_routes(config_dir);
-    let mut routes = last_routes(config_dir);
-    if routes.is_empty() {
-        let none = "No routed model calls yet. Effort is automatic: each step's reason shows here once it runs.";
-        return brief
-            .into_iter()
-            .chain([none.to_string()])
-            .collect::<Vec<_>>()
-            .join("\n");
-    }
-    let flag = episode_cache_pct(&scanned).filter(|(_, pct)| *pct < CACHE_FLOOR_PCT).map(|(_, pct)| {
-        format!("Cache: the last multi-turn task got {pct}% of its prompt from the cache (under {CACHE_FLOOR_PCT}%), so it paid for more of it.")
-    });
-    while !routes.is_empty() && routes.len() + usize::from(flag.is_some()) + brief.len() > WHY_LINES
-    {
-        routes.remove(0);
-    }
-    let mut lines: Vec<String> = brief;
-    lines.extend(routes.iter().map(|(_, r)| {
-        let same = r.used.effort == r.chosen.effort;
-        let used = if same {
-            String::new()
-        } else {
-            format!(
-                " (this session sent {})",
-                super::effort_word(r.used.effort.as_deref())
-            )
-        };
-        let goal = match (r.goal.as_str(), r.goal_reason.as_str()) {
-            ("", _) => String::new(),
-            (g, "") => format!(" Goal: {g}."),
-            (g, why) => format!(" Goal: {g} ({why})."),
-        };
-        format!(
-            "{} · {} · {}{}{}",
-            r.class, r.used.model, r.reason, used, goal
-        )
-    }));
-    lines.extend(flag);
-    lines.join("\n")
-}
-
-/// `/why models`: one line per model with state, usable and reason.
-pub fn why_models_text(
-    reg: &Registry,
-    profiles: &std::collections::BTreeMap<
-        String,
-        grokhub_core::model_registry::profile::ModelProfile,
-    >,
-) -> String {
-    if reg.models.is_empty() {
-        return "No model list yet. It refreshes 30 s after start, then every 6 hours.".into();
-    }
-    reg.models
-        .values()
-        .map(|r| {
-            let (usable, why) = match profiles.get(&r.meta.id) {
-                Some(p) if p.usable => ("usable".to_string(), String::new()),
-                Some(p) => (
-                    "not usable".to_string(),
-                    format!(" {}", p.unusable_reason.clone().unwrap_or_default()),
-                ),
-                None => ("no profile yet".to_string(), String::new()),
-            };
-            format!(
-                "{} · {} · {}. {}{}",
-                r.meta.id,
-                r.state.as_str(),
-                usable,
-                r.reason,
-                why
-            )
-            .trim_end()
-            .to_string()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }

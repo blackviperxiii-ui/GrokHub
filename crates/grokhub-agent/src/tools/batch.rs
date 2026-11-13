@@ -1,5 +1,7 @@
 //! Batched read-only tool round (Reason harness R5): consecutive gate-readonly
 //! calls in one model reply may execute dispatch in parallel (bounded pool).
+//!
+//! On by default. `batched_tools.toml` with `enabled = false` turns it off.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,9 +16,15 @@ const CONFIG_NAME: &str = "batched_tools.toml";
 
 pub const MAX_PARALLEL: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     pub enabled: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 pub fn config_path(config_dir: &Path) -> std::path::PathBuf {
@@ -31,20 +39,9 @@ pub fn settings(config_dir: &Path) -> Settings {
 }
 
 fn parse_file(text: &str) -> Settings {
-    let mut enabled = false;
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim().eq_ignore_ascii_case("enabled") && value.trim().eq_ignore_ascii_case("true") {
-            enabled = true;
-        }
+    Settings {
+        enabled: crate::config_file::parse(CONFIG_NAME, text, &["enabled"]).flag("enabled", true),
     }
-    Settings { enabled }
 }
 
 fn session_native(name: &str) -> bool {
@@ -101,33 +98,47 @@ where
     let results: Mutex<Vec<Option<ToolOutput>>> = Mutex::new(vec![None; indices.len()]);
     let next = AtomicUsize::new(0);
     let workers = indices.len().min(MAX_PARALLEL);
+    // Workers are fresh threads: they take on the run's origin, recall lines
+    // and fence nonce, so their sends are logged and classed as the run's.
+    let origin = crate::harness::current_origin();
+    let recall = crate::harness::current_recall();
+    let fence_state = super::fence::capture();
     std::thread::scope(|scope| {
         for _ in 0..workers {
-            scope.spawn(|| loop {
-                let slot = next.fetch_add(1, Ordering::SeqCst);
-                if slot >= indices.len() {
-                    break;
-                }
-                let out = if should_stop() {
-                    cancelled_output()
-                } else {
-                    if let Some(session) = session {
-                        bind_deferred_session(session);
+            scope.spawn(|| {
+                let _origin = crate::harness::OriginScope::enter(origin);
+                let _recall = crate::harness::RecallScope::enter(recall.clone());
+                let _trace = super::fence::enter(&fence_state);
+                loop {
+                    let slot = next.fetch_add(1, Ordering::SeqCst);
+                    if slot >= indices.len() {
+                        break;
                     }
-                    dispatch(indices[slot])
-                };
-                results.lock().unwrap_or_else(|e| e.into_inner())[slot] = Some(out);
+                    let out = if should_stop() {
+                        cancelled_output()
+                    } else {
+                        if let Some(session) = session {
+                            bind_deferred_session(session);
+                        }
+                        dispatch(indices[slot])
+                    };
+                    results.lock().unwrap_or_else(|e| e.into_inner())[slot] = Some(out);
+                }
             });
         }
     });
-    let collected = {
-        let slots = results.lock().unwrap_or_else(|e| e.into_inner());
-        slots
-            .iter()
-            .map(|o| o.as_ref().expect("batch worker left a hole").clone())
-            .collect::<Vec<ToolOutput>>()
-    };
-    collected
+    let slots = results.lock().unwrap_or_else(|e| e.into_inner());
+    let outputs = slots
+        .iter()
+        .map(|o| o.as_ref().expect("batch worker left a hole").clone())
+        .collect::<Vec<ToolOutput>>();
+    if outputs
+        .iter()
+        .any(|out| super::fence::holds_outside(&out.text))
+    {
+        super::fence::note_untrusted_seen();
+    }
+    outputs
 }
 
 pub fn cancelled_output() -> ToolOutput {
@@ -141,6 +152,45 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
+    fn nonce_of(fenced: &str) -> String {
+        fenced
+            .split("nonce=")
+            .nth(1)
+            .and_then(|rest| rest.split(">>>").next())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[test]
+    fn batch_workers_carry_the_runs_origin_recall_lines_and_fence() {
+        use super::super::fence;
+        fence::reset_run_nonce_for_tests();
+        let _origin = crate::harness::OriginScope::enter(crate::harness::Origin::Automation);
+        let line = "my sister lives on maple street";
+        let _recall = crate::harness::RecallScope::enter(vec![line.to_string()]);
+        let run_nonce = nonce_of(&fence::fence("probe", "x"));
+        let outs = run_parallel(&[0, 1], None, &|| false, |_| {
+            let personal = crate::harness::model_text_classes(&format!("q={line}"))
+                .contains(&crate::harness::DataClass::Personal);
+            let origin = crate::harness::current_origin();
+            let nonce = nonce_of(&fence::fence("mods", "page text"));
+            ToolOutput::ok(format!("{personal}|{origin:?}|{nonce}"))
+        });
+        for out in &outs {
+            assert_eq!(out.text, format!("true|Automation|{run_nonce}"));
+        }
+
+        fence::reset_run_nonce_for_tests();
+        assert!(!fence::run_saw_untrusted());
+        let _ = run_parallel(&[0], None, &|| false, |_| {
+            ToolOutput::ok(fence::fence("mods", "page text"))
+        });
+        assert!(
+            fence::run_saw_untrusted(),
+            "a worker's fence marks the run, so its later writes keep a taint mark"
+        );
+    }
+
     fn call(name: &str, id: &str) -> FunctionCall {
         FunctionCall {
             call_id: id.into(),
@@ -150,10 +200,14 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_off() {
+    fn settings_default_on_and_file_disables() {
         let dir = std::env::temp_dir().join(format!("gh-batch-off-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        assert!(settings(&dir).enabled);
+        assert!(parse_file("").enabled);
+        assert!(parse_file("# nothing set\n").enabled);
+        std::fs::write(dir.join(CONFIG_NAME), "enabled = false\n").unwrap();
         assert!(!settings(&dir).enabled);
         let _ = std::fs::remove_dir_all(&dir);
     }

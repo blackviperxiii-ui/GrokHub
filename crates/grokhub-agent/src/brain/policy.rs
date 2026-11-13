@@ -123,10 +123,6 @@ mod tests {
         assert_eq!(pick_policy(&rows, &brief), Some(shipped));
         assert_eq!(note.as_deref(), Some("`require_approval` is a safety key; safety and approval rules aren't in the policy table"));
         assert!(!care_first_enabled(&dir));
-        assert_eq!(
-            super::super::why_lines(&dir),
-            vec!["Policy file ignored (`require_approval` is a safety key; safety and approval rules aren't in the policy table); using the shipped rows.".to_string()]
-        );
         std::fs::write(
             policy_path(&dir),
             "care_first = true\n[[row]]\nintent = \"chat\"\ncare = \"casual\"\ngoal = \"cost\"\nreason = \"keep it cheap\"\ndepth = \"none\"\nask = \"act\"\nstop = \"answered\"\ntalk = \"one line\"\n",

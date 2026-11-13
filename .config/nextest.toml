@@ -17,6 +17,9 @@ serial = { max-threads = 1 }
 [[profile.ci.overrides]]
 filter = 'test(channel_tip_tests)'
 test-group = 'serial'
+# Started first: one at a time, they were the last ~28 s of the Windows run
+# with three of four slots idle.
+priority = 100
 
 [profile.ci]
 # Run everything and list every failure, not just the first.

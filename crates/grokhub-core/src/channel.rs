@@ -63,20 +63,32 @@ pub struct BuildVersion {
     pub sha: String,
 }
 
-/// `GrokHub 2.10.91-beta.3 (beta @ abc1234)` / `GrokHub 2.10.91 (main @ abc1234)`.
-/// Without git info it is `GrokHub 2.10.91`. `beta_n` is the prerelease number
+/// `Loadout 2.10.91-beta.3 (beta @ abc1234)` / `Loadout 2.10.91 (main @ abc1234)`,
+/// led by the product name from `brand.json`. Without git info it is
+/// `Loadout 2.10.91`. `beta_n` is the prerelease number
 /// on Beta (`-beta.N`); ignored on Stable.
 pub fn version_line(base: &str, channel: Channel, branch: &str, sha: &str, beta_n: u64) -> String {
     let version = match channel {
         Channel::Beta => format!("{base}-beta.{beta_n}"),
         Channel::Stable => base.to_string(),
     };
+    let name = crate::brand::product_name();
     match (branch.trim(), sha.trim()) {
-        ("", "") => format!("GrokHub {version}"),
-        ("", sha) => format!("GrokHub {version} ({sha})"),
-        (branch, "") => format!("GrokHub {version} ({branch})"),
-        (branch, sha) => format!("GrokHub {version} ({branch} @ {sha})"),
+        ("", "") => format!("{name} {version}"),
+        ("", sha) => format!("{name} {version} ({sha})"),
+        (branch, "") => format!("{name} {version} ({branch})"),
+        (branch, sha) => format!("{name} {version} ({branch} @ {sha})"),
     }
+}
+
+/// A `--version` line without its leading product name. Takes the current
+/// name and the old `GrokHub ` one, which installs before the rename print.
+pub fn strip_product_prefix(line: &str) -> &str {
+    let line = line.trim_start();
+    [crate::brand::product_name(), crate::brand::INTERNAL_ID]
+        .iter()
+        .find_map(|name| line.strip_prefix(name).and_then(|r| r.strip_prefix(' ')))
+        .unwrap_or(line)
 }
 
 /// Core `X.Y.Z` and channel from a version token (`2.13.0-beta.2`, bare
@@ -94,11 +106,11 @@ fn version_core_channel(version: &str) -> Option<(&str, Channel)> {
     Some((version, Channel::Stable))
 }
 
-/// Reads a `--version` line back. Also takes the old bare `2.10.90` output
-/// and legacy `2.10.91-beta` (no `.N`).
+/// Reads a `--version` line back. Also takes the old `GrokHub ` prefix, the
+/// old bare `2.10.90` output and legacy `2.10.91-beta` (no `.N`).
 pub fn parse_version_line(line: &str) -> Option<BuildVersion> {
     let line = line.trim();
-    let rest = line.strip_prefix("GrokHub ").unwrap_or(line).trim();
+    let rest = strip_product_prefix(line).trim();
     let (version, paren) = match rest.split_once(' ') {
         Some((v, p)) => (v.trim(), p.trim()),
         None => (rest, ""),
@@ -163,30 +175,30 @@ mod tests {
     fn version_lines_name_the_channel_branch_and_sha() {
         assert_eq!(
             version_line("2.10.91", Channel::Beta, "beta", "abc1234", 3),
-            "GrokHub 2.10.91-beta.3 (beta @ abc1234)"
+            "Loadout 2.10.91-beta.3 (beta @ abc1234)"
         );
         assert_eq!(
             version_line("2.10.91", Channel::Stable, "main", "abc1234", 0),
-            "GrokHub 2.10.91 (main @ abc1234)"
+            "Loadout 2.10.91 (main @ abc1234)"
         );
         assert_eq!(
             version_line("2.10.91", Channel::Stable, "v2.10.91", "bb7890b", 0),
-            "GrokHub 2.10.91 (v2.10.91 @ bb7890b)"
+            "Loadout 2.10.91 (v2.10.91 @ bb7890b)"
         );
         assert_eq!(
             version_line("2.10.91", Channel::Stable, "", "", 0),
-            "GrokHub 2.10.91"
+            "Loadout 2.10.91"
         );
         assert_eq!(
             version_line("2.10.91", Channel::Beta, "", "abc1234", 0),
-            "GrokHub 2.10.91-beta.0 (abc1234)"
+            "Loadout 2.10.91-beta.0 (abc1234)"
         );
     }
 
     #[test]
     fn version_lines_parse_back() {
         assert_eq!(
-            parse_version_line("GrokHub 2.10.91-beta.3 (beta @ abc1234)\n"),
+            parse_version_line("Loadout 2.10.91-beta.3 (beta @ abc1234)\n"),
             Some(BuildVersion {
                 version: "2.10.91-beta.3".into(),
                 channel: Channel::Beta,
@@ -204,7 +216,7 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_version_line("GrokHub 2.10.91 (main @ 0f1e2d3)"),
+            parse_version_line("Loadout 2.10.91 (main @ 0f1e2d3)"),
             Some(BuildVersion {
                 version: "2.10.91".into(),
                 channel: Channel::Stable,
@@ -229,7 +241,13 @@ mod tests {
             parse_version_line("GrokHub 2.10.91-beta (abc1234)").map(|v| (v.channel, v.sha)),
             Some((Channel::Beta, "abc1234".to_string()))
         );
-        assert_eq!(parse_version_line("GrokHub two (main @ x)"), None);
+        assert_eq!(parse_version_line("Loadout two (main @ x)"), None);
+        assert_eq!(
+            strip_product_prefix("Loadout 3.5.0 (beta @ a)"),
+            "3.5.0 (beta @ a)"
+        );
+        assert_eq!(strip_product_prefix("GrokHub 3.5.0"), "3.5.0");
+        assert_eq!(strip_product_prefix("3.5.0"), "3.5.0");
         assert_eq!(parse_version_line("GrokHub 2.10.91 (main @ abc1234"), None);
         assert_eq!(parse_version_line(""), None);
     }
@@ -259,7 +277,9 @@ mod tests {
         };
         let receipt = cfg.join("channel").display().to_string();
         let plan = |c: &str, b: &str, sw: u8| {
-            format!("channel={c} branch={b} switch={sw} prefix=/tmp/gh-chan receipt={receipt}")
+            format!(
+                "channel={c} branch={b} switch={sw} prefix=/tmp/gh-chan receipt={receipt} app=shell"
+            )
         };
         assert_eq!(run(&["--user", "--dry-run"]).1, plan("stable", "main", 0));
         assert_eq!(
@@ -293,6 +313,69 @@ mod tests {
             )
         );
         assert_eq!(run(&["--bogus"]).0, Some(2));
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    /// `--app` picks which desktop app the clone install builds. No `--app`
+    /// installs the shell, so a fresh install and an old cabin's own update
+    /// (`install.sh --user`) both move to it; the retired cabin is refused.
+    #[cfg(unix)]
+    #[test]
+    fn install_sh_app_flag_defaults_to_the_shell() {
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/install.sh");
+        let cfg = std::env::temp_dir().join(format!("grokhub-app-sh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cfg);
+        std::fs::create_dir_all(&cfg).unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("bash")
+                .arg(script)
+                .args(args)
+                .env("GROKHUB_CONFIG", &cfg)
+                .env("PREFIX", "/tmp/gh-app")
+                .output()
+                .unwrap();
+            (
+                out.status.code(),
+                String::from_utf8_lossy(&out.stdout).trim().to_string(),
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            )
+        };
+        let receipt = cfg.join("channel").display().to_string();
+        let plan = |app: &str| {
+            format!(
+                "channel=stable branch=main switch=0 prefix=/tmp/gh-app receipt={receipt} app={app}"
+            )
+        };
+        assert_eq!(
+            run(&["--user", "--dry-run"]),
+            (Some(0), plan("shell"), String::new())
+        );
+        assert_eq!(run(&["--dry-run"]).1, plan("shell"));
+        assert_eq!(
+            run(&["--user", "--app", "shell", "--dry-run"]).1,
+            plan("shell")
+        );
+        let retired = (
+            Some(2),
+            String::new(),
+            "error: the cabin was retired; --app takes only shell".to_string(),
+        );
+        assert_eq!(run(&["--app=both", "--dry-run"]), retired);
+        assert_eq!(run(&["--app", "cabin", "--dry-run"]), retired);
+        assert_eq!(
+            run(&["--app", "tauri", "--dry-run"]),
+            (
+                Some(2),
+                String::new(),
+                "error: --app takes shell, not 'tauri'".into()
+            )
+        );
+        assert_eq!(
+            run(&["--app"]),
+            (Some(2), String::new(), "error: --app takes shell".into())
+        );
+        let sh = include_str!("../../../scripts/install.sh");
+        assert!(sh.contains("\nAPP=shell\n"), "the default app is the shell");
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
@@ -360,6 +443,13 @@ mod tests {
         let cargo = base.join("bin/cargo");
         std::fs::write(&cargo, "#!/bin/sh\necho cargo-stub \"$@\"\nexit 7\n").unwrap();
         std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The default install builds the shell, which first checks for npm
+        // and webkit2gtk; the cargo stub stops the run before either is used.
+        for tool in ["npm", "pkg-config"] {
+            let stub = base.join("bin").join(tool);
+            std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let git = |dir: &std::path::Path, args: &[&str]| {
             let out = std::process::Command::new("git")
                 .args(args)
@@ -448,7 +538,7 @@ mod tests {
             "{stdout}"
         );
         assert!(
-            lines.contains(&"cargo-stub build --release --locked -p grokhub-app -p grokhub-hub"),
+            lines.contains(&"cargo-stub build --release --locked -p grokhub-hub"),
             "{stdout}"
         );
         assert_eq!(
@@ -766,7 +856,7 @@ pub fn channel_switch_preflight(
 fn is_source_tree(dir: &std::path::Path) -> bool {
     dir.join("Cargo.toml").is_file()
         && dir.join("scripts/install.sh").is_file()
-        && dir.join("crates/grokhub-app").is_dir()
+        && dir.join("crates/grokhub-core").is_dir()
 }
 
 #[cfg(test)]

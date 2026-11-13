@@ -4,11 +4,14 @@
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
 use grokhub_core::desktop_mcp::{
-    current_desktop_is_kde, join_kscreen_with_eis, parse_kscreen_doctor, select_desktop_stack,
-    union_monitor, CapturedShot, DesktopBackend, DesktopCaptureKind, DesktopInputKind,
-    DesktopMonitorKind, DesktopProbes, DesktopSessionEnv, DesktopStack, EisRegion, KeyCombo,
-    MonitorGeom, MouseButton, ShotGeom,
+    current_desktop_is_kde, join_kscreen_with_eis, parse_kscreen_doctor,
+};
+use grokhub_core::desktop_mcp::{
+    select_desktop_stack, union_monitor, CapturedShot, DesktopBackend, DesktopCaptureKind,
+    DesktopInputKind, DesktopMonitorKind, DesktopProbes, DesktopSessionEnv, DesktopStack,
+    EisRegion, KeyCombo, MonitorGeom, MouseButton, ShotGeom,
 };
 use grokhub_core::{grim_capture_args, ydotool_socket_path};
 
@@ -144,20 +147,20 @@ impl WaylandBackend {
     }
 
     fn wl_monitors(&self) -> Result<Vec<MonitorGeom>, String> {
-        if crate::which("swaymsg") {
-            if let Ok(out) = run_bin("swaymsg", &["-t".into(), "get_outputs".into()], 3000) {
-                let text = String::from_utf8_lossy(&out.stdout);
-                if let Some(mons) = parse_sway_outputs(&text) {
-                    return Ok(mons);
-                }
+        if crate::which("swaymsg")
+            && let Ok(out) = run_bin("swaymsg", &["-t".into(), "get_outputs".into()], 3000)
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Some(mons) = parse_sway_outputs(&text) {
+                return Ok(mons);
             }
         }
-        if crate::which("wlr-randr") {
-            if let Ok(out) = run_bin("wlr-randr", &[], 3000) {
-                let mons = parse_wlr_randr(&String::from_utf8_lossy(&out.stdout));
-                if !mons.is_empty() {
-                    return Ok(mons);
-                }
+        if crate::which("wlr-randr")
+            && let Ok(out) = run_bin("wlr-randr", &[], 3000)
+        {
+            let mons = parse_wlr_randr(&String::from_utf8_lossy(&out.stdout));
+            if !mons.is_empty() {
+                return Ok(mons);
             }
         }
         Err(format!(
@@ -252,6 +255,9 @@ impl DesktopBackend for WaylandBackend {
         if let Some(result) = self.dispatch_route(|routes| routes.move_abs_on(geom, x, y)) {
             return result;
         }
+        // Only the Linux routes place the pointer by the shot's geometry.
+        #[cfg(not(target_os = "linux"))]
+        let _ = geom;
         self.prepare_input()?;
         self.move_to(x, y)
     }
@@ -322,10 +328,10 @@ impl DesktopBackend for WaylandBackend {
     }
 
     fn is_locked(&mut self) -> bool {
-        if let Some((at, locked)) = self.lock_at {
-            if at.elapsed() < Duration::from_secs(2) {
-                return locked;
-            }
+        if let Some((at, locked)) = self.lock_at
+            && at.elapsed() < Duration::from_secs(2)
+        {
+            return locked;
         }
         let locked = self.locked_now();
         if self.was_locked && !locked {

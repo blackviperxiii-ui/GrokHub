@@ -30,6 +30,10 @@ const READONLY: &[&str] = &[
     "exit_plan_mode",
     "diagnose",
     "local_ai_status",
+    "models_check",
+    "mods_search",
+    "mods_detail",
+    "mods_installed",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
@@ -42,8 +46,10 @@ const CONTROL: &[&str] = &[
     "connection_disable",
     "connection_delete",
     "local_ai_selftest",
+    "mods_prepare_install",
     "spawn_subagent",
     "send_subagent_message",
+    "merge_subagent_work",
 ];
 const DESKTOP: &[&str] = &[
     "screenshot",
@@ -132,22 +138,76 @@ pub struct PermitNote {
 
 pub struct PermitInbox {
     rx: Mutex<Receiver<PermitNote>>,
+    /// A chat and its helpers share this inbox, so one waiter can read an
+    /// answer meant for another. It is kept here for its owner, not dropped.
+    parked: Mutex<Vec<PermitNote>>,
+    /// Call ids someone waits on now. `drain` keeps their answers.
+    waiting: Mutex<Vec<String>>,
 }
+
+/// Answers kept for other waiters, at most; the oldest goes first.
+const PARKED_MAX: usize = 64;
 
 impl PermitInbox {
     pub fn pair() -> (Sender<PermitNote>, Self) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (tx, Self { rx: Mutex::new(rx) })
+        let inbox = Self {
+            rx: Mutex::new(rx),
+            parked: Mutex::new(Vec::new()),
+            waiting: Mutex::new(Vec::new()),
+        };
+        (tx, inbox)
+    }
+
+    fn park(&self, note: PermitNote) {
+        let mut parked = self.parked.lock().unwrap_or_else(|err| err.into_inner());
+        if parked.len() >= PARKED_MAX {
+            parked.remove(0);
+        }
+        parked.push(note);
+    }
+
+    fn take_parked(&self, call_id: &str) -> Option<PermAnswer> {
+        let mut parked = self.parked.lock().unwrap_or_else(|err| err.into_inner());
+        let at = parked.iter().position(|note| note.id == call_id)?;
+        Some(parked.remove(at).answer)
+    }
+}
+
+/// Takes the call id off the waiting list however the wait ends.
+struct Waiting<'a>(&'a PermitInbox, String);
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        let mut waiting = self.0.waiting.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(at) = waiting.iter().position(|id| *id == self.1) {
+            waiting.remove(at);
+        }
     }
 }
 
 impl PermitWait for PermitInbox {
+    /// Drops answers nobody waits on (cards from an earlier turn). A helper
+    /// still waiting keeps its answer.
     fn drain(&self) {
         let rx = self.rx.lock().unwrap_or_else(|err| err.into_inner());
-        while rx.try_recv().is_ok() {}
+        while let Ok(note) = rx.try_recv() {
+            self.park(note);
+        }
+        drop(rx);
+        let waiting = self.waiting.lock().unwrap_or_else(|err| err.into_inner());
+        self.parked
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .retain(|note| waiting.contains(&note.id));
     }
 
     fn wait(&self, call_id: &str, cancel: &CancelToken, halted: &dyn Fn() -> bool) -> Waited {
+        self.waiting
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .push(call_id.to_string());
+        let _waiting = Waiting(self, call_id.to_string());
         loop {
             if cancel.is_cancelled() {
                 return Waited::Cancelled;
@@ -155,10 +215,16 @@ impl PermitWait for PermitInbox {
             if halted() {
                 return Waited::Halted;
             }
+            if let Some(answer) = self.take_parked(call_id) {
+                return Waited::Answer(answer);
+            }
             let rx = self.rx.lock().unwrap_or_else(|err| err.into_inner());
             match rx.recv_timeout(Duration::from_millis(30)) {
                 Ok(note) if note.id == call_id => return Waited::Answer(note.answer),
-                Ok(_) => continue,
+                Ok(note) => {
+                    drop(rx);
+                    self.park(note);
+                }
                 Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => return Waited::Cancelled,
             }
@@ -184,6 +250,13 @@ pub fn is_readonly(name: &str) -> bool {
     READONLY.contains(&name)
 }
 
+/// Web search and fetch read the web and change nothing here, so a read-only
+/// (Plan / Ask) session may still look things up. They still go through the
+/// normal ask, policy and egress checks.
+pub fn is_web_lookup(name: &str) -> bool {
+    name == WEB_SEARCH || name == WEB_FETCH
+}
+
 pub fn is_desktop(name: &str) -> bool {
     DESKTOP.contains(&name)
 }
@@ -192,8 +265,14 @@ pub fn is_media(name: &str) -> bool {
     MEDIA.contains(&name)
 }
 
+/// The look-only screenshot ([`crate::tools::LOOK_AT_SCREEN`]).
+pub fn is_look(name: &str) -> bool {
+    name == crate::tools::LOOK_AT_SCREEN
+}
+
 pub fn is_known(name: &str) -> bool {
     is_readonly(name)
+        || is_look(name)
         || EDIT.contains(&name)
         || SHELL.contains(&name)
         || CONTROL.contains(&name)
@@ -202,6 +281,16 @@ pub fn is_known(name: &str) -> bool {
         || name == WEB_SEARCH
         || is_media(name)
         || crate::self_manage::self_tool(name).is_some()
+}
+
+/// Every tool name in the lists above, for tests that must cover them all.
+#[cfg(test)]
+pub(crate) fn native_names() -> Vec<&'static str> {
+    [READONLY, EDIT, SHELL, CONTROL, DESKTOP, MEDIA]
+        .concat()
+        .into_iter()
+        .chain([WEB_FETCH, WEB_SEARCH])
+        .collect()
 }
 
 pub fn readonly_refusal(name: &str) -> String {
@@ -213,7 +302,7 @@ pub fn mcp_policy_deny(name: &str) -> String {
 }
 
 pub fn unattended_deny(name: &str) -> String {
-    let label = if is_desktop(name) {
+    let label = if is_desktop(name) || is_look(name) {
         "mcp matching \"grokhub-desktop__*\""
     } else if SHELL.contains(&name) || name == "kill_command_or_subagent" || name == "monitor" {
         "bash"
@@ -228,10 +317,16 @@ pub fn unattended_deny(name: &str) -> String {
 }
 
 pub fn hard_class_unattended(name: &str, class: crate::harness::HardClass) -> String {
-    format!(
+    let base = format!(
         "Tool `{name}` was not executed: hard-class {} needs you, and nobody is here to approve it",
         class.as_str()
-    )
+    );
+    match class {
+        crate::harness::HardClass::OutsideValue => {
+            format!("{base}. {}", crate::harness::provenance::UNATTENDED_NOTE)
+        }
+        _ => base,
+    }
 }
 
 pub fn user_rejected(name: &str) -> String {
@@ -249,18 +344,38 @@ pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFl
     if is_readonly(name) || crate::self_manage::is_read(name) {
         return Decision::Run;
     }
-    if gate.readonly_session {
+    if gate.readonly_session && !is_web_lookup(name) {
         return Decision::Refuse(readonly_refusal(name));
     }
     if !is_known(name) {
         return Decision::Refuse(format!("unknown tool `{name}`"));
     }
+    if is_look(name) {
+        // A look reads the screen and changes nothing, so it needs no desktop
+        // control. Halt and a locked screen still stop it. With control off it
+        // asks every time (unless the person chose Always for it): seeing the
+        // screen is still the person's call.
+        match desk {
+            Some(DeskFlags { halted: true, .. }) => {
+                return Decision::Refuse((*HALT_MSG).to_string())
+            }
+            Some(DeskFlags { locked: true, .. }) => return Decision::Refuse(LOCK_MSG.to_string()),
+            _ => {}
+        }
+        if latched_always || (gate.desktop && gate.mode == PermMode::Always) {
+            return Decision::Run;
+        }
+        if gate.attended {
+            return Decision::Ask;
+        }
+        return Decision::Refuse(unattended_deny(name));
+    }
     if is_desktop(name) {
         if !gate.desktop {
-            return Decision::Refuse(OFF_MSG.to_string());
+            return Decision::Refuse((*OFF_MSG).to_string());
         }
         match desk {
-            None => return Decision::Refuse(OFF_MSG.to_string()),
+            None => return Decision::Refuse((*OFF_MSG).to_string()),
             Some(DeskFlags { halted: true, .. }) => {
                 return Decision::Refuse((*HALT_MSG).to_string())
             }
@@ -451,11 +566,11 @@ mod tests {
         let off = gate(PermMode::Always, false, true, false);
         assert_eq!(
             decide(&off, "screenshot", false, None),
-            Decision::Refuse(OFF_MSG.into())
+            Decision::Refuse((*OFF_MSG).into())
         );
         assert_eq!(
             decide(&off, "type", false, None),
-            Decision::Refuse(OFF_MSG.into())
+            Decision::Refuse((*OFF_MSG).into())
         );
 
         let on = gate(PermMode::Always, false, true, true);
@@ -497,7 +612,7 @@ mod tests {
         );
         assert_eq!(
             decide(&on, "screenshot", false, None),
-            Decision::Refuse(OFF_MSG.into())
+            Decision::Refuse((*OFF_MSG).into())
         );
 
         let ask_desk = gate(PermMode::Ask, false, true, true);
@@ -525,6 +640,75 @@ mod tests {
             ),
             Decision::Refuse(unattended_deny("screenshot"))
         );
+    }
+
+    #[test]
+    fn a_look_at_the_screen_needs_no_desktop_control_but_asks() {
+        let look = crate::tools::LOOK_AT_SCREEN;
+        let free = Some(DeskFlags {
+            halted: false,
+            locked: false,
+        });
+        // Control off, attended: it asks every time, even under Always.
+        for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
+            assert_eq!(
+                decide(&gate(mode, false, true, false), look, false, free),
+                Decision::Ask
+            );
+        }
+        // Always chosen on its card, or control on with Always: it runs.
+        assert_eq!(
+            decide(&gate(PermMode::Ask, false, true, false), look, true, free),
+            Decision::Run
+        );
+        assert_eq!(
+            decide(
+                &gate(PermMode::Always, false, true, true),
+                look,
+                false,
+                free
+            ),
+            Decision::Run
+        );
+        // Nobody there: refused, as other desktop tools are.
+        assert_eq!(
+            decide(
+                &gate(PermMode::Always, false, false, false),
+                look,
+                false,
+                free
+            ),
+            Decision::Refuse(unattended_deny(look))
+        );
+        // Halt and a locked screen still stop it; plan mode refuses it.
+        assert_eq!(
+            decide(
+                &gate(PermMode::Ask, false, true, false),
+                look,
+                true,
+                Some(DeskFlags {
+                    halted: true,
+                    locked: false
+                })
+            ),
+            Decision::Refuse((*HALT_MSG).into())
+        );
+        assert_eq!(
+            decide(
+                &gate(PermMode::Ask, false, true, false),
+                look,
+                true,
+                Some(DeskFlags {
+                    halted: false,
+                    locked: true
+                })
+            ),
+            Decision::Refuse(LOCK_MSG.into())
+        );
+        assert!(matches!(
+            decide(&gate(PermMode::Always, true, true, true), look, true, free),
+            Decision::Refuse(text) if text.contains(READ_ONLY_PHASE)
+        ));
     }
 
     #[test]
@@ -590,5 +774,147 @@ mod tests {
             None,
         );
         assert_eq!(d, Decision::Refuse("hard floor: rm -rf /".into()));
+    }
+
+    fn note(id: &str, answer: PermAnswer) -> PermitNote {
+        PermitNote {
+            id: id.into(),
+            answer,
+        }
+    }
+
+    #[test]
+    fn two_waiters_on_one_inbox_each_get_their_own_answer() {
+        let (tx, inbox) = PermitInbox::pair();
+        let inbox = std::sync::Arc::new(inbox);
+        let cancel = CancelToken::new();
+        let waiter = |id: &'static str| {
+            let inbox = std::sync::Arc::clone(&inbox);
+            let cancel = cancel.clone();
+            std::thread::spawn(move || inbox.wait(id, &cancel, &|| false))
+        };
+        let a = waiter("helper-a");
+        let b = waiter("helper-b");
+        while inbox.waiting.lock().unwrap().len() < 2 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        tx.send(note("helper-b", PermAnswer::Deny)).unwrap();
+        tx.send(note("helper-a", PermAnswer::Allow)).unwrap();
+        assert_eq!(a.join().unwrap(), Waited::Answer(PermAnswer::Allow));
+        assert_eq!(b.join().unwrap(), Waited::Answer(PermAnswer::Deny));
+        assert!(inbox.waiting.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn drain_drops_stale_answers_but_keeps_a_waiting_helpers() {
+        let (tx, inbox) = PermitInbox::pair();
+        inbox.waiting.lock().unwrap().push("helper".into());
+        tx.send(note("old-card", PermAnswer::Allow)).unwrap();
+        tx.send(note("helper", PermAnswer::Always)).unwrap();
+        inbox.drain();
+        inbox.waiting.lock().unwrap().clear();
+        let cancel = CancelToken::new();
+        assert_eq!(
+            inbox.wait("helper", &cancel, &|| false),
+            Waited::Answer(PermAnswer::Always)
+        );
+        let tries = std::sync::atomic::AtomicUsize::new(0);
+        let gave_up = || tries.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 3;
+        assert_eq!(inbox.wait("old-card", &cancel, &gave_up), Waited::Halted);
+    }
+
+    #[test]
+    fn a_merge_request_always_asks_and_is_refused_when_nobody_can_answer() {
+        let call = r#"{"work":"mb3x9k2a-7q1z"}"#;
+        let ws = Path::new("/home/user/my-app");
+        let ask = |gate: &Gate, latched: bool| {
+            decide_with(gate, "merge_subagent_work", call, latched, None, ws, None)
+        };
+        // Always, and an Always answer given earlier in the run, still ask.
+        for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
+            assert_eq!(ask(&gate(mode, false, true, false), false), Decision::Ask);
+            assert_eq!(ask(&gate(mode, false, true, false), true), Decision::Ask);
+        }
+        assert_eq!(
+            ask(&gate(PermMode::Always, false, false, false), true),
+            Decision::Refuse(
+                "Tool `merge_subagent_work` was not executed: hard-class merge_work needs you, \
+                 and nobody is here to approve it"
+                    .into()
+            )
+        );
+        assert_eq!(
+            ask(&gate(PermMode::Always, true, true, false), true),
+            Decision::Refuse(
+                "read-only in this phase: `merge_subagent_work` is not available. Use \
+                 read_file, list_dir, grep, or glob."
+                    .into()
+            )
+        );
+        assert!(is_known("merge_subagent_work"));
+        assert!(!is_readonly("merge_subagent_work"));
+    }
+
+    #[test]
+    fn an_agents_own_push_always_asks_and_is_refused_when_nobody_can_answer() {
+        let ws = Path::new("/home/user/my-app");
+        let run = |gate: &Gate, cmd: &str, latched: bool| {
+            let call = serde_json::json!({ "command": cmd }).to_string();
+            decide_with(gate, "run_terminal_command", &call, latched, None, ws, None)
+        };
+        // Always, and an Always answer given earlier in the run, still ask.
+        for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
+            for cmd in ["git -C . push origin x", "gh pr create --fill"] {
+                assert_eq!(
+                    run(&gate(mode, false, true, false), cmd, false),
+                    Decision::Ask
+                );
+                assert_eq!(
+                    run(&gate(mode, false, true, false), cmd, true),
+                    Decision::Ask
+                );
+            }
+        }
+        assert_eq!(
+            run(
+                &gate(PermMode::Always, false, false, false),
+                "git push",
+                true
+            ),
+            Decision::Refuse(
+                "Tool `run_terminal_command` was not executed: hard-class ship needs you, \
+                 and nobody is here to approve it"
+                    .into()
+            )
+        );
+        assert_eq!(
+            run(
+                &gate(PermMode::Auto, false, false, false),
+                "gh pr merge 3",
+                false
+            ),
+            Decision::Refuse(
+                "Tool `run_terminal_command` was not executed: hard-class ship needs you, \
+                 and nobody is here to approve it"
+                    .into()
+            )
+        );
+        assert_eq!(
+            run(&gate(PermMode::Always, true, true, false), "git push", true),
+            Decision::Refuse(
+                "read-only in this phase: `run_terminal_command` is not available. Use \
+                 read_file, list_dir, grep, or glob."
+                    .into()
+            )
+        );
+        // A plain commit stays on the soft gate: Always runs it.
+        assert_eq!(
+            run(
+                &gate(PermMode::Always, false, true, false),
+                "git commit -m x",
+                true
+            ),
+            Decision::Run
+        );
     }
 }

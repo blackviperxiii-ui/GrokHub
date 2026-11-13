@@ -10,6 +10,27 @@ pub struct BrowserTab {
 
 pub const CDP_PORTS: &[u16] = &[9222, 9223];
 
+/// The cabin clears `WAYLAND_DISPLAY` / `WAYLAND_SOCKET` for its own X11
+/// window (close-to-tray) and keeps the values here, so a browser it starts
+/// can still use Wayland.
+pub const SAVED_WAYLAND: [(&str, &str); 2] = [
+    ("WAYLAND_DISPLAY", "GROKHUB_SAVED_WAYLAND_DISPLAY"),
+    ("WAYLAND_SOCKET", "GROKHUB_SAVED_WAYLAND_SOCKET"),
+];
+
+/// The Wayland variables a child gets back: each one the cabin cleared and
+/// saved, unless the child's own env (`set`) already names it.
+pub fn wayland_for_child(
+    saved: impl Fn(&str) -> Option<String>,
+    set: impl Fn(&str) -> bool,
+) -> Vec<(&'static str, String)> {
+    SAVED_WAYLAND
+        .iter()
+        .filter(|(name, _)| !set(name))
+        .filter_map(|(name, key)| saved(key).filter(|v| !v.is_empty()).map(|v| (*name, v)))
+        .collect()
+}
+
 pub const CDP_DOWN: &str =
     "browser hand down — start Firefox or Chromium with --remote-debugging-port=9222, or use act / key ctrl+t or ctrl+w after wait_for";
 
@@ -255,5 +276,22 @@ mod tests {
         assert!(cdp_page_close_payload().contains("Page.close"));
         assert!(cdp_page_focus_payload().contains("Page.bringToFront"));
         assert!(cdp_activate_payload("t1").contains("t1"));
+    }
+}
+
+#[cfg(test)]
+mod wayland_tests {
+    use super::*;
+
+    #[test]
+    fn a_child_gets_the_saved_wayland_back_unless_it_sets_its_own() {
+        let saved =
+            |key: &str| (key == "GROKHUB_SAVED_WAYLAND_DISPLAY").then(|| "wayland-0".to_string());
+        assert_eq!(
+            wayland_for_child(saved, |_| false),
+            vec![("WAYLAND_DISPLAY", "wayland-0".to_string())]
+        );
+        assert!(wayland_for_child(saved, |name| name == "WAYLAND_DISPLAY").is_empty());
+        assert!(wayland_for_child(|_| None, |_| false).is_empty());
     }
 }

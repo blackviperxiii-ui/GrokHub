@@ -9,7 +9,7 @@ pub enum ThemeChoice {
     OledBlack,
     /// Loadout softer charcoal variant (`#17181B` base).
     SoftCharcoal,
-    /// Classic Grok cabin dark (true black canvas). Kept for existing users.
+    /// Classic dark (true black canvas) inside the Loadout frame. Kept for existing users.
     Dark,
     Light,
     System,
@@ -18,7 +18,7 @@ pub enum ThemeChoice {
 /// Which dark token set to paint when the cabin is not in light mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DarkPalette {
-    /// Classic Grok OLED black tokens.
+    /// Classic OLED black tokens.
     Classic,
     OpsDark,
     OledBlack,
@@ -37,7 +37,7 @@ pub fn appearance_choices() -> &'static [ThemeChoice] {
 }
 
 pub fn appearance_hint() -> &'static str {
-    "Ops Dark is Loadout's default. OLED Black and Soft Charcoal are alternatives. Dark and Light keep the classic look; System follows your desktop."
+    "Ops Dark is Loadout's default. OLED Black and Soft Charcoal are alternatives. Dark and Light keep the classic colours inside the Loadout frame; System follows your desktop."
 }
 
 pub fn theme_id(choice: ThemeChoice) -> &'static str {

@@ -95,6 +95,7 @@ pub fn signal_for(
 /// rotates to `card_signals.jsonl.1` (replacing any older `.1`) and a new
 /// file starts. IO errors are ignored.
 pub fn append_signal(dir: &Path, signal: &CardSignal) {
+    crate::learn::hub::note_all(crate::learn::sources::card(signal));
     if let Err(_err) = append_signal_inner(dir, signal) {
         // A full disk or a locked folder must not panic or stall the UI.
     }
@@ -114,6 +115,20 @@ fn append_signal_inner(dir: &Path, signal: &CardSignal) -> std::io::Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
     writeln!(file, "{line}")?;
     Ok(())
+}
+
+/// Every signal in the rotated and active logs, oldest first. Unreadable
+/// lines are skipped.
+pub fn read_signals(dir: &Path) -> Vec<CardSignal> {
+    ["card_signals.jsonl.1", "card_signals.jsonl"]
+        .iter()
+        .filter_map(|name| fs::read_to_string(dir.join(name)).ok())
+        .flat_map(|text| {
+            text.lines()
+                .filter_map(|l| serde_json::from_str::<CardSignal>(l).ok())
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn count_lines(path: &Path) -> std::io::Result<usize> {

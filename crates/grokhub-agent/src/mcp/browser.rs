@@ -9,6 +9,7 @@ const NO_BROWSER: &str = "Playwright browser not found. Install Chrome, or run \
     For a custom browser, set --executable-path in the Playwright MCP args.";
 
 pub(super) fn launch_args(
+    server: &str,
     command: &str,
     args: &[String],
     env: &BTreeMap<String, String>,
@@ -20,7 +21,19 @@ pub(super) fn launch_args(
             .or_else(|| std::env::var_os(key))
     };
     let cwd = absolute_cwd(cwd, &std::env::current_dir().unwrap_or_default());
-    configure(command, args, &lookup, || {
+    let args = if is_playwright(command, args) {
+        agent_defaults(
+            args,
+            &lookup,
+            &crate::perm::config_dir()
+                .join("browser")
+                .join("playwright-profile"),
+            is_isolated(server),
+        )
+    } else {
+        args.to_vec()
+    };
+    configure(command, &args, &lookup, || {
         let home = lookup(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
             .map(PathBuf::from)
             .or_else(grokhub_core::user_home)
@@ -37,12 +50,7 @@ fn configure(
     env: &impl Fn(&str) -> Option<OsString>,
     detect: impl FnOnce() -> Option<PathBuf>,
 ) -> Result<Vec<String>, String> {
-    let is_playwright = Path::new(command)
-        .file_stem()
-        .is_some_and(|name| name == "playwright-mcp")
-        || args
-            .iter()
-            .any(|arg| arg == "@playwright/mcp" || arg.starts_with("@playwright/mcp@"));
+    let is_playwright = is_playwright(command, args);
     let explicit = [
         "browser",
         "executable-path",
@@ -76,6 +84,94 @@ fn configure(
     }
     Ok(out)
 }
+
+pub(super) fn is_playwright(command: &str, args: &[String]) -> bool {
+    Path::new(command)
+        .file_stem()
+        .is_some_and(|name| name == "playwright-mcp")
+        || args
+            .iter()
+            .any(|arg| arg == "@playwright/mcp" || arg.starts_with("@playwright/mcp@"))
+}
+
+fn has_flag(args: &[String], env: &impl Fn(&str) -> Option<OsString>, option: &str) -> bool {
+    let flag = format!("--{option}");
+    let key = format!("PLAYWRIGHT_MCP_{}", option.replace('-', "_").to_uppercase());
+    args.iter()
+        .any(|arg| arg == &flag || arg.starts_with(&format!("{flag}=")))
+        || env(&key).is_some_and(|value| is_set(&value))
+}
+
+/// The agent's own browser (LO-51): headless unless the server's env sets
+/// `GROKHUB_BROWSER_HEADED`, and a profile the cabin owns, so a shared or
+/// locked Playwright profile can't kill the launch. After a launch died, the
+/// retry runs `--isolated` (a fresh in-memory profile). A server that attaches
+/// to a browser already running, or names its own choice, keeps its flags.
+fn agent_defaults(
+    args: &[String],
+    env: &impl Fn(&str) -> Option<OsString>,
+    profile: &Path,
+    isolated: bool,
+) -> Vec<String> {
+    let mut out = args.to_vec();
+    if ["cdp-endpoint", "endpoint", "extension"]
+        .iter()
+        .any(|option| has_flag(args, env, option))
+    {
+        return out;
+    }
+    let headed = env("GROKHUB_BROWSER_HEADED").is_some_and(|value| is_set(&value));
+    if !headed && !has_flag(args, env, "headless") {
+        out.push("--headless".into());
+    }
+    let own_profile = has_flag(args, env, "user-data-dir") || has_flag(args, env, "isolated");
+    if isolated && !has_flag(args, env, "isolated") {
+        out.push("--isolated".into());
+    } else if !isolated && !own_profile {
+        out.push("--user-data-dir".into());
+        out.push(profile.to_string_lossy().into_owned());
+    }
+    out
+}
+
+fn isolated_servers() -> &'static std::sync::Mutex<std::collections::BTreeSet<String>> {
+    static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeSet<String>>> =
+        std::sync::OnceLock::new();
+    SET.get_or_init(Default::default)
+}
+
+fn is_isolated(server: &str) -> bool {
+    isolated_servers()
+        .lock()
+        .map(|set| set.contains(server))
+        .unwrap_or(false)
+}
+
+/// Mark `server` for an isolated relaunch. False when it already had one,
+/// so a launch that keeps dying is retried only once.
+pub(super) fn isolate(server: &str) -> bool {
+    isolated_servers()
+        .lock()
+        .map(|mut set| set.insert(server.to_string()))
+        .unwrap_or(false)
+}
+
+/// A Playwright error that means the browser process never came up.
+pub(super) fn launch_died(text: &str) -> bool {
+    let t = text.to_lowercase();
+    (t.contains("browser has been closed") && t.contains("target page"))
+        || t.contains("browsertype.launch")
+        || t.contains("failed to launch")
+        || t.contains("missing x server")
+        || t.contains("cannot open display")
+}
+
+/// The lead the model gets once the isolated retry died too, above the
+/// fenced error, so the turn still answers.
+pub(super) const CANT_START: &str =
+    "The browser can't start on this computer, so nothing was opened. \
+    Read the page with web_fetch, or find it with web_search, and answer from that. \
+    The browser's own error:";
 
 /// A relative MCP cwd is relative to the cabin's own working folder.
 fn absolute_cwd(cwd: &Path, current: &Path) -> PathBuf {
@@ -194,17 +290,15 @@ fn executable(path: &Path) -> bool {
     let Ok(metadata) = path.metadata() else {
         return false;
     };
-    if !metadata.is_file() {
-        return false;
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o111 == 0 {
-            return false;
-        }
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
     }
-    true
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
 }
 
 #[cfg(test)]
@@ -217,6 +311,45 @@ mod tests {
             .chain(extra.iter().copied())
             .map(String::from)
             .collect()
+    }
+
+    #[test]
+    fn the_agent_browser_runs_headless_in_its_own_profile_and_retries_isolated() {
+        let profile = Path::new("/cfg/browser/playwright-profile");
+        let none = |_: &str| None;
+        assert_eq!(
+            agent_defaults(&args(&[]), &none, profile, false),
+            args(&[
+                "--headless",
+                "--user-data-dir",
+                "/cfg/browser/playwright-profile"
+            ])
+        );
+        assert_eq!(
+            agent_defaults(&args(&[]), &none, profile, true),
+            args(&["--headless", "--isolated"])
+        );
+        let headed = |key: &str| (key == "GROKHUB_BROWSER_HEADED").then(|| OsString::from("1"));
+        assert_eq!(
+            agent_defaults(&args(&["--user-data-dir=/mine"]), &headed, profile, false),
+            args(&["--user-data-dir=/mine"])
+        );
+        let attach = args(&["--cdp-endpoint=http://localhost:9222"]);
+        assert_eq!(agent_defaults(&attach, &none, profile, true), attach);
+    }
+
+    #[test]
+    fn a_dead_launch_is_seen_and_the_retry_happens_once() {
+        assert!(launch_died(
+            "Error: browserType.launchPersistentContext: Target page, context or browser has been closed"
+        ));
+        assert!(!launch_died("Error: net::ERR_NAME_NOT_RESOLVED"));
+        let server = format!("pw-retry-{}", std::process::id());
+        assert!(!is_isolated(&server));
+        assert!(isolate(&server));
+        assert!(is_isolated(&server));
+        assert!(!isolate(&server));
+        assert!(CANT_START.contains("web_fetch"));
     }
 
     #[test]

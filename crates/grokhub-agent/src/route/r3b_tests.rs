@@ -20,11 +20,11 @@ use grokhub_core::model_registry::{
 };
 
 use super::learn::RegistryFilters;
-use super::log::last_routes;
+use super::log::{route_records, ROUTE_TAIL_LINES};
 use super::policy::{class_row, CLASS_TABLE};
 use super::providers::{
-    self, add_provider, call_data, parse_base_url, request_body, usable, HttpReply, MemoryVault,
-    ProviderKind, ProviderSource, ProviderTransport, CALL_DATA, CALL_DATA_SENSITIVE,
+    self, add_provider, call_data, parse_base_url, request_body, usable, HttpReply, HttpStream,
+    MemoryVault, ProviderKind, ProviderSource, ProviderTransport, CALL_DATA, CALL_DATA_SENSITIVE,
 };
 use super::refresh::{run_refresh, RefreshJob};
 use super::spend::Spend;
@@ -81,6 +81,7 @@ impl ProviderTransport for Wire {
         Ok(HttpReply {
             status: 200,
             body: OR_LIST.into(),
+            headers: Vec::new(),
         })
     }
     fn post(
@@ -96,6 +97,7 @@ impl ProviderTransport for Wire {
         Ok(HttpReply {
             status: 200,
             body: OR_REPLY.into(),
+            headers: Vec::new(),
         })
     }
 }
@@ -111,6 +113,7 @@ fn setup(label: &str) -> (PathBuf, Arc<Wire>) {
 
 fn hello() -> ResponsesRequest {
     ResponsesRequest {
+        text_format: None,
         model: OR_MODEL.into(),
         effort: Some("high".into()),
         input: vec![InputItem::Message {
@@ -127,6 +130,7 @@ fn hello() -> ResponsesRequest {
 fn send(dir: &Path) -> Result<TurnOutput, ClientError> {
     providers::call_model(
         dir,
+        "chat:default",
         OR_MODEL,
         Some("high"),
         &hello(),
@@ -236,9 +240,12 @@ fn the_model_list_needs_the_key_and_the_grant_and_gets_a_metadata_only_profile()
         named: Vec::new(),
         default_model: "grok-4.7".into(),
         now_ms: NOW,
+        xai_bearer: None,
     });
     assert_eq!(done.errors, Vec::<String>::new());
-    assert_eq!(wire.n(), 1);
+    // Two reads: the model list, and the refresh's quota check reading
+    // the account's `/key` state under the same grant.
+    assert_eq!(wire.n(), 2);
     let line = &read_egress(&dir)[0];
     assert_eq!(
         (
@@ -263,7 +270,7 @@ fn the_model_list_needs_the_key_and_the_grant_and_gets_a_metadata_only_profile()
         provider: p,
     };
     assert_eq!(src.fetch().unwrap_err(), "openrouter: no key");
-    assert_eq!(wire.n(), 1);
+    assert_eq!(wire.n(), 2);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -309,20 +316,23 @@ fn usable_needs_a_key_and_a_grant_that_covers_the_data() {
 #[test]
 fn provider_agent_dials_through_the_public_only_resolver() {
     let arm = include_str!("providers.rs")
-        .split("fn agent() -> ureq::Agent {")
+        .split("fn agent() -> grokhub_core::http::Agent {")
         .nth(1)
         .and_then(|s| s.split("fn reply(").next())
         .expect("provider agent");
+    // `public_only` dials through public_only_resolve (grokhub_core::http tests).
     assert!(
-        arm.contains(".resolver(crate::public_only_resolve)"),
+        arm.contains("public_only: true,"),
         "provider dials must use public_only_resolve: {arm}"
     );
     assert!(
-        arm.contains(".redirects(0)"),
+        arm.contains("redirects: 0,"),
         "provider dials must not follow redirects blindly: {arm}"
     );
     assert!(
-        !arm.contains("env_proxy") && !arm.to_ascii_lowercase().contains("http_proxy"),
+        !arm.contains("env_proxy")
+            && !arm.contains("proxy_from_env")
+            && !arm.to_ascii_lowercase().contains("http_proxy"),
         "env proxy would skip public_only_resolve on the target: {arm}"
     );
 }
@@ -495,12 +505,11 @@ fn granted(ids: &[&str]) -> Spend {
     }
 }
 
-fn ask<'a>(class: &'a str, model: &'a str, pinned: bool, spend: Spend) -> RouteInput<'a> {
+fn ask<'a>(class: &'a str, model: &'a str, spend: Spend) -> RouteInput<'a> {
     RouteInput {
         provider: "xai",
         class,
         current_model: model,
-        pinned,
         d: 0.5,
         needs_tools: true,
         spend,
@@ -513,7 +522,7 @@ fn none() -> BTreeMap<String, ModelProfile> {
 }
 
 #[test]
-fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_takes_it() {
+fn a_provider_is_never_picked_to_save_money_and_the_class_preference_takes_it() {
     let reg = fleet();
     let empty = RoutingTable::default();
     assert_eq!(reg.get(OR_MODEL).map(|r| r.state), Some(ModelState::Live));
@@ -522,7 +531,6 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
         &ask(
             "chat:default",
             "grok-4.7",
-            false,
             granted(&["openrouter", "anthropic"]),
         ),
         &reg,
@@ -538,12 +546,14 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
         r.model
     );
     assert!(!r.model.contains('/'), "must not pick a provider model");
-    // Your pin with its key and grant: it goes there, at an effort from its own list.
+    // The class preference ranks it first: taken while granted, at an effort
+    // from its own list.
+    let pref = table_with("chat:default", OR_MODEL);
     let r = Router::choose(
-        &ask("chat:default", OR_MODEL, true, granted(&["openrouter"])),
+        &ask("chat:default", "grok-4.7", granted(&["openrouter"])),
         &reg,
         &none(),
-        &empty,
+        &pref,
         NOW,
     );
     assert_eq!(
@@ -555,46 +565,9 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
         "{:?}",
         r.effort
     );
-    // No effort list in its listing: no effort is sent.
+    // Never without its grant.
     let r = Router::choose(
-        &ask("chat:default", AN_MODEL, true, granted(&["anthropic"])),
-        &reg,
-        &none(),
-        &empty,
-        NOW,
-    );
-    assert_eq!(
-        (r.provider.as_str(), r.effort.as_deref()),
-        ("anthropic", None)
-    );
-    // Your pick in Settings: taken while it has its key and grant, else Auto as usual.
-    let mut picked = ask("chat:default", "grok-4.7", false, granted(&["openrouter"]));
-    picked.prefer = Some(OR_MODEL);
-    let r = Router::choose(&picked, &reg, &none(), &empty, NOW);
-    assert_eq!(
-        (r.model.as_str(), r.reason.as_str()),
-        (OR_MODEL, "balanced · Low: you picked it in Settings.")
-    );
-    picked.spend = Spend::default();
-    let r = Router::choose(&picked, &reg, &none(), &empty, NOW);
-    assert_eq!(r.provider.as_str(), "xai");
-    assert!(
-        r.model == "grok-4.7" || r.model == "grok-4.3",
-        "ungranted pick falls back to included xAI, got {}",
-        r.model
-    );
-    // The class preference ranks it first: taken while granted, never without.
-    let pref = table_with("chat:default", OR_MODEL);
-    let r = Router::choose(
-        &ask("chat:default", "grok-4.7", false, granted(&["openrouter"])),
-        &reg,
-        &none(),
-        &pref,
-        NOW,
-    );
-    assert_eq!(r.model, OR_MODEL);
-    let r = Router::choose(
-        &ask("chat:default", "grok-4.7", false, Spend::default()),
+        &ask("chat:default", "grok-4.7", Spend::default()),
         &reg,
         &none(),
         &pref,
@@ -606,18 +579,26 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
         "ungranted table preference falls back to included xAI, got {}",
         r.model
     );
+    // No effort list in its listing: no effort is sent.
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.7", granted(&["anthropic"])),
+        &reg,
+        &none(),
+        &table_with("chat:default", AN_MODEL),
+        NOW,
+    );
+    assert_eq!(
+        (r.provider.as_str(), r.model.as_str(), r.effort.as_deref()),
+        ("anthropic", AN_MODEL, None)
+    );
 }
 
 #[test]
-fn no_key_or_no_grant_means_never_a_candidate_and_xai_stands_in_for_a_pin() {
+fn no_key_or_no_grant_means_never_a_candidate_and_xai_stands_in_for_the_episode() {
     let reg = fleet();
-    let r = Router::choose(
-        &ask("chat:default", OR_MODEL, true, Spend::default()),
-        &reg,
-        &none(),
-        &RoutingTable::default(),
-        NOW,
-    );
+    let mut input = ask("chat:default", OR_MODEL, Spend::default());
+    input.episode_model = Some(OR_MODEL);
+    let r = Router::choose(&input, &reg, &none(), &RoutingTable::default(), NOW);
     assert_eq!(
         (r.provider.as_str(), r.cost_class),
         ("xai", CostClass::Included)
@@ -638,36 +619,100 @@ fn no_key_or_no_grant_means_never_a_candidate_and_xai_stands_in_for_a_pin() {
     assert_eq!(r.candidates_n, 2, "only the two xAI models are candidates");
 }
 
+/// E15: after two failures at one rung the episode moves to the strongest
+/// xAI model above its own, then to the strongest provider model you set up;
+/// with nothing stronger it keeps its model.
 #[test]
-fn fallback_chains_never_include_a_provider() {
-    let mut reg = fleet();
-    // Your pinned grok-4.7 rests; the granted provider is cheaper, but xAI stands in.
-    reg.models.get_mut("grok-4.7").unwrap().state = ModelState::Quarantined;
-    let all = granted(&["openrouter", "anthropic"]);
-    let r = Router::choose(
-        &ask("chat:default", "grok-4.7", true, all.clone()),
-        &reg,
-        &none(),
-        &RoutingTable::default(),
-        NOW,
+fn e15_a_failing_episode_moves_to_a_stronger_model_one_step_at_a_time() {
+    let reg = fleet();
+    let next = super::ladder::Pick {
+        rung: super::ladder::rung("xhigh").unwrap(),
+        rules: vec!["E1:ceiling".into(), super::ladder::NEXT_MODEL.into()],
+        ..super::ladder::Pick::default()
+    };
+    let step = |episode: &str, spend: Spend| {
+        let mut input = ask("chat:default", episode, spend);
+        input.episode_model = Some(episode);
+        input.pick = Some(next.clone());
+        let r = Router::choose(&input, &reg, &none(), &RoutingTable::default(), NOW);
+        let stronger = ["model:stronger", "model:strongest_kept", "provider:auto"]
+            .iter()
+            .filter(|id| r.rule_ids.contains(&id.to_string()))
+            .copied()
+            .collect::<Vec<_>>();
+        (r.model, r.provider, r.effort, stronger)
+    };
+    let or = granted(&["openrouter"]);
+    assert_eq!(
+        step("grok-4.3", or.clone()),
+        (
+            "grok-4.7".to_string(),
+            "xai".to_string(),
+            Some("xhigh".to_string()),
+            vec!["model:stronger"]
+        )
     );
-    assert_eq!((r.model.as_str(), r.provider.as_str()), ("grok-4.3", "xai"));
+    assert_eq!(
+        step("grok-4.7", or),
+        (
+            OR_MODEL.to_string(),
+            "openrouter".to_string(),
+            Some("high".to_string()),
+            vec!["model:stronger", "provider:auto"]
+        )
+    );
+    // No provider set up for this data: the strongest xAI model keeps the step.
+    assert_eq!(
+        step("grok-4.7", Spend::default()),
+        (
+            "grok-4.7".to_string(),
+            "xai".to_string(),
+            Some("xhigh".to_string()),
+            vec!["model:strongest_kept"]
+        )
+    );
+    // A plain step (no E15 rule) keeps the episode's model: no cache bust.
+    let mut input = ask("chat:default", "grok-4.3", granted(&["openrouter"]));
+    input.episode_model = Some("grok-4.3");
+    let r = Router::choose(&input, &reg, &none(), &RoutingTable::default(), NOW);
+    assert_eq!(r.model, "grok-4.3");
     assert!(
-        r.rule_ids.contains(&"pin:fallback".to_string()),
+        r.rule_ids.contains(&"episode:keep".to_string()),
         "{:?}",
         r.rule_ids
     );
-    // Nothing on xAI answers: the step pauses rather than leaving for a provider.
-    reg.models.get_mut("grok-4.3").unwrap().state = ModelState::Quarantined;
-    let r = Router::choose(
-        &ask("chat:default", "grok-4.7", true, all),
-        &reg,
-        &none(),
-        &RoutingTable::default(),
-        NOW,
+}
+
+#[test]
+fn fallback_chains_never_include_a_provider_and_one_answers_only_when_xai_cannot() {
+    let mut reg = fleet();
+    // The episode's grok-4.7 rests; the granted provider is cheaper, but xAI stands in.
+    reg.models.get_mut("grok-4.7").unwrap().state = ModelState::Quarantined;
+    let all = granted(&["openrouter", "anthropic"]);
+    let mut input = ask("chat:default", "grok-4.7", all);
+    input.episode_model = Some("grok-4.7");
+    let r = Router::choose(&input, &reg, &none(), &RoutingTable::default(), NOW);
+    assert_eq!((r.model.as_str(), r.provider.as_str()), ("grok-4.3", "xai"));
+    assert!(
+        r.rule_ids.contains(&"episode:fallback".to_string()),
+        "{:?}",
+        r.rule_ids
     );
-    assert!(r.no_route, "{:?}", r.rule_ids);
-    assert_eq!(r.provider, "xai");
+    // Nothing on xAI answers: the priced provider model you set up takes the
+    // step (the Anthropic one lists no price, so it stays out).
+    reg.models.get_mut("grok-4.3").unwrap().state = ModelState::Quarantined;
+    let r = Router::choose(&input, &reg, &none(), &RoutingTable::default(), NOW);
+    assert_eq!(
+        (r.model.as_str(), r.provider.as_str(), r.no_route),
+        (OR_MODEL, "openrouter", false),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(
+        r.rule_ids.contains(&"provider:auto".to_string()),
+        "{:?}",
+        r.rule_ids
+    );
 }
 
 /// A tiny deterministic generator, so the property test needs no new crate.
@@ -727,7 +772,6 @@ fn sensitive_data_never_routes_to_a_provider_without_a_grant_that_names_it_prope
     for _ in 0..1_500 {
         let class = *rng.pick(&classes);
         let model = *rng.pick(&models);
-        let pinned = rng.coin();
         let sensitive = rng.coin();
         let shape = rng.next() % 3;
         let dir = [&plain, &named, &keyless][shape as usize];
@@ -739,14 +783,12 @@ fn sensitive_data_never_routes_to_a_provider_without_a_grant_that_names_it_prope
         let mut input = ask(
             class,
             model,
-            pinned,
             Spend {
                 providers: gate(dir, sensitive),
                 ..Spend::default()
             },
         );
         input.d = (rng.next() % 100) as f64 / 100.0;
-        input.prefer = rng.coin().then_some(*rng.pick(&[OR_MODEL, AN_MODEL]));
         let r = Router::choose(&input, &reg, &none(), &table, NOW);
         if r.cost_class != CostClass::NewProvider {
             continue;
@@ -757,10 +799,11 @@ fn sensitive_data_never_routes_to_a_provider_without_a_grant_that_names_it_prope
             "sensitive data left for a provider without a grant naming it: {class} {model}"
         );
         assert_ne!(shape, 2, "no key, yet routed to a provider");
-        let chosen_by_you = (pinned && r.model == model) || input.prefer == Some(r.model.as_str());
+        // xAI answers in this fleet, so a provider is reached only where the
+        // routing table ranks it for the step.
         assert!(
-            chosen_by_you || table.row(class, &r.model).is_some(),
-            "only your pick or the class preference: {class} {model} {:?}",
+            table.row(class, &r.model).is_some(),
+            "only the class preference: {class} {model} {:?}",
             r.rule_ids
         );
         assert!(
@@ -804,6 +847,7 @@ fn the_self_tuner_never_promotes_a_provider() {
 /// System, user, a tool call and its output, and one function tool plus a hosted one.
 fn turn(effort: &str) -> ResponsesRequest {
     ResponsesRequest {
+        text_format: None,
         model: "m".into(),
         effort: Some(effort.into()),
         input: vec![
@@ -845,9 +889,11 @@ fn effort_maps_per_provider_golden_bodies() {
             ..xai.clone()
         })
         .to_string(),
-        r#"{"input":[{"content":[{"text":"be brief","type":"input_text"}],"role":"system","type":"message"},{"content":[{"text":"weather?","type":"input_text"}],"role":"user","type":"message"},{"arguments":"{\"city\":\"Oslo\"}","call_id":"c1","name":"weather","type":"function_call"},{"call_id":"c1","output":"4C","type":"function_call_output"}],"model":"grok-4.7","reasoning":{"effort":"high"},"stream":true,"tools":[{"description":"Look it up","name":"weather","parameters":{"properties":{"city":{"type":"string"}},"type":"object"},"type":"function"},{"type":"web_search"}]}"#
+        r#"{"include":["reasoning.encrypted_content"],"input":[{"content":[{"text":"be brief","type":"input_text"}],"role":"system","type":"message"},{"content":[{"text":"weather?","type":"input_text"}],"role":"user","type":"message"},{"arguments":"{\"city\":\"Oslo\"}","call_id":"c1","name":"weather","type":"function_call"},{"call_id":"c1","output":"4C","type":"function_call_output"}],"model":"grok-4.7","parallel_tool_calls":true,"prompt_cache_key":"conv","reasoning":{"effort":"high"},"store":false,"stream":true,"tools":[{"description":"Look it up","name":"weather","parameters":{"properties":{"city":{"type":"string"}},"type":"object"},"type":"function"},{"type":"web_search"}]}"#
     );
-    // Anthropic: `output_config.effort`, tool_use / tool_result blocks, the system prompt apart.
+    // Anthropic: `output_config.effort`, tool_use / tool_result blocks, the
+    // system prompt apart — and prompt-cache marks on the system text, the
+    // last tool and the last message block (failover PR 8).
     assert_eq!(
         request_body(
             ProviderKind::Anthropic,
@@ -857,7 +903,7 @@ fn effort_maps_per_provider_golden_bodies() {
             Some(32_000)
         )
         .to_string(),
-        r#"{"max_tokens":8192,"messages":[{"content":[{"text":"weather?","type":"text"}],"role":"user"},{"content":[{"id":"c1","input":{"city":"Oslo"},"name":"weather","type":"tool_use"}],"role":"assistant"},{"content":[{"content":"4C","tool_use_id":"c1","type":"tool_result"}],"role":"user"}],"model":"model-x","output_config":{"effort":"high"},"system":"be brief","tools":[{"description":"Look it up","input_schema":{"properties":{"city":{"type":"string"}},"type":"object"},"name":"weather"}]}"#
+        r#"{"max_tokens":8192,"messages":[{"content":[{"text":"weather?","type":"text"}],"role":"user"},{"content":[{"id":"c1","input":{"city":"Oslo"},"name":"weather","type":"tool_use"}],"role":"assistant"},{"content":[{"cache_control":{"type":"ephemeral"},"content":"4C","tool_use_id":"c1","type":"tool_result"}],"role":"user"}],"model":"model-x","output_config":{"effort":"high"},"system":[{"cache_control":{"type":"ephemeral"},"text":"be brief","type":"text"}],"tools":[{"cache_control":{"type":"ephemeral"},"description":"Look it up","input_schema":{"properties":{"city":{"type":"string"}},"type":"object"},"name":"weather"}]}"#
     );
     // OpenAI-compatible: `reasoning.effort`, chat messages, nested function tools; hosted tools dropped.
     assert_eq!(
@@ -931,6 +977,520 @@ fn replies_map_back_to_turns() {
     assert!(providers::parse_anthropic_reply("{}").is_err());
 }
 
+/// E14: a chat-completions or messages reply cut at the output limit is a
+/// truncated turn; with no answer text it reads as a spent reasoning budget.
+#[test]
+fn e14_a_length_cut_with_no_answer_reads_as_a_spent_budget() {
+    let empty = providers::parse_openai_reply(
+        r#"{"choices":[{"finish_reason":"length","message":{"content":"","reasoning_content":"thinking and thinking"}}],"usage":{"prompt_tokens":9,"completion_tokens":4096}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            empty.truncated,
+            empty.truncate_reason.as_deref(),
+            empty.out_of_budget()
+        ),
+        (true, Some("max_output_tokens"), true)
+    );
+    let partial = providers::parse_openai_reply(
+        r#"{"choices":[{"finish_reason":"length","message":{"content":"Here is the first half"}}]}"#,
+    )
+    .unwrap();
+    assert_eq!((partial.truncated, partial.out_of_budget()), (true, false));
+    let done = providers::parse_openai_reply(
+        r#"{"choices":[{"finish_reason":"stop","message":{"content":""}}]}"#,
+    )
+    .unwrap();
+    assert_eq!((done.truncated, done.out_of_budget()), (false, false));
+    let cut = providers::parse_anthropic_reply(
+        r#"{"content":[{"type":"thinking","thinking":"hmm"}],"stop_reason":"max_tokens","usage":{"input_tokens":3,"output_tokens":2048}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            cut.truncated,
+            cut.truncate_reason.as_deref(),
+            cut.out_of_budget()
+        ),
+        (true, Some("max_output_tokens"), true)
+    );
+    let ended = providers::parse_anthropic_reply(
+        r#"{"content":[{"type":"text","text":"Hi"}],"stop_reason":"end_turn"}"#,
+    )
+    .unwrap();
+    assert!(!ended.truncated);
+    // The Responses API: status incomplete for max_output_tokens, no text.
+    let xai = TurnOutput {
+        truncated: true,
+        truncate_reason: Some("max_output_tokens".into()),
+        reasoning: "long".into(),
+        ..TurnOutput::default()
+    };
+    assert!(xai.out_of_budget());
+    // Cut for another reason (a content filter) is not a spent budget.
+    let filtered = TurnOutput {
+        truncate_reason: Some("content_filter".into()),
+        ..xai.clone()
+    };
+    assert!(!filtered.out_of_budget());
+}
+
+/// Failover PR 8: a refusal is its own error class, never a silent
+/// empty answer, and a server-tool pause is an ordinary ending.
+#[test]
+fn an_anthropic_refusal_is_its_own_error_and_a_pause_is_an_ordinary_end() {
+    let refused = providers::parse_anthropic_reply(
+        r#"{"content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":"bio"},"usage":{"input_tokens":3,"output_tokens":0}}"#,
+    );
+    match refused {
+        Err(ClientError::Refused { message }) => assert!(message.contains("bio"), "{message}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    let paused = providers::parse_anthropic_reply(
+        r#"{"content":[{"type":"text","text":"half the search is in"}],"stop_reason":"pause_turn","usage":{"input_tokens":3,"output_tokens":9}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        (paused.text.as_str(), paused.truncated),
+        ("half the search is in", false)
+    );
+    let tools = providers::parse_anthropic_reply(
+        r#"{"content":[{"type":"tool_use","id":"t1","name":"weather","input":{}}],"stop_reason":"tool_use"}"#,
+    )
+    .unwrap();
+    assert_eq!((tools.calls.len(), tools.truncated), (1, false));
+}
+
+/// A fake wire that answers a POST as an event stream: the canned SSE
+/// body is handed over as a reader, the way the real wire streams it,
+/// with one rate-limit header riding along.
+struct SseWire {
+    posts: Mutex<Vec<String>>,
+    sse: String,
+    status: u16,
+}
+
+impl ProviderTransport for SseWire {
+    fn get(&self, _url: &str, _headers: &[(String, String)]) -> Result<HttpReply, String> {
+        Ok(HttpReply {
+            status: 200,
+            body: OR_LIST.into(),
+            headers: Vec::new(),
+        })
+    }
+
+    fn post(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String> {
+        self.posts.lock().unwrap().push(body.into());
+        Ok(HttpReply {
+            status: self.status,
+            body: self.sse.clone(),
+            headers: Vec::new(),
+        })
+    }
+
+    fn post_streamed(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        body: &str,
+        _limit: Option<std::time::Duration>,
+    ) -> Result<HttpStream, String> {
+        self.posts.lock().unwrap().push(body.into());
+        Ok(HttpStream {
+            status: self.status,
+            headers: vec![("anthropic-ratelimit-requests-remaining".into(), "9".into())],
+            reader: Box::new(std::io::Cursor::new(self.sse.clone().into_bytes())),
+        })
+    }
+}
+
+/// A config dir whose Anthropic provider answers with the canned stream.
+fn sse_setup(label: &str, sse: &str) -> (PathBuf, Arc<SseWire>) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(SseWire {
+        posts: Mutex::new(Vec::new()),
+        sse: sse.into(),
+        status: 200,
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, "https://api.anthropic.com", KEY, NOW).unwrap();
+    grant_destination(
+        &dir,
+        "api.anthropic.com",
+        CALL_DATA,
+        UserClick::from_click(),
+    )
+    .unwrap();
+    (dir, wire)
+}
+
+fn stream_call(dir: &Path, shown: &mut Vec<String>) -> Result<TurnOutput, ClientError> {
+    providers::stream_model(
+        dir,
+        "chat:default",
+        AN_MODEL,
+        Some("high"),
+        &hello(),
+        CALL_DATA,
+        "conv-1:11",
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push(t);
+            }
+        },
+    )
+}
+
+/// Failover PR 8: a streamed Claude call reaches the chat delta by
+/// delta, assembles its tool call, counts cache reads and writes into
+/// the spend ledger, and asks for the stream with cache marks on.
+#[test]
+fn a_streamed_claude_call_arrives_in_deltas_and_notes_its_spend() {
+    let sse = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":25,\"cache_read_input_tokens\":40,\"output_tokens\":1}}}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello \"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"there\"}}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"weather\",\"input\":{}}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"Oslo\\\"}\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":7}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+    let (dir, wire) = sse_setup("anthropic-stream", sse);
+    save_registry(&dir, &fleet()).unwrap();
+    let mut shown: Vec<String> = Vec::new();
+    let out = stream_call(&dir, &mut shown).unwrap();
+    // The chat saw the answer arrive in pieces, not as one block.
+    assert_eq!(shown, ["Hello ", "there"]);
+    assert_eq!(out.text, "Hello there");
+    assert_eq!(
+        (
+            out.calls[0].call_id.as_str(),
+            out.calls[0].name.as_str(),
+            out.calls[0].arguments.as_str()
+        ),
+        ("t1", "weather", r#"{"city":"Oslo"}"#)
+    );
+    assert_eq!(
+        (
+            out.usage.input_tokens,
+            out.usage.output_tokens,
+            out.usage.cached_tokens
+        ),
+        (100, 7, 40)
+    );
+    // The request asked for the stream, with a cache mark on the last block.
+    let body: serde_json::Value = serde_json::from_str(&wire.posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(body["stream"], json!(true));
+    assert_eq!(
+        body["messages"][0]["content"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
+    // The spend ledger counted fresh + cache read + cache write input,
+    // and kept the rate-limit header the reply carried.
+    let ledger = grokhub_core::model_registry::store::load_quota(&dir);
+    assert_eq!(ledger.anthropic.spend.day_input_tokens, 100 + 40 + 25);
+    assert_eq!(ledger.anthropic.spend.day_output_tokens, 7);
+    assert_eq!(ledger.anthropic.rate.requests.remaining, Some(9));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Failover PR 8: the streamed path keeps the native stream's failure
+/// rules — a failure after text showed is a cut-off, one before is the
+/// error itself (a disconnect the router can fail over from), and a
+/// streamed refusal is the refusal class.
+#[test]
+fn a_streamed_claude_failure_follows_the_shown_rules() {
+    // Text showed, then the stream errored: what showed is kept.
+    let (dir, _w) = sse_setup(
+        "anthropic-stream-cutoff",
+        concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n",
+            "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"overloaded\"}}\n\n",
+        ),
+    );
+    let mut shown: Vec<String> = Vec::new();
+    let err = stream_call(&dir, &mut shown).unwrap_err();
+    assert_eq!(shown, ["partial"]);
+    assert!(matches!(err, ClientError::CutOff(_)), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Nothing showed and the stream just ended: a disconnect.
+    let (dir, _w) = sse_setup(
+        "anthropic-stream-dropped",
+        "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+    );
+    let mut shown: Vec<String> = Vec::new();
+    let err = stream_call(&dir, &mut shown).unwrap_err();
+    assert!(matches!(err, ClientError::Disconnect), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // A refusal riding the stream is the refusal class, not an empty turn.
+    let (dir, _w) = sse_setup(
+        "anthropic-stream-refusal",
+        concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\",\"stop_details\":{\"type\":\"refusal\",\"category\":\"sexual\"}},\"usage\":{\"output_tokens\":2}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        ),
+    );
+    let mut shown: Vec<String> = Vec::new();
+    let err = stream_call(&dir, &mut shown).unwrap_err();
+    assert!(matches!(err, ClientError::Refused { .. }), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A config dir whose OpenRouter provider answers with the canned stream.
+fn or_sse_setup(label: &str, sse: &str) -> (PathBuf, Arc<SseWire>) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(SseWire {
+        posts: Mutex::new(Vec::new()),
+        sse: sse.into(),
+        status: 200,
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    (dir, wire)
+}
+
+fn or_stream_call(
+    dir: &Path,
+    shown: &mut Vec<String>,
+    thought: &mut Vec<String>,
+) -> Result<TurnOutput, ClientError> {
+    providers::stream_model(
+        dir,
+        "chat:default",
+        OR_MODEL,
+        Some("high"),
+        &hello(),
+        CALL_DATA,
+        "conv-1:12",
+        &CancelToken::new(),
+        &mut |ev| match ev {
+            StreamEvent::TextDelta(t) => shown.push(t),
+            StreamEvent::ReasoningDelta(t) => thought.push(t),
+            _ => {}
+        },
+    )
+}
+
+/// Failover PR 10: a streamed OpenRouter call reaches the chat delta by
+/// delta (keep-alive comments ignored), assembles its tool call from
+/// indexed pieces, merges its reasoning details, reads the usage chunk
+/// that comes after the finish reason (cost included), gives the
+/// reasoning back to the model the chunks name, and asks for the
+/// stream with its usage on.
+#[test]
+fn a_streamed_openrouter_call_arrives_in_deltas_with_its_tools_and_cost() {
+    let sse = concat!(
+        ": OPENROUTER PROCESSING\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning\":\"Think\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"Think\",\"index\":0}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\"ing\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"ing\",\"signature\":\"sig\",\"index\":0}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello \"}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"there\"}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"weather\",\"arguments\":\"\"}}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\"}}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Oslo\\\"}\"}}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"completion_tokens_details\":{\"reasoning_tokens\":2},\"prompt_tokens_details\":{\"cached_tokens\":3},\"cost\":0.0000025}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (dir, wire) = or_sse_setup("or-stream", sse);
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let out = or_stream_call(&dir, &mut shown, &mut thought).unwrap();
+    assert_eq!(shown, ["Hello ", "there"]);
+    assert_eq!(thought, ["Think", "ing"]);
+    assert_eq!(
+        (out.text.as_str(), out.reasoning.as_str()),
+        ("Hello there", "Thinking")
+    );
+    assert_eq!(
+        (
+            out.calls[0].call_id.as_str(),
+            out.calls[0].name.as_str(),
+            out.calls[0].arguments.as_str()
+        ),
+        ("c1", "weather", r#"{"city":"Oslo"}"#)
+    );
+    assert_eq!(
+        (
+            out.usage.input_tokens,
+            out.usage.output_tokens,
+            out.usage.reasoning_tokens,
+            out.usage.cached_tokens,
+            out.usage.cost_in_usd_ticks
+        ),
+        (12, 4, 2, 3, 25_000)
+    );
+    // The reasoning details merged into one piece, and they go back to
+    // the model that wrote them.
+    assert_eq!(out.reasoning_items.len(), 1);
+    let details = out.reasoning_items[0]
+        .reasoning_details("vendor/cheap")
+        .expect("tagged with the answering model");
+    assert_eq!(
+        (
+            details[0]["text"].as_str(),
+            details[0]["signature"].as_str()
+        ),
+        (Some("Thinking"), Some("sig"))
+    );
+    assert!(!out.truncated);
+    let body: serde_json::Value = serde_json::from_str(&wire.posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(
+        (&body["stream"], &body["stream_options"]),
+        (&json!(true), &json!({"include_usage": true}))
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Failover PR 10: the streamed OpenRouter path keeps the native
+/// stream's failure rules — an error chunk before any text is the error
+/// itself (a rate limit the router fails over from, stamped on the
+/// quota ledger), one after text showed is a cut-off, a stream with no
+/// finish reason is a disconnect, a cut at the output limit is a
+/// truncation, and a host that answered with the whole reply is read
+/// whole.
+#[test]
+fn a_streamed_openrouter_failure_follows_the_shown_rules() {
+    // An error chunk before anything showed: the error class itself.
+    let (dir, _w) = or_sse_setup(
+        "or-stream-limit",
+        concat!(
+            ": OPENROUTER PROCESSING\n\n",
+            "data: {\"error\":{\"code\":429,\"message\":\"Rate limit exceeded: free-models-per-day\"},\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"error\"}]}\n\n",
+        ),
+    );
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let err = or_stream_call(&dir, &mut shown, &mut thought).unwrap_err();
+    assert!(shown.is_empty());
+    assert!(matches!(err, ClientError::RateLimited { .. }), "{err:?}");
+    // The limit is account news: the ledger asks for a re-read at once.
+    let ledger = grokhub_core::model_registry::store::load_quota(&dir);
+    assert!(ledger.openrouter.recheck_at_ms > 0);
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Text showed, then the provider failed mid-stream: what showed is kept.
+    let (dir, _w) = or_sse_setup(
+        "or-stream-cutoff",
+        concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n",
+            "data: {\"error\":{\"code\":502,\"message\":\"Provider returned error\"},\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"error\"}]}\n\n",
+        ),
+    );
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let err = or_stream_call(&dir, &mut shown, &mut thought).unwrap_err();
+    assert_eq!(shown, ["partial"]);
+    assert!(matches!(err, ClientError::CutOff(_)), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Nothing showed and the stream just ended: a disconnect.
+    let (dir, _w) = or_sse_setup("or-stream-dropped", ": OPENROUTER PROCESSING\n\n");
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let err = or_stream_call(&dir, &mut shown, &mut thought).unwrap_err();
+    assert!(matches!(err, ClientError::Disconnect), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Cut at the output limit: a truncation the run loop carries on from.
+    let (dir, _w) = or_sse_setup(
+        "or-stream-length",
+        concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"long\"}}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ),
+    );
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let out = or_stream_call(&dir, &mut shown, &mut thought).unwrap();
+    assert_eq!(
+        (
+            out.text.as_str(),
+            out.truncated,
+            out.truncate_reason.as_deref()
+        ),
+        ("long", true, Some("max_output_tokens"))
+    );
+    let _ = std::fs::remove_dir_all(dir);
+
+    // The whole reply instead of a stream: read whole, sent as one delta.
+    let (dir, _w) = or_sse_setup("or-stream-whole", OR_REPLY);
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let out = or_stream_call(&dir, &mut shown, &mut thought).unwrap();
+    assert_eq!(shown, ["hello from the provider"]);
+    assert_eq!(out.usage.cost_in_usd_ticks, 25_000);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Failover PR 10: an OpenAI-compatible host other than OpenRouter keeps
+/// the whole-reply call, its answer one delta, with no stream asked for.
+#[test]
+fn a_custom_openai_compatible_host_keeps_the_whole_reply() {
+    let dir = test_dir("custom-host-whole");
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(SseWire {
+        posts: Mutex::new(Vec::new()),
+        sse: OR_REPLY.into(),
+        status: 200,
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    let p = add_provider(&dir, "https://api.example.com/v1", KEY, NOW).unwrap();
+    grant_destination(&dir, "api.example.com", CALL_DATA, UserClick::from_click()).unwrap();
+    let model = format!("{}/vendor/cheap", p.id);
+    let mut shown: Vec<String> = Vec::new();
+    let out = providers::stream_model(
+        &dir,
+        "chat:default",
+        &model,
+        None,
+        &hello(),
+        CALL_DATA,
+        "conv-1:13",
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push(t);
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        (out.text.as_str(), shown.len()),
+        ("hello from the provider", 1)
+    );
+    let body: serde_json::Value = serde_json::from_str(&wire.posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(
+        (&body["stream"], body.get("stream_options")),
+        (&json!(false), None)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 // ---- End to end: the route record, and the key is nowhere ---------------------
 
 struct Never;
@@ -958,22 +1518,21 @@ fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn a_pinned_provider_call_routes_logs_its_provider_and_the_key_is_in_no_file_or_input() {
+fn a_provider_call_the_table_ranks_first_routes_logs_its_provider_and_the_key_is_in_no_file_or_input(
+) {
     let (dir, wire) = setup("r3b-e2e");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
     add_provider(&dir, OR_URL, KEY, NOW).unwrap();
     let g = grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
-    live::set_pin(OR_MODEL);
+    rank_first(&dir, OR_MODEL);
     let input = vec![InputItem::Message {
         role: "user".into(),
         content: vec![ContentPart::InputText("say hello".into())],
     }];
     let call = super::ModelCall::xai(OR_MODEL, Some("medium"), "chat:default", "ep-r3b", input)
         .in_session("chat-r3b");
-    let routed = super::call_model(&Never, &call, &CancelToken::new());
-    live::set_pin("");
-    let routed = routed.unwrap();
+    let routed = super::call_model(&Never, &call, &CancelToken::new()).unwrap();
     assert_eq!(routed.out.text, "hello from the provider");
     assert_eq!(routed.tokens.cost_ticks, 25_000);
     // One request, one egress line under the grant, with the span id.
@@ -988,7 +1547,9 @@ fn a_pinned_provider_call_routes_logs_its_provider_and_the_key_is_in_no_file_or_
         (g.id.as_str(), true)
     );
     // The route record carries the provider and the cost class.
-    let (_, rec) = last_routes(&dir).pop().expect("a route record");
+    let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES)
+        .pop()
+        .expect("a route record");
     assert_eq!(
         (
             rec.chosen.provider.as_str(),
@@ -1045,17 +1606,20 @@ impl ProviderTransport for KeyWire {
             Ok(HttpReply {
                 status: 200,
                 body: json!({"key": KEY, "user_id": "u-1"}).to_string(),
+                headers: Vec::new(),
             })
         } else {
             Ok(HttpReply {
                 status: 403,
                 body: "{}".into(),
+                headers: Vec::new(),
             })
         }
     }
 }
 
-/// The browser: approve at once by calling the `callback_url` with `code`.
+/// The browser: approve at once by calling the `callback_url` with `code`,
+/// echoing the `state` the link carried, as OpenRouter does.
 fn approving_browser(
     code: &'static str,
     seen: Arc<Mutex<String>>,
@@ -1069,6 +1633,11 @@ fn approving_browser(
             .unwrap_or("")
             .replace("%3A", ":")
             .replace("%2F", "/");
+        let state = query
+            .split('&')
+            .find_map(|p| p.strip_prefix("state="))
+            .unwrap_or("")
+            .to_string();
         let target = callback.trim_start_matches("http://").to_string();
         let (host, path) = target
             .split_once('/')
@@ -1079,7 +1648,7 @@ fn approving_browser(
             let mut sock = std::net::TcpStream::connect(&host).unwrap();
             let _ = write!(
                 sock,
-                "GET /{path}?code={code} HTTP/1.1\r\nHost: {host}\r\n\r\n"
+                "GET /{path}?code={code}&state={state} HTTP/1.1\r\nHost: {host}\r\n\r\n"
             );
             let mut sink = String::new();
             let _ = sock.read_to_string(&mut sink);
@@ -1109,7 +1678,8 @@ fn openrouter_sign_in_buys_a_key_with_pkce_and_saves_nothing_itself() {
     );
     assert!(
         link.contains("%2Fcallback&code_challenge=")
-            && link.ends_with("&code_challenge_method=S256"),
+            && link.contains("&code_challenge_method=S256&state=")
+            && link.ends_with("&key_label=Loadout"),
         "{link}"
     );
     let sent = wire.0.lock().unwrap().clone();
@@ -1232,6 +1802,7 @@ impl ModelClient for XaiRec {
 
 fn chat(session: &str, lines: &[&str]) -> ResponsesRequest {
     ResponsesRequest {
+        text_format: None,
         model: "grok-4.7".into(),
         effort: None,
         input: lines
@@ -1249,7 +1820,7 @@ fn chat(session: &str, lines: &[&str]) -> ResponsesRequest {
 }
 
 #[test]
-fn an_explicit_turn_pinned_to_anthropic_goes_to_xai_with_one_heads_up() {
+fn an_explicit_turn_with_no_local_model_gets_the_one_line_offer_and_goes_nowhere() {
     let (dir, wire) = setup("adult-anthropic");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
@@ -1261,7 +1832,7 @@ fn an_explicit_turn_pinned_to_anthropic_goes_to_xai_with_one_heads_up() {
         UserClick::from_click(),
     )
     .unwrap();
-    live::set_pin(AN_MODEL);
+    rank_first(&dir, AN_MODEL);
     let xai = XaiRec::default();
     let mut shown = String::new();
     let send = |req: &ResponsesRequest, shown: &mut String| {
@@ -1277,36 +1848,47 @@ fn an_explicit_turn_pinned_to_anthropic_goes_to_xai_with_one_heads_up() {
             "chat:default",
         )
     };
-    let pinned = |lines: &[&str]| ResponsesRequest {
+    let to_anthropic = |lines: &[&str]| ResponsesRequest {
         model: AN_MODEL.into(),
         ..chat("adult-an-1", lines)
     };
-    let out = send(&pinned(&["talk dirty to me, I'm horny"]), &mut shown);
-    let second = send(&pinned(&["send nudes lol"]), &mut String::new());
-    live::set_pin("");
-    let out = out.unwrap();
-    let heads_up = "Heads-up: I sent that one through xAI instead of Anthropic. Anthropic bans adult chat and can ban the account for it.";
-    assert_eq!(out.text, format!("{heads_up}\n\nhey you"));
+    let out = send(&to_anthropic(&["talk dirty to me, I'm horny"]), &mut shown).unwrap();
+    assert_eq!(out.text, grokhub_core::adult_guard::LOCAL_ONLY_MISSING);
     assert_eq!(shown, out.text, "what streams is what is kept");
-    assert_eq!(second.unwrap().text, "hey you", "one heads-up a session");
+    // Routed to xAI it stays off xAI too.
+    let on_xai = send(&chat("adult-an-2", &["send nudes lol"]), &mut String::new());
+    assert_eq!(
+        on_xai.unwrap().text,
+        grokhub_core::adult_guard::LOCAL_ONLY_MISSING
+    );
     assert_eq!(wire.n(), 0, "nothing reached Anthropic");
-    let got = xai.0.lock().unwrap();
-    assert_eq!(got.len(), 2);
-    assert_eq!(got[0].model, grokhub_core::CABIN_FAST_MODEL);
+    assert_eq!(xai.0.lock().unwrap().len(), 0, "nothing reached xAI");
+    // With this computer's model ready it answers, with no heads-up.
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let mut shown = String::new();
+    let local = send(&to_anthropic(&["talk dirty to me, I'm horny"]), &mut shown);
+    assert_eq!(local.unwrap().text, "local here");
+    assert_eq!(shown, "local here");
+    assert_eq!(wire.n(), 0);
+    assert_eq!(xai.0.lock().unwrap().len(), 0);
     let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
-fn explicit_chats_leave_openrouter_for_xai_and_banned_asks_never_leave() {
+fn explicit_chats_never_reach_openrouter_or_xai_and_banned_asks_never_leave() {
+    let _routing = ROUTING_SET.lock().unwrap_or_else(|e| e.into_inner());
     let (dir, wire) = setup("adult-openrouter");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
     add_provider(&dir, OR_URL, KEY, NOW).unwrap();
     grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
-    live::set_pin(OR_MODEL);
+    rank_first(&dir, OR_MODEL);
     let xai = XaiRec::default();
+    // Each chat its own session, so none keeps the model another one ran on.
+    let n = std::cell::Cell::new(0);
     let send = |input: Vec<InputItem>| {
-        let mut req = chat("adult-or-1", &[]);
+        n.set(n.get() + 1);
+        let mut req = chat(&format!("adult-or-{}", n.get()), &[]);
         req.model = OR_MODEL.into();
         req.input = input;
         live::stream_routed(&xai, &req, &CancelToken::new(), &mut |_| {}, "chat:default")
@@ -1333,14 +1915,25 @@ fn explicit_chats_leave_openrouter_for_xai_and_banned_asks_never_leave() {
         say("user", "and now?"),
     ]);
     let clean = send(vec![say("user", "fix my wifi")]);
-    live::set_pin("");
-    for out in [explicit, history, persona, banned, clean] {
+    assert_eq!(
+        explicit.unwrap().text,
+        grokhub_core::adult_guard::LOCAL_ONLY_MISSING
+    );
+    // With the 18+ voice on, every turn of the chat is local only: a clean
+    // ask gets the same notice and nothing goes online.
+    assert_eq!(
+        persona.unwrap().text,
+        grokhub_core::adult_guard::LOCAL_ONLY_MISSING
+    );
+    // Decided per message otherwise: a clean ask from a chat with 18+ turns
+    // still gets answered, with the 18+ turns left out of what goes online.
+    for out in [history, banned, clean] {
         out.unwrap();
     }
     assert_eq!(
         xai.0.lock().unwrap().len(),
-        3,
-        "the three explicit chats went to xAI"
+        0,
+        "no explicit chat went to xAI"
     );
     let bodies: Vec<serde_json::Value> = wire
         .bodies()
@@ -1349,14 +1942,29 @@ fn explicit_chats_leave_openrouter_for_xai_and_banned_asks_never_leave() {
         .collect();
     assert_eq!(
         bodies.len(),
-        2,
-        "only the held and the clean chat reached OpenRouter"
+        3,
+        "every chat but the 18+ ask and the 18+ voice reached OpenRouter"
     );
-    let held = bodies[0].to_string();
+    let history = bodies[0].to_string();
+    assert!(history.contains("continue"), "{history}");
+    assert!(
+        !history.contains("smut") && !history.contains("Here you go"),
+        "{history}"
+    );
+    assert!(
+        bodies
+            .iter()
+            .all(|b| !b.to_string().contains("my build broke")),
+        "the 18+ voice chat stayed off the wire"
+    );
+    let held = bodies[1].to_string();
     assert!(!held.contains("schoolgirl"), "{held}");
     assert!(held.contains("Loadout held this message back"), "{held}");
     for body in &bodies {
-        assert_eq!(body["provider"], serde_json::Value::Null);
+        assert_eq!(
+            body["provider"],
+            json!({"require_parameters": true, "data_collection": "deny"})
+        );
     }
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -1373,6 +1981,7 @@ impl ProviderTransport for LimitWire {
         Ok(HttpReply {
             status: 200,
             body: OR_LIST.into(),
+            headers: Vec::new(),
         })
     }
     fn post(&self, _: &str, _: &[(String, String)], _: &str) -> Result<HttpReply, String> {
@@ -1392,6 +2001,7 @@ impl ProviderTransport for LimitWire {
         Ok(HttpReply {
             status: 200,
             body: OR_REPLY.into(),
+            headers: Vec::new(),
         })
     }
 }
@@ -1407,7 +2017,16 @@ fn a_provider_call_keeps_its_time_limit_and_a_cancel_on_the_wire_drops_the_reply
     let mut timed = hello();
     timed.call_timeout = Some(std::time::Duration::from_secs(45));
     let call = |req: &ResponsesRequest, cancel: &CancelToken| {
-        providers::call_model(&dir, OR_MODEL, None, req, CALL_DATA, "try-it:1", cancel)
+        providers::call_model(
+            &dir,
+            "chat:default",
+            OR_MODEL,
+            None,
+            req,
+            CALL_DATA,
+            "try-it:1",
+            cancel,
+        )
     };
     assert_eq!(
         call(&timed, &CancelToken::new()).unwrap().text,
@@ -1468,7 +2087,7 @@ impl super::local::LocalRuntime for LocalChat {
 }
 
 #[test]
-fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_does_not() {
+fn an_18_plus_chat_goes_straight_to_the_local_model_and_a_clean_one_does_not() {
     let (dir, wire) = setup("adult-local-fallback");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
@@ -1484,21 +2103,16 @@ fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_d
     };
     let explicit = send(&["talk dirty to me, I'm horny"]).unwrap();
     assert_eq!(explicit.text, "local here");
-    // xAI's failure is logged as a failure, and the answer as the local model's.
+    // xAI is never tried: the only call logged is the local model's.
     let health = grokhub_core::model_registry::store::take_observations(&dir);
     let lines: Vec<(&str, grokhub_core::model_registry::CallStatus)> = health
         .iter()
         .map(|o| (o.model.as_str(), o.status))
         .collect();
     let local = super::local::live_tier();
-    assert_eq!(lines.len(), 2, "{health:?}");
-    assert!(
-        lines[0].0 != local && lines[0].1 == grokhub_core::model_registry::CallStatus::Error,
-        "xAI's model is logged as failed: {health:?}"
-    );
     assert_eq!(
-        lines[1],
-        (local, grokhub_core::model_registry::CallStatus::Ok),
+        lines,
+        [(local, grokhub_core::model_registry::CallStatus::Ok)],
         "the answer is the local model's: {health:?}"
     );
     // A banned ask is held before any model sees it: the notice is the answer.
@@ -1513,47 +2127,93 @@ fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_d
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Viper's Nov 7 report: an 18+ chat worked while the local model was loaded,
+/// then hung and refused everything once it was unloaded for a game. Replays
+/// load, unload, an ordinary turn, an 18+ turn, the chat's summary, a reload
+/// and a model that has to load again.
 #[test]
-fn a_rerouted_18_plus_turn_the_local_model_answers_says_so_in_its_heads_up() {
-    let (dir, wire) = setup("adult-local-heads-up");
+fn an_18_plus_chat_keeps_answering_after_its_local_model_is_unloaded() {
+    use grokhub_core::adult_guard::{ADULT_VOICE, LOCAL_ONLY_MISSING};
+    use grokhub_core::personality::EXPLICIT_SAFETY_LINE;
+    let (dir, wire) = setup("adult-unload");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
-    add_provider(&dir, "https://api.anthropic.com", KEY, NOW).unwrap();
-    grant_destination(
-        &dir,
-        "api.anthropic.com",
-        CALL_DATA,
-        UserClick::from_click(),
-    )
-    .unwrap();
-    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
-    live::set_pin(AN_MODEL);
-    let mut shown = String::new();
-    let req = ResponsesRequest {
-        model: AN_MODEL.into(),
-        ..chat("adult-local-heads-up-1", &["talk dirty to me, I'm horny"])
+    let xai = XaiRec::default();
+    let say = |role: &str, text: &str| InputItem::Message {
+        role: role.into(),
+        content: vec![ContentPart::InputText(text.into())],
     };
-    let out = live::stream_routed(
-        &XaiSignedOut,
-        &req,
-        &CancelToken::new(),
-        &mut |ev| {
-            if let StreamEvent::TextDelta(t) = ev {
-                shown.push_str(&t);
-            }
-        },
-        "chat:default",
+    let system =
+        format!("RULES\n\nPersonality: Whore mode. Flirty. {ADULT_VOICE}\n{EXPLICIT_SAFETY_LINE}");
+    let history = vec![
+        say("system", &system),
+        say("user", "wanna have some sexy time"),
+        say("assistant", "Mmm, get naked and talk dirty to me."),
+    ];
+    let send = |ask: &str, class: &str| {
+        let mut req = chat("adult-unload-1", &[]);
+        req.input = history.clone();
+        req.input.push(say("user", ask));
+        let (mut shown, mut thought) = (String::new(), String::new());
+        let out = live::stream_routed(
+            &xai,
+            &req,
+            &CancelToken::new(),
+            &mut |ev| match ev {
+                StreamEvent::TextDelta(t) => shown.push_str(&t),
+                StreamEvent::ReasoningDelta(t) => thought.push_str(&t),
+                StreamEvent::RateWait(_) => {}
+            },
+            class,
+        );
+        (out, shown, thought)
+    };
+    let sent_to_xai = || xai.0.lock().unwrap().len();
+
+    // Loaded: the 18+ turn runs on this computer's model.
+    let loaded = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let (out, shown, _) = send("lets do this, I'm horny", "chat:default");
+    assert_eq!(out.unwrap().text, "local here");
+    assert_eq!(shown, "local here");
+    assert_eq!(sent_to_xai(), 0);
+
+    // Unloaded for a game.
+    drop(loaded);
+    // The 18+ voice is on, so even an ordinary turn stays on this computer:
+    // it gets the one-line notice and nothing goes online (Nov 9 bug card:
+    // turns of an 18+ chat must never fall to a cloud model).
+    let (out, shown, _) = send("whats a good budget gaming mouse", "chat:default");
+    assert_eq!(out.unwrap().text, LOCAL_ONLY_MISSING);
+    assert_eq!(shown, LOCAL_ONLY_MISSING);
+    assert_eq!(sent_to_xai(), 0);
+    // An 18+ turn says in one line why it can't run, and sends nothing.
+    let (out, shown, _) = send("lets get naked", "chat:default");
+    assert_eq!(out.unwrap().text, LOCAL_ONLY_MISSING);
+    assert_eq!(shown, LOCAL_ONLY_MISSING);
+    assert_eq!(sent_to_xai(), 0);
+    // The chat's summary never becomes that notice, and never goes online.
+    let (out, shown, _) = send("Summarize the conversation so far.", super::CLASS_COMPACT);
+    assert!(out.is_err(), "{out:?}");
+    assert!(shown.is_empty(), "{shown}");
+    assert_eq!(sent_to_xai(), 0);
+
+    // Loaded again: 18+ turns are back on this computer's model.
+    let again = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let (out, _, thought) = send("lets get naked", "chat:default");
+    assert_eq!(out.unwrap().text, "local here");
+    assert!(
+        thought.is_empty(),
+        "a loaded model needs no note: {thought}"
     );
-    live::set_pin("");
-    let out = out.unwrap();
-    let heads_up = "Heads-up: I sent that one to this computer's model instead of Anthropic. Anthropic bans adult chat and can ban the account for it.";
-    assert_eq!(out.text, format!("{heads_up}\n\nlocal here"));
-    assert!(!shown.contains("through xAI"), "{shown}");
-    assert_eq!(
-        shown, out.text,
-        "the chat shows the local answer, not just the heads-up"
-    );
-    assert_eq!(wire.n(), 0, "nothing reached Anthropic");
+    drop(again);
+
+    // Ready but not loaded yet: the chat says it's loading, never a silent wait.
+    let _cold = super::local::ForceOn::with(None);
+    let (out, _, thought) = send("lets get naked", "chat:default");
+    assert_eq!(thought, super::local::LOCAL_LOADING_NOTE);
+    assert!(out.is_err(), "no engine here, so it can't start: {out:?}");
+    assert_eq!(sent_to_xai(), 0);
+    assert_eq!(wire.n(), 0);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1585,7 +2245,7 @@ fn a_half_streamed_xai_answer_is_never_finished_by_the_local_model() {
     let mut shown = String::new();
     let out = live::stream_routed(
         &XaiCutOff,
-        &chat("adult-local-cut-off-1", &["talk dirty to me, I'm horny"]),
+        &chat("adult-local-cut-off-1", &["fix my wifi"]),
         &CancelToken::new(),
         &mut |ev| {
             if let StreamEvent::TextDelta(t) = ev {
@@ -1615,6 +2275,7 @@ fn a_direct_provider_call_never_sends_an_18_plus_chat_or_a_banned_ask() {
         req.model = OR_MODEL.into();
         providers::call_model(
             &dir,
+            "chat:default",
             OR_MODEL,
             None,
             &req,
@@ -1625,7 +2286,7 @@ fn a_direct_provider_call_never_sends_an_18_plus_chat_or_a_banned_ask() {
     };
     let explicit = call(&["talk dirty to me, I'm horny"]);
     assert!(
-        matches!(&explicit, Err(ClientError::Protocol(m)) if m.contains("18+ chats go only to xAI")),
+        matches!(&explicit, Err(ClientError::Protocol(m)) if m.contains("18+ chats run only on this computer's model")),
         "{explicit:?}"
     );
     assert_eq!(wire.n(), 0, "nothing reached OpenRouter");
@@ -1672,15 +2333,17 @@ fn a_blocked_send_makes_zero_network_requests_on_any_route() {
             grokhub_core::adult_guard::HELD_NOTICE,
             "{line}"
         );
-        live::set_pin(OR_MODEL);
-        let pinned = send(OR_MODEL, line);
-        live::set_pin("");
+    }
+    // The same asks with OpenRouter ranked first for chats.
+    rank_first(&dir, OR_MODEL);
+    for line in banned {
         assert_eq!(
-            pinned.unwrap().text,
+            send(OR_MODEL, line).unwrap().text,
             grokhub_core::adult_guard::HELD_NOTICE,
             "{line}"
         );
     }
+    std::fs::remove_file(super::table::table_path(&dir)).unwrap();
     assert_eq!(xai.0.lock().unwrap().len(), 0, "nothing reached xAI");
     assert_eq!(wire.n(), 0, "nothing reached OpenRouter");
     // A near-miss between stated adults goes out as usual.
@@ -1688,12 +2351,12 @@ fn a_blocked_send_makes_zero_network_requests_on_any_route() {
         "grok-4.7",
         "sexy teacher and student roleplay, we're both 30",
     );
-    assert_eq!(adults.unwrap().text, "hey you");
-    assert_eq!(xai.0.lock().unwrap().len(), 1);
+    assert_eq!(adults.unwrap().text, "local here", "18+ chat runs locally");
+    assert_eq!(xai.0.lock().unwrap().len(), 0);
     assert_eq!(
         shown,
         format!(
-            "{}hey you",
+            "{}local here",
             grokhub_core::adult_guard::HELD_NOTICE.repeat(banned.len() * 2)
         )
     );
@@ -1732,7 +2395,7 @@ fn a_blocked_model_reply_is_replaced_locally_before_the_chat_shows_it() {
     let mut shown = String::new();
     let out = live::stream_routed(
         &xai,
-        &chat("adult-reply-1", &["talk dirty to me, I'm horny"]),
+        &chat("adult-reply-1", &["tell me a story"]),
         &CancelToken::new(),
         &mut |ev| {
             if let StreamEvent::TextDelta(t) = ev {
@@ -1748,5 +2411,1699 @@ fn a_blocked_model_reply_is_replaced_locally_before_the_chat_shows_it() {
     assert!(!out.text.contains("15"), "{}", out.text);
     assert_eq!(*xai.0.lock().unwrap(), 1);
     assert_eq!(wire.n(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_openrouter_privacy_refusal_reads_as_what_to_do_not_a_raw_404() {
+    let body = "0 endpoints out of 1 requested are available matching your guardrail restrictions and data policy. We removed them for the following reasons: Provider not allowed by guardrail: 1 endpoint excluded; ZDR violation (account settings): 1 endpoint excluded";
+    assert!(providers::policy_refusal(404, body));
+    assert!(providers::policy_refusal(
+        404,
+        "ZDR violation (account settings)"
+    ));
+    // A plain missing model, a key problem or a server fault is not a policy refusal.
+    assert!(!providers::policy_refusal(
+        404,
+        "No endpoints found for vendor/model."
+    ));
+    assert!(!providers::policy_refusal(401, "guardrail"));
+    assert!(!providers::policy_refusal(503, "data policy"));
+    assert!(providers::POLICY_REFUSED.contains("OpenRouter data policy"));
+    assert!(providers::POLICY_REFUSED.contains("https://openrouter.ai/settings/privacy"));
+}
+
+#[test]
+fn set_routing_with_zdr_sends_provider_zdr_and_never_a_sort_or_a_models_list() {
+    use super::providers::{apply_openrouter_routing, is_openrouter_router, Routing};
+    let _routing = ROUTING_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let base = json!({"model": "google/gemma-4-31b-it:free", "stream": false, "messages": []});
+    // The default denies endpoints that keep prompts, and every endpoint must
+    // take every field sent. Only OpenRouter gets this: the golden bodies
+    // ([`request_body`]) stay byte-identical.
+    let mut b = base.clone();
+    apply_openrouter_routing(&mut b, &Routing::default());
+    assert_eq!(
+        b,
+        json!({"model": "google/gemma-4-31b-it:free", "stream": false, "messages": [], "provider": {"require_parameters": true, "data_collection": "deny"}})
+    );
+    // "allow" is data_collection.
+    let mut b = base.clone();
+    apply_openrouter_routing(
+        &mut b,
+        &Routing {
+            data: "allow".into(),
+        },
+    );
+    assert_eq!(
+        b,
+        json!({"model": "google/gemma-4-31b-it:free", "stream": false, "messages": [], "provider": {"require_parameters": true, "data_collection": "allow"}})
+    );
+    // An old saved setting with a sort and a fallback keeps only its data part.
+    let old: Routing =
+        serde_json::from_value(json!({"sort": "price", "fallback": true, "data": "zdr"})).unwrap();
+    assert_eq!(old, Routing { data: "zdr".into() });
+    // Set as the cabin sets it, a real call to openrouter.ai carries zdr and
+    // nothing else of OpenRouter's routing.
+    let (dir, wire) = setup("r3b-routing-zdr");
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    providers::set_routing(old);
+    let out = send(&dir);
+    providers::set_routing(Routing::default());
+    assert_eq!(out.unwrap().text, "hello from the provider");
+    let body: serde_json::Value = serde_json::from_str(&wire.bodies()[0]).unwrap();
+    assert_eq!(
+        body["provider"],
+        json!({"require_parameters": true, "data_collection": "deny", "zdr": true}),
+        "{body}"
+    );
+    assert_eq!(body.get("models"), None, "{body}");
+    assert_eq!(body["model"], "vendor/cheap");
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(is_openrouter_router("openrouter/auto"));
+    assert!(is_openrouter_router("openrouter/openrouter/free"));
+    assert!(!is_openrouter_router(
+        "openrouter/google/gemma-4-31b-it:free"
+    ));
+    assert!(!is_openrouter_router("google/gemma-4-31b-it:free"));
+    assert!(providers::is_free_model("openrouter/openrouter/free"));
+    assert!(providers::is_free_model("google/gemma-4-31b-it:free"));
+    assert!(!providers::is_free_model("openrouter/openrouter/auto"));
+}
+
+#[test]
+fn auto_takes_a_set_up_provider_model_only_priced_under_the_ceiling_and_in_text() {
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    // No sign-in, so nothing on xAI is included; no preferences of any kind.
+    let mut reg = fleet();
+    reg.entitlement.credential = Credential::None;
+    let input = || {
+        ask(
+            "chat:default",
+            "grok-4.7",
+            granted(&["openrouter", "anthropic"]),
+        )
+    };
+    // OpenRouter's model lists $0.50/M, under the $15/M ceiling: Auto takes it.
+    // The Anthropic model lists no price, so it is no candidate.
+    let r = Router::choose(&input(), &reg, &profiles, &table, NOW);
+    assert_eq!(
+        (r.provider.as_str(), r.model.as_str()),
+        ("openrouter", OR_MODEL),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(
+        r.rule_ids.contains(&"provider:auto".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // Without its key and grant it is never a candidate.
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.7", Spend::default()),
+        &reg,
+        &profiles,
+        &table,
+        NOW,
+    );
+    assert_eq!(
+        (r.model.as_str(), r.provider.as_str()),
+        ("grok-4.7", "xai"),
+        "{:?}",
+        r.rule_ids
+    );
+    // Priced at $20/M, over the ceiling: out, and the call keeps its own model.
+    reg.models.get_mut(OR_MODEL).unwrap().meta.prices.completion = Some(200_000);
+    let r = Router::choose(&input(), &reg, &profiles, &table, NOW);
+    assert_eq!(r.model, "grok-4.7", "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"cost:not_included".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // The Anthropic model with a listed price under the ceiling: Auto takes it.
+    reg.models.get_mut(AN_MODEL).unwrap().meta.prices = Prices {
+        prompt: Some(2_000),
+        completion: Some(10_000),
+        ..Prices::default()
+    };
+    let r = Router::choose(&input(), &reg, &profiles, &table, NOW);
+    assert_eq!(
+        (r.provider.as_str(), r.model.as_str()),
+        ("anthropic", AN_MODEL),
+        "{:?}",
+        r.rule_ids
+    );
+    // One that answers in something other than text stays out.
+    reg.models.get_mut(AN_MODEL).unwrap().meta.output_modalities = Some(vec!["embeddings".into()]);
+    let r = Router::choose(&input(), &reg, &profiles, &table, NOW);
+    assert_eq!(r.model, "grok-4.7", "{:?}", r.rule_ids);
+    // An OpenRouter router lists no price (it may pick any model at any price): out.
+    let router = "openrouter/openrouter/auto";
+    let mut rec = reg.models.get(OR_MODEL).unwrap().clone();
+    rec.meta.id = router.into();
+    rec.meta.prices = Prices::default();
+    reg.models.insert(router.into(), rec);
+    let r = Router::choose(&input(), &reg, &profiles, &table, NOW);
+    assert_ne!(r.model, router, "{:?}", r.rule_ids);
+    // Signed in, xAI answers first; the mid-episode provider model keeps its step.
+    let mut plan = fleet();
+    plan.entitlement.credential = Credential::Plan;
+    let r = Router::choose(&input(), &plan, &profiles, &table, NOW);
+    assert_eq!(r.provider.as_str(), "xai", "{:?}", r.rule_ids);
+    let mut mid = input();
+    mid.episode_model = Some(OR_MODEL);
+    let r = Router::choose(&mid, &plan, &profiles, &table, NOW);
+    assert_eq!(r.model, OR_MODEL, "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"episode:keep".into()),
+        "{:?}",
+        r.rule_ids
+    );
+}
+
+/// Saves a routing table that ranks `model` first for a chat's lanes (the
+/// default, quick and debug ones), as the evals would.
+fn rank_first(dir: &Path, model: &str) {
+    let mut t = table_with("chat:default", model);
+    let row = t.classes["chat:default"].clone();
+    for lane in ["chat:quick", "debug"] {
+        t.classes.insert(lane.into(), row.clone());
+    }
+    let path = super::table::table_path(dir);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, serde_json::to_string(&t).unwrap()).unwrap();
+}
+
+/// Held by every test that sets or reads OpenRouter's process-wide routing setting.
+static ROUTING_SET: Mutex<()> = Mutex::new(());
+
+#[test]
+fn every_provider_call_is_told_which_model_answers() {
+    let (dir, wire) = setup("r3b-identity");
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    // Straight through the transport (Settings' Try it, an episode step, a
+    // chat): the identity rides the request without the caller adding it.
+    assert_eq!(send(&dir).unwrap().text, "hello from the provider");
+    let body: serde_json::Value = serde_json::from_str(&wire.bodies()[0]).unwrap();
+    let system = body["messages"][0].clone();
+    assert_eq!(system["role"], "system", "{body}");
+    let text = system["content"].to_string();
+    assert!(
+        text.contains(
+            "[Model identity] This reply comes from `vendor/cheap`, served through OpenRouter"
+        ),
+        "{text}"
+    );
+    assert_eq!(body["messages"][1]["role"], "user", "{body}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// [`XaiRec`] behind xAI's Batch API: the answer took minutes in a queue.
+struct BatchedXai(XaiRec);
+
+impl ModelClient for BatchedXai {
+    fn stream(
+        &self,
+        r: &ResponsesRequest,
+        c: &CancelToken,
+        s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        self.0.stream(r, c, s)
+    }
+
+    fn batches(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_batched_call_teaches_no_speed() {
+    let (dir, _wire) = setup("batched-latency");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let live_xai = XaiRec::default();
+    let queued = BatchedXai(XaiRec::default());
+    let req = chat("batched-1", &["sum up the week"]);
+    live::stream_routed(
+        &live_xai,
+        &req,
+        &CancelToken::new(),
+        &mut |_| {},
+        "chat:default",
+    )
+    .unwrap();
+    live::stream_routed(
+        &queued,
+        &req,
+        &CancelToken::new(),
+        &mut |_| {},
+        "chat:default",
+    )
+    .unwrap();
+    let latencies: Vec<Option<u64>> = route_records(&dir, ROUTE_TAIL_LINES)
+        .into_iter()
+        .map(|(_, r)| r.signals.latency)
+        .collect();
+    assert_eq!(latencies.len(), 2, "{latencies:?}");
+    assert!(latencies[0].is_some(), "a live call is timed");
+    assert_eq!(latencies[1], None, "a queued call is not");
+    let health = std::fs::read_to_string(
+        dir.join("models")
+            .join(grokhub_core::model_registry::store::HEALTH_FILE),
+    )
+    .unwrap();
+    let lines: Vec<serde_json::Value> = health
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2, "{health}");
+    assert_eq!(lines[1]["latency_ms"], json!(0), "health takes no sample");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// xAI is down: the client's retries ran out on a 503.
+struct XaiDown;
+
+impl ModelClient for XaiDown {
+    fn stream(
+        &self,
+        _r: &ResponsesRequest,
+        _c: &CancelToken,
+        _s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        Err(ClientError::Server {
+            status: 503,
+            message: "overloaded".into(),
+            retry_after_secs: None,
+        })
+    }
+}
+
+#[test]
+fn xai_down_hands_an_ordinary_turn_to_a_provider_then_to_this_computer() {
+    let (dir, wire) = setup("outage-fallback");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let send = |client: &dyn ModelClient, n: u32, lines: &[&str]| {
+        let mut shown = String::new();
+        let out = live::stream_routed(
+            client,
+            &chat(&format!("outage-{n}"), lines),
+            &CancelToken::new(),
+            &mut |ev| {
+                if let StreamEvent::TextDelta(t) = ev {
+                    shown.push_str(&t);
+                }
+            },
+            "chat:default",
+        );
+        (out, shown)
+    };
+    // Nothing else is set up: the outage is the answer.
+    let (out, _) = send(&XaiDown, 1, &["fix my wifi"]);
+    assert!(
+        matches!(out, Err(ClientError::Server { status: 503, .. })),
+        "{out:?}"
+    );
+    // This computer's model takes it.
+    {
+        let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+        let (out, shown) = send(&XaiDown, 2, &["fix my wifi"]);
+        assert_eq!(out.unwrap().text, "local here");
+        assert_eq!(shown, "local here");
+    }
+    assert_eq!(wire.n(), 0);
+    // A provider you set up goes first, ahead of this computer's model.
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let (out, shown) = send(&XaiDown, 3, &["fix my wifi"]);
+    assert_eq!(out.unwrap().text, "hello from the provider");
+    assert_eq!(shown, "hello from the provider");
+    assert_eq!(wire.n(), 1);
+    assert!(wire.bodies()[0].contains("\"model\":\"vendor/cheap\""));
+    let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES)
+        .pop()
+        .expect("a route record");
+    assert_eq!(
+        (rec.used.provider.as_str(), rec.used.model.as_str()),
+        ("openrouter", OR_MODEL)
+    );
+    // A signed-out xAI is no outage: nothing stands in for it.
+    let (out, _) = send(&XaiSignedOut, 4, &["fix my wifi"]);
+    assert!(matches!(out, Err(ClientError::Auth { .. })), "{out:?}");
+    // An 18+ chat never goes to the provider: this computer's model answers.
+    let (out, _) = send(&XaiDown, 5, &["talk dirty to me, I'm horny"]);
+    assert_eq!(out.unwrap().text, "local here");
+    assert_eq!(wire.n(), 1, "nothing more reached the provider");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The xAI account ran out of credit.
+struct XaiBroke;
+
+impl ModelClient for XaiBroke {
+    fn stream(
+        &self,
+        _r: &ResponsesRequest,
+        _c: &CancelToken,
+        _s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        Err(ClientError::PaymentRequired {
+            status: 402,
+            message: "out of credit".into(),
+        })
+    }
+}
+
+#[test]
+fn xai_out_of_credit_hands_the_turn_to_a_provider_instead_of_failing() {
+    let (dir, wire) = setup("xai-broke");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let mut shown = String::new();
+    let out = live::stream_routed(
+        &XaiBroke,
+        &chat("xai-broke-1", &["fix my wifi"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    );
+    assert_eq!(out.unwrap().text, "hello from the provider");
+    assert!(shown.contains("hello from the provider"), "{shown}");
+    assert_eq!(wire.n(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_providers_thinking_is_read_and_goes_back_to_it_alone() {
+    // llama.cpp with `--reasoning-format deepseek` says `reasoning_content`.
+    let local = providers::parse_openai_reply(
+        r#"{"choices":[{"message":{"content":"Hi.","reasoning_content":"They said hello."}}]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        (local.text.as_str(), local.reasoning.as_str()),
+        ("Hi.", "They said hello.")
+    );
+    assert!(local.reasoning_items.is_empty());
+
+    // OpenRouter adds `reasoning_details`, which the next tool step sends back.
+    let or = providers::parse_openai_reply(
+        r#"{"choices":[{"message":{"content":null,"reasoning":"Look it up.","reasoning_details":[{"type":"reasoning.encrypted","data":"abc","id":"r1","format":"openai-responses-v1","index":0}],"tool_calls":[{"id":"c1","type":"function","function":{"name":"weather","arguments":"{}"}}]}}]}"#,
+    )
+    .unwrap();
+    assert_eq!(or.reasoning, "Look it up.");
+    assert_eq!(or.reasoning_items.len(), 1);
+    let mut item = or.reasoning_items[0].clone();
+    if let InputItem::Reasoning { model, .. } = &mut item {
+        *model = "x-ai/grok-4.3".into();
+    }
+    let history = vec![
+        InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText("weather?".into())],
+        },
+        item,
+        InputItem::FunctionCall {
+            call_id: "c1".into(),
+            name: "weather".into(),
+            arguments: "{}".into(),
+        },
+        InputItem::FunctionCallOutput {
+            call_id: "c1".into(),
+            output: "sunny".into(),
+        },
+    ];
+    let req = ResponsesRequest {
+        input: history,
+        ..hello()
+    };
+    let back = providers::openai_body("x-ai/grok-4.3", None, &req);
+    let msgs = back["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 3, "{back}");
+    assert_eq!(msgs[1]["role"], "assistant");
+    assert_eq!(msgs[1]["tool_calls"][0]["id"], "c1");
+    assert_eq!(msgs[1]["reasoning_details"][0]["data"], "abc");
+    assert_eq!(msgs[1]["reasoning_details"][0]["id"], "r1");
+    // Another model never gets them, and neither does xAI.
+    let other = providers::openai_body("google/gemini-3-pro", None, &req);
+    assert!(
+        other["messages"][1].get("reasoning_details").is_none(),
+        "{other}"
+    );
+    let xai = responses_body(&ResponsesRequest {
+        model: "x-ai/grok-4.3".into(),
+        ..req.clone()
+    });
+    let wire = xai["input"].to_string();
+    assert!(!wire.contains("reasoning_details"), "{wire}");
+    assert!(!wire.contains("abc"), "{wire}");
+}
+
+// ---- OpenRouter picks: its Models API, the request fields, provider health ----
+
+/// Shaped like OpenRouter's `GET /api/v1/models`.
+const OR_FIXTURE: &str =
+    include_str!("../../../grokhub-core/tests/fixtures/openrouter_models.json");
+
+/// The fixture listing as a refresh reads it: no xAI, no sign-in.
+fn or_fleet() -> Registry {
+    let mut rows =
+        grokhub_core::model_registry::parse_openai_compatible_catalog("openrouter", OR_FIXTURE)
+            .unwrap();
+    providers::openrouter_efforts(&mut rows);
+    let mut reg = Registry::default();
+    reg.apply_refresh(&[Listing::new(SourceKind::OpenAiCompatible, rows)], &[], 1);
+    reg
+}
+
+fn pickable(reg: &Registry, need: &providers::PickNeed) -> Vec<String> {
+    reg.models
+        .iter()
+        .filter(|(id, r)| r.state.routable() && providers::auto_pickable(id, &r.meta, need))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+#[test]
+fn auto_picks_openrouter_models_from_its_listing_never_its_router() {
+    let reg = or_fleet();
+    assert_eq!(
+        reg.get("openrouter/vendor/retiring").map(|r| r.state),
+        Some(ModelState::Retired),
+        "a dated expiration_date takes it out of routing"
+    );
+    // OpenRouter's unified levels for a model that names `reasoning` and no
+    // list of its own; a list it names stays; none for one that doesn't reason.
+    let efforts = |id: &str| reg.get(id).and_then(|r| r.meta.efforts.clone());
+    assert_eq!(
+        efforts("openrouter/vendor/agent-lite"),
+        Some(
+            ["none", "minimal", "low", "medium", "high", "xhigh"]
+                .map(String::from)
+                .to_vec()
+        )
+    );
+    assert_eq!(
+        efforts("openrouter/vendor/agent-pro"),
+        Some(["low", "medium", "high"].map(String::from).to_vec())
+    );
+    assert_eq!(efforts("openrouter/vendor/tools-only"), None);
+    let need = |tools, reasoning, ctx_tokens| providers::PickNeed {
+        tools,
+        reasoning,
+        ctx_tokens,
+        ceiling_usd_per_m: 15.0,
+    };
+    // An agent lane that reasons: tools and reasoning, under $15/M, text out.
+    assert_eq!(
+        pickable(&reg, &need(true, true, 50_000)),
+        vec![
+            "openrouter/vendor/agent-lite",
+            "openrouter/vendor/agent-pro",
+            "openrouter/x-ai/grok-test"
+        ]
+    );
+    // A short prompt fits the 8k window too.
+    assert_eq!(
+        pickable(&reg, &need(true, true, 4_000)),
+        vec![
+            "openrouter/vendor/agent-lite",
+            "openrouter/vendor/agent-pro",
+            "openrouter/vendor/small-window",
+            "openrouter/x-ai/grok-test"
+        ]
+    );
+    // No tools, no reasoning: the chat-only and tools-only models join. The
+    // router, the image model, the $150/M one and the retiring one never do.
+    assert_eq!(
+        pickable(&reg, &need(false, false, 50_000)),
+        vec![
+            "openrouter/vendor/agent-lite",
+            "openrouter/vendor/agent-pro",
+            "openrouter/vendor/chat-only",
+            "openrouter/vendor/tools-only",
+            "openrouter/x-ai/grok-test"
+        ]
+    );
+    // Through the router: no sign-in, OpenRouter set up, an agent lane that
+    // reasons hard. The ranking takes the 400k model with its own effort list.
+    let table = RoutingTable::default();
+    let r = Router::choose(
+        &ask("debug", "grok-4.7", granted(&["openrouter"])),
+        &reg,
+        &none(),
+        &table,
+        NOW,
+    );
+    assert_eq!(
+        (r.provider.as_str(), r.model.as_str()),
+        ("openrouter", "openrouter/vendor/agent-pro"),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(
+        r.rule_ids.contains(&"provider:auto".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // Its router is never the pick, even ranked first by the table.
+    let r = Router::choose(
+        &ask("debug", "grok-4.7", granted(&["openrouter"])),
+        &reg,
+        &none(),
+        &table_with("debug", "openrouter/openrouter/auto"),
+        NOW,
+    );
+    assert_ne!(r.model, "openrouter/openrouter/auto", "{:?}", r.rule_ids);
+}
+
+/// Serves the fixture listing and a reply that names the model that answered.
+#[derive(Default)]
+struct FixtureWire {
+    reply: Mutex<String>,
+    gets: Mutex<usize>,
+    posts: Mutex<Vec<String>>,
+}
+
+impl ProviderTransport for FixtureWire {
+    fn get(&self, _url: &str, _headers: &[(String, String)]) -> Result<HttpReply, String> {
+        *self.gets.lock().unwrap() += 1;
+        Ok(HttpReply {
+            status: 200,
+            body: OR_FIXTURE.into(),
+            headers: Vec::new(),
+        })
+    }
+    fn post(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String> {
+        self.posts.lock().unwrap().push(body.into());
+        Ok(HttpReply {
+            status: 200,
+            body: self.reply.lock().unwrap().clone(),
+            headers: Vec::new(),
+        })
+    }
+}
+
+fn fixture_setup(label: &str) -> (PathBuf, Arc<FixtureWire>) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(FixtureWire::default());
+    providers::use_transport_for(&dir, wire.clone());
+    (dir, wire)
+}
+
+#[test]
+fn openrouters_model_list_is_read_at_most_once_a_day() {
+    use grokhub_core::model_registry::probe::DAY_MS;
+    let (dir, wire) = fixture_setup("or-daily-list");
+    let p = add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    let g = grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let src = ProviderSource {
+        config_dir: dir.clone(),
+        provider: p.clone(),
+    };
+    let first = src.fetch_at(NOW).unwrap();
+    assert_eq!(first.models.len(), 10);
+    assert_eq!(
+        (*wire.gets.lock().unwrap(), read_egress(&dir).len()),
+        (1, 1)
+    );
+    // Within the day: the same list, and nothing sent (no request, no egress line).
+    let again = src.fetch_at(NOW + DAY_MS - 1).unwrap();
+    assert_eq!(again, first);
+    assert_eq!(
+        (*wire.gets.lock().unwrap(), read_egress(&dir).len()),
+        (1, 1)
+    );
+    // A day on: read again.
+    src.fetch_at(NOW + DAY_MS).unwrap();
+    assert_eq!(*wire.gets.lock().unwrap(), 2);
+    // Adding the provider again starts over: the next refresh reads it.
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    src.fetch_at(NOW + DAY_MS + 1).unwrap();
+    assert_eq!(*wire.gets.lock().unwrap(), 3);
+    // Revoked: the day's copy is no way around the grant.
+    assert_eq!(revoke_grant(&dir, &g.id), Ok(true));
+    let err = src.fetch_at(NOW + DAY_MS + 2).unwrap_err();
+    assert!(err.starts_with("openrouter: hard-class send"), "{err}");
+    assert_eq!(*wire.gets.lock().unwrap(), 3);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_backup_is_the_next_pick_from_the_same_filter() {
+    let reg = or_fleet();
+    let table = RoutingTable::default();
+    let need = |tools, reasoning, ctx_tokens| providers::PickNeed {
+        tools,
+        reasoning,
+        ctx_tokens,
+        ceiling_usd_per_m: 15.0,
+    };
+    let fit = |ctx_tokens| super::policy::Fit {
+        needs_tools: true,
+        ctx_tokens,
+        ..super::policy::Fit::default()
+    };
+    let backup = |primary: &str, n: &providers::PickNeed, ctx| {
+        providers::openrouter_backup(&reg, &none(), &table, "debug", primary, n, fit(ctx), NOW)
+    };
+    assert_eq!(
+        backup(
+            "openrouter/vendor/agent-lite",
+            &need(true, true, 50_000),
+            50_000
+        )
+        .as_deref(),
+        Some("openrouter/vendor/agent-pro")
+    );
+    // Only one model holds a 300k prompt: no backup.
+    assert_eq!(
+        backup(
+            "openrouter/vendor/agent-pro",
+            &need(true, true, 300_000),
+            300_000
+        ),
+        None
+    );
+}
+
+#[test]
+fn an_openrouter_call_sends_its_backup_session_and_deny_and_keeps_the_answering_model_out_of_the_chat(
+) {
+    let _routing = ROUTING_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let (dir, wire) = fixture_setup("or-call-picks");
+    save_registry(&dir, &or_fleet()).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    // The backup answered: the reply names it.
+    *wire.reply.lock().unwrap() = r#"{"model":"vendor/agent-pro","choices":[{"message":{"content":"done","reasoning_details":[{"type":"reasoning.encrypted","data":"abc","id":"r1","format":"openai-responses-v1","index":0}]}}]}"#.into();
+    let tool = json!({"type": "function", "name": "read_file", "description": "Read a file", "parameters": {"type": "object", "properties": {}}});
+    let req = ResponsesRequest {
+        tools: vec![tool],
+        ..hello()
+    };
+    let out = providers::call_model(
+        &dir,
+        "debug",
+        "openrouter/vendor/agent-lite",
+        Some("high"),
+        &req,
+        CALL_DATA,
+        "conv-1:9",
+        &CancelToken::new(),
+    )
+    .unwrap();
+    let body: serde_json::Value = serde_json::from_str(&wire.posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(body["model"], "vendor/agent-lite");
+    assert_eq!(
+        body["models"],
+        json!(["vendor/agent-lite", "vendor/agent-pro"])
+    );
+    assert_eq!(
+        body["provider"],
+        json!({"require_parameters": true, "data_collection": "deny"})
+    );
+    assert_eq!(body["session_id"], "36524fd8f6747fc2712506d01fee0e18");
+    assert_eq!(body["reasoning"], json!({"effort": "high"}));
+    // Which model answered never reaches the chat; its thinking goes back to it.
+    assert_eq!((out.text.as_str(), out.reasoning.as_str()), ("done", ""));
+    assert!(!out.text.contains("agent-pro"));
+    match &out.reasoning_items[..] {
+        [InputItem::Reasoning { model, .. }] => assert_eq!(model, "vendor/agent-pro"),
+        other => panic!("{other:?}"),
+    }
+    // A reply naming a model that wasn't sent is not believed.
+    *wire.reply.lock().unwrap() = r#"{"model":"other/model","choices":[{"message":{"content":"ok","reasoning_details":[{"type":"reasoning.text","text":"t"}]}}]}"#.into();
+    let out = providers::call_model(
+        &dir,
+        "debug",
+        "openrouter/vendor/agent-lite",
+        Some("high"),
+        &req,
+        CALL_DATA,
+        "conv-1:10",
+        &CancelToken::new(),
+    )
+    .unwrap();
+    match &out.reasoning_items[..] {
+        [InputItem::Reasoning { model, .. }] => assert_eq!(model, "vendor/agent-lite"),
+        other => panic!("{other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_chats_session_id_is_a_hash_of_its_id_never_its_text() {
+    assert_eq!(
+        providers::openrouter_session_id("conv-1").as_deref(),
+        Some("36524fd8f6747fc2712506d01fee0e18")
+    );
+    assert_eq!(
+        providers::openrouter_session_id(" or-chat-7 ").as_deref(),
+        Some("bed5f8094605e99e4ec7d0fd7a4e7dc4")
+    );
+    assert_eq!(providers::openrouter_session_id("  "), None);
+    // With no backup and no conversation, only the provider field is added.
+    let mut b = json!({"model": "vendor/a"});
+    providers::apply_openrouter_picks(&mut b, None, "");
+    assert_eq!(b, json!({"model": "vendor/a"}));
+}
+
+/// A clock late enough for marks hours old.
+const HNOW: u64 = 10 * 60 * 60 * 1000;
+
+/// Two OpenAI-compatible providers set up, each with one reasoning model
+/// under the ceiling; `marks` are OpenRouter's model's recent calls.
+fn two_providers(label: &str, or_marks: &[(u64, bool, bool, u64)]) -> PathBuf {
+    use grokhub_core::model_registry::record::CallMark;
+    let (dir, _wire) = setup(label);
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    add_provider(&dir, "https://api.groq.com/openai/v1", KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    grant_destination(&dir, "api.groq.com", CALL_DATA, UserClick::from_click()).unwrap();
+    let row = |id: &str| ModelMeta {
+        id: id.into(),
+        context_length: Some(128_000),
+        prices: Prices {
+            prompt: Some(1_000),
+            completion: Some(5_000),
+            ..Prices::default()
+        },
+        tool_calling: Some(true),
+        reasoning: Some(true),
+        efforts: Some(vec!["low".into(), "high".into()]),
+        output_modalities: Some(vec!["text".into()]),
+        ..ModelMeta::default()
+    };
+    let mut reg = Registry::default();
+    reg.apply_refresh(
+        &[Listing::new(
+            SourceKind::OpenAiCompatible,
+            vec![row("openrouter/x-ai/grok-test"), row("groq/vendor/fast")],
+        )],
+        &[],
+        1,
+    );
+    let rec = reg.models.get_mut("openrouter/x-ai/grok-test").unwrap();
+    for &(ago, ok, pressure, latency_ms) in or_marks {
+        rec.health.recent.push_back(CallMark {
+            ts_ms: HNOW - ago,
+            ok,
+            pressure,
+            latency_ms,
+        });
+    }
+    let groq = reg.models.get_mut("groq/vendor/fast").unwrap();
+    groq.health.recent.push_back(CallMark {
+        ts_ms: HNOW - 100,
+        ok: true,
+        pressure: false,
+        latency_ms: 1_000,
+    });
+    save_registry(&dir, &reg).unwrap();
+    dir
+}
+
+fn stand_in(dir: &Path) -> Option<String> {
+    let call = live::RouteCall {
+        provider: "xai",
+        class: "chat:default",
+        model: "grok-4.7",
+        ..live::RouteCall::default()
+    };
+    live::outage_stand_in(dir, &call, HNOW)
+}
+
+#[test]
+fn a_busy_or_slow_provider_stands_in_after_a_healthy_one() {
+    // Healthy: Grok on OpenRouter goes first, so the reply keeps its voice.
+    let dir = two_providers("health-ok", &[(200, true, false, 1_500)]);
+    assert_eq!(stand_in(&dir).as_deref(), Some("openrouter/x-ai/grok-test"));
+    let _ = std::fs::remove_dir_all(dir);
+    // Three of its last five calls answered 429: the other provider goes first.
+    let busy = [
+        (500, false, true, 0),
+        (400, false, true, 0),
+        (300, false, true, 0),
+        (200, true, false, 1_000),
+        (100, true, false, 1_000),
+    ];
+    let dir = two_providers("health-busy", &busy);
+    assert_eq!(stand_in(&dir).as_deref(), Some("groq/vendor/fast"));
+    let _ = std::fs::remove_dir_all(dir);
+    // Over twice as slow as the other provider lately: after it too.
+    let dir = two_providers(
+        "health-slow",
+        &[(300, true, false, 2_500), (200, true, false, 2_500)],
+    );
+    assert_eq!(stand_in(&dir).as_deref(), Some("groq/vendor/fast"));
+    let _ = std::fs::remove_dir_all(dir);
+    // A batched call's queueing (0, no sample) teaches nothing, and an hour-old
+    // busy spell is over.
+    let old_and_queued = [
+        (2 * 60 * 60 * 1000, false, true, 0),
+        (2 * 60 * 60 * 1000 - 1, false, true, 0),
+        (2 * 60 * 60 * 1000 - 2, false, true, 0),
+        (2 * 60 * 60 * 1000 - 3, false, true, 0),
+        (2 * 60 * 60 * 1000 - 4, false, true, 0),
+        (100, true, false, 0),
+    ];
+    let dir = two_providers("health-queued", &old_and_queued);
+    assert_eq!(stand_in(&dir).as_deref(), Some("openrouter/x-ai/grok-test"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_openrouter_long_context_step_reaches_the_ceiling_and_the_cost() {
+    // Base $10/M out, $15/M past 200,000 prompt tokens (OpenRouter's
+    // `pricing.overrides`), read the way a refresh reads the listing.
+    let body = r#"{"data":[{"id":"vendor/long-ctx","context_length":1000000,
+        "supported_parameters":["tools","reasoning"],
+        "architecture":{"output_modalities":["text"]},
+        "pricing":{"prompt":"0.00000125","completion":"0.00001",
+          "overrides":[{"min_prompt_tokens":200000,"prompt":"0.0000025","completion":"0.000015"}]}}]}"#;
+    let rows =
+        grokhub_core::model_registry::parse_openai_compatible_catalog("openrouter", body).unwrap();
+    let meta = &rows[0];
+    let need = |ctx_tokens| providers::PickNeed {
+        tools: true,
+        reasoning: true,
+        ctx_tokens,
+        ceiling_usd_per_m: 12.0,
+    };
+    let id = "openrouter/vendor/long-ctx";
+    assert!(providers::auto_pickable(id, meta, &need(200_000)));
+    assert!(
+        !providers::auto_pickable(id, meta, &need(200_001)),
+        "past the step its $15/M output is over a $12/M ceiling"
+    );
+    // chat:default predicts 600 tokens out; no cache price is listed, so
+    // cached tokens pay the prompt rate.
+    let cost = |ctx| super::policy::expected_cost_usd(&meta.prices, "chat:default", ctx).unwrap();
+    assert_eq!(
+        (cost(200_000) * 1e8).round() / 1e8,
+        0.256,
+        "200,000 in at $1.25/M and 600 out at $10/M"
+    );
+    assert_eq!(
+        (cost(200_001) * 1e8).round() / 1e8,
+        0.5090025,
+        "every token at the long rates: $2.50/M in, $15/M out"
+    );
+}
+
+#[test]
+fn a_claude_row_becomes_auto_pickable_once_the_bundled_table_prices_it() {
+    // Anthropic's own listing names no prices, so before the model card
+    // table the row could never enter Auto's pool.
+    let body = r#"{"data":[{"id":"claude-sonnet-5.5","type":"model","display_name":"Sonnet",
+        "max_input_tokens":1000000,"max_tokens":128000,
+        "capabilities":{"effort":{"levels":["low","medium","high"]}}}]}"#;
+    let rows = grokhub_core::model_registry::parse_anthropic_catalog("anthropic", body).unwrap();
+    let need = providers::PickNeed {
+        tools: true,
+        reasoning: true,
+        ctx_tokens: 10_000,
+        ceiling_usd_per_m: 15.0,
+    };
+    assert!(
+        !providers::auto_pickable("anthropic/claude-sonnet-5.5", &rows[0], &need),
+        "no prices in the listing: never pickable"
+    );
+    let mut reg = Registry::default();
+    reg.apply_refresh(&[Listing::new(SourceKind::Anthropic, rows)], &[], 1);
+    let rec = reg.get("anthropic/claude-sonnet-5.5").unwrap();
+    assert_eq!(rec.route(), grokhub_core::model_registry::Route::Anthropic);
+    // The bundled table priced it ($10/M out, under the $15 ceiling) and
+    // filled its window, so the same filter now lets it in.
+    assert!(providers::auto_pickable(
+        "anthropic/claude-sonnet-5.5",
+        &rec.meta,
+        &need
+    ));
+    assert_eq!(rec.meta.prices.cache_write, Some(25_000));
+}
+
+/// A wire that answers every call 402: the account is out of credit.
+#[derive(Default)]
+struct BrokeWire(Mutex<Vec<Sent>>);
+
+impl BrokeWire {
+    fn calls(&self) -> usize {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(url, _, _)| url.contains("chat/completions"))
+            .count()
+    }
+}
+
+impl ProviderTransport for BrokeWire {
+    fn get(&self, url: &str, headers: &[(String, String)]) -> Result<HttpReply, String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((url.into(), headers.to_vec(), String::new()));
+        Ok(HttpReply {
+            status: 200,
+            body: OR_LIST.into(),
+            headers: Vec::new(),
+        })
+    }
+    fn post(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((url.into(), headers.to_vec(), body.into()));
+        Ok(HttpReply {
+            status: 402,
+            body: r#"{"error":{"message":"Insufficient credits"}}"#.into(),
+            headers: Vec::new(),
+        })
+    }
+}
+
+/// Grok answers, and remembers the model it was asked for.
+struct GrokOk(Mutex<String>);
+
+impl ModelClient for GrokOk {
+    fn stream(
+        &self,
+        r: &ResponsesRequest,
+        _c: &CancelToken,
+        s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        *self.0.lock().unwrap() = r.model.clone();
+        s(StreamEvent::TextDelta("hello from grok".into()));
+        Ok(TurnOutput {
+            text: "hello from grok".into(),
+            ..TurnOutput::default()
+        })
+    }
+}
+
+#[test]
+fn a_provider_out_of_credit_cools_it_and_grok_takes_the_turn() {
+    let dir = test_dir("r3b-402-fallback");
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(BrokeWire::default());
+    providers::use_transport_for(&dir, wire.clone());
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    rank_first(&dir, OR_MODEL);
+    let grok = GrokOk(Mutex::new(String::new()));
+    let mut shown = String::new();
+    let out = live::stream_routed(
+        &grok,
+        &chat("chat-402", &["say hello"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    )
+    .expect("Grok takes the turn the provider couldn't pay for");
+    assert_eq!(out.text, "hello from grok");
+    assert_eq!(shown, "hello from grok");
+    assert_eq!(grok.0.lock().unwrap().as_str(), "grok-4.7");
+    // The provider was tried once, then cooled: the next pick skips it.
+    assert_eq!(wire.calls(), 1);
+    let now = grokhub_core::now_ms();
+    assert!(live::cooling(&dir, OR_MODEL, now));
+    // Out of credit doesn't clear in a minute: an hour on it is still skipped,
+    // and so is every other paid model on the same account. Its free models,
+    // and another provider's, still answer.
+    let later = now + 60 * 60_000;
+    assert!(live::cooling(&dir, OR_MODEL, later));
+    assert!(live::cooling(&dir, "openrouter/other/paid", later));
+    assert!(!live::cooling(&dir, "openrouter/other/model:free", later));
+    assert!(!live::cooling(&dir, AN_MODEL, later));
+    // The route record names Grok as the route that answered.
+    let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES)
+        .pop()
+        .expect("a route record");
+    assert_eq!(
+        (rec.used.provider.as_str(), rec.used.model.as_str()),
+        ("xai", "grok-4.7")
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A provider out of credit on small talk: Grok answers with no word about
+/// the switch. On a work turn the one plain line still shows.
+#[test]
+fn the_switch_line_shows_on_work_turns_and_never_on_small_talk() {
+    let thought_for = |label: &str, ask: &str| {
+        let dir = test_dir(label);
+        providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+        providers::use_transport_for(&dir, Arc::new(BrokeWire::default()));
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        save_registry(&dir, &fleet()).unwrap();
+        add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+        grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+        rank_first(&dir, OR_MODEL);
+        let grok = GrokOk(Mutex::new(String::new()));
+        let (mut shown, mut thought) = (String::new(), String::new());
+        live::stream_routed(
+            &grok,
+            &chat(label, &[ask]),
+            &CancelToken::new(),
+            &mut |ev| match ev {
+                StreamEvent::TextDelta(t) => shown.push_str(&t),
+                StreamEvent::ReasoningDelta(t) => thought.push_str(&t),
+                StreamEvent::RateWait(_) => {}
+            },
+            "chat:default",
+        )
+        .expect("Grok takes the turn");
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(shown, "hello from grok");
+        thought
+    };
+    assert_eq!(
+        thought_for("r3b-switch-work", "fix my wifi"),
+        "The model I was using ran out of credit, so I'm carrying on with another one — the work so far is kept."
+    );
+    assert_eq!(
+        thought_for("r3b-switch-casual", "haha how was your day?"),
+        ""
+    );
+}
+
+#[test]
+fn provider_fallible_covers_limits_credit_and_outages_only() {
+    let fallible = [
+        ClientError::RateLimited {
+            retry_after_secs: None,
+            message: "slow down".into(),
+        },
+        ClientError::PaymentRequired {
+            status: 402,
+            message: "Insufficient credits".into(),
+        },
+        ClientError::Server {
+            status: 502,
+            message: "bad gateway".into(),
+            retry_after_secs: None,
+        },
+        ClientError::Auth {
+            status: 401,
+            message: "bad key".into(),
+        },
+        ClientError::Transport("connection reset".into()),
+        ClientError::Disconnect,
+        ClientError::IdleTimeout,
+        // OpenRouter's privacy settings left the model no endpoint.
+        ClientError::Protocol(providers::POLICY_REFUSED.into()),
+    ];
+    for err in &fallible {
+        assert!(live::provider_fallible(err), "{err:?}");
+    }
+    let not_fallible = [
+        ClientError::Cancelled,
+        // A refusal about the prompt: the next route would refuse it too.
+        ClientError::Protocol("Blocked by content safety".into()),
+        // Too long for this model is the run loop's compaction retry, and
+        // the app's own offline mode blocks every cloud route alike.
+        ClientError::Protocol("HTTP 400: maximum context length exceeded".into()),
+        ClientError::Transport(
+            "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this."
+                .into(),
+        ),
+    ];
+    for err in &not_fallible {
+        assert!(!live::provider_fallible(err), "{err:?}");
+    }
+}
+
+/// Failover step 9: a wire that answers every POST with one canned
+/// status and body, and keeps what it was sent.
+struct ProbeWire {
+    status: u16,
+    body: String,
+    sent: Mutex<Vec<String>>,
+}
+
+impl ProviderTransport for ProbeWire {
+    fn get(&self, _url: &str, _headers: &[(String, String)]) -> Result<HttpReply, String> {
+        Ok(HttpReply {
+            status: 200,
+            body: OR_LIST.into(),
+            headers: Vec::new(),
+        })
+    }
+    fn post(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String> {
+        self.sent.lock().unwrap().push(body.into());
+        Ok(HttpReply {
+            status: self.status,
+            body: self.body.clone(),
+            headers: Vec::new(),
+        })
+    }
+}
+
+const TRIAL_MODEL: &str = "openrouter/vendor/new:free";
+
+/// A granted OpenRouter key, a registry with one free model on tryout
+/// (saved, as the send path reads it) and the canned wire.
+fn probe_setup(label: &str, status: u16, body: &str) -> (PathBuf, Arc<ProbeWire>, Registry) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(ProbeWire {
+        status,
+        body: body.into(),
+        sent: Mutex::new(Vec::new()),
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let or = |ids: &[&str]| {
+        Listing::new(
+            SourceKind::OpenAiCompatible,
+            ids.iter().map(|id| ModelMeta::bare(id)).collect(),
+        )
+    };
+    let mut reg = Registry::default();
+    reg.apply_refresh(&[or(&["openrouter/vendor/old:free"])], &[], NOW);
+    reg.apply_refresh(
+        &[or(&["openrouter/vendor/old:free", TRIAL_MODEL])],
+        &[],
+        NOW,
+    );
+    assert!(reg.get(TRIAL_MODEL).is_some_and(|r| r.probation.is_some()));
+    save_registry(&dir, &reg).unwrap();
+    (dir, wire, reg)
+}
+
+fn tally(reg: &Registry) -> (u32, u32, u32) {
+    let p = reg.get(TRIAL_MODEL).unwrap().probation.clone().unwrap();
+    (p.calls, p.ok, p.probes)
+}
+
+#[test]
+fn a_tryout_probe_counts_a_tool_call_that_answers_and_one_that_does_not() {
+    let call = r#"{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"record_number","arguments":"{\"n\":7}"}}]}}]}"#;
+    let (dir, wire, mut reg) = probe_setup("trial-probe-pass", 200, call);
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW), 1);
+    assert_eq!(tally(&reg), (1, 1, 1));
+    // The probe goes as the model's own answer: no backup, a small cap, the tool.
+    let sent: serde_json::Value = serde_json::from_str(&wire.sent.lock().unwrap()[0]).unwrap();
+    assert!(sent.get("models").is_none(), "{sent}");
+    assert_eq!(sent["max_tokens"], json!(512));
+    assert!(sent.to_string().contains("record_number"));
+    // The second of the day is the text probe; a third waits for tomorrow.
+    super::trial::run_probes(&dir, &mut reg, NOW + 1);
+    assert_eq!(tally(&reg), (2, 1, 2));
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW + 2), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_limit_on_a_probe_counts_against_the_account_not_the_model() {
+    let (dir, wire, mut reg) = probe_setup(
+        "trial-probe-limit",
+        429,
+        r#"{"error":{"code":429,"message":"Rate limit exceeded: free-models-per-day"}}"#,
+    );
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW), 1);
+    assert_eq!(tally(&reg), (0, 0, 0));
+    assert_eq!(wire.sent.lock().unwrap().len(), 1);
+    // A server error is the model's.
+    let (dir2, _wire, mut reg2) = probe_setup("trial-probe-502", 502, r#"{"error":{"code":502}}"#);
+    super::trial::run_probes(&dir2, &mut reg2, NOW);
+    assert_eq!(tally(&reg2), (1, 0, 1));
+    for d in [dir, dir2] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[test]
+fn no_grant_means_no_probe() {
+    let dir = test_dir("trial-probe-nogrant");
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(ProbeWire {
+        status: 200,
+        body: OR_REPLY.into(),
+        sent: Mutex::new(Vec::new()),
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    let or = |ids: &[&str]| {
+        Listing::new(
+            SourceKind::OpenAiCompatible,
+            ids.iter().map(|id| ModelMeta::bare(id)).collect(),
+        )
+    };
+    let mut reg = Registry::default();
+    reg.apply_refresh(&[or(&["openrouter/vendor/old:free"])], &[], NOW);
+    reg.apply_refresh(
+        &[or(&["openrouter/vendor/old:free", TRIAL_MODEL])],
+        &[],
+        NOW,
+    );
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW), 0);
+    assert!(wire.sent.lock().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The connection check's wire: a listing answer and a reply answer.
+struct CheckWire {
+    list_status: u16,
+    reply_body: String,
+    posts: Mutex<u32>,
+}
+
+impl ProviderTransport for CheckWire {
+    fn get(&self, _url: &str, _headers: &[(String, String)]) -> Result<HttpReply, String> {
+        Ok(HttpReply {
+            status: self.list_status,
+            body: if self.list_status == 200 {
+                OR_LIST.into()
+            } else {
+                r#"{"error":{"code":401,"message":"No auth credentials found"}}"#.into()
+            },
+            headers: Vec::new(),
+        })
+    }
+    fn post(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        _body: &str,
+    ) -> Result<HttpReply, String> {
+        *self.posts.lock().unwrap() += 1;
+        Ok(HttpReply {
+            status: 200,
+            body: self.reply_body.clone(),
+            headers: Vec::new(),
+        })
+    }
+}
+
+fn check_setup(label: &str, list_status: u16, grant: bool) -> (PathBuf, Arc<CheckWire>) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(CheckWire {
+        list_status,
+        reply_body: r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Ready"}}]}"#.into(),
+        posts: Mutex::new(0),
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    if grant {
+        grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    }
+    let mut reg = Registry::default();
+    reg.apply_refresh(
+        &[Listing::new(
+            SourceKind::OpenAiCompatible,
+            vec![ModelMeta::bare("openrouter/vendor/cheap")],
+        )],
+        &[],
+        NOW,
+    );
+    save_registry(&dir, &reg).unwrap();
+    (dir, wire)
+}
+
+#[test]
+fn the_connection_check_asks_the_wire_and_reports_what_it_said() {
+    use super::check::{self, Wire};
+    // Allowed: the key lists models and the cheapest one says the word.
+    let (dir, wire) = check_setup("check-ready", 200, true);
+    let c = check::run(&dir, true, NOW);
+    let p = &c.providers[0];
+    assert_eq!(p.name, "OpenRouter");
+    assert_eq!(p.listing, Some(Wire::Listed(1)));
+    assert!(matches!(p.reply, Some(Wire::Replied(_))), "{:?}", p.reply);
+    assert_eq!(*wire.posts.lock().unwrap(), 1);
+    assert!(check::report(&c, false).contains("Auto can use it."));
+    // Saved settings only: nothing goes out.
+    let quiet = check::run(&dir, false, NOW);
+    assert_eq!(
+        (
+            quiet.providers[0].listing.clone(),
+            quiet.providers[0].reply.clone()
+        ),
+        (None, None)
+    );
+    assert_eq!(*wire.posts.lock().unwrap(), 1);
+    // Not allowed yet: nothing goes out, and the report says why.
+    let (dir2, wire2) = check_setup("check-ungranted", 200, false);
+    let c2 = check::run(&dir2, true, NOW);
+    assert_eq!(
+        (
+            c2.providers[0].listing.clone(),
+            c2.providers[0].reply.clone()
+        ),
+        (None, None)
+    );
+    assert_eq!(*wire2.posts.lock().unwrap(), 0);
+    assert!(check::report(&c2, false).contains("not allowed yet"));
+    // A rejected key says so, and no reply is tried.
+    let (dir3, wire3) = check_setup("check-badkey", 401, true);
+    let c3 = check::run(&dir3, true, NOW);
+    assert_eq!(c3.providers[0].listing, Some(Wire::KeyRejected));
+    assert_eq!(*wire3.posts.lock().unwrap(), 0);
+    let r3 = check::report(&c3, false);
+    assert!(
+        r3.contains("rejected the saved key") && !r3.contains("Auto can use it"),
+        "{r3}"
+    );
+    for d in [dir, dir2, dir3] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+// ---- The keyring and the saved list, read with care ---------------------------
+
+/// A keyring that fails the calls it is told to and otherwise keeps keys in memory.
+#[derive(Default)]
+struct ShakyVault {
+    keys: MemoryVault,
+    /// How many reads fail before one answers.
+    failed_reads: Mutex<u32>,
+    /// How many times the keyring was read.
+    reads: Mutex<u32>,
+    set_fails: bool,
+    delete_fails: bool,
+}
+
+impl providers::KeyVault for ShakyVault {
+    fn get(&self, id: &str) -> Result<Option<zeroize::Zeroizing<String>>, String> {
+        *self.reads.lock().unwrap() += 1;
+        let mut left = self.failed_reads.lock().unwrap();
+        if *left > 0 {
+            *left -= 1;
+            return Err("the keyring is locked".into());
+        }
+        self.keys.get(id)
+    }
+
+    fn set(&self, id: &str, key: &str) -> Result<(), String> {
+        if self.set_fails {
+            return Err("No default store has been set, so cannot search or create entries".into());
+        }
+        self.keys.set(id, key)
+    }
+
+    fn delete(&self, id: &str) -> Result<(), String> {
+        if self.delete_fails {
+            return Err("no secret service".into());
+        }
+        self.keys.delete(id)
+    }
+}
+
+#[test]
+fn a_keyring_read_that_failed_is_asked_again_and_not_remembered_as_no_key() {
+    use providers::KeyVault;
+    use std::time::{Duration, Instant};
+    let dir = test_dir("r3b-key-reread");
+    let vault = Arc::new(ShakyVault {
+        failed_reads: Mutex::new(1),
+        ..ShakyVault::default()
+    });
+    vault.keys.set("openrouter", KEY).unwrap();
+    providers::use_vault_for(&dir, vault.clone());
+    let start = Instant::now();
+    assert!(
+        !providers::has_key_at(&dir, "openrouter", start),
+        "the keyring could not be read"
+    );
+    // A page that repaints many times a second does not ask a failing keyring each time.
+    assert!(!providers::has_key_at(
+        &dir,
+        "openrouter",
+        start + Duration::from_secs(4)
+    ));
+    assert_eq!(*vault.reads.lock().unwrap(), 1);
+    assert_eq!(providers::KEY_RETRY, Duration::from_secs(5));
+    assert!(
+        providers::has_key_at(&dir, "openrouter", start + providers::KEY_RETRY),
+        "the keyring is asked again"
+    );
+    // An answer the keyring gave is remembered.
+    assert!(providers::has_key(&dir, "openrouter"));
+    assert_eq!(*vault.reads.lock().unwrap(), 2);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_keyring_installed_after_the_first_ask_finds_the_saved_key() {
+    use providers::KeyVault;
+    let dir = test_dir("r3b-key-late-vault");
+    assert!(
+        !providers::has_key(&dir, "openrouter"),
+        "no keyring yet: no key"
+    );
+    let vault = MemoryVault::default();
+    vault.set("openrouter", KEY).unwrap();
+    providers::use_default_vault(Some(Arc::new(vault)));
+    let found = providers::has_key(&dir, "openrouter");
+    // A vault that answered "no key" is remembered until a new one is installed.
+    providers::use_default_vault(Some(Arc::new(MemoryVault::default())));
+    let gone = providers::has_key(&dir, "openrouter");
+    let late = MemoryVault::default();
+    late.set("openrouter", KEY).unwrap();
+    providers::use_default_vault(Some(Arc::new(late)));
+    let back = providers::has_key(&dir, "openrouter");
+    providers::use_default_vault(None);
+    assert_eq!((found, gone, back), (true, false, true));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Add `https://models.example.org/v1` with a key, then edit its address in the saved file by hand.
+fn moved_provider(label: &str, granted: &str, address: &str) -> PathBuf {
+    let (dir, _wire) = setup(label);
+    add_provider(&dir, "https://models.example.org/v1", KEY, NOW).unwrap();
+    grant_destination(&dir, granted, CALL_DATA, UserClick::from_click()).unwrap();
+    let path = providers::providers_path(&dir);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(raw.matches("https://models.example.org/v1").count(), 1);
+    std::fs::write(&path, raw.replace("https://models.example.org/v1", address)).unwrap();
+    dir
+}
+
+#[test]
+fn a_saved_provider_moved_to_plain_http_is_not_loaded_and_gets_no_key() {
+    let dir = moved_provider(
+        "r3b-moved-http",
+        "models.example.org",
+        "http://models.example.org/v1",
+    );
+    assert_eq!(providers::load_providers(&dir), Vec::new());
+    assert_eq!(usable(&dir, CALL_DATA), Vec::<String>::new());
+    assert!(providers::sources(&dir).is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_saved_provider_moved_to_another_host_is_not_loaded_and_gets_no_key() {
+    let dir = moved_provider(
+        "r3b-moved-host",
+        "other.example.net",
+        "https://other.example.net/v1",
+    );
+    assert_eq!(providers::load_providers(&dir), Vec::new());
+    assert_eq!(usable(&dir, CALL_DATA), Vec::<String>::new());
+    assert!(providers::sources(&dir).is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_untouched_saved_provider_still_loads() {
+    let (dir, _wire) = setup("r3b-saved-loads");
+    let p = add_provider(&dir, "https://models.example.org/v1/", KEY, NOW).unwrap();
+    assert_eq!(p.base_url, "https://models.example.org/v1");
+    assert_eq!(providers::load_providers(&dir), vec![p]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn removing_a_provider_that_was_never_added_says_so_and_reaches_no_other_file() {
+    let (dir, _wire) = setup("r3b-remove-unknown");
+    assert_eq!(
+        providers::remove_provider(&dir, "nope").unwrap_err(),
+        "That provider isn't added."
+    );
+    // An id shaped like a path: `models/listing-x/../../app.json` is the settings file.
+    std::fs::create_dir_all(dir.join("models").join("listing-x")).unwrap();
+    std::fs::write(dir.join("app.json"), "{}").unwrap();
+    assert_eq!(
+        providers::remove_provider(&dir, "x/../../app").unwrap_err(),
+        "That provider isn't added."
+    );
+    assert_eq!(std::fs::read_to_string(dir.join("app.json")).unwrap(), "{}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn removing_with_the_keyring_down_keeps_the_provider_and_says_why() {
+    let dir = test_dir("r3b-remove-keyring-down");
+    providers::use_vault_for(
+        &dir,
+        Arc::new(ShakyVault {
+            delete_fails: true,
+            ..ShakyVault::default()
+        }),
+    );
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    assert_eq!(
+        providers::remove_provider(&dir, "openrouter").unwrap_err(),
+        "The keyring isn't available, so openrouter wasn't removed. Try again when it is."
+    );
+    assert_eq!(providers::load_providers(&dir).len(), 1);
+    assert!(providers::has_key(&dir, "openrouter"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_keyring_that_refuses_the_key_says_so_in_plain_words_and_saves_no_provider() {
+    let dir = test_dir("r3b-add-keyring-off");
+    providers::use_vault_for(
+        &dir,
+        Arc::new(ShakyVault {
+            set_fails: true,
+            ..ShakyVault::default()
+        }),
+    );
+    assert_eq!(
+        add_provider(&dir, OR_URL, KEY, NOW).unwrap_err(),
+        "The keyring isn't available, so the key wasn't saved."
+    );
+    assert!(!providers::providers_path(&dir).exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A row the loader skips (its address was edited by hand) is not shown or
+/// used, but it stays in the file through another provider's add and remove,
+/// and it can still be removed together with its key.
+#[test]
+fn a_skipped_provider_stays_in_the_file_and_can_still_be_removed_with_its_key() {
+    let dir = moved_provider(
+        "r3b-skipped-kept",
+        "models.example.org",
+        "http://models.example.org/v1",
+    );
+    let rows = |dir: &Path| -> Vec<String> {
+        let raw = std::fs::read_to_string(providers::providers_path(dir)).unwrap();
+        let file: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        file["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                format!(
+                    "{} {}",
+                    p["id"].as_str().unwrap(),
+                    p["base_url"].as_str().unwrap()
+                )
+            })
+            .collect()
+    };
+    let skipped = "models http://models.example.org/v1".to_string();
+    assert_eq!(providers::load_providers(&dir), Vec::new());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    assert_eq!(
+        rows(&dir),
+        vec![skipped.clone(), format!("openrouter {OR_URL}")]
+    );
+    providers::remove_provider(&dir, "openrouter").unwrap();
+    assert_eq!(rows(&dir), vec![skipped]);
+    // Still hidden and unused, and its key is still in the keyring.
+    assert_eq!(providers::load_providers(&dir), Vec::new());
+    assert!(providers::has_key(&dir, "models"));
+    assert_eq!(providers::remove_provider(&dir, "models"), Ok(()));
+    assert_eq!(rows(&dir), Vec::<String>::new());
+    assert!(!providers::has_key(&dir, "models"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A hand-written row whose id is not one an address gives (a path) is never
+/// removed by that id: the id would name a file.
+#[test]
+fn a_saved_row_with_a_path_for_an_id_is_not_removed_by_it() {
+    let (dir, _wire) = setup("r3b-skipped-path-id");
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    let path = providers::providers_path(&dir);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(raw.matches("\"openrouter\"").count(), 1);
+    std::fs::write(&path, raw.replace("\"openrouter\"", "\"x/../../app\"")).unwrap();
+    std::fs::create_dir_all(dir.join("models").join("listing-x")).unwrap();
+    std::fs::write(dir.join("app.json"), "{}").unwrap();
+    assert_eq!(
+        providers::remove_provider(&dir, "x/../../app").unwrap_err(),
+        "That provider isn't added."
+    );
+    assert_eq!(std::fs::read_to_string(dir.join("app.json")).unwrap(), "{}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A rate limit cools for five minutes, or for as long as the provider asked;
+/// it stays on the one model. Any other fault keeps the one-minute cool.
+#[test]
+fn a_rate_limit_cools_for_minutes_and_an_outage_for_one() {
+    let dir = test_dir("r3b-limit-cool");
+    let limited = ClientError::RateLimited {
+        retry_after_secs: None,
+        message: "slow down".into(),
+    };
+    live::cool_down_for(&dir, "openrouter/a/b", &limited, NOW);
+    assert!(live::cooling(&dir, "openrouter/a/b", NOW + 61_000));
+    assert!(!live::cooling(
+        &dir,
+        "openrouter/a/b",
+        NOW + live::LIMIT_COOL_MS
+    ));
+    assert!(!live::cooling(&dir, "openrouter/a/c", NOW + 1));
+    let wait = ClientError::RateLimited {
+        retry_after_secs: Some(900),
+        message: "slow down".into(),
+    };
+    live::cool_down_for(&dir, "anthropic/x", &wait, NOW);
+    assert!(live::cooling(&dir, "anthropic/x", NOW + 600_000));
+    assert!(!live::cooling(&dir, "anthropic/x", NOW + 900_000));
+    let down = ClientError::Server {
+        status: 503,
+        message: "overloaded".into(),
+        retry_after_secs: None,
+    };
+    live::cool_down_for(&dir, "anthropic/y", &down, NOW);
+    assert!(live::cooling(&dir, "anthropic/y", NOW + 59_000));
+    assert!(!live::cooling(&dir, "anthropic/y", NOW + 61_000));
     let _ = std::fs::remove_dir_all(dir);
 }

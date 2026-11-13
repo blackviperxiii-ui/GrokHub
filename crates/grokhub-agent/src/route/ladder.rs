@@ -183,7 +183,41 @@ pub struct Obs {
     pub budget_pct: Option<u8>,
     /// DE2: the rung this task's signature is known to succeed at ([`routine_rung`]).
     pub routine: Option<usize>,
+    /// A4 and E14: what the agent loop saw since the last call ([`note_tool_run`]).
+    pub stage: Stage,
+    /// A Flagship or high-stakes turn: no settling below the turn's start (DE1, A4).
+    pub keep_start: bool,
 }
+
+/// A4 and E14: the agent loop's own signals between two routed calls, typed.
+/// Built by [`note_tool_run`] and [`note_out_of_budget`]; a new turn starts empty.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Stage {
+    /// Every tool that ran since the last call was a read or a search and it
+    /// worked: the next step only digests tool output.
+    pub digest: bool,
+    /// The same tool failed twice in a row.
+    pub same_tool_failed: bool,
+    /// A tool ran again with the same arguments (a loop).
+    pub looped: bool,
+    /// A test or build run failed after an edit.
+    pub check_failed: bool,
+    /// [`EXPLORE_LIMIT`] reads or searches in this turn and no edit yet.
+    pub explored: bool,
+    /// An edit worked or a test or build run passed, and nothing failed.
+    pub progress: bool,
+    /// E14: the reasoning used up the output budget and left no answer.
+    pub out_of_budget: bool,
+}
+
+/// A4: read or search calls in one turn, with no edit, that count as a long exploration.
+pub const EXPLORE_LIMIT: u32 = 8;
+/// A4: steps in a row with a working edit or a passing check before effort settles one rung.
+pub const SETTLE_STREAK: u32 = 2;
+/// E15: failures at one rung before the episode moves to a stronger model.
+pub const NEXT_MODEL_AFTER: u32 = 2;
+/// E15: the rule that asks [`super::Router`] for a stronger model.
+pub const NEXT_MODEL: &str = "E15:next_model";
 
 /// One episode's effort in one class.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -199,6 +233,10 @@ pub struct EffortState {
     pub moved: Move,
     /// The user message this turn answers (a hash, never the text).
     pub turn: u64,
+    /// E15: failures seen at the current rung (a rung change starts it over).
+    pub fails: u32,
+    /// A4: steps in a row with a working edit or a passing check.
+    pub progress: u32,
 }
 
 /// The ladder's pick for one call.
@@ -284,19 +322,37 @@ pub fn advance_holding(
         },
     };
     st.moved = Move::Start;
+    let entry = st.rung;
     if fresh {
         rules.extend(start.1);
     }
+    // E15: a failure steps effort up first (same model, so the prompt cache
+    // holds). Only a second failure at a rung that can't climb asks for a
+    // stronger model.
     let up = |st: &mut EffortState, rules: &mut Vec<String>, id: &str| {
         st.clean = 0;
+        st.progress = 0;
         if st.rung < band.ceiling {
             st.rung += 1;
+            st.fails = 0;
             st.moved = Move::Up;
             rules.push(id.to_string());
         } else {
             rules.push(format!("{id}:ceiling"));
+            st.fails += 1;
+            if st.fails >= NEXT_MODEL_AFTER {
+                st.fails = 0;
+                rules.push(NEXT_MODEL.into());
+            }
         }
     };
+    // DE1 and A4 never settle a Flagship or high-stakes turn below its start.
+    let settle_floor = if obs.keep_start {
+        band.floor.max(start.0)
+    } else {
+        band.floor
+    };
+    let mut digest = false;
     let steered = rules.iter().any(|r| r.starts_with("steer:"));
     if let Some(r) = obs
         .routine
@@ -312,23 +368,36 @@ pub fn advance_holding(
             up(&mut st, &mut rules, "E3");
         }
         if !fresh {
-            if obs.tool_errors > 0 {
-                up(&mut st, &mut rules, "E1");
-            } else if st.last_ok {
-                st.clean += 1;
+            // One rung at most for the loop's trouble, named by its plainest cause.
+            let g = &obs.stage;
+            let trouble = [
+                (g.check_failed, "A4:check_failed"),
+                (g.same_tool_failed, "A4:same_tool"),
+                (g.looped, "A4:loop"),
+                (obs.tool_errors > 0, "E1"),
+                (g.explored, "A4:explore"),
+                (g.out_of_budget, "E14"),
+            ]
+            .into_iter()
+            .find_map(|(hit, id)| hit.then_some(id));
+            if let Some(id) = trouble {
+                up(&mut st, &mut rules, id);
             } else {
-                st.clean = 0;
+                if st.last_ok {
+                    st.clean += 1;
+                } else {
+                    st.clean = 0;
+                }
+                st.progress = if g.progress { st.progress + 1 } else { 0 };
+                // A step that only reads tool output thinks at low, for this call
+                // only, unless an escalation is in effect.
+                digest = g.digest && st.rung <= start.0;
             }
         }
         if let Some(n) = obs.rejects.filter(|n| *n > st.rejects) {
             st.rejects = n;
             st.hold = true;
-            let at_ceiling = st.rung >= band.ceiling;
             up(&mut st, &mut rules, "E2");
-            if n == 2 && at_ceiling {
-                // R2 moves to the next-stronger model here.
-                rules.push("E2:next_model".into());
-            }
             if n >= 3 {
                 rules.push("E2:recovery".into());
                 recover = true;
@@ -346,7 +415,15 @@ pub fn advance_holding(
         st.moved = Move::Up;
         rules.push("E5".into());
     }
-    if user && !hard && !st.hold && !hold_drops && st.clean >= 3 && st.rung > band.floor {
+    let settles = user && !hard && !st.hold && !hold_drops && st.rung > settle_floor;
+    if settles && st.progress >= SETTLE_STREAK {
+        // A4: edits that work and checks that pass settle effort one rung.
+        st.rung -= 1;
+        st.clean = 0;
+        st.progress = 0;
+        st.moved = Move::Down;
+        rules.push("A4:settle".into());
+    } else if settles && st.clean >= 3 {
         st.rung -= 1;
         st.clean = 0;
         st.moved = Move::Down;
@@ -367,12 +444,22 @@ pub fn advance_holding(
         }
     }
     st.rung = st.rung.clamp(band.floor, band.ceiling.max(band.floor));
-    let pick = Pick {
+    if st.rung != entry {
+        st.fails = 0;
+    }
+    let mut pick = Pick {
         rung: st.rung,
         moved: st.moved,
         rules,
         recover,
     };
+    let low = rung("low").unwrap_or(0).max(band.floor);
+    if digest && st.moved != Move::Up && !hard && !st.hold && !hold_drops && low < pick.rung {
+        // The saved rung stays: the next step that does more than read is back on it.
+        pick.rung = low;
+        pick.moved = Move::Down;
+        pick.rules.push("A4:digest".into());
+    }
     (st, pick)
 }
 
@@ -415,6 +502,173 @@ pub fn note_tool_error() {
 
 pub fn take_tool_errors() -> u32 {
     TOOL_ERRORS.with(|c| c.replace(0))
+}
+
+/// What one tool run was, for the A4 signals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    /// A read, a listing, a search or a web lookup.
+    Lookup,
+    /// A file write or edit.
+    Edit,
+    /// A shell command that runs tests or a build.
+    Check,
+    Other,
+}
+
+/// Shell commands that run tests or a build.
+const CHECKS: &[&str] = &[
+    "cargo test",
+    "cargo nextest",
+    "cargo build",
+    "cargo check",
+    "cargo clippy",
+    "npm test",
+    "npm run test",
+    "npm run build",
+    "pnpm test",
+    "pnpm build",
+    "yarn test",
+    "yarn build",
+    "npx tsc",
+    "tsc ",
+    "vitest",
+    "npx vitest",
+    "jest",
+    "npx jest",
+    "pytest",
+    "python -m pytest",
+    "go test",
+    "go build",
+    "mvn ",
+    "gradle",
+    "dotnet build",
+    "dotnet test",
+    "make ",
+    "ctest",
+];
+
+impl ToolKind {
+    pub fn of(name: &str, arguments: &str) -> Self {
+        match name {
+            "write" | "search_replace" => Self::Edit,
+            "web_search" | "web_fetch" => Self::Lookup,
+            "run_terminal_command" => {
+                let cmd = serde_json::from_str::<serde_json::Value>(arguments)
+                    .ok()
+                    .and_then(|v| v.get("command")?.as_str().map(str::to_ascii_lowercase))
+                    .unwrap_or_default();
+                // A trailing space so `make` matches as a word, not `makepkg`.
+                let cmd = format!("{} ", cmd.trim());
+                if CHECKS
+                    .iter()
+                    .any(|c| cmd.starts_with(c) || cmd.contains(&format!("&& {c}")))
+                {
+                    Self::Check
+                } else {
+                    Self::Other
+                }
+            }
+            n if crate::gate::is_readonly(n) => Self::Lookup,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// One turn's tool runs so far, and what they say since the last routed call.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StageTrack {
+    /// Tool runs since the last routed call, and whether each was a working lookup.
+    window: u32,
+    window_reads_ok: bool,
+    window_failed: bool,
+    pending: Stage,
+    /// The last tool that ran, and whether it failed.
+    last: Option<(String, bool)>,
+    /// FNV-1a of each `(name, arguments)` that ran this turn.
+    seen: Vec<u64>,
+    lookups: u32,
+    edited: bool,
+}
+
+impl StageTrack {
+    /// One tool that ran (never a call the user denied or a gate refused).
+    pub fn note(&mut self, name: &str, arguments: &str, failed: bool) {
+        let kind = ToolKind::of(name, arguments);
+        let g = &mut self.pending;
+        if self.window == 0 {
+            self.window_reads_ok = true;
+        }
+        self.window += 1;
+        self.window_reads_ok &= kind == ToolKind::Lookup && !failed;
+        self.window_failed |= failed;
+        if failed && self.last.as_ref().is_some_and(|(n, f)| *f && n == name) {
+            g.same_tool_failed = true;
+        }
+        self.last = Some((name.to_string(), failed));
+        let call = turn_hash(&format!("{name}\u{1f}{arguments}"));
+        if self.seen.contains(&call) {
+            g.looped = true;
+        } else if self.seen.len() < 512 {
+            self.seen.push(call);
+        }
+        match kind {
+            ToolKind::Lookup => {
+                self.lookups += 1;
+                if !self.edited && self.lookups.is_multiple_of(EXPLORE_LIMIT) {
+                    g.explored = true;
+                }
+            }
+            ToolKind::Edit => {
+                self.edited |= !failed;
+                g.progress |= !failed;
+            }
+            ToolKind::Check if failed && self.edited => g.check_failed = true,
+            ToolKind::Check => g.progress |= !failed,
+            ToolKind::Other => {}
+        }
+    }
+
+    /// What the next routed call reads; the turn's history stays.
+    pub fn take(&mut self) -> Stage {
+        let mut g = std::mem::take(&mut self.pending);
+        g.digest = self.window > 0 && self.window_reads_ok;
+        g.progress &= !self.window_failed;
+        self.window = 0;
+        self.window_failed = false;
+        g
+    }
+}
+
+thread_local! {
+    static STAGE: std::cell::RefCell<StageTrack> = std::cell::RefCell::new(StageTrack::default());
+}
+
+/// A4: a tool on this thread ran. A failed run is also E1 ([`note_tool_error`]).
+pub fn note_tool_run(name: &str, arguments: &str, failed: bool) {
+    if failed {
+        note_tool_error();
+    }
+    STAGE.with(|t| t.borrow_mut().note(name, arguments, failed));
+}
+
+/// E14: the model's reasoning used up its output budget and left no answer.
+pub fn note_out_of_budget() {
+    STAGE.with(|t| t.borrow_mut().pending.out_of_budget = true);
+}
+
+/// The stage signals for this thread's next routed call. A new turn starts the
+/// turn's history over and reads nothing from the turn before.
+pub fn take_stage(new_turn: bool) -> Stage {
+    STAGE.with(|t| {
+        let mut t = t.borrow_mut();
+        if new_turn {
+            *t = StageTrack::default();
+            Stage::default()
+        } else {
+            t.take()
+        }
+    })
 }
 
 fn key(episode: &str, class: &str) -> String {
@@ -481,6 +735,21 @@ pub fn is_new_turn(episode: &str, class: &str, turn: u64) -> bool {
         .unwrap_or_else(|e| e.into_inner())
         .get(&key(episode, class))
         .is_none_or(|s| s.turn != turn)
+}
+
+/// The learner ([`super::bandit`]) moved this turn's first call to `rung`:
+/// the turn's later steps climb from there.
+pub fn set_rung(episode: &str, class: &str, rung: usize) {
+    if let Some(st) = STATES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(&key(episode, class))
+    {
+        if st.rung != rung {
+            st.rung = rung;
+            st.fails = 0;
+        }
+    }
 }
 
 /// The rung this episode is on now, if it has routed a call in `class`.
@@ -665,6 +934,51 @@ mod tests {
         );
     }
 
+    /// Moved from the retired steady-effort tests: with no switch any more,
+    /// every failed tool step climbs one rung, up to the class ceiling.
+    #[test]
+    fn each_failed_tool_step_climbs_one_rung_up_to_the_ceiling() {
+        let turn = |errors: &[u32]| {
+            let (mut s, _) = go(
+                None,
+                "chat:default",
+                Obs {
+                    new_turn: true,
+                    ..Obs::default()
+                },
+            );
+            let mut out = Vec::new();
+            for n in errors {
+                s.last_ok = true;
+                let (next, pick) = go(
+                    Some(&s),
+                    "chat:default",
+                    Obs {
+                        tool_errors: *n,
+                        ..Obs::default()
+                    },
+                );
+                out.push((name(pick.rung), pick.rules));
+                s = next;
+            }
+            out
+        };
+        let rules = |r: &[&str]| r.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            turn(&[1, 0]),
+            vec![("high", rules(&["E1"])), ("high", rules(&[]))]
+        );
+        assert_eq!(
+            turn(&[1, 1, 1, 0]),
+            vec![
+                ("high", rules(&["E1"])),
+                ("xhigh", rules(&["E1"])),
+                ("xhigh", rules(&["E1:ceiling"])),
+                ("xhigh", rules(&[])),
+            ]
+        );
+    }
+
     #[test]
     fn e2_rejects_climb_then_name_the_next_model_then_hand_to_recovery() {
         // chat:default starts at medium so two rejects reach the ceiling without
@@ -698,7 +1012,8 @@ mod tests {
             },
         );
         assert_eq!((name(p2.rung), p2.recover), ("xhigh", false));
-        // At the ceiling a second reject asks for the next model (R2).
+        // E15: one reject at the ceiling holds the model; the second one at
+        // that rung asks for a stronger model.
         s2.rejects = 1;
         let (s3, p3) = go(
             Some(&s2),
@@ -708,10 +1023,7 @@ mod tests {
                 ..step_obs()
             },
         );
-        assert_eq!(
-            p3.rules,
-            vec!["E2:ceiling".to_string(), "E2:next_model".into()]
-        );
+        assert_eq!(p3.rules, vec!["E2:ceiling".to_string()]);
         assert_eq!(name(p3.rung), "xhigh", "the ceiling holds");
         let (_, p4) = go(
             Some(&s3),
@@ -721,10 +1033,16 @@ mod tests {
                 ..step_obs()
             },
         );
-        assert!(
-            p4.recover && p4.rules.contains(&"E2:recovery".to_string()),
-            "{:?}",
-            p4.rules
+        assert_eq!(
+            (p4.recover, p4.rules.clone()),
+            (
+                true,
+                vec![
+                    "E2:ceiling".to_string(),
+                    NEXT_MODEL.into(),
+                    "E2:recovery".into()
+                ]
+            )
         );
         // No VerifyGate source (None) fires nothing.
         let (_, quiet) = go(
@@ -1217,5 +1535,475 @@ mod tests {
         note_tool_error();
         note_tool_error();
         assert_eq!((take_tool_errors(), take_tool_errors()), (2, 0));
+    }
+
+    fn staged(stage: Stage) -> Obs {
+        Obs {
+            stage,
+            ..step_obs()
+        }
+    }
+
+    /// Run `steps` after a fresh turn in `class`; each step's call came back fine.
+    fn walk(class: &str, keep_start: bool, steps: &[Obs]) -> Vec<(&'static str, Vec<String>)> {
+        let (mut s, _) = go(
+            None,
+            class,
+            Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        );
+        let mut out = Vec::new();
+        for obs in steps {
+            s.last_ok = true;
+            let (next, pick) = go(
+                Some(&s),
+                class,
+                Obs {
+                    keep_start,
+                    ..obs.clone()
+                },
+            );
+            out.push((name(pick.rung), pick.rules));
+            s = next;
+        }
+        out
+    }
+
+    fn ids(r: &[&str]) -> Vec<String> {
+        r.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn e15_effort_climbs_first_and_two_failures_at_one_rung_ask_for_a_stronger_model() {
+        let fail = Obs {
+            tool_errors: 1,
+            ..step_obs()
+        };
+        assert_eq!(
+            walk(
+                "chat:default",
+                false,
+                &[
+                    fail.clone(),
+                    fail.clone(),
+                    fail.clone(),
+                    fail.clone(),
+                    fail.clone(),
+                    staged(Stage {
+                        out_of_budget: true,
+                        ..Stage::default()
+                    }),
+                ]
+            ),
+            vec![
+                ("high", ids(&["E1"])),
+                ("xhigh", ids(&["E1"])),
+                ("xhigh", ids(&["E1:ceiling"])),
+                ("xhigh", ids(&["E1:ceiling", NEXT_MODEL])),
+                // The stronger model starts its own count at the same rung.
+                ("xhigh", ids(&["E1:ceiling"])),
+                ("xhigh", ids(&["E14:ceiling", NEXT_MODEL])),
+            ]
+        );
+        // A rung change starts the count over: one failure at the ceiling,
+        // a settle, then a climb back is not two at one rung.
+        let ok = staged(Stage {
+            progress: true,
+            ..Stage::default()
+        });
+        assert_eq!(
+            walk(
+                "chat:default",
+                false,
+                &[
+                    fail.clone(),
+                    fail.clone(),
+                    fail.clone(),
+                    ok.clone(),
+                    ok,
+                    fail.clone(),
+                    fail,
+                ]
+            ),
+            vec![
+                ("high", ids(&["E1"])),
+                ("xhigh", ids(&["E1"])),
+                ("xhigh", ids(&["E1:ceiling"])),
+                ("xhigh", ids(&[])),
+                ("high", ids(&["A4:settle"])),
+                ("xhigh", ids(&["E1"])),
+                ("xhigh", ids(&["E1:ceiling"])),
+            ]
+        );
+    }
+
+    #[test]
+    fn a4_trouble_in_the_loop_climbs_one_rung_named_by_its_cause() {
+        let one = |stage: Stage, errors: u32| {
+            walk(
+                "chat:default",
+                false,
+                &[Obs {
+                    tool_errors: errors,
+                    ..staged(stage)
+                }],
+            )
+            .remove(0)
+        };
+        let cases = [
+            (
+                Stage {
+                    same_tool_failed: true,
+                    ..Stage::default()
+                },
+                2,
+                "A4:same_tool",
+            ),
+            (
+                Stage {
+                    looped: true,
+                    ..Stage::default()
+                },
+                0,
+                "A4:loop",
+            ),
+            (
+                Stage {
+                    check_failed: true,
+                    ..Stage::default()
+                },
+                1,
+                "A4:check_failed",
+            ),
+            (
+                Stage {
+                    explored: true,
+                    ..Stage::default()
+                },
+                0,
+                "A4:explore",
+            ),
+            (
+                Stage {
+                    out_of_budget: true,
+                    ..Stage::default()
+                },
+                0,
+                "E14",
+            ),
+            // Everything at once is still one rung.
+            (
+                Stage {
+                    same_tool_failed: true,
+                    looped: true,
+                    check_failed: true,
+                    explored: true,
+                    out_of_budget: true,
+                    ..Stage::default()
+                },
+                3,
+                "A4:check_failed",
+            ),
+        ];
+        for (stage, errors, id) in cases {
+            assert_eq!(one(stage, errors), ("high", ids(&[id])), "{id}");
+        }
+        // The first step of a turn reads nothing from the loop.
+        let (_, first) = go(
+            None,
+            "chat:default",
+            Obs {
+                new_turn: true,
+                stage: Stage {
+                    looped: true,
+                    ..Stage::default()
+                },
+                ..Obs::default()
+            },
+        );
+        assert_eq!((name(first.rung), first.rules), ("medium", ids(&[])));
+    }
+
+    #[test]
+    fn a4_a_step_that_only_reads_tool_output_runs_at_low_for_that_call() {
+        let read = staged(Stage {
+            digest: true,
+            ..Stage::default()
+        });
+        let fail = Obs {
+            tool_errors: 1,
+            ..step_obs()
+        };
+        assert_eq!(
+            walk(
+                "chat:default",
+                false,
+                &[read.clone(), step_obs(), fail, read.clone()]
+            ),
+            vec![
+                ("low", ids(&["A4:digest"])),
+                // The saved rung never moved, so the next step is back at the start.
+                ("medium", ids(&[])),
+                ("high", ids(&["E1"])),
+                // An escalation in effect holds: no digest drop above the start.
+                ("high", ids(&[])),
+            ]
+        );
+        // Never below the lane's floor: debug's floor is medium, prepare:hard's high.
+        assert_eq!(
+            walk("debug", true, std::slice::from_ref(&read)),
+            vec![("medium", ids(&["A4:digest"]))]
+        );
+        assert_eq!(walk(PREPARE_HARD, true, &[read]), vec![("high", ids(&[]))]);
+    }
+
+    #[test]
+    fn a4_working_edits_and_passing_checks_settle_one_rung_never_below_a_flagship_start() {
+        let fail = Obs {
+            tool_errors: 1,
+            ..step_obs()
+        };
+        let ok = staged(Stage {
+            progress: true,
+            ..Stage::default()
+        });
+        // chat:default: up to xhigh, then two working steps settle one rung each time.
+        assert_eq!(
+            walk(
+                "chat:default",
+                false,
+                &[
+                    fail.clone(),
+                    fail.clone(),
+                    ok.clone(),
+                    ok.clone(),
+                    ok.clone(),
+                    ok.clone(),
+                    ok.clone(),
+                    ok.clone()
+                ]
+            )
+            .into_iter()
+            .map(|(r, _)| r)
+            .collect::<Vec<_>>(),
+            vec!["high", "xhigh", "xhigh", "high", "high", "medium", "medium", "low"]
+        );
+        // plan is Flagship: it settles back to its start (high) and no lower,
+        // and DE1's clean steps don't take it lower either.
+        let plan = walk(
+            "plan",
+            true,
+            &[
+                fail.clone(),
+                ok.clone(),
+                ok.clone(),
+                ok.clone(),
+                ok.clone(),
+                step_obs(),
+                step_obs(),
+                step_obs(),
+            ],
+        );
+        assert_eq!(
+            plan.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
+            vec!["xhigh", "xhigh", "high", "high", "high", "high", "high", "high"]
+        );
+        assert_eq!(plan[2].1, ids(&["A4:settle"]));
+        // Without keep_start the same steps go down to plan's floor.
+        assert_eq!(
+            walk("plan", false, &[ok.clone(), ok, step_obs()])
+                .into_iter()
+                .map(|(r, _)| r)
+                .collect::<Vec<_>>(),
+            vec!["high", "medium", "medium"]
+        );
+        // A step with a failure in it breaks the streak.
+        assert_eq!(
+            walk(
+                "chat:default",
+                false,
+                &[
+                    fail.clone(),
+                    staged(Stage {
+                        progress: true,
+                        ..Stage::default()
+                    }),
+                    fail,
+                    staged(Stage {
+                        progress: true,
+                        ..Stage::default()
+                    })
+                ]
+            )
+            .into_iter()
+            .map(|(r, _)| r)
+            .collect::<Vec<_>>(),
+            vec!["high", "high", "xhigh", "xhigh"]
+        );
+    }
+
+    fn run(track: &mut StageTrack, name: &str, args: &str, failed: bool) {
+        track.note(name, args, failed);
+    }
+
+    #[test]
+    fn stage_track_reads_the_loop_into_typed_signals() {
+        assert_eq!(ToolKind::of("read_file", "{}"), ToolKind::Lookup);
+        assert_eq!(ToolKind::of("grep", "{}"), ToolKind::Lookup);
+        assert_eq!(ToolKind::of("web_search", "{}"), ToolKind::Lookup);
+        assert_eq!(ToolKind::of("search_replace", "{}"), ToolKind::Edit);
+        assert_eq!(
+            ToolKind::of("run_terminal_command", r#"{"command":"cargo test -p app"}"#),
+            ToolKind::Check
+        );
+        assert_eq!(
+            ToolKind::of("run_terminal_command", r#"{"command":"cd ui && npm test"}"#),
+            ToolKind::Check
+        );
+        assert_eq!(
+            ToolKind::of("run_terminal_command", r#"{"command":"make"}"#),
+            ToolKind::Check
+        );
+        assert_eq!(
+            ToolKind::of("run_terminal_command", r#"{"command":"makepkg -si"}"#),
+            ToolKind::Other
+        );
+        assert_eq!(
+            ToolKind::of("run_terminal_command", r#"{"command":"ls -la"}"#),
+            ToolKind::Other
+        );
+
+        let mut t = StageTrack::default();
+        assert_eq!(t.take(), Stage::default(), "nothing ran");
+        run(&mut t, "read_file", r#"{"path":"a.rs"}"#, false);
+        run(&mut t, "grep", r#"{"pattern":"fn main"}"#, false);
+        assert_eq!(
+            t.take(),
+            Stage {
+                digest: true,
+                ..Stage::default()
+            }
+        );
+        // The same call again is a loop; reads that failed are no digest.
+        run(&mut t, "read_file", r#"{"path":"a.rs"}"#, false);
+        assert_eq!(
+            t.take(),
+            Stage {
+                digest: true,
+                looped: true,
+                ..Stage::default()
+            }
+        );
+        run(&mut t, "read_file", r#"{"path":"gone.rs"}"#, true);
+        run(&mut t, "read_file", r#"{"path":"gone2.rs"}"#, true);
+        assert_eq!(
+            t.take(),
+            Stage {
+                same_tool_failed: true,
+                ..Stage::default()
+            }
+        );
+        // A different tool failing in between is not "the same tool twice".
+        run(&mut t, "grep", r#"{"pattern":"x"}"#, true);
+        run(&mut t, "read_file", r#"{"path":"b.rs"}"#, true);
+        assert_eq!(t.take(), Stage::default());
+        // Eight lookups and no edit: a long exploration, once per eight.
+        let mut t = StageTrack::default();
+        for i in 0..7 {
+            run(
+                &mut t,
+                "read_file",
+                &format!(r#"{{"path":"f{i}.rs"}}"#),
+                false,
+            );
+        }
+        assert!(!t.take().explored);
+        run(&mut t, "glob", r#"{"pattern":"*.rs"}"#, false);
+        assert_eq!(
+            t.take(),
+            Stage {
+                digest: true,
+                explored: true,
+                ..Stage::default()
+            }
+        );
+        // An edit that works is progress; a failing test run after it is a check failure.
+        run(
+            &mut t,
+            "search_replace",
+            r#"{"path":"a.rs","old":"1","new":"2"}"#,
+            false,
+        );
+        assert_eq!(
+            t.take(),
+            Stage {
+                progress: true,
+                ..Stage::default()
+            }
+        );
+        let test = r#"{"command":"cargo test"}"#;
+        run(&mut t, "run_terminal_command", test, true);
+        assert_eq!(
+            t.take(),
+            Stage {
+                check_failed: true,
+                ..Stage::default()
+            }
+        );
+        run(
+            &mut t,
+            "run_terminal_command",
+            r#"{"command":"cargo test -q"}"#,
+            false,
+        );
+        assert_eq!(
+            t.take(),
+            Stage {
+                progress: true,
+                ..Stage::default()
+            }
+        );
+        // Lookups after an edit are no exploration, however many.
+        for i in 0..16 {
+            run(&mut t, "grep", &format!(r#"{{"pattern":"p{i}"}}"#), false);
+        }
+        assert!(!t.take().explored);
+        // A test run that fails before any edit is a plain tool error, not a check failure.
+        let mut fresh = StageTrack::default();
+        run(&mut fresh, "run_terminal_command", test, true);
+        assert_eq!(fresh.take(), Stage::default());
+    }
+
+    #[test]
+    fn stage_signals_reach_the_next_call_and_a_new_turn_starts_empty() {
+        let _ = take_stage(true);
+        note_tool_run("read_file", r#"{"path":"a.rs"}"#, false);
+        assert_eq!(
+            take_stage(false),
+            Stage {
+                digest: true,
+                ..Stage::default()
+            }
+        );
+        note_out_of_budget();
+        assert_eq!(
+            take_stage(false),
+            Stage {
+                out_of_budget: true,
+                ..Stage::default()
+            }
+        );
+        note_tool_run("read_file", r#"{"path":"a.rs"}"#, true);
+        assert_eq!(take_tool_errors(), 1, "a failed run is also E1");
+        assert_eq!(
+            take_stage(true),
+            Stage::default(),
+            "a new turn reads nothing"
+        );
+        // And forgot the turn: the same call is no loop now.
+        note_tool_run("read_file", r#"{"path":"a.rs"}"#, false);
+        assert!(!take_stage(false).looped);
     }
 }

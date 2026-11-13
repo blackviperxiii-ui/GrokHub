@@ -218,6 +218,7 @@ mod tests {
                     out.push_str(arguments);
                     out.push('\n');
                 }
+                InputItem::ServerCompaction { .. } | InputItem::Reasoning { .. } => {}
             }
         }
         out
@@ -758,6 +759,11 @@ mod tests {
 
     fn run_tool_turns(label: &str, tools: usize, same: bool) -> (UnattendedDone, Arc<ToolTurns>) {
         let dir = workspace(label);
+        // Real folders, so each step does new work and the stall guard
+        // (which stops runs that keep failing) leaves the run alone.
+        for n in 0..tools {
+            std::fs::create_dir_all(dir.join(format!("p{n}"))).unwrap();
+        }
         let client = Arc::new(ToolTurns {
             tools,
             same,

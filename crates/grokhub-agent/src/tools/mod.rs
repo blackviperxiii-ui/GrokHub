@@ -13,6 +13,8 @@ mod list_dir;
 pub(crate) mod local_ai;
 mod lock;
 mod media;
+mod models_check;
+pub(crate) mod mods;
 pub(crate) mod ports;
 mod read_file;
 pub(crate) mod registry;
@@ -20,8 +22,11 @@ mod search_replace;
 pub(crate) mod set;
 pub(crate) mod shell;
 mod show_panel;
+pub(crate) mod taint;
+pub(crate) mod talk;
 mod web_fetch;
 pub(crate) mod web_search;
+pub(crate) mod workspace_tools;
 mod write;
 
 pub use registry::Settings as DeferredToolsSettings;
@@ -32,6 +37,11 @@ pub use web_search::{
 };
 
 /// Whether `{config_dir}/deferred_tools.toml` has `enabled = true`.
+/// `generative_ui.toml` turns show_panel and the chat's panels on, read the one way.
+pub fn generative_ui_enabled(config_dir: &Path) -> bool {
+    show_panel::enabled(config_dir)
+}
+
 pub fn deferred_tools_enabled(config_dir: &Path) -> bool {
     registry::settings(config_dir).enabled
 }
@@ -85,7 +95,16 @@ pub trait DesktopOps {
     fn hint(&self, _name: &str, args: &Value) -> Value {
         args.clone()
     }
+    /// [`LOOK_AT_SCREEN`]: a screenshot that only looks. It works with desktop
+    /// control off, so a wrapper that switches control off must still pass it.
+    fn look(&self, args: &Value) -> ToolOutput {
+        self.call("screenshot", args)
+    }
 }
+
+/// The look-only screenshot tool. It runs in the app, not the shell, so the
+/// shell sandbox never stands between the agent and the screen.
+pub const LOOK_AT_SCREEN: &str = "look_at_screen";
 
 pub struct ToolCtx<'a> {
     pub workspace: &'a Path,
@@ -123,6 +142,22 @@ pub fn bind_deferred_session(session: &str) {
 /// Reset loaded deferred schemas for a new user turn.
 pub fn begin_deferred_turn(session: &str) {
     registry::begin_turn(session);
+}
+
+/// Item 33: count a chat's session in its workspace and freeze the workspace's
+/// up-front tool list for it. A chat already started keeps its list.
+pub fn start_workspace_session(session: &str, workspace: &Path) {
+    // Tests that share a config folder would count each other's sessions.
+    if cfg!(test) && crate::perm::pinned_config().is_none() {
+        return;
+    }
+    workspace_tools::start(&crate::perm::config_dir(), session, workspace);
+}
+
+/// LO-45: give the chat's Brief to the tool router. The first Brief picks the
+/// chat's tool profile; a later work Brief upgrades a Talk chat.
+pub fn note_turn_brief(session: &str, brief: &crate::brain::Brief) {
+    registry::note_brief(session, brief);
 }
 
 pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
@@ -164,6 +199,9 @@ pub fn dispatch_for_job(
             return ToolOutput::err(set::tool_set_refusal(name));
         }
     }
+    if let Some(session) = ctx.session {
+        workspace_tools::note_use(&crate::perm::config_dir(), session, name);
+    }
     let args = match parse_args(arguments) {
         Ok(args) => args,
         Err(output) => return output,
@@ -189,31 +227,55 @@ pub fn dispatch_for_job(
         "search_replace" => search_replace::run(ctx.workspace, &args),
         "run_terminal_command" => run_shell(ctx, &args),
         "kill_command_or_subagent" => control::kill(ctx.tasks.as_ref(), &args),
+        control::MERGE_WORK => control::merge(ctx, &args),
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),
         "connection_delete" => connections::delete(&args),
         local_ai::SELFTEST => local_ai::selftest(&args),
+        mods::PREPARE => mods::run(name, &args),
         "web_fetch" => web_fetch::run_with_ports(&args, ctx.stop),
         "web_search" => web_search::run_with_ports(&args, ctx.stop),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)
         }
+        LOOK_AT_SCREEN => match ctx.desktop {
+            Some(desktop) => fence_desktop("screenshot", desktop.look(&args)),
+            None => ToolOutput::err("There is no screen to look at here."),
+        },
         "screenshot" | "click" | "move" | "drag" | "scroll" | "type" | "key" => match ctx.desktop {
             Some(desktop) => fence_desktop(name, desktop.call(name, &args)),
-            None => ToolOutput::err(grokhub_core::desktop_mcp::OFF_MSG),
+            None => ToolOutput::err(*grokhub_core::desktop_mcp::OFF_MSG),
         },
         other => ToolOutput::err(gate::readonly_refusal(other)),
     }
 }
 
 fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
+    let typed = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+    if let Some(why) = shell::names_a_tool(typed) {
+        return ToolOutput::err(why);
+    }
+    if shell::grabs_screen(typed) {
+        return ToolOutput::err(shell::USE_LOOK);
+    }
     let background = args
         .get("is_background")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     if !background {
-        return shell::run(ctx.workspace, args, ctx.stop);
+        // Where background tasks are on, a command that outlives its timeout
+        // keeps running as one instead of being killed.
+        let Some(tasks) = ctx.tasks.as_ref() else {
+            return shell::run(ctx.workspace, args, ctx.stop);
+        };
+        let command = args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let mut adopt = |proc, guard| tasks.adopt(proc, &command, ctx.owner, guard);
+        return shell::run_adoptable(ctx.workspace, args, ctx.stop, Some(&mut adopt));
     }
     let Some(tasks) = ctx.tasks.as_ref() else {
         return ToolOutput::err("background tasks are not available on this run");
@@ -226,14 +288,17 @@ fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
     if command.is_empty() {
         return ToolOutput::err("command is required");
     }
-    match tasks.spawn_for(ctx.workspace, command, ctx.owner) {
+    let plan = crate::sandbox::plan_for_call("run_terminal_command", args, ctx.workspace);
+    match tasks.spawn_for(ctx.workspace, command, ctx.owner, plan) {
         Ok(id) => ToolOutput::ok(format!("task id: {id}\nstatus: running")),
         Err(err) => ToolOutput::err(err),
     }
 }
 
 pub fn desk_flags(name: &str, gate: &Gate, desktop: Option<&dyn DesktopOps>) -> Option<DeskFlags> {
-    if !gate::is_desktop(name) || !gate.desktop {
+    // A look needs no desktop control, but Halt and a locked screen still hold it.
+    let look = name == LOOK_AT_SCREEN;
+    if !look && (!gate::is_desktop(name) || !gate.desktop) {
         return None;
     }
     let desktop = desktop?;
@@ -265,6 +330,8 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "skill" => crate::skills::tool_run(ctx.workspace, args),
         "diagnose" => crate::repair::tool_run(args),
         local_ai::STATUS => local_ai::status(args),
+        models_check::NAME => models_check::run(args),
+        mods::SEARCH | mods::DETAIL | mods::INSTALLED => mods::run(name, args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
 }
@@ -287,9 +354,18 @@ fn parse_args(arguments: &str) -> Result<Value, ToolOutput> {
     }
     match serde_json::from_str::<Value>(arguments) {
         Ok(value) if value.as_object().is_some() => Ok(value),
-        Ok(_) => Err(ToolOutput::err("arguments must be a JSON object")),
-        Err(err) => Err(ToolOutput::err(format!("arguments are not JSON: {err}"))),
+        Ok(_) => Err(ToolOutput::err(
+            "arguments must be a JSON object: send the call again with them as one object",
+        )),
+        Err(err) => Err(ToolOutput::err(format!(
+            "arguments are not JSON ({err}): send the call again with valid JSON"
+        ))),
     }
+}
+
+/// Whether a call's arguments parse the way [`parse_args`] takes them.
+pub fn args_parse(arguments: &str) -> bool {
+    parse_args(arguments).is_ok()
 }
 
 /// Lexical `..` and symlink targets that leave the canonical workspace are rejected.
@@ -352,13 +428,19 @@ pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
     Ok(acc)
 }
 
+/// A native tool's full schema by name, whatever the gate or the deferred
+/// index say: the caller decides whether it is offered.
+pub(crate) fn native_schema(name: &str) -> Option<Value> {
+    defs::find_def(name).map(|d| (d.schema)())
+}
+
 /// `image_generate` request body from the existing media builder.
 /// The `ImagineApi` is not called.
 pub(crate) fn dry_imagine_body(args: &Value) -> Result<Value, String> {
     Ok(media::build_media_call("image_generate", args)?.body)
 }
 
-pub(crate) use media::ImagineApi;
+pub use media::{imagine_client, run_media_tool, ImagineApi};
 
 /// Install fetch and Imagine clients for this thread. An empty bearer installs
 /// adapters that refuse without dialing. The guard restores the previous ports.
@@ -427,6 +509,9 @@ pub fn u32_field(v: &Value, key: &str) -> Option<u32> {
 }
 
 #[cfg(test)]
+mod arg_roundtrip_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -493,6 +578,8 @@ mod tests {
     /// tools share a name, so chat fails before the first token.
     #[test]
     fn schemas_for_has_no_duplicate_names() {
+        // Full tool list: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         for readonly_session in [false, true] {
             for desktop in [false, true] {
                 let gate = Gate {

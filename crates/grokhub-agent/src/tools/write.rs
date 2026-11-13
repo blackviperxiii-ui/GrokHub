@@ -38,10 +38,20 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
     if path.is_dir() {
         return ToolOutput::err("path is a directory");
     }
+    let stored = crate::memory::redact_model_text(&path, &content);
+    let note = if stored != content {
+        " (secrets redacted)"
+    } else {
+        ""
+    };
     crate::checkpoint::before_write(&path);
-    let written = with_file_lock(&path, || write_at(&path, &content));
+    let written = with_file_lock(&path, || write_at(&path, &stored));
     match written {
-        Ok(bytes) => ToolOutput::ok(format!("wrote {bytes} bytes to {raw}")),
+        Ok(bytes) => {
+            crate::memory::after_model_write(workspace, &path);
+            super::taint::after_write(workspace, &path, true);
+            ToolOutput::ok(format!("wrote {bytes} bytes to {raw}{note}"))
+        }
         Err(err) => ToolOutput::err(err),
     }
 }
@@ -124,6 +134,44 @@ mod tests {
         );
         assert!(abs.failed, "{}", abs.text);
         assert!(!outside.exists(), "write left {}", outside.display());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_memory_file_write_redacts_secrets_and_other_files_keep_them() {
+        let dir = scratch("mem");
+        let ctx = ToolCtx {
+            workspace: &dir,
+            desktop: None,
+            stop: &|| false,
+            tasks: None,
+            owner: None,
+            session: None,
+        };
+        let secret = "sk-abcdefghijklmnopqrstuv";
+        let out = dispatch(
+            &ctx,
+            "write",
+            &serde_json::json!({"path": "MEMORY.md", "content": format!("dock token {secret}\n")})
+                .to_string(),
+        );
+        assert!(!out.failed, "{}", out.text);
+        assert!(out.text.contains("secrets redacted"), "{}", out.text);
+        let body = std::fs::read_to_string(dir.join("MEMORY.md")).unwrap();
+        assert!(
+            !body.contains(secret) && body.contains("[redacted]"),
+            "{body}"
+        );
+        let out = dispatch(
+            &ctx,
+            "write",
+            &serde_json::json!({"path": "fixture.txt", "content": secret}).to_string(),
+        );
+        assert!(!out.failed, "{}", out.text);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("fixture.txt")).unwrap(),
+            secret
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

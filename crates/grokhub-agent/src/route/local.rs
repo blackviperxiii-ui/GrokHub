@@ -34,6 +34,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use grokhub_core::local_governor::Level;
+use grokhub_core::local_skills::TaskKind;
 use grokhub_core::model_registry::{CatalogSource, Listing, ModelMeta, Prices, SourceKind};
 
 use super::ladder::PREPARE_HARD;
@@ -89,6 +90,20 @@ pub fn set_enabled(on: bool) {
         // Off: nothing falls back to the device, so drop the chip and keep-warm.
         note_fallback(false);
     }
+}
+
+static PROMPT_CLEANUP: AtomicBool = AtomicBool::new(false);
+
+/// LO-48: the cabin sets this from `app.json` `promptCleanup` (default
+/// `false`) next to [`set_enabled`]. [`super::cleanup::tidy`] runs only while
+/// it is on.
+pub fn set_prompt_cleanup(on: bool) {
+    PROMPT_CLEANUP.store(on, Ordering::SeqCst);
+}
+
+/// The "Tidy typos on this computer" switch, as last set.
+pub fn prompt_cleanup() -> bool {
+    PROMPT_CLEANUP.load(Ordering::SeqCst)
 }
 
 /// The Settings toggle alone, for the governor's sampler.
@@ -153,13 +168,14 @@ pub fn hw_tier(config_dir: &std::path::Path) -> Option<&'static str> {
     super::local_autoconfig::catalog_model_for(&paths.model).map(|m| m.tier)
 }
 
-/// `/why local`: whether the on-device model can take work, the governor's
-/// level and reason, the hardware tier, the heavy-step queue, and the log.
-pub fn why_local_text(config_dir: &std::path::Path) -> String {
+/// Settings → Local AI's status notes: whether the on-device model can take
+/// work, the governor's level and reason, the hardware tier, the heavy-step
+/// queue, and the log. They name no model.
+pub fn status_lines(config_dir: &std::path::Path) -> Vec<String> {
     let cap = LocalCapacity::now();
     let gov = super::local_gov::level();
     let state = if !switched_on() {
-        "off (Settings → Local AI)".to_string()
+        "off".to_string()
     } else if !cap.ready {
         "on, but no engine and model are installed".to_string()
     } else if cap.paused() {
@@ -169,7 +185,9 @@ pub fn why_local_text(config_dir: &std::path::Path) -> String {
     };
     let takes = match gov {
         Level::Unload => "nothing until the machine frees up",
-        Level::Throttle => "offline work and cloud outages only; background work goes to Grok",
+        Level::Throttle => {
+            "offline work and cloud outages only; background work goes to the cloud model"
+        }
         Level::Normal => {
             "background work, offline work and cloud outages; heavy steps wait for idle time"
         }
@@ -199,7 +217,7 @@ pub fn why_local_text(config_dir: &std::path::Path) -> String {
                 .display()
         ),
     ]
-    .join("\n")
+    .into()
 }
 
 /// The chip and pause message while the governor holds the local route.
@@ -249,27 +267,72 @@ pub fn heavy(class: &str, ctx_tokens: u64) -> bool {
     class.starts_with("background:") && ctx_tokens > ctx_cap() / 2
 }
 
+/// What the chat shows while a model that isn't loaded yet starts for a turn.
+pub const LOCAL_LOADING_NOTE: &str =
+    "Loading this computer's model first. It can take a minute after a game or a long idle.";
+
 /// The longest a heavy background step waits for RampUp before it runs anyway.
 pub const HEAVY_WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// Last `ensure_global` failure when production assets are present (cleared on success).
 pub fn bootstrap_error() -> Option<String> {
-    bootstrap_slot().lock().ok().and_then(|g| g.clone())
+    bootstrap_slot()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(e, _)| e.clone()))
 }
 
-fn bootstrap_slot() -> &'static Mutex<Option<String>> {
-    static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+/// How long a failed start keeps the route off before a request tries again.
+/// One failure used to keep it off until the app restarted, so a model and
+/// drafter on disk read as "none set up" for the rest of the session.
+pub const START_RETRY_SECS: u64 = 60;
+
+fn bootstrap_slot() -> &'static Mutex<Option<(String, u64)>> {
+    static SLOT: OnceLock<Mutex<Option<(String, u64)>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
 fn set_bootstrap_error(err: Option<String>) {
     if let Ok(mut slot) = bootstrap_slot().lock() {
-        *slot = err;
+        *slot = err.map(|e| (e, unix_secs_now()));
+    }
+}
+
+fn unix_secs_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The last start failed less than [`START_RETRY_SECS`] ago: the route waits
+/// before it tries again (the governor's crash breaker still caps retries).
+pub fn start_failed_recently() -> bool {
+    bootstrap_slot()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, at)| *at))
+        .is_some_and(|at| unix_secs_now().saturating_sub(at) < START_RETRY_SECS)
+}
+
+/// Forget the last start failure, so the next request starts the model again
+/// (the self-check does this once it has read why).
+pub fn clear_start_error() {
+    set_bootstrap_error(None);
+}
+
+/// Tests only: the last start failed `secs` ago.
+#[cfg(test)]
+pub(crate) fn age_start_error(secs: u64) {
+    if let Ok(mut slot) = bootstrap_slot().lock() {
+        if let Some((_, at)) = slot.as_mut() {
+            *at = at.saturating_sub(secs);
+        }
     }
 }
 
 /// An on-device runtime and model are present: a test fake, or a binary + GGUF
-/// under the config dir / env overrides (not when bootstrap failed).
+/// under the config dir / env overrides. Not for [`START_RETRY_SECS`] after a
+/// start failed; then the next request tries again.
 pub fn installed() -> bool {
     if test_runtime().is_some() {
         return true;
@@ -277,7 +340,12 @@ pub fn installed() -> bool {
     if !production_assets_present() {
         return false;
     }
-    bootstrap_error().is_none()
+    !start_failed_recently()
+}
+
+/// The files are on disk but the last start failed: why, for the chat.
+pub fn start_failure() -> Option<String> {
+    production_assets_present().then(bootstrap_error).flatten()
 }
 
 fn production_assets_present() -> bool {
@@ -310,11 +378,19 @@ pub fn tier_for(d: Device) -> &'static str {
 
 /// The downshift ladder: only which tier is live changes.
 pub fn set_device(d: Device) {
+    LOW_BATTERY.store(d.battery_low, Ordering::SeqCst);
     let t = tier_for(d);
     TIER.store(
         TIERS.iter().position(|x| *x == t).unwrap_or(0),
         Ordering::SeqCst,
     );
+}
+
+static LOW_BATTERY: AtomicBool = AtomicBool::new(false);
+
+/// The device's battery is low (the last [`set_device`]).
+pub fn low_battery() -> bool {
+    LOW_BATTERY.load(Ordering::SeqCst)
 }
 
 pub fn live_tier() -> &'static str {
@@ -410,6 +486,8 @@ pub struct LocalGate {
     pub hard_tool: bool,
     /// Connectivity is offline (PR B): chat may go local too.
     pub offline: bool,
+    /// Offline only is on (LU-13): no step may go to the cloud at all.
+    pub offline_switch: bool,
     /// Last on-device answer failed a verify check (PR E): escalate to cloud when online.
     pub local_verify_failed: bool,
     /// The governor's level and whether the runtime is there at all.
@@ -428,6 +506,7 @@ impl LocalGate {
             cloud_grant,
             hard_tool,
             offline: super::connectivity::state().prefer_local(),
+            offline_switch: grokhub_core::offline::enabled(),
             local_verify_failed: local_verify_failed(),
         }
     }
@@ -441,8 +520,19 @@ fn allowed_classes(gate: &LocalGate) -> &'static [&'static str] {
     }
 }
 
+/// A chat the device answers from a request fitted to its window
+/// ([`super::local_fit::fit`] drops tools, guidance and the oldest turns),
+/// so the thread's length is no bar. Background steps send their text whole,
+/// and a desktop step (`desktop:soft`) keeps the context cap: trimming would
+/// drop its desktop tools, and a step without them cannot act.
+pub fn fits_by_trimming(class: &str) -> bool {
+    let class = class_row(class).map(|r| r.class).unwrap_or(class.trim());
+    matches!(class, "chat:quick" | "chat:default")
+}
+
 /// The local route may take this step: the flag is on, the class is allowed
-/// for this connectivity, the step fits the context cap, and it is not hard.
+/// for this connectivity, the step fits the context cap (or is a chat, which
+/// is trimmed to fit on the way), and it is not hard.
 pub fn eligible(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
     let class = class_row(class).map(|r| r.class).unwrap_or(class.trim());
     if super::connectivity::is_cloud_only(class) {
@@ -452,7 +542,7 @@ pub fn eligible(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
         && !gate.hard_tool
         && class != PREPARE_HARD
         && allowed_classes(gate).contains(&class)
-        && ctx_tokens <= ctx_cap()
+        && (fits_by_trimming(class) || ctx_tokens <= ctx_cap())
 }
 
 /// `id` may serve this step: the live tier, and [`eligible`].
@@ -481,7 +571,14 @@ pub fn offline_only(gate: &LocalGate) -> bool {
 
 /// Online after a failed on-device verify: leave local and pick a cloud model.
 pub fn escalate_after_verify(gate: &LocalGate) -> bool {
-    gate.enabled && !gate.offline && gate.local_verify_failed
+    gate.enabled && !gate.offline && !gate.offline_switch && gate.local_verify_failed
+}
+
+/// The on-device model could take chat with Offline only on: Local AI is on
+/// and an engine and model are installed. `false` ⇒ the toggle should warn
+/// (with [`unavailable_reason`]) before it turns the switch on.
+pub fn ready_for_offline() -> bool {
+    LocalCapacity::now().ready
 }
 
 /// Hard or long work should stay on the cloud when online (PR E).
@@ -490,7 +587,7 @@ pub fn too_hard_for_local(class: &str, ctx_tokens: u64, d: f64) -> bool {
     class == PREPARE_HARD
         || class.starts_with("repair:")
         || d > 0.7
-        || ctx_tokens > ctx_cap().saturating_mul(3) / 4
+        || (!fits_by_trimming(class) && ctx_tokens > ctx_cap().saturating_mul(3) / 4)
 }
 
 /// Quiet note when escalating from local to cloud (names both models).
@@ -517,7 +614,9 @@ pub fn tier_meta(id: &str) -> ModelMeta {
     ModelMeta {
         id: id.into(),
         context_length: Some(ctx_cap().max(c.context)),
-        // No effort menu: a local route sends no effort.
+        // No effort menu: the router picks no effort for a local route. The
+        // sidecar maps the turn's own effort onto the levels the model's
+        // template renders (`local_effort`).
         efforts: Some(Vec::new()),
         // Chat turns can return OpenAI-compatible tool_calls (web_search / web_fetch).
         tool_calling: Some(true),
@@ -573,6 +672,26 @@ pub trait LocalRuntime: Send + Sync {
         Err("local chat is not available on this runtime".into())
     }
 
+    /// [`Self::chat_stream`] at a reasoning effort from [`EFFORT_LADDER`]
+    /// (`None`: the template's default). A runtime that can't say how hard
+    /// the model thinks ignores it.
+    ///
+    /// [`EFFORT_LADDER`]: grokhub_core::model_registry::EFFORT_LADDER
+    fn chat_stream_at(
+        &self,
+        messages: &[ChatMessage],
+        effort: Option<&str>,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        let _ = effort;
+        self.chat_stream(messages, on_delta)
+    }
+
+    /// The model's context window in tokens, when the runtime can tell.
+    fn context_tokens(&self) -> Option<u64> {
+        None
+    }
+
     /// Chat with function tools (cabin web_search / web_fetch). Default falls
     /// back to plain [`chat_stream`] and returns no tool calls.
     fn chat_tools(
@@ -585,11 +704,12 @@ pub trait LocalRuntime: Send + Sync {
         }
         let (text, _) = super::live::last_user_text(&req.input);
         let mut deltas = String::new();
-        let out = self.chat_stream(
+        let out = self.chat_stream_at(
             &[ChatMessage {
                 role: "user".into(),
                 content: text,
             }],
+            req.effort.as_deref(),
             &mut |d| deltas.push_str(d),
         )?;
         let text = if out.is_empty() { deltas } else { out };
@@ -610,6 +730,20 @@ pub fn runtime() -> Option<Arc<dyn LocalRuntime>> {
     }
     let busy = ensure_production_runtime()?;
     super::local_http::from_global_sidecar(busy)
+}
+
+/// [`runtime`], but only while the model is already loaded (a test fake, or a
+/// running sidecar). It never starts or restarts the sidecar, so it returns at
+/// once; a cold start could not answer a short call in time anyway.
+pub fn warm_runtime() -> Option<Arc<dyn LocalRuntime>> {
+    if !available() {
+        return None;
+    }
+    if let Some(rt) = test_runtime() {
+        return Some(rt);
+    }
+    super::local_sidecar::global_endpoint()?;
+    super::local_http::from_global_sidecar(super::local_sidecar::busy())
 }
 
 /// Start the sidecar if needed; the guard marks this caller's request in
@@ -724,10 +858,16 @@ pub fn serve_request(
 ) -> Result<TurnOutput, ClientError> {
     let (text, _) = super::live::last_user_text(&req.input);
     let class_norm = class_row(class).map(|r| r.class).unwrap_or(class);
-    if !matches!(class_norm, "chat:quick" | "chat:default" | "desktop:soft") {
+    // Only the app's own background work is text-only; every other class is a
+    // reply someone reads (a math turn, a plan, an 18+ turn kept on device).
+    if class_norm.starts_with("background:") {
         return serve(class, &text, cancel);
     }
     let tokens = (text.len() as u64).div_ceil(4);
+    let _need =
+        super::local_scale::NeedGuard::set(super::local_scale::need(class_norm, tokens, &text));
+    let kind = super::local_task::kind(class_norm, tokens, &text);
+    let _kind = super::local_task::KindGuard::set(kind);
     if heavy(class_norm, tokens) && super::local_gov::level() != Level::RampUp {
         match super::local_gov::wait_for_ramp_up(HEAVY_WAIT, &|| cancel.is_cancelled()) {
             None => return Err(ClientError::Cancelled),
@@ -740,10 +880,49 @@ pub fn serve_request(
     let Some(rt) = runtime() else {
         return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
     };
-    if req.tools.is_empty() {
-        return serve_within(class, &text, HEAVY_WAIT, cancel);
+    // The prompt calls the assistant Grok: the device is told which model it
+    // is (the file the running sidecar loaded), so it says so when asked.
+    let mut req = req.clone();
+    super::identity::stamp(
+        &mut req.input,
+        live_tier(),
+        super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
+        req.effort.as_deref(),
+    );
+    // The device window is often 4k to 16k: send only what fits, with room to
+    // answer. With or without tools, so a long chat is trimmed on the way
+    // (the oldest turns first) instead of being refused for its length.
+    let n_ctx = rt
+        .context_tokens()
+        .unwrap_or_else(|| super::local_perf::current_defaults().ctx);
+    // A picture ask, or a computer that can draw, keeps the picture tool
+    // even on a small window, and the device is told it can draw.
+    let keep = super::local_image::ready_on_device(
+        &mut req,
+        super::local_image::can_draw_here(),
+        crate::brain::is_picture_ask(&text),
+    );
+    let (fitted, _) = super::local_fit::fit_keeping(&req, n_ctx, keep);
+    let out = rt.chat_tools(&fitted, cancel);
+    note_task_reply(kind, &out, cancel);
+    out.map_err(ClientError::Protocol)
+}
+
+/// Teach the per-task picker how the running model did on this kind of
+/// task: a refusal or an error marks it down, a good reply eases the mark.
+fn note_task_reply(kind: Option<TaskKind>, out: &Result<TurnOutput, String>, cancel: &CancelToken) {
+    let Some(kind) = kind else { return };
+    if cancel.is_cancelled() {
+        return;
     }
-    rt.chat_tools(req, cancel).map_err(ClientError::Protocol)
+    let Some(model) = super::local_sidecar::loaded().map(|l| l.model) else {
+        return;
+    };
+    let ok = match out {
+        Ok(o) => super::local_task::answered(&o.text, !o.calls.is_empty()),
+        Err(_) => false,
+    };
+    super::local_task::note_reply(&crate::perm::config_dir(), &model, kind, ok);
 }
 
 pub(crate) fn serve_within(
@@ -752,7 +931,21 @@ pub(crate) fn serve_within(
     heavy_wait: std::time::Duration,
     cancel: &CancelToken,
 ) -> Result<TurnOutput, ClientError> {
+    serve_within_at(class, text, None, heavy_wait, cancel)
+}
+
+/// [`serve_within`] with the turn's reasoning effort, which only chat uses.
+fn serve_within_at(
+    class: &str,
+    text: &str,
+    effort: Option<&str>,
+    heavy_wait: std::time::Duration,
+    cancel: &CancelToken,
+) -> Result<TurnOutput, ClientError> {
     let tokens = (text.len() as u64).div_ceil(4);
+    let _need = super::local_scale::NeedGuard::set(super::local_scale::need(class, tokens, text));
+    let kind = super::local_task::kind(class, tokens, text);
+    let _kind = super::local_task::KindGuard::set(kind);
     if heavy(class, tokens) && super::local_gov::level() != Level::RampUp {
         match super::local_gov::wait_for_ramp_up(heavy_wait, &|| cancel.is_cancelled()) {
             None => return Err(ClientError::Cancelled),
@@ -769,22 +962,23 @@ pub(crate) fn serve_within(
     if matches!(class, "chat:quick" | "chat:default" | "desktop:soft") {
         let mut deltas = String::new();
         let out = rt
-            .chat_stream(
+            .chat_stream_at(
                 &[ChatMessage {
                     role: "user".into(),
                     content: text.into(),
                 }],
+                effort,
                 &mut |d| deltas.push_str(d),
             )
-            .map_err(ClientError::Protocol)?;
-        let text = if out.is_empty() { deltas } else { out };
-        return Ok(TurnOutput {
-            text,
-            reasoning: String::new(),
-            calls: Vec::new(),
-            usage: Usage::default(),
-            ..Default::default()
-        });
+            .map(|out| TurnOutput {
+                text: if out.is_empty() { deltas } else { out },
+                reasoning: String::new(),
+                calls: Vec::new(),
+                usage: Usage::default(),
+                ..Default::default()
+            });
+        note_task_reply(kind, &out, cancel);
+        return out.map_err(ClientError::Protocol);
     }
     let answer = if class == "background:summarize" {
         rt.summarize(text, 60)

@@ -7,14 +7,20 @@ license.workspace = true
 description = "Native xAI responses engine"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 grokhub-core = { path = "../grokhub-core" }
+grokhub-fps-probe = { path = "../grokhub-fps-probe" }
 serde.workspace = true
-serde_json.workspace = true
+# `raw_value`: an xAI compaction item is kept as the exact JSON text it came in.
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = { workspace = true }
-ureq = { workspace = true }
+# Git blob ids of sha1 repositories (ship_tree.rs); already built for grokhub-core.
+sha1 = "0.11"
 regex = { version = "1.13", default-features = false, features = ["std", "perf", "unicode"] }
-base64 = "0.22"
+base64 = "0.23"
 ignore = "0.4"
 globset = { version = "0.4", default-features = false }
 image = { workspace = true }
@@ -23,31 +29,43 @@ image = { workspace = true }
 # every table but `moz_places` / `urls`.
 rusqlite = { workspace = true, features = ["hooks"] }
 # Spike-4b learned tier at rest. All three are already in Cargo.lock and build
-# on Windows CI today: ring (ChaCha20-Poly1305) via rustls/ureq, zeroize via
-# rustls, keyring 4 via grokhub-app (Secret Service / Credential Manager / Keychain).
+# on Windows CI today: ring (ChaCha20-Poly1305) via rustls/ureq 3, zeroize via
+# rustls, keyring 4 (Secret Service / Credential Manager / Keychain).
 ring = "0.17"
 zeroize = "1"
 keyring = { workspace = true }
 
-[dev-dependencies]
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-    "http2",
-    "blocking",
-] }
+# rustls on the ring provider with webpki roots, the same ureq already builds
+# on every OS: the sandbox's TLS-ending proxy (unix) and WebSocket mode.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
+# xAI WebSocket mode (ws_mode.rs): the same crate and features the app uses,
+# with the rustls/ring/webpki config built here.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"
+# Sandbox credential masking: the egress proxy ends TLS for hosts a masked
+# token may go to, with a session CA (rcgen) on the ring provider.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
+# Microsoft Execution Containers: the shell sandbox's process container on
+# Windows 11 (network only through the egress proxy). Pinned: the API is new.
+mxc-sdk = { version = "=1.0.1", default-features = false }
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Etw",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Power",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_System_Time",
 ] }
 
 # keyring's `v1` feature only turns on the macOS `keychain` store, and

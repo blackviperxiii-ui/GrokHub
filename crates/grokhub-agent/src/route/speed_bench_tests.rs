@@ -113,6 +113,7 @@ fn fixture(name: &str) -> PathBuf {
                 },
                 cost_usd: 0.004,
                 limit: false,
+                ..RouteOutcome::default()
             }),
             ..RouteRecord::default()
         }));
@@ -222,6 +223,7 @@ impl HaltCheck for NeverHalt {
 
 fn chat_turn(stub: &Stub, i: usize) {
     let req = ResponsesRequest {
+        text_format: None,
         model: "grok-4.7".into(),
         effort: None,
         input: vec![InputItem::Message {
@@ -334,7 +336,6 @@ fn bench(name: &str, n: usize) -> Vec<Stat> {
         live::route_gb_turn(
             &dir,
             "grok-4.7",
-            false,
             None,
             "bench-gb",
             &format!("{ASK} ({i})"),

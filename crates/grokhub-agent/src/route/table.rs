@@ -84,7 +84,7 @@ impl SpeedQuality {
             | "background:compact"
             | "chat:quick" => Self::Speed,
             // repair:diagnose is Quality + Flagship lane (strongest reasoner).
-            "plan" | "design" | "code:multi-file" | "debug" | "prepare:hard"
+            "plan" | "design" | "code:multi-file" | "debug" | "chat:reason" | "prepare:hard"
             | "repair:diagnose" => Self::Quality,
             _ => Self::Balanced,
         }
@@ -935,7 +935,7 @@ pub struct Rebuilt {
 }
 
 /// Rebuild the table when the registry or profiles changed (or `force`, the
-/// Refresh models button), running due evals through `eval` once a day.
+/// set-up of a provider or Local AI), running due evals through `eval` once a day.
 pub fn rebuild(config_dir: &Path, eval: Option<EvalEnv<'_>>, force: bool, now_ms: u64) -> Rebuilt {
     let (reg, profiles) = (
         grokhub_core::model_registry::store::load_registry(config_dir),
@@ -996,43 +996,4 @@ pub fn rebuild(config_dir: &Path, eval: Option<EvalEnv<'_>>, force: bool, now_ms
         eval: run,
         joined,
     }
-}
-
-/// "How Auto picks": one line per class with its baseline model@effort and setting.
-pub fn how_auto_picks(table: &RoutingTable) -> Vec<String> {
-    let mut lines: Vec<String> = CLASS_TABLE
-        .iter()
-        .map(|row| {
-            let ct = table.classes.get(row.class);
-            let top = ct.and_then(|c| c.ranked.first()).map(|r| match &r.effort {
-                Some(e) => format!("{}@{e}", r.model),
-                None => r.model.clone(),
-            });
-            let sq = ct
-                .map(|c| c.speed_quality)
-                .unwrap_or(SpeedQuality::of(row.class));
-            format!(
-                "{} → {} ({} · baseline)",
-                row.class,
-                top.unwrap_or_else(|| "today's model".into()),
-                sq.word()
-            )
-        })
-        .collect();
-    lines.push(super::attention::TABLE_ATTENTION_NOTE.into());
-    lines
-}
-
-/// `/why table`: the same list, plus the version and when it was built.
-pub fn why_table_text(table: &RoutingTable, now_ms: u64) -> String {
-    if table.classes.is_empty() {
-        return "No routing table yet. It builds after the model list refreshes (30 s after start, then every 6 hours).".into();
-    }
-    let mut out = vec![format!(
-        "Routing table v{} · built {}",
-        table.version,
-        grokhub_core::pulse::ago_label(table.built_at, now_ms)
-    )];
-    out.extend(how_auto_picks(table));
-    out.join("\n")
 }

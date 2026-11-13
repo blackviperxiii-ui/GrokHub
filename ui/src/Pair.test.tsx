@@ -30,6 +30,23 @@ describe("Pair", () => {
     expect(takeCodeFromLink()).toBe("");
   });
 
+  it("a mangled pairing link leaves the form to pair by hand", async () => {
+    transport.pair.mockResolvedValue();
+    const onPaired = vi.fn();
+    window.history.replaceState(null, "", "/#code=%zz");
+    render(<Pair onPaired={onPaired} />);
+    expect(window.location.hash).toBe("");
+    expect(transport.pair).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Pairing code")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+
+    await userEvent.type(screen.getByLabelText("Pairing code"), "real-code");
+    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(onPaired).toHaveBeenCalledTimes(1));
+    expect(transport.pair).toHaveBeenCalledTimes(1);
+    expect(transport.pair).toHaveBeenCalledWith("real-code");
+  });
+
   it("pairs from a pairing link without typing", async () => {
     transport.pair.mockResolvedValue();
     const onPaired = vi.fn();
@@ -37,6 +54,19 @@ describe("Pair", () => {
     render(<Pair onPaired={onPaired} />);
     await waitFor(() => expect(onPaired).toHaveBeenCalledTimes(1));
     expect(transport.pair).toHaveBeenCalledWith("pair-xyz");
+  });
+
+  it("a pairing link shows it is connecting until the pairing is done", async () => {
+    let done: () => void = () => {};
+    transport.pair.mockImplementation(() => new Promise<void>((resolve) => (done = resolve)));
+    const onPaired = vi.fn();
+    window.history.replaceState(null, "", "/#code=pair-xyz");
+    render(<Pair onPaired={onPaired} />);
+    expect(screen.getByRole("button", { name: "Connecting…" })).toBeDisabled();
+    expect(transport.pair).toHaveBeenCalledWith("pair-xyz");
+    done();
+    expect(await screen.findByRole("button", { name: "Connect" })).toBeDisabled();
+    expect(onPaired).toHaveBeenCalledTimes(1);
   });
 
   it("shows why a typed code didn't pair", async () => {

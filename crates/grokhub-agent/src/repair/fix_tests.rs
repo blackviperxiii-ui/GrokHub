@@ -109,6 +109,19 @@ fn steps_are_classified_by_rules_soft_hard_and_floor() {
             "Remove-Item -Path $env:TEMP\\* -Recurse -Force",
             StepClass::Hard(HardClass::Delete),
         ),
+        // `ri` is Remove-Item, also inside a script block.
+        (
+            "Get-ChildItem build | % { ri $_ -Recurse -Force }",
+            StepClass::Hard(HardClass::Delete),
+        ),
+        (
+            "foreach ($f in $files) { ri $f }",
+            StepClass::Hard(HardClass::Delete),
+        ),
+        (
+            "if (Test-Path build) { ri build -Recurse }",
+            StepClass::Hard(HardClass::Delete),
+        ),
         (
             "rm -rf ~/.cache/thumbnails",
             StepClass::Hard(HardClass::Delete),
@@ -263,7 +276,9 @@ fn every_fix_card_has_what_why_undo_and_risk() {
             ("I'll finish setting up the apps that were left half-installed.", "soft"),
             ("I'll reinstall the apps with missing files: gtk3, firefox.", "soft"),
             ("I'll turn your network connection off and on again.", "soft"),
-            ("I'll restart the background service that stopped: Spooler.", "soft"),
+            // A Windows admin prompt asks in the app first: on an admin
+            // account UAC is one click, not a password.
+            ("I'll restart the background service that stopped: Spooler.", "hard"),
             ("I'll delete files your computer doesn't need to run anything, to free up space.", "hard"),
             ("I'll restart your computer to finish installing Windows updates.", "hard"),
         ]
@@ -335,6 +350,29 @@ fn apply_writes_the_restore_point_span_before_the_first_mutating_span() {
         std::fs::read(backup_dir(&dir, &run.id).join("0.bak")).unwrap(),
         b"[Resolve]\nDNS=1.1.1.1\n"
     );
+}
+
+#[test]
+fn the_apps_own_windows_restore_point_goes_out_but_a_drafted_admin_step_asks() {
+    let dir = test_dir("fix-win-restore");
+    let p = plan(vec![DraftStep::new(
+        "Start-Process powershell -Verb RunAs -ArgumentList 'Set-MpPreference -DisableRealtimeMonitoring $true'",
+        "Turn off Defender.",
+    )]);
+    let ctx = ApplyCtx {
+        os: Os::Windows,
+        ..ctx(&dir, true, AccessMode::Full, &none)
+    };
+    let mut run = ApplyRun::begin(&ctx, p).unwrap();
+    let Action::Gb { command, .. } = run.next_action() else {
+        panic!("the app's own restore point step is not parked")
+    };
+    assert!(command.contains("Checkpoint-Computer"), "{command}");
+    assert!(run.step_finished("STEP_OK"));
+    let Action::Park { class, .. } = run.next_action() else {
+        panic!("a drafted admin step asks first")
+    };
+    assert_eq!(class, HardClass::SystemAdmin);
 }
 
 #[test]
@@ -599,10 +637,30 @@ fn a_snapshot_is_the_first_step_and_its_guidance_names_it() {
         backend: SnapshotBackend::SystemRestore,
         label: "grokhub-repair-1".into(),
     };
-    assert_eq!(
-        cp.create_step().unwrap(),
-        "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile -Command Checkpoint-Computer -Description grokhub-repair-1 -RestorePointType MODIFY_SETTINGS'"
+    let step = cp.create_step().unwrap();
+    assert!(
+        step.starts_with("$p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList '-NoProfile -Command "),
+        "{step}"
     );
+    assert!(step.contains(
+        "Checkpoint-Computer -Description grokhub-repair-1 -RestorePointType MODIFY_SETTINGS"
+    ));
+    // It says what Windows did, and never turns System Restore on.
+    assert!(step.contains("Windows skipped the restore point"), "{step}");
+    assert!(step.contains("System Restore is off"), "{step}");
+    assert!(
+        !step.to_ascii_lowercase().contains("enable-computerrestore"),
+        "{step}"
+    );
+    // The elevated window's script stays inside its single quotes.
+    let inner = step
+        .split("-Command ")
+        .nth(1)
+        .unwrap()
+        .split("'; switch")
+        .next()
+        .unwrap();
+    assert!(!inner.contains('\''), "{inner}");
     assert_eq!(
         detect_backends(Os::Linux, &none),
         Vec::<SnapshotBackend>::new()
@@ -722,6 +780,7 @@ fn my_wifi_doesnt_work_reaches_a_plain_proposal() {
         os: Os::Linux,
         has_bin: &nm,
         runner: &answer,
+        subject: None,
     };
     let found = diagnose(&dctx, &probes);
     let plans = plans_for(&found.findings, Os::Linux, &nm);
@@ -753,5 +812,94 @@ fn my_wifi_doesnt_work_reaches_a_plain_proposal() {
     assert_eq!(
         plans[0].steps[0].command,
         "nmcli networking off; nmcli networking on"
+    );
+}
+
+#[test]
+fn the_live_checklist_shows_each_step_as_it_runs() {
+    use StepMark::{Done, Failed, NeedsOk, Pending, Running, Skipped};
+    let marks = |run: &ApplyRun| -> Vec<(String, StepMark)> {
+        run.checklist()
+            .into_iter()
+            .map(|l| (l.plain, l.mark))
+            .collect()
+    };
+    let line = |plain: &str, mark: StepMark| (plain.to_string(), mark);
+    let dir = test_dir("fix-checklist");
+    let p = plan(vec![
+        DraftStep::new("ipconfig /flushdns", "Clear the list."),
+        DraftStep::new("resolvectl flush-caches", "Clear it again."),
+    ]);
+    let mut run = ApplyRun::begin(&ctx(&dir, true, AccessMode::Supervised, &none), p).unwrap();
+    assert_eq!(
+        marks(&run),
+        vec![
+            line("Clear the list.", Pending),
+            line("Clear it again.", Pending),
+            line(CHECK_LINE, Pending),
+        ]
+    );
+    assert!(matches!(run.next_action(), Action::Gb { .. }));
+    assert_eq!(
+        marks(&run),
+        vec![
+            line("Clear the list.", Running),
+            line("Clear it again.", Pending),
+            line(CHECK_LINE, Pending),
+        ]
+    );
+    assert!(run.step_finished(STEP_OK));
+    assert!(matches!(run.next_action(), Action::Gb { .. }));
+    assert!(!run.step_finished(STEP_FAILED));
+    assert_eq!(run.next_action(), Action::Done);
+    // A failed step stops the run; the re-check never ran.
+    assert_eq!(
+        marks(&run),
+        vec![
+            line("Clear the list.", Done),
+            line("Clear it again.", Failed),
+            line(CHECK_LINE, Skipped),
+        ]
+    );
+
+    // A step waiting on its card, then a no: it and the re-check never ran.
+    let dir = test_dir("fix-checklist-hard");
+    let disk = finding(
+        ProbeId::DiskUsage,
+        Severity::Critical,
+        "Your main disk is almost full (98% used).",
+        "",
+    );
+    let apt = |b: &str| b == "apt-get";
+    let mut run = ApplyRun::begin(
+        &ctx(&dir, true, AccessMode::Full, &apt),
+        plans_for(&[disk], Os::Linux, &apt).remove(0),
+    )
+    .unwrap();
+    assert!(matches!(run.next_action(), Action::Park { .. }));
+    let first = "Delete old copies of app installers kept after updates.";
+    assert_eq!(marks(&run)[0], line(first, NeedsOk));
+    run.answer_hard(false);
+    assert_eq!(run.next_action(), Action::Done);
+    assert_eq!(marks(&run)[0], line(first, Skipped));
+    assert_eq!(marks(&run).last().unwrap(), &line(CHECK_LINE, Skipped));
+
+    // The re-check runs, then passes.
+    let (_dir, mut run) = applied("fix-checklist-verify");
+    assert_eq!(
+        marks(&run),
+        vec![line("Clear the list.", Done), line(CHECK_LINE, Running)]
+    );
+    let ok = finding(
+        ProbeId::Dns,
+        Severity::Ok,
+        "Looking up website names works.",
+        "",
+    );
+    assert!(run.record_verify(&report(vec![ok], vec![ProbeId::Dns])));
+    assert_eq!(run.next_action(), Action::Done);
+    assert_eq!(
+        marks(&run),
+        vec![line("Clear the list.", Done), line(CHECK_LINE, Done)]
     );
 }

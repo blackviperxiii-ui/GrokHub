@@ -6,7 +6,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use grokhub_core::gguf::{self, GgufMeta};
 use grokhub_core::local_profile::{self, Backend, LocalProfile};
@@ -94,6 +95,11 @@ pub struct LaunchArgs {
     pub tensor_split: Option<Vec<u64>>,
     /// Speculative decoding, when [`local_spec::plan`] turned it on.
     pub draft: Option<Box<DraftArgs>>,
+    /// Keep every GPU out of it (`--device none`): set after the GPU backend
+    /// crashed the engine at start. See [`on_cpu`].
+    pub cpu_only: bool,
+    /// How the engine shares the machine (poll, priority, batch size).
+    pub run: super::local_flags::RunFlags,
 }
 
 impl LaunchArgs {
@@ -127,11 +133,104 @@ impl LaunchArgs {
             a.extend(["--split-mode".into(), "layer".into()]);
             a.extend(["--tensor-split".into(), s.join(",")]);
         }
+        a.extend(self.run.to_args());
         if let Some(d) = &self.draft {
             a.extend(d.to_args());
         }
+        if self.cpu_only {
+            // `-ngl 0` alone still lets the GPU take big matmuls; this keeps
+            // the engine off every GPU device.
+            a.extend(["--device".into(), "none".into()]);
+        }
         a.push("--cache-prompt".into());
         a
+    }
+}
+
+/// Whether relaunching `running` as `next` would change anything that
+/// matters: the same flags, or (with every layer on the GPU in both) only
+/// the CPU thread counts differ, which a whole-GPU launch barely uses.
+pub fn same_launch(running: &LaunchArgs, next: &LaunchArgs) -> bool {
+    if running == next {
+        return true;
+    }
+    let whole_gpu = |l: &LaunchArgs| !l.cpu_only && l.ngl >= l.all_layers && l.n_cpu_moe.is_none();
+    whole_gpu(running)
+        && whole_gpu(next)
+        && LaunchArgs {
+            threads: next.threads,
+            threads_batch: next.threads_batch,
+            ..running.clone()
+        } == *next
+}
+
+/// (GPU, RAM) MB one launch takes, for deciding whether a second server
+/// fits beside the running one during a warm relaunch.
+pub fn launch_need_mb(meta: &GgufMeta, l: &LaunchArgs) -> (u64, u64) {
+    let kv = kv_mb_for(meta, l.ctx, l.kv, l.run.seqs());
+    let over = overhead_mb(l.ctx);
+    if l.cpu_only || l.ngl == 0 {
+        return (0, meta.file_mb + kv + over);
+    }
+    let blocks = u64::from(meta.block_count.max(1));
+    let weights_gpu = match l.n_cpu_moe {
+        Some(n) => {
+            let experts = meta.file_mb * EXPERT_SHARE_PCT / 100;
+            let on_gpu = blocks.saturating_sub(u64::from(n).min(blocks));
+            meta.file_mb - experts + experts * on_gpu / blocks
+        }
+        None => meta.file_mb * u64::from(l.ngl.min(l.all_layers)) / u64::from(l.all_layers.max(1)),
+    };
+    (weights_gpu + kv + over, meta.file_mb - weights_gpu + 512)
+}
+
+/// RAM a warm relaunch leaves to the OS on top of both servers.
+const BESIDE_RAM_RESERVE_MB: u64 = 2_048;
+
+/// A launch needing `need` (GPU, RAM) MB fits in what is free `now`, with a
+/// 10% margin; an unknown reading never fits.
+pub fn fits_beside(now: FreeNow, need: (u64, u64)) -> bool {
+    let room = |free: Option<u64>, want: u64, reserve: u64| {
+        want == 0 || free.is_some_and(|f| f >= want + want / 10 + reserve)
+    };
+    room(now.vram_free_mb, need.0, 0) && room(now.ram_free_mb, need.1, BESIDE_RAM_RESERVE_MB)
+}
+
+/// `prev` with every GPU left out: no layers or experts on a GPU, no split,
+/// no drafter (it would run on the GPU too).
+pub fn on_cpu(prev: &LaunchArgs) -> LaunchArgs {
+    LaunchArgs {
+        backend: Backend::Cpu,
+        ngl: 0,
+        n_cpu_moe: None,
+        tensor_split: None,
+        draft: None,
+        cpu_only: true,
+        run: run_with_slots(1),
+        ..prev.clone()
+    }
+}
+
+/// The speed test is timing the gaming setup at idle (see `local_spec`).
+static GAMING_TEST: AtomicBool = AtomicBool::new(false);
+
+/// Plan launches as a game would see them, for the gaming speed test.
+pub fn set_gaming_test(on: bool) {
+    GAMING_TEST.store(on, Ordering::SeqCst);
+}
+
+fn gaming_test() -> bool {
+    GAMING_TEST.load(Ordering::SeqCst)
+}
+
+/// [`on_cpu`] for Gaming mode: half the threads (at least two), so the
+/// game keeps the GPU and most of the CPU.
+pub fn gaming_launch(prev: &LaunchArgs) -> LaunchArgs {
+    let threads = (prev.threads / 2).max(2).min(prev.threads.max(1));
+    LaunchArgs {
+        threads,
+        threads_batch: prev.threads_batch.map(|t| (t / 2).max(threads)),
+        ..on_cpu(prev)
     }
 }
 
@@ -149,8 +248,27 @@ pub fn overhead_mb(ctx: u32) -> u64 {
     512 + u64::from(ctx) / 128
 }
 
+/// KV cache MB for one sequence; see [`kv_mb_for`].
 pub fn kv_mb(meta: &GgufMeta, ctx: u32, kv: KvType) -> u64 {
-    let values = u64::from(meta.block_count) * meta.kv_width() * u64::from(ctx);
+    kv_mb_for(meta, ctx, kv, 1)
+}
+
+/// The engine's default micro-batch, which a sliding-window cache adds room for.
+const DEFAULT_UBATCH: u32 = 512;
+
+/// Cells a sliding-window layer keeps for `seqs` sequences in one unified
+/// cache: the window per sequence plus a micro-batch, padded to 256 as
+/// llama.cpp sizes it, and never more than the context.
+pub fn swa_cells(window: u32, seqs: u32, ctx: u32) -> u64 {
+    let want = u64::from(window) * u64::from(seqs.max(1)) + u64::from(DEFAULT_UBATCH);
+    want.div_ceil(256).saturating_mul(256).min(u64::from(ctx))
+}
+
+/// KV cache MB for `ctx` tokens shared by `seqs` slots: full-attention
+/// layers hold the whole context, sliding-window layers only their window.
+pub fn kv_mb_for(meta: &GgufMeta, ctx: u32, kv: KvType, seqs: u32) -> u64 {
+    let cells = swa_cells(meta.sliding_window, seqs, ctx);
+    let values = meta.kv_values(u64::from(ctx), cells);
     values / 1_024 * kv.bytes_per_1k() / (1_024 * 1_024)
 }
 
@@ -187,7 +305,11 @@ pub fn budgets(p: &LocalProfile, backend: Backend, state: GovState) -> (u64, u64
     (gpu_free * pct / 100, ram)
 }
 
-fn ctx_steps(meta: &GgufMeta, state: GovState, want: Option<u32>) -> impl Iterator<Item = u32> {
+fn ctx_steps(
+    meta: &GgufMeta,
+    state: GovState,
+    want: Option<u32>,
+) -> impl Iterator<Item = u32> + use<> {
     let model_max = if meta.context_length > 0 {
         meta.context_length
     } else {
@@ -197,8 +319,9 @@ fn ctx_steps(meta: &GgufMeta, state: GovState, want: Option<u32>) -> impl Iterat
     CTX_STEPS.into_iter().filter(move |c| *c <= cap.max(4_096))
 }
 
-fn fits(meta: &GgufMeta, ctx: u32, kv: KvType, total_mb: u64) -> bool {
-    meta.file_mb + kv_mb(meta, ctx, kv) + overhead_mb(ctx) <= total_mb
+/// Whether the model and its KV fit `total_mb`, at the slots `slots(ctx)` gives.
+fn fits(meta: &GgufMeta, ctx: u32, kv: KvType, total_mb: u64, slots: &dyn Fn(u32) -> u32) -> bool {
+    meta.file_mb + kv_mb_for(meta, ctx, kv, slots(ctx)) + overhead_mb(ctx) <= total_mb
 }
 
 /// Context past this splits KV across GPU and RAM badly; partial offload stops here.
@@ -214,8 +337,14 @@ fn pick_ctx(
     limit: u64,
     floor: u32,
     kv: Option<KvType>,
+    slots: &dyn Fn(u32) -> u32,
 ) -> Option<(u32, KvType)> {
-    let largest = |kv: KvType| steps.iter().copied().find(|c| fits(meta, *c, kv, limit));
+    let largest = |kv: KvType| {
+        steps
+            .iter()
+            .copied()
+            .find(|c| fits(meta, *c, kv, limit, slots))
+    };
     if let Some(kv) = kv {
         return largest(kv).map(|c| (c, kv));
     }
@@ -241,8 +370,10 @@ pub fn autoconfig(
     let floor = Q8_FLOOR_CTX
         .min(meta.context_length.max(4_096))
         .min(o.ctx.unwrap_or(u32::MAX).max(4_096));
+    let on_cpu = gpu_mb == 0;
+    let slots = |ctx: u32| super::local_flags::slot_count(state, ctx, on_cpu);
     let full = (gpu_mb > 0)
-        .then(|| pick_ctx(meta, &steps, gpu_mb, floor, o.kv))
+        .then(|| pick_ctx(meta, &steps, gpu_mb, floor, o.kv, &slots))
         .flatten()
         .filter(|(c, _)| *c >= floor);
     let cap = if gpu_mb > 0 {
@@ -252,10 +383,11 @@ pub fn autoconfig(
     };
     let capped: Vec<u32> = steps.iter().copied().filter(|c| *c <= cap).collect();
     let (ctx, kv) = full
-        .or_else(|| pick_ctx(meta, &capped, gpu_mb + ram_mb, floor, o.kv))
+        .or_else(|| pick_ctx(meta, &capped, gpu_mb + ram_mb, floor, o.kv, &slots))
         .unwrap_or((4_096, o.kv.unwrap_or(KvType::Q4)));
     let all_layers = meta.block_count + 1;
-    let (ngl, n_cpu_moe) = offload(meta, gpu_mb, ctx, kv);
+    let seqs = slots(ctx);
+    let (ngl, n_cpu_moe) = offload(meta, gpu_mb, ctx, kv, seqs);
     let ngl = o.ngl.map_or(ngl, |n| n.min(all_layers));
     let p_cores = p.cpu.p_cores.max(1);
     let threads = match state {
@@ -281,14 +413,29 @@ pub fn autoconfig(
         mlock: p.free_ram_mb.is_some_and(|free| free > 2 * meta.file_mb),
         tensor_split: p.device_plan().tensor_split,
         draft: None,
+        cpu_only: false,
+        run: run_with_slots(seqs),
+    }
+}
+
+/// Engine flags with `n` slots (unified KV past one); [`planned`] keeps only
+/// the flags the engine lists.
+pub fn run_with_slots(n: u32) -> super::local_flags::RunFlags {
+    super::local_flags::RunFlags {
+        slots: super::local_flags::Slots {
+            parallel: Some(n),
+            kv_unified: Some(n > 1),
+            ..Default::default()
+        },
+        ..Default::default()
     }
 }
 
 /// `-ngl` and `--n-cpu-moe` for the GPU memory left after KV and buffers.
-fn offload(meta: &GgufMeta, gpu_mb: u64, ctx: u32, kv: KvType) -> (u32, Option<u32>) {
+fn offload(meta: &GgufMeta, gpu_mb: u64, ctx: u32, kv: KvType, seqs: u32) -> (u32, Option<u32>) {
     let all = meta.block_count + 1;
     let blocks = u64::from(meta.block_count.max(1));
-    let room = gpu_mb.saturating_sub(kv_mb(meta, ctx, kv) + overhead_mb(ctx));
+    let room = gpu_mb.saturating_sub(kv_mb_for(meta, ctx, kv, seqs) + overhead_mb(ctx));
     if gpu_mb == 0 {
         return (0, None);
     }
@@ -369,9 +516,7 @@ pub fn after_oom(prev: &LaunchArgs, attempt: u8) -> Retry {
 pub fn next_smaller(id: &str) -> Option<&'static LocalModel> {
     let models = local_setup::local_models();
     let at = models.iter().position(|m| m.id == id)?;
-    models[at + 1..]
-        .iter()
-        .find(|m| !m.optional && !m.is_drafter)
+    models[at + 1..].iter().find(|m| !m.optional && m.is_chat())
 }
 
 /// One launch that ran after backing off, kept per model + device + driver.
@@ -382,6 +527,63 @@ pub struct Tuned {
     pub n_cpu_moe: Option<u32>,
     pub ctx: u32,
     pub kv: KvType,
+    /// The GPU backend crashed the engine here, so it runs on the CPU.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cpu_only: bool,
+    /// Clean starts at these caps since they were set or last grew.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub clean: u8,
+}
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
+/// Clean starts at a memory cap before it grows back a step.
+pub const GROW_AFTER_CLEAN: u8 = 2;
+
+/// The caps one step looser: a tenth more layers on the GPU (or a tenth
+/// fewer layers' experts in RAM) and twice the context. `None` once nothing
+/// is capped any more, and the record can go.
+pub fn grow(t: &Tuned, all_layers: u32) -> Option<Tuned> {
+    let step = (all_layers / 10).max(1);
+    let blocks = all_layers.saturating_sub(1);
+    let ctx_max = CTX_STEPS[0];
+    let next = Tuned {
+        ngl: (t.ngl + step).min(all_layers),
+        n_cpu_moe: t
+            .n_cpu_moe
+            .and_then(|n| n.checked_sub((blocks / 10).max(1)))
+            .filter(|n| *n > 0),
+        ctx: t.ctx.saturating_mul(2).min(ctx_max),
+        kv: t.kv,
+        cpu_only: false,
+        clean: 0,
+    };
+    let free = next.ngl >= all_layers && next.n_cpu_moe.is_none() && next.ctx >= ctx_max;
+    (!free).then_some(next)
+}
+
+/// A start ran clean at `key`'s stored caps: after [`GROW_AFTER_CLEAN`] of
+/// them the caps grow a step, so one bad night doesn't cap a model for good.
+/// A CPU-only record (the GPU backend crashed) stays.
+pub fn clean_start(dir: &Path, key: &str, all_layers: u32) -> Result<(), String> {
+    let mut all = load_tuned(dir);
+    let Some(t) = all.get_mut(key).filter(|t| !t.cpu_only) else {
+        return Ok(());
+    };
+    t.clean = t.clean.saturating_add(1);
+    if t.clean >= GROW_AFTER_CLEAN {
+        match grow(t, all_layers) {
+            Some(next) => *t = next,
+            None => {
+                all.remove(key);
+            }
+        }
+    }
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&all).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(AUTOTUNE_FILE), json).map_err(|e| e.to_string())
 }
 
 pub const AUTOTUNE_FILE: &str = "autotune.json";
@@ -433,6 +635,12 @@ pub fn save_tuned(dir: &Path, key: &str, t: &Tuned) -> Result<(), String> {
 
 /// A stored launch caps the fresh plan: never more layers or context than ran.
 pub fn apply_tuned(args: LaunchArgs, t: &Tuned) -> LaunchArgs {
+    if t.cpu_only {
+        return on_cpu(&LaunchArgs {
+            ctx: args.ctx.min(t.ctx),
+            ..args
+        });
+    }
     LaunchArgs {
         ngl: args.ngl.min(t.ngl),
         ctx: args.ctx.min(t.ctx),
@@ -454,6 +662,159 @@ struct Live {
     tune_dir: Option<PathBuf>,
     state: GovState,
     overrides: Overrides,
+    /// The cabin's live free-memory read, taken at every launch.
+    free_probe: Option<Arc<dyn Fn() -> FreeNow + Send + Sync>>,
+    /// Free VRAM once the running model was resident (MB): what is left with
+    /// our own model loaded, so only someone else's use counts as a drop.
+    launch_free_vram_mb: Option<u64>,
+    /// Free memory just before the running launch started.
+    before_launch: FreeNow,
+    /// What the running model itself takes (before launch minus resident),
+    /// added back when planning what a fresh start would get.
+    own: FreeNow,
+}
+
+/// Free memory right now, from the cabin's probe (`nvidia-smi`, the OS).
+/// `None` where a reading isn't available; the hardware profile's value then stands.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FreeNow {
+    /// Free VRAM across the discrete GPUs the plan uses.
+    pub vram_free_mb: Option<u64>,
+    pub ram_free_mb: Option<u64>,
+}
+
+/// The cabin's live free-memory read. Each launch (and relaunch after a
+/// governor level change) plans against what is free *now*, so a game that
+/// took GPU memory leaves the model with fewer layers on the GPU and a
+/// shorter context instead of an out-of-memory start, and the next launch
+/// after the game ends grows back.
+pub fn set_free_probe(probe: Arc<dyn Fn() -> FreeNow + Send + Sync>) {
+    if let Ok(mut l) = live().lock() {
+        l.free_probe = Some(probe);
+    }
+}
+
+/// The profile with its free memory replaced by a live reading. Free VRAM
+/// goes to the plan's GPUs in proportion to their size.
+pub fn with_free_now(mut p: LocalProfile, now: FreeNow) -> LocalProfile {
+    if let Some(vram) = now.vram_free_mb {
+        let plan = p.device_plan();
+        let total: u64 = plan.gpus.iter().map(|g| g.vram_mb).sum();
+        for g in p.gpus.iter_mut() {
+            if plan
+                .gpus
+                .iter()
+                .any(|pg| pg.name == g.name && pg.vram_mb == g.vram_mb)
+            {
+                let share = vram
+                    .saturating_mul(g.vram_mb)
+                    .checked_div(total)
+                    .unwrap_or(vram);
+                g.free_vram_mb = Some(share.min(g.vram_mb));
+            }
+        }
+    }
+    if let Some(ram) = now.ram_free_mb {
+        p.free_ram_mb = Some(ram);
+    }
+    p
+}
+
+/// Free VRAM fell well under what the running launch was sized for (a game
+/// loaded): the model should relaunch into what is left.
+pub fn vram_dropped(launch_free_mb: u64, now_free_mb: u64) -> bool {
+    now_free_mb.saturating_mul(100) < launch_free_mb.saturating_mul(VRAM_DROP_PCT)
+}
+
+/// A relaunch is worth it once free VRAM is under this share of the launch's.
+pub const VRAM_DROP_PCT: u64 = 70;
+
+/// The sidecar is up with the model loaded: free VRAM now is the baseline a
+/// later drop is measured against (the model's own memory is already gone
+/// from it, so loading it never reads as a game taking the GPU).
+pub fn mark_resident() {
+    let probe = live().lock().ok().and_then(|l| l.free_probe.clone());
+    let now = probe.map(|f| f()).unwrap_or_default();
+    if let Ok(mut l) = live().lock() {
+        l.launch_free_vram_mb = now.vram_free_mb;
+        l.own = taken(l.before_launch, now);
+    }
+}
+
+/// A warm relaunch retired the old server: free VRAM now is the new
+/// baseline (the old model's memory came back), the new model's own use stays.
+pub fn refresh_resident() {
+    let probe = live().lock().ok().and_then(|l| l.free_probe.clone());
+    let now = probe.map(|f| f().vram_free_mb).unwrap_or_default();
+    if let Ok(mut l) = live().lock() {
+        l.launch_free_vram_mb = now;
+    }
+}
+
+/// Memory a launch took: free before it minus free once it was resident.
+pub fn taken(before: FreeNow, resident: FreeNow) -> FreeNow {
+    let diff = |b: Option<u64>, r: Option<u64>| Some(b?.saturating_sub(r?));
+    FreeNow {
+        vram_free_mb: diff(before.vram_free_mb, resident.vram_free_mb),
+        ram_free_mb: diff(before.ram_free_mb, resident.ram_free_mb),
+    }
+}
+
+/// `now` with the running model's own memory added back: what a fresh start
+/// of it would see.
+pub fn with_own(now: FreeNow, own: FreeNow) -> FreeNow {
+    let add = |n: Option<u64>, o: Option<u64>| n.map(|n| n + o.unwrap_or(0));
+    FreeNow {
+        vram_free_mb: add(now.vram_free_mb, own.vram_free_mb),
+        ram_free_mb: add(now.ram_free_mb, own.ram_free_mb),
+    }
+}
+
+/// Free memory now, from the probe (both `None` without one).
+pub fn free_now() -> FreeNow {
+    let probe = live().lock().ok().and_then(|l| l.free_probe.clone());
+    probe.map(|f| f()).unwrap_or_default()
+}
+
+/// Tests: forget the probe and the baseline, so no later test plans against
+/// a fake reading.
+#[cfg(test)]
+pub(crate) fn reset_free_probe() {
+    if let Ok(mut l) = live().lock() {
+        l.free_probe = None;
+        l.launch_free_vram_mb = None;
+        l.before_launch = FreeNow::default();
+        l.own = FreeNow::default();
+    }
+}
+
+/// A launch is starting (or the model left): no baseline until the new
+/// model is resident, so the last model's reading never judges this one.
+pub fn clear_resident() {
+    let probe = live().lock().ok().and_then(|l| l.free_probe.clone());
+    let before = probe.map(|f| f()).unwrap_or_default();
+    if let Ok(mut l) = live().lock() {
+        l.launch_free_vram_mb = None;
+        l.before_launch = before;
+        l.own = FreeNow::default();
+    }
+}
+
+/// Under Throttle: free VRAM now is well under what was free once the model
+/// was resident, so the governor should restart the model into the smaller room.
+pub fn vram_dropped_since_launch() -> bool {
+    let (probe, launched) = {
+        let Ok(l) = live().lock() else {
+            return false;
+        };
+        (l.free_probe.clone(), l.launch_free_vram_mb)
+    };
+    match (probe, launched) {
+        (Some(probe), Some(launched)) => probe()
+            .vram_free_mb
+            .is_some_and(|now| vram_dropped(launched, now)),
+        _ => false,
+    }
 }
 
 fn live() -> &'static Mutex<Live> {
@@ -464,6 +825,10 @@ fn live() -> &'static Mutex<Live> {
             tune_dir: None,
             state: GovState::Normal,
             overrides: Overrides::default(),
+            free_probe: None,
+            launch_free_vram_mb: None,
+            before_launch: FreeNow::default(),
+            own: FreeNow::default(),
         })
     })
 }
@@ -474,6 +839,11 @@ pub fn set_profile(p: LocalProfile, tune_dir: PathBuf) {
         l.profile = Some(p);
         l.tune_dir = Some(tune_dir);
     }
+}
+
+/// The cabin's hardware read, once it has one.
+pub fn profile() -> Option<LocalProfile> {
+    live().lock().ok()?.profile.clone()
 }
 
 pub fn set_state(s: GovState) {
@@ -510,12 +880,51 @@ fn engine_files(binary: &Path) -> Vec<String> {
 /// `None` (the one-shot `local_perf` defaults) before that or when the GGUF
 /// header can't be read. Also returns the `autotune.json` key and folder.
 pub fn launch_for(binary: &Path, model: &Path) -> Option<(LaunchArgs, String, PathBuf)> {
-    planned(binary, model).map(|(args, _, key, dir)| (args, key, dir))
+    launch_with(binary, model, None)
+}
+
+/// [`launch_for`] planned against `free` instead of the probe's reading.
+pub fn launch_with(
+    binary: &Path,
+    model: &Path,
+    free: Option<FreeNow>,
+) -> Option<(LaunchArgs, String, PathBuf)> {
+    planned(binary, model, free).map(|(args, plan, key, dir)| {
+        local_spec::launched(&plan, &dir);
+        (args, key, dir)
+    })
 }
 
 /// The draft half of [`launch_for`], for the speed test.
 pub fn draft_plan(binary: &Path, model: &Path) -> Option<local_spec::Plan> {
-    planned(binary, model).map(|(_, plan, _, _)| plan)
+    planned(binary, model, None).map(|(_, plan, _, _)| plan)
+}
+
+/// What a fresh start of the running model would see free now: the probe's
+/// reading with the model's own memory added back.
+pub fn replan_free() -> FreeNow {
+    let own = live().lock().map(|l| l.own).unwrap_or_default();
+    with_own(free_now(), own)
+}
+
+/// [`launch_for`] as a fresh start of the running model would plan it (see
+/// [`replan_free`]), leaving the drafter's record alone. `None` before the
+/// profile is read or when the header can't be.
+pub fn replan_for(binary: &Path, model: &Path) -> Option<(LaunchArgs, String, PathBuf)> {
+    planned(binary, model, Some(replan_free())).map(|(args, _, key, dir)| (args, key, dir))
+}
+
+/// The second server of a warm relaunch, planned as `next`, fits beside the
+/// running one in what is free now. Never with a drafter (its memory isn't
+/// counted) or when the header or a reading is missing.
+pub fn warm_fits(model: &Path, next: &LaunchArgs) -> bool {
+    if next.draft.is_some() {
+        return false;
+    }
+    let Ok(meta) = gguf::read_meta(model) else {
+        return false;
+    };
+    fits_beside(free_now(), launch_need_mb(&meta, next))
 }
 
 /// Where `autotune.json` and the draft verdicts live, once the profile is read.
@@ -523,16 +932,39 @@ pub fn tune_dir() -> Option<PathBuf> {
     live().lock().ok()?.tune_dir.clone()
 }
 
-fn planned(binary: &Path, model: &Path) -> Option<(LaunchArgs, local_spec::Plan, String, PathBuf)> {
-    let (p, dir, state, o) = {
+fn planned(
+    binary: &Path,
+    model: &Path,
+    free: Option<FreeNow>,
+) -> Option<(LaunchArgs, local_spec::Plan, String, PathBuf)> {
+    planned_as(binary, model, free, false)
+}
+
+/// [`draft_plan`] for `model` in the gaming setup, whether a game runs or not.
+pub fn gaming_draft_plan(binary: &Path, model: &Path) -> Option<local_spec::Plan> {
+    planned_as(binary, model, None, true).map(|(_, plan, _, _)| plan)
+}
+
+/// [`planned`]; `gaming` plans the gaming setup even with no game running.
+fn planned_as(
+    binary: &Path,
+    model: &Path,
+    free: Option<FreeNow>,
+    gaming: bool,
+) -> Option<(LaunchArgs, local_spec::Plan, String, PathBuf)> {
+    let (p, dir, state, o, probe) = {
         let l = live().lock().ok()?;
         (
             l.profile.clone()?,
             l.tune_dir.clone()?,
             l.state,
             l.overrides.clone(),
+            l.free_probe.clone(),
         )
     };
+    // Plan against the memory free right now, not the probe's at setup.
+    let now = free.unwrap_or_else(|| probe.as_ref().map(|f| f()).unwrap_or_default());
+    let p = with_free_now(p, now);
     let meta = gguf::read_meta(model).ok()?;
     let files = engine_files(binary);
     let files: Vec<&str> = files.iter().map(String::as_str).collect();
@@ -548,7 +980,7 @@ fn planned(binary: &Path, model: &Path) -> Option<(LaunchArgs, local_spec::Plan,
     };
     let flags = local_spec::help_flags(binary);
     let device = device_label(&p, backend);
-    let plan = local_spec::plan(&local_spec::Launch {
+    let mut plan = local_spec::plan(&local_spec::Launch {
         flags: &flags,
         model,
         meta: &meta,
@@ -557,9 +989,97 @@ fn planned(binary: &Path, model: &Path) -> Option<(LaunchArgs, local_spec::Plan,
         args: &args,
         tune_dir: &dir,
         device: &device,
+        gaming: false,
     });
     args.draft = plan.draft.clone().map(Box::new);
+    // Gaming mode: a game holds the GPU, so the model runs on the CPU with
+    // half the threads and the game keeps its frame rate. Its drafter joins
+    // on the CPU too, only when the gaming setup's own speed test kept it
+    // and both fit in RAM; otherwise the model runs alone.
+    if gaming || gaming_test() || super::local_scale::gaming_reason(super::local_gov::reason()) {
+        args = gaming_launch(&args);
+        plan = local_spec::plan(&local_spec::Launch {
+            flags: &flags,
+            model,
+            meta: &meta,
+            profile: &p,
+            state,
+            args: &args,
+            tune_dir: &dir,
+            device: local_spec::GAMING_DEVICE,
+            gaming: true,
+        });
+        args.draft = plan.draft.clone().map(Box::new);
+    }
+    let options = super::local_flags::engine_options(binary);
+    // A tuned or gaming launch may have cut the context or left the GPU:
+    // never more slots than memory was planned for, nor than now fit.
+    let on_cpu = args.cpu_only || args.ngl == 0;
+    let n = args
+        .run
+        .seqs()
+        .min(super::local_flags::slot_count(state, args.ctx, on_cpu));
+    let slots = super::local_flags::slots(&options, n, p.free_ram_mb);
+    let shared = state == GovState::Throttle;
+    // Kept up under Throttle, it shares the machine: no spinning threads,
+    // low priority, and short GPU submissions so other apps' frames wait less.
+    args.run = if state == GovState::Throttle {
+        let on_gpu = !args.cpu_only && args.ngl > 0;
+        super::local_flags::shared(&options, args.backend, on_gpu)
+    } else {
+        Default::default()
+    };
+    args.run.slots = slots;
+    if !shared {
+        tune(
+            &mut args,
+            &mut plan,
+            &options,
+            &dir,
+            &key,
+            state,
+            p.free_ram_mb,
+        );
+    }
     Some((args, plan, key, dir))
+}
+
+/// Runs the auto-tune arm for this device × model × mode on `args` (see
+/// [`super::local_tune`]); Throttle launches are never tuned.
+fn tune(
+    args: &mut LaunchArgs,
+    plan: &mut local_spec::Plan,
+    options: &std::collections::BTreeSet<String>,
+    dir: &Path,
+    key: &str,
+    state: GovState,
+    ram_free_mb: Option<u64>,
+) {
+    use super::local_tune::{self as t, Arm};
+    let base = Arm {
+        slots: args.run.seqs(),
+        draft: args.draft.is_some(),
+        ubatch: args.run.ubatch.unwrap_or(t::UBATCH_DEFAULT),
+    };
+    let cands = t::candidates(base, options.contains("--ubatch-size"));
+    let key = format!("{key}|{state:?}");
+    let arm = t::current(dir, &key, &cands, base);
+    if arm.slots != base.slots {
+        args.run.slots = super::local_flags::slots(options, arm.slots, ram_free_mb);
+    }
+    if !arm.draft {
+        args.draft = None;
+        plan.draft = None;
+    }
+    if arm.ubatch != base.ubatch {
+        args.run.ubatch = Some(arm.ubatch);
+    }
+    args.run.tune = Some(Box::new(t::Tag {
+        key,
+        arm,
+        base,
+        cands,
+    }));
 }
 
 /// The catalog row for a model file, for [`next_smaller`].

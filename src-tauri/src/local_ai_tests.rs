@@ -40,9 +40,11 @@ fn apple(ram_mb: u64) -> Machine {
 fn page(m: &Machine) -> (Vec<(String, &'static str)>, String, Picker) {
     let p = m.profile();
     let picker = picker(&p, &BenchCache::new(), &[], &LocalAiConfig::default());
+    // The default rows; the optional makers have their own test.
     let order = picker
         .models
         .iter()
+        .filter(|r| !r.optional)
         .map(|r| (r.name.clone(), r.bucket))
         .collect();
     (order, picker.selected.clone(), picker)
@@ -131,10 +133,10 @@ fn a_16_gb_gpu_shows_the_31b_as_slow_with_partial_offload() {
 }
 
 #[test]
-fn a_24_gb_gpu_recommends_every_model_and_preselects_31b() {
+fn a_24_gb_gpu_recommends_every_model_and_preselects_the_fast_26b_a4b() {
     let (order, selected, picker) = page(&machine(vec![gpu("RTX 4090", 24_576)], 65_536));
     assert!(order.iter().all(|(_, b)| *b == "recommended"), "{order:?}");
-    assert_eq!(selected, "gemma-4-31b-it-abliterated-q4_k");
+    assert_eq!(selected, "gemma-4-26b-a4b-it-abliterated-q4_k");
     assert_eq!(
         named(&order),
         [
@@ -145,7 +147,10 @@ fn a_24_gb_gpu_recommends_every_model_and_preselects_31b() {
             ("Gemma 4 E2B", "recommended"),
         ]
     );
-    assert!(picker.models.iter().all(|r| !r.optional));
+    assert!(
+        order.len() < picker.models.len(),
+        "the optional makers show too"
+    );
     assert_eq!(
         why(&picker, "Gemma 4 31B"),
         "Fits in 24 GB of GPU memory, about 35 tok/s."
@@ -249,7 +254,6 @@ fn values_are_clamped_and_caps_never_pass_90_percent() {
         mode: Mode::Manual,
         manual: Manual {
             backend: "Vulkan".into(),
-            draft: "maybe".into(),
             ngl: Some(5_000),
             ctx: Some(100),
             threads: Some(64),
@@ -268,10 +272,7 @@ fn values_are_clamped_and_caps_never_pass_90_percent() {
     }
     .clamped(16);
     let m = &wild.manual;
-    assert_eq!(
-        (m.backend.as_str(), m.draft.as_str(), m.kv.as_str()),
-        ("vulkan", "auto", "q4")
-    );
+    assert_eq!((m.backend.as_str(), m.kv.as_str()), ("vulkan", "q4"));
     assert_eq!(
         (m.ngl, m.ctx, m.threads),
         (Some(999), Some(2_048), Some(16))
@@ -336,6 +337,7 @@ fn saving_writes_the_pick_and_the_governors_rules() {
             deny: vec!["blender".into()],
             throttle_on_battery: false,
             pause_for_games: false,
+            unload_for_games: true,
             use_idle_time: false,
         }
     );
@@ -345,13 +347,14 @@ fn saving_writes_the_pick_and_the_governors_rules() {
 }
 
 #[test]
-fn a_third_party_file_needs_the_notice_once() {
+fn a_third_party_or_abliterated_file_needs_the_notice_once() {
     let seen = vec!["/m/Llama-3-8B-abliterated.Q4_K_M.gguf".to_string()];
-    // The catalog's own abliterated builds carry the badge but no notice.
+    // The catalog's own abliterated builds carry the badge and ask once too.
+    let catalog_path = "/m/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
     let catalog = file_row(
-        Path::new("/m/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf"),
+        Path::new(catalog_path),
         5 * 1_024 * 1_024 * 1_024,
-        "GrokHub models",
+        "Loadout models",
         &[],
     );
     assert_eq!(
@@ -360,9 +363,19 @@ fn a_third_party_file_needs_the_notice_once() {
             catalog.abliterated,
             catalog.needs_notice
         ),
-        (false, true, false)
+        (false, true, true)
     );
     assert_eq!(catalog.size, "5 GB");
+    let catalog_read = file_row(
+        Path::new(catalog_path),
+        0,
+        "GrokHub models",
+        &[catalog_path.to_string()],
+    );
+    assert_eq!(
+        (catalog_read.abliterated, catalog_read.needs_notice),
+        (true, false)
+    );
     // A stock Gemma 4 file from the older catalog is a third-party file now.
     let stock = file_row(
         Path::new("/m/gemma-4-E4B-it-Q4_K_M.gguf"),
@@ -491,4 +504,57 @@ fn limited_detection_is_named() {
         ),
         Vec::<String>::new()
     );
+}
+
+#[test]
+fn saving_keeps_the_cabins_unload_choice() {
+    let dir = std::env::temp_dir().join(format!("grokhub-local-ai-unload-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let gov = dir.join("local").join("governor.json");
+    std::fs::create_dir_all(gov.parent().unwrap()).unwrap();
+    std::fs::write(&gov, r#"{"unloadForGames": false}"#).unwrap();
+    save(&dir, &LocalAiConfig::default()).unwrap();
+    let rules = Rules::from_json(&std::fs::read_to_string(&gov).unwrap());
+    assert!(!rules.unload_for_games);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_settings_file_from_before_the_draft_choice_went_away_still_loads() {
+    let old = r#"{"backend":"cuda","draft":"on","idleMinutes":5}"#;
+    let m: Manual = serde_json::from_str(old).unwrap();
+    assert_eq!((m.backend.as_str(), m.idle_minutes), ("cuda", 5));
+}
+
+#[test]
+fn the_running_rows_offer_keep_loaded_and_say_when_nothing_runs() {
+    let dir = std::env::temp_dir().join(format!("gh-shell-running-{}", std::process::id()));
+    let r = running(&dir);
+    assert!(r.lines[0].starts_with("Running now: "), "{:?}", r.lines);
+    assert_eq!(r.kept_loaded, local_sidecar::keep_loaded());
+}
+
+#[test]
+fn optional_makers_follow_the_defaults_and_are_never_preselected() {
+    for m in [
+        machine(Vec::new(), 8_192),
+        machine(vec![gpu("RTX 4090", 24_576)], 65_536),
+        apple(16_384),
+    ] {
+        let (_, selected, picker) = page(&m);
+        assert_eq!(picker.models.iter().filter(|r| r.optional).count(), 20);
+        assert!(!picker.models.iter().any(|r| r.optional && r.preselected));
+        assert!(!ls::model_by_id(&selected).is_some_and(|x| x.optional));
+        // Within a bucket, no optional row sits above a default one.
+        for w in picker.models.windows(2) {
+            if w[0].bucket == w[1].bucket {
+                assert!(
+                    !(w[0].optional && !w[1].optional),
+                    "{} before {}",
+                    w[0].name,
+                    w[1].name
+                );
+            }
+        }
+    }
 }

@@ -87,11 +87,6 @@ fn bump_check(root: &Path) -> Result<(), String> {
         "packaging/windows/grokhub.iss",
         &format!("#define MyAppVersion \"{version}\""),
     )?;
-    check_contains(
-        root,
-        "crates/grokhub-app/src/cli.rs",
-        &format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{version}\");"),
-    )?;
     check_contains(root, SHELL_TOML, &shell_toml_line(&version))?;
     check_contains(root, SHELL_CONF, &shell_conf_line(&version))?;
     check_reference(root, &version)?;
@@ -154,21 +149,25 @@ fn check_reference_text(text: &str, version: &str) -> Result<(), String> {
     Ok(())
 }
 
-const LOCK_PACKAGES: [&str; 6] = [
-    "grokhub-app",
+const LOCK_PACKAGES: [&str; 7] = [
     "grokhub-agent",
+    "grokhub-code",
     "grokhub-core",
     "grokhub-desktop",
+    "grokhub-fps-probe",
     "grokhub-hub",
     "grokhub-proto",
 ];
 
 /// The Tauri shell (`src-tauri/`) is its own Cargo workspace, so its lockfile
 /// holds its own copies of the grokhub-* crates it builds on, plus the shell.
-const SHELL_LOCK_PACKAGES: [&str; 5] = [
+const SHELL_LOCK_PACKAGES: [&str; 8] = [
     "grokhub-agent",
+    "grokhub-code",
     "grokhub-core",
     "grokhub-desktop",
+    "grokhub-fps-probe",
+    "grokhub-hub",
     "grokhub-proto",
     "grokhub-shell",
 ];
@@ -274,11 +273,6 @@ fn plan_bump(root: &Path, new_version: &str, today: &str) -> Result<BumpPlan, St
             "packaging/windows/grokhub.iss",
             format!("#define MyAppVersion \"{old}\""),
             format!("#define MyAppVersion \"{new_version}\""),
-        ),
-        (
-            "crates/grokhub-app/src/cli.rs",
-            format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{old}\");"),
-            format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{new_version}\");"),
         ),
         (
             SHELL_TOML,
@@ -504,22 +498,20 @@ fn strip_unreleased(text: &str) -> Result<String, String> {
 fn today_utc() -> String {
     // Prefer SOURCE_DATE_EPOCH / date CLI; fall back to a fixed placeholder the
     // release owner can edit. Avoids pulling chrono into xtask.
-    if let Ok(epoch) = env::var("SOURCE_DATE_EPOCH") {
-        if let Ok(secs) = epoch.parse::<i64>() {
-            if let Some(ymd) = civil_date_from_unix(secs) {
-                return ymd;
-            }
-        }
+    if let Ok(epoch) = env::var("SOURCE_DATE_EPOCH")
+        && let Ok(secs) = epoch.parse::<i64>()
+        && let Some(ymd) = civil_date_from_unix(secs)
+    {
+        return ymd;
     }
     if let Ok(out) = process::Command::new("date")
         .args(["-u", "+%Y-%m-%d"])
         .output()
+        && out.status.success()
     {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if s.len() == 10 {
-                return s;
-            }
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if s.len() == 10 {
+            return s;
         }
     }
     "YYYY-MM-DD".into()
@@ -607,7 +599,7 @@ mod tests {
 
     const OLD: &str = "3.0.2";
     const NEW: &str = "3.1.0";
-    const FILES: [&str; 12] = [
+    const FILES: [&str; 11] = [
         "VERSION",
         "Cargo.toml",
         "Cargo.lock",
@@ -617,7 +609,6 @@ mod tests {
         "packaging/PKGBUILD",
         "packaging/aur/PKGBUILD",
         "packaging/windows/grokhub.iss",
-        "crates/grokhub-app/src/cli.rs",
         "docs/REFERENCE.md",
         "CHANGELOG.md",
     ];
@@ -655,10 +646,6 @@ mod tests {
             fx.put(
                 "packaging/windows/grokhub.iss",
                 &format!("#define MyAppVersion \"{OLD}\"\n"),
-            );
-            fx.put(
-                "crates/grokhub-app/src/cli.rs",
-                &format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{OLD}\");\n"),
             );
             fx.put(
                 SHELL_TOML,
@@ -756,8 +743,11 @@ mod tests {
         assert_eq!(
             fx.get("src-tauri/Cargo.lock"),
             "[[package]]\nname = \"grokhub-agent\"\nversion = \"3.1.0\"\n\n\
+             [[package]]\nname = \"grokhub-code\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-core\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-desktop\"\nversion = \"3.1.0\"\n\n\
+             [[package]]\nname = \"grokhub-fps-probe\"\nversion = \"3.1.0\"\n\n\
+             [[package]]\nname = \"grokhub-hub\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-proto\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-shell\"\nversion = \"3.1.0\"\n\n"
         );

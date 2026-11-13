@@ -12,13 +12,23 @@
 // SMOKE_SHOTS=<folder> to keep one screenshot per page the run walks through.
 // SMOKE_WEB=1 adds the web access step, which needs Playwright's Chromium.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { connect as tlsConnect } from "node:tls";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPLY = "Wrote the note for the smoke test";
@@ -26,6 +36,32 @@ const PROMPT = "write a note from the smoke test";
 const NOTE = "smoke-note.txt";
 const NOTE_TEXT = "written after Allow once";
 const DRIVER = "http://127.0.0.1:4444";
+// The Code tab's agent window: one message that writes a note in its
+// session's folder and ticks a to-do.
+const AGENT_PROMPT = "smoke agent window: write the session note";
+const AGENT_NOTE = "agent-session-note.txt";
+const AGENT_NOTE_TEXT = "written by the agent window's session";
+const AGENT_TODO = "write the session note";
+const AGENT_REPLY = "The session note is written";
+// A second message in the same session, sent after the app has moved on.
+const AGENT_PROMPT_2 = "smoke agent window: write the follow-up note";
+const AGENT_NOTE_2 = "agent-session-follow-up.txt";
+const AGENT_REPLY_2 = "The follow-up note is written";
+// The Tasks panel's review, waive and commit: a session in a git project of
+// its own writes a note, its review helper reports one blocker, and the
+// person waives it, allows a planted key-shaped line and commits.
+const SHIP_PROMPT = "smoke ship: write the ship note and review it";
+const SHIP_NOTE = "ship-note.txt";
+const SHIP_NOTE_TEXT = "written for the ship check";
+const SHIP_REPLY = "The note is written and reviewed";
+const SHIP_FINDING = "ship-note.txt:1 the note has no date";
+const SHIP_KEY_FILE = "keys.txt";
+// The secret scan's own test shape; not a real key.
+const SHIP_KEY_LINE = 'token = "sk-abcdefghijklmnopqrstuv"';
+// The start of the review helper's persona (crates/grokhub-agent/src/review.rs).
+const REVIEW_PERSONA_START = "You are the review helper.";
+// Where the stand-in for gh writes each command line it was started with.
+const GH_CALLS = "gh-calls.log";
 
 const binary = process.argv[2];
 if (!binary) {
@@ -65,6 +101,76 @@ function mockReply(callNumber, body) {
     return textReply(JSON.stringify([PULSE_IDEA]));
   }
   if (body.includes(WEB_PROMPT)) return textReply(WEB_REPLY);
+  // The review helper: one blocker, then it is done.
+  if (body.includes(REVIEW_PERSONA_START)) {
+    if (!body.includes("smoke-review-findings")) {
+      return toolCall("smoke-review-findings", "report_findings", {
+        findings: [{ severity: "high", text: SHIP_FINDING }],
+      });
+    }
+    return textReply("One thing must be fixed before this ships.");
+  }
+  // A lead in the ship project: plan, write the note, read it back, start
+  // a review helper, then reply.
+  if (body.includes(SHIP_PROMPT)) {
+    if (!body.includes("smoke-ship-plan")) {
+      return toolCall("smoke-ship-plan", "exit_plan_mode", { plan: `1. Write ${SHIP_NOTE}\n2. Review it` });
+    }
+    if (!body.includes("smoke-ship-write")) {
+      return toolCall("smoke-ship-write", "write", { path: SHIP_NOTE, content: SHIP_NOTE_TEXT });
+    }
+    if (!body.includes("smoke-ship-read")) {
+      return toolCall("smoke-ship-read", "read_file", { target_file: SHIP_NOTE });
+    }
+    if (!body.includes("smoke-ship-review")) {
+      return toolCall("smoke-ship-review", "spawn_subagent", {
+        type: "review",
+        prompt: "Check the note against the plan.",
+      });
+    }
+    return textReply(SHIP_REPLY);
+  }
+  // Before the first agent prompt, which this turn carries as history.
+  if (body.includes(AGENT_PROMPT_2)) {
+    if (!body.includes("smoke-agent-follow-up")) {
+      return toolCall("smoke-agent-follow-up", "write", { path: AGENT_NOTE_2, content: AGENT_NOTE_TEXT });
+    }
+    // The agent loop counts a write as unchecked until the file is read back,
+    // and re-plans a turn that ends without that check, so read it back.
+    if (!body.includes("smoke-agent-follow-up-read")) {
+      return toolCall("smoke-agent-follow-up-read", "read_file", { target_file: AGENT_NOTE_2 });
+    }
+    return textReply(AGENT_REPLY_2);
+  }
+  if (body.includes(AGENT_PROMPT)) {
+    // A new agent-window session is a lead: it plans first and stays
+    // read-only until its plan is approved.
+    if (!body.includes("smoke-agent-plan")) {
+      return toolCall("smoke-agent-plan", "exit_plan_mode", {
+        plan: `1. Write ${AGENT_NOTE}\n2. Tick the to-do`,
+      });
+    }
+    if (!body.includes("smoke-agent-write")) {
+      return toolCall("smoke-agent-write", "write", { path: AGENT_NOTE, content: AGENT_NOTE_TEXT });
+    }
+    if (!body.includes("smoke-agent-read")) {
+      return toolCall("smoke-agent-read", "read_file", { target_file: AGENT_NOTE });
+    }
+    if (!body.includes("smoke-agent-todo")) {
+      return toolCall("smoke-agent-todo", "todo_write", {
+        todos: [{ id: "1", content: AGENT_TODO, status: "completed" }],
+      });
+    }
+    return textReply(AGENT_REPLY);
+  }
+  // A supervised desktop session: its first step types a delete (the card
+  // waits), the next says it is waiting. Checked before the desktop prompt,
+  // whose turn the chat carries as history.
+  if (body.includes(EP_PROMPT)) {
+    const asks = mockSeen.filter((c) => c.path === "/v1/responses" && c.body.includes(EP_PROMPT)).length;
+    if (asks <= 1) return toolCall("smoke-ep", "type", { text: EP_TEXT });
+    return textReply(EP_REPLY);
+  }
   if (body.includes(DESK_PROMPT)) {
     if (!body.includes("smoke-desk")) return toolCall("smoke-desk", "type", { text: DESK_TEXT });
     return textReply(DESK_REPLY);
@@ -109,6 +215,10 @@ function mockRunPrompt() {
   return mockSeen.some((c) => c.body.includes(AUTOMATION));
 }
 
+/** While set, the mock holds its answer to the agent window's first call, so
+ * the test can act while that reply is still running. */
+let agentHold = null;
+
 function startMock() {
   const seen = [];
   mockSeen = seen;
@@ -120,12 +230,16 @@ function startMock() {
       seen.push({ path: req.url, auth: req.headers.authorization, body });
       const calls = seen.filter((c) => c.path === "/v1/responses").length;
       const payload = sse(mockReply(calls, body));
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Content-Length": Buffer.byteLength(payload),
-        Connection: "close",
-      });
-      res.end(payload);
+      const answer = () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Content-Length": Buffer.byteLength(payload),
+          Connection: "close",
+        });
+        res.end(payload);
+      };
+      if (agentHold && body.includes(AGENT_PROMPT)) void agentHold.then(answer);
+      else answer();
     });
   });
   return new Promise((ok) =>
@@ -193,14 +307,26 @@ function pulseFixture(req, res) {
   res.end(body);
 }
 
-async function wd(method, path, body) {
+async function wd(method, path, body, retried = false) {
   const res = await fetch(`${DRIVER}${path}`, {
     method,
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const json = await res.json();
-  if (!res.ok) throw new Error(`${method} ${path}: ${JSON.stringify(json.value)}`);
+  if (!res.ok) {
+    // WebKitGTK refuses a click or type on an element that is still moving (a
+    // page just opened, a post just landed, text reflowing) as "not
+    // interactable" / "not focusable". Wait for it to sit still and try
+    // again; one that never does still fails.
+    const act = /^(\/session\/[^/]+)\/element\/([^/]+)\/(click|value)$/.exec(path);
+    if (act && json.value?.error === "element not interactable" && !retried) {
+      const [, s, el] = act;
+      await waitFor("the element to sit still", async () => ((await settled(s, el)) ? true : null), 10000);
+      return wd(method, path, body, true);
+    }
+    throw new Error(`${method} ${path}: ${JSON.stringify(json.value)}`);
+  }
   return json.value;
 }
 
@@ -219,17 +345,35 @@ async function waitFor(what, fn, timeoutMs = 30000) {
   throw new Error(`timed out waiting for ${what}${last ? `: ${last.message}` : ""}`);
 }
 
+// New cards rise in from opacity 0 (styles.css rise-in), and WebDriver reads
+// an invisible element's text as "". Read until the card is visible and says
+// what it should, then return what it said last.
+async function cardText(s, card, ok, timeoutMs = 5000) {
+  const end = Date.now() + timeoutMs;
+  let text = "";
+  while (Date.now() < end) {
+    text = await wd("GET", `${s}/element/${card}/text`);
+    if (ok(text)) break;
+    await sleep(100);
+  }
+  return text;
+}
+
 const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
 const AUTOMATION = "every day at 7am say hello from the smoke test";
 const MEMORY_NOTE = "the smoke test likes kumquats";
 const PULSE_ACTION = "close every done card on the smoke workboard";
 const JOURNAL_QUESTION = "Should the smoke test ship the shell first?";
-const PLAN_PROMPT = "plan a tidy of the smoke notes";
+// The app reads this as a plan with no picker (intent_tests.rs pins it).
+const PLAN_PROMPT = "make a plan to tidy the smoke notes";
 const PLAN_TEXT = "1. Read the smoke notes. 2. Merge the duplicates.";
 const PLAN_REPLY = "Plan approved, ready to tidy";
 const DESK_PROMPT = "clear out the old folder from the terminal";
 const DESK_TEXT = "rm -rf ~/old";
 const DESK_REPLY = "Left the old folder alone";
+const EP_PROMPT = "tidy the old folder as a watched session";
+const EP_TEXT = "rm -rf ~/old";
+const EP_REPLY = "Waiting for your OK on the delete";
 const WEB_PROMPT = "hello from the browser smoke test";
 const WEB_REPLY = "Hello, browser";
 
@@ -244,18 +388,150 @@ async function click(s, css) {
 
 /** A top tab by its label, so adding a tab moves no test. */
 // Waits for the tab, since Pulse shows only once the capability report loads.
+// Right after a turn ends the window can still be moving (the reply settles,
+// a card leaves), and WebKitGTK then refuses the click as "not interactable".
+// So click only once the tab sits still, and click again until it is pressed.
 async function tab(s, label) {
-  const el = await waitFor(`the ${label} tab`, () =>
-    wd("POST", `${s}/element`, {
+  const button = `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}']`;
+  await waitFor(`the ${label} view`, async () => {
+    const [on] = await wd("POST", `${s}/elements`, {
       using: "xpath",
-      value: `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}']`,
-    }),
-  );
-  await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+      value: `${button}[@aria-pressed='true']`,
+    });
+    if (on) return true;
+    const [el] = await wd("POST", `${s}/elements`, { using: "xpath", value: button });
+    if (el && (await settled(s, el[ELEMENT]))) {
+      await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+    }
+    return null;
+  });
 }
 
-/** A Settings section by its label in the Settings nav. */
+/** Waits until the top tab `label` is the one pressed. A page stays mounted
+ * once opened, so finding its content proves nothing about what shows. */
+async function onView(s, label) {
+  await waitFor(`the ${label} view`, () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}'][@aria-pressed='true']`,
+    }),
+  );
+}
+
+/** Scrolls the element into view and is true once it sits still there for
+ * 300 ms, so a click lands on it. */
+async function settled(s, el) {
+  const where = () =>
+    wd("POST", `${s}/execute/sync`, {
+      script:
+        "arguments[0].scrollIntoView({ block: 'center' }); const r = arguments[0].getBoundingClientRect(); return [r.x, r.y];",
+      args: [{ [ELEMENT]: el }],
+    });
+  const [x, y] = await where();
+  await sleep(300);
+  const [x2, y2] = await where();
+  return x === x2 && y === y2;
+}
+
+/** Types `text` into a text box and reads it back until the box holds exactly
+ * that. A chat's cards animate in a view transition, which commits a beat
+ * after it starts; a commit that lands mid-typing puts back the box's value
+ * and focus from when it started, so keystrokes go missing. Clear and type
+ * again until the text sticks. */
+async function typeInto(s, el, text) {
+  await waitFor(`the box to hold ${JSON.stringify(text)}`, async () => {
+    if (!(await settled(s, el))) return null;
+    await wd("POST", `${s}/element/${el}/clear`, {});
+    await wd("POST", `${s}/element/${el}/value`, { text });
+    await sleep(300);
+    return (await wd("GET", `${s}/element/${el}/property/value`)) === text ? true : null;
+  });
+}
+
+/** What sits on top of the element's middle, for a refused click. */
+async function onTop(s, el) {
+  return wd("POST", `${s}/execute/sync`, {
+    script:
+      "const r = arguments[0].getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return hit ? `${hit.tagName.toLowerCase()}.${hit.className} at ${Math.round(r.x)},${Math.round(r.y)}` : 'nothing';",
+    args: [{ [ELEMENT]: el }],
+  });
+}
+
+/** Clicks the element once it sits still. When a turn ends, the composer row
+ * changes (Stop turns back into Send, the chip row comes in) and the session
+ * switch and panel above it move up; a click sent mid-move is refused as
+ * "element click intercepted" or lands on whatever moved under it. So wait
+ * until the element holds its place, and while something else still covers
+ * it, say what and wait for it to go. */
+async function clickStill(s, el, what) {
+  await waitFor(`${what} to take a click`, async () => {
+    if (!(await settled(s, el))) return null;
+    try {
+      await wd("POST", `${s}/element/${el}/click`, {});
+    } catch (err) {
+      if (!err.message.includes("element click intercepted")) throw err;
+      throw new Error(`${what} is under ${await onTop(s, el)}`);
+    }
+    return true;
+  });
+}
+
+/** Waits for a turn to end: a finished reply holds `text` (a session's reply
+ * goes on to say what waits) and the composer shows Send again (Stop while
+ * the turn runs). */
+async function turnOver(s, text) {
+  await waitFor(`the reply ${JSON.stringify(text)} and Send`, async () => {
+    // Only the Chat tab's own log and composer: the Code tab's agent window
+    // has a second pair once that tab has opened.
+    const replies = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: "section[aria-label='Chat'] .bubble.assistant:not(.streaming)",
+    });
+    let seen = false;
+    for (const el of replies) {
+      if ((await wd("GET", `${s}/element/${el[ELEMENT]}/text`)).includes(text)) seen = true;
+    }
+    if (!seen) return false;
+    const send = await wd("POST", `${s}/elements`, {
+      using: "xpath",
+      value:
+        "//section[@aria-label='Chat']//form[contains(@class,'composer')]//button[@type='submit'][normalize-space()='Send']",
+    });
+    return send.length === 1;
+  });
+}
+
+/** The top-row category each Settings page sits in (src/sections.ts). */
+const SETTINGS_CATEGORY = {
+  Account: "Account",
+  Appearance: "Look & feel",
+  Defaults: "AI & chat",
+  Personality: "AI & chat",
+  Playbooks: "AI & chat",
+  Pulse: "AI & chat",
+  "Local AI": "AI & chat",
+  General: "Your PC",
+  Behavior: "Your PC",
+  Background: "Your PC",
+  "Privacy & data": "Privacy & safety",
+  Permissions: "Privacy & safety",
+  "Web access": "Privacy & safety",
+  About: "Help & updates",
+  Labs: "Help & updates",
+};
+
+/** A Settings section by its label: its category in the top row, then the
+ * page in the side menu. */
 async function section(s, label) {
+  const category = SETTINGS_CATEGORY[label];
+  if (!category) throw new Error(`no Settings category for ${label}`);
+  const tab = await waitFor(`the ${category} category`, () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `//nav[contains(@class,'settings-tabs')]/button[normalize-space()='${category}']`,
+    }),
+  );
+  await wd("POST", `${s}/element/${tab[ELEMENT]}/click`, {});
   const el = await waitFor(`the ${label} section`, () =>
     wd("POST", `${s}/element`, {
       using: "xpath",
@@ -292,6 +568,16 @@ async function scrollIntoView(s, css) {
   }).catch(() => undefined);
 }
 
+/** Scrolls the element an XPath finds to the middle of its scroll box, for a screenshot. */
+async function scrollToXp(s, xpath) {
+  const els = await wd("POST", `${s}/elements`, { using: "xpath", value: xpath }).catch(() => []);
+  if (!els[0]) return;
+  await wd("POST", `${s}/execute/sync`, {
+    script: "arguments[0].scrollIntoView({block:'center', inline:'nearest'});",
+    args: [els[0]],
+  }).catch(() => undefined);
+}
+
 /** True when this run should capture Windows Local AI engine-install proof. */
 function windowsEngineProof() {
   return Boolean(process.env.SMOKE_SHOTS) && process.platform === "win32";
@@ -302,7 +588,7 @@ function windowsEngineProof() {
 async function automations(s, config) {
   await tab(s, "Automations");
   const input = await waitFor("the automations page", () => find(s, "input[aria-label='New automation']"));
-  await wd("POST", `${s}/element/${input}/value`, { text: AUTOMATION });
+  await typeInto(s, input, AUTOMATION);
   await click(s, "form.add button[type='submit']");
   const summary = await waitFor("the new automation", async () => {
     const t = await textOf(s, ".card.automation .card-status");
@@ -329,13 +615,20 @@ async function automations(s, config) {
   if (!ran) throw new Error("the model never got the automation's instructions");
 }
 
-// Memory: Remember a line, check it lands in the work folder's MEMORY.md,
-// then search for it the way chat recall would.
+// Personal: open Notes files, Remember a line, check it lands in the work
+// folder's MEMORY.md, then search for it the way chat recall would.
 async function memory(s, workspace) {
-  await tab(s, "Memory");
-  const input = await waitFor("the memory page", () => find(s, "input[aria-label='New note']"));
-  await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
-  await click(s, ".memory form.add button[type='submit']");
+  await tab(s, "Personal");
+  // Tabs + Reflect/Restore sit above the notes <details>, which starts open
+  // since #1821: a click on its summary would close it, so open it only if shut.
+  await waitFor("the personal page", () => find(s, ".memory-files summary"));
+  await wd("POST", `${s}/execute/sync`, {
+    script: "const d = document.querySelector('.memory-files details'); if (d) d.open = true;",
+    args: [],
+  });
+  const input = await waitFor("the notes files", () => find(s, "input[aria-label='New note']"));
+  await typeInto(s, input, MEMORY_NOTE);
+  await click(s, ".memory-files form.add button[type='submit']");
   // Status is role=status; AMR-on installs also show a banner in p.note.
   await waitFor("the remembered note", async () => {
     const t = await textOf(s, ".memory [role='status']");
@@ -346,8 +639,8 @@ async function memory(s, workspace) {
   console.log(`note remembered: ${JSON.stringify(file)}`);
 
   const search = await find(s, "input[aria-label='Search memory']");
-  await wd("POST", `${s}/element/${search}/value`, { text: "kumquats" });
-  await click(s, ".memory form.add:last-of-type button[type='submit']");
+  await typeInto(s, search, "kumquats");
+  await click(s, ".memory-files form.add:last-of-type button[type='submit']");
   const hit = await waitFor("the search hit", async () => {
     const t = await textOf(s, ".card.hit .card-detail");
     return t === MEMORY_NOTE ? t : null;
@@ -395,12 +688,12 @@ async function connectors(s, config) {
 }
 
 // Pulse: a post and an idea in the cabin's updates.json show on Feed and
-// For You. Love on the post writes the ledger line to memory/pulse-ledger.md.
+// For You. Like on the post writes the ledger line to memory/pulse-ledger.md.
 // Saving the feed instructions makes the writer post at once: it reads the
 // mocked sources, asks the mocked model, and caches the story's image, which
-// opens in the lightbox. Delete takes the first post away. After the post
-// the idea writer adds one idea; its menu holds Let's do it, More like this
-// and Not interested, and More like this is kept for the next run. A click on
+// opens in the lightbox. Dismiss takes the first post away. After the post
+// the idea writer adds one idea; its one row reads Like, Let's do it, I don't
+// like, Dismiss, with no menu, and Like is kept for the next run. A click on
 // the seeded idea's row puts its action in the chat box, unsent.
 async function pulse(s, config) {
   const now = Date.now();
@@ -434,9 +727,9 @@ async function pulse(s, config) {
     return t === "Smoke board summary" ? t : null;
   });
   const post = "//li[@aria-label='Smoke board summary']";
-  await click(s, ".pulse .feed-card .feed-foot button[aria-label='Love']");
+  await click(s, ".pulse .feed-card .feed-foot button[aria-label='Like']");
   await waitFor("the loved post", async () => {
-    const el = await find(s, ".pulse .feed-card .feed-foot button[aria-label='Love']");
+    const el = await find(s, ".pulse .feed-card .feed-foot button[aria-label='Like']");
     return (await wd("GET", `${s}/element/${el}/attribute/aria-pressed`)) === "true";
   });
   const ledger = readFileSync(join(config, "memory", "pulse-ledger.md"), "utf8");
@@ -450,8 +743,7 @@ async function pulse(s, config) {
   await waitFor("the default instructions", async () =>
     (await wd("GET", `${s}/element/${prompt}/property/value`)) ? true : null,
   );
-  await wd("POST", `${s}/element/${prompt}/clear`, {});
-  await wd("POST", `${s}/element/${prompt}/value`, { text: "Smoke news, please." });
+  await typeInto(s, prompt, "Smoke news, please.");
   await shot(s, "pulse-instructions");
   const save = await wd("POST", `${s}/element`, {
     using: "xpath",
@@ -485,21 +777,24 @@ async function pulse(s, config) {
   });
   await wd("POST", `${s}/element/${close[ELEMENT]}/click`, {});
 
-  const more = await wd("POST", `${s}/element`, {
+  // No menu: Dismiss, last in the row, asks first then takes the post away.
+  const dismiss = await wd("POST", `${s}/element`, {
     using: "xpath",
-    value: `${post}//button[@aria-label='More']`,
+    value: `${post}//div[contains(@class,'card-row')]/button[last()][normalize-space()='Dismiss']`,
   });
-  await wd("POST", `${s}/element/${more[ELEMENT]}/click`, {});
-  const del = await wd("POST", `${s}/element`, {
-    using: "xpath",
-    value: `${post}//button[normalize-space()='Delete']`,
-  });
-  await wd("POST", `${s}/element/${del[ELEMENT]}/click`, {});
-  await waitFor("the deleted post", async () => {
+  await wd("POST", `${s}/element/${dismiss[ELEMENT]}/click`, {});
+  const dismissConfirm = await waitFor("dismiss confirm", () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `${post}//div[@role='group' and @aria-label='Dismiss this post?']//button[normalize-space()='Dismiss']`,
+    }).catch(() => null),
+  );
+  await wd("POST", `${s}/element/${dismissConfirm[ELEMENT]}/click`, {});
+  await waitFor("the dismissed post", async () => {
     const left = await wd("POST", `${s}/elements`, { using: "xpath", value: post });
     return left.length === 0;
   });
-  console.log("delete took the post away");
+  console.log("dismiss took the post away");
 
   const ideas = await wd("POST", `${s}/element`, {
     using: "xpath",
@@ -517,23 +812,26 @@ async function pulse(s, config) {
     },
     60000,
   );
-  const ideaMenu = await wd("POST", `${s}/element`, {
+  const menus = await wd("POST", `${s}/elements`, {
     using: "xpath",
     value: `${written}//button[@aria-label='More']`,
   });
-  await wd("POST", `${s}/element/${ideaMenu[ELEMENT]}/click`, {});
-  const items = await wd("POST", `${s}/elements`, {
+  if (menus.length !== 0) throw new Error("the idea still has a menu");
+  const rowButtons = await wd("POST", `${s}/elements`, {
     using: "xpath",
-    value: `${written}//button[@role='menuitem']`,
+    value: `${written}//div[contains(@class,'card-row')]/button`,
   });
   const labels = [];
-  for (const item of items) labels.push(await wd("GET", `${s}/element/${item[ELEMENT]}/text`));
-  if (labels.join("|") !== "Let's do it|More like this|Not interested") {
-    throw new Error(`the idea menu says ${JSON.stringify(labels)}`);
+  for (const b of rowButtons) {
+    const t = await wd("GET", `${s}/element/${b[ELEMENT]}/text`);
+    labels.push(t.replace(/[\u2661\u2665]/g, "").trim());
+  }
+  if (labels.join("|") !== "Like|Let's do it|Not interested|Dismiss") {
+    throw new Error(`the idea buttons say ${JSON.stringify(labels)}`);
   }
   await shot(s, "pulse-ideas");
-  await wd("POST", `${s}/element/${items[1][ELEMENT]}/click`, {});
-  await waitFor("More like this kept", async () => {
+  await wd("POST", `${s}/element/${rowButtons[0][ELEMENT]}/click`, {});
+  await waitFor("Like kept for the next run", async () => {
     try {
       const state = JSON.parse(readFileSync(join(config, "pulse-ideas.json"), "utf8"));
       return state.moreLike?.[0] === PULSE_IDEA.title ? true : null;
@@ -541,9 +839,9 @@ async function pulse(s, config) {
       return null;
     }
   });
-  console.log(`idea menu: ${labels.join(", ")}; More like this kept for the next run`);
+  console.log(`idea row: ${labels.join(", ")}; Like kept for the next run`);
 
-  // The rows stay disabled until More like this has returned, and the kept
+  // The rows stay disabled until Like has returned, and the kept
   // file is written before it does, so a click right away can land on a
   // disabled row and do nothing.
   const run = await waitFor("the idea row, enabled", async () => {
@@ -578,7 +876,7 @@ async function journal(s, config) {
   const input = await waitFor("the question box", () =>
     find(s, ".journal-add input"),
   );
-  await wd("POST", `${s}/element/${input}/value`, { text: JOURNAL_QUESTION });
+  await typeInto(s, input, JOURNAL_QUESTION);
   await click(s, ".journal-add button[type='submit']");
   const mission = await waitFor("the question's To mission", async () => {
     const el = await wd("POST", `${s}/element`, {
@@ -639,28 +937,40 @@ async function palette(s) {
     find(s, "[aria-label='Command palette'] input"),
   );
   await wd("POST", `${s}/element/${again}/value`, { text: "journ\uE007" });
-  await waitFor("the Journal page", () => find(s, "section.journal"));
+  await onView(s, "Journal");
+  await waitFor("the palette to close", async () => {
+    const open = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: "[aria-label='Command palette']",
+    });
+    return open.length === 0;
+  });
   console.log("the Command button opened the Journal");
 }
 
-// Plan chip: the turn is read-only, so a write is refused without a card;
-// the plan waits on its card until Approve plan, and the chip goes back to Chat.
+// A plan-shaped message plans on its own: the turn is read-only, so a write is
+// refused without a card, and the plan waits on its card until Approve plan.
 // Settings → Personality: Use makes a preset the default in shell.json, and
 // the next chat message's system prompt carries its voice after the rules.
 async function usePersonality(s, config, name) {
   await tab(s, "Settings");
   await section(s, "Personality");
-  const use = await waitFor(`${name}'s Use button`, async () => {
-    const el = await wd("POST", `${s}/element`, {
-      using: "xpath",
-      value: `//ul[@aria-label='Personalities']/li[@aria-label='${name}']//button[normalize-space()='Use']`,
-    });
-    return el[ELEMENT];
-  });
-  await wd("POST", `${s}/element/${use}/click`, {});
+  // The cards' pictures arrive after the list and push the buttons down, so
+  // a click can land where Use was a moment ago. Click Use once it sits
+  // still, and again while it still shows.
+  const useButton = `//ul[@aria-label='Personalities']/li[@aria-label='${name}']//button[normalize-space()='Use']`;
+  await waitFor(`${name}'s Use button`, () =>
+    wd("POST", `${s}/element`, { using: "xpath", value: useButton }),
+  );
   await waitFor(`${name} in use`, async () => {
     const t = await textOf(s, `ul[aria-label='Personalities'] li[aria-label='${name}'] .card-status`);
-    return t === "In use" ? t : null;
+    if (t === "In use") return t;
+    const [use] = await wd("POST", `${s}/elements`, { using: "xpath", value: useButton });
+    if (use && (await settled(s, use[ELEMENT]))) {
+      await wd("POST", `${s}/element/${use[ELEMENT]}/click`, {});
+      await sleep(500);
+    }
+    return null;
   });
   const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
   const id = name === "Nyx" ? "" : name.toLowerCase();
@@ -671,12 +981,13 @@ async function usePersonality(s, config, name) {
 
 async function plan(s, workspace) {
   await tab(s, "Chat");
-  await click(s, "[aria-label='Session mode'] button[title^='Grok writes a plan']");
+  const [picker] = await wd("POST", `${s}/elements`, { using: "css selector", value: "[aria-label='Session mode']" });
+  if (picker) throw new Error("the composer still shows a mode picker");
   const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
-  await wd("POST", `${s}/element/${box}/value`, { text: PLAN_PROMPT });
+  await typeInto(s, box, PLAN_PROMPT);
   await click(s, "form.composer button[type='submit']");
-  const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"Grok's plan\"]"));
-  const shown = await wd("GET", `${s}/element/${card}/text`);
+  const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"The plan\"]"));
+  const shown = await cardText(s, card, (t) => t.includes(PLAN_TEXT));
   if (!shown.includes(PLAN_TEXT)) throw new Error(`plan card said ${JSON.stringify(shown)}`);
   if (existsSync(join(workspace, "plan-note.txt"))) throw new Error("plan mode wrote a file");
   const voiced = mockSeen.find((c) => c.body.includes(PLAN_PROMPT));
@@ -686,9 +997,11 @@ async function plan(s, workspace) {
   if (!refused || !refused.body.includes("read-only")) throw new Error("the write was not refused as read-only");
   await shot(s, "plan-card");
   console.log("plan mode refused the write and showed the plan");
+  // Since #1838 a plan card with reply chips offers "Yes, go" in place of
+  // the Approve plan button; either one approves.
   const approve = await wd("POST", `${s}/element/${card}/element`, {
     using: "xpath",
-    value: ".//button[normalize-space()='Approve plan']",
+    value: ".//button[normalize-space()='Approve plan' or normalize-space()='Yes, go']",
   });
   await wd("POST", `${s}/element/${approve[ELEMENT]}/click`, {});
   await waitFor("the reply after the plan", async () => {
@@ -701,10 +1014,7 @@ async function plan(s, workspace) {
     }
     return null;
   });
-  const chat = await find(s, "[aria-label='Session mode'] button[title^='Normal chat']");
-  const pressed = await wd("GET", `${s}/element/${chat}/attribute/aria-pressed`);
-  if (pressed !== "true") throw new Error("the chip stayed on Plan after the approval");
-  console.log(`plan approved: ${JSON.stringify(PLAN_REPLY)}, chip back on Chat`);
+  console.log(`plan approved: ${JSON.stringify(PLAN_REPLY)}, no picker needed`);
 }
 
 // Settings → Local AI: on Windows smoke, capture Get engine → progress →
@@ -712,11 +1022,7 @@ async function plan(s, workspace) {
 // name says its safety training was removed only after the notice is read,
 // and Reset to Auto puts local_ai.json back.
 async function localAi(s, config) {
-  const settingsTab = await wd("POST", `${s}/element`, {
-    using: "xpath",
-    value: "//nav[contains(@class,'tabs')]/button[normalize-space()='Settings']",
-  });
-  await wd("POST", `${s}/element/${settingsTab[ELEMENT]}/click`, {});
+  await tab(s, "Settings");
   await section(s, "Local AI");
   const status = await waitFor("the local AI status line", async () => {
     const t = await textOf(s, ".local-ai .local-status");
@@ -761,55 +1067,45 @@ async function localAi(s, config) {
       await shot(s, "settings-local-ai-engine-progress");
       console.log(`shot engine progress: ${JSON.stringify(progress)}`);
 
-      // 3) Installed + ready after the checksum lands the binary. If the live
-      // download stalls or errors, cancel, plant a stub exe, and re-open the
-      // panel so the ready UI still ships as Windows proof.
+      // 3) Installed + ready after the checksum lands the binary. A download
+      // error or a 120 s stall fails this step: the ready shot is only ever a
+      // real install, never a planted stub.
       let ready = null;
+      let failure = null;
       const readyDeadline = Date.now() + 120000;
-      while (Date.now() < readyDeadline && !ready) {
-        try {
-          const errEls = await wd("POST", `${s}/elements`, {
-            using: "css selector",
-            value: ".local-ai .local-engine-error",
-          });
-          if (errEls.length > 0) {
-            const err = await wd("GET", `${s}/element/${errEls[0][ELEMENT]}/text`);
-            if (err) throw new Error(err);
-          }
-          const t = await textOf(s, ".local-ai .local-engine .note");
-          if (/llama-server is ready/i.test(t)) ready = t;
-        } catch (err) {
-          console.log(`live engine install did not finish: ${err.message}`);
+      while (Date.now() < readyDeadline && !ready && !failure) {
+        const errEls = await wd("POST", `${s}/elements`, {
+          using: "css selector",
+          value: ".local-ai .local-engine-error",
+        });
+        if (errEls.length > 0) {
+          failure = await wd("GET", `${s}/element/${errEls[0][ELEMENT]}/text`);
           break;
         }
-        if (!ready) await sleep(250);
+        const t = await textOf(s, ".local-ai .local-engine .note");
+        if (/llama-server is ready/i.test(t)) ready = t;
+        else await sleep(250);
       }
       if (!ready) {
         const cancel = await wd("POST", `${s}/elements`, {
           using: "xpath",
           value: "//div[contains(@class,'local-engine')]//button[normalize-space()='Cancel']",
         });
-        if (cancel.length > 0) {
-          await wd("POST", `${s}/element/${cancel[0][ELEMENT]}/click`, {});
-          await sleep(500);
-        }
-        const bin = join(config, "bin");
-        mkdirSync(bin, { recursive: true });
-        writeFileSync(join(bin, "llama-server.exe"), "MZ smoke stub\n");
-        await section(s, "Appearance");
-        await section(s, "Local AI");
-        ready = await waitFor("llama-server ready after stub", async () => {
-          const t = await textOf(s, ".local-ai .local-engine .note");
-          return /llama-server is ready/i.test(t) ? t : null;
-        });
+        if (cancel.length > 0) await wd("POST", `${s}/element/${cancel[0][ELEMENT]}/click`, {});
+        throw new Error(
+          failure
+            ? `the live engine download failed: ${failure}`
+            : "the live engine download made no progress to ready in 120 s",
+        );
       }
       await scrollIntoView(s, ".local-ai .local-engine");
       await shot(s, "settings-local-ai-engine-ready");
       console.log(`shot engine ready: ${JSON.stringify(ready)}`);
     } else {
-      // Binary already on PATH / GROKHUB_LLAMA_SERVER — still prove ready.
-      await shot(s, "settings-local-ai-engine-ready");
-      console.log("Get engine absent; shot ready state only");
+      // A binary on PATH or GROKHUB_LLAMA_SERVER: no download ran, so the shot
+      // says so and can't pass for an install.
+      await shot(s, "settings-local-ai-engine-skipped");
+      console.log("Get engine absent; download skipped, shot the state as found");
     }
 
     // 4) Gemma 4 12B → Install and run draft model offer (E2B not on disk).
@@ -854,7 +1150,7 @@ async function localAi(s, config) {
   const input = await waitFor("the model file field", () =>
     find(s, "input[aria-label='Model file path']"),
   );
-  await wd("POST", `${s}/element/${input}/value`, { text: modelFile });
+  await typeInto(s, input, modelFile);
   await click(s, ".local-ai button.use-file");
   const notice = await waitFor("the model notice", async () => {
     const t = await textOf(s, ".local-ai .notice");
@@ -906,7 +1202,7 @@ async function labs(s, config) {
   await tab(s, "Settings");
   await section(s, "Labs");
   const input = await waitFor("the install box", () => find(s, ".labs-row input"));
-  await wd("POST", `${s}/element/${input}/value`, { text: bundle });
+  await typeInto(s, input, bundle);
   await click(s, ".labs-row button[type='submit']");
   const step = async (label, state) => {
     const button = await waitFor(`the ${label} button`, async () => {
@@ -975,7 +1271,7 @@ async function interests(s, config) {
   await tab(s, "Settings");
   await section(s, "Pulse");
   const input = await waitFor("the topic box", () => find(s, ".interests input"));
-  await wd("POST", `${s}/element/${input}/value`, { text: "air compressors" });
+  await typeInto(s, input, "air compressors");
   await click(s, ".interests button[type='submit']");
   const pin = await waitFor("the topic's Pin", async () => {
     const el = await wd("POST", `${s}/element`, {
@@ -1008,7 +1304,7 @@ async function permissions(s, config) {
   const gap = add.y - (box.y + box.height);
   if (gap > 60) throw new Error(`Add rule sits ${Math.round(gap)}px below the rule box`);
   await click(s, "[aria-label='Rule action'] button:nth-child(3)");
-  await wd("POST", `${s}/element/${input}/value`, { text: "WebFetch(domain:example.com)" });
+  await typeInto(s, input, "WebFetch(domain:example.com)");
   await click(s, ".permissions form:first-of-type button[type='submit']");
   await waitFor("the saved deny rule", async () => {
     if (!existsSync(rulesFile)) return null;
@@ -1072,18 +1368,551 @@ async function appearance(s, config) {
   );
 }
 
+// Code tab: the project bar. The folder the chat worked in is added to the
+// project list and shows that chat as a session; a second project is switched
+// to and back, and each switch moves the app's folder and the editor's files.
+async function codeProjects(s, config, workspace) {
+  const xp = (value) => wd("POST", `${s}/elements`, { using: "xpath", value });
+  const press = async (what, value) => {
+    const el = await waitFor(what, async () => (await xp(value))[0]);
+    await clickStill(s, el[ELEMENT], what);
+  };
+  const bound = () => JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).workspace;
+  const rows = () => {
+    const file = join(config, "projects.json");
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : [];
+  };
+  const inBar = "//div[contains(@class,'code-projects')]";
+  const other = join(config, "second-project");
+  mkdirSync(other);
+  writeFileSync(join(other, "only-in-second.txt"), "second");
+
+  await tab(s, "Code");
+  await press("Add to projects", `${inBar}//button[normalize-space()='Add to projects']`);
+  await waitFor("the folder in the project list", () => rows().some((r) => r.kind === "project" && r.path === bound()));
+  await waitFor("the chat as a session of this project", () =>
+    find(s, ".code-sessions ul[aria-label='Sessions'] button"),
+  );
+  const first = bound();
+
+  // A project made outside the tab is there the next time the tab shows.
+  writeFileSync(
+    join(config, "projects.json"),
+    JSON.stringify([...rows(), { id: "proj-smoke-2", name: "Second smoke project", kind: "project", path: other, parent: null, open: false }]),
+  );
+  await tab(s, "Chat");
+  await tab(s, "Code");
+  await press("Switch project", `${inBar}//button[normalize-space()='Switch project']`);
+  await shot(s, "code-projects");
+  await press("the second project's row", `${inBar}//ul[@aria-label='Projects']//button[contains(.,'Second smoke project')]`);
+  await waitFor("the app in the second project", () => realpathSync(bound()) === realpathSync(other));
+  await waitFor("the second project's name on the bar", async () =>
+    (await textOf(s, ".code-projects > .code-head .card-title")) === "Second smoke project",
+  );
+  await waitFor("the second project's file in the editor", async () =>
+    (await xp("//section[@aria-label='Code']//button[normalize-space()='only-in-second.txt']"))[0],
+  );
+  const stale = await xp(`${inBar}//ul[@aria-label='Sessions']//button`);
+  if (stale.length) throw new Error("the second project lists the first project's sessions");
+  await shot(s, "code-project-switched");
+
+  await press("Switch project", `${inBar}//button[normalize-space()='Switch project']`);
+  await press("the first project's row", `${inBar}//ul[@aria-label='Projects']//button[not(@disabled)]`);
+  await waitFor("the app back in the first project", () => bound() === first);
+  if (realpathSync(first) !== realpathSync(workspace)) throw new Error(`the first project was ${first}, not ${workspace}`);
+  await waitFor("the first project's session again", () =>
+    find(s, ".code-sessions ul[aria-label='Sessions'] button"),
+  );
+  console.log("code tab: added the folder as a project, switched to a second project and back");
+}
+
+// The Code tab's agent window: a message sent there runs on the Code tab, in
+// the folder of the project its session started in. While its reply runs the
+// app is moved to the second project from Chat (`/project bind`); the note
+// must still land in the first project. Its to-do shows in the Tasks panel,
+// and the session is listed under the first project.
+async function codeAgent(s, config, workspace) {
+  const xp = (value) => wd("POST", `${s}/elements`, { using: "xpath", value });
+  const bound = () => JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).workspace;
+  const other = join(config, "second-project");
+  const pane = "aside.code-agent";
+  const name = workspace.split(/[\\/]/).filter(Boolean).pop();
+
+  await tab(s, "Code");
+  await waitFor("the session's folder under the agent window's title", async () =>
+    (await textOf(s, `${pane} > .code-head .note`)) === `Works in ${name}`,
+  );
+  const sessionsBefore = (await xp("//div[contains(@class,'code-sessions')]//ul[@aria-label='Sessions']//button")).length;
+
+  let release = () => {};
+  agentHold = new Promise((ok) => (release = ok));
+  const box = await find(s, `${pane} textarea[aria-label='Message the agent']`);
+  await typeInto(s, box, AGENT_PROMPT);
+  await click(s, `${pane} form.composer button[type='submit']`);
+  await waitFor("the agent window's reply to start", async () =>
+    (await xp("//aside[contains(@class,'code-agent')]//form[contains(@class,'composer')]//button[normalize-space()='Stop']"))[0],
+  );
+  await waitFor("the model asked from the agent window", () => mockSeen.some((c) => c.body.includes(AGENT_PROMPT)));
+
+  // The app moves to the second project while that reply waits on the model.
+  await tab(s, "Chat");
+  const chatBox = await find(s, "section[aria-label='Chat'] textarea[aria-label='Message']");
+  await typeInto(s, chatBox, `/project bind ${other}`);
+  await click(s, "section[aria-label='Chat'] form.composer button[type='submit']");
+  await waitFor("the app in the second project", () => realpathSync(bound()) === realpathSync(other));
+  await tab(s, "Code");
+  await waitFor("the second project's name on the bar", async () =>
+    (await textOf(s, ".code-projects > .code-head .card-title")) === "Second smoke project",
+  );
+  // The running session stays in the agent window, with its own folder.
+  if ((await textOf(s, `${pane} > .code-head .note`)) !== `Works in ${name}`) {
+    throw new Error("the running session's folder changed with the app's project");
+  }
+  await shot(s, "code-agent-running");
+
+  /** The note lands in the session's project, never the app's, and the
+   * reply ends in the agent window. */
+  const wrote = async (file, reply) => {
+    const note = join(workspace, file);
+    await waitFor(`${file} in the session's own project`, async () => {
+      if (existsSync(note)) return true;
+      // The lead's first message plans: approve its plan card.
+      const [approve] = await xp(
+        "//aside[contains(@class,'code-agent')]//div[contains(@class,'elicit')]//button[normalize-space()='Approve plan'][not(@disabled)]",
+      );
+      if (approve && (await settled(s, approve[ELEMENT]))) {
+        await wd("POST", `${s}/element/${approve[ELEMENT]}/click`, {}).catch(() => {});
+        return null;
+      }
+      // Ask me first: the write waits on its card in the agent window.
+      const cards = await wd("POST", `${s}/elements`, {
+        using: "css selector",
+        value: `${pane} .card.permission .card-buttons button:not([disabled])`,
+      });
+      const allow = cards[0];
+      if (allow && (await settled(s, allow[ELEMENT]))) {
+        await wd("POST", `${s}/element/${allow[ELEMENT]}/click`, {}).catch(() => {});
+      }
+      return null;
+    });
+    if (readFileSync(note, "utf8") !== AGENT_NOTE_TEXT) throw new Error(`${file} has the wrong words`);
+    if (existsSync(join(other, file))) throw new Error(`${file} landed in the project the app moved to`);
+    await waitFor(`the agent window's reply ${JSON.stringify(reply)}`, async () => {
+      const replies = await wd("POST", `${s}/elements`, {
+        using: "css selector",
+        value: `${pane} .bubble.assistant:not(.streaming)`,
+      });
+      for (const el of replies) {
+        if ((await wd("GET", `${s}/element/${el[ELEMENT]}/text`)).includes(reply)) return true;
+      }
+      return null;
+    });
+    await waitFor("Send again in the agent window", async () =>
+      (await xp("//aside[contains(@class,'code-agent')]//form[contains(@class,'composer')]//button[@type='submit'][normalize-space()='Send']"))[0],
+    );
+  };
+
+  release();
+  agentHold = null;
+  await wrote(AGENT_NOTE, AGENT_REPLY);
+
+  // A message that starts after the move: the app is in the second project,
+  // and the session still works in the first.
+  if (realpathSync(bound()) !== realpathSync(other)) throw new Error("the app left the second project early");
+  const again = await find(s, `${pane} textarea[aria-label='Message the agent']`);
+  await typeInto(s, again, AGENT_PROMPT_2);
+  await click(s, `${pane} form.composer button[type='submit']`);
+  await wrote(AGENT_NOTE_2, AGENT_REPLY_2);
+  await waitFor("the to-do in the Tasks panel", () =>
+    find(s, `${pane} section[aria-label='Agent tasks'] li[aria-label='${AGENT_TODO}']`),
+  );
+  await onView(s, "Code");
+  await shot(s, "code-agent-window");
+
+  // Back in the first project, the session is one of its sessions and the
+  // agent window starts a new one there.
+  await waitFor("the first project again", async () => {
+    if (realpathSync(bound()) === realpathSync(workspace)) return true;
+    const [open] = await xp("//div[contains(@class,'code-projects')]//ul[@aria-label='Projects']//button[not(@disabled)]");
+    if (open) await clickStill(s, open[ELEMENT], "the first project's row");
+    else {
+      const [sw] = await xp("//div[contains(@class,'code-projects')]//button[normalize-space()='Switch project']");
+      if (sw) await clickStill(s, sw[ELEMENT], "Switch project");
+    }
+    return null;
+  });
+  await waitFor("the agent's session among the first project's sessions", async () =>
+    (await xp("//div[contains(@class,'code-sessions')]//ul[@aria-label='Sessions']//button")).length > sessionsBefore,
+  );
+  await waitFor("a new session in the agent window", async () =>
+    (await wd("POST", `${s}/elements`, { using: "css selector", value: `${pane} .bubble` })).length === 0,
+  );
+  console.log("code tab: the agent window ran a session in its own project while the app moved, and listed its to-do");
+}
+
+/** Plain git in `dir`. `env` adds to the environment. */
+function gitIn(dir, args, env = {}) {
+  return execFileSync("git", ["-C", dir, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  }).trim();
+}
+
+/** The tree id of everything in `dir`'s working folder, as the app's
+ * snapshot takes it: an index of its own, so the project's is not touched. */
+function treeOf(dir, scratch) {
+  const env = { GIT_INDEX_FILE: join(scratch, "smoke-index") };
+  gitIn(dir, ["read-tree", "HEAD"], env);
+  gitIn(dir, ["add", "-A"], env);
+  return gitIn(dir, ["write-tree"], env);
+}
+
+// The Tasks panel takes a session's change from review to commit and push. A
+// git project of its own, with its author in its own config (the app's git
+// calls read no GIT_* variable), on a work branch; its `origin` is a bare
+// repository in the config folder, and `origin/HEAD` names `main` as the
+// default branch. A key-shaped line is planted before the session begins.
+// The lead writes a note and starts a review helper, which reports one
+// blocker. Commit waits while the blocker and the flagged line are in the
+// way; the person waives the one and allows the other, and Commit asks with
+// the exact text. After the yes, HEAD is one commit further on, with the
+// reviewed tree, and the status is clean. Push then asks with the exact
+// command, which names that commit, and the bare origin's branch is that
+// commit after the yes. With origin pointed at a GitHub address, Open PR
+// asks with the gh command; the run cancels, so gh never opens one.
+async function codeShip(s, config, workspace) {
+  const xp = (value) => wd("POST", `${s}/elements`, { using: "xpath", value });
+  // The first match, or null, so waitFor keeps waiting while there is none.
+  const first = async (value) => (await xp(value))[0] ?? null;
+  const bound = () => JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).workspace;
+  const pane = "aside.code-agent";
+  const tasks = "//aside[contains(@class,'code-agent')]//section[@aria-label='Agent tasks']";
+  const project = join(config, "ship-project");
+  mkdirSync(project);
+  gitIn(project, ["init", "-q", "-b", "main"]);
+  gitIn(project, ["config", "user.name", "user"]);
+  gitIn(project, ["config", "user.email", "user@example.com"]);
+  gitIn(project, ["config", "commit.gpgsign", "false"]);
+  writeFileSync(join(project, "README"), "smoke ship project\n");
+  gitIn(project, ["add", "README"]);
+  gitIn(project, ["commit", "-q", "-m", "init"]);
+  const origin = join(config, "ship-origin.git");
+  gitIn(config, ["init", "-q", "--bare", "-b", "main", origin]);
+  gitIn(project, ["remote", "add", "origin", origin]);
+  gitIn(project, ["push", "-q", "origin", "main"]);
+  gitIn(project, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  gitIn(project, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+  gitIn(project, ["switch", "-q", "-c", "work/smoke"]);
+  writeFileSync(join(project, SHIP_KEY_FILE), `${SHIP_KEY_LINE}\n`);
+  const before = gitIn(project, ["rev-parse", "HEAD"]);
+
+  // Shots of the Tasks panel need room for the Commit section beside the chat.
+  if (process.env.SMOKE_SHOTS) await setWindowSize(s, 1280, 900);
+
+  // The app moves to the project, and the agent window starts a session there.
+  await tab(s, "Chat");
+  const chatBox = await find(s, "section[aria-label='Chat'] textarea[aria-label='Message']");
+  await typeInto(s, chatBox, `/project bind ${project}`);
+  await click(s, "section[aria-label='Chat'] form.composer button[type='submit']");
+  await waitFor("the app in the ship project", () => realpathSync(bound()) === realpathSync(project));
+  await tab(s, "Code");
+  await waitFor("the agent window in the ship project", async () =>
+    (await textOf(s, `${pane} > .code-head .note`)) === "Works in ship-project",
+  );
+
+  const box = await find(s, `${pane} textarea[aria-label='Message the agent']`);
+  await typeInto(s, box, SHIP_PROMPT);
+  await click(s, `${pane} form.composer button[type='submit']`);
+  // Approve the plan and allow the write as they come; the turn ends with
+  // the reply once the review helper is done.
+  await waitFor(`the agent window's reply ${JSON.stringify(SHIP_REPLY)}`, async () => {
+    const replies = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: `${pane} .bubble.assistant:not(.streaming)`,
+    });
+    for (const el of replies) {
+      if ((await wd("GET", `${s}/element/${el[ELEMENT]}/text`)).includes(SHIP_REPLY)) return true;
+    }
+    const approve = await first(
+      "//aside[contains(@class,'code-agent')]//div[contains(@class,'elicit')]//button[normalize-space()='Approve plan'][not(@disabled)]",
+    );
+    if (approve && (await settled(s, approve[ELEMENT]))) {
+      await wd("POST", `${s}/element/${approve[ELEMENT]}/click`, {}).catch(() => {});
+      return null;
+    }
+    const cards = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: `${pane} .card.permission .card-buttons button:not([disabled])`,
+    });
+    if (cards[0] && (await settled(s, cards[0][ELEMENT]))) {
+      await wd("POST", `${s}/element/${cards[0][ELEMENT]}/click`, {}).catch(() => {});
+    }
+    return null;
+  }, 90000);
+  if (readFileSync(join(project, SHIP_NOTE), "utf8") !== SHIP_NOTE_TEXT) throw new Error("the ship note has the wrong words");
+  await waitFor("Send again in the agent window", () =>
+    first("//aside[contains(@class,'code-agent')]//form[contains(@class,'composer')]//button[@type='submit'][normalize-space()='Send']"),
+  );
+
+  // The review and the checks: the blocker and the planted line are in the way.
+  await waitFor("the review's line in the Tasks panel", async () =>
+    (await textOf(s, `${pane} section[aria-label='Agent tasks'] p.review-line`)) === "Reviewed: 1 blocker",
+  );
+  const inTheWay = async () =>
+    Promise.all(
+      (await xp(`${tasks}//ul[@aria-label='In the way of a commit']/li`)).map((el) =>
+        wd("GET", `${s}/element/${el[ELEMENT]}/text`),
+      ),
+    );
+  await waitFor("the blocker and the flagged line in the way of a commit", async () => {
+    const why = await inTheWay();
+    return why.join("|") === "The review found 1 blocker.|The secret scan flagged 1 place in the change." ? true : null;
+  });
+  const commitButton = async () => (await xp(`${tasks}//button[normalize-space()='Commit']`))[0]?.[ELEMENT];
+  if ((await wd("GET", `${s}/element/${await commitButton()}/property/disabled`)) !== true) {
+    throw new Error("Commit took a click while the review had a blocker");
+  }
+  const flagged = await waitFor("the flagged line in the Secret scan row", async () => {
+    const row = await first(`${tasks}//li[@aria-label='Secret scan']`);
+    return row && (await wd("GET", `${s}/element/${row[ELEMENT]}/text`));
+  });
+  if (!flagged.includes(`${SHIP_KEY_FILE}:1 · looks like a key or a password`) || flagged.includes("sk-")) {
+    throw new Error(`the Secret scan row said ${JSON.stringify(flagged)}`);
+  }
+  await shot(s, "code-ship-blocked");
+
+  // Waive the blocker: one confirm, which names it.
+  const waive = await waitFor("Waive on the blocker", () =>
+    first(`${tasks}//ul[@aria-label='Review findings']//button[normalize-space()='Waive']`),
+  );
+  await clickStill(s, waive[ELEMENT], "Waive");
+  const waiveAsk = "//div[@role='alertdialog'][@aria-label='Ship with this finding open?']";
+  const asked = await waitFor("the Waive confirm", () => first(waiveAsk));
+  const askedText = await wd("GET", `${s}/element/${asked[ELEMENT]}/text`);
+  if (!askedText.includes(SHIP_FINDING)) throw new Error(`the Waive confirm said ${JSON.stringify(askedText)}`);
+  const yes = await waitFor("the confirm's Waive", () => first(`${waiveAsk}//button[normalize-space()='Waive']`));
+  await clickStill(s, yes[ELEMENT], "the confirm's Waive");
+  await waitFor("the waived blocker", async () =>
+    (await textOf(s, `${pane} section[aria-label='Agent tasks'] p.review-line`)) === "Reviewed: 1 blocker · 1 waived",
+  );
+
+  // Allow the planted line, then every check passes.
+  const allow = await waitFor("Allow on the flagged line", () =>
+    first(`${tasks}//button[@aria-label='Allow ${SHIP_KEY_FILE}:1']`),
+  );
+  await clickStill(s, allow[ELEMENT], "Allow");
+  await waitFor("every check to pass", () => first(`${tasks}//p[normalize-space()='Every check passes.']`));
+  const files = await Promise.all(
+    (await xp(`${tasks}//ul[@aria-label='Changed files']/li`)).map((el) => wd("GET", `${s}/element/${el[ELEMENT]}/text`)),
+  );
+  if (files.join("|") !== `A ${SHIP_KEY_FILE}|A ${SHIP_NOTE}`) throw new Error(`the Commit card lists ${JSON.stringify(files)}`);
+  await shot(s, "code-ship-ready");
+
+  // Commit asks with the exact text, which names the tree, the branch, the
+  // parent, the waiver, the allowed line and the tests that did not run.
+  const tree = treeOf(project, config);
+  const commit = await waitFor("Commit to take a click", async () => {
+    const el = await commitButton();
+    return el && (await wd("GET", `${s}/element/${el}/property/disabled`)) === false ? el : null;
+  });
+  await clickStill(s, commit, "Commit");
+  const commitAsk = "//div[@role='alertdialog'][@aria-label='Commit this change?']";
+  await waitFor("the Commit confirm", () => first(commitAsk));
+  const confirm = `commit ${tree.slice(0, 12)} to work/smoke on ${before.slice(0, 8)}: "Change made in this session", 1 flagged line allowed, 1 finding waived, no tests run`;
+  const said = await waitFor("the Commit confirm's text", async () => {
+    const shown = await first(`${commitAsk}//p`);
+    return shown && (await wd("GET", `${s}/element/${shown[ELEMENT]}/text`));
+  });
+  if (said !== confirm) throw new Error(`the Commit confirm said ${JSON.stringify(said)}, not ${JSON.stringify(confirm)}`);
+  if (gitIn(project, ["rev-parse", "HEAD"]) !== before) throw new Error("HEAD moved before the yes");
+  await scrollToXp(s, commitAsk);
+  await shot(s, "code-ship-commit-confirm");
+  const go = await waitFor("the confirm's Commit", () => first(`${commitAsk}//button[normalize-space()='Commit']`));
+  await clickStill(s, go[ELEMENT], "the confirm's Commit");
+  await waitFor("the commit", () => gitIn(project, ["rev-parse", "HEAD"]) !== before);
+  const head = gitIn(project, ["rev-parse", "HEAD"]);
+  await waitFor("the Commit section's line", () =>
+    first(`${tasks}//p[normalize-space()='Committed ${head.slice(0, 8)} to work/smoke.']`),
+  );
+  const count = gitIn(project, ["rev-list", "--count", `${before}..HEAD`]);
+  if (count !== "1") throw new Error(`HEAD moved by ${count} commits`);
+  if (gitIn(project, ["rev-parse", "HEAD^{tree}"]) !== tree) throw new Error("the commit holds another tree than the reviewed one");
+  if (gitIn(project, ["rev-parse", "HEAD^"]) !== before) throw new Error("the commit's parent is not the reviewed HEAD");
+  const status = gitIn(project, ["status", "--porcelain"]);
+  if (status !== "") throw new Error(`the status after the commit is ${JSON.stringify(status)}`);
+  // The workspace beside the panel reads the repo again: nothing is left listed.
+  await waitFor("the workspace to read the repo after the commit", async () =>
+    (await xp("//ul[contains(@class,'code-changed')][@aria-label='Changed files']")).length === 0 &&
+    (await first("//p[normalize-space()='No changes since the last commit.']"))
+      ? true
+      : null,
+  );
+  await shot(s, "code-ship-committed");
+  console.log(`code tab: waived the review's blocker, allowed the flagged line and committed ${head.slice(0, 8)} with the reviewed tree`);
+
+  // Push: the Tasks panel's card asks with the exact command, which names
+  // the commit made there, and only the yes sends it.
+  const onOrigin = () => {
+    try {
+      return gitIn(origin, ["rev-parse", "--verify", "--quiet", "refs/heads/work/smoke"]);
+    } catch {
+      return null;
+    }
+  };
+  const card = `${tasks}//div[@role='group'][@aria-label='Push and PR']`;
+  const pushButton = await waitFor("Push in the Tasks panel", () =>
+    first(`${card}/div[contains(@class,'code-ship-buttons')]/button[normalize-space()='Push work/smoke'][not(@disabled)]`),
+  );
+  await clickStill(s, pushButton[ELEMENT], "Push");
+  const pushAsk = `${card}//div[@role='group'][@aria-label='Push this branch?']`;
+  const pushShown = await waitFor("the Push confirm's command", async () => {
+    const pre = await first(`${pushAsk}//pre[@aria-label='Command to run']`);
+    return pre && (await wd("GET", `${s}/element/${pre[ELEMENT]}/text`));
+  });
+  const pushCommand = `git push --porcelain --no-recurse-submodules --no-signed origin ${head}:refs/heads/work/smoke`;
+  if (pushShown !== pushCommand) throw new Error(`the Push confirm said ${JSON.stringify(pushShown)}, not ${JSON.stringify(pushCommand)}`);
+  if (onOrigin() !== null) throw new Error("origin had the branch before the yes");
+  await shot(s, "code-ship-push-confirm");
+  const pushYes = await waitFor("the confirm's Push", () => first(`${pushAsk}//button[normalize-space()='Push']`));
+  await clickStill(s, pushYes[ELEMENT], "the confirm's Push");
+  await waitFor("the branch on origin", () => onOrigin() === head);
+  await waitFor("the push's line", () =>
+    first(`${card}//p[normalize-space()='Pushed ${head.slice(0, 8)} to work/smoke on origin.']`),
+  );
+  if (gitIn(origin, ["rev-parse", "refs/heads/work/smoke"]) !== head) throw new Error("origin's branch is not the commit made here");
+  await scrollToXp(s, card);
+  await shot(s, "code-ship-pushed");
+  console.log(`code tab: pushed ${head.slice(0, 8)} to a bare origin after the confirm`);
+
+  // Open PR: on a GitHub address it asks with the gh command. Cancel, so gh
+  // never runs `pr create`.
+  gitIn(project, ["remote", "set-url", "origin", "https://github.com/user/my-app.git"]);
+  const prButton = await waitFor("Open PR in the Tasks panel", () =>
+    first(`${card}/div[contains(@class,'code-ship-buttons')]/button[normalize-space()='Open PR into beta'][not(@disabled)]`),
+  );
+  await clickStill(s, prButton[ELEMENT], "Open PR");
+  const prAsk = `${card}//div[@role='group'][@aria-label='Open this PR?']`;
+  const prShown = await waitFor("the Open PR confirm's command", async () => {
+    const pre = await first(`${prAsk}//pre[@aria-label='Command to run']`);
+    return pre && (await wd("GET", `${s}/element/${pre[ELEMENT]}/text`));
+  });
+  if (prShown !== "gh pr create --base beta --head work/smoke --fill") {
+    throw new Error(`the Open PR confirm said ${JSON.stringify(prShown)}`);
+  }
+  await shot(s, "code-ship-pr-confirm");
+  const prCancel = await waitFor("the confirm's Cancel", () => first(`${prAsk}//button[normalize-space()='Cancel']`));
+  await clickStill(s, prCancel[ELEMENT], "the confirm's Cancel");
+  await waitFor("the Open PR confirm to close", async () => ((await xp(prAsk)).length === 0 ? true : null));
+  const ghCalls = existsSync(join(config, GH_CALLS)) ? readFileSync(join(config, GH_CALLS), "utf8") : "";
+  if (ghCalls.includes("pr create")) throw new Error(`gh was started to open a PR: ${JSON.stringify(ghCalls)}`);
+  gitIn(project, ["remote", "set-url", "origin", origin]);
+  console.log("code tab: Open PR asked with the gh command and opened nothing on Cancel");
+
+  // Back to the first project for the steps after this one.
+  await tab(s, "Chat");
+  const back = await find(s, "section[aria-label='Chat'] textarea[aria-label='Message']");
+  await typeInto(s, back, `/project bind ${workspace}`);
+  await click(s, "section[aria-label='Chat'] form.composer button[type='submit']");
+  await waitFor("the first project again", () => realpathSync(bound()) === realpathSync(workspace));
+}
+
+/** The window opens 900px wide (tauri.conf.json). Every tab, the brand, the
+ * Activity dock and Command must fit it without the page scrolling sideways:
+ * a sideways scroll puts a scrollbar along the bottom edge, and WebKit takes
+ * a WebDriver click on Send, just above it, for a scrollbar press (mousedown
+ * and mouseup, no click, nothing sent). Checked once the capability report
+ * has added every tab (Pulse is the last to arrive) and the dock shows. */
+async function noSidewaysScroll(s, when) {
+  await waitFor("the Pulse tab", () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: "//nav[contains(@class,'tabs')]/button[normalize-space()='Pulse']",
+    }),
+  );
+  const [wide, fits] = await wd("POST", `${s}/execute/sync`, {
+    script: "const r = document.documentElement; return [r.scrollWidth, r.clientWidth];",
+    args: [],
+  });
+  if (wide > fits) throw new Error(`the page scrolls sideways ${when}: ${wide}px wide in a ${fits}px window`);
+  console.log(`no sideways scroll ${when}: ${wide}px in ${fits}px`);
+}
+
+/** A fresh profile opens on the first-run window (AutoSetup.tsx), which
+ * covers the page until it's answered, and WebKit then refuses a click on
+ * Send as "element click intercepted". Skip it the way a person would, then
+ * wait out the corner note the launch pass may leave over the composer. */
+async function skipFirstRun(s) {
+  const skip = await waitFor(
+    "the first-run window",
+    () =>
+      wd("POST", `${s}/element`, {
+        using: "xpath",
+        value: "//div[@role='dialog' and contains(@class,'first-run')]//button[normalize-space()='Skip setup']",
+      }),
+    20000,
+  ).catch(() => null);
+  if (!skip) {
+    console.log("first run: no window (auto setup off)");
+    return;
+  }
+  await wd("POST", `${s}/element/${skip[ELEMENT]}/click`, {});
+  // Get to know you (GetToKnowYou.tsx) is the next stage and uses the
+  // same backdrop; skip it too.
+  const later = await waitFor(
+    "the get-to-know-you stage",
+    () =>
+      wd("POST", `${s}/element`, {
+        using: "xpath",
+        value: "//div[@role='dialog' and contains(@class,'onboard')]//button[normalize-space()='Skip for now']",
+      }),
+    10000,
+  ).catch(() => null);
+  if (later) await wd("POST", `${s}/element/${later[ELEMENT]}/click`, {});
+  await waitFor("the first-run window to close", async () => {
+    const open = await wd("POST", `${s}/elements`, { using: "css selector", value: ".first-run-backdrop" });
+    return open.length === 0;
+  });
+  await sleep(1000);
+  const notes = await wd("POST", `${s}/elements`, { using: "css selector", value: ".auto-note.card .chip" });
+  if (notes.length > 0) await wd("POST", `${s}/element/${notes[0][ELEMENT]}/click`, {});
+  const also = [later && "get to know you skipped", notes.length > 0 && "corner note closed"].filter(Boolean);
+  console.log(`first run: skipped${also.map((a) => `, ${a}`).join("")}`);
+}
+
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
   const workspace = join(config, "work");
   mkdirSync(workspace);
-  writeFileSync(join(config, "shell.json"), JSON.stringify({ workspace, theme: "ops-dark" }));
+  // A push to a folder is a push to a host that is not GitHub: the ship
+  // stage pushes to a bare repository in the config folder.
+  writeFileSync(
+    join(config, "shell.json"),
+    JSON.stringify({ workspace, theme: "ops-dark", codeShip: { hosts: { github: true, other: true } } }),
+  );
+  // gh with no sign-in, so the app's read of a branch's PR stops on this
+  // computer. Where a script can stand in for it (not Windows, where the
+  // app starts gh.exe only), the stand-in notes each call and fails.
+  const ghEnv = { GH_CONFIG_DIR: join(config, "gh-config"), GH_NO_UPDATE_NOTIFIER: "1" };
+  const noToken = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
+  mkdirSync(ghEnv.GH_CONFIG_DIR);
+  const pathEnv = {};
+  if (process.platform !== "win32") {
+    const fakeBin = join(config, "fake-bin");
+    mkdirSync(fakeBin);
+    const gh = join(fakeBin, "gh");
+    writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${join(config, GH_CALLS)}'\necho 'gh is not signed in here' >&2\nexit 4\n`);
+    chmodSync(gh, 0o755);
+    pathEnv.PATH = `${fakeBin}${delimiter}${process.env.PATH ?? ""}`;
+  }
   const modelCalls = () => mock.seen.filter((c) => c.path === "/v1/responses");
   const native = process.env.SMOKE_NATIVE_DRIVER;
   const driver = spawn("tauri-driver", native ? ["--native-driver", native] : [], {
     stdio: ["ignore", "inherit", "inherit"],
     env: {
-      ...process.env,
+      ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !noToken.includes(name))),
+      ...ghEnv,
+      ...pathEnv,
       GROKHUB_CONFIG: config,
       GROKHUB_SHELL_RESPONSES_URL: `http://127.0.0.1:${mock.port}/v1/responses`,
       GROKHUB_SHELL_PULSE_NET: `http://127.0.0.1:${mock.port}`,
@@ -1104,7 +1933,8 @@ async function main() {
     const box = await waitFor("the message box", async () =>
       wd("POST", `${s}/element`, { using: "css selector", value: "textarea[aria-label='Message']" }),
     );
-    await wd("POST", `${s}/element/${box[ELEMENT]}/value`, { text: PROMPT });
+    await skipFirstRun(s);
+    await typeInto(s, box[ELEMENT], PROMPT);
     const send = await wd("POST", `${s}/element`, {
       using: "css selector",
       value: "form.composer button[type='submit']",
@@ -1118,12 +1948,13 @@ async function main() {
       });
       return el[ELEMENT];
     });
-    const asked = await wd("GET", `${s}/element/${card}/text`);
+    const asked = await cardText(s, card, (t) => t.includes("write") && t.includes(NOTE));
     if (!asked.includes("write") || !asked.includes(NOTE)) {
       throw new Error(`permission card said ${JSON.stringify(asked)}`);
     }
     await shot(s, "chat-permission-card");
     console.log(`permission card shown: ${JSON.stringify(asked.split("\n")[0])}`);
+    await noSidewaysScroll(s, "with the permission card waiting");
 
     // Without an answer the write must not run and the turn must not go on.
     await sleep(1500);
@@ -1192,6 +2023,10 @@ async function main() {
     await permissions(s, config);
     await appearance(s, config);
     await desktop(s, config);
+    await episode(s, config);
+    await codeProjects(s, config, workspace);
+    await codeAgent(s, config, workspace);
+    await codeShip(s, config, workspace);
     if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");
   } catch (err) {
@@ -1215,12 +2050,24 @@ async function main() {
   }
 }
 
+// A tool counts as offered when the model gets its schema or, with deferred
+// tools on, its line in load_tool_schema's index ("name — blurb").
+function offeredTools(body) {
+  const tools = JSON.parse(body).tools ?? [];
+  const index = tools.find((t) => t.name === "load_tool_schema")?.description ?? "";
+  const deferred = (index.split("Deferred tools (index):\n")[1] ?? "")
+    .split("\n")
+    .map((line) => line.split(" — ")[0].trim())
+    .filter(Boolean);
+  return [...tools.map((t) => t.name), ...deferred];
+}
+
 // Computer-use: desktop tools are off until Settings turns them on. With the
 // switch on and approvals at Always, the model types a delete into the
 // desktop: the card must wait with nothing typed and no further model call,
 // and Deny must reach the model as a refusal.
 async function desktop(s, config) {
-  const offered = (call) => (JSON.parse(call.body).tools ?? []).map((t) => t.name);
+  const offered = (call) => offeredTools(call.body);
   const before = mockSeen.find((c) => c.path === "/v1/responses");
   if (offered(before).includes("type")) throw new Error("desktop tools were offered while off");
 
@@ -1229,11 +2076,18 @@ async function desktop(s, config) {
   const desk = await waitFor("the desktop switch", () =>
     wd("POST", `${s}/element`, {
       using: "xpath",
-      value: "//label[contains(., 'Let Grok control the desktop')]//button[@role='switch']",
+      value: "//label[contains(., 'Let Loadout control the desktop')]//button[@role='switch']",
     }).then((el) => el[ELEMENT]),
   );
   await wd("POST", `${s}/element/${desk}/click`, {});
-  const approvals = await find(s, ".settings > form select");
+  await click(s, ".settings > form button[type='submit']");
+  await waitFor("the saved desktop switch", () => {
+    const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
+    return saved.desktopControl === true;
+  });
+  // Approvals live in Settings → Defaults.
+  await section(s, "Defaults");
+  const approvals = await waitFor("the approvals pick", () => find(s, ".settings > form select"));
   const always = await wd("POST", `${s}/element/${approvals}/element`, {
     using: "css selector",
     value: "option[value='always']",
@@ -1248,7 +2102,7 @@ async function desktop(s, config) {
 
   await tab(s, "Chat");
   const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
-  await wd("POST", `${s}/element/${box}/value`, { text: DESK_PROMPT });
+  await typeInto(s, box, DESK_PROMPT);
   await click(s, "form.composer button[type='submit']");
   const card = await waitFor("the desktop permission card", async () => {
     const cards = await wd("POST", `${s}/elements`, {
@@ -1282,12 +2136,105 @@ async function desktop(s, config) {
     throw new Error("Deny never reached the model as a refusal");
   }
   console.log("Deny reached the model as a refusal");
+  await turnOver(s, DESK_REPLY);
+  console.log(`the turn ended on ${JSON.stringify(DESK_REPLY)}`);
+}
+
+// A supervised desktop session: with desktop control on, the switch arms the
+// chat, the mocked model types a delete, and the session panel shows the card
+// waiting for an OK in every approvals mode (Always is still on). Deny writes
+// the answer the session reads, and Stop ends the session with nothing run.
+async function episode(s, config) {
+  await tab(s, "Chat");
+  await clickStill(s, await find(s, ".episode-arm input"), "the session switch");
+  await waitFor("the switch to read on", async () => {
+    const [on] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode-arm input:checked" });
+    return Boolean(on);
+  });
+  await shot(s, "episode-armed");
+  const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
+  await typeInto(s, box, EP_PROMPT);
+  await click(s, "form.composer button[type='submit']");
+  await waitFor("the session's waiting card", async () => {
+    const [el] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode .episode-park" });
+    return el ? wd("GET", `${s}/element/${el[ELEMENT]}/text`) : null;
+  });
+  await turnOver(s, EP_REPLY);
+  await shot(s, "episode-card");
+  console.log("session card waits for an OK, in Always mode");
+  const parkDir = join(config, "harness", "park");
+  const deny = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: "//section[contains(@class,'episode')]//div[contains(@class,'episode-park')]//button[normalize-space()='Deny']",
+  });
+  await clickStill(s, deny[ELEMENT], "the session's Deny");
+  await waitFor("the deny answer file", () =>
+    existsSync(parkDir) &&
+    readdirSync(parkDir).some((f) => f.endsWith(".answer") && readFileSync(join(parkDir, f), "utf8").trim() === "deny"),
+  );
+  console.log("Deny wrote the answer the session reads");
+  const stop = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: "//section[contains(@class,'episode')]//button[normalize-space()='Stop']",
+  });
+  await clickStill(s, stop[ELEMENT], "the session's Stop");
+  await waitFor("the session to end", async () => {
+    const [el] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode .note[role='status']" });
+    return el ? (await wd("GET", `${s}/element/${el[ELEMENT]}/text`)).includes("Stopped") : false;
+  });
+  await shot(s, "episode-stopped");
+  console.log("Stop ended the session");
 }
 
 // Web access: the window turns it on, and Chromium pairs from the localhost
 // link and chats through this shell's engine. Desktop control and Always
 // are still on from the step above, and the web chat must get no desktop
 // tools. Then a refused command, and turning it off ends the pairing.
+// Diagnostics only (CI's web access step times out now and then and it
+// doesn't happen locally): when the page never loads, say which requests
+// were still open, whether the server answers at all, and where every
+// thread of the shell was waiting. Changes nothing when the step passes.
+async function webStallReport(origin, pending) {
+  console.log(`web stall: ${pending.size} request(s) still open`);
+  for (const [req, at] of pending) console.log(`  open since ${at}ms: ${req.method()} ${new URL(req.url()).pathname}`);
+  for (const path of ["/remote/v1/hello", "/"]) {
+    const started = Date.now();
+    const answer = await fetch(`${origin}${path}`, { signal: AbortSignal.timeout(5000) }).then(
+      (res) => `HTTP ${res.status}`,
+      (err) => `no answer (${err.name})`,
+    );
+    console.log(`web stall: ${path} -> ${answer} after ${Date.now() - started}ms`);
+  }
+  // The shell itself, not the node or xvfb-run whose arguments name it too.
+  const exe = resolve(binary);
+  const pids = spawnSync("pgrep", ["-f", binary], { encoding: "utf8" })
+    .stdout.trim()
+    .split(/\s+/)
+    .filter((pid) => {
+      try {
+        return pid && realpathSync(`/proc/${pid}/exe`) === realpathSync(exe);
+      } catch {
+        return false;
+      }
+    });
+  if (pids.length === 0) console.log(`web stall: no running ${exe}`);
+  for (const pid of pids) {
+    // sudo -n: a runner allows it without a prompt; elsewhere it just fails.
+    const gdb = spawnSync("sudo", ["-n", "gdb", "-p", pid, "-batch", "-ex", "thread apply all bt 25"], {
+      encoding: "utf8",
+      timeout: 120000,
+    });
+    const out = `${gdb.stdout ?? ""}${gdb.stderr ?? ""}`.trim();
+    console.log(`web stall: threads of pid ${pid}${gdb.status === 0 ? "" : ` (gdb exit ${gdb.status})`}:\n${out || "(no gdb output)"}`);
+    if (gdb.status === 0) continue;
+    // No gdb: each thread's name, state and the kernel call it sits in.
+    const tasks = spawnSync("sh", ["-c", `for t in /proc/${pid}/task/*; do echo "$(cat $t/comm) $(cut -d' ' -f3 $t/stat) $(cat $t/wchan)"; done`], {
+      encoding: "utf8",
+    });
+    console.log(`web stall: tasks of pid ${pid} (name state wchan):\n${tasks.stdout.trim()}`);
+  }
+}
+
 async function web(s) {
   const { chromium } = createRequire(import.meta.url)("playwright");
   await tab(s, "Settings");
@@ -1311,7 +2258,17 @@ async function web(s) {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    await page.goto(link);
+    const opened = Date.now();
+    const pending = new Map();
+    page.on("request", (r) => pending.set(r, Date.now() - opened));
+    page.on("requestfinished", (r) => pending.delete(r));
+    page.on("requestfailed", (r) => pending.delete(r));
+    try {
+      await page.goto(link);
+    } catch (err) {
+      await webStallReport(origin, pending);
+      throw err;
+    }
     const box = page.getByRole("textbox", { name: "Message" });
     await box.waitFor({ timeout: 30000 });
     await box.fill(WEB_PROMPT);
@@ -1323,7 +2280,7 @@ async function web(s) {
     console.log(`the browser got the reply: ${JSON.stringify(WEB_REPLY)}`);
 
     const asked = mockSeen.find((c) => c.body.includes(WEB_PROMPT));
-    const tools = (JSON.parse(asked.body).tools ?? []).map((t) => t.name);
+    const tools = offeredTools(asked.body);
     if (tools.includes("type") || tools.includes("click")) {
       throw new Error(`a web chat was offered desktop tools: ${tools}`);
     }

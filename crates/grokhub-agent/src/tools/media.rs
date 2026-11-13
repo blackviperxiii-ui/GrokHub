@@ -36,17 +36,18 @@ impl ImagineApi for BlockedImagine {
 }
 
 pub(crate) struct UreqImagine {
-    agent: ureq::Agent,
+    agent: grokhub_core::http::Agent,
     bearer: String,
 }
 
 impl UreqImagine {
     pub(crate) fn new(bearer: String) -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(20))
-            .timeout(Duration::from_secs(120))
-            .resolver(super::web_fetch::public_only_resolve)
-            .build();
+        let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+            connect: Duration::from_secs(20),
+            overall: Some(Duration::from_secs(120)),
+            public_only: true,
+            ..Default::default()
+        });
         Self { agent, bearer }
     }
 
@@ -61,10 +62,11 @@ impl ImagineApi for UreqImagine {
         let response = self
             .agent
             .post(&endpoint(path))
-            .set("Authorization", &self.auth_header())
-            .set("User-Agent", crate::USER_AGENT)
-            .send_json(body)
-            .map_err(http_err)?;
+            .header("Authorization", &self.auth_header())
+            .header("User-Agent", crate::USER_AGENT)
+            .any_status()
+            .send_json(body);
+        let response = answered(response)?;
         response.into_json::<Value>().map_err(|err| err.to_string())
     }
 
@@ -72,10 +74,11 @@ impl ImagineApi for UreqImagine {
         let response = self
             .agent
             .get(&endpoint(path))
-            .set("Authorization", &self.auth_header())
-            .set("User-Agent", crate::USER_AGENT)
-            .call()
-            .map_err(http_err)?;
+            .header("Authorization", &self.auth_header())
+            .header("User-Agent", crate::USER_AGENT)
+            .any_status()
+            .call();
+        let response = answered(response)?;
         response.into_json::<Value>().map_err(|err| err.to_string())
     }
 
@@ -83,11 +86,15 @@ impl ImagineApi for UreqImagine {
     /// only goes to x.ai hosts. ureq drops it on a cross-host redirect.
     fn download(&self, url: &str) -> Result<Vec<u8>, String> {
         let host = https_host(url).ok_or_else(|| "media url must be https".to_string())?;
-        let mut req = self.agent.get(url).set("User-Agent", crate::USER_AGENT);
+        let mut req = self
+            .agent
+            .get(url)
+            .header("User-Agent", crate::USER_AGENT)
+            .any_status();
         if host == "x.ai" || host.ends_with(".x.ai") {
-            req = req.set("Authorization", &self.auth_header());
+            req = req.header("Authorization", &self.auth_header());
         }
-        let resp = req.call().map_err(http_err)?;
+        let resp = answered(req.call())?;
         let mut buf = Vec::new();
         std::io::Read::read_to_end(
             &mut std::io::Read::take(resp.into_reader(), MEDIA_CAP + 1),
@@ -141,14 +148,20 @@ fn https_host(url: &str) -> Option<String> {
     }
 }
 
-fn http_err(err: ureq::Error) -> String {
-    match err {
-        ureq::Error::Status(status, resp) => {
+/// A 2xx/3xx answer, or the error text for a 4xx/5xx (sent with `any_status`,
+/// so its whole body is read) or no answer.
+fn answered(
+    sent: Result<grokhub_core::http::Response, grokhub_core::http::Error>,
+) -> Result<grokhub_core::http::Response, String> {
+    match sent {
+        Ok(resp) if resp.status() >= 400 => {
+            let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
             let body: String = body.chars().take(500).collect();
-            format!("HTTP {status} {body}")
+            Err(format!("HTTP {status} {body}"))
         }
-        ureq::Error::Transport(err) => format!("imagine request failed: {err}"),
+        Ok(resp) => Ok(resp),
+        Err(err) => Err(format!("imagine request failed: {err}")),
     }
 }
 
@@ -275,10 +288,91 @@ fn video_extend_schema() -> Value {
 
 pub(crate) fn run_with_ports(name: &str, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     let ports = super::ports::current();
+    if let Some(out) = on_device(
+        name,
+        args,
+        ports.imagine.is_some(),
+        &crate::route::local_image::kit_here,
+        stop,
+        ports.media_dir.as_deref(),
+    ) {
+        return out;
+    }
     match ports.imagine {
         Some(api) => execute_with(name, args, api.as_ref(), stop, ports.media_dir.as_deref()),
         None => ToolOutput::err(grokhub_core::XAI_NEED_SIGNIN),
     }
+}
+
+/// A picture is drawn on this computer when it must or can: an 18+ prompt
+/// only ever is (never online), and a clean one is when Grok isn't signed in
+/// and the picture model is on disk. `None` leaves the call to Grok Imagine.
+/// A banned prompt is refused here before anything runs.
+pub(crate) fn on_device(
+    name: &str,
+    args: &Value,
+    signed_in: bool,
+    kit: &dyn Fn() -> Option<crate::route::local_image::Kit>,
+    stop: &dyn Fn() -> bool,
+    media_dir: Option<&std::path::Path>,
+) -> Option<ToolOutput> {
+    use crate::route::local_image as li;
+    use grokhub_core::adult_guard::{self as ag, Risk};
+    if name != "image_generate" {
+        return None;
+    }
+    let prompt = super::str_field(args, "prompt");
+    if prompt.trim().is_empty() {
+        return None;
+    }
+    let explicit = match ag::check(&prompt) {
+        Risk::Banned(_) => return Some(ToolOutput::err(ag::MEDIA_BANNED)),
+        Risk::Explicit => true,
+        Risk::Clean => false,
+    };
+    if !explicit && signed_in {
+        return None;
+    }
+    let Some(kit) = kit() else {
+        return explicit.then(|| ToolOutput::err(li::NEEDS_GUARD));
+    };
+    let aspect = aspect_of(args).unwrap_or_default();
+    let dir = media_dir
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| crate::perm::config_dir().join("media"));
+    Some(
+        match li::make(&kit, &prompt, &aspect, explicit, &dir, stop) {
+            Ok(path) => ToolOutput::ok(format!(
+                "IMAGINE: {}\n(Made on this computer with {}; nothing was sent.)",
+                path.display(),
+                kit.model.name
+            )),
+            Err(e) => ToolOutput::err(e),
+        },
+    )
+}
+
+/// The Imagine client for `bearer`. A blank bearer refuses without dialing.
+pub fn imagine_client(bearer: &str) -> Box<dyn ImagineApi> {
+    let bearer = bearer.trim();
+    if bearer.is_empty() {
+        Box::new(BlockedImagine)
+    } else {
+        Box::new(UreqImagine::new(bearer.to_string()))
+    }
+}
+
+/// One media tool run outside a chat turn, for a page of its own (the
+/// shell's Imagine page): the same request builders, EgressGuard and result
+/// saving as chat. Results are downloaded into `media_dir`.
+pub fn run_media_tool(
+    name: &str,
+    args: &Value,
+    api: &dyn ImagineApi,
+    stop: &dyn Fn() -> bool,
+    media_dir: &std::path::Path,
+) -> ToolOutput {
+    execute_with(name, args, api, stop, Some(media_dir))
 }
 
 #[cfg(test)]
@@ -685,13 +779,16 @@ fn video_url_now(body: &Value) -> Result<Option<String>, String> {
     }
 }
 
+/// The prompt, once it passed the hard-ban and 18+ check: every media tool
+/// sends it to Grok Imagine, an online service.
 fn prompt_of(args: &Value) -> Result<String, String> {
     let prompt = super::str_field(args, "prompt");
     if prompt.is_empty() {
-        Err("prompt is required".into())
-    } else {
-        Ok(prompt)
+        return Err("prompt is required".into());
     }
+    grokhub_core::adult_guard::screen_media_prompt(&prompt, grokhub_core::adult_guard::Dest::Xai)
+        .map_err(str::to_owned)?;
+    Ok(prompt)
 }
 
 fn model_of(args: &Value) -> String {
@@ -864,7 +961,7 @@ pub(crate) mod tests {
 
     #[test]
     fn media_request_bodies_match_imagine() {
-        let gen = body_of(
+        let r#gen = body_of(
             "image_generate",
             json!({
                 "prompt": "a cabin",
@@ -875,9 +972,9 @@ pub(crate) mod tests {
                 "model": "grok-imagine-image-2.0"
             }),
         );
-        assert_eq!(gen.path, "images/generations");
+        assert_eq!(r#gen.path, "images/generations");
         assert_eq!(
-            gen.body,
+            r#gen.body,
             grokhub_core::imagine_generation_body(
                 "a cabin",
                 "grok-imagine-image-2.0",
@@ -888,10 +985,10 @@ pub(crate) mod tests {
                 "url"
             )
         );
-        assert_eq!(gen.body["n"], 4);
-        assert_eq!(gen.body["resolution"], "2k");
-        assert_eq!(gen.body["quality"], "medium");
-        assert_eq!(gen.body["response_format"], "url");
+        assert_eq!(r#gen.body["n"], 4);
+        assert_eq!(r#gen.body["resolution"], "2k");
+        assert_eq!(r#gen.body["quality"], "medium");
+        assert_eq!(r#gen.body["response_format"], "url");
 
         let edit = body_of(
             "image_edit",
@@ -1087,6 +1184,168 @@ pub(crate) mod tests {
                 "video": {"url": "https://cdn.example/cabin.mp4"}
             }))
         }
+    }
+
+    #[test]
+    fn an_18_plus_picture_is_drawn_on_this_computer_or_not_at_all() {
+        use crate::route::local_image as li;
+        let none = || None;
+        let go = |prompt: &str, signed_in: bool| {
+            on_device(
+                "image_generate",
+                &json!({ "prompt": prompt }),
+                signed_in,
+                &none,
+                &|| false,
+                None,
+            )
+        };
+        let banned = go("a nude teen on a beach", true).unwrap();
+        assert!(
+            banned.failed
+                && banned
+                    .text
+                    .contains(grokhub_core::adult_guard::MEDIA_BANNED)
+        );
+        for signed_in in [true, false] {
+            let adult = go("an erotic nude portrait", signed_in).unwrap();
+            assert!(
+                adult.failed && adult.text.contains(li::NEEDS_GUARD),
+                "{}",
+                adult.text
+            );
+        }
+        // A clean picture stays with Grok Imagine when signed in, and with no
+        // picture model it falls through to the usual sign-in note.
+        assert!(go("a cabin in the snow", true).is_none());
+        assert!(go("a cabin in the snow", false).is_none());
+        assert!(on_device(
+            "video_generate",
+            &json!({ "prompt": "an erotic dance" }),
+            true,
+            &none,
+            &|| false,
+            None
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn a_picture_ask_on_the_fast_path_still_refuses_every_hard_ban_before_drawing() {
+        // Each hard ban, asked for as a picture: the turn is a picture ask,
+        // so the device is handed image_generate up front.
+        for prompt in [
+            "a nude teen on a beach",
+            "nsfw roleplay where he is drugged",
+            "make a nude deepfake of a singer",
+            "a sexy scene with a dog",
+        ] {
+            let ask = format!("draw me {prompt}");
+            assert!(crate::brain::is_picture_ask(&ask), "{ask}");
+            // The chat holds the ask itself before any model is called.
+            assert!(grokhub_core::adult_guard::hold(&ask).is_some(), "{ask}");
+            // And if the model writes such a prompt anyway, the tool refuses
+            // it before the picture kit is even looked up, so nothing runs.
+            let looked = std::cell::Cell::new(0);
+            let kit = || {
+                looked.set(looked.get() + 1);
+                None
+            };
+            for signed_in in [true, false] {
+                let out = on_device(
+                    "image_generate",
+                    &json!({ "prompt": prompt }),
+                    signed_in,
+                    &kit,
+                    &|| false,
+                    None,
+                )
+                .unwrap();
+                assert!(out.failed, "{prompt}");
+                assert_eq!(
+                    out.text,
+                    grokhub_core::adult_guard::MEDIA_BANNED,
+                    "{prompt}"
+                );
+            }
+            assert_eq!(looked.get(), 0, "{prompt}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn with_the_kit_on_disk_a_clean_picture_is_made_here_when_grok_is_signed_out() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("grokhub-media-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // A stand-in engine: writes a PNG header to the path after -o.
+        let cli = root.join("sd-cli");
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then printf '\\211PNG' > \"$2\"; fi; shift; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let model = grokhub_core::local_setup::local_models()
+            .iter()
+            .find(|m| m.kind == grokhub_core::local_setup::ModelKind::Image)
+            .unwrap();
+        let kit = || {
+            Some(crate::route::local_image::Kit {
+                cli: cli.clone(),
+                models_dir: root.clone(),
+                model,
+                guard: None,
+            })
+        };
+        let out_dir = root.join("media");
+        let out = on_device(
+            "image_generate",
+            &json!({ "prompt": "a cabin in the snow", "aspect_ratio": "16:9" }),
+            false,
+            &kit,
+            &|| false,
+            Some(&out_dir),
+        )
+        .unwrap();
+        assert!(!out.failed, "{}", out.text);
+        let path = out
+            .text
+            .lines()
+            .next()
+            .unwrap()
+            .strip_prefix("IMAGINE: ")
+            .unwrap();
+        assert!(std::path::Path::new(path).starts_with(&out_dir));
+        assert!(std::path::Path::new(path).is_file());
+        assert!(out.text.contains("nothing was sent"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_banned_or_18_plus_media_prompt_never_reaches_grok_imagine() {
+        let fake = FakeImagine {
+            posts: Mutex::new(Vec::new()),
+            gets: Mutex::new(Vec::new()),
+        };
+        for (tool, prompt, why) in [
+            (
+                "image_generate",
+                "a nude teen on a beach",
+                grokhub_core::adult_guard::MEDIA_BANNED,
+            ),
+            (
+                "video_generate",
+                "an erotic nude dance",
+                grokhub_core::adult_guard::MEDIA_LOCAL_ONLY,
+            ),
+        ] {
+            let out = execute(tool, &json!({ "prompt": prompt }), &fake);
+            assert!(out.failed, "{tool}: {}", out.text);
+            assert!(out.text.contains(why), "{tool}: {}", out.text);
+        }
+        assert!(fake.posts.lock().unwrap().is_empty(), "nothing was posted");
     }
 
     #[test]

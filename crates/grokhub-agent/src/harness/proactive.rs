@@ -15,11 +15,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use grokhub_core::learn::Undo;
 use grokhub_core::AutoAct;
 
 use crate::harness::access::AccessMode;
 use crate::harness::approval::{decide, GateOutcome, Step};
-use crate::harness::changes::{entry_id, Change, ChangeKind, ChangeLedger};
+use crate::harness::changes::{change_id, entry_id, Change, ChangeKind, ChangeLedger};
 use crate::harness::hard::{classify, HardHit};
 use crate::harness::mindcheck::{mind_key, signals_from_spans, Clock, MindCheck};
 use crate::harness::span::{append_span, read_spans, Origin, Span};
@@ -99,15 +100,36 @@ pub fn step_class(tool: &str, arguments: &str) -> Option<String> {
 }
 
 /// The change-ledger target a step writes, if it writes through one.
-/// Only these steps can be undone in one click, so only these may auto-act.
+/// Only these steps can be put back from the ledger, so only these may
+/// auto-act. [`step_undo`] says which rung of the ceiling each one is on.
 pub fn ledger_target(tool: &str, arguments: &str) -> Option<(ChangeKind, String)> {
-    let leaf = tool.rsplit("__").next().unwrap_or(tool);
-    if !matches!(leaf, "connection_disable" | "connection_add") {
-        return None;
-    }
+    let kind = match crate::self_manage::self_tool(tool)? {
+        "connection_disable" | "connection_add" => ChangeKind::Connection,
+        "skill_modify" => ChangeKind::Skill,
+        _ => return None,
+    };
     let args: serde_json::Value = serde_json::from_str(arguments).ok()?;
-    let name = args.get("name").and_then(|v| v.as_str())?;
-    entry_id(name).ok().map(|id| (ChangeKind::Connection, id))
+    let name = args.get("name").and_then(|v| v.as_str())?.trim();
+    match kind {
+        // A skill's ledger id is its folder name; a name that is not already
+        // one would write a different skill than the card names.
+        ChangeKind::Skill => {
+            (!name.is_empty() && change_id(name) == name).then(|| (kind, name.to_string()))
+        }
+        _ => entry_id(name).ok().map(|id| (kind, id)),
+    }
+}
+
+/// How a step is taken back, for the autonomy ceiling. Switching a
+/// connection is one click. A patch to a skill changes what the agent does
+/// from then on, so it is a bigger change with the higher bar. Anything with
+/// no ledger target can't be put back and never acts on its own.
+pub fn step_undo(tool: &str, arguments: &str) -> Undo {
+    match ledger_target(tool, arguments) {
+        Some((ChangeKind::Connection, _)) => Undo::OneClick,
+        Some((ChangeKind::Skill, _)) => Undo::Restore,
+        _ => Undo::Never,
+    }
 }
 
 /// MindCheck over the proactive span log.
@@ -246,6 +268,8 @@ mod tests {
             value: 0.8,
             confidence: 0.9,
             reversibility: 1.0,
+            undo: step_undo(tool, args),
+            evidence: 0.0,
             summary: "Turned off the notes connection".into(),
             offer: "turn off the notes connection".into(),
             why: String::new(),
@@ -263,6 +287,7 @@ mod tests {
             busy: false,
             halted: false,
             budget_left: AUTO_PER_DAY,
+            restore_left: grokhub_core::AUTO_RESTORE_PER_DAY,
         }
     }
 
@@ -292,6 +317,54 @@ mod tests {
         }
         assert_eq!(ledger_target("write", r#"{"path":"a.txt"}"#), None);
         assert_eq!(ledger_target("click", r#"{"x":1,"y":2}"#), None);
+    }
+
+    #[test]
+    fn another_servers_tool_of_the_same_name_has_no_ledger_target() {
+        let foo = r#"{"name":"foo"}"#;
+        let notes = r#"{"name":"notes"}"#;
+        assert_eq!(ledger_target("mcp__x__skill_modify", foo), None);
+        assert_eq!(ledger_target("notes__connection_add", notes), None);
+        assert_eq!(step_undo("notes__connection_disable", notes), Undo::Never);
+        assert_eq!(
+            ledger_target("grokhub-self__skill_modify", foo),
+            Some((ChangeKind::Skill, "foo".into()))
+        );
+        assert_eq!(
+            step_undo("grokhub-self__connection_disable", notes),
+            Undo::OneClick
+        );
+    }
+
+    #[test]
+    fn the_harness_names_the_rung_from_the_tool() {
+        let notes = r#"{"name":"notes"}"#;
+        assert_eq!(step_undo("connection_disable", notes), Undo::OneClick);
+        assert_eq!(step_undo("connection_add", notes), Undo::OneClick);
+        let patch = r#"{"name":"patch-notes","instructions":"Check the date first."}"#;
+        assert_eq!(step_class("skill_modify", patch), None);
+        assert_eq!(
+            ledger_target("skill_modify", patch),
+            Some((ChangeKind::Skill, "patch-notes".into()))
+        );
+        assert_eq!(step_undo("skill_modify", patch), Undo::Restore);
+        // A name that is not the skill's own folder name has no target.
+        assert_eq!(
+            ledger_target("skill_modify", r#"{"name":"Patch Notes"}"#),
+            None
+        );
+        assert_eq!(step_undo("skill_modify", r#"{"name":"../x"}"#), Undo::Never);
+        assert_eq!(step_undo("skill_modify", "{}"), Undo::Never);
+        // Deleting, creating and anything off the ledger stay off both rungs.
+        for tool in [
+            "skill_delete",
+            "skill_create",
+            "automation_create",
+            "write",
+            "mail_send",
+        ] {
+            assert_eq!(step_undo(tool, patch), Undo::Never, "{tool}");
+        }
     }
 
     #[test]

@@ -1,10 +1,8 @@
 //! Guard for the break from the Grok Build CLI.
 //!
-//! GrokHub runs its own engine and OAuth. The one exception is
-//! `crates/grokhub-app/src/google_mcp_via_cli.rs`, which may look for an
-//! installed CLI so Google's MCP connectors can use it. This test fails when:
-//! - non-test Rust code outside that module spawns, locates, installs or
-//!   updates the CLI, or reads its files,
+//! GrokHub runs its own engine and OAuth. This test fails when:
+//! - non-test Rust code spawns, locates, installs or updates the CLI, or
+//!   reads its files,
 //! - packaging or the install/release scripts install or bundle the CLI,
 //! - a deleted CLI installer comes back.
 //!
@@ -12,9 +10,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// The only Rust file allowed to look for the CLI.
-const ALLOWED: &str = "crates/grokhub-app/src/google_mcp_via_cli.rs";
 
 /// Text that only CLI plumbing needs.
 const RUST_BANNED: &[&str] = &[
@@ -98,7 +93,7 @@ fn rust_hits(root: &Path) -> Vec<String> {
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        if rel == ALLOWED || is_test_file(&rel) || rel.contains("/target") {
+        if is_test_file(&rel) || rel.contains("/target") {
             continue;
         }
         let src = fs::read_to_string(&path).expect("read source");
@@ -129,18 +124,13 @@ fn packaging_hits(root: &Path) -> Vec<String> {
 }
 
 #[test]
-fn only_the_google_module_looks_for_the_grok_cli() {
+fn no_rust_code_looks_for_the_grok_cli() {
     let root = repo_root();
     let hits = rust_hits(&root);
     assert!(
         hits.is_empty(),
-        "CLI plumbing outside {ALLOWED}:\n{}",
+        "CLI plumbing in shipped code:\n{}",
         hits.join("\n")
-    );
-    let allowed = fs::read_to_string(root.join(ALLOWED)).expect("google module");
-    assert!(
-        allowed.contains("GROKHUB_GROK") && !shipped_part(&allowed).contains("Command::new"),
-        "the Google module only locates the CLI and never runs it"
     );
 }
 
@@ -167,9 +157,9 @@ fn guard_flags_a_cli_spawn_and_skips_test_modules() {
         shipped_part("fn a() {}\n#[cfg(test)]\nmod tests { grok update }"),
         "fn a() {}\n"
     );
-    assert!(is_test_file("crates/grokhub-app/src/app/tests.rs"));
+    assert!(is_test_file("crates/grokhub-hub/src/tests.rs"));
     assert!(is_test_file("crates/grokhub-agent/src/route/r2a_tests.rs"));
-    assert!(!is_test_file("crates/grokhub-app/src/main.rs"));
+    assert!(!is_test_file("crates/grokhub-hub/src/main.rs"));
     let line = "    let child = std::process::Command::new(\"grok\").arg(\"-p\");";
     assert_eq!(RUST_BANNED.iter().filter(|p| line.contains(*p)).count(), 1);
 }

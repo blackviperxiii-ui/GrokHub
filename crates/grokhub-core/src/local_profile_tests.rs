@@ -105,7 +105,7 @@ fn macs_apple_silicon_by_memory_and_intel_with_amd() {
         (8_192, "T1", "Gemma 4 E2B"),
         (16_384, "T2", "Gemma 4 E4B"),
         (32_768, "T3", "Gemma 4 26B-A4B"),
-        (65_536, "T5", "Gemma 4 31B"),
+        (65_536, "T5", "Gemma 4 26B-A4B"),
     ];
     for (ram, t, model) in cases {
         let mac = machine("macos", vec![apple_gpu(ram)], ram, CpuSimd::Neon);
@@ -137,7 +137,7 @@ fn linux_machines_by_backend() {
         65_536,
         CpuSimd::Avx2,
     );
-    assert_eq!(row(&cuda), (Backend::Cuda, "T4", Some("Gemma 4 31B")));
+    assert_eq!(row(&cuda), (Backend::Cuda, "T4", Some("Gemma 4 26B-A4B")));
     // The example desktop: RX 9070 XT 16 GB + Radeon iGPU, 58 GB RAM.
     let amd = machine(
         "linux",
@@ -195,7 +195,7 @@ fn multi_gpu_splits_by_free_vram_on_one_vendor() {
     );
     assert_eq!(plan.tensor_split, Some(vec![23_000, 11_000]));
     assert_eq!(plan.vram_mb(), 36_864);
-    assert_eq!(row(&p), (Backend::Cuda, "T5", Some("Gemma 4 31B")));
+    assert_eq!(row(&p), (Backend::Cuda, "T5", Some("Gemma 4 26B-A4B")));
     let single = machine(
         "linux",
         vec![gpu(GpuVendor::Nvidia, "RTX 4090", 24_576)],
@@ -335,6 +335,7 @@ fn drm_sysfs_reads_amd_cards_apus_and_intel_arc() {
             vram_total: Some(16 * GIB),
             vram_used: Some(GIB),
             lmem_total: None,
+            ..DrmCard::default()
         },
         DrmCard {
             vendor: "0x1002".into(),
@@ -342,6 +343,7 @@ fn drm_sysfs_reads_amd_cards_apus_and_intel_arc() {
             vram_total: Some(GIB / 2),
             vram_used: None,
             lmem_total: None,
+            ..DrmCard::default()
         },
         DrmCard {
             vendor: "0x8086".into(),
@@ -349,6 +351,7 @@ fn drm_sysfs_reads_amd_cards_apus_and_intel_arc() {
             vram_total: None,
             vram_used: None,
             lmem_total: Some(12 * GIB),
+            ..DrmCard::default()
         },
         DrmCard {
             vendor: "0x8086".into(),
@@ -375,6 +378,85 @@ fn drm_sysfs_reads_amd_cards_apus_and_intel_arc() {
             ("Intel iGPU", 0, None, true),
         ]
     );
+}
+
+#[test]
+fn an_apu_with_a_big_carve_out_is_not_mistaken_for_the_card() {
+    // A 9950X3D's Raphael iGPU set to a 4 GB UMA carve-out, ahead of the RX 9070 XT.
+    const GIB: u64 = 1_024 * 1_024 * 1_024;
+    let pci = "# pci.ids\n1002  Advanced Micro Devices, Inc. [AMD/ATI]\n\t164e  Raphael\n\t\t1043 8877  ROG board\n\t7550  Navi 48 [Radeon RX 9070/9070 XT/9070 GRE]\n10de  NVIDIA Corporation\n\t7550  Not this one\n";
+    let card = |device: &str, vram: u64| DrmCard {
+        vendor: "0x1002".into(),
+        driver: "amdgpu".into(),
+        vram_total: Some(vram),
+        device: device.into(),
+        pci_name: pci_ids_name(pci, "0x1002", device),
+        ..DrmCard::default()
+    };
+    let gpus = gpus_from_drm(&[card("0x164e", 4 * GIB), card("0x7550", 16 * GIB)]);
+    let got: Vec<(&str, u64, bool, &str)> = gpus
+        .iter()
+        .map(|g| (g.name.as_str(), g.vram_mb, g.integrated, g.driver.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                "AMD Radeon Graphics (Raphael)",
+                4_096,
+                true,
+                "amdgpu (kernel)"
+            ),
+            (
+                "AMD Radeon RX 9070/9070 XT/9070 GRE",
+                16_384,
+                false,
+                "amdgpu (kernel)"
+            ),
+        ]
+    );
+    let p = machine("linux", gpus, 65_536, CpuSimd::Avx2);
+    assert_eq!(p.main_gpu().map(|g| g.vram_mb), Some(16_384));
+}
+
+#[test]
+fn without_pci_ids_a_known_apu_still_reads_as_integrated() {
+    const GIB: u64 = 1_024 * 1_024 * 1_024;
+    let gpus = gpus_from_drm(&[DrmCard {
+        vendor: "0x1002".into(),
+        driver: "amdgpu".into(),
+        vram_total: Some(8 * GIB),
+        device: "0x1586".into(),
+        ..DrmCard::default()
+    }]);
+    assert_eq!(gpus[0].name, "AMD Radeon Graphics (Strix Halo)");
+    assert!(gpus[0].integrated);
+    assert_eq!(
+        pci_ids_name("1002  AMD\n\t1586  Strix Halo\n", "0x1002", "0x9999"),
+        None
+    );
+}
+
+#[test]
+fn main_gpu_prefers_the_biggest_card_over_probe_order() {
+    let gpu = |vram_mb, integrated| Gpu {
+        vendor: GpuVendor::Amd,
+        name: format!("{vram_mb}"),
+        vram_mb,
+        free_vram_mb: None,
+        integrated,
+        unified: false,
+        driver: String::new(),
+    };
+    let p = machine(
+        "linux",
+        vec![gpu(512, true), gpu(8_192, false), gpu(24_576, false)],
+        65_536,
+        CpuSimd::Avx2,
+    );
+    assert_eq!(p.main_gpu().map(|g| g.vram_mb), Some(24_576));
+    let igpu_only = machine("linux", vec![gpu(512, true)], 65_536, CpuSimd::Avx2);
+    assert_eq!(igpu_only.main_gpu().map(|g| g.vram_mb), Some(512));
 }
 
 #[test]

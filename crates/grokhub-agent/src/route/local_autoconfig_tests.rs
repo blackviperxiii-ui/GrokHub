@@ -57,6 +57,11 @@ fn dense_12b() -> GgufMeta {
         file_mb: 7_039,
         tokenizer: None,
         nextn_layers: 0,
+        sliding_window: 0,
+        swa_pattern: vec![],
+        kv_heads: vec![],
+        key_length_swa: 0,
+        value_length_swa: 0,
     }
 }
 
@@ -105,6 +110,58 @@ fn kv_cache_size_follows_layers_heads_and_type() {
     assert_eq!(kv_mb(&dense_31b(), 32_768, KvType::Q8), 16_320);
 }
 
+/// [`dense_12b`] with Gemma-style sliding windows: five of every six layers
+/// see only the last 1,024 tokens.
+fn swa_12b() -> GgufMeta {
+    GgufMeta {
+        sliding_window: 1_024,
+        swa_pattern: grokhub_core::gguf::every_nth_full(6, 48),
+        ..dense_12b()
+    }
+}
+
+#[test]
+fn sliding_window_layers_cost_their_window_and_each_extra_slot_one_more() {
+    // 40 window layers at 1,536 cells and 8 full layers at 32k, against
+    // 6,528 MB with every layer at the full context.
+    assert_eq!(kv_mb(&swa_12b(), 32_768, KvType::Q8), 1_343);
+    assert_eq!(kv_mb(&dense_12b(), 32_768, KvType::Q8), 6_528);
+    // Four slots in one pool: 4 x 1,024 + 512 window cells.
+    assert_eq!(kv_mb_for(&swa_12b(), 32_768, KvType::Q8, 4), 1_853);
+    // Full layers don't grow with slots.
+    assert_eq!(kv_mb_for(&dense_12b(), 32_768, KvType::Q8, 4), 6_528);
+    assert_eq!(swa_cells(1_024, 1, 32_768), 1_536);
+    assert_eq!(swa_cells(1_000, 1, 32_768), 1_536);
+    assert_eq!(swa_cells(1_024, 4, 32_768), 4_608);
+    assert_eq!(swa_cells(1_024, 1, 1_024), 1_024);
+    assert_eq!(swa_cells(0, 2, 8_192), 512);
+}
+
+#[test]
+fn a_sliding_window_12b_on_a_12_gb_gpu_gets_twice_the_context_at_q8_and_two_slots() {
+    let a = autoconfig(
+        &rtx_4070_laptop(),
+        &swa_12b(),
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+    );
+    assert_eq!(
+        (a.ngl, a.ctx, a.kv, a.run.seqs()),
+        (49, 16_384, KvType::Q8, 2)
+    );
+    assert_eq!(a.run.slots.kv_unified, Some(true));
+    // The same card with every layer at the full context stops at 8k.
+    let dense = autoconfig(
+        &rtx_4070_laptop(),
+        &dense_12b(),
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+    );
+    assert_eq!((dense.ctx, dense.run.seqs()), (8_192, 1));
+}
+
 #[test]
 fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
     let a = autoconfig(
@@ -129,11 +186,13 @@ fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
             mlock: true,
             tensor_split: None,
             draft: None,
+            cpu_only: false,
+            run: run_with_slots(1),
         }
     );
     assert_eq!(
         a.to_args().join(" "),
-        "-ngl 49 -c 8192 --threads 4 --cache-type-k q4_0 --cache-type-v q4_0 --flash-attn on --load-mode mmap+mlock --cache-prompt"
+        "-ngl 49 -c 8192 --threads 4 --cache-type-k q4_0 --cache-type-v q4_0 --flash-attn on --load-mode mmap+mlock --parallel 1 --no-kv-unified --cache-prompt"
     );
 }
 
@@ -183,7 +242,7 @@ fn moe_on_a_16_gb_gpu_keeps_every_layer_and_moves_experts_to_ram() {
     );
     assert_eq!(
         a.to_args().join(" "),
-        "-ngl 31 -c 16384 --threads 8 --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on --n-cpu-moe 14 --load-mode mmap+mlock --cache-prompt"
+        "-ngl 31 -c 16384 --threads 8 --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on --n-cpu-moe 14 --load-mode mmap+mlock --parallel 2 --kv-unified --cache-prompt"
     );
     // Idle: 90% of memory, every P-core, all threads for prompt batches.
     let r = autoconfig(
@@ -383,6 +442,8 @@ fn autotune_records_cap_the_next_plan_per_model_device_and_driver() {
         n_cpu_moe: None,
         ctx: 8_192,
         kv: KvType::Q4,
+        cpu_only: false,
+        clean: 0,
     };
     save_tuned(&dir, &key, &t).unwrap();
     assert_eq!(load_tuned(&dir).get(&key), Some(&t));
@@ -431,6 +492,7 @@ fn tiny_gguf() -> Vec<u8> {
 
 #[test]
 fn launch_for_reads_the_header_the_engine_and_the_stored_profile() {
+    let _one = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let root = std::env::temp_dir().join(format!("grokhub-launch-for-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("bin")).unwrap();
@@ -489,4 +551,349 @@ fn an_igpu_only_machine_offloads_into_shared_ram_on_vulkan() {
         budgets(&bare, Backend::Vulkan, GovState::Normal),
         (0, 19_200)
     );
+}
+
+#[test]
+fn a_remembered_cpu_fallback_keeps_the_next_start_off_the_gpu() {
+    let dir = std::env::temp_dir().join(format!("gh-tune-cpu-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let gpu = autoconfig(
+        &rtx_4070_laptop(),
+        &dense_12b(),
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+    );
+    assert!(gpu.ngl > 0 && !gpu.cpu_only);
+    let t = Tuned {
+        ngl: 0,
+        n_cpu_moe: None,
+        ctx: gpu.ctx,
+        kv: gpu.kv,
+        cpu_only: true,
+        clean: 0,
+    };
+    save_tuned(&dir, "k", &t).unwrap();
+    let next = apply_tuned(gpu, load_tuned(&dir).get("k").unwrap());
+    assert!(next.cpu_only);
+    assert_eq!((next.ngl, next.backend), (0, Backend::Cpu));
+    // Records written before this field read as GPU launches.
+    let old: Tuned = serde_json::from_str(r#"{"ngl":39,"ctx":8192,"kv":"q4"}"#).unwrap();
+    assert!(!old.cpu_only);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_launch_is_sized_to_the_memory_a_game_leaves_free_and_grows_back_after() {
+    let p = rtx_4070_laptop();
+    // Nothing read: the profile stands.
+    assert_eq!(with_free_now(p.clone(), FreeNow::default()), p);
+    // A game holds most of the card: the plan sees 3 GB free, not the 11.5 GB
+    // the setup probe saw, and RAM follows the live read too.
+    let game = with_free_now(
+        p.clone(),
+        FreeNow {
+            vram_free_mb: Some(3_000),
+            ram_free_mb: Some(10_000),
+        },
+    );
+    assert_eq!(game.gpus[0].free_vram_mb, Some(3_000));
+    assert_eq!(game.free_ram_mb, Some(10_000));
+    let (gpu_before, _) = budgets(&p, Backend::Cuda, GovState::Throttle);
+    let (gpu_game, ram_game) = budgets(&game, Backend::Cuda, GovState::Throttle);
+    assert_eq!((gpu_before, gpu_game, ram_game), (5_750, 1_500, 5_000));
+    // Fewer layers on the GPU and a short context, instead of an OOM start.
+    let full = autoconfig(
+        &p,
+        &dense_12b(),
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+    );
+    let shared = autoconfig(
+        &game,
+        &dense_12b(),
+        Backend::Cuda,
+        GovState::Throttle,
+        &Overrides::default(),
+    );
+    assert_eq!(full.ngl, full.all_layers);
+    assert!(shared.ngl < shared.all_layers, "{shared:?}");
+    assert!(shared.ctx <= 8_192 && shared.ctx >= 4_096, "{shared:?}");
+    // The game took much more than the launch planned for: relaunch; a small
+    // wobble does not.
+    assert!(vram_dropped(11_500, 3_000));
+    assert!(!vram_dropped(11_500, 9_000));
+    assert!(!vram_dropped(0, 0));
+    // Two cards share the live read in proportion to their size.
+    let two = machine(
+        vec![
+            gpu(GpuVendor::Nvidia, "A", 24_000, Some(20_000)),
+            gpu(GpuVendor::Nvidia, "B", 12_000, Some(10_000)),
+        ],
+        65_536,
+        Some(40_000),
+        CpuInfo::new(32, 16, 0, CpuSimd::Avx2),
+    );
+    let two = with_free_now(
+        two,
+        FreeNow {
+            vram_free_mb: Some(9_000),
+            ram_free_mb: None,
+        },
+    );
+    assert_eq!(
+        (
+            two.gpus[0].free_vram_mb,
+            two.gpus[1].free_vram_mb,
+            two.free_ram_mb
+        ),
+        (Some(6_000), Some(3_000), Some(40_000))
+    );
+}
+
+#[test]
+fn the_vram_baseline_is_taken_with_our_model_loaded_so_loading_it_never_reads_as_a_game() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static FREE: AtomicU64 = AtomicU64::new(0);
+    set_free_probe(Arc::new(|| FreeNow {
+        vram_free_mb: Some(FREE.load(Ordering::SeqCst)),
+        ram_free_mb: None,
+    }));
+    // 7.5 GB free before launch; planning never sets the baseline.
+    FREE.store(7_500, Ordering::SeqCst);
+    if let Ok(mut l) = live().lock() {
+        l.launch_free_vram_mb = None;
+    }
+    assert!(
+        !vram_dropped_since_launch(),
+        "no baseline before the model is resident"
+    );
+    // The model took 3.3 GB: that is the baseline, not a drop.
+    FREE.store(4_200, Ordering::SeqCst);
+    mark_resident();
+    assert!(!vram_dropped_since_launch());
+    FREE.store(3_500, Ordering::SeqCst);
+    assert!(!vram_dropped_since_launch(), "a small dip stays");
+    // A game took most of what was left.
+    FREE.store(1_200, Ordering::SeqCst);
+    assert!(vram_dropped_since_launch());
+    // A new launch starts: the old model's baseline no longer counts.
+    clear_resident();
+    assert!(!vram_dropped_since_launch());
+    reset_free_probe();
+}
+
+fn whole_gpu_12b() -> LaunchArgs {
+    LaunchArgs {
+        backend: Backend::Vulkan,
+        ngl: 49,
+        all_layers: 49,
+        n_cpu_moe: None,
+        ctx: 16_384,
+        kv: KvType::Q8,
+        threads: 8,
+        threads_batch: Some(16),
+        flash_attn: true,
+        mlock: false,
+        tensor_split: None,
+        draft: None,
+        cpu_only: false,
+        run: Default::default(),
+    }
+}
+
+#[test]
+fn a_whole_gpu_launch_that_only_changes_threads_is_the_same_launch() {
+    let running = whole_gpu_12b();
+    assert!(same_launch(&running, &running.clone()));
+    let fewer_threads = LaunchArgs {
+        threads: 4,
+        threads_batch: None,
+        ..whole_gpu_12b()
+    };
+    assert!(same_launch(&running, &fewer_threads));
+    let shorter = LaunchArgs {
+        ctx: 8_192,
+        ..whole_gpu_12b()
+    };
+    assert!(!same_launch(&running, &shorter));
+    // Part of it on the CPU: threads do the work there, so they matter.
+    let partial = LaunchArgs {
+        ngl: 30,
+        ..whole_gpu_12b()
+    };
+    let partial_fewer = LaunchArgs {
+        threads: 4,
+        ..partial.clone()
+    };
+    assert!(!same_launch(&partial, &partial_fewer));
+}
+
+#[test]
+fn a_launch_needs_its_gpu_weights_kv_and_buffers_on_the_gpu_and_the_rest_in_ram() {
+    assert_eq!(
+        launch_need_mb(&dense_12b(), &whole_gpu_12b()),
+        (10_943, 512)
+    );
+    let moe = LaunchArgs {
+        ngl: 31,
+        all_layers: 31,
+        n_cpu_moe: Some(10),
+        ctx: 8_192,
+        ..whole_gpu_12b()
+    };
+    assert_eq!(launch_need_mb(&moe_26b(), &moe), (13_342, 4_784));
+    let cpu = on_cpu(&whole_gpu_12b());
+    assert_eq!(launch_need_mb(&dense_12b(), &cpu), (0, 10_943));
+}
+
+#[test]
+fn a_second_server_fits_beside_only_with_a_margin_and_a_known_reading() {
+    let free = |vram: Option<u64>, ram: Option<u64>| FreeNow {
+        vram_free_mb: vram,
+        ram_free_mb: ram,
+    };
+    assert!(fits_beside(free(Some(12_100), Some(3_000)), (11_000, 512)));
+    assert!(!fits_beside(free(Some(12_099), Some(3_000)), (11_000, 512)));
+    assert!(!fits_beside(free(None, Some(3_000)), (11_000, 512)));
+    assert!(!fits_beside(free(Some(20_000), Some(2_600)), (11_000, 512)));
+    assert!(fits_beside(free(None, Some(14_100)), (0, 10_943)));
+    assert!(!fits_beside(free(None, Some(14_000)), (0, 10_943)));
+}
+
+#[test]
+fn the_running_models_own_memory_is_added_back_for_a_fresh_plan() {
+    let before = FreeNow {
+        vram_free_mb: Some(8_000),
+        ram_free_mb: Some(30_000),
+    };
+    let resident = FreeNow {
+        vram_free_mb: Some(4_000),
+        ram_free_mb: Some(29_000),
+    };
+    let own = taken(before, resident);
+    assert_eq!(
+        own,
+        FreeNow {
+            vram_free_mb: Some(4_000),
+            ram_free_mb: Some(1_000),
+        }
+    );
+    let now = FreeNow {
+        vram_free_mb: Some(3_000),
+        ram_free_mb: None,
+    };
+    assert_eq!(
+        with_own(now, own),
+        FreeNow {
+            vram_free_mb: Some(7_000),
+            ram_free_mb: None,
+        }
+    );
+    assert_eq!(taken(FreeNow::default(), resident), FreeNow::default());
+}
+
+/// Tests that set the global profile run one at a time.
+static LIVE_TESTS: Mutex<()> = Mutex::new(());
+
+#[cfg(unix)]
+#[test]
+fn a_model_kept_up_under_throttle_gets_the_sharing_flags_its_engine_knows() {
+    use std::os::unix::fs::PermissionsExt;
+    let _one = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let root = std::env::temp_dir().join(format!("grokhub-throttle-flags-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    let binary = root.join("bin").join("llama-server");
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\necho '--prio N   priority'\necho '--poll <0...100>   polling'\necho '-ub,   --ubatch-size N   ubatch'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(root.join("bin").join("libggml-cuda.so"), b"").unwrap();
+    let model = root.join("tiny.gguf");
+    std::fs::write(&model, tiny_gguf()).unwrap();
+    set_profile(rtx_4070_laptop(), root.join("local"));
+    set_state(GovState::Normal);
+    let (normal, _, _) = launch_for(&binary, &model).expect("planned");
+    // Normal is tuned (one slot at 8k, no drafter); Throttle never is.
+    let tag = normal.run.tune.clone().expect("tuned");
+    assert_eq!(tag.arm.label(), "np1-plain-ub512");
+    assert_eq!(
+        normal.run,
+        super::super::local_flags::RunFlags {
+            tune: Some(tag),
+            ..Default::default()
+        }
+    );
+    set_state(GovState::Throttle);
+    let (shared, _, _) = launch_for(&binary, &model).expect("planned");
+    set_state(GovState::Normal);
+    assert_eq!(shared.run.poll, Some(0));
+    assert_eq!(shared.run.prio, Some(-1));
+    assert_eq!(shared.run.ubatch, Some(128));
+    assert_eq!(shared.run.vk_nodes_per_submit, None, "CUDA, not Vulkan");
+    assert!(shared.run.low_priority);
+    assert_eq!(shared.run.tune, None);
+    let args = shared.to_args();
+    assert!(args.windows(2).any(|w| w == ["--poll", "0"]));
+    assert!(args.windows(2).any(|w| w == ["--prio", "-1"]));
+    assert!(args.windows(2).any(|w| w == ["--ubatch-size", "128"]));
+    // Later tests start with no hardware read.
+    if let Ok(mut l) = live().lock() {
+        l.profile = None;
+        l.tune_dir = None;
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn an_out_of_memory_cap_grows_back_a_step_after_two_clean_starts() {
+    let dir = crate::harness::test_dir("autotune-grow");
+    let capped = Tuned {
+        ngl: 30,
+        n_cpu_moe: Some(12),
+        ctx: 16_384,
+        kv: KvType::Q8,
+        cpu_only: false,
+        clean: 0,
+    };
+    save_tuned(&dir, "k", &capped).unwrap();
+    clean_start(&dir, "k", 31).unwrap();
+    assert_eq!(load_tuned(&dir).get("k").map(|t| t.clean), Some(1));
+    clean_start(&dir, "k", 31).unwrap();
+    assert_eq!(
+        load_tuned(&dir).get("k"),
+        Some(&Tuned {
+            ngl: 31,
+            n_cpu_moe: Some(9),
+            ctx: 32_768,
+            kv: KvType::Q8,
+            cpu_only: false,
+            clean: 0,
+        })
+    );
+    // Once nothing is capped any more, the record goes.
+    let near = Tuned {
+        ngl: 31,
+        n_cpu_moe: None,
+        ctx: 65_536,
+        kv: KvType::Q8,
+        cpu_only: false,
+        clean: 1,
+    };
+    save_tuned(&dir, "k", &near).unwrap();
+    clean_start(&dir, "k", 31).unwrap();
+    assert_eq!(load_tuned(&dir).get("k"), None);
+    // A GPU crash record stays: a clean CPU start says nothing about the GPU.
+    let crashed = Tuned {
+        cpu_only: true,
+        ..capped
+    };
+    save_tuned(&dir, "c", &crashed).unwrap();
+    clean_start(&dir, "c", 31).unwrap();
+    clean_start(&dir, "c", 31).unwrap();
+    assert_eq!(load_tuned(&dir).get("c"), Some(&crashed));
 }

@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { DOCK_MAX, type ActivityItem } from "./activity";
+import { DOCK_MAX, queuedItems, type ActivityItem } from "./activity";
 import { ActivityDock } from "./ActivityDock";
 
 const NOW = 1_000_000;
@@ -86,5 +86,41 @@ describe("ActivityDock", () => {
     await userEvent.click(screen.getByRole("button", { name: /Activity/ }));
     expect(screen.getByText("2 more")).toBeInTheDocument();
     expect(screen.getAllByRole("listitem", { name: /^job / })).toHaveLength(DOCK_MAX);
+  });
+
+  it("a queued row offers Steer now only while its reply can take it, and Remove", async () => {
+    const queued = queuedItems("shell-c1", ["then deploy"]);
+    const onSteer = vi.fn();
+    const onRemove = vi.fn();
+    const { rerender } = render(
+      <ActivityDock
+        items={queued}
+        onOpenChat={() => {}}
+        onOpenAutomations={() => {}}
+        canSteer={() => false}
+        onSteer={onSteer}
+        onRemove={onRemove}
+        now={1}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Activity, 1 queued" }));
+    const row = screen.getByRole("listitem", { name: "then deploy" });
+    expect(row).toHaveTextContent("Queued");
+    expect(within(row).queryByRole("button", { name: "Steer now" })).toBeNull();
+    await userEvent.click(within(row).getByRole("button", { name: "Remove" }));
+    expect(onRemove).toHaveBeenCalledWith(queued[0]);
+    rerender(
+      <ActivityDock
+        items={queued}
+        onOpenChat={() => {}}
+        onOpenAutomations={() => {}}
+        canSteer={() => true}
+        onSteer={onSteer}
+        onRemove={onRemove}
+        now={1}
+      />,
+    );
+    await userEvent.click(within(screen.getByRole("listitem", { name: "then deploy" })).getByRole("button", { name: "Steer now" }));
+    expect(onSteer).toHaveBeenCalledWith(queued[0]);
   });
 });

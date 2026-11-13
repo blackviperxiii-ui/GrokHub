@@ -38,6 +38,10 @@ pub struct RefreshJob<'a> {
     /// Today's default model: probed first.
     pub default_model: String,
     pub now_ms: u64,
+    /// The sign-in's bearer, for the quota check's `GET /v1/api-key`
+    /// (see [`super::quota`]). `None` when no credential could be read:
+    /// the xAI check is skipped, never guessed at.
+    pub xai_bearer: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -219,7 +223,13 @@ pub fn run_refresh(job: &RefreshJob<'_>) -> RefreshDone {
     }
     let gb_version = listings.iter().find_map(|l| l.gb_version.clone());
     let mut reg = load_registry(dir);
-    reg.entitlement.credential = job.credential;
+    // A `None` here means the caller could not read a credential this
+    // time (a failed OAuth renewal reads the same as a sign-out): it
+    // never erases a credential an earlier refresh proved. A real
+    // change (plan <-> key) still lands.
+    if job.credential != Credential::None {
+        reg.entitlement.credential = job.credential;
+    }
     let (mut events, signal) = reg.fold(&take_observations(dir));
     events.extend(reg.apply_refresh(&listings, &job.named, job.now_ms));
     for ev in &events {
@@ -233,7 +243,18 @@ pub fn run_refresh(job: &RefreshJob<'_>) -> RefreshDone {
         &job.default_model,
         job.now_ms,
     );
+    // Failover step 9: a few probes for free models on tryout, then every
+    // tryout judged and close expiries logged.
+    super::trial::run_probes(dir, &mut reg, job.now_ms);
+    let judged = super::trial::judge(dir, &mut reg, job.now_ms);
+    for ev in &judged {
+        let _ = append_span(dir, &event_span(ev));
+    }
+    events.extend(judged);
     let _ = save_registry(dir, &reg);
+    // Quota detection rides the refresh: each route re-reads its account
+    // state when due (ten minutes, or at once after a 402, 403 or 429).
+    let _quota = super::quota::run_quota_checks(dir, job.xai_bearer.as_deref(), job.now_ms);
     RefreshDone {
         events,
         errors,
@@ -333,6 +354,7 @@ mod tests {
             named: vec!["grok-2-pinned".into()],
             default_model: "grok-4.7".into(),
             now_ms: 1_000,
+            xai_bearer: None,
         };
         let done = run_refresh(&job);
         assert_eq!(done.errors, Vec::<String>::new());
@@ -405,6 +427,7 @@ mod tests {
             named: vec![],
             default_model: "grok-4.7".into(),
             now_ms: 1,
+            xai_bearer: None,
         });
         let mut fake = Counting(0, true);
         let p = probe_next(&dir, Credential::Plan, 2, &mut |m, c| {
@@ -427,8 +450,6 @@ mod tests {
                 Some("Tool calls didn't come back in the right shape.")
             )
         );
-        let text = crate::route::why_models_text(&load_registry(&dir), &read_profiles(&dir));
-        assert_eq!(text, "grok-4.7 · live · not usable. In your model list. Tool calls didn't come back in the right shape.");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -492,6 +513,53 @@ mod tests {
     }
 
     #[test]
+    fn a_none_credential_never_erases_the_saved_one() {
+        let dir = test_dir("route-refresh-cred");
+        let api = Fixed(SourceKind::XaiApi, vec![meta("grok-4.7")], Cell::new(0));
+        let job = RefreshJob {
+            config_dir: dir.clone(),
+            sources: vec![&api],
+            credential: Credential::Plan,
+            named: vec![],
+            default_model: "grok-4.7".into(),
+            now_ms: 1,
+            xai_bearer: None,
+        };
+        run_refresh(&job);
+        assert_eq!(load_registry(&dir).entitlement.credential, Credential::Plan);
+        // The error-shaped refresh: no bearer could be read this time.
+        run_refresh(&RefreshJob {
+            config_dir: dir.clone(),
+            sources: vec![&api],
+            credential: Credential::None,
+            named: vec![],
+            default_model: "grok-4.7".into(),
+            now_ms: 1,
+            xai_bearer: None,
+        });
+        assert_eq!(
+            load_registry(&dir).entitlement.credential,
+            Credential::Plan,
+            "a failed read must not wipe the saved credential"
+        );
+        // A real change still lands.
+        run_refresh(&RefreshJob {
+            config_dir: dir.clone(),
+            sources: vec![&api],
+            credential: Credential::ApiKey,
+            named: vec![],
+            default_model: "grok-4.7".into(),
+            now_ms: 1,
+            xai_bearer: None,
+        });
+        assert_eq!(
+            load_registry(&dir).entitlement.credential,
+            Credential::ApiKey
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn an_api_key_route_is_metered_and_never_queued() {
         let dir = test_dir("route-refresh-key");
         let api = Fixed(SourceKind::XaiApi, vec![meta("grok-4.7")], Cell::new(0));
@@ -502,6 +570,7 @@ mod tests {
             named: vec![],
             default_model: "grok-4.7".into(),
             now_ms: 1,
+            xai_bearer: None,
         });
         assert_eq!(
             read_profiles(&dir)["grok-4.7"].probe.status,

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
 import {
   fetchPluginMarket,
   getPlugins,
@@ -9,17 +9,30 @@ import {
   type PluginPage,
   type PluginRow,
 } from "./api";
-import { PRODUCT_NAME } from "./brand";
+import { COMPANION_NAME } from "./brand";
+import {
+  desktopNyxGet,
+  desktopNyxSet,
+  type DesktopNyxState,
+} from "./desktopNyxApi";
+import { Diagnostics } from "./Diagnostics";
+import { Toggle } from "./Toggle";
+import { inShell } from "./transport";
+import { StatusLine, useNote } from "./ui";
 
 export const LABS_NOTE = "Early features. They work, but they may change.";
-export const CHANNEL_NOTE =
-  `The beta channel switch is in the ${PRODUCT_NAME} cabin. This app updates from its release downloads.`;
+export const CHANNEL_NOTE = "Switch between beta and stable in About, under Updates.";
+export const CHANNEL_NOTE_REMOTE =
+  "Switch between beta and stable on your computer, in About, under Updates.";
 export const PLUGINS_TIP =
   "A preview: the same plugins as the cabin's Labs page, with fewer details on each bundle.";
 export const PLUGINS_NOTE =
   "Bundles stay off until you trust this version and turn them on. Trust covers the hook commands, MCP server commands, skills and agents a bundle lists. Fetching a marketplace list installs nothing.";
 export const PLUGINS_EMPTY =
   "No plugins yet. Install a bundle above. It stays off until you trust it and turn it on.";
+export const DESKTOP_NYX_TIP = `Puts a pop-out on ${COMPANION_NAME}'s dock. Popped out, she stands on a holo pedestal in a small see-through window over your desktop.`;
+export const DESKTOP_NYX_WAYLAND =
+  "On this desktop, a see-through always-on-top window may not be honoured (common on Wayland). She still opens; the glass and float may not.";
 
 /** The next step for a bundle: trust first, then on and off. */
 function next(row: PluginRow): { act: PluginAct; label: string } {
@@ -40,28 +53,30 @@ export function Labs() {
   const [source, setSource] = useState("");
   const [marketUrl, setMarketUrl] = useState("");
   const [entries, setEntries] = useState<PluginEntry[]>([]);
-  const [note, setNote] = useState<string | null>(null);
+  const { note, ok, fail } = useNote();
   const [busy, setBusy] = useState(false);
 
+  // Runs each time Labs shows; a market address typed here and not used stays.
+  const refresh = useEffectEvent((loaded: PluginPage) => {
+    if (!page || marketUrl === page.marketUrl) setMarketUrl(loaded.marketUrl);
+    setPage(loaded);
+  });
   useEffect(() => {
     getPlugins().then(
-      (loaded) => {
-        setPage(loaded);
-        setMarketUrl(loaded.marketUrl);
-      },
-      (err) => setNote(String(err)),
+      (loaded) => refresh(loaded),
+      fail,
     );
-  }, []);
+  }, [fail]);
 
   async function run(work: () => Promise<PluginPage>) {
     setBusy(true);
     try {
       const done = await work();
       setPage(done);
-      setNote(done.note || null);
+      ok(done.note || null);
       return done;
     } catch (err) {
-      setNote(String(err));
+      fail(err);
       return null;
     } finally {
       setBusy(false);
@@ -90,7 +105,8 @@ export function Labs() {
     <div className="labs" role="group" aria-label="Labs">
       <h2>Labs</h2>
       <p className="note">{LABS_NOTE}</p>
-      <p className="note">{CHANNEL_NOTE}</p>
+      <p className="note">{inShell() ? CHANNEL_NOTE : CHANNEL_NOTE_REMOTE}</p>
+      {inShell() && <DesktopCompanion />}
       <h3>
         Plugins{" "}
         <span className="badge" title={PLUGINS_TIP}>
@@ -111,11 +127,7 @@ export function Labs() {
           Install
         </button>
       </form>
-      {note && (
-        <p className="note" role="status">
-          {note}
-        </p>
-      )}
+      <StatusLine note={note} className="note" />
       {page === null && !note && <p className="empty">Loading plugins…</p>}
       {page && page.rows.length === 0 && (
         <p className="empty">{PLUGINS_EMPTY}</p>
@@ -192,6 +204,64 @@ export function Labs() {
             </li>
           ))}
         </ul>
+      )}
+      <Diagnostics />
+    </div>
+  );
+}
+
+/** Settings → Labs → Desktop companion (cabin desktop_nyx). Off by default. */
+function DesktopCompanion() {
+  const [desk, setDesk] = useState<DesktopNyxState | null>(null);
+  const { fail } = useNote();
+  useEffect(() => {
+    void desktopNyxGet().then(setDesk, fail);
+  }, [fail]);
+  if (!desk) return null;
+  const effectsOk = desk.effects.transparent && desk.effects.onTop;
+  return (
+    <div className="labs-desktop-nyx" role="group" aria-label={`Desktop ${desk.companion}`}>
+      <h3>
+        Desktop {desk.companion}{" "}
+        <span className="badge" title={DESKTOP_NYX_TIP}>
+          Preview
+        </span>
+      </h3>
+      <Toggle
+        checked={desk.enabled}
+        onChange={(on) => void desktopNyxSet({ enabled: on }).then(setDesk, fail)}
+      >
+        Desktop companion
+      </Toggle>
+      <p className="note">{DESKTOP_NYX_TIP}</p>
+      {!effectsOk && <p className="note warn">{DESKTOP_NYX_WAYLAND}</p>}
+      {desk.enabled && (
+        <>
+          <Toggle
+            checked={desk.behind}
+            onChange={(behind) => void desktopNyxSet({ behind }).then(setDesk, fail)}
+          >
+            Stay behind windows
+          </Toggle>
+          <p className="note">
+            On: she sits on the desktop and your apps cover her. Off: she floats above them.
+          </p>
+          <Toggle
+            checked={desk.adult}
+            onChange={(adult) => void desktopNyxSet({ adult }).then(setDesk, fail)}
+          >
+            Allow 18+ outfits on the desktop
+          </Toggle>
+          <p className="note">
+            Off by default: the desktop is visible to anyone at the screen. Needs adults-only
+            personalities on.
+          </p>
+          <p className="note">
+            {desk.undocked
+              ? "On the desktop. Use Bring her back on her dock or right-click menu."
+              : "Docked in the chat. Use Put her on the desktop on her dock."}
+          </p>
+        </>
       )}
     </div>
   );

@@ -12,7 +12,7 @@ checklist = [
   "game and patch version noted",
   "steps match the user's platform",
   "no unrequested spoilers",
-  "sources or patch notes cited when used",
+  "looked up this turn, links only to pages opened",
 ]
 backup = "Read-only unless the user asks to change a config; then copy the file before editing."
 verify = "Ask whether the tip worked in-game or if a step needs adjusting."
@@ -20,7 +20,8 @@ rollback = "Restore the backed-up config or undo the last change if something br
 give_up = [
   "a hard approval was refused",
   "hardware, access or a sign-in is missing",
-  "every approach in the playbook failed and was checked",
+  "every approach here failed and was checked",
+  "no search tool worked; say so in one line and mark the answer as from memory",
 ]
 
 [applies_when]
@@ -35,7 +36,10 @@ tier = "read_only"
 name = "Confirm the game title, platform, and patch or season when known"
 
 [[phase.step]]
-name = "Check official patch notes or docs dated to that version before recommending a setting or mod"
+name = "Look it up with web_search first, without being asked: quests, items, vendors, bosses and lore change with patches"
+
+[[phase.step]]
+name = "web_fetch the guide or patch notes you rely on (Wowhead, the game's wiki, official notes) and note the patch or date they show"
 
 [[phase]]
 name = "Answer"

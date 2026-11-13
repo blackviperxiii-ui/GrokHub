@@ -4,8 +4,11 @@
 
 use std::path::{Path, PathBuf};
 
-use grokhub_core::personality::{self, Emoji, Personality, Verbosity};
+use grokhub_agent::voice_session::VoiceConfig;
+use grokhub_core::personality::{self, Emoji, Heat, Personality, Verbosity};
 use serde::{Deserialize, Serialize};
+
+use crate::settings::ShellSettings;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +36,15 @@ pub struct Page {
     /// Custom files that could not be used, each naming the file and why.
     pub problems: Vec<String>,
     /// Adults-only personalities: off leaves the explicit presets out of `presets`.
+    /// On only once the 18+ check was answered yes.
     pub explicit: bool,
+    /// The switch was turned on before the 18+ check: nothing changed, and the
+    /// page asks the check first.
+    pub age_check: bool,
+    /// Settings → Personality → Heat, shown while `explicit` is on.
+    pub heat: Heat,
+    /// Settings → Personality → Dynamic chat.
+    pub dynamic_chat: bool,
 }
 
 /// The editor's fields for one custom preset.
@@ -83,10 +94,11 @@ fn preset(p: Personality) -> Preset {
     }
 }
 
-pub fn load(config_dir: &Path, stored: &str, explicit_on: bool) -> Page {
+pub fn load(config_dir: &Path, settings: &ShellSettings) -> Page {
+    let explicit_on = settings.adults_on();
     let (all, problems) = personality::load_all(&dir(config_dir));
     let shown = personality::visible(&all, explicit_on);
-    let current = shown_id(stored);
+    let current = shown_id(&settings.personality);
     // A default whose file was deleted in the cabin, or an explicit one while
     // adults-only personalities are off, falls back to the default voice.
     let current = if shown.iter().any(|p| p.id == current) {
@@ -99,6 +111,9 @@ pub fn load(config_dir: &Path, stored: &str, explicit_on: bool) -> Page {
         current,
         problems,
         explicit: explicit_on,
+        age_check: false,
+        heat: settings.quip_heat,
+        dynamic_chat: settings.dynamic_chat,
     }
 }
 
@@ -123,16 +138,49 @@ pub fn pick(config_dir: &Path, id: &str) -> Result<Personality, String> {
         .ok_or_else(|| format!("No personality called {id}."))
 }
 
-/// The block a chat's system prompt carries for the stored id, with the
-/// closer that puts the safety rules back on top. Empty only when that
-/// preset's tone rules are empty.
-pub fn voice(config_dir: &Path, stored: &str, explicit_on: bool) -> String {
-    let p = personality::lookup(&dir(config_dir), shown_id(stored));
-    let block = personality::gated(p, explicit_on).prompt_block();
-    if block.is_empty() {
-        block
-    } else {
-        format!("{block}\n\n{}", grokhub_core::talk::VOLATILE_SAFETY_CLOSER)
+/// The voice every chat speaks in: the stored default, or the default voice
+/// while it is an explicit preset and adults-only is off.
+fn home(config_dir: &Path, settings: &ShellSettings) -> Personality {
+    let p = personality::lookup(&dir(config_dir), shown_id(&settings.personality));
+    personality::gated(p, settings.adults_on())
+}
+
+/// The xAI voice spoken replies use: the stored default's voice hint when it
+/// names a voice xAI has, else the default voice (as the cabin picks it).
+pub fn speech_voice(config_dir: &Path, settings: &ShellSettings) -> &'static str {
+    grokhub_core::tts_voice(home(config_dir, settings).voice_hint.as_deref())
+}
+
+/// The block a chat's system prompt carries for the stored default. With 18+
+/// on, every voice jokes at the chosen heat. Empty only when that preset's
+/// tone rules are empty. The safety closer comes after the whole volatile
+/// tail (`agent::volatile_tail`), not here.
+pub fn voice(config_dir: &Path, settings: &ShellSettings) -> String {
+    home(config_dir, settings).prompt_block_for(settings.adult_heat())
+}
+
+/// A chat's voice settings for the agent's per-turn voice flow: the default
+/// voice as home, every preset but the explicit ones as the voices dynamic
+/// chat may hand to, and the heat. The shell has no per-chat pick, so no chat
+/// is pinned.
+pub fn voice_config(
+    config_dir: &Path,
+    settings: &ShellSettings,
+    utc_offset_min: i32,
+) -> VoiceConfig {
+    let (all, _) = personality::load_all(&dir(config_dir));
+    VoiceConfig {
+        home: home(config_dir, settings),
+        // Adults-only voices join only with adults-only on, and then speak
+        // only for 18+ turns.
+        roster: all
+            .into_iter()
+            .filter(|p| settings.adult_heat().is_some() || !p.explicit)
+            .collect(),
+        dynamic: settings.dynamic_chat,
+        pinned: false,
+        adult: settings.adult_heat(),
+        utc_offset_min,
     }
 }
 
@@ -175,6 +223,17 @@ pub fn delete(config_dir: &Path, id: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// Settings with `stored` as the default voice, adults-only on (and the
+    /// 18+ check answered) or off.
+    fn with(stored: &str, adults: bool) -> ShellSettings {
+        ShellSettings {
+            personality: stored.to_string(),
+            explicit_personalities: adults,
+            adult_confirmed: adults,
+            ..ShellSettings::default()
+        }
+    }
+
     fn scratch(tag: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("gh-shell-persona-{tag}-{}", std::process::id()));
@@ -186,17 +245,17 @@ mod tests {
     #[test]
     fn the_page_lists_the_builtins_with_the_default_first_and_current() {
         let cfg = scratch("page");
-        let page = load(&cfg, "", false);
+        let page = load(&cfg, &with("", false));
         assert_eq!(page.current, "nyx");
         assert_eq!(page.presets[0].id, "nyx");
         assert_eq!(page.presets[0].name, grokhub_core::brand::companion_name());
         assert!(page.presets.iter().all(|p| p.id != "default"));
         // A profile saved on the retired "default" preset shows Nyx in use.
-        assert_eq!(load(&cfg, "default", false).current, "nyx");
+        assert_eq!(load(&cfg, &with("default", false)).current, "nyx");
         assert!(page.presets.iter().any(|p| p.id == "pirate" && !p.custom));
         assert_eq!(page.problems, Vec::<String>::new());
-        assert_eq!(load(&cfg, "pirate", false).current, "pirate");
-        assert_eq!(load(&cfg, "gone-voice", false).current, "nyx");
+        assert_eq!(load(&cfg, &with("pirate", false)).current, "pirate");
+        assert_eq!(load(&cfg, &with("gone-voice", false)).current, "nyx");
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
@@ -210,16 +269,19 @@ mod tests {
                 .map(|p| p.id.clone())
                 .collect::<Vec<_>>()
         };
-        let off = load(&cfg, "whore", false);
+        let off = load(&cfg, &with("whore", false));
         assert!(!off.explicit);
         assert_eq!(explicit(&off), Vec::<String>::new());
         assert_eq!(off.current, "nyx");
-        let on = load(&cfg, "whore", true);
+        let on = load(&cfg, &with("whore", true));
         assert!(on.explicit);
         assert_eq!(explicit(&on), ["viper", "whore"]);
         assert_eq!(on.current, "whore");
-        assert_eq!(voice(&cfg, "whore", false), voice(&cfg, "", false));
-        assert!(voice(&cfg, "whore", true).starts_with("Personality: Whore. Whore mode:"));
+        assert_eq!(
+            voice(&cfg, &with("whore", false)),
+            voice(&cfg, &with("", false))
+        );
+        assert!(voice(&cfg, &with("whore", true)).starts_with("Personality: Whore. Whore mode:"));
         let whore = pick(&cfg, "whore").unwrap();
         assert_eq!(
             allowed(whore.clone(), false).unwrap_err(),
@@ -234,23 +296,108 @@ mod tests {
     }
 
     #[test]
-    fn the_default_voice_adds_its_values_and_a_preset_adds_its_block_and_the_closer() {
+    fn the_default_voice_adds_its_values_and_a_preset_adds_its_block_without_the_closer() {
         let cfg = scratch("voice");
-        let default_voice = voice(&cfg, "", false);
+        let default_voice = voice(&cfg, &with("", false));
         assert!(default_voice.starts_with("Personality: Nyx. "));
         assert!(default_voice.contains("not sycophantic"));
-        assert!(default_voice.contains(grokhub_core::talk::VOLATILE_SAFETY_CLOSER));
-        assert_eq!(voice(&cfg, "default", false), default_voice);
-        let pirate = voice(&cfg, "pirate", false);
-        assert_eq!(
-            pirate,
-            format!(
-                "{}\n\n{}",
-                personality::builtin("pirate").prompt_block(),
-                grokhub_core::talk::VOLATILE_SAFETY_CLOSER
-            )
-        );
+        // The closer rides once, at the end of the whole tail (agent.rs).
+        assert!(!default_voice.contains(grokhub_core::talk::VOLATILE_SAFETY_CLOSER));
+        assert_eq!(voice(&cfg, &with("default", false)), default_voice);
+        let pirate = voice(&cfg, &with("pirate", false));
+        assert_eq!(pirate, personality::builtin("pirate").prompt_block());
         assert!(pirate.starts_with("Personality: "), "{pirate}");
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn every_voice_jokes_at_the_heat_only_with_18_plus_on() {
+        let cfg = scratch("heat");
+        let at = |heat: Heat, adults: bool, confirmed: bool| {
+            voice(
+                &cfg,
+                &ShellSettings {
+                    personality: "pirate".into(),
+                    explicit_personalities: adults,
+                    adult_confirmed: confirmed,
+                    quip_heat: heat,
+                    ..ShellSettings::default()
+                },
+            )
+        };
+        let plain = personality::builtin("pirate").prompt_block();
+        // Off, or on without the 18+ check, is the plain block at any heat.
+        assert_eq!(at(Heat::Filthy, false, false), plain);
+        assert_eq!(at(Heat::Filthy, false, true), plain);
+        assert_eq!(at(Heat::Filthy, true, false), plain);
+        assert!(!plain.contains(personality::ADULT_HUMOR));
+        let spicy = at(Heat::Spicy, true, true);
+        assert!(spicy.contains(personality::ADULT_HUMOR), "{spicy}");
+        assert!(spicy.contains(Heat::Spicy.line()), "{spicy}");
+        assert!(!spicy.contains(Heat::Filthy.line()), "{spicy}");
+        let cheeky = at(Heat::Cheeky, true, true);
+        assert!(cheeky.contains(personality::ADULT_HUMOR));
+        assert!(cheeky.contains(Heat::Cheeky.line()));
+        assert!(!cheeky.contains(Heat::Spicy.line()));
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn the_voice_config_brings_adults_only_voices_only_with_adults_only_on() {
+        let cfg = scratch("session");
+        let settings = ShellSettings {
+            personality: "viper".into(),
+            explicit_personalities: true,
+            adult_confirmed: true,
+            quip_heat: Heat::Spicy,
+            ..ShellSettings::default()
+        };
+        let on = voice_config(&cfg, &settings, 120);
+        assert_eq!(on.home.id, "viper");
+        assert!(!on.roster.is_empty());
+        // Adults-only on: the adults-only voice can take an 18+ turn.
+        assert!(on.roster.iter().any(|p| p.id == "whore" && p.explicit));
+        assert!(on.roster.iter().any(|p| p.id == "pirate"));
+        assert!(on.dynamic && !on.pinned);
+        assert_eq!(on.adult, Some(Heat::Spicy));
+        assert_eq!(on.utc_offset_min, 120);
+        // Adults-only off: the explicit default speaks as the default voice.
+        let off = voice_config(
+            &cfg,
+            &ShellSettings {
+                explicit_personalities: false,
+                dynamic_chat: false,
+                ..settings
+            },
+            0,
+        );
+        assert_eq!(off.home.id, "nyx");
+        assert_eq!(off.adult, None);
+        assert!(!off.dynamic);
+        assert!(
+            off.roster.iter().all(|p| !p.explicit),
+            "no 18+ voice with it off"
+        );
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn the_page_carries_the_heat_and_dynamic_chat() {
+        let cfg = scratch("page-flow");
+        let page = load(&cfg, &with("", false));
+        assert!(!page.age_check);
+        assert_eq!(page.heat, Heat::Cheeky);
+        assert!(page.dynamic_chat);
+        let json = serde_json::to_value(&page).unwrap();
+        assert_eq!(json["ageCheck"], false);
+        assert_eq!(json["heat"], "cheeky");
+        assert_eq!(json["dynamicChat"], true);
+        // On without the 18+ check stays off on the page.
+        let unconfirmed = ShellSettings {
+            explicit_personalities: true,
+            ..ShellSettings::default()
+        };
+        assert!(!load(&cfg, &unconfirmed).explicit);
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
@@ -260,7 +407,7 @@ mod tests {
         let id = duplicate(&cfg, "pirate").expect("duplicate");
         assert_eq!(id, "pirate-copy");
         assert!(dir(&cfg).join("pirate-copy.toml").exists());
-        let page = load(&cfg, "", false);
+        let page = load(&cfg, &with("", false));
         let copy = page.presets.iter().find(|p| p.id == id).expect("listed");
         assert!(copy.custom);
         assert_eq!(
@@ -295,11 +442,12 @@ mod tests {
                 Verbosity::Terse
             )
         );
-        assert!(voice(&cfg, &id, false).starts_with("Personality: Deckhand. Talk like a deckhand."));
+        assert!(voice(&cfg, &with(&id, false))
+            .starts_with("Personality: Deckhand. Talk like a deckhand."));
 
         delete(&cfg, &id).expect("delete");
         assert!(!dir(&cfg).join("pirate-copy.toml").exists());
-        assert_eq!(load(&cfg, &id, false).current, "nyx");
+        assert_eq!(load(&cfg, &with(&id, false)).current, "nyx");
         let _ = std::fs::remove_dir_all(&cfg);
     }
 

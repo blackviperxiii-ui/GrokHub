@@ -396,6 +396,22 @@ pub fn guard_span(target: &str, why: &str, now: u64) -> Span {
     span
 }
 
+/// What the weekly review's model reads: the week's skill runs, then what
+/// the learning engine measured going wrong with the app itself (nothing in
+/// a good week), then the Brain ask when there is one.
+fn weekly_digest(
+    stats: &[SkillStats],
+    faults: &[grokhub_core::learn::review::Fault],
+    brain: Option<&BrainAsk>,
+) -> String {
+    let mut digest = build_self_review_digest(stats);
+    digest.push_str(&grokhub_core::learn::review::digest(faults));
+    if let Some(ask) = brain {
+        digest.push_str(&brain_digest(&ask.stats, &ask.text));
+    }
+    digest
+}
+
 /// The weekly model call: one routed `background:review` call at the
 /// background effort, then the fixed rules. Refused targets are logged as
 /// scope findings; the call's tokens go on a span. With `brain`, the same
@@ -409,10 +425,7 @@ pub fn run_weekly(
     now: u64,
     cancel: &CancelToken,
 ) -> Result<WeeklyPass, ClientError> {
-    let mut digest = build_self_review_digest(stats);
-    if let Some(ask) = brain {
-        digest.push_str(&brain_digest(&ask.stats, &ask.text));
-    }
+    let digest = weekly_digest(stats, &grokhub_core::learn::hub::faults(now), brain);
     let input = vec![
         InputItem::Message {
             role: "system".into(),
@@ -771,6 +784,43 @@ mod tests {
     }
 
     #[test]
+    fn the_weekly_review_reads_what_the_app_measured_about_itself() {
+        use grokhub_core::learn::decide::Area;
+        use grokhub_core::learn::review::Fault;
+        let stats = vec![SkillStats {
+            skill: "weekly-report".into(),
+            runs: 5,
+            failures: 3,
+            ..SkillStats::default()
+        }];
+        let week = "Skill runs this week (failures first):\n\
+                    - weekly-report: 3 of 5 weekly-report runs needed a fix\n";
+        // A good week reads as before.
+        assert_eq!(weekly_digest(&stats, &[], None), week);
+        let faults = [
+            Fault::Unreliable {
+                subject: "model:weak-model".into(),
+                good: 3,
+                runs: 12,
+            },
+            Fault::Slipped {
+                area: Area::Router,
+                now: 40,
+                before: 90,
+                resting: false,
+            },
+        ];
+        assert_eq!(
+            weekly_digest(&stats, &faults, None),
+            format!(
+                "{week}What the app measured about itself (ids and counts only):\n\
+                 - `model:weak-model` went well in 3 of its last 12 runs (25%).\n\
+                 - Model choice: 40% of the app's own changes were kept in the last four weeks, down from 90%.\n"
+            )
+        );
+    }
+
+    #[test]
     fn a_weekly_reply_aimed_at_protected_surfaces_is_refused_logged_and_changes_nothing() {
         let d = dir("protected");
         let before = protected_hashes();
@@ -859,7 +909,7 @@ mod tests {
     }
 
     /// The loop's files reach the network only through `route::call_model`
-    /// (the cabin builds the model client it is given). No HTTP client, no
+    /// (the app builds the model client it is given). No HTTP client, no
     /// socket, and no developer-tracker host appears in them.
     #[test]
     fn the_self_improvement_loop_names_no_http_client_or_tracker_host() {
@@ -872,9 +922,13 @@ mod tests {
             "crates/grokhub-core/src/run_metrics.rs",
             "crates/grokhub-core/src/protected_surface.rs",
             "crates/grokhub-core/src/outcome.rs",
-            "crates/grokhub-app/src/app/self_review_ui.rs",
-            "crates/grokhub-app/src/app/canary_ui.rs",
-            "crates/grokhub-app/src/app/change_history_ui.rs",
+            // The shared homes of the loop's app glue (the weekly pass, chat
+            // recording) and the desktop app's self-improvement wiring.
+            "crates/grokhub-agent/src/harness/weekly_review.rs",
+            "crates/grokhub-agent/src/harness/chat_record.rs",
+            "src-tauri/src/self_improve.rs",
+            "src-tauri/src/changes.rs",
+            "src-tauri/src/chat_trials.rs",
         ];
         let banned = [
             "ureq",

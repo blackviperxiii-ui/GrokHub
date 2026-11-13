@@ -99,10 +99,7 @@ impl RestorePoint for Snapshot {
                 Os::Linux,
                 &format!("btrfs subvolume snapshot -r / /.snapshots/{l}"),
             ),
-            SnapshotBackend::SystemRestore => elevate(
-                Os::Windows,
-                &format!("Checkpoint-Computer -Description {l} -RestorePointType MODIFY_SETTINGS"),
-            ),
+            SnapshotBackend::SystemRestore => system_restore_step(l),
         })
     }
 
@@ -115,6 +112,25 @@ impl RestorePoint for Snapshot {
             SnapshotBackend::SystemRestore => format!("I also made a Windows restore point called \"{l}\". To go back to it, open Start, type \"Create a restore point\", choose System Restore and pick {l}."),
         })
     }
+}
+
+/// A Windows restore point through UAC that says what Windows did. The
+/// elevated window's own output never comes back, so its exit code carries
+/// the answer: made, skipped (Windows makes one a day at most), or refused
+/// (System Restore is off for the drive). It never turns System Restore on.
+fn system_restore_step(label: &str) -> String {
+    let inner = format!(
+        "$n = @(Get-ComputerRestorePoint).Count; \
+try {{ Checkpoint-Computer -Description {label} -RestorePointType MODIFY_SETTINGS -ErrorAction Stop }} catch {{ exit 3 }}; \
+if (@(Get-ComputerRestorePoint).Count -gt $n) {{ exit 0 }} else {{ exit 2 }}"
+    );
+    format!(
+        "{}; switch ($p.ExitCode) {{ 0 {{ 'Restore point {label} created.' }} \
+2 {{ 'Windows skipped the restore point: it makes one a day at most, and one was made in the last 24 hours.'; exit 2 }} \
+3 {{ 'No restore point: System Restore is off for this drive, or Windows refused it.'; exit 3 }} \
+default {{ 'The restore point did not finish (the admin prompt was closed or failed).'; exit 1 }} }}",
+        elevate(Os::Windows, &inner).replacen("Start-Process", "$p = Start-Process", 1).replacen("-Wait", "-Wait -PassThru", 1)
+    )
 }
 
 /// One backed-up file.

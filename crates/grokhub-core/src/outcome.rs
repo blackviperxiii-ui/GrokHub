@@ -296,11 +296,17 @@ pub fn read_outcome_lines(config_dir: &Path) -> Vec<TaskOutcome> {
 /// One record per task: the newest line wins. Sorted by `finished_at`.
 pub fn fold_outcomes(lines: Vec<TaskOutcome>) -> Vec<TaskOutcome> {
     let mut out: Vec<TaskOutcome> = Vec::new();
+    // Where each task sits in `out`. A linear find per line made this
+    // quadratic: 33 ms for a full 2 MB log, on the UI thread at Home.
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for line in lines {
-        match out.iter_mut().find(|o| o.task == line.task) {
-            Some(prev) if line.at >= prev.at => *prev = line,
+        match index.get(&line.task) {
+            Some(&i) if line.at >= out[i].at => out[i] = line,
             Some(_) => {}
-            None => out.push(line),
+            None => {
+                index.insert(line.task.clone(), out.len());
+                out.push(line);
+            }
         }
     }
     out.sort_by(|a, b| a.finished_at.cmp(&b.finished_at).then(a.task.cmp(&b.task)));
@@ -340,6 +346,43 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    fn line(task: &str, at: u64, finished_at: u64, signature: &str) -> TaskOutcome {
+        TaskOutcome {
+            task: task.into(),
+            signature: signature.into(),
+            result: OutcomeResult::Success,
+            reasons: Vec::new(),
+            span_ids: Vec::new(),
+            episode: String::new(),
+            finished_at,
+            tokens: OutcomeTokens::default(),
+            at,
+        }
+    }
+
+    #[test]
+    fn the_newest_line_of_each_task_wins_and_the_rest_sorts_by_finish() {
+        let folded = fold_outcomes(vec![
+            line("chat:1", 10, 100, "first"),
+            line("chat:2", 11, 50, "b"),
+            line("chat:1", 30, 300, "rewritten"),
+            line("chat:1", 20, 200, "older, arrived late"),
+            line("chat:0", 12, 50, "a"),
+        ]);
+        let got: Vec<(&str, &str, u64)> = folded
+            .iter()
+            .map(|o| (o.task.as_str(), o.signature.as_str(), o.finished_at))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("chat:0", "a", 50),
+                ("chat:2", "b", 50),
+                ("chat:1", "rewritten", 300)
+            ]
+        );
     }
 
     #[test]

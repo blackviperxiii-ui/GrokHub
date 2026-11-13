@@ -447,7 +447,10 @@ impl ChangeLedger {
         &self.changes
     }
 
-    fn for_name<'a>(&'a self, name: &str) -> impl DoubleEndedIterator<Item = &'a Change> + 'a {
+    fn for_name<'a>(
+        &'a self,
+        name: &str,
+    ) -> impl DoubleEndedIterator<Item = &'a Change> + 'a + use<'a> {
         let id = self.kind.id_of(name);
         self.changes
             .iter()

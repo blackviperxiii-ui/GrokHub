@@ -251,9 +251,9 @@ mod tests {
             !sh.contains("build-hands.sh")
                 && !sh.contains("ydotoold")
                 && sh.contains("alsa-utils")
-                && sh.contains("enable grokhub.service")
+                && sh.contains("disable grokhub.service")
                 && sh.contains("enable --now grokhub-hub.service"),
-            "clone install must skip grim/ydotool sidecars and enable cabin/hub: {sh}"
+            "clone install must skip grim/ydotool sidecars, turn off the old cabin unit and enable the hub: {sh}"
         );
         assert!(
             !sh.contains("sudo pacman -S --needed ydotool"),

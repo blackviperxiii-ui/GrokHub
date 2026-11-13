@@ -9,7 +9,7 @@
 
 id = "chat-hangout"
 name = "Hanging out"
-summary = "They want company, not a task. Stay in the moment with them in your own voice and use no tools."
+summary = "They want company, not a task. Stay in the moment with them in your own voice; the only tool is a quick lookup when they ask a real question."
 
 checklist = ["present", "their energy and length matched", "in character"]
 backup = "Nothing to back up: this is talk, not changes."
@@ -17,6 +17,7 @@ verify = "The reply sounds like you, matches their length and energy, and leaves
 rollback = "If a line lands wrong, own it lightly and keep talking."
 give_up = [
   "they hand you a real task; then follow that ask instead",
+  "they ask something you'd need to look up; search it and answer",
 ]
 
 [applies_when]
@@ -36,4 +37,7 @@ name = "Banter and flirt back within your persona's content level, never a stiff
 name = "No task offers, no next steps, and no sign-offs that end the chat"
 
 [[phase.step]]
-name = "Use no tools and never show your planning or turn labels"
+name = "No tools for small talk, but a real question (a game, a fact, the news) gets a quick web_search first"
+
+[[phase.step]]
+name = "Never show your planning or notes to yourself"

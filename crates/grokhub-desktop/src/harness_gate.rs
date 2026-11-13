@@ -36,22 +36,22 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
     let live = gate.enabled && !gate.halted;
     // The game guard answers first: a held call reads no window, parks no
     // card and reaches no backend.
-    if let Some(c) = call.as_ref().filter(|_| live) {
-        if let Some(msg) = server.guard_refusal(&c.tool) {
-            write_span(
-                dir,
-                c,
-                false,
-                &msg,
-                access_now(dir, gate.enabled),
-                None,
-                None,
-            );
-            return RpcOutcome {
-                reply: Some(refusal_reply(&c.id, &msg)),
-                exit: false,
-            };
-        }
+    if let Some(c) = call.as_ref().filter(|_| live)
+        && let Some(msg) = server.guard_refusal(&c.tool)
+    {
+        write_span(
+            dir,
+            c,
+            false,
+            &msg,
+            access_now(dir, gate.enabled),
+            None,
+            None,
+        );
+        return RpcOutcome {
+            reply: Some(refusal_reply(&c.id, &msg)),
+            exit: false,
+        };
     }
     let mut parked = None;
     if let Some(c) = call.as_mut() {
@@ -109,7 +109,7 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
 }
 
 /// Spike-2b: what a click will land on, read before `decide` (AT-SPI on
-/// Linux, capped; unknown on Windows, D3), plus the focused window for the
+/// Linux, UI Automation on Windows, both capped), plus the focused window for the
 /// card. Only the matched rule id ever reaches a span.
 fn click_hint<B: DesktopBackend>(server: &mut DesktopServer<B>, args: &Value) -> Value {
     let mut hint = match server.click_target(args) {
@@ -134,10 +134,10 @@ pub(crate) fn add_hints<B: DesktopBackend>(
     if !args.is_object() {
         return;
     }
-    if hx::needs_window(tool, args) {
-        if let Ok(w) = server.backend_mut().list_windows() {
-            args["window"] = Value::String(w.active);
-        }
+    if hx::needs_window(tool, args)
+        && let Ok(w) = server.backend_mut().list_windows()
+    {
+        args["window"] = Value::String(w.active);
     }
     let at = match tool {
         "click" => args.clone(),
@@ -741,7 +741,7 @@ mod tests {
             &dir,
             &mut || false,
         );
-        assert_eq!(reply_text(&out), grokhub_core::desktop_mcp::OFF_MSG);
+        assert_eq!(reply_text(&out), *grokhub_core::desktop_mcp::OFF_MSG);
         let out = handle_desk_line(
             &mut s,
             &rpc("focus_window", json!({ "title": "GrokHub" })),
@@ -749,7 +749,7 @@ mod tests {
             &dir,
             &mut || false,
         );
-        assert_eq!(reply_text(&out), grokhub_core::desktop_mcp::OFF_MSG);
+        assert_eq!(reply_text(&out), *grokhub_core::desktop_mcp::OFF_MSG);
         assert!(s.backend_mut().opened.is_empty());
         assert_eq!(
             s.backend_mut().windows.active,
@@ -1014,7 +1014,7 @@ mod tests {
         assert_eq!(req.class, "delete");
         assert_eq!(
             req.action,
-            "press Delete on the files selected in org.kde.dolphin Downloads — Dolphin (the cabin can't see which)"
+            "press Delete on the files selected in org.kde.dolphin Downloads — Dolphin (the app can't see which)"
         );
         assert!(reply_text(&out).starts_with("Denied: hard-class delete"));
         assert_eq!(
@@ -1089,7 +1089,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "send",
-                "Grok wants to click Send in org.shop Checkout — Shop"
+                "Loadout wants to click Send in org.shop Checkout — Shop"
             )
         );
         assert!(
@@ -1124,7 +1124,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "money",
-                "Grok wants to click Pay in org.shop Checkout — Shop"
+                "Loadout wants to click Pay in org.shop Checkout — Shop"
             )
         );
         assert!(
@@ -1140,7 +1140,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "send",
-                "Grok wants to click Send in org.shop Checkout — Shop"
+                "Loadout wants to click Send in org.shop Checkout — Shop"
             )
         );
         assert_eq!(
@@ -1229,7 +1229,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "money",
-                "Grok wants to click an unlabeled control in org.shop Checkout — Shop"
+                "Loadout wants to click an unlabeled control in org.shop Checkout — Shop"
             )
         );
         assert!(
@@ -1330,9 +1330,21 @@ mod tests {
             "the cabin's hints never reach the span"
         );
         assert!(hx::pending_parks(&dir).is_empty());
-        // Windows path A keeps the default reader: unknown, so soft (D3, no UIA).
-        if !cfg!(target_os = "linux") {
-            assert_eq!(super::super::LiveBackend::new().target_at(5, 5), None);
+        // Windows path A reads UI Automation for real here: it answers within
+        // the cap, and anything it names is a labelled interactive control.
+        #[cfg(windows)]
+        {
+            let started = std::time::Instant::now();
+            let hit = super::super::LiveBackend::new().target_at(5, 5);
+            assert!(
+                started.elapsed() < crate::uia::HIT_CAP + std::time::Duration::from_millis(200),
+                "{:?}",
+                started.elapsed()
+            );
+            if let Some(t) = hit {
+                assert!(!t.label.is_empty(), "{t:?}");
+                assert!(grokhub_core::is_interactive_role(&t.role), "{t:?}");
+            }
         }
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { pulseImage, type PulseIdea, type PulsePost } from "./api";
+import { pulseImage, type PulseChip, type PulseIdea, type PulsePost } from "./api";
+import { Markdown } from "./Markdown";
+import { VerdictLine } from "./PulseFix";
+import { reducedMotion } from "./rubberBand";
+import { ConfirmRow, ExternalLink, useDismiss, useModalFocus } from "./ui";
 
 /** Topic emoji with a bundled 3D picture (Fluent Emoji 3D, MIT, see
  * public/emoji3d/LICENSE), by code point without variation selectors. */
@@ -47,7 +51,7 @@ function TopicIcon({ icon, fallback = DEFAULT_ICON, className = "topic-icon" }: 
 }
 
 /** The writer's snippet: plain text with `[label](url)` cites and `**bold**`.
- * Links open in a new tab; nothing else is read as markup. */
+ * Links open in the browser; nothing else is read as markup. */
 export function Snippet({ text }: { text: string }) {
   const parts: ReactNode[] = [];
   const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*\*([^*]+)\*\*/g;
@@ -57,9 +61,9 @@ export function Snippet({ text }: { text: string }) {
     if (m.index > at) parts.push(text.slice(at, m.index));
     if (m[1] !== undefined) {
       parts.push(
-        <a key={m.index} href={m[2]} target="_blank" rel="noopener noreferrer">
+        <ExternalLink key={m.index} href={m[2]}>
           {m[1]}
-        </a>,
+        </ExternalLink>,
       );
     } else {
       parts.push(<strong key={m.index}>{m[3]}</strong>);
@@ -67,28 +71,47 @@ export function Snippet({ text }: { text: string }) {
     at = m.index + m[0].length;
   }
   if (at < text.length) parts.push(text.slice(at));
-  return <p className="snippet">{parts}</p>;
+  // pre-line: a digest is a list, one line per item.
+  return (
+    <p className="snippet" style={{ whiteSpace: "pre-line" }}>
+      {parts}
+    </p>
+  );
 }
 
 /** Cached images as data URLs, loaded once per name. */
 function useImages(names: string[]): string[] {
   const [urls, setUrls] = useState<string[]>([]);
-  const key = names.join("|");
+  // `names` is a new array on every page load; its JSON only changes when a name does.
+  const key = JSON.stringify(names);
   useEffect(() => {
     let live = true;
-    Promise.all(names.map((n) => pulseImage(n).catch(() => ""))).then((got) => {
+    const list: string[] = JSON.parse(key);
+    Promise.all(list.map((n) => pulseImage(n).catch(() => ""))).then((got) => {
       if (live) setUrls(got.filter(Boolean));
     });
     return () => {
       live = false;
     };
-    // `key` stands for `names`, which is a new array on every page load.
   }, [key]);
   return urls;
 }
 
-function Lightbox({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
+/** One picture full size, with Download; `video` plays a clip instead. */
+export function Lightbox({
+  src,
+  name,
+  video = false,
+  onClose,
+}: {
+  src: string;
+  name: string;
+  video?: boolean;
+  onClose: () => void;
+}) {
   const close = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  useModalFocus(box);
   useEffect(() => {
     close.current?.focus();
     const onKey = (e: KeyboardEvent) => {
@@ -98,8 +121,12 @@ function Lightbox({ src, name, onClose }: { src: string; name: string; onClose: 
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div className="lightbox" role="dialog" aria-modal="true" aria-label="Image" onClick={onClose}>
-      <img src={src} alt="" onClick={(e) => e.stopPropagation()} />
+    <div ref={box} className="lightbox" role="dialog" aria-modal="true" aria-label="Image" onClick={onClose}>
+      {video ? (
+        <video src={src} controls autoPlay loop onClick={(e) => e.stopPropagation()} />
+      ) : (
+        <img src={src} alt="" onClick={(e) => e.stopPropagation()} />
+      )}
       <div className="lightbox-buttons" onClick={(e) => e.stopPropagation()}>
         <a className="button quiet" href={src} download={name}>
           Download
@@ -147,89 +174,266 @@ export function fullDate(ms: number): string {
   });
 }
 
+/** The same row of buttons on every card, in one line: Like first (far
+ * left), the card's own buttons and Not interested in the middle, Dismiss last
+ * (far right). A like turns into a filled heart that stays; a second tap takes
+ * it back. The heart pops once on the like tap, unless reduced motion is on. */
+export function CardButtons({
+  liked,
+  busy,
+  onLike,
+  onDislike,
+  onDismiss,
+  children,
+}: {
+  liked: boolean;
+  busy: boolean;
+  onLike: () => void;
+  onDislike: () => void;
+  onDismiss: () => void;
+  children?: ReactNode;
+}) {
+  const [popping, setPopping] = useState(false);
+  // Heart shows while liked, or during the one-shot pop before liked lands.
+  // The pop class drops as soon as liked is true (no effect); animationend
+  // clears popping for idea rows where liked never sticks.
+  const showHeart = liked || popping;
+  const like = () => {
+    if (liked) {
+      setPopping(false);
+      onLike();
+      return;
+    }
+    if (!reducedMotion()) setPopping(true);
+    onLike();
+  };
+  return (
+    <div className="card-buttons card-row feed-foot" role="group" aria-label="Card actions">
+      <button
+        type="button"
+        className={["quiet", "card-like", popping && !liked ? "card-like-pop" : ""]
+          .filter(Boolean)
+          .join(" ")}
+        aria-label="Like"
+        aria-pressed={liked}
+        disabled={busy}
+        onClick={like}
+      >
+        {showHeart ? (
+          <span
+            className="card-like-heart"
+            aria-hidden="true"
+            onAnimationEnd={() => setPopping(false)}
+          >
+            ♥
+          </span>
+        ) : (
+          <>
+            <span aria-hidden="true">♡</span> Like
+          </>
+        )}
+      </button>
+      {children}
+      <button type="button" className="quiet" disabled={busy} onClick={onDislike}>
+        Not interested
+      </button>
+      <button type="button" className="quiet card-dismiss" disabled={busy} onClick={onDismiss}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
 export interface FeedCardProps {
   post: PulsePost;
   busy: boolean;
+  /** Like, or take it back when the post is already liked. */
   onLove: () => void;
   onDiscuss: () => void;
-  onDelete: () => void;
-  onWhy: () => Promise<string>;
+  /** Open the post's source page. */
+  onOpen?: () => void;
+  /** Not interested: off the page, and fewer posts like it. */
+  onDislike: () => void;
+  /** Off the page. Carries no weight. */
+  onDismiss: () => void;
+  /** The ⋯ menu's only item: why this card was made. */
+  onWhy?: () => Promise<string>;
+  /** Hidden until the next 9 AM. Shown when the card says it suits. */
+  onSnooze?: () => void;
+  /** Save: the post goes to the Saved page. Shown on source posts. */
+  onSave?: () => void;
+  /** A chip under the card other than Discuss: a fix, Ignore for now, or
+   * Remind me later. */
+  onChip?: (chip: PulseChip) => void;
+  /** A weekly self-review card's Apply change, Revert or Save idea. */
+  onReview?: () => void;
+  /** A code-idea card's Copy as GitHub issue, in the ⋯ menu. */
+  onIssue?: () => void;
 }
 
-/** One Feed post: icon, title, cited snippet, media; Love and Discuss below;
- * time and a menu (date, why, delete) top right. */
-export function FeedCard({ post, busy, onLove, onDiscuss, onDelete, onWhy }: FeedCardProps) {
+/** One Feed post, always fully open: icon, title, where it is from and why,
+ * verdict, cited snippet, the full report, media; then one row of buttons
+ * (Like, the card's chips or Discuss, Read it, Snooze when it suits the card,
+ * a self-review card's Apply change, Revert or Save idea, Not interested,
+ * Dismiss). Dismiss asks first (Delete folded in). The ⋯ menu holds "Why I
+ * created this", plus Copy as GitHub issue on a code idea; nothing collapses. */
+export function FeedCard({
+  post,
+  busy,
+  onLove,
+  onDiscuss,
+  onOpen,
+  onDislike,
+  onDismiss,
+  onWhy,
+  onSnooze,
+  onSave,
+  onChip,
+  onReview,
+  onIssue,
+}: FeedCardProps) {
+  const chips = post.chips ?? [];
   const [menu, setMenu] = useState(false);
   const [why, setWhy] = useState<string | null>(null);
-
+  const [asking, setAsking] = useState(false);
+  const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
   async function askWhy() {
     setMenu(false);
-    setWhy(await onWhy().catch((err) => String(err)));
+    if (onWhy) setWhy(await onWhy().catch((err) => String(err)));
   }
-
   return (
-    <li className="card post feed-card" aria-label={post.title}>
+    <li className="card post feed-card" aria-label={post.title} data-card-id={post.id}>
       <div className="feed-head">
         <TopicIcon icon={post.icon} />
         <div className="feed-title">{post.title}</div>
-        <div className="feed-corner">
-          <span className="card-status">{post.ago}</span>
-          <button
-            type="button"
-            className="quiet icon-button"
-            aria-label="More"
-            aria-haspopup="menu"
-            aria-expanded={menu}
-            onClick={() => setMenu((m) => !m)}
-          >
-            ⋯
-          </button>
+        <div className="feed-corner" ref={corner}>
+          <span className="card-status" title={fullDate(post.createdAt)}>
+            {post.ago}
+          </span>
+          {onWhy && (
+            <button
+              type="button"
+              className="quiet icon-button"
+              aria-label="More"
+              aria-haspopup="menu"
+              aria-expanded={menu}
+              onClick={() => setMenu((m) => !m)}
+            >
+              ⋯
+            </button>
+          )}
           {menu && (
             <div className="feed-menu" role="menu">
-              <div className="feed-menu-date" role="none">
-                {fullDate(post.createdAt)}
-              </div>
               <button type="button" role="menuitem" onClick={() => void askWhy()}>
                 Why I created this
               </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="danger"
-                disabled={busy}
-                onClick={() => {
-                  setMenu(false);
-                  onDelete();
-                }}
-              >
-                Delete
-              </button>
+              {post.issue && onIssue && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenu(false);
+                    onIssue();
+                  }}
+                >
+                  Copy as GitHub issue
+                </button>
+              )}
             </div>
           )}
         </div>
       </div>
+      <p className="feed-source">
+        {post.source}
+        {post.because && ` · ${post.because}`}
+      </p>
+      <VerdictLine verdict={post.verdict} />
       {post.summary && <Snippet text={post.summary} />}
+      {(post.items?.length > 0 || post.more) && (
+        <div className="feed-report">
+          {post.items?.length > 0 && (
+            <ul className="feed-items">
+              {post.items.map((item) => (
+                <li key={item.cardId}>
+                  <strong>{item.found}</strong>
+                  {item.summary && ` ${item.summary}`}
+                </li>
+              ))}
+            </ul>
+          )}
+          {post.more && <Markdown text={post.more} />}
+        </div>
+      )}
       <Media post={post} />
       {why && (
         <p className="card-status why" role="note">
           {why}
         </p>
       )}
-      <div className="card-buttons feed-foot">
-        <button
-          type="button"
-          className="quiet"
-          aria-label="Love"
-          aria-pressed={post.loved}
-          disabled={busy || post.loved}
-          onClick={onLove}
-        >
-          <span aria-hidden="true">{post.loved ? "♥" : "♡"}</span> Love
-        </button>
-        <button type="button" className="quiet" disabled={busy} onClick={onDiscuss}>
-          Discuss
-        </button>
-      </div>
+      {asking && (
+        <ConfirmRow
+          question="Dismiss this post?"
+          detail="It won't come back."
+          action="Dismiss"
+          busy={busy}
+          onConfirm={() => {
+            setAsking(false);
+            onDismiss();
+          }}
+          onCancel={() => setAsking(false)}
+        />
+      )}
+      <CardButtons
+        liked={post.loved}
+        busy={busy}
+        onLike={onLove}
+        onDislike={onDislike}
+        onDismiss={() => setAsking(true)}
+      >
+        {chips.length === 0 ? (
+          <button type="button" className="quiet" disabled={busy} onClick={onDiscuss}>
+            Discuss
+          </button>
+        ) : (
+          chips.map((chip) => (
+            <button
+              key={`${chip.act}-${chip.index}`}
+              type="button"
+              className="quiet"
+              disabled={busy}
+              onClick={() => (chip.act === "discuss" ? onDiscuss() : onChip?.(chip))}
+            >
+              {chip.label}
+            </button>
+          ))
+        )}
+        {post.review && onReview && (
+          <button type="button" className="quiet" disabled={busy} onClick={onReview}>
+            {post.review}
+          </button>
+        )}
+        {post.link && onOpen && (
+          <button type="button" className="quiet" disabled={busy} onClick={onOpen}>
+            Read it
+          </button>
+        )}
+        {post.save && onSave && (
+          <button
+            type="button"
+            className="quiet"
+            aria-pressed={post.saved}
+            disabled={busy || post.saved}
+            onClick={onSave}
+          >
+            {post.saved ? "Saved" : "Save"}
+          </button>
+        )}
+        {post.snooze && onSnooze && (
+          <button type="button" className="quiet" disabled={busy} onClick={onSnooze}>
+            Snooze
+          </button>
+        )}
+      </CardButtons>
     </li>
   );
 }
@@ -238,53 +442,104 @@ export interface IdeaRowProps {
   idea: PulseIdea;
   busy: boolean;
   onDo: () => void;
+  /** A PC health card's main button: open its options window. */
+  onFix?: () => void;
+  /** Like, or take it back when the idea is already liked. */
   onMoreLike: () => void;
+  /** Not interested: the idea goes, with some of its topics' weight. */
   onNotInterested: () => void;
+  /** Off the page, after a confirm. */
+  onDismiss: () => void;
+  /** A chip on a card that found something; Discuss goes to `onDiscuss`. */
+  onChip?: (chip: PulseChip) => void;
+  onDiscuss?: () => void;
 }
 
-/** One Ideas row: a clay icon, the title and its grey "I can …" line. A
- * click on the row is Let's do it; the menu also holds More like this and
- * Not interested. */
-export function IdeaRow({ idea, busy, onDo, onMoreLike, onNotInterested }: IdeaRowProps) {
-  const [menu, setMenu] = useState(false);
-  const pick = (f: () => void) => () => {
-    setMenu(false);
-    f();
-  };
+/** One Ideas row, always fully open: a clay icon, the title, its verdict, its
+ * grey "I can …" line and any full report, then the same row of buttons as
+ * every card: Like, its own buttons (Let's do it, or Fix it / Options and
+ * Ask about it on a PC health card, or the chips of a card that found
+ * something), Not interested, Dismiss. A click on the row is the main button. */
+export function IdeaRow({
+  idea,
+  busy,
+  onDo,
+  onFix,
+  onMoreLike,
+  onNotInterested,
+  onDismiss,
+  onChip,
+  onDiscuss,
+}: IdeaRowProps) {
+  const chips = idea.chips ?? [];
+  const fix = idea.fix && onFix ? onFix : null;
+  const main = fix ?? onDo;
+  const [asking, setAsking] = useState(false);
   return (
     <li className="idea-row" aria-label={idea.title}>
-      <button type="button" className="idea-main" disabled={busy} onClick={onDo}>
+      <button type="button" className="idea-main" disabled={busy} onClick={main}>
         <TopicIcon icon={idea.icon} fallback={IDEA_ICON} className="idea-icon" />
         <span className="idea-text">
           <span className="idea-title">{idea.title}</span>
+          {idea.verdict && (
+            <span className={`verdict ${idea.verdict.tone}`}>
+              <span className="verdict-dot" aria-hidden="true" />
+              {idea.verdict.line}
+            </span>
+          )}
           {idea.summary && <span className="idea-summary">{idea.summary}</span>}
         </span>
       </button>
-      <div className="feed-corner">
-        <button
-          type="button"
-          className="quiet icon-button"
-          aria-label="More"
-          aria-haspopup="menu"
-          aria-expanded={menu}
-          onClick={() => setMenu((m) => !m)}
-        >
-          ⋯
-        </button>
-        {menu && (
-          <div className="feed-menu" role="menu">
-            <button type="button" role="menuitem" disabled={busy} onClick={pick(onDo)}>
-              Let's do it
+      {idea.more && (
+        <div className="feed-report">
+          <Markdown text={idea.more} />
+        </div>
+      )}
+      {asking && (
+        <ConfirmRow
+          question="Dismiss this post?"
+          detail="It won't come back."
+          action="Dismiss"
+          busy={busy}
+          onConfirm={() => {
+            setAsking(false);
+            onDismiss();
+          }}
+          onCancel={() => setAsking(false)}
+        />
+      )}
+      <CardButtons
+        liked={idea.loved}
+        busy={busy}
+        onLike={onMoreLike}
+        onDislike={onNotInterested}
+        onDismiss={() => setAsking(true)}
+      >
+        {chips.length === 0 ? (
+          <>
+            <button type="button" className="quiet" disabled={busy} onClick={main}>
+              {fix ? idea.fix : "Let's do it"}
             </button>
-            <button type="button" role="menuitem" disabled={busy} onClick={pick(onMoreLike)}>
-              More like this
+            {fix && (
+              <button type="button" className="quiet" disabled={busy} onClick={onDo}>
+                Ask about it
+              </button>
+            )}
+          </>
+        ) : (
+          chips.map((chip) => (
+            <button
+              key={`${chip.act}-${chip.index}`}
+              type="button"
+              className="quiet"
+              disabled={busy}
+              onClick={() => (chip.act === "discuss" ? onDiscuss?.() : onChip?.(chip))}
+            >
+              {chip.label}
             </button>
-            <button type="button" role="menuitem" disabled={busy} onClick={pick(onNotInterested)}>
-              Not interested
-            </button>
-          </div>
+          ))
         )}
-      </div>
+      </CardButtons>
     </li>
   );
 }

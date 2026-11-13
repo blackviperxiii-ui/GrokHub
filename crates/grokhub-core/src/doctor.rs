@@ -28,6 +28,20 @@ pub fn doctor_lines(has_key: bool, memory_dir_ok: bool, hub_kind: &str) -> Vec<D
     ]
 }
 
+/// The xAI auth row when a sign-in or key is on file but can't carry a turn
+/// (expired, its renewal failed, or xAI turned it away), so the row agrees
+/// with the send gate. `local_ready`: Local AI answers in the meantime.
+pub fn xai_auth_stale_line(local_ready: bool) -> DoctorLine {
+    DoctorLine {
+        ok: false,
+        text: if local_ready {
+            "xAI sign-in needs renewing — Local AI is answering; sign in again in Settings".into()
+        } else {
+            "xAI sign-in needs renewing — sign in again in Settings".into()
+        },
+    }
+}
+
 pub fn doctor_ok(lines: &[DoctorLine]) -> bool {
     lines.iter().all(|l| l.ok)
 }
@@ -71,9 +85,9 @@ pub fn doctor_cabin_line(running: bool) -> DoctorLine {
     DoctorLine {
         ok: running,
         text: if running {
-            "cabin running".into()
+            format!("{} running", crate::brand::product_name())
         } else {
-            "cabin not running".into()
+            format!("{} not running", crate::brand::product_name())
         },
     }
 }

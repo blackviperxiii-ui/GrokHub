@@ -94,6 +94,9 @@ pub struct WeekRecapInputs {
     pub disk_freed_bytes: Option<u64>,
     pub top_tasks: Vec<TaskDone>,
     pub suggestion: Option<String>,
+    /// How the app's own offers and changes went, one line per area that has
+    /// a score (`learn::hub::score_lines`). Empty hides the section.
+    pub learned: Vec<String>,
     pub tone: RecapTone,
 }
 
@@ -109,6 +112,8 @@ pub struct WeekRecap {
     pub disk: Option<String>,
     pub tasks: Vec<String>,
     pub suggestion: Option<String>,
+    /// How the app's own offers and changes went. Never in the share text.
+    pub learned: Vec<String>,
     pub closing: String,
 }
 
@@ -117,31 +122,52 @@ impl WeekRecap {
         format!("{CARD_SOURCE_PREFIX}{}", self.week_key)
     }
 
-    /// Short Pulse body: greeting + up to a few highlights + suggestion.
+    /// The card's text: the greeting, then every section in full.
     pub fn card_body(&self) -> String {
         let mut lines = vec![self.greeting.clone()];
-        if let Some(line) = self.games.first() {
-            lines.push(format!("Games · {line}"));
+        lines.extend(self.detail_lines());
+        lines.join("\n")
+    }
+
+    /// The card's report: the greeting as headline, every section below.
+    pub fn card_report(&self) -> crate::card_report::CardReport {
+        crate::card_report::CardReport {
+            found: self.greeting.clone(),
+            summary: self.detail_lines().join("\n"),
+            details: self.render(),
+            ..Default::default()
         }
-        if let Some(line) = self.projects.first() {
-            lines.push(format!("Projects · {line}"));
-        }
+    }
+
+    fn detail_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut list = |label: &str, items: &[String]| {
+            if !items.is_empty() {
+                lines.push(format!("{label}: {}", items.join("; ")));
+            }
+        };
+        list("Games", &self.games);
+        list("Projects", &self.projects);
         if let Some(ref p) = self.prints {
-            lines.push(p.clone());
+            lines.push(format!("Prints: {p}"));
         }
         if let Some(ref d) = self.disk {
-            lines.push(d.clone());
+            lines.push(format!("Disk: {d}"));
         }
-        if let Some(line) = self.tasks.first() {
-            lines.push(format!("Tasks · {line}"));
-        }
+        let mut list = |label: &str, items: &[String]| {
+            if !items.is_empty() {
+                lines.push(format!("{label}: {}", items.join("; ")));
+            }
+        };
+        list("Tasks", &self.tasks);
+        list("Its own calls", &self.learned);
         if let Some(ref s) = self.suggestion {
-            lines.push(format!("Next · {s}"));
+            lines.push(format!("Next: {s}"));
         }
-        if lines.len() == 1 {
+        if lines.is_empty() {
             lines.push(self.closing.clone());
         }
-        lines.join("\n")
+        lines
     }
 
     /// Full markdown for card `details` and chat. Omits empty sections.
@@ -164,6 +190,7 @@ impl WeekRecap {
             crate::brand::filled("Top {product} tasks"),
             &self.tasks,
         );
+        section_lines(&mut out, LEARNED_TITLE, &self.learned);
         out.push_str("## Next week\n\n");
         match &self.suggestion {
             Some(s) => out.push_str(&format!("- {s}\n\n")),
@@ -242,6 +269,11 @@ pub fn project_name(raw: &str) -> String {
 }
 
 /// Build the recap. Empty / off signals produce no section.
+/// The recap section for how the app's own offers and changes went.
+pub const LEARNED_TITLE: &str = "How its own calls went";
+/// Areas shown there at most.
+pub const LEARNED_CAP: usize = 3;
+
 pub fn build_recap(input: &WeekRecapInputs) -> WeekRecap {
     let games: Vec<String> = input
         .games
@@ -280,6 +312,13 @@ pub fn build_recap(input: &WeekRecapInputs) -> WeekRecap {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let learned: Vec<String> = input
+        .learned
+        .iter()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .take(LEARNED_CAP)
+        .collect();
     let greeting = greeting_line(
         &input.tone,
         &input.week_key,
@@ -296,6 +335,7 @@ pub fn build_recap(input: &WeekRecapInputs) -> WeekRecap {
         disk,
         tasks,
         suggestion,
+        learned,
         closing,
     }
 }
@@ -819,8 +859,54 @@ mod tests {
                 },
             ],
             suggestion: Some("Lean into gaming again".into()),
+            learned: Vec::new(),
             tone: tone(),
         }
+    }
+
+    #[test]
+    fn the_apps_own_score_is_a_section_of_the_card_and_never_shared() {
+        let mut input = fixture_full();
+        input.learned = vec![
+            "Skills: 80% went your way, up from 60%".into(),
+            "  ".into(),
+            "Quick chips: 50% went your way".into(),
+            "Settings: 100% went your way".into(),
+            "Model choice: 0% went your way".into(),
+        ];
+        let recap = build_recap(&input);
+        assert_eq!(
+            recap.learned,
+            vec![
+                "Skills: 80% went your way, up from 60%",
+                "Quick chips: 50% went your way",
+                "Settings: 100% went your way"
+            ]
+        );
+        assert!(recap.card_body().contains(
+            "\nIts own calls: Skills: 80% went your way, up from 60%; Quick chips: 50% went your way; Settings: 100% went your way\n"
+        ));
+        assert!(recap.render().contains(
+            "## How its own calls went\n\n- Skills: 80% went your way, up from 60%\n- Quick chips: 50% went your way\n- Settings: 100% went your way\n\n## Next week"
+        ));
+        assert!(!recap.share_text().contains("went your way"));
+
+        // No score: no section, and a score alone does not make a quiet
+        // week a busy one.
+        let plain = build_recap(&fixture_full());
+        assert!(!plain.render().contains(LEARNED_TITLE));
+        assert!(!plain.card_body().contains("Its own calls"));
+        let quiet = build_recap(&WeekRecapInputs {
+            week_key: "2026-10-20".into(),
+            learned: vec!["Skills: 80% went your way".into()],
+            tone: tone(),
+            ..WeekRecapInputs::default()
+        });
+        assert!(quiet.greeting.contains("Quiet week"), "{}", quiet.greeting);
+        assert_eq!(
+            quiet.card_body().lines().nth(1),
+            Some("Its own calls: Skills: 80% went your way")
+        );
     }
 
     #[test]
@@ -848,8 +934,18 @@ mod tests {
         assert_eq!(recap.tasks[0], "weekly-report · 3×");
         assert_eq!(recap.suggestion.as_deref(), Some("Lean into gaming again"));
         let body = recap.card_body();
-        assert!(body.contains("Games · Hades"), "{body}");
-        assert!(body.contains("Next · Lean into gaming"), "{body}");
+        assert!(body.contains("Games: Hades"), "{body}");
+        // Every line of every section, not just the first.
+        for line in recap
+            .games
+            .iter()
+            .chain(&recap.projects)
+            .chain(&recap.tasks)
+        {
+            assert!(body.contains(line.as_str()), "{line} missing in {body}");
+        }
+        assert_eq!(recap.card_report().found, recap.greeting);
+        assert!(body.contains("Next: Lean into gaming"), "{body}");
         let md = recap.render();
         assert!(md.contains("## Games played"), "{md}");
         assert!(md.contains("## Prints made"), "{md}");

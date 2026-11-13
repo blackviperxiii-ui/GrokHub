@@ -1,0 +1,10 @@
+{
+  "name": "loadout",
+  "version": "1.0.0",
+  "title": "Loadout stats",
+  "author": "Loadout",
+  "factorio_version": "2.0",
+  "description": "Writes a small read-only summary of your game (research, rockets, deaths, play time, a few production rates) to script-output/loadout/state.json for the Loadout app. Changes nothing in the game.",
+  "dependencies": ["base >= 2.0"],
+  "loadout_app": "installed by the Loadout app"
+}

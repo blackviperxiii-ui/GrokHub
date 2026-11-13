@@ -32,41 +32,9 @@ pub struct LearningState {
     pub directives: Vec<crate::cabin_engine::CabinDirective>,
 }
 
-/// A paid nightly review is worth it after several new turns. Otherwise the
-/// local chip lessons are the whole improvement loop.
+/// A paid nightly review is worth it after several new turns.
 pub fn review_worth_tokens(total_turns: u32, reviewed_turns: u32) -> bool {
     total_turns.saturating_sub(reviewed_turns) >= 8
-}
-
-/// Keep lessons the chips still support. Drop habit and skip lines whose evidence is gone.
-pub fn apply_local_lessons(state: &mut LearningState, lessons: &[crate::chips::LocalLesson]) {
-    let keep: Vec<&crate::chips::LocalLesson> = lessons.iter().filter(|l| !l.drop).collect();
-    for lesson in &keep {
-        if !crate::is_plain_text(&lesson.text) || lesson.key.is_empty() || lesson.text.len() < 8 {
-            continue;
-        }
-        if let Some(found) = state.insights.iter_mut().find(|i| i.key == lesson.key) {
-            if found.text != lesson.text {
-                found.text = lesson.text.clone();
-                found.hits = found.hits.saturating_add(1);
-            }
-        } else {
-            state.insights.push(LearningInsight {
-                key: lesson.key.clone(),
-                text: lesson.text.clone(),
-                hits: 1,
-            });
-        }
-    }
-    let kept: Vec<&str> = keep.iter().map(|l| l.key.as_str()).collect();
-    state.insights.retain(|i| {
-        let managed = i.key.starts_with("habit:") || i.key.starts_with("skip:");
-        !managed || kept.iter().any(|k| *k == i.key)
-    });
-    if state.insights.len() > 40 {
-        let overflow = state.insights.len() - 40;
-        state.insights.drain(0..overflow);
-    }
 }
 
 pub fn upsert_insight(state: &mut LearningState, key: &str, text: &str) {

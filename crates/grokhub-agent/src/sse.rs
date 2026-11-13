@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+use crate::client::HostedUsage;
 use crate::{ClientError, FunctionCall, Usage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,6 +12,13 @@ pub enum SseEvent {
     TextDelta(String),
     ReasoningDelta(String),
     FunctionCall(FunctionCall),
+    /// An xAI `reasoning` output item with `encrypted_content`, or a hosted
+    /// search call ([`crate::client::is_hosted_call`]), as JSON text.
+    ReasoningItem(String),
+    /// Pages a reply message cites (`url_citation` annotations), in order.
+    Sources(Vec<String>),
+    /// What hosted search ran, from the final usage. Sent only when it ran.
+    Hosted(HostedUsage),
     /// Stream finished. `incomplete` is set for `response.incomplete` or a
     /// final response with `status: "incomplete"` (output-token cut-off).
     Completed {
@@ -26,6 +34,9 @@ pub struct SseParser {
     completed: bool,
     errored: bool,
     seen: HashSet<String>,
+    /// Reasoning text so far, per stream kind. A provider that sends the same thought as
+    /// both raw reasoning and a summary would otherwise show it twice, back to back.
+    reasoning: Vec<(String, String)>,
 }
 
 impl SseParser {
@@ -35,6 +46,7 @@ impl SseParser {
             completed: false,
             errored: false,
             seen: HashSet::new(),
+            reasoning: Vec::new(),
         }
     }
 
@@ -46,6 +58,25 @@ impl SseParser {
             out.extend(self.parse_frame(&frame));
         }
         out
+    }
+
+    /// Whether a reasoning delta is new, not a repeat of what another reasoning kind
+    /// already sent.
+    fn new_reasoning(&mut self, kind: &str, delta: &str) -> bool {
+        let at = match self.reasoning.iter().position(|(k, _)| k == kind) {
+            Some(at) => at,
+            None => {
+                self.reasoning.push((kind.to_string(), String::new()));
+                self.reasoning.len() - 1
+            }
+        };
+        self.reasoning[at].1.push_str(delta);
+        let mine = &self.reasoning[at].1;
+        !self
+            .reasoning
+            .iter()
+            .enumerate()
+            .any(|(i, (_, text))| i != at && text.starts_with(mine.as_str()))
     }
 
     /// A stream that ends without `response.completed` or an error event is a disconnect.
@@ -90,12 +121,13 @@ impl SseParser {
         if is_reasoning_delta(kind) {
             return text_delta(&v)
                 .into_iter()
+                .filter(|delta| self.new_reasoning(kind, delta))
                 .map(SseEvent::ReasoningDelta)
                 .collect();
         }
         if kind == "response.output_item.done" {
             return self
-                .take_call(v.get("item").unwrap_or(&v))
+                .take_item(v.get("item").unwrap_or(&v))
                 .into_iter()
                 .collect();
         }
@@ -109,13 +141,17 @@ impl SseParser {
             {
                 if let Some(items) = output.as_array() {
                     for item in items {
-                        if let Some(ev) = self.take_call(item) {
+                        if let Some(ev) = self.take_item(item) {
                             out.push(ev);
                         }
                     }
                 }
             }
             note_served_model(&v);
+            let hosted = parse_hosted_usage(&v);
+            if !hosted.is_empty() {
+                out.push(SseEvent::Hosted(hosted));
+            }
             let (incomplete, incomplete_reason) = incomplete_of(kind, &v);
             out.push(SseEvent::Completed {
                 usage: parse_usage_value(&v),
@@ -129,6 +165,43 @@ impl SseParser {
             return vec![SseEvent::Error(error_message(&v))];
         }
         Vec::new()
+    }
+
+    /// A function call, a sealed reasoning item or a hosted search call, each
+    /// once: `response.completed` repeats what `response.output_item.done`
+    /// already sent. A message gives the pages it cites.
+    fn take_item(&mut self, item: &Value) -> Option<SseEvent> {
+        let typ = item.get("type").and_then(Value::as_str);
+        if typ == Some("message") {
+            let urls = cited_urls(item);
+            return (!urls.is_empty()).then_some(SseEvent::Sources(urls));
+        }
+        if crate::client::is_hosted_call(item) {
+            let raw = serde_json::to_string(item).ok()?;
+            let id = item
+                .get("id")
+                .or(item.get("call_id"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return self
+                .seen
+                .insert(format!("hosted:{id}"))
+                .then_some(SseEvent::ReasoningItem(raw));
+        }
+        if typ == Some("reasoning") {
+            let raw = serde_json::to_string(item).ok()?;
+            crate::client::InputItem::reasoning(&raw, "")?;
+            let key = item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| format!("reasoning:{id}"))
+                .unwrap_or_else(|| raw.clone());
+            return self
+                .seen
+                .insert(key)
+                .then_some(SseEvent::ReasoningItem(raw));
+        }
+        self.take_call(item)
     }
 
     fn take_call(&mut self, item: &Value) -> Option<SseEvent> {
@@ -225,6 +298,47 @@ pub fn take_served_model() -> Option<String> {
     SERVED_MODEL.with(|s| s.borrow_mut().take())
 }
 
+/// The `url_citation` URLs on a message's `output_text` parts, once each.
+fn cited_urls(item: &Value) -> Vec<String> {
+    let mut urls: Vec<String> = Vec::new();
+    let parts = item.get("content").and_then(Value::as_array);
+    for part in parts.into_iter().flatten() {
+        let notes = part.get("annotations").and_then(Value::as_array);
+        for note in notes.into_iter().flatten() {
+            if note.get("type").and_then(Value::as_str) != Some("url_citation") {
+                continue;
+            }
+            let Some(url) = note.get("url").and_then(Value::as_str).map(str::trim) else {
+                continue;
+            };
+            if !url.is_empty() && !urls.iter().any(|u| u == url) {
+                urls.push(url.to_string());
+            }
+        }
+    }
+    urls
+}
+
+/// `usage.server_side_tool_usage_details`: successful hosted search, as billed.
+pub(crate) fn parse_hosted_usage(v: &Value) -> HostedUsage {
+    let details = v
+        .get("response")
+        .and_then(|r| r.get("usage"))
+        .or(v.get("usage"))
+        .and_then(|u| u.get("server_side_tool_usage_details"));
+    let n = |key: &str| {
+        details
+            .and_then(|d| d.get(key))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    HostedUsage {
+        web_search_calls: n("web_search_calls"),
+        x_posts_fetched: n("x_posts_fetched"),
+        x_users_fetched: n("x_users_fetched"),
+    }
+}
+
 pub(crate) fn parse_usage_value(v: &Value) -> Usage {
     let body = v
         .get("response")
@@ -308,6 +422,28 @@ mod tests {
 
     fn frame(json: &str) -> String {
         format!("data: {json}\n\n")
+    }
+
+    #[test]
+    fn a_thought_sent_as_both_reasoning_and_summary_shows_once() {
+        let mut p = SseParser::new();
+        let line = "The findings card is posted.";
+        let mut got = p.push(&frame(&format!(
+            r#"{{"type":"response.reasoning_text.delta","delta":"{line}"}}"#
+        )));
+        got.extend(p.push(&frame(&format!(
+            r#"{{"type":"response.reasoning_summary_text.delta","delta":"{line}"}}"#
+        ))));
+        got.extend(p.push(&frame(
+            r#"{"type":"response.reasoning_text.delta","delta":" Next."}"#,
+        )));
+        assert_eq!(
+            got,
+            vec![
+                SseEvent::ReasoningDelta(line.into()),
+                SseEvent::ReasoningDelta(" Next.".into()),
+            ]
+        );
     }
 
     #[test]
@@ -417,5 +553,78 @@ mod tests {
             .is_empty());
         let ev = p.push("ta\":\"ab\"}\n\n");
         assert_eq!(ev, vec![SseEvent::TextDelta("ab".into())]);
+    }
+
+    /// grok-4.x sends its sealed reasoning as an output item; it comes back once,
+    /// whole, even when `response.completed` repeats it.
+    #[test]
+    fn a_sealed_reasoning_item_is_kept_once() {
+        let mut p = SseParser::new();
+        let item = r#"{"id":"rs_1","summary":[],"type":"reasoning","status":"completed","encrypted_content":"gAAAA=="}"#;
+        let ev = p.push(&frame(&format!(
+            r#"{{"type":"response.output_item.done","item":{item}}}"#
+        )));
+        assert_eq!(
+            ev,
+            vec![SseEvent::ReasoningItem(
+                r#"{"encrypted_content":"gAAAA==","id":"rs_1","status":"completed","summary":[],"type":"reasoning"}"#
+                    .into()
+            )]
+        );
+        let done = p.push(&frame(&format!(
+            r#"{{"type":"response.completed","response":{{"usage":{{"input_tokens":1,"output_tokens":1}},"output":[{item}]}}}}"#
+        )));
+        assert_eq!(done.len(), 1, "{done:?}");
+        assert!(matches!(done[0], SseEvent::Completed { .. }));
+        p.finish().unwrap();
+    }
+
+    #[test]
+    fn hosted_search_calls_sources_and_billed_counts_come_through_once() {
+        let mut p = SseParser::new();
+        let web = r#"{"id":"ws_1","type":"web_search_call","status":"completed","action":{"type":"search","query":"grok"}}"#;
+        let x = r#"{"call_id":"xs_9","type":"custom_tool_call","name":"x_keyword_search","input":"{}","status":"completed"}"#;
+        let msg = r#"{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"See [[1]](https://x.ai/a) and [[2]](https://x.ai/b) [[1]](https://x.ai/a)","annotations":[{"type":"url_citation","url":"https://x.ai/a","start_index":4,"end_index":24,"title":"1"},{"type":"url_citation","url":"https://x.ai/b","start_index":29,"end_index":49,"title":"2"},{"type":"url_citation","url":"https://x.ai/a","start_index":50,"end_index":70,"title":"1"},{"type":"file_citation","file_id":"f"}]}]}"#;
+        let mut events = Vec::new();
+        for item in [web, x, msg] {
+            events.extend(p.push(&frame(&format!(
+                r#"{{"type":"response.output_item.done","item":{item}}}"#
+            ))));
+        }
+        let raw =
+            |s: &str| serde_json::to_string(&serde_json::from_str::<Value>(s).unwrap()).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                SseEvent::ReasoningItem(raw(web)),
+                SseEvent::ReasoningItem(raw(x)),
+                SseEvent::Sources(vec!["https://x.ai/a".into(), "https://x.ai/b".into()]),
+            ]
+        );
+        // The final reply repeats the items: the calls aren't sent twice.
+        let done = p.push(&frame(&format!(
+            r#"{{"type":"response.completed","response":{{"usage":{{"input_tokens":1,"output_tokens":1,"server_side_tool_usage_details":{{"web_search_calls":2,"x_posts_fetched":7,"x_users_fetched":1}}}},"output":[{web},{x}]}}}}"#
+        )));
+        assert_eq!(
+            done[0],
+            SseEvent::Hosted(HostedUsage {
+                web_search_calls: 2,
+                x_posts_fetched: 7,
+                x_users_fetched: 1,
+            })
+        );
+        assert!(matches!(done[1], SseEvent::Completed { .. }));
+        assert_eq!(done.len(), 2, "{done:?}");
+        p.finish().unwrap();
+    }
+
+    #[test]
+    fn a_reply_with_no_hosted_search_sends_no_hosted_event() {
+        let mut p = SseParser::new();
+        let done = p.push(&frame(
+            r#"{"type":"response.completed","response":{"usage":{"input_tokens":1,"server_side_tool_usage_details":{"web_search_calls":0}},"output":[]}}"#,
+        ));
+        assert_eq!(done.len(), 1, "{done:?}");
+        assert!(matches!(done[0], SseEvent::Completed { .. }));
     }
 }

@@ -3,6 +3,8 @@
 //! episode view; nothing grows a transcript.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -30,7 +32,7 @@ use crate::route::{
 use crate::run::{HaltCheck, LoopEvent, SteerQueue};
 use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput};
 use crate::CancelToken;
-use grokhub_core::desktop_mcp::CAPTURE_FAILED_HEAD;
+use grokhub_core::desktop_mcp::{CAPTURE_FAILED_HEAD, HALT_MSG, LOCK_MSG};
 
 /// What every worker step is told, after the cabin's own system prompt.
 /// Fixed text, so the prompt prefix stays cacheable.
@@ -50,6 +52,9 @@ pub const DEAD_WORKER: &str = "worker returned nothing";
 /// A read past [`FANOUT_CAP`] in one fan-out.
 pub const FANOUT_CAPPED: &str = "not run: one fan-out runs at most 20 reads";
 const PARKED: &str = "parked: waiting for your approval";
+/// Ends the step result of a park past the approval TTL: not run, and its
+/// card still waits (a host reads it to tell this from a card that settled).
+pub const STILL_WAITING: &str = "waiting on your card";
 /// Opens the reply when the worker has nothing left but a parked step.
 pub const WAITING_ON_YOU: &str = "Waiting on you: ";
 /// Tools only the chat run loop can serve.
@@ -62,11 +67,20 @@ const LOOP_ONLY: &[&str] = &[
     "enter_plan_mode",
     "exit_plan_mode",
 ];
+/// What a desktop task gets for a merge request. Helpers belong to a chat's
+/// lead, and only its card says whose work goes where.
+const MERGE_NOT_HERE: &str =
+    "a desktop task can't ask for a merge: helper work is merged from the chat's Tasks panel";
 
 /// Where hard steps wait for the user. The cabin answers them on its card.
 pub trait Parks {
     fn post(&self, req: &ParkRequest) -> bool;
     fn answer(&self, id: &str) -> Option<bool>;
+    /// How long ago the card got its answer, read before [`Self::answer`]
+    /// takes it. `None` when there is no answer or the store can't tell.
+    fn answer_age(&self, _id: &str) -> Option<Duration> {
+        None
+    }
     fn withdraw(&self, id: &str);
 }
 
@@ -80,6 +94,12 @@ impl Parks for FileParks<'_> {
 
     fn answer(&self, id: &str) -> Option<bool> {
         harness::take_answer(self.0, id)
+    }
+
+    fn answer_age(&self, id: &str) -> Option<Duration> {
+        let answer = harness::park_dir(self.0).join(format!("{id}.answer"));
+        let written = std::fs::metadata(answer).ok()?.modified().ok()?;
+        written.elapsed().ok()
     }
 
     fn withdraw(&self, id: &str) {
@@ -105,6 +125,9 @@ pub struct KernelIn<'a> {
     pub permits: &'a dyn PermitWait,
     pub halt: &'a dyn HaltCheck,
     pub cancel: &'a CancelToken,
+    /// Pause: set by the host, spent by the loop. The turn returns before
+    /// its next step with the episode, its goal and its cards kept.
+    pub pause: &'a AtomicBool,
     pub steer: &'a SteerQueue,
     /// Wall clock in ms (a test clock in tests).
     pub clock: &'a dyn Fn() -> u64,
@@ -259,6 +282,12 @@ pub fn run_episode(
             run.end_with_parks_denied(EpisodeEnd::Stop, "stopped — fail-closed Deny");
             return run.out(EpisodeStop::Ended(EpisodeEnd::Stop), String::new());
         }
+        // Pause is not Stop: nothing ends and no card is denied. The turn
+        // returns here and the next message goes on with the same goal. A
+        // Stop pressed after the Pause wins (the check above).
+        if k.pause.swap(false, Ordering::SeqCst) {
+            return run.out(EpisodeStop::Waiting, String::new());
+        }
         run.settle_parks(on_event);
         for note in k.steer.drain() {
             run.ep.steer(&note, k.held);
@@ -275,6 +304,10 @@ pub fn run_episode(
         };
         on_event(LoopEvent::Usage(run.usage.clone()));
         if turn.truncated {
+            if turn.out_of_budget() {
+                // E14: the reasoning spent the budget and left no answer.
+                crate::route::ladder::note_out_of_budget();
+            }
             let reason = turn
                 .truncate_reason
                 .as_deref()
@@ -298,6 +331,12 @@ pub fn run_episode(
             continue;
         }
         if turn.calls.is_empty() {
+            // The card was on screen while the worker wrote this: an answer
+            // given meanwhile is acted on now, and the worker goes on from
+            // there, instead of the turn ending on a step already answered.
+            if run.settle_late(on_event) {
+                continue;
+            }
             match run.claim(&turn.text) {
                 Some(stop) => {
                     let reply = run.end_note.take().unwrap_or(turn.text);
@@ -347,8 +386,23 @@ impl Run<'_, '_> {
 
     /// Record a step: its span, its view line, and the fold calls it caused.
     fn record(&mut self, shape: &StepShape, args_redacted: &str, class: &str, view_id: &str) {
+        self.record_as(self.ep.steps, shape, args_redacted, class, view_id);
+    }
+
+    /// [`Self::record`] with the step number the span names. A parked step
+    /// that settles later keeps the number it parked under, which its card
+    /// is named after, so a host can tell which waiting step a span settles.
+    fn record_as(
+        &mut self,
+        step: u32,
+        shape: &StepShape,
+        args_redacted: &str,
+        class: &str,
+        view_id: &str,
+    ) {
         let tokens = self.tokens.take();
-        let span = step_span(self.ep, shape, args_redacted, class, tokens);
+        let mut span = step_span(self.ep, shape, args_redacted, class, tokens);
+        span.claim = format!("episode step {step}");
         let raw = serde_json::to_string(&span).unwrap_or_default();
         self.write(span);
         let line = shape.line(self.ep.steps);
@@ -548,7 +602,13 @@ impl Run<'_, '_> {
             ..Observation::default()
         });
         self.write(reply);
-        let (verdict, tokens) = self.check(&fin);
+        // Item 24: a total the claim gets wrong is a reject in code, before
+        // (and instead of) the checker's call.
+        let sums = crate::post_check::arithmetic(text);
+        let (verdict, tokens) = match sums.first() {
+            Some(f) => (Verdict::Reject(f.detail.clone()), None),
+            None => self.check(&fin),
+        };
         let mut check = Span::deny(&self.ep.chat_id, VERIFY_TOOL, "{}", "", "soft");
         check.decision = "allow".into();
         check.tokens = tokens;
@@ -751,15 +811,37 @@ impl Run<'_, '_> {
         self.end(why);
     }
 
+    /// The worker stopped with steps still parked: settle the ones answered
+    /// while it was thinking. True when one settled, so the loop goes round
+    /// again. A Halt, Stop or Pause is left to the top of the loop.
+    fn settle_late(&mut self, on_event: &mut dyn FnMut(LoopEvent)) -> bool {
+        if self.ep.parks.is_empty()
+            || self.k.halt.halted()
+            || self.k.cancel.is_cancelled()
+            || self.k.pause.load(Ordering::SeqCst)
+        {
+            return false;
+        }
+        let open = self.ep.parks.len();
+        self.settle_parks(on_event);
+        self.ep.parks.len() < open
+    }
+
     /// Answered parks run once or are denied. One past the TTL is denied for
     /// now (not run) and keeps waiting: a late Approve still runs it once.
+    /// An Approve nobody acted on for the TTL is refused: it was for a
+    /// screen long gone.
     fn settle_parks(&mut self, on_event: &mut dyn FnMut(LoopEvent)) {
         let now = self.now();
         for mut park in std::mem::take(&mut self.ep.parks) {
+            let age = self.k.parks.answer_age(&park.id);
             let answer = self.k.parks.answer(&park.id);
             let expired = now.saturating_sub(park.parked_ms) >= APPROVAL_TTL.as_millis() as u64;
             let deny = match answer {
-                Some(true) => None,
+                Some(true) if age.is_some_and(|age| age >= APPROVAL_TTL) => Some(stale_ok()),
+                // The OK was for the screen as it was. A Halt or a lock
+                // screen since then refuses the step, as it would any other.
+                Some(true) => self.desk_stopped(&park.tool),
                 Some(false) => Some("denied".to_string()),
                 None => {
                     if expired && !park.waiting {
@@ -773,7 +855,8 @@ impl Run<'_, '_> {
                             ui_changed: None,
                             result: timed_out(&park),
                         };
-                        self.record(
+                        self.record_as(
+                            park.step,
                             &shape,
                             &park.args_redacted,
                             park.class.as_str(),
@@ -794,7 +877,13 @@ impl Run<'_, '_> {
                         ui_changed: None,
                         result: reason,
                     };
-                    self.record(&shape, &park.args_redacted, park.class.as_str(), &id);
+                    self.record_as(
+                        park.step,
+                        &shape,
+                        &park.args_redacted,
+                        park.class.as_str(),
+                        &id,
+                    );
                 }
                 None => {
                     let call = FunctionCall {
@@ -821,9 +910,26 @@ impl Run<'_, '_> {
                         ui_changed: ui,
                         result: result_text(&out),
                     };
-                    self.record(&shape, &park.args_redacted, park.class.as_str(), &id);
+                    self.record_as(
+                        park.step,
+                        &shape,
+                        &park.args_redacted,
+                        park.class.as_str(),
+                        &id,
+                    );
                 }
             }
+        }
+    }
+
+    /// Why a desktop step can't run right now: Halt (the driver's own read,
+    /// which outlives the turn that was halted) or the lock screen. The
+    /// words the gate refuses any other desktop step with.
+    fn desk_stopped(&self, tool: &str) -> Option<String> {
+        match tools::desk_flags(tool, &self.k.gate, Some(self.k.desktop))? {
+            gate::DeskFlags { halted: true, .. } => Some((*HALT_MSG).to_string()),
+            gate::DeskFlags { locked: true, .. } => Some(LOCK_MSG.to_string()),
+            _ => None,
         }
     }
 
@@ -873,7 +979,11 @@ impl Run<'_, '_> {
             return;
         }
         for (i, call) in calls.iter().enumerate() {
-            if self.k.halt.halted() || self.k.cancel.is_cancelled() {
+            // A Pause stops before the next step; the top of the loop spends it.
+            if self.k.halt.halted()
+                || self.k.cancel.is_cancelled()
+                || self.k.pause.load(Ordering::SeqCst)
+            {
                 return;
             }
             if !self.step(call, on_event) {
@@ -949,7 +1059,9 @@ impl Run<'_, '_> {
             result,
         };
         emit(on_event, call, "in_progress", "", None);
-        match self.verdict(call) {
+        // Read once: the gate and the card must speak of the same control.
+        let hinted = self.hinted(call);
+        match self.verdict_on(call, hinted.as_ref()) {
             GateOutcome::Refuse { reason } => {
                 emit(on_event, call, "failed", &reason, None);
                 let class = hard_class(&call.name, &call.arguments).map_or("soft", |c| c.as_str());
@@ -959,7 +1071,7 @@ impl Run<'_, '_> {
             GateOutcome::Park {
                 hard: Some(class), ..
             } => {
-                self.park(call, class, n, &args_redacted);
+                self.park(call, hinted.as_ref(), class, n, &args_redacted);
                 emit(on_event, call, "completed", PARKED, None);
                 self.record(
                     &shape("park", None, PARKED.into()),
@@ -972,7 +1084,7 @@ impl Run<'_, '_> {
             GateOutcome::Park {
                 hard: None, reason, ..
             } => {
-                if !self.ask(call, &reason, on_event) {
+                if !self.ask(call, hinted.as_ref(), &reason, on_event) {
                     emit(
                         on_event,
                         call,
@@ -1033,6 +1145,25 @@ impl Run<'_, '_> {
     /// read by its args, as on path A), then the soft gate for Ask / Auto /
     /// Always. `zoom` is a read: decide only, it never runs anything.
     fn verdict(&self, call: &FunctionCall) -> GateOutcome {
+        self.verdict_on(call, self.hinted(call).as_ref())
+    }
+
+    /// A desktop call's args plus what the driver reads beside them (the
+    /// control under a click, the focused window). `None` for any other tool.
+    fn hinted(&self, call: &FunctionCall) -> Option<Value> {
+        gate::is_desktop(&call.name).then(|| {
+            let args: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
+            self.k.desktop.hint(&call.name, &args)
+        })
+    }
+
+    /// [`Self::verdict`] on args already hinted ([`Self::hinted`]).
+    fn verdict_on(&self, call: &FunctionCall, hinted: Option<&Value>) -> GateOutcome {
+        if call.name == tools::control::MERGE_WORK {
+            return GateOutcome::Refuse {
+                reason: MERGE_NOT_HERE.into(),
+            };
+        }
         let hard = harness::decide(Step::Tool {
             name: &call.name,
             arguments: &call.arguments,
@@ -1040,12 +1171,10 @@ impl Run<'_, '_> {
         if !hard.is_allow() {
             return hard;
         }
-        if gate::is_desktop(&call.name) {
-            let args: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
-            let args = self.k.desktop.hint(&call.name, &args);
+        if let Some(args) = hinted {
             let desk = harness::decide(Step::Desk {
                 tool: &call.name,
-                args: &args,
+                args,
             });
             if !desk.is_allow() {
                 return desk;
@@ -1055,7 +1184,7 @@ impl Run<'_, '_> {
             return GateOutcome::Allow;
         }
         let desk = tools::desk_flags(&call.name, &self.k.gate, Some(self.k.desktop));
-        match gate::decide_with(
+        let base = gate::decide_with(
             &self.k.gate,
             &call.name,
             &call.arguments,
@@ -1063,6 +1192,15 @@ impl Run<'_, '_> {
             desk,
             self.k.workspace,
             self.k.perms,
+        );
+        // A Code tab session's own guard (its push guard) after the gate.
+        match crate::code_guard::apply(
+            &self.ep.chat_id,
+            &call.name,
+            &call.arguments,
+            self.k.workspace,
+            self.k.perms,
+            base,
         ) {
             Decision::Run => GateOutcome::Allow,
             Decision::Ask => GateOutcome::Park {
@@ -1075,16 +1213,22 @@ impl Run<'_, '_> {
     }
 
     /// A soft ask: the cabin's own permission card, like any native step.
+    /// The card says what the step does (`hinted`: a desktop call's args with
+    /// the driver's hints), not the span's redacted args.
     fn ask(
         &mut self,
         call: &FunctionCall,
+        hinted: Option<&Value>,
         reason: &str,
         on_event: &mut dyn FnMut(LoopEvent),
     ) -> bool {
         on_event(LoopEvent::Permission {
             id: call.call_id.clone(),
             name: call.name.clone(),
-            action: arg_line(&call.name, &call.arguments),
+            action: match hinted {
+                Some(args) => harness::desk_action(&call.name, args, "soft"),
+                None => arg_line(&call.name, &call.arguments),
+            },
             reason: reason.into(),
         });
         let halt = self.k.halt;
@@ -1096,14 +1240,25 @@ impl Run<'_, '_> {
         )
     }
 
-    fn park(&mut self, call: &FunctionCall, class: HardClass, step: u32, args_redacted: &str) {
+    /// Post the card for a hard step. It names what the step does: the
+    /// control a click lands on, the command typed (`hinted`, a desktop
+    /// call's args with the driver's hints), never a credential's value.
+    fn park(
+        &mut self,
+        call: &FunctionCall,
+        hinted: Option<&Value>,
+        class: HardClass,
+        step: u32,
+        args_redacted: &str,
+    ) {
         let now = self.now();
         let id = format!("{PARK_PREFIX}{}-{step}", self.ep.id);
-        let action = match class {
-            HardClass::Credentials => harness::credential_action(
+        let action = match (class, hinted) {
+            (HardClass::Credentials, _) => harness::credential_action(
                 &serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({})),
             ),
-            _ => format!("{} {args_redacted}", call.name),
+            (_, Some(args)) => harness::desk_action(&call.name, args, class.as_str()),
+            (_, None) => format!("{} {args_redacted}", call.name),
         };
         let req = ParkRequest {
             id: id.clone(),
@@ -1134,8 +1289,16 @@ impl Run<'_, '_> {
 /// The step span's result when a park passes the approval TTL unanswered.
 fn timed_out(park: &OpenPark) -> String {
     format!(
-        "hard-class {} unanswered after {}s — not run; waiting on your card",
+        "hard-class {} unanswered after {}s — not run; {STILL_WAITING}",
         park.class.as_str(),
+        APPROVAL_TTL.as_secs()
+    )
+}
+
+/// The step span's result for an Approve older than the approval TTL.
+fn stale_ok() -> String {
+    format!(
+        "your OK was given more than {}s ago — not run",
         APPROVAL_TTL.as_secs()
     )
 }
@@ -1253,7 +1416,10 @@ fn emit(
         },
         name: call.name.clone(),
         status: status.into(),
-        detail: detail.chars().take(180).collect(),
+        detail: crate::tools::fence::display_text(detail)
+            .chars()
+            .take(180)
+            .collect(),
         image,
     });
 }

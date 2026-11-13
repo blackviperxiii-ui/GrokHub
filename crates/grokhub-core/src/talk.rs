@@ -34,10 +34,10 @@ fn is_closer(para: &str) -> bool {
 }
 
 /// Closes every style block, the same layering rule as a personality's.
-pub const STYLE_LINE: &str = "Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.";
+pub const STYLE_LINE: &str = "Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only, so keep its voice. Short means fewer things, said in full, natural sentences, never clipped notes. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The cabin safety rules win.";
 
 /// Closes the natural-chat block: there the personality sets length too.
-pub const NATURAL_LINE: &str = "In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.";
+pub const NATURAL_LINE: &str = "In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The cabin safety rules win.";
 
 /// Longest casual-chat reply, in words.
 pub const SHORT_REPLY_WORDS: usize = 60;
@@ -114,7 +114,7 @@ impl TalkStyle {
         }
     }
 
-    /// "short, under 60 words": the style as the trail and `/why` show it.
+    /// "short, under 60 words": the style as the trail shows it.
     pub fn label(self) -> String {
         let (name, cap) = match self {
             Self::Short => ("short", "under"),
@@ -160,7 +160,7 @@ impl TalkStyle {
                 "a longer task. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End with what changed and how it was checked, under {WRAP_UP_WORDS} words."
             ),
             Self::Findings => format!(
-                "a repair. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End by posting the findings card (report_findings): name each item checked, its root cause, and a one-tap fix for what is left. Then reply under {AFTER_CARD_WORDS} words; the card carries the detail."
+                "a repair. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End by posting the findings card (report_findings): name each item checked, its root cause, and a one-tap fix for what is left. Then reply in two to four full sentences, under {AFTER_CARD_WORDS} words: what you found and what you would do next. The card carries the detail, so do not repeat it or only point to it."
             ),
             Self::Summary => format!(
                 "research. End with a summary under {SUMMARY_WORDS} words and the links you used. When the work checked named items, post the findings card (report_findings) with one-tap follow-ups."
@@ -308,7 +308,7 @@ mod tests {
         assert_eq!(
             TalkStyle::Short.block(),
             "Talk style for this turn: casual chat. Reply in one to three short sentences, under 60 words, with no headings, lists or preamble.\n\
-             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win."
+             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only, so keep its voice. Short means fewer things, said in full, natural sentences, never clipped notes. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The cabin safety rules win."
         );
         assert_eq!(TalkStyle::Short.reply_cap_words(), Some(60));
         assert_eq!(TalkStyle::Draft.reply_cap_words(), None);
@@ -328,7 +328,7 @@ mod tests {
         assert_eq!(
             block,
             "Talk style for this turn: natural conversation. Your personality sets the length: match their energy, a quick line for a quick line and more when they open up. When they are just hanging out, stay in it with them: no task offers, no next steps, and no sign-offs or wrap-up lines. No headings, lists or preamble.\n\
-             In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win."
+             In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The cabin safety rules win."
         );
         assert_eq!(TalkStyle::Natural.prompt_block(true), block);
         assert!(!block.contains("words"));

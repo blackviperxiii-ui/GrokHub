@@ -35,11 +35,12 @@ use crate::harness::{Ladder, Origin, Span};
 
 pub use kernel::{
     fan_out, run_episode, step_span, EpisodeOut, EpisodeStop, FileParks, KernelIn, Parks,
-    CHECKER_ERROR, DEAD_WORKER, EPISODE_RULES, FANOUT_CAPPED, VERIFY_REJECT, WAITING_ON_YOU,
+    CHECKER_ERROR, DEAD_WORKER, EPISODE_RULES, FANOUT_CAPPED, STILL_WAITING, VERIFY_REJECT,
+    WAITING_ON_YOU,
 };
 pub use verify::{
     parse_verdict, verify_call, verify_call_at, verify_gate, Observation, Verdict,
-    CHECKER_UNAVAILABLE, ESCALATED_CLASS, JUDGE_SYSTEM, OBSERVATION_CAP,
+    CHECKER_UNAVAILABLE, ESCALATED_CLASS, JUDGE_SYSTEM, OBSERVATION_CAP, VERIFY_FORMAT,
 };
 pub use view::{
     clip_bytes, zoom_schema, EpisodeView, FoldDone, Folder, ViewNode, FOLD_CAP_BYTES, FOLD_SYSTEM,

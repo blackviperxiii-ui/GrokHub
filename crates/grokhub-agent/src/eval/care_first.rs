@@ -242,6 +242,7 @@ fn brief_for(text: &str) -> Brief {
         tools: &[],
         recent: &[],
         background: false,
+        anchor: None,
     };
     rules(&input).unwrap_or_else(|| Brief {
         mood: "calm".into(),
@@ -442,6 +443,7 @@ pub fn status_line(report: &CareFirstReport) -> String {
 fn sample_ms(system: &str, reply: &str) -> Result<f64, String> {
     let start = Instant::now();
     let req = ResponsesRequest {
+        text_format: None,
         model: "scripted".into(),
         effort: None,
         input: vec![
@@ -566,9 +568,9 @@ mod tests {
             assert_eq!(turn.care_talk, row.7);
             assert_eq!(turn.words, row.8);
         }
-        assert_eq!(report.baseline_cost_ticks, 12_639);
-        assert_eq!(report.care_cost_ticks, 12_328);
-        assert!((report.cost_ratio - (12_328.0 / 12_639.0)).abs() < 1e-12);
+        assert_eq!(report.baseline_cost_ticks, 12_784);
+        assert_eq!(report.care_cost_ticks, 12_472);
+        assert!((report.cost_ratio - (12_472.0 / 12_784.0)).abs() < 1e-12);
         assert_eq!(report.baseline_words, 65);
         assert_eq!(report.care_words, 65);
         assert_eq!(report.words_ratio, 1.0);
@@ -594,8 +596,8 @@ mod tests {
         assert!(report.care_p95_ms.is_finite() && report.care_p95_ms >= 0.0);
         assert!(report.why.contains("Skipped: live quality judge"));
         assert!(report.why.contains("Skipped: live model latency"));
-        assert!(report.why.contains("12639"));
-        assert!(report.why.contains("12328"));
+        assert!(report.why.contains("12784"));
+        assert!(report.why.contains("12472"));
         assert!(report.turns.iter().any(|turn| turn.kind == "emotional"));
         assert!(report.turns.iter().any(|turn| turn.kind == "open"));
     }

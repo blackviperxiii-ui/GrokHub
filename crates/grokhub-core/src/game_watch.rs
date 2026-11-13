@@ -13,18 +13,45 @@ use crate::update_feed::{digest_card, UpdateCard};
 /// One thing that happened in a match.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
-    RoundStart { round: u32 },
-    RoundEnd { round: u32, won: bool },
+    RoundStart {
+        round: u32,
+    },
+    RoundEnd {
+        round: u32,
+        won: bool,
+    },
     Kill,
     Death,
-    MatchEnd { won: u32, lost: u32 },
+    MatchEnd {
+        won: u32,
+        lost: u32,
+    },
     // League: the match began (`GameStart`), and an objective fell, with
     // `ally` true when the player's team took it (`None`: side unknown).
     MatchStart,
-    Objective { what: Objective, ally: Option<bool> },
+    Objective {
+        what: Objective,
+        ally: Option<bool>,
+    },
     // WoW: a boss pull began, and ended in a kill or a wipe.
     PullStart(Pull),
-    PullEnd { pull: Pull, kill: bool },
+    PullEnd {
+        pull: Pull,
+        kill: bool,
+    },
+    // WoW: a Mythic+ key began, and ended. `finished` is the log's success
+    // flag; `time_ms` counts death penalties in.
+    KeyStart {
+        instance_id: u32,
+        name: String,
+        level: u32,
+    },
+    KeyEnd {
+        instance_id: u32,
+        level: u32,
+        finished: bool,
+        time_ms: u64,
+    },
 }
 
 /// The League objectives the watcher records.
@@ -375,6 +402,17 @@ mod tests {
             },
             EventKind::PullStart(pull.clone()),
             EventKind::PullEnd { pull, kill: false },
+            EventKind::KeyStart {
+                instance_id: 2660,
+                name: "Ara-Kara, City of Echoes".into(),
+                level: 10,
+            },
+            EventKind::KeyEnd {
+                instance_id: 2660,
+                level: 10,
+                finished: true,
+                time_ms: 1_754_000,
+            },
         ];
         for kind in kinds {
             let ev = WatchEvent { at_ms: 1, kind };

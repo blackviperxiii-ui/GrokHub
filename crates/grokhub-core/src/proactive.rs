@@ -57,6 +57,8 @@ pub enum CandidateSource {
     SystemState,
     Spans,
     UserModel,
+    /// A goal on Objectives left for a few days.
+    Objectives,
 }
 
 impl CandidateSource {
@@ -125,6 +127,14 @@ pub struct Candidate {
     /// Hard candidates only: what GrokHub prepares (a draft, a filled form).
     #[serde(default)]
     pub prepared: Option<String>,
+    /// A kind question that is the card's title instead of "I can …"
+    /// ("Want to pick a night for your next Elden Ring session?"). The card
+    /// is then a one-tap suggestion and `action` is what the tap asks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<String>,
+    /// What was found. The card's title is its headline and the card opens to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<crate::card_report::CardReport>,
 }
 
 impl Candidate {
@@ -150,6 +160,8 @@ impl Candidate {
             tool: "run_task".into(),
             due_at: None,
             prepared: None,
+            ask: None,
+            report: None,
         }
     }
 
@@ -233,7 +245,7 @@ pub fn route(candidate: &Candidate, unsure: bool) -> Option<ProactiveRoute> {
     if candidate.class == CandidateClass::Hard {
         return Some(ProactiveRoute::Prepare);
     }
-    Some(if unsure {
+    Some(if unsure || candidate.ask.is_some() {
         ProactiveRoute::Suggest
     } else {
         ProactiveRoute::ICan
@@ -260,6 +272,70 @@ pub struct ProactiveMeta {
     pub source: Option<CandidateSource>,
 }
 
+/// A failing automation: the card names it, says how often it failed and
+/// why, and offers to find out what is wrong.
+fn automation_candidate(alert: &crate::automation::AutomationAlert) -> Candidate {
+    use crate::card_report::{CardReport, CardSubject, FixOffer, SubjectKind};
+    let name = alert.name.trim();
+    let quoted = format!("\"{name}\"");
+    let (who, who_lower) = if name.is_empty() {
+        ("An automation".to_string(), "an automation".to_string())
+    } else {
+        (quoted.clone(), quoted)
+    };
+    let n = alert.fail_streak.max(1);
+    let error = alert.error.trim().trim_end_matches('.');
+    let (action, why, found, after) = if n > 1 {
+        (
+            format!("find out why {who_lower} keeps failing"),
+            format!("It failed {n} times in a row."),
+            format!("{who} failed {n} times in a row"),
+            format!("None of its last {n} runs finished, so what it does for you has not happened since."),
+        )
+    } else {
+        (
+            format!("find out why {who_lower} failed"),
+            "Its last run failed.".to_string(),
+            format!("{who} failed on its last run"),
+            "Its last run did not finish.".to_string(),
+        )
+    };
+    let mut evidence = Vec::new();
+    if !name.is_empty() {
+        evidence.push(format!("Automation: {name}"));
+    }
+    evidence.push(format!("Failed runs in a row: {n}"));
+    evidence.push(format!("Last error: {error}"));
+    let mut c = Candidate::soft(
+        CandidateSource::AutomationHealth,
+        &action,
+        if name.is_empty() { "automation" } else { name },
+        0.6,
+        0.8,
+        &why,
+    );
+    c.report = Some(CardReport {
+        found,
+        summary: format!("Last error: {error}. {after}"),
+        evidence,
+        subject: (!name.is_empty()).then(|| CardSubject {
+            kind: SubjectKind::Automation,
+            name: name.to_string(),
+        }),
+        offers: vec![FixOffer {
+            label: "Find out why".into(),
+            prompt: format!(
+                "{}. Its last error was: {error}. Read its recent runs and say what broke and what would fix it. Change nothing yet.",
+                upper_first(&action)
+            ),
+            kind: crate::card_report::OfferKind::Chat,
+            fix_type: None,
+        }],
+        ..Default::default()
+    });
+    c
+}
+
 /// The card for a surfaced candidate, on the existing Pulse/Home surfaces.
 pub fn proactive_card(candidate: &Candidate, route: ProactiveRoute, now_ms: u64) -> UpdateCard {
     // Hard class is never a suggestion: its final step parks the hard card.
@@ -270,12 +346,29 @@ pub fn proactive_card(candidate: &Candidate, route: ProactiveRoute, now_ms: u64)
     );
     let step = candidate.prepare_step();
     let title = match route {
+        ProactiveRoute::Suggest if candidate.ask.is_some() => {
+            candidate.ask.clone().unwrap_or_default()
+        }
         ProactiveRoute::Suggest => {
             upper_first(candidate.action.trim().trim_end_matches(['.', '?']))
         }
         ProactiveRoute::Prepare => format!("I can draft this: {}", candidate.action),
         ProactiveRoute::ICan => format!("I can {}", candidate.action),
     };
+    // A card that found something leads with the finding.
+    let title = candidate
+        .report
+        .as_ref()
+        .map(|r| r.found.trim().to_string())
+        .filter(|found| !found.is_empty())
+        .unwrap_or(title);
+    let body = step.prepared.clone().or_else(|| {
+        candidate
+            .report
+            .as_ref()
+            .map(|r| r.summary.trim().to_string())
+            .filter(|summary| !summary.is_empty())
+    });
     let mut card = crate::update_feed::blank_card(
         format!(
             "{PROACTIVE_ID_PREFIX}{}-{now_ms}",
@@ -283,9 +376,10 @@ pub fn proactive_card(candidate: &Candidate, route: ProactiveRoute, now_ms: u64)
         ),
         UpdateKind::Suggestion,
         title,
-        step.prepared.clone(),
+        body,
         now_ms,
     );
+    card.pulse.report = candidate.report.clone();
     card.why = Some(candidate.why.clone());
     card.prompt = Some(candidate.action.clone());
     card.pulse.due_at = candidate.due_at;
@@ -364,8 +458,8 @@ pub struct Watch<'a> {
     /// already on the page.
     pub cards: &'a [UpdateCard],
     pub work: &'a [WorkItem],
-    /// `automation_health_line` per failing automation.
-    pub automation_health: &'a [String],
+    /// Each failing automation, by name.
+    pub automation_health: &'a [crate::automation::AutomationAlert],
     pub failed: &'a [FailedTask],
     pub needs: &'a [UserNeed],
 }
@@ -443,15 +537,8 @@ impl ProactiveEngine {
                 out.push(c);
             }
         }
-        for line in watch.automation_health {
-            out.push(Candidate::soft(
-                CandidateSource::AutomationHealth,
-                &format!("look into why {}", lower_first(line)),
-                line,
-                0.6,
-                0.8,
-                "An automation keeps failing.",
-            ));
+        for alert in watch.automation_health {
+            out.push(automation_candidate(alert));
         }
         for task in watch.failed {
             out.push(Candidate::soft(
@@ -1036,7 +1123,11 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let health = ["Backup failed 3 times in a row".to_string()];
+        let health = [crate::automation::AutomationAlert {
+            name: "Backup".into(),
+            fail_streak: 3,
+            error: "disk full".into(),
+        }];
         let failed = [FailedTask {
             title: "Sync photos".into(),
         }];
@@ -1069,11 +1160,68 @@ mod tests {
             actions,
             vec![
                 ("get \"Ship notes\" ready", 280),
-                ("look into why backup failed 3 times in a row", 240),
+                ("find out why \"Backup\" keeps failing", 240),
                 ("help unblock \"Quarterly taxes\"", 210),
                 ("get standup prep ready before you start", 150),
             ]
         );
+    }
+
+    #[test]
+    fn a_failing_automation_card_names_it_and_says_what_broke() {
+        let alert = crate::automation::AutomationAlert {
+            name: "Morning brief".into(),
+            fail_streak: 3,
+            error: "OpenRouter has no credits left.".into(),
+        };
+        let c = automation_candidate(&alert);
+        assert_eq!(c.action, "find out why \"Morning brief\" keeps failing");
+        let card = proactive_card(&c, ProactiveRoute::ICan, T0);
+        assert_eq!(card.title, "\"Morning brief\" failed 3 times in a row");
+        // The Pulse row leads with the finding, not "I can find out why …".
+        assert_eq!(
+            crate::pulse::i_can_title(&card),
+            "\"Morning brief\" failed 3 times in a row"
+        );
+        assert_eq!(
+            card.body.as_deref(),
+            Some("Last error: OpenRouter has no credits left. None of its last 3 runs finished, so what it does for you has not happened since.")
+        );
+        assert_eq!(card.prompt.as_deref(), Some(c.action.as_str()));
+        let report = card.pulse.report.expect("report");
+        assert_eq!(
+            report.evidence,
+            vec![
+                "Automation: Morning brief".to_string(),
+                "Failed runs in a row: 3".to_string(),
+                "Last error: OpenRouter has no credits left".to_string(),
+            ]
+        );
+        assert_eq!(
+            report.offers,
+            vec![crate::card_report::FixOffer {
+                label: "Find out why".into(),
+                prompt: "Find out why \"Morning brief\" keeps failing. Its last error was: OpenRouter has no credits left. Read its recent runs and say what broke and what would fix it. Change nothing yet.".into(),
+                kind: crate::card_report::OfferKind::Chat,
+                fix_type: None,
+            }]
+        );
+        let once = automation_candidate(&crate::automation::AutomationAlert {
+            name: String::new(),
+            fail_streak: 1,
+            error: "Run failed".into(),
+        });
+        assert_eq!(once.action, "find out why an automation failed");
+        assert_eq!(
+            once.report
+                .as_ref()
+                .map(|r| (r.found.as_str(), r.summary.as_str())),
+            Some((
+                "An automation failed on its last run",
+                "Last error: Run failed. Its last run did not finish."
+            ))
+        );
+        assert_eq!(once.report.and_then(|r| r.subject), None);
     }
 
     #[test]

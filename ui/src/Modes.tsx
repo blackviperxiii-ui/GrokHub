@@ -1,92 +1,9 @@
 import { useState, type FormEvent } from "react";
-import type { Approvals, ElicitAction, ElicitChoice, SessionMode } from "./api";
-import { APPROVALS } from "./approvals";
+import type { ElicitAction, ElicitChoice, ReplyChipData } from "./api";
+import { externalUrlOk } from "./external";
 import { PRODUCT_NAME } from "./brand";
-
-/** The cabin's composer chips, each with its hover line. */
-export const SESSION_CHIPS: { mode: SessionMode; label: string; tip: string }[] = [
-  {
-    mode: "chat",
-    label: "Chat",
-    tip: "Normal chat. Grok can edit files and use tools in your work folder. Everyday work.",
-  },
-  {
-    mode: "plan",
-    label: "Plan",
-    tip: "Grok writes a plan before changing things, and changes nothing until you approve it. Use this for bigger or riskier work.",
-  },
-  {
-    mode: "btw",
-    label: "btw",
-    tip: "A look-only side ask. Grok can read and answer, but changes nothing.",
-  },
-];
-
-export const APPROVAL_CHIPS: { value: Approvals; label: string }[] = [
-  { value: "ask", label: "Ask" },
-  { value: "auto", label: "Auto" },
-  { value: "always", label: "Always" },
-];
-
-export const EFFORT_TIP = `Auto effort: ${PRODUCT_NAME} picks how hard Grok thinks for each step.`;
-export const REMOTE_APPROVALS_TIP = `Set in ${PRODUCT_NAME} on your computer.`;
-
-/** Chat / Plan / btw, Ask / Auto / Always, and the read-only effort chip.
- * `approvals` is null until Settings loads. On the web app the approvals
- * stay the computer's, so those chips only show it. */
-export function ModeChips({
-  mode,
-  onMode,
-  approvals,
-  onApprovals,
-  busy,
-  remote,
-}: {
-  mode: SessionMode;
-  onMode: (mode: SessionMode) => void;
-  approvals: Approvals | null;
-  onApprovals: (approvals: Approvals) => void;
-  busy: boolean;
-  remote: boolean;
-}) {
-  return (
-    <div className="chips">
-      <div className="chip-group" role="group" aria-label="Session mode">
-        {SESSION_CHIPS.map((chip) => (
-          <button
-            key={chip.mode}
-            type="button"
-            className="chip"
-            title={chip.tip}
-            aria-pressed={mode === chip.mode}
-            disabled={busy}
-            onClick={() => onMode(chip.mode)}
-          >
-            {chip.label}
-          </button>
-        ))}
-      </div>
-      <div className="chip-group" role="group" aria-label="Approvals">
-        {APPROVAL_CHIPS.map((chip) => (
-          <button
-            key={chip.value}
-            type="button"
-            className="chip"
-            title={remote ? REMOTE_APPROVALS_TIP : APPROVALS[chip.value].note}
-            aria-pressed={approvals === chip.value}
-            disabled={busy || remote || approvals === null}
-            onClick={() => onApprovals(chip.value)}
-          >
-            {chip.label}
-          </button>
-        ))}
-      </div>
-      <span className="chip quiet" title={EFFORT_TIP}>
-        Auto effort
-      </span>
-    </div>
-  );
-}
+import { ExternalLink } from "./ui";
+import { ReplyChips } from "./ReplyChips";
 
 export type ElicitItem = {
   kind: "elicit";
@@ -99,36 +16,78 @@ export type ElicitItem = {
   fieldTitle: string;
   secret: boolean;
   options?: ElicitChoice[];
-  /** "ended": the turn stopped before anyone answered. */
-  answer: ElicitAction | "ended" | null;
+  /** Predicted replies for this card, ranked by past picks (Order 733). */
+  chips?: ReplyChipData[];
+  /** "ended": the turn stopped before anyone answered; "halted": Halt stopped it. */
+  answer: ElicitAction | "ended" | "halted" | null;
+  /** A helper asked; it waits past the end of the reply. */
+  helper?: boolean;
 };
 
-const PLAN_ANSWERS: Record<ElicitAction | "ended", string> = {
-  accept: "Approved. Grok can make the changes now.",
+const PLAN_ANSWERS: Record<ElicitAction | "ended" | "halted", string> = {
+  accept: `Approved. ${PRODUCT_NAME} can make the changes now.`,
   decline: "Kept in plan mode.",
   cancel: "Cancelled.",
   ended: "Not answered: the turn ended.",
+  halted: "Not answered: halted.",
 };
 
-const ANSWERS: Record<ElicitAction | "ended", string> = {
+const ANSWERS: Record<ElicitAction | "ended" | "halted", string> = {
   accept: "Sent.",
   decline: "Declined.",
   cancel: "Cancelled.",
   ended: "Not answered: the turn ended.",
+  halted: "Not answered: halted.",
 };
 
-/** A plan to approve, Grok's question, or a connector's form or link. */
+export const PLAN_SENT_BACK = "Sent back for changes.";
+
+/** What Ask for changes sends: the note, and the plan too when it was edited.
+ * The fixed start keeps it from ever reading as an approval. */
+export function changeRequest(note: string, draft: string, shown: string): string {
+  const ask = `Change the plan: ${note.trim()}`;
+  return draft.trim() === shown.trim() ? ask : `${ask}\n\nThe plan as I edited it:\n${draft}`;
+}
+
+/** A plan to approve, the agent's question, or a connector's form or link. */
 export function ElicitCard({
   item,
   onAnswer,
+  editable = false,
+  onChipPick,
 }: {
   item: ElicitItem;
-  onAnswer: (action: ElicitAction, value: string) => void;
+  /** `field` names the answer when it is not the card's own field: "plan" for
+   * an edited plan, "reply" for a request to change it. */
+  onAnswer: (action: ElicitAction, value: string, field?: string) => void;
+  /** The agent window: the plan is a document to edit, approve or send back. */
+  editable?: boolean;
+  /** A reply chip was picked; the shell remembers it for the next card. */
+  onChipPick?: (key: string) => void;
 }) {
   const [value, setValue] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
+  const [draft, setDraft] = useState(item.message);
+  const [note, setNote] = useState("");
+  const [asked, setAsked] = useState(false);
   const plan = item.server === "Plan";
+  const editing = plan && editable;
   const options = item.options ?? [];
+  const chips = item.chips ?? [];
+
+  /** One predicted reply: Send answers the card with its text, Prefill
+   * puts its text in this card's box to finish, Dismiss declines. */
+  function pickChip(chip: ReplyChipData) {
+    onChipPick?.(chip.key);
+    if (chip.act === "send") {
+      if (!plan) setPicked(chip.text);
+      onAnswer("accept", chip.text);
+    } else if (chip.act === "prefill") {
+      setValue(chip.text);
+    } else {
+      onAnswer("decline", "");
+    }
+  }
   // The message lists the options as text for the cabin; here they are buttons.
   const message = options.length
     ? item.message
@@ -138,9 +97,9 @@ export function ElicitCard({
         .trim()
     : item.message;
   const title = plan
-    ? "Grok's plan"
+    ? "The plan"
     : item.server === "Question"
-      ? "Grok asks"
+      ? `${PRODUCT_NAME} asks`
       : `${item.server} needs something from you`;
 
   function send(event: FormEvent) {
@@ -152,14 +111,82 @@ export function ElicitCard({
   return (
     <div className="card elicit" role="group" aria-label={title}>
       <div className="card-title">{title}</div>
-      <pre className="card-detail plain">{message}</pre>
-      {item.mode === "url" && item.url && <code className="card-detail-line">{item.url}</code>}
+      {editing && !item.answer ? (
+        <textarea
+          className="plan-draft"
+          aria-label="Plan"
+          rows={Math.min(Math.max(draft.split("\n").length + 1, 6), 24)}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+      ) : (
+        <pre className="card-detail plain">{editing ? draft : message}</pre>
+      )}
+      {item.mode === "url" && item.url && (
+        <p className="card-detail-line">
+          {externalUrlOk(item.url) ? (
+            <ExternalLink href={item.url}>Open {item.url}</ExternalLink>
+          ) : (
+            <code>{item.url}</code>
+          )}
+        </p>
+      )}
       {item.answer ? (
         <p className="card-answer">
           {item.answer === "accept" && picked
             ? `You chose: ${picked}`
-            : (plan ? PLAN_ANSWERS : ANSWERS)[item.answer]}
+            : editing && asked && item.answer === "accept"
+              ? PLAN_SENT_BACK
+              : (plan ? PLAN_ANSWERS : ANSWERS)[item.answer]}
         </p>
+      ) : editing ? (
+        <form
+          className="card-buttons"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!note.trim()) return;
+            setAsked(true);
+            onAnswer("accept", changeRequest(note, draft, item.message), "reply");
+          }}
+        >
+          <input
+            aria-label="What should change"
+            placeholder="What should change"
+            autoComplete="off"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setAsked(false);
+              onAnswer("accept", draft, "plan");
+            }}
+            disabled={!draft.trim()}
+          >
+            Approve plan
+          </button>
+          <button type="submit" className="quiet" disabled={!note.trim()}>
+            Ask for changes
+          </button>
+        </form>
+      ) : plan && chips.length > 0 ? (
+        <>
+          <ReplyChips chips={chips} onPick={pickChip} />
+          <form className="card-buttons" onSubmit={send}>
+            <input
+              aria-label={item.fieldTitle || "Reply"}
+              placeholder="Or type your reply"
+              type="text"
+              autoComplete="off"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+            />
+            <button type="submit" disabled={Boolean(item.fieldName) && !value.trim()}>
+              Send
+            </button>
+          </form>
+        </>
       ) : plan ? (
         <div className="card-buttons">
           <button type="button" onClick={() => onAnswer("accept", "")}>
@@ -171,34 +198,37 @@ export function ElicitCard({
         </div>
       ) : (
         <>
-          {options.length > 0 && (
-            <div className="answer-options" role="group" aria-label="Options">
-              {options.map((option) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  className={option.recommended ? "choice" : "choice quiet"}
-                  onClick={() => {
-                    setPicked(option.label);
-                    onAnswer("accept", option.label);
-                  }}
-                >
-                  <span className="choice-label">
-                    {option.label}
-                    {option.recommended && (
-                      <>
-                        {" "}
-                        <span className="badge">Recommended</span>
-                      </>
+          {options.length > 0 &&
+            (chips.length > 0 ? (
+              <ReplyChips chips={chips} onPick={pickChip} />
+            ) : (
+              <div className="answer-options" role="group" aria-label="Options">
+                {options.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    className={option.recommended ? "choice" : "choice quiet"}
+                    onClick={() => {
+                      setPicked(option.label);
+                      onAnswer("accept", option.label);
+                    }}
+                  >
+                    <span className="choice-label">
+                      {option.label}
+                      {option.recommended && (
+                        <>
+                          {" "}
+                          <span className="badge">Recommended</span>
+                        </>
+                      )}
+                    </span>
+                    {option.description && (
+                      <span className="choice-detail">{option.description}</span>
                     )}
-                  </span>
-                  {option.description && (
-                    <span className="choice-detail">{option.description}</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
+                  </button>
+                ))}
+              </div>
+            ))}
           <form className="card-buttons" onSubmit={send}>
             {item.fieldName && (
               <input

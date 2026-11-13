@@ -1,5 +1,5 @@
 //! Brain 2 acceptance: the Brief's goal changes the starting effort for the
-//! same call class, the reason lands in the route log and `/why`, nothing
+//! same call class, the reason lands in the route log, nothing
 //! prompts, and the ladder still escalates on failure and drops back after
 //! clean work.
 
@@ -10,7 +10,6 @@ use super::goal::{pin_goal, set_goal, RouteGoal};
 use super::guard::in_holdout;
 use super::ladder::note_tool_error;
 use super::live::{self, RouteCall, RouteDone};
-use super::log::why_text;
 
 const NOW: u64 = 1_000_000;
 
@@ -96,11 +95,19 @@ fn the_goal_changes_the_effort_for_the_same_class_and_the_reason_is_logged() {
             d,
         )
     };
-    let (none, rules, d) = effort("g2-s-none", "g2-ep-none", "debug and refactor the config");
+    let (none, rules, d) = effort(
+        "g2-s-none",
+        "g2-ep-none",
+        "explain how the config loader works",
+    );
     assert_eq!(none, "medium", "{rules:?}");
     assert!(!rules.iter().any(|r| r.starts_with("goal:")), "{rules:?}");
     assert_eq!(d.goal, None);
-    let (quality, rules, d) = effort("g2-s-quality", "g2-ep-q1", "debug and refactor the config");
+    let (quality, rules, d) = effort(
+        "g2-s-quality",
+        "g2-ep-q1",
+        "explain how the config loader works",
+    );
     assert_eq!(quality, "high", "{rules:?}");
     assert!(rules.contains(&"goal:quality".to_string()), "{rules:?}");
     assert_eq!(
@@ -109,7 +116,11 @@ fn the_goal_changes_the_effort_for_the_same_class_and_the_reason_is_logged() {
     );
     let rec = live::route_log(
         &dir,
-        &call("g2-s-quality", "g2-ep-q1", "debug and refactor the config"),
+        &call(
+            "g2-s-quality",
+            "g2-ep-q1",
+            "explain how the config loader works",
+        ),
         &d,
         &ok(),
     );
@@ -117,21 +128,24 @@ fn the_goal_changes_the_effort_for_the_same_class_and_the_reason_is_logged() {
         (rec.goal.as_str(), rec.goal_reason.as_str()),
         ("quality", "mistakes can break the system")
     );
-    let why = why_text(&dir);
-    assert!(
-        why.contains("Goal: quality (mistakes can break the system)."),
-        "{why}"
+    let (speed, rules, _) = effort(
+        "g2-s-speed",
+        "g2-ep-speed",
+        "explain how the config loader works",
     );
-    let (speed, rules, _) = effort("g2-s-speed", "g2-ep-speed", "debug and refactor the config");
     assert_eq!(speed, "low", "{rules:?}");
     assert!(rules.contains(&"goal:speed".to_string()), "{rules:?}");
-    let (cost, rules, _) = effort("g2-s-cost", "g2-ep-cost", "debug and refactor the config");
+    let (cost, rules, _) = effort(
+        "g2-s-cost",
+        "g2-ep-cost",
+        "explain how the config loader works",
+    );
     assert_eq!(cost, "low", "{rules:?}");
     // The user's own words win over the goal.
     let (steered, rules, _) = effort(
         "g2-s-steer",
         "g2-ep-st1",
-        "think hard and debug and refactor the config",
+        "think hard and explain how the config loader works",
     );
     assert_eq!(steered, "xhigh", "{rules:?}");
     assert!(!rules.iter().any(|r| r.starts_with("goal:")), "{rules:?}");
@@ -152,7 +166,7 @@ fn a_goal_start_still_escalates_on_failure_and_drops_back_after_clean_steps() {
         s,
         Some(RouteGoal::of("quality", "mistakes can break the system").unwrap()),
     );
-    let c = call(s, ep, "debug and refactor the config");
+    let c = call(s, ep, "explain how the config loader works");
     let step = || {
         let d = live::decide(&dir, &c, NOW);
         live::route_log(&dir, &c, &d, &ok());

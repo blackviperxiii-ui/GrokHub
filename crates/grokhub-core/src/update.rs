@@ -2,14 +2,14 @@ use crate::channel::{Channel, ChannelTips};
 use crate::host_plan::{explain_host_risk, host_risk, HostPlanStep, HostRisk};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// Overlay update only. Never wipes `~/.config/GrokHub`.
 pub fn is_grokhub_source(dir: &Path) -> bool {
     dir.join("Cargo.toml").is_file()
         && dir.join("scripts/install.sh").is_file()
-        && dir.join("crates/grokhub-app").is_dir()
+        && dir.join("crates/grokhub-core").is_dir()
 }
 
 pub fn walk_up_source(start: &Path) -> Option<PathBuf> {
@@ -68,7 +68,7 @@ fn git_stdout_within(
     args: &[&str],
     timeout: Duration,
 ) -> Result<(bool, String), String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = crate::git_cmd::git();
     cmd.arg("-C")
         .arg(source)
         .args(args)
@@ -177,6 +177,7 @@ pub fn remote_tracking_tips(source: &Path) -> Result<(String, String), String> {
 /// Any fetch, timeout or ref error is `Err` — callers must not flip the
 /// channel then, and there is no fallback to stale cached refs.
 pub fn fetch_channel_tips(source: &Path) -> Result<ChannelTips, String> {
+    crate::offline::refuse()?;
     if !is_grokhub_source(source) {
         return Err("not a GrokHub source tree".into());
     }
@@ -327,6 +328,7 @@ pub fn clone_needs_recover(source: &Path, channel: Channel) -> Result<bool, Stri
 }
 
 fn fetch_channel_tip(source: &Path, channel: Channel) -> Result<(), String> {
+    crate::offline::refuse()?;
     let want = channel.branch();
     let refspec = format!("+refs/heads/{want}:refs/remotes/origin/{want}");
     let (ok, _) = git_stdout_within(
@@ -480,6 +482,8 @@ pub fn update_cmds_in(source: &Path, channel: Channel) -> Result<Vec<String>, St
 /// Same plan as `update_cmds`, for the host the caller named, so a Windows
 /// test can still assert the Linux `install.sh` plan.
 fn update_cmds_on(source: &Path, windows: bool, channel: Channel) -> Result<Vec<String>, String> {
+    // Every plan pulls from GitHub (or downloads a release): none run offline.
+    crate::offline::refuse()?;
     if !is_grokhub_source(source) {
         return Err(format!(
             "{product} can't find its source folder (~/{id} or ~/.config/{id}/source).",
@@ -552,6 +556,7 @@ pub fn update_cmds_for_host_in(
     windows: bool,
     channel: Channel,
 ) -> Result<Vec<String>, String> {
+    crate::offline::refuse()?;
     match source {
         Some(src) => match update_cmds_on(src, windows, channel) {
             Ok(cmds) => Ok(cmds),
@@ -705,7 +710,7 @@ pub fn parse_github_latest_tag(body: &str) -> Option<String> {
 
 pub fn cabin_update_notice(running: &str, latest: &str) -> String {
     format!(
-        "{product} {latest} is on GitHub Latest (running {running}). Update overlays the cabin, then Restart.", product = crate::brand::product_name()
+        "{product} {latest} is on GitHub Latest (running {running}). Update installs over this copy, then Restart.", product = crate::brand::product_name()
     )
 }
 
@@ -740,7 +745,7 @@ pub fn pending_from_versions(running_cabin: &str, cabin_latest: Option<&str>) ->
 pub fn update_chip_label(pending: UpdatePending) -> Option<&'static str> {
     match pending {
         UpdatePending::None => None,
-        UpdatePending::Cabin => Some("Update cabin"),
+        UpdatePending::Cabin => Some(crate::brand::filled("Update {product}")),
     }
 }
 
@@ -779,7 +784,7 @@ pub fn settings_update_hint(pending: UpdatePending) -> &'static str {
 /// Pending-state copy. `None` is the `grokhub --update` exit line (no overlay).
 pub fn update_hint(pending: UpdatePending) -> &'static str {
     match pending {
-        UpdatePending::Cabin => "Updates the cabin, then Restart.",
+        UpdatePending::Cabin => crate::brand::filled("Updates {product}, then Restart."),
         UpdatePending::None => crate::brand::filled("{product} is current."),
     }
 }
@@ -1098,13 +1103,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("grokhub-src-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("scripts")).unwrap();
-        fs::create_dir_all(root.join("crates/grokhub-app")).unwrap();
+        fs::create_dir_all(root.join("crates/grokhub-core")).unwrap();
         fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
         fs::write(root.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
         assert!(is_grokhub_source(&root));
         assert!(!is_grokhub_source(&std::env::temp_dir()));
         assert_eq!(
-            walk_up_source(&root.join("crates/grokhub-app")),
+            walk_up_source(&root.join("crates/grokhub-core")),
             Some(root.clone())
         );
         assert_eq!(discover_source(&[root.join("crates")]), Some(root.clone()));
@@ -1156,7 +1161,7 @@ mod tests {
 
     fn seed_git_source(root: &std::path::Path, branch: &str) {
         fs::create_dir_all(root.join("scripts")).unwrap();
-        fs::create_dir_all(root.join("crates/grokhub-app")).unwrap();
+        fs::create_dir_all(root.join("crates/grokhub-core")).unwrap();
         fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
         fs::write(root.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
         let run = |args: &[&str]| {
@@ -1370,7 +1375,7 @@ mod tests {
         #[cfg(windows)]
         {
             let prev = std::env::var_os("LOCALAPPDATA");
-            std::env::set_var("LOCALAPPDATA", &root);
+            unsafe { std::env::set_var("LOCALAPPDATA", &root) };
             let bin = root.join("Programs").join("GrokHub").join("grokhub.exe");
             fs::create_dir_all(bin.parent().unwrap()).unwrap();
             fs::write(&bin, b"MZ").unwrap();
@@ -1384,8 +1389,8 @@ mod tests {
                 "Windows overlay must win over current_exe"
             );
             match prev {
-                Some(v) => std::env::set_var("LOCALAPPDATA", v),
-                None => std::env::remove_var("LOCALAPPDATA"),
+                Some(v) => unsafe { std::env::set_var("LOCALAPPDATA", v) },
+                None => unsafe { std::env::remove_var("LOCALAPPDATA") },
             }
         }
         assert_eq!(
@@ -1468,10 +1473,10 @@ mod tests {
         assert_eq!(pending_from_versions("2.10.92", Option::None), None);
         assert_eq!(pending_for_manual_update(None), Cabin);
         assert_eq!(update_chip_label(None), Option::None);
-        assert_eq!(update_chip_label(Cabin), Some("Update cabin"));
+        assert_eq!(update_chip_label(Cabin), Some("Update Loadout"));
         assert_eq!(settings_update_label(None), "Update");
         assert_eq!(update_hint(None), "Loadout is current.");
-        assert_eq!(update_hint(Cabin), "Updates the cabin, then Restart.");
+        assert_eq!(update_hint(Cabin), "Updates Loadout, then Restart.");
         assert_eq!(
             settings_update_hint(None),
             "Loadout looks current. Update still overlays so a missed probe can land."
@@ -1650,6 +1655,10 @@ mod tests {
             install_win.contains("Overlay-Locked") && install_win.contains("Rename-Item"),
             "clone overlay must replace a running grokhub.exe: {install_win}"
         );
+        assert!(
+            install_win.contains("cargo build --release --locked -p grokhub-app -p grokhub-hub"),
+            "the clone overlay must build from Cargo.lock as it is: {install_win}"
+        );
         assert_eq!(release_update_cmds(), vec![rel.to_string()]);
         for target in [Channel::Beta, Channel::Stable] {
             let switch = crate::release_verify::release_switch_step(target);
@@ -1824,6 +1833,7 @@ mod tests {
 #[cfg(test)]
 mod channel_tip_tests {
     use super::*;
+    use std::process::Command;
 
     /// Temp fixture: a bare `origin` with `main` and `beta` (both at a seed
     /// commit), a `work` clone that moves them, and a GrokHub-shaped `client`
@@ -1864,10 +1874,10 @@ mod channel_tip_tests {
             let _ = std::fs::remove_dir_all(&base);
             let (origin, work) = (base.join("origin.git"), base.join("work"));
             std::fs::create_dir_all(work.join("scripts")).unwrap();
-            std::fs::create_dir_all(work.join("crates/grokhub-app")).unwrap();
+            std::fs::create_dir_all(work.join("crates/grokhub-core")).unwrap();
             std::fs::write(work.join("Cargo.toml"), "[workspace]\n").unwrap();
             std::fs::write(work.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
-            std::fs::write(work.join("crates/grokhub-app/lib.rs"), "\n").unwrap();
+            std::fs::write(work.join("crates/grokhub-core/lib.rs"), "\n").unwrap();
             git_ok(&base, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
             git_ok(&work, &["init", "-q", "-b", "main"]);
             git_ok(&work, &["config", "user.email", "cabin@test"]);

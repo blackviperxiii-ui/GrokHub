@@ -300,7 +300,7 @@ pub fn plus_empty_status() -> &'static str {
 }
 
 pub fn imagine_ref_status(name: &str) -> String {
-    format!("cabin stills are prompt-only — {name} added as a hint")
+    format!("Imagine stills are prompt-only — {name} added as a hint")
 }
 
 pub fn chat_attach_status(kind: AttachKind, name: &str) -> String {

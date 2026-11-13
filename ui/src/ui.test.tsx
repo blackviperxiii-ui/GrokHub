@@ -1,0 +1,164 @@
+import "@testing-library/jest-dom/vitest";
+import { Activity } from "react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const transport = vi.hoisted(() => ({
+  call: vi.fn<(command: string, args?: unknown) => Promise<unknown>>(),
+  inShell: vi.fn<() => boolean>(),
+}));
+vi.mock("./transport", () => transport);
+
+import { externalUrlOk, openExternal } from "./external";
+import { ConfirmRow, ExternalLink, needsSettings, StatusLine, useCardFocus } from "./ui";
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("outside links", () => {
+  it("only plain web pages count", () => {
+    expect(externalUrlOk("https://example.com/a")).toBe(true);
+    expect(externalUrlOk("http://localhost:3000")).toBe(true);
+    expect(externalUrlOk("javascript:alert(1)")).toBe(false);
+    expect(externalUrlOk("file:///etc/passwd")).toBe(false);
+    expect(externalUrlOk("not a url")).toBe(false);
+  });
+
+  it("the shell asks the desktop to open it", async () => {
+    transport.inShell.mockReturnValue(true);
+    transport.call.mockResolvedValue(undefined);
+    await openExternal("https://example.com/");
+    expect(transport.call).toHaveBeenCalledWith("open_external", { url: "https://example.com/" });
+  });
+
+  it("the web app opens a tab here, never on the desktop", async () => {
+    transport.inShell.mockReturnValue(false);
+    transport.call.mockClear();
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    await openExternal("https://example.com/");
+    expect(open).toHaveBeenCalledWith("https://example.com/", "_blank", "noopener,noreferrer");
+    expect(transport.call).not.toHaveBeenCalled();
+  });
+
+  it("refuses anything else without calling out", async () => {
+    transport.inShell.mockReturnValue(true);
+    transport.call.mockClear();
+    await expect(openExternal("javascript:alert(1)")).rejects.toThrow();
+    expect(transport.call).not.toHaveBeenCalled();
+  });
+
+  it("a link click goes through the opener, not the webview", async () => {
+    transport.inShell.mockReturnValue(true);
+    transport.call.mockResolvedValue(undefined);
+    render(<ExternalLink href="https://example.com/x">source</ExternalLink>);
+    await userEvent.click(screen.getByRole("link", { name: "source" }));
+    expect(transport.call).toHaveBeenCalledWith("open_external", { url: "https://example.com/x" });
+  });
+
+  it("a link that isn't a web page is plain text: no link, no address, nothing to press", async () => {
+    transport.inShell.mockReturnValue(true);
+    transport.call.mockClear();
+    render(
+      <>
+        <p>
+          <ExternalLink href="https://example.com/x">source</ExternalLink>
+        </p>
+        <p>
+          <ExternalLink href="file:///home/user/notes.txt">a file</ExternalLink>
+        </p>
+        <p>
+          <ExternalLink href="javascript:alert(1)">a script</ExternalLink>
+        </p>
+      </>,
+    );
+    expect(screen.getByText("source")).toHaveAttribute("href", "https://example.com/x");
+    expect(screen.getAllByRole("link").map((a) => a.textContent)).toEqual(["source"]);
+    expect(document.querySelectorAll("a")).toHaveLength(1);
+    expect(screen.getByText("a file").outerHTML).toBe("<p>a file</p>");
+    expect(screen.getByText("a script").outerHTML).toBe("<p>a script</p>");
+    await userEvent.click(screen.getByText("a file"));
+    await userEvent.click(screen.getByText("a script"));
+    expect(transport.call).not.toHaveBeenCalled();
+  });
+});
+
+describe("chat errors", () => {
+  it("offer Settings only for key and sign-in trouble", () => {
+    expect(needsSettings("Sign in with Grok or add an API key.")).toBe(true);
+    expect(needsSettings("API key rejected (HTTP 401): bad key")).toBe(true);
+    expect(needsSettings("The system keychain is not available: no service")).toBe(true);
+    expect(needsSettings("read_file failed: no such file")).toBe(false);
+    expect(needsSettings("transport: connection reset")).toBe(false);
+    expect(needsSettings("HTTP 500: server error")).toBe(false);
+  });
+});
+
+describe("status line and confirm", () => {
+  it("errors and results look different", () => {
+    const { rerender } = render(<StatusLine note={{ text: "Saved.", error: false }} />);
+    expect(screen.getByRole("status")).toHaveClass("status", "status--ok");
+    rerender(<StatusLine note={{ text: "Failed.", error: true }} />);
+    expect(screen.getByRole("status")).toHaveClass("status", "status--error");
+    rerender(<StatusLine note={null} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("the action runs only after it is confirmed", async () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <ConfirmRow question="Delete it?" action="Delete" onConfirm={onConfirm} onCancel={onCancel} />,
+    );
+    expect(screen.getByRole("group", { name: "Delete it?" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onConfirm).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onConfirm).toHaveBeenCalledOnce();
+  });
+});
+
+describe("a confirm card's focus", () => {
+  function Card({ card }: { card: string | null }) {
+    const keep = useCardFocus<HTMLButtonElement>(card);
+    return card ? (
+      <button ref={keep} type="button">
+        Keep
+      </button>
+    ) : null;
+  }
+  function Page({ shown, card }: { shown: boolean; card: string | null }) {
+    return (
+      <>
+        <button type="button">Elsewhere</button>
+        <Activity mode={shown ? "visible" : "hidden"}>
+          <Card card={card} />
+        </Activity>
+      </>
+    );
+  }
+
+  it("goes to the safe button when the card appears, and is not taken again when its page shows again", () => {
+    const { rerender } = render(<Page shown card={null} />);
+    expect(document.activeElement).toBe(document.body);
+    rerender(<Page shown card="first" />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep" }));
+
+    // The person moves on with the card still open, and visits another page.
+    const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+    elsewhere.focus();
+    rerender(<Page shown={false} card="first" />);
+    rerender(<Page shown card="first" />);
+    expect(document.activeElement).toBe(elsewhere);
+
+    // Another card is a new question.
+    rerender(<Page shown card="second" />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep" }));
+
+    // And so is the same card, closed and opened again.
+    elsewhere.focus();
+    rerender(<Page shown card={null} />);
+    rerender(<Page shown card="second" />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep" }));
+  });
+});

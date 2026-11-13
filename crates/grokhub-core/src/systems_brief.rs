@@ -129,18 +129,93 @@ impl SystemsBrief {
         out
     }
 
-    /// Short Pulse body (under digest clip). Summary + up to three actions.
+    /// The Pulse card's text: the summary, then the named wins, each issue
+    /// and why, what is blocked, the update with its release notes, and
+    /// every next step in full. Nothing is counted without being named.
     pub fn card_body(&self) -> String {
         let mut lines = vec![self.executive_summary.clone()];
-        for (i, a) in self.next_actions.iter().take(MAX_ACTIONS).enumerate() {
-            lines.push(format!("{}. {}", i + 1, a.text));
-        }
+        lines.extend(self.detail_lines());
         lines.join("\n")
+    }
+
+    /// The card's report: the summary as its headline, the named details
+    /// below it, always shown in full.
+    pub fn card_report(&self) -> crate::card_report::CardReport {
+        crate::card_report::CardReport {
+            found: self.executive_summary.clone(),
+            summary: self.detail_lines().join("\n"),
+            details: self.render(),
+            ..Default::default()
+        }
+    }
+
+    fn detail_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        let wins: Vec<&str> = self
+            .progress
+            .iter()
+            .filter(|c| c.source.starts_with("win:") || c.source.starts_with("outcome:skill:"))
+            .map(|c| c.text.as_str())
+            .collect();
+        if !wins.is_empty() {
+            lines.push(format!("Wins: {}", wins.join("; ")));
+        }
+        let issues: Vec<&str> = self
+            .reliability
+            .iter()
+            .filter(|c| {
+                [
+                    "outcome:fail:",
+                    "outcome:once:",
+                    "health:service:",
+                    "automation:",
+                ]
+                .iter()
+                .any(|p| c.source.starts_with(p))
+            })
+            .map(|c| c.text.as_str())
+            .collect();
+        if !issues.is_empty() {
+            lines.push("Issues:".into());
+            lines.extend(issues.iter().map(|i| format!("- {i}")));
+        }
+        let blocked: Vec<&str> = self
+            .blocked
+            .iter()
+            .filter(|c| c.source != "blocked:none")
+            .map(|c| c.text.as_str())
+            .collect();
+        if !blocked.is_empty() {
+            lines.push(format!("Blocked: {}", blocked.join("; ")));
+        }
+        if let Some(v) = self.sources.iter().find(|c| c.source == "health:update") {
+            let ver = v.text.trim_start_matches('v');
+            lines.push(format!(
+                "Update: {} {ver} is ready. What's in it: {}",
+                crate::brand::product_name(),
+                release_notes_url(ver)
+            ));
+        }
+        if !self.next_actions.is_empty() {
+            lines.push("Next steps:".into());
+            for (i, a) in self.next_actions.iter().enumerate() {
+                lines.push(format!("{}. {} — {}", i + 1, a.text, a.rationale));
+            }
+        }
+        lines
     }
 
     pub fn source_id(&self) -> String {
         format!("{CARD_SOURCE_PREFIX}{}", self.day)
     }
+}
+
+/// The release page that lists what a version brings.
+pub fn release_notes_url(version: &str) -> String {
+    format!(
+        "https://github.com/blackviperxiii-ui/GrokHub/releases/tag/v{}",
+        version.trim_start_matches('v')
+    )
 }
 
 fn section(out: &mut String, title: &str, claims: &[BriefClaim]) {
@@ -290,7 +365,11 @@ pub fn build_brief(input: &BriefInputs) -> SystemsBrief {
     if let Some(v) = &input.cabin_update {
         let src = "health:update";
         reliability.push(claim(
-            format!("Cabin update ready: {}.", v.trim_start_matches('v')),
+            format!(
+                "{} update ready: {}.",
+                crate::brand::product_name(),
+                v.trim_start_matches('v')
+            ),
             src,
         ));
         sources.push(claim(v.clone(), src));
@@ -467,7 +546,10 @@ fn summarize(
         ));
     }
     if update_ready {
-        parts.push("a cabin update is ready".into());
+        parts.push(format!(
+            "a {} update is ready",
+            crate::brand::product_name()
+        ));
     }
     let mut s = parts.join("; ");
     s.push('.');
@@ -601,6 +683,48 @@ mod tests {
         }
         assert!(brief.card_body().contains("8 skill runs"));
         assert_eq!(brief.source_id(), "systems-brief:2026-10-12");
+    }
+
+    #[test]
+    fn the_card_names_the_win_each_issue_the_update_and_every_step() {
+        let brief = build_brief(&BriefInputs {
+            day: "2026-10-12".into(),
+            generated_at: 100,
+            skill_stats: vec![skill("deploy", 6, 4)],
+            progress_wins: vec!["Applied skill patch for notes".into()],
+            blocked: vec!["Need API key for Stripe".into()],
+            cabin_update: Some("v3.0.2".into()),
+            automation_health: vec!["night-check failed twice".into()],
+            failed_services: vec!["xAI auth missing".into()],
+            services_checked: 5,
+            ..Default::default()
+        });
+        let body = brief.card_body();
+        assert!(
+            body.contains("Wins: Applied skill patch for notes"),
+            "{body}"
+        );
+        assert!(body.contains("- Service check: xAI auth missing"), "{body}");
+        assert!(
+            body.contains("- Automation: night-check failed twice"),
+            "{body}"
+        );
+        assert!(body.contains("Blocked: Need API key for Stripe"), "{body}");
+        assert!(
+            body.contains("3.0.2 is ready. What's in it: https://github.com/blackviperxiii-ui/GrokHub/releases/tag/v3.0.2"),
+            "{body}"
+        );
+        for (i, a) in brief.next_actions.iter().enumerate() {
+            let line = format!("{}. {} — {}", i + 1, a.text, a.rationale);
+            assert!(
+                body.lines().any(|l| l == line),
+                "missing step {line} in {body}"
+            );
+        }
+        let report = brief.card_report();
+        assert_eq!(report.found, brief.executive_summary);
+        assert!(report.summary.contains("Next steps:"));
+        assert!(!report.summary.contains(&brief.executive_summary));
     }
 
     #[test]

@@ -146,7 +146,9 @@ pub fn loopback_code(raw: &str, expected_state: &str, who: &str) -> Result<Strin
     let got_state = query_get(&q, "state").unwrap_or("");
     let state_ok = ct_eq(got_state, expected_state);
     if let Some(err) = query_get(&q, "error").filter(|s| !s.is_empty()) {
-        if !state_ok {
+        // Some providers (OpenRouter) drop `state` on a deny. An error buys
+        // nothing, so a missing one still shows why; a wrong one doesn't.
+        if !state_ok && !got_state.is_empty() {
             return Err(format!("{who} state did not match"));
         }
         let desc = query_get(&q, "error_description")
@@ -202,6 +204,28 @@ mod tests {
                 "Linear sign-in"
             ),
             Err("Linear sign-in failed: access_denied".to_string())
+        );
+        // A deny with no state (OpenRouter drops it) still says why; a wrong one doesn't.
+        assert_eq!(
+            loopback_code(
+                "GET /callback?error=access_denied HTTP/1.1",
+                "s1",
+                "Linear sign-in"
+            ),
+            Err("Linear sign-in failed: access_denied".to_string())
+        );
+        assert_eq!(
+            loopback_code(
+                "GET /callback?error=access_denied&state=s2 HTTP/1.1",
+                "s1",
+                "Linear sign-in"
+            ),
+            Err("Linear sign-in state did not match".to_string())
+        );
+        // A code with no state is still refused.
+        assert_eq!(
+            loopback_code("GET /callback?code=c HTTP/1.1", "s1", "Linear sign-in"),
+            Err("Linear sign-in state did not match".to_string())
         );
         assert_eq!(
             loopback_code(

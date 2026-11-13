@@ -1,7 +1,18 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { DELETE_ASK_QUESTION, DELETE_MESSAGE_LABEL, DELETE_REPLY_QUESTION, MESSAGE_MENU_LABEL } from "./DeleteMessage";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Answer, Approvals, ChatEnvelope, ChatEvent, ElicitAction, SessionMode, Settings } from "./api";
+import type {
+  Answer,
+  Approvals,
+  ChatEnvelope,
+  ChatEvent,
+  ElicitAction,
+  QuickChip,
+  SessionMode,
+  Settings,
+  Transcript,
+} from "./api";
 
 const api = vi.hoisted(() => ({
   handler: null as ((envelope: ChatEnvelope) => void) | null,
@@ -12,37 +23,181 @@ const api = vi.hoisted(() => ({
       (id: string, callId: string, action: ElicitAction, field?: string | null, value?: string) => Promise<void>
     >(),
   getSettings: vi.fn<() => Promise<Settings>>(),
+  getBehavior: vi.fn(() =>
+    Promise.resolve({
+      closeToTray: true,
+      behavior: {
+        autocomplete: false,
+        suggestions: true,
+        quietStart: "",
+        quietEnd: "",
+        dailyTokenBudget: 0,
+        pauseOverBudget: false,
+      },
+      budgets: [],
+    }),
+  ),
+  composerGhostSuggest: vi.fn<(draft: string) => Promise<string>>(() => Promise.resolve("")),
   saveSettings:
     vi.fn<
-      (model: string, tray: boolean, ws: string, approvals: Approvals, desk: boolean) => Promise<Settings>
+      (tray: boolean, ws: string, approvals: Approvals, desk: boolean) => Promise<Settings>
     >(),
   answerPermission: vi.fn<(id: string, callId: string, answer: Answer) => Promise<void>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
+  steerChat: vi.fn<(id: string, text: string) => Promise<boolean>>(),
+  readTurn: vi.fn((text: string) => Promise.resolve({ route: "queue", text, ack: "Queued for after this reply" })),
+  sideChat:
+    vi.fn<(id: string, sideId: string, question: string, ask: string, soFar: string) => Promise<string>>(),
+  tellMain: vi.fn<(id: string, question: string, answer: string) => Promise<{ text: string; steered: boolean }>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
+  deleteChat: vi.fn<(id: string) => Promise<void>>(),
+  forgetMessage:
+    vi.fn<(id: string, cut: { reply: boolean; text: string | null; later: number }) => Promise<boolean>>(),
+  getLastChat: vi.fn<() => Promise<Transcript | null>>(),
+  loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
+  slashHits: vi.fn(() => Promise.resolve([])),
+  runSlash: vi.fn(),
+  exportChat: vi.fn(),
+  openSaved: vi.fn(),
+  revealSaved: vi.fn(),
+  quickChips: vi.fn<(surface: string, id?: string, draft?: string, mode?: SessionMode) => Promise<QuickChip[]>>(),
+  chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
+  codeSessionPlan: vi.fn<(id: string) => Promise<string | null>>(),
+  decisionInbox: vi.fn(() => Promise.resolve([])),
+  answerInbox: vi.fn(() => Promise.resolve("answered")),
+  replyPick: vi.fn(() => Promise.resolve()),
+  listChats: vi.fn(() => Promise.resolve([])),
+  goalAct: vi.fn(() => Promise.resolve({ board: { today: [], mine: [], suggested: [], season: { label: "", done: 0, trophies: [], badges: [] } } })),
+  getHangoutMode: vi.fn(() => Promise.resolve("type" as const)),
+  setHangoutMode: vi.fn((mode: "talk" | "type") => Promise.resolve(mode)),
+  listChatTabs: vi.fn(() => Promise.resolve([])),
+  listArchivedChats: vi.fn(() => Promise.resolve([])),
+  listDeletedChats: vi.fn(() => Promise.resolve([])),
+  chatTabSwitch: vi.fn(),
+  chatTabPin: vi.fn(),
+  chatTabRename: vi.fn(),
+  chatTabArchive: vi.fn(),
+  chatTabUnarchive: vi.fn(),
+  chatTabSoftDelete: vi.fn(),
+  chatTabRestoreDeleted: vi.fn(),
 }));
+
+// The router's no-route wait: the test says when a model is back.
+const wait = vi.hoisted(() => ({
+  back: null as (() => void) | null,
+  modelResume: vi.fn<(id: string) => Promise<{ conversationId: string; ask: string; note: string } | null>>(
+    () => Promise.resolve(null),
+  ),
+}));
+vi.mock("./modelWait", () => ({
+  modelResume: wait.modelResume,
+  onModelBack: (handler: () => void) => {
+    wait.back = handler;
+    return Promise.resolve(() => {});
+  },
+}));
+
+// A chat line that asks for a setting is answered by auto setup.
+const auto = vi.hoisted(() => ({
+  settingAsk: vi.fn<(text: string) => Promise<string | null>>(() => Promise.resolve(null)),
+}));
+vi.mock("./autoSetupApi", () => auto);
 
 vi.mock("./api", () => ({
   sendChat: api.sendChat,
   answerElicit: api.answerElicit,
   getSettings: api.getSettings,
+  getBehavior: api.getBehavior,
+  composerGhostSuggest: api.composerGhostSuggest,
   saveSettings: api.saveSettings,
   answerPermission: api.answerPermission,
   cancelChat: api.cancelChat,
+  steerChat: api.steerChat,
+  readTurn: api.readTurn,
+  sideChat: api.sideChat,
+  tellMain: api.tellMain,
   closeChat: api.closeChat,
+  deleteChat: api.deleteChat,
+  forgetMessage: api.forgetMessage,
+  getLastChat: api.getLastChat,
+  loadChat: api.loadChat,
+  slashHits: api.slashHits,
+  runSlash: api.runSlash,
+  exportChat: api.exportChat,
+  openSaved: api.openSaved,
+  revealSaved: api.revealSaved,
+  quickChips: api.quickChips,
+  chipOutcome: api.chipOutcome,
+  decisionInbox: api.decisionInbox,
+  answerInbox: api.answerInbox,
+  replyPick: api.replyPick,
+  listChats: api.listChats,
+  goalAct: api.goalAct,
+  codeSessionPlan: api.codeSessionPlan,
+  getHangoutMode: api.getHangoutMode,
+  setHangoutMode: api.setHangoutMode,
+  listChatTabs: api.listChatTabs,
+  listArchivedChats: api.listArchivedChats,
+  listDeletedChats: api.listDeletedChats,
+  chatTabSwitch: api.chatTabSwitch,
+  chatTabPin: api.chatTabPin,
+  chatTabRename: api.chatTabRename,
+  chatTabArchive: api.chatTabArchive,
+  chatTabUnarchive: api.chatTabUnarchive,
+  chatTabSoftDelete: api.chatTabSoftDelete,
+  chatTabRestoreDeleted: api.chatTabRestoreDeleted,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
     return Promise.resolve(() => {});
   },
+  helperQuestions: () => Promise.resolve([]),
   onEventGap: (handler: () => void) => {
     api.gap = handler;
     return Promise.resolve(() => {});
   },
+  // Push to talk has its own tests (Mic.test.tsx).
+  transcribe: vi.fn(),
+  // Attachments have their own tests (AttachChips.test.tsx).
+  onFileDrop: () => Promise.resolve(() => {}),
+  stageAttachment: vi.fn(),
+  stageAttachmentPaths: vi.fn(),
+  pickAttachments: vi.fn(),
+  removeAttachment: vi.fn(),
 }));
 
-import { applyEvent, Chat, EVENTS_LOST, MISSION_BUSY, type Item } from "./Chat";
+import {
+  AGENT_EMPTY,
+  AGENT_PLACEHOLDER,
+  applyEvent,
+  Chat,
+  CHAT_EMPTY,
+  EARLIER_STEP,
+  EVENTS_LOST,
+  HALTED_LINE,
+  NO_PLAN,
+  itemsFrom,
+  MISSION_BUSY,
+  OPEN_BUSY,
+  PLAN_NEXT,
+  STOP_ASKING_DONE,
+  type Item,
+  waitingLine,
+  type QueueAct,
+} from "./Chat";
+import { ASK_TRACKED } from "./Goals";
+
+const SAVED: Transcript = {
+  id: "shell-saved",
+  title: "paint colours",
+  lines: [
+    { role: "user", text: "pick a paint colour" },
+    { role: "tools", text: "read_file, web_search" },
+    { role: "assistant", text: "Try **blue**." },
+  ],
+  earlier: 0,
+};
 
 const SETTINGS: Settings = {
-  model: "grok-4.7",
   closeToTray: true,
   hasApiKey: true,
   workspace: "",
@@ -51,7 +206,21 @@ const SETTINGS: Settings = {
   desktopControl: false,
   theme: "system",
   version: "3.1.0",
+  summonHotkey: false,
+  notifications: true,
 };
+
+function chip(id: string, label: string, value: string, over: Partial<QuickChip> = {}): QuickChip {
+  return {
+    id,
+    label,
+    value,
+    action: "ask",
+    hint: id.startsWith("reply-") ? "Suggested in the reply" : "",
+    primary: false,
+    ...over,
+  };
+}
 
 /** Holds sendChat open until `finish` is called, like a turn in flight. */
 function holdTurn() {
@@ -72,6 +241,22 @@ function emit(conversationId: string, event: ChatEvent) {
   act(() => api.handler?.({ conversationId, event }));
 }
 
+/** A question card; with `labels` it offers them as buttons. */
+function question(id: string, message: string, labels: string[]): ChatEvent {
+  return {
+    kind: "elicit",
+    id,
+    server: "Question",
+    message,
+    mode: "form",
+    url: "",
+    fieldName: "answer",
+    fieldTitle: "Answer",
+    secret: false,
+    options: labels.map((label) => ({ label, description: "", recommended: false })),
+  };
+}
+
 describe("Chat", () => {
   beforeEach(() => {
     for (const fn of [
@@ -81,12 +266,61 @@ describe("Chat", () => {
       api.closeChat,
       api.answerElicit,
       api.saveSettings,
+      api.loadChat,
     ]) {
       fn.mockReset();
     }
+    // The real call always answers with a promise; the page handles its refusal.
+    api.closeChat.mockResolvedValue();
+    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.quickChips.mockReset().mockResolvedValue([]);
+    api.chipOutcome.mockReset().mockResolvedValue(true);
     api.getSettings.mockReset().mockResolvedValue(SETTINGS);
+    api.getBehavior.mockReset().mockResolvedValue({
+      closeToTray: true,
+      behavior: {
+        autocomplete: false,
+        suggestions: true,
+        quietStart: "",
+        quietEnd: "",
+        dailyTokenBudget: 0,
+        pauseOverBudget: false,
+      },
+      budgets: [],
+    });
+    api.composerGhostSuggest.mockReset().mockResolvedValue("");
     api.handler = null;
     api.gap = null;
+  });
+
+  it("Tab accepts a ghost suggestion when slash is closed; typing clears it", async () => {
+    api.getBehavior.mockResolvedValue({
+      closeToTray: true,
+      behavior: {
+        autocomplete: true,
+        suggestions: true,
+        quietStart: "",
+        quietEnd: "",
+        dailyTokenBudget: 0,
+        pauseOverBudget: false,
+      },
+      budgets: [],
+    });
+    api.composerGhostSuggest.mockResolvedValue(" world");
+    render(<Chat onOpenSettings={() => {}} />);
+    const box = await screen.findByRole("textbox", { name: "Message" });
+    await userEvent.type(box, "hello");
+    await waitFor(() => expect(api.composerGhostSuggest).toHaveBeenCalledWith("hello"), {
+      timeout: 1000,
+    });
+    await waitFor(() => expect(document.querySelector(".composer-ghost-sug")?.textContent).toBe(" world"));
+    fireEvent.keyDown(box, { key: "Tab" });
+    expect(box).toHaveValue("hello world");
+    expect(document.querySelector(".composer-ghost-sug")).toBeNull();
+
+    api.composerGhostSuggest.mockClear().mockResolvedValue(" again");
+    await userEvent.type(box, "!");
+    expect(document.querySelector(".composer-ghost-sug")).toBeNull();
   });
 
   it("says part of the reply may be missing after a gap in the web app's events", async () => {
@@ -100,6 +334,30 @@ describe("Chat", () => {
     finish();
   });
 
+  it("a turn no model answered goes again once by itself when one is back, with the note", async () => {
+    const paused = "protocol error: No model in your plan is answering right now.";
+    api.sendChat.mockRejectedValueOnce(paused).mockResolvedValueOnce("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("Summarize inbox");
+    expect(await screen.findByText(paused)).toBeVisible();
+
+    wait.modelResume.mockImplementation((asked) =>
+      Promise.resolve(
+        asked === id
+          ? { conversationId: id, ask: "Summarize inbox", note: "xAI is answering again; resumed: Summarize inbox" }
+          : null,
+      ),
+    );
+    act(() => wait.back?.());
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1].slice(0, 2)).toEqual([id, "Summarize inbox"]);
+    expect(await screen.findByText("xAI is answering again; resumed: Summarize inbox")).toBeVisible();
+    // The ask is on screen once: going again adds no second line.
+    expect(screen.getAllByText("Summarize inbox")).toHaveLength(1);
+    expect(screen.queryByText(paused)).toBeNull();
+    wait.modelResume.mockReset().mockResolvedValue(null);
+  });
+
   it("puts a prefill in the box without sending it, and a new one replaces it", async () => {
     const { rerender } = render(
       <Chat onOpenSettings={() => {}} prefill={{ text: "close the done cards", n: 1 }} />,
@@ -111,6 +369,134 @@ describe("Chat", () => {
     rerender(<Chat onOpenSettings={() => {}} prefill={{ text: "check the build", n: 2 }} />);
     expect(box).toHaveValue("check the build");
     expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
+  it("TALK and TYPE keep the draft in the box", async () => {
+    api.getHangoutMode.mockResolvedValue("type");
+    api.setHangoutMode.mockImplementation(async (mode) => mode);
+    render(<Chat onOpenSettings={() => {}} />);
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await userEvent.type(box, "keep me while switching");
+    expect(await screen.findByRole("group", { name: "Hangout mode" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "TALK" }));
+    await waitFor(() => expect(api.setHangoutMode).toHaveBeenCalledWith("talk"));
+    expect(box).toHaveValue("keep me while switching");
+    await userEvent.click(screen.getByRole("button", { name: "TYPE" }));
+    await waitFor(() => expect(api.setHangoutMode).toHaveBeenCalledWith("type"));
+    expect(box).toHaveValue("keep me while switching");
+  });
+
+  it("a send prefill (the Command line's run) goes as a chat message, leaving the box alone", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await userEvent.type(box, "half typed");
+    rerender(<Chat onOpenSettings={() => {}} prefill={{ text: "Run this: ls", n: 1, send: true }} />);
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    expect(api.sendChat.mock.calls[0].slice(1)).toEqual(["Run this: ls", "chat"]);
+    expect(box).toHaveValue("half typed");
+  });
+
+  it("a send prefill behind a running reply waits its turn", async () => {
+    const finish = holdTurn();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("hello");
+    rerender(<Chat onOpenSettings={() => {}} prefill={{ text: "Run this: ls", n: 1, send: true }} />);
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await waitFor(() => expect(api.sendChat).toHaveBeenLastCalledWith(id, "Run this: ls", undefined));
+  });
+
+  it("a findings pill fills the composer without sending", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("scan it");
+    emit(id, { kind: "text", text: "Scan complete." });
+    emit(id, {
+      kind: "findings",
+      items: [{ severity: "high", text: "Port 53 is taken" }],
+      fixes: [{ label: "Fix port 53 conflict", prompt: "Fix port 53 conflict: Stop the other service" }],
+      doAll: null,
+    });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await userEvent.click(screen.getByRole("button", { name: "Fix port 53 conflict" }));
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue(
+      "Fix port 53 conflict: Stop the other service",
+    );
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a recap card swaps the Finished block out of the bubble", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("do the work");
+    emit(id, { kind: "text", text: "Fixed it.\n\nFinished\n- Done: Read the file" });
+    emit(id, {
+      kind: "recap",
+      body: "Fixed it.",
+      lines: [{ status: "done", text: "Read the file" }],
+      needsYou: [],
+      undo: [],
+      steps: [{ title: "read_file", failed: false }],
+    });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    expect(screen.getByText("1 of 1 done")).toBeVisible();
+    const bubble = document.querySelector('[data-role="assistant"]');
+    expect(bubble?.textContent).toBe("Fixed it.");
+    await userEvent.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByText("read_file")).toBeVisible();
+  });
+
+  it("a plan card's chips fill its reply box or answer it, and picks are remembered", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("plan it");
+    emit(id, {
+      kind: "elicit",
+      id: "plan-1",
+      server: "Plan",
+      message: "1. Read the file",
+      mode: "form",
+      url: "",
+      fieldName: "reply",
+      fieldTitle: "Reply",
+      secret: false,
+      options: [],
+      chips: [
+        { key: "plan:go", label: "Yes, go", act: "send", text: "Go ahead with the plan." },
+        { key: "plan:change", label: "Change this", act: "prefill", text: "Change the plan: " },
+      ],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Change this" }));
+    expect(screen.getByLabelText("Reply")).toHaveValue("Change the plan: ");
+    expect(api.answerElicit).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Yes, go" }));
+    await waitFor(() =>
+      expect(api.answerElicit).toHaveBeenCalledWith(id, "plan-1", "accept", "reply", "Go ahead with the plan."),
+    );
+    await waitFor(() => expect(api.replyPick).toHaveBeenCalledWith("plan:go"));
+    finish();
+  });
+
+  it("opening the chat that is already open keeps what is typed in the box", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} remote />);
+    const id = await startTurn("hi");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).toBeNull());
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await userEvent.type(box, "my half-written next message");
+
+    rerender(<Chat onOpenSettings={() => {}} remote prefill={{ text: "", n: 1, conversationId: id }} />);
+    expect(box).toHaveValue("my half-written next message");
+    expect(screen.getByText("hi")).toBeVisible();
+    expect(api.closeChat).not.toHaveBeenCalled();
+
+    rerender(<Chat onOpenSettings={() => {}} remote prefill={{ text: "", n: 2, conversationId: "shell-other" }} />);
+    expect(box).toHaveValue("");
+    expect(screen.queryByText("hi")).toBeNull();
   });
 
   it("a mission prefill moves to its chat once, then stays there", async () => {
@@ -127,7 +513,7 @@ describe("Chat", () => {
 
     await userEvent.type(screen.getByLabelText("Message"), "{Enter}");
     await waitFor(() =>
-      expect(api.sendChat).toHaveBeenLastCalledWith("shell-m1", "Mission from my decision journal: Q", "chat"),
+      expect(api.sendChat).toHaveBeenLastCalledWith("shell-m1", "Mission from my decision journal: Q", undefined),
     );
 
     rerender(<Chat onOpenSettings={() => {}} prefill={{ ...mission, text: "again", n: 2 }} />);
@@ -148,91 +534,170 @@ describe("Chat", () => {
     expect(api.closeChat).not.toHaveBeenCalled();
     expect(screen.getByText("hello")).toBeVisible();
     finish();
-    await waitFor(() => expect(api.sendChat).toHaveBeenCalledWith(id, "hello", "chat"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledWith(id, "hello", undefined));
   });
 
-  it("shows at most three suggestions under a reply, and a tap sends one", async () => {
+  it("a goal the reply noticed is asked about under it, and Track puts it on My goals", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("fishing is so relaxing");
+    emit(id, { kind: "text", text: "Nice, go for 99!" });
+    emit(id, { kind: "goal", id: "g7", title: "Old School RuneScape · 99 fishing" });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    const ask = await screen.findByRole("group", { name: "Track this goal?" });
+    expect(ask).toHaveTextContent("Old School RuneScape · 99 fishing");
+    await userEvent.click(within(ask).getByRole("button", { name: "Track" }));
+    expect(api.goalAct).toHaveBeenCalledWith([{ act: "track", id: "g7" }]);
+    expect(await screen.findByText(ASK_TRACKED)).toBeInTheDocument();
+  });
+
+  it("a reply's follow-ups join the row under the box, and a tap sends one in its reply's mode", async () => {
     let finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
     const id = await startTurn("the build failed");
     emit(id, { kind: "text", text: "TypeError in parse_row." });
-    emit(id, {
-      kind: "suggestions",
-      items: [
-        { label: "Fix the cause", prompt: "Fix the root cause in parse_row." },
-        { label: "Root cause + fix", prompt: "Diagnose the error." },
-        { label: "Add a test", prompt: "Add a test for parse_row." },
-        { label: "Fourth", prompt: "Never shown." },
-      ],
-    });
+    expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
+    api.quickChips.mockResolvedValue([
+      chip("reply-0", "Fix the cause", "Fix the root cause in parse_row.", { mode: "plan" }),
+      chip("reply-1", "Add a test", "Add a test for parse_row."),
+      chip("pred-1", "Explain it", "Explain the error."),
+      chip("pred-2", "Fourth", "Never shown."),
+    ]);
+    emit(id, { kind: "suggestions", items: [] });
     emit(id, { kind: "done", stop: "end_turn" });
     finish();
-    const card = await screen.findByRole("group", { name: "Suggestions" });
-    expect(within(card).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "Fix the cause",
-      "Root cause + fix",
-      "Add a test",
-    ]);
-    await waitFor(() => expect(within(card).getByRole("button", { name: "Fix the cause" })).toBeEnabled());
-    await userEvent.type(screen.getByLabelText("Message"), "half typed");
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    expect(api.quickChips).toHaveBeenLastCalledWith("composer", id, "", undefined);
+    const taps = () =>
+      within(row)
+        .getAllByRole("button")
+        .filter((b) => !b.getAttribute("aria-label")?.startsWith("Hide"));
+    expect(taps().map((b) => b.textContent)).toEqual(["Fix the cause", "Add a test", "Explain it"]);
+    expect(taps()[0]).toHaveAttribute("title", "Why this? Suggested in the reply  (Alt+1)");
     finish = holdTurn();
-    await userEvent.click(within(card).getByRole("button", { name: "Fix the cause" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Fix the cause" }));
+    expect(api.chipOutcome).toHaveBeenCalledWith("composer", "reply-0", true);
     await waitFor(() =>
-      expect(api.sendChat).toHaveBeenLastCalledWith(id, "Fix the root cause in parse_row.", "chat"),
+      expect(api.sendChat).toHaveBeenLastCalledWith(id, "Fix the root cause in parse_row.", "plan"),
     );
     expect(screen.getByText("Fix the root cause in parse_row.")).toHaveAttribute("data-role", "user");
     expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
-    expect(screen.getByLabelText("Message")).toHaveValue("half typed");
     finish();
   });
 
-  it("posts a notice when an automation finishes, with a one-tap follow-up", async () => {
-    const onOpenAutomations = vi.fn();
-    const long = `${"x".repeat(300)} tail`;
-    const view = render(<Chat onOpenSettings={() => {}} onOpenAutomations={onOpenAutomations} />);
-    view.rerender(
-      <Chat
-        onOpenSettings={() => {}}
-        onOpenAutomations={onOpenAutomations}
-        notice={{ id: "auto-1", name: "summarize my inbox", ok: true, text: "3 new mails, none urgent.", n: 1 }}
-      />,
-    );
-    const done = screen.getByRole("status", { name: "summarize my inbox finished" });
-    expect(within(done).getByText("Finished")).toBeVisible();
-    expect(within(done).getByText("3 new mails, none urgent.")).toBeVisible();
-    await userEvent.click(within(done).getByRole("button", { name: "Ask about it" }));
-    expect(screen.getByLabelText("Message")).toHaveValue('About the "summarize my inbox" automation run: ');
-    await userEvent.click(within(done).getByRole("button", { name: "Open Automations" }));
-    expect(onOpenAutomations).toHaveBeenCalledTimes(1);
-
-    view.rerender(
-      <Chat
-        onOpenSettings={() => {}}
-        onOpenAutomations={onOpenAutomations}
-        notice={{ id: "auto-2", name: "board", ok: false, text: long, n: 2 }}
-      />,
-    );
-    const failed = screen.getByRole("status", { name: "board finished" });
-    expect(within(failed).getByText("Failed")).toBeVisible();
-    expect(within(failed).getByText(`${"x".repeat(280)}…`)).toBeVisible();
-    await userEvent.click(within(failed).getByRole("button", { name: "Find the cause" }));
-    expect(screen.getByLabelText("Message")).toHaveValue(
-      `The "board" automation failed: ${long}. What went wrong and how do I fix it?`,
-    );
+  it("a chip adds to what is typed, Go opens its page, and × hides one", async () => {
+    const onOpenView = vi.fn();
+    api.quickChips.mockResolvedValue([
+      chip("pred-1", "Explain it", "Explain the error."),
+      { ...chip("nav-1", "Automations", "__nav:night"), action: "go", view: "automations" },
+    ]);
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    await userEvent.type(screen.getByLabelText("Message"), "half typed");
+    await userEvent.click(within(row).getByRole("button", { name: "Explain it" }));
+    expect(screen.getByLabelText("Message")).toHaveValue("half typed Explain the error.");
     expect(api.sendChat).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Automations" })).toBeVisible());
+    await userEvent.click(screen.getByRole("button", { name: "Automations" }));
+    expect(onOpenView).toHaveBeenCalledWith("automations");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Hide Explain it" }));
+    expect(api.chipOutcome).toHaveBeenLastCalledWith("composer", "pred-1", false);
   });
 
-  it("a reply without suggestions shows no suggestion card", async () => {
+  it("Alt+2 taps the second chip", async () => {
+    const onOpenView = vi.fn();
+    api.quickChips.mockResolvedValue([
+      chip("pred-1", "Explain it", "Explain the error."),
+      { ...chip("nav-1", "Automations", "__nav:night"), action: "go", view: "automations" },
+    ]);
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    await screen.findByRole("group", { name: "Suggestions" });
+    fireEvent.keyDown(window, { key: "™", code: "Digit2", altKey: true });
+    expect(onOpenView).toHaveBeenCalledWith("automations");
+    expect(api.chipOutcome).toHaveBeenCalledWith("composer", "nav-1", true);
+  });
+
+  it("a reply without follow-ups and an empty row show no chips", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
     const id = await startTurn("list the files");
     emit(id, { kind: "text", text: "There are 12 files." });
-    emit(id, { kind: "suggestions", items: [] });
     emit(id, { kind: "done", stop: "end_turn" });
     finish();
     await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());
     expect(screen.getByText("There are 12 files.")).toBeVisible();
     expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
+  });
+
+  it("/export saves this chat and leaves a card that opens or shows the file", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "export" });
+    api.exportChat.mockReset().mockResolvedValue({
+      token: "saved-1",
+      name: "hello-20261106-1415.md",
+      folder: "Chats",
+      path: "/home/user/Documents/Loadout/Chats/hello-20261106-1415.md",
+      line: "Saved hello-20261106-1415.md to Chats",
+      revealLabel: "Show in folder",
+    });
+    api.revealSaved.mockReset().mockResolvedValue(undefined);
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("hello");
+    await act(async () => finish());
+    await userEvent.type(screen.getByLabelText("Message"), "/export{Enter}");
+    expect(api.runSlash).toHaveBeenCalledWith("/export", id);
+    expect(api.exportChat).toHaveBeenCalledWith(id);
+    const card = await screen.findByRole("status", { name: "Saved hello-20261106-1415.md to Chats" });
+    await userEvent.click(within(card).getByRole("button", { name: "Show in folder" }));
+    expect(api.revealSaved).toHaveBeenCalledWith("saved-1");
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("/export html and /export json ask for that format", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "exportAs", format: "html" });
+    api.exportChat.mockReset().mockResolvedValue({
+      token: "saved-2",
+      name: "hello-20261106-1415.html",
+      folder: "Chats",
+      path: "/home/user/Documents/Loadout/Chats/hello-20261106-1415.html",
+      line: "Saved hello-20261106-1415.html to Chats",
+      revealLabel: "Show in folder",
+    });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/export html{Enter}");
+    expect(
+      await screen.findByRole("status", { name: "Saved hello-20261106-1415.html to Chats" }),
+    ).toBeInTheDocument();
+    expect(api.exportChat).toHaveBeenCalledWith(expect.stringMatching(/^shell-/), "html");
+    api.runSlash.mockResolvedValue({ kind: "exportAs", format: "json" });
+    await userEvent.type(screen.getByLabelText("Message"), "/export json{Enter}");
+    await waitFor(() =>
+      expect(api.exportChat).toHaveBeenLastCalledWith(expect.stringMatching(/^shell-/), "json"),
+    );
+  });
+
+  it("a failed /export says why and saves no card", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "export" });
+    api.exportChat.mockReset().mockRejectedValue("There's nothing in this chat to save yet.");
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/export{Enter}");
+    expect(await screen.findByText("There's nothing in this chat to save yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show in folder" })).toBeNull();
+  });
+
+  it("/import with no OpenClaw workspace to read says so in the chat and opens nothing", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "import" });
+    const opened = vi.fn();
+    window.addEventListener("onboard:open", opened);
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/import{Enter}");
+    expect(await screen.findByText("No OpenClaw or Hermes workspace on this computer.")).toBeInTheDocument();
+    expect(opened).not.toHaveBeenCalled();
+    window.removeEventListener("onboard:open", opened);
+    expect(api.sendChat).not.toHaveBeenCalled();
   });
 
   it("sends the text and streams its own conversation's reply", async () => {
@@ -241,19 +706,50 @@ describe("Chat", () => {
     const id = await startTurn("hello");
 
     expect(id).toMatch(/^shell-/);
-    expect(api.sendChat).toHaveBeenCalledWith(id, "hello", "chat");
+    expect(api.sendChat).toHaveBeenCalledWith(id, "hello", undefined);
     expect(screen.getByText("hello")).toHaveAttribute("data-role", "user");
     expect(screen.getByLabelText("Message")).toHaveValue("");
 
     emit("someone-else", { kind: "text", text: "nope" });
     emit(id, { kind: "text", text: "Hi from " });
     emit(id, { kind: "text", text: "Grok" });
-    expect(screen.getByText("Hi from Grok")).toHaveClass("streaming");
+    // The reply renders as Markdown, so its text sits in a paragraph inside the bubble.
+    const bubble = () => screen.getByText("Hi from Grok").closest(".bubble");
+    expect(bubble()).toHaveClass("streaming");
     expect(screen.queryByText(/nope/)).toBeNull();
 
     finish();
-    await waitFor(() => expect(screen.getByText("Hi from Grok")).not.toHaveClass("streaming"));
-    expect(screen.getByText("Hi from Grok")).toHaveAttribute("data-role", "assistant");
+    await waitFor(() => expect(bubble()).not.toHaveClass("streaming"));
+    expect(bubble()).toHaveAttribute("data-role", "assistant");
+  });
+
+  it("answers a setting ask here without sending it to the model", async () => {
+    auto.settingAsk.mockResolvedValueOnce("Text size is 115% now.");
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "make the text bigger{Enter}");
+    expect(await screen.findByText("Text size is 115% now.")).toBeInTheDocument();
+    expect(auto.settingAsk).toHaveBeenCalledWith("make the text bigger");
+    expect(screen.getByText("make the text bigger")).toHaveAttribute("data-role", "user");
+    expect(screen.getByLabelText("Message")).toHaveValue("");
+    expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
+  it("renders the reply as Markdown and keeps the person's message plain", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("**mine** <b>x</b>");
+    emit(id, { kind: "text", text: "## Plan\n- **one**\n<script>alert(1)</script>" });
+    finish();
+    const reply = await screen.findByRole("heading", { level: 2, name: "Plan" });
+    const bubble = reply.closest(".bubble")!;
+    expect(bubble).toHaveAttribute("data-role", "assistant");
+    expect(within(bubble as HTMLElement).getByRole("listitem")).toHaveTextContent("one");
+    expect(bubble.querySelector("strong")).toHaveTextContent("one");
+    expect(bubble.querySelector("script")).toBeNull();
+    expect(within(bubble as HTMLElement).getByText("<script>alert(1)</script>")).toBeInTheDocument();
+    const mine = screen.getByText("**mine** <b>x</b>");
+    expect(mine).toHaveAttribute("data-role", "user");
+    expect(mine.querySelector("strong, b")).toBeNull();
   });
 
   it("shows a permission card and Allow once answers it", async () => {
@@ -278,6 +774,23 @@ describe("Chat", () => {
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
   });
 
+  it("an answer that doesn't reach the agent gives the buttons back", async () => {
+    holdTurn();
+    api.answerPermission.mockRejectedValueOnce("Can't reach Loadout on your computer. Is it open?");
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("write a note");
+
+    emit(id, { kind: "permission", id: "call-9", title: "write", action: "note.txt", reason: "" });
+    await userEvent.click(screen.getByRole("button", { name: "Allow once" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Can't reach Loadout on your computer.");
+    const card = screen.getByRole("group", { name: "Approve write" });
+    expect(card).not.toHaveTextContent("Allowed once");
+    await userEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+    expect(api.answerPermission).toHaveBeenLastCalledWith(id, "call-9", "allow");
+    expect(card).toHaveTextContent("Allowed once");
+  });
+
   it("Deny and Always allow send their answers", async () => {
     holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
@@ -300,6 +813,30 @@ describe("Chat", () => {
     expect(screen.getByText("Always allowed")).toBeInTheDocument();
   });
 
+  it("a merge request's card says what it is and offers only Allow once and Deny", async () => {
+    holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("merge it");
+
+    emit(id, {
+      kind: "permission",
+      id: "m1",
+      title: "merge_subagent_work",
+      action: "3 files (1 new, 2 changed, 0 deleted) into /home/user/my-app: Fix the parser",
+      reason: "",
+    });
+    const card = screen.getByRole("group", { name: "Approve merge_subagent_work" });
+    expect(card.textContent).toBe(
+      "Loadout wants to merge a helper's work into the project" +
+        "3 files (1 new, 2 changed, 0 deleted) into /home/user/my-app: Fix the parser" +
+        "Allow onceDeny",
+    );
+    expect(within(card).getAllByRole("button").map((button) => button.textContent)).toEqual(["Allow once", "Deny"]);
+
+    await userEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+    expect(api.answerPermission).toHaveBeenLastCalledWith(id, "m1", "allow");
+  });
+
   it("a card nobody answered is retired when the turn ends", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
@@ -312,6 +849,97 @@ describe("Chat", () => {
     expect(await screen.findByText("Not run: the turn ended")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
     expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("Halt retires every waiting card as halted and says so once", async () => {
+    let finish: (stop: string) => void = () => {};
+    api.sendChat.mockImplementation(() => new Promise<string>((resolve) => (finish = resolve)));
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("type it");
+
+    emit(id, { kind: "permission", id: "d", title: "type", action: "hello", reason: "" });
+    emit(id, {
+      kind: "elicit",
+      id: "ask-h",
+      server: "Question",
+      message: "Which window?",
+      mode: "form",
+      url: "",
+      fieldName: "answer",
+      fieldTitle: "Your answer",
+      secret: false,
+    });
+    emit(id, { kind: "done", stop: "halted" });
+    await act(async () => finish("halted"));
+
+    expect(screen.getByText("Not run: halted")).toBeInTheDocument();
+    expect(screen.getByText("Not answered: halted.")).toBeInTheDocument();
+    expect(screen.getAllByText(HALTED_LINE)).toHaveLength(1);
+    expect(screen.getByText(HALTED_LINE)).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+    expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("a turn that comes back halted settles its cards even if the done event was missed", async () => {
+    let finish: (stop: string) => void = () => {};
+    api.sendChat.mockImplementation(() => new Promise<string>((resolve) => (finish = resolve)));
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("type it");
+
+    emit(id, { kind: "permission", id: "e", title: "type", action: "hi", reason: "" });
+    await act(async () => finish("halted"));
+
+    expect(screen.getByText("Not run: halted")).toBeInTheDocument();
+    expect(screen.getByText(HALTED_LINE)).toBeInTheDocument();
+    expect(screen.queryByText("Not run: the turn ended")).toBeNull();
+  });
+
+  it("a Deny from a notification shows on its card", async () => {
+    holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("write both");
+
+    emit(id, { kind: "permission", id: "n1", title: "write", action: "n.txt", reason: "" });
+    emit(id, { kind: "permission", id: "n2", title: "edit", action: "m.txt", reason: "" });
+    emit(id, { kind: "answered", id: "n1", answer: "deny" });
+
+    expect(screen.getByRole("group", { name: "Approve write" })).toHaveTextContent("Denied");
+    const other = screen.getByRole("group", { name: "Approve edit" });
+    expect(other).not.toHaveTextContent("Denied");
+    expect(screen.getAllByRole("button", { name: "Allow once" })).toHaveLength(1);
+    expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("an answer that comes after the turn ended leaves the card ended", () => {
+    const ended: Item[] = [
+      { kind: "permission", id: "a", title: "write", action: "", reason: "", answer: "ended" },
+      { kind: "permission", id: "b", title: "write", action: "", reason: "", answer: "allow" },
+    ];
+    expect(applyEvent(ended, { kind: "answered", id: "a", answer: "deny" })).toEqual(ended);
+    const halted: Item[] = [{ kind: "permission", id: "h", title: "type", action: "", reason: "", answer: "halted" }];
+    expect(applyEvent(halted, { kind: "answered", id: "h", answer: "deny" })).toEqual(halted);
+    expect(applyEvent(ended, { kind: "answered", id: "b", answer: "deny" })[1]).toMatchObject({
+      answer: "deny",
+    });
+  });
+
+  it("a reply that hasn't started shows a thinking orb, and a lookup tool a searching one", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("what's new");
+
+    const orb = screen.getByRole("img", { name: "Thinking" });
+    expect(orb.tagName).toBe("CANVAS");
+    expect(orb.closest(".bubble")).toHaveAttribute("data-role", "assistant");
+    expect(screen.queryByText("…")).toBeNull();
+
+    emit(id, { kind: "tool", id: "t", title: "web_search", status: "pending", detail: "" });
+    expect(screen.getByRole("img", { name: "Looking it up" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Thinking" })).toBeNull();
+
+    emit(id, { kind: "text", text: "Here" });
+    expect(screen.queryByRole("img", { name: "Looking it up" })).toBeNull();
+    finish();
   });
 
   it("Stop cancels the turn in flight", async () => {
@@ -340,6 +968,43 @@ describe("Chat", () => {
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
   });
 
+  it("shows a helper's question after the turn ended, once, and sends its answer", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("look into it");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeDisabled());
+
+    const ask: ChatEvent = { kind: "permission", id: "h1", title: "write", action: "notes.md", reason: "" };
+    act(() => api.handler?.({ conversationId: id, event: ask, helper: true }));
+    act(() => api.handler?.({ conversationId: id, event: ask, helper: true }));
+    act(() => api.handler?.({ conversationId: "another-chat", event: { ...ask, id: "h2" }, helper: true }));
+
+    expect(screen.getAllByRole("group", { name: "Approve write" })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Allow once" }));
+    expect(api.answerPermission).toHaveBeenLastCalledWith(id, "h1", "allow");
+  });
+
+  it("a turn's end retires its own cards but leaves a helper's question open", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("go");
+
+    emit(id, { kind: "permission", id: "own", title: "write", action: "a.txt", reason: "" });
+    act(() =>
+      api.handler?.({
+        conversationId: id,
+        event: { kind: "permission", id: "h", title: "delete", action: "b.txt", reason: "" },
+        helper: true,
+      }),
+    );
+    act(() => finish());
+
+    const own = screen.getByRole("group", { name: "Approve write" });
+    await waitFor(() => expect(own).toHaveTextContent("Not run: the turn ended"));
+    const helper = screen.getByRole("group", { name: "Approve delete" });
+    expect(within(helper).getByRole("button", { name: "Allow once" })).toBeInTheDocument();
+  });
+
   it("shows the error and links to Settings", async () => {
     api.sendChat.mockRejectedValue("Add an xAI API key in Settings first.");
     const openSettings = vi.fn();
@@ -358,14 +1023,64 @@ describe("Chat", () => {
     api.sendChat.mockResolvedValue("end_turn");
     render(<Chat onOpenSettings={() => {}} />);
     const first = await startTurn("one");
-    await waitFor(() => expect(screen.getByRole("button", { name: "New chat" })).toBeEnabled());
+    const fresh = () =>
+      screen.getByRole("button", { name: "New chat" });
+    await waitFor(() => expect(fresh()).toBeEnabled());
 
-    await userEvent.click(screen.getByRole("button", { name: "New chat" }));
+    await userEvent.click(fresh());
     expect(api.closeChat).toHaveBeenCalledWith(first);
     expect(screen.queryByText("one")).toBeNull();
 
     const second = await startTurn("two");
     expect(second).not.toBe(first);
+  });
+
+  it("New chat still starts a fresh chat when the app refuses to close the old one, with no stray rejection", async () => {
+    const unhandled = vi.fn<(reason: unknown) => void>();
+    // The test runner's Node process reports a rejection nothing handled.
+    type Rejections = Record<"on" | "off", (event: "unhandledRejection", listener: (reason: unknown) => void) => void>;
+    const node = (globalThis as unknown as { process: Rejections }).process;
+    node.on("unhandledRejection", unhandled);
+    try {
+      // A paired browser's chat with no message sent: the computer refuses the close.
+      // The mock library handles a rejected promise it returns; this one is
+      // left for the page to handle, as a real call's is.
+      api.closeChat.mockImplementation(() => {
+        const real = Promise.reject(new Error("That chat isn't open in this browser."));
+        return { then: real.then.bind(real), catch: real.catch.bind(real) } as unknown as Promise<void>;
+      });
+      api.sendChat.mockResolvedValue("end_turn");
+      render(<Chat onOpenSettings={() => {}} remote />);
+      await userEvent.click(screen.getByRole("button", { name: "New chat" }));
+      expect(api.closeChat).toHaveBeenCalledTimes(1);
+      const refused = api.closeChat.mock.calls[0][0];
+      // Node reports an unhandled rejection after the microtasks drain.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled.mock.calls.map(([reason]) => String(reason))).toEqual([]);
+      expect(await startTurn("hi")).not.toBe(refused);
+    } finally {
+      node.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("the web app asks for a new chat's chips without the chat id, and with it once a message is sent", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    api.quickChips.mockResolvedValue([chip("start", "Start here", "Start here")]);
+    render(<Chat onOpenSettings={() => {}} remote />);
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    expect(within(row).getByRole("button", { name: "Start here" })).toBeVisible();
+    // The computer refuses chips for a chat this browser has not sent in.
+    expect(api.quickChips.mock.calls.map(([surface, id]) => [surface, id])).toEqual([["composer", undefined]]);
+
+    const id = await startTurn("hi");
+    emit(id, { kind: "done", stop: "end_turn" });
+    await waitFor(() => expect(api.quickChips).toHaveBeenLastCalledWith("composer", id, "", undefined));
+  });
+
+  it("the desktop window asks for a new chat's chips with the chat id", async () => {
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() => expect(api.quickChips).toHaveBeenCalled());
+    expect(api.quickChips).toHaveBeenLastCalledWith("composer", expect.stringMatching(/^shell-/), "", undefined);
   });
 
   it("Shift+Enter adds a line instead of sending", async () => {
@@ -377,7 +1092,8 @@ describe("Chat", () => {
 
   it("the conversation log takes keyboard focus, so a long one can be scrolled", async () => {
     render(<Chat onOpenSettings={() => {}} />);
-    await userEvent.tab();
+    // Hangout tab strip and TALK/TYPE sit above the log in tab order.
+    screen.getByRole("log").focus();
     expect(screen.getByRole("log")).toHaveFocus();
   });
 });
@@ -410,54 +1126,76 @@ describe("applyEvent", () => {
     ]);
   });
 
-  it("sends with the picked chip, and the chips wait while a reply runs", async () => {
+  it("the app picks how each message runs: there are no mode or approval chips", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
-    await userEvent.click(screen.getByRole("button", { name: "btw" }));
-    expect(screen.getByRole("button", { name: "btw" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("Message")).toHaveAttribute("placeholder", "Ask on the side");
+    // The composer names the product, not the model.
+    expect(screen.getByLabelText("Message")).toHaveAttribute("placeholder", "Message Loadout");
+    for (const name of ["Chat", "Plan", "btw", "Ask", "Auto", "Always"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
     const id = await startTurn("what does main.rs do");
-    expect(api.sendChat).toHaveBeenCalledWith(id, "what does main.rs do", "btw");
-    expect(screen.getByRole("button", { name: "Chat" })).toBeDisabled();
+    expect(api.sendChat).toHaveBeenCalledWith(id, "what does main.rs do", undefined);
     finish();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Chat" })).toBeEnabled());
   });
 
-  it("the approvals chips show and save Settings' approvals", async () => {
+  it("the composer shows no model or effort and has nothing to pick one with", async () => {
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    expect(screen.queryByText(/effort/i)).toBeNull();
+    expect(screen.queryByText(/grok-\d/i)).toBeNull();
+    expect(screen.queryByText(/^model/i)).toBeNull();
+    expect(screen.queryByLabelText(/model/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /model|effort|grok/i })).toBeNull();
+    expect(document.querySelector(".chips")).toBeNull();
+  });
+
+  it("Stop asking me allows the step and moves the setting to only ask for risky things", async () => {
+    holdTurn();
+    api.answerPermission.mockResolvedValue();
     api.saveSettings.mockResolvedValue({ ...SETTINGS, approvals: "auto" });
     render(<Chat onOpenSettings={() => {}} />);
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Ask" })).toHaveAttribute("aria-pressed", "true"),
-    );
-    expect(screen.getByRole("button", { name: "Auto" })).toHaveAttribute(
-      "title",
-      "A quick check approves routine steps and asks you about the rest.",
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Auto" }));
-    expect(api.saveSettings).toHaveBeenCalledWith("grok-4.7", true, "", "auto", false);
-    expect(screen.getByRole("button", { name: "Auto" })).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    const id = await startTurn("write a note");
+    emit(id, { kind: "permission", id: "call-1", title: "write", action: "note.txt", reason: "" });
+    await userEvent.click(screen.getByRole("button", { name: "Stop asking me" }));
+    expect(api.answerPermission).toHaveBeenCalledWith(id, "call-1", "allow");
+    expect(api.saveSettings).toHaveBeenCalledWith(true, "", "auto", false);
+    expect(await screen.findByText(STOP_ASKING_DONE)).toBeVisible();
+    emit(id, { kind: "permission", id: "call-2", title: "run", action: "make", reason: "" });
+    // Only ask for risky things now: the next card has nothing looser to offer.
+    expect(screen.queryByRole("button", { name: "Stop asking me" })).toBeNull();
   });
 
-  it("on the web app the approvals chips only show the computer's", async () => {
+  it("Stop asking me keeps a setting that changed after the chat loaded", async () => {
+    holdTurn();
+    api.answerPermission.mockResolvedValue();
+    api.saveSettings.mockResolvedValue({ ...SETTINGS, closeToTray: false, approvals: "auto" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    const id = await startTurn("write a note");
+    // Close to tray went off elsewhere while this chat stayed open.
+    api.getSettings.mockResolvedValue({ ...SETTINGS, closeToTray: false });
+    emit(id, { kind: "permission", id: "call-1", title: "write", action: "note.txt", reason: "" });
+    await userEvent.click(screen.getByRole("button", { name: "Stop asking me" }));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(false, "", "auto", false));
+    api.getSettings.mockResolvedValue(SETTINGS);
+  });
+
+  it("on the web app the permission card has no Stop asking me", async () => {
+    holdTurn();
     render(<Chat onOpenSettings={() => {}} remote />);
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Ask" })).toHaveAttribute("aria-pressed", "true"),
-    );
-    for (const name of ["Ask", "Auto", "Always"]) {
-      expect(screen.getByRole("button", { name })).toBeDisabled();
-      expect(screen.getByRole("button", { name })).toHaveAttribute(
-        "title",
-        "Set in Loadout on your computer.",
-      );
-    }
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    const id = await startTurn("write a note");
+    emit(id, { kind: "permission", id: "call-1", title: "write", action: "note.txt", reason: "" });
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Stop asking me" })).toBeNull();
   });
 
-  it("a plan card approves, then the chip goes back to Chat", async () => {
+  it("a plan card approves, and the next message is read afresh", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
-    await userEvent.click(screen.getByRole("button", { name: "Plan" }));
     const id = await startTurn("tidy the build");
-    expect(api.sendChat).toHaveBeenCalledWith(id, "tidy the build", "plan");
     emit(id, { kind: "plan", text: "1. Read build.rs" });
     emit(id, {
       kind: "elicit",
@@ -470,17 +1208,35 @@ describe("applyEvent", () => {
       fieldTitle: "",
       secret: false,
     });
-    const card = screen.getByRole("group", { name: "Grok's plan" });
+    const card = screen.getByRole("group", { name: "The plan" });
     expect(card).toHaveTextContent("1. Read build.rs");
     expect(screen.getAllByText("1. Read build.rs")).toHaveLength(1);
     expect(screen.queryByText("…")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Approve plan" }));
     expect(api.answerElicit).toHaveBeenCalledWith(id, "plan-1", "accept", null, "");
-    expect(card).toHaveTextContent("Approved. Grok can make the changes now.");
+    expect(card).toHaveTextContent("Approved. Loadout can make the changes now.");
     finish();
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true"),
-    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeVisible());
+    holdTurn();
+    await startTurn("thanks");
+    expect(api.sendChat).toHaveBeenLastCalledWith(id, "thanks", undefined);
+  });
+
+  it("/plan makes only the next message plan first", async () => {
+    api.runSlash.mockResolvedValue({ kind: "mode", mode: "plan", text: null });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/plan{Enter}");
+    expect(await screen.findByText(PLAN_NEXT)).toBeVisible();
+    expect(api.sendChat).not.toHaveBeenCalled();
+    let finish = holdTurn();
+    const id = await startTurn("set up the release pipeline");
+    expect(api.sendChat).toHaveBeenLastCalledWith(id, "set up the release pipeline", "plan");
+    finish();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeVisible());
+    finish = holdTurn();
+    await startTurn("and what about docs?");
+    expect(api.sendChat).toHaveBeenLastCalledWith(id, "and what about docs?", undefined);
+    finish();
   });
 
   it("a question takes a typed answer, and an unanswered one ends with the turn", async () => {
@@ -503,7 +1259,7 @@ describe("applyEvent", () => {
     expect(send).toBeDisabled();
     await userEvent.type(screen.getByLabelText("Your answer"), "blue{Enter}");
     expect(api.answerElicit).toHaveBeenCalledWith(id, "ask-1", "accept", "answer", "blue");
-    expect(screen.getByRole("group", { name: "Grok asks" })).toHaveTextContent("Sent.");
+    expect(screen.getByRole("group", { name: "Loadout asks" })).toHaveTextContent("Sent.");
     emit(id, ask(2));
     finish();
     await waitFor(() =>
@@ -525,19 +1281,625 @@ describe("applyEvent", () => {
         "Add your API key" +
         "No key yet? Make one at console.x.ai.",
     );
-    expect(screen.queryByText("Ask Grok anything.")).toBeNull();
+    expect(screen.queryByText("Ask Loadout anything.")).toBeNull();
     await userEvent.click(within(card).getByRole("button", { name: "Add your API key" }));
     expect(onSignIn).toHaveBeenCalledTimes(1);
   });
 
-  it("signed out on the web app, it says to add the key on the computer", async () => {
+  it("where Grok sign-in is offered, the card leads with it, and a sign-in hides the card", async () => {
+    api.getSettings.mockResolvedValue({ ...SETTINGS, hasApiKey: false });
+    const onSignIn = vi.fn();
+    const { unmount } = render(<Chat onOpenSettings={() => {}} onSignIn={onSignIn} grokSignIn />);
+    const card = await screen.findByRole("region", { name: "Sign in" });
+    expect(card).toHaveTextContent("Sign in with your Grok account, or add an xAI API key.");
+    await userEvent.click(within(card).getByRole("button", { name: "Sign in with Grok" }));
+    expect(onSignIn).toHaveBeenCalledTimes(1);
+    unmount();
+    api.getSettings.mockResolvedValue({
+      ...SETTINGS,
+      hasApiKey: false,
+      signedIn: { name: "Sam", email: null },
+    });
+    render(<Chat onOpenSettings={() => {}} grokSignIn />);
+    expect(await screen.findByText(CHAT_EMPTY)).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();
+  });
+
+  it("signed out on the web app, it says to sign in on the computer", async () => {
     api.getSettings.mockResolvedValue({ ...SETTINGS, hasApiKey: false });
     render(<Chat onOpenSettings={() => {}} remote />);
     expect(
       await screen.findByText(
-        "Loadout on your computer has no API key yet. Add one there, then chat here.",
+        "Loadout on your computer isn't signed in yet. Sign in there, then chat here.",
       ),
     ).toBeVisible();
     expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();
+  });
+});
+
+describe("Chat history", () => {
+  beforeEach(() => {
+    for (const fn of [api.sendChat, api.closeChat, api.cancelChat, api.loadChat]) fn.mockReset();
+    api.closeChat.mockResolvedValue();
+    api.getSettings.mockReset().mockResolvedValue(SETTINGS);
+    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.handler = null;
+  });
+
+  it("turns a saved chat's lines into bubbles and one muted tools line", () => {
+    expect(itemsFrom(SAVED)).toEqual([
+      { kind: "user", text: "pick a paint colour" },
+      { kind: "tools", text: "read_file, web_search" },
+      { kind: "assistant", text: "Try **blue**.", streaming: false },
+    ]);
+  });
+
+  it("reopens the last chat on mount, and the next message carries it on", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    expect(await screen.findByText("pick a paint colour")).toHaveAttribute("data-role", "user");
+    expect(screen.getByText("Tools ran: read_file, web_search")).toHaveAttribute("data-role", "tools");
+    expect(screen.getByText("blue").closest("[data-role]")).toHaveAttribute("data-role", "assistant");
+    await startTurn("and the trim?");
+    expect(api.sendChat).toHaveBeenLastCalledWith("shell-saved", "and the trim?", undefined);
+  });
+
+  it("the web app never asks for the desktop's last chat", async () => {
+    render(<Chat onOpenSettings={() => {}} remote />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    expect(api.getLastChat).not.toHaveBeenCalled();
+  });
+
+  it("a last chat that arrives after the person started typing away stays out", async () => {
+    let arrive: (t: Transcript) => void = () => {};
+    api.getLastChat.mockReturnValue(new Promise((resolve) => (arrive = resolve)));
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("fresh question");
+    await act(async () => arrive(SAVED));
+    expect(screen.queryByText("pick a paint colour")).toBeNull();
+    expect(id).not.toBe("shell-saved");
+  });
+
+  it("a chat opened from History replaces the open one, which stays saved", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    api.loadChat.mockResolvedValue(SAVED);
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const first = await startTurn("hello");
+    await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());
+
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(await screen.findByText("pick a paint colour")).toBeVisible();
+    expect(api.closeChat).toHaveBeenCalledWith(first);
+    expect(api.loadChat).toHaveBeenCalledWith("shell-saved");
+    expect(screen.queryByText("hello")).toBeNull();
+
+    // Picking the chat that is already open does nothing.
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 2 }} />);
+    expect(api.loadChat).toHaveBeenCalledTimes(1);
+    expect(api.closeChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("opening a chat waits for a running reply", async () => {
+    const finish = holdTurn();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await startTurn("hello");
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(screen.getByText(OPEN_BUSY)).toBeVisible();
+    expect(api.loadChat).not.toHaveBeenCalled();
+    expect(api.closeChat).not.toHaveBeenCalled();
+    finish();
+  });
+
+  it("deleting the open chat in History starts a new one; another chat's delete changes nothing", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} deleted={{ id: "shell-other", n: 1 }} />);
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+    rerender(<Chat onOpenSettings={() => {}} deleted={{ id: "shell-saved", n: 2 }} />);
+    await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
+    const id = await startTurn("new start");
+    expect(id).not.toBe("shell-saved");
+  });
+
+  it("Clear chat deletes the open chat's saved history and starts a new one", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.deleteChat.mockResolvedValue();
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
+    expect(api.deleteChat).toHaveBeenCalledWith("shell-saved");
+    const id = await startTurn("new start");
+    expect(id).not.toBe("shell-saved");
+  });
+
+  it("Clear chat keeps the chat on screen when the delete fails", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.deleteChat.mockRejectedValue("disk is read-only");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    expect(await screen.findByText(/disk is read-only/)).toBeVisible();
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+  });
+
+  it("a bubble's ··· deletes that message after asking, and a reply goes with its tools", async () => {
+    api.getLastChat.mockResolvedValue({
+      ...SAVED,
+      lines: [...SAVED.lines, { role: "user", text: "and the trim?" }, { role: "assistant", text: "White." }],
+    });
+    api.forgetMessage.mockReset().mockResolvedValue(true);
+    render(<Chat onOpenSettings={() => {}} />);
+    const ask = await screen.findByText("and the trim?");
+    await userEvent.click(within(ask).getByRole("button", { name: MESSAGE_MENU_LABEL }));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    const dialog = screen.getByRole("alertdialog", { name: DELETE_ASK_QUESTION });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Keep" }));
+    expect(api.forgetMessage).not.toHaveBeenCalled();
+    expect(screen.getByText("and the trim?")).toBeVisible();
+
+    await userEvent.click(within(ask).getByRole("button", { name: MESSAGE_MENU_LABEL }));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(api.forgetMessage).toHaveBeenCalledWith("shell-saved", {
+      from: 3,
+      to: 4,
+      reply: false,
+      text: "and the trim?",
+      later: 0,
+    });
+    await waitFor(() => expect(screen.queryByText("and the trim?")).toBeNull());
+
+    // The ··· adds nothing to a bubble's text, so copying or reading it
+    // gives the message alone.
+    expect(screen.getByText("White.").closest(".bubble")?.textContent).toBe("White.");
+
+    // Right-click on a reply: the whole reply to "pick a paint colour" goes,
+    // its tools line included, now that "White." answers it too.
+    fireEvent.contextMenu(screen.getByText("White."));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    expect(screen.getByRole("alertdialog", { name: DELETE_REPLY_QUESTION })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(api.forgetMessage).toHaveBeenLastCalledWith(
+      "shell-saved",
+      expect.objectContaining({ reply: true, text: "pick a paint colour", later: 0 }),
+    );
+    await waitFor(() => expect(screen.queryByText("White.")).toBeNull());
+    expect(screen.queryByText("Tools ran: read_file, web_search")).toBeNull();
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+  });
+
+  it("a delete the saved chat refuses keeps the message and says why", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.forgetMessage.mockReset().mockRejectedValue("Wait for the reply to finish, then delete the message.");
+    render(<Chat onOpenSettings={() => {}} />);
+    fireEvent.contextMenu(await screen.findByText("pick a paint colour"));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(await screen.findByText(/Wait for the reply to finish/)).toBeVisible();
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+  });
+
+  it("the web app offers no message menu", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} remote />);
+    await startTurn("hello from the phone");
+    expect(screen.queryByRole("button", { name: MESSAGE_MENU_LABEL })).toBeNull();
+  });
+
+  it("deleting a message above two answered questions leaves each card its own answer", async () => {
+    const finish = holdTurn();
+    api.forgetMessage.mockReset().mockResolvedValue(true);
+    api.answerElicit.mockReset().mockResolvedValue();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("plan it");
+    emit(id, question("ask-a", "Which colour?", ["Red", "Blue"]));
+    await userEvent.click(screen.getByRole("button", { name: "Red" }));
+    emit(id, question("ask-b", "Which size?", ["Small", "Large"]));
+    await userEvent.click(screen.getByRole("button", { name: "Large" }));
+    finish();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).toBeNull());
+    const cards = () => screen.getAllByRole("group", { name: "Loadout asks" }).map((card) => card.textContent);
+    expect(cards()).toEqual(["Loadout asksWhich colour?You chose: Red", "Loadout asksWhich size?You chose: Large"]);
+
+    const ask = screen.getByText("plan it");
+    await userEvent.click(within(ask).getByRole("button", { name: MESSAGE_MENU_LABEL }));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByText("plan it")).toBeNull());
+    expect(cards()).toEqual(["Loadout asksWhich colour?Sent.", "Loadout asksWhich size?Sent."]);
+  });
+
+  it("deleting a message above two open questions keeps what was typed out of the other card", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    api.forgetMessage.mockReset().mockResolvedValue(true);
+    api.answerElicit.mockReset().mockResolvedValue();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("go");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).toBeNull());
+    act(() => api.handler?.({ conversationId: id, event: question("ask-a", "Token for A?", []), helper: true }));
+    act(() => api.handler?.({ conversationId: id, event: question("ask-b", "Token for B?", []), helper: true }));
+    const boxes = () => screen.getAllByRole<HTMLInputElement>("textbox", { name: "Answer" }).map((box) => box.value);
+    await userEvent.type(screen.getAllByRole("textbox", { name: "Answer" })[0], "alpha-for-A");
+    expect(boxes()).toEqual(["alpha-for-A", ""]);
+
+    const ask = screen.getByText("go");
+    await userEvent.click(within(ask).getByRole("button", { name: MESSAGE_MENU_LABEL }));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByText("go")).toBeNull());
+    expect(boxes()).toEqual(["", ""]);
+
+    const second = screen.getAllByRole("group", { name: "Loadout asks" })[1];
+    expect(second).toHaveTextContent("Token for B?");
+    expect(within(second).getByRole("button", { name: "Send" })).toBeDisabled();
+    await userEvent.type(within(second).getByRole("textbox", { name: "Answer" }), "beta-for-B");
+    await userEvent.click(within(second).getByRole("button", { name: "Send" }));
+    expect(api.answerElicit.mock.calls).toEqual([[id, "ask-b", "accept", "answer", "beta-for-B"]]);
+  });
+
+  it("Show earlier loads more of a long chat's start", async () => {
+    api.getLastChat.mockResolvedValue({ ...SAVED, earlier: 5 });
+    api.loadChat.mockResolvedValue({
+      ...SAVED,
+      lines: [{ role: "user", text: "the very first ask" }, ...SAVED.lines],
+      earlier: 0,
+    });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Show earlier messages (5)" }));
+    expect(api.loadChat).toHaveBeenCalledWith("shell-saved", 3 + EARLIER_STEP);
+    expect(await screen.findByText("the very first ask")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Show earlier/ })).toBeNull();
+  });
+});
+
+describe("Chat queue", () => {
+  /** Each sendChat waits until its `end(stop)` is called. */
+  function turns() {
+    const ends: ((stop: string) => void)[] = [];
+    api.sendChat.mockReset().mockImplementation(() => new Promise<string>((resolve) => ends.push(resolve)));
+    return ends;
+  }
+
+  beforeEach(() => {
+    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.quickChips.mockReset().mockResolvedValue([]);
+    api.chipOutcome.mockReset().mockResolvedValue(true);
+    api.getSettings.mockReset().mockResolvedValue(SETTINGS);
+    api.cancelChat.mockReset().mockResolvedValue();
+    api.steerChat.mockReset();
+    api.sideChat.mockReset();
+    api.tellMain.mockReset();
+    api.readTurn.mockReset().mockImplementation((text: string) =>
+      Promise.resolve({ route: "queue", text, ack: "Queued for after this reply" }),
+    );
+  });
+
+  it("a side question gets its own answer beside the reply, never in the chat", async () => {
+    const ends = turns();
+    let endSide: (stop: string) => void = () => {};
+    api.sideChat.mockImplementation(() => new Promise<string>((resolve) => (endSide = resolve)));
+    api.readTurn.mockResolvedValue({ route: "side", text: "what is a lockfile", ack: "Answering on the side" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "update the deps{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText("Message"), "btw what is a lockfile{Enter}");
+    await waitFor(() =>
+      expect(api.sideChat).toHaveBeenCalledWith(id, `${id}~side-1`, "what is a lockfile", "update the deps", ""),
+    );
+    const card = screen.getByRole("group", { name: "On the side: what is a lockfile" });
+    expect(card).toHaveTextContent("Answering…");
+    emit(`${id}~side-1`, { kind: "text", text: "It pins exact versions." });
+    expect(card).toHaveTextContent("It pins exact versions.");
+    await act(async () => endSide("end_turn"));
+    // The main chat never shows the side answer, and nothing queued.
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    api.tellMain.mockResolvedValue({ text: "About lockfiles: It pins exact versions.", steered: true });
+    await userEvent.click(screen.getByRole("button", { name: "Tell the main task" }));
+    expect(api.tellMain).toHaveBeenCalledWith(id, "what is a lockfile", "It pins exact versions.");
+    await waitFor(() => expect(screen.queryByRole("group", { name: /On the side/ })).toBeNull());
+    await act(async () => ends[0]("end_turn"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a correction during a reply steers it, and stop stops it", async () => {
+    turns();
+    api.steerChat.mockResolvedValue(true);
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "write the docs{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    api.readTurn.mockResolvedValueOnce({ route: "steer", text: "use British spelling", ack: "Added to the reply" });
+    await userEvent.type(screen.getByLabelText("Message"), "use British spelling{Enter}");
+    await waitFor(() => expect(api.steerChat).toHaveBeenCalledWith(id, "use British spelling"));
+    api.readTurn.mockResolvedValueOnce({ route: "stop", text: "stop", ack: "Stopping" });
+    await userEvent.type(screen.getByLabelText("Message"), "stop{Enter}");
+    await waitFor(() => expect(api.cancelChat).toHaveBeenCalledWith(id));
+  });
+
+  it("lines up messages sent during a reply, reports them, and sends the next when it ends", async () => {
+    const ends = turns();
+    const onQueue = vi.fn();
+    render(<Chat onOpenSettings={() => {}} onQueue={onQueue} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, "then deploy");
+    expect(screen.getByRole("button", { name: "Send" })).toBeVisible();
+    await userEvent.type(box, "{Enter}");
+    await userEvent.type(box, "and tell me{Enter}");
+    expect(box).toHaveValue("");
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    // Queued messages are not in the chat log until they send.
+    expect(screen.queryByText("then deploy")).toBeNull();
+    const id = api.sendChat.mock.calls[0][0];
+    expect(onQueue).toHaveBeenLastCalledWith(id, ["then deploy", "and tell me"]);
+    await act(async () => ends[0]("end_turn"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1][1]).toBe("then deploy");
+    expect(onQueue).toHaveBeenLastCalledWith(id, ["and tell me"]);
+    await act(async () => ends[1]("end_turn"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(3));
+    expect(api.sendChat.mock.calls[2][1]).toBe("and tell me");
+    await act(async () => ends[2]("end_turn"));
+    expect(onQueue).toHaveBeenLastCalledWith(id, []);
+  });
+
+  it("Clear chat mid-reply opens a chat that shows Send, and the old chat's waiting words go back in the box", async () => {
+    const ends = turns();
+    api.deleteChat.mockResolvedValue();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const old = api.sendChat.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(api.deleteChat).toHaveBeenCalledWith(old));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).toBeNull());
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+    // The old reply ends after the new chat is open: nothing of it sends here.
+    await act(async () => ends[0]("end_turn"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+  });
+
+  it("a message typed in the new chat while the old reply ends goes to the new chat", async () => {
+    const ends = turns();
+    api.deleteChat.mockResolvedValue();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const old = api.sendChat.mock.calls[0][0];
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(api.deleteChat).toHaveBeenCalledWith(old));
+    await userEvent.type(screen.getByLabelText("Message"), "fresh start");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    await act(async () => ends[0]("cancelled"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1][0]).not.toBe(old);
+    expect(api.sendChat.mock.calls[1][1]).toBe("fresh start");
+  });
+
+  it("Stop puts what waited back in the box instead of sending it", async () => {
+    const ends = turns();
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(api.cancelChat).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+    await act(async () => ends[0]("cancelled"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("Remove puts the words back in an empty box; Steer now hands them to the reply", async () => {
+    const ends = turns();
+    api.steerChat.mockResolvedValue(true);
+    const onQueue = vi.fn();
+    const chat = (queueAct?: QueueAct) => <Chat onOpenSettings={() => {}} onQueue={onQueue} queueAct={queueAct} />;
+    const { rerender } = render(chat());
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    await userEvent.type(screen.getByLabelText("Message"), "use staging{Enter}");
+    rerender(chat({ op: "remove", index: 0, n: 1 }));
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("then deploy"));
+    // The queue is reported from an effect, which can run after the box shows the words.
+    await waitFor(() => expect(onQueue).toHaveBeenLastCalledWith(id, ["use staging"]));
+    rerender(chat({ op: "steer", index: 0, n: 2 }));
+    await waitFor(() => expect(api.steerChat).toHaveBeenCalledWith(id, "use staging"));
+    await waitFor(() => expect(onQueue).toHaveBeenLastCalledWith(id, []));
+    // Steered words show as sent; nothing more goes when the reply ends.
+    expect(screen.getByText("use staging")).toBeVisible();
+    await act(async () => ends[0]("end_turn"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Halt puts the queue back in the box", async () => {
+    const ends = turns();
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    await act(async () => ends[0]("halted"));
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("as the Code tab's agent window it starts on a new session, not the last chat", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    const onConversation = vi.fn();
+    const onBusy = vi.fn();
+    const view = render(<Chat onOpenSettings={() => {}} embedded onConversation={onConversation} onBusy={onBusy} />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    expect(api.getLastChat).not.toHaveBeenCalled();
+    expect(screen.queryByText("pick a paint colour")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Agent" })).toHaveClass("chat", "embedded");
+    expect(screen.getByText(AGENT_EMPTY)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New session" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New chat" })).not.toBeInTheDocument();
+    expect(onConversation).toHaveBeenCalledTimes(1);
+    const first = onConversation.mock.calls[0][0];
+    expect(first).toMatch(/^shell-/);
+    expect(onBusy).toHaveBeenLastCalledWith(false);
+
+    // A reply reports busy while it runs; a message typed meanwhile waits in sight.
+    const finish = holdTurn();
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "add a health check{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledWith(first, "add a health check", undefined));
+    expect(onBusy).toHaveBeenLastCalledWith(true);
+    api.readTurn.mockResolvedValue({ route: "queue", text: "then deploy", ack: "" });
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "then deploy{Enter}");
+    expect(await screen.findByText(waitingLine(1))).toBeInTheDocument();
+    expect(waitingLine(1)).toBe("1 message waits for this reply to end.");
+    expect(waitingLine(3)).toBe("3 messages wait for this reply to end.");
+    api.sendChat.mockResolvedValue("end_turn");
+    await act(async () => finish());
+    await waitFor(() => expect(onBusy).toHaveBeenLastCalledWith(false));
+
+    // A typed command tells the tab, which reads the open project again.
+    const onRan = vi.fn();
+    api.runSlash.mockReset().mockResolvedValue({ kind: "notice", text: "Bound /work/dawn" });
+    view.rerender(
+      <Chat onOpenSettings={() => {}} embedded onConversation={onConversation} onBusy={onBusy} onRan={onRan} />,
+    );
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "/project bind /work/dawn{Enter}");
+    expect(await screen.findByText("Bound /work/dawn")).toBeInTheDocument();
+    expect(api.runSlash).toHaveBeenCalledWith("/project bind /work/dawn", first);
+    expect(onRan).toHaveBeenCalledTimes(1);
+
+    // New session tells the tab the session changed.
+    await userEvent.click(screen.getByRole("button", { name: "New session" }));
+    await waitFor(() => expect(onConversation).toHaveBeenCalledTimes(2));
+    expect(onConversation.mock.calls[1][0]).not.toBe(first);
+  });
+
+  it("in the agent window a queued message is sent with no mode when the reply ends", async () => {
+    const ends = turns();
+    render(<Chat onOpenSettings={() => {}} embedded />);
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "add a health check{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "then deploy{Enter}");
+    expect(await screen.findByText("1 message waits for this reply to end.")).toBeInTheDocument();
+    await act(async () => ends[0]("end_turn"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls).toEqual([
+      [id, "add a health check", undefined],
+      [id, "then deploy", undefined],
+    ]);
+  });
+
+  it("an embedded plan card sends the edited plan, or sends it back for changes", async () => {
+    turns();
+    api.answerElicit.mockReset().mockResolvedValue();
+    render(<Chat onOpenSettings={() => {}} embedded lead />);
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "tidy the build{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    const plan = (cardId: string): ChatEvent => ({
+      kind: "elicit",
+      id: cardId,
+      server: "Plan",
+      message: "1. Read build.rs",
+      mode: "form",
+      url: "",
+      fieldName: null,
+      fieldTitle: "",
+      secret: false,
+    });
+    emit(id, plan("plan-1"));
+    const first = screen.getByRole("group", { name: "The plan" });
+    await userEvent.type(within(first).getByRole("textbox", { name: "What should change" }), "add a test step");
+    await userEvent.click(within(first).getByRole("button", { name: "Ask for changes" }));
+    expect(api.answerElicit).toHaveBeenLastCalledWith(
+      id,
+      "plan-1",
+      "accept",
+      "reply",
+      "Change the plan: add a test step",
+    );
+    expect(first).toHaveTextContent("Sent back for changes.");
+
+    emit(id, plan("plan-2"));
+    const second = screen.getAllByRole("group", { name: "The plan" })[1];
+    const box = within(second).getByRole("textbox", { name: "Plan" });
+    expect(box).toHaveValue("1. Read build.rs");
+    await userEvent.type(box, "{Enter}2. Run the tests");
+    await userEvent.click(within(second).getByRole("button", { name: "Approve plan" }));
+    expect(api.answerElicit).toHaveBeenLastCalledWith(
+      id,
+      "plan-2",
+      "accept",
+      "plan",
+      "1. Read build.rs\n2. Run the tests",
+    );
+    expect(second).toHaveTextContent("2. Run the testsApproved. Loadout can make the changes now.");
+    expect(api.answerElicit).toHaveBeenCalledTimes(2);
+  });
+
+  it("a session in the agent window that has no lead keeps the plain plan card", async () => {
+    turns();
+    api.answerElicit.mockReset().mockResolvedValue();
+    render(<Chat onOpenSettings={() => {}} embedded />);
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "tidy the build{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    emit(id, {
+      kind: "elicit",
+      id: "plan-1",
+      server: "Plan",
+      message: "1. Read build.rs",
+      mode: "form",
+      url: "",
+      fieldName: null,
+      fieldTitle: "",
+      secret: false,
+    });
+    const card = screen.getByRole("group", { name: "The plan" });
+    expect(within(card).queryByRole("textbox")).toBeNull();
+    await userEvent.click(within(card).getByRole("button", { name: "Approve plan" }));
+    expect(api.answerElicit).toHaveBeenLastCalledWith(id, "plan-1", "accept", null, "");
+  });
+
+  it("view-plan in the agent window shows the saved plan", async () => {
+    api.codeSessionPlan.mockReset().mockResolvedValueOnce("1. Edited").mockResolvedValueOnce(null);
+    api.runSlash.mockReset().mockResolvedValue({ kind: "viewPlan" });
+    const onConversation = vi.fn();
+    render(<Chat onOpenSettings={() => {}} embedded onConversation={onConversation} />);
+    await waitFor(() => expect(onConversation).toHaveBeenCalledTimes(1));
+    const id = onConversation.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "/view-plan{Enter}");
+    expect(await screen.findByRole("status", { name: "/view-plan result" })).toHaveTextContent("1. Edited");
+    expect(api.codeSessionPlan).toHaveBeenLastCalledWith(id);
+    // No saved plan and no plan card: it says there is none.
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "/view-plan{Enter}");
+    await waitFor(() => expect(screen.getAllByRole("status", { name: "/view-plan result" })).toHaveLength(2));
+    expect(screen.getAllByRole("status", { name: "/view-plan result" })[1]).toHaveTextContent(
+      "No plan yet. Use Plan mode.",
+    );
+    expect(NO_PLAN).toBe("No plan yet. Use Plan mode.");
+    expect(api.codeSessionPlan).toHaveBeenCalledTimes(2);
+  });
+
+  it("view-plan in the Chat tab never reads a saved plan", async () => {
+    api.codeSessionPlan.mockReset().mockResolvedValue("1. Edited");
+    api.runSlash.mockReset().mockResolvedValue({ kind: "viewPlan" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/view-plan{Enter}");
+    expect(await screen.findByRole("status", { name: "/view-plan result" })).toHaveTextContent(
+      "No plan yet. Use Plan mode.",
+    );
+    expect(api.codeSessionPlan).not.toHaveBeenCalled();
   });
 });

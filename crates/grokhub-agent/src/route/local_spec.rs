@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -40,9 +39,15 @@ impl DraftArgs {
                 a.extend([n.clone(), if self.on_gpu { "all" } else { "0" }.to_string()]);
             }
         }
-        // DFlash and MTP know their own draft length.
-        if let (Some(f), DraftKind::Simple) = (&self.flags.max, self.kind) {
-            a.extend([f.clone(), ld::DRAFT_MAX.to_string()]);
+        // DFlash and MTP heads inside the model know their own draft length;
+        // a separate MTP heads file drafts a few tokens ahead.
+        let max = match self.kind {
+            DraftKind::Simple => Some(ld::DRAFT_MAX),
+            DraftKind::Mtp if self.model.is_some() => Some(ld::MTP_FILE_DRAFT_MAX),
+            _ => None,
+        };
+        if let (Some(f), Some(n)) = (&self.flags.max, max) {
+            a.extend([f.clone(), n.to_string()]);
         }
         a
     }
@@ -60,11 +65,13 @@ pub fn fits(
     drafter: &GgufMeta,
 ) -> Option<bool> {
     let (gpu, ram) = autoconfig::budgets(p, a.backend, state);
-    let model =
-        meta.file_mb + autoconfig::kv_mb(meta, a.ctx, a.kv) + autoconfig::overhead_mb(a.ctx);
+    let seqs = a.run.seqs();
+    let model = meta.file_mb
+        + autoconfig::kv_mb_for(meta, a.ctx, a.kv, seqs)
+        + autoconfig::overhead_mb(a.ctx);
     let need = model
         + drafter.file_mb
-        + autoconfig::kv_mb(drafter, a.ctx, a.kv)
+        + autoconfig::kv_mb_for(drafter, a.ctx, a.kv, seqs)
         + autoconfig::overhead_mb(a.ctx);
     if gpu == 0 {
         return (need <= ram).then_some(false);
@@ -102,15 +109,20 @@ struct Candidate {
     name: String,
 }
 
-/// `models/drafters/` next to the model.
-pub fn drafters_dir(model: &Path) -> PathBuf {
-    model
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(ld::DRAFTERS_DIR)
+/// Every folder a drafter for `model` may sit in: beside the model, the
+/// shared `~/GrokHub/models/drafters`, then the desktop app's older
+/// `{config}/models/drafters` (`tune_dir` is the config folder).
+pub fn drafter_dirs(model: &Path, tune_dir: &Path) -> Vec<PathBuf> {
+    let legacy = tune_dir.join("models").join(ld::DRAFTERS_DIR);
+    ld::drafter_dirs(model, ld::models_root().as_deref(), Some(&legacy))
 }
 
-fn candidate(model: &Path, meta: &GgufMeta, flags: &DraftFlags) -> Option<Candidate> {
+fn candidate(
+    model: &Path,
+    meta: &GgufMeta,
+    flags: &DraftFlags,
+    dirs: &[PathBuf],
+) -> Option<Candidate> {
     if meta.nextn_layers > 0 && flags.supports(DraftKind::Mtp) {
         return Some(Candidate {
             kind: DraftKind::Mtp,
@@ -119,12 +131,23 @@ fn candidate(model: &Path, meta: &GgufMeta, flags: &DraftFlags) -> Option<Candid
             name: "the model's own prediction heads".into(),
         });
     }
-    let dir = drafters_dir(model);
     let file = model.file_name()?.to_str()?;
     if let Some(pair) = ld::pair_for_file(file) {
-        // An unreadable header can't pass the tokenizer and room checks.
-        let path = dir.join(pair.drafter.file);
-        let m = header(&path)?;
+        // The first folder that holds the file; an unreadable header can't
+        // pass the tokenizer and room checks.
+        let path = dirs
+            .iter()
+            .map(|d| d.join(pair.drafter.file))
+            .find(|p| p.is_file())?;
+        // An MTP heads file whose header this reader can't parse still runs
+        // (llama.cpp loads it) when it's the catalog's size; size it by that.
+        let m = header(&path).or_else(|| {
+            let mb = std::fs::metadata(&path).ok()?.len().div_ceil(1024 * 1024);
+            (pair.kind == DraftKind::Mtp && mb == pair.drafter.download_mb).then(|| GgufMeta {
+                file_mb: mb,
+                ..GgufMeta::default()
+            })
+        })?;
         return Some(Candidate {
             kind: pair.kind,
             meta: Some(m),
@@ -133,9 +156,10 @@ fn candidate(model: &Path, meta: &GgufMeta, flags: &DraftFlags) -> Option<Candid
         });
     }
     // A model the catalog doesn't list: any drafter that tokenizes the same.
-    let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .ok()?
-        .flatten()
+    let mut found: Vec<PathBuf> = dirs
+        .iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flat_map(|rd| rd.flatten())
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("gguf"))
         .collect();
@@ -189,17 +213,7 @@ pub fn help_flags(binary: &Path) -> DraftFlags {
     {
         return f;
     }
-    let mut cmd = Command::new(binary);
-    cmd.arg("--help").stdin(Stdio::null());
-    grokhub_core::proc_util::hide_windows_console(&mut cmd);
-    let f = cmd
-        .output()
-        .map(|o| {
-            let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
-            text.push_str(&String::from_utf8_lossy(&o.stderr));
-            ld::parse_help(&text)
-        })
-        .unwrap_or_default();
+    let f = ld::parse_help(&super::local_flags::help_text(binary));
     if let Ok(mut c) = cache().lock() {
         c.flags.insert(binary.to_path_buf(), f.clone());
     }
@@ -216,13 +230,6 @@ fn set_force(f: Option<bool>) {
     }
 }
 
-/// Manual draft preference from Settings: `Some(true)` forces drafting on,
-/// `Some(false)` forces it off, `None` uses the stored speed-test verdict
-/// (or NeedsTest until one exists).
-pub fn prefer_draft(force: Option<bool>) {
-    set_force(force);
-}
-
 /// What [`plan`] reads about one launch.
 pub struct Launch<'a> {
     pub flags: &'a DraftFlags,
@@ -235,7 +242,14 @@ pub struct Launch<'a> {
     pub tune_dir: &'a Path,
     /// The device part of the verdict key.
     pub device: &'a str,
+    /// A game runs: the model is on the CPU beside it, and a drafter may
+    /// join only on its own speed test (see [`GAMING_DEVICE`]).
+    pub gaming: bool,
 }
+
+/// The device part of the verdict key for the gaming setup (CPU, half the
+/// threads), so its speed test never borrows a verdict from the GPU.
+pub const GAMING_DEVICE: &str = "cpu-gaming";
 
 /// The draft for one launch.
 pub fn plan(l: &Launch) -> Plan {
@@ -248,12 +262,13 @@ pub fn plan(l: &Launch) -> Plan {
         args,
         tune_dir,
         device,
+        gaming,
     } = *l;
     let forced = force();
     if forced == Some(false) {
         return Plan::off("the speed test is timing the model alone");
     }
-    let Some(c) = candidate(model, meta, flags) else {
+    let Some(c) = candidate(model, meta, flags, &drafter_dirs(model, tune_dir)) else {
         return Plan::off("no draft model is installed");
     };
     let target = model
@@ -266,25 +281,48 @@ pub fn plan(l: &Launch) -> Plan {
         .and_then(|f| f.file_name())
         .map_or("mtp".to_string(), |f| f.to_string_lossy().into_owned());
     let key = ld::verdict_key(device, &target, &drafter);
+    // MTP heads are trained for this one model and carry no tokenizer of
+    // their own, so only a separate small model needs the tokenizer check.
     let (tokenizer_ok, on_gpu) = match &c.meta {
         None => (true, Some(args.ngl > 0)),
         Some(m) => (
-            ld::same_tokenizer(meta.tokenizer.as_deref(), m.tokenizer.as_deref()),
+            c.kind == DraftKind::Mtp
+                || ld::same_tokenizer(meta.tokenizer.as_deref(), m.tokenizer.as_deref()),
             fits(p, meta, args, state, m),
         ),
     };
+    // A verdict live replies set expires, and the speed test runs again.
+    let stored = ld::load_verdicts(tune_dir)
+        .get(&key)
+        .copied()
+        .filter(|v| v.standing(now_secs()));
     let verdict = match forced {
         Some(true) => Some(true),
-        _ => ld::load_verdicts(tune_dir).get(&key).map(|v| v.keep),
+        _ => stored.map(|v| v.keep),
     };
+    let live_off = forced.is_none() && stored.is_some_and(|v| !v.keep && v.retest_at.is_some());
     let decision = ld::decide(Check {
         // The speed test runs whatever the level; it asked for the drafter.
-        level_ok: state != GovState::Throttle || forced == Some(true),
-        engine_ok: flags.supports(c.kind),
+        // A game throttles the machine, but its CPU setup has its own test.
+        level_ok: state != GovState::Throttle || forced == Some(true) || gaming,
+        // A drafter file also needs the flag that loads it.
+        engine_ok: flags.supports(c.kind) && (c.file.is_none() || flags.model.is_some()),
         tokenizer_ok,
         fits: on_gpu.is_some(),
         verdict,
     });
+    // Say which test turned it off.
+    let decision = match decision {
+        Decision::Off("the speed test found the draft model didn't help") if live_off => {
+            // A pair that never ran (it stopped the start) kept no guesses at all.
+            if stored.is_some_and(|v| v.acceptance == 0.0 && v.gain == 0.0) {
+                Decision::Off(START_OFF)
+            } else {
+                Decision::Off(LIVE_OFF)
+            }
+        }
+        d => d,
+    };
     let draft = (decision == Decision::On).then(|| DraftArgs {
         kind: c.kind,
         model: c.file.clone(),
@@ -299,6 +337,208 @@ pub fn plan(l: &Launch) -> Plan {
     }
 }
 
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The running server's draft: what [`draft_status`] reports and what live
+/// replies count toward.
+#[derive(Default)]
+struct Running {
+    /// The drafter's name and the launch's decision.
+    status: Option<(String, Decision)>,
+    /// The verdict key and folder while it drafts.
+    key: Option<(String, PathBuf)>,
+    live: ld::Live,
+    /// The last reply's speed, and the guesses drafted and kept since launch.
+    tok_s: Option<f64>,
+    drafted: u64,
+    accepted: u64,
+}
+
+fn running() -> &'static Mutex<Running> {
+    static R: OnceLock<Mutex<Running>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(Running::default()))
+}
+
+/// A launch went ahead with `plan`: keep what it decided for Settings, and
+/// count its replies when it drafts.
+pub fn launched(plan: &Plan, tune_dir: &Path) {
+    if let Ok(mut r) = running().lock() {
+        r.status = plan.name.clone().map(|n| (n, plan.decision));
+        r.key = match (&plan.draft, &plan.key) {
+            (Some(_), Some(k)) => Some((k.clone(), tune_dir.to_path_buf())),
+            _ => None,
+        };
+        r.live = ld::Live::default();
+        r.tok_s = None;
+        r.drafted = 0;
+        r.accepted = 0;
+    }
+}
+
+/// The last reply's tokens per second, and the share of the drafter's
+/// guesses kept since the model loaded.
+pub fn reply_stats() -> (Option<f64>, Option<f64>) {
+    let Ok(r) = running().lock() else {
+        return (None, None);
+    };
+    let kept = (r.drafted > 0).then(|| r.accepted as f64 / r.drafted as f64);
+    (r.tok_s, kept)
+}
+
+/// The test's own servers are gone; the next launch says what runs.
+fn forget_running() {
+    if let Ok(mut r) = running().lock() {
+        *r = Running::default();
+    }
+}
+
+/// The drafter the running model launched with and whether it drafts, or why
+/// not. `None` before a launch, or with no drafter to consider.
+pub fn draft_status() -> Option<(String, Decision)> {
+    running().lock().ok()?.status.clone()
+}
+
+/// One finished reply's timings. When live replies keep too few of the
+/// drafter's guesses, drafting turns off until a retest, from the next
+/// launch (between requests).
+pub fn note_reply(t: &Timing) {
+    let Some((dir, key, v)) = live_verdict(t, now_secs()) else {
+        return;
+    };
+    if ld::save_verdict(&dir, &key, v).is_ok() {
+        super::local_gov::request_restart();
+    }
+}
+
+/// [`note_reply`]'s count: the verdict to save, once, when the window ends
+/// poorly. The running status says why from then on.
+fn live_verdict(t: &Timing, now: u64) -> Option<(PathBuf, String, ld::Verdict)> {
+    let mut r = running().lock().ok()?;
+    r.tok_s = Some(t.tok_s);
+    r.drafted += t.drafted;
+    r.accepted += t.accepted.min(t.drafted);
+    let (key, dir) = r.key.clone()?;
+    let v = r.live.add(t, now)?;
+    r.key = None;
+    if let Some((_, d)) = r.status.as_mut() {
+        *d = Decision::Off(LIVE_OFF);
+    }
+    Some((dir, key, v))
+}
+
+/// Why drafting stopped after live replies.
+pub const LIVE_OFF: &str = "too few of the draft model's guesses were kept in your chats";
+
+/// Why drafting stopped after the drafter kept the model from starting.
+pub const START_OFF: &str = "the draft model kept this model from starting, so it runs alone";
+
+/// The model only started once its drafter came off: that pair stays off
+/// until the retest ([`ld::RETEST_SECS`]), and Settings says why.
+pub fn draft_broke_start() {
+    let Some((key, dir)) = running().lock().ok().and_then(|mut r| {
+        if let Some((_, d)) = r.status.as_mut() {
+            *d = Decision::Off(START_OFF);
+        }
+        r.key.take()
+    }) else {
+        return;
+    };
+    let _ = ld::save_verdict(
+        &dir,
+        &key,
+        ld::Verdict {
+            keep: false,
+            acceptance: 0.0,
+            gain: 0.0,
+            retest_at: Some(now_secs() + ld::RETEST_SECS),
+        },
+    );
+}
+
+/// When the unattended speed test may look again, and what it said last.
+#[derive(Default)]
+struct Auto {
+    running: bool,
+    next_at: u64,
+    line: Option<String>,
+}
+
+fn auto() -> &'static Mutex<Auto> {
+    static A: OnceLock<Mutex<Auto>> = OnceLock::new();
+    A.get_or_init(|| Mutex::new(Auto::default()))
+}
+
+/// Seconds between looks while the plan doesn't need a test.
+const AUTO_LOOK_SECS: u64 = 15 * 60;
+/// Seconds before trying again after a test that ran.
+const AUTO_RETRY_SECS: u64 = 6 * 3600;
+
+/// Run the draft speed test on its own, once, while the machine is quiet
+/// (see [`ld::auto_test_due`]) and the model's drafter still needs one. The
+/// test runs on its own thread; a request that comes in meanwhile waits for
+/// the current timing and the test stops early.
+pub fn tick_auto_test(config_dir: &Path, q: &ld::Quiet) {
+    let now = now_secs();
+    {
+        let Ok(mut a) = auto().lock() else {
+            return;
+        };
+        if a.running || !ld::auto_test_due(q, a.next_at, now) {
+            return;
+        }
+        a.next_at = now + AUTO_LOOK_SECS;
+    }
+    let Some(paths) = super::local_sidecar::resolve_paths(config_dir) else {
+        return;
+    };
+    let needs = autoconfig::draft_plan(&paths.binary, &paths.model)
+        .is_some_and(|p| p.decision == Decision::NeedsTest);
+    // Then the model a game swaps to, timed in the gaming setup now, while
+    // no game runs, so its drafter can join it during one.
+    let gaming = (!needs)
+        .then(|| super::local_sidecar::gaming_model_for(config_dir, &paths.model))
+        .flatten()
+        .filter(|g| {
+            autoconfig::gaming_draft_plan(&paths.binary, g)
+                .is_some_and(|p| p.decision == Decision::NeedsTest)
+        });
+    // With the drafters settled, a model that hasn't had its refusal check
+    // gets it next.
+    let refusal = !needs && gaming.is_none() && refusal_due(&paths.model);
+    if !needs && gaming.is_none() && !refusal {
+        return;
+    }
+    if let Ok(mut a) = auto().lock() {
+        a.running = true;
+        a.next_at = now + AUTO_RETRY_SECS;
+    }
+    let dir = config_dir.to_path_buf();
+    std::thread::spawn(move || {
+        let line = if refusal {
+            run_refusal_check(&dir)
+        } else if let Some(model) = gaming {
+            run_gaming_bench(&dir, model)
+        } else {
+            run_bench(&dir)
+        };
+        if let Ok(mut a) = auto().lock() {
+            a.running = false;
+            if line.is_some() {
+                a.line = line;
+            }
+        }
+    });
+}
+
+/// What the last unattended speed test found, in words.
+pub fn auto_test_line() -> Option<String> {
+    auto().lock().ok()?.line.clone()
+}
+
 const BENCH_PROMPT: &str =
     "Write a short paragraph about why the sky looks blue. Plain prose, no lists.";
 
@@ -310,13 +550,14 @@ pub fn measure(base_url: &str, token: &str) -> Result<Timing, String> {
         "temperature": 0,
         "stream": false,
     });
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(5))
-        .timeout_read(Duration::from_secs(300))
-        .build();
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(5),
+        read: Some(Duration::from_secs(300)),
+        ..Default::default()
+    });
     let text = agent
         .post(&format!("{base_url}/v1/chat/completions"))
-        .set("Authorization", &format!("Bearer {token}"))
+        .header("Authorization", &format!("Bearer {token}"))
         .send_json(body)
         .map_err(|e| format!("speed test request failed: {e}"))?
         .into_string()
@@ -328,10 +569,29 @@ pub fn measure(base_url: &str, token: &str) -> Result<Timing, String> {
 /// when there's no drafter to test.
 pub fn run_bench(config_dir: &Path) -> Option<String> {
     let paths = super::local_sidecar::resolve_paths(config_dir)?;
+    bench(&paths)
+}
+
+/// [`run_bench`] for `model` in the gaming setup (CPU, half the threads), so
+/// a verdict waits for the next game. Run only while no game does.
+pub fn run_gaming_bench(config_dir: &Path, model: PathBuf) -> Option<String> {
+    let paths = super::local_sidecar::resolve_paths(config_dir)?;
+    let paths = super::local_sidecar::SidecarPaths {
+        binary: paths.binary,
+        model,
+    };
+    autoconfig::set_gaming_test(true);
+    let line = bench(&paths);
+    autoconfig::set_gaming_test(false);
+    line.map(|l| format!("While gaming: {l}"))
+}
+
+fn bench(paths: &super::local_sidecar::SidecarPaths) -> Option<String> {
     let planned = autoconfig::draft_plan(&paths.binary, &paths.model)?;
     match planned.decision {
         Decision::Off(r)
             if r != "the speed test found the draft model didn't help"
+                && r != LIVE_OFF
                 && r != "the machine is busy, so the draft model is off" =>
         {
             return None
@@ -339,16 +599,26 @@ pub fn run_bench(config_dir: &Path) -> Option<String> {
         _ => {}
     }
     let (key, name, dir) = (planned.key?, planned.name?, autoconfig::tune_dir()?);
+    // Requests wait for the test instead of loading the model beside it.
+    let _gate = super::local_sidecar::speed_test_gate();
     super::local_sidecar::stop_global();
     let timed = |force: Option<bool>| -> Result<(Timing, bool), String> {
         set_force(force);
-        let side = super::local_sidecar::start(&paths)?;
+        let side = super::local_sidecar::start(paths)?;
         let drafting = side.drafting();
         let t = measure(&side.base_url(), &side.token);
         side.stop();
         t.map(|t| (t, drafting))
     };
     let plain = timed(Some(false));
+    // A reply is waiting: stop here and try another time.
+    if super::local_sidecar::speed_test_wanted_back() {
+        set_force(None);
+        forget_running();
+        return Some(format!(
+            "The {name} test stopped for a reply and runs again later."
+        ));
+    }
     let with = timed(Some(true));
     set_force(None);
     let line = match (plain, with) {
@@ -364,6 +634,96 @@ pub fn run_bench(config_dir: &Path) -> Option<String> {
         }
         (Err(e), _) | (_, Err(e)) => format!("The draft model test stopped: {e}"),
     };
+    forget_running();
+    Some(line)
+}
+
+fn model_file(model: &Path) -> Option<String> {
+    model.file_name().map(|f| f.to_string_lossy().into_owned())
+}
+
+fn refusal_due(model: &Path) -> bool {
+    match (autoconfig::tune_dir(), model_file(model)) {
+        (Some(dir), Some(file)) => grokhub_core::local_refusal::due(&dir, &file),
+        _ => false,
+    }
+}
+
+/// The refusal check's result for the model in `model`, as its row reads.
+pub fn refusal_line(model: &Path) -> Option<String> {
+    let o = grokhub_core::local_refusal::result_for(&autoconfig::tune_dir()?, &model_file(model)?)?;
+    Some(o.line())
+}
+
+/// One reply to `prompt` from a running server, thinking off, or `None` for
+/// an empty one.
+pub fn ask(base_url: &str, token: &str, prompt: &str) -> Result<Option<String>, String> {
+    let body = serde_json::json!({
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 96,
+        "temperature": 0,
+        "stream": false,
+        // A thinking model answers in its reply, not in its reasoning.
+        "chat_template_kwargs": {"enable_thinking": false},
+    });
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(5),
+        read: Some(Duration::from_secs(300)),
+        ..Default::default()
+    });
+    let text = agent
+        .post(&format!("{base_url}/v1/chat/completions"))
+        .header("Authorization", &format!("Bearer {token}"))
+        .send_json(body)
+        .map_err(|e| format!("refusal check request failed: {e}"))?
+        .into_string()
+        .map_err(|e| format!("refusal check reply: {e}"))?;
+    Ok(reply_text(&text))
+}
+
+/// The assistant's reply in a chat completion, if it has one.
+pub fn reply_text(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let c = v["choices"][0]["message"]["content"].as_str()?.trim();
+    (!c.is_empty()).then(|| c.to_string())
+}
+
+/// Ask the running model's fixed everyday asks once and keep how many it
+/// answered. Like the speed test, a reply that comes in stops it, and it runs
+/// again later.
+pub fn run_refusal_check(config_dir: &Path) -> Option<String> {
+    use grokhub_core::local_refusal as lr;
+    let paths = super::local_sidecar::resolve_paths(config_dir)?;
+    let (dir, file) = (autoconfig::tune_dir()?, model_file(&paths.model)?);
+    if !lr::due(&dir, &file) {
+        return None;
+    }
+    let _gate = super::local_sidecar::speed_test_gate();
+    super::local_sidecar::stop_global();
+    let side = match super::local_sidecar::start(&paths) {
+        Ok(s) => s,
+        Err(e) => return Some(format!("The refusal check couldn't start the model: {e}")),
+    };
+    let mut replies = Vec::with_capacity(lr::PROMPTS.len());
+    for p in lr::PROMPTS {
+        if super::local_sidecar::speed_test_wanted_back() {
+            side.stop();
+            return Some("The refusal check stopped for a reply and runs again later.".into());
+        }
+        match ask(&side.base_url(), &side.token, p) {
+            Ok(r) => replies.push(r),
+            Err(e) => {
+                side.stop();
+                return Some(format!("The refusal check stopped: {e}"));
+            }
+        }
+    }
+    side.stop();
+    let o = lr::Outcome::from_replies(&replies, now_secs());
+    let line = o.line();
+    if let Err(e) = lr::save(&dir, &file, o) {
+        return Some(format!("Couldn't save the refusal check: {e}"));
+    }
     Some(line)
 }
 

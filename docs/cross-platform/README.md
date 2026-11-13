@@ -101,7 +101,11 @@ lockfile in step, and `bump --check` fails if they drift.
   replaced this with the agent loop, below.)
 - Settings: model and close-to-tray in `shell.json` in the GrokHub config
   folder. The xAI API key lives in the OS keychain (service `GrokHub`, account
-  `shell-console-key`). Grok sign-in (OAuth) comes with Phase 3.
+  `shell-console-key`). Sign in with Grok (device code) is in Settings →
+  Account on desktop and iOS; its tokens live in the keychain under account
+  `shell-xai-oauth`, and a live sign-in is used before the key. Android gets
+  it once the keyring has an Android store. `GROKHUB_SHELL_OAUTH_URL` points
+  sign-in at a loopback mock auth server for tests (plain-http loopback only).
 - Tray: Show GrokHub and Quit. A left click shows the window.
 - `GROKHUB_SHELL_RESPONSES_URL` points chat at a local mock model. Only
   plain-http loopback URLs are accepted, so it cannot move real traffic.
@@ -115,12 +119,20 @@ Build locally (Linux needs `libwebkit2gtk-4.1-dev`,
 `libayatana-appindicator3-dev` and `librsvg2-dev`):
 
 ```sh
+node scripts/stage-hub-sidecar.mjs          # Windows and macOS: builds grokhub-hub and stages it as the sidecar
 npm ci --prefix ui
 ui/node_modules/.bin/tauri build            # bundles in src-tauri/target/release/bundle
 ui/node_modules/.bin/tauri build --debug --no-bundle
 cargo install tauri-driver --locked
 xvfb-run -a node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell
 ```
+
+On Windows and macOS, run `node scripts/stage-hub-sidecar.mjs` before any
+`cargo` or `tauri` command in `src-tauri/` (`tauri build`, `tauri dev`,
+`cargo check`, clippy and `cargo test`), and again after a change under
+`crates/`: nothing else rebuilds the staged hub. Without the staged file the
+`src-tauri` build script stops with "resource path `grokhub-hub-<triple>`
+doesn't exist" (`.exe` on Windows). On Linux the script does nothing.
 
 ## Phase 3 status
 
@@ -163,13 +175,42 @@ app shows in both.
   and the page stays mounted so a run in flight is not lost on a tab change.
 - Edits take a lock and reload the file first, and a cabin row with no id gets
   one written back, so Pause or Remove always finds the row it showed.
-- The cabin's pulse still fires jobs on schedule. The shell runs no second
-  scheduler, so a job never fires twice. Firing from the shell waits until
-  the shell replaces the cabin.
-- Tests: Rust tests for add, refusing text with no time, pause, resume,
+- Edit opens a box on the row with the job's words (`describe_automation`,
+  the parser's inverse) and saves new words in place: the id, pause state,
+  run count, health and any cabin check command stay. Words with no time are
+  refused and nothing is written. Weekly, monthly, one-off and several-times
+  jobs have no Edit, since the words cannot say their schedule.
+- Scheduled jobs fire from the shell (`src-tauri/src/scheduler.rs`, desktop
+  only) with the window open or in the tray, but only while the cabin is
+  closed. The cabin writes a beat to `{config}/scheduler-lease.json`
+  (`{owner, pid, beat_ms}`, `grokhub_core::scheduler_lease`) every 30 s from
+  its pulse. A beat under 90 s old keeps the shell from firing, so the cabin
+  keeps priority while it is open. Otherwise the shell beats as `shell` (a
+  second shell process defers to it) and checks for due jobs every 30 s.
+- A due job is claimed before it runs: its last run, run count and next run
+  are saved first, so a second tick, or a cabin that opens, finds it done.
+  After a laptop sleep each job runs once, for its latest missed slot, and
+  its next run is the next slot to come. The run is the same unattended,
+  read-only Ask run as Run now, whatever the approvals setting, and its end
+  goes to the window as `automations://ran` (the chat notice, the Activity
+  Dock and the row's reply).
+- A job with a check command runs that command first
+  (`grokhub_core::run_night_check_command`); the shell fires only when the
+  receipt passes (`skip_night_check_receipt`), the same gate the cabin uses.
+- The scheduler needs the local time. The window reports its clock at start
+  and every 5 minutes (`set_scheduler_clock`); a paired browser does not,
+  since it may be in another time zone. Until the window reports, nothing
+  fires.
+- Tests: Rust tests for add, edit, refusing text with no time, pause, resume,
   remove, a broken file, rows the cabin wrote, and a Run now whose write is
-  refused. vitest covers the page. The smoke test adds a job through the UI,
-  checks `automations.json`, runs it and waits for the reply.
+  refused; for the scheduler, a claim saved before the run, no second fire on
+  the next tick, a fresh cabin lease holding every job, a stale one letting
+  the shell fire, missed slots firing once, a failing check skipping without
+  a fire, a passing check letting the shell fire, and a scheduled run whose
+  write is refused. Core tests cover the lease, the check receipt, and the
+  `describe_automation` round trip. vitest covers the page. The smoke test
+  adds a job through the UI, checks `automations.json`, runs it and waits for
+  the reply.
 
 **3c, Memory.** A Memory page shows and edits the same `MEMORY.md` files the
 cabin and the agent loop read (`src-tauri/src/memory.rs`): global notes in the
@@ -218,8 +259,19 @@ approve, the cabin's three permission modes.
   entry out of `mcp.json`, through the same change ledger the cabin uses, and
   deletes its sign-in and saved token. Computer-use servers can't be
   disconnected here.
-- Not yet: signing in to an HTTP server and adding new connectors. The shell
-  has no browser opener, so the page points to the cabin for both.
+- Add… opens a sheet with the catalog the cabin ships (search, Add) and
+  Paste config for an `mcpServers` block. Refresh reads newer names and
+  descriptions from the official MCP registry, only when clicked. New entries
+  are written enabled through the change ledger and start on Check or first
+  use. Names already set up are kept as they are.
+- A key connector shows a password field once added. Save key posts a
+  credentials card through the harness park; only Save on that card seals the
+  key and names it in `mcp.json`, and Deny or a timeout saves nothing.
+- Sign in opens an HTTP server's https sign-in page in the browser and
+  reconnects it with the new token. The switch on each row writes `enabled`
+  through the change ledger; a server that is off is listed and never started.
+- The web remote lists, checks, reconnects, signs out and disconnects. Adding,
+  signing in, keys and the switch stay on the computer.
 - Rust tests run a real stdio server (`ui/e2e/fake-mcp.mjs` under node) and a
   missing command. The smoke test writes an entry for that server, checks it
   connects with one tool, and checks the entry leaves `mcp.json` only after
@@ -285,18 +337,173 @@ the same hard gate as the cabin (`src-tauri/src/agent.rs`).
 - Risky steps (delete, send, money, credentials) wait for an OK in every
   approvals mode, Always included. Ordinary steps follow the approvals
   setting. A halt stamp (the cabin's Halt) stops a running prompt.
+- Halt stops desktop control and every running prompt at once, the way the
+  cabin's tray Halt does (`agent::halt`, `halt_now` in `src-tauri/src/lib.rs`).
+  It's a red button in the top bar while desktop control is on or anything
+  runs, Ctrl+Alt+H in the window, a Halt item in the tray, and Super+Shift+Esc
+  from any app. Super+Shift+Esc is best effort: when another app (the cabin)
+  holds it or the desktop has no system-wide keys, Settings → General says so
+  and the other three still work. Halt writes the halt stamp, lets go of held
+  keys, stops unattended runs, and cancels every chat. A waiting card reads
+  "Not run: halted", and the chat says it stopped. Desktop steps stay off until
+  the app restarts, as in the cabin. A prompt sent after the Halt still runs.
+  Halt only listens and stops; it never types or clicks. Phones and the web
+  app don't get it (`halt_desktop` is not in `remote::WEB_COMMANDS`).
 - The shell is the crate's host: its config folder, its switch, and on Linux
   the lock-screen and click-target readers in `grokhub-desktop/src/screen.rs`
   (the AT-SPI walk now lives in `grokhub_core::ATSPI_PY` for both apps).
-- Not yet: desktop episodes (the cabin's observe, act, verify loop), the
-  Cua driver, and a Halt button in the shell. macOS has no desktop backend
-  yet, so desktop calls fail there with the no-display error.
+- Desktop episodes (the cabin's observe, act, verify loop) run in the shell
+  (`src-tauri/src/episode.rs`, `ui/src/Episode.tsx`). The "Supervised desktop
+  session" switch above the composer (shown while desktop control is on) arms
+  the chat; its next messages then run through `grokhub_agent::episode`, the
+  cabin's own kernel, with the same hard gate and spans (`path E`). A hard-class
+  step (delete, send, money, credentials) parks for an OK in every approvals
+  mode, Always included; Allow and Deny answer the park file the kernel reads.
+  The panel (`episode://event`) lists the steps, the latest screen as a
+  thumbnail held in memory only (hidden on a lock screen and while a
+  credentials step waits) and Pause, Stop and Halt. Pause stops after the
+  step it is on and keeps the session open; Stop ends it and denies every
+  waiting card; Halt is the same Halt as everywhere. A finished or stopped
+  session disarms the chat. Desktop only: none of it is in
+  `remote::WEB_COMMANDS`.
+- Cua driver: with desktop control and the cabin's `cuaDriver` flag both on
+  (Linux), the shell registers `grokhub-hub --mcp-cua`, found next to the app,
+  as the engine's native Cua server (`episode::sync_cua`), and the panel says
+  "Using the Cua driver". The shell has no Cua switch of its own; it reads the
+  one the cabin saved in `app.json`. Without the hub binary it stays off.
+  macOS has no desktop backend yet, so desktop calls fail there with the
+  no-display error.
 - Rust tests cover the switch, a refused call while it's off, a typed delete
   that waits in Always and is denied, and an allowed step that runs. The
   smoke test turns the switch on with approvals at Always, has the model
   type a delete, and checks that the card waits, nothing runs, and Deny
   reaches the model as a refusal.
+  Halt's Rust tests park a desktop step, halt, and check that the turn ends
+  as halted, the step never runs and the stamp is written; a prompt sent after
+  the Halt still runs. The smoke test has no Halt walk yet.
+  Episodes' Rust tests drive the real session, kernel, gate and span store with
+  a scripted model and a fixture driver: two steps observe, act and verify to
+  a verified end; a send step waits for an OK in Always and a Deny sends
+  nothing; Halt mid-session stops before the next step; Pause keeps it open
+  and Stop ends it and denies its cards; an unarmed chat stays a plain turn.
+  The smoke test arms the switch, has the mocked model type a delete, checks
+  the card waits in Always, that Deny writes the answer, and that Stop ends
+  the session.
 
+**3h, chat history.** Chats now survive New chat, a reload and quitting
+(`src-tauri/src/history.rs`, `ui/src/History.tsx`).
+
+- The engine already saved every turn to `sessions/<id>.jsonl` in the config
+  folder. The History page lists the shell's own chats (ids starting
+  `shell-`) under Today, This week and Older, newest first, with a search
+  over titles and words in the chat (250 ms after typing stops, at most 200
+  rows). A row's menu renames it or deletes it; Delete asks first and stops a
+  reply still running in that chat.
+- A click opens the chat in Chat: its newest 200 lines, with Show earlier for
+  the rest. Tool steps come back as one muted "Tools ran" line, not cards.
+  The next message carries the chat on: a new worker resumes the engine from
+  the saved turns, as the cabin does.
+- The chat open at the last close comes back at launch (`lastChat` in
+  `shell.json`); New chat clears it.
+- Cabin threads stay on the cabin's own History page, so no session file has
+  two writers. History is desktop-only: it isn't in `WEB_COMMANDS`, and a
+  browser sees only the chats it started.
+- Rust tests cover listing, the transcript with folded tool steps, a second
+  worker sending the first turn again, search, rename, delete and that cabin
+  sessions stay out. vitest covers the page, its search and delete prompt,
+  and Chat reopening the last chat. Not yet: the smoke test does not walk
+  History.
+
+**3i, the Code tab.** A Code page for the project folder. Its logic is the
+`grokhub-code` crate (`crates/grokhub-code`), which the egui cabin's Code tab
+uses too; the shell wraps it in the `code_*` commands
+(`src-tauri/src/lib.rs`) and the pages in `ui/src/Code*.tsx`.
+
+- Desktops only. The capability report's `code` flag is off on phones, the
+  web app doesn't show the page, and no Code tab command is in
+  `WEB_COMMANDS`.
+- Read only: the branch, up to 500 changed files, one file's diff (the first
+  256 KB), and the built-in skills with what overrides them. Review puts a
+  prompt in Chat that asks the agent to look over the uncommitted changes.
+- What asks first:
+  - Tests. The first run of a command shows the exact command and asks.
+    After a yes, the same command text runs without asking in that project
+    until it changes or Settings → Code forgets it.
+  - Deploy. Off until it is turned on for the project in Settings → Code.
+    Ask mode shows the command and asks every time. Auto-beta runs a deploy
+    confirmed once without asking until its command changes; Forget makes
+    the next one ask.
+  - Push and Open PR. Ask mode (the default) shows the command and asks
+    every time. Auto-beta skips the ask only for a branch made in the Code
+    tab, on GitHub, when the repo's default branch could be read and the
+    branch has no PR yet or one into the PR base (`beta` unless changed). A
+    yes counts only for the command on the card: if the branch changed
+    since, nothing runs.
+  - Deleting a secret.
+  - New branch, an editor save and opening the terminal don't ask.
+- What is always refused, in either mode:
+  - A push of `main`, of the repo's default branch (read from the local
+    `origin/HEAD`), or of a branch protected in Settings → Code.
+  - A force-push, and deleting a branch. The app builds every git and gh
+    argument itself and never passes a force, mirror, delete or prune flag.
+  - A push from a detached HEAD, with no `origin` remote, or of a branch
+    name git wouldn't take as a plain name (one that starts with `-`, for
+    one). A host other than GitHub is refused until it is turned on in
+    Settings, and then always asks. A PR opens on GitHub only, and not when
+    the branch already has one open.
+  - In the editor: a path outside the project (`..`, a link that leads out,
+    a link whose target is missing), anything in `.git`, a file over 512 KB
+    or not UTF-8 text, a save into something that isn't a plain file, and a
+    save after the project folder changed ("The project folder changed
+    since this file was opened. Nothing was saved.").
+  - A secret name that changes how programs run (`PATH`, `HOME`, `SHELL`,
+    `TERM`, `GIT_TERMINAL_PROMPT`, anything starting `LD_` or `DYLD_`).
+  - A second test run or deploy while one is running.
+- Git hooks do not run. The app's own push and new-branch calls run git with
+  hooks and fsmonitor off (`grokhub_core::git_cmd`), so a repo's `pre-push`
+  hook is passed over. The command on the confirm card is the git command
+  without those switches. A rejected push is reported, never retried.
+- Stop, beside a running test or deploy, ends the run and everything it
+  started (`code_run_stop`). Quitting the app ends it too. The cabin has no
+  Stop button; quitting the cabin ends the run.
+- Secrets. Only the names are saved (`code-secrets.json` in the config
+  folder); the values live in the OS keychain and never come back to the
+  window. A deploy gets them as environment variables and stops before it
+  runs when a listed secret has no value. Test runs and the terminal don't
+  get them. Test and deploy output and the Activity list show a value as
+  `[redacted]`, along with key-shaped tokens.
+- Editor. Opens and saves one text file at a time inside the project. A file
+  whose line endings are all CRLF keeps them on save, and a save with
+  nothing changed writes nothing. Not yet: a save doesn't check whether the
+  file changed on disk since it was opened.
+- Terminal. The user's own shell on a pseudo-terminal, started in the
+  project folder, one at a time; it keeps running while another tab is
+  shown and ends with Close terminal.
+  - Output passes through a filter before it reaches the window. It hides
+    the project's secret values as they were in the keychain when the
+    terminal opened (one saved later is hidden after the terminal is closed
+    and opened again) and key-shaped tokens (`sk-`, `xai-`, `ghp_`,
+    `github_pat_`, `gho_`, `ghu_`, `ghs_`, and the word after `Bearer`).
+  - The filter reads what the shell prints. A value that reaches the screen
+    a piece at a time, like one typed by hand, is not hidden.
+  - Commands typed there, `git push` included, are not checked by the push
+    guard, and the tab says so.
+  - Input never waits for the shell. When the program in it isn't reading,
+    a paste is refused with "The terminal is busy. Try again when the
+    program is reading input."; after the shell ended, with "The terminal
+    has ended." One paste is at most 65,536 bytes.
+- Activity. `code-activity.jsonl` in the config folder gets one line per
+  push, PR, new branch, blocked attempt, deploy, secret change (the name
+  only), editor save (path and size) and terminal opening or closing, never
+  what was typed or shown. The tab lists this project's newest 50. Test
+  runs are not in it.
+- Tests: Rust tests in `crates/grokhub-code` cover the push guard and its
+  commands, the remembered test and deploy commands, Stop, the secret store
+  and the redactors, the editor's path rules and the terminal.
+  `no_code_tab_command_is_a_web_command` (`src-tauri/src/remote.rs`) reads
+  the window's handler list and fails when a Code command is on the web
+  list. vitest covers the pages. Not yet: the smoke test does not walk the
+  Code tab.
 
 Phase 3 met its accept line: risky desktop steps wait for an OK in the Rust
 gate tests on all three desktop OSes, and the smoke test confirms it on
@@ -390,7 +597,8 @@ The desktop answers only the web app's commands: chat (`send_chat`,
 `answer_permission`, `cancel_chat`, `close_chat`), `get_settings`,
 automations, memory, connectors and Pulse (`get_pulse`, `pulse_act`,
 `pulse_discuss`, `pulse_why`, `get_feed_prompt`, `save_feed_prompt`,
-`pulse_image`). Everything else gets `ok: false`: the key, settings changes,
+`pulse_image`) and Nyx's picture (`nyx_look`, gated by the desktop's
+Adults-only setting). Everything else gets `ok: false`: the key, settings changes,
 Local AI and desktop control.
 
 **5b, the desktop side.** Settings → Web access in the shell

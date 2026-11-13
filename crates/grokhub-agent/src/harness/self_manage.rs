@@ -215,6 +215,31 @@ pub(crate) fn forget_connection_token(config_dir: &Path, name: &str) {
     forget_mcp_signin(config_dir, name);
 }
 
+/// The sealed-token name for a mod source's key (`mods-nexus`, `mods-steam`).
+fn mod_key_name(source: &str) -> String {
+    format!("mods-{source}")
+}
+
+/// Seal a key the user typed on the Mods page for one mod source. Fails
+/// closed like [`seal_connection_token`].
+pub fn seal_mod_key(config_dir: &Path, source: &str, key: &str) -> Result<(), String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("No key was typed, so nothing was saved".into());
+    }
+    seal_connection_token(config_dir, &mod_key_name(source), key)
+}
+
+/// The key sealed for one mod source, if any.
+pub fn open_mod_key(config_dir: &Path, source: &str) -> Option<String> {
+    open_connection_token(config_dir, &mod_key_name(source))
+}
+
+/// Remove a mod source's sealed key.
+pub fn forget_mod_key(config_dir: &Path, source: &str) {
+    forget_connection_token(config_dir, &mod_key_name(source));
+}
+
 fn signin_path(config_dir: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(config_dir
         .join(TOKEN_DIR)
@@ -600,5 +625,14 @@ mod tests {
         assert_eq!(open_connection_token(&root, "other"), None);
         forget_connection_token(&root, "notes");
         assert_eq!(open_connection_token(&root, "notes"), None);
+        seal_mod_key(&root, "nexus", "  nexus-key-abcdefghijklmnop  ").unwrap();
+        assert_eq!(
+            open_mod_key(&root, "nexus").as_deref(),
+            Some("nexus-key-abcdefghijklmnop")
+        );
+        assert_eq!(open_connection_token(&root, "nexus"), None);
+        assert!(seal_mod_key(&root, "steam", " ").is_err());
+        forget_mod_key(&root, "nexus");
+        assert_eq!(open_mod_key(&root, "nexus"), None);
     }
 }

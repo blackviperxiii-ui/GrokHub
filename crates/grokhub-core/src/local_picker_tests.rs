@@ -35,8 +35,22 @@ fn apple(ram_mb: u64) -> Profile {
     }
 }
 
+/// The catalog rows the picker may choose for you: the Gemma 4 defaults. The
+/// other makers' rows are optional, so they never change a pick (pinned by
+/// `optional_makers_never_change_the_pick`).
+fn defaults() -> &'static [LocalModel] {
+    static ROWS: std::sync::LazyLock<Vec<LocalModel>> = std::sync::LazyLock::new(|| {
+        local_models()
+            .iter()
+            .filter(|m| !m.optional)
+            .copied()
+            .collect()
+    });
+    &ROWS
+}
+
 fn run(p: &Profile) -> Vec<Pick> {
-    score(p, local_models(), &BenchCache::new())
+    score(p, defaults(), &BenchCache::new())
 }
 
 fn buckets(picks: &[Pick]) -> Vec<Bucket> {
@@ -261,21 +275,22 @@ fn with_optional_row() -> &'static [LocalModel] {
         ..*big
     };
     let mut rows = vec![optional];
-    rows.extend(local_models().iter().copied());
+    rows.extend(defaults().iter().copied());
     rows.leak()
 }
 
 #[test]
-fn a_24_gb_gpu_gets_31b_and_never_picks_an_optional_model() {
+fn a_24_gb_gpu_gets_the_fast_26b_a4b_and_never_picks_an_optional_model() {
     let p = gpu(&[24_576], 65_536);
     let picks = run(&p);
     assert_eq!(buckets(&picks), [R; 5]);
-    assert_eq!(pre(&picks), Some("Gemma 4 31B"));
+    // The 31B runs well too, but the 26B-A4B MoE is about twice as fast.
+    assert_eq!(pre(&picks), Some("Gemma 4 26B-A4B"));
     assert_eq!(tier(&p), "T4");
     let picks = score(&p, with_optional_row(), &BenchCache::new());
     assert_eq!(picks[0].model.name, "Optional 30B");
     assert_eq!(picks[0].bucket, R);
-    assert_eq!(pre(&picks), Some("Gemma 4 31B"));
+    assert_eq!(pre(&picks), Some("Gemma 4 26B-A4B"));
     assert_eq!(
         why(&picks, "Optional 30B"),
         "Fits in 24 GB of GPU memory, about 40 tok/s. Optional: Loadout never picks it for you."
@@ -288,7 +303,7 @@ fn multi_gpu_sums_the_vram_and_is_t5() {
     assert_eq!(p.budget(), (Memory::Gpu, 32_768));
     let picks = run(&p);
     assert_eq!(buckets(&picks), [R; 5]);
-    assert_eq!(pre(&picks), Some("Gemma 4 31B"));
+    assert_eq!(pre(&picks), Some("Gemma 4 26B-A4B"));
     assert_eq!(tier(&p), "T5");
 }
 
@@ -332,7 +347,7 @@ fn apple_unified_memory_budgets_70_percent_of_ram() {
 
     let picks = run(&apple(65_536));
     assert_eq!(buckets(&picks), [R; 5]);
-    assert_eq!(pre(&picks), Some("Gemma 4 31B"));
+    assert_eq!(pre(&picks), Some("Gemma 4 26B-A4B"));
     assert_eq!(tier(&apple(65_536)), "T5");
 }
 
@@ -388,7 +403,7 @@ fn an_old_engine_hides_a_row_that_needs_a_newer_one_and_an_unknown_one_does_not(
 fn a_slow_speed_test_demotes_the_default_to_the_next_model() {
     let p = gpu(&[16_384], 32_768);
     let bench: BenchCache = [("gemma-4-26b-a4b-it-abliterated-q4_k".to_string(), 7.5)].into();
-    let picks = score(&p, local_models(), &bench);
+    let picks = score(&p, defaults(), &bench);
     assert_eq!(buckets(&picks), [S, S, R, R, R]);
     assert_eq!(pre(&picks), Some("Gemma 4 12B"));
     assert_eq!(
@@ -397,13 +412,26 @@ fn a_slow_speed_test_demotes_the_default_to_the_next_model() {
     );
     let fast: BenchCache = [("gemma-4-26b-a4b-it-abliterated-q4_k".to_string(), 72.0)].into();
     assert_eq!(
-        why(&score(&p, local_models(), &fast), "Gemma 4 26B-A4B"),
+        why(&score(&p, defaults(), &fast), "Gemma 4 26B-A4B"),
         "Fits in 16 GB of GPU memory, measured 72 tok/s."
     );
 }
 
 #[test]
-fn budgets_from_2_gb_to_48_gb_map_to_one_tier_default() {
+fn the_default_is_speedy_then_capable_and_a_measured_speed_can_change_it() {
+    let p = gpu(&[24_576], 65_536);
+    // Estimates: 26B-A4B 60 tok/s at quality 72 beats the 31B's 35 at 76.
+    assert_eq!(pre(&run(&p)), Some("Gemma 4 26B-A4B"));
+    // Measured: a 31B that runs at 70 tok/s here is quick and more capable.
+    let bench: BenchCache = [("gemma-4-31b-it-abliterated-q4_k".to_string(), 70.0)].into();
+    assert_eq!(pre(&score(&p, defaults(), &bench)), Some("Gemma 4 31B"));
+    // A quick but weak model never wins over a quick capable one: on 12 GB
+    // the E2B (60 tok/s) loses to the 12B (35 tok/s, quality 62).
+    assert_eq!(pre(&run(&gpu(&[12_288], 4_096))), Some("Gemma 4 12B"));
+}
+
+#[test]
+fn budgets_from_2_gb_to_48_gb_map_to_one_default_and_tier() {
     let cases: [(u64, Option<&str>, &str); 9] = [
         (2_048, None, "T0"),
         (3_072, Some("Gemma 4 E2B"), "T1"),
@@ -411,9 +439,11 @@ fn budgets_from_2_gb_to_48_gb_map_to_one_tier_default() {
         (6_144, Some("Gemma 4 E4B"), "T2"),
         (10_240, Some("Gemma 4 12B"), "T3"),
         (15_360, Some("Gemma 4 26B-A4B"), "T3"),
-        (20_480, Some("Gemma 4 31B"), "T4"),
-        (24_576, Some("Gemma 4 31B"), "T4"),
-        (49_152, Some("Gemma 4 31B"), "T5"),
+        // Where the 31B fits, the twice-as-fast 26B-A4B is the default and
+        // the 31B is what hard tasks step up to; the tier still says T4/T5.
+        (20_480, Some("Gemma 4 26B-A4B"), "T4"),
+        (24_576, Some("Gemma 4 26B-A4B"), "T4"),
+        (49_152, Some("Gemma 4 26B-A4B"), "T5"),
     ];
     for (vram, want, t) in cases {
         // 4 GB of RAM leaves no CPU budget, so only the GPU counts.
@@ -425,8 +455,28 @@ fn budgets_from_2_gb_to_48_gb_map_to_one_tier_default() {
 
 #[test]
 fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
-    let models = local_models();
-    assert_eq!(models.len(), 5, "data/local_catalog.toml parses");
+    let all: Vec<&LocalModel> = crate::local_setup::standard_models().collect();
+    assert_eq!(all.len(), 25, "data/local_catalog.toml parses");
+    // The other makers' rows: optional, uncensored, pinned, and never claiming
+    // an engine newer than they need.
+    for m in all.iter().filter(|m| m.optional) {
+        assert!(
+            m.id.contains("-heretic-") || m.id.contains("-abliterated-"),
+            "{}",
+            m.id
+        );
+        assert!(m.abliterated.is_some(), "{}", m.id);
+        assert!(
+            m.sha256.len() == 64 && m.sha256.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{}",
+            m.id
+        );
+        assert!(m.download_mb > 0 && m.run_mb > m.download_mb, "{}", m.id);
+        assert!(m.min_llama_build.is_none_or(|b| b <= 12_017), "{}", m.id);
+    }
+    // The defaults the picker chooses from stay the five Gemma 4 builds.
+    let models: Vec<&LocalModel> = all.into_iter().filter(|m| !m.optional).collect();
+    assert_eq!(models.len(), 5);
     assert!(models.iter().all(|m| !m.name.contains("Qwen")));
     assert!(models
         .iter()
@@ -442,7 +492,7 @@ fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
             .ends_with("-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf")));
     assert!(models
         .iter()
-        .all(|m| !m.optional && !m.is_drafter && m.min_llama_build.is_none()));
+        .all(|m| !m.is_drafter && m.min_llama_build.is_none()));
     assert_eq!(
         models
             .iter()
@@ -459,6 +509,23 @@ fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
     assert_eq!(
         crate::local_setup::model_by_id("gemma-4-12b-it-abliterated-q4_k").map(|m| m.sha256),
         Some("8cfe39c96b966b2bc99d908315404914e9128fb35e134ca36f1a199507d6da6b")
+    );
+    // Each one's drafter is the MTP heads file from its own repo, pinned.
+    for m in &models {
+        let d = crate::local_setup::model_by_id(m.drafter.unwrap()).unwrap();
+        assert!(
+            d.is_drafter && d.id.ends_with("-it-abliterated-mtp"),
+            "{}",
+            d.id
+        );
+        assert_eq!((d.repo, d.pairs_with), (m.repo, Some(m.id)));
+        assert_eq!(d.remote_name(), "mtp-ggml-model-bf16.gguf");
+        assert_ne!(d.file, d.remote_name(), "a name of its own on disk");
+        assert!(d.sha256.len() == 64 && d.quant == "BF16" && d.license == "Apache-2.0");
+    }
+    assert_eq!(
+        crate::local_setup::model_by_id("gemma-4-12b-it-abliterated-mtp").map(|m| m.sha256),
+        Some("c24069c9ea03da35c65cdf1d03d9f1dc3c69f962362bee02d79b51a0f4de2261")
     );
     // A stock Gemma 4 or a Muse Glimmer id from an older catalog finds nothing.
     for old in [
@@ -481,5 +548,37 @@ fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
     // The pinned engine is new enough for every row, and its x86 builds carry
     // the AVX-only CPU variants.
     let pinned = crate::runtime_download::manifest_for_key("linux-x86_64").expect("pinned");
-    assert_eq!(build_number(&pinned.version), Some(11_602));
+    assert_eq!(build_number(&pinned.version), Some(12_017));
+}
+
+#[test]
+fn optional_makers_never_change_the_pick() {
+    let machines = [
+        gpu(&[16_384], 32_768),
+        gpu(&[24_576], 65_536),
+        gpu(&[8_192], 16_384),
+        gpu(&[4_096], 16_384),
+        gpu(&[16_384, 16_384], 65_536),
+        cpu_only(16_384),
+        cpu_only(65_536),
+        apple(16_384),
+        apple(65_536),
+    ];
+    for p in machines {
+        let full = score(&p, local_models(), &BenchCache::new());
+        let picked = full.iter().find(|x| x.preselected).map(|x| x.model.id);
+        assert_eq!(picked, pre_id(&run(&p)), "{p:?}");
+        // An optional row that fits says nothing picks it for you.
+        for x in full.iter().filter(|x| x.model.optional && x.bucket == R) {
+            assert!(
+                x.reason.contains("never picks it for you"),
+                "{}",
+                x.model.id
+            );
+        }
+    }
+}
+
+fn pre_id(picks: &[Pick]) -> Option<&'static str> {
+    picks.iter().find(|x| x.preselected).map(|x| x.model.id)
 }

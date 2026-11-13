@@ -85,6 +85,7 @@ pub fn call_model<T>(
         ..*call
     };
     let started = std::time::Instant::now();
+    crate::harness::replay::clear_last();
     let out = send(&routed);
     let elapsed = started.elapsed();
     let args = serde_json::json!({

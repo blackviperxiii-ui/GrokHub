@@ -811,19 +811,13 @@ fn parse_feed(req: &SourceReq, body: &str) -> Vec<SourceItem> {
                 }
             }
             Event::Text(t) => {
-                if let Ok(s) = t.decode() {
-                    text.push_str(&s);
-                }
+                text.push_str(t.as_ref());
             }
             Event::CData(c) => {
-                if let Ok(s) = c.decode() {
-                    text.push_str(&s);
-                }
+                text.push_str(c.as_ref());
             }
             Event::GeneralRef(r) => {
-                if let Ok(name) = r.decode() {
-                    text.push_str(&entity(&name));
-                }
+                text.push_str(&entity(r.as_ref()));
             }
             Event::End(_) => {
                 let name = stack.pop().unwrap_or_default();
@@ -864,15 +858,15 @@ fn parse_feed(req: &SourceReq, body: &str) -> Vec<SourceItem> {
     out
 }
 
-fn local(name: &[u8]) -> String {
-    String::from_utf8_lossy(name).to_string()
+fn local(name: &str) -> String {
+    name.to_string()
 }
 
 fn attr(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
     e.attributes()
         .flatten()
-        .find(|a| a.key.local_name().as_ref() == key.as_bytes())
-        .map(|a| decode_entities(&String::from_utf8_lossy(&a.value)))
+        .find(|a| a.key.local_name().as_ref() == key)
+        .map(|a| decode_entities(a.value.as_ref()))
 }
 
 fn take_attrs(cur: &mut Entry, name: &str, e: &quick_xml::events::BytesStart<'_>) {
@@ -1351,14 +1345,36 @@ impl SourceCache {
 
     /// Spend one summary call. False when today's budget is used up.
     pub fn take_summary_call(&mut self, now_ms: u64) -> bool {
-        let used = self.calls_today(now_ms);
+        self.take_call_on(now_ms / DAY_MS)
+    }
+
+    /// Calls made on `day` (a [`local_day`] number).
+    pub fn calls_on(&self, day: u64) -> u32 {
+        if self.summary_day == day {
+            self.summary_calls
+        } else {
+            0
+        }
+    }
+
+    /// Spend one call on `day` (a [`local_day`] number). False when that
+    /// day's budget is used up.
+    pub fn take_call_on(&mut self, day: u64) -> bool {
+        let used = self.calls_on(day);
         if used >= SUMMARY_CALLS_PER_DAY {
             return false;
         }
-        self.summary_day = now_ms / DAY_MS;
+        self.summary_day = day;
         self.summary_calls = used + 1;
         true
     }
+}
+
+/// The person's local day number: midnight is theirs, not UTC's. With no
+/// known offset it is the UTC day.
+pub fn local_day(now_ms: u64, utc_offset_min: Option<i32>) -> u64 {
+    let shift = i64::from(utc_offset_min.unwrap_or(0)) * 60_000;
+    (now_ms as i64).saturating_add(shift).max(0) as u64 / DAY_MS
 }
 
 pub fn load_cache(path: &std::path::Path) -> SourceCache {
@@ -1457,11 +1473,15 @@ pub struct Ranked {
 pub const RANK_MIN: u32 = 12;
 /// What a followed source's item that names no interest is worth: you chose the source.
 pub const FOLLOWED_RELEVANCE: u32 = 35;
+/// What news for a library game you play is worth when it names no interest:
+/// more than a followed source, because it is your game.
+pub const PLAYED_RELEVANCE: u32 = 60;
 /// Titles this alike (shared-word ratio, in percent) are the same story.
 pub const SAME_STORY_PCT: u32 = 60;
 
 /// How well an item fits: the strongest interest it names (pinned counts as 100), else
-/// half the weight of the interest its search was for, else the followed-source floor.
+/// half the weight of the interest its search was for, at least the played-game floor
+/// for a Steam game's own news, else the followed-source floor. A muted topic is 0.
 fn relevance(
     item: &SourceItem,
     profile: &crate::interests::InterestProfile,
@@ -1475,12 +1495,16 @@ fn relevance(
     {
         return (weight(t), Some(t.topic.clone()));
     }
-    match item.topic.as_deref() {
-        Some(topic) => match profile.find(topic).filter(|t| !t.muted) {
-            Some(t) => (weight(t) / 2, Some(t.topic.clone())),
-            None => (0, None),
-        },
-        None => (FOLLOWED_RELEVANCE, None),
+    let Some(topic) = item.topic.as_deref() else {
+        return (FOLLOWED_RELEVANCE, None);
+    };
+    let played = item.source_name == format!("{topic} on Steam");
+    match profile.find(topic) {
+        Some(t) if t.muted => (0, None),
+        Some(t) if played => ((weight(t) / 2).max(PLAYED_RELEVANCE), Some(t.topic.clone())),
+        Some(t) => (weight(t) / 2, Some(t.topic.clone())),
+        None if played => (PLAYED_RELEVANCE, Some(topic.to_string())),
+        None => (0, None),
     }
 }
 
@@ -1741,10 +1765,31 @@ const SUMMARY_RULES: &str = "You write the summaries on a news feed. For each nu
 /// One fast-model ask that summarizes a run's picks. None when nothing cleared the
 /// threshold: then no model is called.
 pub fn summary_messages(picks: &[Ranked]) -> Option<Vec<(String, String)>> {
+    summary_messages_with(picks, "")
+}
+
+/// [`summary_messages`] that also carries the person's own Feed instructions,
+/// so the sheet's "future posts follow them" holds for source posts too. The
+/// default instructions add nothing; the instructions steer tone and focus
+/// and never add facts.
+pub fn summary_messages_with(
+    picks: &[Ranked],
+    instructions: &str,
+) -> Option<Vec<(String, String)>> {
     if picks.is_empty() {
         return None;
     }
     let mut ask = String::new();
+    let own: String = instructions
+        .trim()
+        .chars()
+        .take(crate::pulse::FEED_INSTRUCTIONS_CAP)
+        .collect();
+    if !own.is_empty() && own != crate::pulse::DEFAULT_FEED_INSTRUCTIONS.trim() {
+        ask.push_str(&format!(
+            "Their feed instructions (follow them for tone and focus; they never add facts):\n{own}\n\n"
+        ));
+    }
     for (i, r) in picks.iter().enumerate() {
         let text = one_line(&r.item.summary, SUMMARY_CHARS);
         ask.push_str(&format!(
@@ -1818,8 +1863,9 @@ pub fn is_source_post(card: &UpdateCard) -> bool {
 }
 
 /// Saved Finds: posts kept with Save, newest first, in `{config}/saved-finds.json`.
+/// A file of their own: feed cleanup, expiry, archive and delete never read
+/// it, and nothing here drops a find. Only Remove from saved takes one out.
 pub const SAVED_FILE: &str = "saved-finds.json";
-pub const SAVED_MAX: usize = 200;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedFind {
@@ -1854,18 +1900,99 @@ pub fn save_find(list: &mut Vec<SavedFind>, find: SavedFind) -> bool {
         return false;
     }
     list.insert(0, find);
-    list.truncate(SAVED_MAX);
     true
 }
 
-pub fn load_saved(path: &std::path::Path) -> Vec<SavedFind> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+/// Remove from saved. False when that link wasn't saved.
+pub fn remove_find(list: &mut Vec<SavedFind>, url: &str) -> bool {
+    let key = canonical_url(url);
+    let before = list.len();
+    list.retain(|f| canonical_url(&f.url) != key);
+    list.len() != before
 }
 
+/// Whether this link is already saved.
+pub fn is_saved(list: &[SavedFind], url: &str) -> bool {
+    let key = canonical_url(url);
+    list.iter().any(|f| canonical_url(&f.url) == key)
+}
+
+/// Saved Finds from disk; no file yet is an empty list. A file that can't be
+/// read or parsed is never taken as empty: see [`load_saved_at`].
+pub fn load_saved(path: &std::path::Path) -> Result<Vec<SavedFind>, String> {
+    load_saved_at(path, crate::now_ms())
+}
+
+/// [`load_saved`] at `now_ms`. A damaged file is copied byte for byte to
+/// `saved-finds.json.corrupt-<now_ms>` (once: a copy with the same bytes is
+/// reused), stays where it is, and the error names the copy. Until the file
+/// parses again or is moved, [`save_saved`] refuses to write.
+pub fn load_saved_at(path: &std::path::Path, now_ms: u64) -> Result<Vec<SavedFind>, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(format!(
+                "Saved items couldn't be read ({e}). Nothing is saved or removed until it can."
+            ))
+        }
+    };
+    let err = match serde_json::from_slice(&bytes) {
+        Ok(list) => return Ok(list),
+        Err(e) => e,
+    };
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("saved-finds.json");
+    Err(match back_up_damaged(path, &bytes, now_ms) {
+        Ok(copy) => format!(
+            "{name} is damaged ({err}). A copy is in {copy}. Nothing is saved or removed until {name} is fixed or moved."
+        ),
+        Err(e) => format!(
+            "{name} is damaged ({err}) and couldn't be copied ({e}). Nothing is saved or removed until it is fixed or moved."
+        ),
+    })
+}
+
+/// The damaged file's copy next to it, by file name. A copy that already
+/// holds these exact bytes is reused, so reading every frame makes one copy.
+fn back_up_damaged(path: &std::path::Path, bytes: &[u8], now_ms: u64) -> std::io::Result<String> {
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("saved-finds.json");
+    let prefix = format!("{name}.corrupt-");
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            if file.starts_with(&prefix) && std::fs::read(entry.path()).is_ok_and(|b| b == bytes) {
+                return Ok(file);
+            }
+        }
+    }
+    let copy = format!("{prefix}{now_ms}");
+    std::fs::write(dir.join(&copy), bytes)?;
+    Ok(copy)
+}
+
+/// Writes Saved Finds. Refuses while the file on disk can't be read or
+/// parsed, so a damaged file is never written over.
 pub fn save_saved(path: &std::path::Path, list: &[SavedFind]) -> Result<(), String> {
+    match std::fs::read(path) {
+        Ok(bytes) if serde_json::from_slice::<Vec<SavedFind>>(&bytes).is_err() => {
+            return Err(load_saved(path)
+                .err()
+                .unwrap_or_else(|| "Saved items are damaged. Nothing was saved.".to_string()))
+        }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "Saved items couldn't be read ({e}). Nothing was saved."
+            ))
+        }
+        _ => {}
+    }
     let text = serde_json::to_string_pretty(list).map_err(|e| format!("Saved finds: {e}"))?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("Saved finds: {e}"))?;
@@ -2311,6 +2438,50 @@ mod tests {
     }
 
     #[test]
+    fn news_for_a_game_you_play_ranks_without_an_interest() {
+        const H: u64 = 3_600_000;
+        let steam = |game: &str, title: &str| {
+            let mut i = item(title, &format!("https://store.test/{title}"), NOW - H);
+            i.source_name = format!("{game} on Steam");
+            i.topic = Some(game.into());
+            i
+        };
+        let p = profile(&[
+            ("Deep Rock Galactic", 30, false, false),
+            ("Rust", 80, false, true),
+        ]);
+        let got: Vec<(String, u32, Option<String>)> = rank(
+            &[
+                steam("Helldivers 2", "Patch 1.004 notes"),
+                steam("Deep Rock Galactic", "Season 6 roadmap"),
+                steam("Rust", "Monthly update"),
+            ],
+            &p,
+            NOW,
+        )
+        .into_iter()
+        .map(|r| (r.item.title, r.score, r.because))
+        .collect();
+        assert_eq!(PLAYED_RELEVANCE, 60);
+        assert_eq!(
+            got,
+            vec![
+                ("Patch 1.004 notes".into(), 60, Some("Helldivers 2".into())),
+                (
+                    "Season 6 roadmap".into(),
+                    60,
+                    Some("Deep Rock Galactic".into())
+                ),
+            ],
+            "a played game lifts to 60 (×100% fresh ×100% source); a muted one stays out"
+        );
+        // A web search for a topic that is not an interest still scores nothing.
+        let mut search = item("Patch notes roundup", "https://s.test", NOW - H);
+        search.topic = Some("Helldivers 2".into());
+        assert!(rank(&[search], &p, NOW).is_empty());
+    }
+
+    #[test]
     fn rank_scores_relevance_freshness_and_source_signal() {
         const H: u64 = 3_600_000;
         let p = profile(&[
@@ -2519,6 +2690,19 @@ mod tests {
     }
 
     #[test]
+    fn the_budget_counts_the_persons_own_day() {
+        // NOW is 08:00 UTC on Oct 11.
+        assert_eq!(local_day(NOW, None), 20_737);
+        assert_eq!(local_day(NOW, Some(-600)), 20_736);
+        assert_eq!(local_day(NOW, Some(300)), 20_737);
+        assert_eq!(local_day(NOW + 12 * 3_600_000, Some(300)), 20_738);
+        let mut cache = SourceCache::default();
+        assert!(cache.take_call_on(20_736));
+        assert_eq!(cache.calls_on(20_736), 1);
+        assert_eq!(cache.calls_on(20_737), 0);
+    }
+
+    #[test]
     fn only_the_picks_go_to_the_model_and_nothing_new_asks_nothing() {
         assert_eq!(summary_messages(&[]), None);
         let mut a = ranked(item("Rust 1.99 released", "https://a.test/1", NOW));
@@ -2544,6 +2728,24 @@ mod tests {
         assert_eq!(picks[1].item.summary, "Six quiet units. Tested at home.");
         assert_eq!(picks[0].item.summary, "812 points on Hacker News.");
         assert_eq!(apply_summaries(&mut picks, "Sorry, I can't."), 0);
+    }
+
+    #[test]
+    fn source_summaries_follow_the_persons_own_feed_instructions() {
+        let a = ranked(item("Rust 1.99 released", "https://a.test/1", NOW));
+        let plain = summary_messages(std::slice::from_ref(&a)).expect("asks");
+        let default = summary_messages_with(
+            std::slice::from_ref(&a),
+            crate::pulse::DEFAULT_FEED_INSTRUCTIONS,
+        )
+        .expect("asks");
+        assert_eq!(default, plain, "the default instructions add nothing");
+        let own = summary_messages_with(std::slice::from_ref(&a), "  Keep it short, no hype. ")
+            .expect("asks");
+        assert_eq!(
+            own[1].1,
+            "Their feed instructions (follow them for tone and focus; they never add facts):\nKeep it short, no hype.\n\n1. Rust 1.99 released (feed.test)"
+        );
     }
 
     #[test]
@@ -2802,6 +3004,127 @@ mod tests {
             rank_with(std::slice::from_ref(&followed), &p, &bias, &known, NOW)[0].score,
             35
         );
+    }
+
+    #[test]
+    fn saved_finds_are_never_dropped_and_only_remove_takes_one_out() {
+        let mut list = Vec::new();
+        for i in 0..250 {
+            let find = SavedFind {
+                title: format!("Find {i}"),
+                url: format!("https://a.test/{i}"),
+                source_name: String::new(),
+                summary: String::new(),
+                because: None,
+                saved_ms: i,
+            };
+            assert!(save_find(&mut list, find));
+        }
+        assert_eq!(list.len(), 250, "no cap drops a saved find");
+        assert!(is_saved(&list, "https://www.a.test/0?utm_source=x"));
+        assert!(remove_find(&mut list, "https://a.test/0"));
+        assert!(!is_saved(&list, "https://a.test/0"));
+        assert!(!remove_find(&mut list, "https://a.test/0"));
+        assert_eq!(list.len(), 249);
+    }
+
+    #[test]
+    fn two_hundred_fifty_saved_finds_survive_a_round_trip_and_remove_takes_exactly_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-core-saved-250-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        let path = dir.join(SAVED_FILE);
+        let mut list = Vec::new();
+        for i in 0..250u64 {
+            let find = SavedFind {
+                title: format!("Find {i}"),
+                url: format!("https://a.test/{i}"),
+                source_name: "Example Feed".into(),
+                summary: String::new(),
+                because: None,
+                saved_ms: i,
+            };
+            assert!(save_find(&mut list, find));
+            save_saved(&path, &list).expect("write");
+        }
+        let on_disk = load_saved(&path).expect("read");
+        assert_eq!(on_disk.len(), 250);
+        assert_eq!(on_disk[0].url, "https://a.test/249");
+        assert_eq!(on_disk[249].url, "https://a.test/0");
+
+        let mut list = on_disk;
+        assert!(remove_find(&mut list, "https://a.test/125"));
+        save_saved(&path, &list).expect("write");
+        let after = load_saved(&path).expect("read");
+        assert_eq!(after.len(), 249);
+        assert!(!is_saved(&after, "https://a.test/125"));
+        assert!(is_saved(&after, "https://a.test/124"));
+        assert!(is_saved(&after, "https://a.test/126"));
+        let left: Vec<String> = after.iter().map(|f| f.url.clone()).collect();
+        let want: Vec<String> = (0..250u64)
+            .rev()
+            .filter(|i| *i != 125)
+            .map(|i| format!("https://a.test/{i}"))
+            .collect();
+        assert_eq!(left, want, "only that one find left the list");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_damaged_saved_file_is_copied_kept_and_never_written_over() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-core-saved-damaged-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join(SAVED_FILE);
+        let damaged =
+            b"[{\"title\":\"Rust 1.99 released\",\"url\":\"https://blog.rust-lang.org/1.99\"";
+        std::fs::write(&path, damaged).expect("damaged file");
+
+        // Loading is an error, never an empty list, and copies the bytes.
+        let err = load_saved_at(&path, 1_791_705_600_000).expect_err("damaged is an error");
+        assert!(err.contains("saved-finds.json is damaged"), "{err}");
+        assert!(
+            err.contains("saved-finds.json.corrupt-1791705600000"),
+            "{err}"
+        );
+        let copy = dir.join("saved-finds.json.corrupt-1791705600000");
+        assert_eq!(std::fs::read(&copy).expect("copy"), damaged.to_vec());
+        assert_eq!(std::fs::read(&path).expect("original"), damaged.to_vec());
+
+        // Reading again later makes no second copy.
+        let again = load_saved_at(&path, 1_791_705_660_000).expect_err("still damaged");
+        assert!(
+            again.contains("saved-finds.json.corrupt-1791705600000"),
+            "{again}"
+        );
+        assert!(!dir.join("saved-finds.json.corrupt-1791705660000").exists());
+
+        // A Save after that is refused and the original stays byte for byte.
+        let find = SavedFind {
+            title: "Find 1".into(),
+            url: "https://a.test/1".into(),
+            source_name: "Example Feed".into(),
+            summary: String::new(),
+            because: None,
+            saved_ms: 1_791_705_600_000,
+        };
+        let refused = save_saved(&path, &[find]).expect_err("no write over a damaged file");
+        assert!(refused.contains("Nothing is saved or removed"), "{refused}");
+        assert_eq!(std::fs::read(&path).expect("original"), damaged.to_vec());
+        assert!(!path.with_extension("json.tmp").exists());
+
+        // No file at all is still just an empty list.
+        let missing = dir.join("none").join(SAVED_FILE);
+        assert_eq!(
+            load_saved_at(&missing, 1_791_705_600_000).expect("missing"),
+            Vec::new()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

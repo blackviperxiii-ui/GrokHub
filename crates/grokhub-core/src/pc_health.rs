@@ -26,6 +26,8 @@ pub const CPU_CRITICAL_C: f32 = 97.0;
 pub const CLOCK_DROP_PCT: f32 = 12.0;
 
 pub const SOURCE_PREFIX: &str = "pchealth:";
+/// What every PC health card and its Fix it sheet promise.
+pub const SAFETY_FOOTER: &str = "Changes fans only with a backup you can restore. Updates drivers only from the official source after checking it twice. Never touches clock speeds or a running game.";
 pub const LEDGER_FILE: &str = "pc-health.json";
 
 /// Settings → Behavior / Pulse. Off by default.
@@ -34,11 +36,26 @@ pub const LEDGER_FILE: &str = "pc-health.json";
 pub struct PcHealthSettings {
     #[serde(default)]
     pub enabled: bool,
+    /// Skip the card after a session the verdict calls normal.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quiet_when_normal: bool,
+    /// The user's own warm lines (°C); `None` keeps the built-in ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_warn_c: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_warn_c: Option<u8>,
+    /// No summary cards until this unix ms (Pause these cards for a week).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub paused_until_ms: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl PcHealthSettings {
     pub fn is_default(&self) -> bool {
-        !self.enabled
+        *self == Self::default()
     }
 }
 
@@ -133,6 +150,10 @@ pub struct PcHealthLedger {
     pub last_summary_ms: u64,
     #[serde(default)]
     pub last_game: String,
+    /// Recent sessions, oldest first, for the verdict's baseline and the
+    /// Fix it sheet's compare view.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<crate::pc_health_advice::SessionStat>,
 }
 
 /// Outcome of one observe tick.
@@ -418,7 +439,7 @@ pub fn tips_for(summary: &SessionSummary) -> Vec<String> {
 
     if throttled || hot_gpu || hot_cpu {
         tips.push(format!(
-            "Check the fan curve in your OEM/vendor tool — {product} never changes fans or clocks.",
+            "Run the fans at full speed from the card, or check the fan curve in your vendor tool. {product} never touches clock speeds.",
             product = crate::brand::product_name()
         ));
         tips.push("Blow dust out of heatsinks and make sure intake vents are clear.".into());
@@ -546,7 +567,7 @@ pub fn summary_text(summary: &SessionSummary) -> (String, String) {
     };
     // Keep under UpdateCard body clip (~160). Full tips live in `why` + prompt.
     let body = format!(
-        "{mins} min · CPU {} / GPU {} · util {}/{} · {} · {}. Report only — never changes fans, clocks, or drivers.",
+        "{mins} min · CPU {} / GPU {} · util {}/{} · {} · {}. Never touches clock speeds or a running game.",
         fmt_temp(summary.max_cpu_temp_c),
         fmt_temp(summary.max_gpu_temp_c),
         fmt_util(summary.avg_cpu_util),
@@ -576,7 +597,7 @@ pub fn summary_card(summary: &SessionSummary, now_ms: u64) -> UpdateCard {
     let source = format!("{SOURCE_PREFIX}{game_key}:{now_ms}");
     let mut card = suggestion_card(&source, &title, &body, now_ms);
     card.prompt = Some(format!(
-        "I just finished a gaming session ({}). Max CPU {} / GPU {}. Bound {}. Suggest concrete FPS and cooling fixes for this PC without changing fans or clocks yourself.",
+        "I just finished a gaming session ({}). Max CPU {} / GPU {}. Bound {}. Suggest concrete FPS and cooling fixes for this PC. Never change clock speeds, and change fans only with a backup first.",
         summary.game_label.as_deref().unwrap_or("a game"),
         fmt_temp(summary.max_cpu_temp_c),
         fmt_temp(summary.max_gpu_temp_c),
@@ -595,9 +616,8 @@ pub fn summary_card(summary: &SessionSummary, now_ms: u64) -> UpdateCard {
             why.push_str(tip);
         }
     }
-    why.push_str(crate::brand::filled(
-        "\n{product} never changes fans, clocks, or drivers.",
-    ));
+    why.push('\n');
+    why.push_str(SAFETY_FOOTER);
     card.why = Some(why);
     card.pulse = PulseMeta {
         category: Some("gaming".into()),
@@ -806,9 +826,13 @@ mod tests {
         assert!(!summary.tips.is_empty());
         let card = summary_card(&summary, 90_000);
         assert!(is_pc_health_card(&card));
-        assert!(card.body.as_deref().unwrap().contains("never changes"));
+        assert!(card
+            .body
+            .as_deref()
+            .unwrap()
+            .ends_with("Never touches clock speeds or a running game."));
         assert!(card.why.as_deref().unwrap().contains("Tips:"));
-        assert!(card.why.as_deref().unwrap().contains("never changes fans"));
+        assert!(card.why.as_deref().unwrap().ends_with(SAFETY_FOOTER));
     }
 
     #[test]

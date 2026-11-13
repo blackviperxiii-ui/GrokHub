@@ -249,24 +249,24 @@ pub trait LiveClient {
 }
 
 /// The real client. Riot's certificate on port 2999 is self-signed, so this
-/// client skips certificate checks. It is private to that one origin: it
-/// only ever requests [`LIVE_CLIENT_ORIGIN`] paths, follows no redirects
-/// and uses no proxy, so the relaxed check can't reach any other host. No
-/// other client in the app is affected.
+/// agent skips certificate checks. It is private to that one origin: it
+/// only ever requests [`LIVE_CLIENT_ORIGIN`] paths, dials loopback addresses
+/// and `https` only (`loopback_self_signed`), follows no redirects and uses
+/// no proxy, so the relaxed check can't reach any other host. No other
+/// agent in the app is affected.
 pub struct RiotLoopback {
-    http: reqwest::blocking::Client,
+    http: crate::http::Agent,
 }
 
 impl RiotLoopback {
-    pub fn new() -> Result<Self, reqwest::Error> {
-        let http = reqwest::blocking::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .https_only(true)
-            .connect_timeout(Duration::from_millis(500))
-            .timeout(Duration::from_secs(2))
-            .build()?;
+    pub fn new() -> Result<Self, crate::http::Error> {
+        let http = crate::http::agent(crate::http::Opts {
+            connect: Duration::from_millis(500),
+            overall: Some(Duration::from_secs(2)),
+            redirects: 0,
+            loopback_self_signed: true,
+            ..crate::http::Opts::default()
+        });
         Ok(Self { http })
     }
 }
@@ -274,11 +274,11 @@ impl RiotLoopback {
 impl LiveClient for RiotLoopback {
     fn all_game_data(&mut self) -> Option<String> {
         let url = format!("{LIVE_CLIENT_ORIGIN}{ALL_GAME_DATA}");
-        let resp = self.http.get(url).send().ok()?;
-        if !resp.status().is_success() {
+        let resp = self.http.get(&url).call().ok()?;
+        if !(200..300).contains(&resp.status()) {
             return None;
         }
-        resp.text().ok()
+        resp.into_string().ok()
     }
 }
 

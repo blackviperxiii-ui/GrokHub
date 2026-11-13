@@ -71,6 +71,54 @@ fn evict_oldest_image(items: &mut [InputItem]) -> bool {
     false
 }
 
+/// Replaces an image older than the newest few, which [`mask_old_images`] drops.
+pub const OLD_IMAGE_PLACEHOLDER: &str = "[An earlier image was removed to save space and is no longer visible. Do not describe or reason about its contents from memory; take a new screenshot or ask the user to re-share it if you need to see it again.]";
+
+/// How many of the newest images stay whole.
+pub const KEEP_RECENT_IMAGES: usize = 3;
+
+/// Older images pile up to this many before they are dropped together, so a
+/// chat full of screenshots breaks the prompt cache once per batch, not per image.
+pub const IMAGE_MASK_BATCH: usize = 3;
+
+/// Turn every image but the newest `keep` into [`OLD_IMAGE_PLACEHOLDER`] once
+/// more than `keep + IMAGE_MASK_BATCH` are whole, or once more than `keep` are
+/// whole when `now` is set (another trim already changed the history this
+/// turn, so the cache breaks anyway). Returns how many images changed.
+pub fn mask_old_images(items: &mut [InputItem], keep: usize, now: bool) -> usize {
+    let whole = items
+        .iter()
+        .map(|item| match item {
+            InputItem::Message { content, .. } => content
+                .iter()
+                .filter(|p| matches!(p, ContentPart::InputImage(_)))
+                .count(),
+            _ => 0,
+        })
+        .sum::<usize>();
+    let limit = if now {
+        keep
+    } else {
+        keep.saturating_add(IMAGE_MASK_BATCH)
+    };
+    if whole <= limit {
+        return 0;
+    }
+    let mut drop = whole - keep;
+    for item in items.iter_mut() {
+        let InputItem::Message { content, .. } = item else {
+            continue;
+        };
+        for part in content.iter_mut() {
+            if drop > 0 && matches!(part, ContentPart::InputImage(_)) {
+                *part = ContentPart::InputText(OLD_IMAGE_PLACEHOLDER.to_string());
+                drop -= 1;
+            }
+        }
+    }
+    whole - keep
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +243,33 @@ mod tests {
             InputItem::Message { ref content, .. }
                 if matches!(content.first(), Some(ContentPart::InputText(t)) if t == "hello")
         ));
+    }
+
+    #[test]
+    fn old_images_wait_for_a_batch_then_only_the_newest_stay() {
+        let mut items: Vec<InputItem> = (0..6).map(|i| image_message(&format!("img{i}"))).collect();
+        assert_eq!(mask_old_images(&mut items, KEEP_RECENT_IMAGES, false), 0);
+        assert_eq!(urls(&items).iter().flatten().count(), 6);
+        items.push(image_message("img6"));
+        assert_eq!(mask_old_images(&mut items, KEEP_RECENT_IMAGES, false), 4);
+        let left: Vec<String> = urls(&items).into_iter().flatten().collect();
+        assert_eq!(left, ["img4", "img5", "img6"]);
+        let InputItem::Message { content, .. } = &items[0] else {
+            panic!("message");
+        };
+        assert!(content
+            .iter()
+            .any(|p| matches!(p, ContentPart::InputText(t) if t == OLD_IMAGE_PLACEHOLDER)));
+        // Already masked: nothing changes again.
+        assert_eq!(mask_old_images(&mut items, KEEP_RECENT_IMAGES, false), 0);
+    }
+
+    #[test]
+    fn a_trim_that_already_broke_the_cache_masks_old_images_too() {
+        let mut items: Vec<InputItem> = (0..4).map(|i| image_message(&format!("img{i}"))).collect();
+        assert_eq!(mask_old_images(&mut items, KEEP_RECENT_IMAGES, false), 0);
+        assert_eq!(mask_old_images(&mut items, KEEP_RECENT_IMAGES, true), 1);
+        let left: Vec<String> = urls(&items).into_iter().flatten().collect();
+        assert_eq!(left, ["img1", "img2", "img3"]);
     }
 }

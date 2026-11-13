@@ -488,7 +488,7 @@ mod tests {
         let body = md.split("---\n").nth(2).unwrap();
         assert_eq!(
             body,
-            "Turn 4: 1 step.\nBrief: repair × critical, done = services, packages, boot errors, ports\nPolicy: repair × critical, goal quality (mistakes can break the system)\nTalk: findings card, reply under 80 words\nPlaybook: Fix this PC\nTools: click x1\nDecisions: allow 1\nScreen changed: yes 1, no 0\nFindings: none\nVerify: none\nSpans: chat-7:2001\n"
+            format!("Turn 4: 1 step.\nBrief: repair × critical, done = {}\nPolicy: repair × critical, goal quality (mistakes can break the system)\nTalk: findings card, reply under 80 words\nPlaybook: Fix this PC\nTools: click x1\nDecisions: allow 1\nScreen changed: yes 1, no 0\nFindings: none\nVerify: none\nSpans: chat-7:2001\n", crate::brain::SYSTEM_DONE_TEXT)
         );
         assert_eq!(
             with_brief(

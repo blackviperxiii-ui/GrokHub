@@ -509,6 +509,16 @@ pub fn project_name_from_path(p: &str) -> String {
         .to_string()
 }
 
+/// What a project is called on screen. The default work folder keeps its
+/// `GrokHub-Work` name on disk so nobody's files move; it shows as Work.
+pub fn project_display_name(name: &str) -> &str {
+    if name == "GrokHub-Work" {
+        "Work"
+    } else {
+        name
+    }
+}
+
 fn peel_host_path_token(tok: &str) -> String {
     let t = tok.trim_matches(|c| matches!(c, '"' | '\'' | '`'));
     if let Some((_, v)) = t.split_once('=') {
@@ -683,6 +693,12 @@ pub fn refund_host_reserved(count: u32, reserved: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn default_work_folder_shows_as_work() {
+        assert_eq!(project_display_name("GrokHub-Work"), "Work");
+        assert_eq!(project_display_name("night-watch"), "night-watch");
+    }
     use super::*;
 
     #[test]

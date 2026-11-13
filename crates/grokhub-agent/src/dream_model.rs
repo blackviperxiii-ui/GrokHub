@@ -16,7 +16,7 @@ use grokhub_core::{automation_done_card, skill_dir_name, UpdateCard};
 use crate::client::{CancelToken, ContentPart, InputItem, ModelClient, ResponsesRequest};
 use crate::harness::{lesson_checks, record_skill_change, Origin};
 
-const LESSON_SKILL: &str = "dream-lessons";
+use crate::dream_gate::LESSON_SKILL;
 
 /// Deterministic dream, then at most one model call when `model_opts.enabled`.
 pub struct SleepDreamOut {
@@ -141,6 +141,7 @@ fn one_call(
     cap: u32,
 ) -> Result<String, ()> {
     let req = ResponsesRequest {
+        text_format: None,
         model: model.to_string(),
         // The live `background:dream` row starts at low and ceilings at medium.
         effort: Some("medium".into()),
@@ -176,7 +177,7 @@ Do not agree with a wrong claim. Do not drop a stored fact. Stay under {cap} out
 fn user_prompt(store: &grokhub_core::amr::AmrStore, report: &DreamReport) -> String {
     let (rows, _) = memory_rows(store);
     let mut lines = String::new();
-    for row in rows.into_iter().filter(|row| !row.proposed).take(24) {
+    for row in rows.into_iter().filter(|row| row.in_use()).take(24) {
         let text: String = row.text.chars().take(120).collect();
         lines.push_str(&text);
         lines.push('\n');

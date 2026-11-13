@@ -706,10 +706,32 @@ pub fn load_intentions(config_dir: &Path, conversation_id: &str) -> Intentions {
     let Ok(path) = intentions_path(config_dir, conversation_id) else {
         return Intentions::default();
     };
-    let Ok(text) = fs::read_to_string(path) else {
+    let Ok(text) = read_settled(&path) else {
         return Intentions::default();
     };
     serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// Read a file that [`write_intentions`] may be replacing right now. On
+/// Windows, an open that lands in the instant the old copy is swapped out
+/// can fail with access denied though the file is there before and after;
+/// that read is tried again for up to about 100 ms, so a goal list never
+/// reads as empty (and is never saved back empty) because of the swap.
+fn read_settled(path: &Path) -> std::io::Result<String> {
+    let mut tries = 0;
+    loop {
+        match fs::read_to_string(path) {
+            Err(err)
+                if cfg!(windows)
+                    && err.kind() == std::io::ErrorKind::PermissionDenied
+                    && tries < 20 =>
+            {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            read => return read,
+        }
+    }
 }
 
 pub fn save_intentions(
@@ -840,8 +862,8 @@ fn write_intentions(path: &Path, bytes: &[u8]) -> Result<(), String> {
         let mut file = opts.open(&tmp).map_err(|err| err.to_string())?;
         file.write_all(bytes).map_err(|err| err.to_string())?;
     }
-    // Windows rename does not replace an existing file. One writer owns this path.
-    let _ = fs::remove_file(path);
+    // std's rename replaces the file on Windows too, so the old copy stays
+    // readable until the new one is in place.
     fs::rename(&tmp, path).map_err(|err| {
         let _ = fs::remove_file(&tmp);
         err.to_string()
@@ -853,6 +875,44 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_reader_never_finds_intentions_missing_while_they_are_rewritten() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-intentions-swap-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("intentions.json");
+        write_intentions(&path, b"[]").unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let missing = Arc::new(AtomicUsize::new(0));
+        let reader = {
+            let (path, stop, missing) = (path.clone(), stop.clone(), missing.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if read_settled(&path).is_err() {
+                        missing.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            })
+        };
+        for i in 0..500 {
+            write_intentions(&path, format!("[{i}]").as_bytes()).unwrap();
+        }
+        stop.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
+        assert_eq!(
+            missing.load(Ordering::Relaxed),
+            0,
+            "the old copy stays until the new one is in place"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[499]");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn thread_goal_prompt_skips_host_results() {

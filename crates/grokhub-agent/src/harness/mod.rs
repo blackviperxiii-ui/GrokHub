@@ -62,6 +62,7 @@ mod backend;
 mod brain_tune;
 mod canary;
 mod changes;
+pub mod chat_record;
 mod consent;
 mod cua;
 mod detect;
@@ -75,12 +76,16 @@ mod mindcheck;
 mod park;
 mod path_d;
 mod proactive;
+pub mod provenance;
+pub mod replay;
+pub mod safety_events;
 mod self_improve;
 mod self_manage;
 mod span;
 mod span_search;
 mod span_tail;
 mod trail;
+pub mod weekly_review;
 
 pub use access::{always_does_not_imply_full, AccessMode};
 pub use approval::{
@@ -88,17 +93,18 @@ pub use approval::{
     GateOutcome, HardAnswer, HardPark, Step, APPROVAL_TTL,
 };
 pub use at_rest::{
-    has_sealed_data, keyring_name_for, read_key, recheck_keyring, set_default_key_store,
-    use_key_store_for, use_os_keyring, KeyStore, KeyringOs, LearnedVault, Locked, MemoryKeyStore,
-    OsKeyring, KEY_ACCOUNT, KEY_ID_FILE, KEY_SERVICE, SEALED_PREFIX,
+    forget_key_store_for, has_sealed_data, keyring_name_for, read_key, recheck_keyring,
+    set_default_key_store, use_key_store_for, use_os_keyring, KeyStore, KeyringOs, LearnedVault,
+    Locked, MemoryKeyStore, OsKeyring, KEY_ACCOUNT, KEY_ID_FILE, KEY_SERVICE, SEALED_PREFIX,
 };
 pub use audit::{
     audit_file, audit_spans, pass1, pass2, summarize, Audit, SpanDigest, Window, WindowAudit,
     WindowSummary,
 };
 pub use backend::{
-    computer_tool_names, desk_access, desk_args, desk_decide, desk_span, grok_build_click,
-    park_desk_call, ClickOutcome, ClickRequest, ComputerUseBackend, DeskCall, CU_TRACE,
+    computer_tool_names, desk_access, desk_action, desk_args, desk_decide, desk_span,
+    grok_build_click, park_desk_call, ClickOutcome, ClickRequest, ComputerUseBackend, DeskCall,
+    CU_TRACE,
 };
 pub use brain_tune::{
     apply_brain_tweak, brain_ask, propose, user_version, BrainAsk, PlaybookTarget, PolicyTarget,
@@ -141,21 +147,21 @@ pub use detect::{
     DONE_WITHOUT_CRITERIA, UNSUPPORTED_ASSURANCE,
 };
 pub use egress::{
-    append_egress, current_origin, egress_dest, egress_path, guard_egress, guard_or_park,
-    guard_provider, guard_quiet, is_local_dest, is_model_host, model_text_classes,
+    append_egress, current_origin, current_recall, egress_dest, egress_path, guard_egress,
+    guard_or_park, guard_provider, guard_quiet, is_local_dest, is_model_host, model_text_classes,
     provider_or_park, read_egress, read_egress_report, record_approved_once, DataClass,
     EgressBasis, EgressLine, EgressRead, EgressReq, OriginScope, RecallScope, EGRESS_FILE,
-    HUB_DEST, HUB_SYNC_DATA,
+    HUB_DEST, HUB_SYNC_DATA, XAI_MODEL_ENDPOINTS,
 };
 pub use evidence::{
     evidence_summary, latest_evidence_turn, run_evidence, RunEvidence, EVIDENCE_LINES_CAP,
 };
 pub use hard::{
     classify, classify_ask, click_action, click_rule, click_target, click_target_class,
-    click_target_in, credential_action, credential_field, credential_hint, delete_files_action,
-    delete_targets, desk_classify, hard_class, hard_floor, needs_window, ClickRule, ClickTarget,
-    HardClass, HardFloor, HardHit, BUILTIN_CU_DENY, GB_DENY_GAPS, HEADLESS_DENY_RULES, NO_BIN_HINT,
-    TARGET_HINT,
+    click_target_in, creates_automation, credential_action, credential_field, credential_hint,
+    delete_files_action, delete_targets, desk_classify, hard_class, hard_floor, needs_window,
+    set_mod_roots, ClickRule, ClickTarget, HardClass, HardFloor, HardHit, BUILTIN_CU_DENY,
+    GB_DENY_GAPS, HEADLESS_DENY_RULES, NO_BIN_HINT, TARGET_HINT,
 };
 pub use ladder::{hard_target, ladder_span, Ladder, LadderStep, Rung, RECOVERY_TOOL};
 pub use mindcheck::{
@@ -171,7 +177,7 @@ pub use park::{
 pub use path_d::{builtin_cu, cu_look_only, decide_unasked, unasked_action, unasked_title};
 pub use proactive::{
     answer_span, ledger_target, note_proactive, proactive_key, proactive_mind, proactive_span,
-    run_approved_once, run_auto_act, step_class, AutoRun, DECISION_ASK, DECISION_AUTO,
+    run_approved_once, run_auto_act, step_class, step_undo, AutoRun, DECISION_ASK, DECISION_AUTO,
     DECISION_NEVER, DECISION_UNDO, PROACTIVE_TRACE,
 };
 pub use self_improve::{
@@ -181,8 +187,9 @@ pub use self_improve::{
     SELF_REVIEW_SESSION, SELF_REVIEW_TOOL,
 };
 pub use self_manage::{
-    automation_cap_refusal, open_connection_token, tool_origin, undo_connection, AutomationsFile,
-    McpFile, SELF_AUTOMATION_WEEK_CAP, SELF_MANAGE_TOOLS, WEEK_MS,
+    automation_cap_refusal, forget_mod_key, open_connection_token, open_mod_key, seal_mod_key,
+    tool_origin, undo_connection, AutomationsFile, McpFile, SELF_AUTOMATION_WEEK_CAP,
+    SELF_MANAGE_TOOLS, WEEK_MS,
 };
 pub(crate) use self_manage::{
     forget_connection_token, forget_mcp_signin, open_mcp_signin, seal_connection_token,

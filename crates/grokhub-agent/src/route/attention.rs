@@ -54,7 +54,7 @@ pub struct AttentionDecision {
     pub kind: Attention,
     /// Stable rule id for route logs (`attn:escalate:host`).
     pub rule: &'static str,
-    /// Short plain clause for `/why` and the Auto chip.
+    /// Short plain clause for the route reason.
     pub why: &'static str,
 }
 
@@ -378,6 +378,12 @@ fn caps_of(reg: &Registry, id: &str) -> Caps {
     caps
 }
 
+/// E15: how strong a reasoner `id` is (its reasoning score, 0..=100), for
+/// moving a failing episode to a stronger model.
+pub fn reasoning_of(reg: &Registry, id: &str) -> u8 {
+    caps_of(reg, id).reasoning
+}
+
 /// Re-order candidates for the attention decision. Table order is the Stay
 /// baseline; escalate/force-top score against max-reasoning; de-escalate picks
 /// a cheaper *task* model when attention is confident care can be light.
@@ -429,9 +435,6 @@ pub fn rank_models(
         }
     }
 }
-
-/// Note under Settings / `/why table` baseline rows.
-pub const TABLE_ATTENTION_NOTE: &str = "Baselines: Cheap / Workhorse / Code / Flagship (flagship reserved for plan/design/debug/prepare/repair). Each turn can escalate or de-escalate from built-in signals + learned feedback (no model-in-the-loop). Token savings apply to the task model.";
 
 #[cfg(test)]
 mod tests {

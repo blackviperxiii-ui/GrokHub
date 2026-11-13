@@ -156,7 +156,7 @@ pub fn before_write(path: &Path) {
         eprintln!("file_checkpoint: could not write manifest: {err}");
         return;
     }
-    prune_store();
+    prune_keeping(Some(&active.conversation));
 }
 
 /// Steps for a conversation, oldest first.
@@ -274,40 +274,48 @@ pub fn restore_step(conversation_id: &str, step: u64) -> Result<String, String> 
             }
         }
     }
-    prune_store();
+    prune_keeping(Some(&conv));
     Ok(format!(
         "Restored step {step} ({restored} file(s), {removed} new file(s) moved aside). Undo with /rewind step {undo}."
     ))
 }
 
-/// Drop oldest conversation runs past [`MAX_RUNS`] or over [`MAX_BYTES`].
-pub fn prune_store() {
+/// Drop oldest conversation runs past [`MAX_RUNS`] or over [`MAX_BYTES`], but
+/// never the run named `keep`: the one being written or restored right now
+/// still counts toward the caps, it just isn't a victim.
+/// Oldest first by sub-second mtime, ties broken by name, so runs made in the
+/// same second don't drop in directory order.
+fn prune_keeping(keep: Option<&str>) {
     let root = checkpoints_root();
     let Ok(rd) = fs::read_dir(&root) else {
         return;
     };
-    let mut runs: Vec<(PathBuf, u64, u64)> = Vec::new();
+    let mut runs: Vec<(PathBuf, u128, u64)> = Vec::new();
+    let mut kept = 0usize;
+    let mut total: u64 = 0;
     for ent in rd.flatten() {
         let path = ent.path();
         if !path.is_dir() {
             continue;
         }
-        let mtime = dir_mtime_secs(&path);
         let size = dir_size(&path);
+        total += size;
+        if keep.is_some_and(|k| ent.file_name() == k) {
+            kept += 1;
+            continue;
+        }
+        let mtime = dir_mtime_nanos(&path);
         runs.push((path, mtime, size));
     }
-    runs.sort_by_key(|(_, mtime, _)| *mtime);
-    let mut total: u64 = runs.iter().map(|(_, _, s)| *s).sum();
-    while runs.len() > MAX_RUNS || total > MAX_BYTES {
-        let Some((path, _, size)) = runs.first().cloned() else {
-            break;
-        };
-        if runs.len() <= 1 && total <= MAX_BYTES {
+    runs.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    let mut count = runs.len() + kept;
+    for (path, _, size) in runs {
+        if count <= MAX_RUNS && total <= MAX_BYTES {
             break;
         }
         let _ = fs::remove_dir_all(&path);
         total = total.saturating_sub(size);
-        runs.remove(0);
+        count -= 1;
     }
 }
 
@@ -401,12 +409,12 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn dir_mtime_secs(path: &Path) -> u64 {
+fn dir_mtime_nanos(path: &Path) -> u128 {
     fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos())
         .unwrap_or(0)
 }
 
@@ -514,7 +522,7 @@ mod tests {
         fs::write(&ssh, b"secret-key-material").unwrap();
 
         let prev_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &fake_home);
+        unsafe { std::env::set_var("HOME", &fake_home) };
 
         assert_eq!(begin_step("conv-c"), Some(1));
         before_write(&ssh);
@@ -526,8 +534,8 @@ mod tests {
         );
 
         match prev_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
         }
         let _ = fs::remove_dir_all(&base);
     }
@@ -546,7 +554,7 @@ mod tests {
             // Ensure distinct mtimes across platforms.
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
-        prune_store();
+        prune_keeping(None);
         let root = checkpoints_root();
         let count = fs::read_dir(&root)
             .unwrap()
@@ -554,6 +562,27 @@ mod tests {
             .filter(|e| e.path().is_dir())
             .count();
         assert!(count <= MAX_RUNS, "kept {count} runs, cap is {MAX_RUNS}");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_run_being_written_is_never_pruned_even_when_it_is_the_oldest() {
+        let (base, _ws, _guard) = scratch("keep");
+        let root = checkpoints_root();
+        for i in 0..(MAX_RUNS + 3) {
+            let run = root.join(format!("run-{i:02}"));
+            fs::create_dir_all(&run).unwrap();
+            fs::write(run.join("touched"), [i as u8]).unwrap();
+        }
+        // run-00 is the oldest by mtime and by name: plain pruning drops it.
+        prune_keeping(Some("run-00"));
+        assert!(root.join("run-00").is_dir(), "the active run was pruned");
+        let left = fs::read_dir(&root).unwrap().flatten().count();
+        assert_eq!(left, MAX_RUNS, "the kept run still counts toward the cap");
+        assert!(
+            !root.join("run-01").exists(),
+            "the next oldest goes instead"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 

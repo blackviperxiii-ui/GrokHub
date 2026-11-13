@@ -2,7 +2,7 @@
 
 ## Owns
 - The pure logic every surface shares, so Linux and Windows do not grow a second protocol: chat routing and models, slash parsing, chips, history, projects, automations, Pulse and the update feed, pairing and hub state, desktop MCP protocol, channels, AMR memory, motion constants.
-- No HTTP and no UI: serde stack plus minisign/toml/quick-xml/rusqlite; Windows adds `win_acl` (`crates/grokhub-core/Cargo.toml`).
+- No UI. HTTP goes through one client facade, `crates/grokhub-core/src/http.rs` (ureq 3). The other network exits (loopback sockets in `game_watch_rl.rs` and `game_watch_gsi.rs`, `git fetch` in `update.rs`) and every HTTP caller are listed in `crates/grokhub-core/tests/offline_guard.rs`. Serde stack plus minisign/toml/quick-xml/rusqlite; Windows adds `win_acl` (`crates/grokhub-core/Cargo.toml`).
 ## Quick commands
 - `cargo test -p grokhub-core --locked -- --test-threads=1`
 - `cargo test -p grokhub-core --test compass_paths` (these compass files)
@@ -10,14 +10,14 @@
 - `crates/grokhub-core/src/lib.rs`: the `pub mod` list and the flat `pub use` re-exports that other crates import.
 - `crates/grokhub-core/src/state.rs` (`HubState`, `state_for_disk`) and `crates/grokhub-core/src/pair.rs`.
 - `crates/grokhub-core/src/host_safety.rs`: `forbidden_reason` (leaf match plus assignment/`+`/`$(echo)`/`chr()` deobfuscation and `base64|sh` rebuild refuse) and `recall_hits`. `crates/grokhub-core/src/ssrf.rs`: `ip_blocked` / `host_name_blocked`; `public_http_url` uses them (dialers add `public_only_resolve`, never env proxy).
-- Also: `panel_spec.rs` (generative UI validate-only), `watch_learn.rs` (pure SD1 step extract), `connectivity.rs`, `fix_plan.rs` (SC2).
+- Also: `panel_spec.rs` (generative UI validate-only), `watch_learn.rs` (pure SD1 step extract), `connectivity.rs`, `fix_plan.rs` (SC2). `crates/grokhub-core/src/offline.rs`: Offline only switch (`{config}/offline.toml`, `GROKHUB_OFFLINE_ONLY=1`). `enabled`, `set`, `check_url` / `check_host` (loopback and LAN pass), `refuse`, `OFFLINE_MSG`. `connectivity::state` reads Offline while on. Every network exit is listed in `crates/grokhub-core/tests/offline_guard.rs` (`GUARDED`); a new one fails until it is listed with its check.
 - `crates/grokhub-core/src/feel.rs`: `ALWAYS_SETTLE_SECS`, `GLOW_SETTLE_SECS`, and the other motion timings.
 - `crates/grokhub-core/src/appearance.rs`: Settings theme ids (`ops-dark`, `oled-black`, `soft-charcoal`, classic `dark` / `light` / `system`) and `resolve_palette`.
 - `crates/grokhub-core/src/paths.rs`: `user_home`. `diagnostics.rs`: About clipboard + Labs Desktop zip (`DiagnosticsExport`, `write_diagnostics_zip`).
-- `crates/grokhub-core/src/wire.rs`: chat wire types (`AcpEvent`, `ToolCard`, `PermissionAsk`, `ElicitAsk`, `SessionMode`, `PermissionMode`, `GrokUsage`). `crates/grokhub-core/src/proc_util.rs`: `hide_windows_console`, `kill_pid`, `is_sigterm_status`.
+- `crates/grokhub-core/src/wire.rs`: chat wire types (`AcpEvent`, `ToolCard`, `PermissionAsk`, `ElicitAsk`, `SessionMode`, `PermissionMode`, `GrokUsage`). `crates/grokhub-core/src/proc_util.rs`: `hide_windows_console`, `output_within`, `is_sigterm_status`, `run_night_check_command`.
 ## Change recipe
 - New helper: write it in its module with a literal-value test, then add it to that module's `pub use` block in `lib.rs`; grokhub-app imports flat names (`use grokhub_core::{...}`).
-- New module: `pub mod x;` in `lib.rs` plus its re-exports. Keep it free of network and egui; outside tests only `update.rs` spawns a process (`git`).
+- New module: `pub mod x;` in `lib.rs` plus its re-exports. Keep it free of egui; an HTTP call goes through `http.rs`, and any network exit is listed in `offline_guard.rs`. Outside tests only `update.rs` spawns a process (`git`).
 ## What breaks it
 - Renaming a re-exported item: it breaks grokhub-app, grokhub-hub, and grokhub-agent in one go. Grep the workspace first.
 - Editing scripts or packaging: `hands.rs`, `desktop_entry.rs`, `update.rs`, and `channel.rs` tests read `scripts/` and `packaging/` and assert on their text.
@@ -29,7 +29,7 @@
 - `crates/grokhub-core/src/goal.rs` stores per-chat intentions next to `ThreadGoal`. `set_intention_status` changes status only.
 - `state_for_disk` strips the live frame before `hub-state.json` is written (`disk_omits_frame`); writes are 0600 / user-only DACL (`win_acl` on Windows).
 - Some modules assert on their own source with `include_str!` (`chips.rs`, `state.rs`, `update.rs`); a reworded string or moved fn can fail a test.
-- `crates/grokhub-core/src/imagine_auth.rs` only re-exports `xai_signin`; keychain storage for Imagine is `crates/grokhub-app/src/imagine_auth.rs`.
+- `crates/grokhub-core/src/imagine_auth.rs` only re-exports `xai_signin`; keychain storage for Imagine is the retired cabin's imagine_auth.rs.
 - The harness is not here: it lives in `crates/grokhub-agent/src/harness/mod.rs`.
 ## See also
 - [amr](amr.md), [slash](slash.md), [desktop-mcp](desktop-mcp.md), [grokhub-hub](grokhub-hub.md), [install-scripts](install-scripts.md)

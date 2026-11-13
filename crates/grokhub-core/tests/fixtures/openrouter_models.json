@@ -1,0 +1,105 @@
+{
+  "data": [
+    {
+      "id": "openrouter/auto",
+      "name": "Auto Router",
+      "context_length": 2000000,
+      "pricing": {"prompt": "-1", "completion": "-1"},
+      "supported_parameters": ["tools", "tool_choice", "reasoning", "include_reasoning"],
+      "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+      "top_provider": {"context_length": null, "max_completion_tokens": null, "is_moderated": false},
+      "expiration_date": null
+    },
+    {
+      "id": "x-ai/grok-test",
+      "name": "xAI: Grok Test",
+      "context_length": 256000,
+      "pricing": {"prompt": "0.000003", "completion": "0.000012", "input_cache_read": "0.00000075"},
+      "supported_parameters": ["tools", "tool_choice", "reasoning", "include_reasoning", "max_tokens"],
+      "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+      "top_provider": {"context_length": 256000, "max_completion_tokens": 64000, "is_moderated": false},
+      "expiration_date": null
+    },
+    {
+      "id": "vendor/agent-pro",
+      "name": "Vendor: Agent Pro",
+      "context_length": 400000,
+      "pricing": {"prompt": "0.000002", "completion": "0.000008", "input_cache_read": "0.0000005"},
+      "supported_parameters": ["tools", "tool_choice", "reasoning", "include_reasoning", "max_tokens", "response_format"],
+      "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+      "top_provider": {"context_length": 400000, "max_completion_tokens": 128000, "is_moderated": false},
+      "reasoning_efforts": ["low", "medium", "high"],
+      "expiration_date": null
+    },
+    {
+      "id": "vendor/agent-lite",
+      "name": "Vendor: Agent Lite",
+      "context_length": 200000,
+      "pricing": {"prompt": "0.0000002", "completion": "0.0000008"},
+      "supported_parameters": ["tools", "tool_choice", "reasoning", "include_reasoning", "max_tokens"],
+      "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+      "top_provider": {"context_length": 200000, "max_completion_tokens": 32000, "is_moderated": false},
+      "expiration_date": null
+    },
+    {
+      "id": "vendor/tools-only",
+      "name": "Vendor: Tools Only",
+      "context_length": 128000,
+      "pricing": {"prompt": "0.0000001", "completion": "0.0000004"},
+      "supported_parameters": ["tools", "tool_choice", "max_tokens", "temperature"],
+      "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+      "top_provider": {"context_length": 128000, "max_completion_tokens": 16000, "is_moderated": false},
+      "expiration_date": null
+    },
+    {
+      "id": "vendor/chat-only",
+      "name": "Vendor: Chat Only",
+      "context_length": 128000,
+      "pricing": {"prompt": "0.0000001", "completion": "0.0000003"},
+      "supported_parameters": ["max_tokens", "temperature", "reasoning"],
+      "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+      "top_provider": {"context_length": 128000, "max_completion_tokens": 16000, "is_moderated": false},
+      "expiration_date": null
+    },
+    {
+      "id": "vendor/retiring",
+      "name": "Vendor: Retiring",
+      "context_length": 200000,
+      "pricing": {"prompt": "0.0000001", "completion": "0.0000002"},
+      "supported_parameters": ["tools", "reasoning", "include_reasoning"],
+      "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+      "top_provider": {"context_length": 200000, "max_completion_tokens": 32000, "is_moderated": false},
+      "expiration_date": "2026-12-01"
+    },
+    {
+      "id": "vendor/pricey",
+      "name": "Vendor: Pricey",
+      "context_length": 1000000,
+      "pricing": {"prompt": "0.00003", "completion": "0.00015"},
+      "supported_parameters": ["tools", "reasoning", "include_reasoning"],
+      "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+      "top_provider": {"context_length": 1000000, "max_completion_tokens": 128000, "is_moderated": false},
+      "expiration_date": null
+    },
+    {
+      "id": "vendor/small-window",
+      "name": "Vendor: Small Window",
+      "context_length": 8192,
+      "pricing": {"prompt": "0.0000001", "completion": "0.0000002"},
+      "supported_parameters": ["tools", "reasoning"],
+      "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+      "top_provider": {"context_length": 8192, "max_completion_tokens": 4096, "is_moderated": false},
+      "expiration_date": null
+    },
+    {
+      "id": "vendor/image-maker",
+      "name": "Vendor: Image Maker",
+      "context_length": 32000,
+      "pricing": {"prompt": "0.0000003", "completion": "0.0000025"},
+      "supported_parameters": ["max_tokens", "temperature"],
+      "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["image"]},
+      "top_provider": {"context_length": 32000, "max_completion_tokens": 8192, "is_moderated": false},
+      "expiration_date": null
+    }
+  ]
+}

@@ -223,6 +223,16 @@ impl DevicePlan {
 }
 
 impl LocalProfile {
+    /// The GPU to show: the discrete one with the most VRAM, else the first.
+    /// Probe order isn't a ranking (an APU can be `card0`).
+    pub fn main_gpu(&self) -> Option<&Gpu> {
+        self.gpus
+            .iter()
+            .filter(|g| !g.integrated)
+            .max_by_key(|g| g.vram_mb)
+            .or_else(|| self.gpus.first())
+    }
+
     /// Discrete GPUs of the vendor with the most VRAM (one backend), else the
     /// Apple unified GPU. iGPUs are left out: they share RAM.
     pub fn device_plan(&self) -> DevicePlan {
@@ -408,10 +418,96 @@ pub struct DrmCard {
     pub vram_used: Option<u64>,
     /// Intel discrete local memory bytes (`lmem_total_bytes` on i915, `tile0/vram0/size` on xe).
     pub lmem_total: Option<u64>,
+    /// PCI `device` id (`0x164e`).
+    pub device: String,
+    /// The model as `pci.ids` names it (`Navi 48 [Radeon RX 9070/9070 XT/9070 GRE]`).
+    pub pci_name: Option<String>,
 }
 
-/// AMD below this much VRAM is an APU's carve-out, not a card.
+/// AMD below this much VRAM is an APU's carve-out, not a card, when the
+/// device id isn't one [`amd_apu_codename`] knows.
 pub const APU_CARVEOUT_MAX_MB: u64 = 2_048;
+
+/// AMD APU graphics by PCI device id. A BIOS can carve 4 GB or more out of RAM
+/// for these, so VRAM size alone can't tell them from a card.
+pub fn amd_apu_codename(device: &str) -> Option<&'static str> {
+    let id = device.trim().trim_start_matches("0x").to_ascii_lowercase();
+    Some(match id.as_str() {
+        "15dd" | "15d8" => "Raven",
+        "1636" | "1638" | "164c" | "15e7" => "Renoir",
+        "163f" => "Van Gogh",
+        "1681" => "Rembrandt",
+        "164e" => "Raphael",
+        "13c0" => "Granite Ridge",
+        "1506" => "Mendocino",
+        "15bf" | "15c8" => "Phoenix",
+        "150e" => "Strix Point",
+        "1586" => "Strix Halo",
+        "1114" => "Krackan Point",
+        _ => return None,
+    })
+}
+
+/// The device's line in a `pci.ids` file: `vendor` and `device` are the sysfs
+/// ids (`0x1002`, `0x7550`). Subsystem lines are skipped.
+pub fn pci_ids_name(text: &str, vendor: &str, device: &str) -> Option<String> {
+    let norm = |id: &str| id.trim().trim_start_matches("0x").to_ascii_lowercase();
+    let (vendor, device) = (norm(vendor), norm(device));
+    let mut in_vendor = false;
+    for line in text.lines() {
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        if !line.starts_with('\t') {
+            if in_vendor {
+                return None;
+            }
+            in_vendor = line.split_whitespace().next() == Some(vendor.as_str());
+            continue;
+        }
+        if !in_vendor || line.starts_with("\t\t") {
+            continue;
+        }
+        let rest = line.trim_start();
+        if let Some((id, name)) = rest.split_once(char::is_whitespace) {
+            if id.eq_ignore_ascii_case(&device) {
+                return Some(name.trim().to_string()).filter(|n| !n.is_empty());
+            }
+        }
+    }
+    None
+}
+
+/// A short display name from a `pci.ids` model: the marketing name in
+/// brackets when there is one (`AMD Radeon RX 9070/9070 XT/9070 GRE`), else
+/// the codename.
+fn pci_display_name(vendor: GpuVendor, pci: &str, integrated: bool) -> String {
+    let brand = match vendor {
+        GpuVendor::Amd => "AMD",
+        GpuVendor::Intel => "Intel",
+        _ => "",
+    };
+    let inner = pci
+        .rsplit_once('[')
+        .and_then(|(_, r)| r.split_once(']'))
+        .map(|(n, _)| n.trim())
+        .filter(|n| !n.is_empty());
+    match (inner, vendor, integrated) {
+        (Some(n), _, _) => format!("{brand} {n}"),
+        (None, GpuVendor::Amd, true) => format!("AMD Radeon Graphics ({})", pci.trim()),
+        (None, _, _) => format!("{brand} {}", pci.trim()),
+    }
+}
+
+/// Honest driver label: the kernel module DRM reports, not a version.
+fn drm_driver_label(driver: &str) -> String {
+    let d = driver.trim();
+    if d.is_empty() {
+        String::new()
+    } else {
+        format!("{d} (kernel)")
+    }
+}
 
 /// GPUs from DRM sysfs. NVIDIA cards are skipped: `nvidia-smi` reads them.
 pub fn gpus_from_drm(cards: &[DrmCard]) -> Vec<Gpu> {
@@ -423,26 +519,29 @@ pub fn gpus_from_drm(cards: &[DrmCard]) -> Vec<Gpu> {
             let (name, vram_mb, integrated) = match vendor {
                 GpuVendor::Amd => {
                     let mb = c.vram_total? / MIB;
-                    let apu = mb < APU_CARVEOUT_MAX_MB;
-                    (
-                        if apu {
-                            "AMD Radeon iGPU"
-                        } else {
-                            "AMD Radeon GPU"
-                        },
-                        mb,
-                        apu,
-                    )
+                    let codename = amd_apu_codename(&c.device);
+                    let apu = codename.is_some() || mb < APU_CARVEOUT_MAX_MB;
+                    let fallback = match (codename, apu) {
+                        (Some(code), _) => format!("AMD Radeon Graphics ({code})"),
+                        (None, true) => "AMD Radeon iGPU".into(),
+                        (None, false) => "AMD Radeon GPU".into(),
+                    };
+                    (fallback, mb, apu)
                 }
                 GpuVendor::Intel => match c.lmem_total.filter(|b| *b > 0) {
-                    Some(b) => ("Intel Arc GPU", b / MIB, false),
-                    None => ("Intel iGPU", 0, true),
+                    Some(b) => ("Intel Arc GPU".into(), b / MIB, false),
+                    None => ("Intel iGPU".into(), 0, true),
                 },
                 _ => return None,
             };
+            let name = c
+                .pci_name
+                .as_deref()
+                .map(|p| pci_display_name(vendor, p, integrated))
+                .unwrap_or(name);
             Some(Gpu {
                 vendor,
-                name: name.into(),
+                name,
                 vram_mb,
                 free_vram_mb: c
                     .vram_total
@@ -451,7 +550,7 @@ pub fn gpus_from_drm(cards: &[DrmCard]) -> Vec<Gpu> {
                     .filter(|_| !integrated),
                 integrated,
                 unified: false,
-                driver: c.driver.clone(),
+                driver: drm_driver_label(&c.driver),
             })
         })
         .collect()

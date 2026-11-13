@@ -567,6 +567,93 @@ pub fn audio_report(
     }
 }
 
+/// What the Home audio tile knows: outputs and inputs where the OS lists
+/// them (PipeWire/PulseAudio), and sound devices that report a fault.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AudioFacts {
+    pub outputs: Vec<AudioDevice>,
+    pub inputs: Vec<AudioDevice>,
+    /// Devices Windows lists, as `(name, ok)`, where in and out aren't told
+    /// apart.
+    pub devices: Vec<(String, bool)>,
+}
+
+impl AudioFacts {
+    pub fn is_empty(&self) -> bool {
+        self.outputs.is_empty() && self.inputs.is_empty() && self.devices.is_empty()
+    }
+}
+
+/// `Name|Status` lines from `Win32_SoundDevice`: each device and whether
+/// Windows says it's OK.
+pub fn parse_sound_devices(text: &str) -> Vec<(String, bool)> {
+    text.lines()
+        .filter_map(|l| l.trim().split_once('|'))
+        .filter(|(name, _)| !name.trim().is_empty())
+        .map(|(name, status)| (name.trim().to_string(), status.trim() == "OK"))
+        .collect()
+}
+
+/// Reads the audio devices without changing or recording anything: `pactl`
+/// on Linux, the sound device list on Windows. Empty when neither answers.
+pub fn read_facts() -> AudioFacts {
+    use std::process::Command;
+    use std::time::Duration;
+    let run = |bin: &str, args: &[&str]| {
+        let mut cmd = Command::new(bin);
+        cmd.args(args).env("LC_ALL", "C");
+        crate::proc_util::output_within(&mut cmd, Duration::from_secs(4), 256 * 1024)
+    };
+    if cfg!(windows) {
+        let script =
+            "Get-CimInstance Win32_SoundDevice | ForEach-Object { $_.Name + '|' + $_.Status }";
+        return AudioFacts {
+            devices: run(
+                "powershell",
+                &["-NoProfile", "-NonInteractive", "-Command", script],
+            )
+            .map(|t| parse_sound_devices(&t))
+            .unwrap_or_default(),
+            ..AudioFacts::default()
+        };
+    }
+    let Some(info) = run("pactl", &["info"]) else {
+        return AudioFacts::default();
+    };
+    let (sink, source) = parse_pactl_defaults(&info);
+    let list = |what: &str, default: Option<&str>| {
+        run("pactl", &["list", what])
+            .map(|t| parse_pactl_list(&t, default))
+            .unwrap_or_default()
+    };
+    AudioFacts {
+        outputs: list("sinks", sink.as_deref()),
+        inputs: list("sources", source.as_deref()),
+        devices: Vec::new(),
+    }
+}
+
+/// [`read_facts`], kept for `max_age` so tiles that ask often (the stream
+/// check every few seconds) don't start a reader each time.
+pub fn read_facts_within(max_age: std::time::Duration) -> AudioFacts {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static KEPT: Mutex<Option<(Instant, AudioFacts)>> = Mutex::new(None);
+    let fresh = KEPT.lock().ok().and_then(|kept| {
+        kept.as_ref()
+            .filter(|(at, _)| at.elapsed() < max_age)
+            .map(|(_, facts)| facts.clone())
+    });
+    if let Some(facts) = fresh {
+        return facts;
+    }
+    let facts = read_facts();
+    if let Ok(mut kept) = KEPT.lock() {
+        *kept = Some((Instant::now(), facts.clone()));
+    }
+    facts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -881,5 +968,17 @@ mod tests {
             .contains("Input: the default input (Loadout couldn't list devices here)\n"));
         assert!(fine.text.contains("\nNo problems found.\n"));
         assert!(!fine.text.contains("Outputs:"));
+    }
+
+    #[test]
+    fn sound_devices_parse_name_and_status() {
+        let text = "Realtek(R) Audio|OK\r\nNVIDIA High Definition Audio|Error\n|OK\n";
+        assert_eq!(
+            parse_sound_devices(text),
+            vec![
+                ("Realtek(R) Audio".to_string(), true),
+                ("NVIDIA High Definition Audio".to_string(), false),
+            ]
+        );
     }
 }

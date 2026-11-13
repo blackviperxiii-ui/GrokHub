@@ -1,12 +1,12 @@
 //! Tool registry (Reason harness R4): optional deferred native schemas.
 //!
-//! Off by default (`{config_dir}/deferred_tools.toml`). When enabled, rarely used
+//! On by default; `enabled = false` in `{config_dir}/deferred_tools.toml` turns it off. When enabled, rarely used
 //! native tools are listed in a compact index; the model calls `load_tool_schema`
 //! to pull a full schema into the volatile tail of the tools list so the stable
 //! prefix stays byte-identical across turns when only loaded tools change.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use crate::gate::Gate;
 
 use super::defs::{action_defs, all_defs, desktop_tail_defs, find_def, read_defs, ToolDef};
+use super::talk::{self, Profile, TALK_DEMOTED};
 use super::ToolOutput;
 
 const CONFIG_NAME: &str = "deferred_tools.toml";
@@ -28,10 +29,38 @@ pub struct Settings {
 
 thread_local! {
     static SESSION: RefCell<Option<String>> = const { RefCell::new(None) };
+    static TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-fn loaded_by_session() -> &'static Mutex<BTreeMap<String, BTreeSet<String>>> {
-    static MAP: OnceLock<Mutex<BTreeMap<String, BTreeSet<String>>>> = OnceLock::new();
+/// Test hook for this thread: `Some(true|false)` overrides the file; `None` reads it again.
+#[cfg(test)]
+pub fn set_enabled_for_tests(on: Option<bool>) {
+    TEST_OVERRIDE.with(|cell| cell.set(on));
+}
+
+/// Pins deferred tools off on this thread until dropped, for tests that check
+/// the full tool list.
+#[cfg(test)]
+pub struct LegacyPromptGuard;
+
+#[cfg(test)]
+impl LegacyPromptGuard {
+    pub fn set() -> Self {
+        set_enabled_for_tests(Some(false));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for LegacyPromptGuard {
+    fn drop(&mut self) {
+        set_enabled_for_tests(None);
+    }
+}
+
+/// Deferred schemas each chat has loaded, in load order.
+fn loaded_by_session() -> &'static Mutex<BTreeMap<String, Vec<String>>> {
+    static MAP: OnceLock<Mutex<BTreeMap<String, Vec<String>>>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
@@ -40,27 +69,19 @@ pub fn config_path(config_dir: &Path) -> std::path::PathBuf {
 }
 
 pub fn settings(config_dir: &Path) -> Settings {
+    if let Some(on) = TEST_OVERRIDE.with(|cell| cell.get()) {
+        return Settings { enabled: on };
+    }
     let Ok(text) = std::fs::read_to_string(config_path(config_dir)) else {
-        return Settings::default();
+        return Settings { enabled: true };
     };
     parse_file(&text)
 }
 
 fn parse_file(text: &str) -> Settings {
-    let mut enabled = false;
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim().eq_ignore_ascii_case("enabled") && value.trim().eq_ignore_ascii_case("true") {
-            enabled = true;
-        }
+    Settings {
+        enabled: crate::config_file::parse(CONFIG_NAME, text, &["enabled"]).flag("enabled", true),
     }
-    Settings { enabled }
 }
 
 /// Bind the conversation id for deferred schema state on this thread.
@@ -70,20 +91,25 @@ pub fn bind_session(session: &str) {
     });
 }
 
-/// Clear loaded schemas for a new user turn (same chat, fresh tool list).
+/// Start a user turn. Schemas this chat already loaded stay, in load order,
+/// so the tool list only ever grows at its end and the cached prefix holds;
+/// clearing them each turn shrank the tail, broke the cache and cost a reload.
+/// MCP servers that connected since the last turn join here, not mid-turn.
 pub fn begin_turn(session: &str) {
     bind_session(session);
+    crate::mcp::begin_turn(session);
     loaded_by_session()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(session.to_string(), BTreeSet::new());
+        .entry(session.to_string())
+        .or_default();
 }
 
 fn current_session() -> Option<String> {
     SESSION.with(|cell| cell.borrow().clone())
 }
 
-fn loaded_names(session: &str) -> BTreeSet<String> {
+fn loaded_names(session: &str) -> Vec<String> {
     loaded_by_session()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -93,12 +119,13 @@ fn loaded_names(session: &str) -> BTreeSet<String> {
 }
 
 fn remember_loaded(session: &str, name: &str) {
-    loaded_by_session()
+    let mut map = loaded_by_session()
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .entry(session.to_string())
-        .or_default()
-        .insert(name.to_string());
+        .unwrap_or_else(|e| e.into_inner());
+    let names = map.entry(session.to_string()).or_default();
+    if !names.iter().any(|n| n == name) {
+        names.push(name.to_string());
+    }
 }
 
 /// Stable tool schemas (eager natives, session tools, spawn, meta, MCP) for prefix-cache tests.
@@ -127,6 +154,42 @@ struct Offer {
     volatile: Vec<Value>,
 }
 
+/// LO-45: the chat runs on the Talk profile (upgraded or not). Lazy tools off
+/// or a bound job [`ToolSet`] keep today's list.
+fn talk_shaped(session: &str, cfg: Settings) -> bool {
+    cfg.enabled
+        && !session.is_empty()
+        && talk::profile(session) != Profile::Full
+        && !crate::run::has_job_tool_set(session)
+}
+
+/// A Brief for `session`: the first sets its profile, a later work Brief
+/// upgrades a Talk chat.
+pub fn note_brief(session: &str, brief: &crate::brain::Brief) {
+    if talk::note_brief(session, brief) {
+        upgrade_talk(session);
+    }
+    // A picture ask gets the picture tool up front, at the tail so the cached
+    // prefix holds, instead of a load_tool_schema round trip the model may
+    // skip and then say it can't draw. The gate still decides: a read-only
+    // chat never offers it.
+    if brief.intent == crate::brain::Intent::Image && !session.is_empty() {
+        remember_loaded(session, IMAGE_GENERATE);
+    }
+}
+
+/// The picture tool.
+pub const IMAGE_GENERATE: &str = "image_generate";
+
+/// Append every demoted tool to the chat's tail, once, in [`TALK_DEMOTED`] order.
+fn upgrade_talk(session: &str) {
+    if talk::mark_upgraded(session) {
+        for name in TALK_DEMOTED {
+            remember_loaded(session, name);
+        }
+    }
+}
+
 fn offer(gate: &Gate, cfg: Settings) -> Offer {
     if !cfg.enabled {
         return Offer {
@@ -134,10 +197,20 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
             volatile: Vec::new(),
         };
     }
+    let session = current_session().unwrap_or_default();
+    let talk = talk_shaped(&session, cfg);
+    let ws = workspace_plan(&session);
+    // Indexed (not eager): deferred rows, plus the demoted ones on Talk, and
+    // this workspace's own changes, frozen for the session.
+    let indexed = |def: &ToolDef| {
+        (def.defer && !ws.promotes(def.name))
+            || (talk && talk::is_demoted(def.name))
+            || ws.demotes(def.name)
+    };
     let rows = offered_defs(gate);
     let mut stable: Vec<Value> = rows
         .iter()
-        .filter(|def| !def.defer)
+        .filter(|def| !indexed(def))
         .map(|def| (def.schema)())
         .collect();
     stable.extend(crate::session_tools::schemas());
@@ -149,18 +222,20 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
     };
     // Self-manage reads (`*_list`) stay eager; its writes are deferred like the rest.
     stable.extend(selfs.iter().filter(|r| r.read).map(|r| r.schema.clone()));
-    stable.push(load_tool_schema_schema(index_lines(&rows, &selfs)));
-    let session = current_session().unwrap_or_default();
+    stable.push(load_tool_schema_schema(index_lines(
+        &rows, &selfs, &indexed,
+    )));
     let volatile = loaded_names(&session)
         .iter()
         .filter_map(|name| {
-            if let Some(def) = rows.iter().find(|d| d.defer && d.name == name) {
+            if let Some(def) = rows.iter().find(|d| indexed(d) && d.name == name) {
                 return Some((def.schema)());
             }
             selfs
                 .iter()
                 .find(|r| !r.read && r.name == *name)
                 .map(|r| r.schema.clone())
+                .or_else(|| crate::self_manage::work::schema(name))
         })
         .collect();
     if !gate.readonly_session {
@@ -169,9 +244,17 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
         } else {
             0
         };
-        stable.extend(crate::mcp::schema_tools(native));
+        stable.extend(crate::mcp::chat_schema_tools(&session, native));
     }
     Offer { stable, volatile }
+}
+
+/// Item 33: this chat's per-workspace list changes. A bound job keeps its own set.
+fn workspace_plan(session: &str) -> super::workspace_tools::Plan {
+    if session.is_empty() || crate::run::has_job_tool_set(session) {
+        return super::workspace_tools::Plan::default();
+    }
+    super::workspace_tools::plan(session)
 }
 
 fn legacy_schemas(gate: &Gate) -> Vec<Value> {
@@ -184,6 +267,7 @@ fn legacy_schemas(gate: &Gate) -> Vec<Value> {
     tools.extend(crate::session_tools::schemas());
     tools.push(crate::subagent::spawn_schema());
     if gate.readonly_session {
+        tools.extend(web_lookup_defs().map(|def| (def.schema)()));
         return tools;
     }
     for def in action_defs().iter().chain(desktop_tail_defs().iter()) {
@@ -201,10 +285,17 @@ fn legacy_schemas(gate: &Gate) -> Vec<Value> {
     tools
 }
 
-/// Native rows the gate offers: read-only sessions get the read rows only, as in legacy.
+/// Web search and fetch, which a read-only session may still use to look things up.
+fn web_lookup_defs() -> impl Iterator<Item = &'static ToolDef> {
+    action_defs()
+        .iter()
+        .filter(|def| crate::gate::is_web_lookup(def.name))
+}
+
+/// Native rows the gate offers: read-only sessions get the read rows plus web lookups.
 fn offered_defs(gate: &Gate) -> Vec<&'static ToolDef> {
     let rows: Vec<&'static ToolDef> = if gate.readonly_session {
-        read_defs().iter().collect()
+        read_defs().iter().chain(web_lookup_defs()).collect()
     } else {
         all_defs().collect()
     };
@@ -238,10 +329,10 @@ fn self_rows() -> Vec<SelfRow> {
 
 /// One `name — blurb` line per deferred tool the gate shows, sorted by name so the
 /// index (and the stable prefix it sits in) is byte-identical from build to build.
-fn index_lines(rows: &[&ToolDef], selfs: &[SelfRow]) -> String {
+fn index_lines(rows: &[&ToolDef], selfs: &[SelfRow], indexed: &dyn Fn(&ToolDef) -> bool) -> String {
     let native = rows
         .iter()
-        .filter(|def| def.defer)
+        .filter(|def| indexed(def))
         .map(|def| format!("{} — {}", def.name, def.blurb));
     let own = selfs
         .iter()
@@ -284,6 +375,11 @@ pub fn run_load_tool_schema(args: &Value) -> ToolOutput {
     if name.is_empty() {
         return ToolOutput::err("name is required");
     }
+    // KB-02/KB-04: the `work_*` tools are in neither the stable list nor the
+    // index; they load by name only.
+    if let Some(schema) = crate::self_manage::work::schema(name) {
+        return finish_load(name, schema);
+    }
     if crate::self_manage::self_tool(name).is_some() {
         if crate::self_manage::is_read(name) {
             return ToolOutput::err(format!(
@@ -299,6 +395,16 @@ pub fn run_load_tool_schema(args: &Value) -> ToolOutput {
         return ToolOutput::err(format!("unknown tool `{name}`"));
     };
     if !def.defer {
+        // A Talk chat loads a demoted tool by upgrading: all of them land at once.
+        let session = current_session().unwrap_or_default();
+        if talk::is_demoted(name) && talk_shaped(&session, settings(&crate::perm::config_dir())) {
+            upgrade_talk(&session);
+            return finish_load(name, (def.schema)());
+        }
+        // This workspace sent it to the index for the session: load it alone.
+        if workspace_plan(&session).demotes(name) {
+            return finish_load(name, (def.schema)());
+        }
         return ToolOutput::err(format!(
             "`{name}` is always available with its full schema; load_tool_schema is only for deferred tools"
         ));
@@ -318,6 +424,10 @@ fn finish_load(name: &str, schema: Value) -> ToolOutput {
 use super::desktop;
 
 #[cfg(test)]
+#[path = "talk_registry_tests.rs"]
+mod talk_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::gate::{Gate, PermMode};
@@ -335,11 +445,35 @@ mod tests {
     const OFF: Settings = Settings { enabled: false };
 
     #[test]
-    fn settings_default_off_and_file_enables() {
-        assert!(!parse_file("").enabled);
+    fn read_only_sessions_still_offer_both_web_tools() {
+        let readonly = chat(true, false);
+        let names = |settings| -> Vec<String> {
+            schemas_for_settings(&readonly, settings)
+                .iter()
+                .filter_map(|t| t["name"].as_str().map(String::from))
+                .collect()
+        };
+        begin_turn("conv-readonly-web");
+        let legacy = names(OFF);
+        assert!(legacy.iter().any(|n| n == "web_search"), "{legacy:?}");
+        assert!(legacy.iter().any(|n| n == "web_fetch"), "{legacy:?}");
+        assert!(!legacy.iter().any(|n| n == "write"), "{legacy:?}");
+        let deferred = names(ON);
+        assert!(deferred.iter().any(|n| n == "web_search"), "{deferred:?}");
+        // web_fetch waits in the index there and loads on demand.
+        assert!(!run_load_tool_schema(&json!({"name": "web_fetch"})).failed);
+        assert!(names(ON).iter().any(|n| n == "web_fetch"));
+    }
+
+    #[test]
+    fn settings_default_on_and_file_disables() {
+        assert!(parse_file("").enabled);
         assert!(parse_file("enabled = true").enabled);
+        assert!(!parse_file("enabled = false").enabled);
         let dir = crate::harness::test_dir("deferred-tools-default");
         let _ = std::fs::remove_file(config_path(&dir));
+        assert!(settings(&dir).enabled);
+        std::fs::write(config_path(&dir), "enabled = false\n").unwrap();
         assert!(!settings(&dir).enabled);
         std::fs::write(config_path(&dir), "enabled = true\n").unwrap();
         assert!(settings(&dir).enabled);
@@ -357,27 +491,27 @@ mod tests {
     }
 
     #[test]
-    fn enabled_defers_web_fetch_until_load_tool_schema() {
+    fn enabled_defers_models_check_until_load_tool_schema() {
         let gate = chat(false, false);
         begin_turn("conv-defer");
         let stable = stable_schemas(&gate, ON);
         assert!(
-            !stable.iter().any(|t| t["name"] == "web_fetch"),
-            "web_fetch must not be in the stable list"
+            !stable.iter().any(|t| t["name"] == "models_check"),
+            "models_check must not be in the stable list"
         );
         assert!(
             stable.iter().any(|t| t["name"] == LOAD_TOOL_SCHEMA),
             "meta loader must stay in the stable list"
         );
         assert!(volatile_schemas(&gate, ON).is_empty());
-        let out = run_load_tool_schema(&json!({"name": "web_fetch"}));
+        let out = run_load_tool_schema(&json!({"name": "models_check"}));
         assert!(!out.failed);
-        assert!(out.text.contains("\"web_fetch\""));
+        assert!(out.text.contains("\"models_check\""));
         let volatile = volatile_schemas(&gate, ON);
         assert_eq!(volatile.len(), 1);
-        assert_eq!(volatile[0]["name"], "web_fetch");
+        assert_eq!(volatile[0]["name"], "models_check");
         let full = schemas_for_settings(&gate, ON);
-        assert!(full.iter().any(|t| t["name"] == "web_fetch"));
+        assert!(full.iter().any(|t| t["name"] == "models_check"));
     }
 
     #[test]
@@ -385,7 +519,7 @@ mod tests {
         let gate = chat(false, false);
         begin_turn("conv-stable");
         let before = serde_json::to_string(&stable_schemas(&gate, ON)).unwrap();
-        run_load_tool_schema(&json!({"name": "web_fetch"}));
+        run_load_tool_schema(&json!({"name": "models_check"}));
         run_load_tool_schema(&json!({"name": "scheduler_list"}));
         let after = serde_json::to_string(&stable_schemas(&gate, ON)).unwrap();
         assert_eq!(before, after, "stable tool prefix must stay byte-identical");
@@ -393,10 +527,33 @@ mod tests {
     }
 
     #[test]
+    fn loaded_schemas_stay_for_the_chat_in_load_order() {
+        let gate = chat(false, false);
+        begin_turn("conv-keep");
+        run_load_tool_schema(&json!({"name": "models_check"}));
+        let first = serde_json::to_string(&schemas_for_settings(&gate, ON)).unwrap();
+        // Next user turn in the same chat: the loaded tool is still offered and a
+        // later load appends after it, so the earlier request is a byte prefix.
+        begin_turn("conv-keep");
+        run_load_tool_schema(&json!({"name": "scheduler_list"}));
+        run_load_tool_schema(&json!({"name": "models_check"}));
+        let names: Vec<_> = volatile_schemas(&gate, ON)
+            .iter()
+            .map(|t| t["name"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(names, ["models_check", "scheduler_list"]);
+        let second = serde_json::to_string(&schemas_for_settings(&gate, ON)).unwrap();
+        assert!(
+            second.starts_with(first.trim_end_matches(']')),
+            "the tool list must only grow at its end"
+        );
+    }
+
+    #[test]
     fn begin_turn_clears_loaded_schemas() {
         let gate = chat(false, false);
         begin_turn("conv-clear-a");
-        run_load_tool_schema(&json!({"name": "web_fetch"}));
+        run_load_tool_schema(&json!({"name": "models_check"}));
         assert_eq!(volatile_schemas(&gate, ON).len(), 1);
         begin_turn("conv-clear-b");
         assert!(volatile_schemas(&gate, ON).is_empty());
@@ -492,6 +649,27 @@ mod tests {
     /// eager read `know_me_tags` (the agent's only view of Know me) 184.
     /// Eager `web_search` (OpenRouter / local always see the schema) added 472
     /// to Chat/Agent (10_503 → 10_975) and background (9_323 → 9_795).
+    /// Grep's `-i` and `output_mode` args (R2-30: ask for paths or counts
+    /// instead of 200 lines) added 143 to Chat/Agent and background, 146 to Plan/Ask.
+    /// The deferred `models_check` index line (the live key test) added 48 to
+    /// Chat/Agent and background, and 50 to Plan/Ask.
+    /// The deferred `module_setup` index line (Home's one-tap Frame Rate setup)
+    /// added 36 to Chat/Agent and background.
+    /// Eager `look_at_screen` (one way to see the screen on every desktop, so the
+    /// agent stops trying shell screenshot tools) added 334 to Chat/Agent
+    /// (11_352 → 11_686); unattended and read-only runs don't get it.
+    /// The deferred `merge_subagent_work` index line (the lead's request to
+    /// merge a worktree helper's work) added 57 to Chat/Agent (11_686 → 11_743)
+    /// and background (10_172 → 10_229). The index is not cut to a job's tool
+    /// set, so a background job reads the line; the call is refused there.
+    /// `spawn_subagent`'s `redo` argument (a new worktree helper redoes work
+    /// that conflicted) and its words in the description added 49 to
+    /// Chat/Agent (11_743 → 11_792, and 11_798 measured with eager look_at_screen beside them), Plan/Ask (7_526 → 7_575) and background
+    /// (10_229 → 10_278).
+    /// `spawn_subagent`'s `review` type (a read-only helper that checks the
+    /// session's change against the approved plan), named in the description,
+    /// added 39 to Chat/Agent (11_798 → 11_837), Plan/Ask (7_575 → 7_614) and
+    /// background (10_278 → 10_317).
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -501,20 +679,30 @@ mod tests {
                 "chat",
                 profile(PermMode::Ask, false, true),
                 full.clone(),
-                10_975,
+                // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes,
+                // +334 for eager look_at_screen,
+                // +57 for the merge_subagent_work index line, +49 for spawn_subagent's redo,
+                // +39 for its review type.
+                11_837,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                10_975,
+                11_837,
             ),
-            ("plan/ask", profile(PermMode::Ask, true, true), full, 6_824),
+            (
+                "plan/ask",
+                profile(PermMode::Ask, true, true),
+                full,
+                // +506 for web_search: a read-only session can still look things up (LO-51).
+                7_614,
+            ),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                9_795,
+                10_317,
             ),
         ];
         for (label, gate, set, budget) in cases {
@@ -548,6 +736,7 @@ mod tests {
                 "search_replace",
                 "run_terminal_command",
                 "web_search",
+                "look_at_screen",
                 "todo_write",
                 "ask_user_question",
                 "report_findings",
@@ -611,7 +800,8 @@ mod tests {
             "connection_add",
             "skill_create",
         ] {
-            begin_turn("conv-moved");
+            // A fresh chat per tool: loaded schemas now stay for the whole chat.
+            begin_turn(&format!("conv-moved-{name}"));
             let out = run_load_tool_schema(&json!({"name": name}));
             assert!(!out.failed, "{name}: {}", out.text);
             let volatile = volatile_schemas(&desk, ON);
@@ -654,5 +844,57 @@ mod tests {
         assert!(!loaded.failed);
         let listed = crate::tools::dispatch(&ctx, "scheduler_list", "{}");
         assert!(!listed.failed);
+    }
+
+    /// KB-02/KB-04: the `work_*` tools cost no bytes until loaded by name. They
+    /// are in neither the stable list, the index nor the legacy list.
+    #[test]
+    fn work_tools_load_by_name_only() {
+        let gate = chat(false, false);
+        begin_turn("conv-work-tools");
+        let stable = stable_schemas(&gate, ON);
+        let stable_text = serde_json::to_string(&stable).unwrap();
+        let work_names = [
+            "work_get",
+            "work_list",
+            "work_update",
+            "work_add",
+            "work_archive",
+        ];
+        let legacy = serde_json::to_string(&legacy_schemas(&gate)).unwrap();
+        for name in work_names {
+            assert!(!stable_text.contains(name), "{name} is in the stable list");
+            assert!(!legacy.contains(name), "{name} is in the legacy list");
+        }
+        let out = run_load_tool_schema(&json!({"name": "work_update"}));
+        assert!(!out.failed, "{}", out.text);
+        let volatile = volatile_schemas(&gate, ON);
+        assert_eq!(volatile.len(), 1);
+        assert_eq!(volatile[0]["name"], "work_update");
+        assert_eq!(
+            serde_json::to_string(&stable_schemas(&gate, ON)).unwrap(),
+            stable_text,
+            "loading one keeps the stable prefix byte-identical"
+        );
+        let missing = run_load_tool_schema(&json!({"name": "work_delete"}));
+        assert!(missing.failed, "there is no delete");
+        // Self-manage reads are eager, but the `work_*` reads are the
+        // exception: they too load by name, and stay out of the index.
+        assert!(crate::self_manage::is_read("work_get"));
+        assert!(!index_of(&stable).contains("work_"));
+        for name in ["work_get", "work_list"] {
+            let out = run_load_tool_schema(&json!({ "name": name }));
+            assert!(!out.failed, "{name}: {}", out.text);
+        }
+        assert_eq!(
+            names(&volatile_schemas(&gate, ON)),
+            vec!["work_update", "work_get", "work_list"]
+        );
+        // A read-only chat (Plan / Ask) and a desktop chat carry none either.
+        for gate in [chat(true, false), chat(false, true)] {
+            begin_turn("conv-work-tools-other");
+            let text = serde_json::to_string(&stable_schemas(&gate, ON)).unwrap();
+            assert!(!text.contains("\"work_"), "{text}");
+        }
     }
 }

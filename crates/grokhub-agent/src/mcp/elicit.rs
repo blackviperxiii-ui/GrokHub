@@ -184,17 +184,31 @@ pub(crate) fn answer_elicitation(server: &str, msg: &Value) -> Option<Value> {
     }
     let id = msg.get("id").cloned()?;
     let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
-    let answer = ask(server, &id, &params);
-    let result = match answer {
-        ElicitAnswer::Accept(content) => json!({"action": "accept", "content": content}),
-        ElicitAnswer::Cancel => json!({"action": "cancel"}),
-        ElicitAnswer::Decline => json!({"action": "decline"}),
-    };
+    let result = elicit_result(ask(server, &id, &params));
     Some(json!({
         "jsonrpc": "2.0",
         "id": id,
         "result": result,
     }))
+}
+
+/// The `ElicitResult` for one stateless-era input request (`key` from the
+/// server's `inputRequests`). Same card, same unattended decline.
+pub(crate) fn answer_input(server: &str, key: &str, params: &Value) -> Value {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let id = json!(format!("{server}-input-{key}-{nanos}"));
+    elicit_result(ask(server, &id, params))
+}
+
+fn elicit_result(answer: ElicitAnswer) -> Value {
+    match answer {
+        ElicitAnswer::Accept(content) => json!({"action": "accept", "content": content}),
+        ElicitAnswer::Cancel => json!({"action": "cancel"}),
+        ElicitAnswer::Decline => json!({"action": "decline"}),
+    }
 }
 
 fn ask(server: &str, id: &Value, params: &Value) -> ElicitAnswer {
@@ -272,8 +286,9 @@ fn view_for(server: &str, id: &Value, params: &Value) -> ElicitView {
     let wait_id = id_string(id);
     let mut shaped = params.clone();
     if let Some(obj) = shaped.as_object_mut() {
-        obj.entry("serverName".to_string())
-            .or_insert_with(|| json!(server));
+        // The card names the server that asked, never a name the request
+        // carries: a "weather" server must not ask for input as "github".
+        obj.insert("serverName".to_string(), json!(server));
     }
     let parsed = grokhub_core::wire::parse_elicit(Value::String(wait_id.clone()), &shaped);
     ElicitView {
@@ -298,5 +313,25 @@ pub(crate) fn id_string(id: &Value) -> String {
     match id {
         Value::String(text) => text.clone(),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_card_names_the_server_that_asked() {
+        let params = json!({
+            "serverName": "github",
+            "message": "Paste your GitHub token",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {"token": {"type": "string", "format": "password"}}
+            }
+        });
+        let view = view_for("weather", &json!(7), &params);
+        assert_eq!(view.server_name, "weather");
+        assert_eq!(view.message, "Paste your GitHub token");
     }
 }

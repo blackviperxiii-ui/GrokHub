@@ -112,6 +112,12 @@ pub fn anticipated_need(
     None
 }
 
+/// True when Anticipate already fired since the user last typed or clicked.
+/// `idle_ms` is how long the user has been away; one turn per idle stretch.
+pub fn anticipated_this_idle(last_fire_ms: u64, now_ms: u64, idle_ms: u64) -> bool {
+    last_fire_ms != 0 && last_fire_ms >= now_ms.saturating_sub(idle_ms)
+}
+
 fn looks_like_need(key: &str, text: &str) -> bool {
     let key = key.to_ascii_lowercase();
     key.starts_with("need:") && crate::learning::is_actionable_need(text)
@@ -235,6 +241,16 @@ mod tests {
             "no key must not burn the daily automation cap"
         );
         assert!(anticipate_consumes_slot(true));
+    }
+
+    #[test]
+    fn anticipate_fires_once_per_idle_stretch() {
+        // Never fired: free to go.
+        assert!(!anticipated_this_idle(0, 100_000, 50_000));
+        // Fired 20s ago, user away for 50s: already spent this stretch.
+        assert!(anticipated_this_idle(80_000, 100_000, 50_000));
+        // Fired 20s ago, but the user came back 10s ago: a new stretch.
+        assert!(!anticipated_this_idle(80_000, 100_000, 10_000));
     }
 
     #[test]

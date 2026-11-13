@@ -1,63 +1,209 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { Capabilities } from "./api";
+import { decisionInbox, type Capabilities, type QuickChip } from "./api";
+import {
+  answersTo,
+  chatRows,
+  commandRows,
+  NO_CHATS,
+  NO_SLASH,
+  SETTINGS_KEYS,
+  slashRows,
+  type ChatHit,
+  type ChatSource,
+  type CommandId,
+  type CommandRunners,
+  type SlashHit,
+  type SlashSource,
+} from "./paletteCommands";
 import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
+import { PRODUCT_NAME } from "./brand";
+import { useModalFocus } from "./ui";
 
-export type View = "chat" | "pulse" | "journal" | "automations" | "memory" | "connectors" | "settings";
+export type View =
+  | "home"
+  | "objectives"
+  | "chat"
+  | "code"
+  | "command"
+  | "history"
+  | "pulse"
+  | "imagine"
+  | "journal"
+  | "automations"
+  | "agents"
+  | "memory"
+  | "skills"
+  | "connectors"
+  | "settings"
+  | "library"
+  | "mods"
+  | "workboard"
+  | "devices"
+  | "updates";
 
 /** What a palette row does. */
 export type PaletteAction =
   | { kind: "view"; view: View }
   | { kind: "settings"; section: Section }
-  | { kind: "ask"; text: string };
+  | { kind: "ask"; text: string }
+  | { kind: "command"; id: CommandId }
+  | { kind: "chat"; id: string };
 
 export interface PaletteRow {
   label: string;
   action: PaletteAction;
+  /** The suggestion this row came from, taught on pick. */
+  chip?: QuickChip;
+  /** The key that does the same, shown at the row's right. */
+  keys?: string;
+}
+
+/** Where the rows beyond pages and Settings sections come from. */
+export interface PaletteSources {
+  runners: CommandRunners;
+  signedOut: boolean;
+  chats: ChatSource;
+  slash: SlashSource;
+  /** Suggested next steps, shown first while nothing is typed. */
+  chips?: readonly QuickChip[];
+  /** A suggestion was picked. */
+  onChip?: (chip: QuickChip) => void;
+}
+
+/** Pages and Settings sections only. */
+export const NO_SOURCES: PaletteSources = { runners: {}, signedOut: false, chats: NO_CHATS, slash: NO_SLASH };
+
+/** The sources' rows for one query, already looked up. */
+export interface PaletteExtras {
+  runners: CommandRunners;
+  signedOut: boolean;
+  chats: readonly ChatHit[];
+  slash: readonly SlashHit[];
+  chips?: readonly QuickChip[];
+}
+
+const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], slash: [] };
+
+/** A suggestion as a palette row: a Go chip opens its page when this app has
+ * it, an Ask chip puts its words in the chat box. */
+function chipRow(chip: QuickChip, views: readonly View[]): PaletteRow | null {
+  const label = `Suggested: ${chip.label}`;
+  if (chip.action === "ask") return { label, chip, action: { kind: "ask", text: chip.value } };
+  const view = views.find((v) => v === chip.view);
+  return view ? { label, chip, action: { kind: "view", view } } : null;
 }
 
 export const VIEW_LABELS: Record<View, string> = {
+  home: "Home",
+  objectives: "Objectives",
   chat: "Chat",
+  code: "Code",
+  command: "Command line",
+  history: "History",
   pulse: "Pulse",
+  imagine: "Imagine",
   journal: "Journal",
   automations: "Automations",
-  memory: "Memory",
+  agents: "Agents",
+  memory: "Personal",
+  skills: "Skills",
   connectors: "Connectors",
   settings: "Settings",
+  workboard: "Workboard",
+  devices: "Devices",
+  library: "Library",
+  mods: "Mods",
+  updates: "Updates & Drivers",
 };
 
-/** The pages this platform shows, in tab order. The journal is this
- * computer's file, so the web app leaves it on the desktop. */
+/** The pages this platform shows, in tab order. Code, History and the journal
+ * are this computer's files, so the web app leaves them on the desktop (a
+ * browser sees only the chats it started); Devices is about this computer's
+ * Web access, so only a desktop that has it shows it. */
 export function views(caps: Capabilities): View[] {
   return [
+    "home",
     "chat",
+    ...(caps.code && !caps.remote ? (["code"] as const) : []),
+    ...(caps.remote ? [] : (["history"] as const)),
     ...(caps.pulse ? (["pulse"] as const) : []),
+    "imagine",
     ...(caps.remote ? [] : (["journal"] as const)),
     "automations",
+    "agents",
     "memory",
+    "skills",
     "connectors",
+    "workboard",
+    ...(caps.webAccess && !caps.remote ? (["devices"] as const) : []),
+    ...(caps.library ? (["library"] as const) : []),
+    ...(caps.mods && !caps.remote ? (["mods"] as const) : []),
     "settings",
   ];
 }
 
-/** The rows for `query`: pages, then Settings sections, then Ask Grok with
- * the typed text, which puts it in the chat box like the cabin's palette. */
-export function paletteRows(caps: Capabilities, query: string): PaletteRow[] {
-  const all: PaletteRow[] = [
-    ...views(caps).map((view) => ({
-      label: VIEW_LABELS[view],
-      action: { kind: "view", view } as const,
-    })),
-    // The web app's Settings is one page on the desktop's terms.
-    ...(caps.remote ? [] : sections(caps)).map((section) => ({
-      label: `Settings: ${SECTION_LABELS[section]}`,
-      action: { kind: "settings", section } as const,
-    })),
-  ];
+/** Every page the palette opens: the tabs, Objectives right after Home, and
+ * the Command line right after Code. Neither has a tab of its own; Home's
+ * objectives tiles open Objectives too. Updates & Drivers opens from its Home
+ * tile only. */
+export function pageViews(caps: Capabilities): View[] {
+  const tabs = views(caps);
+  const at = tabs.indexOf("home") + 1;
+  const pages: View[] = [...tabs.slice(0, at), "objectives", ...tabs.slice(at)];
+  const code = pages.indexOf("code");
+  return code < 0 ? pages : [...pages.slice(0, code + 1), "command", ...pages.slice(code + 1)];
+}
+
+/** Whether this app has `view` to open. Updates & Drivers has no tab, and
+ * reads this computer. */
+export function hasPage(caps: Capabilities, view: View): boolean {
+  return pageViews(caps).includes(view) || (view === "updates" && !caps.remote);
+}
+
+/** The rows for `query`, in order: suggestions (while nothing is typed),
+ * pages, commands, slash commands (for a query that starts with `/`), recent
+ * chats, Settings sections, then Ask with the typed text, which puts it in the
+ * chat box like the cabin's palette. */
+export function paletteRows(caps: Capabilities, query: string, extras: PaletteExtras = NO_EXTRAS): PaletteRow[] {
   const q = query.trim().toLowerCase();
+  const slash = q.startsWith("/");
+  const pages: PaletteRow[] = pageViews(caps).map((view) => ({
+    label: VIEW_LABELS[view],
+    action: { kind: "view", view },
+    ...(view === "settings" ? { keys: SETTINGS_KEYS } : {}),
+  }));
+  // The web app's Settings is one page on the desktop's terms.
+  const settings: PaletteRow[] = (caps.remote ? [] : sections(caps)).map((section) => ({
+    label: `Settings: ${SECTION_LABELS[section]}`,
+    action: { kind: "settings", section },
+  }));
+  const named = (rows: PaletteRow[]) => (q ? rows.filter((row) => answersTo(row.label, q)) : rows);
+  const views = pageViews(caps);
+  const suggested = q ? [] : (extras.chips ?? []).flatMap((chip) => chipRow(chip, views) ?? []);
+  const all = [
+    ...suggested,
+    ...named(pages),
+    ...named(commandRows(caps, extras)),
+    ...(slash ? slashRows(extras.slash) : []),
+    ...(slash ? [] : chatRows(extras.chats)),
+    ...named(settings),
+  ];
   if (!q) return all;
-  const hits = all.filter((row) => row.label.toLowerCase().includes(q));
-  return [...hits, { label: `Ask Grok: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];
+  return [...all, { label: `Ask ${PRODUCT_NAME}: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];
+}
+
+const NOTHING_FOUND = { chats: [], slash: [] };
+
+/** Rows can share a label (two chats with one title), so keys use the action. */
+function rowKey(row: PaletteRow): string {
+  if (row.chip) return `chip:${row.chip.id}`;
+  return row.action.kind === "chat" ? `chat:${row.action.id}` : row.label;
+}
+
+/** `Ctrl+Alt+H` as aria-keyshortcuts spells it. */
+function ariaKeys(keys: string): string {
+  return keys.replace(/\bCtrl\b/g, "Control");
 }
 
 /** The list may take half the window, as in the stylesheet. */
@@ -67,26 +213,70 @@ const paletteRoom = () => window.innerHeight * 0.5;
  * outside or a pick closes it. */
 export function Palette({
   caps,
+  sources = NO_SOURCES,
   onPick,
   onClose,
 }: {
   caps: Capabilities;
+  sources?: PaletteSources;
   onPick: (action: PaletteAction) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState(0);
+  const [found, setFound] = useState<{ chats: readonly ChatHit[]; slash: readonly SlashHit[] }>(NOTHING_FOUND);
   const input = useRef<HTMLInputElement>(null);
+  const box = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
   // The way the last arrow key moved, so only key moves (not hovers) scroll.
   const moved = useRef<1 | -1 | null>(null);
-  const rows = paletteRows(caps, query);
+  // The decision inbox (Order 733): while anything waits on you, the first
+  // row opens Chat, where the inbox sits.
+  const [waiting, setWaiting] = useState(0);
+  useEffect(() => {
+    let live = true;
+    Promise.resolve()
+      .then(() => decisionInbox())
+      .then((rows) => {
+        if (live) setWaiting(rows.length);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  const inboxLabel = `Decisions waiting · ${waiting}`;
+  const inboxRow: PaletteRow[] =
+    waiting > 0 && (!query.trim() || answersTo(inboxLabel, query.trim().toLowerCase()))
+      ? [{ label: inboxLabel, action: { kind: "view", view: "chat" } }]
+      : [];
+  const rows = [...inboxRow, ...paletteRows(caps, query, { ...sources, ...found })];
+  const { onChip } = sources;
+  const { chats: findChats, slash: findSlash } = sources;
   const at = Math.min(pick, rows.length - 1);
   usePeek(list, "y", rows.length, paletteRoom);
+  useModalFocus(box);
 
   useEffect(() => {
     input.current?.focus();
   }, []);
+
+  // Chats and slash commands come from the desktop, so they arrive a moment
+  // later; an answer for an older query is dropped.
+  useEffect(() => {
+    let live = true;
+    const q = query.trim();
+    const keep = (next: typeof found) => {
+      if (!live) return;
+      setFound((now) => (now.chats.length + now.slash.length + next.chats.length + next.slash.length === 0 ? now : next));
+    };
+    const lost = () => keep(NOTHING_FOUND);
+    if (q.startsWith("/")) findSlash(q).then((slash) => keep({ chats: [], slash }), lost);
+    else findChats(q).then((chats) => keep({ chats, slash: [] }), lost);
+    return () => {
+      live = false;
+    };
+  }, [query, findChats, findSlash]);
 
   useEffect(() => {
     const dir = moved.current;
@@ -96,6 +286,7 @@ export function Palette({
 
   function choose(row: PaletteRow | undefined) {
     if (!row) return;
+    if (row.chip) onChip?.(row.chip);
     onClose();
     onPick(row.action);
   }
@@ -121,6 +312,7 @@ export function Palette({
   return (
     <div className="palette-backdrop" onMouseDown={onClose}>
       <div
+        ref={box}
         className="palette"
         role="dialog"
         aria-modal="true"
@@ -146,14 +338,16 @@ export function Palette({
         <ul ref={list} id="palette-rows" role="listbox" aria-label="Pages and commands">
           {rows.map((row, i) => (
             <li
-              key={row.label}
+              key={rowKey(row)}
               id={`palette-row-${i}`}
               role="option"
               aria-selected={i === at}
+              aria-keyshortcuts={row.keys && ariaKeys(row.keys)}
               onMouseEnter={() => setPick(i)}
               onClick={() => choose(row)}
             >
-              {row.label}
+              <span>{row.label}</span>
+              {row.keys && <kbd aria-hidden="true">{row.keys}</kbd>}
             </li>
           ))}
         </ul>

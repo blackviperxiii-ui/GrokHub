@@ -31,6 +31,33 @@ pub enum HardClass {
     Delete,
     Credentials,
     IrreversibleOs,
+    /// A write to the files that set what the agent may do or is told:
+    /// the workspace's `.claude/` folder and `.grok/hooks/`.
+    AgentConfig,
+    /// A value the call carries came only from outside text the run read.
+    OutsideValue,
+    /// A change to a file that runs code later (a build script, a package
+    /// script, an editor task), made after the run read outside text.
+    RunsLater,
+    /// An install of a hardware tool whose kernel driver Microsoft's
+    /// vulnerable driver blocklist names (anti-cheats won't start with it).
+    FlaggedDriver,
+    /// A Windows admin prompt (`-Verb RunAs`, `runas`, `gsudo`), or a change
+    /// to the machine's own protection: System Restore and shadow copies,
+    /// machine-wide registry keys, the script execution policy, Defender
+    /// or the firewall.
+    SystemAdmin,
+    /// A new scheduled job (`automation_create`, `scheduler_create` with no
+    /// `task_id`): it runs on its own later, so it is only ever offered.
+    Automation,
+    /// A lead's request to merge a helper's work into the project folder
+    /// (`merge_subagent_work`): the person's files change, so it is only
+    /// ever offered.
+    MergeWork,
+    /// An agent's own `git push` or `send-pack`, or `gh pr create`,
+    /// `gh pr merge` or a `gh api` call that is not plainly a GET
+    /// ([`ships`]). A plain commit is not here: it stays routine.
+    Ship,
 }
 
 impl HardClass {
@@ -41,6 +68,14 @@ impl HardClass {
             Self::Delete => "delete",
             Self::Credentials => "credentials",
             Self::IrreversibleOs => "irreversible_os",
+            Self::AgentConfig => "agent_config",
+            Self::OutsideValue => "outside_value",
+            Self::RunsLater => "runs_later",
+            Self::FlaggedDriver => "flagged_driver",
+            Self::SystemAdmin => "system_admin",
+            Self::Automation => "automation",
+            Self::MergeWork => "merge_work",
+            Self::Ship => "ship",
         }
     }
 
@@ -51,6 +86,14 @@ impl HardClass {
             Self::Delete => "Delete",
             Self::Credentials => "Credentials / secrets",
             Self::IrreversibleOs => "Irreversible OS",
+            Self::AgentConfig => "Agent instructions and settings",
+            Self::OutsideValue => "Value from outside text",
+            Self::RunsLater => "File that runs code later",
+            Self::FlaggedDriver => "Driver anti-cheats block",
+            Self::SystemAdmin => "Admin rights or system protection",
+            Self::Automation => "New automation",
+            Self::MergeWork => "Merge helper work",
+            Self::Ship => "Push, PR, GitHub API call or ship button",
         }
     }
 
@@ -61,6 +104,14 @@ impl HardClass {
             "delete" => Some(Self::Delete),
             "credentials" => Some(Self::Credentials),
             "irreversible_os" => Some(Self::IrreversibleOs),
+            "agent_config" => Some(Self::AgentConfig),
+            "outside_value" => Some(Self::OutsideValue),
+            "runs_later" => Some(Self::RunsLater),
+            "flagged_driver" => Some(Self::FlaggedDriver),
+            "system_admin" => Some(Self::SystemAdmin),
+            "automation" => Some(Self::Automation),
+            "merge_work" => Some(Self::MergeWork),
+            "ship" => Some(Self::Ship),
             _ => None,
         }
     }
@@ -115,6 +166,10 @@ pub fn classify(name: &str, arguments: &str) -> HardHit {
     }
     match hard_class(name, arguments) {
         Some(class) => HardHit::Class(class),
+        // ROPE / PACT: a value only outside text named needs your yes.
+        None if crate::harness::provenance::outside_value(name, arguments).is_some() => {
+            HardHit::Class(HardClass::OutsideValue)
+        }
         None => HardHit::None,
     }
 }
@@ -137,6 +192,12 @@ fn use_tool_target(arguments: &str) -> Option<(String, String)> {
 /// Classify a Grok Build permission ask (ACP / native side ask) from its title and
 /// one-line action. The action is usually the command, path, or site.
 pub fn classify_ask(title: &str, action: &str) -> HardHit {
+    // The lead's merge request arrives as an ask titled with the tool's name.
+    // Its action is a line about the work, not a command, so nothing below
+    // would know it, and a host in Always would answer it by itself.
+    if title.trim() == crate::tools::control::MERGE_WORK {
+        return HardHit::Class(HardClass::MergeWork);
+    }
     let as_shell = serde_json::json!({ "command": action }).to_string();
     let floor = classify("run_terminal_command", &as_shell);
     if let HardHit::Floor(_) = floor {
@@ -607,6 +668,9 @@ pub fn click_target_in(
             }
         }
     }
+    if let Some(rule) = ship_click(&words, context) {
+        return Some(rule);
+    }
     if words.iter().any(|w| w == "submit") {
         let around: Vec<String> = words.iter().cloned().chain(field_words(context)).collect();
         let has = |list: &[&str]| around.iter().any(|w| list.contains(&w.as_str()));
@@ -618,6 +682,34 @@ pub fn click_target_in(
         }
     }
     None
+}
+
+/// The app's own buttons that commit, push, open or merge a pull request,
+/// waive a review finding or allow a flagged line. In the app's own window
+/// an agent's click on one needs the person, as its shell push does.
+const CLICK_SHIP_OWN: &[&str] = &["commit", "push", "open pr", "merge", "waive", "allow"];
+/// In any window: a pull request is opened or merged.
+const CLICK_SHIP: &[&str] = &[
+    "create pull request",
+    "open pull request",
+    "merge pull request",
+];
+
+/// A click that ships ([`HardClass::Ship`]): a pull request anywhere, and
+/// the app's own ship buttons in its own window (`context` names it).
+fn ship_click(words: &[String], context: &str) -> Option<ClickRule> {
+    let own_name = field_words(grokhub_core::brand::product_name()).join(" ");
+    let own = !own_name.is_empty() && phrase_at(&field_words(context), &own_name).is_some();
+    let lists: &[&[&str]] = if own {
+        &[CLICK_SHIP, CLICK_SHIP_OWN]
+    } else {
+        &[CLICK_SHIP]
+    };
+    lists
+        .iter()
+        .flat_map(|list| list.iter())
+        .find(|phrase| phrase_at(words, phrase).is_some())
+        .map(|phrase| ClickRule::new(HardClass::Ship, phrase))
 }
 
 /// A click on a control nothing names errs to hard in a risky window: a
@@ -723,7 +815,7 @@ pub fn click_rule(args: &serde_json::Value) -> Option<ClickRule> {
     click_target_in(t.effect.as_deref(), &t.label, &t.role, &t.context)
 }
 
-/// The hard card line for a parked click: "Grok wants to click Send in Mail".
+/// The hard card line for a parked click: "Loadout wants to click Send in Mail".
 pub fn click_action(args: &serde_json::Value, rule: &ClickRule) -> String {
     let t = click_target(args);
     let place = if t.context.is_empty() {
@@ -731,7 +823,11 @@ pub fn click_action(args: &serde_json::Value, rule: &ClickRule) -> String {
     } else {
         t.context.chars().take(60).collect()
     };
-    format!("Grok wants to click {} in {place}", rule.word())
+    format!(
+        "{} wants to click {} in {place}",
+        grokhub_core::brand::product_name(),
+        rule.word()
+    )
 }
 
 /// Delete and Shift+Delete. On a file manager they delete the selection.
@@ -1257,6 +1353,11 @@ const BASE_DENY_RULES: &[&str] = &[
     "Bash(*; rd *)",
     "Bash(*&& rd *)",
     "Bash(*| rd *)",
+    "Bash(ri *)",
+    "Bash(sudo ri *)",
+    "Bash(*; ri *)",
+    "Bash(*&& ri *)",
+    "Bash(*| ri *)",
     "Bash(remove-item *)",
     "Bash(sudo remove-item *)",
     "Bash(*; remove-item *)",
@@ -1452,6 +1553,8 @@ const BASE_DENY_RULES: &[&str] = &[
     "MCPTool(grokhub-self__skill_delete)",
     "MCPTool(grokhub-self__connection_remove)",
     "MCPTool(grokhub-self__automation_delete)",
+    // A new automation runs on its own later, so it waits for your yes too
+    "MCPTool(grokhub-self__automation_create)",
 ];
 
 /// Every path C `--deny` rule: [`BASE_DENY_RULES`], then the forms GB's
@@ -1482,6 +1585,7 @@ const CASE_HEADS: &[&str] = &[
     "del",
     "erase",
     "rd",
+    "ri",
     "remove-item",
     "remove-itemsafely",
     "clear-recyclebin",
@@ -1519,6 +1623,7 @@ const WRAPPED_HEADS: &[&str] = &[
     "del",
     "erase",
     "rd",
+    "ri",
     "remove-item",
     "Remove-Item",
     "shutdown",
@@ -1627,6 +1732,13 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
     ("cp linux.efi /boot/efi/EFI/Linux/", "a copy, move or write into /boot or the ESP (the target path, not the head)"),
 ];
 
+/// An install of a tool whose driver Microsoft's cached vulnerable driver
+/// blocklist names (round 3 item 36).
+fn flagged_driver(cmd: &str) -> Option<HardClass> {
+    let list = grokhub_core::driver_check::cached(&crate::perm::config_dir());
+    grokhub_core::driver_check::flag(cmd, &list).map(|_| HardClass::FlaggedDriver)
+}
+
 /// Floor for shell commands: host_safety paths, rm -rf /, fork bomb, mkfs, dd to a disk,
 /// curl|sh as root.
 pub fn hard_floor(name: &str, arguments: &str) -> Option<HardFloor> {
@@ -1670,6 +1782,9 @@ fn command_floor(cmd: &str) -> Option<String> {
     if let Some(why) = host_safety::forbidden_reason(cmd) {
         return Some(why.to_string());
     }
+    if let Some(why) = grokhub_core::driver_check::input_driver_install(cmd) {
+        return Some(why);
+    }
     if cmd.to_ascii_lowercase().contains("consent.jsonl") {
         return Some(LEDGER_FLOOR.into());
     }
@@ -1710,16 +1825,282 @@ fn command_floor(cmd: &str) -> Option<String> {
     None
 }
 
+/// Game folders mods go into, lowercase with `/`. A write or a command that
+/// names one parks a card: only the Mods page's own install writes there.
+static MOD_ROOTS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+fn norm_path(p: &str) -> String {
+    p.trim()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
+/// The app names the game folders it may install mods into.
+pub fn set_mod_roots(roots: &[std::path::PathBuf]) {
+    let roots = roots
+        .iter()
+        .map(|r| norm_path(&r.to_string_lossy()))
+        .filter(|r| r.len() > 3)
+        .collect();
+    *MOD_ROOTS.write().unwrap_or_else(|e| e.into_inner()) = roots;
+}
+
+/// A write, edit or command that touches a game's mod folder.
+fn touches_mod_root(name: &str, arguments: &str) -> bool {
+    let roots = MOD_ROOTS.read().unwrap_or_else(|e| e.into_inner());
+    if roots.is_empty() {
+        return false;
+    }
+    let v: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
+    let texts: Vec<String> = if SHELL_TOOLS.contains(&name) {
+        command_arg(arguments).into_iter().collect()
+    } else if matches!(name, "write" | "search_replace") {
+        ["path", "file_path", "target_file"]
+            .iter()
+            .filter_map(|k| v.get(*k).and_then(|p| p.as_str()).map(str::to_string))
+            .collect()
+    } else {
+        return false;
+    };
+    texts.iter().any(|t| {
+        let t = norm_path(t);
+        roots.iter().any(|r| t.contains(r.as_str()))
+    })
+}
+
+/// Files that run code later without anyone reading them first: build and
+/// package scripts, editor tasks, direnv and pre-commit config. Matched by
+/// file name, or by the folder they live in.
+const RUNS_LATER_FILES: &[&str] = &[
+    "build.rs",
+    "package.json",
+    "makefile",
+    "gnumakefile",
+    "justfile",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "conftest.py",
+    ".envrc",
+    ".pre-commit-config.yaml",
+    "pre-commit-config.yaml",
+    "lefthook.yml",
+    "tasks.json",
+    "launch.json",
+    "profile.ps1",
+    "microsoft.powershell_profile.ps1",
+    ".bashrc",
+    ".bash_profile",
+    ".profile",
+    ".zshrc",
+    ".zprofile",
+];
+
+/// A path to a file that runs code later: one of [`RUNS_LATER_FILES`], cargo
+/// config (`.cargo/config`, with or without its `.toml` ending), or anything
+/// under `.husky/` or `.githooks/`.
+pub fn is_runs_later_path(path: &str) -> bool {
+    let path = norm_path(path);
+    let parts: Vec<String> = path
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.trim_matches(|c: char| matches!(c, '"' | '\'' | '`'))
+                .to_ascii_lowercase()
+        })
+        .collect();
+    let Some(last) = parts.last() else {
+        return false;
+    };
+    let in_hook_dir = parts[..parts.len() - 1]
+        .iter()
+        .any(|part| part == ".husky" || part == ".githooks");
+    let cargo_config = parts.len() >= 2
+        && parts[parts.len() - 2] == ".cargo"
+        && last
+            .strip_prefix("config")
+            .is_some_and(|rest| rest.is_empty() || rest == ".toml");
+    RUNS_LATER_FILES.contains(&last.as_str()) || in_hook_dir || cargo_config
+}
+
+/// A write, edit or non-read-only command that names a file that runs later.
+fn touches_runs_later(name: &str, arguments: &str) -> bool {
+    touches_path(name, arguments, is_runs_later_path)
+}
+
+/// Files every later chat reads as standing instructions: `AGENTS.md`,
+/// `CLAUDE.md`, `MEMORY.md` and skill files. A page that talks the agent into
+/// writing one leaves an instruction behind for every chat after it.
+const INSTRUCTION_FILES: &[&str] = &[
+    "agents.md",
+    "claude.md",
+    "memory.md",
+    "skill.md",
+    // MCP server lists: a new entry is a new program the agent will start.
+    ".mcp.json",
+    "mcp.json",
+];
+
+/// A path the agent reads as its own settings or instructions: any `.claude`
+/// folder, `.grok/hooks`, `.grok/hooks-paths` and `.grok/skills`, the cabin's
+/// own skills and memory folders, and the instruction files above wherever
+/// they sit. These grant permissions, run hooks or steer later chats, so the
+/// agent writing them could approve or instruct its own later calls.
+pub fn is_agent_config_path(path: &str) -> bool {
+    let path = norm_path(path);
+    let clean = |part: &str| {
+        part.trim_matches(|c: char| matches!(c, '"' | '\'' | '`'))
+            .to_string()
+    };
+    let parts: Vec<String> = path
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .map(clean)
+        .filter(|part| part != ".")
+        .collect();
+    // `.grok/a/../hooks` is `.grok/hooks`: each `..` steps back over the part
+    // before it. The path as written counts too.
+    let mut folded: Vec<String> = Vec::new();
+    for part in &parts {
+        if part == ".." && folded.last().is_some_and(|prev| prev != "..") {
+            folded.pop();
+        } else {
+            folded.push(part.clone());
+        }
+    }
+    let in_settings = |parts: &[String]| {
+        parts.iter().enumerate().any(|(at, part)| {
+            part == ".claude"
+                || (part == ".grok"
+                    && parts.get(at + 1).is_some_and(|next| {
+                        matches!(next.as_str(), "hooks" | "hooks-paths" | "skills")
+                    }))
+        })
+    };
+    let instruction_file = parts
+        .last()
+        .is_some_and(|name| INSTRUCTION_FILES.contains(&name.to_ascii_lowercase().as_str()));
+    in_settings(&parts)
+        || in_settings(&folded)
+        || instruction_file
+        || in_cabin_instructions(&parts)
+        || in_cabin_instructions(&folded)
+}
+
+/// The cabin's own skills and memory folders, under its config folder.
+fn in_cabin_instructions(parts: &[String]) -> bool {
+    let config = norm_path(&crate::perm::config_dir().display().to_string());
+    let config: Vec<&str> = config.split('/').filter(|part| !part.is_empty()).collect();
+    // `~/...` and `$HOME/...` name the same folder as the absolute path.
+    let mut expanded: Vec<String> = Vec::new();
+    let parts = match parts.first().map(String::as_str) {
+        Some("~" | "$home" | "${home}") => {
+            let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+            let Some(home) = std::env::var_os(var) else {
+                return false;
+            };
+            let home = std::path::PathBuf::from(home);
+            expanded.extend(
+                norm_path(&home.display().to_string())
+                    .split('/')
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_string),
+            );
+            expanded.extend(parts[1..].iter().cloned());
+            expanded.as_slice()
+        }
+        _ => parts,
+    };
+    if config.is_empty() || parts.len() <= config.len() {
+        return false;
+    }
+    parts.iter().zip(&config).all(|(a, b)| a == b)
+        && matches!(parts[config.len()].as_str(), "skills" | "memory")
+}
+
+/// A write, edit or non-read-only command that names the agent's settings.
+fn touches_agent_config(name: &str, arguments: &str) -> bool {
+    touches_path(name, arguments, is_agent_config_path)
+}
+
+/// A write or edit of a path `matches` accepts, or a command that is not
+/// read-only and names one.
+fn touches_path(name: &str, arguments: &str, matches: fn(&str) -> bool) -> bool {
+    let v: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
+    if SHELL_TOOLS.contains(&name) {
+        let Some(command) = command_arg(arguments) else {
+            return false;
+        };
+        let facts = crate::perm::analyze(&command);
+        let read_only = facts.segments.as_ref().is_some_and(|segs| {
+            !segs.is_empty()
+                && !facts.dangerous
+                && segs
+                    .iter()
+                    .all(|seg| seg.readonly && seg.eligible && !seg.dangerous)
+        });
+        return !read_only
+            && command
+                .split(|c: char| {
+                    c.is_whitespace() || matches!(c, ';' | '&' | '|' | '>' | '<' | '(' | ')' | '=')
+                })
+                .any(matches);
+    }
+    if matches!(name, "write" | "search_replace") {
+        return ["path", "file_path", "target_file"]
+            .iter()
+            .filter_map(|k| v.get(*k).and_then(|p| p.as_str()))
+            .any(matches);
+    }
+    false
+}
+
+/// A call that adds a new scheduled job: `automation_create` (native or
+/// `grokhub-self__`), or `scheduler_create` without a `task_id` to update.
+pub fn creates_automation(name: &str, arguments: &str) -> bool {
+    if crate::self_manage::self_tool(name) == Some("automation_create") {
+        return true;
+    }
+    if name.rsplit("__").next() != Some("scheduler_create") {
+        return false;
+    }
+    let args = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
+    args.get("task_id")
+        .and_then(|v| v.as_str())
+        .is_none_or(|id| id.trim().is_empty())
+}
+
 /// Hard class for a tool call. Read-only tools are never hard class.
 pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     if crate::gate::is_readonly(name) {
         return None;
     }
+    if name == crate::tools::control::MERGE_WORK {
+        return Some(HardClass::MergeWork);
+    }
+    if touches_mod_root(name, arguments) {
+        return Some(HardClass::IrreversibleOs);
+    }
+    if touches_agent_config(name, arguments) {
+        return Some(HardClass::AgentConfig);
+    }
+    // Ordinary coding edits these files all the time, so they only need you
+    // once the run has read outside text that could have asked for the edit.
+    if crate::tools::fence::run_saw_untrusted() && touches_runs_later(name, arguments) {
+        return Some(HardClass::RunsLater);
+    }
     if SHELL_TOOLS.contains(&name) {
         let cmd = command_arg(arguments)
             .unwrap_or_default()
             .to_ascii_lowercase();
-        return command_class(&cmd);
+        return command_class(&cmd)
+            .or_else(|| system_admin(&cmd))
+            .or_else(|| flagged_driver(&cmd))
+            .or_else(|| asks_outside_sandbox(arguments));
+    }
+    if creates_automation(name, arguments) {
+        return Some(HardClass::Automation);
     }
     if let Some(class) =
         crate::self_manage::self_class(name, &serde_json::from_str(arguments).unwrap_or_default())
@@ -1748,6 +2129,81 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
         return Some(HardClass::Credentials);
     }
     name_class(name)
+}
+
+/// A step that raises a Windows admin prompt or changes how the machine
+/// protects itself always asks first: the agent never works its way around
+/// an access-denied or the admin prompt on its own. `cmd` is lower case.
+fn system_admin(cmd: &str) -> Option<HardClass> {
+    let squashed: String = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
+    let c = squashed.as_str();
+    let words: Vec<&str> = c
+        .split(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '(' | ')' | '{' | '}')
+        })
+        .filter(|w| !w.is_empty())
+        .collect();
+    let elevates = c.contains("-verb runas")
+        || c.contains("-verb:runas")
+        || c.contains("-verb 'runas'")
+        || c.contains("-verb \"runas\"")
+        || words
+            .iter()
+            .any(|w| matches!(*w, "runas" | "runas.exe" | "gsudo" | "gsudo.exe"));
+    let machine_key = [
+        "hklm:",
+        "hkey_local_machine",
+        "registry::hkey_local_machine",
+    ]
+    .iter()
+    .any(|k| c.contains(k));
+    let writes_key = [
+        "set-itemproperty",
+        "new-itemproperty",
+        "remove-itemproperty",
+        "rename-itemproperty",
+        "new-item ",
+        "remove-item ",
+        "set-item ",
+    ]
+    .iter()
+    .any(|v| c.contains(v));
+    let reg_write = words.windows(3).any(|w| {
+        matches!(w[0], "reg" | "reg.exe")
+            && matches!(w[1], "add" | "import" | "restore" | "copy")
+            && (w[2].starts_with("hklm") || w[2].starts_with("hkey_local_machine"))
+    }) || words
+        .windows(2)
+        .any(|w| matches!(w[0], "reg" | "reg.exe") && matches!(w[1], "import" | "restore"));
+    let protection = [
+        "enable-computerrestore",
+        "disable-computerrestore",
+        "systemrestorepointcreationfrequency",
+        "disablesr",
+        "set-executionpolicy",
+        "set-mppreference",
+        "add-mppreference",
+        "remove-mppreference",
+        "set-netfirewallprofile",
+        "advfirewall set",
+        "netsh firewall",
+    ]
+    .iter()
+    .any(|p| c.contains(p))
+        || words.windows(2).any(|w| {
+            w[0].trim_end_matches(".exe") == "vssadmin"
+                && matches!(w[1], "resize" | "delete" | "add")
+        });
+    (elevates || (machine_key && writes_key) || reg_write || protection)
+        .then_some(HardClass::SystemAdmin)
+}
+
+/// HX-11: a shell call that asks to run on the whole machine, outside the
+/// sandbox, always asks first.
+fn asks_outside_sandbox(arguments: &str) -> Option<HardClass> {
+    let v: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    (v.get(crate::sandbox::OUTSIDE_ARG).and_then(|b| b.as_bool()) == Some(true))
+        .then_some(HardClass::IrreversibleOs)
 }
 
 /// Named tools (native, MCP `server__tool`, and the spike stubs).
@@ -1847,6 +2303,9 @@ const DELETE_HEADS: &[&str] = &[
     "del",
     "erase",
     "rd",
+    // PowerShell's short name for Remove-Item. Ruby's doc viewer shares the
+    // name and gets the card too.
+    "ri",
     "remove-item",
     "remove-itemsafely",
     "recycle",
@@ -2044,6 +2503,9 @@ fn command_class(cmd: &str) -> Option<HardClass> {
         {
             return Some(HardClass::Delete);
         }
+        if ships_seg(seg, 0) {
+            return Some(HardClass::Ship);
+        }
         if SEND_HEADS.contains(&h) {
             return Some(HardClass::Send);
         }
@@ -2054,9 +2516,320 @@ fn command_class(cmd: &str) -> Option<HardClass> {
     None
 }
 
+/// git's own options before the verb that take the next word as their value
+/// (lower case, as [`command_class`] reads the command).
+const GIT_VALUE_OPTIONS: &[&str] = &[
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--super-prefix",
+    "--config-env",
+    "--attr-source",
+];
+
+/// `gh api` options that never change the method or add a body. Any other
+/// option means the call can't be read as a GET.
+const GH_API_READ_VALUE: &[&str] = &[
+    "-h",
+    "--header",
+    "-q",
+    "--jq",
+    "-t",
+    "--template",
+    "-p",
+    "--preview",
+    "--cache",
+    "--hostname",
+];
+const GH_API_READ_FLAGS: &[&str] = &[
+    "-i",
+    "--include",
+    "--paginate",
+    "--silent",
+    "--slurp",
+    "--verbose",
+];
+
+/// How deep [`ships_cmd`] reads scripts inside scripts (`bash -c`,
+/// `eval`, an alias that runs a shell). Deeper than this asks.
+const SHIP_DEPTH: u8 = 6;
+
+/// Step 6 of phase 5: whether any command in `cmd` pushes, or opens or
+/// merges a pull request. `cmd` is lower case, as [`command_class`] reads
+/// it. Each command is read by its shell words, quotes joined as a shell
+/// joins them (`g''it`, `-C 'my app'`), past git's global options, the
+/// wrappers [`head_at`] knows, shell keywords (`if`, `then`, `!`),
+/// `stdbuf`, `flock` and `eval`, and into a script given to `bash -c`,
+/// `sh -lc` and the like. `commit`, `commit-tree` and `update-ref` are not
+/// here: the person chose that an agent's plain commit stays as it is, and
+/// the push gates refuse to push a commit the app did not make. An alias
+/// from a config file or a script file still passes; the gates in
+/// `grokhub-code`'s `push.rs` are what hold.
+fn ships_cmd(cmd: &str, depth: u8) -> bool {
+    if depth > SHIP_DEPTH {
+        return true;
+    }
+    let cmd = cmd.replace("$(", ";").replace("<(", ";").replace(">(", ";");
+    cmd.split([';', '|', '&', '\n', '\r', '`'])
+        .map(str::trim)
+        .filter(|seg| !seg.is_empty())
+        .any(|seg| ships_seg(seg, depth))
+}
+
+/// [`ships_cmd`] for one segment, already split on `;`, `|`, `&` and the rest.
+fn ships_seg(seg: &str, depth: u8) -> bool {
+    names_push_program(seg) || words_ship(&shell_words(seg), depth)
+}
+
+/// git's own push programs named by path: `/usr/lib/git-core/git-push`,
+/// `"$(git --exec-path)/git-push"`.
+fn names_push_program(seg: &str) -> bool {
+    seg.split(|c: char| c.is_whitespace() || "\"'`$();|&<>{}=".contains(c))
+        .any(|token| matches!(leaf(token), "git-push" | "git-send-pack"))
+}
+
+/// One segment's words: the head, past wrappers and keywords, and what it
+/// runs.
+fn words_ship(words: &[String], depth: u8) -> bool {
+    let mut from = 0;
+    while from < words.len() {
+        let Some(at) = head_at(&words[from..]).map(|at| at + from) else {
+            return false;
+        };
+        let word = &words[at];
+        // `bash -c '<script>'`: the script is one word.
+        if word.contains(char::is_whitespace) {
+            return ships_cmd(&words[at..].join(" "), depth + 1);
+        }
+        let rest = &words[at + 1..];
+        match leaf(word) {
+            "if" | "then" | "elif" | "else" | "do" | "while" | "until" | "!" | "builtin"
+            | "unbuffer" | "chronic" => from = at + 1,
+            "eval" => return ships_cmd(&rest.join(" "), depth + 1),
+            // `stdbuf -o0 git push`, `stdbuf -o 0 git push`
+            "stdbuf" => {
+                from = at + 1;
+                while let Some(w) = words.get(from).filter(|w| w.starts_with('-')) {
+                    from += if matches!(w.as_str(), "-i" | "-o" | "-e") {
+                        2
+                    } else {
+                        1
+                    };
+                }
+            }
+            // `flock /tmp/l git push`, `flock /tmp/l -c 'git push'`
+            "flock" => {
+                if let Some(i) = rest.iter().position(|w| w == "-c" || w == "--command") {
+                    return rest.get(i + 1).is_some_and(|s| ships_cmd(s, depth + 1));
+                }
+                from = at + 1;
+                while let Some(w) = words.get(from).filter(|w| w.starts_with('-')) {
+                    from += if matches!(w.as_str(), "-w" | "--wait" | "--timeout") {
+                        2
+                    } else {
+                        1
+                    };
+                }
+                // The lock file.
+                from += 1;
+            }
+            // `sh -ec '<script>'`, `bash -lc '<script>'`: any short option
+            // cluster with `c` takes the next word as the script.
+            "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" | "mksh" => {
+                let mut i = at + 1;
+                let mut script = false;
+                while let Some(w) = words
+                    .get(i)
+                    .filter(|w| w.len() > 1 && w.starts_with(['-', '+']))
+                {
+                    script |= !w.starts_with("--") && w[1..].contains('c');
+                    i += if matches!(w.as_str(), "-o" | "+o") {
+                        2
+                    } else {
+                        1
+                    };
+                }
+                return script && words.get(i).is_some_and(|s| ships_cmd(s, depth + 1));
+            }
+            _ => return ships(words, at, depth),
+        }
+    }
+    false
+}
+
+/// The command whose head is at `head` pushes or opens or merges a pull
+/// request. Read by words, not by prefix, so git's global options (`-C
+/// <dir>`, `-c <k=v>`, `--git-dir`, `--no-pager`, …) and gh's (`-R <repo>`)
+/// before the verb don't hide it. An alias given with `-c alias.<name>=`
+/// is read as what it names.
+fn ships(words: &[String], head: usize, depth: u8) -> bool {
+    let at = |i: usize| words.get(i).map(String::as_str);
+    match leaf(&words[head]) {
+        "git" => {
+            // Aliases set on this command line: name, and what it runs when
+            // that can be read.
+            let mut aliases: Vec<(&str, Option<&str>)> = Vec::new();
+            let mut i = head + 1;
+            while let Some(w) = at(i).filter(|w| w.starts_with('-')) {
+                let value = match w {
+                    "-c" => at(i + 1),
+                    "--config-env" => at(i + 1).map(|v| v.split('=').next().unwrap_or(v)),
+                    _ => w
+                        .strip_prefix("--config-env=")
+                        .map(|v| v.split('=').next().unwrap_or(v)),
+                };
+                if let Some(alias) = value.and_then(|v| v.strip_prefix("alias.")) {
+                    let set = match alias.split_once('=') {
+                        Some((name, runs)) if w == "-c" => (name, Some(runs)),
+                        Some((name, _)) => (name, None),
+                        None => (alias, None),
+                    };
+                    aliases.push(set);
+                }
+                i += if GIT_VALUE_OPTIONS.contains(&w) { 2 } else { 1 };
+            }
+            let Some(verb) = at(i) else {
+                return false;
+            };
+            let args = &words[i + 1..];
+            if let Some((_, runs)) = aliases.iter().rev().find(|(name, _)| *name == verb) {
+                let Some(runs) = runs else {
+                    // Set from the environment: what it runs can't be read.
+                    return true;
+                };
+                let line = match runs.strip_prefix('!') {
+                    Some(shell) => format!("{shell} {}", args.join(" ")),
+                    None => format!("git {runs} {}", args.join(" ")),
+                };
+                return ships_cmd(&line, depth + 1);
+            }
+            match verb {
+                "push" | "send-pack" => true,
+                // `git subtree push`, `git lfs push`
+                "subtree" | "lfs" => args
+                    .iter()
+                    .find(|w| !w.starts_with('-'))
+                    .is_some_and(|w| w == "push"),
+                _ => false,
+            }
+        }
+        "git-push" | "git-send-pack" => true,
+        "gh" => {
+            // Like cobra: an option before the command takes the next word,
+            // unless it carries `=` or is help or version.
+            let skip = |mut i: usize| {
+                while let Some(w) = at(i).filter(|w| w.starts_with('-')) {
+                    let bare = w.contains('=') || matches!(w, "-h" | "--help" | "--version");
+                    i += if bare { 1 } else { 2 };
+                }
+                i
+            };
+            let group = skip(head + 1);
+            let sub = skip(group + 1);
+            match (at(group), at(sub)) {
+                (Some("pr"), Some("create" | "new" | "merge")) => true,
+                // `gh repo create my-app --source=. --push`
+                (Some("repo"), Some("create" | "new")) => words[sub..]
+                    .iter()
+                    .any(|w| w == "--push" || w.starts_with("--push=")),
+                (Some("api"), _) => !gh_api_is_get(&words[group + 1..]),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// A `gh api` call is plainly a GET when it names no method or GET, sends
+/// no field or input (which turns gh's default into POST), and is not the
+/// `graphql` endpoint. Anything not read here is not a GET.
+fn gh_api_is_get(args: &[String]) -> bool {
+    let mut method: Option<&str> = None;
+    let mut body = false;
+    let mut endpoint: Option<&str> = None;
+    let mut it = args.iter().map(String::as_str);
+    while let Some(w) = it.next() {
+        if !w.starts_with('-') {
+            endpoint.get_or_insert(w);
+            continue;
+        }
+        let (name, inline) = match w.split_once('=') {
+            Some((n, v)) => (n, Some(v)),
+            None => (w, None),
+        };
+        match name {
+            "-x" | "--method" => method = inline.or_else(|| it.next()),
+            _ if name.starts_with("-x") => method = Some(&name[2..]),
+            "-f" | "--field" | "--raw-field" | "--input" => {
+                body = true;
+                if inline.is_none() {
+                    it.next();
+                }
+            }
+            _ if name.starts_with("-f") => body = true,
+            _ if GH_API_READ_VALUE.contains(&name) => {
+                if inline.is_none() {
+                    it.next();
+                }
+            }
+            _ if GH_API_READ_FLAGS.contains(&name) && inline.is_none() => {}
+            _ => return false,
+        }
+    }
+    let get = match method {
+        Some(m) => m == "get",
+        None => !body,
+    };
+    get && endpoint != Some("graphql")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_admin_prompt_or_a_system_protection_change_always_asks_first() {
+        let shell = |cmd: &str| {
+            hard_class(
+                "run_terminal_command",
+                &serde_json::json!({ "command": cmd }).to_string(),
+            )
+        };
+        // The steps from a tune-up that worked around access-denied on its own.
+        for cmd in [
+            "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-Command Checkpoint-Computer'",
+            "Start-Process cmd -Verb:RunAs",
+            "runas /user:Administrator cmd",
+            "gsudo sfc /scannow",
+            "Enable-ComputerRestore -Drive 'C:\\'",
+            "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore' -Name SystemRestorePointCreationFrequency -Value 0",
+            "New-ItemProperty -Path HKLM:\\SOFTWARE\\Policies\\X -Name Y -Value 1",
+            "reg add HKLM\\SOFTWARE\\X /v Y /d 1 /f",
+            "reg import tweaks.reg",
+            "vssadmin resize shadowstorage /for=C: /on=C: /maxsize=1GB",
+            "Set-ExecutionPolicy Bypass -Scope LocalMachine",
+            "Add-MpPreference -ExclusionPath C:\\Tools",
+            "netsh advfirewall set allprofiles state off",
+        ] {
+            assert_eq!(shell(cmd), Some(HardClass::SystemAdmin), "{cmd}");
+        }
+        // Reading the same places is a scan step.
+        for cmd in [
+            "Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore'",
+            "Get-ComputerRestorePoint",
+            "reg query HKLM\\SOFTWARE\\X",
+            "vssadmin list shadowstorage",
+            "Get-ExecutionPolicy -List",
+            "Get-Service | Where-Object Status -ne Running",
+        ] {
+            assert_eq!(shell(cmd), None, "{cmd}");
+        }
+        assert_eq!(
+            HardClass::parse(HardClass::SystemAdmin.as_str()),
+            Some(HardClass::SystemAdmin)
+        );
+    }
 
     #[test]
     fn desk_typing_is_checked_like_a_shell() {
@@ -2088,21 +2861,25 @@ mod tests {
 
     #[test]
     fn headless_deny_rules_cover_the_floor_and_stubs() {
-        assert_eq!(BASE_DENY_RULES.len(), 265);
-        assert_eq!(&HEADLESS_DENY_RULES[..265], BASE_DENY_RULES);
-        assert_eq!(HEADLESS_DENY_RULES[259], "Bash(*consent.jsonl*)");
-        assert_eq!(HEADLESS_DENY_RULES[261], "Write(**/consent.jsonl)");
+        assert_eq!(BASE_DENY_RULES.len(), 271);
+        assert_eq!(&HEADLESS_DENY_RULES[..271], BASE_DENY_RULES);
+        assert_eq!(HEADLESS_DENY_RULES[264], "Bash(*consent.jsonl*)");
+        assert_eq!(HEADLESS_DENY_RULES[266], "Write(**/consent.jsonl)");
         assert_eq!(
-            HEADLESS_DENY_RULES[262],
+            HEADLESS_DENY_RULES[267],
             "MCPTool(grokhub-self__skill_delete)"
         );
         assert_eq!(
-            HEADLESS_DENY_RULES[263],
+            HEADLESS_DENY_RULES[268],
             "MCPTool(grokhub-self__connection_remove)"
         );
         assert_eq!(
-            HEADLESS_DENY_RULES[264],
+            HEADLESS_DENY_RULES[269],
             "MCPTool(grokhub-self__automation_delete)"
+        );
+        assert_eq!(
+            HEADLESS_DENY_RULES[270],
+            "MCPTool(grokhub-self__automation_create)"
         );
         assert_eq!(HEADLESS_DENY_RULES[0], "Bash(rm -rf /)");
         assert!(HEADLESS_DENY_RULES.contains(&"Bash(rm *)"));
@@ -2131,11 +2908,25 @@ mod tests {
             else {
                 return false;
             };
-            let pattern: Vec<String> = glob.split('*').map(regex::escape).collect();
-            regex::Regex::new(&format!("^{}$", pattern.join(".*")))
-                .map(|re| re.is_match(subject))
-                .unwrap_or(false)
+            glob_regex(glob).is_some_and(|re| re.is_match(subject))
         })
+    }
+
+    /// Each glob compiled once. Compiling per rule per command made the two
+    /// big tables ~83,000 compiles a run, the slowest tests in the suite.
+    fn glob_regex(glob: &str) -> Option<regex::Regex> {
+        use std::collections::HashMap;
+        use std::sync::{LazyLock, Mutex};
+        static COMPILED: LazyLock<Mutex<HashMap<String, Option<regex::Regex>>>> =
+            LazyLock::new(Mutex::default);
+        let mut compiled = COMPILED.lock().unwrap_or_else(|e| e.into_inner());
+        compiled
+            .entry(glob.to_string())
+            .or_insert_with(|| {
+                let pattern: Vec<String> = glob.split('*').map(regex::escape).collect();
+                regex::Regex::new(&format!("^{}$", pattern.join(".*"))).ok()
+            })
+            .clone()
     }
 
     fn hard_shell(cmd: &str) -> bool {
@@ -2151,7 +2942,7 @@ mod tests {
             CREDENTIAL_HEADS,
         ]
         .concat();
-        assert_eq!(heads.len(), 29);
+        assert_eq!(heads.len(), 30);
         for h in &heads {
             for cmd in [
                 format!("{h} target"),
@@ -2281,7 +3072,7 @@ mod tests {
     /// Card 29 part 3: case, full paths, wrappers and encoded PowerShell on path C.
     #[test]
     fn gb_rules_see_case_full_paths_wrappers_and_encoded_powershell() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 723);
+        assert_eq!(HEADLESS_DENY_RULES.len(), 754);
         let argv: usize = HEADLESS_DENY_RULES
             .iter()
             .map(|r| "--deny".len() + r.len() + 4)
@@ -2812,6 +3603,15 @@ mod tests {
             ("nice -n 10 rm notes.txt", HardClass::Delete),
             ("timeout 5 shutdown now", HardClass::IrreversibleOs),
             ("timeout -s KILL 5s rm notes.txt", HardClass::Delete),
+            ("ri -Recurse -Force build", HardClass::Delete),
+            (
+                "Get-ChildItem build | ri -Recurse -Force",
+                HardClass::Delete,
+            ),
+            (
+                "powershell -NoProfile -Command \"ri -Recurse -Force build\"",
+                HardClass::Delete,
+            ),
         ] {
             assert_eq!(
                 hard_class("run_terminal_command", &sh(cmd)),
@@ -3070,6 +3870,10 @@ mod tests {
         assert_eq!(
             delete_targets("Remove-Item -Path C:\\tmp\\x.txt -Force"),
             vec!["C:\\tmp\\x.txt"]
+        );
+        assert_eq!(
+            delete_targets("ri -Recurse -Force C:\\tmp\\x"),
+            vec!["C:\\tmp\\x"]
         );
         assert_eq!(
             delete_targets("sudo rm /var/tmp/old.log"),
@@ -3358,7 +4162,7 @@ mod tests {
         assert_eq!(rule.id, "send:Send");
         assert_eq!(
             click_action(&ax, &rule),
-            "Grok wants to click Send in Compose — Mail"
+            "Loadout wants to click Send in Compose — Mail"
         );
         assert_eq!(click_target(&ax).source, "ax");
         // The caller's own element (Cua `element`, path D frames) counts too.
@@ -3370,7 +4174,7 @@ mod tests {
         assert_eq!(click_target(&named).source, "args");
         assert_eq!(
             click_action(&named, &click_rule(&named).unwrap()),
-            "Grok wants to click Pay in the focused window"
+            "Loadout wants to click Pay in the focused window"
         );
         let unknown = serde_json::json!({"x": 1, "y": 2, "_target": {"unknown": true}});
         assert_eq!(desk_classify("click", &unknown), HardHit::None);
@@ -3561,5 +4365,544 @@ mod tests {
             HardHit::None
         );
         assert_eq!(classify("use_tool", "not json"), HardHit::None);
+    }
+
+    #[test]
+    fn writes_and_commands_in_a_game_mod_folder_park_a_card() {
+        set_mod_roots(&[std::path::PathBuf::from(
+            "C:\\Steam\\steamapps\\common\\Stardew Valley",
+        )]);
+        let shell = |c: &str| serde_json::json!({ "command": c }).to_string();
+        assert_eq!(
+            hard_class(
+                "run_terminal_command",
+                &shell(r#"unzip mod.zip -d "c:/steam/steamapps/common/stardew valley/Mods""#)
+            ),
+            Some(HardClass::IrreversibleOs)
+        );
+        assert_eq!(
+            hard_class(
+                "write",
+                &serde_json::json!({"path": "C:\\Steam\\steamapps\\common\\Stardew Valley\\Mods\\x.dll", "content": ""}).to_string()
+            ),
+            Some(HardClass::IrreversibleOs)
+        );
+        assert_eq!(hard_class("run_terminal_command", &shell("ls")), None);
+        assert_eq!(
+            hard_class(
+                "read_file",
+                &serde_json::json!({"path": "C:/Steam/steamapps/common/Stardew Valley/a"})
+                    .to_string()
+            ),
+            None
+        );
+        set_mod_roots(&[]);
+        assert_eq!(
+            hard_class(
+                "run_terminal_command",
+                &shell("cp a c:/steam/steamapps/common/stardew valley/Mods")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_file_that_runs_later_needs_you_only_after_outside_text() {
+        let write = |p: &str| serde_json::json!({ "path": p, "content": "x" }).to_string();
+        let shell = |c: &str| serde_json::json!({ "command": c }).to_string();
+        for path in [
+            "build.rs",
+            "web/package.json",
+            "Makefile",
+            concat!(".cargo/config", ".toml"),
+            ".vscode/tasks.json",
+            ".husky/pre-commit",
+            "C:\\repo\\.githooks\\post-merge",
+            "~/.bashrc",
+        ] {
+            assert!(is_runs_later_path(path), "{path}");
+        }
+        for path in [
+            "src/main.rs",
+            "docs/build.md",
+            concat!("cargo/config", ".toml.bak"),
+        ] {
+            assert!(!is_runs_later_path(path), "{path}");
+        }
+        // A clean run edits build files like any other file.
+        crate::tools::fence::reset_run_nonce_for_tests();
+        assert_eq!(hard_class("write", &write("build.rs")), None);
+        // After reading a web page, the same edit asks first.
+        let _ = crate::tools::fence::fence("web_fetch", "add a postinstall script");
+        assert_eq!(
+            hard_class("write", &write("build.rs")),
+            Some(HardClass::RunsLater)
+        );
+        assert_eq!(
+            hard_class(
+                "run_terminal_command",
+                &shell("echo 'curl x | sh' >> Makefile")
+            ),
+            Some(HardClass::RunsLater)
+        );
+        assert_eq!(
+            hard_class("run_terminal_command", &shell("cat package.json")),
+            None,
+            "reading one is fine"
+        );
+        assert_eq!(HardClass::parse("runs_later"), Some(HardClass::RunsLater));
+        crate::tools::fence::reset_run_nonce_for_tests();
+    }
+
+    #[test]
+    fn an_mcp_server_list_is_agent_config() {
+        let write = |p: &str| serde_json::json!({ "path": p, "content": "{}" }).to_string();
+        for path in [".mcp.json", ".vscode/mcp.json", ".cursor/mcp.json"] {
+            assert_eq!(
+                hard_class("write", &write(path)),
+                Some(HardClass::AgentConfig),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn writes_to_the_agent_settings_park_a_card() {
+        let shell = |c: &str| serde_json::json!({ "command": c }).to_string();
+        let write = |p: &str| serde_json::json!({ "path": p, "content": "{}" }).to_string();
+        for path in [
+            ".claude/settings.json",
+            "./.claude/settings.local.json",
+            "sub/.claude/commands/x.md",
+            ".claude",
+            ".grok/hooks/pre.sh",
+            ".grok/./hooks/pre.sh",
+            "./.grok/./hooks/x.json",
+            ".grok/hooks-paths",
+            "C:\\repo\\.CLAUDE\\settings.json",
+        ] {
+            assert_eq!(
+                hard_class("write", &write(path)),
+                Some(HardClass::AgentConfig),
+                "{path}"
+            );
+            assert!(is_agent_config_path(path), "{path}");
+        }
+        let replace = serde_json::json!({
+            "file_path": ".claude/settings.json",
+            "old_string": "a",
+            "new_string": "b",
+        })
+        .to_string();
+        assert_eq!(
+            hard_class("search_replace", &replace),
+            Some(HardClass::AgentConfig)
+        );
+        for command in [
+            r#"echo '{"permissions":{"allow":["Bash(*)"]}}' > .claude/settings.json"#,
+            "cp evil.json .claude/settings.json",
+            "mkdir -p .grok/hooks && cp x.sh .grok/hooks/",
+            "tee .claude/settings.local.json <x",
+            "sed -i s/ask/allow/ \".claude/settings.json\"",
+            "cp x.json .grok/./hooks/x.json",
+            "cp x.json .grok/a/../hooks/x.json",
+            "mkdir -p .grok/a/../hooks && cp x.json .grok/a/../hooks/x.json",
+            "cp x.sh .grok/a/b/../../skills/x/SKILL.txt",
+            "cp x.json sub/../.grok/a/.././hooks-paths",
+        ] {
+            assert_eq!(
+                hard_class("run_terminal_command", &shell(command)),
+                Some(HardClass::AgentConfig),
+                "{command}"
+            );
+        }
+        // `..` steps back over the part before it; the path as written counts too.
+        assert!(is_agent_config_path(".grok/a/../hooks/x.json"));
+        assert!(is_agent_config_path(".grok/hooks/../x.json"));
+        assert!(!is_agent_config_path(".grok/a/../notes/x.json"));
+        assert!(!is_agent_config_path("a/../.grok/notes.md"));
+        for (name, args) in [
+            ("write", write("src/claude.rs")),
+            ("write", write("notes/.claudeish/x")),
+            ("write", write(".grok/notes.md")),
+            ("write", write("hooks/.grok")),
+            ("run_terminal_command", shell("cat .claude/settings.json")),
+            ("run_terminal_command", shell("ls .claude")),
+            ("run_terminal_command", shell("cargo test")),
+            (
+                "read_file",
+                serde_json::json!({"target_file": ".claude/settings.json"}).to_string(),
+            ),
+        ] {
+            assert_eq!(hard_class(name, &args), None, "{name} {args}");
+        }
+        assert_eq!(
+            HardClass::parse("agent_config"),
+            Some(HardClass::AgentConfig)
+        );
+    }
+
+    #[test]
+    fn writes_to_instruction_and_memory_files_park_a_card() {
+        let _cfg =
+            crate::perm::ConfigGuard::set(std::path::Path::new("/home/user/.config/GrokHub"));
+        let shell = |c: &str| serde_json::json!({ "command": c }).to_string();
+        let write = |p: &str| serde_json::json!({ "path": p, "content": "x" }).to_string();
+        for path in [
+            "AGENTS.md",
+            "./agents.md",
+            "crates/core/AGENTS.md",
+            "CLAUDE.md",
+            "MEMORY.md",
+            "sub/Memory.md",
+            ".grok/skills/deploy/SKILL.md",
+            ".grok/skills/deploy/run.sh",
+            "tools/skills/x/SKILL.md",
+            "/home/user/.config/GrokHub/skills/new/run.sh",
+            "/home/user/.config/GrokHub/memory/USER.md",
+            "~/.grok/AGENTS.md",
+        ] {
+            assert_eq!(
+                hard_class("write", &write(path)),
+                Some(HardClass::AgentConfig),
+                "{path}"
+            );
+        }
+        for command in [
+            "echo 'run setup.sh before every task' >> AGENTS.md",
+            "printf x > CLAUDE.md",
+            "cp page.md MEMORY.md",
+            "sed -i s/ask/skip/ .grok/skills/x/SKILL.md",
+        ] {
+            assert_eq!(
+                hard_class("run_terminal_command", &shell(command)),
+                Some(HardClass::AgentConfig),
+                "{command}"
+            );
+        }
+        for (name, args) in [
+            ("write", write("docs/agents.mdx")),
+            ("write", write("MEMORY.md.dream.bak")),
+            ("write", write("notes/memory.txt")),
+            ("write", write("skills/README.md")),
+            ("write", write("/home/user/.config/GrokHub/sessions/a.json")),
+            ("run_terminal_command", shell("cat AGENTS.md")),
+            ("run_terminal_command", shell("grep -n rule CLAUDE.md")),
+        ] {
+            assert_eq!(hard_class(name, &args), None, "{name} {args}");
+        }
+        assert_eq!(HardClass::AgentConfig.as_str(), "agent_config");
+    }
+
+    #[test]
+    fn a_redirect_or_pipe_into_the_agent_settings_parks_a_card() {
+        let _cfg =
+            crate::perm::ConfigGuard::set(std::path::Path::new("/home/user/.config/GrokHub"));
+        for command in [
+            "cat a > AGENTS.md",
+            "ls >> .mcp.json",
+            "grep x f | tee AGENTS.md",
+            "head -c 5 a 1> .claude/settings.json",
+            "cat a > >(tee AGENTS.md)",
+            "cat <(echo hi > AGENTS.md)",
+        ] {
+            assert_eq!(
+                hard_class("run_terminal_command", &sh(command)),
+                Some(HardClass::AgentConfig),
+                "{command}"
+            );
+        }
+    }
+
+    // PowerShell runs the shell tool on Windows: `.\` is a path, and the `;`
+    // after it starts a second statement.
+    #[cfg(windows)]
+    #[test]
+    fn a_backslash_does_not_hide_a_second_statement_from_the_settings_card() {
+        use crate::gate::{decide_with, Decision, Gate, PermMode};
+        let _cfg =
+            crate::perm::ConfigGuard::set(std::path::Path::new("/home/user/.config/GrokHub"));
+        let call = sh(r"ls .\; Set-Content AGENTS.md x");
+        assert_eq!(
+            hard_class("run_terminal_command", &call),
+            Some(HardClass::AgentConfig)
+        );
+        let gate = Gate {
+            mode: PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        };
+        assert_eq!(
+            decide_with(
+                &gate,
+                "run_terminal_command",
+                &call,
+                false,
+                None,
+                std::path::Path::new("/home/user/my-app"),
+                None,
+            ),
+            Decision::Ask
+        );
+    }
+
+    #[test]
+    fn input_drivers_hit_the_floor_and_flagged_drivers_get_a_card() {
+        let floor = hard_floor("run_terminal_command", &sh("winget install interception"))
+            .expect("an input driver is refused");
+        assert!(floor.reason.contains("Interception"), "{}", floor.reason);
+        assert_eq!(
+            HardClass::parse(HardClass::FlaggedDriver.as_str()),
+            Some(HardClass::FlaggedDriver)
+        );
+        let dir = crate::harness::test_dir("flagged-driver");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let install = sh("winget install -e --id Rem0o.FanControl");
+        // No cached blocklist: no flag.
+        assert_eq!(hard_class("run_terminal_command", &install), None);
+        grokhub_core::driver_check::save(
+            &dir,
+            &grokhub_core::driver_check::Blocklist {
+                fetched_at: 1,
+                names: ["winring0x64.sys".to_string()].into_iter().collect(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            hard_class("run_terminal_command", &install),
+            Some(HardClass::FlaggedDriver)
+        );
+        assert_eq!(
+            hard_class(
+                "run_terminal_command",
+                &sh("winget install Mozilla.Firefox")
+            ),
+            None
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_a_new_automation_needs_your_yes() {
+        let new = r#"{"interval":"1d","prompt":"say good morning"}"#;
+        assert_eq!(
+            hard_class("scheduler_create", new),
+            Some(HardClass::Automation)
+        );
+        assert_eq!(
+            hard_class("grokhub__scheduler_create", new),
+            Some(HardClass::Automation)
+        );
+        // Updating a job you already have keeps the pill.
+        let update = r#"{"interval":"1h","prompt":"x","task_id":"auto1"}"#;
+        assert_eq!(hard_class("scheduler_create", update), None);
+        assert_eq!(
+            HardClass::parse(HardClass::Automation.as_str()),
+            Some(HardClass::Automation)
+        );
+    }
+
+    #[test]
+    fn a_merge_request_is_its_own_hard_class() {
+        assert_eq!(
+            hard_class("merge_subagent_work", r#"{"work":"mb3x9k2a-7q1z"}"#),
+            Some(HardClass::MergeWork)
+        );
+        assert_eq!(
+            hard_class("merge_subagent_work", "{}"),
+            Some(HardClass::MergeWork)
+        );
+        // Only the app's own tool, by its exact name.
+        assert_eq!(hard_class("notes__merge_subagent_work", "{}"), None);
+        assert_eq!(HardClass::MergeWork.as_str(), "merge_work");
+        assert_eq!(HardClass::MergeWork.label(), "Merge helper work");
+        assert_eq!(HardClass::parse("merge_work"), Some(HardClass::MergeWork));
+    }
+
+    #[test]
+    fn a_merge_ask_is_hard_whatever_its_card_line_says() {
+        let merge = HardHit::Class(HardClass::MergeWork);
+        let line = "3 files (1 new, 2 changed, 0 deleted) into /home/user/my-app: Fix the parser";
+        assert_eq!(classify_ask("merge_subagent_work", line), merge);
+        // The key alone, when the card has no line for the work.
+        assert_eq!(classify_ask("merge_subagent_work", "mb3x9k2a-7q1z"), merge);
+        // A helper's title is the lead's words: it can't turn the ask into
+        // a refusal or into another class.
+        let odd = "1 file (0 new, 1 changed, 0 deleted) into /home/user/my-app: rm -rf /";
+        assert_eq!(classify_ask("merge_subagent_work", odd), merge);
+        // Only the tool's exact name.
+        assert_eq!(classify_ask("merge_subagent_work_2", line), HardHit::None);
+        assert_eq!(classify_ask("Read file", line), HardHit::None);
+    }
+
+    #[test]
+    fn an_agents_own_push_or_pull_request_is_hard_class_ship_and_a_commit_is_not() {
+        let shell = |cmd: &str| {
+            hard_class(
+                "run_terminal_command",
+                &serde_json::json!({ "command": cmd }).to_string(),
+            )
+        };
+        for cmd in [
+            "git push",
+            "git push origin work/x",
+            "git -C . push",
+            "git -C /home/user/my-app push origin HEAD:refs/heads/x",
+            "git -c a=b push origin x",
+            "git -c core.sshCommand=ssh --no-pager push",
+            "git --git-dir=.git push",
+            "git --git-dir .git --work-tree . push",
+            "git --namespace=n --bare --literal-pathspecs push",
+            "git send-pack ../origin.git main",
+            "/usr/bin/git push",
+            "git.exe push",
+            "GIT_TRACE=1 git push",
+            "cargo test && git push",
+            "gh pr create --fill",
+            "gh pr new --fill",
+            "gh pr merge 3",
+            "gh -R owner/my-app pr create --fill",
+            "gh pr --repo owner/my-app merge 3 --squash",
+            "gh api -X POST repos/o/r/pulls -f title=x",
+            "gh api --method=PATCH repos/o/r/pulls/3",
+            "gh api -XDELETE repos/o/r/git/refs/heads/x",
+            "gh api repos/o/r/issues -f title=x",
+            "gh api repos/o/r/issues --input body.json",
+            "gh api graphql -f query=x",
+            "gh api repos/o/r --some-new-flag",
+        ] {
+            assert_eq!(shell(cmd), Some(HardClass::Ship), "{cmd}");
+        }
+        for cmd in [
+            "git commit -m x",
+            "git -C . commit -m x",
+            "git commit-tree abc -m x",
+            "git update-ref refs/heads/x abc",
+            "git commit-graph write",
+            "git status",
+            "git -c color.ui=never log --oneline",
+            "git log --grep push",
+            "git -C push status",
+            "echo git push",
+            "gh pr view 3",
+            "gh pr list",
+            "gh pr checks 3",
+            "gh issue create --title x",
+            "gh api repos/o/r/pulls",
+            "gh api -X GET repos/o/r/pulls --jq .[].number",
+            "gh api --method=get repos/o/r --paginate -H accept:x",
+        ] {
+            assert_eq!(shell(cmd), None, "{cmd}");
+        }
+        // A delete push keeps its own class.
+        assert_eq!(shell("git push --delete origin x"), Some(HardClass::Delete));
+        // Through a side ask (paths B and D) too.
+        assert_eq!(
+            classify_ask("Run command", "git -C . push origin x"),
+            HardHit::Class(HardClass::Ship)
+        );
+        assert_eq!(
+            classify_ask("Run command", "git commit -m x"),
+            HardHit::None
+        );
+        assert_eq!(HardClass::Ship.as_str(), "ship");
+    }
+
+    /// The forms two reviews found passing the first word rule: each one
+    /// pushes (six of them made a ref in a bare origin when run), so each
+    /// is a Ship card.
+    #[test]
+    fn a_push_behind_quotes_a_wrapper_a_keyword_an_alias_or_a_nested_shell_is_hard_class_ship() {
+        let shell = |cmd: &str| {
+            hard_class(
+                "run_terminal_command",
+                &serde_json::json!({ "command": cmd }).to_string(),
+            )
+        };
+        for cmd in [
+            "/usr/lib/git-core/git-push origin x",
+            "\"$(git --exec-path)/git-push\" origin x",
+            "git -c alias.p=push p origin x",
+            "git -c 'alias.p=!git push' p origin x",
+            "git --config-env=alias.p=MY_ALIAS p",
+            "git subtree push --prefix=lib origin x",
+            "git lfs push origin x",
+            "eval git push origin x",
+            "bash -lc 'git push origin x'",
+            "sh -ec 'git fetch; git push origin x'",
+            "sh -lc \"git push\"",
+            "if true; then git push origin x; fi",
+            "! git push origin x",
+            "g''it push origin x",
+            "git pu''sh origin x",
+            "stdbuf -o0 git push origin x",
+            "stdbuf -o 0 git push origin x",
+            "flock /tmp/l git push origin x",
+            "flock -w 5 /tmp/l -c 'git push origin x'",
+            "gh repo create my-app --source=. --push",
+            "git -c 'core.sshCommand=ssh -i /home/user/.ssh/deploy' push origin work/x",
+            "git -c \"user.name=a b\" push",
+            "git -C 'my app' push",
+        ] {
+            assert_eq!(shell(cmd), Some(HardClass::Ship), "{cmd}");
+        }
+        for cmd in [
+            "echo git push",
+            "git help push",
+            "bash deploy.sh",
+            "sh -c 'git status'",
+            "if true; then git status; fi",
+            "eval git log",
+            "git -c alias.st=status st",
+            "gh repo create my-app --private",
+            "stdbuf -o0 cargo test",
+            "cat docs/git-push.md",
+        ] {
+            assert_eq!(shell(cmd), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn a_click_on_the_apps_own_ship_buttons_or_on_a_pull_request_is_hard_class_ship() {
+        let own = grokhub_core::brand::product_name();
+        for label in [
+            "Commit",
+            "Push work/one",
+            "Open PR into beta",
+            "Waive",
+            "Allow src/a.txt:3",
+            "Merge",
+        ] {
+            assert_eq!(
+                click_target_in(None, label, "button", own).map(|rule| rule.class),
+                Some(HardClass::Ship),
+                "{label}"
+            );
+            // In another app, or with no window named, these words ship nothing.
+            assert_eq!(
+                click_target_in(None, label, "button", "Text Editor"),
+                None,
+                "{label}"
+            );
+            assert_eq!(click_target_class(None, label, "button"), None, "{label}");
+        }
+        assert_eq!(
+            click_target_in(None, "Create pull request", "button", "Firefox").map(|r| r.class),
+            Some(HardClass::Ship)
+        );
+        assert_eq!(
+            click_target_in(None, "Send", "button", own).map(|r| r.class),
+            Some(HardClass::Send)
+        );
+        assert_eq!(
+            click_target_in(None, "Undo allow src/a.txt:3", "button", own),
+            None
+        );
+        assert_eq!(
+            HardClass::Ship.label(),
+            "Push, PR, GitHub API call or ship button"
+        );
+        assert_eq!(HardClass::parse("ship"), Some(HardClass::Ship));
     }
 }

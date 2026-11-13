@@ -215,7 +215,7 @@ pub fn releases(p: &Profile, installed_run_mb: u64, repos: &[String]) -> Vec<Sug
             }
             let like = local_models()
                 .iter()
-                .filter(|m| !m.is_drafter && tok_s(m, mem) > 0)
+                .filter(|m| m.is_chat() && tok_s(m, mem) > 0)
                 .min_by_key(|m| m.run_mb.abs_diff(run_mb))
                 .map(|m| (m.name, tok_s(m, mem)));
             Some(Suggestion::Release {
@@ -459,7 +459,7 @@ mod tests {
         );
         assert_eq!(
             got[0].body(),
-            "Needs about 9.8 GB at Q4, fits your 16 GB of GPU memory, about 35 tok/s here like Gemma 4 12B. Not in Loadout's checked catalog yet, so this only links it."
+            "Needs about 9.8 GB at Q4, fits your 16 GB of GPU memory, about 50 tok/s here like Mistral Ministral 3 14B Reasoning. Not in Loadout's checked catalog yet, so this only links it."
         );
         let card = got[0].card(9);
         assert_eq!(

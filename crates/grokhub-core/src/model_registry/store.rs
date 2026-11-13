@@ -1,5 +1,6 @@
 //! `{config}/models/`: `registry.json`, `health.jsonl` (passive calls),
-//! `model_profiles/<id>.json`, `onboarding.json` and `probe_log.jsonl`.
+//! `model_profiles/<id>.json`, `onboarding.json`, `probe_log.jsonl` and
+//! `quota.json` (detected account state, see [`super::quota`]).
 //! Paths are built with `std::path`, so Windows (`%APPDATA%\GrokHub`) and
 //! Linux (`~/.config/GrokHub`) read the same layout.
 
@@ -19,6 +20,7 @@ pub const HEALTH_FILE: &str = "health.jsonl";
 pub const PROFILES_DIR: &str = "model_profiles";
 pub const ONBOARDING_FILE: &str = "onboarding.json";
 pub const PROBE_LOG_FILE: &str = "probe_log.jsonl";
+pub const QUOTA_FILE: &str = "quota.json";
 
 pub fn models_dir(config_dir: &Path) -> PathBuf {
     config_dir.join(MODELS_DIR)
@@ -42,6 +44,10 @@ pub fn onboarding_path(config_dir: &Path) -> PathBuf {
 
 pub fn probe_log_path(config_dir: &Path) -> PathBuf {
     models_dir(config_dir).join(PROBE_LOG_FILE)
+}
+
+pub fn quota_path(config_dir: &Path) -> PathBuf {
+    models_dir(config_dir).join(QUOTA_FILE)
 }
 
 /// A model id as a file name on every OS: `/ : * ? " < > |` (and `\`) become `_`.
@@ -91,7 +97,19 @@ pub fn append_line<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
 
 /// The saved registry, or an empty one (a bad file is never fatal).
 pub fn load_registry(config_dir: &Path) -> Registry {
+    // The user's profile overrides ride with the registry: every refresh
+    // that follows a load fills from them.
+    super::builtin::install_overrides(config_dir);
     read_json(&registry_path(config_dir)).unwrap_or_default()
+}
+
+/// The saved quota ledger, or an empty one (a bad file is never fatal).
+pub fn load_quota(config_dir: &Path) -> super::quota::QuotaLedger {
+    read_json(&quota_path(config_dir)).unwrap_or_default()
+}
+
+pub fn save_quota(config_dir: &Path, quota: &super::quota::QuotaLedger) -> Result<(), String> {
+    write_json(&quota_path(config_dir), quota)
 }
 
 pub fn save_registry(config_dir: &Path, reg: &Registry) -> Result<(), String> {
@@ -142,6 +160,29 @@ mod tests {
         assert_eq!(
             probe_log_path(base),
             base.join("models").join("probe_log.jsonl")
+        );
+        assert_eq!(quota_path(base), base.join("models").join("quota.json"));
+    }
+
+    #[test]
+    fn quota_round_trips_through_the_store() {
+        let dir = std::env::temp_dir().join(format!("grokhub-quota-store-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let ledger = super::super::quota::QuotaLedger {
+            openrouter: super::super::quota::OpenRouterQuota {
+                state: super::super::quota::OpenRouterState::FreeOnly,
+                free_daily_limit: Some(50),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        save_quota(&dir, &ledger).unwrap();
+        assert_eq!(load_quota(&dir), ledger);
+        // A missing file reads as an empty ledger, never an error.
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(
+            load_quota(&dir),
+            super::super::quota::QuotaLedger::default()
         );
     }
 }

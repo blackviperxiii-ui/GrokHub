@@ -85,6 +85,15 @@ register_slash! {
 }
 
 register_slash! {
+    LEARNED {
+        names: ["/learned"],
+        effect: Local,
+        sample: "/learned",
+        parse: |rest| Some(Slash::Learned(rest.to_string())),
+    }
+}
+
+register_slash! {
     HOST {
         names: ["/host", "/tools"],
         effect: Local,
@@ -148,29 +157,11 @@ register_slash! {
 }
 
 register_slash! {
-    MODELS {
-        names: ["/models"],
-        effect: Local,
-        sample: "/models",
-        parse: |_rest| Some(Slash::Models),
-    }
-}
-
-register_slash! {
     PALETTE {
         names: ["/palette"],
         effect: Local,
         sample: "/palette",
         parse: |_rest| Some(Slash::Palette),
-    }
-}
-
-register_slash! {
-    EFFORT {
-        names: ["/effort"],
-        effect: Local,
-        sample: "/effort",
-        parse: |_rest| Some(Slash::Effort),
     }
 }
 

@@ -112,7 +112,7 @@ pub fn sha256_file(path: &Path) -> Option<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Some(format!("{:x}", hasher.finalize()))
+    Some(hex::encode(hasher.finalize()))
 }
 
 /// Lowercase letters and digits only.

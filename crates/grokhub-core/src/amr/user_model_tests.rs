@@ -792,3 +792,92 @@ fn calibration_picks_the_lowest_approval_above_every_rejection() {
     reject_node(&store, low.id(), UserForget::from_click(), NOW).unwrap();
     assert_eq!(calibrate_reflect_min(&approval_samples(&store)), 0.75);
 }
+
+#[test]
+fn personal_adds_groups_pauses_exports_and_wipes() {
+    let tmp = Tmp::new("personal");
+    let store = tmp.store();
+    let job = add_fact(
+        &store,
+        "I work nights at the warehouse",
+        PersonalGroup::About,
+        NOW,
+    )
+    .unwrap();
+    let likes = add_fact(&store, "Likes short replies", PersonalGroup::Likes, NOW + 1).unwrap();
+    add_fact(&store, "Plays after 9pm", PersonalGroup::Routines, NOW + 2).unwrap();
+    assert!(add_fact(&store, "  ", PersonalGroup::About, NOW).is_err());
+    assert!(add_fact(&store, "two\nlines", PersonalGroup::About, NOW).is_err());
+
+    let (rows, _) = memory_rows(&store);
+    let group_of = |id: &str| rows.iter().find(|r| r.id == id).map(MemoryRow::group);
+    assert_eq!(group_of(&job), Some(PersonalGroup::About));
+    assert_eq!(group_of(&likes), Some(PersonalGroup::Likes));
+    assert!(rows
+        .iter()
+        .all(|r| r.in_use() && r.source.label() == "you wrote it"));
+    assert_eq!(search_rows(&rows, "WAREHOUSE").len(), 1);
+    assert_eq!(search_rows(&rows, "").len(), 3);
+    assert!(store.recall("warehouse").iter().any(|h| h.id == job));
+
+    // Paused: still listed, never recalled, back after resume.
+    pause_node(&store, &job, true).unwrap();
+    pause_node(&store, &job, true).unwrap();
+    let (rows, _) = memory_rows(&store);
+    let row = rows.iter().find(|r| r.id == job).unwrap();
+    assert!(row.paused && !row.in_use());
+    assert!(row.line().ends_with(" · paused"), "{}", row.line());
+    assert!(store.recall("warehouse").iter().all(|h| h.id != job));
+    assert!(store.recallable().0.iter().all(|n| n.id != job));
+    pause_node(&store, &job, false).unwrap();
+    assert!(store.recall("warehouse").iter().any(|h| h.id == job));
+    pause_node(&store, &job, true).unwrap();
+
+    let text = personal_export(&store, NOW + 10);
+    assert!(
+        text.contains("## About you\n\n- I work nights at the warehouse (paused) · you wrote it"),
+        "{text}"
+    );
+    assert!(
+        text.contains("## What you like") && text.contains("## Your routines"),
+        "{text}"
+    );
+    assert!(!text.contains("## Waiting for your OK"), "{text}");
+
+    // Wipe takes every learned line, forgotten ones too, and their files.
+    forget_node(&store, &likes, UserForget::from_click(), NOW).unwrap();
+    let other = store
+        .remember(&NodeDraft {
+            id: "project-garage".into(),
+            node_type: NodeType::Project,
+            created: "2026-11-09T00:00:00Z".into(),
+            updated: "2026-11-09T00:00:00Z".into(),
+            source: "user".into(),
+            confidence: 1.0,
+            tags: Vec::new(),
+            body: "Garage rebuild\n".into(),
+            sensitivity: Sensitivity::Plain,
+            consent_ref: String::new(),
+        })
+        .unwrap();
+    let report = wipe_user_model(&store, UserForget::from_click()).unwrap();
+    assert_eq!(
+        report,
+        WipeReport {
+            removed: 3,
+            locked: 0
+        }
+    );
+    assert!(memory_rows(&store).0.is_empty());
+    let left: Vec<String> = fs::read_dir(store.root().join("nodes"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        left,
+        vec![format!("{}.md", other.as_str())],
+        "only the project note stays"
+    );
+    assert!(personal_export(&store, NOW).contains("Nothing learned yet."));
+}

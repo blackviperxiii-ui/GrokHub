@@ -12,38 +12,74 @@ use crate::skill::{match_skill, skill_use_in_chat_prompt, SkillMd};
 
 pub const CHIP_VISIBLE_MAX: usize = 5;
 pub const CHIP_HARD_MAX: usize = 8;
-pub const CHIP_LLM_DEBOUNCE_MS: u64 = 1200;
-/// How long the cabin waits before spending tokens on another chip suggestion.
-pub const CHIP_LLM_SPEND_MS: u64 = 30 * 60 * 1000;
-pub const CHIP_LLM_MODE: &str = "fast";
 /// On-disk `chips.json` schema. v1 embedded raw chat in keys; v2 uses opaque hashes.
-pub const CHIP_MEMORY_VERSION: u32 = 2;
+/// 3: retired mode kind dropped, replay-unsafe text scrubbed, local chip log.
+pub const CHIP_MEMORY_VERSION: u32 = 3;
 const CHIP_SCAN_CAP: usize = 4096;
 const MAX_HITS: usize = 80;
 const MAX_TRANSITIONS: usize = 12;
 /// Hex chars kept from the sha256 of a normalized value (`kind:v1:{hex}`).
 const VALUE_KEY_HASH_HEX: usize = 16;
 /// Visible habit labels stay short; never the full typed line.
-const HABIT_LABEL_MAX_CHARS: usize = 28;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChipKind {
     Chat,
     Shell,
+    /// `mode` is the retired model/effort chip kind. Chip memory written
+    /// before still reads (as a nav hit) and the load prune drops it: no chip
+    /// changes the model or effort, the router alone picks them.
+    #[serde(alias = "mode")]
     Nav,
-    Mode,
 }
 
-impl ChipKind {
-    fn from_str(s: &str) -> Self {
-        match s.to_ascii_lowercase().as_str() {
-            "shell" => Self::Shell,
-            "nav" => Self::Nav,
-            "mode" => Self::Mode,
-            _ => Self::Chat,
-        }
+/// What a tap does. One rule per kind, the same on every surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChipAction {
+    /// Sends a message when the box is empty; with a draft typed, it is
+    /// added to the draft and nothing is sent.
+    Ask,
+    /// Opens a page, a guide or a link.
+    Go,
+    /// Runs a small app action right away, with an Undo after it.
+    Do,
+    /// Shows what would happen first (a command, a cleanup, a note) and
+    /// waits for the person to run it.
+    Review,
+}
+
+/// The id of the Undo chip that follows a `Do` chip for a short while.
+pub const UNDO_CHIP_ID: &str = "undo";
+
+/// The tap rule for a chip. Feature one-taps are told apart by their id.
+pub fn chip_action(chip: &QuickChip) -> ChipAction {
+    let id = chip.id.as_str();
+    if id == crate::backup_nudge::SNOOZE_ID
+        || id == UNDO_CHIP_ID
+        || id.starts_with(crate::release_radar::REMIND_PREFIX)
+        || id.starts_with(crate::objectives::TRACK_CHIP_PREFIX)
+    {
+        return ChipAction::Do;
     }
+    if id.starts_with(crate::game_companion::GUIDES_PREFIX) {
+        return ChipAction::Go;
+    }
+    if id == crate::downloads_tidy::REVIEW_CHIP
+        || id.starts_with(crate::game_companion::NOTE_PREFIX)
+    {
+        return ChipAction::Review;
+    }
+    match chip.kind {
+        ChipKind::Chat => ChipAction::Ask,
+        ChipKind::Nav => ChipAction::Go,
+        ChipKind::Shell => ChipAction::Review,
+    }
+}
+
+/// A chip value from the retired model/effort chips (`__mode:think`).
+pub fn retired_mode_value(value: &str) -> bool {
+    value.trim_start().starts_with("__mode:")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +216,40 @@ pub struct ChipMemory {
     pub total_events: u32,
     #[serde(default)]
     pub updated_at: u64,
+    /// Habits by what a chip or typed ask is for ([`chip_intent`]), never
+    /// by its text, so chat-built chips and typed asks teach too (#1057).
+    #[serde(default)]
+    pub intents: BTreeMap<String, IntentHit>,
+    /// Local log of shown rows and what happened (no chip text), newest last.
+    /// See [`crate::chip_store`].
+    #[serde(default)]
+    pub events: Vec<crate::chip_store::ChipEvent>,
+    /// The learned chip ranker. See [`crate::chip_rank`].
+    #[serde(default)]
+    pub ranker: crate::chip_rank::ChipRanker,
+    /// When the reply's own chips last lost and the rule asking for them left
+    /// the prompt; 0 while it is in. See [`crate::chip_trailer`].
+    #[serde(default)]
+    pub trailer_off_at: u64,
+    /// How often each predicted reply on a plan or question card was picked,
+    /// by reply kind (`plan:go`). See [`crate::reply_chips`].
+    #[serde(default)]
+    pub reply_picks: BTreeMap<String, u32>,
+}
+
+/// How often one intent was used, by local hour and weekday.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntentHit {
+    #[serde(default)]
+    pub uses: u32,
+    #[serde(default)]
+    pub hour_hits: Vec<u32>,
+    /// 0 = Sunday.
+    #[serde(default)]
+    pub day_hits: Vec<u32>,
+    #[serde(default)]
+    pub last_used_at: u64,
 }
 
 /// Serde default when `version` is missing: treat as legacy v1 so load scrubs.
@@ -198,8 +268,117 @@ impl Default for ChipMemory {
             last_surface: None,
             total_events: 0,
             updated_at: 0,
+            intents: BTreeMap::new(),
+            events: Vec::new(),
+            ranker: crate::chip_rank::ChipRanker::default(),
+            trailer_off_at: 0,
+            reply_picks: BTreeMap::new(),
         }
     }
+}
+
+/// What a chip or typed ask is for, from a fixed catalog, first match wins.
+/// Game and rig words come before code words, so "Fix stutter in …" is a
+/// game ask, not a code fix.
+const INTENT_CATALOG: &[(&str, &[&str])] = &[
+    (
+        "game.perf",
+        &[
+            "stutter",
+            "fps",
+            "frame rate",
+            "framerate",
+            "lag",
+            "ping",
+            "hitch",
+        ],
+    ),
+    (
+        "game.squad",
+        &["duo", "squad", "teammate", "lfg", "party up"],
+    ),
+    ("game.build", &["roast my build", "my build", "loadout"]),
+    (
+        "game.session",
+        &["how'd", "match go", "ranked", "just finished playing"],
+    ),
+    (
+        "rig.storage",
+        &["storage", "disk", "drive space", "free up"],
+    ),
+    ("rig.update", &["update", "driver"]),
+    ("day.plan", &["plan my", "weekend", "my week", "schedule"]),
+    ("create.image", &["imagine", "image", "draw", "logo"]),
+    (
+        "code.fix",
+        &["fix", "error", "bug", "crash", "failing", "root cause"],
+    ),
+    (
+        "code.ship",
+        &["implement", "ship", "deploy", "release", "merge"],
+    ),
+    ("code.review", &["review", "refactor", "tests"]),
+    ("explain", &["explain", "what does", "how does"]),
+];
+
+/// The catalog intent of a chip or typed ask, or none.
+pub fn chip_intent(label: &str, value: &str) -> Option<&'static str> {
+    let hay = format!(" {} {} ", label, value).to_ascii_lowercase();
+    // A word must start the match: "fix" is not in "prefix", "lag" not in "flag".
+    let starts_word = |w: &str| {
+        hay.match_indices(w).any(|(i, _)| {
+            !hay[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric())
+        })
+    };
+    INTENT_CATALOG
+        .iter()
+        .find(|(_, words)| words.iter().any(|w| starts_word(w)))
+        .map(|(key, _)| *key)
+}
+
+/// Count one use of what `label`/`value` is for at this hour and weekday.
+/// Only the catalog key is kept; neither text reaches chips.json.
+pub fn remember_intent(
+    memory: &mut ChipMemory,
+    label: &str,
+    value: &str,
+    now_ms: u64,
+    hour: u8,
+    weekday: u8,
+) {
+    let Some(key) = chip_intent(label, value) else {
+        return;
+    };
+    let hit = memory.intents.entry(key.to_string()).or_default();
+    hit.uses = hit.uses.saturating_add(1);
+    hit.hour_hits = bump_hour(&hit.hour_hits, hour);
+    let mut days = if hit.day_hits.len() == 7 {
+        hit.day_hits.clone()
+    } else {
+        vec![0; 7]
+    };
+    let d = (weekday as usize).min(6);
+    days[d] = days[d].saturating_add(1);
+    hit.day_hits = days;
+    hit.last_used_at = now_ms;
+    memory.updated_at = now_ms;
+}
+
+/// Lift for a chip whose intent you use at this hour (or the next) and on
+/// this weekday. A habit at 9pm does nothing at 2pm.
+fn intent_boost(memory: &ChipMemory, chip: &QuickChip, hour: u8, weekday: u8) -> f32 {
+    let Some(hit) = chip_intent(&chip.label, &chip.value).and_then(|k| memory.intents.get(k))
+    else {
+        return 0.0;
+    };
+    let at = |hours: &[u32], i: usize| hours.get(i).copied().unwrap_or(0);
+    let h = (hour as usize).min(23);
+    let near = at(&hit.hour_hits, h) * 2 + at(&hit.hour_hits, (h + 1) % 24);
+    let day = at(&hit.day_hits, (weekday as usize).min(6));
+    (near as f32 * 3.0).min(24.0) + (day as f32 * 2.0).min(8.0)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -227,14 +406,12 @@ pub struct ChipInput<'a> {
     pub chat: &'a [(String, String)],
     pub draft: &'a str,
     pub grok_connected: bool,
-    pub host_on: bool,
     pub mode: &'a str,
     pub thread_title: &'a str,
     pub usage_messages: u32,
-    pub usage_cap: u32,
     pub memory: &'a ChipMemory,
     pub dismissed: &'a [String],
-    pub llm_chips: &'a [QuickChip],
+    pub reply_chips: &'a [QuickChip],
     pub last_failed: bool,
     pub hour: u8,
     pub now_ms: u64,
@@ -246,6 +423,48 @@ pub struct ChipInput<'a> {
     pub last_project: &'a str,
     pub skill_count: u32,
     pub session_mode: &'a str,
+    pub signals: ChipSignals<'a>,
+    /// Timely chips from the app's own features (model drop, code resume,
+    /// Downloads tidy, backup, release radar, game companion, focus help,
+    /// skill offer). They rank with every other chip instead of jumping the
+    /// row, and obey the same hides and vetoes.
+    pub extra: &'a [QuickChip],
+}
+
+/// What the app already knows about this PC and the day, beyond the chat.
+/// Filled from cached state only: no new process, file or network reads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChipSignals<'a> {
+    /// The library game the last process sample saw running.
+    pub game: Option<&'a str>,
+    /// A library game that closed a few minutes ago.
+    pub game_ended: Option<&'a str>,
+    /// A local drive is nearly full (see [`disk_is_low`]).
+    pub low_disk: bool,
+    /// Local weekday, 0 = Sunday, like `date +%w`.
+    pub weekday: u8,
+    /// A new app build is waiting to install.
+    pub update_waiting: bool,
+    /// The user's quiet hours are on.
+    pub quiet_hours: bool,
+    /// The person is gaming, or a fullscreen app owns the screen. Nudges
+    /// wait; the chat's own chips and game chips stay.
+    pub gaming: bool,
+    /// A protected anti-cheat is running. Chips that touch the game, read
+    /// other windows or run on the host are hidden so nothing gets flagged.
+    pub anticheat: bool,
+    /// The name of a file waiting in the attach tray (name only, no path).
+    pub attachment: Option<&'a str>,
+}
+
+/// Under this share free, a drive counts as nearly full.
+const LOW_DISK_SHARE: u64 = 10;
+/// Under this many bytes free, a drive counts as nearly full whatever its size.
+const LOW_DISK_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
+/// True when a drive with `total` bytes has under 10% or 5 GiB left.
+pub fn disk_is_low(free: u64, total: u64) -> bool {
+    total > 0 && (free < LOW_DISK_BYTES || free.saturating_mul(100) < total * LOW_DISK_SHARE)
 }
 
 pub fn empty_chip_memory() -> ChipMemory {
@@ -253,11 +472,13 @@ pub fn empty_chip_memory() -> ChipMemory {
 }
 
 pub fn chip_memory_key(chip: &QuickChip) -> String {
-    // Model chips put their label in the id (`llm-0-Fix the blen`).
+    // A reply's chips reuse `reply-0..2` for every reply, and older model
+    // chips put their label in the id (`llm-0-Fix the blen`): key by value.
     if chip.id.starts_with("learn-")
         || chip.id.starts_with("recent-")
         || chip.id.starts_with("pred-habit")
         || chip.id.starts_with("llm-")
+        || chip.id.starts_with(crate::chip_trailer::REPLY_CHIP_PREFIX)
     {
         value_key(&chip.value, chip.kind)
     } else {
@@ -270,7 +491,6 @@ fn kind_key_prefix(kind: ChipKind) -> &'static str {
         ChipKind::Chat => "chat",
         ChipKind::Shell => "shell",
         ChipKind::Nav => "nav",
-        ChipKind::Mode => "mode",
     }
 }
 
@@ -316,26 +536,6 @@ pub fn chip_key_embeds_chat_text(key: &str) -> bool {
     }
     // Bare prose keys (defensive): spaces mean a line, not an id.
     key.contains(' ')
-}
-
-/// Short generated habit label — topic words only, never the full typed line.
-fn habit_label_from_text(text: &str) -> String {
-    let topic = topic_from_text(text);
-    let label = if topic.trim().is_empty() {
-        match text.trim().chars().next() {
-            Some('$') | Some('/') => "Host command".to_string(),
-            _ => "Saved ask".to_string(),
-        }
-    } else {
-        topic
-    };
-    let clipped: String = label.chars().take(HABIT_LABEL_MAX_CHARS).collect();
-    let clipped = clipped.trim();
-    if clipped.is_empty() {
-        "Saved ask".into()
-    } else {
-        chip_label(clipped)
-    }
 }
 
 pub fn chip_scan(s: &str) -> &str {
@@ -616,20 +816,6 @@ pub fn context_fingerprint(
     bits.join("+")
 }
 
-pub fn should_refresh_llm(
-    prev_fp: &str,
-    next_fp: &str,
-    last_llm_at: u64,
-    now_ms: u64,
-    has_auth: bool,
-    busy: bool,
-) -> bool {
-    has_auth
-        && !busy
-        && next_fp != prev_fp
-        && now_ms.saturating_sub(last_llm_at) >= CHIP_LLM_DEBOUNCE_MS
-}
-
 /// How the cabin should sit with this person. Local only. No model call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CabinPace {
@@ -671,13 +857,6 @@ pub fn cabin_pace(input: &ChipInput<'_>) -> CabinPace {
     } else {
         CabinPace::With
     }
-}
-
-/// Chip suggestions that call a model. Guide and quiet never spend. A working
-/// session spends at most once per `CHIP_LLM_SPEND_MS`, and only after they
-/// have actually said something.
-pub fn chip_spend_allowed(pace: CabinPace, user_turns: usize) -> bool {
-    matches!(pace, CabinPace::With) && user_turns >= 2
 }
 
 fn guide_dismisses(memory: &ChipMemory) -> u32 {
@@ -722,6 +901,48 @@ fn family_quiet_this_hour(
         chip_family(&hit.key, &hit.value, &hit.label) == family
             && hit.dismiss_hours.get(hour_i).copied().unwrap_or(0) > 0
     })
+}
+
+/// Id prefix of the starter chips below.
+pub const SEED_PREFIX: &str = "seed-";
+
+/// Loadout's starter chips (the deck's Hangout four plus Home's picks). They
+/// rank below anything the chat, history or signals suggest, so they only fill
+/// a thin row, and they dismiss and learn like any catalog chip (the label is
+/// fixed copy, never chat text).
+pub const SEED_CHIPS: &[(&str, &str)] = &[
+    ("stutter", "Fix my stutter"),
+    ("duo", "Find a duo"),
+    ("roast", "Roast my build"),
+    ("weekend", "Plan my weekend"),
+    ("storage", "Free up storage"),
+    ("week", "Plan my week"),
+];
+
+const SEED_SCORE: f32 = 30.0;
+
+fn seed_chips(stage: ChipStage) -> Vec<QuickChip> {
+    // Mid-chat they sink further so the conversation's own chips lead.
+    let base = if stage == ChipStage::Empty {
+        SEED_SCORE
+    } else {
+        SEED_SCORE - 15.0
+    };
+    SEED_CHIPS
+        .iter()
+        .enumerate()
+        .map(|(i, (key, label))| {
+            chip(
+                &format!("{SEED_PREFIX}{key}"),
+                label,
+                label,
+                ChipKind::Chat,
+                // Keep the listed order among equals.
+                base - i as f32 * 0.1,
+                "",
+            )
+        })
+        .collect()
 }
 
 fn guide_chips(connected: bool) -> Vec<QuickChip> {
@@ -947,7 +1168,7 @@ fn chip(id: &str, label: &str, value: &str, kind: ChipKind, score: f32, hint: &s
 }
 
 /// Visible chip label: collapse whitespace, drop mid-phrase `…`. Paint wraps.
-fn chip_label(s: &str) -> String {
+pub(crate) fn chip_label(s: &str) -> String {
     s.split_whitespace()
         .flat_map(|w| w.split('…'))
         .filter(|w| !w.is_empty())
@@ -1504,17 +1725,87 @@ fn record_transition(memory: &mut ChipMemory, from: Option<String>, to: String) 
 /// title or a model reply. Catalog chips (`empty-brief`, `ctx-draw`) are
 /// fixed strings and keep theirs.
 const CHAT_TEXT_CHIP_IDS: &[&str] = &[
-    "llm-", "learn-", "recent-", "prev-", "pred-", "last-", "topic-",
+    "llm-", "reply-", "learn-", "recent-", "prev-", "pred-", "last-", "topic-",
 ];
 
 fn chip_text_from_chat(id: &str) -> bool {
     CHAT_TEXT_CHIP_IDS.iter().any(|p| id.starts_with(p))
 }
 
+/// Chips a feature producer builds from live state (a file that landed, a
+/// repo, a game, the app in focus). Their text names things that may be
+/// gone tomorrow, so a habit never replays it.
+const LIVE_STATE_CHIP_IDS: &[&str] = &[
+    "model:",
+    "resume:",
+    "backup:",
+    "tidy:",
+    "radar:",
+    "game:",
+    "focus:",
+    "sig-attach",
+];
+
+/// Chips offered unasked: the PC's and the day's signals, other threads and
+/// the app's feature offers. They wait while the person is gaming.
+const NUDGE_CHIP_IDS: &[&str] = &[
+    "sig-",
+    "prev-",
+    "home-continue",
+    "model:",
+    "resume:",
+    "backup:",
+    "tidy:",
+    "radar:",
+    "focus:",
+];
+
+/// True for a nudge that waits while the person is gaming. Game chips stay:
+/// the game is what they are doing.
+fn waits_while_gaming(c: &QuickChip) -> bool {
+    NUDGE_CHIP_IDS.iter().any(|p| c.id.starts_with(p))
+        && !c.id.starts_with("sig-attach")
+        && !touches_the_game(c)
+}
+
+/// True for a chip an anti-cheat could object to: it is about the game,
+/// reads the window in front, or runs a command on the host.
+fn touches_the_game(c: &QuickChip) -> bool {
+    c.kind == ChipKind::Shell
+        || c.id.starts_with("game:")
+        || c.id.starts_with("sig-game")
+        || c.id.starts_with("focus:")
+}
+
+/// True when text names a full path: `/home/x`, `~/x`, `C:\x`.
+fn names_full_path(text: &str) -> bool {
+    text.split(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+        .any(|w| {
+            let w = w.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | ';'));
+            w.starts_with("~/")
+                || (w.starts_with('/') && w[1..].contains('/'))
+                || (w.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                    && w.get(1..3) == Some(":\\"))
+        })
+}
+
+/// A chip whose text must never come back as a habit: shell lines run on
+/// the host, and live-state chips or full paths go stale. Its opaque key
+/// still carries the habit for ranking.
+fn replay_unsafe(kind: ChipKind, id: &str, label: &str, value: &str) -> bool {
+    kind == ChipKind::Shell
+        || LIVE_STATE_CHIP_IDS.iter().any(|p| id.starts_with(p))
+        || names_full_path(label)
+        || names_full_path(value)
+}
+
 /// The label and value a chip leaves in chips.json. A Chat chip built from
-/// chat text keeps neither; its opaque key carries the habit.
+/// chat text keeps neither; its opaque key carries the habit. Shell lines,
+/// live-state chips and full paths keep neither too (see [`replay_unsafe`]).
 fn stored_text(chip: &QuickChip) -> (&str, &str) {
-    if chip.kind == ChipKind::Chat && chip_text_from_chat(&chip.id) {
+    if (chip.kind == ChipKind::Chat && chip_text_from_chat(&chip.id))
+        || replay_unsafe(chip.kind, &chip.id, &chip.label, &chip.value)
+    {
         ("", "")
     } else {
         (&chip.label, &chip.value)
@@ -1590,13 +1881,14 @@ pub fn remember_typed_prompt(memory: &mut ChipMemory, text: &str, now_ms: u64, h
         !chip_key_embeds_chat_text(&key),
         "value_key must stay opaque: {key}"
     );
-    let label = habit_label_from_text(raw);
+    // A typed shell line keeps only its opaque key: replayed later as a
+    // chip it could run against a folder or file that is gone.
     let from = memory.last_chip_key.clone();
     upsert_hit(
         memory,
         key.clone(),
-        &label,
-        raw,
+        "",
+        "",
         kind,
         1,
         1,
@@ -1758,6 +2050,96 @@ fn home_signal_chips(input: &ChipInput<'_>) -> Vec<QuickChip> {
     out
 }
 
+/// Longest game name kept whole in a chip label.
+const SIGNAL_GAME_LABEL_MAX: usize = 22;
+
+fn signal_game_label(name: &str) -> String {
+    let name = chip_label(name);
+    if name.chars().count() <= SIGNAL_GAME_LABEL_MAX {
+        name
+    } else {
+        // Whole words only, without a dangling ":" or "-".
+        let cut: String = name.chars().take(SIGNAL_GAME_LABEL_MAX + 1).collect();
+        let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+        cut.trim_end_matches([' ', ':', '-', ',']).to_string()
+    }
+}
+
+/// Chips from what the PC and the day are doing: a game running or just
+/// closed, a full drive, an update waiting, a Friday evening. They lead an
+/// empty chat and sit under the chat's own chips once it has turns. Quiet
+/// hours drop the social one.
+fn signal_chips(input: &ChipInput<'_>) -> Vec<QuickChip> {
+    let sig = &input.signals;
+    let lift = if input.chat.is_empty() { 0.0 } else { -30.0 };
+    let mut out = vec![];
+    if let Some(game) = sig.game.map(str::trim).filter(|g| !g.is_empty()) {
+        out.push(chip(
+            "sig-game-stutter",
+            &format!("Fix stutter in {}", signal_game_label(game)),
+            &format!(
+                "{game} is stuttering. Check what else is using this PC right now and tell me how to smooth it out. Don't touch the game or its files."
+            ),
+            ChipKind::Chat,
+            98.0 + lift,
+            "Game running",
+        ));
+    } else if let Some(game) = sig.game_ended.map(str::trim).filter(|g| !g.is_empty()) {
+        out.push(chip(
+            "sig-game-ended",
+            &format!("How'd {} go?", signal_game_label(game)),
+            &format!(
+                "I just finished playing {game}. Ask me how it went, then give me one thing to try next time."
+            ),
+            ChipKind::Chat,
+            94.0 + lift,
+            "Game just closed",
+        ));
+    }
+    if sig.low_disk {
+        out.push(chip(
+            "sig-low-disk",
+            "Free up storage",
+            "My disk is almost full. Find what's taking up the most space and tell me what's safe to clear before deleting anything.",
+            ChipKind::Chat,
+            96.0 + lift,
+            "Drive almost full",
+        ));
+    }
+    if sig.update_waiting {
+        out.push(chip(
+            "sig-update",
+            "See the update",
+            "__nav:update",
+            ChipKind::Nav,
+            92.0 + lift,
+            "Update waiting",
+        ));
+    }
+    if let Some(name) = sig.attachment.map(str::trim).filter(|n| !n.is_empty()) {
+        out.push(chip(
+            "sig-attach-explain",
+            &chip_label(&format!("Explain {name}")),
+            &format!("Explain the file I attached, {name}: what it is and what matters in it."),
+            ChipKind::Chat,
+            // A file in the tray is about to be sent: it leads either way.
+            104.0,
+            "File ready to send",
+        ));
+    }
+    if sig.weekday == 5 && input.hour >= 17 && !sig.quiet_hours {
+        out.push(chip(
+            "sig-weekend",
+            "Plan my weekend",
+            "Help me plan my weekend. Ask what I'm in the mood for first.",
+            ChipKind::Chat,
+            90.0 + lift,
+            "Friday evening",
+        ));
+    }
+    out
+}
+
 fn apply_home_signal_boost(chips: &mut [QuickChip], input: &ChipInput<'_>) {
     let slash = home_slash_cmd(input.last_slash).unwrap_or("");
     let surface = input.last_surface.trim().to_ascii_lowercase();
@@ -1814,93 +2196,9 @@ fn apply_home_signal_boost(chips: &mut [QuickChip], input: &ChipInput<'_>) {
     }
 }
 
-/// One lesson the cabin learned from its own chips. `drop` means the evidence is gone.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalLesson {
-    pub key: String,
-    pub text: String,
-    pub drop: bool,
-}
-
-/// Habits and skips from chip use and dismiss hour. No model call.
-/// A lesson disappears when the person later does the opposite.
-pub fn local_lessons(memory: &ChipMemory) -> Vec<LocalLesson> {
-    let mut out = Vec::new();
-    for hit in &memory.hits {
-        if hit.dismisses > 0 || hit.uses < 2 || hit.successes < 1 || hit.label.trim().is_empty() {
-            continue;
-        }
-        let Some((hour, n)) = best_hour(&hit.hour_hits) else {
-            continue;
-        };
-        if n < 2 {
-            continue;
-        }
-        out.push(LocalLesson {
-            key: format!("habit:{hour}:{}", hit.key),
-            text: format!("Around {hour}:00 they use {}.", hit.label),
-            drop: false,
-        });
-    }
-    let mut families: Vec<&str> = Vec::new();
-    for hit in &memory.hits {
-        let family = chip_family(&hit.key, &hit.value, &hit.label);
-        if !family.is_empty() && !families.contains(&family) {
-            families.push(family);
-        }
-    }
-    for family in families {
-        for hour in 0..24 {
-            let dismissed: u32 = memory
-                .hits
-                .iter()
-                .filter(|h| chip_family(&h.key, &h.value, &h.label) == family)
-                .map(|h| h.dismiss_hours.get(hour).copied().unwrap_or(0))
-                .sum();
-            if dismissed < 2 {
-                continue;
-            }
-            let used_later = memory.hits.iter().any(|h| {
-                chip_family(&h.key, &h.value, &h.label) == family
-                    && h.successes > 0
-                    && h.hour_hits.get(hour).copied().unwrap_or(0) > 0
-            });
-            if used_later {
-                continue;
-            }
-            let name = if family == "guide" {
-                "the tour"
-            } else {
-                family
-            };
-            out.push(LocalLesson {
-                key: format!("skip:{hour}:{family}"),
-                text: format!("Around {hour}:00 they skip {name}."),
-                drop: false,
-            });
-        }
-    }
-    out.truncate(6);
-    out
-}
-
-fn best_hour(hours: &[u32]) -> Option<(u8, u32)> {
-    let mut best: Option<(u8, u32)> = None;
-    for (i, n) in hours.iter().copied().enumerate().take(24) {
-        if n == 0 {
-            continue;
-        }
-        if best.is_none_or(|(_, b)| n > b) {
-            best = Some((i as u8, n));
-        }
-    }
-    best
-}
-
-pub fn remember_chip_outcome(memory: &mut ChipMemory, success: bool, now_ms: u64) {
-    let Some(key) = memory.last_chip_key.clone() else {
-        return;
-    };
+/// Credit how a turn went to the chip that started it, by its memory key.
+/// A typed turn has no chip and credits nothing.
+pub fn remember_chip_turn_outcome(memory: &mut ChipMemory, key: &str, success: bool, now_ms: u64) {
     if let Some(h) = memory.hits.iter_mut().find(|h| h.key == key) {
         if success {
             h.successes = h.successes.saturating_add(1);
@@ -2135,39 +2433,7 @@ fn apply_draft_boost(
     }
 }
 
-fn routing_chip(id: &str, mode: &str, score: f32) -> QuickChip {
-    let mode = mode.trim();
-    if matches!(mode, "max" | "deep" | "heavy") {
-        chip(
-            id,
-            "Use Adaptive",
-            "__mode:auto",
-            ChipKind::Mode,
-            score,
-            "Auto routes Fast / Balance / Think / Max",
-        )
-    } else if matches!(mode, "think" | "thinking" | "expert" | "build") {
-        chip(
-            id,
-            "Go Max",
-            "__mode:max",
-            ChipKind::Mode,
-            score,
-            "Max · Grok 4.7 xhigh",
-        )
-    } else {
-        chip(
-            id,
-            "Think Harder",
-            "__mode:think",
-            ChipKind::Mode,
-            score,
-            "Think · Grok 4.7 high",
-        )
-    }
-}
-
-fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
+fn stage_chips(stage: ChipStage) -> Vec<QuickChip> {
     match stage {
         ChipStage::Empty => vec![
             chip(
@@ -2180,8 +2446,8 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
             ),
             chip(
                 "empty-brief",
-                "Cabin brief",
-                "Give me a short cabin brief: bound project, recent chats, and the next useful step.",
+                "Quick brief",
+                "Give me a short brief: bound project, recent chats, and the next useful step.",
                 ChipKind::Chat,
                 68.0,
                 "New chat",
@@ -2240,7 +2506,6 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
                 80.0,
                 "Long thread",
             ),
-            routing_chip("long-think", mode, 72.0),
         ],
         ChipStage::Mid | ChipStage::Default => vec![
             chip(
@@ -2251,7 +2516,6 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
                 74.0,
                 "Mid-thread",
             ),
-            routing_chip("mid-think", mode, 70.0),
         ],
     }
 }
@@ -2279,7 +2543,7 @@ pub fn idea_talk_chips(title: &str, body: &str, chat: &[(String, String)]) -> Ve
         chip(
             "idea-sit",
             "When I sit down",
-            "Run this when I open the cabin.",
+            crate::brand::filled("Run this when I open {product}."),
             ChipKind::Chat,
             96.0,
             "This idea",
@@ -2374,9 +2638,47 @@ fn retired_host_copy(id: &str, label: &str, value: &str) -> bool {
 
 /// Drop leftover desk/host habits so chips.json cannot resurrect them.
 pub fn prune_retired_chip_memory(mem: &mut ChipMemory) -> bool {
-    let retired = prune_retired_host_hits(mem);
+    let modes = prune_retired_mode_hits(mem);
+    let retired = prune_retired_host_hits(mem) || modes;
     let scrubbed = scrub_chat_text_chip_keys(mem);
-    retired || scrubbed
+    let unsafe_text = scrub_replay_unsafe_text(mem);
+    retired || scrubbed || unsafe_text
+}
+
+/// Idempotent scrub: clear the stored text of shell lines, live-state chips
+/// and full paths that older builds kept, so no habit chip replays them.
+/// The hits stay, so their counts still rank. True when anything changed.
+fn scrub_replay_unsafe_text(mem: &mut ChipMemory) -> bool {
+    let mut changed = false;
+    for h in mem.hits.iter_mut() {
+        let id = h.key.strip_prefix("id:").unwrap_or("");
+        if (!h.label.is_empty() || !h.value.is_empty())
+            && replay_unsafe(h.kind, id, &h.label, &h.value)
+        {
+            h.label.clear();
+            h.value.clear();
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Drop old model/effort chip habits. Their keys were `mode:…` (learned) or
+/// `id:mode-…`/`id:route-…` (row chips); their values `__mode:…`.
+fn prune_retired_mode_hits(mem: &mut ChipMemory) -> bool {
+    let gone =
+        |k: &str| k.starts_with("mode:") || k.starts_with("id:mode-") || k.starts_with("id:route-");
+    let before = mem.hits.len();
+    mem.hits
+        .retain(|h| !gone(&h.key) && !retired_mode_value(&h.value));
+    mem.transitions.retain(|from, dests| {
+        dests.retain(|to, _| !gone(to));
+        !gone(from) && !dests.is_empty()
+    });
+    if mem.last_chip_key.as_deref().is_some_and(gone) {
+        mem.last_chip_key = None;
+    }
+    mem.hits.len() != before
 }
 
 fn prune_retired_host_hits(mem: &mut ChipMemory) -> bool {
@@ -2497,7 +2799,10 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         .collect();
     let pace = cabin_pace(&input);
     if pace == CabinPace::Guide {
-        let mut chips = guide_chips(input.grok_connected);
+        // A feature offer is about what the PC is doing now, so it shows
+        // even while the first-run guide holds the row.
+        let mut chips: Vec<QuickChip> = input.extra.to_vec();
+        chips.extend(guide_chips(input.grok_connected));
         chips.retain(|c| {
             let id = c.id.to_ascii_lowercase();
             let val = c.value.trim().to_ascii_lowercase();
@@ -2505,6 +2810,8 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
                 && !dismissed.contains(&val)
                 && !chip_dismissed_for_good(input.memory, c)
                 && !family_quiet_this_hour(input.memory, &c.id, &c.value, &c.label, input.hour)
+                && !(input.signals.anticheat && touches_the_game(c))
+                && !(input.signals.gaming && waits_while_gaming(c))
         });
         chips.truncate(3);
         if let Some(first) = chips.first_mut() {
@@ -2546,7 +2853,10 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             "You're not connected — this is the best next step",
         ));
     }
+    // Feature offers come first so a plain chip with the same text yields.
+    chips.extend(input.extra.iter().cloned());
     chips.extend(home_signal_chips(&input));
+    chips.extend(signal_chips(&input));
     chips.extend(draft_prediction_chips(input.draft));
     chips.extend(
         learned_chips_from_memory(input.memory, input.now_ms)
@@ -2630,7 +2940,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             "Implement context",
         ));
     }
-    chips.extend(stage_chips(stage, input.mode));
+    chips.extend(stage_chips(stage));
     if input.first_run {
         chips.retain(|c| {
             let label = c.label.to_ascii_lowercase();
@@ -2661,7 +2971,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         ));
     }
 
-    for c in input.llm_chips {
+    for c in input.reply_chips {
         if !is_plain_text(&c.value) || !is_plain_text(&c.label) {
             continue;
         }
@@ -2678,8 +2988,12 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         chips.push(copy);
     }
 
+    chips.extend(seed_chips(stage));
+    lead_with_reply_follow_ups(&mut chips, &input, &said, &heard);
+
     for c in &mut chips {
         c.score += memory_boost_for_chip(input.memory, c, input.now_ms, input.hour);
+        c.score += intent_boost(input.memory, c, input.hour, input.signals.weekday);
         if let Some(hit) = input
             .memory
             .hits
@@ -2703,6 +3017,9 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             && !family_quiet_this_hour(input.memory, &c.id, &c.value, &c.label, input.hour)
             && is_plain_text(&c.value)
             && !is_desk_takeover_chip(c)
+            && !retired_mode_value(&c.value)
+            && !(input.signals.anticheat && touches_the_game(c))
+            && !(input.signals.gaming && waits_while_gaming(c))
     });
     if input.grok_connected {
         chips.retain(|c| !is_stale_connect_chip(c));
@@ -2718,7 +3035,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
 
     if stage != ChipStage::Empty && input.chat.len() >= 2 {
         for c in &mut chips {
-            if matches!(c.kind, ChipKind::Nav | ChipKind::Mode) {
+            if c.kind == ChipKind::Nav {
                 c.score -= 16.0;
             }
         }
@@ -2757,7 +3074,6 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         ChipKind::Chat => 0,
         ChipKind::Shell => 1,
         ChipKind::Nav => 2,
-        ChipKind::Mode => 3,
     };
     for c in &chips {
         if picked.len() >= max {
@@ -2768,9 +3084,6 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             continue;
         }
         if c.kind == ChipKind::Nav && n >= 1 && max <= 5 && stage != ChipStage::Empty {
-            continue;
-        }
-        if c.kind == ChipKind::Mode && n >= 1 {
             continue;
         }
         picked.push(c.clone());
@@ -2795,12 +3108,14 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         picked.retain(|c| {
             let id = c.id.as_str();
             id.starts_with("home-")
+                || id.starts_with(SEED_PREFIX)
                 || id.starts_with("pred-tod")
                 || id.starts_with("pred-tx")
                 || id.starts_with("pred-habit")
                 || id.starts_with("learn-")
                 || id.starts_with("skill-")
                 || c.value.starts_with('/')
+                || input.extra.iter().any(|x| x.id == c.id)
         });
         picked.truncate(2);
     }
@@ -2813,6 +3128,46 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         }
     }
     picked
+}
+
+/// Score that puts a reply's follow-ups at the front of the row, under only
+/// "Connect Grok".
+const FOLLOW_UP_SCORE: f32 = 112.0;
+
+/// Right after a reply, its one-tap follow-ups ([`reply_suggestions`]) lead
+/// the row. A chip already in the pool with the same label is lifted rather
+/// than doubled. Typing a draft, or a reply that names no next move, leaves
+/// the row as it was.
+fn lead_with_reply_follow_ups(
+    chips: &mut Vec<QuickChip>,
+    input: &ChipInput<'_>,
+    said: &str,
+    heard: &str,
+) {
+    let replied = input
+        .chat
+        .last()
+        .is_some_and(|(role, _)| role == "assistant");
+    if !replied || !input.draft.trim().is_empty() {
+        return;
+    }
+    for follow in reply_suggestions(said, heard, input.last_failed) {
+        let hint = "Follow-up to that reply";
+        match chips
+            .iter_mut()
+            .find(|c| c.label.eq_ignore_ascii_case(&follow.label))
+        {
+            Some(c) => {
+                c.score = c.score.max(FOLLOW_UP_SCORE);
+                c.hint = hint.into();
+            }
+            None => chips.push(QuickChip {
+                score: FOLLOW_UP_SCORE,
+                hint: hint.into(),
+                ..follow
+            }),
+        }
+    }
 }
 
 /// Up to three one-tap follow-ups for the reply that just finished, or none.
@@ -2841,7 +3196,7 @@ pub fn reply_suggestions(said: &str, heard: &str, failed: bool) -> Vec<QuickChip
         ));
     }
     if detect_chip_stage(&chat, failed) == ChipStage::Error {
-        out.extend(stage_chips(ChipStage::Error, ""));
+        out.extend(stage_chips(ChipStage::Error));
     }
     let mut seen = std::collections::HashSet::new();
     out.retain(|c| {
@@ -2852,265 +3207,6 @@ pub fn reply_suggestions(said: &str, heard: &str, failed: bool) -> Vec<QuickChip
             && seen.insert(c.label.to_ascii_lowercase())
     });
     out.truncate(3);
-    out
-}
-
-pub fn chip_suggest_prompt(
-    chat: &[(String, String)],
-    thread_title: &str,
-    draft: &str,
-    habits: &[String],
-    dismissed: &[String],
-    other_threads: &[ChipThread],
-) -> String {
-    let ctx = detect_chip_context(chat);
-    let stage = detect_chip_stage(chat, false);
-    let mut flags = vec![];
-    if ctx.code {
-        flags.push("code");
-    }
-    if ctx.app {
-        flags.push("app");
-    }
-    if ctx.host {
-        flags.push("host");
-    }
-    if ctx.imagine {
-        flags.push("imagine");
-    }
-    if ctx.error {
-        flags.push("error");
-    }
-    if ctx.decide {
-        flags.push("decide");
-    }
-    if ctx.implement {
-        flags.push("impl");
-    }
-    if ctx.incomplete {
-        flags.push("todo");
-    }
-    let transcript = chat
-        .iter()
-        .filter(|(r, _)| r == "user" || r == "assistant")
-        .rev()
-        .take(8)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .filter_map(|(role, content)| {
-            let who = if role == "user" { "User" } else { "Asst" };
-            let capped = chip_scan(content);
-            let content = crate::turn_timeline::strip_turn_labels(capped);
-            let body: String = content
-                .replace("```", "[code]")
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            let body: String = body.chars().take(220).collect();
-            if body.is_empty() {
-                None
-            } else {
-                Some(format!("{who}: {body}"))
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let mut lines = vec![
-        "You generate quick-action chips for a Grok Build cabin chat.".into(),
-        "Return ONLY valid JSON array of up to 5 objects:".into(),
-        r#"[{"label":"≤28 chars","value":"full prompt to send","kind":"chat","hint":"why useful"}]"#.into(),
-        String::new(),
-        "Rules:".into(),
-        "- label: short, action-first, naming the thing (e.g. Fix the login test, Add tests for parse_row, Think Harder)".into(),
-        "- value: a concrete instruction the user would send (1–2 sentences max)".into(),
-        "- Every chip names a specific action grounded in the transcript (a file, error, task or result in it), never a generic tip".into(),
-        "- Never a generic follow-up: no What's next, Next step, Take the next step, or Anything else".into(),
-        "- If nothing specific fits, return []".into(),
-        "- Predict what the user will want NEXT, not a recap of what already happened".into(),
-        "- Do not copy the user's words or a sentence from the transcript.".into(),
-        "- Each chip is the action that would have helped in this situation.".into(),
-        "- hint is why they needed it, in your own words.".into(),
-        "- One chip may save a skill for this kind of chat. One may automate a step so they do not have to ask again.".into(),
-        "- If user is mid-typing (draft shown), align chips with that draft".into(),
-        "- Also use previous chats, habits, and actions taken on earlier replies".into(),
-        "- Avoid chips the user dismissed".into(),
-        "- Prefer habits if they fit the current context".into(),
-        "- No markdown fences, no commentary outside JSON".into(),
-        "- Cabin-real only: no SuperGrok, subscription, Outlook, Gmail, Drive, or Office".into(),
-        "- Never suggest Turn host on, Take over this desktop, Scan the desk, Check the machine, Voice, or Hey Grok. Voice is the mic. Grok Build already has computer-use from chat.".into(),
-        "- Never emit HOST_CMD or HOST_RESULT. Grok Build runs bash itself.".into(),
-        "- Imagine stills use grok-imagine-image-2.0; Video kind uses grok-imagine-video-1.5".into(),
-        String::new(),
-        format!("Stage: {}", stage.as_str()),
-        format!("Signals: {}", if flags.is_empty() { "none".into() } else { flags.join(", ") }),
-    ];
-    if !thread_title.trim().is_empty() {
-        lines.push(format!("Thread title: {}", thread_title.trim()));
-    }
-    if !draft.trim().is_empty() {
-        let d: String = draft.trim().chars().take(80).collect();
-        lines.push(format!("User is typing: {d}"));
-    }
-    if !habits.is_empty() {
-        lines.push(format!(
-            "User habits: {}",
-            habits
-                .iter()
-                .take(6)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(" · ")
-        ));
-    }
-    if !dismissed.is_empty() {
-        lines.push(format!(
-            "Dismissed (avoid): {}",
-            dismissed
-                .iter()
-                .take(8)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(" · ")
-        ));
-    }
-    let prev: Vec<String> = other_threads
-        .iter()
-        .filter(|t| !skip_other_thread_title(&t.title) && is_plain_text(&t.title))
-        .take(6)
-        .filter_map(|t| {
-            let ask: String = t.last_user.trim().chars().take(120).collect();
-            let reply: String = t.last_assistant.trim().chars().take(120).collect();
-            if !is_plain_text(&ask) || !is_plain_text(&reply) {
-                return None;
-            }
-            Some(format!(
-                "- {} · last ask: {} · last reply: {}",
-                t.title.trim(),
-                if ask.is_empty() { "(none)".into() } else { ask },
-                if reply.is_empty() {
-                    "(none)".into()
-                } else {
-                    reply
-                }
-            ))
-        })
-        .collect();
-    if !prev.is_empty() {
-        lines.push("Previous chats:".into());
-        lines.extend(prev);
-    }
-    lines.push(String::new());
-    lines.push("Transcript:".into());
-    lines.push(if transcript.is_empty() {
-        "(empty chat)".into()
-    } else {
-        transcript
-    });
-    lines.join("\n")
-}
-
-pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
-    let mut text = raw.trim().to_string();
-    if let Some(rest) = text.strip_prefix("```json") {
-        text = rest.to_string();
-    } else if let Some(rest) = text.strip_prefix("```") {
-        text = rest.to_string();
-    }
-    text = text.trim().trim_end_matches("```").trim().to_string();
-    if let (Some(start), Some(end)) = (text.find('['), text.rfind(']')) {
-        if end > start {
-            text = text[start..=end].to_string();
-        }
-    }
-    let parsed: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&text);
-    let mut out = vec![];
-    match parsed {
-        Ok(arr) => {
-            for (i, row) in arr.into_iter().enumerate() {
-                if out.len() >= CHIP_VISIBLE_MAX {
-                    break;
-                }
-                let label = row
-                    .get("label")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let value = row
-                    .get("value")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let label = chip_label(&label);
-                let value: String = value.chars().take(400).collect();
-                if label.len() < 2 || value.len() < 4 {
-                    continue;
-                }
-                if !is_plain_text(&label) || !is_plain_text(&value) {
-                    continue;
-                }
-                if !cabin_chip_copy_ok(&label, &value, "") {
-                    continue;
-                }
-                let mut kind =
-                    ChipKind::from_str(row.get("kind").and_then(|v| v.as_str()).unwrap_or("chat"));
-                if kind == ChipKind::Shell && !value.starts_with('$') && !value.starts_with("/sh") {
-                    kind = ChipKind::Chat;
-                }
-                let hint = row
-                    .get("hint")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Suggested from this chat")
-                    .chars()
-                    .take(80)
-                    .collect::<String>();
-                out.push(QuickChip {
-                    id: format!(
-                        "llm-{i}-{}",
-                        label.chars().take(10).collect::<String>().replace(' ', "")
-                    ),
-                    label,
-                    value,
-                    kind,
-                    score: 99.0 - i as f32 * 1.5,
-                    hint,
-                    primary: i == 0,
-                });
-            }
-        }
-        Err(_) => {
-            for (i, line) in raw
-                .lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .take(CHIP_VISIBLE_MAX)
-                .enumerate()
-            {
-                let parts: Vec<_> = line.split('|').map(str::trim).collect();
-                let label =
-                    parts[0].trim_start_matches(['-', '*', '1', '2', '3', '4', '.', ')', ' ']);
-                let value = if parts.len() > 1 { parts[1] } else { parts[0] };
-                if label.len() < 2 || value.len() < 4 || !is_plain_text(value) {
-                    continue;
-                }
-                if !cabin_chip_copy_ok(label, value, "") {
-                    continue;
-                }
-                out.push(chip(
-                    &format!("llm-{i}-{}", label.chars().take(12).collect::<String>()),
-                    &chip_label(label),
-                    &value.chars().take(400).collect::<String>(),
-                    ChipKind::Chat,
-                    98.0 - i as f32,
-                    "Suggested from this chat",
-                ));
-            }
-        }
-    }
     out
 }
 
@@ -3141,7 +3237,7 @@ fn generic_follow_up(label: &str) -> bool {
     )
 }
 
-fn cabin_chip_copy_ok(label: &str, value: &str, hint: &str) -> bool {
+pub(crate) fn cabin_chip_copy_ok(label: &str, value: &str, hint: &str) -> bool {
     if retired_host_copy("", label, value) || retired_host_copy("", hint, "") {
         return false;
     }
@@ -3169,6 +3265,7 @@ fn cabin_chip_copy_ok(label: &str, value: &str, hint: &str) -> bool {
 pub fn nav_from_chip_value(value: &str) -> Option<&'static str> {
     match value.trim() {
         "__nav:settings" => Some("settings"),
+        "__nav:update" => Some("update"),
         "__nav:imagine" => Some("imagine"),
         "__nav:history" => Some("history"),
         "__nav:workboard" => Some("workboard"),
@@ -3183,22 +3280,28 @@ pub fn nav_from_chip_value(value: &str) -> Option<&'static str> {
     }
 }
 
-pub fn mode_from_chip_value(value: &str) -> Option<&'static str> {
-    let v = value.trim();
-    let rest = v.strip_prefix("__mode:").unwrap_or(v);
-    match rest {
-        "max" | "deep" | "heavy" => Some("max"),
-        "think" | "thinking" | "build" | "expert" => Some("think"),
-        "balanced" | "balance" => Some("balanced"),
-        "fast" => Some("fast"),
-        "auto" => Some("auto"),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_chip_kind_gets_one_tap_rule() {
+        let c = |id: &str, kind: ChipKind| chip(id, "Label here", "value", kind, 1.0, "");
+        assert_eq!(chip_action(&c("chat-x", ChipKind::Chat)), ChipAction::Ask);
+        assert_eq!(chip_action(&c("nav-x", ChipKind::Nav)), ChipAction::Go);
+        // A shell line is never run on tap: it is shown first.
+        assert_eq!(chip_action(&c("sh-x", ChipKind::Shell)), ChipAction::Review);
+        let snooze = c(crate::backup_nudge::SNOOZE_ID, ChipKind::Chat);
+        assert_eq!(chip_action(&snooze), ChipAction::Do);
+        let remind = format!("{}42", crate::release_radar::REMIND_PREFIX);
+        assert_eq!(chip_action(&c(&remind, ChipKind::Chat)), ChipAction::Do);
+        let guides = format!("{}42", crate::game_companion::GUIDES_PREFIX);
+        assert_eq!(chip_action(&c(&guides, ChipKind::Chat)), ChipAction::Go);
+        let note = format!("{}42", crate::game_companion::NOTE_PREFIX);
+        assert_eq!(chip_action(&c(&note, ChipKind::Chat)), ChipAction::Review);
+        let tidy = c(crate::downloads_tidy::REVIEW_CHIP, ChipKind::Chat);
+        assert_eq!(chip_action(&tidy), ChipAction::Review);
+    }
 
     fn msg(role: &str, content: &str) -> (String, String) {
         (role.into(), content.into())
@@ -3215,14 +3318,12 @@ mod tests {
             chat,
             draft,
             grok_connected: true,
-            host_on: true,
             mode: "auto",
             thread_title: "Chat",
             usage_messages: 1,
-            usage_cap: 40,
             memory,
             dismissed,
-            llm_chips: llm,
+            reply_chips: llm,
             last_failed: false,
             hour: 21,
             now_ms: 1_000_000,
@@ -3234,7 +3335,83 @@ mod tests {
             last_project: "",
             skill_count: 0,
             session_mode: "chat",
+            signals: ChipSignals::default(),
+            extra: &[],
         }
+    }
+
+    fn ids(chips: &[QuickChip]) -> Vec<&str> {
+        chips.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn seeds_fill_a_thin_row_and_rank_below_real_chips() {
+        let memory = ChipMemory::default();
+        // A returning user (the first-run tour owns a brand new chat).
+        let familiar = |mut i: ChipInput<'_>| {
+            i.usage_messages = 20;
+            build_quick_chips(i)
+        };
+        let empty = familiar(input(&[], "", &memory, &[], &[]));
+        assert!(
+            empty.iter().any(|c| c.id.starts_with(SEED_PREFIX)),
+            "a fresh chat is never dev-only or empty: {:?}",
+            ids(&empty)
+        );
+        let chat = [
+            msg("user", "the build fails with a linker error"),
+            msg(
+                "assistant",
+                "Error: linker `cc` not found. Install build-essential.",
+            ),
+        ];
+        let mid = familiar(input(&chat, "", &memory, &[], &[]));
+        let first_seed = mid.iter().position(|c| c.id.starts_with(SEED_PREFIX));
+        let last_real = mid.iter().rposition(|c| !c.id.starts_with(SEED_PREFIX));
+        if let (Some(seed), Some(real)) = (first_seed, last_real) {
+            assert!(
+                seed > real,
+                "seeds trail the chat's own chips: {:?}",
+                ids(&mid)
+            );
+        }
+    }
+
+    #[test]
+    fn a_dismissed_seed_stays_gone() {
+        let memory = ChipMemory::default();
+        let mut fresh = input(&[], "", &memory, &[], &[]);
+        fresh.usage_messages = 20;
+        let before = build_quick_chips(fresh);
+        let seed = before
+            .iter()
+            .find(|c| c.id.starts_with(SEED_PREFIX))
+            .expect("a seed")
+            .clone();
+        let dismissed = vec![seed.id.clone()];
+        let mut again = input(&[], "", &memory, &dismissed, &[]);
+        again.usage_messages = 20;
+        let after = build_quick_chips(again);
+        assert!(
+            after.iter().all(|c| c.id != seed.id),
+            "{} came back: {:?}",
+            seed.id,
+            ids(&after)
+        );
+    }
+
+    #[test]
+    fn seed_clicks_are_remembered_by_their_fixed_label() {
+        let seed = seed_chips(ChipStage::Empty)
+            .into_iter()
+            .next()
+            .expect("seed");
+        assert_eq!(
+            seed.value, seed.label,
+            "seed copy is fixed text, never chat"
+        );
+        assert!(SEED_CHIPS.iter().any(|(_, l)| *l == "Find a duo"));
+        assert!(SEED_CHIPS.iter().any(|(_, l)| *l == "Fix my stutter"));
     }
 
     /// Every chip any row offers, clicked and dismissed, twice over (the
@@ -3329,7 +3506,7 @@ mod tests {
     }
 
     #[test]
-    fn mid_stage_offers_think_harder() {
+    fn no_stage_offers_a_mode_chip() {
         let mem = ChipMemory::default();
         let chat = [
             msg("user", "hi"),
@@ -3338,50 +3515,34 @@ mod tests {
                 "Hello — what should we work on in the cabin tonight?",
             ),
         ];
-        let chips = build_quick_chips(input(&chat, "", &mem, &[], &[]));
-        let think = chips
-            .iter()
-            .find(|c| c.label == "Think Harder" && c.kind == ChipKind::Mode)
-            .expect("think chip");
-        assert_eq!(think.value, "__mode:think");
-        assert_eq!(mode_from_chip_value(&think.value), Some("think"));
-        assert!(chips.len() <= CHIP_VISIBLE_MAX);
-    }
-
-    #[test]
-    fn routing_chips_follow_new_modes() {
-        let mem = ChipMemory::default();
-        let chat = [
-            msg("user", "hi"),
-            msg(
-                "assistant",
-                "Hello — what should we work on in the cabin tonight?",
-            ),
-        ];
-        let mut auto = input(&chat, "", &mem, &[], &[]);
-        auto.mode = "auto";
-        let auto_chips = build_quick_chips(auto);
-        assert!(auto_chips.iter().any(|c| {
-            c.label == "Think Harder" && c.value == "__mode:think" && c.kind == ChipKind::Mode
-        }));
-
-        let mut think = input(&chat, "", &mem, &[], &[]);
-        think.mode = "think";
-        let think_chips = build_quick_chips(think);
-        assert!(think_chips.iter().any(|c| {
-            (c.label == "Go Max" || c.label == "Max")
-                && c.value == "__mode:max"
-                && c.kind == ChipKind::Mode
-        }));
-        assert!(!think_chips.iter().any(|c| c.label == "Think Harder"));
-
-        let mut max = input(&chat, "", &mem, &[], &[]);
-        max.mode = "max";
-        let max_chips = build_quick_chips(max);
-        assert!(max_chips.iter().any(|c| {
-            c.label == "Use Adaptive" && c.value == "__mode:auto" && c.kind == ChipKind::Mode
-        }));
-        assert!(!max_chips.iter().any(|c| c.label == "Think Harder"));
+        // The router alone picks the model and effort: whatever the mode, no
+        // chip offers to change it.
+        for mode in ["auto", "think", "max", "fast"] {
+            let mut i = input(&chat, "", &mem, &[], &[]);
+            i.mode = mode;
+            let chips = build_quick_chips(i);
+            assert!(!chips.is_empty(), "{mode}");
+            assert!(chips.len() <= CHIP_VISIBLE_MAX);
+            assert!(
+                chips.iter().all(|c| !c.value.starts_with("__mode:")),
+                "{mode}: {:?}",
+                labels(&chips)
+            );
+            for gone in ["Think Harder", "Go Max", "Use Adaptive"] {
+                assert!(!chips.iter().any(|c| c.label == gone), "{mode}: {gone}");
+            }
+        }
+        // A mode chip from an older model reply is dropped too.
+        let old = chip(
+            "llm-0-Think",
+            "Think Harder",
+            "__mode:think",
+            ChipKind::Nav,
+            99.0,
+            "",
+        );
+        let chips = build_quick_chips(input(&chat, "", &mem, &[], std::slice::from_ref(&old)));
+        assert!(!chips.iter().any(|c| c.value.starts_with("__mode:")));
     }
 
     #[test]
@@ -3506,12 +3667,6 @@ mod tests {
         assert!(enc.contains("TURN_TOOL"), "precondition: timeline marker");
         let chat = vec![msg("user", "check the window"), ("assistant".into(), enc)];
         assert_ne!(detect_chip_stage(&chat, false), ChipStage::Error);
-        let prompt = chip_suggest_prompt(&chat, "Chat", "", &[], &[], &[]);
-        assert!(
-            !prompt.contains("TURN_"),
-            "chip prompt reads the reply, not the timeline: {prompt}"
-        );
-        assert!(prompt.contains("The window is back."), "{prompt}");
     }
 
     #[test]
@@ -3546,9 +3701,9 @@ mod tests {
         let base = build_quick_chips(input(&chat, "", &mem0, &[], &[]));
         let think = base
             .iter()
-            .find(|c| c.label == "Think Harder")
+            .find(|c| c.id == "mid-continue")
             .cloned()
-            .expect("think chip");
+            .expect("continue chip");
         let mut mem = ChipMemory::default();
         remember_chip_dismiss(&mut mem, &think, 2_000, 21);
         let after = build_quick_chips(input(
@@ -3582,46 +3737,18 @@ mod tests {
     }
 
     #[test]
-    fn secrets_never_enter_memory_or_llm_parse() {
+    fn secrets_never_enter_memory_or_reply_chips() {
         let mut mem = ChipMemory::default();
         remember_typed_prompt(&mut mem, "token sk-abcdefghijklmnopqrstuv", 1, 3);
         assert!(mem.hits.is_empty());
-        let parsed = parse_llm_chips(
-            r#"[{"label":"Leak","value":"use token sk-abcdefghijklmnopqrstuv now","kind":"chat"}]"#,
+        let parsed = crate::chip_trailer::parse_chip_trailer(
+            "ask|use token sk-abcdefghijklmnopqrstuv now|Leak",
         );
         assert!(parsed.is_empty());
     }
 
     #[test]
-    fn parse_llm_json_and_prompt_grounding() {
-        let chat = [
-            msg("user", "add tests"),
-            msg("assistant", "I will add coverage next."),
-        ];
-        let prompt = chip_suggest_prompt(
-            &chat,
-            "Auth",
-            "add tes",
-            &["Check the machine".into()],
-            &["Open Imagine".into()],
-            &[],
-        );
-        assert!(prompt.contains("Stage:"));
-        assert!(prompt.contains("User is typing: add tes"));
-        assert!(prompt.contains("User habits:"));
-        assert!(prompt.contains("Auth"));
-        let chips = parse_llm_chips(
-            r#"```json
-[{"label":"Add unit tests","value":"Write focused unit tests for the auth path.","kind":"chat","hint":"from thread"}]
-```"#,
-        );
-        assert_eq!(chips.len(), 1);
-        assert_eq!(chips[0].label, "Add unit tests");
-        assert!(chips[0].score >= 95.0);
-    }
-
-    #[test]
-    fn fingerprint_and_llm_debounce() {
+    fn fingerprint_follows_the_context() {
         let empty: [(String, String); 0] = [];
         let err = [msg("user", "crash"), msg("assistant", "error: boom failed")];
         let a = context_fingerprint(&empty, "", false, 21, "auto");
@@ -3629,11 +3756,6 @@ mod tests {
         assert_ne!(a, b);
         let think = context_fingerprint(&empty, "", false, 21, "think");
         assert_ne!(a, think, "mode change should refresh Fast chips");
-        assert!(should_refresh_llm(&a, &b, 0, 2000, true, false));
-        assert!(!should_refresh_llm(&b, &b, 0, 2000, true, false));
-        assert!(!should_refresh_llm(&a, &b, 1800, 2000, true, false));
-        assert!(!should_refresh_llm(&a, &b, 0, 2000, false, false));
-        assert!(!should_refresh_llm(&a, &b, 0, 2000, true, true));
     }
 
     #[test]
@@ -3692,7 +3814,7 @@ mod tests {
     }
 
     #[test]
-    fn quiet_users_get_no_tour_and_no_chip_model() {
+    fn quiet_users_get_no_tour() {
         let mem = ChipMemory::default();
         let mut inp = input(&[], "", &mem, &[], &[]);
         inp.usage_messages = 80;
@@ -3707,73 +3829,28 @@ mod tests {
             "{:?}",
             labels(&chips)
         );
-        assert!(!chip_spend_allowed(CabinPace::Quiet, 4));
-        assert!(!chip_spend_allowed(CabinPace::Guide, 4));
-        assert!(chip_spend_allowed(CabinPace::With, 2));
-        assert!(!chip_spend_allowed(CabinPace::With, 1));
     }
 
     #[test]
-    fn a_repeated_success_becomes_a_lesson_and_a_dismiss_removes_it() {
-        let mut mem = ChipMemory::default();
-        let think = chip(
-            "route-think",
-            "Think Harder",
-            "__mode:think",
-            ChipKind::Mode,
-            10.0,
-            "",
-        );
-        remember_chip_click(&mut mem, &think, None, 1_000, 21);
-        remember_chip_click(&mut mem, &think, None, 2_000, 21);
-        remember_chip_outcome(&mut mem, true, 3_000);
-        let lessons = local_lessons(&mem);
-        assert!(
-            lessons
-                .iter()
-                .any(|l| l.text.contains("21:00") && l.text.contains("Think Harder")),
-            "{lessons:?}"
-        );
-        remember_chip_dismiss(&mut mem, &think, 4_000, 21);
-        let gone = local_lessons(&mem);
-        assert!(
-            gone.iter().all(|l| !l.text.contains("Think Harder")),
-            "a later no removes the lesson: {gone:?}"
-        );
-        let mut state = crate::learning::LearningState::default();
-        crate::learning::apply_local_lessons(&mut state, &lessons);
-        assert!(state.insights.iter().any(|i| i.key.starts_with("habit:")));
-        crate::learning::apply_local_lessons(&mut state, &gone);
-        assert!(state.insights.iter().all(|i| !i.key.starts_with("habit:")));
+    fn a_paid_review_waits_for_enough_new_turns() {
         assert!(!crate::learning::review_worth_tokens(3, 0));
         assert!(crate::learning::review_worth_tokens(8, 0));
         assert!(!crate::learning::review_worth_tokens(10, 8));
     }
 
     #[test]
-    fn mode_and_nav_values() {
-        assert_eq!(mode_from_chip_value("__mode:max"), Some("max"));
-        assert_eq!(mode_from_chip_value("__mode:auto"), Some("auto"));
-        assert_eq!(mode_from_chip_value("__mode:fast"), Some("fast"));
-        assert_eq!(mode_from_chip_value("fast"), Some("fast"));
-        assert_eq!(mode_from_chip_value("__mode:think"), Some("think"));
-        assert_eq!(mode_from_chip_value("__mode:balanced"), Some("balanced"));
+    fn nav_values() {
         assert_eq!(nav_from_chip_value("__nav:imagine"), Some("imagine"));
     }
 
     #[test]
-    fn llm_chips_drop_missing_products() {
-        let chips = parse_llm_chips(
-            r#"[{"label":"Make a video","value":"Generate a video of the cabin.","kind":"chat","hint":"x"}]"#,
-        );
+    fn reply_chips_drop_missing_products() {
+        use crate::chip_trailer::parse_chip_trailer;
+        let chips = parse_chip_trailer("ask|Generate a video of the cabin.|Make a video");
         assert!(chips.is_empty());
-        let office = parse_llm_chips(
-            r#"[{"label":"Office mail","value":"Draft the weekly office memo.","kind":"chat"}]"#,
-        );
+        let office = parse_chip_trailer("ask|Draft the weekly office memo.|Office mail");
         assert!(office.is_empty(), "{office:?}");
-        let stock = parse_llm_chips(
-            r#"[{"label":"Market move","value":"Check the stock ticker.","kind":"chat"}]"#,
-        );
+        let stock = parse_chip_trailer("ask|Check the stock ticker.|Market move");
         assert!(stock.is_empty(), "{stock:?}");
     }
 
@@ -3782,7 +3859,6 @@ mod tests {
         let mem = ChipMemory::default();
         let mut inp = input(&[], "", &mem, &[], &[]);
         inp.usage_messages = 40;
-        inp.usage_cap = 40;
         let chips = build_quick_chips(inp);
         assert!(!chips.iter().any(|c| c.id == "ctx-quota"));
         for c in &chips {
@@ -4039,7 +4115,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_typed_prompt_uses_opaque_key_and_short_label() {
+    fn shell_typed_prompt_keeps_only_an_opaque_key() {
         let mut mem = ChipMemory::default();
         remember_typed_prompt(&mut mem, "$ uname -a && whoami", 10, 8);
         remember_typed_prompt(&mut mem, "$ uname -a && whoami", 20, 8);
@@ -4052,12 +4128,149 @@ mod tests {
             mem.hits[0].key
         );
         assert!(!chip_key_embeds_chat_text(&mem.hits[0].key));
-        assert!(
-            mem.hits[0].label.chars().count() <= HABIT_LABEL_MAX_CHARS,
-            "label too long: {}",
-            mem.hits[0].label
+        assert_eq!(mem.hits[0].label, "");
+        assert_eq!(mem.hits[0].value, "");
+        // Nothing to replay, so no habit chip comes back from it.
+        assert!(learned_chips_from_memory(&mem, 30).is_empty());
+    }
+
+    fn feature_chip(id: &str, label: &str, value: &str, kind: ChipKind) -> QuickChip {
+        QuickChip {
+            id: id.into(),
+            label: label.into(),
+            value: value.into(),
+            kind,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        }
+    }
+
+    #[test]
+    fn live_state_and_shell_chips_never_come_back_as_habits() {
+        let mut mem = ChipMemory::default();
+        let picks = [
+            feature_chip(
+                "model:move:tiny.gguf",
+                "Move to models",
+                "mv \"/home/user/Downloads/tiny.gguf\" \"/home/user/models\"",
+                ChipKind::Shell,
+            ),
+            feature_chip(
+                "backup:push:my-app",
+                "Push my-app",
+                "Push /home/user/code/my-app to its remote",
+                ChipKind::Chat,
+            ),
+            feature_chip(
+                "resume:continue:my-app",
+                "Continue main",
+                "Continue main",
+                ChipKind::Chat,
+            ),
+            feature_chip("x-shell", "Status", "git status", ChipKind::Shell),
+            feature_chip(
+                "x-path",
+                "Open notes",
+                "Open C:\\notes\\todo.txt",
+                ChipKind::Chat,
+            ),
+        ];
+        for (i, c) in picks.iter().enumerate() {
+            remember_chip_click(&mut mem, c, None, 10 + i as u64, 8);
+            remember_chip_click(&mut mem, c, None, 20 + i as u64, 8);
+        }
+        assert_eq!(mem.hits.len(), 5);
+        for h in &mem.hits {
+            assert_eq!((h.label.as_str(), h.value.as_str()), ("", ""), "{}", h.key);
+        }
+        assert!(learned_chips_from_memory(&mem, 100).is_empty());
+
+        // A plain catalog chat chip still keeps its text.
+        let plain = feature_chip(
+            "empty-brief",
+            "Quick brief",
+            "Give me a quick brief.",
+            ChipKind::Chat,
         );
-        assert_ne!(mem.hits[0].label, "$ uname -a && whoami");
+        remember_chip_click(&mut mem, &plain, None, 50, 8);
+        let hit = mem.hits.iter().find(|h| h.key == "id:empty-brief").unwrap();
+        assert_eq!(hit.value, "Give me a quick brief.");
+    }
+
+    #[test]
+    fn load_scrub_clears_old_shell_and_path_habits() {
+        let mut mem = ChipMemory::default();
+        let mut push = |key: &str, label: &str, value: &str, kind: ChipKind| {
+            mem.hits.push(ChipHit {
+                key: key.into(),
+                label: label.into(),
+                value: value.into(),
+                kind,
+                uses: 3,
+                typed_uses: 0,
+                picks: 3,
+                last_used_at: 1,
+                hour_hits: Vec::new(),
+                successes: 0,
+                failures: 0,
+                context_tags: Vec::new(),
+                dismisses: 0,
+                dismiss_hours: Vec::new(),
+                last_dismissed_at: 0,
+            });
+        };
+        push(
+            "id:model:move:a.gguf",
+            "Move a.gguf",
+            "mv a.gguf models",
+            ChipKind::Shell,
+        );
+        push(
+            "shell:v1:0123456789abcdef",
+            "uname",
+            "$ uname -a",
+            ChipKind::Shell,
+        );
+        push(
+            "id:backup:push:my-app",
+            "Push my-app",
+            "Push /home/user/my-app",
+            ChipKind::Chat,
+        );
+        push(
+            "id:empty-brief",
+            "Quick brief",
+            "Give me a quick brief.",
+            ChipKind::Chat,
+        );
+        assert!(prune_retired_chip_memory(&mut mem));
+        let text: Vec<(&str, &str)> = mem
+            .hits
+            .iter()
+            .map(|h| (h.label.as_str(), h.value.as_str()))
+            .collect();
+        assert_eq!(
+            text,
+            vec![
+                ("", ""),
+                ("", ""),
+                ("", ""),
+                ("Quick brief", "Give me a quick brief.")
+            ]
+        );
+        assert_eq!(mem.hits.len(), 4, "counts stay for ranking");
+        assert!(!prune_retired_chip_memory(&mut mem), "idempotent");
+    }
+
+    #[test]
+    fn full_path_detection() {
+        assert!(names_full_path("open /home/user/x"));
+        assert!(names_full_path("~/notes.md"));
+        assert!(names_full_path("\"C:\\Users\\user\""));
+        assert!(!names_full_path("/learn"));
+        assert!(!names_full_path("Make a checklist"));
+        assert!(!names_full_path("and/or"));
     }
 
     fn labels(chips: &[QuickChip]) -> Vec<String> {
@@ -4207,12 +4420,10 @@ mod tests {
             "empty home must not paint leftover desk chips: {:?}",
             labels(&empty)
         );
-        assert!(
-            parse_llm_chips(
-                r#"[{"label":"Check the machine","value":"Run HOST_CMD now.","kind":"chat"},{"label":"Scan the desk","value":"Look at my desk.","kind":"chat"}]"#
-            )
-            .is_empty()
-        );
+        assert!(crate::chip_trailer::parse_chip_trailer(
+            "ask|Run HOST_CMD now.|Check the machine\nask|Look at my desk.|Scan the desk"
+        )
+        .is_empty());
     }
 
     #[test]
@@ -4228,18 +4439,6 @@ mod tests {
                 || last.contains("TEXT_FILE_CAP")
                 || last.contains("CHIP_SCAN"),
             "last_of must not clone an 8MB assistant for chips: {last}"
-        );
-        let suggest = src
-            .split("pub fn chip_suggest_prompt(")
-            .nth(1)
-            .and_then(|s| s.split("pub fn ").next())
-            .expect("chip_suggest_prompt");
-        let replace = suggest.find("replace(\"```\"").expect("fence replace");
-        assert!(
-            suggest[..replace].contains("chip_scan")
-                || suggest[..replace].contains("TEXT_FILE_CAP")
-                || suggest[..replace].contains("CHIP_SCAN"),
-            "chip prompt must not split_whitespace an 8MB body: {suggest}"
         );
     }
 
@@ -4278,48 +4477,18 @@ mod tests {
     }
 
     #[test]
-    fn chip_suggest_prompt_asks_for_five() {
-        let prompt = chip_suggest_prompt(&[], "Chat", "", &[], &[], &[]);
-        assert!(
-            prompt.contains("up to 5") || prompt.contains("5 objects"),
-            "Fast chip prompt should ask for five chips: {prompt}"
-        );
-        assert!(
-            !prompt.contains("3 to 4"),
-            "Fast chip prompt still asks for 3 to 4: {prompt}"
-        );
-    }
-
-    #[test]
-    fn parse_llm_accepts_five() {
-        let chips = parse_llm_chips(
-            r#"[{"label":"Continue the wall","value":"Continue painting the cabin wall.","kind":"chat"},{"label":"Cabin brief","value":"Give me a short cabin brief.","kind":"chat"},{"label":"Think Harder","value":"__mode:think","kind":"mode"},{"label":"Open Imagine","value":"__nav:imagine","kind":"nav"},{"label":"Make a checklist","value":"Turn the last answer into a short checklist.","kind":"chat"}]"#,
-        );
-        assert_eq!(chips.len(), 5, "{:?}", labels(&chips));
-    }
-
-    #[test]
-    fn parse_llm_keeps_full_chip_labels() {
-        let chips = parse_llm_chips(
-            r#"[{"label":"you should already have mcp configured","value":"Confirm the existing MCP connector is wired.","kind":"chat"}]"#,
+    fn reply_chips_keep_full_labels() {
+        use crate::chip_trailer::parse_chip_trailer;
+        let chips = parse_chip_trailer(
+            "ask|Confirm the existing MCP connector is wired.|you should already have mcp configured",
         );
         assert_eq!(chips[0].label, "you should already have mcp configured");
         assert!(!chips[0].label.contains('…'));
-        let clipped = parse_llm_chips(
-            r#"[{"label":"check doosan for information on…","value":"Look up Doosan in this chat.","kind":"chat"}]"#,
-        );
+        let clipped =
+            parse_chip_trailer("ask|Look up Doosan in this chat.|check doosan for information on…");
         assert_eq!(clipped[0].label, "check doosan for information on");
         assert!(!clipped[0].label.contains('…'));
         let src = include_str!("chips.rs");
-        let parse = src
-            .split("pub fn parse_llm_chips(")
-            .nth(1)
-            .and_then(|s| s.split("fn cabin_chip_copy_ok(").next())
-            .expect("parse_llm_chips");
-        assert!(
-            !parse.contains("take(32)") && parse.contains("chip_label"),
-            "LLM labels must not hard-cut mid-phrase: {parse}"
-        );
         let upsert = src
             .split("fn upsert_hit(")
             .nth(1)
@@ -4415,22 +4584,7 @@ mod tests {
     }
 
     #[test]
-    fn chip_suggest_prompt_includes_other_chats() {
-        let others = [ChipThread {
-            title: "Night cabin".into(),
-            last_user: "paint the wall".into(),
-            last_assistant: "First coat is ready.".into(),
-        }];
-        let prompt =
-            chip_suggest_prompt(&[], "Chat", "", &["Check the machine".into()], &[], &others);
-        assert!(prompt.contains("Night cabin"), "{prompt}");
-        assert!(prompt.contains("paint the wall"), "{prompt}");
-        assert!(prompt.contains("Previous"), "{prompt}");
-    }
-
-    #[test]
-    fn chip_llm_is_fast_mode() {
-        assert_eq!(CHIP_LLM_MODE, "fast");
+    fn cabin_fast_model_is_pinned() {
         assert_eq!(crate::CABIN_FAST_MODEL, "grok-4.7");
     }
 
@@ -4468,8 +4622,9 @@ mod tests {
             "New chat",
         );
         remember_chip_click(&mut mem, &habit, Some("mid"), 3_000, 21);
-        remember_chip_outcome(&mut mem, true, 4_000);
-        remember_chip_outcome(&mut mem, true, 5_000);
+        let key = mem.last_chip_key.clone().unwrap();
+        remember_chip_turn_outcome(&mut mem, &key, true, 4_000);
+        remember_chip_turn_outcome(&mut mem, &key, true, 5_000);
         let chat = [
             msg("user", "hi"),
             msg(
@@ -4694,18 +4849,19 @@ mod tests {
     }
 
     #[test]
-    fn llm_chips_drop_generic_follow_ups_and_may_be_empty() {
-        let raw = r#"[
-            {"label":"What's next","value":"What should we do next?","kind":"chat"},
-            {"label":"Next step","value":"Take the next step.","kind":"chat"},
-            {"label":"Anything else?","value":"Is there anything else?","kind":"chat"},
-            {"label":"Add tests for parse_row","value":"Add unit tests for parse_row in rows.rs.","kind":"chat"}
-        ]"#;
-        let labels: Vec<_> = parse_llm_chips(raw).into_iter().map(|c| c.label).collect();
+    fn reply_chips_drop_generic_follow_ups_and_may_be_empty() {
+        use crate::chip_trailer::parse_chip_trailer;
+        let raw = "ask|What should we do next?|What's next\n\
+                   ask|Take the next step.|Next step\n\
+                   ask|Add unit tests for parse_row in rows.rs.|Add tests for parse_row";
+        let labels: Vec<_> = parse_chip_trailer(raw)
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
         assert_eq!(labels, vec!["Add tests for parse_row".to_string()]);
-        assert_eq!(parse_llm_chips("[]"), Vec::<QuickChip>::new());
+        assert_eq!(parse_chip_trailer(""), Vec::<QuickChip>::new());
         assert_eq!(
-            parse_llm_chips("What’s next | What should we do next?"),
+            parse_chip_trailer("ask|What should we do next?|What’s next"),
             Vec::<QuickChip>::new()
         );
     }
@@ -4766,22 +4922,396 @@ mod tests {
     }
 
     #[test]
-    fn chip_prompt_bans_generic_labels_and_allows_none() {
-        let prompt = chip_suggest_prompt(
-            &[msg("user", "fix the login test")],
-            "Chat",
-            "",
-            &[],
-            &[],
-            &[],
+    fn a_failed_turn_leads_the_row_with_its_follow_up() {
+        let mem = ChipMemory::default();
+        let chat = [msg("user", "run the tests"), msg("assistant", "Done.")];
+        let mut i = input(&chat, "", &mem, &[], &[]);
+        i.usage_messages = 20;
+        i.last_failed = true;
+        let chips = build_quick_chips(i);
+        assert_eq!(chips[0].label, "Root cause + fix", "{:?}", ids(&chips));
+        assert_eq!(chips[0].hint, "Follow-up to that reply");
+        assert_eq!(
+            chips
+                .iter()
+                .filter(|c| c.label == "Root cause + fix")
+                .count(),
+            1,
+            "lifted, not doubled"
+        );
+    }
+
+    #[test]
+    fn a_named_move_leads_and_a_plain_reply_or_a_draft_gets_none() {
+        let mem = ChipMemory::default();
+        let broke = [
+            msg("user", "the build failed after the last change"),
+            msg("assistant", "TypeError: foo is not a function."),
+        ];
+        let mut i = input(&broke, "", &mem, &[], &[]);
+        i.usage_messages = 20;
+        let chips = build_quick_chips(i.clone());
+        assert_eq!(chips[0].label, "Fix the cause", "{:?}", ids(&chips));
+        i.draft = "also check";
+        let typing = build_quick_chips(i);
+        assert!(typing.iter().all(|c| c.hint != "Follow-up to that reply"));
+        let plain = [msg("user", "hi"), msg("assistant", "Hello.")];
+        let mut i = input(&plain, "", &mem, &[], &[]);
+        i.usage_messages = 20;
+        let chips = build_quick_chips(i);
+        assert!(chips.iter().all(|c| c.hint != "Follow-up to that reply"));
+    }
+
+    fn with_signals(signals: ChipSignals<'_>, hour: u8) -> Vec<QuickChip> {
+        let memory = ChipMemory::default();
+        let mut i = input(&[], "", &memory, &[], &[]);
+        i.usage_messages = 20;
+        i.hour = hour;
+        i.max = CHIP_HARD_MAX;
+        i.signals = signals;
+        build_quick_chips(i)
+    }
+
+    fn find<'c>(chips: &'c [QuickChip], id: &str) -> Option<&'c QuickChip> {
+        chips.iter().find(|c| c.id == id)
+    }
+
+    #[test]
+    fn a_running_game_offers_a_stutter_fix_named_for_it() {
+        let chips = with_signals(
+            ChipSignals {
+                game: Some("Cyberpunk 2077"),
+                weekday: 2,
+                ..Default::default()
+            },
+            14,
+        );
+        let c = find(&chips, "sig-game-stutter").expect("stutter chip");
+        assert_eq!(c.label, "Fix stutter in Cyberpunk 2077");
+        assert!(c.value.contains("Cyberpunk 2077"));
+        assert!(c.value.contains("Don't touch the game"));
+        assert!(find(&chips, "sig-game-ended").is_none());
+        let off = with_signals(ChipSignals::default(), 14);
+        assert!(
+            off.iter().all(|c| !c.id.starts_with("sig-")),
+            "{:?}",
+            ids(&off)
+        );
+    }
+
+    #[test]
+    fn a_long_game_name_is_cut_in_the_label_but_whole_in_the_ask() {
+        let name = "The Elder Scrolls V: Skyrim Special Edition";
+        let chips = with_signals(
+            ChipSignals {
+                game: Some(name),
+                ..Default::default()
+            },
+            14,
+        );
+        let c = find(&chips, "sig-game-stutter").expect("stutter chip");
+        assert_eq!(c.label, "Fix stutter in The Elder Scrolls V");
+        assert!(c.value.contains(name));
+    }
+
+    #[test]
+    fn a_closed_game_asks_how_it_went() {
+        let chips = with_signals(
+            ChipSignals {
+                game_ended: Some("Hades"),
+                ..Default::default()
+            },
+            14,
+        );
+        let c = find(&chips, "sig-game-ended").expect("ended chip");
+        assert_eq!(c.label, "How'd Hades go?");
+    }
+
+    #[test]
+    fn a_full_drive_offers_to_free_space_without_deleting_first() {
+        let chips = with_signals(
+            ChipSignals {
+                low_disk: true,
+                ..Default::default()
+            },
+            14,
+        );
+        let c = find(&chips, "sig-low-disk").expect("disk chip");
+        assert_eq!(c.label, "Free up storage");
+        assert!(c.value.contains("before deleting anything"));
+    }
+
+    #[test]
+    fn disk_is_low_under_ten_percent_or_five_gib() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert!(disk_is_low(4 * GIB, 100 * GIB));
+        assert!(disk_is_low(90 * GIB, 1000 * GIB));
+        assert!(!disk_is_low(20 * GIB, 100 * GIB));
+        assert!(!disk_is_low(150 * GIB, 1000 * GIB));
+        assert!(!disk_is_low(0, 0), "an unknown drive is not low");
+    }
+
+    #[test]
+    fn a_waiting_update_opens_the_update_page() {
+        let chips = with_signals(
+            ChipSignals {
+                update_waiting: true,
+                ..Default::default()
+            },
+            14,
+        );
+        let c = find(&chips, "sig-update").expect("update chip");
+        assert_eq!(c.kind, ChipKind::Nav);
+        assert_eq!(nav_from_chip_value(&c.value), Some("update"));
+    }
+
+    #[test]
+    fn friday_evening_offers_weekend_plans_and_quiet_hours_drop_them() {
+        let friday = |hour, quiet_hours| {
+            with_signals(
+                ChipSignals {
+                    weekday: 5,
+                    quiet_hours,
+                    ..Default::default()
+                },
+                hour,
+            )
+        };
+        assert!(find(&friday(19, false), "sig-weekend").is_some());
+        assert!(
+            find(&friday(12, false), "sig-weekend").is_none(),
+            "Friday lunch"
         );
         assert!(
-            !prompt.contains("Add tests, Next step, Think Harder"),
-            "{prompt}"
+            find(&friday(19, true), "sig-weekend").is_none(),
+            "quiet hours"
         );
-        assert!(prompt.contains(
-            "- Never a generic follow-up: no What's next, Next step, Take the next step, or Anything else"
-        ));
-        assert!(prompt.contains("- If nothing specific fits, return []"));
+        let thursday = with_signals(
+            ChipSignals {
+                weekday: 4,
+                ..Default::default()
+            },
+            19,
+        );
+        assert!(find(&thursday, "sig-weekend").is_none());
+    }
+
+    #[test]
+    fn signal_chips_sit_under_the_chats_own_once_it_has_turns() {
+        let memory = ChipMemory::default();
+        let chat = vec![msg("user", "fix the build"), msg("assistant", "Done.")];
+        let base = |chat: &[(String, String)]| {
+            let mut i = input(chat, "", &memory, &[], &[]);
+            i.signals = ChipSignals {
+                low_disk: true,
+                ..Default::default()
+            };
+            signal_chips(&i)[0].score
+        };
+        assert!(base(&chat) < base(&[]));
+    }
+
+    #[test]
+    fn intents_come_from_the_catalog_and_whole_words() {
+        assert_eq!(chip_intent("Fix stutter in Hades", ""), Some("game.perf"));
+        assert_eq!(
+            chip_intent("Fix my stutter", "Fix my stutter"),
+            Some("game.perf")
+        );
+        assert_eq!(chip_intent("Free up storage", ""), Some("rig.storage"));
+        assert_eq!(chip_intent("Find a duo tonight", ""), Some("game.squad"));
+        assert_eq!(chip_intent("Plan my weekend", ""), Some("day.plan"));
+        assert_eq!(chip_intent("", "the build is failing"), Some("code.fix"));
+        assert_eq!(
+            chip_intent("", "add a prefix to the flag while typing"),
+            None
+        );
+        assert_eq!(chip_intent("hi", "how are you"), None);
+    }
+
+    fn stutter_chips(mem: &ChipMemory, hour: u8) -> f32 {
+        let mut i = input(&[], "", mem, &[], &[]);
+        i.usage_messages = 20;
+        i.hour = hour;
+        i.max = CHIP_HARD_MAX;
+        i.signals = ChipSignals {
+            game: Some("Hades"),
+            weekday: 3,
+            ..Default::default()
+        };
+        build_quick_chips(i)
+            .into_iter()
+            .find(|c| c.id == "sig-game-stutter")
+            .map(|c| c.score)
+            .expect("stutter chip")
+    }
+
+    #[test]
+    fn a_game_chip_used_at_nine_three_nights_lifts_at_nine_only() {
+        let mut mem = ChipMemory::default();
+        let fresh_9pm = stutter_chips(&mem, 21);
+        // Three nights at 9pm, through the composer chip or by typing.
+        remember_intent(&mut mem, "Fix stutter in Hades", "", 1_000, 21, 1);
+        remember_intent(&mut mem, "", "my game stutters again", 2_000, 21, 2);
+        remember_intent(&mut mem, "Fix my stutter", "Fix my stutter", 3_000, 21, 3);
+        assert!(stutter_chips(&mem, 21) > fresh_9pm + 10.0);
+        assert!(
+            stutter_chips(&mem, 14) < stutter_chips(&mem, 21),
+            "a 9pm habit does little at 2pm"
+        );
+        // Only catalog keys reach chips.json, never the typed words.
+        let json = serde_json::to_string(&mem).unwrap();
+        assert!(json.contains("game.perf"));
+        assert!(!json.contains("stutters again") && !json.contains("Hades"));
+    }
+
+    #[test]
+    fn a_turn_credits_only_the_chip_that_started_it() {
+        let mut mem = ChipMemory::default();
+        let fix = chip("ctx-fix", "Fix it", "Fix it", ChipKind::Chat, 50.0, "");
+        remember_chip_click(&mut mem, &fix, None, 1_000, 10);
+        let key = chip_memory_key(&fix);
+        remember_chip_turn_outcome(&mut mem, &key, true, 2_000);
+        remember_chip_turn_outcome(&mut mem, "chat:v1:0000000000000000", false, 3_000);
+        let hit = mem.hits.iter().find(|h| h.key == key).unwrap();
+        assert_eq!((hit.successes, hit.failures), (1, 0));
+    }
+
+    fn offer(id: &str, label: &str, score: f32) -> QuickChip {
+        QuickChip {
+            id: id.into(),
+            label: label.into(),
+            value: label.into(),
+            kind: ChipKind::Chat,
+            score,
+            hint: "Feature offer".into(),
+            primary: false,
+        }
+    }
+
+    fn with_pace<'a>(chat: &'a [(String, String)], memory: &'a ChipMemory) -> ChipInput<'a> {
+        let mut i = input(chat, "", memory, &[], &[]);
+        // Familiar but not advanced: the ordinary paced row.
+        i.usage_messages = 25;
+        i.max = CHIP_HARD_MAX;
+        i
+    }
+
+    #[test]
+    fn feature_offers_rank_with_the_rest_instead_of_jumping_the_row() {
+        let memory = ChipMemory::default();
+        let chat = vec![msg("user", "fix the build"), msg("assistant", "Done.")];
+        let extra = [offer("backup:due", "Back up now", 100.0)];
+        let mut i = with_pace(&chat, &memory);
+        i.extra = &extra;
+        let row = build_quick_chips(i);
+        let at = row
+            .iter()
+            .position(|c| c.id == "backup:due")
+            .expect("offer in pool");
+        assert!(
+            row[..at].iter().all(|c| c.score >= row[at].score),
+            "only stronger chips lead it: {:?}",
+            ids(&row)
+        );
+        // A hidden offer stays hidden like any chip.
+        let gone = ["backup:due".to_string()];
+        let mut i = with_pace(&chat, &memory);
+        i.extra = &extra;
+        i.dismissed = &gone;
+        assert!(build_quick_chips(i).iter().all(|c| c.id != "backup:due"));
+    }
+
+    #[test]
+    fn gaming_holds_nudges_but_keeps_game_and_chat_chips() {
+        let memory = ChipMemory::default();
+        let chat = vec![
+            msg("user", "how do I fix this crash"),
+            msg("assistant", "Try verifying the files."),
+        ];
+        let extra = [
+            offer("tidy:review", "Review Downloads cleanup", 100.0),
+            offer("game:guides:1", "Top guides for Hades", 100.0),
+        ];
+        let mut i = with_pace(&chat, &memory);
+        i.extra = &extra;
+        i.signals = ChipSignals {
+            low_disk: true,
+            gaming: true,
+            ..Default::default()
+        };
+        let row = build_quick_chips(i);
+        let got = ids(&row);
+        assert!(!got.contains(&"tidy:review"), "{got:?}");
+        assert!(!got.contains(&"sig-low-disk"), "{got:?}");
+        assert!(got.contains(&"game:guides:1"), "{got:?}");
+        assert!(
+            !row.is_empty() && row.iter().any(|c| !c.id.contains(':')),
+            "the chat's own chips stay: {got:?}"
+        );
+    }
+
+    #[test]
+    fn an_anticheat_hides_chips_that_touch_the_game() {
+        let memory = ChipMemory::default();
+        let chat = vec![
+            msg("user", "my fps dropped"),
+            msg("assistant", "Close the overlay."),
+        ];
+        let mut shell = offer("pred-shell", "Show processes", 100.0);
+        shell.kind = ChipKind::Shell;
+        shell.value = "ps aux".into();
+        let extra = [
+            offer("game:guides:1", "Top guides for Hades", 100.0),
+            offer("focus:game:hades", "Help with Hades", 100.0),
+            shell,
+        ];
+        let mut i = with_pace(&chat, &memory);
+        i.extra = &extra;
+        i.signals = ChipSignals {
+            game: Some("Hades"),
+            anticheat: true,
+            gaming: true,
+            ..Default::default()
+        };
+        let row = build_quick_chips(i);
+        assert!(row.iter().all(|c| !touches_the_game(c)), "{:?}", ids(&row));
+    }
+
+    #[test]
+    fn a_file_in_the_tray_offers_an_explain_chip_that_is_never_kept() {
+        let memory = ChipMemory::default();
+        let chat = vec![msg("user", "hi"), msg("assistant", "Hey!")];
+        let mut i = with_pace(&chat, &memory);
+        i.signals = ChipSignals {
+            attachment: Some("report.pdf"),
+            gaming: true,
+            ..Default::default()
+        };
+        let row = build_quick_chips(i);
+        let chip = row
+            .iter()
+            .find(|c| c.id == "sig-attach-explain")
+            .expect("explain chip, even while gaming");
+        assert_eq!(chip.label, "Explain report.pdf");
+        let mut mem = ChipMemory::default();
+        remember_chip_click(&mut mem, chip, None, 1_000, 9);
+        assert!(
+            mem.hits
+                .iter()
+                .all(|h| !h.label.contains("report") && !h.value.contains("report")),
+            "the file name never becomes a habit"
+        );
+    }
+
+    #[test]
+    fn the_first_run_guide_still_shows_a_feature_offer() {
+        let memory = ChipMemory::default();
+        let extra = [offer("focus:coding:cursor", "Next coding step", 110.0)];
+        let mut i = input(&[], "", &memory, &[], &[]);
+        i.first_run = true;
+        i.extra = &extra;
+        assert_eq!(cabin_pace(&i), CabinPace::Guide);
+        assert!(ids(&build_quick_chips(i)).contains(&"focus:coding:cursor"));
     }
 }

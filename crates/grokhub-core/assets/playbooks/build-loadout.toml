@@ -20,7 +20,7 @@ rollback = "Undo a purchase or config change if the user rejects it."
 give_up = [
   "a hard approval was refused",
   "hardware, access or a sign-in is missing",
-  "every approach in the playbook failed and was checked",
+  "every approach here failed and was checked",
 ]
 
 [applies_when]

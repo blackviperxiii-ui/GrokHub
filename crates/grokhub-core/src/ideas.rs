@@ -95,6 +95,10 @@ pub struct IdeaContext<'a> {
     /// Idea titles on the board now, and ones they turned down.
     pub existing: &'a [String],
     pub rejected: &'a [String],
+    /// Games they played lately, most recent first.
+    pub games: &'a [String],
+    /// Interest topics they follow, strongest first.
+    pub interests: &'a [String],
     pub hour: u8,
     pub weekday: &'a str,
 }
@@ -140,7 +144,10 @@ pub fn idea_prompt(ctx: &IdeaContext) -> String {
             "Suggest at most {IDEAS_PER_RUN} ideas, and only ones that clear every rule below:"
         ),
         "- It answers work they REPEAT: a pattern marked (2x) or more below, an open workboard card, or something \
-         their memory says is ongoing. One ask is not a pattern."
+         their memory says is ongoing. One ask is not a pattern. Or it watches or prepares something about a game \
+         they play or a topic they follow, listed below, that they would check anyway (patch notes, a sale on \
+         their wishlist, server status, a mod update). Games are read-only: never touch a running game, its \
+         memory or its anti-cheat."
             .into(),
         "- A one-time task gets nothing. Installing a driver or a package, fixing one bug, setting something up \
          once, or a task that is already done does not need an automation, a skill, a reminder, or a follow-up \
@@ -205,6 +212,8 @@ pub fn idea_prompt(ctx: &IdeaContext) -> String {
         160,
     );
     push_list(&mut lines, "Open workboard cards", ctx.open_cards, 8, 80);
+    push_list(&mut lines, "Games they play lately", ctx.games, 8, 60);
+    push_list(&mut lines, "Topics they follow", ctx.interests, 8, 60);
     push_list(
         &mut lines,
         "Automations they already run",
@@ -289,8 +298,12 @@ pub fn topic_words(text: &str) -> Vec<String> {
 /// Two lines are about the same thing when they share two topic words, or one
 /// when either line has only one or two to begin with.
 pub fn same_topic(a: &str, b: &str) -> bool {
-    let wa = topic_words(a);
-    let wb = topic_words(b);
+    same_topic_words(&topic_words(a), &topic_words(b))
+}
+
+/// [`same_topic`] on [`topic_words`] already worked out, for callers that
+/// compare one line against many.
+pub fn same_topic_words(wa: &[String], wb: &[String]) -> bool {
     if wa.is_empty() || wb.is_empty() {
         return false;
     }
@@ -575,6 +588,28 @@ mod tests {
             weekday: "Tuesday",
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn prompt_carries_their_games_and_topics() {
+        let games = vec!["Helldivers 2".to_string(), "Deep Rock Galactic".to_string()];
+        let topics = vec!["mechanical keyboards".to_string()];
+        let p = idea_prompt(&IdeaContext {
+            games: &games,
+            interests: &topics,
+            ..ctx(&[], &[])
+        });
+        assert!(
+            p.contains("Games they play lately:\n- Helldivers 2\n- Deep Rock Galactic"),
+            "{p}"
+        );
+        assert!(
+            p.contains("Topics they follow:\n- mechanical keyboards"),
+            "{p}"
+        );
+        assert!(p.contains("never touch a running game, its memory or its anti-cheat"));
+        let none = idea_prompt(&ctx(&[], &[]));
+        assert!(!none.contains("Games they play lately"));
     }
 
     #[test]

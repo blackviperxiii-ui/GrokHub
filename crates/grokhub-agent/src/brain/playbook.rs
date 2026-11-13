@@ -333,7 +333,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (15, Source::Shipped, 0)
+            (17, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -375,6 +375,8 @@ mod tests {
                 ("quick-answer", Source::Shipped),
                 ("plan-day", Source::Shipped),
                 ("creative", Source::Shipped),
+                ("pc-tuneup", Source::Shipped),
+                ("app-update", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -404,6 +406,8 @@ mod tests {
                 ("quick-answer", Source::Shipped),
                 ("plan-day", Source::Shipped),
                 ("creative", Source::Shipped),
+                ("pc-tuneup", Source::Shipped),
+                ("app-update", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -467,7 +471,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 16);
+        assert_eq!(all.len(), 18);
         assert_eq!(
             problems,
             vec![
@@ -501,6 +505,14 @@ mod tests {
         );
         // One PC-fix family covers macOS too; the any-task playbook no longer does.
         assert_eq!(id("repair", "system", "macos").as_deref(), Some("pc-fix"));
+        // A check-up of a PC that isn't broken gets the tune-up, never small talk.
+        for os in ["linux", "windows", "macos"] {
+            assert_eq!(id("repair", "pc-health", os).as_deref(), Some("pc-tuneup"));
+            assert_eq!(
+                id("question", "pc-health", os).as_deref(),
+                Some("pc-tuneup")
+            );
+        }
         assert_eq!(id("task", "code", "linux").as_deref(), Some("code-dev"));
         assert_eq!(id("repair", "code", "windows").as_deref(), Some("code-dev"));
         assert_eq!(id("task", "files", "linux").as_deref(), Some("files"));
@@ -641,6 +653,58 @@ mod tests {
         let (all, _) = load(&dir);
         assert_eq!(id(&all, "task", "files").as_deref(), Some("files-alt"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The bluetoothd card, replayed: the chat opened from the card picks the
+    /// PC fix playbook on its first turn and on "check into it for me",
+    /// whatever was said in a hangout before. Without the card, the same
+    /// follow-up after hangout talk names nothing, so the Brief can't place it.
+    #[test]
+    fn a_chat_opened_from_a_crash_card_stays_on_that_program() {
+        let (all, _) = load(&crate::harness::test_dir("playbook-crash-card-replay"));
+        let anchor = Some("bluetoothd crashed several times recently");
+        let ask =
+            "Help me investigate why bluetoothd keeps crashing (read crash logs metadata only).";
+        let hangout = [
+            "lol that raid was wild".to_string(),
+            "what should I play tonight".to_string(),
+        ];
+        let card_turns = [ask.to_string()];
+        let pick_for = |text: &str, recent: &[String], anchor: Option<&str>| {
+            let b = crate::brain::rules(&crate::brain::BriefInput {
+                text,
+                recent,
+                anchor,
+                ..Default::default()
+            })?;
+            let id = pick(&all, b.intent.as_str(), &b.domain, "linux", b.mood.as_str())
+                .map(|p| p.id.clone())
+                .unwrap_or_default();
+            Some((b.intent.as_str().to_string(), b.domain, id))
+        };
+        let pc_fix = Some((
+            "repair".to_string(),
+            "system".to_string(),
+            "pc-fix".to_string(),
+        ));
+        // The card's first turn.
+        assert_eq!(pick_for(ask, &[], anchor), pc_fix);
+        // "check into it for me" after it, and with only the card behind it.
+        assert_eq!(
+            pick_for("check into it for me", &card_turns, anchor),
+            pc_fix
+        );
+        assert_eq!(pick_for("check into it for me", &[], anchor), pc_fix);
+        assert_eq!(pick_for("why does it keep doing that", &[], anchor), pc_fix);
+        // Hangout talk never turns the card's chat into chat.
+        assert_eq!(pick_for("check into it for me", &hangout, anchor), pc_fix);
+        // The old way: the same line in the hangout chat had no subject.
+        assert_eq!(pick_for("check into it for me", &hangout, None), None);
+        // Small talk in the card's chat stays small talk.
+        assert_eq!(
+            pick_for("thanks, you're the best", &card_turns, anchor).map(|b| b.0),
+            Some("chat".to_string())
+        );
     }
 
     #[test]

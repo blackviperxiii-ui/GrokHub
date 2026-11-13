@@ -76,10 +76,11 @@ pub use signal::{
 };
 pub use store::{AmrStore, ForgetReport, RecallReport};
 pub use user_model::{
-    approval_samples, approve_node, calibrate_reflect_min, edit_node, forget_node, memory_rows,
-    memory_text, reflect_diff, reflect_threshold_log, reject_node, strip_forgotten,
-    supersede_same_topic, topic_slug, ApprovalSample, MemoryRow, ReflectDiff, SourceLink,
-    UserForget, PROPOSED_TAG, REFLECT_MIN_CONFIDENCE,
+    add_fact, approval_samples, approve_node, calibrate_reflect_min, edit_node, forget_node,
+    memory_rows, memory_text, pause_node, personal_export, reflect_diff, reflect_threshold_log,
+    reject_node, search_rows, strip_forgotten, supersede_same_topic, topic_slug, wipe_user_model,
+    ApprovalSample, MemoryRow, PersonalGroup, ReflectDiff, SourceLink, UserForget, WipeReport,
+    PROPOSED_TAG, REFLECT_MIN_CONFIDENCE,
 };
 pub use write::{
     line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered,
@@ -753,6 +754,91 @@ Glow stays white.
             .iter()
             .any(|hit| hit.contains("n20") || hit.contains("broken")));
         assert!(store.recall("not a node").is_empty());
+    }
+
+    #[test]
+    fn ranked_recall_puts_more_matched_words_first_then_newer() {
+        let tmp = Tmp::new("ranked");
+        let store = AmrStore::at(&tmp.path);
+        store.init().unwrap();
+        // "a-" sorts first by id, so id order alone would put it on top.
+        store
+            .remember(&draft("a-mode", "ranked mode off\n"))
+            .unwrap();
+        store
+            .remember(&draft("z-partner", "Kestrel duo partner ranked\n"))
+            .unwrap();
+        store
+            .remember(&NodeDraft {
+                updated: "2026-10-09T00:00:00Z".into(),
+                ..draft("m-queue", "ranked queue at nine\n")
+            })
+            .unwrap();
+        let words: Vec<String> = ["ranked", "duo", "partner"]
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        let lines: Vec<String> = store
+            .recall_ranked(&words)
+            .into_iter()
+            .map(|hit| hit.line)
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                "Kestrel duo partner ranked".to_string(),
+                "ranked queue at nine".to_string(),
+                "ranked mode off".to_string(),
+            ]
+        );
+        assert!(store.recall_ranked(&[]).is_empty());
+    }
+
+    /// Toy meanings for [`AmrStore::recall_semantic`]: "gpu" and "graphics"
+    /// share one direction, "ram" and "memory" another.
+    fn toy_encode(text: &str) -> Option<Vec<f32>> {
+        let t = text.to_ascii_lowercase();
+        let gpu = (t.contains("gpu") || t.contains("graphics")) as u8 as f32;
+        let ram = (t.contains("ram") || t.contains("memory")) as u8 as f32;
+        let n = (gpu * gpu + ram * ram).sqrt();
+        (n > 0.0).then(|| vec![gpu / n, ram / n])
+    }
+
+    #[test]
+    fn semantic_recall_finds_lines_by_meaning_and_skips_superseded_facts() {
+        let tmp = Tmp::new("semantic");
+        let store = AmrStore::at(&tmp.path);
+        store.init().unwrap();
+        store
+            .remember(&draft(
+                "rig-card",
+                "Rig notes\ngraphics card is an RTX 4080\n",
+            ))
+            .unwrap();
+        store
+            .remember(&draft("rig-ram", "the PC has 64 GB of RAM\n"))
+            .unwrap();
+        store
+            .remember(&draft("old-card", "graphics card is a GTX 1080\n"))
+            .unwrap();
+        store
+            .link("rig-card", "old-card", EdgeRel::Supersedes)
+            .unwrap();
+        let q = toy_encode("which GPU do I have").unwrap();
+        let hits = store.recall_semantic(&q, &toy_encode, 0.5, 5);
+        assert_eq!(
+            hits.iter().map(|h| h.line.as_str()).collect::<Vec<_>>(),
+            vec!["graphics card is an RTX 4080"],
+            "the replaced card stays on disk but is never recalled"
+        );
+        assert!(tmp.path.join("nodes").join("old-card.md").is_file());
+        assert!(store.recall_semantic(&q, &toy_encode, 0.5, 0).is_empty());
+        assert!(store.recall_semantic(&[], &toy_encode, 0.5, 5).is_empty());
+        let q = toy_encode("how much memory").unwrap();
+        assert_eq!(
+            store.recall_semantic(&q, &toy_encode, 0.5, 5)[0].id,
+            "rig-ram"
+        );
     }
 
     /// A node file that sat untouched and still won't parse is moved aside and noted for

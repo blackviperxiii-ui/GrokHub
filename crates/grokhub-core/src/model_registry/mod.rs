@@ -3,13 +3,18 @@
 //! traffic moves health ([`health`]); nothing here touches the network.
 //! Stored at `{config}/models/registry.json`.
 
+pub mod builtin;
+pub mod card;
 pub mod cost_class;
 pub mod discover;
 pub mod entitlement;
 pub mod health;
+pub mod probation;
 pub mod probe;
 pub mod profile;
+pub mod quota;
 pub mod record;
+pub mod seed;
 pub mod store;
 
 use std::collections::BTreeMap;
@@ -25,7 +30,8 @@ pub use discover::{
 pub use entitlement::{tier_notice, Credential, Entitlement};
 pub use health::{classify_status, CallStatus, Observation};
 pub use record::{
-    model_id_stem, Breaker, ModelMeta, ModelRecord, ModelState, Notice, Prices, SourceKind,
+    model_id_stem, Breaker, CapabilityScores, DataPolicy, ModelCard, ModelMeta, ModelRecord,
+    ModelState, Notice, Prices, Reliability, Route, SourceKind,
 };
 
 pub const REGISTRY_SCHEMA: u32 = 1;
@@ -50,7 +56,7 @@ pub enum RegistryEvent {
     Removed {
         id: String,
     },
-    /// `what` is any of `price`, `context`, `efforts`, `endpoint`, `notice`.
+    /// `what` is any of `price`, `context`, `efforts`, `endpoint`, `notice`, `card`.
     Changed {
         id: String,
         what: Vec<String>,
@@ -68,6 +74,18 @@ pub enum RegistryEvent {
     Deleted {
         id: String,
     },
+    /// A new model's tryout moved: started, graduated, failed or retried.
+    Probation {
+        id: String,
+        stage: probation::Stage,
+        reason: String,
+    },
+    /// A routable model's announced expiry is close: routing to it has
+    /// stopped (the scorer's expiry bar); logged once per date.
+    Expiring {
+        id: String,
+        expires: String,
+    },
 }
 
 impl RegistryEvent {
@@ -79,6 +97,8 @@ impl RegistryEvent {
             Self::State { .. } => "state",
             Self::Notice { .. } => "notice",
             Self::Deleted { .. } => "deleted",
+            Self::Probation { .. } => "probation",
+            Self::Expiring { .. } => "expiring",
         }
     }
 }
@@ -118,6 +138,9 @@ fn changed_kinds(old: &ModelMeta, new: &ModelMeta) -> Vec<String> {
     }
     if (&old.notice, old.deprecated) != (&new.notice, new.deprecated) {
         what.push("notice".into());
+    }
+    if old.card != new.card {
+        what.push("card".into());
     }
     what
 }
@@ -235,6 +258,9 @@ impl Registry {
 
     /// Fold fresh listings in. `named` is every id a pin, default, skill or
     /// automation names. No listing (every source failed) changes nothing.
+    /// A source that doesn't answer keeps the models it listed before: a
+    /// record only goes stale once every source that ever listed it has
+    /// checked in without it.
     pub fn apply_refresh(
         &mut self,
         listings: &[Listing],
@@ -247,6 +273,11 @@ impl Registry {
         }
         let mut ordered: Vec<&Listing> = listings.iter().collect();
         ordered.sort_by_key(|l| l.kind);
+        // The kinds that answered this refresh. A record only goes stale
+        // once every source that ever listed it checked in without it: a
+        // source that failed or stayed silent keeps its models, so one
+        // source's bad day can't wipe another's list.
+        let answered: Vec<SourceKind> = ordered.iter().filter_map(|l| l.kind).collect();
         let mut merged: BTreeMap<String, (ModelMeta, Vec<SourceKind>)> = BTreeMap::new();
         let mut tier = None;
         for listing in ordered {
@@ -278,8 +309,53 @@ impl Registry {
         if tier.is_some() {
             self.entitlement.tier = tier;
         }
-        for (id, (meta, sources)) in &merged {
+        // The providers that had listed models before this refresh: a model
+        // one of them starts listing now is new, and goes on a tryout. A
+        // provider's first listing is its baseline, not a batch of new models.
+        let known_providers: std::collections::BTreeSet<String> = self
+            .models
+            .iter()
+            .filter(|(_, r)| r.sources.iter().any(|k| k.is_new_provider()))
+            .filter_map(|(id, _)| id.split_once('/').map(|(p, _)| p.to_string()))
+            .collect();
+        for (id, (meta, sources)) in &mut merged {
             let api = sources.contains(&SourceKind::XaiApi);
+            if !api {
+                // No xAI API listing describes it (a Grok Build sign-in lists bare
+                // ids): the known prices and window stand in. An API row keeps its own.
+                seed::fill(meta);
+            }
+            // The model card: stamp the route and fill the priors the
+            // bundled table ships (Claude's prices among them — its own
+            // listing names none). A listing's own figures stay.
+            card::fill(meta, sources);
+            // The tryout: kept as it stands, or started for a model the
+            // table marks as on probation or a known provider newly lists.
+            // Its stage, not the table's prior, is what the card says.
+            let fresh_from_provider = sources.iter().any(|k| k.is_new_provider())
+                && id
+                    .split_once('/')
+                    .is_some_and(|(p, _)| known_providers.contains(p));
+            let trial = match self.models.get(id) {
+                Some(rec) => rec.probation.clone().or_else(|| {
+                    meta.card
+                        .probation
+                        .then(|| probation::Probation::start(now_ms))
+                }),
+                None => (meta.card.probation || fresh_from_provider)
+                    .then(|| probation::Probation::start(now_ms)),
+            };
+            let had = self.models.get(id).is_some_and(|r| r.probation.is_some());
+            if let Some(t) = &trial {
+                meta.card.probation = t.active();
+                if !had {
+                    events.push(RegistryEvent::Probation {
+                        id: id.clone(),
+                        stage: t.stage,
+                        reason: t.reason.clone(),
+                    });
+                }
+            }
             let hash = meta.content_hash();
             let rec = match self.models.get_mut(id) {
                 Some(rec) => {
@@ -303,6 +379,7 @@ impl Registry {
                 }
             };
             rec.meta = meta.clone();
+            rec.probation = trial;
             rec.sources = sources.clone();
             rec.content_hash = hash;
             rec.absent_since_ms = 0;
@@ -328,6 +405,10 @@ impl Registry {
         }
         for (id, rec) in self.models.iter_mut() {
             if merged.contains_key(id) {
+                continue;
+            }
+            if !rec.sources.is_empty() && rec.sources.iter().any(|k| !answered.contains(k)) {
+                // One of its sources never answered: its list stands.
                 continue;
             }
             let was_absent = rec.absent_since_ms != 0 || rec.sources.is_empty();
@@ -453,6 +534,9 @@ impl Registry {
             let from = rec.state;
             health::observe(rec, listed, obs);
             health::breaker_observe(rec, listed, obs);
+            if let Some(p) = rec.probation.as_mut() {
+                p.observe(obs);
+            }
             if rec.state != from {
                 events.push(RegistryEvent::State {
                     id: id.to_string(),
@@ -465,6 +549,51 @@ impl Registry {
                 matches!(obs.status, CallStatus::NotFound) || rec.state == ModelState::Redirected;
         }
         (events, signal)
+    }
+
+    /// Judge every tryout (graduate, fail, retry) with the learner's word
+    /// on each model's answers, and keep each card's probation flag on
+    /// its stage. The tryout events.
+    pub fn judge_probation(
+        &mut self,
+        quality: &dyn Fn(&str) -> probation::Quality,
+        now_ms: u64,
+    ) -> Vec<RegistryEvent> {
+        let mut events = Vec::new();
+        for (id, rec) in self.models.iter_mut() {
+            let Some(p) = rec.probation.as_mut() else {
+                continue;
+            };
+            if let Some(v) = p.judge(quality(id), now_ms) {
+                events.push(RegistryEvent::Probation {
+                    id: id.clone(),
+                    stage: v.to,
+                    reason: v.reason,
+                });
+            }
+            rec.meta.card.probation = p.active();
+        }
+        events
+    }
+
+    /// Routable models whose announced expiry is inside the scorer's stop
+    /// window (`stop_day`: the day key that many days on): one event per
+    /// model and date, so the log says why routing to it stopped.
+    pub fn note_expiring(&mut self, stop_day: &str) -> Vec<RegistryEvent> {
+        let mut events = Vec::new();
+        for (id, rec) in self.models.iter_mut() {
+            let Some(expires) = rec.meta.card.expires.clone() else {
+                continue;
+            };
+            if rec.state.routable() && expires.as_str() <= stop_day && rec.expiry_noted != expires {
+                rec.expiry_noted.clone_from(&expires);
+                events.push(RegistryEvent::Expiring {
+                    id: id.clone(),
+                    expires,
+                });
+            }
+        }
+        events
     }
 
     /// Quarantined models whose open backoff ran out: each gets one check.
@@ -494,21 +623,6 @@ impl Registry {
             to: rec.state,
             reason: rec.reason.clone(),
         })
-    }
-
-    /// How a pin or setting names `id`: with "(retired)" once it is retired,
-    /// pruned or gone from the registry after its tombstone.
-    pub fn pin_label(&self, id: &str) -> String {
-        let id = id.trim();
-        let gone = match self.get(id) {
-            Some(r) => r.state.tombstone(),
-            None => !self.models.is_empty(),
-        };
-        if gone {
-            format!("{id} (retired)")
-        } else {
-            id.to_string()
-        }
     }
 
     pub fn compute_hash(&self) -> String {
@@ -837,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn a_retired_row_is_a_tombstone_for_30_days_then_deleted_and_a_pin_shows_retired() {
+    fn a_retired_row_is_a_tombstone_for_30_days_then_deleted() {
         let mut reg = Registry::default();
         let mut old = meta("grok-4.5");
         old.deprecated = Some(true);
@@ -845,8 +959,7 @@ mod tests {
         let r = reg.get("grok-4.5").unwrap();
         assert_eq!((r.state, r.tombstone_ms), (ModelState::Retired, 1_000));
         assert!(!r.state.routable());
-        assert_eq!(reg.pin_label("grok-4.5"), "grok-4.5 (retired)");
-        assert_eq!(reg.pin_label("grok-4.7"), "grok-4.7");
+        assert!(reg.get("grok-4.7").unwrap().state.routable());
         let ev = reg.apply_refresh(
             &[api(vec![meta("grok-4.7"), old.clone()])],
             &[],
@@ -865,9 +978,6 @@ mod tests {
             }]
         );
         assert!(reg.get("grok-4.5").is_none());
-        // Gone after its tombstone still reads as retired.
-        assert_eq!(reg.pin_label("grok-4.5"), "grok-4.5 (retired)");
-        assert_eq!(Registry::default().pin_label("grok-4.5"), "grok-4.5");
     }
 
     #[test]
@@ -911,5 +1021,181 @@ mod tests {
         let ev = reg.half_open_result("grok-4.7", true, until + 1).unwrap();
         assert_eq!(ev.kind(), "state");
         assert_eq!(reg.get("grok-4.7").unwrap().state, ModelState::Live);
+    }
+
+    #[test]
+    fn a_source_that_does_not_answer_keeps_its_models() {
+        let mut reg = Registry::default();
+        let gb = gb_listing(&["grok-build-1".into()], Some("1.0.49"));
+        reg.apply_refresh(&[gb, api(vec![meta("grok-4.7")])], &[], 1);
+        assert_eq!(reg.get("grok-build-1").unwrap().state, ModelState::Live);
+        // The Grok Build listing never arrives (its fetch failed) while the
+        // API listing answers: the GB-only model keeps its place and the
+        // refresh reports no change for it.
+        let ev = reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 2);
+        assert_eq!(ev, vec![]);
+        let kept = reg.get("grok-build-1").unwrap();
+        assert_eq!(kept.state, ModelState::Live);
+        assert!(reg.listed("grok-build-1"));
+        // Once GB answers again without it, it goes stale as before.
+        let gb = gb_listing(&["grok-4.7".into()], Some("1.0.49"));
+        let ev = reg.apply_refresh(&[gb, api(vec![meta("grok-4.7")])], &[], 3);
+        assert!(ev.contains(&RegistryEvent::Removed {
+            id: "grok-build-1".into()
+        }));
+        assert_eq!(
+            reg.get("grok-build-1").unwrap().state,
+            ModelState::NotInPlan
+        );
+    }
+
+    #[test]
+    fn a_model_kept_by_a_silent_source_survives_the_answering_source_dropping_it() {
+        let mut reg = Registry::default();
+        let gb = gb_listing(&["grok-dual".into()], Some("1.0.49"));
+        reg.apply_refresh(
+            &[gb, api(vec![meta("grok-dual"), meta("grok-4.7")])],
+            &[],
+            1,
+        );
+        assert_eq!(
+            reg.get("grok-dual").unwrap().sources,
+            vec![SourceKind::XaiApi, SourceKind::GrokBuild]
+        );
+        // The API answers and drops it, but GB never answered: it stands.
+        reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 2);
+        assert_eq!(reg.get("grok-dual").unwrap().state, ModelState::Live);
+        assert!(reg.listed("grok-dual"));
+    }
+
+    fn or(models: &[&str]) -> Listing {
+        Listing::new(
+            SourceKind::OpenAiCompatible,
+            models.iter().map(|id| ModelMeta::bare(id)).collect(),
+        )
+    }
+
+    fn tryout(reg: &Registry, id: &str) -> Option<probation::Stage> {
+        reg.get(id)
+            .and_then(|r| r.probation.as_ref())
+            .map(|p| p.stage)
+    }
+
+    #[test]
+    fn a_new_model_from_a_known_provider_goes_on_a_tryout() {
+        let mut reg = Registry::default();
+        // The provider's first listing is its baseline: no tryouts.
+        let ev = reg.apply_refresh(&[or(&["openrouter/vendor/old"])], &[], 1);
+        assert_eq!(tryout(&reg, "openrouter/vendor/old"), None);
+        assert!(!ev.iter().any(|e| e.kind() == "probation"));
+        // A model it starts listing later is new.
+        let ev = reg.apply_refresh(
+            &[or(&["openrouter/vendor/old", "openrouter/vendor/new"])],
+            &[],
+            2,
+        );
+        assert_eq!(
+            tryout(&reg, "openrouter/vendor/new"),
+            Some(probation::Stage::Trial)
+        );
+        assert!(
+            reg.get("openrouter/vendor/new")
+                .unwrap()
+                .meta
+                .card
+                .probation
+        );
+        assert_eq!(tryout(&reg, "openrouter/vendor/old"), None);
+        let started: Vec<_> = ev.iter().filter(|e| e.kind() == "probation").collect();
+        assert_eq!(started.len(), 1, "{ev:?}");
+        // The next refresh keeps the tryout as it stands, with no new event.
+        let ev = reg.apply_refresh(
+            &[or(&["openrouter/vendor/old", "openrouter/vendor/new"])],
+            &[],
+            3,
+        );
+        assert!(!ev.iter().any(|e| e.kind() == "probation"));
+        assert_eq!(
+            reg.get("openrouter/vendor/new")
+                .and_then(|r| r.probation.as_ref())
+                .map(|p| p.since_ms),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_model_the_card_table_marks_starts_on_a_tryout() {
+        let mut reg = Registry::default();
+        let id = "openrouter/nvidia/nemotron-3-super-120b-a12b:free";
+        reg.apply_refresh(&[or(&[id])], &[], 1);
+        assert_eq!(tryout(&reg, id), Some(probation::Stage::Trial));
+        // xAI's own listing is not a provider tryout.
+        reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 2);
+        assert_eq!(tryout(&reg, "grok-4.7"), None);
+    }
+
+    #[test]
+    fn tryout_calls_count_and_the_judge_graduates_or_fails_on_them() {
+        let mut reg = Registry::default();
+        reg.apply_refresh(&[or(&["openrouter/vendor/old"])], &[], 1);
+        reg.apply_refresh(
+            &[or(&["openrouter/vendor/old", "openrouter/vendor/new"])],
+            &[],
+            2,
+        );
+        let o = |status| Observation {
+            model: "openrouter/vendor/new".into(),
+            ts_ms: 10,
+            status,
+            latency_ms: 500,
+            served_model: None,
+            endpoint_ok: true,
+            reasoning_tokens: 0,
+            cost_ticks: 0,
+            http: 0,
+        };
+        let obs: Vec<_> = (0..5).map(|_| o(CallStatus::Error)).collect();
+        reg.fold(&obs);
+        assert_eq!(
+            reg.get("openrouter/vendor/new")
+                .and_then(|r| r.probation.as_ref())
+                .map(|p| p.calls),
+            Some(5)
+        );
+        let unknown = |_: &str| probation::Quality::Unknown;
+        let ev = reg.judge_probation(&unknown, 3);
+        assert_eq!(ev.len(), 1, "{ev:?}");
+        let rec = reg.get("openrouter/vendor/new").unwrap();
+        assert!(rec.probation_failed());
+        assert!(rec.meta.card.probation);
+        // Judged again with nothing new: no second event.
+        assert!(reg.judge_probation(&unknown, 4).is_empty());
+        // A refresh keeps the failed stage (the card table can't undo it).
+        reg.apply_refresh(
+            &[or(&["openrouter/vendor/old", "openrouter/vendor/new"])],
+            &[],
+            5,
+        );
+        assert!(reg.get("openrouter/vendor/new").unwrap().probation_failed());
+    }
+
+    #[test]
+    fn a_close_expiry_is_logged_once_per_date() {
+        let mut reg = Registry::default();
+        reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 1);
+        reg.models.get_mut("grok-4.7").unwrap().meta.card.expires = Some("2026-11-20".into());
+        assert!(reg.note_expiring("2026-11-19").is_empty());
+        let ev = reg.note_expiring("2026-11-22");
+        assert_eq!(
+            ev,
+            vec![RegistryEvent::Expiring {
+                id: "grok-4.7".into(),
+                expires: "2026-11-20".into()
+            }]
+        );
+        assert!(reg.note_expiring("2026-11-23").is_empty());
+        // A new date is news again.
+        reg.models.get_mut("grok-4.7").unwrap().meta.card.expires = Some("2026-11-21".into());
+        assert_eq!(reg.note_expiring("2026-11-23").len(), 1);
     }
 }

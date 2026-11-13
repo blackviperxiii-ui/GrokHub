@@ -1,5 +1,5 @@
 //! Self-tuning guardrails on a fake clock: the promotion thresholds, rollback,
-//! the canary's reach, the candidate filters and the weekly line.
+//! the canary's reach, the candidate filters and the offline shadow gate.
 
 use super::*;
 use crate::route::ladder::rung;
@@ -236,7 +236,6 @@ fn the_canary_never_touches_hard_holdout_pinned_or_rejected_retry_steps_and_take
             class: rng.pick(&classes),
             holdout: rng.coin(10),
             under_reject: rng.coin(8),
-            pinned: rng.coin(6),
             hard_tool: rng.coin(9),
         };
         let episode = format!("ep-{i}");
@@ -247,10 +246,7 @@ fn the_canary_never_touches_hard_holdout_pinned_or_rejected_retry_steps_and_take
                 r.class != PREPARE_HARD && !r.class.starts_with("repair:"),
                 "{r:?}"
             );
-            assert!(
-                !r.holdout && !r.under_reject && !r.pinned && !r.hard_tool,
-                "{r:?}"
-            );
+            assert!(!r.holdout && !r.under_reject && !r.hard_tool, "{r:?}");
         }
         if canary_eligible(&r) {
             eligible += 1;
@@ -322,7 +318,7 @@ fn view(class: &str, top: &str) -> (BTreeMap<String, String>, BTreeMap<String, B
 }
 
 #[test]
-fn a_cheaper_model_goes_to_shadow_and_a_pricier_one_is_only_ever_a_card() {
+fn a_cheaper_model_goes_to_shadow_and_a_pricier_one_goes_to_shadow_flagged() {
     let mut steps = steps_for("chat:default", "a", "medium", 40, 90, 0.010, 2_000);
     steps.extend(steps_for(
         "chat:default",
@@ -349,8 +345,8 @@ fn a_cheaper_model_goes_to_shadow_and_a_pricier_one_is_only_ever_a_card() {
         (p.auto[0].stage, p.auto[0].change.clone()),
         (Stage::Shadow, Some(Change::Order { model: "b".into() }))
     );
-    assert!(p.cards.is_empty());
-    // Only a pricier, better model: a card, never an automatic change.
+    assert_eq!(p.auto[0].cost_rise_pct, None);
+    // Only a pricier, better model: it goes to shadow too, flagged with its cost.
     let mut steps = steps_for("chat:default", "a", "medium", 40, 85, 0.010, 2_000);
     steps.extend(steps_for(
         "chat:default",
@@ -370,15 +366,13 @@ fn a_cheaper_model_goes_to_shadow_and_a_pricier_one_is_only_ever_a_card() {
         &Fake,
         NOW,
     );
-    assert!(p.auto.is_empty(), "{:?}", p.auto);
-    assert_eq!(p.cards.len(), 1);
-    assert_eq!(p.cards[0].stage, Stage::Card);
-    assert_eq!(p.cards[0].cost_rise_pct.map(f64::round), Some(20.0));
+    assert_eq!(p.auto.len(), 1, "{:?}", p.auto);
     assert_eq!(
-        card_text(&p.cards[0]).1,
-        "everyday chat would do better on c, which costs about 20% more. Use it first?"
+        (p.auto[0].stage, p.auto[0].change.clone()),
+        (Stage::Shadow, Some(Change::Order { model: "c".into() }))
     );
-    // A higher start rung that does better is a card too.
+    assert_eq!(p.auto[0].cost_rise_pct.map(f64::round), Some(20.0));
+    // A higher start rung that does better goes the same way.
     let mut steps = steps_for("chat:default", "a", "medium", 40, 80, 0.010, 2_000);
     steps.extend(steps_for("chat:default", "a", "high", 40, 95, 0.013, 2_500));
     let p = propose(
@@ -390,17 +384,17 @@ fn a_cheaper_model_goes_to_shadow_and_a_pricier_one_is_only_ever_a_card() {
         &Fake,
         NOW,
     );
-    assert!(p.auto.is_empty());
+    assert_eq!(p.auto.len(), 1);
     assert_eq!(
-        p.cards[0].change,
-        Some(Change::Start {
-            effort: "high".into()
-        })
+        (p.auto[0].stage, p.auto[0].change.clone()),
+        (
+            Stage::Shadow,
+            Some(Change::Start {
+                effort: "high".into()
+            })
+        )
     );
-    assert_eq!(
-        card_text(&p.cards[0]).1,
-        "everyday chat would do better at High, which costs about 30% more. Start it at High?"
-    );
+    assert_eq!(p.auto[0].cost_rise_pct.map(f64::round), Some(30.0));
 }
 
 #[test]
@@ -448,7 +442,7 @@ fn no_candidate_ever_lowers_a_floor_touches_prepare_hard_or_picks_an_ungranted_r
             &Fake,
             NOW,
         );
-        for c in p.auto.iter().chain(&p.cards) {
+        for c in &p.auto {
             assert_ne!(c.class, PREPARE_HARD, "round {round}");
             let band = bands[&c.class];
             match c.change.as_ref().unwrap() {
@@ -463,6 +457,11 @@ fn no_candidate_ever_lowers_a_floor_touches_prepare_hard_or_picks_an_ungranted_r
         }
         for c in &p.auto {
             assert_eq!(c.stage, Stage::Shadow);
+            if let Some(rise) = c.cost_rise_pct {
+                // A pricier candidate is flagged with its rise, never applied unflagged.
+                assert!(rise >= 0.0, "round {round}: {c:?}");
+                continue;
+            }
             if let Some(Change::Order { model }) = &c.change {
                 assert!(
                     Fake.expected_cost(&c.class, model)
@@ -517,24 +516,92 @@ fn a_tuned_start_is_clamped_inside_the_band_and_prepare_hard_never_starts_lower(
 }
 
 #[test]
-fn the_weekly_line_uses_real_numbers() {
-    let mut kept = canary("k");
-    kept.stage = Stage::Watch;
-    kept.promoted_at = Some(NOW - DAY_MS);
-    kept.baseline = Some(snap(400, 90.0, 4.0, 0.0100, 2_000));
-    kept.promoted_snap = Some(snap(50, 90.2, 4.0, 0.0088, 2_000));
-    let state = TuneState {
-        candidates: vec![kept],
-        ..TuneState::default()
+fn a_logged_shadow_starts_its_canary_only_when_its_offline_score_holds() {
+    let mut c = canary("s");
+    c.stage = Stage::Shadow;
+    let ev = |n, matched, live, dr| Evidence {
+        shadow_steps: 200,
+        ope: crate::route::bandit::Ope {
+            n,
+            matched,
+            live,
+            ips: dr,
+            dr,
+        },
+        ..Evidence::default()
     };
     assert_eq!(
-        review_line(&state, NOW),
-        "Router: 1 change kept (everyday chat: \u{2212}12% cost, quality same), 0 rolled back."
+        (OPE_MIN_MATCHED, OPE_MAX_DROP, SHADOW_MAX_DAYS),
+        (20, 0.02, 14)
+    );
+    // The log covers the class: too few matched turns wait...
+    assert_eq!(judge(&c, &ev(200, 19, 0.70, 0.90), 0, NOW), Verdict::Wait);
+    // ...then a no-worse score starts the canary, a worse one is rejected.
+    assert_eq!(
+        judge(&c, &ev(200, 20, 0.70, 0.69), 0, NOW),
+        Verdict::StartCanary
     );
     assert_eq!(
-        review_line(&TuneState::default(), NOW),
-        "Router: 0 changes kept, 0 rolled back."
+        judge(&c, &ev(200, 20, 0.70, 0.67), 0, NOW),
+        Verdict::Reject {
+            why: "its logged score fell short in shadow (0.67 vs 0.70)".into(),
+            rollback: false
+        }
     );
+    // Past 14 days with too few matches, the canary judges it.
+    c.created_at = NOW - SHADOW_MAX_DAYS * DAY_MS;
+    assert_eq!(
+        judge(&c, &ev(200, 3, 0.70, 0.10), 0, NOW),
+        Verdict::StartCanary
+    );
+}
+
+#[test]
+fn a_pricier_canary_promotes_only_on_a_clear_quality_gain_that_beats_its_cost() {
+    let mut c = canary("p");
+    c.cost_rise_pct = Some(20.0);
+    let live = snap(400, 85.0, 4.0, 0.0100, 2_000);
+    let ev = |pass, cost| Evidence {
+        canary: snap(50, pass, 4.0, cost, 2_000),
+        live,
+        ..Evidence::default()
+    };
+    assert_eq!(snap(1, 85.0, 0.0, 0.01, 1).reward(), 0.84);
+    assert_eq!(
+        judge(&c, &ev(95.0, 0.0120), 0, NOW),
+        Verdict::Promote {
+            cost_gain_pct: -20.0,
+            latency_gain_pct: 0.0
+        }
+    );
+    assert_eq!(
+        judge(&c, &ev(88.0, 0.0120), 0, NOW),
+        Verdict::Reject {
+            why: "it cost more and did only +3 pts better".into(),
+            rollback: false
+        }
+    );
+    // Ten points better is not worth eleven cents more a step.
+    assert_eq!(
+        judge(&c, &ev(95.0, 0.1200), 0, NOW),
+        Verdict::Reject {
+            why: "it cost more and did only +10 pts better".into(),
+            rollback: false
+        }
+    );
+}
+
+#[test]
+fn old_card_stages_read_as_ended() {
+    let read = |stage: &str| -> Candidate {
+        serde_json::from_str(&format!(
+            r#"{{"id":"x","class":"chat:default","stage":"{stage}"}}"#
+        ))
+        .unwrap()
+    };
+    assert_eq!(read("card").stage, Stage::Rejected);
+    assert_eq!(read("accepted").stage, Stage::Kept);
+    assert_eq!(read("shadow").stage, Stage::Shadow);
 }
 
 #[test]
@@ -568,34 +635,5 @@ fn the_live_table_merges_tuned_orders_and_a_rebuild_cannot_drop_them() {
         t.rows("chat:default")[0].model,
         "a",
         "the saved table is untouched"
-    );
-}
-
-#[test]
-fn the_why_card_names_the_model_the_class_the_scores_and_the_day() {
-    let mut c = canary("c");
-    assert_eq!(
-        why_card_text(&c),
-        None,
-        "nothing to explain before a promotion"
-    );
-    c.stage = Stage::Watch;
-    // 2026-10-06 15:00 UTC.
-    c.promoted_at = Some(1_791_298_800_000);
-    c.baseline = Some(snap(400, 85.0, 4.0, 0.0100, 2_000));
-    c.promoted_snap = Some(snap(60, 92.0, 3.0, 0.0088, 1_600));
-    let (title, body) = why_card_text(&c).unwrap();
-    assert_eq!(
-        title,
-        "Why grok-4.6 for everyday chat: 92% pass vs 85%, promoted Oct 6"
-    );
-    assert_eq!(body, "Auto now runs everyday chat with grok-4.6 first: 12% cheaper and 20% faster over 60 canary steps. Info only; Auto keeps tuning on its own.");
-
-    c.change = Some(Change::Start {
-        effort: "medium".into(),
-    });
-    assert_eq!(
-        why_card_text(&c).unwrap().0,
-        "Why Medium for everyday chat: 92% pass vs 85%, promoted Oct 6"
     );
 }

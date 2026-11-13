@@ -1169,6 +1169,9 @@ fn posted_text(card: &UpdateCard) -> String {
 /// Seed for Discuss on a digest or suggestion. Main chat gets the title, the
 /// short takeaway, the source URL, and why it matters.
 pub fn discuss_context(card: &UpdateCard) -> String {
+    if let Some(context) = crate::card_report::card_context(card) {
+        return context;
+    }
     let takeaway = short_takeaway(card);
     let mut out = format!("Feed post: {}", card.title.trim());
     if !takeaway.is_empty() {
@@ -1274,7 +1277,7 @@ fn is_lead_in(sentence: &str) -> bool {
 }
 
 /// Drop opening lead-in sentences. Kept when nothing else is left.
-fn skip_lead_ins(sentences: Vec<String>) -> Vec<String> {
+pub(crate) fn skip_lead_ins(sentences: Vec<String>) -> Vec<String> {
     let n = sentences.iter().take_while(|s| is_lead_in(s)).count();
     if n == 0 || n == sentences.len() {
         return sentences;
@@ -1706,7 +1709,7 @@ fn post_useful_idea(
     }
     let mut card = idea_card(source, title, body, now);
     card.why = Some(if why.trim().is_empty() {
-        "A way this cabin can work for you.".into()
+        format!("A way {} can work for you.", crate::brand::product_name())
     } else {
         why.trim().to_string()
     });
@@ -2040,6 +2043,7 @@ fn real_links(links: &[CitedLink]) -> Vec<CitedLink> {
 fn useful_profile_lines(raw: &str) -> Vec<String> {
     const SKIP: &[&str] = &[
         "Who this cabin is. Edit this.",
+        "Who your assistant is. Edit this.",
         "Who you are. Edit this.",
         "Long-term notes.",
     ];
@@ -2156,7 +2160,7 @@ fn strip_title_prefix(text: &str, title: &str) -> String {
 
 /// End a sentence on `.` `!` `?` when the next letter is uppercase, or at the end.
 /// `1.0.50` stays one token. A missing space (`tips.Grok`) still splits.
-fn split_sentences(text: &str) -> Vec<String> {
+pub(crate) fn split_sentences(text: &str) -> Vec<String> {
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
     let mut start = 0usize;
@@ -2238,6 +2242,47 @@ fn edition_prose(raw: &str) -> String {
 
 /// Like `clip_line`, but cuts between words so a URL is never cut in half.
 /// A single word longer than `max_chars` still falls back to a character cut.
+/// Like [`clip_words`], but each line stays its own line (blank ones drop),
+/// so a digest's list reads as a list.
+fn clip_keep_lines(raw: &str, max_chars: usize) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut left = max_chars;
+    for line in raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let room = left.saturating_sub(usize::from(!out.is_empty()));
+        if room == 0 {
+            if let Some(last) = out.last_mut() {
+                if !last.ends_with('…') {
+                    last.push('…');
+                }
+            }
+            break;
+        }
+        let kept = clip_words(line, room);
+        left = room.saturating_sub(kept.chars().count());
+        let cut = kept.ends_with('…') && !line.ends_with('…');
+        out.push(kept);
+        if cut {
+            break;
+        }
+    }
+    out.join("\n")
+}
+
+/// A digest's whole text for the card face: every body line, without the
+/// steer line or a line that repeats the title. Nothing is cut to two
+/// sentences, so a digest never hides what it is about.
+pub fn digest_text(card: &UpdateCard) -> String {
+    let title = card.title.trim();
+    card.body
+        .as_deref()
+        .unwrap_or("")
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !is_steer(l) && !same_line(l, title))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn clip_words(raw: &str, max_chars: usize) -> String {
     let mut out = String::new();
     let mut used = 0usize;
@@ -2601,6 +2646,22 @@ pub fn automation_done_card(
     card.action = Some(UpdateAction::OpenAutomations);
     card.source_id = source_id.trim().to_string();
     refresh_event_why(&mut card);
+    card
+}
+
+/// A finished run that reported something: titled with what it found, the
+/// short summary under it, and the full report on the card.
+pub fn automation_report_card(
+    source_id: &str,
+    name: &str,
+    reply: &str,
+    created_at: u64,
+) -> UpdateCard {
+    let Some(report) = crate::card_report::report_from_run(name, reply) else {
+        return automation_done_card(source_id, name, "", created_at);
+    };
+    let mut card = automation_done_card(source_id, &report.found, &report.summary, created_at);
+    card.pulse.report = Some(report);
     card
 }
 
@@ -3018,7 +3079,7 @@ pub fn digest_card(source_id: &str, title: &str, body: &str, created_at: u64) ->
         title
     };
     let body = {
-        let body = clip_words(body, DIGEST_BODY_CHARS);
+        let body = clip_keep_lines(body, DIGEST_BODY_CHARS);
         if body.is_empty() {
             None
         } else {
@@ -3946,7 +4007,9 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert_eq!(digest.title, "While you were in quiet hours");
         assert_eq!(
             digest.body.as_deref(),
-            Some("4 updates: Backup ran · Inbox sorted · Standup drafted · and 1 more")
+            Some(
+                "• Backup ran: ok\n• Inbox sorted: ok\n• Standup drafted: ok\n• Prices checked: ok"
+            )
         );
         assert_eq!(digest.source_id, "pulse:quiet");
         assert_eq!(cards.iter().filter(|c| c.pulse.quiet_batched).count(), 4);
@@ -4996,6 +5059,16 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 "Nightly backup",
             ),
             (
+                "automation_report_card",
+                automation_report_card(
+                    "a1",
+                    "Nightly backup",
+                    "Copied 3 files to the NAS. Two were new photos.",
+                    at,
+                ),
+                "Nightly backup",
+            ),
+            (
                 "recovered_card",
                 recovered_card(
                     &crate::recovered::Recovered {
@@ -5332,6 +5405,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             icon: "🦀".into(),
             why: "You follow Rust.".into(),
             cites: vec!["https://blog.rust-lang.org/".into()],
+            traits: Vec::new(),
         };
         rows.push((
             "post_card",
@@ -5342,7 +5416,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             title: "Cheaper groceries this week".into(),
             description: "I can plan meals around this week's grocery sales.".into(),
             emoji: "🛒".into(),
-            category: crate::pulse::PulseCategory::Shopping,
+            category: crate::pulse::PulseCategory::Deals,
             action: "plan a week of meals from this week's grocery sales".into(),
         };
         rows.push((
@@ -5390,6 +5464,23 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             companion.companion_card(at),
             "Deep Rock Galactic",
         ));
+        let mut poe = crate::game_watch_poe::PoeSession::default();
+        poe.character = Some("Testwitch".into());
+        poe.deaths = 2;
+        rows.push((
+            "session_card",
+            crate::game_watch_poe::session_card("Path of Exile", &poe, at),
+            "Path of Exile",
+        ));
+        let mc = crate::game_watch_minecraft::McSession {
+            deaths: 1,
+            ..Default::default()
+        };
+        rows.push((
+            "session_card",
+            crate::game_watch_minecraft::session_card(&mc, at),
+            "Minecraft",
+        ));
         rows.push((
             "recap_card",
             crate::game_watch::recap_card(
@@ -5403,6 +5494,67 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 at,
             ),
             "Counter-Strike 2",
+        ));
+        let elite = crate::game_watch_elite::EliteSession {
+            jumps: 3,
+            ..Default::default()
+        };
+        rows.push((
+            "session_card",
+            crate::game_watch_elite::session_card(&elite, at),
+            "Elite Dangerous",
+        ));
+        let farm = crate::stardew_saves::StardewFarm {
+            farm: Some("Pickle".into()),
+            ..Default::default()
+        };
+        rows.push((
+            "session_card",
+            crate::stardew_saves::session_card(
+                &crate::stardew_saves::FarmSession {
+                    before: None,
+                    after: farm,
+                },
+                at,
+            ),
+            "Stardew Valley",
+        ));
+        rows.push((
+            "key_card",
+            crate::game_watch_wow::key_card(None, 12, true, 1_700_000, at),
+            "Mythic+ key",
+        ));
+        rows.push((
+            "boss_kill_card",
+            crate::game_watch_wow::boss_kill_card("Ulgrax the Devourer", 16, 4, 1, at),
+            "Ulgrax the Devourer",
+        ));
+        rows.push((
+            "session_card",
+            crate::eso_addon::session_card(
+                &crate::eso_addon::EsoSession {
+                    before: None,
+                    after: Default::default(),
+                },
+                at,
+            ),
+            "The Elder Scrolls Online",
+        ));
+        rows.push((
+            "match_card",
+            crate::game_watch_rl::match_card(&Default::default(), at),
+            "Rocket League",
+        ));
+        rows.push((
+            "session_card",
+            crate::factorio_state::session_card(
+                &crate::factorio_state::FactorioSession {
+                    before: None,
+                    after: Default::default(),
+                },
+                at,
+            ),
+            "Factorio",
         ));
         rows
     }
@@ -6165,5 +6317,25 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             explain_hint(&fresh, &disliked, now, true).is_none(),
             "a stronger negative group blocks New for you"
         );
+    }
+
+    #[test]
+    fn a_digest_keeps_its_lines_and_shows_them_all() {
+        let body = "Weekly brief\n\n- Backup ran: 3 files copied.\n- Price check: GPU down 12%. Worth a look. Still in stock.\nThe brief steers the next edition.";
+        let card = digest_card("d", "Weekly brief", body, 1);
+        assert_eq!(
+            card.body.as_deref(),
+            Some("Weekly brief\n- Backup ran: 3 files copied.\n- Price check: GPU down 12%. Worth a look. Still in stock.\nThe brief steers the next edition.")
+        );
+        // The face drops only the title echo and the steer line, never a sentence.
+        assert_eq!(
+            digest_text(&card),
+            "- Backup ran: 3 files copied.\n- Price check: GPU down 12%. Worth a look. Still in stock."
+        );
+        let long = "x ".repeat(600);
+        let cut = digest_card("d", "Long", &format!("first line\n{long}\nlast"), 1);
+        let cut = cut.body.unwrap_or_default();
+        assert!(cut.starts_with("first line\n"), "{cut}");
+        assert!(cut.ends_with('…') && !cut.contains("last"), "{cut}");
     }
 }

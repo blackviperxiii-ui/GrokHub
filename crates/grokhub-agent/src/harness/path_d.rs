@@ -140,8 +140,19 @@ pub fn unasked_title(class: HardClass) -> String {
         HardClass::Delete => "delete something",
         HardClass::Credentials => "type into a credential field",
         HardClass::IrreversibleOs => "do an irreversible OS action",
+        HardClass::AgentConfig => "change the agent's instructions or settings",
+        HardClass::OutsideValue => "use a value it only read in outside text",
+        HardClass::RunsLater => "change a file that runs code later",
+        HardClass::FlaggedDriver => "install a driver that anti-cheats block",
+        HardClass::SystemAdmin => "use admin rights or change system protection",
+        HardClass::Automation => "add an automation",
+        HardClass::MergeWork => "merge a helper's work",
+        HardClass::Ship => "push or open a pull request",
     };
-    format!("Grok tried to {what} without asking")
+    format!(
+        "{} tried to {what} without asking",
+        grokhub_core::brand::product_name()
+    )
 }
 
 /// The card and span line for an unasked step: the tool and what the frame
@@ -299,11 +310,19 @@ mod tests {
     fn card_words_name_the_step_never_a_value() {
         assert_eq!(
             unasked_title(HardClass::Send),
-            "Grok tried to send something without asking"
+            "Loadout tried to send something without asking"
+        );
+        assert_eq!(
+            unasked_title(HardClass::MergeWork),
+            "Loadout tried to merge a helper's work without asking"
+        );
+        assert_eq!(
+            unasked_title(HardClass::Ship),
+            "Loadout tried to push or open a pull request without asking"
         );
         assert_eq!(
             unasked_title(HardClass::Credentials),
-            "Grok tried to type into a credential field without asking"
+            "Loadout tried to type into a credential field without asking"
         );
         assert_eq!(
             unasked_action(

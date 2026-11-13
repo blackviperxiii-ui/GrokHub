@@ -62,10 +62,12 @@ else:
 PY
 }
 
-cabin_reports_version_line() {
+# The Setup script's version define (`cargo xtask bump` rewrites it). The rest
+# of grokhub.iss (names, shortcuts, files) is ordinary packaging.
+inno_version_line() {
   local file="$1"
   [[ -f "$file" ]] || { echo ""; return; }
-  grep -E 'assert_eq!\(env!\("CARGO_PKG_VERSION"\),' "$file" | head -n1 || true
+  grep -E '^[[:space:]]*#define[[:space:]]+MyAppVersion[[:space:]]' "$file" | head -n1 || true
 }
 
 grokhub_lock_versions() {
@@ -74,7 +76,7 @@ grokhub_lock_versions() {
   python3 - "$file" <<'PY'
 import sys
 text = open(sys.argv[1], encoding="utf-8").read().splitlines()
-want = {"grokhub-app", "grokhub-agent", "grokhub-core", "grokhub-hub", "grokhub-proto"}
+want = {"grokhub-agent", "grokhub-core", "grokhub-hub", "grokhub-proto"}
 out = []
 i = 0
 while i < len(text):
@@ -192,7 +194,7 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
     version_hits=()
     for f in "${pr_changed[@]+"${pr_changed[@]}"}"; do
       case "$f" in
-        VERSION|CHANGELOG.md|packaging/PKGBUILD|packaging/aur/PKGBUILD|packaging/windows/grokhub.iss)
+        VERSION|CHANGELOG.md|packaging/PKGBUILD|packaging/aur/PKGBUILD)
           version_hits+=("$f")
           ;;
       esac
@@ -212,17 +214,17 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
       fi
     fi
 
-    if printf '%s\n' "${pr_changed[@]+"${pr_changed[@]}"}" | grep -qx 'crates/grokhub-app/src/cli.rs'; then
-      old_cli=$(mktemp)
-      git show "$pr_merge_base:crates/grokhub-app/src/cli.rs" >"$old_cli" 2>/dev/null || true
-      old_line=$(cabin_reports_version_line "$old_cli")
-      new_line=$(cabin_reports_version_line "crates/grokhub-app/src/cli.rs")
-      rm -f "$old_cli"
-      if [[ -z "$old_line" || -z "$new_line" ]]; then
-        echo "ci-guards: could not find the cabin_reports_version line in cli.rs (old/new)" >&2
+    if printf '%s\n' "${pr_changed[@]+"${pr_changed[@]}"}" | grep -qx 'packaging/windows/grokhub.iss'; then
+      old_iss=$(mktemp)
+      git show "$pr_merge_base:packaging/windows/grokhub.iss" >"$old_iss" 2>/dev/null || true
+      old_line=$(inno_version_line "$old_iss")
+      new_line=$(inno_version_line "packaging/windows/grokhub.iss")
+      rm -f "$old_iss"
+      if [[ -z "$new_line" ]]; then
+        echo "ci-guards: could not find the MyAppVersion define in packaging/windows/grokhub.iss" >&2
         fail=1
       elif [[ "$old_line" != "$new_line" ]]; then
-        version_hits+=("crates/grokhub-app/src/cli.rs (cabin_reports_version)")
+        version_hits+=("packaging/windows/grokhub.iss (MyAppVersion)")
       fi
     fi
 

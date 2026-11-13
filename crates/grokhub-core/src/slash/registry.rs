@@ -46,7 +46,6 @@ pub const SLASH_REGISTRY: &[SlashEntry] = &[
     cmds::changes::CONNECTIONS,
     cmds::changes::AUTOMATIONS,
     cmds::changes::WORKFLOW,
-    cmds::review::WHY,
     cmds::review::REWIND,
     cmds::review::EXPORT,
     cmds::actions::RECORD,
@@ -75,6 +74,7 @@ pub const SLASH_REGISTRY: &[SlashEntry] = &[
     cmds::views::DASHBOARD,
     cmds::views::STATUS,
     cmds::views::LEARN,
+    cmds::views::LEARNED,
     cmds::views::HOST,
     cmds::views::HEALTH,
     cmds::views::BRIEF,
@@ -82,9 +82,7 @@ pub const SLASH_REGISTRY: &[SlashEntry] = &[
     cmds::views::DREAM,
     cmds::views::IMPORT,
     cmds::views::USAGE,
-    cmds::views::MODELS,
     cmds::views::PALETTE,
-    cmds::views::EFFORT,
     cmds::views::SESSIONS,
     cmds::views::INSPECT,
     cmds::views::PRIVACY,
@@ -108,8 +106,6 @@ pub const SLASH_REGISTRY: &[SlashEntry] = &[
     cmds::actions::AUTO,
     cmds::actions::SYNC,
     cmds::actions::INHABIT,
-    cmds::settings::MODEL,
-    cmds::settings::MODE,
 ];
 
 pub(super) fn lookup(cmd: &str) -> Option<&'static SlashEntry> {
@@ -159,7 +155,6 @@ mod tests {
         assert_eq!(parse_slash("/approve on"), None);
         assert_eq!(parse_slash("/approve"), None);
         assert_eq!(parse_slash("/connections nope"), None);
-        assert_eq!(parse_slash("/why nope"), None);
         assert_eq!(parse_slash("/project nope"), None);
         assert_eq!(parse_slash("/project new  "), None);
     }

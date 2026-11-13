@@ -291,6 +291,20 @@ impl ConsentLedger {
         let key = scope.key();
         self.active().find(|g| g.source == key)
     }
+
+    /// The scope keys the proactive engine may read from (calendar, mail,
+    /// system state): only the ones granted here. Both apps call this.
+    pub fn proactive_scopes(&self) -> Vec<&'static str> {
+        [
+            (Scope::Calendar, "calendar"),
+            (Scope::Mail, "mail"),
+            (Scope::SystemState, "system_state"),
+        ]
+        .into_iter()
+        .filter(|(scope, _)| self.scope_grant(scope).is_some())
+        .map(|(_, key)| key)
+        .collect()
+    }
 }
 
 pub fn consent_path(config_dir: &Path) -> PathBuf {
@@ -584,8 +598,10 @@ mod tests {
         let g = grant_destination(&d, HUB_DEST, &data, UserClick::from_click()).unwrap();
         let text = fs::read_to_string(consent_path(&d)).unwrap();
         assert!(text.lines().all(is_sealed_line), "{text}");
+        // Sealed lines are base64, which can spell "hub" or "user" by chance, so look
+        // for the JSON-quoted plaintext (base64 has no quotes) and the hyphenated id.
         assert!(
-            !text.contains("hub") && !text.contains(&g.id) && !text.contains("user"),
+            !text.contains("\"hub\"") && !text.contains(&g.id) && !text.contains("\"user\""),
             "{text}"
         );
         assert!(ConsentLedger::load(&d)
@@ -660,5 +676,27 @@ mod tests {
         let ledger = ConsentLedger::from_lines(&[grant, revoke, grant].join("\n"));
         assert_eq!(ledger.all().len(), 1);
         assert_eq!(ledger.active().count(), 0);
+    }
+
+    #[test]
+    fn the_proactive_engine_reads_only_granted_connector_scopes() {
+        assert_eq!(
+            ConsentLedger::empty().proactive_scopes(),
+            Vec::<&str>::new()
+        );
+        let text = concat!(
+            r#"{"id":"s-1","source":"mail","scope":"read","granted_at":1,"by":"user"}"#,
+            "\n",
+            r#"{"id":"s-2","source":"calendar","scope":"read","granted_at":2,"by":"user","revoked_at":3}"#,
+            "\n",
+            r#"{"id":"s-3","source":"system_state","scope":"read","granted_at":4,"by":"agent"}"#,
+            "\n",
+            r#"{"id":"s-4","source":"apps","scope":"read","granted_at":5,"by":"user"}"#,
+            "\n"
+        );
+        assert_eq!(
+            ConsentLedger::from_lines(text).proactive_scopes(),
+            vec!["mail"]
+        );
     }
 }

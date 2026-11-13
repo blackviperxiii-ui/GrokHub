@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ideas::same_topic;
+use crate::ideas::{same_topic_words, topic_words};
 use crate::update_feed::{
     post_update, public_http_url, CardReaction, FeedPulse, UpdateCard, UpdateKind, UpdateStatus,
 };
@@ -56,6 +56,34 @@ pub struct PulseMeta {
     /// Bite-sized hobby learning-path tip (Know me opt-in).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hobby_path: Option<crate::hobby_paths::HobbyPathMeta>,
+    /// One line on what the card's numbers mean, painted above its detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<PulseVerdict>,
+    /// What the card found: headline, summary and the full report it opens to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<crate::card_report::CardReport>,
+    /// Generic `kind:value` tags (topic, subject, tone…) that taste learning
+    /// reads (`card_taste`). Empty on cards nobody tagged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub traits: Vec<String>,
+}
+
+/// How a verdict reads: normal, worth watching, or worth a look.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VerdictTone {
+    #[default]
+    Fine,
+    Watch,
+    Act,
+}
+
+/// A card's one-line interpretation, from rules over the user's own history.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PulseVerdict {
+    pub tone: VerdictTone,
+    pub line: String,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -67,7 +95,9 @@ fn is_false(v: &bool) -> bool {
 }
 
 pub const PULSE_TITLE: &str = "Pulse";
-pub const PULSE_SUBTITLE: &str = "What I'd do next, from how you use the cabin.";
+pub static PULSE_SUBTITLE: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    crate::brand::filled("What I'd do next, from how you use {product}.")
+});
 /// Pulse with no ideas, no posts, and nothing running.
 pub const PULSE_EMPTY: &str =
     "Nothing on Pulse yet. I'll add ideas and posts when I spot something worth doing.";
@@ -107,169 +137,188 @@ pub fn ago_label(at_ms: u64, now_ms: u64) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PulseCategory {
-    Financial,
-    Productivity,
-    Relationships,
-    Health,
-    Shopping,
+    Games,
+    Pc,
+    Mods,
+    Deals,
+    Automations,
     More,
 }
 
 impl PulseCategory {
-    /// Header order on the Ideas view. More holds older cards whose words
-    /// match no category; written ideas always take one of the first five.
+    /// Header order on the Ideas view: a player's own things first. More
+    /// holds cards whose words match no category.
     pub const ORDER: [PulseCategory; 6] = [
-        Self::Productivity,
-        Self::Financial,
-        Self::Shopping,
-        Self::Relationships,
-        Self::Health,
+        Self::Games,
+        Self::Pc,
+        Self::Mods,
+        Self::Deals,
+        Self::Automations,
         Self::More,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Financial => "Financial Management",
-            Self::Productivity => "Productivity",
-            Self::Relationships => "Relationships",
-            Self::Health => "Health & Fitness",
-            Self::Shopping => "Shopping",
+            Self::Games => "Games",
+            Self::Pc => "PC",
+            Self::Mods => "Mods & builds",
+            Self::Deals => "Deals",
+            Self::Automations => "Automations",
             Self::More => "More for you",
         }
     }
 
     pub fn key(self) -> &'static str {
         match self {
-            Self::Financial => "financial",
-            Self::Productivity => "productivity",
-            Self::Relationships => "relationships",
-            Self::Health => "health",
-            Self::Shopping => "shopping",
+            Self::Games => "games",
+            Self::Pc => "pc",
+            Self::Mods => "mods",
+            Self::Deals => "deals",
+            Self::Automations => "automations",
             Self::More => "more",
         }
     }
 
+    /// A stored key. Keys from the older consumer categories map over:
+    /// shopping is Deals, productivity is Automations, the rest are More.
     pub fn parse(key: &str) -> Option<Self> {
-        Self::ORDER.into_iter().find(|c| c.key() == key.trim())
+        let key = key.trim();
+        Self::ORDER
+            .into_iter()
+            .find(|c| c.key() == key)
+            .or(match key {
+                "shopping" => Some(Self::Deals),
+                "productivity" => Some(Self::Automations),
+                "financial" | "relationships" | "health" => Some(Self::More),
+                _ => None,
+            })
     }
 }
 
-const FINANCIAL: &[&str] = &[
-    "bill",
-    "bills",
-    "budget",
-    "invoice",
-    "invoices",
-    "payment",
-    "pay ",
-    "paycheck",
-    "payday",
-    "subscription",
-    "subscriptions",
-    "renewal",
-    "renews",
-    "insurance",
-    "tax",
-    "taxes",
-    "bank",
-    "rent",
-    "mortgage",
-    "loan",
-    "refund",
-    "expense",
-    "expenses",
-    "spending",
-    "savings",
-    "price drop",
+const MODS: &[&str] = &[
+    "mod",
+    "mods",
+    "modded",
+    "modding",
+    "modlist",
+    "mod list",
+    "load order",
+    "nexus",
+    "workshop",
+    "shader",
+    "shaders",
+    "reshade",
+    "texture pack",
+    "loadout",
+    "loadouts",
+    "build guide",
+    "builds",
 ];
-const HEALTH: &[&str] = &[
-    "workout",
-    "exercise",
-    "gym",
-    "run ",
-    "running",
-    "steps",
-    "sleep",
-    "doctor",
-    "dentist",
-    "meal",
-    "meals",
-    "calorie",
-    "calories",
-    "habit",
-    "health",
-    "fitness",
-    "stretch",
-    "water",
-    "medication",
-    "dinner plan",
-    "grocery plan",
+const PC: &[&str] = &[
+    "pc",
+    "gpu",
+    "cpu",
+    "driver",
+    "drivers",
+    "fps",
+    "temps",
+    "temperature",
+    "fan",
+    "fans",
+    "overclock",
+    "benchmark",
+    "ssd",
+    "disk",
+    "drive space",
+    "ram",
+    "memory leak",
+    "crash",
+    "crashes",
+    "stutter",
+    "windows update",
+    "startup",
+    "backup",
+    "backups",
+    "health check",
 ];
-const RELATIONSHIPS: &[&str] = &[
-    "family",
-    "friend",
-    "friends",
-    "birthday",
-    "anniversary",
-    "mom",
-    "dad",
-    "partner",
-    "wife",
-    "husband",
-    "kids",
-    "invite",
-    "catch up",
-    "reunion",
-    "pet ",
-    "dog",
-    "cat ",
+const GAMES: &[&str] = &[
+    "game",
+    "games",
+    "gaming",
+    "steam",
+    "patch",
+    "patch notes",
+    "season",
+    "raid",
+    "ranked",
+    "match",
+    "matches",
+    "achievement",
+    "achievements",
+    "playtime",
+    "speedrun",
+    "boss",
+    "quest",
+    "dlc",
+    "server",
+    "servers",
+    "squad",
+    "co-op",
+    "spoiler-free",
 ];
-const SHOPPING: &[&str] = &[
-    "buy",
-    "shopping",
+const DEALS: &[&str] = &[
+    "sale",
+    "sales",
     "deal",
     "deals",
+    "discount",
     "price",
     "prices",
+    "price drop",
+    "cheaper",
+    "wishlist",
+    "bundle",
+    "free weekend",
+    "coupon",
+    "buy",
+    "shopping",
     "compare",
-    "order",
-    "marketplace",
-    "best-reviewed",
     "cart",
-    "gift",
-    "laptop stand",
+    "order",
 ];
-const PRODUCTIVITY: &[&str] = &[
-    "resume",
-    "job",
-    "jobs",
-    "interview",
-    "calendar",
-    "meeting",
-    "email",
-    "inbox",
-    "workboard",
-    "report",
-    "review",
-    "notes",
-    "plan",
+const AUTOMATIONS: &[&str] = &[
+    "every",
+    "daily",
+    "weekly",
+    "weekday",
+    "weekdays",
+    "morning",
+    "nightly",
     "schedule",
-    "build",
-    "release",
-    "repo",
-    "pull request",
-    "deploy",
+    "remind",
+    "reminder",
+    "automate",
+    "automation",
+    "watch",
+    "notify",
+    "track",
     "summarize",
     "summary",
     "brief",
-    "draft",
+    "tidy",
+    "organize",
+    "workboard",
+    "inbox",
+    "email",
+    "calendar",
     "folder",
     "files",
-    "backup",
 ];
 
 /// Category from the card's words. Fixed keyword table, first match in this
-/// order: Financial, Health, Relationships, Shopping, Productivity, else More.
+/// order: Mods, PC, Deals, Games, Automations, else More. The narrower lists
+/// go first so a mod for a game is a mod, a GPU driver for a game is PC and a
+/// Steam sale is a deal.
 pub fn categorize(text: &str) -> PulseCategory {
     let lower = text.to_ascii_lowercase();
     let words: Vec<&str> = lower
@@ -286,19 +335,16 @@ pub fn categorize(text: &str) -> PulseCategory {
             }
         })
     };
-    if hit(FINANCIAL) {
-        PulseCategory::Financial
-    } else if hit(HEALTH) {
-        PulseCategory::Health
-    } else if hit(RELATIONSHIPS) {
-        PulseCategory::Relationships
-    } else if hit(SHOPPING) {
-        PulseCategory::Shopping
-    } else if hit(PRODUCTIVITY) {
-        PulseCategory::Productivity
-    } else {
-        PulseCategory::More
-    }
+    [
+        (MODS, PulseCategory::Mods),
+        (PC, PulseCategory::Pc),
+        (DEALS, PulseCategory::Deals),
+        (GAMES, PulseCategory::Games),
+        (AUTOMATIONS, PulseCategory::Automations),
+    ]
+    .into_iter()
+    .find(|(list, _)| hit(list))
+    .map_or(PulseCategory::More, |(_, cat)| cat)
 }
 
 /// The stored category, or the keyword pick for a card that has none yet.
@@ -402,6 +448,16 @@ pub fn is_idea_card(card: &UpdateCard) -> bool {
 /// a card without one gets a plain line from its action: Do "I can {action}",
 /// Automate "I can {action} {cadence}", Learn "I can learn how you {action}".
 pub fn i_can_title(card: &UpdateCard) -> String {
+    // A card that found something leads with what it found.
+    if let Some(found) = card
+        .pulse
+        .report
+        .as_ref()
+        .map(|r| r.found.trim())
+        .filter(|found| !found.is_empty())
+    {
+        return found.to_string();
+    }
     let title = card.title.trim();
     // A written idea has its own short title; its "I can" line is the body.
     if crate::pulse_ideas::is_muse_idea(card) {
@@ -767,6 +823,8 @@ pub const SCORE_DUE: i64 = 500;
 pub const SCORE_UNFINISHED: i64 = 250;
 pub const SCORE_REPEAT: i64 = 120;
 pub const SCORE_LEARN_BOOST: i64 = 80;
+/// A Like on a card with the same title or topic.
+pub const SCORE_LIKED: i64 = 60;
 pub const PENALTY_NOT_THIS: i64 = 400;
 pub const PENALTY_DISMISS: i64 = 200;
 /// A card below this is Quiet: nothing is shown for it.
@@ -818,13 +876,45 @@ fn asks_explicitly(text: &str) -> bool {
     .any(|p| lower.contains(p))
 }
 
+/// The inputs' topic words, worked out once per ranking. Pulse ranks every
+/// frame, and comparing each card with each ledger line, skill and open card
+/// re-split both sides every time.
+struct InputTopics {
+    ledger: Vec<Vec<String>>,
+    skills: Vec<Vec<String>>,
+    open_work: Vec<Vec<String>>,
+}
+
+impl InputTopics {
+    fn of(inputs: &PulseInputs) -> Self {
+        let words = |lines: &mut dyn Iterator<Item = &str>| lines.map(topic_words).collect();
+        Self {
+            ledger: words(&mut inputs.ledger.iter().map(|e| e.title.as_str())),
+            skills: words(&mut inputs.skills.iter().map(String::as_str)),
+            open_work: words(&mut inputs.open_work.iter().map(String::as_str)),
+        }
+    }
+}
+
 /// The card's score: base by type, plus each rule that fires.
 pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
+    score_with(card, inputs, &InputTopics::of(inputs))
+}
+
+fn score_with(card: &UpdateCard, inputs: &PulseInputs, topics: &InputTopics) -> i64 {
     let text = card_text(card);
+    let title_words = topic_words(&card.title);
     let mut score = base_score(pulse_type(card));
     // 1. An explicit remind-me / need-to that a saved skill covers.
-    if asks_explicitly(&text) && inputs.skills.iter().any(|s| same_topic(s, &text)) {
-        score += SCORE_SKILL_ASK;
+    if asks_explicitly(&text) {
+        let text_words = topic_words(&text);
+        if topics
+            .skills
+            .iter()
+            .any(|s| same_topic_words(s, &text_words))
+        {
+            score += SCORE_SKILL_ASK;
+        }
     }
     // 2. Due inside a day, or overdue.
     if card
@@ -839,7 +929,10 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
     if card.modified
         || card.feed_pin
         || card.draft.is_some()
-        || inputs.open_work.iter().any(|w| same_topic(w, &card.title))
+        || topics
+            .open_work
+            .iter()
+            .any(|w| same_topic_words(w, &title_words))
     {
         score += SCORE_UNFINISHED;
     }
@@ -847,22 +940,23 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
     if card.runs >= 3 || card.kind == UpdateKind::AutomateOffer {
         score += SCORE_REPEAT;
     }
-    // 5 and 6. The ledger: accepted Learn cards lift a topic, Not this and
-    // unused Dismiss push it down. Used-then-dismissed is neutral. Dismiss only
+    // 5 and 6. The ledger: accepted Learn cards and likes lift a topic, Not
+    // this and unused Dismiss push it down. Used-then-dismissed is neutral. Dismiss only
     // buries ideas: a dismissed Feed post is gone, but tomorrow's run report or
     // quiet digest with that title still posts.
     let idea = is_idea_card(card);
-    for entry in inputs.ledger {
+    for (entry, words) in inputs.ledger.iter().zip(&topics.ledger) {
         let hit = entry.title.eq_ignore_ascii_case(card.title.trim())
-            || same_topic(&entry.title, &card.title);
+            || same_topic_words(words, &title_words);
         if !hit {
             continue;
         }
         score += match entry.reason {
             LedgerReason::Accepted => SCORE_LEARN_BOOST,
+            LedgerReason::Liked => SCORE_LIKED,
             LedgerReason::NotThis | LedgerReason::Wrong => -PENALTY_NOT_THIS,
             LedgerReason::Dismiss if idea => -PENALTY_DISMISS,
-            LedgerReason::Dismiss | LedgerReason::Used | LedgerReason::Liked => 0,
+            LedgerReason::Dismiss | LedgerReason::Used => 0,
         };
     }
     // 7. A proactive offer's help (value × confidence × reversibility, × 1000).
@@ -906,11 +1000,12 @@ pub struct Ranked {
 /// Visible cards, best first: score, then newer, then id. Cards under the
 /// threshold are kept with kind Quiet so the page can say why it is silent.
 pub fn rank_pulse(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<Ranked> {
+    let topics = InputTopics::of(inputs);
     let mut out: Vec<(Ranked, u64)> = cards
         .iter()
         .filter(|c| pulse_visible(c, inputs.now_ms))
         .map(|c| {
-            let score = pulse_score(c, inputs);
+            let score = score_with(c, inputs, &topics);
             let kind = if score < PULSE_THRESHOLD {
                 PulseType::Quiet
             } else {
@@ -973,17 +1068,165 @@ pub fn group_ideas(
     groups
 }
 
-/// The Feed view: every visible post, newest first. No score gate: the
-/// writer already chose what is worth posting, and Delete takes one away.
-pub fn feed_posts(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<UpdateCard> {
+/// A fetched or written post leaves the feed this long after it was posted,
+/// unless it was kept: news is stale in a day or two, patch notes in about three.
+pub const POST_TTL_MS: u64 = 3 * 24 * 60 * 60 * 1000;
+/// Posts newer than this make up today's set.
+pub const TODAY_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
+/// Today's set holds at most this many posts.
+pub const TODAY_MAX: usize = 12;
+/// And at most this many from one source (one game, one subreddit, one site).
+pub const TODAY_PER_SOURCE: usize = 2;
+
+/// Loved, saved, pinned, edited or discussed: the person wants it kept.
+pub fn card_kept(card: &UpdateCard) -> bool {
+    card.modified
+        || card.feed_pin
+        || card.feed_kept
+        || card.reaction == Some(crate::update_feed::CardReaction::Up)
+        || card.discuss_thread.is_some()
+}
+
+/// A post from a followed source or the writer, older than `POST_TTL_MS`
+/// and not kept. Run reports, digests and other feed cards keep their own rules.
+pub fn post_retired(card: &UpdateCard, now_ms: u64) -> bool {
+    let fetched = card.source_id.starts_with("source:")
+        || card
+            .source_id
+            .starts_with(crate::pulse_writer::WRITER_SOURCE);
+    fetched && !card_kept(card) && now_ms >= card.created_at.saturating_add(POST_TTL_MS)
+}
+
+fn post_source(card: &UpdateCard) -> &str {
+    card.pulse
+        .source_name
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(card.source_id.as_str())
+}
+
+/// Why a fetched post is in the feed, in plain words: "You play Helldivers 2",
+/// "Matches your interest in Rust", "From r/buildapc, a source you follow".
+/// None for cards that are not fetched posts.
+pub fn plain_why(card: &UpdateCard) -> Option<String> {
+    if !crate::pulse_sources::is_source_post(card) {
+        return None;
+    }
+    let source = card
+        .pulse
+        .source_name
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("");
+    let because = card
+        .pulse
+        .because
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty());
+    Some(match because {
+        Some(game) if source == format!("{game} on Steam") => format!("You play {game}"),
+        Some(topic) => format!("Matches your interest in {topic}"),
+        None if !source.is_empty() => format!("From {source}, a source you follow"),
+        None => "From a source you follow".to_string(),
+    })
+}
+
+/// The Feed view split in two: today's set (posted in the last
+/// `TODAY_WINDOW_MS`, newest first, at most `TODAY_PER_SOURCE` per source and
+/// `TODAY_MAX` in all), then everything else, newest first. Retired posts are
+/// left out. No score gate: the writer already chose what is worth posting.
+pub fn feed_day(cards: &[UpdateCard], inputs: &PulseInputs) -> (Vec<UpdateCard>, Vec<UpdateCard>) {
+    let now = inputs.now_ms;
     let mut posts: Vec<UpdateCard> = cards
         .iter()
-        .filter(|c| is_feed_card(c) && pulse_visible(c, inputs.now_ms))
+        .filter(|c| is_feed_card(c) && pulse_visible(c, now) && !post_retired(c, now))
         .filter(|c| !reaction_quiet(c, inputs))
         .cloned()
         .collect();
     posts.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
-    posts
+    let mut today = Vec::new();
+    let mut older = Vec::new();
+    for card in posts {
+        let fresh = now < card.created_at.saturating_add(TODAY_WINDOW_MS);
+        let from_source = today
+            .iter()
+            .filter(|t: &&UpdateCard| post_source(t) == post_source(&card))
+            .count();
+        if fresh && today.len() < TODAY_MAX && from_source < TODAY_PER_SOURCE {
+            today.push(card);
+        } else {
+            older.push(card);
+        }
+    }
+    (today, older)
+}
+
+/// The Feed view as one list: today's set first, then the older posts.
+pub fn feed_posts(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<UpdateCard> {
+    let (mut today, older) = feed_day(cards, inputs);
+    today.extend(older);
+    today
+}
+
+// pings
+
+/// Pulse may raise at most this many OS notifications a day; the rest wait
+/// on the page.
+pub const PINGS_PER_DAY: u32 = 3;
+
+/// What a Pulse ping asks about the moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PingAsk<'a> {
+    /// Due within the hour, or a watch that just hit. Anything else waits on
+    /// the page.
+    pub time_sensitive: bool,
+    /// A game is running: never interrupt it.
+    pub game_running: bool,
+    pub quiet_hours: bool,
+    /// The person's local day, like "2026-11-06".
+    pub day: &'a str,
+}
+
+/// The one gate every Pulse-origin OS notification goes through.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PingGate {
+    day: String,
+    sent: u32,
+}
+
+impl PingGate {
+    pub const fn new() -> Self {
+        Self {
+            day: String::new(),
+            sent: 0,
+        }
+    }
+
+    pub fn sent_on(&self, day: &str) -> u32 {
+        if self.day == day {
+            self.sent
+        } else {
+            0
+        }
+    }
+
+    pub fn may_ping(&self, ask: &PingAsk) -> bool {
+        ask.time_sensitive
+            && !ask.game_running
+            && !ask.quiet_hours
+            && self.sent_on(ask.day) < PINGS_PER_DAY
+    }
+
+    /// Count a ping that the gate lets through. False means stay quiet.
+    pub fn take(&mut self, ask: &PingAsk) -> bool {
+        if !self.may_ping(ask) {
+            return false;
+        }
+        self.sent = self.sent_on(ask.day) + 1;
+        self.day = ask.day.to_string();
+        true
+    }
 }
 
 // buttons
@@ -1131,6 +1374,8 @@ pub fn recent_taste(ledger: &[LedgerEntry], n: usize) -> Vec<LedgerEntry> {
 
 pub const QUIET_DIGEST_TITLE: &str = "While you were in quiet hours";
 pub const QUIET_DIGEST_SOURCE: &str = "pulse:quiet";
+/// How much of each held update the roll-up repeats.
+pub const QUIET_LINE_MAX: usize = 220;
 
 /// Quiet hours ended: release every held card. Two or more become one digest
 /// card (and ping nothing on their own); a single card is released as is.
@@ -1138,10 +1383,16 @@ pub const QUIET_DIGEST_SOURCE: &str = "pulse:quiet";
 pub fn release_quiet_batch(cards: &mut Vec<UpdateCard>, now_ms: u64) -> (usize, Option<String>) {
     let mut titles = Vec::new();
     let mut ids = Vec::new();
+    let mut items = Vec::new();
     for card in cards.iter_mut().filter(|c| c.held) {
         card.held = false;
         titles.push(card.title.clone());
         ids.push(card.id.clone());
+        items.push(crate::card_report::ReportItem {
+            card_id: card.id.clone(),
+            found: crate::card_report::card_headline(card),
+            summary: crate::card_report::card_summary(card),
+        });
     }
     let n = titles.len();
     if n < 2 {
@@ -1152,17 +1403,33 @@ pub fn release_quiet_batch(cards: &mut Vec<UpdateCard>, now_ms: u64) -> (usize, 
     }
     // Yesterday's dismissed digest must not swallow today's.
     cards.retain(|c| !(c.source_id == QUIET_DIGEST_SOURCE && c.status == UpdateStatus::Dismissed));
-    let shown: Vec<&str> = titles.iter().take(3).map(String::as_str).collect();
-    let mut body = format!("{n} updates: {}", shown.join(" · "));
-    if n > 3 {
-        body.push_str(&format!(" · and {} more", n - 3));
-    }
+    // Every held update, named, with what it said.
+    let body = items
+        .iter()
+        .map(|item| {
+            let said = crate::card_report::clip(&item.summary, QUIET_LINE_MAX);
+            if said.is_empty() || said == item.found {
+                format!("• {}", item.found)
+            } else {
+                format!("• {}: {said}", item.found)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let id = format!("pulse-quiet-{now_ms}");
     let mut digest =
         crate::update_feed::suggestion_card(QUIET_DIGEST_SOURCE, QUIET_DIGEST_TITLE, &body, now_ms);
+    // Kept whole: one line per update, never clipped to a single line.
+    digest.body = Some(body.clone());
     digest.id = id.clone();
     digest.source_id = QUIET_DIGEST_SOURCE.to_string();
     digest.pulse.source_name = Some("Quiet hours".into());
+    digest.pulse.report = Some(crate::card_report::CardReport {
+        found: format!("Held during quiet hours: {}", titles.join(" · ")),
+        summary: body.clone(),
+        items,
+        ..Default::default()
+    });
     post_update(cards, digest);
     (n, Some(id))
 }
@@ -1420,53 +1687,74 @@ mod tests {
 
     #[test]
     fn categories_follow_the_keyword_table_and_the_fixed_order() {
-        assert_eq!(
-            categorize("I can stage your $287.63 power bill before October 5"),
-            PulseCategory::Financial
-        );
-        assert_eq!(
-            categorize("I can find and cancel subscriptions you forgot"),
-            PulseCategory::Financial
-        );
-        assert_eq!(
-            categorize("Name a habit you want to break; I'll nudge you"),
-            PulseCategory::Health
-        );
-        assert_eq!(
-            categorize("Gather the family for a trivia night"),
-            PulseCategory::Relationships
-        );
-        assert_eq!(
-            categorize("Tell me the item and I'll compare prices"),
-            PulseCategory::Shopping
-        );
-        assert_eq!(
-            categorize("I can tailor your resume for entry-level jobs"),
-            PulseCategory::Productivity
-        );
-        assert_eq!(
-            categorize("I can map a spoiler-free path through Witcher 3"),
-            PulseCategory::More
-        );
+        let cases = [
+            (
+                "I can watch Helldivers 2 patch notes for you",
+                PulseCategory::Games,
+            ),
+            (
+                "I can map a spoiler-free path through Witcher 3",
+                PulseCategory::Games,
+            ),
+            (
+                "I can check your GPU temps after each session",
+                PulseCategory::Pc,
+            ),
+            (
+                "I can find the newest Nvidia driver for your game",
+                PulseCategory::Pc,
+            ),
+            (
+                "I can check your Skyrim load order for mod conflicts",
+                PulseCategory::Mods,
+            ),
+            ("I can watch your wishlist for a sale", PulseCategory::Deals),
+            (
+                "I can tell you when the Steam sale starts",
+                PulseCategory::Deals,
+            ),
+            (
+                "Tell me the item and I'll compare prices",
+                PulseCategory::Deals,
+            ),
+            (
+                "I can tidy your workboard every Friday",
+                PulseCategory::Automations,
+            ),
+            (
+                "I can tailor your resume for entry-level jobs",
+                PulseCategory::More,
+            ),
+        ];
+        for (text, want) in cases {
+            assert_eq!(categorize(text), want, "{text}");
+        }
         let labels: Vec<&str> = PulseCategory::ORDER.iter().map(|c| c.label()).collect();
         assert_eq!(
             labels,
             vec![
-                "Productivity",
-                "Financial Management",
-                "Shopping",
-                "Relationships",
-                "Health & Fitness",
+                "Games",
+                "PC",
+                "Mods & builds",
+                "Deals",
+                "Automations",
                 "More for you"
             ]
         );
         let mut stored = idea("i1", "Witcher 3 route", "", 1);
-        stored.pulse.category = Some("shopping".into());
+        stored.pulse.category = Some("deals".into());
         assert_eq!(
             card_category(&stored),
-            PulseCategory::Shopping,
+            PulseCategory::Deals,
             "a stored category wins"
         );
+        let old = |key: &str| PulseCategory::parse(key);
+        assert_eq!(old("shopping"), Some(PulseCategory::Deals));
+        assert_eq!(old("productivity"), Some(PulseCategory::Automations));
+        assert_eq!(old("financial"), Some(PulseCategory::More));
+        assert_eq!(old("relationships"), Some(PulseCategory::More));
+        assert_eq!(old("health"), Some(PulseCategory::More));
+        assert_eq!(old("fun"), None);
     }
 
     #[test]
@@ -1734,17 +2022,17 @@ mod tests {
             c.pulse.category = Some(cat.into());
             c
         };
-        let mut bill = at("bill", "I can stage your power bill", "financial", 90);
+        let mut bill = at("bill", "I can sum up the Helldivers 2 patch", "games", 90);
         bill.modified = true;
         let cards = vec![
             bill,
-            at("groc", "I can plan groceries", "shopping", 80),
-            at("subs", "I can cancel subscriptions", "financial", 70),
-            at("resume", "I can tailor your resume", "productivity", 60),
-            at("gym", "I can plan a workout", "health", 50),
+            at("groc", "I can watch your wishlist", "deals", 80),
+            at("subs", "I can check your GPU temps", "pc", 70),
+            at("resume", "I can tidy your workboard", "automations", 60),
+            at("gym", "I can check your load order", "mods", 50),
             at("trivia", "I can plan a trivia night", "relationships", 40),
             at("deals", "I can watch for deals", "shopping", 30),
-            at("route", "I can map a route", "productivity", 20),
+            at("route", "I can map a route", "games", 20),
             automation_done_card("a", "Nightly backup", "ok", now - 10),
         ];
         let groups: Vec<(Option<&str>, Vec<String>)> = group_ideas(
@@ -1767,13 +2055,13 @@ mod tests {
             groups,
             vec![
                 (None, ids(&["bill", "route", "deals"])),
-                (Some("Productivity"), ids(&["resume"])),
-                (Some("Financial Management"), ids(&["subs"])),
-                (Some("Shopping"), ids(&["groc"])),
-                (Some("Relationships"), ids(&["trivia"])),
-                (Some("Health & Fitness"), ids(&["gym"])),
+                (Some("PC"), ids(&["subs"])),
+                (Some("Mods & builds"), ids(&["gym"])),
+                (Some("Deals"), ids(&["groc"])),
+                (Some("Automations"), ids(&["resume"])),
+                (Some("More for you"), ids(&["trivia"])),
             ],
-            "the edited idea and the two newest lead, with no header"
+            "the edited idea and the two newest lead, with no header; an older key maps over"
         );
     }
 
@@ -1784,7 +2072,7 @@ mod tests {
             title: "Cheaper groceries".into(),
             description: "I can plan meals around the sales.".into(),
             emoji: "🛒".into(),
-            category: PulseCategory::Shopping,
+            category: PulseCategory::Deals,
             action: "plan meals from this week's sales".into(),
         };
         let mut old = crate::pulse_ideas::muse_idea_card(&idea, posted);
@@ -2024,10 +2312,30 @@ mod tests {
         assert_eq!(digest.title, "While you were in quiet hours");
         assert_eq!(
             digest.body.as_deref(),
-            Some("4 updates: Backup ran · Price check ran · Brief ready · and 1 more")
+            Some("• Backup ran: ok\n• Price check ran: ok\n• Brief ready: ok\n• Repo synced: ok")
         );
         assert_eq!(cards.iter().filter(|c| c.held).count(), 0);
         assert_eq!(cards.iter().filter(|c| c.pulse.quiet_batched).count(), 4);
+        // Each update keeps its own line and opens its own card.
+        let report = digest.pulse.report.clone().expect("report");
+        assert_eq!(
+            report.found,
+            "Held during quiet hours: Backup ran · Price check ran · Brief ready · Repo synced"
+        );
+        let items: Vec<(&str, &str, &str)> = report
+            .items
+            .iter()
+            .map(|i| (i.card_id.as_str(), i.found.as_str(), i.summary.as_str()))
+            .collect();
+        assert_eq!(
+            items,
+            vec![
+                ("done-auto-0", "Backup ran", "ok"),
+                ("done-auto-1", "Price check ran", "ok"),
+                ("done-auto-2", "Brief ready", "ok"),
+                ("done-auto-3", "Repo synced", "ok"),
+            ]
+        );
         let mut one = vec![automation_done_card("solo", "Solo run", "ok", 1)];
         one[0].held = true;
         assert_eq!(release_quiet_batch(&mut one, 9_000), (1, None));
@@ -2054,6 +2362,115 @@ mod tests {
         // An idea with that title still drops below the line.
         let idea = idea("i", "Nightly backup", "", 10);
         assert_eq!(pulse_score(&idea, &inputs), 150 - 200);
+    }
+
+    fn source_post(id: &str, source: &str, at: u64) -> UpdateCard {
+        let mut c = automation_done_card(id, id, "", at);
+        c.id = id.into();
+        c.source_id = format!("source:rss:https://example.test/{id}");
+        c.pulse.source_name = Some(source.into());
+        c
+    }
+
+    #[test]
+    fn posts_retire_after_three_days_unless_kept() {
+        const DAY: u64 = 24 * 60 * 60 * 1000;
+        assert_eq!(POST_TTL_MS, 259_200_000, "3 days");
+        let posted = 10 * DAY;
+        let old = source_post("old", "r/buildapc", posted);
+        assert!(!post_retired(&old, posted + POST_TTL_MS - 1));
+        assert!(post_retired(&old, posted + POST_TTL_MS));
+        let mut loved = old.clone();
+        loved.reaction = Some(crate::update_feed::CardReaction::Up);
+        assert!(
+            !post_retired(&loved, posted + 30 * DAY),
+            "a loved post keeps"
+        );
+        let mut saved = old.clone();
+        saved.feed_kept = true;
+        assert!(
+            !post_retired(&saved, posted + 30 * DAY),
+            "a saved post keeps"
+        );
+        let mut writer = old.clone();
+        writer.source_id = "pulse:writer:1".into();
+        assert!(
+            post_retired(&writer, posted + POST_TTL_MS),
+            "written briefings too"
+        );
+        let report = automation_done_card("backup", "Nightly backup", "ok", posted);
+        assert!(
+            !post_retired(&report, posted + 30 * DAY),
+            "run reports keep their own rules"
+        );
+        let inputs = PulseInputs {
+            now_ms: posted + POST_TTL_MS,
+            ..Default::default()
+        };
+        let ids: Vec<String> = feed_posts(&[old, loved], &inputs)
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, vec!["old".to_string()], "only the loved copy is left");
+    }
+
+    #[test]
+    fn plain_why_says_it_in_words() {
+        let mut steam = source_post("p", "Helldivers 2 on Steam", 1);
+        steam.pulse.because = Some("Helldivers 2".into());
+        assert_eq!(plain_why(&steam).as_deref(), Some("You play Helldivers 2"));
+        let mut topic = source_post("t", "Hacker News", 1);
+        topic.pulse.because = Some("Rust".into());
+        assert_eq!(
+            plain_why(&topic).as_deref(),
+            Some("Matches your interest in Rust")
+        );
+        let followed = source_post("f", "r/buildapc", 1);
+        assert_eq!(
+            plain_why(&followed).as_deref(),
+            Some("From r/buildapc, a source you follow")
+        );
+        let mut nameless = source_post("n", "", 1);
+        nameless.pulse.source_name = None;
+        assert_eq!(
+            plain_why(&nameless).as_deref(),
+            Some("From a source you follow")
+        );
+        let report = automation_done_card("backup", "Nightly backup", "ok", 1);
+        assert_eq!(plain_why(&report), None);
+    }
+
+    #[test]
+    fn todays_set_caps_each_source_and_the_total_then_lists_the_rest() {
+        const HOUR: u64 = 60 * 60 * 1000;
+        let now = 100 * HOUR;
+        let mut cards = vec![
+            source_post("h1", "Helldivers 2 on Steam", now - HOUR),
+            source_post("h2", "Helldivers 2 on Steam", now - 2 * HOUR),
+            source_post("h3", "Helldivers 2 on Steam", now - 3 * HOUR),
+            source_post("y", "Yesterday's news", now - 30 * HOUR),
+        ];
+        for i in 0..14 {
+            cards.push(source_post(
+                &format!("s{i:02}"),
+                &format!("site {i}"),
+                now - 4 * HOUR - i,
+            ));
+        }
+        let inputs = PulseInputs {
+            now_ms: now,
+            ..Default::default()
+        };
+        let (today, older) = feed_day(&cards, &inputs);
+        let today: Vec<&str> = today.iter().map(|c| c.id.as_str()).collect();
+        let older: Vec<&str> = older.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(TODAY_MAX, 12);
+        assert_eq!(
+            today,
+            vec!["h1", "h2", "s00", "s01", "s02", "s03", "s04", "s05", "s06", "s07", "s08", "s09"]
+        );
+        assert_eq!(older, vec!["h3", "s10", "s11", "s12", "s13", "y"]);
+        assert_eq!(feed_posts(&cards, &inputs).len(), 18, "nothing is lost");
     }
 
     #[test]
@@ -2096,7 +2513,7 @@ mod tests {
         assert_eq!(digest.status, UpdateStatus::Unread);
         assert_eq!(
             digest.body.as_deref(),
-            Some("2 updates: Repo synced · Price check ran")
+            Some("• Repo synced: ok\n• Price check ran: ok")
         );
     }
 
@@ -2166,6 +2583,23 @@ mod tests {
         assert_eq!(IDEAS_LOADING, "Looking for ideas in your recent work…");
         assert_eq!(IDEAS_SIGN_IN, "Sign in to Grok to get ideas.");
         assert_eq!(PulseCategory::More.label(), "More for you");
+    }
+
+    #[test]
+    fn a_like_lifts_the_same_topic() {
+        let card = idea("idea-1", "Watch Helldivers 2 patch notes", "", 40);
+        let liked = parse_ledger(&ledger_line(
+            "2026-11-06",
+            "Watch Helldivers 2 patch notes",
+            LedgerReason::Liked,
+        ));
+        let inputs = PulseInputs {
+            ledger: &liked,
+            now_ms: 5_000,
+            ..Default::default()
+        };
+        assert_eq!(pulse_score(&card, &inputs), 150 + SCORE_LIKED);
+        assert_eq!(SCORE_LIKED, 60);
     }
 
     #[test]
@@ -2303,5 +2737,27 @@ mod tests {
         let mut huge = vec![0x89, b'P', b'N', b'G'];
         huge.resize(IMAGE_MAX_BYTES + 1, 0);
         assert!(!image_bytes_ok(&huge));
+    }
+
+    #[test]
+    fn pulse_pings_only_when_time_sensitive_never_in_game_and_three_a_day() {
+        let ask = |time_sensitive, game_running, quiet_hours, day| PingAsk {
+            time_sensitive,
+            game_running,
+            quiet_hours,
+            day,
+        };
+        let mut gate = PingGate::default();
+        assert!(!gate.take(&ask(false, false, false, "2026-11-06")));
+        assert!(!gate.take(&ask(true, true, false, "2026-11-06")));
+        assert!(!gate.take(&ask(true, false, true, "2026-11-06")));
+        assert_eq!(gate.sent_on("2026-11-06"), 0);
+        for _ in 0..3 {
+            assert!(gate.take(&ask(true, false, false, "2026-11-06")));
+        }
+        assert!(!gate.take(&ask(true, false, false, "2026-11-06")));
+        assert_eq!(gate.sent_on("2026-11-06"), 3);
+        assert!(gate.take(&ask(true, false, false, "2026-11-07")));
+        assert_eq!(gate.sent_on("2026-11-07"), 1);
     }
 }

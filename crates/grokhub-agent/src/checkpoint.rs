@@ -13,7 +13,6 @@
 //! a long task in a progress style gets a short note at each phase boundary
 //! (a checklist item closing), rate-limited by [`PROGRESS_GAP`].
 
-use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use serde_json::Value;
@@ -24,6 +23,7 @@ use grokhub_core::findings::{
 use grokhub_core::talk::TalkStyle;
 
 use crate::brain::{Brief, Care, Intent};
+use crate::lru_map::LruMap;
 use crate::session_tools::TodoItem;
 
 // File shadow checkpoints live in `file_checkpoint` (this module is Brain 2
@@ -307,9 +307,44 @@ pub struct Fresh {
     backed_up: bool,
     /// This run posted a findings card.
     findings: bool,
+    /// The chat this run belongs to, so a backup covers its later turns too.
+    conversation: String,
+}
+
+/// How long one backup covers a chat: Windows makes at most one restore
+/// point a day, so each Do all step asking for its own got skipped anyway.
+const BACKUP_COVERS_MS: u64 = 24 * 60 * 60 * 1000;
+
+static BACKED_UP: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, u64>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// A backup or restore point ran in this chat within the last day.
+fn backed_up_lately(conversation: &str) -> bool {
+    !conversation.is_empty()
+        && BACKED_UP
+            .lock()
+            .ok()
+            .and_then(|m| m.get(conversation).copied())
+            .is_some_and(|at| now_ms().saturating_sub(at) < BACKUP_COVERS_MS)
 }
 
 impl Fresh {
+    /// A run in `conversation`: a backup an earlier turn of the chat took
+    /// (a Do all batch's first step) still covers this one's changes.
+    pub fn for_conversation(conversation: &str) -> Self {
+        Self {
+            backed_up: backed_up_lately(conversation),
+            conversation: conversation.to_string(),
+            ..Self::default()
+        }
+    }
+
     /// Note one tool call that ran without failing.
     pub fn note(&mut self, name: &str, args: &Value) {
         let file = matches!(name, "write" | "search_replace");
@@ -345,6 +380,11 @@ impl Fresh {
                 Step::Backup => {
                     self.backed_up = true;
                     self.unbacked = None;
+                    if !self.conversation.is_empty() {
+                        if let Ok(mut m) = BACKED_UP.lock() {
+                            m.insert(self.conversation.clone(), now_ms());
+                        }
+                    }
                 }
                 Step::Other => {}
             }
@@ -541,7 +581,11 @@ fn named(items: &[&TodoItem]) -> String {
         .map(|t| mid_sentence(&clip(&t.content)))
         .collect();
     if items.len() > PROGRESS_ITEMS {
-        out.push(format!("{} others", items.len() - PROGRESS_ITEMS));
+        let rest = items.len() - PROGRESS_ITEMS;
+        out.push(format!(
+            "{rest} {}",
+            if rest == 1 { "other" } else { "others" }
+        ));
     }
     match out.split_last() {
         Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
@@ -688,7 +732,8 @@ pub fn fallback_findings(todos: &[TodoItem], gaps: &Gaps) -> Option<Findings> {
 }
 
 /// The turn's Brief, by chat session, for the run loop's checkpoints.
-static BRIEFS: Mutex<BTreeMap<String, Brief>> = Mutex::new(BTreeMap::new());
+/// Each per-session map drops its least recently used chat when full.
+static BRIEFS: Mutex<LruMap<Brief>> = Mutex::new(LruMap::new(BRIEFS_CAP));
 const BRIEFS_CAP: usize = 256;
 
 pub fn set_turn_brief(session: &str, brief: Brief) {
@@ -696,10 +741,7 @@ pub fn set_turn_brief(session: &str, brief: Brief) {
         return;
     }
     let mut m = BRIEFS.lock().unwrap_or_else(|e| e.into_inner());
-    if m.len() >= BRIEFS_CAP && !m.contains_key(session) {
-        m.clear();
-    }
-    m.insert(session.to_string(), brief);
+    m.insert(session, brief);
 }
 
 pub fn turn_brief(session: &str) -> Option<Brief> {
@@ -711,7 +753,7 @@ pub fn turn_brief(session: &str) -> Option<Brief> {
 }
 
 /// The turn's talk style, by chat session (Brain 5). `None` clears it.
-static STYLES: Mutex<BTreeMap<String, TalkStyle>> = Mutex::new(BTreeMap::new());
+static STYLES: Mutex<LruMap<TalkStyle>> = Mutex::new(LruMap::new(BRIEFS_CAP));
 
 pub fn set_turn_style(session: &str, style: Option<TalkStyle>) {
     if session.is_empty() {
@@ -722,10 +764,7 @@ pub fn set_turn_style(session: &str, style: Option<TalkStyle>) {
         m.remove(session);
         return;
     };
-    if m.len() >= BRIEFS_CAP && !m.contains_key(session) {
-        m.clear();
-    }
-    m.insert(session.to_string(), style);
+    m.insert(session, style);
 }
 
 pub fn turn_style(session: &str) -> Option<TalkStyle> {
@@ -737,7 +776,7 @@ pub fn turn_style(session: &str) -> Option<TalkStyle> {
 }
 
 /// The turn's playbook paragraph, by chat session (Brain 3). `None` clears it.
-static PLAYBOOKS: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+static PLAYBOOKS: Mutex<LruMap<String>> = Mutex::new(LruMap::new(BRIEFS_CAP));
 
 pub fn set_turn_playbook(session: &str, block: Option<String>) {
     if session.is_empty() {
@@ -748,10 +787,7 @@ pub fn set_turn_playbook(session: &str, block: Option<String>) {
         m.remove(session);
         return;
     };
-    if m.len() >= BRIEFS_CAP && !m.contains_key(session) {
-        m.clear();
-    }
-    m.insert(session.to_string(), block);
+    m.insert(session, block);
 }
 
 pub fn turn_playbook(session: &str) -> Option<String> {
@@ -891,6 +927,21 @@ mod tests {
         // Writing a .bak in the workspace is not a system backup.
         h.note("write", &json!({ "path": "fstab.bak" }));
         assert!(Gaps::of(Some(&critical), &[], 3, &h).unbacked.is_some());
+        // A backup an earlier turn of the same chat took covers this run too.
+        let conv = format!("backup-covers-{}", std::process::id());
+        let mut first = Fresh::for_conversation(&conv);
+        first.note(
+            "run_terminal_command",
+            &serde_json::json!({"command": "Checkpoint-Computer -Description before"}),
+        );
+        let mut next = Fresh::for_conversation(&conv);
+        next.note(
+            "run_terminal_command",
+            &serde_json::json!({"command": "sudo sed -i x /etc/fstab"}),
+        );
+        assert_eq!(Gaps::of(Some(&critical), &[], 2, &next).unbacked, None);
+        let other = Fresh::for_conversation("another-chat");
+        assert!(!other.backed_up);
         // Backed up first: the change never counts as unbacked.
         let mut g = Fresh::default();
         g.note("run_terminal_command", &shell("timeshift --create"));
@@ -1013,6 +1064,16 @@ mod tests {
         assert_eq!(
             Progress::default().check(&many, 3).as_deref(),
             Some("Finished a, b, c and 2 others. Now on f.")
+        );
+        // One more than three reads "1 other", never "1 others".
+        let four: Vec<TodoItem> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|n| todo(n, "completed"))
+            .chain([todo("f", "pending")])
+            .collect();
+        assert_eq!(
+            Progress::default().check(&four, 3).as_deref(),
+            Some("Finished a, b, c and 1 other. Now on f.")
         );
         let pair = [
             todo("DNS lookups", "completed"),

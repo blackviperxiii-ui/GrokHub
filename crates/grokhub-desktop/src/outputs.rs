@@ -71,11 +71,11 @@ pub(crate) fn parse_wlr_randr(text: &str) -> Vec<MonitorGeom> {
                 slot.scale = rest.trim().parse().unwrap_or(1.0);
             } else if let Some(rest) = t.strip_prefix("Enabled:") {
                 slot.enabled = rest.trim().eq_ignore_ascii_case("yes");
-            } else if mode_is_current(t) {
-                if let Some((w, h)) = mode_size(t) {
-                    slot.w = w;
-                    slot.h = h;
-                }
+            } else if mode_is_current(t)
+                && let Some((w, h)) = mode_size(t)
+            {
+                slot.w = w;
+                slot.h = h;
             }
             continue;
         }

@@ -5,4 +5,8 @@
 # 2026-10-30: Linux measured 54275368 on beta 6896bc94, already over 54000000
 # (the 10-27 bump left +5.8%, not +15%). 54275368 * 1.15 = 62416674, rounded
 # up to the next 100 KB.
-62500000
+# 2026-11-06: Linux measured 64798728 on beta 3f3a6dd9 (sandbox proxy TLS deps,
+# voice, objectives), over 62500000 since #1420, so every release run failed and
+# no beta published after v3.5.0-beta.533. 64798728 * 1.15 = 74518537, rounded
+# up to the next 100 KB.
+74600000

@@ -13,7 +13,9 @@
 //! skills, connections, automations, Pulse's Steam source, the Know me tags
 //! (read only), and nothing else.
 
+pub mod mcp;
 mod ops;
+pub mod work;
 
 use serde_json::{json, Value};
 
@@ -32,6 +34,9 @@ pub enum SelfClass {
     Read,
     /// Create, modify, disable, enable: logged with Undo, follows the GB pill.
     Soft,
+    /// A new automation: logged with Undo, and it always parks a card for
+    /// your yes first, since the job runs on its own later.
+    NewAutomation,
     /// Hard class delete: always parks a card.
     Delete,
     /// Hard class credentials: a connection that needs a token.
@@ -43,6 +48,7 @@ impl SelfClass {
         match self {
             Self::Read => "read",
             Self::Soft => "soft",
+            Self::NewAutomation => "new_automation",
             Self::Delete => "delete",
             Self::Credentials => "credentials",
         }
@@ -52,6 +58,7 @@ impl SelfClass {
     pub fn hard(self) -> Option<crate::harness::HardClass> {
         match self {
             Self::Read | Self::Soft => None,
+            Self::NewAutomation => Some(crate::harness::HardClass::Automation),
             Self::Delete => Some(crate::harness::HardClass::Delete),
             Self::Credentials => Some(crate::harness::HardClass::Credentials),
         }
@@ -74,11 +81,12 @@ pub const SELF_TOOLS: &[(&str, SelfClass)] = &[
     ("connection_disable", SelfClass::Soft),
     ("connection_remove", SelfClass::Delete),
     ("automation_list", SelfClass::Read),
-    ("automation_create", SelfClass::Soft),
+    ("automation_create", SelfClass::NewAutomation),
     ("automation_modify", SelfClass::Soft),
     ("automation_disable", SelfClass::Soft),
     ("automation_delete", SelfClass::Delete),
     ("pulse_steam", SelfClass::Soft),
+    ("module_setup", SelfClass::Soft),
     ("know_me_tags", SelfClass::Read),
 ];
 
@@ -91,7 +99,21 @@ pub fn self_tool(name: &str) -> Option<&'static str> {
         Some(_) => return None,
         None => name,
     };
-    SELF_TOOLS.iter().find(|(n, _)| *n == leaf).map(|(n, _)| *n)
+    SELF_TOOLS
+        .iter()
+        .find(|(n, _)| *n == leaf)
+        .map(|(n, _)| *n)
+        .or_else(|| work::work_tool(leaf))
+}
+
+/// The base class of a table name, from [`SELF_TOOLS`] or the lazy
+/// [`work::WORK_TOOLS`].
+fn base_class(tool: &str) -> Option<SelfClass> {
+    SELF_TOOLS
+        .iter()
+        .find(|(n, _)| *n == tool)
+        .map(|(_, c)| *c)
+        .or_else(|| work::class(tool))
 }
 
 /// Path E: run one call on the native engine. A token is asked on the
@@ -110,20 +132,13 @@ pub(crate) fn run_native(name: &str, args: &Value) -> crate::tools::ToolOutput {
 
 /// A list tool: runs like the read-only tools.
 pub fn is_read(name: &str) -> bool {
-    self_tool(name).is_some_and(|t| {
-        SELF_TOOLS
-            .iter()
-            .any(|(n, c)| *n == t && *c == SelfClass::Read)
-    })
+    self_tool(name).is_some_and(|t| base_class(t) == Some(SelfClass::Read))
 }
 
 /// Class for one call. A connection write that needs a token is credentials.
 pub fn self_class(name: &str, args: &Value) -> Option<SelfClass> {
     let tool = self_tool(name)?;
-    let base = SELF_TOOLS
-        .iter()
-        .find(|(n, _)| *n == tool)
-        .map(|(_, c)| *c)?;
+    let base = base_class(tool)?;
     if matches!(tool, "connection_add" | "connection_modify") && needs_token(args) {
         return Some(SelfClass::Credentials);
     }
@@ -279,6 +294,11 @@ pub fn mcp_tools() -> Vec<Value> {
             "unmute": { "type": "array", "items": { "type": "string" }, "description": "Game names to let back in." },
             "reason": reason,
         }), &[])),
+        tool("module_setup", grokhub_core::brand::filled("Set up Frame Rate. Runs its one-time setup on this PC, like its Set up button, so {product} counts frames from the OS, never inside a game. The OS shows its own password prompt; never ask for the password. Quote the result."), obj(json!({
+            "module": { "type": "string", "enum": ["frame_rate"], "description": "Only frame_rate." },
+            "undo": { "type": "boolean", "description": "true removes the setup instead." },
+            "reason": reason,
+        }), &["module", "reason"])),
         tool("know_me_tags", "Know me tags from this PC, with sources. Cite them, never guess.", obj(json!({}), &[])),
     ]
 }

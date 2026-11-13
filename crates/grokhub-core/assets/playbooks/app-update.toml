@@ -1,0 +1,49 @@
+# Loadout playbook: bring one app to a newer version.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Look steps only read. Safe steps can be undone. Risky steps ask you first,
+# every time; a playbook can never make Loadout skip an approval.
+
+id = "app-update"
+name = "Update an app"
+summary = "Find how the app was installed and its version, update it the way it was installed (its own updater, its package manager or its official download), then confirm the new version runs."
+
+checklist = ["installed version found", "official update applied", "new version running"]
+backup = "Keep the old install (move it aside, never delete it) and a copy of any launcher or shortcut you change, until the new version runs."
+verify = "Start the app and read its version from the app itself or its files; it must match the version you installed."
+rollback = "Put the old install and launcher back and start it again."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach here failed and was checked",
+]
+
+[applies_when]
+intent = ["task", "repair"]
+domain = ["app-update"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "Find how the app was installed (package manager, store, AppImage, tarball or installer) and its version"
+
+[[phase.step]]
+name = "Check the app's own update channel or official download page for the newest version"
+
+[[phase]]
+name = "Update"
+tier = "risky"
+
+[[phase.step]]
+name = "Use the app's own updater, or its package manager, or download the official build; never take the app apart to update it"
+
+[[phase.step]]
+name = "Keep the old install and launcher flags, and swap in the new version"
+
+[[phase.step]]
+name = "Restart the app on the new version and confirm its version number"

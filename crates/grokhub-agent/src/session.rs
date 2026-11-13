@@ -2,7 +2,7 @@
 //!
 //! The first line is a header (`id`, `title`, `created`, `cwd`, `model`, `engine: "native"`).
 //! Later lines are user and assistant messages, function calls, their outputs, and per-turn usage.
-//! Each line is flushed on its own. A torn last line is dropped and the file rewritten. Resume
+//! A turn's lines are written and synced together. A torn last line is dropped and the file rewritten. Resume
 //! rebuilds the Responses `input` from the kept lines.
 
 use std::collections::HashSet;
@@ -27,7 +27,18 @@ struct Header {
     cwd: String,
     model: String,
     renamed: bool,
+    /// The session this one was forked from (`/bg`, scheduled runs). Empty otherwise.
+    forked_from: String,
 }
+
+/// Session line type of an xAI compaction item ([`InputItem::ServerCompaction`]).
+const SERVER_COMPACTION_RECORD: &str = "server_compaction";
+
+/// Session line type of an xAI sealed reasoning item ([`InputItem::Reasoning`]).
+const REASONING_RECORD: &str = "reasoning_item";
+
+/// What a transcript shows where xAI folded the earlier turns.
+pub const COMPACTED_NOTE: &str = "Earlier conversation compacted";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Record {
@@ -52,6 +63,8 @@ pub struct SessionInfo {
     pub renamed: bool,
     pub usage: Usage,
     pub meter: String,
+    /// The session this one was forked from. Empty when it wasn't.
+    pub forked_from: String,
     records: Vec<Record>,
 }
 
@@ -256,16 +269,28 @@ pub fn local_title(text: &str) -> String {
     }
 }
 
+/// A cost in xAI ticks as dollars. A tick is 1e-10 USD (docs.x.ai cost
+/// tracking), so whole cents show two places and smaller amounts keep two
+/// significant digits, down to one tick.
 pub fn format_cost_ticks(ticks: i64) -> String {
+    const TICKS_PER_USD: u64 = 10_000_000_000;
     let sign = if ticks < 0 { "-" } else { "" };
     let ticks = ticks.unsigned_abs();
-    let whole = ticks / 1_000_000;
-    let frac = ticks % 1_000_000;
-    if frac == 0 {
-        return format!("{sign}${whole}.00");
-    }
-    let mut frac_s = format!("{frac:06}");
-    while frac_s.ends_with('0') {
+    let whole = ticks / TICKS_PER_USD;
+    let frac = ticks % TICKS_PER_USD;
+    // Ten places is one tick. Keep two places, or two significant digits when
+    // the amount is under a cent.
+    let digits = format!("{frac:010}");
+    let places = if whole > 0 {
+        2
+    } else {
+        match digits.find(|c: char| c != '0') {
+            Some(first) => (first + 2).clamp(2, 10),
+            None => 2,
+        }
+    };
+    let mut frac_s = digits[..places].to_string();
+    while frac_s.len() > 2 && frac_s.ends_with('0') {
         frac_s.pop();
     }
     format!("{sign}${whole}.{frac_s}")
@@ -368,11 +393,17 @@ pub fn load_session(id: &str) -> Result<SessionInfo, String> {
     read_session(&path, safe_id(id)?, true)
 }
 
+/// KB-03: the session file is there and still reads, with at least one turn,
+/// so a resume on the same model can continue it instead of starting fresh.
+pub fn session_intact(id: &str) -> bool {
+    load_session(id).is_ok_and(|info| !info.input().is_empty())
+}
+
 pub fn resume_input(id: &str) -> Result<Vec<InputItem>, String> {
     Ok(load_session(id)?.input())
 }
 
-/// Create the file if needed and append this turn. Each line is flushed.
+/// Create the file if needed and append this turn in one write and one sync.
 /// A session that was just deleted is not written back.
 pub fn record_turn(
     id: &str,
@@ -388,18 +419,22 @@ pub fn record_turn(
         return Ok(());
     }
     touch(&id, cwd, model)?;
-    for item in items {
-        if tombstoned(&id) {
-            let _ = fs::remove_file(session_file(&id)?);
-            return Ok(());
-        }
-        append_json(&id, &item_json(item))?;
+    // The turn's lines go out in one write and one sync: a sync per item cost
+    // a 10-tool turn about two dozen fsyncs before Done.
+    let mut lines = Vec::new();
+    for value in items
+        .iter()
+        .map(item_json)
+        .chain([usage_json(usage, meter)])
+    {
+        serde_json::to_writer(&mut lines, &value).map_err(|err| err.to_string())?;
+        lines.push(b'\n');
     }
     if tombstoned(&id) {
         let _ = fs::remove_file(session_file(&id)?);
         return Ok(());
     }
-    append_json(&id, &usage_json(usage, meter))?;
+    append_lines(&id, &lines)?;
     if !tombstoned(&id) {
         let _ = note_title(&id, user_text);
     }
@@ -430,12 +465,12 @@ pub fn record_compaction(
         let _ = fs::remove_file(session_file(&id)?);
         return Ok(());
     }
-    append_json(&id, &compaction_json(items))?;
-    if tombstoned(&id) {
-        let _ = fs::remove_file(session_file(&id)?);
-        return Ok(());
+    let mut lines = Vec::new();
+    for value in [compaction_json(items), usage_json(usage, meter)] {
+        serde_json::to_writer(&mut lines, &value).map_err(|err| err.to_string())?;
+        lines.push(b'\n');
     }
-    append_json(&id, &usage_json(usage, meter))?;
+    append_lines(&id, &lines)?;
     if tombstoned(&id) {
         let _ = fs::remove_file(session_file(&id)?);
         return Ok(());
@@ -474,7 +509,7 @@ pub fn record_usage(
 pub fn fork_session(id: &str) -> Result<SessionInfo, String> {
     let mut info = load_session(id)?;
     let new_id = format!("native-{}", grokhub_core::uid("n"));
-    info.id = new_id;
+    info.forked_from = std::mem::replace(&mut info.id, new_id);
     info.created = grokhub_core::now_ms();
     write_session(&info)?;
     bump_history();
@@ -503,6 +538,7 @@ pub fn rename_session(id: &str, title: &str) -> Result<(), String> {
                 renamed: true,
                 usage: Usage::default(),
                 meter: String::new(),
+                forked_from: String::new(),
                 records: Vec::new(),
             };
             write_session(&info)?;
@@ -530,6 +566,249 @@ pub fn delete_session(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Delete every saved session forked from one of `ids`, and the forks of
+/// those forks. Returns the ids it deleted. Only the header line of each
+/// file is read.
+pub fn delete_forks_of(ids: &[String]) -> Vec<String> {
+    let mut parents: HashSet<String> = ids.iter().map(|id| id.trim().to_string()).collect();
+    parents.retain(|id| !id.is_empty());
+    let mut deleted = Vec::new();
+    loop {
+        let found: Vec<String> = fork_headers()
+            .into_iter()
+            .filter(|(id, from)| parents.contains(from) && !parents.contains(id))
+            .map(|(id, _)| id)
+            .collect();
+        if found.is_empty() {
+            return deleted;
+        }
+        for id in found {
+            if delete_session(&id).is_ok() {
+                deleted.push(id.clone());
+            }
+            parents.insert(id);
+        }
+    }
+}
+
+/// `(id, forked_from)` for every saved session that was forked.
+fn fork_headers() -> Vec<(String, String)> {
+    let Ok(entries) = fs::read_dir(sessions_dir()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let Ok(file) = fs::File::open(&path) else {
+            continue;
+        };
+        let mut first = String::new();
+        if std::io::BufRead::read_line(&mut std::io::BufReader::new(file), &mut first).is_err() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(first.trim()) else {
+            continue;
+        };
+        if let Some(header) = parse_header(&value, stem) {
+            if !header.forked_from.is_empty() {
+                out.push((header.id, header.forked_from));
+            }
+        }
+    }
+    out
+}
+
+/// A message the person deleted from a chat. The ask is found by its text;
+/// `later` counts the same text asked again after it, so a message hidden by
+/// a compaction never shifts which one is meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Forget<'a> {
+    /// That user message.
+    Ask { text: &'a str, later: usize },
+    /// The reply after that user message: its assistant messages, tool calls
+    /// and tool results, up to the next user message. `None` is the reply
+    /// before any user message.
+    Reply { ask: Option<(&'a str, usize)> },
+}
+
+/// What [`forget_message`] did to the saved session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Forgotten {
+    /// The records are gone; the model won't read them again.
+    Removed,
+    /// Nothing saved matched: the message never reached the model, or it is
+    /// already folded into an earlier compaction's summary.
+    NotSaved,
+}
+
+/// The reply still running in this chat: deleting under it would race its writes.
+pub const FORGET_BUSY: &str = "Wait for the reply to finish, then delete the message.";
+
+/// Take one message out of a saved session so the model never reads it again.
+/// Records kept by an earlier compaction are searched too; a call and its
+/// output always go together. Refuses while a run is live on `id`.
+pub fn forget_message(id: &str, what: Forget<'_>) -> Result<Forgotten, String> {
+    let id = safe_id(id)?.to_string();
+    if runs()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .contains_key(&id)
+    {
+        return Err(FORGET_BUSY.into());
+    }
+    if !session_file(&id)?.is_file() {
+        return Ok(Forgotten::NotSaved);
+    }
+    let mut info = load_session(&id)?;
+    let visible = visible_slots(&info.records);
+    // An ask goes out as typed, or with a note the app put before or after it
+    // (a resume recap, a skill's follow-up). Exact matches win; the wrapped
+    // ones count only when there aren't enough exact ones to reach `later`.
+    let asks: Vec<(usize, String)> = visible
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (_, item))| user_text(item).map(|t| (i, squash(&t))))
+        .collect();
+    let ask_at = |text: &str, later: usize| -> Option<usize> {
+        let want = squash(text);
+        if want.is_empty() {
+            return None;
+        }
+        let pick = |hit: &dyn Fn(&str) -> bool| {
+            asks.iter()
+                .filter(|(_, t)| hit(t))
+                .map(|(i, _)| *i)
+                .rev()
+                .nth(later)
+        };
+        pick(&|t| t == want).or_else(|| pick(&|t| wraps(t, &want)))
+    };
+    let doomed: Vec<Slot> = match what {
+        Forget::Ask { text, later } => match ask_at(text, later) {
+            Some(i) => vec![visible[i].0],
+            None => Vec::new(),
+        },
+        Forget::Reply { ask } => {
+            let start = match ask {
+                Some((text, later)) => ask_at(text, later).map(|i| i + 1),
+                None => Some(0),
+            };
+            match start {
+                Some(start) => visible[start..]
+                    .iter()
+                    .take_while(|(_, item)| user_text(item).is_none())
+                    .filter(|(_, item)| is_reply_item(item))
+                    .map(|(slot, _)| *slot)
+                    .collect(),
+                None => Vec::new(),
+            }
+        }
+    };
+    if doomed.is_empty() {
+        return Ok(Forgotten::NotSaved);
+    }
+    drop_slots(&mut info.records, &doomed);
+    write_session(&info)?;
+    bump_history();
+    Ok(Forgotten::Removed)
+}
+
+/// Where a visible item sits: a top-level record, or item `j` of the
+/// compaction record at `i`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    Top(usize),
+    Kept(usize, usize),
+}
+
+/// The items the model reads, in order, with where each one is stored.
+fn visible_slots(records: &[Record]) -> Vec<(Slot, InputItem)> {
+    let mut out = Vec::new();
+    for (i, record) in records.iter().enumerate() {
+        match record {
+            Record::Compaction { items } => {
+                out.clear();
+                for (j, item) in items.iter().enumerate() {
+                    out.push((Slot::Kept(i, j), item.clone()));
+                }
+            }
+            Record::Item(item) => out.push((Slot::Top(i), item.clone())),
+            Record::Usage { .. } => {}
+        }
+    }
+    out
+}
+
+fn drop_slots(records: &mut Vec<Record>, doomed: &[Slot]) {
+    let mut kept: Vec<(usize, Vec<usize>)> = Vec::new();
+    for slot in doomed {
+        if let Slot::Kept(i, j) = *slot {
+            match kept.iter_mut().find(|(at, _)| *at == i) {
+                Some((_, js)) => js.push(j),
+                None => kept.push((i, vec![j])),
+            }
+        }
+    }
+    for (i, js) in kept {
+        if let Some(Record::Compaction { items }) = records.get_mut(i) {
+            let mut j = 0;
+            items.retain(|_| {
+                let keep = !js.contains(&j);
+                j += 1;
+                keep
+            });
+        }
+    }
+    let mut i = 0;
+    records.retain(|_| {
+        let keep = !doomed.contains(&Slot::Top(i));
+        i += 1;
+        keep
+    });
+}
+
+/// The person's words in a user message; `None` for anything else.
+fn user_text(item: &InputItem) -> Option<String> {
+    match item {
+        InputItem::Message { role, content } if role == "user" => {
+            let text = visible_text(role, content);
+            (!text.trim().is_empty()).then_some(text)
+        }
+        _ => None,
+    }
+}
+
+/// Part of a reply: what the model said and the tools it ran. System notes
+/// and xAI's opaque compaction items stay.
+fn is_reply_item(item: &InputItem) -> bool {
+    match item {
+        InputItem::Message { role, .. } => role == "assistant",
+        InputItem::FunctionCall { .. }
+        | InputItem::FunctionCallOutput { .. }
+        | InputItem::Reasoning { .. } => true,
+        InputItem::ServerCompaction { .. } => false,
+    }
+}
+
+/// `sent` is `ask` with a note before or after it, on a word boundary.
+fn wraps(sent: &str, ask: &str) -> bool {
+    sent == ask
+        || sent.starts_with(&format!("{ask} "))
+        || sent.ends_with(&format!(" {ask}"))
+        || sent.contains(&format!(" {ask} "))
+}
+
+/// Text compared for a match: whitespace runs read as one space.
+fn squash(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub fn export_markdown(id: &str) -> Result<String, String> {
     let info = load_session(id)?;
     let mut out = format!("# {}\n", info.title);
@@ -542,7 +821,10 @@ pub fn export_markdown(id: &str) -> Result<String, String> {
                 } else {
                     "User"
                 };
-                out.push_str(&format!("\n## {heading}\n\n{}\n", message_text(content)));
+                out.push_str(&format!(
+                    "\n## {heading}\n\n{}\n",
+                    visible_text(role, content)
+                ));
             }
             Record::Item(InputItem::FunctionCall {
                 name, arguments, ..
@@ -552,6 +834,10 @@ pub fn export_markdown(id: &str) -> Result<String, String> {
             Record::Item(InputItem::FunctionCallOutput { output, .. }) => {
                 out.push_str(&format!("\n## Tool result\n\n{output}\n"));
             }
+            Record::Item(InputItem::ServerCompaction { .. }) => {
+                out.push_str(&format!("\n_{COMPACTED_NOTE}_\n"));
+            }
+            Record::Item(InputItem::Reasoning { .. }) => {}
             Record::Usage { usage, meter } => {
                 let line = usage_label(
                     usage.input_tokens,
@@ -575,7 +861,7 @@ pub fn transcript_pairs(info: &SessionInfo) -> Vec<(String, String)> {
     for record in &visible_records(&info.records) {
         match record {
             Record::Item(InputItem::Message { role, content }) if role != "system" => {
-                let text = message_text(content);
+                let text = visible_text(role, content);
                 if text.trim().is_empty() {
                     continue;
                 }
@@ -598,6 +884,17 @@ pub fn transcript_pairs(info: &SessionInfo) -> Vec<(String, String)> {
         }
     }
     pairs
+}
+
+/// A message as the person saw it: a user turn loses the `<cabin-volatile>`
+/// notes the cabin put in front of it for the model.
+fn visible_text(role: &str, content: &[ContentPart]) -> String {
+    let text = message_text(content);
+    if role == "user" {
+        crate::prefix_cache::visible_user_text(&text).to_string()
+    } else {
+        text
+    }
 }
 
 fn message_text(content: &[ContentPart]) -> String {
@@ -657,6 +954,7 @@ fn touch(id: &str, cwd: &str, model: &str) -> Result<(), String> {
         cwd: cwd.to_string(),
         model: model.to_string(),
         renamed: false,
+        forked_from: String::new(),
     });
     let mut bytes = serde_json::to_vec(&header).map_err(|err| err.to_string())?;
     bytes.push(b'\n');
@@ -673,18 +971,23 @@ fn touch(id: &str, cwd: &str, model: &str) -> Result<(), String> {
 }
 
 fn append_json(id: &str, value: &Value) -> Result<(), String> {
+    let mut line = serde_json::to_vec(value).map_err(|err| err.to_string())?;
+    line.push(b'\n');
+    append_lines(id, &line)
+}
+
+/// Append whole `\n`-ended lines in one write, then sync once.
+fn append_lines(id: &str, lines: &[u8]) -> Result<(), String> {
     if tombstoned(id) {
         return Ok(());
     }
     let path = session_file(id)?;
-    let mut line = serde_json::to_vec(value).map_err(|err| err.to_string())?;
-    line.push(b'\n');
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .map_err(|err| err.to_string())?;
-    file.write_all(&line).map_err(|err| err.to_string())?;
+    file.write_all(lines).map_err(|err| err.to_string())?;
     file.flush().map_err(|err| err.to_string())?;
     let _ = file.sync_all();
     Ok(())
@@ -705,6 +1008,7 @@ fn write_session(info: &SessionInfo) -> Result<(), String> {
             cwd: info.cwd.clone(),
             model: info.model.clone(),
             renamed: info.renamed,
+            forked_from: info.forked_from.clone(),
         }),
     )?;
     for record in &info.records {
@@ -740,10 +1044,6 @@ fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
         file.write_all(bytes).map_err(|err| err.to_string())?;
         file.flush().map_err(|err| err.to_string())?;
         let _ = file.sync_all();
-    }
-    #[cfg(windows)]
-    {
-        let _ = fs::remove_file(path);
     }
     fs::rename(&tmp, path).map_err(|err| {
         let _ = fs::remove_file(&tmp);
@@ -807,6 +1107,7 @@ fn assemble(header: Header, records: Vec<Record>) -> SessionInfo {
         renamed: header.renamed,
         usage,
         meter,
+        forked_from: header.forked_from,
         records,
     }
 }
@@ -859,6 +1160,7 @@ fn parse_header(value: &Value, fallback_id: &str) -> Option<Header> {
             .get("renamed")
             .and_then(|flag| flag.as_bool())
             .unwrap_or(false),
+        forked_from: string_field(value, "forkedFrom"),
     })
 }
 
@@ -892,6 +1194,16 @@ fn parse_record(value: &Value) -> Option<Record> {
             call_id: string_field(value, "call_id"),
             output: string_field(value, "output"),
         })),
+        REASONING_RECORD => value
+            .get("raw")
+            .and_then(Value::as_str)
+            .and_then(|raw| InputItem::reasoning(raw, &string_field(value, "model")))
+            .map(Record::Item),
+        SERVER_COMPACTION_RECORD => value
+            .get("raw")
+            .and_then(Value::as_str)
+            .and_then(InputItem::server_compaction)
+            .map(|item| Record::Item(item.with_digest(&string_field(value, "digest")))),
         "usage" => Some(Record::Usage {
             usage: Usage {
                 input_tokens: u64_field(value, "input_tokens"),
@@ -947,7 +1259,7 @@ fn visible_records(records: &[Record]) -> Vec<Record> {
 }
 
 fn header_json(header: &Header) -> Value {
-    json!({
+    let mut value = json!({
         "id": header.id,
         "title": header.title,
         "created": header.created,
@@ -955,7 +1267,11 @@ fn header_json(header: &Header) -> Value {
         "model": header.model,
         "engine": ENGINE,
         "renamed": header.renamed,
-    })
+    });
+    if !header.forked_from.is_empty() {
+        value["forkedFrom"] = json!(header.forked_from);
+    }
+    value
 }
 
 fn item_json(item: &InputItem) -> Value {
@@ -986,6 +1302,24 @@ fn item_json(item: &InputItem) -> Value {
             "type": "function_call_output",
             "call_id": call_id,
             "output": output,
+        }),
+        // Its own type: `compaction` is this file's marker line. The item stays
+        // the exact text xAI sent, as a string.
+        InputItem::ServerCompaction { raw, digest } => {
+            let mut record = json!({
+                "type": SERVER_COMPACTION_RECORD,
+                "raw": raw,
+            });
+            if !digest.is_empty() {
+                record["digest"] = json!(digest);
+            }
+            record
+        }
+        // Same idea: the sealed item as the exact text xAI sent, and its model.
+        InputItem::Reasoning { raw, model } => json!({
+            "type": REASONING_RECORD,
+            "raw": raw,
+            "model": model,
         }),
     }
 }
@@ -1114,6 +1448,62 @@ mod tests {
         assert!(raw.ends_with('\n'));
         assert_eq!(resume_input(id).unwrap(), items);
         assert_eq!(loaded.input(), items);
+    }
+
+    #[test]
+    fn a_turn_appends_its_items_then_its_usage_one_line_each_in_order() {
+        let (_dir, _guard) = isolated("lines");
+        let id = "native-lines";
+        let items = sample_items();
+        let usage = Usage {
+            input_tokens: 3,
+            ..Usage::default()
+        };
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &items,
+            &usage,
+            "pool",
+            "fix the dock",
+        )
+        .unwrap();
+        let first = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        record_turn(id, "/work", "grok-4.7", &items, &usage, "pool", "again").unwrap();
+        let raw = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        let expected: Vec<String> = items
+            .iter()
+            .map(item_json)
+            .chain([usage_json(&usage, "pool")])
+            .map(|v| serde_json::to_string(&v).unwrap())
+            .collect();
+        let turn = |text: &str| -> Vec<String> {
+            text.lines().skip(1).map(str::to_string).collect::<Vec<_>>()
+        };
+        assert_eq!(turn(&first), expected, "one line per item, then usage");
+        let both: Vec<String> = expected.iter().chain(expected.iter()).cloned().collect();
+        assert_eq!(turn(&raw), both, "the second turn follows the first");
+    }
+
+    #[test]
+    fn session_intact_needs_a_readable_file_with_a_turn() {
+        let (_dir, _guard) = isolated("intact");
+        assert!(!session_intact("native-none"), "no file");
+        assert!(!session_intact("../escape"), "bad id");
+        record_turn(
+            "native-kept",
+            "/work",
+            "grok-4.7",
+            &sample_items(),
+            &Usage::default(),
+            "",
+            "fix the dock",
+        )
+        .unwrap();
+        assert!(session_intact("native-kept"));
+        fs::write(session_file("native-kept").unwrap(), "").unwrap();
+        assert!(!session_intact("native-kept"), "an emptied file is gone");
     }
 
     #[test]
@@ -1247,9 +1637,17 @@ mod tests {
         assert!(md.contains("## Tool read_file"), "{md}");
         assert!(md.contains("## Tool result"), "{md}");
         assert!(md.contains("## Usage"), "{md}");
-        assert!(md.contains("$0.000009"), "{md}");
+        assert!(md.contains("$0.0000000009"), "{md}");
         assert!(md.contains("API credits"), "{md}");
-        assert_eq!(format_cost_ticks(84_000), "$0.084");
+        // A tick is 1e-10 USD.
+        assert_eq!(format_cost_ticks(84_000), "$0.0000084");
+        assert_eq!(format_cost_ticks(37_756_000), "$0.0037");
+        assert_eq!(format_cost_ticks(840_000_000), "$0.084");
+        assert_eq!(format_cost_ticks(12_345_000_000), "$1.23");
+        assert_eq!(format_cost_ticks(5_000_000_000), "$0.50");
+        assert_eq!(format_cost_ticks(1), "$0.0000000001");
+        assert_eq!(format_cost_ticks(0), "$0.00");
+        assert_eq!(format_cost_ticks(-31_000_000), "-$0.0031");
         assert_eq!(
             local_title("<user_query>\nfix the dock\n</user_query>"),
             "fix the dock"
@@ -1311,6 +1709,292 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_chat_takes_its_forks_and_their_forks_but_no_other_chat() {
+        let (_dir, _guard) = isolated("forks");
+        let turn = |id: &str| {
+            record_turn(
+                id,
+                "/work",
+                "grok-4.7",
+                &[user("hi")],
+                &Usage::default(),
+                "",
+                "hi",
+            )
+            .unwrap()
+        };
+        turn("native-main");
+        turn("native-other");
+        let fork = fork_session("native-main").unwrap();
+        assert_eq!(fork.forked_from, "native-main");
+        assert_eq!(load_session(&fork.id).unwrap().forked_from, "native-main");
+        let grandchild = fork_session(&fork.id).unwrap();
+        let unrelated = fork_session("native-other").unwrap();
+
+        let mut gone = delete_forks_of(&["native-main".to_string()]);
+        gone.sort();
+        let mut want = vec![fork.id.clone(), grandchild.id.clone()];
+        want.sort();
+        assert_eq!(gone, want);
+        assert!(!session_file(&fork.id).unwrap().exists());
+        assert!(!session_file(&grandchild.id).unwrap().exists());
+        assert!(
+            session_file("native-main").unwrap().is_file(),
+            "the parent is the caller's to delete"
+        );
+        assert!(session_file("native-other").unwrap().is_file());
+        assert!(session_file(&unrelated.id).unwrap().is_file());
+        assert!(delete_forks_of(&["native-main".to_string()]).is_empty());
+    }
+
+    fn said(role: &str, text: &str) -> InputItem {
+        InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        }
+    }
+
+    fn ran(call: &str) -> [InputItem; 2] {
+        [
+            InputItem::FunctionCall {
+                call_id: call.into(),
+                name: "read".into(),
+                arguments: "{}".into(),
+            },
+            InputItem::FunctionCallOutput {
+                call_id: call.into(),
+                output: format!("{call} done"),
+            },
+        ]
+    }
+
+    fn seen(id: &str) -> Vec<(String, String)> {
+        transcript_pairs(&load_session(id).unwrap())
+    }
+
+    fn save(id: &str, items: &[InputItem]) {
+        record_turn(id, "/work", "grok-4.7", items, &Usage::default(), "", "t").unwrap();
+    }
+
+    #[test]
+    fn forgetting_an_ask_finds_it_inside_a_note_the_app_added_but_prefers_an_exact_match() {
+        let (_dir, _guard) = isolated("forget-wrapped");
+        let id = "native-forget-wrapped";
+        save(
+            id,
+            &[
+                said("user", "Earlier: we planned a trip.\nbook the train"),
+                said("assistant", "booked"),
+            ],
+        );
+        save(id, &[said("user", "book"), said("assistant", "what?")]);
+        save(
+            id,
+            &[
+                said("user", "book the train please"),
+                said("assistant", "again"),
+            ],
+        );
+        // "book" is asked exactly once; the wrapped asks above it don't count.
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "book",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        // No exact "book the train": the one sent with a recap before it is
+        // the newest that wraps it on a word boundary, then the older one.
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "book the train",
+                    later: 1
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        let users: Vec<String> = seen(id)
+            .into_iter()
+            .filter(|(role, _)| role == "user")
+            .map(|(_, text)| text)
+            .collect();
+        assert_eq!(users, vec!["book the train please".to_string()]);
+    }
+
+    #[test]
+    fn forgetting_an_ask_takes_only_that_message_counting_repeats_from_the_end() {
+        let (_dir, _guard) = isolated("forget-ask");
+        let id = "native-forget-ask";
+        save(id, &[said("user", "continue"), said("assistant", "one")]);
+        save(
+            id,
+            &[
+                said("user", "the code is kumquat"),
+                said("assistant", "two"),
+            ],
+        );
+        save(id, &[said("user", "continue"), said("assistant", "three")]);
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "the  code is kumquat\n",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        // The first "continue" of two: one more comes after it.
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "continue",
+                    later: 1
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        let pairs = seen(id);
+        assert_eq!(
+            pairs,
+            vec![
+                ("assistant".to_string(), "one".to_string()),
+                ("assistant".into(), "two".into()),
+                ("user".into(), "continue".into()),
+                ("assistant".into(), "three".into()),
+            ]
+        );
+        assert!(!format!("{:?}", resume_input(id).unwrap()).contains("kumquat"));
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "never said",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::NotSaved)
+        );
+    }
+
+    #[test]
+    fn forgetting_a_reply_takes_its_messages_and_tool_pairs_up_to_the_next_ask() {
+        let (_dir, _guard) = isolated("forget-reply");
+        let id = "native-forget-reply";
+        let [call, out] = ran("c1");
+        save(
+            id,
+            &[
+                said("user", "look"),
+                call,
+                out,
+                said("assistant", "found it"),
+            ],
+        );
+        save(id, &[said("user", "thanks"), said("assistant", "anytime")]);
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Reply {
+                    ask: Some(("look", 0))
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        assert_eq!(
+            seen(id),
+            vec![
+                ("user".to_string(), "look".to_string()),
+                ("user".into(), "thanks".into()),
+                ("assistant".into(), "anytime".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn forgetting_reaches_into_what_a_compaction_kept_and_skips_what_it_folded() {
+        let (_dir, _guard) = isolated("forget-compact");
+        let id = "native-forget-compact";
+        save(
+            id,
+            &[said("user", "old ask"), said("assistant", "old reply")],
+        );
+        record_compaction(
+            id,
+            "/work",
+            "grok-4.7",
+            &[said("user", "kept ask"), said("assistant", "summary")],
+            &Usage::default(),
+            "",
+        )
+        .unwrap();
+        save(
+            id,
+            &[said("user", "new ask"), said("assistant", "new reply")],
+        );
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "old ask",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::NotSaved),
+            "folded into the summary, so there is no record to take out"
+        );
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "kept ask",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        let input = format!("{:?}", resume_input(id).unwrap());
+        assert!(
+            !input.contains("kept ask") && input.contains("summary") && input.contains("new ask")
+        );
+    }
+
+    #[test]
+    fn forgetting_waits_for_a_running_reply() {
+        let (_dir, _guard) = isolated("forget-busy");
+        let id = "native-forget-busy";
+        save(id, &[said("user", "hi"), said("assistant", "hello")]);
+        let run = attach_run(id, CancelToken::new());
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "hi",
+                    later: 0
+                }
+            ),
+            Err(FORGET_BUSY.to_string())
+        );
+        drop(run);
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "hi",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+    }
+
+    #[test]
     fn merge_history_keeps_cli_rows_read_only() {
         let cli = vec![GrokSession {
             id: "01a01b0f-7e06-74b1-8f22-5236c9d57d45".into(),
@@ -1334,6 +2018,7 @@ mod tests {
                 cached_tokens: 0,
             },
             meter: "SuperGrok pool".into(),
+            forked_from: String::new(),
             records: Vec::new(),
         };
         let mut native_clash = native.clone();
@@ -1427,5 +2112,129 @@ mod tests {
         assert!(!pairs.iter().any(|(_, text)| text.contains("OLD_TOPIC")));
         let raw = fs::read_to_string(session_file(id).unwrap()).unwrap();
         assert!(raw.contains("\"type\":\"compaction\""), "{raw}");
+    }
+
+    #[test]
+    fn a_reopened_chat_shows_what_was_typed_not_the_cabin_notes() {
+        let (_dir, _guard) = isolated("volatile");
+        let id = "native-volatile";
+        let stored = crate::prefix_cache::user_message_text(
+            "Talk style for this turn: casual chat.",
+            "hi there",
+        );
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &[user(&stored), assistant("hey")],
+            &Usage::default(),
+            "SuperGrok pool",
+            "hi there",
+        )
+        .unwrap();
+        let loaded = load_session(id).unwrap();
+        // The model keeps getting the turn exactly as sent, so the cache holds.
+        assert_eq!(loaded.input()[0], user(&stored));
+        let pairs = transcript_pairs(&loaded);
+        // The helper's turn also carries a picture, shown as its marker.
+        assert_eq!(
+            pairs[0],
+            ("user".to_string(), "hi there\n[image]".to_string())
+        );
+        let md = export_markdown(id).unwrap();
+        assert!(md.contains("hi there"));
+        assert!(!md.contains("Talk style for this turn"));
+        assert!(!md.contains("cabin-volatile"));
+    }
+
+    /// An xAI compaction item is opaque: saved, loaded, rewritten (rename) and
+    /// loaded again, it is the exact text that came in, spacing and escapes too.
+    #[test]
+    fn a_server_compaction_item_round_trips_byte_for_byte() {
+        let (_dir, _guard) = isolated("server-compact");
+        let id = "native-server-compact";
+        let raw =
+            r#"{ "id":"cmp_7", "type":"compaction","encrypted_content":"gAAAAB+x/y==\u00e9" }"#;
+        let digest = "User: OLD_TOPIC\nAssistant: old reply";
+        let item = InputItem::server_compaction(raw)
+            .unwrap()
+            .with_digest(digest);
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &[user("OLD_TOPIC"), assistant("old reply")],
+            &Usage::default(),
+            "API credits",
+            "OLD_TOPIC",
+        )
+        .unwrap();
+        record_compaction(
+            id,
+            "/work",
+            "grok-4.7",
+            &[item.clone(), assistant("keep me")],
+            &Usage::default(),
+            "API credits",
+        )
+        .unwrap();
+        let want = vec![
+            InputItem::ServerCompaction {
+                raw: raw.to_string(),
+                digest: digest.to_string(),
+            },
+            assistant("keep me"),
+        ];
+        assert_eq!(resume_input(id).unwrap(), want);
+        rename_session(id, "Renamed").unwrap();
+        let loaded = load_session(id).unwrap();
+        assert_eq!(loaded.title, "Renamed");
+        assert_eq!(loaded.input(), want);
+        let file = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        assert!(
+            file.contains(r#"{"digest":"User: OLD_TOPIC\nAssistant: old reply","raw":"{ \"id\":\"cmp_7\", \"type\":\"compaction\",\"encrypted_content\":\"gAAAAB+x/y==\\u00e9\" }","type":"server_compaction"}"#),
+            "{file}"
+        );
+        assert_eq!(
+            export_markdown(id).unwrap(),
+            "# Renamed\n\n## Usage\n\n0 in · 0 out · API credits\n\n\
+             _Earlier conversation compacted_\n\n## Assistant\n\nkeep me\n\n\
+             ## Usage\n\n0 in · 0 out · API credits\n"
+        );
+        assert_eq!(
+            transcript_pairs(&loaded),
+            vec![("assistant".to_string(), "keep me".to_string())]
+        );
+    }
+
+    /// A sealed reasoning item is saved as the exact text xAI sent, with the
+    /// model that wrote it, and resumes as the same item.
+    #[test]
+    fn a_reasoning_item_round_trips_with_its_model() {
+        let (_dir, _guard) = isolated("reasoning-item");
+        let id = "native-reasoning-item";
+        let raw =
+            r#"{"id":"rs_1","summary":[],"type":"reasoning","encrypted_content":"gAAAAB+x/y=="}"#;
+        let item = InputItem::reasoning(raw, "grok-4.7").unwrap();
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &[user("Q"), item.clone(), assistant("A")],
+            &Usage::default(),
+            "API credits",
+            "Q",
+        )
+        .unwrap();
+        assert_eq!(
+            resume_input(id).unwrap(),
+            vec![user("Q"), item, assistant("A")]
+        );
+        let file = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        assert!(
+            file.contains(r#"{"model":"grok-4.7","raw":"{\"id\":\"rs_1\",\"summary\":[],\"type\":\"reasoning\",\"encrypted_content\":\"gAAAAB+x/y==\"}","type":"reasoning_item"}"#),
+            "{file}"
+        );
+        assert!(!export_markdown(id).unwrap().contains("gAAAA"));
     }
 }

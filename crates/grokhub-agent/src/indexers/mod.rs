@@ -25,6 +25,7 @@
 
 pub mod apps;
 pub mod browser_history;
+pub mod display_fps;
 pub mod files;
 pub mod fs;
 pub mod paths;

@@ -2,22 +2,60 @@
 
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod doctor;
+pub mod oauth_cli;
 mod server;
+pub mod update;
 
 pub use server::{serve, serve_background, serve_lan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Launch {
+    /// The LAN hub (also `--hub`, the cabin's name for it).
     Serve,
     Version,
     Help,
+    /// The agent's skill, connection and automation tools on stdio.
+    McpSelf,
+    /// `grokhub-hub bench local`: on-device speed and eval.
+    BenchLocal,
+    /// The desktop tools on stdio, behind the same switch and hard gate.
+    McpDesktop,
+    /// The Cua Driver gate proxy on stdio (Linux, `cuaDriver` flag).
+    McpCua,
+    /// Auth, memory folder and hub checks; exits 1 on any ERR.
+    Doctor,
+    /// Says how this install updates. Runs nothing.
+    Update,
+    /// Sign in with Grok (device code) into the shell's keychain entry.
+    OAuth,
+}
+
+/// `grokhub-hub --askpass <socket> [prompt]`: `sudo` runs this through the
+/// helper script the app writes.
+pub fn askpass_socket(args: &[String]) -> Option<&str> {
+    match args {
+        [_, flag, socket, ..] if flag == "--askpass" => Some(socket),
+        _ => None,
+    }
 }
 
 pub fn parse_args(args: &[String]) -> Launch {
+    if args.get(1).map(String::as_str) == Some("bench")
+        && args.get(2).map(String::as_str) == Some("local")
+    {
+        return Launch::BenchLocal;
+    }
     for a in args.iter().skip(1) {
         match a.as_str() {
             "--version" | "-V" => return Launch::Version,
             "-h" | "--help" => return Launch::Help,
+            "--mcp-self" => return Launch::McpSelf,
+            "--mcp-desktop" => return Launch::McpDesktop,
+            "--mcp-cua" => return Launch::McpCua,
+            "--doctor" => return Launch::Doctor,
+            "--update" => return Launch::Update,
+            "--oauth" => return Launch::OAuth,
             _ => {}
         }
     }
@@ -166,6 +204,74 @@ mod tests {
         assert_eq!(
             parse_args(&["grokhub-hub".into(), "-h".into()]),
             Launch::Help
+        );
+    }
+
+    fn args(s: &[&str]) -> Vec<String> {
+        s.iter().map(|x| (*x).to_string()).collect()
+    }
+
+    #[test]
+    fn headless_tool_flags() {
+        assert_eq!(parse_args(&args(&["grokhub-hub", "--hub"])), Launch::Serve);
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--mcp-self"])),
+            Launch::McpSelf
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--hub", "--mcp-self"])),
+            Launch::McpSelf
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "bench", "local"])),
+            Launch::BenchLocal
+        );
+        assert_eq!(parse_args(&args(&["grokhub-hub", "bench"])), Launch::Serve);
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--version", "--mcp-self"])),
+            Launch::Version
+        );
+        assert_eq!(
+            askpass_socket(&args(&["grokhub-hub", "--askpass", "/x"])),
+            Some("/x")
+        );
+        assert_eq!(
+            askpass_socket(&args(&[
+                "grokhub-hub",
+                "--askpass",
+                "/run/user/1000/grokhub-askpass-9/s",
+                "[sudo] password for j: "
+            ])),
+            Some("/run/user/1000/grokhub-askpass-9/s")
+        );
+        assert_eq!(askpass_socket(&args(&["grokhub-hub", "--askpass"])), None);
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--mcp-desktop"])),
+            Launch::McpDesktop
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--mcp-cua"])),
+            Launch::McpCua
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--doctor"])),
+            Launch::Doctor
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--oauth"])),
+            Launch::OAuth
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--update"])),
+            Launch::Update
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--help", "--doctor"])),
+            Launch::Help
+        );
+        assert_eq!(
+            askpass_socket(&args(&["grokhub-hub", "--hub", "--askpass", "/x"])),
+            None
         );
     }
 }

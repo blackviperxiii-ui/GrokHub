@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
 import { App } from "./App";
 import { inShell, onPairChange, pair, paired } from "./transport";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
@@ -15,37 +15,54 @@ export function takeCodeFromLink(): string {
   if (!match) return "";
   const { pathname, search } = window.location;
   window.history.replaceState(null, "", pathname + search);
-  return decodeURIComponent(match[1]);
+  return decoded(match[1]);
+}
+
+/** A mangled link (`#code=%zz`) carries no code: pair by hand instead of a blank page. */
+function decoded(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return "";
+  }
+}
+
+/** Whether the address carries a pairing link's code (read only; `takeCodeFromLink` takes it). */
+function linkHasCode(): boolean {
+  const match = /(?:^#|&)code=([^&]*)/.exec(window.location.hash);
+  return match !== null && decoded(match[1]) !== "";
 }
 
 /** The web app's first screen: pair this browser with the desktop. */
 export function Pair({ onPaired }: { onPaired: () => void }) {
   const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
+  // A pairing link starts connecting as the screen opens, so it starts busy.
+  const [busy, setBusy] = useState(linkHasCode);
   const [note, setNote] = useState<string | null>(null);
 
-  async function connect(value: string) {
-    setBusy(true);
-    setNote(null);
-    try {
-      await pair(value);
-      onPaired();
-    } catch (err) {
-      setNote(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+  function attempt(value: string): Promise<void> {
+    return pair(value)
+      .then(() => onPaired())
+      .catch((err: unknown) => setNote(err instanceof Error ? err.message : String(err)))
+      .finally(() => setBusy(false));
   }
 
+  function connect(value: string) {
+    setBusy(true);
+    setNote(null);
+    void attempt(value);
+  }
+
+  // Only once, on the first render: the link's code is gone after it is taken.
+  const pairFromLink = useEffectEvent((value: string) => void attempt(value));
   useEffect(() => {
     const fromLink = takeCodeFromLink();
-    if (fromLink) void connect(fromLink);
-    // Only once, on the first render.
+    if (fromLink) pairFromLink(fromLink);
   }, []);
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    void connect(code);
+    connect(code);
   }
 
   return (

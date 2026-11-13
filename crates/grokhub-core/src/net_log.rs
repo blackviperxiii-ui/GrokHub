@@ -15,6 +15,8 @@ pub const FILE_NAME: &str = "net-log.json";
 /// The public resolvers each probe tries, in order.
 pub const PROBE_HOSTS: [&str; 2] = ["1.1.1.1:443", "9.9.9.9:443"];
 pub const PROBE_EVERY_MS: u64 = 60_000;
+/// How long one probe waits for a resolver to answer.
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 /// Failed probes in a row before an outage starts.
 pub const FAILS_TO_DROP: u32 = 2;
 /// A connect slower than this counts as a slow minute.
@@ -57,6 +59,17 @@ pub struct Slow {
     pub latency_ms: u32,
 }
 
+/// One probe's connect time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ping {
+    pub at_ms: u64,
+    pub ms: u32,
+}
+
+/// How many recent connect times are kept for ping and jitter.
+pub const PINGS_KEPT: usize = 10;
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeedTest {
@@ -83,6 +96,9 @@ pub struct NetLog {
     pub slow: Vec<Slow>,
     #[serde(default)]
     pub speed: Vec<SpeedTest>,
+    /// The last few connect times, oldest first.
+    #[serde(default)]
+    pub pings: Vec<Ping>,
     /// The last time an insight card posted.
     #[serde(default)]
     pub last_insight_ms: u64,
@@ -120,6 +136,9 @@ impl NetLog {
             }
             Some(ms) => {
                 self.fails = 0;
+                self.pings.push(Ping { at_ms: now_ms, ms });
+                let extra = self.pings.len().saturating_sub(PINGS_KEPT);
+                self.pings.drain(..extra);
                 if ms > SLOW_MS {
                     self.slow.push(Slow {
                         at_ms: now_ms,
@@ -131,6 +150,28 @@ impl NetLog {
                 Some(Change::Restored(open.minutes(now_ms)))
             }
         }
+    }
+
+    /// The newest connect time, while it is fresh (three probes old at most).
+    pub fn ping(&self, now_ms: u64) -> Option<u32> {
+        self.pings
+            .last()
+            .filter(|p| now_ms.saturating_sub(p.at_ms) <= 3 * PROBE_EVERY_MS)
+            .map(|p| p.ms)
+    }
+
+    /// How much the connect time moves from probe to probe: the mean
+    /// change between neighbours, from three probes on.
+    pub fn jitter(&self) -> Option<u32> {
+        if self.pings.len() < 3 {
+            return None;
+        }
+        let steps: Vec<u32> = self
+            .pings
+            .windows(2)
+            .map(|w| w[0].ms.abs_diff(w[1].ms))
+            .collect();
+        Some((steps.iter().sum::<u32>() as f64 / steps.len() as f64).round() as u32)
     }
 
     pub fn note_speed(&mut self, bytes: u64, elapsed_ms: u64, now_ms: u64) -> Option<f64> {
@@ -265,6 +306,18 @@ pub fn iso_utc(ms: u64) -> String {
         rem % 3600 / 60,
         rem % 60
     )
+}
+
+/// One probe: the connect time to the first resolver that answers, or
+/// `None` when none does (or the app is in offline mode).
+pub fn probe() -> Option<u32> {
+    crate::offline::refuse().ok()?;
+    PROBE_HOSTS.iter().find_map(|host| {
+        let addr: std::net::SocketAddr = host.parse().ok()?;
+        let start = std::time::Instant::now();
+        std::net::TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).ok()?;
+        Some(u32::try_from(start.elapsed().as_millis()).unwrap_or(u32::MAX))
+    })
 }
 
 pub fn load(config_dir: &Path) -> NetLog {
@@ -412,5 +465,31 @@ mod tests {
         log.note(None, DAY0 + KEEP_MS + DAY_MS, 0);
         assert_eq!(log.outages.len(), 1);
         assert!(log.down());
+    }
+
+    #[test]
+    fn ping_is_the_newest_connect_time_and_jitter_the_mean_change() {
+        let mut log = NetLog::default();
+        assert_eq!(log.ping(DAY0), None);
+        let mut at = DAY0;
+        for ms in [20, 30, 25] {
+            log.note(Some(ms), at, 0);
+            at += MIN;
+        }
+        assert_eq!(log.ping(at), Some(25));
+        assert_eq!(log.jitter(), Some(8), "(10 + 5) / 2 rounds to 8");
+        assert_eq!(log.ping(at + 4 * MIN), None, "a stale ping is not shown");
+        for _ in 0..20 {
+            log.note(Some(40), at, 0);
+            at += MIN;
+        }
+        assert_eq!(log.pings.len(), PINGS_KEPT);
+        assert_eq!(log.jitter(), Some(0));
+    }
+
+    #[test]
+    fn a_log_saved_before_pings_still_loads() {
+        let log: NetLog = serde_json::from_str("{}").unwrap();
+        assert!(log.pings.is_empty());
     }
 }
