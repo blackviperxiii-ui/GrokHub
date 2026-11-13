@@ -131,6 +131,10 @@ fn receipt_lines(report: &repair::DiagnoseReport) -> Vec<String> {
 /// and put the receipt on the card. `look` reads the program's crash history
 /// (split out so a test can hand it a fixed report). Returns how many cards
 /// got a receipt.
+///
+/// Each post runs once: only a card the store just took comes here. A repeat
+/// spike merges into the card still on the page, which keeps its old report,
+/// so the new look's receipt joins the old one there (as in the cabin).
 pub fn after_post(
     config_dir: &Path,
     posted: &[UpdateCard],
@@ -154,14 +158,11 @@ pub fn after_post(
             what: format!("Checked {}'s crash history", name.as_str()),
             result: receipt_lines(&look(&name)),
         };
-        // The card may be gone, or have run already, by the time the look ends.
+        // The card may be gone by the time the look ends.
         let added = crate::pulse::edit_cards(config_dir, &mut |cards| {
             let Some(stored) = cards.iter_mut().find(|c| c.id == card.id) else {
                 return 0;
             };
-            if auto_offer(stored, &on).is_none() {
-                return 0;
-            }
             add_receipt(stored, receipt.clone());
             1
         });

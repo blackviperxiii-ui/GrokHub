@@ -174,9 +174,6 @@ fn a_switched_on_look_runs_once_and_its_receipt_lands_on_the_card() {
         ),
         "{more}"
     );
-    // A second pass over the same card does not look again.
-    assert_eq!(after_post(&d, &[card], NOW + MIN, &look), 0);
-    assert_eq!(receipts(&d, "crash-1").len(), 1);
 }
 
 #[test]
@@ -276,17 +273,36 @@ fn the_crash_watchers_own_card_gets_its_look_when_switched_on() {
     };
     let posted = crate::nudges::tick_with(&d, &settings, &snap, "2027-01-15", NOW).unwrap();
     assert_eq!(posted.len(), 1);
+    let looks = Cell::new(0);
     let look = |name: &repair::ProgramName| {
         assert_eq!(name.as_str(), "bluetoothd");
+        looks.set(looks.get() + 1);
         found(&["The Bluetooth service stopped 4 times."])
     };
     assert_eq!(after_post(&d, &posted, NOW, &look), 1);
+    let first = CardReceipt {
+        at_ms: NOW,
+        what: "Checked bluetoothd's crash history".into(),
+        result: vec!["The Bluetooth service stopped 4 times.".into()],
+    };
+    assert_eq!(receipts(&d, &posted[0].id), vec![first.clone()]);
+    // A day later it spikes again while the card is still up: the new card
+    // merges into it, and that look's receipt joins the first one.
+    let later = NOW + 25 * 60 * MIN;
+    let again = crate::nudges::tick_with(&d, &settings, &snap, "2027-01-16", later).unwrap();
+    assert_eq!(again.len(), 1);
+    assert_eq!(after_post(&d, &again, later, &look), 1);
+    assert_eq!(looks.get(), 2);
+    assert_eq!(crate::pulse::cards(&d).unwrap().len(), 1);
     assert_eq!(
-        receipts(&d, &posted[0].id),
-        vec![CardReceipt {
-            at_ms: NOW,
-            what: "Checked bluetoothd's crash history".into(),
-            result: vec!["The Bluetooth service stopped 4 times.".into()],
-        }]
+        receipts(&d, &again[0].id),
+        vec![
+            first,
+            CardReceipt {
+                at_ms: later,
+                what: "Checked bluetoothd's crash history".into(),
+                result: vec!["The Bluetooth service stopped 4 times.".into()],
+            }
+        ]
     );
 }

@@ -254,7 +254,12 @@ fn look(
     // Before the error goes back: a card that could not be saved cost nothing.
     refund(config_dir, now_ms, surfaced.len() - posted.len());
     match failed {
-        Some(e) => Err(e),
+        // Cards already on the page still go back, so their reminders go out.
+        Some(e) if posted.is_empty() => Err(e),
+        Some(e) => {
+            eprintln!("proactive: {e}");
+            Ok(posted)
+        }
         None => Ok(posted),
     }
 }
