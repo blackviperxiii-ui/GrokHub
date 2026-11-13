@@ -2551,7 +2551,7 @@ textarea.code {
 .work-chat {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-8);
 }
 
 .work-chat-lines {
@@ -2562,7 +2562,7 @@ textarea.code {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-8);
   font-size: var(--font-body);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2583,7 +2583,7 @@ textarea.code {
 }
 
 .work-chat-ask p {
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-4);
 }
 
 .chips {
