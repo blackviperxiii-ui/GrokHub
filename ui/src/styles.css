@@ -4478,6 +4478,24 @@ label.toggle-row {
   align-items: stretch;
 }
 
+.skill-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.skill-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.skill-field-hint {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
 /* A card's one-line read of its own numbers: a dot in its tone, then the line. */
 .verdict {
   display: flex;

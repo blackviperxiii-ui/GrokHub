@@ -3162,6 +3162,34 @@ export function openSkillFolder(
   return invoke<void>("open_skill_folder", { source, name });
 }
 
+/** The fields Edit changes on a cabin skill: what it does, when to use it, its steps. */
+export interface SkillDetail {
+  name: string;
+  description: string;
+  trigger: string;
+  instructions: string;
+}
+
+/** Make a cabin skill from a name and what it should do. Desktop only; returns the new page. */
+export function createSkill(name: string, what: string): Promise<SkillPage> {
+  return invoke<SkillPage>("create_skill", { name, what });
+}
+
+/** What Edit shows for a cabin skill. Desktop only. */
+export function getSkillDetail(name: string): Promise<SkillDetail> {
+  return invoke<SkillDetail>("get_skill_detail", { name });
+}
+
+/** Save an edit to a cabin skill's description, trigger and steps. Desktop only; returns the new page. */
+export function editSkill(
+  name: string,
+  description: string,
+  trigger: string,
+  instructions: string,
+): Promise<SkillPage> {
+  return invoke<SkillPage>("edit_skill", { name, description, trigger, instructions });
+}
+
 /** A background task's status on the Agents page (src-tauri/src/queue.rs). */
 export type TaskStatus = "running" | "failed" | "done" | "stopped";
 
