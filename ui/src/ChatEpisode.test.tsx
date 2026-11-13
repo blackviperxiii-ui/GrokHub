@@ -51,7 +51,7 @@ vi.mock("./api", async () => {
   closeChat: vi.fn(() => Promise.resolve()),
   deleteChat: vi.fn(),
   forgetMessage: vi.fn(),
-  getLastChat: vi.fn(() => Promise.resolve(null)),
+  getStartChat: vi.fn(() => Promise.resolve(null)),
   loadChat: vi.fn(),
   slashHits: vi.fn(() => Promise.resolve([])),
   runSlash: vi.fn(),

@@ -592,6 +592,8 @@ export interface ChatRow {
   pinned?: boolean;
   /** The id of the project whose folder the chat works in. */
   project?: string | null;
+  /** The permanent Main chat: no pin, rename or delete. */
+  main?: boolean;
 }
 
 /** A project or folder from the sidebar list the cabin shares (projects.json). */
@@ -655,9 +657,9 @@ export function loadChat(id: string, limit?: number): Promise<Transcript> {
   return invoke<Transcript>("load_chat", { id, limit: limit ?? null });
 }
 
-/** The chat open when the app last closed, if it is still saved. */
-export function getLastChat(): Promise<Transcript | null> {
-  return invoke<Transcript | null>("get_last_chat");
+/** The chat the Chat tab opens at launch: Main, made first if there is none. */
+export function getStartChat(): Promise<Transcript> {
+  return invoke<Transcript>("get_start_chat");
 }
 
 export function renameChat(id: string, title: string): Promise<void> {
@@ -708,6 +710,8 @@ export interface ChatTab {
   title: string;
   pinned: boolean;
   updated: number;
+  /** The permanent Main chat: first, and never archived, deleted, renamed or unpinned. */
+  main: boolean;
   archivedAt?: number;
   deletedAt?: number;
 }
@@ -753,6 +757,12 @@ export function chatTabSoftDelete(id: string): Promise<ChatTab> {
 
 export function chatTabRestoreDeleted(id: string): Promise<ChatTab> {
   return invoke<ChatTab>("chat_tab_restore_deleted", { id });
+}
+
+/** Clear on Main: the old Main goes and an empty Main takes its place. */
+/** Clear chat: deletes the chat, or on Main swaps in an empty Main and returns it. */
+export function clearChat(id: string): Promise<Transcript | null> {
+  return invoke<Transcript | null>("clear_chat", { id });
 }
 
 export function getHangoutMode(): Promise<HangoutMode> {

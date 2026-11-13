@@ -14,13 +14,13 @@ import {
   answerPermission,
   cancelChat,
   closeChat,
-  deleteChat,
+  clearChat,
   exportChat,
   forgetMessage,
   composerGhostSuggest,
   getBehavior,
   getHangoutMode,
-  getLastChat,
+  getStartChat,
   getSettings,
   helperQuestions,
   loadChat,
@@ -821,14 +821,18 @@ export function Chat({
     setQueue(next);
   }
 
-  function startFresh() {
-    // Messages lined up in the chat being left go back in the box, never
-    // into the new chat by themselves.
+  /** Messages lined up in the chat being left go back in the box, never
+   * into the next chat by themselves. */
+  function queueBackToBox() {
     const waiting = queueRef.current;
     if (waiting.length > 0) {
       changeQueue([]);
       setDraft((now) => withQueued(now, waiting));
     }
+  }
+
+  function startFresh() {
+    queueBackToBox();
     leaveSides();
     touched.current = true;
     setGoalAsk(null);
@@ -847,6 +851,13 @@ export function Chat({
     setError(null);
   }
 
+  /** Clear on Main hands back an empty Main: like a new chat, the old
+   * chat's waiting messages go back in the box. */
+  function showClearedMain(fresh: Transcript) {
+    queueBackToBox();
+    show(fresh);
+  }
+
   // The saved chat shows only if nothing was typed or picked meanwhile.
   const restoreLast = useEffectEvent((last: Transcript | null) => {
     if (last && !touched.current) show(last);
@@ -854,8 +865,8 @@ export function Chat({
 
   useEffect(() => {
     if (remote || embedded) return;
-    getLastChat().then(
-      (last) => restoreLast(last),
+    getStartChat().then(
+      (start) => restoreLast(start),
       () => {},
     );
   }, [remote, embedded]);
@@ -907,11 +918,15 @@ export function Chat({
     return () => window.clearTimeout(timer);
   }, [deleted]);
 
-  // Clear chat: stop any reply, delete the open chat's saved history, start over.
+  // Clear chat: stop any reply, delete the open chat's saved history, start
+  // over. On Main the backend hands back an empty Main instead.
   const clearOpen = useEffectEvent(() => {
     const id = conversationId;
     touched.current = true;
-    deleteChat(id).then(startFresh, (err) => setError(String(err)));
+    clearChat(id).then(
+      (fresh) => (fresh ? showClearedMain(fresh) : startFresh()),
+      (err) => setError(String(err)),
+    );
   });
 
   useEffect(() => {
@@ -1637,10 +1652,12 @@ export function Chat({
               loadChat(id).then(show, (err) => setError(String(err)));
             }}
             onNew={startOver}
-            onClear={() => {
-              const id = conversationId;
+            onClear={async (id) => {
               touched.current = true;
-              deleteChat(id).then(startFresh, (err) => setError(String(err)));
+              const fresh = await clearChat(id);
+              if (id !== conversationId) return;
+              if (fresh) showClearedMain(fresh);
+              else startFresh();
             }}
             onError={setError}
           />

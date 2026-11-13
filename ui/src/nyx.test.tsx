@@ -27,7 +27,7 @@ vi.mock("./api", async () => {
   answerElicit: vi.fn(),
   cancelChat: vi.fn(),
   closeChat: vi.fn(() => Promise.resolve()),
-  getLastChat: vi.fn(() => Promise.resolve(null)),
+  getStartChat: vi.fn(() => Promise.resolve(null)),
   loadChat: vi.fn(),
   getPersonalities: api.getPersonalities,
   setPersonality: vi.fn(),
