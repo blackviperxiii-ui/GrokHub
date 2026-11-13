@@ -10,7 +10,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use grokhub_agent::{AuthKind, CancelToken, ModelClient, PermMode, UnattendedRun};
+use grokhub_agent::{CancelToken, ModelClient};
+
+use crate::unattended::RunGate;
 use grokhub_core::{Automation, LocalClock};
 use serde::{Deserialize, Serialize};
 
@@ -246,6 +248,11 @@ impl Running {
     }
 }
 
+/// A Run now or a scheduled run holds automation `id` now.
+pub(crate) fn is_running(id: &str) -> bool {
+    Running::holds(id)
+}
+
 impl Drop for Running {
     fn drop(&mut self) {
         let mut running = RUNNING.lock().unwrap_or_else(|err| err.into_inner());
@@ -255,19 +262,20 @@ impl Drop for Running {
     }
 }
 
-/// One unattended run of `job` in Ask mode, as the shell's scheduler fires it.
-/// It records nothing on the row. The session is read-only, as the cabin's
-/// scheduled Ask jobs are, so an allow rule cannot turn a refused write into
-/// one that runs. Like the cabin's scheduled run, it takes the automation's
-/// board card into Doing and logs the start and end on it.
+/// One unattended run of `job`, as the shell's scheduler fires it, behind
+/// `gate` (your Approvals; Ask is a read-only session, so an allow rule cannot
+/// turn a refused write into one that runs). It records nothing on the row.
+/// Like the cabin's scheduled run, it takes the automation's board card into
+/// Doing and logs the start and end on it.
 pub fn execute(
     config_dir: &Path,
     job: &Automation,
     client: Arc<dyn ModelClient + Send + Sync>,
     model: &str,
     workspace: PathBuf,
+    gate: RunGate,
 ) -> RunResult {
-    run_on_board(config_dir, job, client, model, workspace, "scheduled")
+    run_on_board(config_dir, job, client, model, workspace, gate, "scheduled")
 }
 
 /// `execute`, with `why` as the note on the card's start log line.
@@ -277,30 +285,22 @@ fn run_on_board(
     client: Arc<dyn ModelClient + Send + Sync>,
     model: &str,
     workspace: PathBuf,
+    gate: RunGate,
     why: &str,
 ) -> RunResult {
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
     let started = grokhub_core::now_ms();
     let session_id = format!("shell-auto-{}-{started}", job.id);
-    let card = board_run_start(config_dir, job, &session_id, model, started, why);
-    let system = crate::agent::system_prompt(&workspace, false, "");
-    let done = grokhub_agent::run_unattended(UnattendedRun {
+    let card = board_run_start(config_dir, job, &session_id, model, gate, started, why);
+    let done = crate::unattended::run(crate::unattended::Job {
         client,
-        workspace,
         model: model.to_string(),
-        effort: None,
-        system,
+        workspace,
         session_id,
-        auth_kind: AuthKind::ApiKey,
         prompt: job.instructions.clone(),
-        image: None,
-        mode: PermMode::Ask,
-        readonly_session: true,
-        desktop: false,
+        tools_from: None,
+        gate,
         cancel: CancelToken::new(),
-        halt: Box::new(crate::agent::NeverHalted),
-        desktop_ops: None,
-        imagine_bearer: String::new(),
         resume: false,
     });
     let result = RunResult {
@@ -333,6 +333,7 @@ pub fn run_now(
     client: Arc<dyn ModelClient + Send + Sync>,
     model: &str,
     workspace: PathBuf,
+    gate: RunGate,
 ) -> Result<RunResult, String> {
     let job = load(config_dir)?
         .into_iter()
@@ -342,7 +343,7 @@ pub fn run_now(
         })?;
     let _running = Running::claim(id)?;
     let started = grokhub_core::now_ms();
-    let result = run_on_board(config_dir, &job, client, model, workspace, "run now");
+    let result = run_on_board(config_dir, &job, client, model, workspace, gate, "run now");
     change(config_dir, id, |list, at| {
         let ran = grokhub_core::mark_automation_ran(list[at].clone(), started);
         list[at] = settle(ran, &result);
@@ -422,16 +423,17 @@ fn board_run_start(
     job: &Automation,
     session: &str,
     model: &str,
+    gate: RunGate,
     now: u64,
     why: &str,
 ) -> Option<String> {
     use grokhub_core::{work_resume as res, work_run as wr};
     let id = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
         let id = wr::begin_automation_card(cards, &job.id, &job.name, session, model, now);
-        // KB-03: the shell runs it unattended in Ask, and a shell restart
-        // interrupts it, not the cabin's.
+        // KB-03: the shell runs it in `gate`'s mode, which a resume keeps,
+        // and a shell restart interrupts it, not the cabin's.
         if let Some(c) = cards.iter_mut().find(|c| c.id == id) {
-            res::claim_run(c, res::HOST_SHELL, grokhub_core::wire::PermissionMode::Ask);
+            res::claim_run(c, res::HOST_SHELL, gate.wire());
         }
         id
     })
@@ -448,7 +450,12 @@ fn board_run_start(
 
 /// The run's final checkpoint. A reply that needs you files the Follow up card,
 /// as in the cabin; a quiet run lets the agent's untouched card archive itself.
-fn board_run_end(config_dir: &Path, job: &Automation, card: Option<&str>, done: &RunResult) {
+pub(crate) fn board_run_end(
+    config_dir: &Path,
+    job: &Automation,
+    card: Option<&str>,
+    done: &RunResult,
+) {
     use grokhub_core::work_resume as res;
     use grokhub_core::work_run::{self as wr, RunEnd};
     let Some(card) = card else {
@@ -467,8 +474,8 @@ fn board_run_end(config_dir: &Path, job: &Automation, card: Option<&str>, done: 
     } else {
         &job.name
     };
-    // KB-03: a failed run is Interrupted (Blocked with its checkpoint), so the
-    // cabin can resume it from there.
+    // KB-03: a failed run is Interrupted (Blocked with its checkpoint), so it
+    // resumes from there.
     let cut = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
         let cut = cards
             .iter_mut()
@@ -837,8 +844,15 @@ mod tests {
         let client = Arc::new(WantsToWrite {
             requests: Mutex::new(Vec::new()),
         });
-        let result =
-            run_now(&dir, &id, client.clone(), "grok-4.7", workspace.clone()).expect("ran");
+        let result = run_now(
+            &dir,
+            &id,
+            client.clone(),
+            "grok-4.7",
+            workspace.clone(),
+            RunGate::BACKGROUND,
+        )
+        .expect("ran");
         (dir, workspace, id, client, result)
     }
 
@@ -911,7 +925,15 @@ mod tests {
         let id = add(&dir, "every day at 7am check the build", tuesday_8am()).expect("a")[0]
             .id
             .clone();
-        let result = run_now(&dir, &id, Arc::new(Stalls), "grok-4.7", workspace).expect("ran");
+        let result = run_now(
+            &dir,
+            &id,
+            Arc::new(Stalls),
+            "grok-4.7",
+            workspace,
+            RunGate::BACKGROUND,
+        )
+        .expect("ran");
         assert!(result.failed(), "{result:?}");
 
         let board = wr::read_board_file(&wr::board_path(&dir)).expect("board");

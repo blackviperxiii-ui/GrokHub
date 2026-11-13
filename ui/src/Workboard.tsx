@@ -93,8 +93,10 @@ export function findArchived(cards: BoardCard[], query: string): BoardCard[] {
 /** The cabin's Workboards page on the same workboard.json. Every change goes
  * through the shared board lock and merge, so neither app overwrites the
  * other, and the page reloads when the file changes. `onWork` puts a card's
- * first message in the chat box and `onResume` a paused run's; nothing is
- * sent until you send it, and nothing here reaches the model by itself. */
+ * first message in the chat box. Resume picks a paused run up from its
+ * checkpoint: an automation's or a background run's card goes on by itself
+ * in the background, and any other card hands `onResume` its resume block to
+ * send once in its chat. */
 export function Workboard({
   onWork,
   onResume,
@@ -227,6 +229,10 @@ export function Workboard({
     try {
       const started = await workboardResume(card.id, card.chat ?? newConversationId());
       setPage(started.page);
+      if (started.background) {
+        setNote("Resumed in the background from where it left off.");
+        return;
+      }
       setNote(null);
       onResume?.({ conversationId: started.conversationId, prompt: started.prompt });
     } catch (err) {

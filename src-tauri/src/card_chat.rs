@@ -61,7 +61,7 @@ fn set_wait(why: Option<String>) {
     *WAIT.lock().unwrap_or_else(|e| e.into_inner()) = why;
 }
 
-fn note_card_chat(chat: &str) {
+pub(crate) fn note_card_chat(chat: &str) {
     with_chats(|c| {
         c.cards.insert(chat.to_string());
     });
