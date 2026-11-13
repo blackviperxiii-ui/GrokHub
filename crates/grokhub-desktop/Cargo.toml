@@ -21,7 +21,7 @@ x11rb = { version = "0.14", default-features = false, features = ["randr", "xtes
 # the tree. reis stays blocking on that same worker; do not enable its tokio
 # or async-io features.
 [target.'cfg(target_os = "linux")'.dependencies]
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "remote_desktop", "screencast", "screenshot"] }
+ashpd = { version = "0.14", default-features = false, features = ["tokio", "remote_desktop", "screencast", "screenshot"] }
 reis = { version = "0.7", default-features = false }
 tokio = { version = "1", default-features = false, features = ["rt", "time"] }
 zbus = { version = "5.19", default-features = false, features = ["blocking-api"] }
