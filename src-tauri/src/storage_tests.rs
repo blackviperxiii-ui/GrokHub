@@ -61,7 +61,10 @@ fn the_view_names_each_folder_and_the_models() {
     );
     assert_eq!(
         v.models.line,
-        format!("Local models: {}", home.join("GrokHub/models").display())
+        format!(
+            "Local models: {}",
+            home.join("GrokHub").join("models").display()
+        )
     );
     assert_eq!(v.waiting, None);
     assert_eq!(v.moves, Vec::<String>::new());
@@ -117,7 +120,7 @@ fn older_files_are_counted_named_and_brought_over() {
     let d = dir("bring");
     let (config, home) = (d.join("config"), d.join("home"));
     change(&config, &d.join("files"));
-    let imagine = home.join("GrokHub-Work/imagine");
+    let imagine = home.join("GrokHub-Work").join("imagine");
     std::fs::create_dir_all(&imagine).expect("imagine");
     std::fs::write(imagine.join("a-cat.png"), b"png").expect("cat");
     std::fs::write(imagine.join("a-dog.png"), b"png").expect("dog");
@@ -131,7 +134,7 @@ fn older_files_are_counted_named_and_brought_over() {
         [format!(
             "{} → {}",
             imagine.display(),
-            d.join("files/Images").display()
+            d.join("files").join("Images").display()
         )]
     );
     let done = bring_all_over(&config, &older_spots(Some(&home), None));
@@ -142,18 +145,13 @@ fn older_files_are_counted_named_and_brought_over() {
 
 #[test]
 fn a_change_adds_the_old_folder_to_the_spots() {
-    let spots = older_spots(None, Some(Path::new("/old/files")));
+    let old = Path::new("/old/files");
+    let spots = older_spots(None, Some(old));
     let names: Vec<String> = spots.iter().map(|(p, _)| p.display().to_string()).collect();
-    assert_eq!(
-        names,
-        [
-            "/old/files/Chats",
-            "/old/files/Diagnostics",
-            "/old/files/Recordings",
-            "/old/files/Images",
-            "/old/files/Reports",
-        ]
-    );
+    // Built with join so the separator is the platform's own (`\` on Windows).
+    let expected = ["Chats", "Diagnostics", "Recordings", "Images", "Reports"]
+        .map(|n| old.join(n).display().to_string());
+    assert_eq!(names, expected);
 }
 
 #[test]
