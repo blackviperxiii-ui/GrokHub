@@ -37,6 +37,23 @@ pub fn redact_secret_words(input: &str) -> String {
     redact_patterns(input, true)
 }
 
+/// True when the app's redactors would change `text`: it has a key, a token
+/// or a password in it. Three redactors are asked, and each counts a key
+/// only where one can start, so a branch named `fix/desk-sessions-halt` or a
+/// file named `task-runner-notes.md` is not taken for a key:
+/// - the one the Code tab's terminal uses for typed commands (`sk-…`,
+///   `xai-…`, GitHub tokens, `Bearer …`);
+/// - the debug bundle's token shapes (AWS, Slack, Hugging Face, GitLab, npm
+///   and the like, a password in a URL, a JWT);
+/// - the debug bundle's credential assignments: `API_KEY=…`,
+///   `--password=…`, an `Authorization` header. This one goes by the key's
+///   name, so `TOKEN=abc make` counts too.
+pub fn holds_secret(text: &str) -> bool {
+    redact_secret_words(text) != text
+        || redact_token_shapes(text) != text
+        || crate::diagnostics::has_credential_value(text)
+}
+
 fn redact_patterns(input: &str, word_start: bool) -> String {
     let mut s = input.to_string();
     for (needle, _) in PATTERNS {

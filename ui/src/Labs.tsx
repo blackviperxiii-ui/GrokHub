@@ -9,7 +9,7 @@ import {
   type PluginPage,
   type PluginRow,
 } from "./api";
-import { COMPANION_NAME, PRODUCT_NAME } from "./brand";
+import { COMPANION_NAME } from "./brand";
 import {
   desktopNyxGet,
   desktopNyxSet,
@@ -21,8 +21,9 @@ import { inShell } from "./transport";
 import { StatusLine, useNote } from "./ui";
 
 export const LABS_NOTE = "Early features. They work, but they may change.";
-export const CHANNEL_NOTE =
-  `The beta channel switch is in the ${PRODUCT_NAME} cabin. This app updates from its release downloads.`;
+export const CHANNEL_NOTE = "Switch between beta and stable in About, under Updates.";
+export const CHANNEL_NOTE_REMOTE =
+  "Switch between beta and stable on your computer, in About, under Updates.";
 export const PLUGINS_TIP =
   "A preview: the same plugins as the cabin's Labs page, with fewer details on each bundle.";
 export const PLUGINS_NOTE =
@@ -104,7 +105,7 @@ export function Labs() {
     <div className="labs" role="group" aria-label="Labs">
       <h2>Labs</h2>
       <p className="note">{LABS_NOTE}</p>
-      <p className="note">{CHANNEL_NOTE}</p>
+      <p className="note">{inShell() ? CHANNEL_NOTE : CHANNEL_NOTE_REMOTE}</p>
       {inShell() && <DesktopCompanion />}
       <h3>
         Plugins{" "}

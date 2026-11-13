@@ -40,20 +40,38 @@ const ANSWERS: Record<ElicitAction | "ended" | "halted", string> = {
   halted: "Not answered: halted.",
 };
 
+export const PLAN_SENT_BACK = "Sent back for changes.";
+
+/** What Ask for changes sends: the note, and the plan too when it was edited.
+ * The fixed start keeps it from ever reading as an approval. */
+export function changeRequest(note: string, draft: string, shown: string): string {
+  const ask = `Change the plan: ${note.trim()}`;
+  return draft.trim() === shown.trim() ? ask : `${ask}\n\nThe plan as I edited it:\n${draft}`;
+}
+
 /** A plan to approve, the agent's question, or a connector's form or link. */
 export function ElicitCard({
   item,
   onAnswer,
+  editable = false,
   onChipPick,
 }: {
   item: ElicitItem;
-  onAnswer: (action: ElicitAction, value: string) => void;
+  /** `field` names the answer when it is not the card's own field: "plan" for
+   * an edited plan, "reply" for a request to change it. */
+  onAnswer: (action: ElicitAction, value: string, field?: string) => void;
+  /** The agent window: the plan is a document to edit, approve or send back. */
+  editable?: boolean;
   /** A reply chip was picked; the shell remembers it for the next card. */
   onChipPick?: (key: string) => void;
 }) {
   const [value, setValue] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
+  const [draft, setDraft] = useState(item.message);
+  const [note, setNote] = useState("");
+  const [asked, setAsked] = useState(false);
   const plan = item.server === "Plan";
+  const editing = plan && editable;
   const options = item.options ?? [];
   const chips = item.chips ?? [];
 
@@ -93,7 +111,17 @@ export function ElicitCard({
   return (
     <div className="card elicit" role="group" aria-label={title}>
       <div className="card-title">{title}</div>
-      <pre className="card-detail plain">{message}</pre>
+      {editing && !item.answer ? (
+        <textarea
+          className="plan-draft"
+          aria-label="Plan"
+          rows={Math.min(Math.max(draft.split("\n").length + 1, 6), 24)}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+      ) : (
+        <pre className="card-detail plain">{editing ? draft : message}</pre>
+      )}
       {item.mode === "url" && item.url && (
         <p className="card-detail-line">
           {externalUrlOk(item.url) ? (
@@ -107,8 +135,41 @@ export function ElicitCard({
         <p className="card-answer">
           {item.answer === "accept" && picked
             ? `You chose: ${picked}`
-            : (plan ? PLAN_ANSWERS : ANSWERS)[item.answer]}
+            : editing && asked && item.answer === "accept"
+              ? PLAN_SENT_BACK
+              : (plan ? PLAN_ANSWERS : ANSWERS)[item.answer]}
         </p>
+      ) : editing ? (
+        <form
+          className="card-buttons"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!note.trim()) return;
+            setAsked(true);
+            onAnswer("accept", changeRequest(note, draft, item.message), "reply");
+          }}
+        >
+          <input
+            aria-label="What should change"
+            placeholder="What should change"
+            autoComplete="off"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setAsked(false);
+              onAnswer("accept", draft, "plan");
+            }}
+            disabled={!draft.trim()}
+          >
+            Approve plan
+          </button>
+          <button type="submit" className="quiet" disabled={!note.trim()}>
+            Ask for changes
+          </button>
+        </form>
       ) : plan && chips.length > 0 ? (
         <>
           <ReplyChips chips={chips} onPick={pickChip} />

@@ -56,14 +56,31 @@ fn taint_path(workspace: &Path) -> PathBuf {
 
 fn load(workspace: &Path) -> BTreeSet<String> {
     std::fs::read_to_string(taint_path(workspace))
-        .map(|text| {
-            text.lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
+        .map(|text| marks(&text))
         .unwrap_or_default()
+}
+
+/// The paths a mark list's text names.
+pub(crate) fn marks(text: &str) -> BTreeSet<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The folder a mark list at `path` speaks for, as a prefix of the paths it
+/// names (`""` or `"sub/"`). `None` when `path` is not a mark list.
+pub(crate) fn list_folder(path: &str) -> Option<&str> {
+    let folder = path.strip_suffix(TAINT_FILE)?;
+    (folder.is_empty() || folder.ends_with('/')).then_some(folder)
+}
+
+/// Whether `path`, relative to any folder above it, is a spooled tool
+/// output: those read back fenced with no mark.
+pub(crate) fn spooled(path: &str) -> bool {
+    let spool = crate::compact::TOOL_OUTPUT_SPOOL_DIR;
+    path.starts_with(spool) || path.contains(&format!("/{spool}"))
 }
 
 fn update(workspace: &Path, change: impl FnOnce(&mut BTreeSet<String>)) {

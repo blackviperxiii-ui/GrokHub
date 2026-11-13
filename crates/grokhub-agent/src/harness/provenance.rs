@@ -614,4 +614,17 @@ mod tests {
         let _scope = begin(&history, &[], &ws, 0);
         assert!(outside_value("mail__send", r#"{"to":"leak@evil.example"}"#).is_some());
     }
+
+    #[test]
+    fn a_merge_request_has_every_string_checked() {
+        assert_eq!(
+            kinds_for("merge_subagent_work", r#"{"work":"mb3x9k2a-7q1z"}"#),
+            Some(Kinds::AllStrings)
+        );
+        // The stop tool beside it is not checked.
+        assert_eq!(
+            kinds_for("kill_command_or_subagent", r#"{"task_id":"t1"}"#),
+            None
+        );
+    }
 }

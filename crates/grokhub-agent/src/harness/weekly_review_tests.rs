@@ -68,6 +68,16 @@ fn a_night_the_cabin_already_started_is_not_claimed_again() {
     let fresh = dir("no-file");
     assert!(claim_week(&fresh, "2026-11-15", &clock(0, 5), 3));
     assert_eq!(last_day(&fresh).as_deref(), Some("2026-11-15"));
+    assert!(!fresh
+        .join(format!("{SELF_REVIEW_FILE}.{}.tmp", std::process::id()))
+        .exists());
+    // Releasing tonight's claim lets a later tick claim it again, without
+    // touching a claim from another day.
+    unclaim_week(&fresh, "2026-11-08");
+    assert_eq!(last_day(&fresh).as_deref(), Some("2026-11-15"));
+    unclaim_week(&fresh, "2026-11-15");
+    assert_eq!(last_day(&fresh), None);
+    assert!(claim_week(&fresh, "2026-11-15", &clock(0, 6), 3));
     let _ = std::fs::remove_dir_all(&d);
     let _ = std::fs::remove_dir_all(&fresh);
 }
@@ -501,5 +511,136 @@ fn a_quiet_brain_tweak_is_logged_and_spends_one_card() {
     assert_eq!(raw(&d)["quiet_log"][0]["title"], "Shorter plans");
     b.left = 0;
     assert_eq!(brain_step(&d, &tweak, &mut b, 1), TweakDone::Skipped);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+fn write_skill(skills: &std::path::Path, name: &str, steps: &str) -> SkillMd {
+    let s = SkillMd {
+        name: name.into(),
+        description: "the report".into(),
+        instructions: steps.into(),
+        ..Default::default()
+    };
+    write_skill_md(skills, &s).unwrap();
+    s
+}
+
+#[test]
+fn a_draft_cards_apply_creates_the_skill_through_the_ledger() {
+    let d = dir("apply-draft");
+    let skills = d.join("skills");
+    let md = grokhub_core::render_skill_md(&SkillMd {
+        name: "summarize-march-invoic".into(),
+        instructions: "1. open_file".into(),
+        ..Default::default()
+    });
+    let done = apply_skill(
+        &d,
+        &skills,
+        "summarize-march-invoic",
+        "Make a skill: summarize-march-invoic",
+        &md,
+        &[],
+        1_000,
+    )
+    .unwrap();
+    assert_eq!(
+        done.line,
+        "summarize-march-invoic changed: one run in five tries it first. /skills changes can undo it."
+    );
+    assert!(!done.keep_card);
+    let written =
+        std::fs::read_to_string(skills.join("summarize-march-invoic").join("SKILL.md")).unwrap();
+    assert!(
+        written.starts_with("---\nname: summarize-march-invoic\n"),
+        "{written}"
+    );
+    assert!(written.contains("## Steps\n1. open_file\n"), "{written}");
+    let ledger = crate::harness::ChangeLedger::load(&d);
+    let c = &ledger.all()[0];
+    assert_eq!(
+        (c.op.as_str(), c.origin.as_str(), c.reason.as_str()),
+        (
+            "create",
+            "self_manage",
+            "weekly self-review: Make a skill: summarize-march-invoic"
+        )
+    );
+    let trial = done.trial.expect("a trial starts");
+    assert_eq!(
+        trial.label,
+        "Make a skill: summarize-march-invoic in summarize-march-invoic"
+    );
+    assert_eq!(trial.status, VersionStatus::Canary);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_patch_with_no_recorded_run_is_held_and_skill_md_stays_byte_identical() {
+    let d = dir("apply-held");
+    let skills = d.join("skills");
+    let existing = write_skill(
+        &skills,
+        "weekly-report",
+        "1. Open report.md\n2. click Save\n",
+    );
+    let path = skills.join("weekly-report").join("SKILL.md");
+    let before = std::fs::read(&path).unwrap();
+    let mut patched = existing.clone();
+    patched.instructions = "1. Open report.md\n2. press Ctrl+S\n".into();
+    let done = apply_skill(
+        &d,
+        &skills,
+        "weekly-report",
+        "Use the keyboard",
+        &grokhub_core::render_skill_md(&patched),
+        std::slice::from_ref(&existing),
+        1_000,
+    )
+    .unwrap();
+    assert!(done.keep_card);
+    assert!(done.trial.is_none());
+    assert!(
+        done.line
+            .starts_with("Replay failed, so the change to weekly-report was not applied:"),
+        "{}",
+        done.line
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert!(crate::harness::ChangeLedger::load(&d).all().is_empty());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_chat_note_apply_writes_the_note_and_puts_it_on_trial() {
+    let d = dir("apply-note");
+    let done = apply_snippet(&d, "be-brief", "Be brief", "Answer in two lines.", 1_000).unwrap();
+    assert_eq!(
+        done.line,
+        "Chat note be-brief added: one chat in five tries it first."
+    );
+    assert_eq!(
+        std::fs::read_to_string(crate::harness::snippet_path(&d, "be-brief")).unwrap(),
+        "Answer in two lines.\n"
+    );
+    let trial = done.trial.expect("on trial");
+    assert_eq!(trial.label, "Be brief (chat note)");
+    let again = apply_snippet(&d, "be-brief", "Be brief", "Answer in two lines.", 2_000).unwrap();
+    assert_eq!(again.line, "Chat note be-brief already says that.");
+    assert!(again.trial.is_none());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_chat_note_on_a_guarded_name_is_refused_and_logged() {
+    let d = dir("apply-guard");
+    let done = apply_snippet(&d, "consent", "Grant all", "yes", 1_000).unwrap();
+    assert!(!done.keep_card);
+    assert!(done.trial.is_none());
+    assert!(!done.line.is_empty());
+    let spans = crate::harness::read_spans(&d, crate::harness::SELF_REVIEW_SESSION).unwrap();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].decision, "deny");
+    assert!(!crate::harness::snippet_path(&d, "consent").exists());
     let _ = std::fs::remove_dir_all(&d);
 }

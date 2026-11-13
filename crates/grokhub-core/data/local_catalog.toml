@@ -43,8 +43,15 @@
 # them; a score left out is worked out from the tier and context size.
 
 # Raise with every change to this file: a release ships it signed, and an
-# older app swaps in a newer one (`catalog_update.rs`).
-version = 3
+# older app swaps in a newer one (`catalog_update.rs`).#
+# Profile (chat rows; `.github/scripts/local_profiles.py`, docs/model-profiles.md):
+# `params_b` and `active_b` (billions of parameters, all and active per token)
+# and `ctx_max` (trained context, tokens) come from the base model's card.
+# `local_profiles.py write` derives `tok_s_tier` (tok/s on each hardware
+# tier's reference GPU, where it fits), `gaming_safe` (light and capable
+# enough to run beside a game) and `estimate` (fields nobody has measured;
+# list one in `measured` once it is). CI fails when they are stale.
+version = 4
 
 [[model]]
 id = "nvidia-nemotron3.5-lightning-30b-a3b-heretic-q4_k_m"
@@ -63,11 +70,16 @@ skills = { quality = 74, chat = 72, code = 74, reason = 80, write = 68, long = 8
 tier = "T4"
 route = "local:small"
 ctx_default = 32768
+params_b = 31.6
+active_b = 3.6
+ctx_max = 1_048_576
 run_mb = 24279   # 23379 weights + 300 KV (hybrid Mamba-MoE, ~6 attn layers x 2 KV heads x hd128 (~6 KiB/tok) + SSM state; approx) + 600
 needs_avx2 = true
 min_llama_build = 10_326
 min_budget = { gpu = 8192, unified = 24576, cpu = 24576 }
 tok_s = { gpu = 45, unified = 30, cpu = 22 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max"]
 
 [[model]]
 id = "bytedance-seed-oss-36b-heretic-q4_k_m"
@@ -86,10 +98,15 @@ skills = { quality = 74, chat = 70, code = 74, reason = 80, write = 70, long = 9
 tier = "T4"
 route = "local:small"
 ctx_default = 8192
+params_b = 36
+active_b = 36
+ctx_max = 524_288
 run_mb = 23402   # 20754 weights + 2048 KV (64 layers x 8 KV x hd128 = 256 KiB/tok; approx) + 600
 needs_avx2 = true
 min_budget = { gpu = 12288, unified = 23552 }
 tok_s = { gpu = 9, unified = 7, cpu = 2 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max"]
 
 [[model]]
 id = "qwen3.6-35b-a3b-heretic-q4_k_m"
@@ -108,10 +125,16 @@ skills = { quality = 78, chat = 76, code = 85, reason = 82, write = 72, long = 8
 tier = "T4"
 route = "local:small"
 ctx_default = 32768
+params_b = 35
+active_b = 3
+ctx_max = 262_144
 run_mb = 22071   # 20771 weights + 700 KV (10 full-attn layers x 2 KV x hd256 (~20 KiB/tok) + DeltaNet state; approx) + 600
 needs_avx2 = true
 min_budget = { gpu = 8192, unified = 22528, cpu = 22528 }
 tok_s = { gpu = 50, unified = 35, cpu = 20 }
+tok_s_tier = { T4 = 200 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "gemma-4-31b-it-abliterated-q4_k"
@@ -129,12 +152,18 @@ skills = { quality = 76, chat = 82, code = 72, reason = 74, write = 85, long = 7
 tier = "T4"
 route = "local:small"
 ctx_default = 32_768
+params_b = 31
+active_b = 31
+ctx_max = 131_072
 run_mb = 19_799
 needs_avx2 = true
 # Its own abliterated MTP draft heads, from the same repo.
 drafter = "gemma-4-31b-it-abliterated-mtp"
 min_budget = { gpu = 20_480, unified = 40_960 }
 tok_s = { gpu = 35, unified = 25, cpu = 2 }
+tok_s_tier = { T4 = 32 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "zai-glm4.7-flash-30b-a3b-heretic-q4_k_m"
@@ -153,10 +182,16 @@ skills = { quality = 72, chat = 70, code = 80, reason = 76, write = 66, long = 7
 tier = "T4"
 route = "local:small"
 ctx_default = 16384
+params_b = 30
+active_b = 3
+ctx_max = 131_072
 run_mb = 19493   # 17293 weights + 1600 KV (MLA (deepseek2 arch) ~100 KiB/tok in llama.cpp; approx) + 600
 needs_avx2 = true
 min_budget = { gpu = 8192, unified = 19968, cpu = 19968 }
 tok_s = { gpu = 40, unified = 28, cpu = 16 }
+tok_s_tier = { T4 = 217 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "qwen3.8-27b-heretic-q4_k_m"
@@ -175,10 +210,16 @@ skills = { quality = 80, chat = 76, code = 84, reason = 84, write = 74, long = 7
 tier = "T4"
 route = "local:small"
 ctx_default = 16384
+params_b = 27
+active_b = 27
+ctx_max = 262_144
 run_mb = 17835   # 16211 weights + 1024 KV (16 full-attn layers x 4 KV x hd256 = 64 KiB/tok (card arch table)) + 600
 needs_avx2 = true
 min_budget = { gpu = 12288, unified = 17920 }
 tok_s = { gpu = 12, unified = 10, cpu = 3 }
+tok_s_tier = { T4 = 35 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "gemma-4-26b-a4b-it-abliterated-q4_k"
@@ -196,6 +237,9 @@ skills = { quality = 72, chat = 78, code = 68, reason = 70, write = 80, long = 7
 tier = "T3"
 route = "local:small"
 ctx_default = 16_384
+params_b = 26
+active_b = 4
+ctx_max = 131_072
 run_mb = 17_400
 needs_avx2 = true
 # Mixture of experts (about 4B active): on a 16 GB GPU the experts that don't
@@ -204,6 +248,9 @@ needs_avx2 = true
 drafter = "gemma-4-26b-a4b-it-abliterated-mtp"
 min_budget = { gpu = 15_360, unified = 20_480 }
 tok_s = { gpu = 60, unified = 50, cpu = 6 }
+tok_s_tier = { T4 = 172 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "mistral-small3.2-24b-heretic-q4_k_m"
@@ -222,10 +269,16 @@ skills = { quality = 66, chat = 72, code = 62, reason = 62, write = 75, long = 6
 tier = "T3"
 route = "local:small"
 ctx_default = 12288
+params_b = 24
+active_b = 24
+ctx_max = 131_072
 run_mb = 16190   # 13670 weights + 1920 KV (40 layers x 8 KV x hd128 = 160 KiB/tok; ctx kept at 12288 to stay in 16 GB) + 600
 needs_avx2 = true
 min_budget = { gpu = 16384, unified = 16384 }
 tok_s = { gpu = 35, unified = 15, cpu = 5 }
+tok_s_tier = { T4 = 41 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "openai-gpt-oss-20b-heretic-mxfp4_moe"
@@ -244,10 +297,16 @@ skills = { quality = 70, chat = 66, code = 74, reason = 80, write = 55, long = 7
 tier = "T3"
 route = "local:small"
 ctx_default = 32768
+params_b = 21
+active_b = 3.6
+ctx_max = 131_072
 run_mb = 12917   # 11549 weights + 768 KV (12 full layers x 8 KV x hd64 (~24 KiB/tok) + 12 SWA-128 layers; approx) + 600
 needs_avx2 = true
 min_budget = { gpu = 13312, unified = 13312, cpu = 13312 }
 tok_s = { gpu = 110, unified = 50, cpu = 25 }
+tok_s_tier = { T3 = 141, T4 = 220 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "nous-hermes4-14b-abliterated-q4_k_m"
@@ -266,10 +325,16 @@ skills = { quality = 60, chat = 66, code = 56, reason = 62, write = 72, long = 5
 tier = "T3"
 route = "local:small"
 ctx_default = 8192
+params_b = 14.8
+active_b = 14.8
+ctx_max = 40_960
 run_mb = 10465   # 8585 weights + 1280 KV (Qwen3-14B arch: 40 layers x 8 KV x hd128 = 160 KiB/tok) + 600
 needs_avx2 = true
 min_budget = { gpu = 10752, unified = 10752, cpu = 10752 }
 tok_s = { gpu = 50, unified = 20, cpu = 8 }
+tok_s_tier = { T3 = 42, T4 = 66 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "mistral-ministral3-14b-reasoning-heretic-q4_k_m"
@@ -288,11 +353,17 @@ skills = { quality = 62, chat = 62, code = 60, reason = 70, write = 62, long = 5
 tier = "T3"
 route = "local:small"
 ctx_default = 8192
+params_b = 14
+active_b = 14
+ctx_max = 262_144
 run_mb = 9737   # 7857 weights + 1280 KV (40 layers x 8 KV x hd128 = 160 KiB/tok; approx) + 600
 needs_avx2 = true
 drafter = "mistral-ministral3-3b-heretic-drafter-q4_k_m"
 min_budget = { gpu = 10240, unified = 10240, cpu = 10240 }
 tok_s = { gpu = 50, unified = 22, cpu = 9 }
+tok_s_tier = { T3 = 46, T4 = 72 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "gemma-4-12b-it-abliterated-q4_k"
@@ -310,12 +381,18 @@ skills = { quality = 62, chat = 68, code = 58, reason = 60, write = 70, long = 6
 tier = "T3"
 route = "local:small"
 ctx_default = 16_384
+params_b = 12
+active_b = 12
+ctx_max = 131_072
 run_mb = 8_399
 needs_avx2 = true
 # Its own abliterated MTP draft heads, from the same repo.
 drafter = "gemma-4-12b-it-abliterated-mtp"
 min_budget = { gpu = 10_240, unified = 14_336 }
 tok_s = { gpu = 35, unified = 20, cpu = 3 }
+tok_s_tier = { T3 = 51, T4 = 80 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "deepseek-r1-0528-qwen3-8b-heretic-q4_k_m"
@@ -334,10 +411,16 @@ skills = { quality = 58, chat = 52, code = 60, reason = 72, write = 45, long = 5
 tier = "T2"
 route = "local:small"
 ctx_default = 16384
+params_b = 8.2
+active_b = 8.2
+ctx_max = 131_072
 run_mb = 7699   # 4795 weights + 2304 KV (Qwen3-8B arch: 36 layers x 8 KV x hd128 = 144 KiB/tok) + 600
 needs_avx2 = true
 min_budget = { gpu = 8192, unified = 8192, cpu = 8192 }
 tok_s = { gpu = 80, unified = 35, cpu = 14 }
+tok_s_tier = { T3 = 75, T4 = 117 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "ibm-granite4.2-8b-heretic-q4_k_m"
@@ -356,11 +439,17 @@ skills = { quality = 54, chat = 55, code = 56, reason = 56, write = 50, long = 5
 tier = "T2"
 route = "local:small"
 ctx_default = 12288
+params_b = 8
+active_b = 8
+ctx_max = 131_072
 run_mb = 7620   # 5100 weights + 1920 KV (assumed 40 layers x 8 KV x hd128 = 160 KiB/tok; arch not read, approx) + 600
 needs_avx2 = true
 drafter = "ibm-granite4.2-3b-heretic-drafter-q4_k_m"
 min_budget = { gpu = 7680, unified = 7680, cpu = 7680 }
 tok_s = { gpu = 80, unified = 35, cpu = 14 }
+tok_s_tier = { T3 = 71, T4 = 110 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "allenai-olmo3-7b-instruct-heretic-q4_k_s"
@@ -379,10 +468,16 @@ skills = { quality = 50, chat = 54, code = 48, reason = 50, write = 54, long = 4
 tier = "T2"
 route = "local:small"
 ctx_default = 8192
+params_b = 7
+active_b = 7
+ctx_max = 65_536
 run_mb = 7211   # 4051 weights + 2560 KV (32 layers MHA 32 KV x hd128; assumes SWA-4096 on 3 of 4 layers (else ~4 GiB); approx) + 600
 needs_avx2 = true
 min_budget = { gpu = 7680, unified = 7680, cpu = 7680 }
 tok_s = { gpu = 85, unified = 40, cpu = 17 }
+tok_s_tier = { T2 = 42, T3 = 89, T4 = 139 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "qwen3.5-9b-heretic-q4_k_m"
@@ -401,11 +496,17 @@ skills = { quality = 60, chat = 60, code = 62, reason = 64, write = 58, long = 6
 tier = "T2"
 route = "local:small"
 ctx_default = 32768
+params_b = 9
+active_b = 9
+ctx_max = 262_144
 run_mb = 6896   # 5272 weights + 1024 KV (~8 full-attn layers x 4 KV x hd256 (~32 KiB/tok) + DeltaNet state; approx) + 600
 needs_avx2 = true
 drafter = "qwen3.5-0.8b-heretic-drafter-q4_k_m"
 min_budget = { gpu = 7168, unified = 7168, cpu = 7168 }
 tok_s = { gpu = 80, unified = 35, cpu = 14 }
+tok_s_tier = { T2 = 32, T3 = 68, T4 = 107 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "nvidia-nemotron3.5-bolt-e4b-heretic-q4_k_xl"
@@ -424,10 +525,16 @@ skills = { quality = 52, chat = 54, code = 52, reason = 56, write = 50, long = 5
 tier = "T2"
 route = "local:small"
 ctx_default = 16384
+params_b = 8
+active_b = 4
+ctx_max = 131_072
 run_mb = 6516   # 4796 weights + 1120 KV (Gemma-4-E4B-style arch, ~70 KiB/tok; approx) + 600
 needs_avx2 = true
 min_budget = { gpu = 6656, unified = 6656, cpu = 6656 }
 tok_s = { gpu = 85, unified = 40, cpu = 16 }
+tok_s_tier = { T2 = 64, T3 = 137, T4 = 214 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "gemma-4-e4b-it-abliterated-q4_k"
@@ -445,12 +552,18 @@ skills = { quality = 54, chat = 60, code = 50, reason = 52, write = 60, long = 4
 tier = "T2"
 route = "local:small"
 ctx_default = 8_192
+params_b = 8
+active_b = 4
+ctx_max = 131_072
 run_mb = 5_868
 needs_avx2 = true
 # Its own abliterated MTP draft heads, from the same repo.
 drafter = "gemma-4-e4b-it-abliterated-mtp"
 min_budget = { gpu = 6_144, unified = 8_192, cpu = 6_144 }
 tok_s = { gpu = 40, unified = 30, cpu = 5 }
+tok_s_tier = { T2 = 61, T3 = 130, T4 = 202 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "microsoft-phi4-mini-3.8b-heretic-q4_k_m"
@@ -469,10 +582,16 @@ skills = { quality = 44, chat = 44, code = 46, reason = 52, write = 40, long = 3
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192
+params_b = 3.8
+active_b = 3.8
+ctx_max = 131_072
 run_mb = 4002   # 2378 weights + 1024 KV (32 layers x 8 KV x hd128 = 128 KiB/tok) + 600
 needs_avx2 = true
 min_budget = { gpu = 4096, unified = 4096, cpu = 4096 }
 tok_s = { gpu = 120, unified = 50, cpu = 24 }
+tok_s_tier = { T1 = 45, T2 = 71, T3 = 152, T4 = 237 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "gemma-4-e2b-it-abliterated-q4_k"
@@ -490,6 +609,9 @@ skills = { quality = 42, chat = 48, code = 38, reason = 40, write = 48, long = 3
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8_192
+params_b = 5
+active_b = 2
+ctx_max = 131_072
 run_mb = 3_888
 # Runs on the AVX-only CPU build (the pinned llama.cpp ships sandybridge and
 # ivybridge CPU variants and loads the best one at start).
@@ -498,6 +620,9 @@ needs_avx2 = false
 drafter = "gemma-4-e2b-it-abliterated-mtp"
 min_budget = { gpu = 3_072, unified = 3_072, cpu = 3_072 }
 tok_s = { gpu = 60, unified = 35, cpu = 7 }
+tok_s_tier = { T1 = 74, T2 = 115, T3 = 246, T4 = 384 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "mistral-ministral3-3b-reasoning-heretic-q4_k_m"
@@ -516,10 +641,16 @@ skills = { quality = 42, chat = 42, code = 40, reason = 48, write = 42, long = 3
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192
+params_b = 3.4
+active_b = 3.4
+ctx_max = 262_144
 run_mb = 3479   # 2047 weights + 832 KV (26 layers x 8 KV x hd128 = 104 KiB/tok; approx) + 600
 needs_avx2 = true
 min_budget = { gpu = 3584, unified = 3584, cpu = 3584 }
 tok_s = { gpu = 130, unified = 55, cpu = 28 }
+tok_s_tier = { T1 = 53, T2 = 83, T3 = 176, T4 = 275 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "qwen3.5-4b-heretic-q4_k_m"
@@ -538,11 +669,17 @@ skills = { quality = 48, chat = 48, code = 48, reason = 52, write = 44, long = 3
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192
+params_b = 4
+active_b = 4
+ctx_max = 262_144
 run_mb = 3439   # 2583 weights + 256 KV (~8 full-attn layers x 4 KV x hd256 (~32 KiB/tok); approx) + 600
 needs_avx2 = true
 drafter = "qwen3.5-0.8b-heretic-drafter-q4_k_m"
 min_budget = { gpu = 3584, unified = 3584, cpu = 3584 }
 tok_s = { gpu = 120, unified = 50, cpu = 25 }
+tok_s_tier = { T1 = 42, T2 = 65, T3 = 140, T4 = 218 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "meta-llama3.2-3b-heretic-q4_k_m"
@@ -561,11 +698,17 @@ skills = { quality = 38, chat = 42, code = 34, reason = 34, write = 44, long = 3
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192
+params_b = 3.2
+active_b = 3.2
+ctx_max = 131_072
 run_mb = 3422   # 1926 weights + 896 KV (28 layers x 8 KV x hd128 = 112 KiB/tok) + 600
 needs_avx2 = true
 drafter = "meta-llama3.2-1b-heretic-drafter-q4_k_m"
 min_budget = { gpu = 3584, unified = 3584, cpu = 3584 }
 tok_s = { gpu = 140, unified = 60, cpu = 30 }
+tok_s_tier = { T1 = 56, T2 = 88, T3 = 187, T4 = 292 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "ibm-granite4.2-3b-heretic-q4_k_m"
@@ -584,10 +727,16 @@ skills = { quality = 38, chat = 40, code = 38, reason = 40, write = 36, long = 3
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192
+params_b = 3
+active_b = 3
+ctx_max = 131_072
 run_mb = 3380   # 2140 weights + 640 KV (assumed 40 layers x 8 KV x hd64 = 80 KiB/tok; approx) + 600
 needs_avx2 = true
 min_budget = { gpu = 3584, unified = 3584, cpu = 3584 }
 tok_s = { gpu = 130, unified = 55, cpu = 28 }
+tok_s_tier = { T1 = 51, T2 = 79, T3 = 168, T4 = 263 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "hf-smollm3-3b-heretic-q4_k_m"
@@ -606,10 +755,16 @@ skills = { quality = 38, chat = 40, code = 36, reason = 40, write = 36, long = 3
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192
+params_b = 3
+active_b = 3
+ctx_max = 65_536
 run_mb = 3003   # 1827 weights + 576 KV (36 layers x 4 KV x hd128 = 72 KiB/tok) + 600
 needs_avx2 = true
 min_budget = { gpu = 3072, unified = 3072, cpu = 3072 }
 tok_s = { gpu = 140, unified = 60, cpu = 32 }
+tok_s_tier = { T1 = 59, T2 = 92, T3 = 197, T4 = 308 }
+gaming_safe = true
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 
 [[model]]
 id = "gemma-4-31b-it-abliterated-mtp"

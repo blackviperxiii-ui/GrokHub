@@ -703,8 +703,8 @@ fn more(line: &str, word: &str, rest: &str, remote: bool) -> Option<Result<Actio
 
 /// What the cabin's retired CLI features answer.
 pub const WORKFLOWS_GONE: &str = "Workflows were a grok CLI feature and are not in this app";
-pub const WORKTREE_GONE: &str =
-    "Worktrees were a grok CLI feature; chats run in the bound project folder";
+pub const WORKTREE_GONE: &str = "There is no /worktree command. Chats run in the bound project \
+     folder; only helpers work in worktrees of their own";
 pub const PERMISSION_IN_SETTINGS: &str =
     "Permissions are set in Settings → Defaults, under When the AI wants to change things";
 
@@ -1481,7 +1481,8 @@ mod tests {
         assert_eq!(
             parse("/worktree", false),
             Ok(Action::Effect(Effect::Notice {
-                text: "Worktrees were a grok CLI feature; chats run in the bound project folder"
+                text: "There is no /worktree command. Chats run in the bound project folder; \
+                       only helpers work in worktrees of their own"
                     .into()
             }))
         );

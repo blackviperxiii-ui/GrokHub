@@ -355,4 +355,11 @@ mod tests {
         assert_eq!(TOOL_SET_OUTSIDE, "tool_set_outside");
         let _ = json!({"ok": true});
     }
+
+    #[test]
+    fn a_background_job_has_no_merge_tool() {
+        assert!(!BACKGROUND_TOOLS.contains(&"merge_subagent_work"));
+        assert!(!ToolSet::background().allows("merge_subagent_work"));
+        assert!(ToolSet::FULL.allows("merge_subagent_work"));
+    }
 }

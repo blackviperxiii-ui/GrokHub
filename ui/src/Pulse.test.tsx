@@ -10,6 +10,7 @@ import type {
   PulsePage,
   PulsePost,
   PulseReminded,
+  PulseReviewDone,
   PulseSeed,
 } from "./api";
 
@@ -27,6 +28,8 @@ const api = vi.hoisted(() => ({
   saveFeedPrompt: vi.fn<(text: string) => Promise<FeedPrompt>>(),
   pulseSaved: vi.fn<() => Promise<SavedFind[]>>(),
   pulseUnsave: vi.fn<(url: string) => Promise<SavedFind[]>>(),
+  pulseReviewApply: vi.fn<(id: string) => Promise<PulseReviewDone>>(),
+  pulseReviewIssue: vi.fn<(id: string) => Promise<{ text: string; copied: string }>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -1006,5 +1009,81 @@ describe("Pulse", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  const REVIEW = post({
+    id: "sugg-1",
+    source: "Suggestion",
+    title: "Wait for Export",
+    summary: "3 of 5 report runs needed a fix",
+    link: "",
+    more: "```text\n3 of 5 report runs needed a fix.\n+ 3. wait for the file\n```",
+    review: "Apply change",
+  });
+
+  it("a self-review card applies from its own button and shows the line", async () => {
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [REVIEW] });
+    api.pulseReviewApply.mockResolvedValue({
+      line: "report changed: one run in five tries it first. /skills changes can undo it.",
+      page: { ...PAGE, feed: [] },
+    });
+    render(<Pulse onRun={() => {}} />);
+    const card = await screen.findByRole("listitem", { name: "Wait for Export" });
+    expect(within(card).getByText(/\+ 3\. wait for the file/)).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "More" }));
+    expect(within(card).queryByRole("menuitem", { name: "Copy as GitHub issue" })).toBeNull();
+    await userEvent.click(within(card).getByRole("button", { name: "More" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Apply change" }));
+    expect(api.pulseReviewApply).toHaveBeenCalledWith("sugg-1");
+    expect(api.pulseAct).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText(
+        "report changed: one run in five tries it first. /skills changes can undo it.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("listitem", { name: "Wait for Export" })).toBeNull();
+  });
+
+  it("a refused apply keeps the card and says why", async () => {
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [REVIEW] });
+    api.pulseReviewApply.mockRejectedValue(
+      "This suggestion is no longer waiting. The next Sunday self-review proposes again.",
+    );
+    render(<Pulse onRun={() => {}} />);
+    const card = await screen.findByRole("listitem", { name: "Wait for Export" });
+    await userEvent.click(within(card).getByRole("button", { name: "Apply change" }));
+    expect(
+      await screen.findByText(
+        "This suggestion is no longer waiting. The next Sunday self-review proposes again.",
+      ),
+    ).toBeInTheDocument();
+    expect(api.getPulse).toHaveBeenCalledTimes(2);
+  });
+
+  it("a code idea saves, or copies as a GitHub issue", async () => {
+    const idea = post({
+      id: "sugg-2",
+      source: "Suggestion",
+      title: "Faster export",
+      link: "",
+      review: "Save idea",
+      issue: true,
+    });
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [idea] });
+    api.pulseReviewIssue.mockResolvedValue({
+      text: "## Faster export\n\nProblem: slow",
+      copied: "Issue copied. Paste it on GitHub.",
+    });
+    const write = vi.fn<(text: string) => Promise<void>>().mockResolvedValue();
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: write }, configurable: true });
+    render(<Pulse onRun={() => {}} />);
+    const card = await screen.findByRole("listitem", { name: "Faster export" });
+    expect(within(card).getByRole("button", { name: "Save idea" })).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Copy as GitHub issue" })).toBeNull();
+    await userEvent.click(within(card).getByRole("button", { name: "More" }));
+    await userEvent.click(within(card).getByRole("menuitem", { name: "Copy as GitHub issue" }));
+    expect(api.pulseReviewIssue).toHaveBeenCalledWith("sugg-2");
+    expect(await screen.findByText("Issue copied. Paste it on GitHub.")).toBeInTheDocument();
+    expect(write).toHaveBeenCalledWith("## Faster export\n\nProblem: slow");
   });
 });

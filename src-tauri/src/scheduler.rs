@@ -61,14 +61,7 @@ pub fn utc_offset() -> Option<i32> {
 
 /// The local wall clock at `now_ms` for a UTC offset. 1 Jan 1970 was a Thursday.
 pub fn local_clock(now_ms: u64, offset_min: i32) -> LocalClock {
-    let local = (now_ms / 60_000) as i64 + i64::from(offset_min);
-    let (day, tod) = (local.div_euclid(1440), local.rem_euclid(1440));
-    LocalClock {
-        now_ms,
-        weekday: (day + 4).rem_euclid(7) as u8,
-        hour: (tod / 60) as u32,
-        minute: (tod % 60) as u32,
-    }
+    LocalClock::at_offset(now_ms, offset_min)
 }
 
 /// One look for due jobs. With the lease, each due job is claimed and then

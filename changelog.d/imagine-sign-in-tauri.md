@@ -1,0 +1,1 @@
+- Imagine: sign in with Grok right on the Imagine page in the desktop app, like the old app. Imagine keeps its own sign-in in the OS keychain, uses it first, then your chat sign-in, then an API key.

@@ -93,6 +93,13 @@ function mockReply(callNumber, body) {
     return textReply(AGENT_REPLY_2);
   }
   if (body.includes(AGENT_PROMPT)) {
+    // A new agent-window session is a lead: it plans first and stays
+    // read-only until its plan is approved.
+    if (!body.includes("smoke-agent-plan")) {
+      return toolCall("smoke-agent-plan", "exit_plan_mode", {
+        plan: `1. Write ${AGENT_NOTE}\n2. Tick the to-do`,
+      });
+    }
     if (!body.includes("smoke-agent-write")) {
       return toolCall("smoke-agent-write", "write", { path: AGENT_NOTE, content: AGENT_NOTE_TEXT });
     }
@@ -534,9 +541,13 @@ async function automations(s, config) {
 // folder's MEMORY.md, then search for it the way chat recall would.
 async function memory(s, workspace) {
   await tab(s, "Personal");
-  // Tabs + Reflect/Restore sit above the notes <details>; summary is nested.
+  // Tabs + Reflect/Restore sit above the notes <details>, which starts open
+  // since #1821: a click on its summary would close it, so open it only if shut.
   await waitFor("the personal page", () => find(s, ".memory-files summary"));
-  await click(s, ".memory-files summary");
+  await wd("POST", `${s}/execute/sync`, {
+    script: "const d = document.querySelector('.memory-files details'); if (d) d.open = true;",
+    args: [],
+  });
   const input = await waitFor("the notes files", () => find(s, "input[aria-label='New note']"));
   await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
   await click(s, ".memory-files form.add button[type='submit']");
@@ -909,9 +920,11 @@ async function plan(s, workspace) {
   if (!refused || !refused.body.includes("read-only")) throw new Error("the write was not refused as read-only");
   await shot(s, "plan-card");
   console.log("plan mode refused the write and showed the plan");
+  // Since #1838 a plan card with reply chips offers "Yes, go" in place of
+  // the Approve plan button; either one approves.
   const approve = await wd("POST", `${s}/element/${card}/element`, {
     using: "xpath",
-    value: ".//button[normalize-space()='Approve plan']",
+    value: ".//button[normalize-space()='Approve plan' or normalize-space()='Yes, go']",
   });
   await wd("POST", `${s}/element/${approve[ELEMENT]}/click`, {});
   await waitFor("the reply after the plan", async () => {
@@ -1386,6 +1399,14 @@ async function codeAgent(s, config, workspace) {
     const note = join(workspace, file);
     await waitFor(`${file} in the session's own project`, async () => {
       if (existsSync(note)) return true;
+      // The lead's first message plans: approve its plan card.
+      const [approve] = await xp(
+        "//aside[contains(@class,'code-agent')]//div[contains(@class,'elicit')]//button[normalize-space()='Approve plan'][not(@disabled)]",
+      );
+      if (approve && (await settled(s, approve[ELEMENT]))) {
+        await wd("POST", `${s}/element/${approve[ELEMENT]}/click`, {}).catch(() => {});
+        return null;
+      }
       // Ask me first: the write waits on its card in the agent window.
       const cards = await wd("POST", `${s}/elements`, {
         using: "css selector",

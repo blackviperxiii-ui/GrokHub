@@ -261,6 +261,10 @@ jobs:
         run: bash scripts/test-release-tag-check.sh
       - name: Cards sync test
         run: python3 .github/scripts/test_cards_sync.py
+      - name: Model profiles updater test
+        run: python3 .github/scripts/test_model_profiles.py
+      - name: Local model profiles are up to date
+        run: python3 .github/scripts/test_local_profiles.py
       - name: Repo friction guards
         env:
           # Live label fetch for the Cargo.lock escape hatch (gh / API).

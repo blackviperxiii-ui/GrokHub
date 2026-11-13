@@ -230,7 +230,10 @@ pub fn undo(config_dir: &Path, kind: ChangeKind, id: &str, click: bool) -> Resul
     let ask = ask(click);
     let done = match kind {
         ChangeKind::Skill => {
-            hx::undo_skill_change(config_dir, &config_dir.join("skills"), id, ask)?
+            let done = hx::undo_skill_change(config_dir, &config_dir.join("skills"), id, ask)?;
+            // The skill's runs from the day before count as failures now.
+            crate::chat_trials::skill_undone(config_dir, id, grokhub_core::now_ms());
+            done
         }
         ChangeKind::Connection => {
             let done = hx::undo_connection(config_dir, &grokhub_agent::mcp::config_file(), id, ask);
@@ -343,6 +346,31 @@ mod tests {
                 .err()
                 .as_deref(),
             Some("No change to undo on weekly-report")
+        );
+    }
+
+    #[test]
+    fn a_skill_undo_fails_that_skills_runs_from_the_day_before() {
+        use grokhub_core::outcome::{self as oc, OutcomeResult, OutcomeSignals, TaskOutcome};
+        let root = dir("undo-runs");
+        write_skill(&root, V1);
+        record(&root, V2);
+        let now = grokhub_core::now_ms();
+        let ran = TaskOutcome::finished(
+            "shell-r:1",
+            "skill:weekly-report",
+            &OutcomeSignals {
+                verify_ok: true,
+                ..OutcomeSignals::default()
+            },
+            now - 60_000,
+        );
+        oc::append_outcome(&root, &ran).unwrap();
+        undo(&root, ChangeKind::Skill, "weekly-report", false).expect("undo");
+        let all = oc::read_outcomes(&root);
+        assert_eq!(
+            (all.len(), all[0].result, all[0].reasons.clone()),
+            (1, OutcomeResult::Failure, vec!["undo".to_string()])
         );
     }
 

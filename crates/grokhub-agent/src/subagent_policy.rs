@@ -229,7 +229,11 @@ impl Drop for Ticket {
 /// Decides the ask against the chat's live counts; on allow, takes a place
 /// and returns its ticket. Either way the decision is logged.
 pub fn admit(ask: &Ask<'_>) -> Result<Ticket, String> {
-    let sized = sized(ask.session);
+    // A lead's turn is the host's own count, with a long turn's share.
+    let sized = match crate::lead::lead_turn(ask.session) {
+        Some(turn) => Some((turn, TaskSize::Long)),
+        None => sized(ask.session),
+    };
     let turn = sized.map_or(0, |(turn, _)| turn);
     let mut chats = CHATS.lock().unwrap_or_else(|e| e.into_inner());
     if chats.len() >= CHATS_CAP && !chats.contains_key(ask.session) {
@@ -542,5 +546,105 @@ mod tests {
         // A new turn starts its own count.
         crate::route::sizing::note_latest(session, 78, TaskSize::Long);
         assert!(admit(&general).is_ok());
+    }
+
+    #[test]
+    fn a_lead_turn_starts_helpers_on_a_small_message() {
+        use crate::lead::{set_lead_session, LeadPhase};
+        let session = "policy-lead-small-test";
+        crate::route::sizing::note_latest(session, 5, TaskSize::Tiny);
+        let general = Ask {
+            session,
+            ..ask(false)
+        };
+        let small = "This is a small task. Do it yourself instead of starting a helper.";
+        assert_eq!(admit(&general).err().as_deref(), Some(small));
+        set_lead_session(session, Some(LeadPhase::Work));
+        drop(admit(&general).expect("a working lead turn delegates"));
+        set_lead_session(session, Some(LeadPhase::Plan));
+        drop(admit(&general).expect("a planning lead turn delegates"));
+        // A turn the host did not mark gets the router's size again.
+        set_lead_session(session, None);
+        assert_eq!(admit(&general).err().as_deref(), Some(small));
+    }
+
+    #[test]
+    fn a_second_equal_message_gets_a_fresh_lead_allowance() {
+        use crate::lead::{set_lead_session, LeadPhase};
+        let session = "policy-lead-again-test";
+        crate::route::sizing::note_latest(session, 5, TaskSize::Tiny);
+        set_lead_session(session, Some(LeadPhase::Work));
+        let objectives: Vec<String> = (0..11).map(|n| format!("read part {n}")).collect();
+        for objective in &objectives[..10] {
+            let explore = Ask {
+                session,
+                objective,
+                ..ask(true)
+            };
+            drop(admit(&explore).expect("within the lead turn's ten"));
+        }
+        let eleventh = Ask {
+            session,
+            objective: &objectives[10],
+            ..ask(true)
+        };
+        assert_eq!(
+            admit(&eleventh).err().as_deref(),
+            Some(
+                "This turn already started 10 helpers, its limit. Use their results or do the \
+                 rest yourself."
+            )
+        );
+        // The same message again: the router's turn is unchanged, the host's is new.
+        set_lead_session(session, Some(LeadPhase::Work));
+        assert!(admit(&eleventh).is_ok());
+        set_lead_session(session, None);
+    }
+
+    #[test]
+    fn an_approval_keeps_the_lead_turns_count() {
+        use crate::lead::{set_lead_session, LeadPhase};
+        let session = "policy-lead-approve-test";
+        set_lead_session(session, Some(LeadPhase::Plan));
+        for n in 0..10 {
+            let objective = format!("read part {n}");
+            let explore = Ask {
+                session,
+                objective: &objective,
+                ..ask(true)
+            };
+            drop(admit(&explore).expect("within the lead turn's ten"));
+        }
+        crate::lead::plan_approved(session);
+        assert_eq!(
+            admit(&Ask {
+                session,
+                ..ask(false)
+            })
+            .err()
+            .as_deref(),
+            Some(
+                "This turn already started 10 helpers, its limit. Use their results or do the \
+                 rest yourself."
+            )
+        );
+        set_lead_session(session, None);
+    }
+
+    #[test]
+    fn an_on_device_lead_session_still_never_delegates() {
+        use crate::lead::{set_lead_session, LeadPhase};
+        let session = "policy-lead-local-test";
+        set_lead_session(session, Some(LeadPhase::Work));
+        let local = Ask {
+            session,
+            lead_model: "local:gemma-26b",
+            ..ask(true)
+        };
+        assert_eq!(
+            admit(&local).err().as_deref(),
+            Some("Helpers don't run under an on-device lead model. Do this step yourself.")
+        );
+        set_lead_session(session, None);
     }
 }

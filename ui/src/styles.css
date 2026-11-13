@@ -417,7 +417,7 @@ select:focus-visible {
   display: flex;
   flex: 1;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
 }
 
 .palette-open {
@@ -1409,6 +1409,15 @@ button.md-copy {
 /* Phones: the categories scroll sideways in one row, and the category's pages
    sit in a row above the page instead of down the side. */
 @media (max-width: 600px) {
+  .composer {
+    flex-wrap: wrap;
+  }
+
+  .composer textarea {
+    order: -1;
+    flex: 1 0 100%;
+  }
+
   .settings-page {
     overflow-y: auto;
   }
@@ -2640,6 +2649,14 @@ span.chip.quiet {
   flex: 1 1 200px;
 }
 
+/* The agent window's plan: a document to edit before it is approved. */
+.card.elicit textarea.plan-draft {
+  flex-basis: 100%;
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+}
+
 .signed-out {
   margin: auto;
   max-width: 420px;
@@ -2817,6 +2834,7 @@ label.toggle-row {
   right: 0;
   z-index: 5;
   min-width: 190px;
+  width: max-content;
   display: flex;
   flex-direction: column;
   padding: 4px;
@@ -3420,15 +3438,6 @@ label.toggle-row {
   animation: pop-in var(--t-base) var(--ease-out) backwards;
 }
 
-/* Chat's cards sit in <ViewTransition>: one that arrives, changes or goes
-   eases over 150ms. A webview without view transitions just shows the change. */
-::view-transition-group(*),
-::view-transition-old(*),
-::view-transition-new(*) {
-  animation-duration: 150ms;
-  animation-timing-function: var(--ease-out);
-}
-
 /* People who ask for less motion get none: state changes still happen, instantly. */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -3439,13 +3448,6 @@ label.toggle-row {
     transition-duration: 0.01ms !important;
     transition-delay: 0s !important;
     scroll-behavior: auto !important;
-  }
-
-  /* `*` does not reach the view transition's pseudo-elements. */
-  ::view-transition-group(*),
-  ::view-transition-old(*),
-  ::view-transition-new(*) {
-    animation: none !important;
   }
 }
 
@@ -3601,7 +3603,8 @@ label.toggle-row {
 .tabs button {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  padding: 4px 12px;
 }
 
 .tab-icon {
@@ -4317,6 +4320,69 @@ label.toggle-row {
 
 .card.agent.failed .card-status {
   color: var(--danger-text);
+}
+
+/* A helper's step, tokens and time: never the failed row's red. */
+.card.agent .card-status.task-progress {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+/* What became of a helper's work in its worktree. Only a conflict is the
+   failed row's red; held work waits for a click and is not an error. The
+   line can hold a conflict's file names or a held reason's folder, and a
+   path with no hyphen has nowhere to break unless it may break anywhere. */
+.card.agent .card-status.task-work {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.card.agent.work.conflict .card-status.task-work {
+  color: var(--danger-text);
+}
+
+.card.agent .card-status.work-partial {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* File names and folders are as long as the helper made them. */
+.card.agent .card-status.work-detail {
+  color: var(--muted);
+  font-size: var(--font-caption);
+  overflow-wrap: anywhere;
+}
+
+.card.agent.work .error {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+/* Focus lands here when the row a click was on is gone. */
+.agents .work-said:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A helper's result in its details window: plain text that scrolls. */
+.task-steps {
+  margin: 0;
+  padding-left: 24px;
+}
+
+.task-result {
+  max-height: 40vh;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-caption);
+}
+
+.task-result:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .card.agent.completed .card-title,
