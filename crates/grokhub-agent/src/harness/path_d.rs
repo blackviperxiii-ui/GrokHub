@@ -147,6 +147,7 @@ pub fn unasked_title(class: HardClass) -> String {
         HardClass::SystemAdmin => "use admin rights or change system protection",
         HardClass::Automation => "add an automation",
         HardClass::MergeWork => "merge a helper's work",
+        HardClass::Ship => "push or open a pull request",
     };
     format!(
         "{} tried to {what} without asking",
@@ -314,6 +315,10 @@ mod tests {
         assert_eq!(
             unasked_title(HardClass::MergeWork),
             "Loadout tried to merge a helper's work without asking"
+        );
+        assert_eq!(
+            unasked_title(HardClass::Ship),
+            "Loadout tried to push or open a pull request without asking"
         );
         assert_eq!(
             unasked_title(HardClass::Credentials),

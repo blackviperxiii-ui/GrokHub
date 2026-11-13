@@ -8,9 +8,14 @@
 //! gh argv itself (no shell, no free text), never emits a force, mirror,
 //! delete or prune flag, and never deletes a branch. A rejected push is
 //! reported, never retried. Hooks and fsmonitor are off for every git call.
+//!
+//! The agent window's Tasks panel pushes through [`plan_at`] and [`ship_at`]:
+//! always Ask, whatever the setting, and the push names the one commit made
+//! there, never `HEAD`.
 
 use crate::activity::{self as code_activity, Entry, Kind as ActKind};
 use crate::runs::repo_key;
+use grokhub_agent::ship_tree;
 use grokhub_core::proc_util::hide_windows_console;
 use grokhub_core::redact::redact_secrets;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -365,6 +370,115 @@ pub fn push_args(branch: &str) -> Vec<String> {
     ]
 }
 
+/// The push argv after `git` from the agent window: the one commit `sha` to
+/// the same-named branch on origin, with no submodule pushed and no signed
+/// push. Never a force, mirror, delete or prune flag.
+pub fn push_commit_args(sha: &str, branch: &str) -> Vec<String> {
+    vec![
+        "push".into(),
+        "--porcelain".into(),
+        "--no-recurse-submodules".into(),
+        "--no-signed".into(),
+        "origin".into(),
+        format!("{sha}:refs/heads/{branch}"),
+    ]
+}
+
+/// What every push from the agent window sets before its verb, whatever the
+/// repository's config says: no tags along with the commit, no signed push,
+/// and no hint about the grafts file the push is told not to read.
+const PUSH_PINS: [&str; 6] = [
+    "-c",
+    "push.followTags=false",
+    "-c",
+    "push.gpgSign=false",
+    "-c",
+    "advice.graftFileDeprecated=false",
+];
+
+/// The null device, which git reads as "no hooks folder".
+#[cfg(windows)]
+const NULL_DEVICE: &str = "NUL";
+#[cfg(not(windows))]
+const NULL_DEVICE: &str = "/dev/null";
+
+/// The git config the agent window's `gh` runs its own git calls with. It is
+/// set in the environment, which git reads after the repository's file.
+const GH_GIT_PINS: [(&str, &str); 4] = [
+    ("core.hooksPath", NULL_DEVICE),
+    ("core.fsmonitor", "false"),
+    ("push.followTags", "false"),
+    ("advice.graftFileDeprecated", "false"),
+];
+
+/// Sets [`GH_GIT_PINS`] on `cmd` through `GIT_CONFIG_COUNT`, and turns
+/// replace refs and a grafts file off.
+fn pin_git_env(cmd: &mut Command) {
+    cmd.env("GIT_CONFIG_COUNT", GH_GIT_PINS.len().to_string());
+    for (at, (key, value)) in GH_GIT_PINS.iter().enumerate() {
+        cmd.env(format!("GIT_CONFIG_KEY_{at}"), key)
+            .env(format!("GIT_CONFIG_VALUE_{at}"), value);
+    }
+    cmd.env("GIT_NO_REPLACE_OBJECTS", "1")
+        .env("GIT_GRAFT_FILE", NULL_DEVICE);
+}
+
+/// A full commit id in lower-case hex, SHA-1 or SHA-256.
+fn commit_id(sha: &str) -> bool {
+    (sha.len() == 40 || sha.len() == 64)
+        && sha
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// What [`plan_at`] and [`ship_at`] say for a `sha` that is no commit id.
+pub const NOT_A_COMMIT: &str = "The commit to push is not a commit id.";
+
+/// What a push or pull request from the agent window says when the
+/// repository's own git config sets `key`.
+pub fn untrusted_sentence(key: &str) -> String {
+    let key: String = key.chars().filter(|c| !c.is_control()).take(120).collect();
+    format!("This repository's own git config sets {key}; push from your terminal.")
+}
+
+/// Refuses when the repository's own git config names a program to run or
+/// redirects a push; read just before the agent window spawns git or gh.
+fn refuse_untrusted(dir: &Path) -> Result<(), String> {
+    let (top, _) =
+        ship_tree::head(dir).map_err(|err| format!("The repository could not be read: {err}."))?;
+    match ship_tree::untrusted_config(&top) {
+        Ok(None) => Ok(()),
+        Ok(Some(key)) => Err(untrusted_sentence(&key)),
+        Err(err) => Err(format!(
+            "The repository's git config could not be read: {err}."
+        )),
+    }
+}
+
+/// What `refs/heads/<branch>` names on origin, read with the agent window's
+/// pins: the commit a pull request for `branch` would carry. `None` when
+/// origin has no such branch. It talks to origin, so Offline only refuses it.
+pub(crate) fn origin_branch(dir: &Path, branch: &str) -> Result<Option<String>, String> {
+    grokhub_core::offline::refuse()?;
+    refuse_untrusted(dir)?;
+    let refname = format!("refs/heads/{branch}");
+    let (code, out) = git_with(
+        dir,
+        &PUSH_PINS,
+        &["ls-remote", "--refs", "origin", &refname],
+    )?;
+    if code != 0 {
+        return Err(format!(
+            "origin could not be read (git exited with {code}); open the pull request from your \
+             terminal."
+        ));
+    }
+    Ok(out.lines().find_map(|line| {
+        let (sha, name) = line.split_once('\t')?;
+        (name == refname && commit_id(sha)).then(|| sha.to_string())
+    }))
+}
+
 /// The gh argv for "Open PR into": base and head fixed, title and body from
 /// the commits.
 pub fn pr_args(base: &str, branch: &str) -> Vec<String> {
@@ -438,13 +552,25 @@ pub fn rejected(output: &str) -> bool {
 // ---- the repo, read through git and gh ----
 
 fn git(dir: &Path, args: &[&str]) -> Result<(i32, String), String> {
+    git_with(dir, &[], args)
+}
+
+/// [`git`] with `pins` before the verb. With pins, replace refs and a
+/// grafts file are off too: the agent window's push sends the history the
+/// commits themselves record, which is the one its checks read.
+fn git_with(dir: &Path, pins: &[&str], args: &[&str]) -> Result<(i32, String), String> {
     let mut c = grokhub_core::git_cmd::git();
     c.args(["-c", "core.quotepath=false"])
+        .args(pins)
         .args(args)
         .current_dir(dir)
         .stdin(Stdio::null())
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0");
+    if !pins.is_empty() {
+        c.env("GIT_NO_REPLACE_OBJECTS", "1")
+            .env("GIT_GRAFT_FILE", NULL_DEVICE);
+    }
     hide_windows_console(&mut c);
     let out = c
         .output()
@@ -532,19 +658,28 @@ fn head_sha(dir: &Path) -> Option<String> {
     git_line(dir, &["rev-parse", "HEAD"])
 }
 
-/// The branch's open PR, through the user's own gh login. Read only.
-fn pr_of(dir: &Path, branch: &str) -> Pr {
-    if grokhub_core::offline::refuse().is_err() {
-        return Pr::Unknown;
-    }
+/// `gh` with `args` in `dir`, never prompting. `pinned`: from the agent
+/// window, with [`GH_GIT_PINS`] for the git calls gh makes itself.
+fn gh(dir: &Path, args: &[String], pinned: bool) -> Command {
     let mut c = Command::new("gh");
-    c.args(pr_view_args(branch))
+    c.args(args)
         .current_dir(dir)
         .stdin(Stdio::null())
         .env("GH_PROMPT_DISABLED", "1")
         .env("GIT_TERMINAL_PROMPT", "0");
+    if pinned {
+        pin_git_env(&mut c);
+    }
     hide_windows_console(&mut c);
-    let Ok(out) = c.output() else {
+    c
+}
+
+/// The branch's open PR, through the user's own gh login. Read only.
+fn pr_of(dir: &Path, branch: &str, pinned: bool) -> Pr {
+    if grokhub_core::offline::refuse().is_err() {
+        return Pr::Unknown;
+    }
+    let Ok(out) = gh(dir, &pr_view_args(branch), pinned).output() else {
         return Pr::Unknown;
     };
     parse_pr_view(
@@ -670,8 +805,8 @@ struct Ctx {
 /// Test seam: a local bare repo as origin stands in for this host and PR.
 pub(crate) type Probe = Option<(Host, Pr)>;
 
-/// The facts for the checked-out branch.
-fn context(dir: &Path, config_dir: &Path, probe: &Probe) -> Result<Ctx, Blocked> {
+/// The facts for the checked-out branch. `pinned`: for the agent window.
+fn context(dir: &Path, config_dir: &Path, probe: &Probe, pinned: bool) -> Result<Ctx, Blocked> {
     let branch = current_branch(dir).ok_or(Blocked::Detached)?;
     branch_ok(&branch)?;
     let host = push_host(dir).ok_or(Blocked::NoRemote)?;
@@ -679,7 +814,7 @@ fn context(dir: &Path, config_dir: &Path, probe: &Probe) -> Result<Ctx, Blocked>
         Some((host, pr)) => (*host, pr.clone()),
         None => {
             let pr = if host == Host::GitHub {
-                pr_of(dir, &branch)
+                pr_of(dir, &branch, pinned)
             } else {
                 Pr::None
             };
@@ -712,7 +847,7 @@ pub(crate) fn facts_for(
     let host = push_host(dir).ok_or(Blocked::NoRemote)?;
     let (host, pr) = match probe {
         Some((host, pr)) => (*host, pr.clone()),
-        None if host == Host::GitHub => (host, pr_of(dir, branch)),
+        None if host == Host::GitHub => (host, pr_of(dir, branch, false)),
         None => (host, Pr::None),
     };
     let key = key_of(dir);
@@ -726,10 +861,25 @@ pub(crate) fn facts_for(
     Ok((key, facts))
 }
 
-fn command_for(action: Action, cfg: &CodeShip, branch: &str) -> (&'static str, Vec<String>) {
-    match action {
-        Action::Push => ("git", push_args(branch)),
-        Action::Pr => ("gh", pr_args(&cfg.auto_base, branch)),
+/// The command for `action`. With `sha`, a push sends that one commit.
+fn command_for(
+    action: Action,
+    cfg: &CodeShip,
+    branch: &str,
+    sha: Option<&str>,
+) -> (&'static str, Vec<String>) {
+    match (action, sha) {
+        (Action::Push, Some(sha)) => ("git", push_commit_args(sha, branch)),
+        (Action::Push, None) => ("git", push_args(branch)),
+        (Action::Pr, _) => ("gh", pr_args(&cfg.auto_base, branch)),
+    }
+}
+
+/// The settings with every push and PR confirmed: the agent window's.
+fn asking(cfg: &CodeShip) -> CodeShip {
+    CodeShip {
+        mode: ShipMode::Ask,
+        ..cfg.clone()
     }
 }
 
@@ -737,7 +887,35 @@ pub fn plan(config_dir: &Path, dir: &Path, cfg: &CodeShip, action: Action) -> Pl
     plan_with(config_dir, dir, cfg, action, None)
 }
 
+/// What the agent window's push of the commit `sha`, or its PR, would run.
+/// It always asks: the settings are read as Ask, whatever they say.
+pub fn plan_at(config_dir: &Path, dir: &Path, cfg: &CodeShip, action: Action, sha: &str) -> Plan {
+    plan_at_with(config_dir, dir, cfg, action, sha, None)
+}
+
+pub(crate) fn plan_at_with(
+    config_dir: &Path,
+    dir: &Path,
+    cfg: &CodeShip,
+    action: Action,
+    sha: &str,
+    probe: Probe,
+) -> Plan {
+    plan_on(config_dir, dir, &asking(cfg), action, Some(sha), probe)
+}
+
 fn plan_with(config_dir: &Path, dir: &Path, cfg: &CodeShip, action: Action, probe: Probe) -> Plan {
+    plan_on(config_dir, dir, cfg, action, None, probe)
+}
+
+fn plan_on(
+    config_dir: &Path,
+    dir: &Path,
+    cfg: &CodeShip,
+    action: Action,
+    sha: Option<&str>,
+    probe: Probe,
+) -> Plan {
     let mut out = Plan {
         action,
         branch: current_branch(dir),
@@ -750,7 +928,11 @@ fn plan_with(config_dir: &Path, dir: &Path, cfg: &CodeShip, action: Action, prob
         pr_url: None,
         skips_hook: action == Action::Push && has_pre_push_hook(dir),
     };
-    let ctx = match context(dir, config_dir, &probe) {
+    if sha.is_some_and(|sha| !commit_id(sha)) {
+        out.blocked = Some(NOT_A_COMMIT.into());
+        return out;
+    }
+    let ctx = match context(dir, config_dir, &probe, sha.is_some()) {
         Ok(ctx) => ctx,
         Err(b) => {
             out.blocked = Some(b.message(out.branch.as_deref().unwrap_or("")));
@@ -758,7 +940,7 @@ fn plan_with(config_dir: &Path, dir: &Path, cfg: &CodeShip, action: Action, prob
         }
     };
     let f = &ctx.facts;
-    let (program, args) = command_for(action, cfg, &f.branch);
+    let (program, args) = command_for(action, cfg, &f.branch, sha);
     out.command = shown(program, &args);
     out.app_made = f.app_made;
     if let Pr::Open { url, .. } = &f.pr {
@@ -818,6 +1000,49 @@ pub fn ship(
     ship_with(config_dir, dir, cfg, action, confirmed, expected, None)
 }
 
+/// The agent window's push of the commit `sha`, or its PR. Always Ask:
+/// `confirmed` must be true and `expected` the command the confirm showed.
+/// The push names `sha`, never `HEAD`, with [`PUSH_PINS`]; gh runs its git
+/// calls with [`GH_GIT_PINS`]. Right before either spawns, the repository's
+/// own config is read again for a program it would run.
+pub fn ship_at(
+    config_dir: &Path,
+    dir: &Path,
+    cfg: &CodeShip,
+    action: Action,
+    sha: &str,
+    confirmed: bool,
+    expected: Option<&str>,
+) -> Result<Shipped, String> {
+    ship_at_with(config_dir, dir, cfg, action, sha, confirmed, expected, None)
+}
+
+pub(crate) fn ship_at_with(
+    config_dir: &Path,
+    dir: &Path,
+    cfg: &CodeShip,
+    action: Action,
+    sha: &str,
+    confirmed: bool,
+    expected: Option<&str>,
+    probe: Probe,
+) -> Result<Shipped, String> {
+    if !commit_id(sha) {
+        return Err(NOT_A_COMMIT.into());
+    }
+    let cfg = asking(cfg);
+    ship_on(
+        config_dir,
+        dir,
+        &cfg,
+        action,
+        Some(sha),
+        confirmed,
+        expected,
+        probe,
+    )
+}
+
 fn ship_with(
     config_dir: &Path,
     dir: &Path,
@@ -827,10 +1052,26 @@ fn ship_with(
     expected: Option<&str>,
     probe: Probe,
 ) -> Result<Shipped, String> {
-    let ctx = context(dir, config_dir, &probe)
+    ship_on(
+        config_dir, dir, cfg, action, None, confirmed, expected, probe,
+    )
+}
+
+fn ship_on(
+    config_dir: &Path,
+    dir: &Path,
+    cfg: &CodeShip,
+    action: Action,
+    sha: Option<&str>,
+    confirmed: bool,
+    expected: Option<&str>,
+    probe: Probe,
+) -> Result<Shipped, String> {
+    let pinned = sha.is_some();
+    let ctx = context(dir, config_dir, &probe, pinned)
         .map_err(|b| b.message(&current_branch(dir).unwrap_or_default()))?;
     let f = &ctx.facts;
-    let (program, args) = command_for(action, cfg, &f.branch);
+    let (program, args) = command_for(action, cfg, &f.branch, sha);
     let command = shown(program, &args);
     let verdict = match action {
         Action::Push => guard(cfg, f),
@@ -873,20 +1114,17 @@ fn ship_with(
     } else {
         "user"
     };
+    if pinned {
+        refuse_untrusted(dir)?;
+    }
     let (exit, raw) = match action {
         Action::Push => {
             let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-            git(dir, &argv)?
+            let pins: &[&str] = if pinned { &PUSH_PINS } else { &[] };
+            git_with(dir, pins, &argv)?
         }
         Action::Pr => {
-            let mut c = Command::new("gh");
-            c.args(&args)
-                .current_dir(dir)
-                .stdin(Stdio::null())
-                .env("GH_PROMPT_DISABLED", "1")
-                .env("GIT_TERMINAL_PROMPT", "0");
-            hide_windows_console(&mut c);
-            let out = c
+            let out = gh(dir, &args, pinned)
                 .output()
                 .map_err(|_| "gh isn't installed or couldn't start. Install the GitHub CLI and sign in with gh auth login.".to_string())?;
             let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -896,7 +1134,10 @@ fn ship_with(
     };
     let output = clean_output(&raw);
     let summary = match (action, exit) {
-        (Action::Push, 0) => format!("Pushed {} to origin.", f.branch),
+        (Action::Push, 0) => match sha {
+            Some(sha) => format!("Pushed {} to {} on origin.", &sha[..8], f.branch),
+            None => format!("Pushed {} to origin.", f.branch),
+        },
         (Action::Push, _) if rejected(&output) => {
             "Rejected: origin has commits this branch doesn't. Pull them first; the app never force-pushes.".into()
         }

@@ -104,6 +104,12 @@ struct Snapshot {
     common: PathBuf,
     config: Config,
     hooks: Hooks,
+    /// The real path of the folder git reads `commondir` in (`.git`, or a
+    /// linked worktree's own folder), and that file as it was. A `commondir`
+    /// planted there sends git to config and hooks in another folder, so it
+    /// is guarded like the config. None in a helper's tree, whose pointer is
+    /// never followed.
+    git_dir: Option<(PathBuf, Config)>,
 }
 
 /// What is at a path, without following a link there.
@@ -251,18 +257,19 @@ fn helper_tree(workspace: &Path) -> Option<Option<(PathBuf, PathBuf)>> {
 /// The repository folder git reads for `workspace`: `.git` itself, or the
 /// common folder of a linked worktree (where its config and hooks live).
 pub fn common_dir(workspace: &Path) -> Option<PathBuf> {
-    read_dot(workspace).map(|(_, _, common)| common)
+    read_dot(workspace).map(|(_, _, common, _)| common)
 }
 
-/// The folder that holds `.git` for `workspace`, what that `.git` is, and
-/// the repository folder it leads to.
-fn read_dot(workspace: &Path) -> Option<(PathBuf, DotGit, PathBuf)> {
+/// The folder that holds `.git` for `workspace`, what that `.git` is, the
+/// repository folder it leads to, and the folder git reads `commondir` in
+/// (none in a helper's tree).
+fn read_dot(workspace: &Path) -> Option<(PathBuf, DotGit, PathBuf, Option<PathBuf>)> {
     if let Some(pinned) = helper_tree(workspace) {
         // A helper's tree: where its `.git` points is never followed.
         let (tree, common) = pinned?;
         let dot =
             read_file(&tree.join(".git"), MAX_POINTER_BYTES).map_or(DotGit::Other, DotGit::Pointer);
-        return Some((tree, dot, common));
+        return Some((tree, dot, common, None));
     }
     let dot = workspace.join(".git");
     let (was, git_dir) = match kind(&dot) {
@@ -292,9 +299,9 @@ fn read_dot(workspace: &Path) -> Option<(PathBuf, DotGit, PathBuf)> {
                 git_dir.join(raw)
             }
         }
-        None => git_dir,
+        None => git_dir.clone(),
     };
-    Some((workspace.to_path_buf(), was, common))
+    Some((workspace.to_path_buf(), was, common, Some(git_dir)))
 }
 
 /// Folders one level down that are checked for a repository of their own,
@@ -362,7 +369,7 @@ pub fn restore(guard: &Guard) -> Option<String> {
 }
 
 fn take_repo(workspace: &Path) -> Option<Snapshot> {
-    let (holder, dot, named) = read_dot(workspace)?;
+    let (holder, dot, named, git_dir) = read_dot(workspace)?;
     if kind(&named) != Kind::Dir {
         return None;
     }
@@ -383,12 +390,27 @@ fn take_repo(workspace: &Path) -> Option<Snapshot> {
         Kind::File => Hooks::Unguarded,
         Kind::Other => fs::read_link(&hooks_dir).map_or(Hooks::Unguarded, Hooks::Link),
     };
+    let git_dir = git_dir
+        .filter(|dir| kind(dir) == Kind::Dir)
+        .and_then(|dir| fs::canonicalize(dir).ok())
+        .map(|dir| {
+            let file = dir.join("commondir");
+            let was = match kind(&file) {
+                Kind::Absent => Config::Absent,
+                Kind::File => {
+                    read_file(&file, MAX_POINTER_BYTES).map_or(Config::Unguarded, Config::File)
+                }
+                Kind::Dir | Kind::Other => Config::Unguarded,
+            };
+            (dir, was)
+        });
     Some(Snapshot {
         work,
         dot,
         common,
         config,
         hooks,
+        git_dir,
     })
 }
 
@@ -444,6 +466,11 @@ fn restore_repo(snapshot: &Snapshot) -> Found {
         // A worktree folder that was moved or removed is the command's own
         // business. The main repository below is guarded either way.
     }
+    if let Some((dir, was)) = &snapshot.git_dir {
+        if work_there && kind(dir) == Kind::Dir && still_real(dir) && restore_commondir(dir, was) {
+            found.put_back.push(".git/commondir");
+        }
+    }
     if kind(&snapshot.common) != Kind::Dir || !still_real(&snapshot.common) {
         // Nothing is written: the folder there now is not the one that was
         // copied. A link left as `.git` would send git wherever it points,
@@ -478,6 +505,25 @@ fn restore_repo(snapshot: &Snapshot) -> Found {
         found.put_back.push(".git/hooks");
     }
     found
+}
+
+/// Make `<dir>/commondir` what it was before; returns whether it had
+/// changed. One that was not there goes, whatever it is now.
+fn restore_commondir(dir: &Path, before: &Config) -> bool {
+    let path = dir.join("commondir");
+    match before {
+        Config::Unguarded => false,
+        Config::Absent => {
+            kind(&path) != Kind::Absent && {
+                clear(&path);
+                true
+            }
+        }
+        Config::File(bytes) => {
+            let same = read_file(&path, MAX_POINTER_BYTES).as_ref() == Some(bytes);
+            !same && write_back(&path, bytes)
+        }
+    }
 }
 
 /// Write `bytes` at `path` as a new file. Whatever is there goes first, and
@@ -648,6 +694,60 @@ mod tests {
             "refs and HEAD are git's own work"
         );
         let _ = fs::remove_dir_all(&ws);
+    }
+
+    /// A command copied `.git` elsewhere, gave the copy a push address and
+    /// a hook, and wrote `.git/commondir` to send git there. Git would then
+    /// read the copy's config and run its hooks outside the sandbox.
+    #[test]
+    fn a_commondir_planted_in_the_git_folder_is_removed() {
+        let ws = scratch("commondir");
+        let git = ws.join(".git");
+        fs::create_dir_all(git.join("hooks")).unwrap();
+        fs::write(git.join("config"), "[core]\n\tbare = false\n").unwrap();
+        let guard = take(&ws).expect("a repository");
+
+        let evil = ws.join("evil");
+        fs::create_dir_all(evil.join("hooks")).unwrap();
+        fs::write(
+            evil.join("config"),
+            "[remote \"origin\"]\n\tpushurl = https://github.com/attacker/x.git\n",
+        )
+        .unwrap();
+        fs::write(evil.join("hooks/pre-commit"), "#!/bin/sh\ntouch marker\n").unwrap();
+        fs::write(git.join("commondir"), format!("{}\n", evil.display())).unwrap();
+
+        let note = restore(&guard).expect("put back");
+        assert!(
+            note.starts_with("The sandbox put back .git/commondir: "),
+            "{note}"
+        );
+        assert!(!git.join("commondir").exists());
+        assert_eq!(
+            listing(&git),
+            pairs(&[("config", "[core]\n\tbare = false\n")])
+        );
+        assert_eq!(restore(&guard), None, "a second pass finds nothing");
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn a_linked_worktrees_rewritten_commondir_is_put_back_with_its_bytes() {
+        let base = scratch("commondir-linked");
+        let (main, wt, _pointer) = linked(&base);
+        let guard = take(&wt).expect("a repository");
+        let gitdir = main.join(".git/worktrees/wt");
+        fs::write(gitdir.join("commondir"), "/home/user/elsewhere\n").unwrap();
+        let note = restore(&guard).expect("put back");
+        assert!(
+            note.starts_with("The sandbox put back .git/commondir: "),
+            "{note}"
+        );
+        assert_eq!(
+            fs::read_to_string(gitdir.join("commondir")).unwrap(),
+            "../..\n"
+        );
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

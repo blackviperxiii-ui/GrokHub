@@ -1398,6 +1398,8 @@ mod tests {
             "start_share",
             "delete_all_chats",
             "read_turn",
+            "ship_commit",
+            "ship_waive",
         ] {
             assert!(
                 handlers.contains(&name),

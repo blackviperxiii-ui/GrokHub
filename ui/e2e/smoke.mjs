@@ -12,9 +12,10 @@
 // SMOKE_SHOTS=<folder> to keep one screenshot per page the run walks through.
 // SMOKE_WEB=1 adds the web access step, which needs Playwright's Chromium.
 
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -27,7 +28,7 @@ import {
 import { createServer } from "node:http";
 import { connect as tlsConnect } from "node:tls";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPLY = "Wrote the note for the smoke test";
@@ -46,6 +47,21 @@ const AGENT_REPLY = "The session note is written";
 const AGENT_PROMPT_2 = "smoke agent window: write the follow-up note";
 const AGENT_NOTE_2 = "agent-session-follow-up.txt";
 const AGENT_REPLY_2 = "The follow-up note is written";
+// The Tasks panel's review, waive and commit: a session in a git project of
+// its own writes a note, its review helper reports one blocker, and the
+// person waives it, allows a planted key-shaped line and commits.
+const SHIP_PROMPT = "smoke ship: write the ship note and review it";
+const SHIP_NOTE = "ship-note.txt";
+const SHIP_NOTE_TEXT = "written for the ship check";
+const SHIP_REPLY = "The note is written and reviewed";
+const SHIP_FINDING = "ship-note.txt:1 the note has no date";
+const SHIP_KEY_FILE = "keys.txt";
+// The secret scan's own test shape; not a real key.
+const SHIP_KEY_LINE = 'token = "sk-abcdefghijklmnopqrstuv"';
+// The start of the review helper's persona (crates/grokhub-agent/src/review.rs).
+const REVIEW_PERSONA_START = "You are the review helper.";
+// Where the stand-in for gh writes each command line it was started with.
+const GH_CALLS = "gh-calls.log";
 
 const binary = process.argv[2];
 if (!binary) {
@@ -85,6 +101,35 @@ function mockReply(callNumber, body) {
     return textReply(JSON.stringify([PULSE_IDEA]));
   }
   if (body.includes(WEB_PROMPT)) return textReply(WEB_REPLY);
+  // The review helper: one blocker, then it is done.
+  if (body.includes(REVIEW_PERSONA_START)) {
+    if (!body.includes("smoke-review-findings")) {
+      return toolCall("smoke-review-findings", "report_findings", {
+        findings: [{ severity: "high", text: SHIP_FINDING }],
+      });
+    }
+    return textReply("One thing must be fixed before this ships.");
+  }
+  // A lead in the ship project: plan, write the note, read it back, start
+  // a review helper, then reply.
+  if (body.includes(SHIP_PROMPT)) {
+    if (!body.includes("smoke-ship-plan")) {
+      return toolCall("smoke-ship-plan", "exit_plan_mode", { plan: `1. Write ${SHIP_NOTE}\n2. Review it` });
+    }
+    if (!body.includes("smoke-ship-write")) {
+      return toolCall("smoke-ship-write", "write", { path: SHIP_NOTE, content: SHIP_NOTE_TEXT });
+    }
+    if (!body.includes("smoke-ship-read")) {
+      return toolCall("smoke-ship-read", "read_file", { target_file: SHIP_NOTE });
+    }
+    if (!body.includes("smoke-ship-review")) {
+      return toolCall("smoke-ship-review", "spawn_subagent", {
+        type: "review",
+        prompt: "Check the note against the plan.",
+      });
+    }
+    return textReply(SHIP_REPLY);
+  }
   // Before the first agent prompt, which this turn carries as history.
   if (body.includes(AGENT_PROMPT_2)) {
     if (!body.includes("smoke-agent-follow-up")) {
@@ -520,6 +565,16 @@ async function scrollIntoView(s, css) {
   await wd("POST", `${s}/execute/sync`, {
     script: "arguments[0].scrollIntoView({block:'start', inline:'nearest'});",
     args: [{ [ELEMENT]: id }],
+  }).catch(() => undefined);
+}
+
+/** Scrolls the element an XPath finds to the middle of its scroll box, for a screenshot. */
+async function scrollToXp(s, xpath) {
+  const els = await wd("POST", `${s}/elements`, { using: "xpath", value: xpath }).catch(() => []);
+  if (!els[0]) return;
+  await wd("POST", `${s}/execute/sync`, {
+    script: "arguments[0].scrollIntoView({block:'center', inline:'nearest'});",
+    args: [els[0]],
   }).catch(() => undefined);
 }
 
@@ -1495,6 +1550,272 @@ async function codeAgent(s, config, workspace) {
   console.log("code tab: the agent window ran a session in its own project while the app moved, and listed its to-do");
 }
 
+/** Plain git in `dir`. `env` adds to the environment. */
+function gitIn(dir, args, env = {}) {
+  return execFileSync("git", ["-C", dir, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  }).trim();
+}
+
+/** The tree id of everything in `dir`'s working folder, as the app's
+ * snapshot takes it: an index of its own, so the project's is not touched. */
+function treeOf(dir, scratch) {
+  const env = { GIT_INDEX_FILE: join(scratch, "smoke-index") };
+  gitIn(dir, ["read-tree", "HEAD"], env);
+  gitIn(dir, ["add", "-A"], env);
+  return gitIn(dir, ["write-tree"], env);
+}
+
+// The Tasks panel takes a session's change from review to commit and push. A
+// git project of its own, with its author in its own config (the app's git
+// calls read no GIT_* variable), on a work branch; its `origin` is a bare
+// repository in the config folder, and `origin/HEAD` names `main` as the
+// default branch. A key-shaped line is planted before the session begins.
+// The lead writes a note and starts a review helper, which reports one
+// blocker. Commit waits while the blocker and the flagged line are in the
+// way; the person waives the one and allows the other, and Commit asks with
+// the exact text. After the yes, HEAD is one commit further on, with the
+// reviewed tree, and the status is clean. Push then asks with the exact
+// command, which names that commit, and the bare origin's branch is that
+// commit after the yes. With origin pointed at a GitHub address, Open PR
+// asks with the gh command; the run cancels, so gh never opens one.
+async function codeShip(s, config, workspace) {
+  const xp = (value) => wd("POST", `${s}/elements`, { using: "xpath", value });
+  // The first match, or null, so waitFor keeps waiting while there is none.
+  const first = async (value) => (await xp(value))[0] ?? null;
+  const bound = () => JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).workspace;
+  const pane = "aside.code-agent";
+  const tasks = "//aside[contains(@class,'code-agent')]//section[@aria-label='Agent tasks']";
+  const project = join(config, "ship-project");
+  mkdirSync(project);
+  gitIn(project, ["init", "-q", "-b", "main"]);
+  gitIn(project, ["config", "user.name", "user"]);
+  gitIn(project, ["config", "user.email", "user@example.com"]);
+  gitIn(project, ["config", "commit.gpgsign", "false"]);
+  writeFileSync(join(project, "README"), "smoke ship project\n");
+  gitIn(project, ["add", "README"]);
+  gitIn(project, ["commit", "-q", "-m", "init"]);
+  const origin = join(config, "ship-origin.git");
+  gitIn(config, ["init", "-q", "--bare", "-b", "main", origin]);
+  gitIn(project, ["remote", "add", "origin", origin]);
+  gitIn(project, ["push", "-q", "origin", "main"]);
+  gitIn(project, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  gitIn(project, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+  gitIn(project, ["switch", "-q", "-c", "work/smoke"]);
+  writeFileSync(join(project, SHIP_KEY_FILE), `${SHIP_KEY_LINE}\n`);
+  const before = gitIn(project, ["rev-parse", "HEAD"]);
+
+  // Shots of the Tasks panel need room for the Commit section beside the chat.
+  if (process.env.SMOKE_SHOTS) await setWindowSize(s, 1280, 900);
+
+  // The app moves to the project, and the agent window starts a session there.
+  await tab(s, "Chat");
+  const chatBox = await find(s, "section[aria-label='Chat'] textarea[aria-label='Message']");
+  await typeInto(s, chatBox, `/project bind ${project}`);
+  await click(s, "section[aria-label='Chat'] form.composer button[type='submit']");
+  await waitFor("the app in the ship project", () => realpathSync(bound()) === realpathSync(project));
+  await tab(s, "Code");
+  await waitFor("the agent window in the ship project", async () =>
+    (await textOf(s, `${pane} > .code-head .note`)) === "Works in ship-project",
+  );
+
+  const box = await find(s, `${pane} textarea[aria-label='Message the agent']`);
+  await typeInto(s, box, SHIP_PROMPT);
+  await click(s, `${pane} form.composer button[type='submit']`);
+  // Approve the plan and allow the write as they come; the turn ends with
+  // the reply once the review helper is done.
+  await waitFor(`the agent window's reply ${JSON.stringify(SHIP_REPLY)}`, async () => {
+    const replies = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: `${pane} .bubble.assistant:not(.streaming)`,
+    });
+    for (const el of replies) {
+      if ((await wd("GET", `${s}/element/${el[ELEMENT]}/text`)).includes(SHIP_REPLY)) return true;
+    }
+    const approve = await first(
+      "//aside[contains(@class,'code-agent')]//div[contains(@class,'elicit')]//button[normalize-space()='Approve plan'][not(@disabled)]",
+    );
+    if (approve && (await settled(s, approve[ELEMENT]))) {
+      await wd("POST", `${s}/element/${approve[ELEMENT]}/click`, {}).catch(() => {});
+      return null;
+    }
+    const cards = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: `${pane} .card.permission .card-buttons button:not([disabled])`,
+    });
+    if (cards[0] && (await settled(s, cards[0][ELEMENT]))) {
+      await wd("POST", `${s}/element/${cards[0][ELEMENT]}/click`, {}).catch(() => {});
+    }
+    return null;
+  }, 90000);
+  if (readFileSync(join(project, SHIP_NOTE), "utf8") !== SHIP_NOTE_TEXT) throw new Error("the ship note has the wrong words");
+  await waitFor("Send again in the agent window", () =>
+    first("//aside[contains(@class,'code-agent')]//form[contains(@class,'composer')]//button[@type='submit'][normalize-space()='Send']"),
+  );
+
+  // The review and the checks: the blocker and the planted line are in the way.
+  await waitFor("the review's line in the Tasks panel", async () =>
+    (await textOf(s, `${pane} section[aria-label='Agent tasks'] p.review-line`)) === "Reviewed: 1 blocker",
+  );
+  const inTheWay = async () =>
+    Promise.all(
+      (await xp(`${tasks}//ul[@aria-label='In the way of a commit']/li`)).map((el) =>
+        wd("GET", `${s}/element/${el[ELEMENT]}/text`),
+      ),
+    );
+  await waitFor("the blocker and the flagged line in the way of a commit", async () => {
+    const why = await inTheWay();
+    return why.join("|") === "The review found 1 blocker.|The secret scan flagged 1 place in the change." ? true : null;
+  });
+  const commitButton = async () => (await xp(`${tasks}//button[normalize-space()='Commit']`))[0]?.[ELEMENT];
+  if ((await wd("GET", `${s}/element/${await commitButton()}/property/disabled`)) !== true) {
+    throw new Error("Commit took a click while the review had a blocker");
+  }
+  const flagged = await waitFor("the flagged line in the Secret scan row", async () => {
+    const row = await first(`${tasks}//li[@aria-label='Secret scan']`);
+    return row && (await wd("GET", `${s}/element/${row[ELEMENT]}/text`));
+  });
+  if (!flagged.includes(`${SHIP_KEY_FILE}:1 · looks like a key or a password`) || flagged.includes("sk-")) {
+    throw new Error(`the Secret scan row said ${JSON.stringify(flagged)}`);
+  }
+  await shot(s, "code-ship-blocked");
+
+  // Waive the blocker: one confirm, which names it.
+  const waive = await waitFor("Waive on the blocker", () =>
+    first(`${tasks}//ul[@aria-label='Review findings']//button[normalize-space()='Waive']`),
+  );
+  await clickStill(s, waive[ELEMENT], "Waive");
+  const waiveAsk = "//div[@role='alertdialog'][@aria-label='Ship with this finding open?']";
+  const asked = await waitFor("the Waive confirm", () => first(waiveAsk));
+  const askedText = await wd("GET", `${s}/element/${asked[ELEMENT]}/text`);
+  if (!askedText.includes(SHIP_FINDING)) throw new Error(`the Waive confirm said ${JSON.stringify(askedText)}`);
+  const yes = await waitFor("the confirm's Waive", () => first(`${waiveAsk}//button[normalize-space()='Waive']`));
+  await clickStill(s, yes[ELEMENT], "the confirm's Waive");
+  await waitFor("the waived blocker", async () =>
+    (await textOf(s, `${pane} section[aria-label='Agent tasks'] p.review-line`)) === "Reviewed: 1 blocker · 1 waived",
+  );
+
+  // Allow the planted line, then every check passes.
+  const allow = await waitFor("Allow on the flagged line", () =>
+    first(`${tasks}//button[@aria-label='Allow ${SHIP_KEY_FILE}:1']`),
+  );
+  await clickStill(s, allow[ELEMENT], "Allow");
+  await waitFor("every check to pass", () => first(`${tasks}//p[normalize-space()='Every check passes.']`));
+  const files = await Promise.all(
+    (await xp(`${tasks}//ul[@aria-label='Changed files']/li`)).map((el) => wd("GET", `${s}/element/${el[ELEMENT]}/text`)),
+  );
+  if (files.join("|") !== `A ${SHIP_KEY_FILE}|A ${SHIP_NOTE}`) throw new Error(`the Commit card lists ${JSON.stringify(files)}`);
+  await shot(s, "code-ship-ready");
+
+  // Commit asks with the exact text, which names the tree, the branch, the
+  // parent, the waiver, the allowed line and the tests that did not run.
+  const tree = treeOf(project, config);
+  const commit = await waitFor("Commit to take a click", async () => {
+    const el = await commitButton();
+    return el && (await wd("GET", `${s}/element/${el}/property/disabled`)) === false ? el : null;
+  });
+  await clickStill(s, commit, "Commit");
+  const commitAsk = "//div[@role='alertdialog'][@aria-label='Commit this change?']";
+  await waitFor("the Commit confirm", () => first(commitAsk));
+  const confirm = `commit ${tree.slice(0, 12)} to work/smoke on ${before.slice(0, 8)}: "Change made in this session", 1 flagged line allowed, 1 finding waived, no tests run`;
+  const said = await waitFor("the Commit confirm's text", async () => {
+    const shown = await first(`${commitAsk}//p`);
+    return shown && (await wd("GET", `${s}/element/${shown[ELEMENT]}/text`));
+  });
+  if (said !== confirm) throw new Error(`the Commit confirm said ${JSON.stringify(said)}, not ${JSON.stringify(confirm)}`);
+  if (gitIn(project, ["rev-parse", "HEAD"]) !== before) throw new Error("HEAD moved before the yes");
+  await scrollToXp(s, commitAsk);
+  await shot(s, "code-ship-commit-confirm");
+  const go = await waitFor("the confirm's Commit", () => first(`${commitAsk}//button[normalize-space()='Commit']`));
+  await clickStill(s, go[ELEMENT], "the confirm's Commit");
+  await waitFor("the commit", () => gitIn(project, ["rev-parse", "HEAD"]) !== before);
+  const head = gitIn(project, ["rev-parse", "HEAD"]);
+  await waitFor("the Commit section's line", () =>
+    first(`${tasks}//p[normalize-space()='Committed ${head.slice(0, 8)} to work/smoke.']`),
+  );
+  const count = gitIn(project, ["rev-list", "--count", `${before}..HEAD`]);
+  if (count !== "1") throw new Error(`HEAD moved by ${count} commits`);
+  if (gitIn(project, ["rev-parse", "HEAD^{tree}"]) !== tree) throw new Error("the commit holds another tree than the reviewed one");
+  if (gitIn(project, ["rev-parse", "HEAD^"]) !== before) throw new Error("the commit's parent is not the reviewed HEAD");
+  const status = gitIn(project, ["status", "--porcelain"]);
+  if (status !== "") throw new Error(`the status after the commit is ${JSON.stringify(status)}`);
+  // The workspace beside the panel reads the repo again: nothing is left listed.
+  await waitFor("the workspace to read the repo after the commit", async () =>
+    (await xp("//ul[contains(@class,'code-changed')][@aria-label='Changed files']")).length === 0 &&
+    (await first("//p[normalize-space()='No changes since the last commit.']"))
+      ? true
+      : null,
+  );
+  await shot(s, "code-ship-committed");
+  console.log(`code tab: waived the review's blocker, allowed the flagged line and committed ${head.slice(0, 8)} with the reviewed tree`);
+
+  // Push: the Tasks panel's card asks with the exact command, which names
+  // the commit made there, and only the yes sends it.
+  const onOrigin = () => {
+    try {
+      return gitIn(origin, ["rev-parse", "--verify", "--quiet", "refs/heads/work/smoke"]);
+    } catch {
+      return null;
+    }
+  };
+  const card = `${tasks}//div[@role='group'][@aria-label='Push and PR']`;
+  const pushButton = await waitFor("Push in the Tasks panel", () =>
+    first(`${card}/div[contains(@class,'code-ship-buttons')]/button[normalize-space()='Push work/smoke'][not(@disabled)]`),
+  );
+  await clickStill(s, pushButton[ELEMENT], "Push");
+  const pushAsk = `${card}//div[@role='group'][@aria-label='Push this branch?']`;
+  const pushShown = await waitFor("the Push confirm's command", async () => {
+    const pre = await first(`${pushAsk}//pre[@aria-label='Command to run']`);
+    return pre && (await wd("GET", `${s}/element/${pre[ELEMENT]}/text`));
+  });
+  const pushCommand = `git push --porcelain --no-recurse-submodules --no-signed origin ${head}:refs/heads/work/smoke`;
+  if (pushShown !== pushCommand) throw new Error(`the Push confirm said ${JSON.stringify(pushShown)}, not ${JSON.stringify(pushCommand)}`);
+  if (onOrigin() !== null) throw new Error("origin had the branch before the yes");
+  await shot(s, "code-ship-push-confirm");
+  const pushYes = await waitFor("the confirm's Push", () => first(`${pushAsk}//button[normalize-space()='Push']`));
+  await clickStill(s, pushYes[ELEMENT], "the confirm's Push");
+  await waitFor("the branch on origin", () => onOrigin() === head);
+  await waitFor("the push's line", () =>
+    first(`${card}//p[normalize-space()='Pushed ${head.slice(0, 8)} to work/smoke on origin.']`),
+  );
+  if (gitIn(origin, ["rev-parse", "refs/heads/work/smoke"]) !== head) throw new Error("origin's branch is not the commit made here");
+  await scrollToXp(s, card);
+  await shot(s, "code-ship-pushed");
+  console.log(`code tab: pushed ${head.slice(0, 8)} to a bare origin after the confirm`);
+
+  // Open PR: on a GitHub address it asks with the gh command. Cancel, so gh
+  // never runs `pr create`.
+  gitIn(project, ["remote", "set-url", "origin", "https://github.com/user/my-app.git"]);
+  const prButton = await waitFor("Open PR in the Tasks panel", () =>
+    first(`${card}/div[contains(@class,'code-ship-buttons')]/button[normalize-space()='Open PR into beta'][not(@disabled)]`),
+  );
+  await clickStill(s, prButton[ELEMENT], "Open PR");
+  const prAsk = `${card}//div[@role='group'][@aria-label='Open this PR?']`;
+  const prShown = await waitFor("the Open PR confirm's command", async () => {
+    const pre = await first(`${prAsk}//pre[@aria-label='Command to run']`);
+    return pre && (await wd("GET", `${s}/element/${pre[ELEMENT]}/text`));
+  });
+  if (prShown !== "gh pr create --base beta --head work/smoke --fill") {
+    throw new Error(`the Open PR confirm said ${JSON.stringify(prShown)}`);
+  }
+  await shot(s, "code-ship-pr-confirm");
+  const prCancel = await waitFor("the confirm's Cancel", () => first(`${prAsk}//button[normalize-space()='Cancel']`));
+  await clickStill(s, prCancel[ELEMENT], "the confirm's Cancel");
+  await waitFor("the Open PR confirm to close", async () => ((await xp(prAsk)).length === 0 ? true : null));
+  const ghCalls = existsSync(join(config, GH_CALLS)) ? readFileSync(join(config, GH_CALLS), "utf8") : "";
+  if (ghCalls.includes("pr create")) throw new Error(`gh was started to open a PR: ${JSON.stringify(ghCalls)}`);
+  gitIn(project, ["remote", "set-url", "origin", origin]);
+  console.log("code tab: Open PR asked with the gh command and opened nothing on Cancel");
+
+  // Back to the first project for the steps after this one.
+  await tab(s, "Chat");
+  const back = await find(s, "section[aria-label='Chat'] textarea[aria-label='Message']");
+  await typeInto(s, back, `/project bind ${workspace}`);
+  await click(s, "section[aria-label='Chat'] form.composer button[type='submit']");
+  await waitFor("the first project again", () => realpathSync(bound()) === realpathSync(workspace));
+}
+
 /** The window opens 900px wide (tauri.conf.json). Every tab, the brand, the
  * Activity dock and Command must fit it without the page scrolling sideways:
  * a sideways scroll puts a scrollbar along the bottom edge, and WebKit takes
@@ -1563,13 +1884,35 @@ async function main() {
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
   const workspace = join(config, "work");
   mkdirSync(workspace);
-  writeFileSync(join(config, "shell.json"), JSON.stringify({ workspace, theme: "ops-dark" }));
+  // A push to a folder is a push to a host that is not GitHub: the ship
+  // stage pushes to a bare repository in the config folder.
+  writeFileSync(
+    join(config, "shell.json"),
+    JSON.stringify({ workspace, theme: "ops-dark", codeShip: { hosts: { github: true, other: true } } }),
+  );
+  // gh with no sign-in, so the app's read of a branch's PR stops on this
+  // computer. Where a script can stand in for it (not Windows, where the
+  // app starts gh.exe only), the stand-in notes each call and fails.
+  const ghEnv = { GH_CONFIG_DIR: join(config, "gh-config"), GH_NO_UPDATE_NOTIFIER: "1" };
+  const noToken = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
+  mkdirSync(ghEnv.GH_CONFIG_DIR);
+  const pathEnv = {};
+  if (process.platform !== "win32") {
+    const fakeBin = join(config, "fake-bin");
+    mkdirSync(fakeBin);
+    const gh = join(fakeBin, "gh");
+    writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${join(config, GH_CALLS)}'\necho 'gh is not signed in here' >&2\nexit 4\n`);
+    chmodSync(gh, 0o755);
+    pathEnv.PATH = `${fakeBin}${delimiter}${process.env.PATH ?? ""}`;
+  }
   const modelCalls = () => mock.seen.filter((c) => c.path === "/v1/responses");
   const native = process.env.SMOKE_NATIVE_DRIVER;
   const driver = spawn("tauri-driver", native ? ["--native-driver", native] : [], {
     stdio: ["ignore", "inherit", "inherit"],
     env: {
-      ...process.env,
+      ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !noToken.includes(name))),
+      ...ghEnv,
+      ...pathEnv,
       GROKHUB_CONFIG: config,
       GROKHUB_SHELL_RESPONSES_URL: `http://127.0.0.1:${mock.port}/v1/responses`,
       GROKHUB_SHELL_PULSE_NET: `http://127.0.0.1:${mock.port}`,
@@ -1683,6 +2026,7 @@ async function main() {
     await episode(s, config);
     await codeProjects(s, config, workspace);
     await codeAgent(s, config, workspace);
+    await codeShip(s, config, workspace);
     if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");
   } catch (err) {

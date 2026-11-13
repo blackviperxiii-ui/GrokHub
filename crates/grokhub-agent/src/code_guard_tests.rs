@@ -1,11 +1,12 @@
 use super::*;
 use std::path::PathBuf;
 
-/// Refuses a push to main, lets a beta push run, asks for any other push,
-/// and leaves every other call alone.
+/// Refuses a push to main, lets a beta push (or fetch) run, asks for any
+/// other push, and leaves every other call alone.
 fn pushes() -> Guard {
     Arc::new(|name: &str, arguments: &str, _: &Path| {
-        if name != "run_terminal_command" || !arguments.contains("git push") {
+        let git = arguments.contains("git push") || arguments.contains("git fetch");
+        if name != "run_terminal_command" || !git {
             return None;
         }
         Some(if arguments.contains("main") {
@@ -75,9 +76,9 @@ fn a_refusal_wins_even_over_always() {
 }
 
 #[test]
-fn an_allowed_push_runs_without_a_card_and_others_ask() {
+fn an_allowed_call_runs_without_a_card_a_push_still_asks_and_others_ask() {
     set("cg-run", Some(pushes()));
-    let ok = shell("git push origin code/fix");
+    let ok = shell("git fetch origin code/fix");
     assert_eq!(
         apply(
             "cg-run",
@@ -88,6 +89,19 @@ fn an_allowed_push_runs_without_a_card_and_others_ask() {
             Decision::Ask
         ),
         Decision::Run
+    );
+    // A push is hard class `ship`: the guard can't skip its card.
+    let push = shell("git push origin code/fix");
+    assert_eq!(
+        apply(
+            "cg-run",
+            "run_terminal_command",
+            &push,
+            &ws(),
+            None,
+            Decision::Ask
+        ),
+        Decision::Ask
     );
     let other = shell("git push origin code/other");
     assert_eq!(

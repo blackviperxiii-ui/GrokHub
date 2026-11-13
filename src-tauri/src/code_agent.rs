@@ -4,9 +4,9 @@
 //!   the agent follows them whenever it codes. They can't be switched off and
 //!   still don't show on the Skills tab.
 //! - The agent's own `git push` goes through the Code tab's push guard
-//!   (`grokhub_code::chat_push`, on `ship::guard`): no card when the guard
-//!   says Auto-beta may push, a card when it asks, and never main, the default
-//!   branch or a force-push, in any mode.
+//!   (`grokhub_code::chat_push`, on `ship::guard`): a card every time (a
+//!   push is hard class `ship`, so Auto-beta doesn't skip it), and never
+//!   main, the default branch or a force-push, in any mode.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

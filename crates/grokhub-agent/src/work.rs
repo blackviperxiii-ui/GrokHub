@@ -722,7 +722,11 @@ fn scrub(cmd: &mut Command, inherited: impl Iterator<Item = OsString>) {
 /// `config --get`, `remote get-url`, `merge-base --is-ancestor`, `rev-list`,
 /// `ls-files -v`, `diff-tree`, `cat-file --batch`, and, with an index and an
 /// object folder of their own in the config folder, `read-tree`, `add -A` and
-/// `write-tree`.
+/// `write-tree`. And one writer, run only after the person's click on
+/// Commit (`ship_tree::commit`): `check-ref-format`, then `read-tree`,
+/// `add -A` and `write-tree` with an index of their own and the project's
+/// object store, `commit-tree --no-gpg-sign`, `update-ref` with the old
+/// value, and `reset -q`.
 ///
 /// None of them talks to a remote, so every transport is off: a repository
 /// whose own config names a promisor remote cannot make a read fetch a
