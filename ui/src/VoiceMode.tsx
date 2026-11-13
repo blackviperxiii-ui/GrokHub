@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import * as api from "./api";
 import type { LiveEvent, Spoken } from "./api";
 import { CANT_RECORD, MIC_DENIED, NO_MIC, tap } from "./Mic";
-import { downsample, toBase64, WAV_RATE } from "./wav";
+import { Downsampler, toBase64, WAV_RATE } from "./wav";
 
 export type VoiceState = "off" | "listening" | "thinking" | "speaking";
 
@@ -86,7 +86,12 @@ export class VoiceSession {
   private player: Playing | null = null;
   private spoke = false;
   private finished = false;
+  /** A piece failed to speak: the rest of this reply stays quiet. */
   private noVoice = false;
+  /** The failure was shown once this session. */
+  private warned = false;
+  /** The mic's rate to 16 kHz, carried from block to block. */
+  private down: Downsampler | null = null;
 
   private deps: VoiceDeps;
 
@@ -112,6 +117,8 @@ export class VoiceSession {
 
   async start() {
     if (this.state !== "off") return;
+    this.noVoice = false;
+    this.warned = false;
     await api.voiceLiveStart();
     this.go("start");
     try {
@@ -131,6 +138,7 @@ export class VoiceSession {
     this.hushPlayback();
     this.talking = false;
     this.pending = new Float32Array(0);
+    this.down = null;
     if (note) this.deps.onNote(note);
     if (wasOn) await api.voiceLiveStop().catch(() => {});
   }
@@ -145,7 +153,8 @@ export class VoiceSession {
   /** Mic samples at `rate`, sent on in 100 ms blocks, one push at a time. */
   take(samples: Float32Array, rate: number) {
     if (this.state === "off") return;
-    const down = downsample(samples, rate);
+    if (this.down?.fromRate !== rate) this.down = new Downsampler(rate);
+    const down = this.down.push(samples);
     const all = new Float32Array(this.pending.length + down.length);
     all.set(this.pending);
     all.set(down, this.pending.length);
@@ -239,7 +248,8 @@ export class VoiceSession {
     for (const piece of pieces) {
       this.queue.push(
         api.voiceSpeak(piece).catch((e) => {
-          if (!this.noVoice) this.note(e);
+          if (!this.warned) this.note(e);
+          this.warned = true;
           this.noVoice = true;
           return null;
         }),
@@ -276,6 +286,8 @@ export class VoiceSession {
     if (!this.finished || this.player || this.queue.length) return;
     this.finished = false;
     this.spoke = false;
+    // The next reply tries its voice again (a failed piece may have been a blip).
+    this.noVoice = false;
     if (this.state === "speaking") {
       this.go("done");
       await api.voiceLivePlaying(false).catch(() => {});
