@@ -886,7 +886,8 @@ select:focus-visible {
     overflow: hidden;
   }
 
-  .nyx-dock img {
+  .nyx-dock img,
+  .nyx-dock video {
     width: 100%;
     aspect-ratio: 448 / 350;
     object-fit: cover;

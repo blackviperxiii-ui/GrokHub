@@ -14,3 +14,7 @@ export const SUPPORT_LABEL: string = brand.supportLabel;
 /** Image URLs for the logo mark and the app icon tile. */
 export const LOGO_MARK_URL: string = logoMark;
 export const APP_ICON_URL: string = appIcon;
+
+/** Base URL for the prerelease hosting all 144 animated Nyx card clips. */
+export const NYX_ANIM_BASE =
+  "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1";

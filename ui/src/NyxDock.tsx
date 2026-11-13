@@ -7,6 +7,7 @@ import {
   desktopNyxUndock,
   type DesktopNyxState,
 } from "./desktopNyxApi";
+import { NyxCard } from "./NyxCard";
 import { MOOD_LABEL, type Mood } from "./nyx";
 import { inShell } from "./transport";
 
@@ -42,7 +43,15 @@ export function useWide(): boolean {
 /** Nyx docked at the chat's right, in the pose for what the chat is doing.
  * A new pose fades in (instantly with reduced motion). When Labs → Desktop
  * companion is on, Put her on the desktop / Bring her back and the wardrobe. */
-export const NyxDock = memo(function NyxDock({ url, mood }: { url: string; mood: Mood }) {
+export const NyxDock = memo(function NyxDock({
+  url,
+  path,
+  mood,
+}: {
+  url: string;
+  path?: string;
+  mood: Mood;
+}) {
   const wide = useWide();
   const [desk, setDesk] = useState<DesktopNyxState | null>(null);
 
@@ -60,7 +69,7 @@ export const NyxDock = memo(function NyxDock({ url, mood }: { url: string; mood:
 
   return (
     <aside className="card nyx-dock" aria-label={COMPANION_NAME}>
-      <img key={url} src={url} alt={`${COMPANION_NAME}: ${doing}`} draggable={false} />
+      <NyxCard key={url} url={url} path={path} alt={`${COMPANION_NAME}: ${doing}`} draggable={false} />
       <p className="note">{doing}</p>
       {desktopOn && (
         <div className="nyx-dock-desktop">

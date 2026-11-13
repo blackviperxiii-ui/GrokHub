@@ -1620,7 +1620,7 @@ export function Chat({
       onDragOver={attach.onDragOver}
       onDrop={attach.onDrop}
     >
-      {nyx && !embedded && <NyxDock url={nyx.url} mood={nyx.mood} />}
+      {nyx && !embedded && <NyxDock url={nyx.url} path={nyx.path} mood={nyx.mood} />}
       {!remote && !embedded && (
         <>
           <ChatTabs

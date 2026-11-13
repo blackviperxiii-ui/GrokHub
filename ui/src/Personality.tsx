@@ -17,6 +17,7 @@ import {
   type Verbosity,
 } from "./api";
 import { Toggle } from "./Toggle";
+import { NyxCard } from "./NyxCard";
 import { useNyxTiles } from "./nyx";
 import { PRODUCT_NAME } from "./brand";
 
@@ -361,7 +362,7 @@ export function Personality() {
             return (
               <li key={p.id} className="card" aria-label={p.name}>
                 {tiles[p.id] && (
-                  <img className="persona-thumb" src={tiles[p.id]} alt="" aria-hidden="true" />
+                  <NyxCard className="persona-thumb" url={tiles[p.id].url} path={tiles[p.id].path} />
                 )}
                 <div className="card-status">
                   {on ? "In use" : p.custom ? "Yours" : "Built in"}

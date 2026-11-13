@@ -1,0 +1,1 @@
+- Stream animated WebM/MP4 Nyx card clips from `assets-nyx-anim-1` when visible, keeping bundled JPG posters and reduced-motion, offline, and error fallbacks.

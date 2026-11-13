@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { COMPANION_NAME } from "./brand";
+import { NyxCard } from "./NyxCard";
 import {
   desktopNyxDock,
   desktopNyxGet,
@@ -109,10 +110,10 @@ export function NyxDesk() {
           <div className="nyx-desk-ring nyx-desk-ring-inner" />
         </div>
         {url && (
-          <img
+          <NyxCard
             className="nyx-desk-figure"
-            src={url}
-            alt=""
+            url={url}
+            path={state.outfitFile}
             draggable={false}
             onClick={() => {
               /* open main chat later; click focuses her for now */
