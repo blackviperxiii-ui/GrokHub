@@ -1,0 +1,2 @@
+- Desktop app: a chat that no model in your plan answers now waits and sends its ask again on its own once one does, with one quiet note naming the provider and the step. A Pulse card names the wait and offers Retry now; only models in your plan are checked.
+- Desktop app: the router's budget cards are back over the chat box (80% of the week, the ask at 100% with Keep going, and the upgrade nudge), and Settings → Account shows the SuperGrok pool's room or that the plan refused the sign-in.

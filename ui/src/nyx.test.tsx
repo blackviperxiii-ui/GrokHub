@@ -56,7 +56,11 @@ vi.mock("./api", async () => {
 };
 });
 
-vi.mock("./transport", () => ({ call: desktop.call, inShell: () => false }));
+vi.mock("./transport", () => ({
+  call: desktop.call,
+  inShell: () => false,
+  subscribe: () => Promise.resolve(() => {}),
+}));
 
 import { CHAT_EMPTY, Chat } from "./Chat";
 import { Personality } from "./Personality";

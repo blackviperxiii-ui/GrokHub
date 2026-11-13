@@ -529,7 +529,11 @@ fn post(
         delete: offers.delete,
         save,
         saved,
-        review: crate::review_cards::label(card).to_string(),
+        review: if grokhub_core::is_model_wait_card(card) {
+            crate::model_wait::RETRY_LABEL.to_string()
+        } else {
+            crate::review_cards::label(card).to_string()
+        },
         issue: crate::review_cards::copies_issue(card),
     }
 }

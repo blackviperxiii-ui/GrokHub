@@ -78,6 +78,7 @@ mod md_fixtures;
 pub mod memory;
 mod mission;
 pub mod model_library;
+pub mod model_wait;
 pub mod mods;
 pub mod mods_install;
 #[cfg(desktop)]
@@ -122,6 +123,7 @@ pub mod ship_gate;
 pub mod skills;
 pub mod slash;
 pub mod slash_ops;
+pub mod spend_cards;
 mod steam_checks;
 pub mod storage;
 mod task_feed;
@@ -199,6 +201,9 @@ pub struct SettingsView {
     pub summon_hotkey: bool,
     /// Settings → General → notifications while the window is in the background.
     pub notifications: bool,
+    /// Settings → Account under a live Grok sign-in: the SuperGrok pool's
+    /// room, or that xAI's plan gate refused the sign-in.
+    pub plan_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -209,10 +214,14 @@ struct ChatEvent<'a> {
 }
 
 fn view(settings: &ShellSettings) -> SettingsView {
+    let signed_in = oauth::signed_in(&oauth::Keychain);
     SettingsView {
         close_to_tray: settings.close_to_tray,
         has_api_key: credential::has_key(),
-        signed_in: oauth::signed_in(&oauth::Keychain),
+        plan_note: signed_in
+            .as_ref()
+            .and_then(|_| spend_cards::plan_note_now()),
+        signed_in,
         workspace: settings.workspace.clone(),
         workspace_path: agent::workspace_for(&settings.workspace)
             .display()
@@ -706,6 +715,7 @@ async fn chat_turn(
         clock,
     } = turn;
     let files = state.trays.take(&conversation_id, &attachments)?;
+    let asked = text.clone();
     // A card's chat shows Stop on its card while this turn runs.
     card_chat::turn_began(&conversation_id);
     let (ended_dir, ended_chat) = (state.config_dir.clone(), conversation_id.clone());
@@ -812,6 +822,10 @@ async fn chat_turn(
     .and_then(|stop| stop);
     // A card's run settles on its card, however the turn ended.
     card_chat::turn_ended(&ended_dir, &ended_chat, &stop);
+    // No model in your plan answered: the chat waits and sends again on its own.
+    if let Err(err) = &stop {
+        model_wait::turn_failed(&ended_dir, &ended_chat, &asked, err, grokhub_core::now_ms());
+    }
     if coding {
         let why = match &stop {
             Err(err) => Some(err.as_str()),
@@ -821,6 +835,69 @@ async fn chat_turn(
         code_keep::record(&ended_dir, &ended_chat, why);
     }
     stop
+}
+
+/// A chat that paused because no model in your plan answered, once one is
+/// back: its ask to send again and the quiet note, at most once. The page
+/// asks when the chat is open and idle, and when the router says one is back.
+#[tauri::command]
+fn model_resume(conversation_id: String) -> Option<model_wait::Resume> {
+    model_wait::take_resume(&conversation_id)
+}
+
+/// The budget card over the chat box, if one is up: 80% of the week, the
+/// ask at 100% or the upgrade nudge.
+#[tauri::command]
+fn budget_card() -> Option<spend_cards::CardView> {
+    spend_cards::current()
+}
+
+/// A click on the budget card.
+#[tauri::command]
+async fn answer_budget_card(
+    state: State<'_, ShellState>,
+    key: String,
+    primary: bool,
+) -> Result<spend_cards::Answered, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || spend_cards::answer(&dir, &key, primary, grokhub_core::now_ms())).await?
+}
+
+/// Every minute: this week's spend against the cap and the nudge's facts,
+/// for the budget card.
+fn start_budget_tally(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(
+            grokhub_agent::route::budget::BUDGET_EVERY_MS,
+        ));
+        let state = app.state::<ShellState>();
+        let now = grokhub_core::now_ms();
+        let in_task = state
+            .chats
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|s| s.busy());
+        let config_dir = state.config_dir.clone();
+        let gate = grokhub_agent::route::budget::NudgeGate {
+            in_task,
+            quiet_hours: quiet_now(&config_dir, now),
+            throttled: proactive::load_budget(&config_dir).room(now) == 0,
+        };
+        spend_cards::tally(&config_dir, gate, now);
+    });
+}
+
+/// Behavior's quiet hours at the window's clock; never quiet before it sent one.
+fn quiet_now(config_dir: &Path, now: u64) -> bool {
+    #[cfg(desktop)]
+    if let Some(offset) = scheduler::utc_offset() {
+        let clock = scheduler::local_clock(now, offset);
+        let behavior = settings::load(config_dir).behavior;
+        return proactive::is_quiet(&behavior, clock.hour, clock.minute);
+    }
+    let _ = (config_dir, now);
+    false
 }
 
 /// Push to talk: one recording (a WAV, as base64) to text for the draft.
@@ -4717,6 +4794,16 @@ async fn pulse_review_apply(
     let dir = state.config_dir.clone();
     off_main(move || {
         let now = grokhub_core::now_ms();
+        // A no-route wait's Retry now: check again now; the card stays.
+        if model_wait::is_wait_card(&dir, &id)? {
+            let line = if model_wait::retry_now(now) {
+                model_wait::RETRYING.to_string()
+            } else {
+                review_cards::GONE.to_string()
+            };
+            let page = pulse::load(&dir, Some(&day), now)?;
+            return Ok(ReviewDone { line, page });
+        }
         pulse::act(&dir, &id, pulse::Act::Accept, &day, now)?;
         let line = review_cards::apply(&dir, &id, now)?;
         let page = pulse::load(&dir, Some(&day), now)?;
@@ -6390,6 +6477,15 @@ pub fn run() {
             // The proactive engine and nudge watchers, while the cabin is closed.
             #[cfg(desktop)]
             proactive::start(app.state::<ShellState>().config_dir.clone());
+            start_budget_tally(app.handle().clone());
+            // A no-route pause re-checks on a backoff and resumes its chat.
+            let told = app.handle().clone();
+            model_wait::start_watch(
+                app.state::<ShellState>().config_dir.clone(),
+                move |resume| {
+                    let _ = told.emit(model_wait::MODEL_BACK_EVENT, resume);
+                },
+            );
             build_main_window(app)?;
             #[cfg(desktop)]
             {
@@ -6649,6 +6745,9 @@ pub fn run() {
             get_pulse,
             pulse_act,
             pulse_review_apply,
+            model_resume,
+            budget_card,
+            answer_budget_card,
             pulse_review_issue,
             pulse_discuss,
             pulse_offer,
