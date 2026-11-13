@@ -291,6 +291,20 @@ impl ConsentLedger {
         let key = scope.key();
         self.active().find(|g| g.source == key)
     }
+
+    /// The scope keys the proactive engine may read from (calendar, mail,
+    /// system state): only the ones granted here. Both apps call this.
+    pub fn proactive_scopes(&self) -> Vec<&'static str> {
+        [
+            (Scope::Calendar, "calendar"),
+            (Scope::Mail, "mail"),
+            (Scope::SystemState, "system_state"),
+        ]
+        .into_iter()
+        .filter(|(scope, _)| self.scope_grant(scope).is_some())
+        .map(|(_, key)| key)
+        .collect()
+    }
 }
 
 pub fn consent_path(config_dir: &Path) -> PathBuf {
