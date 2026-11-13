@@ -795,8 +795,6 @@ export interface AutomationRow {
   health: string | null;
   /** The words for the Edit box; null when words can't say the schedule. */
   describe: string | null;
-  /** It has a check command, so only the cabin runs it. */
-  cabinOnly: boolean;
 }
 
 export interface RunResult {

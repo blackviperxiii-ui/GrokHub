@@ -34,7 +34,6 @@ function row(over: Partial<AutomationRow>): AutomationRow {
     summary: "weekdays at 09:00 · next today 9:00 AM",
     health: null,
     describe: "every weekday at 9am summarize my inbox",
-    cabinOnly: false,
     ...over,
   };
 }
@@ -234,19 +233,15 @@ describe("Automations edit and schedule", () => {
     expect(api.editAutomation).not.toHaveBeenCalled();
   });
 
-  it("marks cabin-only jobs and hides Edit when words can't say the schedule", async () => {
+  it("hides Edit when words can't say the schedule", async () => {
     api.listAutomations.mockResolvedValue([
-      row({ id: "auto-gated", name: "tidy", cabinOnly: true }),
       row({ id: "auto-weekly", name: "weekly review", describe: null, summary: "weekly at 09:00" }),
       row({}),
     ]);
     render(<Automations />);
-    const gated = await screen.findByRole("listitem", { name: "tidy" });
-    expect(within(gated).getByText("Runs in the cabin")).toBeInTheDocument();
-    const weekly = screen.getByRole("listitem", { name: "weekly review" });
+    const weekly = await screen.findByRole("listitem", { name: "weekly review" });
     expect(within(weekly).queryByRole("button", { name: "Edit" })).toBeNull();
-    const inbox = screen.getByRole("listitem", { name: "summarize my inbox" });
-    expect(within(inbox).queryByText("Runs in the cabin")).toBeNull();
+    expect(screen.queryByText("Runs in the cabin")).toBeNull();
     expect(screen.getByText(/While the Loadout cabin is open, the cabin runs them\./)).toBeInTheDocument();
   });
 

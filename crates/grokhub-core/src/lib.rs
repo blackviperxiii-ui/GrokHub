@@ -282,6 +282,7 @@ pub use automation::{
     teach_routine, teachable_steps, user_asked_to_schedule, watch_once_keeps_running, AutoHealth,
     AutoOutcome, Automation, AutomationAlert, ScheduleRoute,
 };
+pub use proc_util::{run_night_check_command, NIGHT_CHECK_TIMEOUT};
 pub use autonomy::{
     anticipate_consumes_slot, anticipated_need, cabin_system_prompt, host_plan_autorun,
     host_step_autorun, should_anticipate, HostAuto, LearnMode, Policy, SkillFollow, SkillWrite,

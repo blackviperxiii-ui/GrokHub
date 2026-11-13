@@ -194,8 +194,9 @@ app shows in both.
   read-only Ask run as Run now, whatever the approvals setting, and its end
   goes to the window as `automations://ran` (the chat notice, the Activity
   Dock and the row's reply).
-- A job with a check command is left to the cabin, which runs the command
-  first. Its row says "Runs in the cabin".
+- A job with a check command runs that command first
+  (`grokhub_core::run_night_check_command`); the shell fires only when the
+  receipt passes (`skip_night_check_receipt`), the same gate the cabin uses.
 - The scheduler needs the local time. The window reports its clock at start
   and every 5 minutes (`set_scheduler_clock`); a paired browser does not,
   since it may be in another time zone. Until the window reports, nothing
@@ -204,11 +205,12 @@ app shows in both.
   remove, a broken file, rows the cabin wrote, and a Run now whose write is
   refused; for the scheduler, a claim saved before the run, no second fire on
   the next tick, a fresh cabin lease holding every job, a stale one letting
-  the shell fire, missed slots firing once, a check-command job left alone
-  and a scheduled run whose write is refused. Core tests cover the lease and
-  the `describe_automation` round trip. vitest covers the page. The smoke
-  test adds a job through the UI, checks `automations.json`, runs it and
-  waits for the reply.
+  the shell fire, missed slots firing once, a failing check skipping without
+  a fire, a passing check letting the shell fire, and a scheduled run whose
+  write is refused. Core tests cover the lease, the check receipt, and the
+  `describe_automation` round trip. vitest covers the page. The smoke test
+  adds a job through the UI, checks `automations.json`, runs it and waits for
+  the reply.
 
 **3c, Memory.** A Memory page shows and edits the same `MEMORY.md` files the
 cabin and the agent loop read (`src-tauri/src/memory.rs`): global notes in the

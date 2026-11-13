@@ -1,9 +1,10 @@
 //! Automations (cross-platform recode, Phase 3b). The shell edits the same
 //! `automations.json` the egui cabin uses, so a job made in either shows in
 //! both. While the cabin is open its pulse fires them; once it is closed the
-//! shell's scheduler (`scheduler.rs`) does. "Run now" and scheduled runs go
-//! unattended in Ask mode, so a job can read but every tool that changes
-//! something is refused without a card.
+//! shell's scheduler (`scheduler.rs`) does. Jobs gated by a check command run
+//! the check first, then fire only when it passes. "Run now" and scheduled
+//! runs go unattended in Ask mode, so a job can read but every tool that
+//! changes something is refused without a card.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -51,8 +52,6 @@ pub struct Row {
     pub health: Option<String>,
     /// The words for the Edit box, `None` when words cannot say the schedule.
     pub describe: Option<String>,
-    /// It has a check command, so only the cabin fires it.
-    pub cabin_only: bool,
 }
 
 pub fn rows(list: &[Automation], clock: LocalClock) -> Vec<Row> {
@@ -65,15 +64,8 @@ pub fn rows(list: &[Automation], clock: LocalClock) -> Vec<Row> {
             summary: grokhub_core::automation_summary_line(a, clock),
             health: grokhub_core::automation_health_line(a),
             describe: grokhub_core::describe_automation(a),
-            cabin_only: cabin_only(a),
         })
         .collect()
-}
-
-/// A job gated by a check command runs only in the cabin, which runs the
-/// command first. The shell neither fires it nor counts it as due.
-pub fn cabin_only(a: &Automation) -> bool {
-    grokhub_core::night_check_command(&a.check_command).is_some()
 }
 
 pub fn path(config_dir: &Path) -> PathBuf {
@@ -362,8 +354,8 @@ pub fn run_now(
 /// saves it as run (last run, count and the next run after `clock`) before it
 /// starts, so a second tick, or the cabin opening, finds it done. However many
 /// slots were missed (the laptop slept), the job runs once and its next run is
-/// the next slot to come. Jobs only the cabin fires, jobs in `skip` and jobs
-/// a Run now holds are left alone. A job with no next run gets one.
+/// the next slot to come. Jobs in `skip` and jobs a Run now holds are left
+/// alone. A job with no next run gets one.
 pub fn claim_due(
     config_dir: &Path,
     clock: LocalClock,
@@ -374,7 +366,7 @@ pub fn claim_due(
     let before = list.clone();
     let pick = grokhub_core::due_automations(&list, clock.now_ms)
         .into_iter()
-        .find(|a| !cabin_only(a) && !skip.contains(&a.id) && !Running::holds(&a.id))
+        .find(|a| !skip.contains(&a.id) && !Running::holds(&a.id))
         .map(|a| a.id);
     let mut claimed = None;
     for a in &mut list {
@@ -382,7 +374,7 @@ pub fn claim_due(
             let ran = grokhub_core::mark_automation_ran(a.clone(), clock.now_ms);
             *a = grokhub_core::ensure_automation_schedule(ran, clock);
             claimed = Some(a.clone());
-        } else if a.enabled && a.next_run.is_none() && !cabin_only(a) {
+        } else if a.enabled && a.next_run.is_none() {
             *a = grokhub_core::ensure_automation_schedule(a.clone(), clock);
         }
     }
@@ -390,6 +382,29 @@ pub fn claim_due(
         save(config_dir, &list)?;
     }
     Ok(claimed)
+}
+
+/// Peek at the next due job the shell would claim, without saving a run.
+pub fn next_due(
+    config_dir: &Path,
+    clock: LocalClock,
+    skip: &HashSet<String>,
+) -> Result<Option<Automation>, String> {
+    let _store = store();
+    let list = load_unlocked(config_dir)?;
+    Ok(grokhub_core::due_automations(&list, clock.now_ms)
+        .into_iter()
+        .find(|a| !skip.contains(&a.id) && !Running::holds(&a.id)))
+}
+
+/// A check command said to wait: advance the next run without counting a
+/// successful fire.
+pub fn settle_skip(config_dir: &Path, id: &str, clock: LocalClock) -> Result<(), String> {
+    change(config_dir, id, |list, at| {
+        list[at] =
+            grokhub_core::mark_automation_skipped(list[at].clone(), clock.now_ms, clock);
+    })
+    .map(drop)
 }
 
 /// How a scheduled run ended, on its row. The claim already counted it.
@@ -699,7 +714,6 @@ mod tests {
             row.describe.as_deref(),
             Some("every weekday at 9:30am water the ferns")
         );
-        assert!(!row.cabin_only);
     }
 
     #[test]
@@ -721,7 +735,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_keeps_a_cabin_check_command() {
+    fn edit_keeps_a_check_command() {
         let dir = temp_dir("edit-check");
         std::fs::write(
             path(&dir),
@@ -729,7 +743,6 @@ mod tests {
         )
         .expect("seed");
         let row = &rows(&load(&dir).expect("load"), tuesday_8am())[0];
-        assert!(row.cabin_only);
         assert_eq!(
             row.describe.as_deref(),
             Some("every day at 9am tidy downloads")
