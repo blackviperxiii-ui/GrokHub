@@ -235,6 +235,7 @@ pub mod win_acl;
 pub mod wind_down;
 pub mod windshield;
 pub mod wire;
+pub mod work_chat;
 pub mod work_file;
 pub mod work_item;
 pub mod work_resume;

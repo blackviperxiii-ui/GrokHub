@@ -17,6 +17,7 @@ pub mod bg_runs;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
+pub mod card_chat;
 pub mod change_rows;
 pub mod changes;
 pub mod chat_tabs;
@@ -703,6 +704,9 @@ async fn chat_turn(
         clock,
     } = turn;
     let files = state.trays.take(&conversation_id, &attachments)?;
+    // A card's chat shows Stop on its card while this turn runs.
+    card_chat::turn_began(&conversation_id);
+    let (ended_dir, ended_chat) = (state.config_dir.clone(), conversation_id.clone());
     // A session the agent window started, while it shows it, has a lead: it
     // plans first, until its first plan is approved.
     let lead = state.code_sessions.holds(&conversation_id)
@@ -727,7 +731,7 @@ async fn chat_turn(
     // turn's own outcome is written when it ends (as the cabin does).
     let started = grokhub_core::now_ms();
     chat_trials::said(&config_dir, &conversation_id, &text, started);
-    tauri::async_runtime::spawn_blocking(move || {
+    let stop = tauri::async_runtime::spawn_blocking(move || {
         let mut route = route(&settings, mode, &config_dir)?;
         if let Some(dir) = own_folder {
             route.workspace = dir;
@@ -801,7 +805,11 @@ async fn chat_turn(
         stop
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+    .and_then(|stop| stop);
+    // A card's run settles on its card, however the turn ended.
+    card_chat::turn_ended(&ended_dir, &ended_chat, &stop);
+    stop
 }
 
 /// Push to talk: one recording (a WAV, as base64) to text for the draft.
@@ -3064,6 +3072,79 @@ async fn workboard_resume(
 ) -> Result<workboard::Resume, String> {
     let dir = state.config_dir.clone();
     off_main(move || workboard::resume(&dir, &id, &conversation_id)).await?
+}
+
+/// Workboard → a card's own chat: Say gives the card its chat (the page's
+/// new id when it has none here) and the message, which the page then sends
+/// with `send_chat`, so it streams like any chat. Desktop only.
+#[tauri::command]
+async fn workboard_say(
+    state: State<'_, ShellState>,
+    id: String,
+    text: String,
+    conversation_id: String,
+) -> Result<card_chat::Say, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || card_chat::say(&dir, &id, &text, &conversation_id)).await?
+}
+
+/// The Workboard's queue, while the cabin is closed: once a second, the
+/// oldest queued card starts as a turn in its own chat when no chat of yours
+/// runs, no other queued card runs, there is room for background runs, no
+/// game holds it and the agent is ready.
+#[cfg(desktop)]
+fn start_card_queue(app: AppHandle) {
+    std::thread::spawn(move || {
+        let config_dir = app.state::<ShellState>().config_dir.clone();
+        card_chat::seed(&config_dir);
+        let mut queue = card_chat::Queue::default();
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let state = app.state::<ShellState>();
+            let foreground = state
+                .chats
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+                .any(|s| s.busy());
+            let gate = grokhub_core::work_triage::QueueGate {
+                foreground,
+                bg_live: bg_runs::live_count(),
+                game: grokhub_core::work_chat::queue_game_wait(&grokhub_desktop::game_guard::peek()),
+                ..Default::default()
+            };
+            let now = grokhub_core::now_ms();
+            let mode = match current(&state).approvals {
+                settings::Approvals::Ask => grokhub_core::wire::PermissionMode::Ask,
+                settings::Approvals::Auto => grokhub_core::wire::PermissionMode::Auto,
+                settings::Approvals::Always => grokhub_core::wire::PermissionMode::AlwaysApprove,
+            };
+            let ready = || chat_client().is_ok();
+            let new_chat = || card_chat::new_chat_id(now);
+            let look = card_chat::Look {
+                now,
+                gate,
+                ready: &ready,
+                new_chat: &new_chat,
+                mode,
+            };
+            let Some(start) = queue.tick(&config_dir, look) else {
+                continue;
+            };
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<ShellState>();
+                let turn = Turn {
+                    text: start.message,
+                    mode: None,
+                    attachments: Vec::new(),
+                    clock: None,
+                };
+                let settings = current(&state);
+                let _ = chat_turn(app.clone(), &state, start.chat, turn, settings).await;
+            });
+        }
+    });
 }
 
 /// Workboard: the cabin's work cards from the same file, through the shared
@@ -6128,6 +6209,9 @@ pub fn run() {
             // The Workboard's local tidy, while the cabin is closed. No model.
             #[cfg(desktop)]
             workboard::start_sweeper(app.state::<ShellState>().config_dir.clone());
+            // Queued Workboard cards start on their own, while the cabin is closed.
+            #[cfg(desktop)]
+            start_card_queue(app.handle().clone());
             // The proactive engine and nudge watchers, while the cabin is closed.
             #[cfg(desktop)]
             proactive::start(app.state::<ShellState>().config_dir.clone());
@@ -6465,6 +6549,7 @@ pub fn run() {
             get_workboard,
             workboard_add,
             workboard_act,
+            workboard_say,
             workboard_work,
             workboard_playbook,
             home_run_playbook,
