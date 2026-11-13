@@ -386,6 +386,16 @@ async function click(s, css) {
   await wd("POST", `${s}/element/${await find(s, css)}/click`, {});
 }
 
+/** Centres the element first, for a card a sticky heading can cover after a scroll. */
+async function clickCentered(s, css) {
+  const id = await find(s, css);
+  await wd("POST", `${s}/execute/sync`, {
+    script: "arguments[0].scrollIntoView({block:'center', inline:'nearest'});",
+    args: [{ [ELEMENT]: id }],
+  }).catch(() => undefined);
+  await wd("POST", `${s}/element/${id}/click`, {});
+}
+
 /** A top tab by its label, so adding a tab moves no test. */
 // Waits for the tab, since Pulse shows only once the capability report loads.
 // Right after a turn ends the window can still be moving (the reply settles,
@@ -1108,7 +1118,7 @@ async function localAi(s, config) {
       console.log("Get engine absent; download skipped, shot the state as found");
     }
 
-    // 4) Gemma 4 12B → Install and run draft model offer (E2B not on disk).
+    // 4) Gemma 4 12B → Install and run draft model offer (its paired 12B drafter not on disk).
     await click(s, ".local-ai button.mode-manual");
     const showAll = await wd("POST", `${s}/elements`, {
       using: "css selector",
@@ -1131,7 +1141,8 @@ async function localAi(s, config) {
     await wd("POST", `${s}/element/${gemma}/click`, {});
     const offer = await waitFor("the Gemma 4 12B draft offer", async () => {
       const t = await textOf(s, ".local-ai .local-draft-offer");
-      return /Install and run draft model/i.test(t) && /Gemma 4 E2B/i.test(t) ? t : null;
+      const paired = /Gemma 4 12B draft model makes Gemma 4 12B/.test(t);
+      return /Install and run draft model/i.test(t) && paired ? t : null;
     });
     await scrollIntoView(s, ".local-ai .local-draft-offer");
     await shot(s, "settings-local-ai-gemma-draft-offer");
@@ -1146,19 +1157,21 @@ async function localAi(s, config) {
 
   const modelFile = join(config, "Llama-3-8B-abliterated.Q4_K_M.gguf");
   writeFileSync(modelFile, "GGUF");
-  await click(s, ".local-ai button.mode-manual");
+  // The Windows proof above leaves the draft offer scrolled to the top, where
+  // the page heading covers the card's buttons, so these clicks centre first.
+  await clickCentered(s, ".local-ai button.mode-manual");
   const input = await waitFor("the model file field", () =>
     find(s, "input[aria-label='Model file path']"),
   );
   await typeInto(s, input, modelFile);
-  await click(s, ".local-ai button.use-file");
+  await clickCentered(s, ".local-ai button.use-file");
   const notice = await waitFor("the model notice", async () => {
     const t = await textOf(s, ".local-ai .notice");
     return t.includes("safety training removed") ? t : null;
   });
   console.log(`notice shown: ${JSON.stringify(notice.split("\n")[0])}`);
-  await click(s, ".local-ai .notice button.accept");
-  await click(s, ".local-ai button.save-local");
+  await clickCentered(s, ".local-ai .notice button.accept");
+  await clickCentered(s, ".local-ai button.save-local");
   await waitFor("the saved note", async () => {
     const t = await textOf(s, ".local-ai .local-note");
     return t === "Local AI saved." ? t : null;
