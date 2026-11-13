@@ -110,16 +110,18 @@ describe("theme contrast", () => {
     expect(contrast("#c8304a", "#1d1e22")).toBeLessThan(4.5);
   });
 
-  // A danger button's text is danger-text. On the accent fill every plain
-  // button starts with it could not be read, so the button is outlined.
-  it("a danger button is outlined, because danger text on the accent fill can't be read", () => {
+  // Destructive differs from primary outline by fill + a "!" mark, not color alone.
+  it("a danger button is filled red with a bang mark", () => {
     const block = /\nbutton\.danger:not\(:disabled\) \{([^}]*)\}/.exec(css)?.[1] ?? "";
-    expect(block.trim()).toBe("background: transparent;");
-    const ratios = THEMES.map((id) => {
-      const vars = theme(rules, id);
-      return Number(contrast(resolve(vars, "danger-text"), resolve(vars, "accent")).toFixed(2));
-    });
-    expect(ratios).toEqual([1.53, 1.53, 1.63, 2.32]);
+    expect(block).toMatch(/background:\s*var\(--red\)/);
+    expect(css).toMatch(/button\.danger:not\(:disabled\)::before[\s\S]*?content:\s*"! "/);
+  });
+
+  it("default buttons are red outline, not a filled accent", () => {
+    const block = /\nbutton \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(block).toMatch(/background:\s*transparent/);
+    expect(block).toMatch(/border:\s*1\.5px solid var\(--red\)/);
+    expect(css).toMatch(/button\.cta[\s\S]*?background:\s*var\(--amber\)/);
   });
 
   it("reads the real themes, not an empty table", () => {

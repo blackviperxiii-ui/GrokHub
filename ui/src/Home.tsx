@@ -285,7 +285,7 @@ function ViewBody({
       {buttons.length > 0 && (
         <div className="home-buttons">
           {buttons.map((b) => (
-            <button key={b.label} type="button" className={b.primary ? undefined : "quiet"} onClick={() => run(b.action)}>
+            <button key={b.label} type="button" className={b.primary ? "cta" : "quiet"} onClick={() => run(b.action)}>
               {b.label}
             </button>
           ))}

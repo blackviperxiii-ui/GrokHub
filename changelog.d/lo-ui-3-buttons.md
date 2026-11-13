@@ -1,0 +1,1 @@
+- Loadout UI: default buttons are red outline; one amber CTA per screen; danger uses a filled red bang mark.
