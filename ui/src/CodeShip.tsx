@@ -27,7 +27,15 @@ const KIND_LABEL: Record<CodeActivityEntry["kind"], string> = {
   secret: "Secret",
   edit: "Edit",
   terminal: "Terminal",
+  commit: "Commit",
+  review: "Review",
 };
+
+/** The session as the last argument of a call, when there is one: the
+ * Code tab's own card calls exactly as it did before there was a session. */
+function forSession(conversationId?: string): [] | [string] {
+  return conversationId === undefined ? [] : [conversationId];
+}
 
 /** One activity line's time, in the person's own clock. */
 export function activityTime(ms: number): string {
@@ -35,8 +43,18 @@ export function activityTime(ms: number): string {
 }
 
 /** The Code tab's push, PR and activity section. Every push goes through the guard in the app.
- * `refreshKey` is a counter: a new value reads the plans and the activity list again and keeps the rest. */
-export function CodeShip({ onShipped, refreshKey = 0 }: { onShipped?: () => void; refreshKey?: number }) {
+ * `refreshKey` is a counter: a new value reads the plans and the activity list again and keeps the rest.
+ * With `conversationId` it is the agent window's Tasks panel: it pushes the commit made there, in that
+ * session's folder, after the app's checks, and every push and PR asks with the exact command. */
+export function CodeShip({
+  onShipped,
+  refreshKey = 0,
+  conversationId,
+}: {
+  onShipped?: () => void;
+  refreshKey?: number;
+  conversationId?: string;
+}) {
   const [push, setPush] = useState<CodeShipPlan | null>(null);
   const [pr, setPr] = useState<CodeShipPlan | null>(null);
   const [confirming, setConfirming] = useState<CodeShipPlan | null>(null);
@@ -46,6 +64,7 @@ export function CodeShip({ onShipped, refreshKey = 0 }: { onShipped?: () => void
   const [output, setOutput] = useState("");
   const [activity, setActivity] = useState<CodeActivityEntry[]>([]);
   const cancel = useCardFocus<HTMLButtonElement>(confirming);
+  const session = forSession(conversationId);
 
   const show = useCallback((nextPush: CodeShipPlan, nextPr: CodeShipPlan, log: CodeActivityEntry[]) => {
     setPush(nextPush);
@@ -60,19 +79,27 @@ export function CodeShip({ onShipped, refreshKey = 0 }: { onShipped?: () => void
   }, []);
 
   const refresh = useCallback(async () => {
-    const [nextPush, nextPr, log] = await Promise.all([codeShipPlan("push"), codeShipPlan("pr"), codeActivity()]);
+    const [nextPush, nextPr, log] = await Promise.all([
+      codeShipPlan("push", ...forSession(conversationId)),
+      codeShipPlan("pr", ...forSession(conversationId)),
+      codeActivity(...forSession(conversationId)),
+    ]);
     show(nextPush, nextPr, log);
     return { push: nextPush, pr: nextPr };
-  }, [show]);
+  }, [show, conversationId]);
 
   // Runs each time the tab shows, so a card left open for another branch's command goes too,
   // and when something else on the tab (a deploy) added to the activity list.
   useEffect(() => {
-    Promise.all([codeShipPlan("push"), codeShipPlan("pr"), codeActivity()]).then(
+    Promise.all([
+      codeShipPlan("push", ...forSession(conversationId)),
+      codeShipPlan("pr", ...forSession(conversationId)),
+      codeActivity(...forSession(conversationId)),
+    ]).then(
       ([nextPush, nextPr, log]) => show(nextPush, nextPr, log),
       (err) => setNote(String(err)),
     );
-  }, [show, refreshKey]);
+  }, [show, refreshKey, conversationId]);
 
   async function start(action: CodeShipAction) {
     if (busy) return;
@@ -85,7 +112,8 @@ export function CodeShip({ onShipped, refreshKey = 0 }: { onShipped?: () => void
         setNote(plan.blocked);
         return;
       }
-      if (plan.needsConfirm) {
+      // The Tasks panel's push always asks, whatever a plan says.
+      if (plan.needsConfirm || conversationId !== undefined) {
         setConfirming(plan);
         return;
       }
@@ -100,7 +128,14 @@ export function CodeShip({ onShipped, refreshKey = 0 }: { onShipped?: () => void
     setConfirming(null);
     setBusy(true);
     try {
-      const done = shown === undefined ? await codeShipRun(action, false) : await codeShipRun(action, true, shown);
+      // The Tasks panel never runs without the confirm; its call still names
+      // the session, so the app refuses it rather than push from the Code tab.
+      const done =
+        shown !== undefined
+          ? await codeShipRun(action, true, shown, ...session)
+          : conversationId !== undefined
+            ? await codeShipRun(action, false, null, conversationId)
+            : await codeShipRun(action, false);
       setNote(done.summary);
       setOutput(done.output);
       onShipped?.();
@@ -118,7 +153,7 @@ export function CodeShip({ onShipped, refreshKey = 0 }: { onShipped?: () => void
     setBusy(true);
     setNote(null);
     try {
-      const made = await codeNewBranch(name);
+      const made = await codeNewBranch(name, ...session);
       // An open card shows the command for the branch just left.
       setConfirming(null);
       setBranchName("");
@@ -143,22 +178,27 @@ export function CodeShip({ onShipped, refreshKey = 0 }: { onShipped?: () => void
       <p className="note">
         {modeNote} {SHIP_RULES}
       </p>
-      <div className="code-test-row">
-        <label>
-          New branch
-          <input
-            value={branchName}
-            spellCheck={false}
-            autoComplete="off"
-            placeholder="code/fix-typo"
-            disabled={busy}
-            onChange={(e) => setBranchName(e.target.value)}
-          />
-        </label>
-        <button type="button" onClick={() => void makeBranch()} disabled={busy || !branchName.trim()}>
-          Make branch
-        </button>
-      </div>
+      {conversationId === undefined && (
+        // The Tasks panel pushes the commit made there on the branch it was
+        // made on, so it offers no other branch: a new one would leave the
+        // commit behind and refuse every push.
+        <div className="code-test-row">
+          <label>
+            New branch
+            <input
+              value={branchName}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="code/fix-typo"
+              disabled={busy}
+              onChange={(e) => setBranchName(e.target.value)}
+            />
+          </label>
+          <button type="button" onClick={() => void makeBranch()} disabled={busy || !branchName.trim()}>
+            Make branch
+          </button>
+        </div>
+      )}
       <div className="card-buttons code-ship-buttons">
         <button type="button" onClick={() => void start("push")} disabled={busy || !push}>
           {busy ? "Working…" : push?.branch ? `Push ${push.branch}` : "Push"}

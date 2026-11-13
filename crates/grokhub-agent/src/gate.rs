@@ -854,4 +854,67 @@ mod tests {
         assert!(is_known("merge_subagent_work"));
         assert!(!is_readonly("merge_subagent_work"));
     }
+
+    #[test]
+    fn an_agents_own_push_always_asks_and_is_refused_when_nobody_can_answer() {
+        let ws = Path::new("/home/user/my-app");
+        let run = |gate: &Gate, cmd: &str, latched: bool| {
+            let call = serde_json::json!({ "command": cmd }).to_string();
+            decide_with(gate, "run_terminal_command", &call, latched, None, ws, None)
+        };
+        // Always, and an Always answer given earlier in the run, still ask.
+        for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
+            for cmd in ["git -C . push origin x", "gh pr create --fill"] {
+                assert_eq!(
+                    run(&gate(mode, false, true, false), cmd, false),
+                    Decision::Ask
+                );
+                assert_eq!(
+                    run(&gate(mode, false, true, false), cmd, true),
+                    Decision::Ask
+                );
+            }
+        }
+        assert_eq!(
+            run(
+                &gate(PermMode::Always, false, false, false),
+                "git push",
+                true
+            ),
+            Decision::Refuse(
+                "Tool `run_terminal_command` was not executed: hard-class ship needs you, \
+                 and nobody is here to approve it"
+                    .into()
+            )
+        );
+        assert_eq!(
+            run(
+                &gate(PermMode::Auto, false, false, false),
+                "gh pr merge 3",
+                false
+            ),
+            Decision::Refuse(
+                "Tool `run_terminal_command` was not executed: hard-class ship needs you, \
+                 and nobody is here to approve it"
+                    .into()
+            )
+        );
+        assert_eq!(
+            run(&gate(PermMode::Always, true, true, false), "git push", true),
+            Decision::Refuse(
+                "read-only in this phase: `run_terminal_command` is not available. Use \
+                 read_file, list_dir, grep, or glob."
+                    .into()
+            )
+        );
+        // A plain commit stays on the soft gate: Always runs it.
+        assert_eq!(
+            run(
+                &gate(PermMode::Always, false, true, false),
+                "git commit -m x",
+                true
+            ),
+            Decision::Run
+        );
+    }
 }

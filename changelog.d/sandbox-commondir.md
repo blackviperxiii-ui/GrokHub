@@ -1,0 +1,1 @@
+- Sandbox: a sandboxed command that writes or rewrites `.git/commondir` (which sends git to the config and hooks of another folder) has it put back when the command ends, like `.git/config` and `.git/hooks`, so a push address or a hook planted that way no longer outlives the command.

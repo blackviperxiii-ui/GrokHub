@@ -86,6 +86,7 @@ vi.mock("./Agents", () => ({
     live?: boolean;
     onOpenChat?: () => void;
     onAsk?: (text: string) => void;
+    onShipped?: () => void;
   }) => (
     <div
       data-testid="agent-tasks"
@@ -97,6 +98,9 @@ vi.mock("./Agents", () => ({
       tasks of {p.conversationId}
       <button type="button" onClick={() => p.onAsk?.("review the change")}>
         stub review
+      </button>
+      <button type="button" onClick={() => p.onShipped?.()}>
+        stub committed
       </button>
     </div>
   ),
@@ -883,6 +887,16 @@ describe("Code tab", () => {
     await userEvent.click(screen.getByRole("button", { name: "stub open session" }));
     await waitFor(() => expect(chat).toHaveTextContent("session chat-7"));
     await waitFor(() => expect(tasks).toHaveAttribute("data-asks", "false"));
+  });
+
+  it("a commit made in the Tasks panel reads the repo again, so the committed files leave the list", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    render(<Tab shown />);
+    expect(await screen.findByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
+    api.codeRepo.mockResolvedValue(repo({ ahead: 2, files: [] }));
+    await userEvent.click(screen.getByRole("button", { name: "stub committed" }));
+    expect(await screen.findByText(/On beta → origin\/beta · 2 ahead, 0 behind/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /notes\.md/ })).not.toBeInTheDocument();
   });
 
   it("keeps the agent window mounted and idle while another tab shows", async () => {

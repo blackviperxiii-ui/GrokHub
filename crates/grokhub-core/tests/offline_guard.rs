@@ -86,6 +86,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/sandbox/proxy.rs", 2, "sandboxed shell's egress proxy (HX-11): egress guard on every CONNECT and request before it dials the host or the app's own upstream proxy; the Unix-socket bridge only dials that same proxy on loopback"),
     ("crates/grokhub-app/src/app/pulse_ui.rs", 1, "Pulse previews: egress_ok"),
     ("crates/grokhub-app/src/app/pulse_sources_ui.rs", 1, "Pulse sources: egress_ok on every hop"),
+    ("crates/grokhub-code/src/ship.rs", 1, "origin_branch (ls-remote of the branch before a confirmed Open PR): offline::refuse first; the transports are pinned by PUSH_PINS"),
     ("src-tauri/src/voice.rs", 1, "push-to-talk speech to text: guard_quiet (chat data) before the POST; the test override is plain-http loopback only"),
     ("src-tauri/src/voice_live.rs", 1, "voice mode text to speech: guard_quiet (chat data) before the POST; the test override is plain-http loopback only"),
     ("crates/grokhub-agent/src/xai_keychain.rs", 1, "Sign in with Grok (desktop app and grokhub-hub --oauth) to xAI's auth host: guard_quiet (codes and tokens only); the test override is loopback only"),

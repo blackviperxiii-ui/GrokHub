@@ -8,8 +8,8 @@
 //! `+refspec`), `--mirror`, `--delete`, `--all`, `--tags`, `--prune`, a
 //! remote other than origin, `git -C`/`-c` and anything the reader can't
 //! follow is refused. The guard then refuses main, the default branch and
-//! any protected branch, in every mode. What it lets through runs with no
-//! card in Auto-beta and asks otherwise.
+//! any protected branch, in every mode. What it lets through still asks:
+//! an agent's push is hard class `ship`, which no mode skips.
 
 use crate::activity::{self as code_activity, Entry, Kind as ActKind};
 use crate::ship::{self, Blocked, CodeShip, Go, Probe};

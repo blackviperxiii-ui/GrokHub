@@ -3,9 +3,11 @@
 //! Every call goes through [`project_git`]: the `GIT_*` variables the app
 //! was started with are removed, replace refs and a grafts file are off, no
 //! transport is allowed, and no hook and no fsmonitor runs. Nothing here
-//! writes the project's index, refs or object store. A snapshot hashes the
-//! working folder into an index and an object folder of its own, in the
-//! app's config folder, and borrows the project's objects read-only. The
+//! writes the project's index, refs or object store, except [`commit`] and
+//! [`reset_index`], which run only after the person's click on Commit. A
+//! snapshot hashes the working folder into an index and an object folder of
+//! its own, in the app's config folder, and borrows the project's objects
+//! read-only. The
 //! system's temp folder is not used: an agent's command may write there, and
 //! could swap the index while a snapshot is taken.
 //!
@@ -319,7 +321,13 @@ fn runs_a_program(key: &str) -> bool {
         ),
         ("credential", _) => name == "helper",
         ("http", _) => matches!(name, "proxy" | "sslverify"),
-        ("remote", true) => matches!(name, "proxy" | "receivepack" | "uploadpack" | "mirror"),
+        // `pushurl` sends a push of `origin` to another address than the
+        // one the card names, and so does `url.<base>.pushInsteadOf`.
+        ("remote", true) => matches!(
+            name,
+            "proxy" | "receivepack" | "uploadpack" | "mirror" | "pushurl"
+        ),
+        ("url", true) => name == "pushinsteadof",
         // `protocol.allow` and `protocol.<name>.allow`: with `ext` allowed, a
         // remote's address is a command line.
         ("protocol", _) => name == "allow",
@@ -857,6 +865,87 @@ pub fn commit_added_lines(top: &Path, sha: &str) -> Result<(Vec<Change>, Vec<Add
     Ok((changes, parse_added(&git(top, &patch)?)?))
 }
 
+/// What [`commit`] says when the branch moved between the checks and the
+/// ref update.
+pub const BRANCH_MOVED: &str = "the branch moved since the checks ran";
+/// What [`commit`] says when the folder no longer holds the checked tree.
+pub const FILES_MOVED: &str = "files changed since the checks ran";
+
+/// Commits the snapshot's tree onto `branch`, with the snapshot's HEAD as
+/// its one parent, and moves the branch to it only while the branch still
+/// names that HEAD. The only call here that writes the project: the tree's
+/// files go into its object store and the branch moves. Its index is left
+/// as it was; [`reset_index`] brings it in line.
+///
+/// The tree is taken again first, with an index of its own and the
+/// project's object store, and must be the snapshot's: the commit holds
+/// exactly the files that were checked. No hook, no signing program and no
+/// editor runs. On an error nothing was committed.
+pub fn commit(snap: &Snapshot, branch: &str, message: &str) -> Result<String, String> {
+    need_id(&snap.head)?;
+    need_id(&snap.tree)?;
+    let top = snap.top.as_path();
+    let refname = format!("refs/heads/{branch}");
+    let mut check = project_git(top);
+    check.args(["check-ref-format", &refname]);
+    if run(check)?.code != Some(0) || branch.starts_with('-') {
+        return Err(format!("{} is not a branch name", plain(branch)));
+    }
+    if self::branch(top)?.as_deref() != Some(branch) {
+        return Err(BRANCH_MOVED.into());
+    }
+
+    let scratch = Scratch::new()?;
+    let index = |args: &[&str]| {
+        let mut cmd = project_git(top);
+        cmd.env("GIT_INDEX_FILE", scratch.index())
+            .args(["-c", "core.splitIndex=false"])
+            .args(args);
+        run(cmd)?.ok(args[0])
+    };
+    refuse_untrusted(top)?;
+    index(&["read-tree", &snap.head])?;
+    // `add` runs clean filters, so the config is read again right before it.
+    refuse_untrusted(top)?;
+    index(&["add", "-A"])?;
+    let tree = one_line(index(&["write-tree"])?, "write-tree")?;
+    if tree != snap.tree {
+        return Err(FILES_MOVED.into());
+    }
+
+    let mut body = message.trim_end().to_string();
+    body.push('\n');
+    let mut cmd = project_git(top);
+    cmd.args([
+        "commit-tree",
+        "--no-gpg-sign",
+        &tree,
+        "-p",
+        &snap.head,
+        "-F",
+        "-",
+    ]);
+    let sha = one_line(
+        run_fed(cmd, body.as_bytes())?.ok("commit-tree")?,
+        "commit-tree",
+    )?;
+    need_id(&sha)?;
+
+    // Compare and swap: a branch that moved is left where it is.
+    let mut cmd = project_git(top);
+    cmd.args(["update-ref", "-m", "ship", &refname, &sha, &snap.head]);
+    if run(cmd)?.code != Some(0) {
+        return Err(BRANCH_MOVED.into());
+    }
+    Ok(sha)
+}
+
+/// `git reset -q`: the project's index takes the tree HEAD names, so a
+/// commit [`commit`] made leaves a clean status.
+pub fn reset_index(top: &Path) -> Result<(), String> {
+    git(top, &["reset", "-q"]).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1181,6 +1270,14 @@ mod tests {
             ),
             ("remote.origin.uploadpack\nrun", "remote.origin.uploadpack"),
             ("remote.origin.mirror\ntrue", "remote.origin.mirror"),
+            (
+                "remote.origin.pushurl\n/home/user/other.git",
+                "remote.origin.pushurl",
+            ),
+            (
+                "url.https://github.com/attacker/.pushinsteadof\nhttps://github.com/user/",
+                "url.https://github.com/attacker/.pushinsteadof",
+            ),
             ("protocol.allow\nalways", "protocol.allow"),
             ("protocol.ext.allow\nalways", "protocol.ext.allow"),
             ("core.sparsecheckout\ntrue", "core.sparsecheckout"),
@@ -2016,5 +2113,183 @@ mod tests {
         let snap = snapshot(&dir).unwrap();
         assert_eq!(snap.changes(&snap.head).unwrap(), [change('A', "a.txt")]);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // -- commit --------------------------------------------------------------
+
+    /// [`project`] on the branch `work/one`, with the change of the first
+    /// snapshot test: staged, unstaged, untracked, deleted and ignored files.
+    fn changed_project(name: &str) -> PathBuf {
+        let dir = project(name);
+        git(&dir, &["switch", "-q", "-c", "work/one"]);
+        write(&dir.join("README"), "hi\nthere\n");
+        write(&dir.join("src/a.txt"), "one\n");
+        write(&dir.join("staged.txt"), "staged\n");
+        git(&dir, &["add", "staged.txt"]);
+        std::fs::remove_file(dir.join("old.txt")).unwrap();
+        write(&dir.join(".gitignore"), "target/\n");
+        write(&dir.join("target/out.bin"), "built\n");
+        dir
+    }
+
+    #[test]
+    fn a_commit_holds_the_checked_tree_on_the_checked_head_and_the_reset_cleans_the_status() {
+        let dir = changed_project("commit");
+        let before = head_of(&dir);
+        let snap = snapshot(&dir).unwrap();
+        assert_eq!(snap.tree, "98eeb2bb5cc20755bbf73147beabb5106d331219");
+
+        let sha = commit(&snap, "work/one", "Add the parser\n\nWith its tests.\n\n").unwrap();
+        assert_eq!(head_of(&dir), sha);
+        assert_eq!(
+            git(&dir, &["rev-parse", &format!("{sha}^{{tree}}")]).trim(),
+            "98eeb2bb5cc20755bbf73147beabb5106d331219"
+        );
+        assert_eq!(git(&dir, &["rev-parse", &format!("{sha}^")]).trim(), before);
+        assert_eq!(
+            git(&dir, &["rev-list", "--count", &format!("{before}..HEAD")]).trim(),
+            "1"
+        );
+        assert_eq!(
+            git(&dir, &["log", "-1", "--format=%an <%ae>"]).trim(),
+            "test <test@example.com>"
+        );
+        // The message as given, its trailing blank lines cut to one newline.
+        let raw = git(&dir, &["cat-file", "commit", &sha]);
+        assert_eq!(
+            raw.split_once("\n\n").map(|(_, message)| message),
+            Some("Add the parser\n\nWith its tests.\n")
+        );
+        assert_eq!(
+            git(
+                &dir,
+                &["reflog", "-1", "--format=%gs", "refs/heads/work/one"]
+            )
+            .trim(),
+            "ship"
+        );
+        // The index is still the one from before the commit: against the
+        // new HEAD it takes back every change but the staged one.
+        assert_eq!(
+            git(&dir, &["status", "--porcelain"]),
+            "D  .gitignore\nMM README\nAD old.txt\nD  src/a.txt\n?? .gitignore\n?? src/\n"
+        );
+        reset_index(&dir).unwrap();
+        assert_eq!(git(&dir, &["status", "--porcelain"]), "");
+        assert_eq!(tree_id(&dir).unwrap(), snap.tree);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_branch_that_moved_after_the_checks_is_left_where_it_is() {
+        let dir = changed_project("commit-moved");
+        let snap = snapshot(&dir).unwrap();
+        // The agent's own commit, made after the checks.
+        git(&dir, &["commit", "-q", "-m", "sneaked in"]);
+        let moved = head_of(&dir);
+        assert_eq!(
+            commit(&snap, "work/one", "Ship it"),
+            Err("the branch moved since the checks ran".to_string())
+        );
+        assert_eq!(head_of(&dir), moved);
+        assert_eq!(
+            git(&dir, &["log", "-1", "--format=%s"]).trim(),
+            "sneaked in"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // HEAD on another branch at the same commit: the checked branch is
+        // not the one checked out.
+        let dir = changed_project("commit-switched");
+        let snap = snapshot(&dir).unwrap();
+        git(&dir, &["switch", "-q", "-c", "work/two"]);
+        assert_eq!(
+            commit(&snap, "work/one", "Ship it"),
+            Err("the branch moved since the checks ran".to_string())
+        );
+        assert_eq!(head_of(&dir), snap.head);
+        assert_eq!(
+            git(&dir, &["rev-parse", "refs/heads/work/one"]).trim(),
+            snap.head
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_changed_after_the_checks_commit_nothing() {
+        let dir = changed_project("commit-files");
+        let snap = snapshot(&dir).unwrap();
+        write(&dir.join("late.txt"), "late\n");
+        assert_eq!(
+            commit(&snap, "work/one", "Ship it"),
+            Err("files changed since the checks ran".to_string())
+        );
+        assert_eq!(head_of(&dir), snap.head);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_commit_refuses_a_bad_branch_name_and_a_config_program_set_after_the_checks() {
+        let dir = changed_project("commit-refused");
+        let snap = snapshot(&dir).unwrap();
+        assert_eq!(
+            commit(&snap, "work/../one", "Ship it"),
+            Err("work/../one is not a branch name".to_string())
+        );
+        let marker = dir.join("filter-ran");
+        git(
+            &dir,
+            &["config", "filter.x.clean", &filter_command(&marker)],
+        );
+        write(&dir.join(".git/info/attributes"), "* filter=x\n");
+        assert_eq!(
+            commit(&snap, "work/one", "Ship it"),
+            Err(
+                "this repository's own git config sets filter.x.clean; commit from your terminal"
+                    .to_string()
+            )
+        );
+        assert!(!marker.exists());
+        assert_eq!(head_of(&dir), snap.head);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_commit_runs_no_hook_and_no_signing_program() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = changed_project("commit-hooks");
+        let marker = dir.join("ran");
+        let script = format!("#!/bin/sh\necho \"$0\" >> '{}'\n", marker.display());
+        let hooks = dir.join(".git/hooks");
+        for hook in [
+            "pre-commit",
+            "commit-msg",
+            "post-commit",
+            "reference-transaction",
+            "post-index-change",
+        ] {
+            write(&hooks.join(hook), &script);
+            std::fs::set_permissions(hooks.join(hook), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        let signer = dir.join("sign.sh");
+        write(&signer, &script);
+        std::fs::set_permissions(&signer, std::fs::Permissions::from_mode(0o755)).unwrap();
+        git(&dir, &["config", "commit.gpgsign", "true"]);
+        git(&dir, &["config", "gpg.program", &signer.to_string_lossy()]);
+
+        let snap = snapshot(&dir).unwrap();
+        let sha = commit(&snap, "work/one", "Ship it").unwrap();
+        reset_index(&dir).unwrap();
+        assert!(
+            !marker.exists(),
+            "{}",
+            std::fs::read_to_string(&marker).unwrap_or_default()
+        );
+        let raw = git(&dir, &["cat-file", "commit", &sha]);
+        assert!(!raw.contains("gpgsig"), "{raw}");
+        assert_eq!(git(&dir, &["status", "--porcelain"]), "");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

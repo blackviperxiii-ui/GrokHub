@@ -19,6 +19,7 @@ use crate::work::{self, plain, random_base36, root_session};
 const BASE_FILE: &str = "base.json";
 const PLAN_FILE: &str = "plan.md";
 const REVIEW_FILE: &str = "review.json";
+const SHIP_FILE: &str = "ship.json";
 
 /// How much of the diff the helper's task carries, in characters.
 const DIFF_MAX: usize = 60_000;
@@ -80,6 +81,74 @@ pub struct Review {
     /// list of its commits or files was cut.
     #[serde(default)]
     pub cut: bool,
+    /// The findings the person chose to ship with, by their place in the
+    /// parsed list, in order. Only a click in the app adds one, and a new
+    /// review starts with none.
+    #[serde(default)]
+    pub waived: Vec<u32>,
+}
+
+impl Review {
+    /// The blockers no click waived. A body that cannot be read counts every
+    /// blocker as open.
+    pub fn open_blockers(&self) -> u32 {
+        let Some(card) = Findings::parse(&self.body) else {
+            return self.blockers;
+        };
+        let waived = card
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(at, item)| {
+                item.severity == Severity::High && self.waived.contains(&(*at as u32))
+            })
+            .count() as u32;
+        self.blockers.saturating_sub(waived)
+    }
+
+    /// How many blockers a click waived.
+    pub fn waived_blockers(&self) -> u32 {
+        self.blockers - self.open_blockers()
+    }
+}
+
+/// A flagged line the person allowed, in the commit made from the Tasks
+/// panel that holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AllowedLine {
+    pub commit: String,
+    /// `path:line`.
+    pub place: String,
+}
+
+/// The commit the person made from the Tasks panel, kept for the push that
+/// may follow.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shipped {
+    /// The repository's top level.
+    pub project: String,
+    pub branch: String,
+    /// The commit that was made.
+    pub sha: String,
+    /// Its one parent: [`Review::head`].
+    pub parent: String,
+    pub tree: String,
+    /// [`Base::head`].
+    pub base: String,
+    /// `sha`, then [`Review::commits`]: every commit a push may add on top
+    /// of `base`, newest first.
+    pub commits: Vec<String>,
+    /// The flagged lines the person allowed, in `sha` and in the earlier
+    /// commits made from the Tasks panel that `commits` still holds. A
+    /// commit's content never changes, so a line allowed in it stays allowed
+    /// there.
+    #[serde(default)]
+    pub allowed: Vec<AllowedLine>,
+    /// A push of `sha` went through.
+    #[serde(default)]
+    pub pushed: bool,
 }
 
 fn record_path(session: &str, name: &str) -> PathBuf {
@@ -205,6 +274,48 @@ pub fn plan_of(session: &str) -> Option<String> {
 /// an error, never "not reviewed".
 pub fn review_for(session: &str) -> Result<Option<Review>, String> {
     read_json(session, REVIEW_FILE)
+}
+
+/// The commit made from the Tasks panel, or `None` before the first. A
+/// record that exists and cannot be read is an error.
+pub fn shipped_for(session: &str) -> Result<Option<Shipped>, String> {
+    read_json(session, SHIP_FILE)
+}
+
+/// Keeps the commit made from the Tasks panel. Only the newest is kept.
+pub fn note_shipped(session: &str, shipped: &Shipped) -> Result<(), String> {
+    let body = serde_json::to_vec_pretty(shipped).map_err(|err| err.to_string())?;
+    write_record(session, SHIP_FILE, &body)
+}
+
+/// What [`waive`] says when the page showed another review than the one on
+/// record.
+pub const WAIVE_STALE: &str = "The review changed since it was shown. Look again.";
+
+/// Waives the blocker at `index` of the session's review, which must be the
+/// review the page showed: of the tree `tree`, written at `at_ms`. A second
+/// review of the same files has the same tree and another time, so a click
+/// on the first never waives a finding of the second. The person ships with
+/// the blocker open. Waiving one that is waived already changes nothing.
+pub fn waive(session: &str, tree: &str, at_ms: u64, index: u32) -> Result<Review, String> {
+    let mut review = review_for(session)?.ok_or("There is no review to waive a finding of.")?;
+    if review.tree != tree || review.at_ms != at_ms {
+        return Err(WAIVE_STALE.into());
+    }
+    let card = Findings::parse(&review.body).ok_or("The review's findings could not be read.")?;
+    match card.items.get(index as usize) {
+        Some(item) if item.severity == Severity::High => {}
+        Some(_) => return Err("Only a blocker is waived.".into()),
+        None => return Err("The review has no such finding.".into()),
+    }
+    if !review.waived.contains(&index) {
+        review.waived.push(index);
+        review.waived.sort_unstable();
+        let body = serde_json::to_vec_pretty(&review).map_err(|err| err.to_string())?;
+        write_record(session, REVIEW_FILE, &body)?;
+        crate::tasks::mark_changed(root_session(session));
+    }
+    Ok(review)
 }
 
 /// What a review is bound to: the change as it stood when the review began.
@@ -407,6 +518,7 @@ impl Run {
             body: body.to_string(),
             blockers,
             cut: anchor.cut,
+            waived: Vec::new(),
         };
         let body = serde_json::to_vec_pretty(&review).map_err(|err| err.to_string())?;
         write_record(session, REVIEW_FILE, &body)?;
@@ -831,6 +943,7 @@ mod tests {
                 body: CARD.to_string(),
                 blockers: 1,
                 cut: false,
+                waived: Vec::new(),
             }
         );
         // The project's git folder holds no trace of it.
@@ -968,5 +1081,148 @@ mod tests {
         assert_eq!(review.body, clean);
         assert_eq!(review.tree, ship_tree::tree_id(&project).unwrap());
         assert!(!review.plan_given);
+    }
+
+    #[test]
+    fn a_blocker_is_waived_once_by_its_place_and_a_new_review_starts_with_none() {
+        let (_cfg, project, _first) = fixture("review-waive");
+        let session = "review-waive";
+        assert_eq!(
+            waive(session, "0".repeat(40).as_str(), 1, 0),
+            Err("There is no review to waive a finding of.".to_string())
+        );
+        note_base(session, &project);
+        std::fs::write(project.join("a.txt"), "one\n").unwrap();
+        let tree = ship_tree::tree_id(&project).unwrap();
+        let (_task, run) = begin(session, &project, "look");
+        assert_eq!(
+            run.end(session, &project, Some(CARD), &StopReason::EndTurn),
+            None
+        );
+        let review = review_for(session).unwrap().unwrap();
+        assert_eq!((review.open_blockers(), review.waived_blockers()), (1, 0));
+        let at = review.at_ms;
+
+        let waived = waive(session, &tree, at, 0).unwrap();
+        assert_eq!(waived.waived, [0]);
+        assert_eq!((waived.open_blockers(), waived.waived_blockers()), (0, 1));
+        assert_eq!(review_for(session).unwrap().unwrap(), waived);
+        // A second click changes nothing.
+        assert_eq!(waive(session, &tree, at, 0).unwrap().waived, [0]);
+        assert_eq!(
+            waive(session, &tree, at, 1),
+            Err("Only a blocker is waived.".to_string())
+        );
+        assert_eq!(
+            waive(session, &tree, at, 2),
+            Err("The review has no such finding.".to_string())
+        );
+        assert_eq!(
+            waive(session, "1".repeat(40).as_str(), at, 0),
+            Err("The review changed since it was shown. Look again.".to_string())
+        );
+        assert_eq!(review_for(session).unwrap().unwrap().waived, [0]);
+
+        // A new review of the same change keeps no waiver.
+        let (_task, run) = begin(session, &project, "look again");
+        assert_eq!(
+            run.end(session, &project, Some(CARD), &StopReason::EndTurn),
+            None
+        );
+        let again = review_for(session).unwrap().unwrap();
+        assert_eq!(again.waived, Vec::<u32>::new());
+        assert_eq!(again.open_blockers(), 1);
+    }
+
+    /// Correctness M3: "Review again" with no file changed writes a review
+    /// of the same tree. A Waive click on the first review's finding names
+    /// the first review's time, so it never lands on the second.
+    #[test]
+    fn a_waive_given_for_one_review_does_not_land_on_a_newer_review_of_the_same_tree() {
+        let base = scratch("review-waive-time");
+        let _cfg = ConfigGuard::set(base.join("cfg"));
+        let session = "review-waive-time";
+        let tree = "3".repeat(40);
+        let review = |at_ms: u64, text: &str| Review {
+            project: "/home/user/my-app".into(),
+            base: "1".repeat(40),
+            head: "1".repeat(40),
+            commits: vec![],
+            tree: tree.clone(),
+            at_ms,
+            plan_given: true,
+            body: format!("Findings from this run\n\n- High: {text}"),
+            blockers: 1,
+            cut: false,
+            waived: vec![],
+        };
+        let write = |review: &Review| {
+            write_record(session, REVIEW_FILE, &serde_json::to_vec(review).unwrap()).unwrap()
+        };
+        write(&review(1, "src/a.rs:1 a false alarm the person read"));
+        write(&review(2, "src/a.rs:9 SQL injection the person never saw"));
+        assert_eq!(
+            waive(session, &tree, 1, 0),
+            Err("The review changed since it was shown. Look again.".to_string())
+        );
+        let now = review_for(session).unwrap().unwrap();
+        assert_eq!((now.at_ms, now.waived.clone()), (2, vec![]));
+        assert_eq!(now.open_blockers(), 1);
+        assert_eq!(waive(session, &tree, 2, 0).unwrap().waived, [0]);
+    }
+
+    #[test]
+    fn a_review_written_before_waivers_reads_with_none() {
+        let base = scratch("review-old");
+        let _cfg = ConfigGuard::set(base.join("cfg"));
+        let session = "review-old";
+        let old = r#"{"project":"/home/user/my-app","base":"b","head":"h","commits":[],
+            "tree":"t","atMs":1,"planGiven":true,"body":"x","blockers":2}"#;
+        write_record(session, REVIEW_FILE, old.as_bytes()).unwrap();
+        let review = review_for(session).unwrap().unwrap();
+        assert_eq!(review.waived, Vec::<u32>::new());
+        // A body that cannot be read leaves every blocker open.
+        assert_eq!(review.open_blockers(), 2);
+    }
+
+    #[test]
+    fn the_commit_made_from_the_panel_is_kept_beside_the_review() {
+        let base = scratch("review-shipped");
+        let _cfg = ConfigGuard::set(base.join("cfg"));
+        let session = "review-shipped";
+        assert_eq!(shipped_for(session), Ok(None));
+        let shipped = Shipped {
+            project: "/home/user/my-app".into(),
+            branch: "work/one".into(),
+            sha: "a".repeat(40),
+            parent: "b".repeat(40),
+            tree: "c".repeat(40),
+            base: "d".repeat(40),
+            commits: vec!["a".repeat(40), "e".repeat(40)],
+            allowed: vec![AllowedLine {
+                commit: "a".repeat(40),
+                place: "src/a.rs:3".into(),
+            }],
+            pushed: false,
+        };
+        note_shipped(session, &shipped).unwrap();
+        assert_eq!(shipped_for(session), Ok(Some(shipped.clone())));
+        let text =
+            std::fs::read_to_string(work::session_dir(&work::root(), session).join("ship.json"))
+                .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["sha"], "a".repeat(40));
+        assert_eq!(
+            json["allowed"],
+            serde_json::json!([{"commit": "a".repeat(40), "place": "src/a.rs:3"}])
+        );
+        assert_eq!(json["pushed"], false);
+        // Only the newest commit is kept.
+        let next = Shipped {
+            sha: "f".repeat(40),
+            ..shipped
+        };
+        note_shipped(session, &next).unwrap();
+        assert_eq!(shipped_for(session).unwrap().unwrap().sha, "f".repeat(40));
     }
 }

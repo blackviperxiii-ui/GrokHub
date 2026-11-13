@@ -54,6 +54,10 @@ pub enum HardClass {
     /// (`merge_subagent_work`): the person's files change, so it is only
     /// ever offered.
     MergeWork,
+    /// An agent's own `git push` or `send-pack`, or `gh pr create`,
+    /// `gh pr merge` or a `gh api` call that is not plainly a GET
+    /// ([`ships`]). A plain commit is not here: it stays routine.
+    Ship,
 }
 
 impl HardClass {
@@ -71,6 +75,7 @@ impl HardClass {
             Self::SystemAdmin => "system_admin",
             Self::Automation => "automation",
             Self::MergeWork => "merge_work",
+            Self::Ship => "ship",
         }
     }
 
@@ -88,6 +93,7 @@ impl HardClass {
             Self::SystemAdmin => "Admin rights or system protection",
             Self::Automation => "New automation",
             Self::MergeWork => "Merge helper work",
+            Self::Ship => "Push, PR, GitHub API call or ship button",
         }
     }
 
@@ -105,6 +111,7 @@ impl HardClass {
             "system_admin" => Some(Self::SystemAdmin),
             "automation" => Some(Self::Automation),
             "merge_work" => Some(Self::MergeWork),
+            "ship" => Some(Self::Ship),
             _ => None,
         }
     }
@@ -661,6 +668,9 @@ pub fn click_target_in(
             }
         }
     }
+    if let Some(rule) = ship_click(&words, context) {
+        return Some(rule);
+    }
     if words.iter().any(|w| w == "submit") {
         let around: Vec<String> = words.iter().cloned().chain(field_words(context)).collect();
         let has = |list: &[&str]| around.iter().any(|w| list.contains(&w.as_str()));
@@ -672,6 +682,34 @@ pub fn click_target_in(
         }
     }
     None
+}
+
+/// The app's own buttons that commit, push, open or merge a pull request,
+/// waive a review finding or allow a flagged line. In the app's own window
+/// an agent's click on one needs the person, as its shell push does.
+const CLICK_SHIP_OWN: &[&str] = &["commit", "push", "open pr", "merge", "waive", "allow"];
+/// In any window: a pull request is opened or merged.
+const CLICK_SHIP: &[&str] = &[
+    "create pull request",
+    "open pull request",
+    "merge pull request",
+];
+
+/// A click that ships ([`HardClass::Ship`]): a pull request anywhere, and
+/// the app's own ship buttons in its own window (`context` names it).
+fn ship_click(words: &[String], context: &str) -> Option<ClickRule> {
+    let own_name = field_words(grokhub_core::brand::product_name()).join(" ");
+    let own = !own_name.is_empty() && phrase_at(&field_words(context), &own_name).is_some();
+    let lists: &[&[&str]] = if own {
+        &[CLICK_SHIP, CLICK_SHIP_OWN]
+    } else {
+        &[CLICK_SHIP]
+    };
+    lists
+        .iter()
+        .flat_map(|list| list.iter())
+        .find(|phrase| phrase_at(words, phrase).is_some())
+        .map(|phrase| ClickRule::new(HardClass::Ship, phrase))
 }
 
 /// A click on a control nothing names errs to hard in a risky window: a
@@ -2465,6 +2503,9 @@ fn command_class(cmd: &str) -> Option<HardClass> {
         {
             return Some(HardClass::Delete);
         }
+        if ships_seg(seg, 0) {
+            return Some(HardClass::Ship);
+        }
         if SEND_HEADS.contains(&h) {
             return Some(HardClass::Send);
         }
@@ -2473,6 +2514,274 @@ fn command_class(cmd: &str) -> Option<HardClass> {
         }
     }
     None
+}
+
+/// git's own options before the verb that take the next word as their value
+/// (lower case, as [`command_class`] reads the command).
+const GIT_VALUE_OPTIONS: &[&str] = &[
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--super-prefix",
+    "--config-env",
+    "--attr-source",
+];
+
+/// `gh api` options that never change the method or add a body. Any other
+/// option means the call can't be read as a GET.
+const GH_API_READ_VALUE: &[&str] = &[
+    "-h",
+    "--header",
+    "-q",
+    "--jq",
+    "-t",
+    "--template",
+    "-p",
+    "--preview",
+    "--cache",
+    "--hostname",
+];
+const GH_API_READ_FLAGS: &[&str] = &[
+    "-i",
+    "--include",
+    "--paginate",
+    "--silent",
+    "--slurp",
+    "--verbose",
+];
+
+/// How deep [`ships_cmd`] reads scripts inside scripts (`bash -c`,
+/// `eval`, an alias that runs a shell). Deeper than this asks.
+const SHIP_DEPTH: u8 = 6;
+
+/// Step 6 of phase 5: whether any command in `cmd` pushes, or opens or
+/// merges a pull request. `cmd` is lower case, as [`command_class`] reads
+/// it. Each command is read by its shell words, quotes joined as a shell
+/// joins them (`g''it`, `-C 'my app'`), past git's global options, the
+/// wrappers [`head_at`] knows, shell keywords (`if`, `then`, `!`),
+/// `stdbuf`, `flock` and `eval`, and into a script given to `bash -c`,
+/// `sh -lc` and the like. `commit`, `commit-tree` and `update-ref` are not
+/// here: the person chose that an agent's plain commit stays as it is, and
+/// the push gates refuse to push a commit the app did not make. An alias
+/// from a config file or a script file still passes; the gates in
+/// `grokhub-code`'s `push.rs` are what hold.
+fn ships_cmd(cmd: &str, depth: u8) -> bool {
+    if depth > SHIP_DEPTH {
+        return true;
+    }
+    let cmd = cmd.replace("$(", ";").replace("<(", ";").replace(">(", ";");
+    cmd.split([';', '|', '&', '\n', '\r', '`'])
+        .map(str::trim)
+        .filter(|seg| !seg.is_empty())
+        .any(|seg| ships_seg(seg, depth))
+}
+
+/// [`ships_cmd`] for one segment, already split on `;`, `|`, `&` and the rest.
+fn ships_seg(seg: &str, depth: u8) -> bool {
+    names_push_program(seg) || words_ship(&shell_words(seg), depth)
+}
+
+/// git's own push programs named by path: `/usr/lib/git-core/git-push`,
+/// `"$(git --exec-path)/git-push"`.
+fn names_push_program(seg: &str) -> bool {
+    seg.split(|c: char| c.is_whitespace() || "\"'`$();|&<>{}=".contains(c))
+        .any(|token| matches!(leaf(token), "git-push" | "git-send-pack"))
+}
+
+/// One segment's words: the head, past wrappers and keywords, and what it
+/// runs.
+fn words_ship(words: &[String], depth: u8) -> bool {
+    let mut from = 0;
+    while from < words.len() {
+        let Some(at) = head_at(&words[from..]).map(|at| at + from) else {
+            return false;
+        };
+        let word = &words[at];
+        // `bash -c '<script>'`: the script is one word.
+        if word.contains(char::is_whitespace) {
+            return ships_cmd(&words[at..].join(" "), depth + 1);
+        }
+        let rest = &words[at + 1..];
+        match leaf(word) {
+            "if" | "then" | "elif" | "else" | "do" | "while" | "until" | "!" | "builtin"
+            | "unbuffer" | "chronic" => from = at + 1,
+            "eval" => return ships_cmd(&rest.join(" "), depth + 1),
+            // `stdbuf -o0 git push`, `stdbuf -o 0 git push`
+            "stdbuf" => {
+                from = at + 1;
+                while let Some(w) = words.get(from).filter(|w| w.starts_with('-')) {
+                    from += if matches!(w.as_str(), "-i" | "-o" | "-e") {
+                        2
+                    } else {
+                        1
+                    };
+                }
+            }
+            // `flock /tmp/l git push`, `flock /tmp/l -c 'git push'`
+            "flock" => {
+                if let Some(i) = rest.iter().position(|w| w == "-c" || w == "--command") {
+                    return rest.get(i + 1).is_some_and(|s| ships_cmd(s, depth + 1));
+                }
+                from = at + 1;
+                while let Some(w) = words.get(from).filter(|w| w.starts_with('-')) {
+                    from += if matches!(w.as_str(), "-w" | "--wait" | "--timeout") {
+                        2
+                    } else {
+                        1
+                    };
+                }
+                // The lock file.
+                from += 1;
+            }
+            // `sh -ec '<script>'`, `bash -lc '<script>'`: any short option
+            // cluster with `c` takes the next word as the script.
+            "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" | "mksh" => {
+                let mut i = at + 1;
+                let mut script = false;
+                while let Some(w) = words
+                    .get(i)
+                    .filter(|w| w.len() > 1 && w.starts_with(['-', '+']))
+                {
+                    script |= !w.starts_with("--") && w[1..].contains('c');
+                    i += if matches!(w.as_str(), "-o" | "+o") {
+                        2
+                    } else {
+                        1
+                    };
+                }
+                return script && words.get(i).is_some_and(|s| ships_cmd(s, depth + 1));
+            }
+            _ => return ships(words, at, depth),
+        }
+    }
+    false
+}
+
+/// The command whose head is at `head` pushes or opens or merges a pull
+/// request. Read by words, not by prefix, so git's global options (`-C
+/// <dir>`, `-c <k=v>`, `--git-dir`, `--no-pager`, …) and gh's (`-R <repo>`)
+/// before the verb don't hide it. An alias given with `-c alias.<name>=`
+/// is read as what it names.
+fn ships(words: &[String], head: usize, depth: u8) -> bool {
+    let at = |i: usize| words.get(i).map(String::as_str);
+    match leaf(&words[head]) {
+        "git" => {
+            // Aliases set on this command line: name, and what it runs when
+            // that can be read.
+            let mut aliases: Vec<(&str, Option<&str>)> = Vec::new();
+            let mut i = head + 1;
+            while let Some(w) = at(i).filter(|w| w.starts_with('-')) {
+                let value = match w {
+                    "-c" => at(i + 1),
+                    "--config-env" => at(i + 1).map(|v| v.split('=').next().unwrap_or(v)),
+                    _ => w
+                        .strip_prefix("--config-env=")
+                        .map(|v| v.split('=').next().unwrap_or(v)),
+                };
+                if let Some(alias) = value.and_then(|v| v.strip_prefix("alias.")) {
+                    let set = match alias.split_once('=') {
+                        Some((name, runs)) if w == "-c" => (name, Some(runs)),
+                        Some((name, _)) => (name, None),
+                        None => (alias, None),
+                    };
+                    aliases.push(set);
+                }
+                i += if GIT_VALUE_OPTIONS.contains(&w) { 2 } else { 1 };
+            }
+            let Some(verb) = at(i) else {
+                return false;
+            };
+            let args = &words[i + 1..];
+            if let Some((_, runs)) = aliases.iter().rev().find(|(name, _)| *name == verb) {
+                let Some(runs) = runs else {
+                    // Set from the environment: what it runs can't be read.
+                    return true;
+                };
+                let line = match runs.strip_prefix('!') {
+                    Some(shell) => format!("{shell} {}", args.join(" ")),
+                    None => format!("git {runs} {}", args.join(" ")),
+                };
+                return ships_cmd(&line, depth + 1);
+            }
+            match verb {
+                "push" | "send-pack" => true,
+                // `git subtree push`, `git lfs push`
+                "subtree" | "lfs" => args
+                    .iter()
+                    .find(|w| !w.starts_with('-'))
+                    .is_some_and(|w| w == "push"),
+                _ => false,
+            }
+        }
+        "git-push" | "git-send-pack" => true,
+        "gh" => {
+            // Like cobra: an option before the command takes the next word,
+            // unless it carries `=` or is help or version.
+            let skip = |mut i: usize| {
+                while let Some(w) = at(i).filter(|w| w.starts_with('-')) {
+                    let bare = w.contains('=') || matches!(w, "-h" | "--help" | "--version");
+                    i += if bare { 1 } else { 2 };
+                }
+                i
+            };
+            let group = skip(head + 1);
+            let sub = skip(group + 1);
+            match (at(group), at(sub)) {
+                (Some("pr"), Some("create" | "new" | "merge")) => true,
+                // `gh repo create my-app --source=. --push`
+                (Some("repo"), Some("create" | "new")) => words[sub..]
+                    .iter()
+                    .any(|w| w == "--push" || w.starts_with("--push=")),
+                (Some("api"), _) => !gh_api_is_get(&words[group + 1..]),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// A `gh api` call is plainly a GET when it names no method or GET, sends
+/// no field or input (which turns gh's default into POST), and is not the
+/// `graphql` endpoint. Anything not read here is not a GET.
+fn gh_api_is_get(args: &[String]) -> bool {
+    let mut method: Option<&str> = None;
+    let mut body = false;
+    let mut endpoint: Option<&str> = None;
+    let mut it = args.iter().map(String::as_str);
+    while let Some(w) = it.next() {
+        if !w.starts_with('-') {
+            endpoint.get_or_insert(w);
+            continue;
+        }
+        let (name, inline) = match w.split_once('=') {
+            Some((n, v)) => (n, Some(v)),
+            None => (w, None),
+        };
+        match name {
+            "-x" | "--method" => method = inline.or_else(|| it.next()),
+            _ if name.starts_with("-x") => method = Some(&name[2..]),
+            "-f" | "--field" | "--raw-field" | "--input" => {
+                body = true;
+                if inline.is_none() {
+                    it.next();
+                }
+            }
+            _ if name.starts_with("-f") => body = true,
+            _ if GH_API_READ_VALUE.contains(&name) => {
+                if inline.is_none() {
+                    it.next();
+                }
+            }
+            _ if GH_API_READ_FLAGS.contains(&name) && inline.is_none() => {}
+            _ => return false,
+        }
+    }
+    let get = match method {
+        Some(m) => m == "get",
+        None => !body,
+    };
+    get && endpoint != Some("graphql")
 }
 
 #[cfg(test)]
@@ -4425,5 +4734,175 @@ mod tests {
         // Only the tool's exact name.
         assert_eq!(classify_ask("merge_subagent_work_2", line), HardHit::None);
         assert_eq!(classify_ask("Read file", line), HardHit::None);
+    }
+
+    #[test]
+    fn an_agents_own_push_or_pull_request_is_hard_class_ship_and_a_commit_is_not() {
+        let shell = |cmd: &str| {
+            hard_class(
+                "run_terminal_command",
+                &serde_json::json!({ "command": cmd }).to_string(),
+            )
+        };
+        for cmd in [
+            "git push",
+            "git push origin work/x",
+            "git -C . push",
+            "git -C /home/user/my-app push origin HEAD:refs/heads/x",
+            "git -c a=b push origin x",
+            "git -c core.sshCommand=ssh --no-pager push",
+            "git --git-dir=.git push",
+            "git --git-dir .git --work-tree . push",
+            "git --namespace=n --bare --literal-pathspecs push",
+            "git send-pack ../origin.git main",
+            "/usr/bin/git push",
+            "git.exe push",
+            "GIT_TRACE=1 git push",
+            "cargo test && git push",
+            "gh pr create --fill",
+            "gh pr new --fill",
+            "gh pr merge 3",
+            "gh -R owner/my-app pr create --fill",
+            "gh pr --repo owner/my-app merge 3 --squash",
+            "gh api -X POST repos/o/r/pulls -f title=x",
+            "gh api --method=PATCH repos/o/r/pulls/3",
+            "gh api -XDELETE repos/o/r/git/refs/heads/x",
+            "gh api repos/o/r/issues -f title=x",
+            "gh api repos/o/r/issues --input body.json",
+            "gh api graphql -f query=x",
+            "gh api repos/o/r --some-new-flag",
+        ] {
+            assert_eq!(shell(cmd), Some(HardClass::Ship), "{cmd}");
+        }
+        for cmd in [
+            "git commit -m x",
+            "git -C . commit -m x",
+            "git commit-tree abc -m x",
+            "git update-ref refs/heads/x abc",
+            "git commit-graph write",
+            "git status",
+            "git -c color.ui=never log --oneline",
+            "git log --grep push",
+            "git -C push status",
+            "echo git push",
+            "gh pr view 3",
+            "gh pr list",
+            "gh pr checks 3",
+            "gh issue create --title x",
+            "gh api repos/o/r/pulls",
+            "gh api -X GET repos/o/r/pulls --jq .[].number",
+            "gh api --method=get repos/o/r --paginate -H accept:x",
+        ] {
+            assert_eq!(shell(cmd), None, "{cmd}");
+        }
+        // A delete push keeps its own class.
+        assert_eq!(shell("git push --delete origin x"), Some(HardClass::Delete));
+        // Through a side ask (paths B and D) too.
+        assert_eq!(
+            classify_ask("Run command", "git -C . push origin x"),
+            HardHit::Class(HardClass::Ship)
+        );
+        assert_eq!(
+            classify_ask("Run command", "git commit -m x"),
+            HardHit::None
+        );
+        assert_eq!(HardClass::Ship.as_str(), "ship");
+    }
+
+    /// The forms two reviews found passing the first word rule: each one
+    /// pushes (six of them made a ref in a bare origin when run), so each
+    /// is a Ship card.
+    #[test]
+    fn a_push_behind_quotes_a_wrapper_a_keyword_an_alias_or_a_nested_shell_is_hard_class_ship() {
+        let shell = |cmd: &str| {
+            hard_class(
+                "run_terminal_command",
+                &serde_json::json!({ "command": cmd }).to_string(),
+            )
+        };
+        for cmd in [
+            "/usr/lib/git-core/git-push origin x",
+            "\"$(git --exec-path)/git-push\" origin x",
+            "git -c alias.p=push p origin x",
+            "git -c 'alias.p=!git push' p origin x",
+            "git --config-env=alias.p=MY_ALIAS p",
+            "git subtree push --prefix=lib origin x",
+            "git lfs push origin x",
+            "eval git push origin x",
+            "bash -lc 'git push origin x'",
+            "sh -ec 'git fetch; git push origin x'",
+            "sh -lc \"git push\"",
+            "if true; then git push origin x; fi",
+            "! git push origin x",
+            "g''it push origin x",
+            "git pu''sh origin x",
+            "stdbuf -o0 git push origin x",
+            "stdbuf -o 0 git push origin x",
+            "flock /tmp/l git push origin x",
+            "flock -w 5 /tmp/l -c 'git push origin x'",
+            "gh repo create my-app --source=. --push",
+            "git -c 'core.sshCommand=ssh -i /home/user/.ssh/deploy' push origin work/x",
+            "git -c \"user.name=a b\" push",
+            "git -C 'my app' push",
+        ] {
+            assert_eq!(shell(cmd), Some(HardClass::Ship), "{cmd}");
+        }
+        for cmd in [
+            "echo git push",
+            "git help push",
+            "bash deploy.sh",
+            "sh -c 'git status'",
+            "if true; then git status; fi",
+            "eval git log",
+            "git -c alias.st=status st",
+            "gh repo create my-app --private",
+            "stdbuf -o0 cargo test",
+            "cat docs/git-push.md",
+        ] {
+            assert_eq!(shell(cmd), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn a_click_on_the_apps_own_ship_buttons_or_on_a_pull_request_is_hard_class_ship() {
+        let own = grokhub_core::brand::product_name();
+        for label in [
+            "Commit",
+            "Push work/one",
+            "Open PR into beta",
+            "Waive",
+            "Allow src/a.txt:3",
+            "Merge",
+        ] {
+            assert_eq!(
+                click_target_in(None, label, "button", own).map(|rule| rule.class),
+                Some(HardClass::Ship),
+                "{label}"
+            );
+            // In another app, or with no window named, these words ship nothing.
+            assert_eq!(
+                click_target_in(None, label, "button", "Text Editor"),
+                None,
+                "{label}"
+            );
+            assert_eq!(click_target_class(None, label, "button"), None, "{label}");
+        }
+        assert_eq!(
+            click_target_in(None, "Create pull request", "button", "Firefox").map(|r| r.class),
+            Some(HardClass::Ship)
+        );
+        assert_eq!(
+            click_target_in(None, "Send", "button", own).map(|r| r.class),
+            Some(HardClass::Send)
+        );
+        assert_eq!(
+            click_target_in(None, "Undo allow src/a.txt:3", "button", own),
+            None
+        );
+        assert_eq!(
+            HardClass::Ship.label(),
+            "Push, PR, GitHub API call or ship button"
+        );
+        assert_eq!(HardClass::parse("ship"), Some(HardClass::Ship));
     }
 }

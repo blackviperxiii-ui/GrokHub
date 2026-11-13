@@ -1012,4 +1012,148 @@ mod repo {
         assert!(push(&f).skips_hook);
         let _ = std::fs::remove_dir_all(&f.root);
     }
+
+    #[test]
+    fn the_agent_window_asks_for_the_facts_auto_beta_pushes_without_asking() {
+        // GitHub, a branch the app made, no PR yet, Auto-beta: the Code tab
+        // pushes with no confirm, and the agent window asks for the same.
+        let f = fixture("at");
+        let cfg = auto();
+        new_branch(&f.config, &f.work, &cfg, "code/fix").unwrap();
+        commit(&f.work, "fix\n");
+        let head = sh_git(&f.work, &["rev-parse", "HEAD"]);
+        let tab = plan_with(&f.config, &f.work, &cfg, Action::Push, GITHUB_NO_PR);
+        assert!(!tab.needs_confirm);
+        assert_eq!(tab.mode, ShipMode::AutoBeta);
+        assert_eq!(
+            tab.command,
+            "git push --porcelain origin HEAD:refs/heads/code/fix"
+        );
+        let at = plan_at_with(&f.config, &f.work, &cfg, Action::Push, &head, GITHUB_NO_PR);
+        assert!(at.needs_confirm);
+        assert_eq!(at.mode, ShipMode::Ask);
+        assert_eq!(at.blocked, None);
+        assert!(at.app_made);
+        assert_eq!(
+            at.command,
+            format!(
+                "git push --porcelain --no-recurse-submodules --no-signed origin {head}:refs/heads/code/fix"
+            )
+        );
+        // The PR asks too.
+        assert!(!plan_with(&f.config, &f.work, &cfg, Action::Pr, GITHUB_NO_PR).needs_confirm);
+        let pr = plan_at_with(&f.config, &f.work, &cfg, Action::Pr, &head, GITHUB_NO_PR);
+        assert!(pr.needs_confirm);
+        assert_eq!(
+            pr.command,
+            "gh pr create --base beta --head code/fix --fill"
+        );
+        // With no yes nothing is pushed, though Auto-beta needs none.
+        assert_eq!(
+            ship_at_with(
+                &f.config,
+                &f.work,
+                &cfg,
+                Action::Push,
+                &head,
+                false,
+                None,
+                GITHUB_NO_PR
+            ),
+            Err("This needs a confirmation first.".to_string())
+        );
+        assert_eq!(origin_sha(&f, "code/fix"), None);
+        let done = ship_at_with(
+            &f.config,
+            &f.work,
+            &cfg,
+            Action::Push,
+            &head,
+            true,
+            Some(&at.command),
+            GITHUB_NO_PR,
+        )
+        .unwrap();
+        assert_eq!(done.exit, 0, "{}", done.output);
+        assert_eq!(origin_sha(&f, "code/fix").as_deref(), Some(head.as_str()));
+        let log = code_activity::list(&f.config, 1);
+        assert_eq!(log[0].approved_by, "user");
+        assert_eq!(log[0].mode, "ask");
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
+
+    #[test]
+    fn the_agent_window_pushes_only_a_commit_id() {
+        let f = fixture("id");
+        sh_git(&f.work, &["switch", "-c", "feature"]);
+        let cfg = CodeShip::default();
+        for sha in [
+            "HEAD",
+            "--mirror",
+            "0123456789ABCDEF0123456789ABCDEF01234567",
+            "0123",
+        ] {
+            let plan = plan_at_with(&f.config, &f.work, &cfg, Action::Push, sha, GITHUB_NO_PR);
+            assert_eq!(
+                plan.blocked.as_deref(),
+                Some("The commit to push is not a commit id.")
+            );
+            assert_eq!(plan.command, "");
+            assert_eq!(
+                ship_at_with(
+                    &f.config,
+                    &f.work,
+                    &cfg,
+                    Action::Push,
+                    sha,
+                    true,
+                    Some(sha),
+                    GITHUB_NO_PR
+                ),
+                Err("The commit to push is not a commit id.".to_string())
+            );
+        }
+        assert_eq!(origin_sha(&f, "feature"), None);
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
+
+    #[test]
+    fn gh_runs_its_git_calls_with_no_hook_no_fsmonitor_and_no_tags() {
+        // The pins gh gets, set on a plain git push, beat the repository's
+        // own hooks folder and push.followTags.
+        let f = fixture("ghpins");
+        sh_git(&f.work, &["switch", "-c", "feature"]);
+        commit(&f.work, "two\n");
+        sh_git(&f.work, &["tag", "-a", "v1", "-m", "v1"]);
+        sh_git(&f.work, &["config", "push.followTags", "true"]);
+        let hooks = f.root.join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let marker = f.root.join("hook-ran");
+        let hook = hooks.join("pre-push");
+        std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        sh_git(
+            &f.work,
+            &["config", "core.hooksPath", hooks.to_str().unwrap()],
+        );
+        let push = |pinned: bool, to: &str| {
+            let mut c = Command::new("git");
+            c.args(["push", "-q", "origin", &format!("HEAD:refs/heads/{to}")])
+                .current_dir(&f.work);
+            if pinned {
+                pin_git_env(&mut c);
+            }
+            assert!(c.output().unwrap().status.success());
+        };
+        let tags = || sh_git(&f.bare, &["tag", "--list"]);
+        push(true, "feature");
+        assert!(!marker.exists(), "the hook ran under the pins");
+        assert_eq!(tags(), "");
+        // Without them the same push runs the hook and sends the tag.
+        push(false, "other");
+        assert!(marker.exists());
+        assert_eq!(tags(), "v1");
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
 }

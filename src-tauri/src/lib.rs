@@ -34,6 +34,7 @@ pub use grokhub_code::activity as code_activity;
 pub use grokhub_code::commit as code_commit;
 pub use grokhub_code::deploy as code_deploy;
 pub use grokhub_code::files as code_files;
+pub use grokhub_code::push as code_push;
 pub use grokhub_code::repo as code;
 pub use grokhub_code::runs as code_runs;
 pub use grokhub_code::secrets as code_secrets;
@@ -1693,17 +1694,80 @@ async fn stop_task(
 }
 
 /// Tasks → the checks on the session's change before it can be committed.
-/// Read only: nothing is committed, staged or pushed. Desktop only: it reads
-/// the project folder and the keychain, and is not a web command.
+/// Read only: nothing is committed, staged or pushed. `message` and
+/// `allowed` are what the Commit card holds: the confirm text is for that
+/// message, and the flagged lines the person allowed do not block. Desktop
+/// only: it reads the project folder and the keychain, and is not a web
+/// command.
 #[tauri::command]
 async fn ship_status(
     state: State<'_, ShellState>,
     conversation_id: String,
+    message: Option<String>,
+    allowed: Option<Vec<String>>,
 ) -> Result<code_commit::ShipStatus, String> {
     let dir = workspace_of(&state, Some(&conversation_id));
     let config = state.config_dir.clone();
     let cfg = current(&state).code_ship;
-    off_main(move || ship_gate::status(&config, &dir, &conversation_id, &cfg)).await
+    let draft = code_commit::Draft {
+        message,
+        allowed: allowed.unwrap_or_default(),
+    };
+    off_main(move || ship_gate::status(&config, &dir, &conversation_id, &cfg, &draft)).await
+}
+
+/// Tasks → Commit: the session's change becomes one commit on its branch.
+/// Every check runs again; `confirmed` must be true and `command` must be
+/// the exact text the confirm showed. Desktop only: it is not a web command.
+#[tauri::command]
+async fn ship_commit(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    message: String,
+    allowed: Vec<String>,
+    confirmed: bool,
+    command: Option<String>,
+) -> Result<code_commit::Committed, String> {
+    let dir = workspace_of(&state, Some(&conversation_id));
+    let config = state.config_dir.clone();
+    let cfg = current(&state).code_ship;
+    let draft = code_commit::Draft {
+        message: Some(message),
+        allowed,
+    };
+    off_main(move || {
+        ship_gate::commit(
+            &config,
+            &dir,
+            &conversation_id,
+            &cfg,
+            &draft,
+            confirmed,
+            command.as_deref(),
+        )
+    })
+    .await?
+}
+
+/// Tasks → Waive: the person ships with one review blocker open. `tree` and
+/// `at_ms` are the tree id and the time of the review the page showed.
+/// Desktop only.
+#[tauri::command]
+async fn ship_waive(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    tree: String,
+    at_ms: u64,
+    index: u32,
+) -> Result<queue::Queue, String> {
+    let dir = workspace_of(&state, Some(&conversation_id));
+    let config = state.config_dir.clone();
+    let cfg = current(&state).code_ship;
+    off_main(move || {
+        ship_gate::waive(&config, &dir, &conversation_id, &cfg, &tree, at_ms, index)?;
+        Ok(queue::queue(&config, &conversation_id))
+    })
+    .await?
 }
 
 /// Tasks → Merge: a helper's work goes into the project folder. Desktop
@@ -2740,49 +2804,78 @@ async fn command_box_forget(state: State<'_, ShellState>) -> Result<command_box:
 }
 
 /// Code tab: what a push or "Open PR into" would run, and whether it asks first.
+/// With `conversation_id`, the agent window's Tasks panel: the push of the
+/// commit made there, in the session's folder, after every check of the
+/// push, and always asked.
 #[tauri::command]
 async fn code_ship_plan(
     state: State<'_, ShellState>,
     action: code_ship::Action,
+    conversation_id: Option<String>,
 ) -> Result<code_ship::Plan, String> {
-    let dir = workspace(&state);
+    let dir = workspace_of(&state, conversation_id.as_deref());
     let config = state.config_dir.clone();
     let cfg = current(&state).code_ship;
-    off_main(move || code_ship::plan(&config, &dir, &cfg, action)).await
+    off_main(move || match conversation_id {
+        Some(id) => ship_gate::push_plan(&config, &dir, &id, &cfg, action),
+        None => code_ship::plan(&config, &dir, &cfg, action),
+    })
+    .await
 }
 
 /// Code tab: push the current branch or open its PR, through the push guard.
 /// Unless the guard said no confirm is needed, `confirmed` must be true and
-/// `command` must be the command the confirm showed.
+/// `command` must be the command the confirm showed. With
+/// `conversation_id`, the Tasks panel's push of the commit made there, or
+/// its PR: every check runs again, and the confirm is always needed.
 #[tauri::command]
 async fn code_ship_run(
     state: State<'_, ShellState>,
     action: code_ship::Action,
     confirmed: bool,
     command: Option<String>,
+    conversation_id: Option<String>,
 ) -> Result<code_ship::Shipped, String> {
-    let dir = workspace(&state);
+    let dir = workspace_of(&state, conversation_id.as_deref());
     let config = state.config_dir.clone();
     let cfg = current(&state).code_ship;
-    off_main(move || code_ship::ship(&config, &dir, &cfg, action, confirmed, command.as_deref()))
-        .await?
+    off_main(move || match conversation_id {
+        Some(id) => ship_gate::push(
+            &config,
+            &dir,
+            &id,
+            &cfg,
+            action,
+            confirmed,
+            command.as_deref(),
+        ),
+        None => code_ship::ship(&config, &dir, &cfg, action, confirmed, command.as_deref()),
+    })
+    .await?
 }
 
 /// Code tab: make and check out a branch the guard counts as the app's own.
+/// With `conversation_id`, in that session's folder.
 #[tauri::command]
-async fn code_new_branch(state: State<'_, ShellState>, name: String) -> Result<String, String> {
-    let dir = workspace(&state);
+async fn code_new_branch(
+    state: State<'_, ShellState>,
+    name: String,
+    conversation_id: Option<String>,
+) -> Result<String, String> {
+    let dir = workspace_of(&state, conversation_id.as_deref());
     let config = state.config_dir.clone();
     let cfg = current(&state).code_ship;
     off_main(move || code_ship::new_branch(&config, &dir, &cfg, &name)).await?
 }
 
 /// Code tab: this project's newest pushes, PRs, branches and blocked attempts.
+/// With `conversation_id`, of the project that session works in.
 #[tauri::command]
 async fn code_activity_list(
     state: State<'_, ShellState>,
+    conversation_id: Option<String>,
 ) -> Result<Vec<code_activity::Entry>, String> {
-    let dir = workspace(&state);
+    let dir = workspace_of(&state, conversation_id.as_deref());
     let config = state.config_dir.clone();
     off_main(move || code_activity::list_for(&config, &dir, code_activity::SHOW)).await
 }
@@ -6590,6 +6683,8 @@ pub fn run() {
             get_queue,
             stop_task,
             ship_status,
+            ship_commit,
+            ship_waive,
             merge_task_work,
             resume_task_work,
             discard_task_work,
