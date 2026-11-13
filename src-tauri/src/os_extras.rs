@@ -407,6 +407,49 @@ pub fn auto_resume_stopped(app: &AppHandle, text: &str) {
     }
 }
 
+/// One day's reminder notices, shared by every reminder (the cabin's three a day).
+static REMINDERS: Mutex<grokhub_core::pulse::PingGate> =
+    Mutex::new(grokhub_core::pulse::PingGate::new());
+
+/// A proactive card is due within the hour (Settings → Pulse → Reminder
+/// notifications): one notice, at most three a day, never mid-game or in
+/// quiet hours.
+pub fn proactive_reminder(app: &AppHandle, title: &str) {
+    let enabled = crate::current(&app.state::<ShellState>()).notifications
+        && capabilities::current().notifications;
+    if !enabled {
+        return;
+    }
+    let now = grokhub_core::now_ms();
+    let config_dir = app.state::<ShellState>().config_dir.clone();
+    let behavior = settings::load(&config_dir).behavior;
+    let (quiet, day) = match crate::scheduler::utc_offset() {
+        Some(offset) => {
+            let clock = crate::scheduler::local_clock(now, offset);
+            (
+                crate::proactive::is_quiet(&behavior, clock.hour, clock.minute),
+                crate::nudges::local_day(now, offset),
+            )
+        }
+        None => (false, crate::nudges::local_day(now, 0)),
+    };
+    let ask = grokhub_core::pulse::PingAsk {
+        time_sensitive: true,
+        game_running: grokhub_desktop::game_guard::peek().gaming,
+        quiet_hours: quiet,
+        day: &day,
+    };
+    if !REMINDERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take(&ask)
+    {
+        return;
+    }
+    let id = app.state::<ShellState>().notified.fresh_id();
+    notify(app, id, "Coming up", &short(title, DETAIL_CHARS), false);
+}
+
 fn hotkey(app: &AppHandle, on: bool) -> Result<(), String> {
     let shortcuts = app.global_shortcut();
     let registered = shortcuts.is_registered(SUMMON_HOTKEY);

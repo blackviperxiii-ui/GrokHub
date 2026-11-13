@@ -19,34 +19,27 @@ use crate::xai_keychain::{endpoints, post_form, CallError, Poll, SignIn, SignedI
 /// The system keychain, under the same service the cabin used.
 pub struct Keychain;
 
-fn entry(account: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(grokhub_core::brand::INTERNAL_ID, account)
-        .map_err(|e| grokhub_core::keychain_unavailable_message(&e.to_string()))
-}
-
 fn keychain_err(e: keyring::Error) -> String {
     grokhub_core::keychain_unavailable_message(&e.to_string())
 }
 
+fn backend() -> crate::keyring_blob::OsBackend {
+    crate::keyring_blob::OsBackend::new(grokhub_core::brand::INTERNAL_ID, keychain_err)
+}
+
 impl OAuthAccountStore for Keychain {
     fn load_account(&self, account: &str) -> Result<Option<ImagineTokens>, String> {
-        match entry(account)?.get_password() {
-            Ok(raw) => Ok(serde_json::from_str(&raw).ok()),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(keychain_err(e)),
-        }
+        Ok(crate::keyring_blob::get(&backend(), account)?
+            .and_then(|raw| serde_json::from_str(&raw).ok()))
     }
 
     fn save_account(&self, account: &str, tokens: &ImagineTokens) -> Result<(), String> {
         let raw = serde_json::to_string(tokens).map_err(|e| e.to_string())?;
-        entry(account)?.set_password(&raw).map_err(keychain_err)
+        crate::keyring_blob::set(&backend(), account, &raw)
     }
 
     fn delete_account(&self, account: &str) -> Result<(), String> {
-        match entry(account)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(keychain_err(e)),
-        }
+        crate::keyring_blob::delete(&backend(), account)
     }
 }
 
