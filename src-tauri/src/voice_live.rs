@@ -71,7 +71,7 @@ impl Live {
 
     /// One block of 16 kHz mono s16le from the page.
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<LiveEvent>, String> {
-        if bytes.len() > BLOCK_MAX || bytes.len() % 2 != 0 {
+        if bytes.len() > BLOCK_MAX || !bytes.len().is_multiple_of(2) {
             return Err(BAD_BLOCK.into());
         }
         let heard = self.mic.push(&s16le(bytes));
@@ -368,7 +368,7 @@ pub(crate) async fn voice_live_hear(
 ) -> Result<String, String> {
     let turn = with(Live::take_turn)?;
     let dir = state.config_dir.clone();
-    crate::off_main(move || hear(&dir, turn)).await
+    crate::off_main(move || hear(&dir, turn)).await?
 }
 
 #[tauri::command]
@@ -395,7 +395,7 @@ pub(crate) async fn voice_speak(
     crate::capabilities::needs(crate::capabilities::current().voice, "Voice")?;
     let dir = state.config_dir.clone();
     let voice = crate::personality::speech_voice(&dir, &crate::current(&state));
-    crate::off_main(move || speak(&dir, &models_dir(&dir), voice, &text)).await
+    crate::off_main(move || speak(&dir, &models_dir(&dir), voice, &text)).await?
 }
 
 #[cfg(test)]
