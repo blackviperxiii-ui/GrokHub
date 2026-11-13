@@ -1,0 +1,1 @@
+- Loadout UI: red primary and amber CTA palette tokens in the Tauri shell (no gray outlines).

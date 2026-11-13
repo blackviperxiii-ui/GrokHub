@@ -4,7 +4,7 @@ import { LookRows } from "./AutoSetup";
 import { PRODUCT_NAME } from "./brand";
 import { applyTheme } from "./theme";
 
-export const APPEARANCE_NOTE = `System follows your computer. Ops Dark, OLED Black and Soft Charcoal match the ${PRODUCT_NAME} cabin.`;
+export const APPEARANCE_NOTE = `System follows your computer. Ops Dark, OLED Black and Soft Charcoal are the ${PRODUCT_NAME} dark themes (red primary, amber for the one call-to-action).`;
 
 const CHOICES: { value: Theme; label: string }[] = [
   { value: "system", label: "System" },

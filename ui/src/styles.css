@@ -65,7 +65,7 @@
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.18), 0 1px 1px rgb(0 0 0 / 0.1);
   --shadow-2: 0 6px 20px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12);
   --shadow-3: 0 18px 48px rgb(0 0 0 / 0.38), 0 4px 12px rgb(0 0 0 / 0.2);
-  --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 38%, transparent);
+  --ring: var(--red-glow, 0 0 0 3px color-mix(in srgb, var(--accent) 38%, transparent));
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --t-fast: 120ms;
   --t-base: 200ms;
@@ -81,9 +81,17 @@
   --steel: #6b6b66;
   --accent: #1c1c1a;
   --accent-text: #ffffff;
-  --amber: #ffb000;
+  --primary: var(--accent);
+  --red: #d7263d;
+  --red-hover: #e8384f;
+  --red-dim: #5e1a25;
+  --red-wash: rgb(215 38 61 / 0.1);
+  --red-glow: 0 0 0 1px rgb(215 38 61 / 0.18), 0 0 18px rgb(215 38 61 / 0.22);
+  --amber: #ff9f1a;
+  --amber-wash: rgb(255 159 26 / 0.12);
+  --line: #dcdcd6;
   --user: #e9e9e4;
-  --border: #dcdcd6;
+  --border: var(--line);
   --hover: #ececea;
   --selected: #e0e0dc;
   --danger: #a3261c;
@@ -94,7 +102,7 @@
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-/* Ops Dark — Loadout baseline (slides 07–08). Also the OS-dark default. */
+/* Ops Dark — Loadout locked palette. Also the OS-dark default. */
 :root,
 :root[data-theme="dark"],
 :root[data-theme="ops-dark"] {
@@ -102,17 +110,22 @@
   --ops-bg: #0b0b0d;
   --ops-surface: #121215;
   --ops-raised: #18191c;
-  --ops-hover: #2a2b2f;
-  --ops-selected: #3a3b40;
+  --ops-hover: #1f1316;
+  --ops-selected: #2a1519;
   --ops-steel: #c9cbd1;
   --ops-bright: #f2f2f4;
   --ops-muted: #8a8c94;
-  --ops-line: #232428;
-  --ops-signal: #d7263d;
-  --ops-amber: #ffb000;
+  --ops-line: #3a161d;
+  --ops-red: #d7263d;
+  --ops-red-hover: #e8384f;
   --ops-red-dim: #5e1a25;
+  --ops-red-wash: rgb(215 38 61 / 0.1);
+  --ops-amber: #ff9f1a;
+  --ops-amber-wash: rgb(255 159 26 / 0.12);
+  --ops-signal: var(--ops-red);
 }
 
+/* Shared dark role mapping (Ops Dark + OS-dark fallback). */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: var(--ops-bg);
@@ -121,17 +134,28 @@
     --text: var(--ops-bright);
     --muted: var(--ops-muted);
     --steel: var(--ops-steel);
-    --accent: var(--ops-amber);
-    --accent-text: var(--ops-void);
+    --void: var(--ops-void);
+    --surface: var(--ops-surface);
+    --red: var(--ops-red);
+    --red-hover: var(--ops-red-hover);
+    --red-dim: var(--ops-red-dim);
+    --red-wash: var(--ops-red-wash);
+    --red-glow: 0 0 0 1px rgb(215 38 61 / 0.18), 0 0 18px rgb(215 38 61 / 0.22);
+    --primary: var(--red);
+    --accent: var(--red);
+    /* White on primary red clears 4.5:1; --text (#f2f2f4) is 4.44. */
+    --accent-text: #ffffff;
     --amber: var(--ops-amber);
+    --amber-wash: var(--ops-amber-wash);
+    --line: var(--ops-line);
     --user: var(--ops-raised);
-    --border: var(--ops-line);
+    --border: var(--line);
     --hover: var(--ops-hover);
     --selected: var(--ops-selected);
     --danger: var(--ops-signal);
     --signal: var(--ops-signal);
-  --danger-text: #ff6b7d;
-  --field-border: #626266;
+    --danger-text: #ff4d5e;
+    --field-border: #626266;
   }
 }
 
@@ -143,21 +167,31 @@
   --text: var(--ops-bright);
   --muted: var(--ops-muted);
   --steel: var(--ops-steel);
-  --accent: var(--ops-amber);
-  --accent-text: var(--ops-void);
+  --void: var(--ops-void);
+  --surface: var(--ops-surface);
+  --red: var(--ops-red);
+  --red-hover: var(--ops-red-hover);
+  --red-dim: var(--ops-red-dim);
+  --red-wash: var(--ops-red-wash);
+  --red-glow: 0 0 0 1px rgb(215 38 61 / 0.18), 0 0 18px rgb(215 38 61 / 0.22);
+  --primary: var(--red);
+  --accent: var(--red);
+  --accent-text: #ffffff;
   --amber: var(--ops-amber);
+  --amber-wash: var(--ops-amber-wash);
+  --line: var(--ops-line);
   --user: var(--ops-raised);
-  --border: var(--ops-line);
+  --border: var(--line);
   --hover: var(--ops-hover);
   --selected: var(--ops-selected);
   --danger: var(--ops-signal);
   --signal: var(--ops-signal);
-  --danger-text: #ff6b7d;
+  --danger-text: #ff4d5e;
   --field-border: #626266;
   color-scheme: dark;
 }
 
-/* OLED Black */
+/* OLED Black — same role map, pure black base. */
 :root[data-theme="oled-black"] {
   --bg: #000000;
   --panel: #050506;
@@ -165,21 +199,31 @@
   --text: #f2f2f4;
   --muted: #8a8c94;
   --steel: #c9cbd1;
-  --accent: #ffb000;
-  --accent-text: #0a0a0b;
-  --amber: #ffb000;
+  --void: #0a0a0b;
+  --surface: #050506;
+  --red: #d7263d;
+  --red-hover: #e8384f;
+  --red-dim: #5e1a25;
+  --red-wash: rgb(215 38 61 / 0.1);
+  --red-glow: 0 0 0 1px rgb(215 38 61 / 0.18), 0 0 18px rgb(215 38 61 / 0.22);
+  --primary: var(--red);
+  --accent: var(--red);
+  --accent-text: #ffffff;
+  --amber: #ff9f1a;
+  --amber-wash: rgb(255 159 26 / 0.12);
+  --line: #3a161d;
   --user: #0a0a0b;
-  --border: #151619;
-  --hover: #25262a;
-  --selected: #34353a;
+  --border: var(--line);
+  --hover: #1f1316;
+  --selected: #2a1519;
   --danger: #d7263d;
   --signal: #d7263d;
-  --danger-text: #ff6b7d;
+  --danger-text: #ff4d5e;
   --field-border: #5c5c60;
   color-scheme: dark;
 }
 
-/* Soft Charcoal */
+/* Soft Charcoal — warmer red from the deck. */
 :root[data-theme="soft-charcoal"] {
   --bg: #17181b;
   --panel: #1d1e22;
@@ -187,16 +231,26 @@
   --text: #f2f2f4;
   --muted: #8a8c94;
   --steel: #c9cbd1;
-  --accent: #ffb000;
-  --accent-text: #0a0a0b;
-  --amber: #ffb000;
+  --void: #0a0a0b;
+  --surface: #1d1e22;
+  --red: #c8304a;
+  --red-hover: #e8384f;
+  --red-dim: #5a2530;
+  --red-wash: rgb(200 48 74 / 0.1);
+  --red-glow: 0 0 0 1px rgb(200 48 74 / 0.18), 0 0 18px rgb(200 48 74 / 0.22);
+  --primary: var(--red);
+  --accent: var(--red);
+  --accent-text: #ffffff;
+  --amber: #ff9f1a;
+  --amber-wash: rgb(255 159 26 / 0.12);
+  --line: #3a161d;
   --user: #232428;
-  --border: #2e2f34;
-  --hover: #2f3035;
-  --selected: #3f4046;
+  --border: var(--line);
+  --hover: #1f1316;
+  --selected: #2a1519;
   --danger: #c8304a;
   --signal: #c8304a;
-  --danger-text: #ff6b7d;
+  --danger-text: #ff4d5e;
   --field-border: #6a6a6e;
   color-scheme: dark;
 }
@@ -317,8 +371,9 @@ button.quiet:hover:not(:disabled),
 .switch button[aria-pressed="true"],
 .settings-nav button[aria-pressed="true"],
 .settings-tabs button[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: var(--red);
+  background: var(--red-wash);
+  box-shadow: inset 0 -2px 0 var(--amber);
 }
 
 button.link {
@@ -741,18 +796,20 @@ select:focus-visible {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--panel);
-  border: 1px solid var(--border);
+  border: 1.5px solid transparent;
   box-shadow: var(--shadow-1);
 }
 
 .bubble.assistant {
   align-self: flex-start;
+  border-color: var(--red);
   border-bottom-left-radius: 6px;
 }
 
 .bubble.user {
   align-self: flex-end;
   background: var(--user);
+  border-color: transparent;
   border-bottom-right-radius: 6px;
 }
 
@@ -1297,6 +1354,7 @@ button.md-copy {
   min-height: 52px;
   padding: 12px 16px;
   border-radius: var(--radius-md);
+  border: 1.5px solid var(--red);
   resize: none;
   font-size: var(--font-prose);
   line-height: var(--lh-prose);
@@ -1596,7 +1654,7 @@ button.md-copy {
   max-width: 80%;
   padding: 8px 12px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--red);
   background: var(--panel);
   box-shadow: var(--shadow-1);
   display: flex;
@@ -2656,11 +2714,13 @@ textarea.code {
   border-radius: 999px;
   background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--red-dim);
 }
 
 .chip[aria-pressed="true"] {
-  border-color: var(--accent);
+  border-color: var(--red);
+  background: var(--red-wash);
+  box-shadow: inset 0 -2px 0 var(--amber);
   font-weight: 600;
 }
 
@@ -4774,7 +4834,7 @@ label.toggle-row {
   gap: 8px;
   min-width: 0;
   padding: 12px;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--red-dim);
   border-radius: var(--radius-md);
   background: var(--panel);
   box-shadow: var(--shadow-1);
@@ -4783,6 +4843,7 @@ label.toggle-row {
 .home-tile.large {
   grid-column: span 2;
   grid-row: span 2;
+  border-color: var(--red);
 }
 
 .home-tile.medium {
@@ -4822,7 +4883,7 @@ label.toggle-row {
 }
 
 .home-tile:has(.home-go:hover) {
-  border-color: var(--accent);
+  border-color: var(--red);
 }
 
 .home-stack,
