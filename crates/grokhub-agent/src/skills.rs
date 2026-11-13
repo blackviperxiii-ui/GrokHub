@@ -5,8 +5,8 @@
 //! Project skills (`.grok/skills`, then `.claude/skills`, from the workspace up to the
 //! git root) win over the user directory, then cabin skills under
 //! `{GROKHUB_CONFIG}/skills` (the same store `skill_list` / `skill_create` use),
-//! then plugins, then Loadout built-ins shipped under `assets/skills/` (vstack
-//! QA / verify / follow-through). Same-name duplicates keep the winner; the walk
+//! then plugins, then Loadout built-ins shipped under `assets/skills/` (the
+//! vstack skills listed in `assets/skills/vstack.json`). Same-name duplicates keep the winner; the walk
 //! order is sorted so the choice does not depend on directory iteration.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,35 +57,23 @@ impl SkillSource {
     }
 }
 
-/// Bundled vstack skills (MIT; see `assets/skills/CREDITS.md`).
-pub const BUILTIN_SKILL_BODIES: &[(&str, &str)] = &[
-    (
-        "qa-walkthrough",
-        include_str!("../assets/skills/qa-walkthrough/SKILL.md"),
-    ),
-    (
-        "av-qa-walkthrough",
-        include_str!("../assets/skills/av-qa-walkthrough/SKILL.md"),
-    ),
-    (
-        "create-verification-skill",
-        include_str!("../assets/skills/create-verification-skill/SKILL.md"),
-    ),
-    (
-        "maintain-verification-skill",
-        include_str!("../assets/skills/maintain-verification-skill/SKILL.md"),
-    ),
-    (
-        "follow-through",
-        include_str!("../assets/skills/follow-through/SKILL.md"),
-    ),
-];
+// Bundled vstack skills (MIT; see `assets/skills/CREDITS.md`). The table is
+// generated from `assets/skills/vstack.json` by `.github/scripts/vstack_sync.py`.
+pub use crate::builtin_skills::{BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES, BUILTIN_SKILL_FILES};
 
 fn builtin_body(name: &str) -> Option<&'static str> {
     BUILTIN_SKILL_BODIES
         .iter()
         .find(|(n, _)| *n == name || normalize_name(n) == normalize_name(name))
         .map(|(_, body)| *body)
+}
+
+/// The other files in a built-in skill's folder: path inside it and text.
+fn builtin_files(name: &str) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
+    BUILTIN_SKILL_FILES
+        .iter()
+        .filter(move |(n, _, _)| *n == name || normalize_name(n) == normalize_name(name))
+        .map(|(_, rel, text)| (*rel, *text))
 }
 
 fn builtin_skills() -> Vec<Skill> {
@@ -474,12 +462,25 @@ fn render(skill: &Skill, rel: Option<&str>) -> ToolOutput {
     out.push_str("Files:\n");
     if skill.source == SkillSource::Builtin {
         out.push_str("- SKILL.md\n");
+        for (file, _) in builtin_files(&skill.name) {
+            out.push_str("- ");
+            out.push_str(file);
+            out.push('\n');
+        }
         if let Some(rel) = rel {
-            if rel != "SKILL.md" && rel != "./SKILL.md" {
-                return ToolOutput::err("path is not available");
-            }
-            out.push_str("\nFile SKILL.md:\n");
-            out.push_str(&body);
+            let rel = rel.strip_prefix("./").unwrap_or(rel);
+            let text = if rel == "SKILL.md" {
+                body
+            } else {
+                match builtin_files(&skill.name).find(|(file, _)| *file == rel) {
+                    Some((_, text)) => clip_chars(text, BODY_CAP),
+                    None => return ToolOutput::err("path is not available"),
+                }
+            };
+            out.push_str("\nFile ");
+            out.push_str(rel);
+            out.push_str(":\n");
+            out.push_str(&text);
         }
         return ToolOutput::ok(out);
     }
@@ -1113,6 +1114,98 @@ mod tests {
         assert!(text.contains("(user)"));
         assert!(text.len() <= REMINDER_CAP + 20, "{}", text.len());
         assert!(!text.contains(&"d".repeat(400)));
+    }
+
+    fn bundled_names(doc: &Value, key: &str) -> Vec<String> {
+        doc[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("vstack.json `{key}`"))
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// The bullet list under `heading` in CREDITS.md, up to the next blank line.
+    fn credit_list(credits: &str, heading: &str) -> Vec<String> {
+        let (_, rest) = credits
+            .split_once(&format!("{heading}\n\n"))
+            .unwrap_or_else(|| panic!("CREDITS.md has no `{heading}`"));
+        rest.lines()
+            .take_while(|line| line.starts_with("- "))
+            .map(|line| line[2..].split(':').next().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn every_manifest_skill_is_bundled_loads_and_is_credited() {
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
+        let doc: Value =
+            serde_json::from_str(&fs::read_to_string(assets.join("vstack.json")).unwrap()).unwrap();
+        let skills = bundled_names(&doc, "skills");
+        let table: Vec<&str> = BUILTIN_SKILL_BODIES.iter().map(|(n, _)| *n).collect();
+        assert_eq!(table, skills, "run .github/scripts/vstack_sync.py sync");
+        assert_eq!(BUILTIN_ALWAYS_ON, bundled_names(&doc, "always_on").as_slice());
+        assert!(skills.iter().any(|s| s == "elevate"), "{skills:?}");
+
+        let root = scratch("manifest");
+        let repo = root.join("repo");
+        let home = root.join("empty-home");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        let found = discover(&repo, Some(&home), &[]);
+        for name in &skills {
+            let skill = found
+                .iter()
+                .find(|s| &s.name == name)
+                .unwrap_or_else(|| panic!("{name} is not discovered"));
+            assert_eq!(skill.source, SkillSource::Builtin, "{name}");
+            assert!(!skill.description.is_empty(), "{name}");
+            let loaded = tool_run(&repo, &json!({ "name": name }));
+            assert!(!loaded.failed, "{name}: {}", loaded.text);
+            assert!(
+                loaded
+                    .text
+                    .starts_with(&format!("<skill name=\"{name}\" source=\"builtin\"")),
+                "{name}: {}",
+                loaded.text
+            );
+        }
+        for (name, rel, text) in BUILTIN_SKILL_FILES {
+            let on_disk = fs::read_to_string(assets.join(name).join(rel)).unwrap();
+            assert_eq!(*text, on_disk, "{name}/{rel}");
+            let listed = tool_run(&repo, &json!({ "name": name }));
+            assert!(listed.text.contains(&format!("\n- {rel}\n")), "{}", listed.text);
+            let read = tool_run(&repo, &json!({ "name": name, "path": rel }));
+            assert!(!read.failed, "{name}/{rel}: {}", read.text);
+            assert!(
+                read.text.ends_with(&format!("\nFile {rel}:\n{text}")),
+                "{name}/{rel}"
+            );
+        }
+        let guide = tool_run(&repo, &json!({ "name": "elevate", "path": "GUIDE.md" }));
+        assert!(!guide.failed, "{}", guide.text);
+        let missing = tool_run(&repo, &json!({ "name": "elevate", "path": "NOPE.md" }));
+        assert!(missing.failed);
+        assert_eq!(missing.text, "path is not available");
+        // Left-out skills stay out.
+        for name in ["setup-vstack", "stageshow"] {
+            assert!(doc["exclude"][name].is_string(), "{name}");
+            assert!(tool_run(&repo, &json!({ "name": name })).failed, "{name}");
+        }
+
+        let credits = fs::read_to_string(assets.join("CREDITS.md")).unwrap();
+        let tag = doc["tag"].as_str().unwrap();
+        let commit = doc["commit"].as_str().unwrap();
+        assert!(credits.contains(&format!("release\n[`{tag}`]")), "{credits}");
+        assert!(credits.contains(&format!("(commit `{commit}`)")), "{credits}");
+        assert_eq!(
+            credit_list(&credits, "Skills shipped here (read-only built-ins inside Loadout / GrokHub):"),
+            skills
+        );
+        let left: Vec<String> = doc["exclude"].as_object().unwrap().keys().cloned().collect();
+        assert_eq!(credit_list(&credits, "Left out:"), left);
+        assert!(assets.join("LICENSE-upstream").is_file());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

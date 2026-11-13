@@ -284,7 +284,7 @@ fn skill_list(ctx: &SelfCtx<'_>) -> String {
             format!("{id}: {}", s.description)
         })
         .collect();
-    // Built-in Loadout skills (vstack QA / verify / follow-through).
+    // Built-in Loadout skills (the bundled vstack skills).
     for (name, body) in crate::skills::BUILTIN_SKILL_BODIES {
         let desc = body
             .lines()

@@ -1,0 +1,84 @@
+name: vstack-sync
+# Daily: when vstack has a release newer than the one the built-in skills are
+# pinned to (crates/grokhub-agent/assets/skills/vstack.json), sync the skills
+# to it and open a PR to beta titled "vstack sync: vX.Y.Z". No secrets needed.
+# Schedules fire from the default branch, so the job checks out beta itself.
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "vstack tag to sync to, like v1.3.0 (blank: the newest release)"
+        required: false
+        default: ""
+permissions: {}
+concurrency:
+  group: vstack-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: beta
+      - name: Sync self-test
+        run: python3 .github/scripts/test_vstack_sync.py
+      - name: Pick the tag
+        id: tag
+        env:
+          WANT: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${WANT:-$(python3 .github/scripts/vstack_sync.py newer)}"
+          if [[ -z "$tag" ]]; then
+            echo "The built-in skills are on the newest vstack release."
+          elif [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$tag is not a vX.Y.Z tag"; exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Sync and open a PR to beta
+        if: steps.tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          branch="bot/vstack-sync-$TAG"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "$branch already exists, so its PR is open or was closed on purpose."; exit 0
+          fi
+          python3 .github/scripts/vstack_sync.py sync --tag "$TAG" --summary body.md
+          python3 .github/scripts/vstack_sync.py check
+          if [[ -z "$(git status --porcelain -- crates/grokhub-agent)" ]]; then
+            echo "Nothing changed."; exit 0
+          fi
+          printf -- '- Built-in skills: the bundled vstack skills now come from vstack %s.\n' "$TAG" \
+            > "changelog.d/vstack-sync-${TAG//./-}.md"
+          python3 scripts/pii-guard/pii_guard.py
+          {
+            echo
+            echo "Base: \`beta\` at \`$(git rev-parse --short HEAD)\`."
+            echo
+            echo "Proof: the sync job ran \`test_vstack_sync.py\` and \`vstack_sync.py check\`, and \`pii_guard.py\` is clean. CI runs the Rust tests that load every bundled skill."
+            echo
+            echo "Skipped / not verified: no person has read the new skill text."
+          } >> body.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A crates/grokhub-agent changelog.d
+          git commit -m "vstack sync: $TAG"
+          git push -u origin "$branch"
+          gh pr create --base beta --head "$branch" --title "vstack sync: $TAG" --body-file body.md
+          # A PR opened with the workflow token starts no workflows by itself,
+          # so start CI and turn on the squash auto-merge auto-merge.yml would.
+          gh workflow run ci.yml --ref "$branch"
+          gh pr merge "$branch" --auto --squash \
+            || echo "::warning::could not turn on auto-merge for $branch"

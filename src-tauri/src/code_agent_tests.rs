@@ -18,13 +18,27 @@ fn the_skills_block_carries_every_bundled_skill_in_full() {
         assert!(block.contains(&format!("\n### {name}\n")), "{name}");
     }
     assert_eq!(
-        grokhub_agent::BUILTIN_SKILL_BODIES.len(),
+        grokhub_agent::BUILTIN_ALWAYS_ON.len(),
         5,
-        "a new bundled skill joins the block"
+        "a new always-on skill joins the block"
     );
     // The bodies, not their front matter.
     assert!(!block.contains("\n---\n"), "{block}");
     assert!(block.contains(PUSH_NOTE));
+    // The other bundled skills are one line each, after the full ones.
+    let (full, more) = block.split_once("\n### More built-in skills\n").expect("index");
+    let elevate = more
+        .lines()
+        .find_map(|line| line.strip_prefix("- elevate: "))
+        .expect("elevate is listed");
+    assert!(elevate.ends_with("/elevate"), "{elevate}");
+    assert!(!full.contains("### elevate"), "{full}");
+    assert!(!more.contains("\n- follow-through:"), "{more}");
+    assert!(!more.contains("setup-vstack"), "{more}");
+    assert_eq!(
+        more.matches("\n- ").count(),
+        grokhub_agent::BUILTIN_SKILL_BODIES.len() - 5
+    );
 }
 
 #[test]
