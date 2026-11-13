@@ -126,6 +126,7 @@ pub mod storage;
 mod task_feed;
 mod turns;
 pub mod voice;
+mod voice_live;
 pub mod workboard;
 
 use std::collections::HashMap;
@@ -6272,6 +6273,17 @@ pub fn run() {
             grok_sign_out,
             send_chat,
             transcribe,
+            voice_live::voice_live_start,
+            voice_live::voice_live_stop,
+            voice_live::voice_live_push,
+            voice_live::voice_live_listen,
+            voice_live::voice_live_playing,
+            voice_live::voice_live_finish,
+            voice_live::voice_live_hear,
+            voice_live::voice_reply_feed,
+            voice_live::voice_reply_finish,
+            voice_live::voice_reply_hush,
+            voice_live::voice_speak,
             answer_permission,
             answer_elicit,
             helper_questions,

@@ -64,6 +64,7 @@ import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
 import { appendDraft, Mic } from "./Mic";
+import { useVoiceMode, VoiceButton } from "./VoiceMode";
 import { ElicitCard, type ElicitItem } from "./Modes";
 import { SIDE_MARK, SideCards, withSide, type Side } from "./Side";
 import { NyxDock } from "./NyxDock";
@@ -685,6 +686,8 @@ export function Chat({
    * the Activity menu. The next one sends when the reply ends. */
   const [queue, setQueue] = useState<string[]>([]);
   const queueRef = useRef<string[]>([]);
+  const voice = useVoiceMode();
+  const voiceSession = voice.session;
   /** The queued message whose turn came: it sends after this render. */
   const [nextUp, setNextUp] = useState<{ text: string; n: number; as?: SessionMode }>();
   /** `/plan` or `/chat` named how the next message runs; otherwise the app reads it. */
@@ -926,7 +929,10 @@ export function Chat({
       else if (event.kind === "suggestions") setFollowed((n) => n + 1);
       else if (event.kind === "goal") setGoalAsk({ id: event.id, title: event.title });
       else if (event.kind === "done") setItems(event.stop === HALTED_STOP ? settleHalted : settle);
-      else if (event.kind === "text") setItems((now) => applyEvent(now, event));
+      else if (event.kind === "text") {
+        voiceSession.feed(event.text);
+        setItems((now) => applyEvent(now, event));
+      }
       // Not a transition: one would hold the page's next updates while the
       // card eases in, and typing in the box then loses its first letters.
       else setItems((now) => applyEvent(now, event));
@@ -950,7 +956,7 @@ export function Chat({
       stop?.();
       stopGap?.();
     };
-  }, [conversationId]);
+  }, [conversationId, voiceSession]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "end" });
@@ -1006,6 +1012,7 @@ export function Chat({
     busyRef.current = false;
     setBusy(false);
     setRunIn(undefined);
+    voiceSession.replyDone("");
     // Another chat opened meanwhile: what waits now was typed there, so it
     // goes, and the lines on screen are that chat's, not this reply's.
     const moved = openNow.current !== from;
@@ -1022,6 +1029,16 @@ export function Chat({
       setDraft((now) => withQueued(now, waiting));
     }
   }
+
+  // Voice mode: what it hears goes as a message, or waits behind a running
+  // reply; what it has to say shows where errors do.
+  const showVoiceNote = (note: string) => setError(note);
+  useEffect(() =>
+    voiceSession.handlers((words) => {
+      if (busyRef.current) changeQueue([...queueRef.current, words]);
+      else void deliver(words, [], false);
+    }, showVoiceNote),
+  );
 
   /** Stop: the reply ends, and the messages lined up behind it come back to
    * the box instead of sending. */
@@ -1671,7 +1688,10 @@ export function Chat({
           onPaste={attach.onPaste}
         />
         {!remote && (
-          <Mic onText={(words) => setDraft((now) => appendDraft(now, words))} onError={setError} busy={busy} active={active} />
+          <>
+            <Mic onText={(words) => setDraft((now) => appendDraft(now, words))} onError={setError} busy={busy} active={active} />
+            <VoiceButton state={voice.state} session={voice.session} />
+          </>
         )}
         {busyHere ? (
           <>

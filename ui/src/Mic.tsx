@@ -60,7 +60,7 @@ function onChunk(w: Warm, chunk: Float32Array) {
 
 /** Copy the mic's samples off the audio thread when the webview can; the
  * older processor otherwise (and in tests). */
-async function tap(ctx: AudioContext, source: MediaStreamAudioSourceNode, take: (c: Float32Array) => void) {
+export async function tap(ctx: AudioContext, source: MediaStreamAudioSourceNode, take: (c: Float32Array) => void) {
   if (ctx.audioWorklet) {
     try {
       await ctx.audioWorklet.addModule("/mic-worklet.js");
