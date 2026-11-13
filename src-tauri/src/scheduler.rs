@@ -414,16 +414,10 @@ mod tests {
         )
         .expect("seed");
         let mut checks = Vec::new();
-        let fired = tick_with_check(
-            &dir,
-            &at(nine),
-            PID,
-            &mut |_| ok("cleaned"),
-            &mut |cmd| {
-                checks.push(cmd.to_string());
-                "$ git status --porcelain\nexit 0 · 3ms\n M downloads\n".into()
-            },
-        )
+        let fired = tick_with_check(&dir, &at(nine), PID, &mut |_| ok("cleaned"), &mut |cmd| {
+            checks.push(cmd.to_string());
+            "$ git status --porcelain\nexit 0 · 3ms\n M downloads\n".into()
+        })
         .expect("tick");
         assert_eq!(checks, vec!["git status --porcelain".to_string()]);
         assert_eq!(

@@ -202,10 +202,7 @@ mod tests {
     #[test]
     fn run_night_check_command_passes_when_stdout_is_ready() {
         let receipt = run_night_check_command("echo ready-for-night");
-        assert!(
-            !crate::skip_night_check_receipt(&receipt),
-            "{receipt}"
-        );
+        assert!(!crate::skip_night_check_receipt(&receipt), "{receipt}");
         assert!(receipt.contains("ready-for-night"), "{receipt}");
     }
 

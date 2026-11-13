@@ -401,8 +401,7 @@ pub fn next_due(
 /// successful fire.
 pub fn settle_skip(config_dir: &Path, id: &str, clock: LocalClock) -> Result<(), String> {
     change(config_dir, id, |list, at| {
-        list[at] =
-            grokhub_core::mark_automation_skipped(list[at].clone(), clock.now_ms, clock);
+        list[at] = grokhub_core::mark_automation_skipped(list[at].clone(), clock.now_ms, clock);
     })
     .map(drop)
 }
