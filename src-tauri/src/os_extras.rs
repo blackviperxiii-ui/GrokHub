@@ -393,6 +393,20 @@ pub fn automation_finished(app: &AppHandle, name: &str) {
     }
 }
 
+/// An auto-resume stopped for the day: the card waits for you in Blocked.
+pub fn auto_resume_stopped(app: &AppHandle, text: &str) {
+    let enabled = crate::current(&app.state::<ShellState>()).notifications
+        && capabilities::current().notifications;
+    let focused = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_focused().ok())
+        .unwrap_or(false);
+    if should_notify(focused, enabled) {
+        let id = app.state::<ShellState>().notified.fresh_id();
+        notify(app, id, "Workboard", &short(text, DETAIL_CHARS), false);
+    }
+}
+
 fn hotkey(app: &AppHandle, on: bool) -> Result<(), String> {
     let shortcuts = app.global_shortcut();
     let registered = shortcuts.is_registered(SUMMON_HOTKEY);

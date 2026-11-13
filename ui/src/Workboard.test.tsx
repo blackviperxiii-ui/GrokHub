@@ -45,7 +45,10 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 vi.mock("./Chat", () => ({ newConversationId: () => "shell-new" }));
-vi.mock("./WorkboardChat", () => ({ CardChat: () => null }));
+vi.mock("./WorkboardChat", async (actual) => ({
+  ...(await actual<typeof import("./WorkboardChat")>()),
+  CardChat: () => null,
+}));
 
 import {
   BOARD_EMPTY,
@@ -595,12 +598,14 @@ describe("Workboard", () => {
     expect(open.queryByText("just now · step · Wrote the reader")).toBeNull();
   });
 
-  it("Resume calls the resume command and hands the draft to the chat", async () => {
-    api.getWorkboard.mockResolvedValue(board({ blocked: [PAUSED] }));
+  it("Resume calls the resume command and hands the resume block to the chat", async () => {
+    const mine = { ...PAUSED, chat: "shell-p1" };
+    api.getWorkboard.mockResolvedValue(board({ blocked: [mine] }));
     api.workboardResume.mockResolvedValue({
-      conversationId: "chat-p1",
+      conversationId: "shell-p1",
       prompt: "Resume the work card",
-      page: board({ blocked: [PAUSED] }),
+      background: false,
+      page: board({ blocked: [mine] }),
     });
     const onResume = vi.fn();
     render(<Workboard onWork={() => {}} onResume={onResume} />);
@@ -608,11 +613,49 @@ describe("Workboard", () => {
       await screen.findByRole("button", { name: /Port the lexer/ }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Resume" }));
-    expect(api.workboardResume).toHaveBeenCalledWith("p1", "chat-p1");
+    expect(api.workboardResume).toHaveBeenCalledWith("p1", "shell-p1");
     expect(onResume).toHaveBeenCalledWith({
-      conversationId: "chat-p1",
+      conversationId: "shell-p1",
       prompt: "Resume the work card",
     });
+  });
+
+  it("a card on a cabin chat resumes in a new chat of this app's", async () => {
+    api.getWorkboard.mockResolvedValue(board({ blocked: [PAUSED] }));
+    api.workboardResume.mockResolvedValue({
+      conversationId: "shell-new",
+      prompt: "Resume the work card",
+      background: false,
+      page: board({ blocked: [PAUSED] }),
+    });
+    render(<Workboard onWork={() => {}} onResume={() => {}} />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Port the lexer/ }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+    const [, chat] = api.workboardResume.mock.calls[0];
+    expect(PAUSED.chat).toBe("chat-p1");
+    expect(chat).toMatch(/^shell-/);
+  });
+
+  it("a run that resumes in the background opens no chat and says so", async () => {
+    api.getWorkboard.mockResolvedValue(board({ blocked: [PAUSED] }));
+    api.workboardResume.mockResolvedValue({
+      conversationId: "",
+      prompt: "",
+      background: true,
+      page: board({ doing: [{ ...PAUSED, canResume: false }] }),
+    });
+    const onResume = vi.fn();
+    render(<Workboard onWork={() => {}} onResume={onResume} />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Port the lexer/ }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+    expect(
+      await screen.findByText("Resumed in the background from where it left off."),
+    ).toBeVisible();
+    expect(onResume).not.toHaveBeenCalled();
   });
 
   it("Hand back, Move up and Move down go through act", async () => {

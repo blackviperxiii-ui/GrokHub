@@ -203,7 +203,9 @@ fn a_card_run_from_an_earlier_launch_still_settles() {
     seed(&dir);
     turn_began("shell-old");
     assert!(running("shell-old"));
-    turn_ended(&dir, "shell-old", &Err("no model".into()));
+    // A card's chat: its failed ask is not sent again on its own.
+    assert!(turn_ended(&dir, "shell-old", &Err("no model".into())));
+    assert!(!turn_ended(&dir, "shell-plain", &Err("no model".into())));
     let disk = on_disk(&dir);
     assert_eq!(disk[0].status, BoardStatus::Blocked);
     assert_eq!(
