@@ -68,7 +68,10 @@ describe("useOverscroll", () => {
     const { getByTestId } = render(<Page />);
     const log = getByTestId("log");
     pull(log, 0, 100);
-    expect(log.style.transform).toBe(`translateY(${rubberBand(100)}px)`);
+    // jsdom 31 serializes transform floats with fewer digits than Number#toString.
+    const m = /^translateY\((-?\d+(?:\.\d+)?)px\)$/.exec(log.style.transform);
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBeCloseTo(rubberBand(100), 3);
     fireEvent.touchEnd(log);
     expect(log.style.transform).toBe("");
     expect(log).toHaveClass("snapping");
