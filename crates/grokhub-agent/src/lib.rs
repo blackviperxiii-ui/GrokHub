@@ -89,9 +89,11 @@ pub use dream_model::sleep_dream;
 pub use eval::efficiency::{render_bench, run_bench, BenchRow};
 pub use eval::live::{
     ab_flag as live_ab_flag, ab_passed as live_ab_passed, dream_lessons_passed,
-    parse_budget as parse_live_budget, render_live, run_live, LiveOpts, LiveReport,
-    LocalClient as LiveLocalClient, OpenRouterClient as LiveOpenRouterClient,
-    Provider as LiveProvider, AB_FLAGS as LIVE_AB_FLAGS, DEFAULT_K as LIVE_DEFAULT_K,
+    parse_budget as parse_live_budget, read_progress as read_live_progress, render_live, run_live,
+    run_live_with, write_atomic as write_live_atomic, write_progress as write_live_progress,
+    LiveOpts, LiveReport, LocalClient as LiveLocalClient, OpenRouterClient as LiveOpenRouterClient,
+    Provider as LiveProvider, RetryPolicy as LiveRetryPolicy, AB_FLAGS as LIVE_AB_FLAGS,
+    DEFAULT_K as LIVE_DEFAULT_K,
 };
 pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
 pub use eval::turn_endings::{generic_closing, last_sentence};
