@@ -143,17 +143,18 @@ fn candidates(config_dir: &Path, cards: &[UpdateCard], now_ms: u64) -> Vec<Candi
         pro::CandidateSource::Objectives,
         goal_follow_ups(config_dir, now_ms),
     );
-    gather(config_dir, cards, now_ms, &[&goals])
+    gather(config_dir, cards, now_ms, &[&goals], &[])
 }
 
 /// The rules over the board, the automations and `sources`. A source behind
-/// a connector grant is read only when the consent ledger holds that grant;
-/// then your reactions weigh each category (a quiet one is dropped).
+/// a connector grant is read only when `granted` names its scope; then your
+/// reactions weigh each category (a quiet one is dropped).
 fn gather(
     config_dir: &Path,
     cards: &[UpdateCard],
     now_ms: u64,
     sources: &[&dyn pro::GrantedSource],
+    granted: &[&str],
 ) -> Vec<Candidate> {
     let work = work_items(config_dir);
     let health: Vec<grokhub_core::AutomationAlert> = crate::automations::load(config_dir)
@@ -168,9 +169,8 @@ fn gather(
         failed: &[],
         needs: &[],
     };
-    let granted = hx::ConsentLedger::load(config_dir).proactive_scopes();
     let ranked =
-        pro::ProactiveEngine::new(Arc::new(move || now_ms)).gather(&watch, sources, &granted);
+        pro::ProactiveEngine::new(Arc::new(move || now_ms)).gather(&watch, sources, granted);
     grokhub_core::reactions::load(&config_dir.join(grokhub_core::reactions::FILE_NAME))
         .weigh(ranked)
 }
@@ -192,7 +192,9 @@ pub fn tick(
         pro::CandidateSource::Objectives,
         goal_follow_ups(config_dir, now_ms),
     );
-    look(config_dir, pid, now_ms, quiet, hour, &[&goals])
+    // Only the connector scopes you granted in Settings are read.
+    let granted = hx::ConsentLedger::load(config_dir).proactive_scopes();
+    look(config_dir, pid, now_ms, quiet, hour, &[&goals], &granted)
 }
 
 fn look(
@@ -202,9 +204,10 @@ fn look(
     quiet: bool,
     hour: u32,
     sources: &[&dyn pro::GrantedSource],
+    granted: &[&str],
 ) -> Result<Vec<UpdateCard>, String> {
     let on_page = crate::pulse::cards(config_dir)?;
-    let ranked = gather(config_dir, &on_page, now_ms, sources);
+    let ranked = gather(config_dir, &on_page, now_ms, sources, granted);
     let rhythm = grokhub_core::rhythm::load(&config_dir.join(grokhub_core::rhythm::FILE_NAME));
     let quiet = quiet || rhythm.holds(&ranked, hour);
     // The budget lock is never held across a Pulse store call: a click's
@@ -750,12 +753,13 @@ mod tests {
     #[test]
     fn a_connector_source_is_read_only_behind_its_grant() {
         let dir = temp_dir("grant");
-        assert!(look(&dir, PID, NOW, false, 8, &[&Mail])
+        assert!(look(&dir, PID, NOW, false, 8, &[&Mail], &[])
             .expect("no grant")
             .is_empty());
-        hx::grant_scope(&dir, &hx::Scope::Mail, None, hx::UserClick::from_click())
-            .expect("grant mail");
-        let posted = look(&dir, PID, NOW + MIN, false, 8, &[&Mail]).expect("granted");
+        assert!(look(&dir, PID, NOW, false, 8, &[&Mail], &["calendar"])
+            .expect("another grant")
+            .is_empty());
+        let posted = look(&dir, PID, NOW + MIN, false, 8, &[&Mail], &["mail"]).expect("granted");
         assert_eq!(posted.len(), 1);
         assert_eq!(posted[0].title, "I can sum up today's mail");
         let meta = posted[0].pulse.proactive.clone().expect("proactive meta");

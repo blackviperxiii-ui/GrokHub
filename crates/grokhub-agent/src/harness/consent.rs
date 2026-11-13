@@ -677,4 +677,26 @@ mod tests {
         assert_eq!(ledger.all().len(), 1);
         assert_eq!(ledger.active().count(), 0);
     }
+
+    #[test]
+    fn the_proactive_engine_reads_only_granted_connector_scopes() {
+        assert_eq!(
+            ConsentLedger::empty().proactive_scopes(),
+            Vec::<&str>::new()
+        );
+        let text = concat!(
+            r#"{"id":"s-1","source":"mail","scope":"read","granted_at":1,"by":"user"}"#,
+            "\n",
+            r#"{"id":"s-2","source":"calendar","scope":"read","granted_at":2,"by":"user","revoked_at":3}"#,
+            "\n",
+            r#"{"id":"s-3","source":"system_state","scope":"read","granted_at":4,"by":"agent"}"#,
+            "\n",
+            r#"{"id":"s-4","source":"apps","scope":"read","granted_at":5,"by":"user"}"#,
+            "\n"
+        );
+        assert_eq!(
+            ConsentLedger::from_lines(text).proactive_scopes(),
+            vec!["mail"]
+        );
+    }
 }
