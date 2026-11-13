@@ -1326,6 +1326,11 @@ export interface PulsePost {
   save: boolean;
   /** Already on the Saved page. */
   saved: boolean;
+  /** A weekly self-review card's Apply button: "Apply change", "Revert" or
+   * "Save idea". Empty on other posts. */
+  review?: string;
+  /** A code-idea card also offers Copy as GitHub issue. */
+  issue?: boolean;
 }
 
 /** A card kept with Save, on the Saved page. Stored apart from the feed
@@ -1488,6 +1493,22 @@ export function pulseAct(id: string, act: PulseAct): Promise<PulsePage> {
   return invoke<PulsePage>("pulse_act", { id, act, day: localDay() });
 }
 
+/** A weekly self-review card's Apply change, Revert or Save idea: the
+ * status line and the page after it. */
+export interface PulseReviewDone {
+  line: string;
+  page: PulsePage;
+}
+
+export function pulseReviewApply(id: string): Promise<PulseReviewDone> {
+  return invoke<PulseReviewDone>("pulse_review_apply", { id, day: localDay() });
+}
+
+/** A code-idea card's Copy as GitHub issue: the redacted text and the note. */
+export function pulseReviewIssue(id: string): Promise<{ text: string; copied: string }> {
+  return invoke<{ text: string; copied: string }>("pulse_review_issue", { id });
+}
+
 /** Discuss: the card's own chat and the words for its box. */
 export function pulseDiscuss(id: string): Promise<PulseSeed> {
   return invoke<PulseSeed>("pulse_discuss", { id });
@@ -1552,6 +1573,10 @@ export interface ImaginePage {
   tiles: ImagineTile[];
   /** A Grok sign-in or a key is there, so Make can run. */
   ready: boolean;
+  /** Imagine's own sign-in, when there is one. */
+  account: SignedIn | null;
+  /** This computer can show a sign-in code. */
+  canSignIn: boolean;
 }
 
 export interface ImagineMade {
@@ -1587,6 +1612,20 @@ export function imagineCancel(): Promise<boolean> {
 /** A gallery file as a data URL, by its bare name. */
 export function imagineImage(name: string): Promise<string> {
   return invoke<string>("imagine_image", { name });
+}
+
+/** Imagine's own Sign in with Grok (the cabin's "Use a code"), step one. */
+export function imagineSignInStart(): Promise<GrokSignInStart> {
+  return invoke<GrokSignInStart>("imagine_sign_in_start");
+}
+
+export function imagineSignInPoll(): Promise<GrokSignInPoll> {
+  return invoke<GrokSignInPoll>("imagine_sign_in_poll");
+}
+
+/** Signs out of Imagine only; chat's sign-in and the key stay. */
+export function imagineSignOut(): Promise<ImaginePage> {
+  return invoke<ImaginePage>("imagine_sign_out");
 }
 
 /** One decision journal question (src-tauri/src/journal.rs). */
@@ -3033,6 +3072,15 @@ export function openSkillFolder(
 /** A background task's status on the Agents page (src-tauri/src/queue.rs). */
 export type TaskStatus = "running" | "failed" | "done" | "stopped";
 
+/** How far a helper has got: its tool steps, tokens and time so far. */
+export interface QueueProgress {
+  steps: number;
+  /** The tool the last step ran; empty before the first one. */
+  lastStep: string;
+  tokens: number;
+  seconds: number;
+}
+
 /** A background command, subagent or monitor of the open chat. */
 export interface QueueTask {
   id: string;
@@ -3040,18 +3088,114 @@ export interface QueueTask {
   status: TaskStatus;
   /** Still going, so Stop has something to stop. */
   live: boolean;
+  /** Only on a helper of a session whose Tasks panel is live. */
+  progress?: QueueProgress;
 }
+
+/** A to-do as the Code tab's Tasks panel shows it. */
+export type TodoState = "planned" | "running" | "needsYou" | "review" | "notMerged" | "done" | "failed";
 
 /** A to-do Grok wrote in the chat: "pending", "in_progress", "completed" or "cancelled". */
 export interface QueueTodo {
   id: string;
   content: string;
   status: string;
+  /** The helper that has the task, by its task id ("s3"); none before one starts. */
+  owner?: string;
+  /** Where the task stands, from its status and its helper. */
+  state: TodoState;
+}
+
+/** What became of a helper's work in a worktree. */
+export type WorkState = "running" | "ready" | "conflict" | "held" | "merged" | "empty" | "discarded";
+
+/** Why a helper's work is held back from a plain merge. `rolledBack` is a
+ * merge that could not be written and was put back; `applyFailed` is one
+ * that stopped part way. */
+export type WorkHeld =
+  | "partial"
+  | "gitStateChanged"
+  | "changedAfterSeal"
+  | "ignoredOnly"
+  | "nestedRepo"
+  | "sealFailed"
+  | "interrupted"
+  | "orphan"
+  | "projectChanged"
+  | "blocked"
+  | "rolledBack"
+  | "applyFailed"
+  | "mergeFailed";
+
+/** One helper's work in a worktree of its own (src-tauri/src/queue.rs). It
+ * is in the project folder only after a Merge. */
+export interface HelperWork {
+  key: string;
+  /** The helper's task id ("s2") in the launch that ran it. */
+  task: string;
+  title: string;
+  state: WorkState;
+  /** The helper did not finish. */
+  partial: boolean;
+  /** How the helper ended, in words ("it was stopped"). */
+  ended: string;
+  /** The changed paths, at most 200 of them. */
+  files: string[];
+  counts: { added: number; changed: number; deleted: number };
+  /** Ignored paths the helper wrote. They are never merged. */
+  ignored: string[];
+  /** The files of a conflict. */
+  conflicts: string[];
+  why?: WorkHeld;
+  /** The same reason in words. */
+  whyText?: string;
+  /** Files a finished or put-back merge left as the person changed them. */
+  skipped: string[];
+  /** The worktree folder. */
+  path: string;
+  /** The worktree is still on disk. */
+  treeKept: boolean;
+  /** A merge stopped part way: it is finished or put back, nothing else. */
+  landing: boolean;
+  /** A helper row of this launch is this work's helper. */
+  live: boolean;
+  /** The title of the work this helper redid (its key once that is gone). */
+  redoOf?: string;
+  /** This work still waits, and a newer helper that finished redid it. */
+  redone?: boolean;
 }
 
 export interface Queue {
   todos: QueueTodo[];
   tasks: QueueTask[];
+  /** The chat's helper work, also after a relaunch, when it has no tasks. */
+  work?: HelperWork[];
+  /** Why the helper work list could not be read. */
+  workError?: string;
+  /** The newest review of the session's change; none before the first. */
+  review?: Review;
+  /** Why the review could not be read. */
+  reviewError?: string;
+  /** A turn of the chat runs now. */
+  working?: boolean;
+}
+
+/** One finding of a review. A "high" one is a blocker. */
+export interface ReviewFinding {
+  severity: "high" | "medium" | "low" | "info";
+  text: string;
+}
+
+/** A review helper's findings on the session's change (src-tauri/src/queue.rs),
+ * most severe first. */
+export interface Review {
+  findings: ReviewFinding[];
+  blockers: number;
+  atMs: number;
+  /** False when the session had no approved plan to review against. */
+  planGiven: boolean;
+  /** True when the helper was shown only part of the change. Left out when not. */
+  cut?: boolean;
 }
 
 export function getQueue(conversationId: string): Promise<Queue> {
@@ -3064,6 +3208,85 @@ export function stopTask(
   taskId?: string,
 ): Promise<Queue> {
   return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
+}
+
+/** How the session's review stands against the change that is there now.
+ * "stale": a file, HEAD or a commit differs from what the review read. */
+export type ReviewCheck = { state: "none" | "stale" | "clean" } | { state: "blockers"; count: number };
+
+/** How the project's tests stand against the change that is there now.
+ * "noCommand" does not block. */
+export type TestsCheck =
+  | { state: "noCommand" }
+  | { state: "notRun" | "stale" | "passed"; command: string }
+  | { state: "failed"; command: string; exit: number };
+
+/** One place the secret scan flagged. It never carries the line's text. */
+export interface SecretHit {
+  path: string;
+  /** None for a file flagged by its name. */
+  line: number | null;
+  kind: "name" | "held" | "shape";
+  /** The session commit that added it; none for the uncommitted change. */
+  commit: string | null;
+}
+
+export interface ShipChecks {
+  /** None on a detached HEAD. */
+  branch: string | null;
+  review: ReviewCheck;
+  tests: TestsCheck;
+  /** None when the scan could not run. */
+  secrets: SecretHit[] | null;
+}
+
+/** Whether the session's change could be committed
+ * (crates/grokhub-code/src/commit.rs). */
+export interface ShipStatus {
+  /** One sentence for each thing in the way; empty when nothing is. */
+  blocked: string[];
+  /** None when the project could not be read at all. */
+  checks: ShipChecks | null;
+}
+
+/** Tasks: the checks on the session's change. Read only; desktop only. */
+export function shipStatus(conversationId: string): Promise<ShipStatus> {
+  return invoke<ShipStatus>("ship_status", { conversationId });
+}
+
+/** Merges a helper's work into the project folder, as uncommitted changes.
+ * A merge that ends in a conflict or held resolves: the row says how it
+ * ended. It rejects when it is refused and nothing changed. */
+export function mergeTaskWork(conversationId: string, key: string): Promise<Queue> {
+  return invoke<Queue>("merge_task_work", { conversationId, key });
+}
+
+/** Finishes a merge that stopped part way (`finish`), or puts its files back. */
+export function resumeTaskWork(conversationId: string, key: string, finish: boolean): Promise<Queue> {
+  return invoke<Queue>("resume_task_work", { conversationId, key, finish });
+}
+
+/** Deletes a helper's unmerged work, or the worktree kept for merged work. */
+export function discardTaskWork(conversationId: string, key: string): Promise<Queue> {
+  return invoke<Queue>("discard_task_work", { conversationId, key });
+}
+
+/** A session's tasks, helpers or to-dos changed: read the queue again. */
+export const TASKS_EVENT = "tasks://changed";
+
+export function onTasksChanged(handler: (conversationId: string) => void): Promise<UnlistenFn> {
+  return subscribe<{ conversationId: string }>(TASKS_EVENT, (changed) => handler(changed.conversationId));
+}
+
+/** A helper's steps so far, by tool name, and its result as plain text. */
+export interface TaskDetail {
+  steps: string[];
+  result: string;
+}
+
+/** Reads a helper's steps and result without taking the result from the lead. */
+export function getTaskDetail(conversationId: string, taskId: string): Promise<TaskDetail> {
+  return invoke<TaskDetail>("get_task_detail", { conversationId, taskId });
 }
 
 /** Settings → Behavior, saved in shell.json. Everything starts off. */
@@ -3735,6 +3958,17 @@ export function codeSessionBind(conversationId: string): Promise<string> {
   return invoke<string>("code_session_bind", { conversationId });
 }
 
+/** Whether the session started in the agent window, so it has a lead and
+ * its plan can be edited there. Ask after `codeSessionBind`. */
+export function codeSessionLead(conversationId: string): Promise<boolean> {
+  return invoke<boolean>("code_session_lead", { conversationId });
+}
+
+/** The session's saved plan, as last shown or edited; null when it has none. */
+export function codeSessionPlan(conversationId: string): Promise<string | null> {
+  return invoke<string | null>("code_session_plan", { conversationId });
+}
+
 export function codeRepo(): Promise<CodeRepo> {
   return invoke<CodeRepo>("code_repo");
 }
@@ -3774,6 +4008,9 @@ export interface CodeTestResult {
   exit: number;
   output: string;
   cut: boolean;
+  /** The run changed a file of the project, so it does not count as a run of
+   * the change that is there now. */
+  changedFiles: boolean;
 }
 
 /** Settings → Code: the remembered test command for this project, if any. */
@@ -3789,15 +4026,18 @@ export interface CodeRunChunk {
   cut: boolean;
 }
 
-export function codeTestPlan(command?: string | null): Promise<CodeTestPlan> {
-  return invoke<CodeTestPlan>("code_test_plan", { command: command ?? null });
+/** With `conversationId`, for the folder that session works in. */
+export function codeTestPlan(command?: string | null, conversationId?: string): Promise<CodeTestPlan> {
+  return invoke<CodeTestPlan>("code_test_plan", { command: command ?? null, conversationId: conversationId ?? null });
 }
 
+/** With `conversationId`, in the folder that session works in. */
 export function codeTestRun(
   command: string,
   confirmed: boolean,
+  conversationId?: string,
 ): Promise<CodeTestResult> {
-  return invoke<CodeTestResult>("code_test_run", { command, confirmed });
+  return invoke<CodeTestResult>("code_test_run", { command, confirmed, conversationId: conversationId ?? null });
 }
 
 export function codeTestRemembered(): Promise<CodeTestRemembered> {

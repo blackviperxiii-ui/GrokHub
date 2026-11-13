@@ -34,7 +34,8 @@ const desk = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 vi.mock("./desktopNyxApi", () => desk);
-vi.mock("./transport", () => ({ inShell: () => false }));
+const transport = vi.hoisted(() => ({ shell: false }));
+vi.mock("./transport", () => ({ inShell: () => transport.shell }));
 
 import { CHANNEL_NOTE, Labs, PLUGINS_EMPTY, PLUGINS_TIP } from "./Labs";
 
@@ -64,15 +65,32 @@ describe("Labs", () => {
     for (const fn of Object.values(api)) fn.mockReset();
   });
 
-  it("labels plugins a preview, points to the cabin for the channel, and says what to do when empty", async () => {
+  it("labels plugins a preview, points to About for the channel, and says what to do when empty", async () => {
     api.getPlugins.mockResolvedValue(page([]));
     render(<Labs />);
     expect(await screen.findByText(PLUGINS_EMPTY)).toBeVisible();
-    expect(screen.getByText(CHANNEL_NOTE)).toBeVisible();
+    expect(
+      screen.getByText("Switch between beta and stable on your computer, in About, under Updates."),
+    ).toBeVisible();
+    expect(screen.queryByText(/cabin/)).toBeNull();
     expect(
       screen.getByRole("heading", { name: "Plugins Preview" }),
     ).toBeVisible();
     expect(screen.getByText("Preview")).toHaveAttribute("title", PLUGINS_TIP);
+  });
+
+  it("on this computer, points to About and Updates for the channel, not the cabin", async () => {
+    transport.shell = true;
+    try {
+      api.getPlugins.mockResolvedValue(page([]));
+      render(<Labs />);
+      expect(
+        await screen.findByText("Switch between beta and stable in About, under Updates."),
+      ).toBeVisible();
+      expect(CHANNEL_NOTE).not.toMatch(/cabin/i);
+    } finally {
+      transport.shell = false;
+    }
   });
 
   it("installs a bundle off, then trusts it, turns it on and off, and removes it", async () => {

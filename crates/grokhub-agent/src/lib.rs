@@ -26,7 +26,9 @@ pub mod harness;
 mod hooks;
 pub mod identity;
 mod image_budget;
+pub mod imagine_keychain;
 pub mod indexers;
+mod lead;
 mod loopback;
 mod lru_map;
 pub mod mcp;
@@ -49,6 +51,7 @@ mod recovery;
 pub mod repair;
 mod research;
 mod retry;
+pub mod review;
 pub mod route;
 mod run;
 pub mod sandbox;
@@ -56,6 +59,7 @@ mod scan;
 pub mod self_manage;
 mod session;
 mod session_tools;
+pub mod ship_tree;
 mod skills;
 mod slash_parity;
 mod sse;
@@ -70,6 +74,7 @@ mod tools;
 mod turn_budget;
 mod unattended;
 pub mod voice_session;
+mod work;
 mod ws_mode;
 pub mod xai_keychain;
 
@@ -108,6 +113,7 @@ pub use hooks::{
     HookInfo, HookOrigin,
 };
 pub use identity::{identity_blocks, SOUL_BYTE_CAP, USER_BYTE_CAP};
+pub use lead::{lead_on, set_lead_session, LeadPhase};
 pub use mcp::{
     alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,
     restart, set_workspace, shutdown_all, unalias_elicit, DoctorRow, ElicitInbox, ElicitNote,
@@ -164,8 +170,9 @@ pub use slash_parity::{slash_parity, unparsed_native_slash, SlashParity, Unparse
 pub use sse::SseParser;
 pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
 pub use tasks::{
-    forget_session, halt_all_sessions, halt_session, halt_tree, hub_for, link_child,
-    session_is_live, watch_cancel, TaskRow, TaskState,
+    drain_task_changes, forget_session, halt_all_sessions, halt_session, halt_tree, hub_for,
+    link_child, session_is_live, set_task_watch, watch_cancel, TaskPeek, TaskProgress, TaskRow,
+    TaskState,
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
 pub use tools::mods::{set_host as set_mods_host, ModsOps};
@@ -177,3 +184,7 @@ pub use tools::{
     WebSearchBackend, WebSearchSettings, READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};
+pub use work::{
+    discard_work, how_ended, merge_work, resume_work, settled, why_held, work_for, By, Counts,
+    Ended, Held, Landing, Resume, Work, WorkState,
+};

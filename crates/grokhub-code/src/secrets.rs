@@ -459,7 +459,7 @@ pub fn held_values(config_dir: &Path, vault: &dyn Vault, repo_key: &str) -> Vec<
 /// What to look for in output: each value trimmed, and each line of a value
 /// with line breaks as well (a command can print such a value a line at a
 /// time). Longest first, so a value that contains another is hidden whole.
-fn hidden(held: &[String]) -> Vec<String> {
+pub(crate) fn hidden(held: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for value in held.iter().map(|v| v.trim()).filter(|v| !v.is_empty()) {
         out.push(value.to_string());

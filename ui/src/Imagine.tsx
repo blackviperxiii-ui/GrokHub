@@ -4,15 +4,22 @@ import {
   imagineCancel,
   imagineGenerate,
   imagineImage,
+  imagineSignInPoll,
+  imagineSignInStart,
+  imagineSignOut,
   type ImagineKind,
   type ImaginePage,
   type ImagineTile,
 } from "./api";
 import { Lightbox } from "./FeedCard";
+import { GrokSignIn, type SignInFlow } from "./GrokSignIn";
 
 /** What the shell says when there is no key, or Imagine refuses it. */
-export const NEED_SIGNIN = "Sign in to Imagine in the cabin.";
-export const SIGNIN_HINT = "Or sign in with Grok or add an xAI API key in Settings → Account.";
+export const NEED_SIGNIN = "Sign in to Imagine first.";
+export const SIGNIN_HINT = "Sign in with Grok here, or add an xAI API key in Settings → Account.";
+export const IMAGINE_SIGN_IN = "Imagine sign-in";
+export const IMAGINE_SIGN_IN_NOTE =
+  "Use your Grok subscription for images and videos. Your sign-in is kept in this device's keychain.";
 export const GALLERY_EMPTY = "Nothing yet. What you make shows up here and on the cabin's wall.";
 
 /** Square first: the default. Values are what the shell accepts. */
@@ -116,6 +123,20 @@ export function Imagine() {
     getImagine().then(setPage, (err) => setError(String(err)));
   }, []);
 
+  /** Imagine's own sign-in, shown on this page as the cabin did. */
+  const flow: SignInFlow = {
+    title: IMAGINE_SIGN_IN,
+    note: IMAGINE_SIGN_IN_NOTE,
+    signedOut: "Signed out of Imagine.",
+    start: imagineSignInStart,
+    poll: imagineSignInPoll,
+    done: async () => {
+      setPage(await getImagine());
+      setError(null);
+    },
+    signOut: async () => setPage(await imagineSignOut()),
+  };
+
   async function make(event: FormEvent) {
     event.preventDefault();
     if (busy || !prompt.trim()) return;
@@ -152,6 +173,9 @@ export function Imagine() {
 
   const signIn = page !== null && !page.ready;
   const needsSignIn = signIn || error === NEED_SIGNIN;
+  // The sign-in shows when it is needed, and while Imagine's own is there so
+  // it can be signed out. A chat sign-in or a key alone needs nothing here.
+  const showSignIn = page !== null && page.canSignIn && (needsSignIn || page.account !== null);
   return (
     <section className="imagine" aria-label="Imagine">
       <div className="card-buttons">
@@ -245,6 +269,11 @@ export function Imagine() {
           )
         )}
       </form>
+      {showSignIn && (
+        <div className="card">
+          <GrokSignIn signedIn={page.account} flow={flow} />
+        </div>
+      )}
       {page && page.tiles.length === 0 && <p className="empty">{GALLERY_EMPTY}</p>}
       {page && page.tiles.length > 0 && (
         <ul className="imagine-gallery" aria-label="Gallery">

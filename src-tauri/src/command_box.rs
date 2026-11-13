@@ -13,6 +13,7 @@
 
 use std::path::Path;
 
+use grokhub_core::redact::holds_secret;
 use grokhub_core::HostRisk;
 use serde::{Deserialize, Serialize};
 
@@ -96,24 +97,6 @@ pub fn judge(
         prompt: agent_prompt(&command),
         command,
     }
-}
-
-/// True when the app's redactors would change `command`: it has a key, a
-/// token or a password in it. Such a line is never remembered. Three
-/// redactors are asked, and each counts a key only where one can start, so
-/// a branch named `fix/desk-sessions-halt` or a file named
-/// `task-runner-notes.md` is not taken for a key:
-/// - the one the Code tab's terminal uses for typed commands (`sk-…`,
-///   `xai-…`, GitHub tokens, `Bearer …`);
-/// - the debug bundle's token shapes (AWS, Slack, Hugging Face, GitLab, npm
-///   and the like, a password in a URL, a JWT);
-/// - the debug bundle's credential assignments: `API_KEY=…`,
-///   `--password=…`, an `Authorization` header. This one goes by the key's
-///   name, so `TOKEN=abc make` asks every time too.
-fn holds_secret(command: &str) -> bool {
-    grokhub_core::redact_secret_words(command) != command
-        || grokhub_core::redact::redact_token_shapes(command) != command
-        || grokhub_core::diagnostics::has_credential_value(command)
 }
 
 /// Why `command` doesn't run at all, if it doesn't.

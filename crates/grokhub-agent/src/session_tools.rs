@@ -265,6 +265,7 @@ fn todo_write(session: &str, arguments: &str) -> ToolOutput {
         .lock()
         .unwrap_or_else(|err| err.into_inner())
         .insert(session.to_string(), current.clone());
+    crate::tasks::mark_changed(session);
     ToolOutput::ok(render_todos(&current))
 }
 
@@ -573,7 +574,7 @@ fn exit_plan(call: SessionCall<'_>) -> ToolOutput {
     let view = ElicitView {
         id: id.clone(),
         server_name: "Plan".into(),
-        message: shown,
+        message: shown.clone(),
         mode: "form".into(),
         url: String::new(),
         elicitation_id: id.clone(),
@@ -606,13 +607,40 @@ fn exit_plan(call: SessionCall<'_>) -> ToolOutput {
             } else {
                 call.gate.readonly_session = call.base_readonly;
             }
-            if reply.is_empty() || reply == grokhub_core::reply_chips::PLAN_GO_TEXT {
-                ToolOutput::ok("Plan approved. Plan mode is off.")
+            let added = if reply.is_empty() || reply == grokhub_core::reply_chips::PLAN_GO_TEXT {
+                ""
             } else {
-                ToolOutput::ok(format!(
-                    "Plan approved. Plan mode is off. The user added: {reply}"
-                ))
+                reply.as_str()
+            };
+            let approved = if added.is_empty() {
+                "Plan approved. Plan mode is off.".to_string()
+            } else {
+                format!("Plan approved. Plan mode is off. The user added: {added}")
+            };
+            if !crate::lead::lead_on(call.session) {
+                return ToolOutput::ok(approved);
             }
+            // A lead's approval: the turn now works, from the text the person
+            // approved, which they may have edited on the card.
+            crate::lead::plan_approved(call.session);
+            let work = crate::lead::LEAD_WORK;
+            let edited = content
+                .get("plan")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            // Kept for the review, before the result that starts the work.
+            if edited.is_empty() || edited == shown {
+                crate::review::save_plan(call.session, &shown, added);
+                return ToolOutput::ok(format!("{approved}\n\n{work}"));
+            }
+            crate::review::save_plan(call.session, &edited, added);
+            (call.on_event)(LoopEvent::Plan(edited.clone()));
+            ToolOutput::ok(format!(
+                "{approved} The user edited the plan. Follow this text, not your \
+                 draft:\n{edited}\n\n{work}"
+            ))
         }
         mcp::ElicitAnswer::Decline => ToolOutput::err("User declined the plan"),
         mcp::ElicitAnswer::Cancel => ToolOutput::err("User cancelled the plan"),
@@ -780,6 +808,35 @@ mod tests {
                 });
             }
         }
+    }
+
+    #[test]
+    fn todo_write_marks_the_session() {
+        let cfg = scratch("todomarkcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let _watch = crate::tasks::WatchScope::set(true);
+        let out = todo_write(
+            "w2",
+            r#"{"todos":[{"id":"1","content":"a","status":"pending"}]}"#,
+        );
+        assert!(!out.failed, "{}", out.text);
+        assert_eq!(crate::tasks::drain_task_changes(), vec!["w2".to_string()]);
+        assert_eq!(crate::tasks::drain_task_changes(), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn todo_write_marks_nothing_with_the_watch_off() {
+        let cfg = scratch("todoquietcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let _watch = crate::tasks::WatchScope::set(false);
+        let out = todo_write(
+            "w3",
+            r#"{"todos":[{"id":"1","content":"a","status":"pending"}]}"#,
+        );
+        assert!(!out.failed, "{}", out.text);
+        assert_eq!(crate::tasks::drain_task_changes(), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&cfg);
     }
 
     #[test]
@@ -1159,6 +1216,226 @@ mod tests {
         assert!(!dir.join("ask.txt").exists());
         assert!(!plan_on(&ask_mode));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One turn in plan mode in `dir` that shows `draft`; the card is
+    /// answered with `action` and `content`. Gives the tool outputs and the
+    /// plan texts shown.
+    fn plan_turn_in(
+        dir: &Path,
+        session: &str,
+        lead: bool,
+        draft: &str,
+        action: &str,
+        content: Option<Value>,
+    ) -> (String, Vec<String>) {
+        use crate::lead::{set_lead_session, LeadPhase};
+        let (tx, inbox) = crate::mcp::ElicitInbox::pair();
+        crate::mcp::attach_elicit(session, inbox);
+        set_plan_session(session, true);
+        set_lead_session(session, lead.then_some(LeadPhase::Plan));
+        let mut reply = answer(&tx, action, content);
+        let mut plans = Vec::new();
+        let (_out, history) = run(
+            dir,
+            session,
+            chat(false, true),
+            vec![call(
+                "1",
+                "exit_plan_mode",
+                &json!({ "plan": draft }).to_string(),
+            )],
+            &mut |ev: LoopEvent| {
+                if let LoopEvent::Plan(text) = &ev {
+                    plans.push(text.clone());
+                }
+                reply(ev);
+            },
+        );
+        (outputs(&history), plans)
+    }
+
+    /// One lead turn in plan mode that shows "1. Draft"; the card is answered
+    /// with `content`. Gives the tool outputs and the plan texts shown.
+    fn lead_plan_turn(tag: &str, lead: bool, content: Value) -> (String, Vec<String>, String) {
+        let dir = scratch(tag);
+        let _config = crate::perm::ConfigGuard::set(dir.join("cfg"));
+        let session = sid(tag);
+        let (text, plans) = plan_turn_in(&dir, &session, lead, "1. Draft", "accept", Some(content));
+        let _ = std::fs::remove_dir_all(&dir);
+        (text, plans, session)
+    }
+
+    #[test]
+    fn an_approved_lead_plan_is_kept_for_the_review_and_a_declined_draft_never_is() {
+        let dir = scratch("leadkeep");
+        let _config = crate::perm::ConfigGuard::set(dir.join("cfg"));
+        let session = sid("leadkeep");
+        let turn = |draft: &str, action: &str, content: Option<Value>| {
+            plan_turn_in(&dir, &session, true, draft, action, content).0
+        };
+        // A draft that is sent back or declined is not the approved plan.
+        turn(
+            "1. Draft",
+            "accept",
+            Some(json!({"reply": "make it smaller"})),
+        );
+        assert_eq!(crate::review::plan_of(&session), None);
+        turn("1. Draft", "decline", None);
+        assert_eq!(crate::review::plan_of(&session), None);
+        // Approved as shown.
+        let text = turn("1. Draft", "accept", Some(json!({"plan": "1. Draft"})));
+        assert!(text.contains("The plan is approved."), "{text}");
+        assert_eq!(
+            crate::review::plan_of(&session).as_deref(),
+            Some("1. Draft")
+        );
+        // Approved as the person edited it, with the words they added. The
+        // plan approved before stays: its work is in the same change.
+        turn(
+            "2. Second",
+            "accept",
+            Some(json!({"plan": "2. Edited", "reply": "Go ahead, but skip step 2"})),
+        );
+        let both = "1. Draft\n\nApproved after that; where the two differ, this one counts:\n\
+                    2. Edited\n\nThe person added when approving: Go ahead, but skip step 2";
+        assert_eq!(crate::review::plan_of(&session).as_deref(), Some(both));
+        // A later draft that is declined leaves the approved text.
+        let text = turn("3. Third", "decline", None);
+        assert!(text.contains("User declined the plan"), "{text}");
+        assert_eq!(crate::review::plan_of(&session).as_deref(), Some(both));
+        // A chat with no lead keeps no plan.
+        let plain = sid("leadkeepoff");
+        plan_turn_in(
+            &dir,
+            &plain,
+            false,
+            "1. Draft",
+            "accept",
+            Some(json!({"plan": "1. Edited"})),
+        );
+        assert_eq!(crate::review::plan_of(&plain), None);
+        set_plan_session(&session, false);
+        crate::lead::set_lead_session(&session, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_lead_follows_the_plan_as_the_person_edited_it() {
+        let (text, plans, session) = lead_plan_turn("leadedit", true, json!({"plan": "1. Edited"}));
+        assert!(
+            text.contains(
+                "Plan approved. Plan mode is off. The user edited the plan. Follow this text, \
+                 not your draft:\n1. Edited\n\nThe plan is approved. Follow the approved text."
+            ),
+            "{text}"
+        );
+        assert!(text.contains("merge true"), "{text}");
+        assert_eq!(plans, vec!["1. Draft".to_string(), "1. Edited".to_string()]);
+        assert!(!plan_on(&session));
+        // The engine moved the turn on: the next note no longer says to plan.
+        let note = crate::lead::turn_note(&session).expect("still a lead");
+        assert!(
+            note.ends_with(
+                "call enter_plan_mode and plan it first. After merged work changes, start a \
+                 helper with type review. Never commit, push or open a pull request."
+            ),
+            "{note}"
+        );
+        assert!(!note.contains("Plan first."), "{note}");
+        crate::lead::set_lead_session(&session, None);
+    }
+
+    #[test]
+    fn an_unedited_lead_plan_approves_with_the_next_steps() {
+        let (text, plans, session) = lead_plan_turn("leadsame", true, json!({"plan": "1. Draft"}));
+        assert!(
+            text.contains(
+                "Plan approved. Plan mode is off.\n\nThe plan is approved. Follow the approved \
+                 text.\n1. Call todo_write"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("The user edited the plan"), "{text}");
+        assert_eq!(plans, vec!["1. Draft".to_string()]);
+        assert!(!plan_on(&session));
+        crate::lead::set_lead_session(&session, None);
+    }
+
+    #[test]
+    fn a_lead_plan_sent_back_keeps_the_turn_planning() {
+        let (text, plans, session) = lead_plan_turn(
+            "leadback",
+            true,
+            json!({"reply": "Change the plan: make step 2 smaller"}),
+        );
+        assert!(
+            text.contains("They replied: Change the plan: make step 2 smaller"),
+            "{text}"
+        );
+        assert!(!text.contains("The plan is approved."), "{text}");
+        assert_eq!(plans, vec!["1. Draft".to_string()]);
+        assert!(plan_on(&session));
+        let note = crate::lead::turn_note(&session).expect("still a lead");
+        assert!(note.contains("Plan first."), "{note}");
+        set_plan_session(&session, false);
+        crate::lead::set_lead_session(&session, None);
+    }
+
+    #[test]
+    fn an_edited_plan_is_ignored_outside_a_lead_session() {
+        let (text, plans, session) = lead_plan_turn("leadoff", false, json!({"plan": "1. Edited"}));
+        assert_eq!(text, "Plan approved. Plan mode is off.");
+        assert_eq!(plans, vec!["1. Draft".to_string()]);
+        assert!(!plan_on(&session));
+        assert!(!crate::lead::lead_on(&session));
+    }
+
+    /// Runs one plain text turn and gives everything the model was sent.
+    fn plain_turn(tag: &str, phase: Option<crate::lead::LeadPhase>) -> String {
+        let dir = scratch(tag);
+        let session = sid(tag);
+        set_plan_session(&session, phase == Some(crate::lead::LeadPhase::Plan));
+        crate::lead::set_lead_session(&session, phase);
+        let (_out, history) = run(&dir, &session, chat(false, true), Vec::new(), &mut |_| {});
+        set_plan_session(&session, false);
+        crate::lead::set_lead_session(&session, None);
+        let _ = std::fs::remove_dir_all(&dir);
+        history
+            .iter()
+            .map(crate::compact::message_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_lead_turn_carries_its_note_and_other_turns_do_not() {
+        use crate::lead::LeadPhase;
+        let plan = plain_turn("leadnoteplan", Some(LeadPhase::Plan));
+        assert!(
+            plan.contains("You are the lead for this session."),
+            "{plan}"
+        );
+        assert!(plan.contains("Plan first."), "{plan}");
+        assert!(!plan.contains("Keep working from the task list"), "{plan}");
+
+        let work = plain_turn("leadnotework", Some(LeadPhase::Work));
+        assert!(
+            work.contains("You are the lead for this session."),
+            "{work}"
+        );
+        assert!(
+            work.contains(
+                "Keep working from the task list and hand open tasks to helpers as before."
+            ),
+            "{work}"
+        );
+        assert!(!work.contains("The plan is approved"), "{work}");
+        assert!(!work.contains("Plan first."), "{work}");
+
+        let off = plain_turn("leadnoteoff", None);
+        assert!(!off.contains("You are the lead"), "{off}");
+        assert!(!off.contains("Keep working from the task list"), "{off}");
     }
 
     #[test]

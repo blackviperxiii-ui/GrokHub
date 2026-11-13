@@ -20,6 +20,7 @@ pub mod capabilities;
 pub mod change_rows;
 pub mod changes;
 pub mod chat_tabs;
+pub mod chat_trials;
 pub mod chips;
 mod code_agent;
 mod code_rollback;
@@ -28,6 +29,7 @@ pub mod command_box;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
 // old module names stay so the commands below and settings read the same.
 pub use grokhub_code::activity as code_activity;
+pub use grokhub_code::commit as code_commit;
 pub use grokhub_code::deploy as code_deploy;
 pub use grokhub_code::files as code_files;
 pub use grokhub_code::repo as code;
@@ -63,6 +65,7 @@ pub mod inbox;
 pub mod interests;
 pub mod journal;
 pub mod know_me;
+mod lead;
 pub mod library;
 pub mod local_ai;
 pub mod local_engine;
@@ -102,19 +105,24 @@ pub mod queue;
 pub mod remote;
 pub mod remote_devices;
 pub mod remote_tls;
+pub mod review_cards;
 #[cfg(desktop)]
 pub mod scheduler;
 pub mod scopes;
 pub mod screen_record;
 pub mod screenshot_offer;
 pub mod self_improve;
+#[cfg(desktop)]
+pub mod self_review;
 pub mod settings;
 pub mod shell_update;
+pub mod ship_gate;
 pub mod skills;
 pub mod slash;
 pub mod slash_ops;
 mod steam_checks;
 pub mod storage;
+mod task_feed;
 mod turns;
 pub mod voice;
 pub mod workboard;
@@ -136,6 +144,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Listener, Manager, State, WindowEvent};
 
 pub const CHAT_EVENT: &str = "chat://event";
+/// Sent when a chat's to-dos or background tasks changed: read the queue again.
+pub const TASKS_EVENT: &str = "tasks://changed";
 /// Sent after every Halt, with the chats it stopped mid-reply.
 pub const HALT_EVENT: &str = "halt://done";
 
@@ -597,6 +607,8 @@ fn route(
         // A chat turn adds its voice settings (`chat_turn`); automations have none.
         voice_session: None,
         suggestions: settings.behavior.suggestions,
+        // Only a session the agent window started leads (`chat_turn`).
+        lead: false,
     })
 }
 
@@ -691,7 +703,13 @@ async fn chat_turn(
         clock,
     } = turn;
     let files = state.trays.take(&conversation_id, &attachments)?;
-    let mode = mode.unwrap_or_else(|| turns::pick_mode(state, &conversation_id, &text));
+    // A session the agent window started, while it shows it, has a lead: it
+    // plans first, until its first plan is approved.
+    let lead = state.code_sessions.holds(&conversation_id)
+        && lead::is_lead(&state.config_dir, &conversation_id);
+    let approved = lead && lead::approved(&state.config_dir, &conversation_id);
+    let mode = lead::first_mode(mode, lead, approved)
+        .unwrap_or_else(|| turns::pick_mode(state, &conversation_id, &text));
     let session = session(state, &conversation_id);
     let config_dir = state.config_dir.clone();
     // A Code tab session works in its own project's folder, not the app's.
@@ -705,11 +723,16 @@ async fn chat_turn(
         // Typed asks also feed the repeated-ask automate offers.
         pulse_digests::note_ask(&config_dir, &text, grokhub_core::now_ms());
     }
+    // "That was wrong" fails the chat's last task before this turn runs; the
+    // turn's own outcome is written when it ends (as the cabin does).
+    let started = grokhub_core::now_ms();
+    chat_trials::said(&config_dir, &conversation_id, &text, started);
     tauri::async_runtime::spawn_blocking(move || {
         let mut route = route(&settings, mode, &config_dir)?;
         if let Some(dir) = own_folder {
             route.workspace = dir;
         }
+        route.lead = lead;
         // Dynamic chat and quips step per turn from this chat's voice settings,
         // at the page's local hour (UTC when the page sent no clock).
         let offset = clock.map_or(0, |c| c.at(grokhub_core::now_ms()).utc_offset_min());
@@ -771,6 +794,9 @@ async fn chat_turn(
             let now = grokhub_core::now_ms();
             let offset = clock.map_or(0, |c| c.at(now).utc_offset_min());
             home::turn_done_for(&config_dir, &conversation_id, now, offset);
+            // The turn's task outcome and run metrics, for the weekly
+            // self-review and skill trials.
+            chat_trials::turn_end(&config_dir, &conversation_id, &text, started, now);
         }
         stop
     })
@@ -1248,6 +1274,9 @@ fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
 
 fn end_chat(state: &ShellState, conversation_id: &str) {
     drop_worker(state, conversation_id);
+    if state.code_sessions.holds(conversation_id) {
+        lead::closed(&state.config_dir, conversation_id);
+    }
     state.code_sessions.forget(conversation_id);
     code_agent::bind(&state.config_dir, conversation_id, false);
     if current(state).last_chat == conversation_id {
@@ -1639,6 +1668,77 @@ async fn stop_task(
         Ok(queue::queue(&dir, &conversation_id))
     })
     .await?
+}
+
+/// Tasks → the checks on the session's change before it can be committed.
+/// Read only: nothing is committed, staged or pushed. Desktop only: it reads
+/// the project folder and the keychain, and is not a web command.
+#[tauri::command]
+async fn ship_status(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+) -> Result<code_commit::ShipStatus, String> {
+    let dir = workspace_of(&state, Some(&conversation_id));
+    let config = state.config_dir.clone();
+    let cfg = current(&state).code_ship;
+    off_main(move || ship_gate::status(&config, &dir, &conversation_id, &cfg)).await
+}
+
+/// Tasks → Merge: a helper's work goes into the project folder. Desktop
+/// only: it is not a web command.
+#[tauri::command]
+async fn merge_task_work(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    key: String,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::merge_work(&dir, &conversation_id, &key)?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
+}
+
+/// Tasks → Finish merge (`finish`) or Put files back. Desktop only.
+#[tauri::command]
+async fn resume_task_work(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    key: String,
+    finish: bool,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::resume_work(&dir, &conversation_id, &key, finish)?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
+}
+
+/// Tasks → Discard or Delete worktree. Desktop only.
+#[tauri::command]
+async fn discard_task_work(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    key: String,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::discard_work(&dir, &conversation_id, &key)?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
+}
+
+/// Tasks → Details: a helper's steps so far and its result. Reading it
+/// leaves the result waiting for the session that started the helper.
+#[tauri::command]
+async fn get_task_detail(
+    conversation_id: String,
+    task_id: String,
+) -> Result<queue::TaskDetail, String> {
+    off_main(move || queue::detail(&conversation_id, &task_id)).await?
 }
 
 fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
@@ -2416,13 +2516,29 @@ async fn code_project_new(app: AppHandle, name: String) -> Result<projects::Code
 
 /// Code tab: the agent window shows this session. It takes the open
 /// project's folder unless it has one already; the answer is its folder.
+/// A session with no saved turns yet started here, so it has a lead.
 #[tauri::command]
 fn code_session_bind(state: State<'_, ShellState>, conversation_id: String) -> String {
+    lead::shown(&state.config_dir, &conversation_id);
     state
         .code_sessions
         .bind(&conversation_id, &workspace(&state))
         .to_string_lossy()
         .into_owned()
+}
+
+/// Code tab: whether the session started in the agent window, so it has a
+/// lead and its plan can be edited there.
+#[tauri::command]
+fn code_session_lead(state: State<'_, ShellState>, conversation_id: String) -> bool {
+    lead::is_lead(&state.config_dir, &conversation_id)
+}
+
+/// Code tab: the session's saved plan, as last shown or as the person
+/// edited it. `None` for a session with no plan.
+#[tauri::command]
+fn code_session_plan(state: State<'_, ShellState>, conversation_id: String) -> Option<String> {
+    lead::read_plan(&state.config_dir, &conversation_id)
 }
 
 /// Code tab: the workspace's repo, read only.
@@ -2449,27 +2565,32 @@ async fn code_builtins(state: State<'_, ShellState>) -> Result<Vec<code::Builtin
 }
 
 /// Code tab: the test command to show, and whether it still needs a confirm.
+/// With `conversation_id`, for the folder that session works in.
 #[tauri::command]
 async fn code_test_plan(
     state: State<'_, ShellState>,
     command: Option<String>,
+    conversation_id: Option<String>,
 ) -> Result<code_runs::Plan, String> {
-    let dir = workspace(&state);
+    let dir = workspace_of(&state, conversation_id.as_deref());
     let config = state.config_dir.clone();
     off_main(move || code_runs::plan(&config, &dir, command.as_deref(), code_runs::Mode::Auto))
         .await?
 }
 
 /// Code tab: run the test command. `confirmed` must be true when the store
-/// still wants a confirm for this command.
+/// still wants a confirm for this command. With `conversation_id`, in the
+/// folder that session works in. A run in a git repository that leaves the
+/// files as it found them is kept as the project's last test run.
 #[tauri::command]
 async fn code_test_run(
     app: AppHandle,
     state: State<'_, ShellState>,
     command: String,
     confirmed: bool,
+    conversation_id: Option<String>,
 ) -> Result<code_runs::RunResult, String> {
-    let dir = workspace(&state);
+    let dir = workspace_of(&state, conversation_id.as_deref());
     let config = state.config_dir.clone();
     off_main(move || {
         let result = code_runs::run(
@@ -4321,11 +4442,58 @@ async fn pulse_act(
     off_main(move || pulse::act(&dir, &id, act, &day, grokhub_core::now_ms())).await?
 }
 
+/// What a weekly self-review card's Apply did, and the page after it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewDone {
+    line: String,
+    page: pulse::Page,
+}
+
+/// A weekly self-review card's Apply change, Revert or Save idea: noted like
+/// the card's other accepts, then applied the way the cabin applies it.
+#[tauri::command]
+async fn pulse_review_apply(
+    state: State<'_, ShellState>,
+    id: String,
+    day: pulse::Day,
+) -> Result<ReviewDone, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let now = grokhub_core::now_ms();
+        pulse::act(&dir, &id, pulse::Act::Accept, &day, now)?;
+        let line = review_cards::apply(&dir, &id, now)?;
+        let page = pulse::load(&dir, Some(&day), now)?;
+        Ok(ReviewDone { line, page })
+    })
+    .await?
+}
+
+/// A code-idea card's Copy as GitHub issue: the text, redacted, for the
+/// page to put on the clipboard. The card stays.
+#[tauri::command]
+async fn pulse_review_issue(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<self_improve::IssueText, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let home = grokhub_core::user_home().map(|h| h.to_string_lossy().into_owned());
+        Ok(self_improve::IssueText {
+            text: review_cards::issue(&dir, &id, home.as_deref())?,
+            copied: self_improve::issue_copied(),
+        })
+    })
+    .await?
+}
+
 /// The Imagine page: the gallery (the cabin's wall) and whether chat can sign a call.
 #[tauri::command]
 async fn get_imagine(state: State<'_, ShellState>) -> Result<imagine::Page, String> {
     let dir = state.config_dir.clone();
-    off_main(move || imagine::load(&dir, imagine::ready())).await?
+    off_main(move || imagine::load(&dir, imagine::ready()).map(imagine::with_account)).await?
 }
 
 /// Makes images, or one video, through chat's guarded media tool. Resolves
@@ -4346,16 +4514,47 @@ async fn imagine_generate(
         kind,
     };
     off_main(move || {
-        let bearer = imagine::bearer()?;
+        let (bearer, own) = imagine::bearer()?;
         let run = imagine::start()?;
-        let api = grokhub_agent::imagine_client(&bearer);
-        imagine::generate(
-            &dir,
-            &req,
-            api.as_ref(),
-            &|| run.stopped(),
-            grokhub_core::now_ms(),
-        )
+        let make = |bearer: &str| {
+            let api = grokhub_agent::imagine_client(bearer);
+            imagine::generate(
+                &dir,
+                &req,
+                api.as_ref(),
+                &|| run.stopped(),
+                grokhub_core::now_ms(),
+            )
+        };
+        let first = make(&bearer);
+        imagine::retry_refused(own, first, imagine::shared_bearer, make).map(|mut made| {
+            made.page = imagine::with_account(made.page);
+            made
+        })
+    })
+    .await?
+}
+
+/// Imagine's own Sign in with Grok, step one: the code to type at x.ai.
+#[tauri::command]
+async fn imagine_sign_in_start() -> Result<oauth::Started, String> {
+    capabilities::needs(capabilities::current().grok_sign_in, "Sign in with Grok")?;
+    off_main(imagine::start_sign_in).await?
+}
+
+/// Step two, asked every few seconds by the Imagine page.
+#[tauri::command]
+async fn imagine_sign_in_poll() -> Result<oauth::Poll, String> {
+    off_main(imagine::poll_sign_in).await?
+}
+
+/// Signs out of Imagine only, and hands back the page.
+#[tauri::command]
+async fn imagine_sign_out(state: State<'_, ShellState>) -> Result<imagine::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        imagine::sign_out()?;
+        imagine::load(&dir, imagine::ready()).map(imagine::with_account)
     })
     .await?
 }
@@ -5855,6 +6054,12 @@ pub fn run() {
                 let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
                 Ok((client, grokhub_agent::route::host::chat_start().0))
             });
+            // The Sunday self-review, while the cabin is closed.
+            #[cfg(desktop)]
+            self_review::start(config_dir.clone(), || {
+                let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
+                Ok(client)
+            });
             steam_checks::start(config_dir.clone());
             game_companion::start(config_dir.clone());
             // The learning engine: chips, cards and runs record to it from
@@ -5905,6 +6110,8 @@ pub fn run() {
             #[cfg(desktop)]
             start_scheduler(app);
             // Questions from helpers that outlive their chat's reply.
+            // Only this shell watches task changes; the cabin leaves it off.
+            grokhub_agent::set_task_watch(true);
             helper_asks::start(app.handle().clone());
             // The internet log, when it's on and the cabin isn't running.
             #[cfg(desktop)]
@@ -6112,6 +6319,8 @@ pub fn run() {
             code_project_pick,
             code_project_new,
             code_session_bind,
+            code_session_lead,
+            code_session_plan,
             get_code_ship,
             save_code_ship,
             get_journal,
@@ -6164,6 +6373,8 @@ pub fn run() {
             know_me::know_me_wipe,
             get_pulse,
             pulse_act,
+            pulse_review_apply,
+            pulse_review_issue,
             pulse_discuss,
             pulse_offer,
             pulse_remind,
@@ -6178,6 +6389,9 @@ pub fn run() {
             imagine_generate,
             imagine_cancel,
             imagine_image,
+            imagine_sign_in_start,
+            imagine_sign_in_poll,
+            imagine_sign_out,
             get_ai_models,
             add_ai_provider,
             allow_ai_provider,
@@ -6243,6 +6457,11 @@ pub fn run() {
             desktop_nyx_set_passthrough,
             get_queue,
             stop_task,
+            ship_status,
+            merge_task_work,
+            resume_task_work,
+            discard_task_work,
+            get_task_detail,
             get_workboard,
             workboard_add,
             workboard_act,

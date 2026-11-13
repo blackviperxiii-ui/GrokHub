@@ -265,13 +265,18 @@ export interface FeedCardProps {
   /** A chip under the card other than Discuss: a fix, Ignore for now, or
    * Remind me later. */
   onChip?: (chip: PulseChip) => void;
+  /** A weekly self-review card's Apply change, Revert or Save idea. */
+  onReview?: () => void;
+  /** A code-idea card's Copy as GitHub issue, in the ⋯ menu. */
+  onIssue?: () => void;
 }
 
 /** One Feed post, always fully open: icon, title, where it is from and why,
  * verdict, cited snippet, the full report, media; then one row of buttons
  * (Like, the card's chips or Discuss, Read it, Snooze when it suits the card,
- * Not interested, Dismiss). Dismiss asks first (Delete folded in). The ⋯ menu
- * holds only "Why I created this"; nothing collapses. */
+ * a self-review card's Apply change, Revert or Save idea, Not interested,
+ * Dismiss). Dismiss asks first (Delete folded in). The ⋯ menu holds "Why I
+ * created this", plus Copy as GitHub issue on a code idea; nothing collapses. */
 export function FeedCard({
   post,
   busy,
@@ -284,6 +289,8 @@ export function FeedCard({
   onSnooze,
   onSave,
   onChip,
+  onReview,
+  onIssue,
 }: FeedCardProps) {
   const chips = post.chips ?? [];
   const [menu, setMenu] = useState(false);
@@ -320,6 +327,18 @@ export function FeedCard({
               <button type="button" role="menuitem" onClick={() => void askWhy()}>
                 Why I created this
               </button>
+              {post.issue && onIssue && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenu(false);
+                    onIssue();
+                  }}
+                >
+                  Copy as GitHub issue
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -387,6 +406,11 @@ export function FeedCard({
               {chip.label}
             </button>
           ))
+        )}
+        {post.review && onReview && (
+          <button type="button" className="quiet" disabled={busy} onClick={onReview}>
+            {post.review}
+          </button>
         )}
         {post.link && onOpen && (
           <button type="button" className="quiet" disabled={busy} onClick={onOpen}>

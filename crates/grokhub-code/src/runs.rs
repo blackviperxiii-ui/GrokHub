@@ -75,6 +75,22 @@ pub struct RunResult {
     pub exit: i32,
     pub output: String,
     pub cut: bool,
+    /// A test run only: the run changed a file of the project, so it does
+    /// not count as a run of the change that is there now.
+    pub changed_files: bool,
+}
+
+/// The last test run that left the project's files as it found them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastRun {
+    pub repo_key: String,
+    pub command: String,
+    pub exit: i32,
+    /// The working folder's tree id (`grokhub_agent::ship_tree`) before and
+    /// after the run.
+    pub tree: String,
+    pub at_ms: u64,
 }
 
 /// Settings → Code: whether this project's test command is remembered.
@@ -99,6 +115,9 @@ pub struct RunChunk {
 struct Store {
     #[serde(default)]
     entries: Vec<Entry>,
+    /// One row for each project.
+    #[serde(default)]
+    last: Vec<LastRun>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,7 +280,7 @@ fn save(config_dir: &Path, store: &Store) -> Result<(), String> {
     std::fs::rename(&tmp, path(config_dir)).map_err(|e| e.to_string())
 }
 
-fn project_key(workspace: &Path) -> String {
+pub(crate) fn project_key(workspace: &Path) -> String {
     repo_key(workspace, crate::repo::origin_url(workspace).as_deref())
 }
 
@@ -352,7 +371,47 @@ pub fn run_with(
         Decision::Remembered => {}
     }
     let held = crate::secrets::held_values(config_dir, vault, &key);
-    exec(workspace, command, Kind::Test, &held, None, &mut on_chunk)
+    // A folder with no repository, or one whose tree cannot be read, runs
+    // its tests as before and leaves no record.
+    let before = grokhub_agent::ship_tree::tree_id(workspace).ok();
+    let mut done = exec(workspace, command, Kind::Test, &held, None, &mut on_chunk)?;
+    if let Some(before) = before {
+        let after = grokhub_agent::ship_tree::tree_id(workspace);
+        let unchanged = after.as_ref() == Ok(&before);
+        done.changed_files = after.is_ok() && !unchanged;
+        let last = unchanged.then(|| LastRun {
+            repo_key: key.clone(),
+            command: done.command.clone(),
+            exit: done.exit,
+            tree: before,
+            at_ms: grokhub_core::now_ms(),
+        });
+        // A record that cannot be saved is a run that does not count.
+        let _ = set_last(config_dir, &key, last);
+    }
+    Ok(done)
+}
+
+/// Keeps `last` as the project's last test run, or forgets the one kept.
+fn set_last(config_dir: &Path, repo_key: &str, last: Option<LastRun>) -> Result<(), String> {
+    let mut store = load(config_dir)?;
+    let before = store.last.len();
+    store.last.retain(|row| row.repo_key != repo_key);
+    if last.is_none() && store.last.len() == before {
+        return Ok(());
+    }
+    store.last.extend(last);
+    save(config_dir, &store)
+}
+
+/// The last test run, in the project with this key, that left its files as
+/// it found them.
+pub fn last_run(config_dir: &Path, repo_key: &str) -> Option<LastRun> {
+    load(config_dir)
+        .ok()?
+        .last
+        .into_iter()
+        .find(|row| row.repo_key == repo_key)
 }
 
 /// Run `command` in the workspace through the shell, as a test run or a
@@ -453,6 +512,7 @@ pub(crate) fn exec(
         exit,
         output,
         cut,
+        changed_files: false,
     })
 }
 
@@ -958,6 +1018,97 @@ mod tests {
         let next = exec(&work, "echo next", Kind::Test, &[], None, &mut |_: &str| {}).unwrap();
         assert_eq!(next.output, "next\n");
         assert!(!stop());
+    }
+
+    /// A repository in a new folder with one commit that holds `README`.
+    fn repo_dir(name: &str) -> PathBuf {
+        let dir = temp_dir(name);
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(["-c", "safe.directory=*", "-c", "commit.gpgsign=false"])
+                .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+        };
+        git(&["init"]);
+        std::fs::write(dir.join("README"), "hi\n").unwrap();
+        git(&["add", "README"]);
+        git(&["commit", "-m", "init"]);
+        dir
+    }
+
+    #[test]
+    fn a_test_run_that_leaves_the_files_alone_is_kept_as_the_last_run() {
+        let config = temp_dir("last");
+        let work = repo_dir("last-work");
+        assert_eq!(last_run(&config, &project_key(&work)), None);
+        let done = run(&config, &work, "exit 3", true, Mode::Auto, |_| {}).unwrap();
+        assert_eq!((done.exit, done.changed_files), (3, false));
+        let last = last_run(&config, &project_key(&work)).expect("a last run");
+        assert!(last.at_ms > 0);
+        assert_eq!(
+            last,
+            LastRun {
+                repo_key: project_key(&work),
+                command: "exit 3".into(),
+                exit: 3,
+                // The tree that holds only README with "hi".
+                tree: "31418df53795275a494630ee06a6ad6abbf0989e".into(),
+                at_ms: last.at_ms,
+            }
+        );
+        // The next run takes its place; another project's row is its own.
+        let other = repo_dir("last-other");
+        run(&config, &other, "echo ok", true, Mode::Auto, |_| {}).unwrap();
+        run(&config, &work, "echo ok", true, Mode::Auto, |_| {}).unwrap();
+        let last = last_run(&config, &project_key(&work)).expect("a last run");
+        assert_eq!((last.command.as_str(), last.exit), ("echo ok", 0));
+        assert_eq!(
+            last_run(&config, &project_key(&other)).map(|row| row.repo_key),
+            Some(project_key(&other))
+        );
+        // The remembered command is still in the same file.
+        assert_eq!(
+            remembered(&config, Kind::Test, &project_key(&work)).unwrap(),
+            Some("echo ok".to_string())
+        );
+    }
+
+    #[test]
+    fn a_test_run_that_changes_a_file_is_not_kept_and_says_so() {
+        let config = temp_dir("changed-files");
+        let work = repo_dir("changed-files-work");
+        run(&config, &work, "echo ok", true, Mode::Auto, |_| {}).unwrap();
+        assert!(last_run(&config, &project_key(&work)).is_some());
+        let done = run(
+            &config,
+            &work,
+            "echo made> made.txt",
+            true,
+            Mode::Auto,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!((done.exit, done.changed_files), (0, true));
+        // The earlier run is forgotten too: it was of the same files, and
+        // this run of them did not end clean.
+        assert_eq!(last_run(&config, &project_key(&work)), None);
+    }
+
+    #[test]
+    fn tests_in_a_folder_with_no_repository_run_and_leave_no_record() {
+        let config = temp_dir("no-repo");
+        let work = temp_dir("no-repo-work");
+        let done = run(&config, &work, "echo ok", true, Mode::Auto, |_| {}).unwrap();
+        assert_eq!(
+            (done.exit, done.output.trim(), done.changed_files),
+            (0, "ok", false)
+        );
+        assert_eq!(last_run(&config, &project_key(&work)), None);
     }
 
     #[test]

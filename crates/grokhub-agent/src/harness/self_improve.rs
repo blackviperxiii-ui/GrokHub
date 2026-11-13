@@ -909,7 +909,7 @@ mod tests {
     }
 
     /// The loop's files reach the network only through `route::call_model`
-    /// (the cabin builds the model client it is given). No HTTP client, no
+    /// (the app builds the model client it is given). No HTTP client, no
     /// socket, and no developer-tracker host appears in them.
     #[test]
     fn the_self_improvement_loop_names_no_http_client_or_tracker_host() {
@@ -922,9 +922,13 @@ mod tests {
             "crates/grokhub-core/src/run_metrics.rs",
             "crates/grokhub-core/src/protected_surface.rs",
             "crates/grokhub-core/src/outcome.rs",
-            "crates/grokhub-app/src/app/self_review_ui.rs",
-            "crates/grokhub-app/src/app/canary_ui.rs",
-            "crates/grokhub-app/src/app/change_history_ui.rs",
+            // The shared homes of the loop's app glue (the weekly pass, chat
+            // recording) and the desktop app's self-improvement wiring.
+            "crates/grokhub-agent/src/harness/weekly_review.rs",
+            "crates/grokhub-agent/src/harness/chat_record.rs",
+            "src-tauri/src/self_improve.rs",
+            "src-tauri/src/changes.rs",
+            "src-tauri/src/chat_trials.rs",
         ];
         let banned = [
             "ureq",

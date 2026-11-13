@@ -7,6 +7,8 @@ import {
   pulseDiscuss,
   pulseOffer,
   pulseRemind,
+  pulseReviewApply,
+  pulseReviewIssue,
   pulseWhy,
   saveFeedPrompt,
   type PulseAct,
@@ -248,6 +250,33 @@ export function Pulse({
     }
   }
 
+  /** A self-review card's Apply change, Revert or Save idea. */
+  async function review(id: string) {
+    setBusy(true);
+    acting.current = true;
+    try {
+      const done = await pulseReviewApply(id);
+      setPage(done.page);
+      ok(done.line);
+    } catch (err) {
+      fail(err);
+      await getPulse().then(setPage, () => {});
+    } finally {
+      acting.current = false;
+      setBusy(false);
+    }
+  }
+
+  function copyIssue(id: string) {
+    pulseReviewIssue(id).then(
+      async ({ text, copied }) => {
+        await navigator.clipboard.writeText(text);
+        ok(copied);
+      },
+      fail,
+    );
+  }
+
   async function run(idea: PulseIdea) {
     if (await act(idea.id, "accept")) onRun(idea.action);
   }
@@ -398,6 +427,8 @@ export function Pulse({
                 onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
                 onSave={() => void act(post.id, "save", "Saved. It's on the Saved page.")}
                 onChip={(c) => void chip(post.id, c)}
+                onReview={() => void review(post.id)}
+                onIssue={() => copyIssue(post.id)}
               />
               {i === today - 1 && i < total - 1 && (
                 <li className="day-end" role="separator">

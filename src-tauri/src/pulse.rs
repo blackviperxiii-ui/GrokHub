@@ -134,6 +134,11 @@ pub struct Post {
     pub save: bool,
     /// Its link is already on the Saved page.
     pub saved: bool,
+    /// A weekly self-review card's Apply button ("Apply change", "Revert"
+    /// or "Save idea"). Empty on other posts.
+    pub review: String,
+    /// A code-idea card also offers Copy as GitHub issue.
+    pub issue: bool,
 }
 
 /// One update inside a digest card.
@@ -429,6 +434,22 @@ pub fn post_digest(
     Ok(added)
 }
 
+/// Change the store under its lock: `f` edits the cards and returns how
+/// many it added; the store is saved only when that is above zero. The
+/// weekly self-review posts its cards through this.
+pub fn edit_cards(
+    config_dir: &Path,
+    f: &mut dyn FnMut(&mut Vec<UpdateCard>) -> usize,
+) -> Result<usize, String> {
+    let _store = store();
+    let mut cards = load_unlocked(config_dir)?;
+    let added = f(&mut cards);
+    if added > 0 {
+        save(config_dir, &cards)?;
+    }
+    Ok(added)
+}
+
 /// Add one idea run's ideas. Returns how many landed.
 pub fn add_ideas(
     config_dir: &Path,
@@ -489,7 +510,9 @@ fn post(
             .unwrap_or_default(),
         loved: card.reaction == Some(CardReaction::Up),
         verdict: verdict(card),
-        more: report_more(card).unwrap_or_default(),
+        more: report_more(card)
+            .or_else(|| crate::review_cards::details(card))
+            .unwrap_or_default(),
         items: card
             .pulse
             .report
@@ -506,6 +529,8 @@ fn post(
         delete: offers.delete,
         save,
         saved,
+        review: crate::review_cards::label(card).to_string(),
+        issue: crate::review_cards::copies_issue(card),
     }
 }
 

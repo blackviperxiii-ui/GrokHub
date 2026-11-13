@@ -105,7 +105,7 @@ fn build_ctx(config_dir: &Path, now: u64) -> Ctx {
     let offset = crate::pulse_feed::state(config_dir)
         .utc_offset_min
         .unwrap_or(0);
-    let clock = crate::scheduler::local_clock(now, offset);
+    let clock = grokhub_core::LocalClock::at_offset(now, offset);
     let day = local_day(now, offset);
     let behavior = crate::settings::load(config_dir).behavior;
     let quiet = !behavior.quiet_start.is_empty()
@@ -650,7 +650,7 @@ pub fn note_ask(config_dir: &Path, text: &str, now_ms: u64) {
     let offset = crate::pulse_feed::state(config_dir)
         .utc_offset_min
         .unwrap_or(0);
-    let clock = crate::scheduler::local_clock(now_ms, offset);
+    let clock = grokhub_core::LocalClock::at_offset(now_ms, offset);
     let mut ledger = load_ask_ledger(config_dir);
     ao::append_ask(&mut ledger, text, clock.hour, clock.weekday, now_ms);
     save_ask_ledger(config_dir, &ledger);
