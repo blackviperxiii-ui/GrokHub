@@ -24,6 +24,7 @@ describe("Find in this chat", () => {
 
   it("searches what a row says, and rows with no words find nothing", () => {
     expect(itemText({ kind: "user", text: "build it" })).toBe("build it");
+    expect(itemText({ kind: "thought", text: "check the port first", fold: "minimized" })).toBe("check the port first");
     expect(itemText({ kind: "tool", id: "t", title: "read_file", status: "done", detail: "src/lib.rs" })).toBe(
       "read_file\nsrc/lib.rs",
     );

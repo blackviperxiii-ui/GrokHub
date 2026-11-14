@@ -4239,6 +4239,10 @@ label.toggle-row {
   animation: rise-in var(--t-base) var(--ease-out) backwards;
 }
 
+.log > .thought {
+  animation: rise-in var(--t-base) var(--ease-out) backwards;
+}
+
 .palette-backdrop {
   animation: fade-in var(--t-fast) var(--ease-out) backwards;
 }
@@ -4691,6 +4695,54 @@ button.primary:not(.quick-chip) {
 .log .nyx-row[data-find="current"] > .bubble {
   outline: 2px solid var(--accent);
   box-shadow: var(--ring);
+}
+
+/* The model's thinking above its reply: quieter than the reply, with a rule
+   on the left. Folded, it is one "Thought" row with Expand. */
+.thought {
+  display: grid;
+  gap: 4px;
+  max-width: min(80%, 70ch);
+  padding: 4px 12px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  font-size: var(--font-body);
+  line-height: var(--lh-body);
+}
+
+.thought.minimized {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thought-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thought-label {
+  font-weight: 600;
+}
+
+.thought-body {
+  font-style: italic;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thought-body > :first-child {
+  margin-top: 0;
+}
+
+.thought-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* Find's hidden row marker sits between two rows. */
+.log > .thought + [data-row] + .thought {
+  margin-top: -8px;
 }
 
 /* A reopened chat's tool steps: one quiet line instead of cards. */

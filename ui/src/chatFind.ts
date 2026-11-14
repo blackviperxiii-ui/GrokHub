@@ -11,6 +11,7 @@ export function itemText(item: Item): string {
     case "assistant":
     case "tools":
     case "slash":
+    case "thought":
       return item.text;
     case "tool":
       return `${item.title}\n${item.detail}`;
