@@ -33,6 +33,7 @@ const api = vi.hoisted(() => ({
         quietEnd: "",
         dailyTokenBudget: 0,
         pauseOverBudget: false,
+        lane: "coding",
       },
       budgets: [],
     }),
@@ -285,6 +286,7 @@ describe("Chat", () => {
         quietEnd: "",
         dailyTokenBudget: 0,
         pauseOverBudget: false,
+        lane: "coding",
       },
       budgets: [],
     });
@@ -303,6 +305,7 @@ describe("Chat", () => {
         quietEnd: "",
         dailyTokenBudget: 0,
         pauseOverBudget: false,
+        lane: "coding",
       },
       budgets: [],
     });
