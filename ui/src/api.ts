@@ -4081,6 +4081,29 @@ export function setGameWatch(on: boolean): Promise<GameWatch> {
   return invoke<GameWatch>("set_game_watch", { on });
 }
 
+/** Settings → Behavior → Living wall (`app.json` imagineWall). Desktops only. */
+export interface LivingWall {
+  on: boolean;
+}
+
+export function getLivingWall(): Promise<LivingWall> {
+  return invoke<LivingWall>("get_living_wall");
+}
+
+export function setLivingWall(on: boolean): Promise<LivingWall> {
+  return invoke<LivingWall>("set_living_wall", { on });
+}
+
+/** The living wall's cover as it starts, lands in the Imagine gallery, or
+ * fails (`living_wall::News`). */
+export type WallNews = { state: "painting"; title: string } | { state: "painted"; title: string } | { state: "failed" };
+
+export const IMAGINE_WALL_EVENT = "imagine://wall";
+
+export function onWallNews(handler: (news: WallNews) => void): Promise<UnlistenFn> {
+  return subscribe<WallNews>(IMAGINE_WALL_EVENT, handler);
+}
+
 /** Settings → Pulse: one kind of fix that may run without its tap (`app.json` autoFixes). */
 export interface PulseAutoFix {
   id: string;

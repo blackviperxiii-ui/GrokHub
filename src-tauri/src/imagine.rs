@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use grokhub_agent::imagine_keychain::{self as own, Keychain};
 use grokhub_agent::xai_keychain::{Poll, SignIn, SignedIn, Started};
 use grokhub_agent::ImagineApi;
-use grokhub_core::{ImagineWall, WallGif};
+use grokhub_core::{ImagineWall, WallGif, WallSeed};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -418,6 +418,13 @@ fn pin(
         wall.gifs.push(gif);
         at += 1;
     }
+    keep(config_dir, wall, now_ms)
+}
+
+/// Writes the wall with `last_ms` at `now_ms`, dropping the oldest past the
+/// wall's size along with their wall copies. Called under [`STORE`].
+fn keep(config_dir: &Path, mut wall: ImagineWall, now_ms: u64) -> Result<(), String> {
+    let wdir = wall_dir(config_dir);
     let (kept, evicted) =
         grokhub_core::wall_evict(std::mem::take(&mut wall.gifs), grokhub_core::WALL_GIF_MAX);
     wall.gifs = kept;
@@ -432,6 +439,95 @@ fn pin(
         }
     }
     Ok(())
+}
+
+/// The living wall's last paint (or Make) and the titles on it now.
+pub fn wall_state(config_dir: &Path) -> Result<(u64, Vec<String>), String> {
+    let _store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let wall = read_wall(config_dir)?;
+    Ok((
+        wall.last_ms,
+        wall.gifs.into_iter().map(|g| g.title).collect(),
+    ))
+}
+
+/// Pins a living wall cover, as [`pin`] pins a Make.
+pub fn pin_cover(config_dir: &Path, gif: WallGif, now_ms: u64) -> Result<(), String> {
+    let _store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut wall = read_wall(config_dir)?;
+    wall.gifs.retain(|g| g.id != gif.id);
+    wall.gifs.push(gif);
+    keep(config_dir, wall, now_ms)
+}
+
+/// Moves the wall's last paint to `last_ms` and changes nothing else: a
+/// failed cover tries again sooner than the full interval.
+pub fn hold_wall(config_dir: &Path, last_ms: u64) -> Result<(), String> {
+    let _store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut wall = read_wall(config_dir)?;
+    wall.last_ms = last_ms;
+    write_wall(config_dir, &wall)
+}
+
+/// Paints one living wall cover from a seed: two low-quality 1k stills, the
+/// second a breath later, saved straight into the wall folder as
+/// `{id}_a` and `{id}_b`. When the second call fails the cover keeps one
+/// frame. Nothing is pinned here.
+pub fn paint_cover(
+    config_dir: &Path,
+    api: &dyn ImagineApi,
+    stop: &dyn Fn() -> bool,
+    seed: &WallSeed,
+    id: &str,
+    now_ms: u64,
+) -> Result<WallGif, String> {
+    let wdir = wall_dir(config_dir);
+    let aspect = if seed.tall { "2:3" } else { "16:9" };
+    let frame = |prompt: &str, which: &str| -> Result<String, String> {
+        let args = json!({
+            "prompt": prompt,
+            "n": 1,
+            "aspect_ratio": aspect,
+            "resolution": "1k",
+            "quality": "low",
+        });
+        let out = grokhub_agent::run_media_tool("image_generate", &args, api, stop, &wdir);
+        if out.failed {
+            return Err(friendly(&out.text));
+        }
+        let saved = out
+            .text
+            .lines()
+            .filter_map(|line| line.strip_prefix("IMAGINE: ").map(str::trim))
+            .find(|path| Path::new(path).starts_with(&wdir))
+            .ok_or("Imagine sent nothing back.")?;
+        let ext = Path::new(saved)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("png");
+        let dest = wdir.join(format!("{id}_{which}.{ext}"));
+        std::fs::rename(saved, &dest).map_err(|e| e.to_string())?;
+        Ok(dest.display().to_string())
+    };
+    let path_a = frame(seed.prompt, "a")?;
+    let path_b = match frame(seed.prompt_b, "b") {
+        Ok(path) => path,
+        // Stop between the stills is a stop, not a one-frame cover.
+        Err(_) if stop() => {
+            let _ = std::fs::remove_file(&path_a);
+            return Err(STOPPED.into());
+        }
+        Err(_) => path_a.clone(),
+    };
+    Ok(WallGif {
+        id: id.to_string(),
+        title: seed.title.to_string(),
+        prompt: seed.prompt.to_string(),
+        created_ms: now_ms,
+        path_a,
+        path_b,
+        tall: seed.tall,
+    })
 }
 
 fn mime(name: &str) -> Option<&'static str> {
@@ -746,6 +842,105 @@ mod tests {
             .map(|g| g.id)
             .collect();
         assert_eq!(ids, ["gen-8", "gen-9", "gen-1a3185c5000"]);
+    }
+
+    #[test]
+    fn a_wall_cover_is_two_low_1k_stills_in_the_wall_folder() {
+        let d = dirs("cover");
+        let api = FakeImagine::default();
+        let tall = grokhub_core::WALL_SEEDS.iter().find(|s| s.tall).unwrap();
+        let gif = paint_cover(&d.config, &api, &|| false, tall, "abc", NOW).unwrap();
+        let posts = api.posts.lock().unwrap();
+        assert_eq!(posts.len(), 2);
+        for ((path, body), prompt) in posts.iter().zip([tall.prompt, tall.prompt_b]) {
+            assert_eq!(path, "images/generations");
+            assert_eq!(body["prompt"], json!(prompt));
+            assert_eq!(body["n"], json!(1));
+            assert_eq!(body["resolution"], json!("1k"));
+            assert_eq!(body["quality"], json!("low"));
+            assert_eq!(body["aspect_ratio"], json!("2:3"));
+        }
+        let wdir = wall_dir(&d.config);
+        assert_eq!(gif.path_a, wdir.join("abc_a.png").display().to_string());
+        assert_eq!(gif.path_b, wdir.join("abc_b.png").display().to_string());
+        assert_eq!(files(&wdir), 2);
+        assert_eq!(
+            (
+                gif.id.as_str(),
+                gif.title.as_str(),
+                gif.prompt.as_str(),
+                gif.created_ms,
+                gif.tall
+            ),
+            ("abc", tall.title, tall.prompt, NOW, true)
+        );
+        drop(posts);
+
+        let wide = grokhub_core::WALL_SEEDS.iter().find(|s| !s.tall).unwrap();
+        let api = FakeImagine::default();
+        paint_cover(&d.config, &api, &|| false, wide, "def", NOW).unwrap();
+        assert_eq!(
+            api.posts.lock().unwrap()[0].1["aspect_ratio"],
+            json!("16:9")
+        );
+    }
+
+    /// The second still fails after the first lands.
+    struct SecondFails(FakeImagine);
+
+    impl ImagineApi for SecondFails {
+        fn post_json(&self, path: &str, body: &Value) -> Result<Value, String> {
+            if !self.0.posts.lock().unwrap().is_empty() {
+                return Err("HTTP 500".into());
+            }
+            self.0.post_json(path, body)
+        }
+        fn get_json(&self, path: &str) -> Result<Value, String> {
+            self.0.get_json(path)
+        }
+        fn download(&self, url: &str) -> Result<Vec<u8>, String> {
+            self.0.download(url)
+        }
+    }
+
+    #[test]
+    fn a_cover_keeps_one_frame_when_the_second_fails_and_none_when_the_first_does() {
+        let d = dirs("cover-half");
+        let seed = &grokhub_core::WALL_SEEDS[0];
+        let gif = paint_cover(
+            &d.config,
+            &SecondFails(FakeImagine::default()),
+            &|| false,
+            seed,
+            "abc",
+            NOW,
+        )
+        .unwrap();
+        assert_eq!(gif.path_b, gif.path_a);
+        assert_eq!(files(&wall_dir(&d.config)), 1);
+
+        let api = FakeImagine {
+            fail: Some("HTTP 500"),
+            ..Default::default()
+        };
+        assert!(paint_cover(&d.config, &api, &|| false, seed, "def", NOW).is_err());
+        assert_eq!(api.posts.lock().unwrap().len(), 1);
+        assert_eq!(files(&wall_dir(&d.config)), 1);
+        // Pinning and the wall file are the look's job, not the paint's.
+        assert!(!d.config.join(WALL_FILE).exists());
+    }
+
+    #[test]
+    fn stop_after_the_first_still_paints_no_cover_and_keeps_no_frame() {
+        let d = dirs("cover-stopped");
+        let seed = &grokhub_core::WALL_SEEDS[0];
+        let api = FakeImagine::default();
+        // Stop lands once the first still has gone out.
+        let stop = || !api.posts.lock().unwrap().is_empty();
+        let err = paint_cover(&d.config, &api, &stop, seed, "abc", NOW).unwrap_err();
+        assert_eq!(err, "Stopped.");
+        assert_eq!(api.posts.lock().unwrap().len(), 1);
+        assert_eq!(files(&wall_dir(&d.config)), 0);
     }
 
     #[test]
