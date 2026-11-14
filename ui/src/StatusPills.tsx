@@ -77,7 +77,14 @@ export function StatusPills({
         >
           <span className="pill-dot" aria-hidden="true" />
           <span className="pill-key">Personality</span>
-          {name && <span className="pill-value">{`· ${name}`}</span>}
+          {name && (
+            <>
+              <span className="pill-sep" aria-hidden="true">
+                ·
+              </span>
+              <span className="pill-value">{name}</span>
+            </>
+          )}
         </button>
       )}
       <button
@@ -89,7 +96,14 @@ export function StatusPills({
       >
         <span className="pill-dot" aria-hidden="true" />
         <span className="pill-key">{key}</span>
-        {rest.length > 0 && <span className="pill-value">{`· ${rest.join(" · ")}`}</span>}
+        {rest.length > 0 && (
+          <>
+            <span className="pill-sep" aria-hidden="true">
+              ·
+            </span>
+            <span className="pill-value">{rest.join(" · ")}</span>
+          </>
+        )}
       </button>
     </div>
   );

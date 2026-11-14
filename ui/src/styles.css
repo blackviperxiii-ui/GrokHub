@@ -770,7 +770,7 @@ select:focus-visible {
    week. Red strokes and dots; amber stays on the one CTA. */
 .pills {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
   min-width: 0;
   gap: 8px;
 }
@@ -791,6 +791,8 @@ button.pill {
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
   white-space: nowrap;
+  flex: 0 1 auto;
+  overflow: hidden;
 }
 
 button.pill:hover:not(:disabled),
@@ -812,13 +814,29 @@ button.pill:focus-visible {
   background: var(--muted);
 }
 
+.pill-key,
+.pill-sep {
+  flex: none;
+}
+
+/* A long value gives way first: it ends in an ellipsis (the full text is the
+   pill's name), and a personality name stops at 16 characters. */
 .pill-value {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.pill-personality .pill-value {
+  max-width: 16ch;
+}
+
 /* Narrower windows keep each pill's value; the key stays for screen readers. */
 @media (max-width: 1099px) {
+  .pill-personality .pill-sep {
+    display: none;
+  }
+
   .pill-personality .pill-key {
     position: absolute;
     width: 1px;
@@ -4495,11 +4513,16 @@ button.primary:not(.quick-chip) {
   min-height: 0;
 }
 
-/* Phones: the logo stays, the name and the pills give their room to the
-   controls (Settings shows both). */
-@media (max-width: 600px) {
-  .brand-mark span,
+/* Below 800px the pills give their room to the controls (Settings shows
+   both); on phones the name goes too and the logo stays. */
+@media (max-width: 799px) {
   .pills {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .brand-mark span {
     display: none;
   }
 }

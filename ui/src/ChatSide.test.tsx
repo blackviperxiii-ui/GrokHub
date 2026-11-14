@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HomePage, MissionPage, PulsePage } from "./api";
@@ -124,7 +124,13 @@ describe("ChatSide", () => {
   });
 
   it("reads no Pulse where the app has none, and nothing while Chat is hidden", async () => {
+    vi.useFakeTimers();
     const { rerender } = render(<ChatSide active={false} pulse={false} onOpen={() => {}} />);
+    // Let a read that a hidden column wrongly starts land, and a poll tick pass.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    vi.useRealTimers();
     expect(api.getMission).not.toHaveBeenCalled();
     expect(api.getHome).not.toHaveBeenCalled();
     rerender(<ChatSide active pulse={false} onOpen={() => {}} />);

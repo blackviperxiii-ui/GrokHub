@@ -246,6 +246,23 @@ async function run() {
           await context.close();
         }
       }
+      // The top bar must fit from the phone layout up, even with a long
+      // personality name and a count in the local pill: no sideways scroll.
+      const long = initScript("ops-dark")
+        .replace('"name":"Default"', '"name":"Patient senior engineer who reviews every change"')
+        .replace('"sentCalls":0', '"sentCalls":128');
+      for (const width of [601, 700, 800, 900, 1100]) {
+        const context = await browser.newContext({ viewport: { width, height: 700 }, deviceScaleFactor: 1 });
+        const page = await context.newPage();
+        page.on("pageerror", (err) => errors.push(`fit/${width}: ${err.message}`));
+        await page.addInitScript(long);
+        await page.goto(ORIGIN, { waitUntil: "networkidle", timeout: 60_000 });
+        await sleep(800);
+        await page.keyboard.press("Escape").catch(() => {});
+        await openTab(page, "Chat");
+        await check(page, `fit-${width}_chat`);
+        await context.close();
+      }
     } finally {
       await browser.close();
     }

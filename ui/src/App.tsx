@@ -474,7 +474,7 @@ export function App() {
       const key = event.key.toLowerCase();
       if (key === "k") {
         event.preventDefault();
-        setPalette((open) => (open ? false : "all"));
+        setPalette((open) => (open === "all" ? false : "all"));
       } else if (key === "n" || key === "," || key === "/") {
         event.preventDefault();
         setPalette(false);

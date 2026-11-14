@@ -634,6 +634,19 @@ describe("App", () => {
     expect(await screen.findByText("Settings for a desktop at localAi")).toBeVisible();
   });
 
+  it("Ctrl+K over the More list swaps it for the full palette, and again closes it", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.click(view("More"));
+    expect(screen.getByRole("dialog", { name: "More pages" })).toBeInTheDocument();
+    await userEvent.keyboard("{Control>}k{/Control}");
+    expect(screen.queryByRole("dialog", { name: "More pages" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
+    await userEvent.keyboard("{Control>}k{/Control}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("the Command button opens it too, and Ask Loadout fills the chat box", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
