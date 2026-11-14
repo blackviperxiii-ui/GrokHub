@@ -707,6 +707,7 @@ export function initScript(theme = "ops-dark") {
             firstRun: false,
             textSize: 100,
             reduceMotion: false,
+            chatObjectives: false,
             theme: fix.theme,
             question: null,
             summary: false,

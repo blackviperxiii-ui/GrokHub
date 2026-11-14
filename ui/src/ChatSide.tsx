@@ -6,8 +6,19 @@
 // Home shows it; a paired browser reads it from the host's Home instead.
 // Amber stays on the chat's own Send.
 import { useEffect, useState } from "react";
-import { getHome, getMission, getPcSnapshot, getPulse, type MissionPage, type PulsePage, type TileView } from "./api";
+import {
+  getHome,
+  getMission,
+  getPcSnapshot,
+  getPulse,
+  listChats,
+  type ChatRow,
+  type MissionPage,
+  type PulsePage,
+  type TileView,
+} from "./api";
 import { NO_STEPS, XpBar } from "./Home";
+import { NyxDeskControls } from "./NyxDock";
 import type { View } from "./Palette";
 
 /** How often the cards read again while Chat shows, in ms. */
@@ -159,5 +170,125 @@ export function ChatSide({
       {pc && pc.state !== "unsupported" && <PcCard view={pc} onOpen={() => onOpen("home")} />}
       {pulse && feed && <FromPulse page={feed} onOpen={() => onOpen("pulse")} />}
     </>
+  );
+}
+
+/** Recent chats beside the chat: at most this many. */
+export const RECENT_MAX = 5;
+export const RECENT_EMPTY = "Other chats show up here.";
+
+/** The chats to list beside `openId`: newest first, without it or Main. */
+export function recentChats(rows: ChatRow[], openId: string | undefined): ChatRow[] {
+  return rows
+    .filter((row) => row.id !== openId && !row.main)
+    .sort((a, b) => b.updated - a.updated)
+    .slice(0, RECENT_MAX);
+}
+
+/** Objectives beside chat, the left column: the open chat's objective with
+ * its current step marked, then recent chats to switch to. Desktop only:
+ * a paired browser has no chat list. */
+export function ChatLeft({
+  active,
+  conversationId,
+  onOpen,
+  onOpenChat,
+}: {
+  active: boolean;
+  conversationId?: string;
+  onOpen: (view: View) => void;
+  onOpenChat: (id: string) => void;
+}) {
+  const id = conversationId ?? "";
+  const page = usePoll(active, () => getMission(conversationId), `mission:${id}`);
+  const chats = usePoll(active, () => listChats(), `chats:${id}`);
+  const mission = page?.mission ?? null;
+  const steps = mission?.steps.filter((step) => step.status !== "cancelled") ?? [];
+  const current = steps.find((step) => step.status !== "verified")?.id;
+  const recent = chats ? recentChats(chats, conversationId) : [];
+  return (
+    <aside className="chat-left" aria-label="Objectives">
+      <section className="card side-glance" aria-label="Steps">
+        <div className="side-head">
+          <h3>Objectives</h3>
+          {mission && mission.total > 0 && (
+            <span className="side-count">
+              {mission.done} / {mission.total}
+            </span>
+          )}
+        </div>
+        {mission && steps.length > 0 ? (
+          <>
+            {mission.title && <p className="side-strong">{mission.title}</p>}
+            <ol className="side-steps">
+              {steps.map((step) => (
+                <li
+                  key={step.id}
+                  className={step.status === "verified" ? "done" : step.id === current ? "current" : undefined}
+                  aria-current={step.id === current ? "step" : undefined}
+                >
+                  {step.text}
+                </li>
+              ))}
+            </ol>
+          </>
+        ) : (
+          <p className="home-muted">{NO_STEPS}</p>
+        )}
+        <button type="button" className="quiet" onClick={() => onOpen("objectives")}>
+          Open Objectives
+        </button>
+      </section>
+      <section className="card side-glance" aria-label="Recent chats">
+        <div className="side-head">
+          <h3>Recent</h3>
+        </div>
+        {recent.length > 0 ? (
+          <ul className="home-rows">
+            {recent.map((row) => (
+              <li key={row.id}>
+                <button type="button" className="home-row" onClick={() => onOpenChat(row.id)}>
+                  {row.title.trim() || "Untitled chat"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="home-muted">{RECENT_EMPTY}</p>
+        )}
+      </section>
+      <NyxDeskControls framed active={active} />
+    </aside>
+  );
+}
+
+/** Objectives beside chat, the right column: three readings from this PC's
+ * own PC Loadout tile. Phones have none, so it stays out there. */
+export function ChatSnapshot({ active, onOpen }: { active: boolean; onOpen: (view: View) => void }) {
+  const view = usePoll(active, () => getPcSnapshot(), "pc");
+  if (!view || view.state === "unsupported") return null;
+  const tiles = [
+    { label: view.text.caption || "This PC", value: view.text.big, tone: view.text.tone },
+    ...view.rows.slice(0, 2),
+  ];
+  return (
+    <aside className="chat-snapshot" aria-label="Snapshot">
+      <section className="card side-glance" aria-label="PC snapshot">
+        <div className="side-head">
+          <h3>Snapshot</h3>
+        </div>
+        <ul className="snapshot-tiles">
+          {tiles.map((tile, i) => (
+            <li key={`${tile.label}-${i}`} className={i === 0 ? "snapshot-tile lead" : "snapshot-tile"}>
+              <span className={`snapshot-value tone-${tile.tone}`}>{tile.value}</span>
+              <span className="home-muted">{tile.label}</span>
+            </li>
+          ))}
+        </ul>
+        <button type="button" className="quiet" onClick={() => onOpen("home")}>
+          Open Home
+        </button>
+      </section>
+    </aside>
   );
 }

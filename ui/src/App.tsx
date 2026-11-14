@@ -57,7 +57,7 @@ import { applyTheme } from "./theme";
 import { inShell } from "./transport";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
 import { Rail } from "./Rail";
-import { ChatSide } from "./ChatSide";
+import { ChatLeft, ChatSide, ChatSnapshot } from "./ChatSide";
 import { StatusPills } from "./StatusPills";
 import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
 import { AutoNote, FirstRun, useAutoSetup } from "./AutoSetup";
@@ -715,6 +715,16 @@ export function App() {
                   onOpen={openView}
                 />
               }
+              left={
+                <ChatLeft
+                  active={view === "chat"}
+                  conversationId={chatSession}
+                  onOpen={openView}
+                  onOpenChat={openSaved}
+                />
+              }
+              snapshot={<ChatSnapshot active={view === "chat"} onOpen={openView} />}
+              tuned={auto.reply}
             />
           </div>
           <div hidden={view !== "automations"}>

@@ -34,6 +34,9 @@ export interface Settings {
   summonHotkey: boolean;
   /** Settings → General → notifications while the window is in the background. */
   notifications: boolean;
+  /** Settings → Appearance → Objectives beside chat. Missing from an older
+   * desktop, which reads as off. */
+  chatObjectives?: boolean;
   /** Settings → Account under a live Grok sign-in: the SuperGrok pool's room,
    * or that xAI's plan gate refused the sign-in. */
   planNote?: string | null;

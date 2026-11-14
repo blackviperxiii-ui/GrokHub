@@ -25,7 +25,7 @@ export function Appearance({
   onSaved,
 }: {
   theme: Theme;
-  /** Text size and reduce motion (auto setup's), on a desktop. */
+  /** Text size, reduce motion and Objectives beside chat (auto setup's), on a desktop. */
   textSize?: boolean;
   onSaved: (theme: Theme) => void;
 }) {

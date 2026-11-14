@@ -8,12 +8,13 @@ const mock = vi.hoisted(() => ({
 }));
 vi.mock("./autoSetupApi", () => ({ autoSetup: mock.autoSetup, TEXT_STEPS: [100, 115, 130, 150] }));
 
-import { AutoNote, AutoSetupPage, FirstRun, LookRows, SUMMARY } from "./AutoSetup";
+import { AutoNote, AutoSetupPage, CHAT_OBJECTIVES_NOTE, FirstRun, LookRows, SUMMARY } from "./AutoSetup";
 
 const BASE: AutoReply = {
   firstRun: true,
   textSize: 100,
   reduceMotion: false,
+  chatObjectives: false,
   theme: "system",
   question: null,
   summary: false,
@@ -139,5 +140,27 @@ describe("Settings pages", () => {
         value: { t: "bool", v: true },
       }),
     );
+  });
+
+  it("Appearance turns Objectives beside chat on and off as the person's own", async () => {
+    mock.autoSetup.mockResolvedValue({ ...BASE, firstRun: false });
+    render(<LookRows />);
+    const toggle = await screen.findByRole("switch", { name: "Objectives beside chat" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(CHAT_OBJECTIVES_NOTE)).toBeVisible();
+    mock.autoSetup.mockResolvedValue({ ...BASE, firstRun: false, chatObjectives: true });
+    await userEvent.click(toggle);
+    expect(mock.autoSetup).toHaveBeenLastCalledWith({
+      act: "set",
+      key: "chatObjectives",
+      value: { t: "bool", v: true },
+    });
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    await userEvent.click(toggle);
+    expect(mock.autoSetup).toHaveBeenLastCalledWith({
+      act: "set",
+      key: "chatObjectives",
+      value: { t: "bool", v: false },
+    });
   });
 });
