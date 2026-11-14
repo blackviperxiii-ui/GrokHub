@@ -195,6 +195,9 @@ describe("Home", () => {
       .map((h) => h.textContent);
     expect(names).toEqual(["Objectives", "PC Loadout", "Recent Chats", "Automations", "Pulse · For You", "Up Next", "Squad"]);
     expect(tile("Objectives")).toHaveClass("home-tile", "large");
+    // The amber-washed objective surface follows the module, not the large slot.
+    expect(tile("Objectives")).toHaveClass("objective-tile");
+    expect(tile("PC Loadout")).not.toHaveClass("objective-tile");
     expect(tile("Recent Chats")).toHaveClass("medium");
     expect(tile("Automations")).toHaveClass("small");
 
