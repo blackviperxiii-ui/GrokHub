@@ -498,7 +498,7 @@ impl NativeEngine {
         if let Some(seed) = self
             .episode_seed
             .clone()
-            .filter(|_| self.gate.desktop && self.desktop.is_some())
+            .filter(|_| runs_as_episode(self.gate.desktop && self.desktop.is_some(), text))
         {
             return self.prompt_episode(text, &seed, emit);
         }
@@ -1186,6 +1186,12 @@ where
     fn halted(&self) -> bool {
         (self.read)().is_some_and(|ms| grokhub_core::stamp_halts(ms, self.started_ms))
     }
+}
+
+/// A turn with desktop control on runs as an episode, except a
+/// `/deep-research` line: that is a research turn of its own.
+pub(crate) fn runs_as_episode(desktop_on: bool, text: &str) -> bool {
+    desktop_on && !crate::research::is_command(text)
 }
 
 #[cfg(test)]

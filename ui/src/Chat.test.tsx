@@ -1015,6 +1015,18 @@ describe("Chat", () => {
     expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
   });
 
+  it("/deep-research sends the line as typed and runs no second command", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "queue", text: "/deep-research harbor tides" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/deep-research harbor tides{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    expect(api.runSlash).toHaveBeenCalledTimes(1);
+    expect(api.runSlash.mock.calls[0][0]).toBe("/deep-research harbor tides");
+    expect(api.sendChat.mock.calls[0][1]).toBe("/deep-research harbor tides");
+    expect(api.sendChat.mock.calls[0][2]).toBe("chat");
+    expect(await screen.findByText("/deep-research harbor tides")).toBeInTheDocument();
+  });
+
   it("/export saves this chat and leaves a card that opens or shows the file", async () => {
     api.runSlash.mockReset().mockResolvedValue({ kind: "export" });
     api.exportChat.mockReset().mockResolvedValue({
@@ -2159,6 +2171,23 @@ describe("Chat queue", () => {
     api.readTurn.mockReset().mockImplementation((text: string) =>
       Promise.resolve({ route: "queue", text, ack: "Queued for after this reply" }),
     );
+  });
+
+  it("/deep-research typed while a reply runs waits its turn, then goes as typed", async () => {
+    const ends = turns();
+    api.runSlash.mockReset().mockResolvedValue({ kind: "queue", text: "/deep-research harbor tides" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "hello{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    await userEvent.type(screen.getByLabelText("Message"), "/deep-research harbor tides{Enter}");
+    await waitFor(() => expect(api.runSlash).toHaveBeenCalledTimes(1));
+    expect(api.runSlash.mock.calls[0][0]).toBe("/deep-research harbor tides");
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Message")).toHaveValue("");
+    await act(async () => ends[0]("end_turn"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1][1]).toBe("/deep-research harbor tides");
+    expect(api.runSlash).toHaveBeenCalledTimes(1);
   });
 
   it("a side question gets its own answer beside the reply, never in the chat", async () => {

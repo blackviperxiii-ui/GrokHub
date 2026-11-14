@@ -350,13 +350,15 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         )
     },
     ShellCmd {
-        ready: false,
-        ..row("/room", "Speak the room…", "/room ")
+        desktop_only: true,
+        ..row("/room", "Bind a work folder named for a room…", "/room ")
     },
-    ShellCmd {
-        ready: false,
-        ..row("/history", "Past chats", "/history")
-    },
+    row("/history", "Open History", "/history"),
+    row(
+        "/deep-research",
+        "Research a question with cited sources…",
+        "/deep-research ",
+    ),
 ];
 
 /// One row of the composer's command list.
@@ -576,7 +578,7 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         "/title" => "/rename".to_string(),
         "/close" => "/delete".to_string(),
         "/background" => "/bg".to_string(),
-        "/resume" | "/dashboard" | "/agents-dashboard" => "/sessions".to_string(),
+        "/resume" | "/history" | "/dashboard" | "/agents-dashboard" => "/sessions".to_string(),
         "/status" | "/info" | "/session-info" | "/doctor" => "/inspect".to_string(),
         "/marketplace" | "/mcps" => "/connectors".to_string(),
         "/show-plan" | "/plan-view" => "/view-plan".to_string(),
@@ -633,7 +635,7 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         "/stop" => Effect::Stop,
         "/compact" => Effect::Compact,
         "/rename" | "/pin" | "/delete" | "/sessions" | "/context" | "/usage" | "/rewind"
-        | "/project" => return op(line, &word).map(Action::Op),
+        | "/project" | "/room" => return op(line, &word).map(Action::Op),
         "/remember" => {
             return match text {
                 Some(note) => Ok(Action::Remember(note)),
@@ -745,6 +747,14 @@ fn extras(word: &str, rest: &str) -> Option<Result<Action, String>> {
     let fx = |e: Effect| Some(Ok(Action::Effect(e)));
     let open = |view: &'static str| fx(Effect::Open { view });
     match word {
+        "/deep-research" if rest.is_empty() => {
+            Some(Err("Type what to research after /deep-research.".into()))
+        }
+        // A normal turn: the engine reads the line and works to its research
+        // recipe, and the chat shows the line as typed.
+        "/deep-research" => fx(Effect::Queue {
+            text: format!("{word} {rest}"),
+        }),
         "/send" if rest.is_empty() => Some(Err("Type the task after /send.".into())),
         "/send" => mine(Op::Send(rest.to_string())),
         "/bg" => mine(Op::Bg(rest.to_string())),
@@ -822,7 +832,11 @@ fn op(line: &str, word: &str) -> Result<Op, String> {
         Some(Slash::ProjectMove(folder)) => Op::Project(P::Move(folder)),
         Some(Slash::ProjectFolder(name)) => Op::Project(P::Folder(name)),
         Some(Slash::ProjectDelete) => Op::Project(P::Delete { yes }),
+        Some(Slash::Room(name)) => Op::Project(P::Room(name)),
+        // `/history` reads as the cabin's own History command, which is this.
+        _ if word == "/sessions" => Op::Sessions,
         _ if word == "/rename" => return Err("Type the new name after /rename.".into()),
+        _ if word == "/room" => return Err("Type the room's name after /room.".into()),
         _ => return Err(PROJECT_USAGE.into()),
     })
 }
@@ -986,15 +1000,62 @@ mod tests {
     }
 
     #[test]
-    fn history_waits_and_help_lists_what_runs() {
-        assert_eq!(
-            parse("/history", false),
-            Err("/history isn't in this app yet.".into())
-        );
+    fn history_opens_history_and_help_lists_what_runs() {
+        assert_eq!(parse("/history", false), Ok(Action::Op(Op::Sessions)));
+        assert_eq!(parse("/History", true), Ok(Action::Op(Op::Sessions)));
+        let hit = hits("/hist", false);
+        assert_eq!(cmds(&hit), vec!["/history"]);
+        assert_eq!(hit[0].disabled, None);
         let help = help();
         assert!(help.contains("/plan — Plan the next message first"));
         assert!(help.contains("/remember — Save a memory note"));
-        assert!(!help.contains("/history"));
+        assert!(help.contains("/history — Open History"));
+        assert!(help.contains("/deep-research — Research a question with cited sources"));
+    }
+
+    #[test]
+    fn room_binds_a_named_folder_on_this_computer_only() {
+        use crate::projects::Op as P;
+        assert_eq!(
+            parse("/room Harbor Lab", false),
+            Ok(Action::Op(Op::Project(P::Room("Harbor Lab".into()))))
+        );
+        assert_eq!(
+            parse("/room", false),
+            Err("Type the room's name after /room.".into())
+        );
+        assert_eq!(
+            parse("/room harbor", true),
+            Err("/room works on your computer.".into())
+        );
+        let hit = hits("/roo", false);
+        assert_eq!(cmds(&hit), vec!["/room"]);
+        assert_eq!(hit[0].disabled, None);
+        assert!(!hit[0].run_on_pick);
+    }
+
+    #[test]
+    fn deep_research_sends_the_line_as_typed() {
+        assert_eq!(
+            parse("/deep-research  why is the sky blue ", false),
+            Ok(Action::Effect(Effect::Queue {
+                text: "/deep-research why is the sky blue".into()
+            }))
+        );
+        assert_eq!(
+            parse("/Deep-Research cats", true),
+            Ok(Action::Effect(Effect::Queue {
+                text: "/deep-research cats".into()
+            }))
+        );
+        assert_eq!(
+            parse("/deep-research", false),
+            Err("Type what to research after /deep-research.".into())
+        );
+        let hit = hits("/deep", false);
+        assert_eq!(cmds(&hit), vec!["/deep-research"]);
+        assert_eq!(hit[0].insert, "/deep-research ");
+        assert_eq!(hit[0].disabled, None);
     }
 
     fn workspace(name: &str) -> (std::path::PathBuf, grokhub_agent::perm::ConfigGuard) {
@@ -1536,7 +1597,7 @@ mod tests {
 
     #[test]
     fn what_waits_on_another_card_is_greyed_not_in_the_cabin() {
-        for cmd in ["/sh", "/scratch", "/sync", "/inhabit", "/room"] {
+        for cmd in ["/sh", "/scratch", "/sync", "/inhabit"] {
             let hit = hits(cmd, false)
                 .into_iter()
                 .find(|h| h.cmd == cmd)

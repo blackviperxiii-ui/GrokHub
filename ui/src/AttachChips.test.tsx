@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   stageAttachmentPaths: vi.fn<(id: string, paths: string[]) => Promise<StageOutcome[]>>(),
   pickAttachments: vi.fn<(id: string) => Promise<StageOutcome[]>>(),
   removeAttachment: vi.fn<(id: string, path: string) => Promise<void>>(),
+  runSlash: vi.fn<(line: string, id?: string) => Promise<{ kind: "queue"; text: string }>>(),
   drop: null as ((paths: string[]) => void) | null,
 }));
 
@@ -26,6 +27,8 @@ vi.mock("./api", async () => {
   stageAttachmentPaths: api.stageAttachmentPaths,
   pickAttachments: api.pickAttachments,
   removeAttachment: api.removeAttachment,
+  runSlash: api.runSlash,
+  slashHits: () => Promise.resolve([]),
   onFileDrop: (handler: (paths: string[]) => void) => {
     api.drop = handler;
     return Promise.resolve(() => {});
@@ -75,7 +78,7 @@ function paste(files: File[]) {
 
 describe("composer attachments", () => {
   beforeEach(() => {
-    for (const fn of [api.sendChat, api.stageAttachment, api.stageAttachmentPaths, api.pickAttachments, api.removeAttachment]) {
+    for (const fn of [api.sendChat, api.stageAttachment, api.stageAttachmentPaths, api.pickAttachments, api.removeAttachment, api.runSlash]) {
       fn.mockReset();
     }
     api.removeAttachment.mockResolvedValue();
@@ -120,6 +123,22 @@ describe("composer attachments", () => {
     expect(screen.queryByRole("button", { name: "Remove shot.png" })).toBeNull();
     // The message shows what went with it.
     expect(screen.getByText(/what is this\s+Picture shot\.png/)).toHaveAttribute("data-role", "user");
+  });
+
+  it("/deep-research takes the chips with the line as typed, then clears them", async () => {
+    const paper = staged("paper.md");
+    api.stageAttachment.mockResolvedValue(paper);
+    api.runSlash.mockResolvedValue({ kind: "queue", text: "/deep-research check its claims" });
+    render(<Chat onOpenSettings={() => {}} />);
+    paste([new File(["claims"], "paper.md")]);
+    await screen.findByText("File paper.md");
+
+    await userEvent.type(screen.getByLabelText("Message"), "/deep-research check its claims{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.stageAttachment.mock.calls[0][0];
+    expect(api.sendChat).toHaveBeenCalledWith(id, "/deep-research check its claims", "chat", [paper.path]);
+    expect(screen.queryByRole("button", { name: "Remove paper.md" })).toBeNull();
+    expect(screen.getByText(/\/deep-research check its claims\s+File paper\.md/)).toHaveAttribute("data-role", "user");
   });
 
   it("a file alone can be sent", async () => {

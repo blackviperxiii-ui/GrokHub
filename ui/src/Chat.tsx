@@ -273,7 +273,7 @@ function stillBusy(now: string | null) {
   return now === OPEN_BUSY || now === MISSION_BUSY ? null : now;
 }
 /** Slash lines that leave the running reply alone, so they run beside it. */
-const BESIDE_REPLY = /^\/(queue|bg|background|send|consult)(\s|$)/i;
+const BESIDE_REPLY = /^\/(queue|bg|background|send|consult|deep-research)(\s|$)/i;
 /** Every other slash line typed during a reply stays in the box with this. */
 export const SLASH_WAITS = "That command waits for the reply. /stop ends it.";
 /** The web app has no /stop. */
@@ -860,7 +860,13 @@ export function Chat({
   const voice = useVoiceMode();
   const voiceSession = voice.session;
   /** The queued message whose turn came: it sends after this render. */
-  const [nextUp, setNextUp] = useState<{ text: string; n: number; as?: SessionMode }>();
+  const [nextUp, setNextUp] = useState<{
+    text: string;
+    n: number;
+    as?: SessionMode;
+    /** Files from the box that go with it; the box is cleared once it is sent. */
+    files?: typeof attach.files;
+  }>();
   /** `/plan` or `/chat` named how the next message runs; otherwise the app reads it. */
   const nextAs = useRef<SessionMode | undefined>(undefined);
   /** Questions answered beside the running reply. */
@@ -1326,7 +1332,8 @@ export function Chat({
   async function deliver(
     text: string,
     files: typeof attach.files,
-    fromDraft: boolean,
+    /** The box held it: the box empties. `"files"`: only its files went. */
+    fromDraft: boolean | "files",
     as?: SessionMode,
     again = false,
   ) {
@@ -1341,7 +1348,7 @@ export function Chat({
     const said = [text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
     if (!again) setItems((now) => [...now, { kind: "user", text: said }]);
     if (fromDraft) {
-      setDraft("");
+      if (fromDraft === true) setDraft("");
       attach.clear();
     }
     setError(null);
@@ -1600,8 +1607,8 @@ export function Chat({
   }
 
   /** Runs a slash line and applies what it did. `box` is what the box held
-   * when the line was sent. */
-  async function slash(line: string, box = line) {
+   * when the line was sent, and `files` what was attached to it. */
+  async function slash(line: string, box = line, files: typeof attach.files = []) {
     if (slashing.current.has(line)) {
       setAck(SLASH_RUNNING);
       return;
@@ -1716,7 +1723,7 @@ export function Chat({
         if (busyRef.current) changeQueue([...queueRef.current, effect.text]);
         // Sent from the next render: the reply may have ended while the line
         // was read, and this render's `deliver` still sees it running.
-        else setNextUp((now) => ({ text: effect.text, n: (now?.n ?? 0) + 1, as: "chat" }));
+        else setNextUp((now) => ({ text: effect.text, n: (now?.n ?? 0) + 1, as: "chat", files }));
         break;
       case "palette":
         onOpenPalette?.();
@@ -1814,7 +1821,8 @@ export function Chat({
     if (!text && files.length === 0) return;
     touched.current = true;
     if (isSlashCommand(text)) {
-      await slash(text);
+      // A line that becomes a message (/queue, /deep-research) takes the files.
+      await slash(text, text, files);
       return;
     }
     // "make the text bigger", "undo that": a setting, answered here.
@@ -1922,11 +1930,13 @@ export function Chat({
     if (act.op === "remove") removeQueued(act.index);
     else void steerQueued(act.index);
   });
-  const sendNext = useEffectEvent((text: string, as?: SessionMode) => void deliver(text, [], false, as));
+  const sendNext = useEffectEvent((text: string, as?: SessionMode, files: typeof attach.files = []) =>
+    void deliver(text, files, files.length > 0 && "files", as),
+  );
   useEffect(() => {
     if (!nextUp) return;
-    const { text, as } = nextUp;
-    const timer = window.setTimeout(() => sendNext(text, as), 0);
+    const { text, as, files } = nextUp;
+    const timer = window.setTimeout(() => sendNext(text, as, files), 0);
     return () => window.clearTimeout(timer);
   }, [nextUp]);
   useEffect(() => {
