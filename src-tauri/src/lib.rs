@@ -143,6 +143,7 @@ pub mod slash_ops;
 pub mod spend_cards;
 mod steam_checks;
 pub mod storage;
+pub mod suggested;
 mod task_feed;
 mod turns;
 pub mod unattended;
@@ -156,6 +157,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use grokhub_agent::{AuthKind, XaiClient};
+use grokhub_core::review_pass::SuggestedTile;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
@@ -2228,6 +2230,24 @@ fn add_automation(
 ) -> Result<Vec<automations::Row>, String> {
     let clock = now_clock(clock);
     let list = automations::add(&state.config_dir, &text, clock)?;
+    Ok(automations::rows(&list, clock))
+}
+
+/// The Automations page's Suggested tiles.
+#[tauri::command]
+fn list_suggested_automations(state: State<'_, ShellState>) -> Vec<SuggestedTile> {
+    suggested::suggested(&state.config_dir)
+}
+
+/// Add a Suggested tile: its seed becomes an automation.
+#[tauri::command]
+fn add_suggested_automation(
+    state: State<'_, ShellState>,
+    seed: String,
+    clock: automations::Clock,
+) -> Result<Vec<automations::Row>, String> {
+    let clock = now_clock(clock);
+    let list = suggested::add_suggested(&state.config_dir, &seed, clock)?;
     Ok(automations::rows(&list, clock))
 }
 
@@ -6350,6 +6370,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "text")?,
             arg(args, "clock")?,
         )?),
+        "list_suggested_automations" => out(list_suggested_automations(state)),
+        "add_suggested_automation" => out(add_suggested_automation(
+            state,
+            arg(args, "seed")?,
+            arg(args, "clock")?,
+        )?),
         "set_automation_enabled" => out(set_automation_enabled(
             state,
             arg(args, "id")?,
@@ -7266,6 +7292,8 @@ pub fn run() {
             remove_attachment,
             list_automations,
             add_automation,
+            list_suggested_automations,
+            add_suggested_automation,
             set_automation_enabled,
             remove_automation,
             edit_automation,
