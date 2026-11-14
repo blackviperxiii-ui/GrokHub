@@ -59,6 +59,17 @@ describe("useDesktopNyx", () => {
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
 
+  it("stops listening when it unmounts before the listener is in place", async () => {
+    let ready: (stop: () => void) => void = () => {};
+    api.onDesktopNyx.mockReturnValue(new Promise((done) => (ready = done)));
+    api.desktopNyxGet.mockResolvedValue(state());
+    const { unmount } = render(<Probe />);
+    unmount();
+    expect(unlisten).toHaveBeenCalledTimes(0);
+    await act(async () => ready(unlisten));
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a change heard while the read is out over the read's older answer", async () => {
     let answer: (s: DesktopNyxState) => void = () => {};
     api.desktopNyxGet.mockReturnValue(new Promise((done) => (answer = done)));

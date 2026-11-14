@@ -3966,11 +3966,16 @@ fn set_personality(state: State<'_, ShellState>, id: String) -> Result<personali
 /// one-time 18+ check comes first ([`confirm_adult`]).
 #[tauri::command]
 fn set_explicit_personalities(
+    app: AppHandle,
     state: State<'_, ShellState>,
     on: bool,
 ) -> Result<personality::Page, String> {
     match current(&state).adults_only(on) {
-        Some(next) => save_shell(&state, next),
+        Some(next) => {
+            let page = save_shell(&state, next)?;
+            adults_changed(&app, &state);
+            Ok(page)
+        }
         None => Ok(personality::Page {
             age_check: true,
             ..personalities(&state)
@@ -3981,11 +3986,25 @@ fn set_explicit_personalities(
 /// The 18+ check's yes: remembered for good, with when it was given (never a
 /// birth date), and adults-only turns on.
 #[tauri::command]
-fn confirm_adult(state: State<'_, ShellState>) -> Result<personality::Page, String> {
-    save_shell(
+fn confirm_adult(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+) -> Result<personality::Page, String> {
+    let page = save_shell(
         &state,
         current(&state).confirm_adult(grokhub_core::now_ms()),
-    )
+    )?;
+    adults_changed(&app, &state);
+    Ok(page)
+}
+
+/// Adults-only decides which outfits the desktop companion may wear, so her
+/// window, the dock's wardrobe and Labs hear it.
+fn adults_changed(app: &AppHandle, state: &ShellState) {
+    #[cfg(desktop)]
+    desktop_nyx::publish(app, &current(state));
+    #[cfg(mobile)]
+    let _ = (app, state);
 }
 
 /// Settings → Personality → Heat. Clean is not a stop on the dial, so it reads
@@ -4117,8 +4136,29 @@ fn desktop_nyx_commit(
     shown.map(|()| told)
 }
 
-/// Async: building the desk's webview from a sync command (the main thread)
-/// can hang on Windows.
+/// One desktop-companion write at a time, from the read to the window: two
+/// pop-outs at once (a double click, or the tray during the dock's) would
+/// each build her window, and a read taken outside could undo a newer
+/// write. Only async callers take it; the main thread never waits on it,
+/// because building her window needs the main thread.
+#[cfg(desktop)]
+static DESKTOP_NYX_WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(desktop)]
+async fn desktop_nyx_write(
+    app: &AppHandle,
+    state: &ShellState,
+    window: bool,
+    change: impl FnOnce(ShellSettings) -> Result<ShellSettings, String>,
+) -> Result<desktop_nyx::State, String> {
+    let _one = DESKTOP_NYX_WRITES.lock().await;
+    let next = change(current(state))?;
+    desktop_nyx_commit(app, state, next, window)
+}
+
+/// The desktop-companion writers are async: building her webview from a
+/// sync command (the main thread) can hang on Windows, and the write lock
+/// must never block the main thread.
 #[cfg(desktop)]
 #[tauri::command]
 async fn desktop_nyx_set(
@@ -4126,8 +4166,10 @@ async fn desktop_nyx_set(
     state: State<'_, ShellState>,
     patch: desktop_nyx::Patch,
 ) -> Result<desktop_nyx::State, String> {
-    let next = desktop_nyx::apply_patch(current(&state), patch);
-    desktop_nyx_commit(&app, &state, next, true)
+    desktop_nyx_write(&app, &state, true, |now| {
+        Ok(desktop_nyx::apply_patch(now, patch))
+    })
+    .await
 }
 
 #[cfg(desktop)]
@@ -4136,44 +4178,45 @@ async fn desktop_nyx_undock(
     app: AppHandle,
     state: State<'_, ShellState>,
 ) -> Result<desktop_nyx::State, String> {
-    let mut next = current(&state);
-    if !next.desktop_nyx {
+    desktop_nyx_write(&app, &state, true, |mut next| {
         next.desktop_nyx = true;
-    }
-    next.desktop_nyx_undocked = true;
-    desktop_nyx_commit(&app, &state, next, true)
+        next.desktop_nyx_undocked = true;
+        Ok(next)
+    })
+    .await
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn desktop_nyx_dock(
+async fn desktop_nyx_dock(
     app: AppHandle,
     state: State<'_, ShellState>,
 ) -> Result<desktop_nyx::State, String> {
-    let next = desktop_nyx::apply_patch(
-        current(&state),
-        desktop_nyx::Patch {
-            undocked: Some(false),
-            ..desktop_nyx::Patch::default()
-        },
-    );
-    desktop_nyx_commit(&app, &state, next, true)
+    desktop_nyx_write(&app, &state, true, |now| {
+        Ok(desktop_nyx::apply_patch(
+            now,
+            desktop_nyx::Patch {
+                undocked: Some(false),
+                ..desktop_nyx::Patch::default()
+            },
+        ))
+    })
+    .await
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn desktop_nyx_set_outfit(
+async fn desktop_nyx_set_outfit(
     app: AppHandle,
     state: State<'_, ShellState>,
     id: Option<String>,
 ) -> Result<desktop_nyx::State, String> {
-    let next = desktop_nyx::set_outfit(current(&state), id)?;
-    desktop_nyx_commit(&app, &state, next, false)
+    desktop_nyx_write(&app, &state, false, |now| desktop_nyx::set_outfit(now, id)).await
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn desktop_nyx_save_pos(
+async fn desktop_nyx_save_pos(
     app: AppHandle,
     state: State<'_, ShellState>,
     x: f64,
@@ -4181,8 +4224,10 @@ fn desktop_nyx_save_pos(
     monitor_w: f64,
     monitor_h: f64,
 ) -> Result<desktop_nyx::State, String> {
-    let next = desktop_nyx::save_pos(current(&state), [x, y], [monitor_w, monitor_h]);
-    desktop_nyx_commit(&app, &state, next, false)
+    desktop_nyx_write(&app, &state, false, |now| {
+        Ok(desktop_nyx::save_pos(now, [x, y], [monitor_w, monitor_h]))
+    })
+    .await
 }
 
 /// The tray's "Nyx on desktop". The settings decide, never the item's own
@@ -4192,12 +4237,13 @@ fn desktop_nyx_from_tray(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app.state::<ShellState>();
-        let now = current(&state);
-        let done = match desktop_nyx::tray_toggle(now) {
-            Some(next) => desktop_nyx_commit(&app, &state, next, true).is_ok(),
-            None => false,
-        };
-        if !done {
+        let toggled = desktop_nyx_write(&app, &state, true, |now| {
+            desktop_nyx::tray_toggle(now).ok_or_else(|| "Labs is off".to_string())
+        })
+        .await;
+        // A click flips the tick itself: a click that changed nothing (Labs
+        // off, or the save failed) must put the settings' answer back.
+        if toggled.is_err() {
             desktop_nyx::refresh_tray(&current(&state));
         }
     });
@@ -7831,26 +7877,41 @@ pub fn run() {
 #[cfg(test)]
 mod command_tests {
     /// The text from `start` to the end of that item (the next line that is
-    /// a lone `}` at the margin).
-    fn item_after<'a>(src: &'a str, start: &str) -> &'a str {
+    /// a lone `}` at the margin), with all whitespace taken out so a
+    /// reformat doesn't break the checks.
+    fn item_after(src: &str, start: &str) -> String {
         src.split(start)
             .nth(1)
             .and_then(|s| s.split("\n}\n").next())
             .unwrap_or_else(|| panic!("{start} is in lib.rs"))
+            .split_whitespace()
+            .collect()
+    }
+
+    fn squeeze(code: &str) -> String {
+        code.split_whitespace().collect()
     }
 
     #[test]
     fn the_tray_lists_nyx_on_desktop_after_show() {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         let tray = item_after(&src, "fn build_tray(");
-        assert!(
-            tray.contains("CheckMenuItem::with_id(\n        app,\n        desktop_nyx::TRAY_ID,")
-        );
-        assert!(tray.contains("&[&local, &halt, &show, &nyx, &quit]"));
-        assert!(tray.contains("desktop_nyx::start_tray(nyx)"));
-        assert!(tray.contains("id if id == desktop_nyx::TRAY_ID => desktop_nyx_from_tray(app)"));
+        for want in [
+            "CheckMenuItem::with_id(app, desktop_nyx::TRAY_ID,",
+            "&[&local, &halt, &show, &nyx, &quit]",
+            "desktop_nyx::start_tray(nyx)",
+            "id if id == desktop_nyx::TRAY_ID => desktop_nyx_from_tray(app)",
+        ] {
+            assert!(tray.contains(&squeeze(want)), "build_tray: {want}");
+        }
         let click = item_after(&src, "fn desktop_nyx_from_tray(");
         assert!(click.contains("tauri::async_runtime::spawn"));
+        assert!(
+            click.contains(&squeeze(
+                "if toggled.is_err() { desktop_nyx::refresh_tray(&current(&state)); }"
+            )),
+            "a click that changed nothing puts the tick back"
+        );
         assert!(
             !click.contains("is_checked"),
             "the settings decide, not the item's own tick"
@@ -7863,23 +7924,36 @@ mod command_tests {
         for name in [
             "async fn desktop_nyx_set(",
             "async fn desktop_nyx_undock(",
-            "fn desktop_nyx_dock(",
-            "fn desktop_nyx_set_outfit(",
-            "fn desktop_nyx_save_pos(",
+            "async fn desktop_nyx_dock(",
+            "async fn desktop_nyx_set_outfit(",
+            "async fn desktop_nyx_save_pos(",
             "fn desktop_nyx_from_tray(",
         ] {
             let body = item_after(&src, name);
-            assert!(
-                body.contains("desktop_nyx_commit(&app, &state, next,"),
-                "{name}"
-            );
+            assert!(body.contains("desktop_nyx_write(&app,&state,"), "{name}");
             assert!(
                 !body.contains("settings::save("),
-                "{name} saves through the commit"
+                "{name} saves through the write"
             );
         }
+        // One at a time, the read inside the lock.
+        let write = item_after(&src, "async fn desktop_nyx_write(");
+        assert!(write.contains(&squeeze(concat!(
+            "let _one = DESKTOP_NYX_WRITES.lock().await; let next = change(current(state))?; ",
+            "desktop_nyx_",
+            "commit(app, state, next, window)"
+        ))));
+        assert_eq!(
+            src.matches(concat!("desktop_nyx_", "commit(app,")).count(),
+            1,
+            "only desktop_nyx_write commits"
+        );
+        // A window that fails still leaves the tray and pages right.
         let commit = item_after(&src, "fn desktop_nyx_commit(");
-        assert!(commit.contains("desktop_nyx::publish(app, &next)"));
+        assert!(commit.contains(&squeeze(
+            "let told = desktop_nyx::publish(app, &next); shown.map(|()| told)"
+        )));
+        assert!(!commit.contains("show_window(app,&next)?"));
         let close = src
             .split("if window.label() == desktop_nyx::LABEL {")
             .nth(1)
@@ -7891,6 +7965,13 @@ mod command_tests {
             1,
             "only desktop_nyx_undock writes the field directly"
         );
+        // Adults-only changes her wardrobe.
+        for name in ["fn set_explicit_personalities(", "fn confirm_adult("] {
+            assert!(
+                item_after(&src, name).contains("adults_changed(&app,&state);"),
+                "{name}"
+            );
+        }
     }
 
     #[test]
