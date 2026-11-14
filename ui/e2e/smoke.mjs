@@ -479,6 +479,22 @@ const KEY_LOG_START = `
       window.addEventListener(type, (e) => queueMicrotask(() => push([type, e.key ?? e.inputType ?? "", e.data ?? "", at(), e.defaultPrevented ? "taken" : "", e.target.value?.length ?? ""])), true);
     }
     window.addEventListener("blur", () => push(["window-blur", "", "", at(), "", ""]), true);
+    window.addEventListener("error", (e) => push(["error", "", "", at(), String(e.message), ""]), true);
+    // Before React sees an input on the box: note the props it renders with,
+    // and log its onChange, so a put-back value shows whether React ever
+    // committed the typed one (new props) or not (the same props).
+    window.addEventListener("input", (e) => {
+      const el = e.target;
+      const key = Object.keys(el).find((k) => k.startsWith("__reactProps$"));
+      const props = key && el[key];
+      if (!props || typeof props.onChange !== "function") return;
+      window.__smokeProps = props;
+      const change = props.onChange;
+      props.onChange = function (ev) {
+        push(["onChange", "", "", at(), "", ev.target.value.length]);
+        return change.apply(this, arguments);
+      };
+    }, true);
   }
   // A script write to the box's value (React putting back its state) logs
   // where it came from; React's own value tracker stays in the chain.
@@ -490,7 +506,10 @@ const KEY_LOG_START = `
       get() { return own.get.call(this); },
       set(v) {
         const stack = (new Error().stack || "").split("\\n").slice(2, 14).map((l) => l.trim()).join(" < ");
-        push(["set", "", "", at(), stack, String(v).length]);
+        const key = Object.keys(this).find((k) => k.startsWith("__reactProps$"));
+        const props = key && this[key];
+        const same = props && props === window.__smokeProps ? "same-props" : "new-props";
+        push(["set", same, String(props?.value ?? "").length, at(), stack, String(v).length]);
         own.set.call(this, v);
       },
     });
