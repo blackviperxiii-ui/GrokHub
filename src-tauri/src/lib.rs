@@ -5680,13 +5680,14 @@ async fn new_share_code(
 
 /// The chat's device glance: "Sharing" while this computer's hub is on, or
 /// the newest screenshot, from desktop control in any chat or from a paired
-/// computer. Memory only; `None` hides it. Desktop only.
+/// computer. Memory only; `None` hides it. Desktop only. Copying and
+/// checking frames of up to 400 KB runs off the main thread.
 #[cfg(desktop)]
 #[tauri::command]
-fn get_device_glance(
+async fn get_device_glance(
     state: State<'_, ShellState>,
     share: State<'_, Arc<hub_share::HubShare>>,
-) -> Option<hub_share::DeviceGlance> {
+) -> Result<Option<hub_share::DeviceGlance>, String> {
     let chats: Vec<Arc<agent::Session>> = state
         .chats
         .lock()
@@ -5694,12 +5695,16 @@ fn get_device_glance(
         .values()
         .cloned()
         .collect();
-    let (sharing, theirs) = share.glance();
-    let frames = chats
-        .iter()
-        .filter_map(|chat| chat.stamped_frame())
-        .chain(theirs);
-    hub_share::device_glance(sharing, frames)
+    let share = Arc::clone(&share);
+    off_main(move || {
+        let (sharing, theirs) = share.glance();
+        let frames = chats
+            .iter()
+            .filter_map(|chat| chat.stamped_frame())
+            .chain(theirs);
+        hub_share::device_glance(sharing, frames)
+    })
+    .await
 }
 
 /// Settings → Behavior: the tray, the composer and the limits on scheduled work.
@@ -7412,6 +7417,8 @@ mod command_tests {
             ("start_share", "off_main(move || share.start()).await?"),
             ("stop_share", "off_main(move || share.stop()).await"),
             ("new_share_code", "off_main(move || share.new_code()).await"),
+            // The glance copies and checks frames of up to 400 KB.
+            ("get_device_glance", "off_main(move || {"),
         ] {
             let body = src
                 .split(&format!("async fn {name}("))
