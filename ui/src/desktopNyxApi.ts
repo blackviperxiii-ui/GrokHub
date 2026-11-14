@@ -1,5 +1,6 @@
 // Desktop companion window + wardrobe (src-tauri/src/desktop_nyx.rs).
-import { call } from "./transport";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { call, subscribe } from "./transport";
 
 export interface DesktopNyxEffects {
   transparent: boolean;
@@ -32,6 +33,14 @@ export interface DesktopNyxPatch {
   undocked?: boolean;
   behind?: boolean;
   adult?: boolean;
+}
+
+/** Sent after every desktop-companion change, from any page or the tray. */
+export const DESKTOP_NYX_EVENT = "desktop-nyx://changed";
+
+/** Hears every desktop-companion change, with the whole new state. */
+export function onDesktopNyx(handler: (state: DesktopNyxState) => void): Promise<UnlistenFn> {
+  return subscribe<DesktopNyxState>(DESKTOP_NYX_EVENT, handler);
 }
 
 export function desktopNyxGet(): Promise<DesktopNyxState> {

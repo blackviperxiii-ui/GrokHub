@@ -3,13 +3,12 @@ import { COMPANION_NAME } from "./brand";
 import { NyxCard } from "./NyxCard";
 import {
   desktopNyxDock,
-  desktopNyxGet,
   desktopNyxSavePos,
   desktopNyxSet,
   desktopNyxSetOutfit,
   desktopNyxSetPassthrough,
-  type DesktopNyxState,
 } from "./desktopNyxApi";
+import { useDesktopNyx } from "./useDesktopNyx";
 
 /** Every outfit picture, including gaming (the chat dock leaves that out). */
 const ART = import.meta.glob<string>(["../../brand/nyx/**/*.jpg", "../../brand/nyx-*.jpg"], {
@@ -26,16 +25,12 @@ const POS_SETTLE_MS = 600;
 
 /** The desktop companion page: pedestal + figure, wardrobe, dock back. */
 export function NyxDesk() {
-  const [state, setState] = useState<DesktopNyxState | null>(null);
+  // The dock's wardrobe, Labs and the tray change her too.
+  const [state, setState] = useDesktopNyx();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const artRef = useRef<HTMLDivElement>(null);
   const settle = useRef<number | null>(null);
   const dragging = useRef(false);
-
-  // Mount load only. Inlined like Memory / NyxDock (no refresh wrapper).
-  useEffect(() => {
-    void desktopNyxGet().then(setState, () => setState(null));
-  }, []);
 
   useEffect(() => {
     function onDoc() {

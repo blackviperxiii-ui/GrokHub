@@ -12,6 +12,13 @@ use serde::{Deserialize, Serialize};
 pub const LABEL: &str = "desktop-nyx";
 pub const PAGE: &str = "nyx-desk.html";
 
+/// Sent to every page after any desktop-companion change, with the new
+/// [`State`]: the dock, Labs and the desk page all follow it.
+pub const EVENT: &str = "desktop-nyx://changed";
+
+/// The tray menu's "Nyx on desktop" item.
+pub const TRAY_ID: &str = "desktop-nyx";
+
 /// Window size in logical points (cabin `WINDOW_SIZE`).
 pub const WIDTH: f64 = 320.0;
 pub const HEIGHT: f64 = 480.0;
@@ -238,6 +245,79 @@ pub fn save_pos(
     settings
 }
 
+/// The tray item's words, the same as the old cabin's: "Nyx on desktop".
+pub fn tray_label() -> String {
+    format!("{} on desktop", brand::companion_name())
+}
+
+/// What the tray item shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrayItem {
+    pub text: String,
+    pub enabled: bool,
+    pub checked: bool,
+}
+
+/// Enabled only with Labs → Desktop companion on; checked while she is out
+/// on the desktop. (Later, a game hiding her leaves it checked: she is still
+/// out, only hidden.)
+pub fn tray_item(settings: &crate::settings::ShellSettings) -> TrayItem {
+    TrayItem {
+        text: tray_label(),
+        enabled: settings.desktop_nyx,
+        checked: settings.desktop_nyx && settings.desktop_nyx_undocked,
+    }
+}
+
+/// A tray click: pop her out, or dock her when she is out. `None` while the
+/// Labs switch is off, so a stale click never turns the Lab on.
+pub fn tray_toggle(
+    settings: crate::settings::ShellSettings,
+) -> Option<crate::settings::ShellSettings> {
+    if !settings.desktop_nyx {
+        return None;
+    }
+    let out = !settings.desktop_nyx_undocked;
+    Some(apply_patch(
+        settings,
+        Patch {
+            undocked: Some(out),
+            ..Patch::default()
+        },
+    ))
+}
+
+#[cfg(desktop)]
+static TRAY_ITEM: std::sync::OnceLock<tauri::menu::CheckMenuItem<tauri::Wry>> =
+    std::sync::OnceLock::new();
+
+/// Keeps the tray item so every change can update it.
+#[cfg(desktop)]
+pub fn start_tray(item: tauri::menu::CheckMenuItem<tauri::Wry>) {
+    let _ = TRAY_ITEM.set(item);
+}
+
+/// Writes the settings' answer into the tray item. A click flips the tick
+/// itself, so a click that changes nothing must call this to undo it.
+#[cfg(desktop)]
+pub fn refresh_tray(settings: &crate::settings::ShellSettings) {
+    if let Some(item) = TRAY_ITEM.get() {
+        let t = tray_item(settings);
+        let _ = item.set_enabled(t.enabled);
+        let _ = item.set_checked(t.checked);
+    }
+}
+
+/// Every desktop-companion change ends here: the tray item and every page.
+#[cfg(desktop)]
+pub fn publish(app: &tauri::AppHandle, settings: &crate::settings::ShellSettings) -> State {
+    use tauri::Emitter;
+    refresh_tray(settings);
+    let state = state_of(settings, wayland_now());
+    let _ = app.emit(EVENT, &state);
+    state
+}
+
 /// Create or focus the desktop window. No-op when the Labs switch is off.
 #[cfg(desktop)]
 pub fn show_window(
@@ -315,6 +395,80 @@ pub fn wayland_now() -> bool {
 mod tests {
     use super::*;
     use crate::settings::ShellSettings;
+
+    fn labs_on(undocked: bool) -> ShellSettings {
+        ShellSettings {
+            desktop_nyx: true,
+            desktop_nyx_undocked: undocked,
+            ..ShellSettings::default()
+        }
+    }
+
+    fn item(enabled: bool, checked: bool) -> TrayItem {
+        TrayItem {
+            text: "Nyx on desktop".into(),
+            enabled,
+            checked,
+        }
+    }
+
+    #[test]
+    fn the_tray_item_reads_nyx_on_desktop_and_waits_for_labs() {
+        assert_eq!(tray_item(&ShellSettings::default()), item(false, false));
+        assert_eq!(EVENT, "desktop-nyx://changed");
+        assert_eq!(TRAY_ID, "desktop-nyx");
+    }
+
+    #[test]
+    fn the_tray_item_is_checked_only_while_she_is_out() {
+        assert_eq!(tray_item(&labs_on(false)), item(true, false));
+        assert_eq!(tray_item(&labs_on(true)), item(true, true));
+        let stale = ShellSettings {
+            desktop_nyx_undocked: true,
+            ..ShellSettings::default()
+        };
+        assert_eq!(tray_item(&stale), item(false, false), "Labs off wins");
+    }
+
+    #[test]
+    fn the_tray_toggle_pops_her_out_then_docks_her_and_never_flips_labs() {
+        assert_eq!(tray_toggle(ShellSettings::default()), None);
+        let start = ShellSettings {
+            desktop_nyx_pos: Some([100, 200]),
+            desktop_nyx_behind: true,
+            desktop_nyx_outfit: Some("hanging-out".into()),
+            ..labs_on(false)
+        };
+        let out = tray_toggle(start).expect("Labs is on");
+        assert!(out.desktop_nyx);
+        assert!(out.desktop_nyx_undocked);
+        let back = tray_toggle(out).expect("Labs is on");
+        assert!(back.desktop_nyx);
+        assert!(!back.desktop_nyx_undocked);
+        assert_eq!(back.desktop_nyx_pos, Some([100, 200]));
+        assert!(back.desktop_nyx_behind);
+        assert_eq!(back.desktop_nyx_outfit.as_deref(), Some("hanging-out"));
+    }
+
+    #[test]
+    fn the_tray_item_follows_dock_and_labs_off() {
+        let off = apply_patch(
+            labs_on(true),
+            Patch {
+                enabled: Some(false),
+                ..Patch::default()
+            },
+        );
+        assert_eq!(tray_item(&off), item(false, false));
+        let docked = apply_patch(
+            labs_on(true),
+            Patch {
+                undocked: Some(false),
+                ..Patch::default()
+            },
+        );
+        assert_eq!(tray_item(&docked), item(true, false));
+    }
 
     #[test]
     fn the_window_spec_is_transparent_undecorated_and_on_top_unless_behind() {

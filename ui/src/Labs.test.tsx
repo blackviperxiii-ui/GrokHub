@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginAct, PluginMarket, PluginPage, PluginRow } from "./api";
@@ -30,7 +30,12 @@ const desk = vi.hoisted(() => ({
     }),
   ),
   desktopNyxSet: vi.fn(),
+  onDesktopNyx: vi.fn((fn: (s: unknown) => void) => {
+    deskHeard.fn = fn;
+    return Promise.resolve(() => {});
+  }),
 }));
+const deskHeard = vi.hoisted(() => ({ fn: null as ((s: unknown) => void) | null }));
 
 vi.mock("./api", () => api);
 vi.mock("./desktopNyxApi", () => desk);
@@ -77,6 +82,22 @@ describe("Labs", () => {
       screen.getByRole("heading", { name: "Plugins Preview" }),
     ).toBeVisible();
     expect(screen.getByText("Preview")).toHaveAttribute("title", PLUGINS_TIP);
+  });
+
+  it("follows a desktop companion change made elsewhere, such as the tray", async () => {
+    transport.shell = true;
+    try {
+      api.getPlugins.mockResolvedValue(page([]));
+      const on = { ...(await desk.desktopNyxGet()), enabled: true };
+      desk.desktopNyxGet.mockResolvedValueOnce(on);
+      render(<Labs />);
+      expect(await screen.findByText("Stay behind windows")).toBeVisible();
+      act(() => deskHeard.fn?.({ ...on, enabled: false }));
+      expect(screen.queryByText("Stay behind windows")).toBeNull();
+      expect(desk.desktopNyxSet).not.toHaveBeenCalled();
+    } finally {
+      transport.shell = false;
+    }
   });
 
   it("on this computer, points to About and Updates for the channel, not the cabin", async () => {

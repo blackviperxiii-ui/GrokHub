@@ -10,14 +10,11 @@ import {
   type PluginRow,
 } from "./api";
 import { COMPANION_NAME } from "./brand";
-import {
-  desktopNyxGet,
-  desktopNyxSet,
-  type DesktopNyxState,
-} from "./desktopNyxApi";
+import { desktopNyxSet } from "./desktopNyxApi";
 import { Diagnostics } from "./Diagnostics";
 import { Toggle } from "./Toggle";
 import { inShell } from "./transport";
+import { useDesktopNyx } from "./useDesktopNyx";
 import { StatusLine, useNote } from "./ui";
 
 export const LABS_NOTE = "Early features. They work, but they may change.";
@@ -212,11 +209,9 @@ export function Labs() {
 
 /** Settings → Labs → Desktop companion (cabin desktop_nyx). Off by default. */
 function DesktopCompanion() {
-  const [desk, setDesk] = useState<DesktopNyxState | null>(null);
   const { fail } = useNote();
-  useEffect(() => {
-    void desktopNyxGet().then(setDesk, fail);
-  }, [fail]);
+  // The tray and the desk page change it too; their events land here.
+  const [desk, setDesk] = useDesktopNyx(true, fail);
   if (!desk) return null;
   const effectsOk = desk.effects.transparent && desk.effects.onTop;
   return (

@@ -167,7 +167,7 @@ use serde::Serialize;
 use serde_json::Value;
 use settings::ShellSettings;
 #[cfg(desktop)]
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 #[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Listener, Manager, State, WindowEvent};
@@ -3966,11 +3966,16 @@ fn set_personality(state: State<'_, ShellState>, id: String) -> Result<personali
 /// one-time 18+ check comes first ([`confirm_adult`]).
 #[tauri::command]
 fn set_explicit_personalities(
+    app: AppHandle,
     state: State<'_, ShellState>,
     on: bool,
 ) -> Result<personality::Page, String> {
     match current(&state).adults_only(on) {
-        Some(next) => save_shell(&state, next),
+        Some(next) => {
+            let page = save_shell(&state, next)?;
+            adults_changed(&app, &state);
+            Ok(page)
+        }
         None => Ok(personality::Page {
             age_check: true,
             ..personalities(&state)
@@ -3981,11 +3986,25 @@ fn set_explicit_personalities(
 /// The 18+ check's yes: remembered for good, with when it was given (never a
 /// birth date), and adults-only turns on.
 #[tauri::command]
-fn confirm_adult(state: State<'_, ShellState>) -> Result<personality::Page, String> {
-    save_shell(
+fn confirm_adult(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+) -> Result<personality::Page, String> {
+    let page = save_shell(
         &state,
         current(&state).confirm_adult(grokhub_core::now_ms()),
-    )
+    )?;
+    adults_changed(&app, &state);
+    Ok(page)
+}
+
+/// Adults-only decides which outfits the desktop companion may wear, so her
+/// window, the dock's wardrobe and Labs hear it.
+fn adults_changed(app: &AppHandle, state: &ShellState) {
+    #[cfg(desktop)]
+    desktop_nyx::publish(app, &current(state));
+    #[cfg(mobile)]
+    let _ = (app, state);
 }
 
 /// Settings → Personality → Heat. Clean is not a stop on the dial, so it reads
@@ -4094,82 +4113,140 @@ fn desktop_nyx_get(state: State<'_, ShellState>) -> desktop_nyx::State {
     desktop_nyx::state_of(&current(&state), desktop_nyx::wayland_now())
 }
 
+/// Every desktop-companion write: save, store, apply the window when asked
+/// (`show_window` hides it while docked), then the tray and every page hear
+/// it, even when the window couldn't be applied.
+#[cfg(desktop)]
+fn desktop_nyx_commit(
+    app: &AppHandle,
+    state: &ShellState,
+    next: ShellSettings,
+    window: bool,
+) -> Result<desktop_nyx::State, String> {
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    let shown = if window {
+        desktop_nyx::show_window(app, &next).map(|()| {
+            let _ = desktop_nyx::apply_behind(app, next.desktop_nyx_behind);
+        })
+    } else {
+        Ok(())
+    };
+    let told = desktop_nyx::publish(app, &next);
+    shown.map(|()| told)
+}
+
+/// One desktop-companion write at a time, from the read to the window: two
+/// pop-outs at once (a double click, or the tray during the dock's) would
+/// each build her window, and a read taken outside could undo a newer
+/// write. Only async callers take it; the main thread never waits on it,
+/// because building her window needs the main thread.
+#[cfg(desktop)]
+static DESKTOP_NYX_WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(desktop)]
+async fn desktop_nyx_write(
+    app: &AppHandle,
+    state: &ShellState,
+    window: bool,
+    change: impl FnOnce(ShellSettings) -> Result<ShellSettings, String>,
+) -> Result<desktop_nyx::State, String> {
+    let _one = DESKTOP_NYX_WRITES.lock().await;
+    let next = change(current(state))?;
+    desktop_nyx_commit(app, state, next, window)
+}
+
+/// The desktop-companion writers are async: building her webview from a
+/// sync command (the main thread) can hang on Windows, and the write lock
+/// must never block the main thread.
 #[cfg(desktop)]
 #[tauri::command]
-fn desktop_nyx_set(
+async fn desktop_nyx_set(
     app: AppHandle,
     state: State<'_, ShellState>,
     patch: desktop_nyx::Patch,
 ) -> Result<desktop_nyx::State, String> {
-    let next = desktop_nyx::apply_patch(current(&state), patch);
-    settings::save(&state.config_dir, &next)?;
-    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
-    desktop_nyx::show_window(&app, &next)?;
-    let _ = desktop_nyx::apply_behind(&app, next.desktop_nyx_behind);
-    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+    desktop_nyx_write(&app, &state, true, |now| {
+        Ok(desktop_nyx::apply_patch(now, patch))
+    })
+    .await
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn desktop_nyx_undock(
+async fn desktop_nyx_undock(
     app: AppHandle,
     state: State<'_, ShellState>,
 ) -> Result<desktop_nyx::State, String> {
-    let mut next = current(&state);
-    if !next.desktop_nyx {
+    desktop_nyx_write(&app, &state, true, |mut next| {
         next.desktop_nyx = true;
-    }
-    next.desktop_nyx_undocked = true;
-    settings::save(&state.config_dir, &next)?;
-    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
-    desktop_nyx::show_window(&app, &next)?;
-    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+        next.desktop_nyx_undocked = true;
+        Ok(next)
+    })
+    .await
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn desktop_nyx_dock(
+async fn desktop_nyx_dock(
     app: AppHandle,
     state: State<'_, ShellState>,
 ) -> Result<desktop_nyx::State, String> {
-    let next = desktop_nyx::apply_patch(
-        current(&state),
-        desktop_nyx::Patch {
-            undocked: Some(false),
-            ..desktop_nyx::Patch::default()
-        },
-    );
-    settings::save(&state.config_dir, &next)?;
-    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
-    desktop_nyx::hide_window(&app)?;
-    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+    desktop_nyx_write(&app, &state, true, |now| {
+        Ok(desktop_nyx::apply_patch(
+            now,
+            desktop_nyx::Patch {
+                undocked: Some(false),
+                ..desktop_nyx::Patch::default()
+            },
+        ))
+    })
+    .await
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn desktop_nyx_set_outfit(
+async fn desktop_nyx_set_outfit(
+    app: AppHandle,
     state: State<'_, ShellState>,
     id: Option<String>,
 ) -> Result<desktop_nyx::State, String> {
-    let next = desktop_nyx::set_outfit(current(&state), id)?;
-    settings::save(&state.config_dir, &next)?;
-    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
-    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+    desktop_nyx_write(&app, &state, false, |now| desktop_nyx::set_outfit(now, id)).await
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn desktop_nyx_save_pos(
+async fn desktop_nyx_save_pos(
+    app: AppHandle,
     state: State<'_, ShellState>,
     x: f64,
     y: f64,
     monitor_w: f64,
     monitor_h: f64,
 ) -> Result<desktop_nyx::State, String> {
-    let next = desktop_nyx::save_pos(current(&state), [x, y], [monitor_w, monitor_h]);
-    settings::save(&state.config_dir, &next)?;
-    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
-    Ok(desktop_nyx::state_of(&next, desktop_nyx::wayland_now()))
+    desktop_nyx_write(&app, &state, false, |now| {
+        Ok(desktop_nyx::save_pos(now, [x, y], [monitor_w, monitor_h]))
+    })
+    .await
+}
+
+/// The tray's "Nyx on desktop". The settings decide, never the item's own
+/// tick, and the window work runs off the menu callback.
+#[cfg(desktop)]
+fn desktop_nyx_from_tray(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<ShellState>();
+        let toggled = desktop_nyx_write(&app, &state, true, |now| {
+            desktop_nyx::tray_toggle(now).ok_or_else(|| "Labs is off".to_string())
+        })
+        .await;
+        // A click flips the tick itself: a click that changed nothing (Labs
+        // off, or the save failed) must put the settings' answer back.
+        if toggled.is_err() {
+            desktop_nyx::refresh_tray(&current(&state));
+        }
+    });
 }
 
 #[cfg(desktop)]
@@ -6759,12 +6836,22 @@ fn show_main(app: &AppHandle) {
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show_label = format!("Show {}", grokhub_core::brand::product_name());
     let show = MenuItem::with_id(app, "show", show_label, true, None::<&str>)?;
+    let t = desktop_nyx::tray_item(&current(&app.state::<ShellState>()));
+    let nyx = CheckMenuItem::with_id(
+        app,
+        desktop_nyx::TRAY_ID,
+        t.text,
+        t.enabled,
+        t.checked,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     // Always on; harmless when nothing runs.
     let halt = MenuItem::with_id(app, "halt", "Halt", true, None::<&str>)?;
     let local = MenuItem::with_id(app, "local", local_ai::TRAY_CHECKING, false, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&local, &halt, &show, &quit])?;
+    let menu = Menu::with_items(app, &[&local, &halt, &show, &nyx, &quit])?;
     local_ai::start_tray(local, app.state::<ShellState>().config_dir.clone());
+    desktop_nyx::start_tray(nyx);
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip(grokhub_core::brand::product_name())
         .menu(&menu)
@@ -6775,6 +6862,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 halt_now(app);
             }
             "quit" => app.exit(0),
+            id if id == desktop_nyx::TRAY_ID => desktop_nyx_from_tray(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -7260,7 +7348,9 @@ pub fn run() {
                         },
                     );
                     let _ = settings::save(&state.config_dir, &next);
-                    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+                    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+                    // Alt+F4 on her: the tray and every page hear it too.
+                    desktop_nyx::publish(window.app_handle(), &next);
                     return;
                 }
                 let state = window.state::<ShellState>();
@@ -7786,6 +7876,104 @@ pub fn run() {
 
 #[cfg(test)]
 mod command_tests {
+    /// The text from `start` to the end of that item (the next line that is
+    /// a lone `}` at the margin), with all whitespace taken out so a
+    /// reformat doesn't break the checks.
+    fn item_after(src: &str, start: &str) -> String {
+        src.split(start)
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .unwrap_or_else(|| panic!("{start} is in lib.rs"))
+            .split_whitespace()
+            .collect()
+    }
+
+    fn squeeze(code: &str) -> String {
+        code.split_whitespace().collect()
+    }
+
+    #[test]
+    fn the_tray_lists_nyx_on_desktop_after_show() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let tray = item_after(&src, "fn build_tray(");
+        for want in [
+            "CheckMenuItem::with_id(app, desktop_nyx::TRAY_ID,",
+            "&[&local, &halt, &show, &nyx, &quit]",
+            "desktop_nyx::start_tray(nyx)",
+            "id if id == desktop_nyx::TRAY_ID => desktop_nyx_from_tray(app)",
+        ] {
+            assert!(tray.contains(&squeeze(want)), "build_tray: {want}");
+        }
+        let click = item_after(&src, "fn desktop_nyx_from_tray(");
+        assert!(click.contains("tauri::async_runtime::spawn"));
+        assert!(
+            click.contains(&squeeze(
+                "if toggled.is_err() { desktop_nyx::refresh_tray(&current(&state)); }"
+            )),
+            "a click that changed nothing puts the tick back"
+        );
+        assert!(
+            !click.contains("is_checked"),
+            "the settings decide, not the item's own tick"
+        );
+    }
+
+    #[test]
+    fn every_desktop_nyx_write_tells_the_tray_and_every_page() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        for name in [
+            "async fn desktop_nyx_set(",
+            "async fn desktop_nyx_undock(",
+            "async fn desktop_nyx_dock(",
+            "async fn desktop_nyx_set_outfit(",
+            "async fn desktop_nyx_save_pos(",
+            "fn desktop_nyx_from_tray(",
+        ] {
+            let body = item_after(&src, name);
+            assert!(body.contains("desktop_nyx_write(&app,&state,"), "{name}");
+            assert!(
+                !body.contains("settings::save("),
+                "{name} saves through the write"
+            );
+        }
+        // One at a time, the read inside the lock.
+        let write = item_after(&src, "async fn desktop_nyx_write(");
+        assert!(write.contains(&squeeze(concat!(
+            "let _one = DESKTOP_NYX_WRITES.lock().await; let next = change(current(state))?; ",
+            "desktop_nyx_",
+            "commit(app, state, next, window)"
+        ))));
+        assert_eq!(
+            src.matches(concat!("desktop_nyx_", "commit(app,")).count(),
+            1,
+            "only desktop_nyx_write commits"
+        );
+        // A window that fails still leaves the tray and pages right.
+        let commit = item_after(&src, "fn desktop_nyx_commit(");
+        assert!(commit.contains(&squeeze(
+            "let told = desktop_nyx::publish(app, &next); shown.map(|()| told)"
+        )));
+        assert!(!commit.contains("show_window(app,&next)?"));
+        let close = src
+            .split("if window.label() == desktop_nyx::LABEL {")
+            .nth(1)
+            .and_then(|s| s.split("return;").next())
+            .expect("the desk's close arm");
+        assert!(close.contains("desktop_nyx::publish(window.app_handle(), &next)"));
+        assert_eq!(
+            src.matches(concat!("desktop_nyx_", "undocked = ")).count(),
+            1,
+            "only desktop_nyx_undock writes the field directly"
+        );
+        // Adults-only changes her wardrobe.
+        for name in ["fn set_explicit_personalities(", "fn confirm_adult("] {
+            assert!(
+                item_after(&src, name).contains("adults_changed(&app,&state);"),
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn settings_load_on_the_blocking_pool() {
         // `view` reads the keychain. A plain command runs on the main thread

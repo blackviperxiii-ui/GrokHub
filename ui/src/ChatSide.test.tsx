@@ -19,6 +19,7 @@ const desk = vi.hoisted(() => ({
   desktopNyxUndock: vi.fn(() => Promise.resolve({ enabled: true, undocked: true, outfit: null, outfits: [] })),
   desktopNyxDock: vi.fn(),
   desktopNyxSetOutfit: vi.fn(),
+  onDesktopNyx: vi.fn(() => Promise.resolve(() => {})),
 }));
 vi.mock("./desktopNyxApi", () => desk);
 vi.mock("./transport", async (importOriginal) => ({
