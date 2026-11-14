@@ -396,6 +396,11 @@ function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean, r
               type="button"
               className="home-row"
               onClick={() => {
+                // A skill idea is added from Pulse, where Add skill says what it saved.
+                if (idea.skill) {
+                  go.onOpen("pulse");
+                  return;
+                }
                 // Taking the idea is its accept, as in Pulse; the box still waits on Send.
                 void pulseAct(idea.id, "accept").catch(() => {});
                 go.onAsk(idea.action);

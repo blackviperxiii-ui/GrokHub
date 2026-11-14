@@ -1,0 +1,1 @@
+- The desktop app runs the nightly chat review again. Once a day, after 8 or more new turns, it suggests automations for the Automations page's Suggested tiles and skills as Pulse ideas with an Add skill button, and writes better steps for skills you have only when a replay of their last run passes. Scratch chats are never read.

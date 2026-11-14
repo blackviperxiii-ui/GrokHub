@@ -383,3 +383,41 @@ fn the_journal_tile_opens_a_mission_chat_only_for_a_viewer_who_sees_it() {
     assert_eq!(desktop.rows[0].tap, open);
     assert_eq!(desktop.rows[1].tap, Some(TileAction::nav("journal")));
 }
+
+#[test]
+fn todays_pick_sends_a_skill_idea_to_pulse_instead_of_a_chat() {
+    let idea = |skill: bool| crate::pulse::Idea {
+        id: "i1".into(),
+        title: "Tidy the board".into(),
+        icon: String::new(),
+        summary: "Sort open cards".into(),
+        kind: "Learn".into(),
+        action: "sort cards by due date".into(),
+        verdict: None,
+        fix: String::new(),
+        more: String::new(),
+        chips: Vec::new(),
+        loved: false,
+        skill,
+    };
+    let page = |skill: bool| crate::pulse::Page {
+        feed: Vec::new(),
+        today: 0,
+        ideas: vec![crate::pulse::Group {
+            label: String::new(),
+            ideas: vec![idea(skill)],
+        }],
+        note: String::new(),
+    };
+    let skill = daily_drop_view(&page(true));
+    assert_eq!(skill.buttons.len(), 1);
+    assert_eq!(skill.buttons[0].label, "Open Pulse");
+    assert_eq!(skill.buttons[0].action, TileAction::nav("pulse"));
+    let plain = daily_drop_view(&page(false));
+    assert_eq!(plain.buttons[0].label, "Let's do it");
+    assert_eq!(
+        plain.buttons[0].action,
+        TileAction::ask("sort cards by due date")
+    );
+    assert_eq!(plain.buttons[1].label, "Open Pulse");
+}

@@ -20,6 +20,8 @@ pub mod capabilities;
 pub mod card_chat;
 pub mod change_rows;
 pub mod changes;
+#[cfg(desktop)]
+pub mod chat_review;
 pub mod chat_tabs;
 pub mod chat_trials;
 pub mod chips;
@@ -6456,12 +6458,18 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "sign_out_connector" => out(block_on(sign_out_connector(state, arg(args, "name")?))?),
         "disconnect_connector" => out(block_on(disconnect_connector(state, arg(args, "name")?))?),
         "get_pulse" => out(block_on(get_pulse(state, arg(args, "day")?))?),
-        "pulse_act" => out(block_on(pulse_act(
-            state,
-            arg(args, "id")?,
-            arg(args, "act")?,
-            arg(args, "day")?,
-        ))?),
+        "pulse_act" => {
+            let act: pulse::Act = arg(args, "act")?;
+            if !remote::web_may_pulse(&act) {
+                return Err(remote::refused());
+            }
+            out(block_on(pulse_act(
+                state,
+                arg(args, "id")?,
+                act,
+                arg(args, "day")?,
+            ))?)
+        }
         "pulse_discuss" => out(block_on(pulse_discuss(state, arg(args, "id")?))?),
         "pulse_offer" => out(block_on(pulse_offer(
             state,

@@ -1542,6 +1542,8 @@ export interface PulseIdea {
   chips: PulseChip[];
   /** Like was tapped and is still on: the row shows a filled heart. */
   loved: boolean;
+  /** A skill the nightly review suggested: the main button is Add skill. */
+  skill: boolean;
 }
 
 export type FixKind =
@@ -1600,6 +1602,7 @@ export type PulseAct =
   | "snooze"
   | "opened"
   | "accept"
+  | "addSkill"
   | "moreLike"
   | "notInterested"
   | "ignore"
@@ -2135,7 +2138,7 @@ export type HomeTile =
   | {
       kind: "pulse";
       post: { id: string; title: string; summary: string; ago: string } | null;
-      idea: { id: string; title: string; action: string } | null;
+      idea: { id: string; title: string; action: string; skill: boolean } | null;
     }
   | { kind: "personality"; name: string; picture: string | null }
   | { kind: "upNext"; games: { appId: number; name: string }[] }
