@@ -8,6 +8,7 @@ import type {
   ChatEnvelope,
   ChatEvent,
   ElicitAction,
+  HubSend,
   QuickChip,
   SessionMode,
   Settings,
@@ -62,6 +63,7 @@ const api = vi.hoisted(() => ({
   slashHits: vi.fn(() => Promise.resolve([])),
   runSlash: vi.fn(),
   commandBoxApprove: vi.fn<(line: string, conversationId?: string) => Promise<string>>(),
+  hubSendApprove: vi.fn<(send: HubSend) => Promise<string>>(),
   exportChat: vi.fn(),
   openSaved: vi.fn(),
   revealSaved: vi.fn(),
@@ -110,6 +112,7 @@ vi.mock("./autoSetupApi", () => auto);
 
 vi.mock("./api", () => ({
   commandBoxApprove: api.commandBoxApprove,
+  hubSendApprove: api.hubSendApprove,
   getDeviceGlance: api.getDeviceGlance,
   sendChat: api.sendChat,
   answerElicit: api.answerElicit,
@@ -1151,6 +1154,52 @@ describe("Chat", () => {
     expect(await screen.findByText("Cancelled. Nothing ran.")).toBeInTheDocument();
     expect(api.commandBoxApprove).not.toHaveBeenCalled();
     expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("/sync asks on a card, Send shares once through the hub, and nothing reaches the model", async () => {
+    render(<Chat onOpenSettings={() => {}} />);
+    api.runSlash.mockReset().mockResolvedValue({
+      kind: "hubAsk",
+      send: { what: "sync" },
+      prompt: "Share your chats and memory with your paired computers?",
+      note: "Send shares them once; Cancel sends nothing.",
+    });
+    api.hubSendApprove.mockReset().mockResolvedValue("Shared chats and memory with your paired computer.");
+    await userEvent.type(screen.getByLabelText("Message"), "/sync{Enter}");
+    const card = await screen.findByRole("group", { name: "/sync asks first" });
+    expect(card).toHaveTextContent("Share your chats and memory with your paired computers?");
+    expect(card).toHaveTextContent("Send shares them once; Cancel sends nothing.");
+    expect(api.hubSendApprove).not.toHaveBeenCalled();
+    await userEvent.click(within(card).getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Shared chats and memory with your paired computer.")).toBeInTheDocument();
+    expect(api.hubSendApprove).toHaveBeenCalledTimes(1);
+    expect(api.hubSendApprove).toHaveBeenCalledWith({ what: "sync" });
+    expect(screen.queryByRole("group", { name: "/sync asks first" })).toBeNull();
+    expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
+  it("/inhabit Cancel sends nothing, and a refused Send says why", async () => {
+    render(<Chat onOpenSettings={() => {}} />);
+    const ask = {
+      kind: "hubAsk",
+      send: { what: "inhabit", peer: "dev-7f3a" },
+      prompt: "Hand off to Desk?",
+      note: "Desk can pick this up once.",
+    };
+    api.runSlash.mockReset().mockResolvedValue(ask);
+    api.hubSendApprove.mockReset().mockRejectedValue("Sharing is off. Start share on Devices first.");
+    await userEvent.type(screen.getByLabelText("Message"), "/inhabit desk{Enter}");
+    let card = await screen.findByRole("group", { name: "/inhabit asks first" });
+    await userEvent.click(within(card).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Cancelled. Nothing was sent.")).toBeInTheDocument();
+    expect(api.hubSendApprove).not.toHaveBeenCalled();
+
+    await userEvent.type(screen.getByLabelText("Message"), "/inhabit desk{Enter}");
+    card = await screen.findByRole("group", { name: "/inhabit asks first" });
+    await userEvent.click(within(card).getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Sharing is off. Start share on Devices first.")).toBeInTheDocument();
+    expect(api.hubSendApprove).toHaveBeenCalledWith({ what: "inhabit", peer: "dev-7f3a" });
+    expect(api.sendChat).not.toHaveBeenCalled();
   });
 
   it("/deep-research sends the line as typed and runs no second command", async () => {

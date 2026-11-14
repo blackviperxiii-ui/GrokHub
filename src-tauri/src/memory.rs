@@ -805,6 +805,26 @@ fn tab_path(name: &str) -> Result<std::path::PathBuf, String> {
     }
 }
 
+/// SOUL.md, USER.md and MEMORY.md as they are on disk, each with when it
+/// last changed (Unix ms, 0 when it isn't there), for what `/sync` and
+/// `/inhabit` hand to a paired computer. A link or an oversized file is
+/// refused, as the Memory page refuses it.
+pub fn tab_files() -> Result<Vec<(&'static str, String, u64)>, String> {
+    ["SOUL.md", "USER.md", "MEMORY.md"]
+        .into_iter()
+        .map(|name| {
+            let path = tab_path(name)?;
+            let body = read(&path)?;
+            let at = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis() as u64);
+            Ok((name, body, at))
+        })
+        .collect()
+}
+
 /// The three Memory page tabs (global config folder), plus the one-time tidy offer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -1100,7 +1100,13 @@ export type SlashEffect =
   /** `/plugins`: Settings → Labs. */
   | { kind: "openSection"; section: "labs" }
   /** `/sh <line>` or `$ <line>`: the Command page's checks on the line. */
-  | { kind: "shell"; check: CommandBoxVerdict };
+  | { kind: "shell"; check: CommandBoxVerdict }
+  /** `/sync` or `/inhabit <computer>`: a send to a paired computer asks
+   * first. Its Send is `hubSendApprove`, which checks again. */
+  | { kind: "hubAsk"; send: HubSend; prompt: string; note: string };
+
+/** What `/sync` or `/inhabit` sends. `peer` is the paired computer's id. */
+export type HubSend = { what: "sync" } | { what: "inhabit"; peer: string };
 
 export function slashHits(draft: string): Promise<SlashHit[]> {
   return invoke<SlashHit[]>("slash_hits", { draft });
@@ -4373,6 +4379,12 @@ export function commandBoxCheck(line: string): Promise<CommandBoxVerdict> {
  * chat's folder. */
 export function commandBoxApprove(line: string, conversationId?: string): Promise<string> {
   return invoke<string>("command_box_approve", { line, conversationId });
+}
+
+/** Send on a `/sync` or `/inhabit` card: the checks run again before
+ * anything leaves this computer, and the line to show comes back. */
+export function hubSendApprove(send: HubSend): Promise<string> {
+  return invoke<string>("hub_send_approve", { send });
 }
 
 export function commandBoxForget(): Promise<CommandBoxView> {

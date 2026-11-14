@@ -1,0 +1,2 @@
+- Chat: `/sync` shares your chats and memory with paired computers, and `/inhabit <computer>` hands your soul, skills and goal pin to one of them. Both ask first on a card, need sharing on and a paired computer, and redact secrets before anything leaves.
+- Hub: a paired computer gets nothing while sharing is off, and a share or hand-off from an earlier launch is never served again.

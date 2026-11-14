@@ -31,6 +31,7 @@ import {
   readTurn,
   replyPick,
   commandBoxApprove,
+  hubSendApprove,
   runSlash,
   saveSettings,
   sendChat,
@@ -42,6 +43,7 @@ import {
   type ChatEvent,
   type ElicitAction,
   type HangoutMode,
+  type HubSend,
   type SavedFile,
   type SessionMode,
   type Settings,
@@ -152,6 +154,9 @@ export type Item =
   /** A `/sh` or `$ ` line asks first. Its Yes is the Command page's, which
    * runs the checks again; no typed line can stand in for it. */
   | { kind: "shell"; line: string; destructive: boolean; secret: boolean }
+  /** `/sync` or `/inhabit` asks before anything leaves this computer. Its
+   * Send is the hub's own command, which checks again. */
+  | { kind: "hub"; command: string; send: HubSend; prompt: string; note: string }
   /** A show_panel panel. Dismissed stays in the list, so the same panel
    * sent again stays hidden; a changed one comes back. */
   | (Extract<ChatEvent, { kind: "panel" }> & { dismissed?: boolean })
@@ -763,6 +768,22 @@ function LogItem({
               onClick={() => onConfirm(item, true)}
             >
               Run
+            </button>
+            <button type="button" onClick={() => onConfirm(item, false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      );
+    case "hub":
+      return (
+        <div className="card notice slash-notice" role="group" aria-label={`${item.command} asks first`}>
+          <span className="card-title">{item.command}</span>
+          <p className="card-detail-line plain">{item.prompt}</p>
+          <p className="card-detail-line plain">{item.note}</p>
+          <div className="card-buttons">
+            <button type="button" className="quiet" onClick={() => onConfirm(item, true)}>
+              Send
             </button>
             <button type="button" onClick={() => onConfirm(item, false)}>
               Cancel
@@ -1708,6 +1729,24 @@ export function Chat({
     }
   }
 
+  /** Send on a `/sync` or `/inhabit` card. The reply is not touched, so it
+   * does not wait for one. */
+  async function settleHub(item: Extract<Item, { kind: "hub" }>, yes: boolean) {
+    setItems((now) => now.filter((it) => it !== item));
+    if (!yes) {
+      setItems((now) => [...now, { kind: "slash", command: item.command, text: "Cancelled. Nothing was sent." }]);
+      return;
+    }
+    const from = conversationId;
+    let text: string;
+    try {
+      text = await hubSendApprove(item.send);
+    } catch (err) {
+      text = String(err);
+    }
+    if (openNow.current === from) setItems((now) => [...now, { kind: "slash", command: item.command, text }]);
+  }
+
   /** Runs a slash line and applies what it did. `box` is what the box held
    * when the line was sent, and `files` what was attached to it. */
   async function slash(line: string, box = line, files: typeof attach.files = []) {
@@ -1870,6 +1909,12 @@ export function Chat({
         else setItems((now) => [...now, { kind: "slash", command: "/sh", text: check.message }]);
         break;
       }
+      case "hubAsk":
+        setItems((now) => [
+          ...now,
+          { kind: "hub", command, send: effect.send, prompt: effect.prompt, note: effect.note },
+        ]);
+        break;
       default: {
         const _unhandled: never = effect;
         return _unhandled;
@@ -1881,6 +1926,10 @@ export function Chat({
   function settleConfirm(item: Item, yes: boolean) {
     if (item.kind === "shell") {
       void settleShell(item, yes);
+      return;
+    }
+    if (item.kind === "hub") {
+      void settleHub(item, yes);
       return;
     }
     if (item.kind !== "confirm") return;
