@@ -446,7 +446,12 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
         // Checked again here, so the page only ever gets a spec the core
         // rules allow (plain text, intent ids, size caps).
         AcpEvent::Panel { id, spec } => {
-            grokhub_core::panel_spec::parse_panel_spec(&spec.to_string()).ok()?;
+            // Checked again as a spec, not by the length of its re-serialized
+            // text: the engine's form (with a default heading level filled
+            // in) can be longer than what the tool checked.
+            let checked: grokhub_core::panel_spec::PanelSpec =
+                serde_json::from_value(spec.clone()).ok()?;
+            grokhub_core::panel_spec::validate_panel_spec(&checked).ok()?;
             UiEvent::Panel { id, spec }
         }
         AcpEvent::Elicit(ask) => UiEvent::Elicit {
@@ -2247,6 +2252,37 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn a_panel_near_the_cap_still_reaches_the_page() {
+        use grokhub_core::panel_spec::{panel_spec_from_args, PANEL_JSON_MAX, TEXT_MAX};
+        // Headings with no level: the engine's form adds `"level":2` to each,
+        // so it grows past the cap the tool checked the call against.
+        let build = |last: usize| {
+            let mut elements: Vec<serde_json::Value> = (0..11)
+                .map(|_| serde_json::json!({"type": "text", "text": "a".repeat(TEXT_MAX)}))
+                .collect();
+            elements.push(serde_json::json!({"type": "text", "text": "b".repeat(last.max(1))}));
+            for _ in 0..36 {
+                elements.push(serde_json::json!({"type": "heading", "text": "h"}));
+            }
+            serde_json::json!({ "elements": elements }).to_string()
+        };
+        let base = build(1).len();
+        let args = build(1 + PANEL_JSON_MAX - 100 - base);
+        assert_eq!(args.len(), PANEL_JSON_MAX - 100);
+        let spec = serde_json::to_value(panel_spec_from_args(&args).unwrap()).unwrap();
+        assert!(
+            spec.to_string().len() > PANEL_JSON_MAX,
+            "{}",
+            spec.to_string().len()
+        );
+        let event = ui_event(AcpEvent::Panel {
+            id: "call-1".into(),
+            spec,
+        });
+        assert!(matches!(event, Some(UiEvent::Panel { ref id, .. }) if id == "call-1"));
     }
 
     #[test]

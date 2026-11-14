@@ -50,6 +50,8 @@ enum Act {
     /// Asks to merge a helper's work.
     Merge,
     Shot,
+    /// Draws a panel with show_panel.
+    Panel,
     /// A click in a length-truncated reply: must not execute.
     TruncatedClick,
 }
@@ -244,6 +246,14 @@ impl ModelClient for FakeModel {
                 )],
             ),
             Act::Shot => (String::new(), vec![call(n, "screenshot", json!({}))]),
+            Act::Panel => (
+                String::new(),
+                vec![call(
+                    n,
+                    "show_panel",
+                    json!({"title": "Wi-Fi — on ✓", "elements": [{"type": "text", "text": "Connected."}]}),
+                )],
+            ),
         };
         Ok(TurnOutput {
             text,
@@ -439,6 +449,8 @@ struct Rig {
     mode: PermMode,
     /// The soft asks the kernel raised: the tool and the card's line.
     asks: Mutex<Vec<(String, String)>>,
+    /// The panels the kernel handed the chat: call id and spec.
+    panels: Mutex<Vec<(String, Value)>>,
 }
 
 const T0: u64 = 1_800_000_000_000;
@@ -473,6 +485,7 @@ fn rig(label: &str, script: Script) -> Rig {
         pause: Arc::new(AtomicBool::new(false)),
         mode: PermMode::Always,
         asks: Mutex::new(Vec::new()),
+        panels: Mutex::new(Vec::new()),
     }
 }
 
@@ -507,10 +520,14 @@ impl Rig {
             held: &[],
             perms: self.perms.as_ref(),
         };
-        run_episode(&k, ep, view, &mut |ev| {
-            if let crate::run::LoopEvent::Permission { name, action, .. } = ev {
+        run_episode(&k, ep, view, &mut |ev| match ev {
+            crate::run::LoopEvent::Permission { name, action, .. } => {
                 self.asks.lock().unwrap().push((name, action));
             }
+            crate::run::LoopEvent::Panel { id, spec } => {
+                self.panels.lock().unwrap().push((id, spec));
+            }
+            _ => {}
         })
     }
 
@@ -531,6 +548,25 @@ fn clicks_then_done(steps: usize) -> Script {
             Act::Done
         }
     })
+}
+
+#[test]
+fn a_panel_drawn_in_an_episode_reaches_the_chat() {
+    let r = rig(
+        "panel",
+        Box::new(|n| if n == 0 { Act::Panel } else { Act::Done }),
+    );
+    let config = r.dir.join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("generative_ui.toml"), "enabled = true\n").unwrap();
+    let _guard = crate::perm::ConfigGuard::set(&config);
+    let mut ep = r.episode("Turn on Wi-Fi in Settings");
+    let mut view = EpisodeView::default();
+    r.run(&mut ep, &mut view);
+    let panels = r.panels.lock().unwrap().clone();
+    assert_eq!(panels.len(), 1, "{panels:?}");
+    assert_eq!(panels[0].1["title"], "Wi-Fi — on ✓");
+    assert_eq!(panels[0].1["elements"][0]["text"], "Connected.");
 }
 
 fn is_step(s: &crate::harness::Span) -> bool {

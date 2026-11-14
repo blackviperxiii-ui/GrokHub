@@ -1408,12 +1408,18 @@ fn emit(
     detail: &str,
     image: Option<String>,
 ) {
+    let id = if call.call_id.is_empty() {
+        format!("tool-{}", call.name)
+    } else {
+        call.call_id.clone()
+    };
+    // A parked call also reads "completed", but show_panel is read-only and
+    // never parks; only a call that ran draws its panel.
+    if detail != PARKED {
+        crate::run::emit_panel(on_event, &id, call, status);
+    }
     on_event(LoopEvent::Tool {
-        id: if call.call_id.is_empty() {
-            format!("tool-{}", call.name)
-        } else {
-            call.call_id.clone()
-        },
+        id,
         name: call.name.clone(),
         status: status.into(),
         detail: crate::tools::fence::display_text(detail)

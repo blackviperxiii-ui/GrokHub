@@ -2096,6 +2096,29 @@ fn record_turn_truncated(conversation_id: &str, reason: Option<&str>, streak: u3
     let _ = crate::harness::append_span(&crate::perm::config_dir(), &span);
 }
 
+/// A finished show_panel hands the chat its whole panel, before the clipped
+/// row. The tool only finishes on a spec that parses, and only with generative
+/// UI on, so a refused or failed call never draws one. The chat loop and the
+/// desktop episode kernel both call this.
+pub(crate) fn emit_panel(
+    on_event: &mut dyn FnMut(LoopEvent),
+    id: &str,
+    call: &FunctionCall,
+    status: &str,
+) {
+    if status != "completed" || call.name != crate::tools::SHOW_PANEL {
+        return;
+    }
+    if let Ok(spec) = grokhub_core::panel_spec::panel_spec_from_args(&call.arguments) {
+        if let Ok(spec) = serde_json::to_value(spec) {
+            on_event(LoopEvent::Panel {
+                id: id.to_string(),
+                spec,
+            });
+        }
+    }
+}
+
 pub(crate) fn emit_tool(
     on_event: &mut dyn FnMut(LoopEvent),
     id: &str,
@@ -2104,19 +2127,7 @@ pub(crate) fn emit_tool(
     detail: &str,
     image: Option<String>,
 ) {
-    // A finished show_panel hands the chat its panel before the row. The
-    // tool only finishes on a spec that parses, and only with generative UI
-    // on, so a refused or failed call never draws one.
-    if status == "completed" && call.name == crate::tools::SHOW_PANEL {
-        if let Ok(spec) = grokhub_core::panel_spec::parse_panel_spec(&call.arguments) {
-            if let Ok(spec) = serde_json::to_value(spec) {
-                on_event(LoopEvent::Panel {
-                    id: id.to_string(),
-                    spec,
-                });
-            }
-        }
-    }
+    emit_panel(on_event, id, call, status);
     // The row shows what the tool said, not the untrusted fence around it.
     let detail = crate::tools::fence::display_text(detail);
     on_event(LoopEvent::Tool {
@@ -6540,7 +6551,8 @@ mod tests {
     }
 
     /// A panel a long way past the row's 180-character clip.
-    const PANEL_ARGS: &str = r#"{"title":"Linux CI","elements":[{"type":"heading","level":2,"text":"Checks"},{"type":"key_value","pairs":[{"key":"Workflow","value":"ci"},{"key":"Branch","value":"beta"}]},{"type":"button","label":"Re-run","action":"rerun_ci"}]}"#;
+    // Non-ASCII on purpose: a byte-stepping URL scan once panicked on "—".
+    const PANEL_ARGS: &str = r#"{"title":"Linux CI — beta ✓","elements":[{"type":"heading","level":2,"text":"Checks"},{"type":"key_value","pairs":[{"key":"Workflow","value":"ci"},{"key":"Branch","value":"beta"}]},{"type":"button","label":"Re-run","action":"rerun_ci"}]}"#;
 
     fn panel_run(name: &str, generative: bool) -> Vec<LoopEvent> {
         let dir = workspace(&format!("panel-{name}-{generative}"));
@@ -6579,7 +6591,7 @@ mod tests {
         assert_eq!(panels.len(), 1, "{events:?}");
         let (id, spec) = panels[0];
         assert_eq!(id, "call-1");
-        assert_eq!(spec["title"], "Linux CI");
+        assert_eq!(spec["title"], "Linux CI — beta ✓");
         assert_eq!(spec["elements"][1]["pairs"][1]["value"], "beta");
         assert_eq!(spec["elements"][2]["action"], "rerun_ci");
         // It comes just before the finished row, which keeps its clip.

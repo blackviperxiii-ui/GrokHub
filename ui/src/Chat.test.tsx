@@ -482,6 +482,36 @@ describe("Chat", () => {
     expect(await screen.findByText("[panel action] rerun_ci on call-1")).toBeInTheDocument();
   });
 
+  it("panels with one repeated id keep a card per turn, and Dismiss hides one without scrolling", async () => {
+    // A provider that sends no call ids: every panel is "tool-show_panel".
+    let finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("show CI");
+    emit(id, { kind: "panel", id: "tool-show_panel", spec: { ...PANEL, title: "Monday CI" } });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());
+    finish = holdTurn();
+    await startTurn("and now?");
+    emit(id, { kind: "panel", id: "tool-show_panel", spec: { ...PANEL, title: "Tuesday CI" } });
+    emit(id, { kind: "panel", id: "tool-show_panel", spec: { ...PANEL, title: "Tuesday CI (green)" } });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    expect(await screen.findByRole("group", { name: "Tuesday CI (green)" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Monday CI" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Tuesday CI" })).toBeNull();
+    // jsdom has no scrollIntoView; the log calls it when it follows the end.
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    const monday = screen.getByRole("group", { name: "Monday CI" });
+    await userEvent.click(within(monday).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("group", { name: "Monday CI" })).toBeNull();
+    expect(screen.getByRole("group", { name: "Tuesday CI (green)" })).toBeInTheDocument();
+    expect(scroll).not.toHaveBeenCalled();
+    // @ts-expect-error -- put jsdom back as it was
+    delete Element.prototype.scrollIntoView;
+  });
+
   it("Ctrl+F finds in the chat: newest match first, Enter and Shift+Enter step and wrap, Esc closes", async () => {
     api.getStartChat.mockResolvedValue({
       id: "shell-find",

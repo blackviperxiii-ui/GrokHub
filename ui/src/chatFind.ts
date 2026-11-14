@@ -3,6 +3,7 @@
 // of truth. It searches the rows on screen: lines above "Show earlier" are
 // not loaded, so they are not searched.
 import type { Item } from "./Chat";
+import { panelText } from "./PanelCard";
 
 /** What a row offers to find: its words, or "" for a row with none. */
 export function itemText(item: Item): string {
@@ -17,6 +18,8 @@ export function itemText(item: Item): string {
       return `${item.title}\n${item.detail}`;
     case "permission":
       return `${item.title}\n${item.action}`;
+    case "panel":
+      return item.dismissed ? "" : panelText(item.id, item.spec);
     default:
       return "";
   }

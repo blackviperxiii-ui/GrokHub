@@ -332,7 +332,17 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
       return [...items, { ...event, answer: null }];
     // One card per panel id: a new spec replaces it in place.
     case "panel": {
-      const at = items.findIndex((item) => item.kind === "panel" && item.id === event.id);
+      // A new spec for a panel id replaces its card, but only within this
+      // turn: a provider that sends no call ids gives every panel the same
+      // id ("tool-show_panel"), and an earlier turn's card must stay.
+      let at = -1;
+      for (let i = items.length - 1; i >= 0 && items[i].kind !== "user"; i--) {
+        const item = items[i];
+        if (item.kind === "panel" && item.id === event.id) {
+          at = i;
+          break;
+        }
+      }
       if (at < 0) return [...items, { ...event }];
       const was = items[at];
       if (was.kind === "panel" && JSON.stringify(was.spec) === JSON.stringify(event.spec)) return items;
@@ -642,7 +652,8 @@ function LogItem({
   onFix: (text: string) => void;
   /** A panel button: the chat sends its action as the next turn. */
   onPanelAction: (panelId: string, action: string) => void;
-  onPanelDismiss: (panelId: string) => void;
+  /** Hides this row's card; rows, not ids, since ids can repeat across turns. */
+  onPanelDismiss: () => void;
   /** A reply chip was picked; the shell remembers it for the next card. */
   onChipPick: (key: string) => void;
 }) {
@@ -689,7 +700,7 @@ function LogItem({
           id={item.id}
           spec={item.spec}
           onAction={(action) => onPanelAction(item.id, action)}
-          onDismiss={() => onPanelDismiss(item.id)}
+          onDismiss={onPanelDismiss}
         />
       );
     case "findings":
@@ -1428,10 +1439,8 @@ export function Chat({
     else void deliver(text, [], false);
   }
 
-  function dismissPanel(panelId: string) {
-    setItems((now) =>
-      now.map((item) => (item.kind === "panel" && item.id === panelId ? { ...item, dismissed: true } : item)),
-    );
+  function dismissPanel(row: number) {
+    setItems((now) => now.map((item, i) => (i === row && item.kind === "panel" ? { ...item, dismissed: true } : item)));
   }
 
   /** Stop: the reply ends, and the messages lined up behind it come back to
@@ -2009,7 +2018,7 @@ export function Chat({
               onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
               onFix={(text) => setDraft(text)}
               onPanelAction={panelAction}
-              onPanelDismiss={dismissPanel}
+              onPanelDismiss={() => dismissPanel(i)}
               onChipPick={(key) => {
                 void Promise.resolve()
                   .then(() => replyPick(key))

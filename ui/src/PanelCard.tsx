@@ -20,6 +20,39 @@ export function panelTitle(id: string, spec: PanelSpec): string {
   return heading?.type === "heading" ? heading.text.trim() : `Panel ${id}`;
 }
 
+/** The words a panel shows, for Find in this chat: its title, then each
+ * element as drawn. */
+export function panelText(id: string, spec: PanelSpec): string {
+  const lines = [panelTitle(id, spec)];
+  for (const el of spec.elements) {
+    switch (el.type) {
+      case "heading":
+      case "text":
+        lines.push(el.text);
+        break;
+      case "list":
+        lines.push(...el.items);
+        break;
+      case "table":
+        lines.push(el.headers.join(" "), ...el.rows.map((row) => row.join(" ")));
+        break;
+      case "key_value":
+        lines.push(...el.pairs.map((p) => `${p.key}: ${p.value}`));
+        break;
+      case "button":
+        lines.push(el.label);
+        break;
+      case "input":
+        lines.push(`${el.label}: ${el.value ?? ""}`);
+        break;
+      case "progress":
+        lines.push(`${el.label} — ${percent(el.value)}%`);
+        break;
+    }
+  }
+  return lines.join("\n");
+}
+
 /** 0.856 → 86, clamped to 0..100 like the cabin. */
 export function percent(value: number): number {
   return Math.round(Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0)) * 100);
