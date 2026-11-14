@@ -3,9 +3,15 @@
 //! Soft archive / soft-delete live in `{config}/shell-chat-tabs.json` so the
 //! session files stay on disk until trash is purged (30 days, cabin window).
 //! Pin and rename reuse `history` / `shell-pins.json`.
+//!
+//! One chat is **Main**: always there, first in the strip, opened at launch.
+//! The store names it (`mainId`); it can't be archived, deleted, renamed or
+//! unpinned. Clear swaps in a fresh empty Main, because a deleted session id
+//! is never written again in this run.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +28,9 @@ pub const NOT_DELETED: &str = "That chat is not in Recently deleted.";
 pub const ALREADY_ARCHIVED: &str = "That chat is already archived.";
 pub const ALREADY_DELETED: &str = "That chat is already deleted.";
 pub const NO_CHAT: &str = "That chat isn't one of this app's chats.";
+pub const MAIN_TITLE: &str = "Main";
+pub const MAIN_FIXED: &str =
+    "Main always stays: it can't be archived, deleted, renamed or unpinned. Clear empties it.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -64,6 +73,9 @@ struct Store {
     hangout_mode: HangoutMode,
     #[serde(default)]
     tabs: HashMap<String, TabMeta>,
+    /// The Main chat's session id; none until the first launch makes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    main_id: Option<String>,
 }
 
 impl Default for Store {
@@ -71,6 +83,7 @@ impl Default for Store {
         Self {
             hangout_mode: HangoutMode::Type,
             tabs: HashMap::new(),
+            main_id: None,
         }
     }
 }
@@ -83,6 +96,8 @@ pub struct ChatTab {
     pub title: String,
     pub pinned: bool,
     pub updated: u64,
+    /// The permanent Main chat.
+    pub main: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,6 +106,17 @@ pub struct ChatTab {
 
 fn store_path(config_dir: &Path) -> PathBuf {
     config_dir.join(STORE_FILE)
+}
+
+/// Every load-change-save of the store runs under this lock. Tab commands run
+/// side by side on the blocking pool, and a writer saving a stale copy would
+/// drop another's change, `mainId` included.
+static STORE_LOCK: Mutex<()> = Mutex::new(());
+
+fn store_lock() -> MutexGuard<'static, ()> {
+    STORE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn load_store(config_dir: &Path) -> Store {
@@ -129,13 +155,90 @@ fn is_deleted(store: &Store, id: &str) -> bool {
     meta_of(store, id).and_then(|m| m.deleted_at).is_some()
 }
 
+fn is_main(store: &Store, id: &str) -> bool {
+    store.main_id.as_deref() == Some(id)
+}
+
+/// The Main chat's id, when there is one. Read-only: [`ensure_main`] makes it.
+pub fn main_id(config_dir: &Path) -> Option<String> {
+    load_store(config_dir).main_id
+}
+
+/// Refuses an id that is Main: the guard for archive, delete, rename and pin.
+pub fn refuse_main(config_dir: &Path, id: &str) -> Result<(), String> {
+    if is_main(&load_store(config_dir), id.trim()) {
+        Err(MAIN_FIXED.into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Main's id, making Main when the store names none or its file is gone (an
+/// old install, or a file removed by hand). A Main that is somehow archived
+/// or in the trash comes back live.
+pub fn ensure_main(config_dir: &Path, now_ms: u64) -> Result<String, String> {
+    let _lock = store_lock();
+    let mut store = load_store(config_dir);
+    if let Some(id) = store.main_id.clone() {
+        if history::saved(config_dir, &id).is_ok() {
+            if store.tabs.remove(&id).is_some() {
+                save_store(config_dir, &store)?;
+            }
+            return Ok(id);
+        }
+    }
+    make_main(config_dir, &mut store, now_ms)
+}
+
+/// Clear on Main: a fresh, empty Main takes over first, then the old Main's
+/// file goes. In that order a crash or a failed delete never leaves the store
+/// naming a Main that can't be written. A delete that fails (a file held open
+/// elsewhere) leaves the old Main behind as an ordinary chat the user can
+/// delete; the empty Main still opens. Returns the new Main's id.
+pub fn clear_main(config_dir: &Path, now_ms: u64) -> Result<String, String> {
+    let _lock = store_lock();
+    let mut store = load_store(config_dir);
+    let old = store.main_id.clone();
+    let id = make_main(config_dir, &mut store, now_ms)?;
+    if let Some(old) = old.filter(|old| *old != id) {
+        let _ = history::delete(config_dir, &old);
+    }
+    Ok(id)
+}
+
+/// Writes an empty session titled Main under a new id and names it in the
+/// store. Call under [`store_lock`].
+fn make_main(config_dir: &Path, store: &mut Store, now_ms: u64) -> Result<String, String> {
+    let mut stamp = now_ms;
+    let id = loop {
+        let id = format!("{}main-{stamp:x}", history::PREFIX);
+        if store.main_id.as_deref() != Some(id.as_str()) && history::saved(config_dir, &id).is_err()
+        {
+            break id;
+        }
+        stamp += 1;
+    };
+    {
+        let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
+        grokhub_agent::rename_session(&id, MAIN_TITLE)?;
+    }
+    // A deleted id is never written again in this run, so prove the file is there.
+    history::saved(config_dir, &id)?;
+    store.tabs.remove(&id);
+    store.main_id = Some(id.clone());
+    save_store(config_dir, store)?;
+    Ok(id)
+}
+
 fn row_from(history: &history::ChatRow, store: &Store) -> ChatTab {
     let meta = meta_of(store, &history.id);
+    let main = is_main(store, &history.id);
     ChatTab {
         id: history.id.clone(),
         title: history.title.clone(),
-        pinned: history.pinned,
+        pinned: history.pinned || main,
         updated: history.updated,
+        main,
         archived_at: meta.and_then(|m| m.archived_at),
         deleted_at: meta.and_then(|m| m.deleted_at),
     }
@@ -146,15 +249,18 @@ fn ensure_known(config_dir: &Path, id: &str) -> Result<(), String> {
     history::saved(config_dir, id).map(|_| ())
 }
 
-/// Live tabs: not archived, not soft-deleted. Pinned first, then newest.
+/// Live tabs: not archived, not soft-deleted. Main first, then pinned, then
+/// newest.
 pub fn list_tabs(config_dir: &Path) -> Vec<ChatTab> {
-    let mut store = load_store(config_dir);
-    let _ = purge_expired(config_dir, &mut store, now_ms());
-    history::list(config_dir)
+    let store = purged_store(config_dir);
+    let mut tabs: Vec<ChatTab> = history::list(config_dir)
         .into_iter()
         .filter(|row| !is_archived(&store, &row.id) && !is_deleted(&store, &row.id))
         .map(|row| row_from(&row, &store))
-        .collect()
+        .collect();
+    // Stable: the rest keep history's order.
+    tabs.sort_by_key(|tab| !tab.main);
+    tabs
 }
 
 pub fn list_archived(config_dir: &Path) -> Vec<ChatTab> {
@@ -167,8 +273,7 @@ pub fn list_archived(config_dir: &Path) -> Vec<ChatTab> {
 }
 
 pub fn list_deleted(config_dir: &Path) -> Vec<ChatTab> {
-    let mut store = load_store(config_dir);
-    let _ = purge_expired(config_dir, &mut store, now_ms());
+    let store = purged_store(config_dir);
     history::list(config_dir)
         .into_iter()
         .filter(|row| is_deleted(&store, &row.id))
@@ -206,7 +311,11 @@ pub fn rename_tab(config_dir: &Path, id: &str, title: &str) -> Result<(), String
 pub fn archive_tab(config_dir: &Path, id: &str, now_ms: u64) -> Result<ChatTab, String> {
     let id = shell_id(id)?;
     ensure_known(config_dir, id)?;
+    let _lock = store_lock();
     let mut store = load_store(config_dir);
+    if is_main(&store, id) {
+        return Err(MAIN_FIXED.into());
+    }
     if is_deleted(&store, id) {
         return Err(ALREADY_DELETED.into());
     }
@@ -225,6 +334,7 @@ pub fn archive_tab(config_dir: &Path, id: &str, now_ms: u64) -> Result<ChatTab, 
 pub fn unarchive_tab(config_dir: &Path, id: &str) -> Result<ChatTab, String> {
     let id = shell_id(id)?;
     ensure_known(config_dir, id)?;
+    let _lock = store_lock();
     let mut store = load_store(config_dir);
     {
         let meta = store.tabs.entry(id.to_string()).or_default();
@@ -244,7 +354,11 @@ pub fn unarchive_tab(config_dir: &Path, id: &str) -> Result<ChatTab, String> {
 pub fn soft_delete_tab(config_dir: &Path, id: &str, now_ms: u64) -> Result<ChatTab, String> {
     let id = shell_id(id)?;
     ensure_known(config_dir, id)?;
+    let _lock = store_lock();
     let mut store = load_store(config_dir);
+    if is_main(&store, id) {
+        return Err(MAIN_FIXED.into());
+    }
     if is_deleted(&store, id) {
         return Err(ALREADY_DELETED.into());
     }
@@ -262,6 +376,7 @@ pub fn soft_delete_tab(config_dir: &Path, id: &str, now_ms: u64) -> Result<ChatT
 pub fn restore_deleted_tab(config_dir: &Path, id: &str) -> Result<ChatTab, String> {
     let id = shell_id(id)?;
     ensure_known(config_dir, id)?;
+    let _lock = store_lock();
     let mut store = load_store(config_dir);
     {
         let meta = store.tabs.entry(id.to_string()).or_default();
@@ -276,6 +391,14 @@ pub fn restore_deleted_tab(config_dir: &Path, id: &str) -> Result<ChatTab, Strin
         .find(|r| r.id == id)
         .ok_or_else(|| NO_CHAT.to_string())?;
     Ok(row_from(&row, &load_store(config_dir)))
+}
+
+/// The store after expired trash is purged.
+fn purged_store(config_dir: &Path) -> Store {
+    let _lock = store_lock();
+    let mut store = load_store(config_dir);
+    let _ = purge_expired(config_dir, &mut store, now_ms());
+    store
 }
 
 /// Drop soft-deleted rows older than the retain window and hard-delete their
@@ -319,6 +442,7 @@ pub fn get_hangout_mode(config_dir: &Path) -> HangoutMode {
 }
 
 pub fn set_hangout_mode(config_dir: &Path, mode: HangoutMode) -> Result<HangoutMode, String> {
+    let _lock = store_lock();
     let mut store = load_store(config_dir);
     store.hangout_mode = mode;
     save_store(config_dir, &store)?;
@@ -457,6 +581,197 @@ mod tests {
         // Sidecar reload still sees the pin file.
         let again = list_tabs(&config);
         assert!(again.iter().find(|t| t.id == "shell-pin-a").unwrap().pinned);
+    }
+
+    #[test]
+    fn main_is_made_once_and_listed_first_and_pinned() {
+        let config = temp_dir("main-first");
+        // An old install: chats from before Main stay as they are.
+        write_session(&config, "shell-old-a", "Old one", 1_000);
+        write_session(&config, "shell-old-b", "Old two", 2_000);
+        assert_eq!(main_id(&config), None);
+
+        let main = ensure_main(&config, 0xabc).expect("main");
+        assert_eq!(main, "shell-main-abc");
+        assert_eq!(
+            ensure_main(&config, 0xdef).expect("again"),
+            "shell-main-abc"
+        );
+
+        let tabs = list_tabs(&config);
+        let shape: Vec<(&str, &str, bool, bool)> = tabs
+            .iter()
+            .map(|t| (t.id.as_str(), t.title.as_str(), t.main, t.pinned))
+            .collect();
+        assert_eq!(shape[0], ("shell-main-abc", "Main", true, true));
+        assert_eq!(shape.len(), 3, "{shape:?}");
+        assert!(shape[1..]
+            .iter()
+            .all(|(_, _, main, pinned)| !main && !pinned));
+    }
+
+    #[test]
+    fn main_refuses_archive_delete_rename_and_unpin_everywhere() {
+        let config = temp_dir("main-fixed");
+        let main = ensure_main(&config, 0x10).expect("main");
+        let now = 5_000;
+
+        assert_eq!(
+            archive_tab(&config, &main, now),
+            Err(MAIN_FIXED.to_string())
+        );
+        assert_eq!(
+            soft_delete_tab(&config, &main, now),
+            Err(MAIN_FIXED.to_string())
+        );
+        assert_eq!(
+            rename_tab(&config, &main, "Other"),
+            Err(MAIN_FIXED.to_string())
+        );
+        assert_eq!(pin_tab(&config, &main), Err(MAIN_FIXED.to_string()));
+        // The History page's own paths refuse too.
+        assert_eq!(history::delete(&config, &main), Err(MAIN_FIXED.to_string()));
+        assert_eq!(
+            history::rename(&config, &main, "Other"),
+            Err(MAIN_FIXED.to_string())
+        );
+        assert_eq!(
+            history::toggle_pin(&config, &main),
+            Err(MAIN_FIXED.to_string())
+        );
+
+        let tabs = list_tabs(&config);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(
+            (tabs[0].id.as_str(), tabs[0].title.as_str()),
+            (main.as_str(), "Main")
+        );
+        assert!(list_archived(&config).is_empty());
+        assert!(list_deleted(&config).is_empty());
+    }
+
+    #[test]
+    fn delete_all_leaves_main() {
+        use std::sync::Mutex;
+        use std::time::{Duration, Instant};
+        let config = temp_dir("main-delete-all");
+        write_session(&config, "shell-loose-a", "Loose", 1_000);
+        let main = ensure_main(&config, 0x20).expect("main");
+        let arm = Mutex::new(history::DeleteArm::default());
+        let t0 = Instant::now();
+        let asked = history::delete_all(&config, &arm, t0).expect("arms");
+        assert_eq!(asked.count, 1, "only the loose chat is named");
+        let done =
+            history::delete_all(&config, &arm, t0 + Duration::from_secs(1)).expect("deletes");
+        assert_eq!(done.ids, ["shell-loose-a"]);
+        let left: Vec<String> = list_tabs(&config).into_iter().map(|t| t.id).collect();
+        assert_eq!(left, [main]);
+    }
+
+    #[test]
+    fn main_is_remade_when_its_file_is_gone_or_it_was_put_away() {
+        let config = temp_dir("main-remade");
+        let first = ensure_main(&config, 0x30).expect("main");
+        std::fs::remove_file(config.join("sessions").join(format!("{first}.jsonl"))).expect("rm");
+        let second = ensure_main(&config, 0x31).expect("remade");
+        assert_eq!(second, "shell-main-31");
+        assert_eq!(main_id(&config).as_deref(), Some("shell-main-31"));
+        assert_eq!(list_tabs(&config)[0].title, "Main");
+
+        // A store from before the guards that has Main archived: it comes back live.
+        let mut store = load_store(&config);
+        store.tabs.entry(second.clone()).or_default().archived_at = Some(1);
+        save_store(&config, &store).expect("save");
+        assert!(list_tabs(&config).is_empty());
+        assert_eq!(ensure_main(&config, 0x32).expect("back"), second);
+        assert_eq!(list_tabs(&config)[0].id, second);
+
+        // Even long-expired trash never takes Main's file.
+        let mut store = load_store(&config);
+        store.tabs.entry(second.clone()).or_default().deleted_at = Some(1);
+        save_store(&config, &store).expect("save");
+        assert_eq!(list_tabs(&config)[0].id, second);
+        assert!(config
+            .join("sessions")
+            .join(format!("{second}.jsonl"))
+            .is_file());
+    }
+
+    #[test]
+    fn clear_on_main_swaps_in_an_empty_main() {
+        let config = temp_dir("main-clear");
+        write_session(&config, "shell-other", "Other", 1_000);
+        let old = ensure_main(&config, 0x40).expect("main");
+        let old_file = config.join("sessions").join(format!("{old}.jsonl"));
+        // A turn on Main, as a send writes it.
+        {
+            let _guard = ConfigGuard::set(&config);
+            grokhub_agent::record_turn(
+                &old,
+                "/home/user",
+                "test",
+                &[],
+                &Default::default(),
+                "",
+                "hi",
+            )
+            .expect("turn");
+        }
+        assert!(old_file.is_file());
+
+        let fresh = clear_main(&config, 0x41).expect("clear");
+        assert_eq!(fresh, "shell-main-41");
+        assert!(!old_file.is_file(), "the old Main's file goes");
+        let tabs = list_tabs(&config);
+        let ids: Vec<(&str, bool)> = tabs.iter().map(|t| (t.id.as_str(), t.main)).collect();
+        assert_eq!(ids, [("shell-main-41", true), ("shell-other", false)]);
+        assert!(history::load(&config, &fresh, 10)
+            .expect("load")
+            .lines
+            .is_empty());
+    }
+
+    #[test]
+    fn main_lists_ahead_of_pinned_and_newer_chats() {
+        let config = temp_dir("main-order");
+        let main = ensure_main(&config, 0x60).expect("main");
+        // Both outrank Main in history's own order: one pinned, one newer.
+        write_session(&config, "shell-pinned", "Pinned", 1_000);
+        history::toggle_pin(&config, "shell-pinned").expect("pin");
+        write_session(&config, "shell-newer", "Newer", u64::MAX / 4);
+        let history_order: Vec<String> = history::list(&config).into_iter().map(|r| r.id).collect();
+        assert_ne!(history_order[0], main, "{history_order:?}");
+
+        let ids: Vec<String> = list_tabs(&config).into_iter().map(|t| t.id).collect();
+        assert_eq!(ids[0], main, "{ids:?}");
+        assert_eq!(ids.len(), 3, "{ids:?}");
+        // History marks Main, so its page offers no pin, rename or delete.
+        let flags: Vec<(String, bool, bool)> = history::list(&config)
+            .into_iter()
+            .map(|r| (r.id, r.main, r.pinned))
+            .filter(|(_, main, _)| *main)
+            .collect();
+        assert_eq!(flags, [(main.clone(), true, true)]);
+    }
+
+    #[test]
+    fn clear_in_the_same_millisecond_still_gets_a_new_main() {
+        let config = temp_dir("main-same-ms");
+        let old = ensure_main(&config, 0x70).expect("main");
+        let fresh = clear_main(&config, 0x70).expect("clear");
+        assert_eq!(
+            (old.as_str(), fresh.as_str()),
+            ("shell-main-70", "shell-main-71")
+        );
+        assert!(!config
+            .join("sessions")
+            .join(format!("{old}.jsonl"))
+            .is_file());
+        assert!(config
+            .join("sessions")
+            .join(format!("{fresh}.jsonl"))
+            .is_file());
+        assert_eq!(main_id(&config).as_deref(), Some("shell-main-71"));
     }
 
     #[test]

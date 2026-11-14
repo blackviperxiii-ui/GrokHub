@@ -14,13 +14,13 @@ import {
   answerPermission,
   cancelChat,
   closeChat,
-  deleteChat,
+  clearChat,
   exportChat,
   forgetMessage,
   composerGhostSuggest,
   getBehavior,
   getHangoutMode,
-  getLastChat,
+  getStartChat,
   getSettings,
   helperQuestions,
   loadChat,
@@ -230,6 +230,13 @@ export const OPEN_BUSY = "A reply is still running. Stop it or wait, then open t
 
 export const EVENTS_LOST = `Lost touch with ${PRODUCT_NAME} on your computer for a while. Part of this reply may be missing.`;
 export const MISSION_BUSY = "A reply is still running. Stop it or wait, then press To mission again.";
+/** How long a chat picked while a finished reply wraps up waits quietly
+ * before it says the reply still runs. */
+const OPEN_WAIT_MS = 2000;
+/** Drops a "reply is still running" error once the reply is over. */
+function stillBusy(now: string | null) {
+  return now === OPEN_BUSY || now === MISSION_BUSY ? null : now;
+}
 /** Slash lines that leave the running reply alone, so they run beside it. */
 const BESIDE_REPLY = /^\/(queue|bg|background|send|consult)(\s|$)/i;
 /** Every other slash line typed during a reply stays in the box with this. */
@@ -693,6 +700,12 @@ export function Chat({
   const busyHere = busy && runIn === conversationId;
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
+  /** The running reply already sent its last event (`done`): only the app's
+   * own wrap-up after it is left. */
+  const replyDone = useRef(false);
+  /** A chat picked in that wrap-up: it opens as soon as the reply settles,
+   * so the person never sees "still running" for a reply that finished. */
+  const openAfter = useRef<string | null>(null);
   /** Messages sent while a reply runs wait here, in order, and show only in
    * the Activity menu. The next one sends when the reply ends. */
   const [queue, setQueue] = useState<string[]>([]);
@@ -821,14 +834,19 @@ export function Chat({
     setQueue(next);
   }
 
-  function startFresh() {
-    // Messages lined up in the chat being left go back in the box, never
-    // into the new chat by themselves.
+  /** Messages lined up in the chat being left go back in the box, never
+   * into the next chat by themselves. */
+  function queueBackToBox() {
     const waiting = queueRef.current;
     if (waiting.length > 0) {
       changeQueue([]);
       setDraft((now) => withQueued(now, waiting));
     }
+  }
+
+  function startFresh() {
+    openAfter.current = null;
+    queueBackToBox();
     leaveSides();
     touched.current = true;
     setGoalAsk(null);
@@ -839,12 +857,20 @@ export function Chat({
   }
 
   function show(transcript: Transcript) {
+    openAfter.current = null;
     leaveSides();
     setGoalAsk(null);
     setConversationId(transcript.id);
     setItems(itemsFrom(transcript));
     setEarlier(transcript.earlier);
     setError(null);
+  }
+
+  /** Clear on Main hands back an empty Main: like a new chat, the old
+   * chat's waiting messages go back in the box. */
+  function showClearedMain(fresh: Transcript) {
+    queueBackToBox();
+    show(fresh);
   }
 
   // The saved chat shows only if nothing was typed or picked meanwhile.
@@ -854,8 +880,8 @@ export function Chat({
 
   useEffect(() => {
     if (remote || embedded) return;
-    getLastChat().then(
-      (last) => restoreLast(last),
+    getStartChat().then(
+      (start) => restoreLast(start),
       () => {},
     );
   }, [remote, embedded]);
@@ -879,20 +905,39 @@ export function Chat({
 
   // Only a new pick acts; the conversation it leaves is the latest, not a
   // dependency.
-  const openPicked = useEffectEvent((id: string) => {
-    if (id === conversationId) return;
+  function openChat(id: string) {
+    // Picking the chat on screen keeps it, and drops a pick still waiting.
+    if (id === conversationId) {
+      openAfter.current = null;
+      return;
+    }
     if (busyRef.current) {
+      // Past its `done` with nothing queued, the reply here only wraps up:
+      // the pick waits for it rather than refusing.
+      if (replyDone.current && queueRef.current.length === 0 && runIn === conversationId) {
+        openAfter.current = id;
+        window.setTimeout(() => {
+          if (openAfter.current === id) setError(OPEN_BUSY);
+        }, OPEN_WAIT_MS);
+        return;
+      }
       setError(OPEN_BUSY);
       return;
     }
+    openAfter.current = null;
     touched.current = true;
     closeChat(conversationId).catch(() => {});
     loadChat(id).then(show, (err) => setError(String(err)));
-  });
+  }
+  const openPicked = useEffectEvent((id: string) => openChat(id));
 
   useEffect(() => {
     if (open) openPicked(open.id);
   }, [open]);
+  const [openNext, setOpenNext] = useState<{ id: string; n: number } | null>(null);
+  useEffect(() => {
+    if (openNext) openPicked(openNext.id);
+  }, [openNext]);
 
   // Deleting the chat on screen starts a new one; deleting another leaves it.
   const dropDeleted = useEffectEvent((ids: string[]) => {
@@ -907,11 +952,15 @@ export function Chat({
     return () => window.clearTimeout(timer);
   }, [deleted]);
 
-  // Clear chat: stop any reply, delete the open chat's saved history, start over.
+  // Clear chat: stop any reply, delete the open chat's saved history, start
+  // over. On Main the backend hands back an empty Main instead.
   const clearOpen = useEffectEvent(() => {
     const id = conversationId;
     touched.current = true;
-    deleteChat(id).then(startFresh, (err) => setError(String(err)));
+    clearChat(id).then(
+      (fresh) => (fresh ? showClearedMain(fresh) : startFresh()),
+      (err) => setError(String(err)),
+    );
   });
 
   useEffect(() => {
@@ -936,6 +985,7 @@ export function Chat({
     const switched = !!to && to !== conversationId;
     if (switched) {
       if (busyRef.current) {
+        openAfter.current = null;
         setError(MISSION_BUSY);
         return;
       }
@@ -986,7 +1036,11 @@ export function Chat({
       if (event.kind === "error") setError(event.message);
       else if (event.kind === "suggestions") setFollowed((n) => n + 1);
       else if (event.kind === "goal") setGoalAsk({ id: event.id, title: event.title });
-      else if (event.kind === "done") setItems(event.stop === HALTED_STOP ? settleHalted : settle);
+      else if (event.kind === "done") {
+        replyDone.current = true;
+        setError(stillBusy);
+        setItems(event.stop === HALTED_STOP ? settleHalted : settle);
+      }
       else if (event.kind === "text") {
         voiceSession.feed(event.text);
         setItems((now) => applyEvent(now, event));
@@ -1056,6 +1110,8 @@ export function Chat({
     setError(null);
     setAck(null);
     busyRef.current = true;
+    replyDone.current = false;
+    openAfter.current = null;
     setBusy(true);
     const from = conversationId;
     setRunIn(from);
@@ -1072,6 +1128,7 @@ export function Chat({
     busyRef.current = false;
     setBusy(false);
     setRunIn(undefined);
+    setError(stillBusy);
     voiceSession.replyDone("");
     // Another chat opened meanwhile: what waits now was typed there, so it
     // goes, and the lines on screen are that chat's, not this reply's.
@@ -1080,6 +1137,11 @@ export function Chat({
     // The reply ended well: the next queued message goes. Halt, Stop or a
     // failure sends nothing more; what waited goes back in the box.
     const waiting = queueRef.current;
+    // A chat picked while this reply wrapped up opens now, unless a message
+    // waits to go here: that next reply wins and the pick is dropped.
+    const picked = openAfter.current;
+    openAfter.current = null;
+    if (picked && !moved && waiting.length === 0) setOpenNext((now) => ({ id: picked, n: (now?.n ?? 0) + 1 }));
     if (waiting.length === 0) return;
     if (moved || (stop && stop !== HALTED_STOP && stop !== "cancelled")) {
       changeQueue(waiting.slice(1));
@@ -1626,21 +1688,14 @@ export function Chat({
           <ChatTabs
             activeId={conversationId}
             draftEmpty={items.length === 0}
-            onSwitch={(id) => {
-              if (id === conversationId) return;
-              if (busyRef.current) {
-                setError(OPEN_BUSY);
-                return;
-              }
-              touched.current = true;
-              closeChat(conversationId).catch(() => {});
-              loadChat(id).then(show, (err) => setError(String(err)));
-            }}
+            onSwitch={openChat}
             onNew={startOver}
-            onClear={() => {
-              const id = conversationId;
+            onClear={async (id) => {
               touched.current = true;
-              deleteChat(id).then(startFresh, (err) => setError(String(err)));
+              const fresh = await clearChat(id);
+              if (id !== conversationId) return;
+              if (fresh) showClearedMain(fresh);
+              else startFresh();
             }}
             onError={setError}
           />
@@ -1648,16 +1703,7 @@ export function Chat({
         </>
       )}
       <Inbox
-        onOpenChat={(id) => {
-          if (id === conversationId) return;
-          if (busyRef.current) {
-            setError(OPEN_BUSY);
-            return;
-          }
-          touched.current = true;
-          closeChat(conversationId).catch(() => {});
-          loadChat(id).then(show, (err) => setError(String(err)));
-        }}
+        onOpenChat={openChat}
       />
       {/* Focusable so the keyboard can scroll a long conversation. */}
       <div className="log" role="log" aria-live="polite" tabIndex={0}>

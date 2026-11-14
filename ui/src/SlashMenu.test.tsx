@@ -29,7 +29,7 @@ vi.mock("./api", async () => {
   answerPermission: vi.fn(),
   cancelChat: vi.fn(),
   // No chat saved from an earlier launch.
-  getLastChat: () => Promise.resolve(null),
+  getStartChat: () => Promise.resolve(null),
   loadChat: vi.fn(),
   onChatEvent: () => Promise.resolve(() => {}),
   helperQuestions: () => Promise.resolve([]),

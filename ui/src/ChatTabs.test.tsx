@@ -19,10 +19,10 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { CHAT_TABS_LABEL, ChatTabs, HangoutHeader, NEW_CHAT_TAB } from "./ChatTabs";
+import { CHAT_TABS_LABEL, ChatTabs, HangoutHeader, MAIN_TAB_HINT, NEW_CHAT_TAB } from "./ChatTabs";
 
-function tab(id: string, title: string, pinned = false): ChatTab {
-  return { id, title, pinned, updated: 1 };
+function tab(id: string, title: string, pinned = false, main = false): ChatTab {
+  return { id, title, pinned, updated: 1, main };
 }
 
 describe("ChatTabs", () => {
@@ -47,7 +47,7 @@ describe("ChatTabs", () => {
         draftEmpty={false}
         onSwitch={onSwitch}
         onNew={() => {}}
-        onClear={() => {}}
+        onClear={async () => {}}
         onError={() => {}}
       />,
     );
@@ -59,7 +59,7 @@ describe("ChatTabs", () => {
   });
 
   it("Clear asks first before wiping", async () => {
-    const onClear = vi.fn();
+    const onClear = vi.fn(async () => {});
     render(
       <ChatTabs
         activeId="shell-a"
@@ -81,6 +81,60 @@ describe("ChatTabs", () => {
     expect(onClear).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Clear chat" }));
     expect(onClear).toHaveBeenCalledTimes(1);
+    expect(onClear).toHaveBeenCalledWith("shell-a");
+  });
+
+  it("Main shows its mark, keeps its name when empty, and only offers Clear", async () => {
+    api.listChatTabs.mockResolvedValue([
+      tab("shell-main-1", "Main", true, true),
+      tab("shell-a", "Alpha chat"),
+    ]);
+    const onClear = vi.fn(async () => {});
+    render(
+      <ChatTabs
+        activeId="shell-main-1"
+        draftEmpty
+        onSwitch={() => {}}
+        onNew={() => {}}
+        onClear={onClear}
+        onError={() => {}}
+      />,
+    );
+    const main = await screen.findByRole("tab", { name: "Main" });
+    expect(main).toHaveAttribute("title", MAIN_TAB_HINT);
+    expect(main).toHaveClass("main");
+    expect(screen.queryByRole("tab", { name: NEW_CHAT_TAB })).toBeNull();
+
+    await userEvent.pointer({ keys: "[MouseRight>]", target: main });
+    const menu = await screen.findByRole("menu", { name: "Chat tab" });
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Clear chat…"]);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: /Clear chat/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "Clear chat" }));
+    expect(onClear).toHaveBeenCalledWith("shell-main-1");
+    expect(api.chatTabArchive).not.toHaveBeenCalled();
+    expect(api.chatTabSoftDelete).not.toHaveBeenCalled();
+  });
+
+  it("a failed Clear shows the error instead of throwing", async () => {
+    const onError = vi.fn();
+    render(
+      <ChatTabs
+        activeId="shell-a"
+        draftEmpty={false}
+        onSwitch={() => {}}
+        onNew={() => {}}
+        onClear={async () => {
+          throw new Error("disk full");
+        }}
+        onError={onError}
+      />,
+    );
+    const alpha = await screen.findByRole("tab", { name: /Alpha chat/i });
+    await userEvent.pointer({ keys: "[MouseRight>]", target: alpha });
+    const menu = await screen.findByRole("menu", { name: "Chat tab" });
+    await userEvent.click(within(menu).getByRole("menuitem", { name: /Clear chat/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "Clear chat" }));
+    await waitFor(() => expect(onError).toHaveBeenCalledWith("Error: disk full"));
   });
 
   it("restores an archived chat from tools", async () => {
@@ -92,7 +146,7 @@ describe("ChatTabs", () => {
         draftEmpty={false}
         onSwitch={onSwitch}
         onNew={() => {}}
-        onClear={() => {}}
+        onClear={async () => {}}
         onError={() => {}}
       />,
     );
@@ -111,7 +165,7 @@ describe("ChatTabs", () => {
         draftEmpty
         onSwitch={() => {}}
         onNew={() => {}}
-        onClear={() => {}}
+        onClear={async () => {}}
         onError={() => {}}
       />,
     );
