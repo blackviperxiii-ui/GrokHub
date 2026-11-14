@@ -246,7 +246,11 @@ function ViewBody({
   const fit = FIT[size];
   const run = (a: TileAction) => runAction(a, go, remote, reload);
   const rows = view.rows.slice(0, fit.rows);
-  const buttons = view.buttons.slice(0, fit.buttons);
+  // A paired browser can't open this computer's Details sheet, so it gets
+  // neither the button nor that tap; a Small tile falls back to its button.
+  const here = (a: TileAction | null) => (a && !(remote && a.kind === "details") ? a : null);
+  const usable = view.buttons.filter((b) => here(b.action));
+  const buttons = usable.slice(0, fit.buttons);
   const head = (
     <>
       <span className={`home-big tone-${view.text.tone}`}>{view.text.big}</span>
@@ -260,7 +264,7 @@ function ViewBody({
     </>
   );
   // A Small tile is one tap; so is any tile whose state wants its one button.
-  const tap = view.tap ?? (size === "small" ? (view.buttons[0]?.action ?? null) : null);
+  const tap = here(view.tap) ?? (size === "small" ? (usable[0]?.action ?? null) : null);
   return (
     <div className={`home-stack state-${view.state}`}>
       {tap ? (
