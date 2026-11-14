@@ -177,8 +177,8 @@ pub use park::{
 pub use path_d::{builtin_cu, cu_look_only, decide_unasked, unasked_action, unasked_title};
 pub use proactive::{
     answer_span, ledger_target, note_proactive, proactive_key, proactive_mind, proactive_span,
-    run_approved_once, run_auto_act, step_class, step_undo, AutoRun, DECISION_ASK, DECISION_AUTO,
-    DECISION_NEVER, DECISION_UNDO, PROACTIVE_TRACE,
+    run_approved_once, run_auto_act, run_offered_step, step_class, step_undo, AutoRun,
+    DECISION_APPROVE, DECISION_ASK, DECISION_AUTO, DECISION_NEVER, DECISION_UNDO, PROACTIVE_TRACE,
 };
 pub use self_improve::{
     guard_span, last_recorded_run, lesson_checks, outcome_from_spans, patch_marks,

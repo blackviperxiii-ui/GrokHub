@@ -31,6 +31,9 @@ pub const PROACTIVE_TRACE: &str = "proactive";
 pub const DECISION_AUTO: &str = "auto";
 /// Decision on a span for a candidate the ceiling or the gate sent to a card.
 pub const DECISION_ASK: &str = "ask";
+/// Decision on a span for a step the user ran from its card (Pause it).
+/// MindCheck reads it as an approval of that kind of step.
+pub const DECISION_APPROVE: &str = "approve";
 /// Undo on a Done-for-you card.
 pub const DECISION_UNDO: &str = "undo";
 /// "Don't do this again" on a Done-for-you card.
@@ -103,30 +106,38 @@ pub fn step_class(tool: &str, arguments: &str) -> Option<String> {
 /// Only these steps can be put back from the ledger, so only these may
 /// auto-act. [`step_undo`] says which rung of the ceiling each one is on.
 pub fn ledger_target(tool: &str, arguments: &str) -> Option<(ChangeKind, String)> {
-    let kind = match crate::self_manage::self_tool(tool)? {
-        "connection_disable" | "connection_add" => ChangeKind::Connection,
-        "skill_modify" => ChangeKind::Skill,
+    let (kind, field) = match crate::self_manage::self_tool(tool)? {
+        "connection_disable" | "connection_add" => (ChangeKind::Connection, "name"),
+        "skill_modify" => (ChangeKind::Skill, "name"),
+        "automation_disable" => (ChangeKind::Automation, "id"),
         _ => return None,
     };
     let args: serde_json::Value = serde_json::from_str(arguments).ok()?;
-    let name = args.get("name").and_then(|v| v.as_str())?.trim();
+    let raw = args.get(field).and_then(|v| v.as_str())?;
+    let name = raw.trim();
     match kind {
         // A skill's ledger id is its folder name; a name that is not already
         // one would write a different skill than the card names.
         ChangeKind::Skill => {
             (!name.is_empty() && change_id(name) == name).then(|| (kind, name.to_string()))
         }
+        // The tool looks a job up by its exact id, so the ledger id must be
+        // that id, not a trimmed copy of it.
+        ChangeKind::Automation => entry_id(raw)
+            .ok()
+            .filter(|id| id == raw)
+            .map(|id| (kind, id)),
         _ => entry_id(name).ok().map(|id| (kind, id)),
     }
 }
 
 /// How a step is taken back, for the autonomy ceiling. Switching a
-/// connection is one click. A patch to a skill changes what the agent does
+/// connection or turning an automation back on is one click. A patch to a skill changes what the agent does
 /// from then on, so it is a bigger change with the higher bar. Anything with
 /// no ledger target can't be put back and never acts on its own.
 pub fn step_undo(tool: &str, arguments: &str) -> Undo {
     match ledger_target(tool, arguments) {
-        Some((ChangeKind::Connection, _)) => Undo::OneClick,
+        Some((ChangeKind::Connection | ChangeKind::Automation, _)) => Undo::OneClick,
         Some((ChangeKind::Skill, _)) => Undo::Restore,
         _ => Undo::Never,
     }
@@ -192,6 +203,85 @@ pub fn run_auto_act(
         note_proactive(config_dir, &span);
         return AutoRun::Asked(outcome);
     }
+    let ran = dispatch_ledgered(config_dir, workspace, &c.tool, &c.arguments, kind, &id);
+    let mut span = proactive_span(&c.tool, &c.arguments, DECISION_AUTO, &c.summary, access);
+    let change = match ran {
+        Ok(change) => change,
+        Err(Ran { failed, text }) => {
+            span.result = if failed {
+                "failed".into()
+            } else {
+                "no change".into()
+            };
+            note_proactive(config_dir, &span);
+            return AutoRun::Failed(text);
+        }
+    };
+    span.result = "done".into();
+    span.undo_ref = format!("{}:{}", kind.as_str(), change.seq);
+    note_proactive(config_dir, &span);
+    AutoRun::Done {
+        kind,
+        change: Box::new(change),
+    }
+}
+
+/// A step the user ran from its card (Pause it): the same native dispatch
+/// as an auto-act, with no gate in between, since the tap is the approval.
+/// A hard-class step is refused before anything runs, and a step with no
+/// ledger target never runs. Only a step that wrote a new ledger line counts:
+/// it gets one `approve` span linking that line, so MindCheck learns from
+/// it. Anything else writes no span.
+pub fn run_offered_step(
+    config_dir: &Path,
+    workspace: &Path,
+    tool: &str,
+    arguments: &str,
+    access: AccessMode,
+) -> AutoRun {
+    let Some((kind, id)) = ledger_target(tool, arguments) else {
+        return AutoRun::NoUndo;
+    };
+    if step_class(tool, arguments).is_some() {
+        return AutoRun::Failed("That step always asks.".into());
+    }
+    let change = match dispatch_ledgered(config_dir, workspace, tool, arguments, kind, &id) {
+        Ok(change) => change,
+        Err(Ran { text, .. }) => return AutoRun::Failed(text),
+    };
+    let mut span = proactive_span(
+        tool,
+        arguments,
+        DECISION_APPROVE,
+        "ran from its card",
+        access,
+    );
+    span.result = "done".into();
+    span.undo_ref = format!("{}:{}", kind.as_str(), change.seq);
+    note_proactive(config_dir, &span);
+    AutoRun::Done {
+        kind,
+        change: Box::new(change),
+    }
+}
+
+/// Why a dispatched step did not count: the tool failed, or it changed
+/// nothing on the ledger. `text` is the tool's reply with secrets redacted.
+struct Ran {
+    failed: bool,
+    text: String,
+}
+
+/// Run `tool` through the native dispatch and return the new ledger line it
+/// wrote on `id`, if any.
+fn dispatch_ledgered(
+    config_dir: &Path,
+    workspace: &Path,
+    tool: &str,
+    arguments: &str,
+    kind: ChangeKind,
+    id: &str,
+) -> Result<Change, Ran> {
     let last_seq = ChangeLedger::load_kind(config_dir, kind)
         .all()
         .last()
@@ -205,32 +295,19 @@ pub fn run_auto_act(
         owner: None,
         session: None,
     };
-    let out = crate::tools::dispatch(&ctx, &c.tool, &c.arguments);
-    let mut span = proactive_span(&c.tool, &c.arguments, DECISION_AUTO, &c.summary, access);
+    let out = crate::tools::dispatch(&ctx, tool, arguments);
     let wrote = ChangeLedger::load_kind(config_dir, kind)
         .all()
         .iter()
         .rev()
         .find(|line| line.id == id && Some(line.seq) > last_seq)
         .cloned();
-    let change = match (out.failed, wrote) {
-        (false, Some(change)) => change,
-        (failed, _) => {
-            span.result = if failed {
-                "failed".into()
-            } else {
-                "no change".into()
-            };
-            note_proactive(config_dir, &span);
-            return AutoRun::Failed(grokhub_core::redact_secrets(&out.text));
-        }
-    };
-    span.result = "done".into();
-    span.undo_ref = format!("{}:{}", kind.as_str(), change.seq);
-    note_proactive(config_dir, &span);
-    AutoRun::Done {
-        kind,
-        change: Box::new(change),
+    match (out.failed, wrote) {
+        (false, Some(change)) => Ok(change),
+        (failed, _) => Err(Ran {
+            failed,
+            text: grokhub_core::redact_secrets(&out.text),
+        }),
     }
 }
 
@@ -365,6 +442,145 @@ mod tests {
         ] {
             assert_eq!(step_undo(tool, patch), Undo::Never, "{tool}");
         }
+    }
+
+    #[test]
+    fn pausing_an_automation_is_a_one_click_ledger_step_and_nothing_else_moves() {
+        let pause = r#"{"id":"auto-abc","reason":"x"}"#;
+        assert_eq!(
+            ledger_target("automation_disable", pause),
+            Some((ChangeKind::Automation, "auto-abc".into()))
+        );
+        assert_eq!(step_undo("automation_disable", pause), Undo::OneClick);
+        assert_eq!(step_class("automation_disable", pause), None);
+        assert_eq!(
+            proactive_key("automation_disable", pause),
+            "proactive:automation_disable"
+        );
+        // An id the tool would not find as written has no target.
+        assert_eq!(
+            ledger_target("automation_disable", r#"{"id":" auto-abc"}"#),
+            None
+        );
+        assert_eq!(
+            ledger_target("automation_disable", r#"{"id":"../x"}"#),
+            None
+        );
+        assert_eq!(
+            ledger_target("automation_disable", r#"{"name":"auto-abc"}"#),
+            None
+        );
+        for tool in ["automation_delete", "automation_modify", "skill_disable"] {
+            assert_eq!(ledger_target(tool, pause), None, "{tool}");
+            assert_eq!(step_undo(tool, pause), Undo::Never, "{tool}");
+        }
+        assert_eq!(
+            ledger_target("connection_disable", r#"{"name":"notes"}"#),
+            Some((ChangeKind::Connection, "notes".into()))
+        );
+    }
+
+    fn write_automation(dir: &Path, id: &str, enabled: bool) {
+        let row = serde_json::json!([{
+            "id": id,
+            "name": "Sync notes",
+            "schedule": "daily",
+            "time": "09:00",
+            "instructions": "sync my notes",
+            "enabled": enabled,
+            "health": {"outcome": "failed", "error": "disk full", "failStreak": 5}
+        }]);
+        std::fs::write(dir.join("automations.json"), row.to_string()).expect("write automations");
+    }
+
+    #[test]
+    fn pause_it_from_a_card_turns_the_job_off_once_and_records_the_approval() {
+        let dir = crate::harness::test_dir("proactive-offered");
+        let _pin = crate::perm::ConfigGuard::set(&dir);
+        write_automation(&dir, "auto-abc", true);
+        let args = r#"{"id":"auto-abc","reason":"failed 5 runs in a row"}"#;
+
+        let run = run_offered_step(
+            &dir,
+            &dir,
+            "automation_disable",
+            args,
+            AccessMode::Supervised,
+        );
+        let AutoRun::Done { kind, change } = run else {
+            panic!("expected Done, got {run:?}");
+        };
+        assert_eq!(kind, ChangeKind::Automation);
+        assert_eq!(change.id, "auto-abc");
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("automations.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved[0]["enabled"], serde_json::json!(false));
+        let ledger = ChangeLedger::load_kind(&dir, ChangeKind::Automation);
+        let ids: Vec<&str> = ledger.all().iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["auto-abc"]);
+        let spans = read_spans(&dir, PROACTIVE_TRACE).unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].decision, "approve");
+        assert_eq!(spans[0].result, "done");
+        assert_eq!(spans[0].undo_ref, format!("automation:{}", change.seq));
+        assert_eq!(mind_key(&spans[0]), "proactive:automation_disable");
+
+        // Already off: the tool changes nothing, so no span and no ledger line.
+        let again = run_offered_step(
+            &dir,
+            &dir,
+            "automation_disable",
+            args,
+            AccessMode::Supervised,
+        );
+        assert!(matches!(again, AutoRun::Failed(_)), "{again:?}");
+        assert_eq!(read_spans(&dir, PROACTIVE_TRACE).unwrap().len(), 1);
+        assert_eq!(
+            ChangeLedger::load_kind(&dir, ChangeKind::Automation)
+                .all()
+                .len(),
+            1
+        );
+
+        // A job that is not there fails the same way.
+        let gone = run_offered_step(
+            &dir,
+            &dir,
+            "automation_disable",
+            r#"{"id":"auto-none"}"#,
+            AccessMode::Supervised,
+        );
+        assert!(matches!(gone, AutoRun::Failed(_)), "{gone:?}");
+        assert_eq!(read_spans(&dir, PROACTIVE_TRACE).unwrap().len(), 1);
+        let _ = crate::tools::control::take_automation_changes();
+        let _ = crate::harness::take_self_changes(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hard_step_from_a_card_is_refused_before_it_runs() {
+        let dir = crate::harness::test_dir("proactive-offered-hard");
+        let _pin = crate::perm::ConfigGuard::set(&dir);
+        let args = r#"{"name":"crm","url":"http://127.0.0.1:9/mcp","needs_token":true}"#;
+        assert!(step_class("connection_add", args).is_some());
+        let run = run_offered_step(&dir, &dir, "connection_add", args, AccessMode::Supervised);
+        assert_eq!(run, AutoRun::Failed("That step always asks.".into()));
+        assert!(!dir.join("mcp.json").exists());
+        assert!(read_spans(&dir, PROACTIVE_TRACE).unwrap().is_empty());
+        // And a step with no ledger target never runs.
+        assert_eq!(
+            run_offered_step(
+                &dir,
+                &dir,
+                "write",
+                r#"{"path":"a.txt"}"#,
+                AccessMode::Supervised
+            ),
+            AutoRun::NoUndo
+        );
+        assert!(!dir.join("a.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

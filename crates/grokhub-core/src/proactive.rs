@@ -135,6 +135,10 @@ pub struct Candidate {
     /// What was found. The card's title is its headline and the card opens to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<crate::card_report::CardReport>,
+    /// `tool`'s JSON arguments when the step is one GrokHub can run itself
+    /// (pausing a failing automation). `None` for a step a chat carries out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
 }
 
 impl Candidate {
@@ -162,6 +166,7 @@ impl Candidate {
             prepared: None,
             ask: None,
             report: None,
+            arguments: None,
         }
     }
 
@@ -270,6 +275,9 @@ pub struct ProactiveMeta {
     /// Where the candidate came from: its category for learned reactions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<CandidateSource>,
+    /// `tool`'s JSON arguments, kept for the card's Pause it chip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
 }
 
 /// A failing automation: the card names it, says how often it failed and
@@ -333,6 +341,18 @@ fn automation_candidate(alert: &crate::automation::AutomationAlert) -> Candidate
         }],
         ..Default::default()
     });
+    // A job that still runs can be paused from the card. The step, its
+    // value and confidence stay the same, so ranking does not move.
+    if alert.enabled && !alert.id.is_empty() {
+        c.tool = "automation_disable".into();
+        c.arguments = Some(
+            serde_json::json!({
+                "id": alert.id,
+                "reason": format!("failed {n} runs in a row"),
+            })
+            .to_string(),
+        );
+    }
     c
 }
 
@@ -391,6 +411,7 @@ pub fn proactive_card(candidate: &Candidate, route: ProactiveRoute, now_ms: u64)
         hard: candidate.class == CandidateClass::Hard,
         final_step: (candidate.class == CandidateClass::Hard).then(|| candidate.action.clone()),
         source: Some(candidate.source),
+        arguments: candidate.arguments.clone(),
     });
     card
 }
@@ -1124,6 +1145,8 @@ mod tests {
             },
         ];
         let health = [crate::automation::AutomationAlert {
+            id: "auto-backup".into(),
+            enabled: true,
             name: "Backup".into(),
             fail_streak: 3,
             error: "disk full".into(),
@@ -1170,6 +1193,8 @@ mod tests {
     #[test]
     fn a_failing_automation_card_names_it_and_says_what_broke() {
         let alert = crate::automation::AutomationAlert {
+            id: String::new(),
+            enabled: true,
             name: "Morning brief".into(),
             fail_streak: 3,
             error: "OpenRouter has no credits left.".into(),
@@ -1207,6 +1232,8 @@ mod tests {
             }]
         );
         let once = automation_candidate(&crate::automation::AutomationAlert {
+            id: String::new(),
+            enabled: true,
             name: String::new(),
             fail_streak: 1,
             error: "Run failed".into(),
@@ -1222,6 +1249,53 @@ mod tests {
             ))
         );
         assert_eq!(once.report.and_then(|r| r.subject), None);
+    }
+
+    #[test]
+    fn a_running_failing_automation_can_be_paused_from_its_card_and_ranks_the_same() {
+        let alert = |enabled: bool| crate::automation::AutomationAlert {
+            id: "auto-abc".into(),
+            enabled,
+            name: "Sync notes".into(),
+            fail_streak: 5,
+            error: "disk full".into(),
+        };
+        let on = automation_candidate(&alert(true));
+        assert_eq!(on.tool, "automation_disable");
+        assert_eq!(
+            on.arguments.as_deref(),
+            Some(r#"{"id":"auto-abc","reason":"failed 5 runs in a row"}"#)
+        );
+        // Same value and confidence as before the step was added: 0.6 × 0.8 × 0.5.
+        assert_eq!(on.help_milli(), 240);
+        let card = proactive_card(&on, ProactiveRoute::ICan, T0);
+        let meta = card.pulse.proactive.expect("proactive meta");
+        assert_eq!(meta.tool, "automation_disable");
+        assert_eq!(
+            meta.arguments.as_deref(),
+            Some(r#"{"id":"auto-abc","reason":"failed 5 runs in a row"}"#)
+        );
+
+        let off = automation_candidate(&alert(false));
+        assert_eq!(off.tool, "run_task");
+        assert_eq!(off.arguments, None);
+        assert_eq!(off.help_milli(), 240);
+        let no_id = automation_candidate(&crate::automation::AutomationAlert {
+            id: String::new(),
+            ..alert(true)
+        });
+        assert_eq!((no_id.tool.as_str(), no_id.arguments), ("run_task", None));
+    }
+
+    #[test]
+    fn proactive_meta_saved_before_arguments_still_loads() {
+        let old = r#"{"help":240,"route":"i_can","topic":"Backup","tool":"run_task"}"#;
+        let meta: ProactiveMeta = serde_json::from_str(old).expect("old meta loads");
+        assert_eq!(meta.tool, "run_task");
+        assert_eq!(meta.arguments, None);
+        // And a meta without arguments writes no key, so older builds read it.
+        let back = serde_json::to_string(&meta).expect("serialize");
+        assert!(!back.contains("arguments"), "{back}");
     }
 
     #[test]
