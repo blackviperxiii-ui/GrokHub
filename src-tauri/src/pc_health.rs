@@ -380,7 +380,7 @@ mod tests {
         }
     }
 
-    fn playing(gpu_c: f32) -> impl Fn(u64, Option<(u64, u64)>) -> Probe {
+    fn playing(gpu_c: f32, game: &'static str) -> impl Fn(u64, Option<(u64, u64)>) -> Probe {
         move |at_ms, _| Probe {
             game_up: true,
             sample: Some(SensorSample {
@@ -389,7 +389,7 @@ mod tests {
                 cpu_temp_c: Some(60.0),
                 gpu_util_pct: Some(80),
                 cpu_util_pct: Some(40),
-                game_label: Some("Hades".into()),
+                game_label: Some(game.into()),
                 ..SensorSample::default()
             }),
             cpu: Some((1_000 + at_ms, 500)),
@@ -400,8 +400,8 @@ mod tests {
         Probe::default()
     }
 
-    /// Plays from `start` for 90 seconds at `gpu_c`, then quits. Returns
-    /// the card the quit brought, if any.
+    /// Plays Hades from `start` for 90 seconds at `gpu_c`, then quits.
+    /// Returns the card the quit brought, if any.
     fn session(
         watch: &mut Watch,
         dir: &Path,
@@ -409,8 +409,25 @@ mod tests {
         start: u64,
         gpu_c: f32,
     ) -> Option<UpdateCard> {
+        play(watch, dir, settings, start, gpu_c, "Hades")
+    }
+
+    fn play(
+        watch: &mut Watch,
+        dir: &Path,
+        settings: &PcHealthSettings,
+        start: u64,
+        gpu_c: f32,
+        game: &'static str,
+    ) -> Option<UpdateCard> {
         for i in 0..7 {
-            let card = watch.tick(dir, settings, true, start + i * 15_000, playing(gpu_c));
+            let card = watch.tick(
+                dir,
+                settings,
+                true,
+                start + i * 15_000,
+                playing(gpu_c, game),
+            );
             assert_eq!(card, None, "no card while the game runs");
         }
         watch.tick(dir, settings, true, start + 120_000, quit)
@@ -451,7 +468,7 @@ mod tests {
         let reads = Cell::new(0);
         let counted = |at, prev| {
             reads.set(reads.get() + 1);
-            playing(70.0)(at, prev)
+            playing(70.0, "Hades")(at, prev)
         };
         let mut watch = Watch::default();
         assert_eq!(watch.tick(&dir, &on(), true, 0, counted), None);
@@ -518,16 +535,32 @@ mod tests {
         // The same game again ten minutes later: saved, no card.
         assert_eq!(session(&mut watch, &dir, &on(), 1_600_000, 86.0), None);
         assert_eq!(load_ledger(&dir).history.len(), 2);
+        // The half hour runs from the last card, not the skipped session.
+        assert!(session(&mut watch, &dir, &on(), 3_000_000, 70.0).is_some());
         // An hour later with quiet on, a normal session posts nothing...
         let quiet = PcHealthSettings {
             quiet_when_normal: true,
             ..on()
         };
         assert_eq!(session(&mut watch, &dir, &quiet, 5_000_000, 70.0), None);
-        assert_eq!(load_ledger(&dir).history.len(), 3);
+        assert_eq!(load_ledger(&dir).history.len(), 4);
         // ...and a hot one still does.
         assert!(session(&mut watch, &dir, &quiet, 9_000_000, 88.0).is_some());
-        assert_eq!(load_ledger(&dir).history.len(), 4);
+        assert_eq!(load_ledger(&dir).history.len(), 5);
+    }
+
+    #[test]
+    fn another_game_within_the_half_hour_still_gets_its_card() {
+        let dir = temp("games");
+        let mut watch = Watch::default();
+        let t = 1_700_000_000_000;
+        assert!(play(&mut watch, &dir, &on(), t, 70.0, "Hades").is_some());
+        assert!(play(&mut watch, &dir, &on(), t + 600_000, 70.0, "Celeste").is_some());
+        assert_eq!(
+            play(&mut watch, &dir, &on(), t + 1_200_000, 70.0, "Celeste"),
+            None
+        );
+        assert_eq!(load_ledger(&dir).history.len(), 3);
     }
 
     #[test]
@@ -535,7 +568,7 @@ mod tests {
         let dir = temp("short");
         let mut watch = Watch::default();
         for i in 0..3 {
-            watch.tick(&dir, &on(), true, i * 15_000, playing(70.0));
+            watch.tick(&dir, &on(), true, i * 15_000, playing(70.0, "Hades"));
         }
         assert_eq!(watch.tick(&dir, &on(), true, 45_000, quit), None);
         assert!(!dir.join(ph::LEDGER_FILE).exists());
