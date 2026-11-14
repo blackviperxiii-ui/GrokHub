@@ -468,27 +468,71 @@ describe("Chat", () => {
     expect(document.querySelector("[data-find]")).toBeNull();
   });
 
-  it("while find is open a streaming reply keeps the view on the match", async () => {
+  it("while find is open a streaming reply leaves the view and the pick on the match", async () => {
     api.getStartChat.mockResolvedValue(SAVED);
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
     await screen.findByText("pick a paint colour");
     const id = await startTurn("and the trim?");
     await userEvent.keyboard("{Control>}f{/Control}");
-    await userEvent.type(screen.getByRole("textbox", { name: "Find in this chat" }), "paint");
     // jsdom draws nothing, so it has no scrollIntoView; the log calls it when there is one.
     const scroll = vi.fn();
     Element.prototype.scrollIntoView = scroll;
     try {
-      emit(id, { kind: "text", text: "White trim." });
-      expect(screen.getByText("White trim.")).toBeVisible();
-      expect(scroll.mock.calls).not.toContainEqual([{ block: "end" }]);
+      await userEvent.type(screen.getByRole("textbox", { name: "Find in this chat" }), "paint");
       expect(scroll.mock.calls).toContainEqual([{ block: "center" }]);
+      expect(scroll.mock.calls).not.toContainEqual([{ block: "end" }]);
+      scroll.mockClear();
+      emit(id, { kind: "text", text: "Paint the trim white." });
+      expect(screen.getByText("Paint the trim white.")).toBeVisible();
+      expect(scroll).not.toHaveBeenCalled();
+      // The new match joins the count; the person stays on the one they were reading.
+      expect(screen.getByRole("search", { name: "Find in chat" })).toHaveTextContent("1 of 2");
+      expect(screen.getByText("pick a paint colour").closest("[data-role]")).toHaveAttribute("data-find", "current");
+      await userEvent.keyboard("{Escape}");
+      expect(scroll).not.toHaveBeenCalled();
+      emit(id, { kind: "text", text: " And the door." });
+      expect(scroll).toHaveBeenCalledWith({ block: "end" });
     } finally {
       delete (Element.prototype as Partial<Element>).scrollIntoView;
     }
     emit(id, { kind: "done", stop: "end_turn" });
     finish();
+  });
+
+  it("Ctrl+F stays out of an open dialog, a held key and another letter on the F key", async () => {
+    api.getStartChat.mockResolvedValue(SAVED);
+    render(
+      <>
+        <Chat onOpenSettings={() => {}} />
+        <div role="dialog" aria-modal="true" aria-label="Palette">
+          <input aria-label="Search pages and commands" />
+        </div>
+      </>,
+    );
+    await screen.findByText("pick a paint colour");
+    const palette = screen.getByRole("textbox", { name: "Search pages and commands" });
+    palette.focus();
+    await userEvent.keyboard("{Control>}f{/Control}");
+    expect(screen.queryByRole("search", { name: "Find in chat" })).toBeNull();
+    expect(palette).toHaveFocus();
+  });
+
+  it("Ctrl+F follows the layout's letter, falls back to the key's place, and ignores a held key", async () => {
+    api.getStartChat.mockResolvedValue(SAVED);
+    render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    const bar = () => screen.queryByRole("search", { name: "Find in chat" });
+    // Dvorak's U sits where QWERTY has F.
+    fireEvent.keyDown(window, { key: "u", code: "KeyF", ctrlKey: true });
+    expect(bar()).toBeNull();
+    fireEvent.keyDown(window, { key: "f", code: "KeyF", ctrlKey: true, repeat: true });
+    expect(bar()).toBeNull();
+    // A Cyrillic layout types а on that key: no Latin letter, so its place counts.
+    fireEvent.keyDown(window, { key: "а", code: "KeyF", ctrlKey: true });
+    expect(bar()).not.toBeNull();
+    fireEvent.keyDown(window, { key: "f", code: "KeyF", ctrlKey: true, repeat: true });
+    expect(bar()).not.toBeNull();
   });
 
   it("Ctrl+F does nothing on an empty chat or while the Chat tab is hidden", async () => {

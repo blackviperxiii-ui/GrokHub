@@ -96,6 +96,7 @@ import { Inbox } from "./Inbox";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
 import { findLabel, findRows, findStep, itemText } from "./chatFind";
+import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { ChatFindBar } from "./ChatFind";
 
 export type Item =
@@ -146,6 +147,13 @@ export interface QueueAct {
 }
 
 /** Text to put back in the box, after what is typed there. */
+/** The log row a find match is on: each row sits right after its hidden
+ * `data-row` marker. */
+function findRow(log: HTMLElement, i: number): Element | null {
+  const next = log.querySelector(`[data-row="${i}"]`)?.nextElementSibling;
+  return next && !next.hasAttribute("data-row") ? next : null;
+}
+
 function withQueued(draft: string, texts: readonly string[]): string {
   const back = texts.join("\n\n");
   return draft.trim() ? `${draft.trimEnd()}\n\n${back}` : back;
@@ -1087,13 +1095,27 @@ export function Chat({
     };
   }, [conversationId, voiceSession]);
 
-  // Find in this chat (Ctrl+F). `pick` indexes `hits`; a new query starts on
-  // the newest match, as the old app did.
-  const [find, setFind] = useState<{ query: string; pick: number } | null>(null);
+  // Find in this chat (Ctrl+F). `at` is the row of the match the person is
+  // on, so rows that stream in, load above or go away don't move it; a new
+  // query starts on the newest match, as the old app did. `seek` counts typed
+  // queries and steps, the only things that move the view onto the match.
+  const [find, setFind] = useState<{ query: string; at: Item | null; seek: number } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const hits = find ? findRows(items.map(itemText), find.query) : [];
-  const pick = find ? Math.min(find.pick, Math.max(hits.length - 1, 0)) : 0;
+  const atHit = find?.at ? hits.findIndex((row) => items[row] === find.at) : -1;
+  const pick = atHit >= 0 ? atHit : Math.max(hits.length - 1, 0);
   const findOpen = find !== null;
+  const seek = find?.seek ?? 0;
+
+  function findQuery(query: string) {
+    const rows = findRows(items.map(itemText), query);
+    setFind({ query, at: items[rows[rows.length - 1]] ?? null, seek: seek + 1 });
+  }
+
+  function findNext(forward: boolean) {
+    if (!find) return;
+    setFind({ query: find.query, at: items[hits[findStep(pick, hits.length, forward)]] ?? null, seek: seek + 1 });
+  }
   // Another chat, or an emptied one, closes the bar.
   const [findChat, setFindChat] = useState(conversationId);
   if (findChat !== conversationId || (find && items.length === 0)) {
@@ -1107,11 +1129,12 @@ export function Chat({
   }
 
   const onFindKey = useEffectEvent((event: globalThis.KeyboardEvent) => {
-    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-    if (event.code !== "KeyF" && event.key.toLowerCase() !== "f") return;
+    if (!isChatShortcut(event, "f", false)) return;
     event.preventDefault();
+    // Holding the keys toggles once; a dialog over the chat keeps the keyboard.
+    if (event.repeat || dialogOpen()) return;
     if (findOpen) closeFind();
-    else if (items.length > 0) setFind({ query: "", pick: 0 });
+    else if (items.length > 0) setFind({ query: "", at: null, seek: 0 });
   });
   useEffect(() => {
     if (!active || embedded) return;
@@ -1129,19 +1152,24 @@ export function Chat({
     if (!log) return;
     for (const el of log.querySelectorAll("[data-find]")) el.removeAttribute("data-find");
     if (!hitRows) return;
-    const row = (i: number) => {
-      const next = log.querySelector(`[data-row="${i}"]`)?.nextElementSibling;
-      return next && !next.hasAttribute("data-row") ? next : null;
-    };
-    for (const i of hitRows.split(",").map(Number)) row(i)?.setAttribute("data-find", i === current ? "current" : "hit");
-    row(current)?.scrollIntoView?.({ block: "center" });
+    for (const i of hitRows.split(",").map(Number)) findRow(log, i)?.setAttribute("data-find", i === current ? "current" : "hit");
   }, [hitRows, current, items]);
-
+  const centreMatch = useEffectEvent(() => {
+    const log = logRef.current;
+    if (log) findRow(log, current)?.scrollIntoView?.({ block: "center" });
+  });
   useEffect(() => {
-    // While find is open, a streaming reply does not pull the view off the match.
-    if (findOpen) return;
-    endRef.current?.scrollIntoView?.({ block: "end" });
-  }, [items, findOpen]);
+    if (seek > 0) centreMatch();
+  }, [seek]);
+
+  // While find is open the log stays put, and closing it leaves the view on
+  // the match; only new rows after that follow the end again.
+  const followEnd = useEffectEvent(() => {
+    if (!findOpen) endRef.current?.scrollIntoView?.({ block: "end" });
+  });
+  useEffect(() => {
+    followEnd();
+  }, [items]);
 
   function startOver() {
     if (busy) return;
@@ -1756,6 +1784,7 @@ export function Chat({
           <ChatTabs
             activeId={conversationId}
             active={active}
+            busy={busy}
             draftEmpty={items.length === 0}
             onSwitch={openChat}
             onNew={startOver}
@@ -1779,8 +1808,8 @@ export function Chat({
           query={find.query}
           label={findLabel(pick, hits.length, find.query)}
           hasHits={hits.length > 0}
-          onQuery={(query) => setFind({ query, pick: Number.MAX_SAFE_INTEGER })}
-          onStep={(forward) => setFind({ query: find.query, pick: findStep(pick, hits.length, forward) })}
+          onQuery={findQuery}
+          onStep={findNext}
           onClose={closeFind}
         />
       )}
