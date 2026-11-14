@@ -1,9 +1,10 @@
-// The top bar's two pills: the default personality, and how much this week
-// left the computer. Each opens its Settings section. A pill whose answer is
-// missing (a command this desktop or the web app doesn't have, a locked
-// keyring) says less instead of failing.
+// The top bar's pills: "Quiet until 07:00" while quiet hours hold, the
+// default personality, and how much this week left the computer. Each opens
+// its Settings section. A pill whose answer is missing (a command this
+// desktop or the web app doesn't have, a locked keyring) says less instead of
+// failing.
 import { useEffect, useState } from "react";
-import { getPersonalities, getPrivacy } from "./api";
+import { getPersonalities, getPrivacy, quietChip } from "./api";
 import type { Section } from "./sections";
 
 /** The personality pill's value: the default voice's name, or Home's fallback. */
@@ -20,6 +21,8 @@ export function localText(page: { offlineOnly: boolean; sentCalls?: number | nul
   return count === null ? "Local first" : `Local first · ${count} sent`;
 }
 
+const MINUTE = 60_000;
+
 export function StatusPills({
   remote,
   refresh,
@@ -33,6 +36,33 @@ export function StatusPills({
 }) {
   const [name, setName] = useState<string | null>(null);
   const [local, setLocal] = useState<{ text: string; title: string } | null>(null);
+  const [quiet, setQuiet] = useState<string | null>(null);
+
+  // Quiet hours start and end on the minute, so the pill reads again at each
+  // minute's turn as well as when Settings closes.
+  useEffect(() => {
+    if (remote) return;
+    let live = true;
+    let timer = 0;
+    const read = () => {
+      Promise.resolve()
+        .then(() => quietChip())
+        .then(
+          (text) => {
+            if (live) setQuiet(text ?? null);
+          },
+          () => {
+            if (live) setQuiet(null);
+          },
+        );
+      timer = window.setTimeout(read, MINUTE - (Date.now() % MINUTE) + 50);
+    };
+    read();
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [remote, refresh]);
 
   useEffect(() => {
     let live = true;
@@ -68,6 +98,17 @@ export function StatusPills({
   const voice = name ? `Personality · ${name}` : "Personality";
   return (
     <div className="pills">
+      {quiet && (
+        <button
+          type="button"
+          className="pill pill-quiet"
+          title="Automations wait until then. Opens Behavior."
+          onClick={() => onSettings("behavior")}
+        >
+          <span className="pill-dot" aria-hidden="true" />
+          <span className="pill-key">{quiet}</span>
+        </button>
+      )}
       {!remote && (
         <button
           type="button"

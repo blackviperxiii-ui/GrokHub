@@ -1,0 +1,1 @@
+- Chat: a web-search reply that ends in a "Sources:" list shows the links as small site chips (for example "blog.rust-lang.org") under the answer, in live and reopened chats. Hovering a chip shows the full link, and a click opens it in the browser.

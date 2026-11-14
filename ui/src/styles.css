@@ -849,7 +849,8 @@ button.pill:focus-visible {
   background: var(--red);
 }
 
-.pill-local .pill-dot {
+.pill-local .pill-dot,
+.pill-quiet .pill-dot {
   background: var(--muted);
 }
 
@@ -4743,6 +4744,48 @@ button.primary:not(.quick-chip) {
 /* Find's hidden row marker sits between two rows. */
 .log > .thought + [data-row] + .thought {
   margin-top: -8px;
+}
+
+/* A web-search reply's Sources list: one quiet pill per site, wrapping, with
+   the link on hover. */
+.source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* min-width 0 lets a long site name shrink to the bubble and end in an
+   ellipsis instead of pushing the chat sideways. */
+.source-chips > li {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.bubble .source-chips:first-child {
+  margin-top: 0;
+}
+
+.source-chip {
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-chip:hover:not(:disabled) {
+  background: var(--hover);
+  box-shadow: none;
+  color: var(--text);
 }
 
 /* A reopened chat's tool steps: one quiet line instead of cards. */

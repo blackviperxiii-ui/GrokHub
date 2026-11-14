@@ -1611,6 +1611,55 @@ describe("Chat history", () => {
     api.handler = null;
   });
 
+  it("a finished web-search reply shows its Sources as site chips that open the link", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    try {
+      const finish = holdTurn();
+      render(<Chat onOpenSettings={() => {}} />);
+      const id = await startTurn("what's new in rust?");
+      emit(id, { kind: "text", text: "Rust 1.92 is out.\n\nSources:\n1. https://blog.rust-lang.org/2026/10/30/Rust-1.92.html\n" });
+      // Still streaming: the list could keep growing, so it stays text.
+      expect(screen.queryByRole("list", { name: "Sources" })).toBeNull();
+      emit(id, { kind: "text", text: "2. https://www.phoronix.com/news/Rust-1.92\n" });
+      emit(id, { kind: "done", stop: "end_turn" });
+      finish();
+      const chips = await screen.findByRole("list", { name: "Sources" });
+      expect(within(chips).getAllByRole("button").map((chip) => chip.textContent)).toEqual([
+        "blog.rust-lang.org",
+        "phoronix.com",
+      ]);
+      const bubble = chips.closest('[data-role="assistant"]');
+      expect(bubble).toHaveTextContent("Rust 1.92 is out.");
+      expect(bubble).not.toHaveTextContent("https://www.phoronix.com");
+      const phoronix = within(chips).getByRole("button", { name: "Open phoronix.com" });
+      expect(phoronix).toHaveAttribute("title", "https://www.phoronix.com/news/Rust-1.92");
+      await userEvent.click(phoronix);
+      expect(open).toHaveBeenCalledWith("https://www.phoronix.com/news/Rust-1.92", "_blank", "noopener,noreferrer");
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it("a saved reply's Sources show as chips; a user line and a list with no heading stay text", async () => {
+    api.getStartChat.mockResolvedValue({
+      id: "shell-src",
+      title: "rust",
+      lines: [
+        { role: "user", text: "Sources:\n- https://mine.example/a" },
+        { role: "assistant", text: "Answer.\n- https://a.com" },
+        { role: "assistant", text: "Repairable. Sources: https://frame.work/laptop16 https://www.dell.com/xps15" },
+      ],
+      earlier: 0,
+    });
+    render(<Chat onOpenSettings={() => {}} />);
+    const chips = await screen.findByRole("list", { name: "Sources" });
+    expect(within(chips).getAllByRole("button").map((chip) => chip.textContent)).toEqual(["frame.work", "dell.com"]);
+    expect(chips.closest('[data-role="assistant"]')).toHaveTextContent(/^Repairable\.\s*frame\.workdell\.com/);
+    expect(screen.getAllByRole("list", { name: "Sources" })).toHaveLength(1);
+    expect(screen.getByText("https://a.com")).toBeVisible();
+    expect(document.querySelector('[data-role="user"]')).toHaveTextContent("https://mine.example/a");
+  });
+
   it("turns a saved chat's lines into bubbles and one muted tools line", () => {
     expect(itemsFrom(SAVED)).toEqual([
       { kind: "user", text: "pick a paint colour" },
