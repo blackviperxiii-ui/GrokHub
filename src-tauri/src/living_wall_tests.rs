@@ -41,6 +41,14 @@ fn wall_on(config: &Path) {
     std::fs::write(config.join("app.json"), r#"{"imagineWall": true}"#).unwrap();
 }
 
+fn signed_in() -> bool {
+    true
+}
+
+fn signed_out() -> bool {
+    false
+}
+
 fn cx(config: &Path, now: u64) -> Cx<'_> {
     Cx {
         config_dir: config,
@@ -48,7 +56,8 @@ fn cx(config: &Path, now: u64) -> Cx<'_> {
         now,
         offset_min: Some(0),
         busy: false,
-        signed_in: true,
+        not_before: 0,
+        signed_in: &signed_in,
     }
 }
 
@@ -112,6 +121,19 @@ fn off_until_turned_on_and_a_cabin_on_keeps_painting() {
     );
     assert_eq!(calls.get(), 0);
     assert!(!config.join("imagine-wall.json").exists());
+
+    // Off is the default, so the keychain is never read for it.
+    let asked = Cell::new(0);
+    let keychain = || {
+        asked.set(asked.get() + 1);
+        true
+    };
+    let off = Cx {
+        signed_in: &keychain,
+        ..cx(&config, NOON)
+    };
+    assert_eq!(look(&off, &painter(&config, &calls)), Look::Held(Hold::Off));
+    assert_eq!(asked.get(), 0);
 
     std::fs::write(
         config.join("app.json"),
@@ -205,7 +227,7 @@ fn each_hold_paints_nothing() {
     );
     assert_eq!(
         held(&Cx {
-            signed_in: false,
+            signed_in: &signed_out,
             ..cx(&config, NOON)
         }),
         Look::Held(Hold::NoSignIn)
@@ -299,4 +321,90 @@ fn a_failed_cover_tries_again_in_fifteen_minutes() {
     assert!(matches!(look(&cx(&config, soon), &paint), Look::Painted(_)));
     // The failed run let go of Imagine: a Make can start.
     assert!(crate::imagine::start().is_ok());
+}
+
+#[test]
+fn a_failed_cover_waits_in_memory_when_the_wall_file_cannot_hold_it() {
+    let config = dir("held-in-memory");
+    wall_on(&config);
+    let fail = |_: &WallSeed, _: &str, _: &dyn Fn() -> bool| -> Result<WallGif, String> {
+        Err("HTTP 500".into())
+    };
+    let failed = look(&cx(&config, NOON), &fail);
+    assert_eq!(failed, Look::Failed("HTTP 500".into()));
+    let not_before = next_try(&failed, NOON, 0);
+    assert_eq!(not_before, NOON + 15 * 60 * 1000);
+    // The hold never reached the disk: the wall file is gone.
+    std::fs::remove_file(config.join("imagine-wall.json")).unwrap();
+
+    let calls = Cell::new(0);
+    let paint = painter(&config, &calls);
+    let asked = Cell::new(0);
+    let keychain = || {
+        asked.set(asked.get() + 1);
+        true
+    };
+    let minute_later = Cx {
+        not_before,
+        signed_in: &keychain,
+        ..cx(&config, NOON + 60_000)
+    };
+    assert_eq!(look(&minute_later, &paint), Look::Held(Hold::NotDue));
+    assert_eq!((calls.get(), asked.get()), (0, 0));
+
+    let due = Cx {
+        not_before,
+        ..cx(&config, not_before)
+    };
+    let painted = look(&due, &paint);
+    assert!(matches!(painted, Look::Painted(_)));
+    assert_eq!(calls.get(), 1);
+    // A cover or a hold leaves the thread's own hold as it was.
+    assert_eq!(next_try(&painted, not_before, not_before), not_before);
+    assert_eq!(next_try(&Look::Held(Hold::Busy), NOON, 7), 7);
+}
+
+#[test]
+fn a_cover_that_cannot_be_pinned_takes_its_frames_with_it() {
+    let config = dir("unpinned");
+    wall_on(&config);
+    let calls = Cell::new(0);
+    let frames = painter(&config, &calls);
+    // The wall file outgrows its cap while the stills are out.
+    let paint = |seed: &WallSeed, id: &str, stop: &dyn Fn() -> bool| {
+        let gif = frames(seed, id, stop);
+        std::fs::write(
+            config.join("imagine-wall.json"),
+            vec![b' '; 5 * 1024 * 1024],
+        )
+        .unwrap();
+        gif
+    };
+    let Look::Failed(err) = look(&cx(&config, NOON), &paint) else {
+        panic!("expected the pin to fail");
+    };
+    assert!(!err.is_empty());
+    assert_eq!(calls.get(), 1);
+    let wdir = crate::imagine::wall_dir(&config);
+    let id = format!("{NOON:x}");
+    assert!(!wdir.join(format!("{id}_a.png")).exists());
+    assert!(!wdir.join(format!("{id}_b.png")).exists());
+}
+
+#[test]
+fn the_page_hears_a_cover_start_land_or_fail() {
+    let said = |news: News| serde_json::to_value(news).unwrap();
+    assert_eq!(
+        said(News::Painting {
+            title: "Snow porch".into()
+        }),
+        json!({"state": "painting", "title": "Snow porch"})
+    );
+    assert_eq!(
+        said(News::Painted {
+            title: "Snow porch".into()
+        }),
+        json!({"state": "painted", "title": "Snow porch"})
+    );
+    assert_eq!(said(News::Failed), json!({"state": "failed"}));
 }

@@ -7,7 +7,7 @@ import {
   imagineSignInPoll,
   imagineSignInStart,
   imagineSignOut,
-  onWallCover,
+  onWallNews,
   type ImagineKind,
   type ImaginePage,
   type ImagineTile,
@@ -43,6 +43,15 @@ export function makingLine(kind: ImagineKind, count: number): string {
 export function wallLine(title: string): string {
   return `New cover on the wall: ${title}`;
 }
+
+export function paintingLine(title: string): string {
+  return `Painting a wall cover: ${title}`;
+}
+
+export const WALL_RETRY = "The wall cover didn't come. It tries again in 15 minutes.";
+
+/** The shell's refusal while another run holds Imagine (imagine.rs BUSY). */
+export const IMAGINE_BUSY = "Imagine is already making something. Stop it or wait for it.";
 
 function madeLine(made: number, note: string): string {
   const line = made === 1 ? "Made 1." : `Made ${made}.`;
@@ -121,6 +130,15 @@ export function Imagine() {
   const [count, setCount] = useState(1);
   const [kind, setKind] = useState<ImagineKind>("image");
   const [busy, setBusy] = useState(false);
+  /** The living wall cover being painted now, by its title. */
+  const [wall, setWall] = useState<string | null>(null);
+  // The wall's news must not write over a Make's own status line.
+  const making = useRef(false);
+  useEffect(() => {
+    making.current = busy;
+  }, [busy]);
+  /** A Make or a wall cover holds Imagine's one run: Stop shows. */
+  const working = busy || wall !== null;
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<ImagineTile | null>(null);
@@ -159,15 +177,31 @@ export function Imagine() {
     getImagine().then(setPage, (err) => setError(String(err)));
   }, []);
 
-  // A living wall cover painted while the page is open.
+  // The living wall painting while the page is open: its line, Stop (the
+  // run is Imagine's one run), then the gallery again when it lands.
   useEffect(() => {
     let live = true;
-    const off = onWallCover((cover) => {
+    const say = (line: string) => {
+      if (!making.current) setStatus(line);
+    };
+    const off = onWallNews((news) => {
+      if (news.state === "painting") {
+        setWall(news.title);
+        say(paintingLine(news.title));
+        return;
+      }
+      setWall(null);
+      // A Make refused while the cover held Imagine can go now.
+      setError((now) => (now === IMAGINE_BUSY ? null : now));
+      if (news.state === "failed") {
+        say(WALL_RETRY);
+        return;
+      }
       getImagine().then(
         (next) => {
           if (!live) return;
           setPage(next);
-          setStatus(wallLine(cover.title));
+          say(wallLine(news.title));
         },
         () => {},
       );
@@ -194,7 +228,7 @@ export function Imagine() {
 
   async function make(event: FormEvent) {
     event.preventDefault();
-    if (busy || !prompt.trim()) return;
+    if (working || !prompt.trim()) return;
     const n = kind === "video" ? 1 : count;
     setBusy(true);
     setError(null);
@@ -257,7 +291,7 @@ export function Imagine() {
                 type="button"
                 className="chip"
                 aria-pressed={kind === k}
-                disabled={busy}
+                disabled={working}
                 onClick={() => setKind(k)}
               >
                 {k === "image" ? "Image" : "Video"}
@@ -272,7 +306,7 @@ export function Imagine() {
                 className="chip"
                 aria-pressed={aspect === a.value}
                 title={a.value}
-                disabled={busy}
+                disabled={working}
                 onClick={() => setAspect(a.value)}
               >
                 {a.label}
@@ -287,7 +321,7 @@ export function Imagine() {
                   type="button"
                   className="chip"
                   aria-pressed={count === n}
-                  disabled={busy}
+                  disabled={working}
                   onClick={() => setCount(n)}
                 >
                   {n}
@@ -297,7 +331,7 @@ export function Imagine() {
           )}
         </div>
         <div className="card-buttons">
-          {busy ? (
+          {working ? (
             <button type="button" onClick={stop}>
               Stop
             </button>
@@ -308,7 +342,7 @@ export function Imagine() {
           )}
         </div>
         {status && (
-          <p className="status" role="status" aria-busy={busy}>
+          <p className="status" role="status" aria-busy={working}>
             {status}
           </p>
         )}

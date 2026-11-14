@@ -7209,8 +7209,8 @@ pub fn run() {
                     move || {
                         background_busy(&watched) || grokhub_desktop::game_guard::current().gaming
                     },
-                    move |gif| {
-                        let _ = told.emit(living_wall::PAINTED_EVENT, gif);
+                    move |news| {
+                        let _ = told.emit(living_wall::EVENT, news);
                     },
                 );
             }

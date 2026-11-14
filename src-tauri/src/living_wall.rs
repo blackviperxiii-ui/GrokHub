@@ -15,7 +15,11 @@
 //! - the chat you have open is a scratch chat;
 //! - there is nothing to sign an Imagine call with;
 //! - the last cover (or Make) is under three hours old, or it is quiet hours;
+//! - a failed cover is under fifteen minutes old (kept in memory as well as
+//!   on disk, so a wall file that can't be written still holds it);
 //! - Imagine is already making something on the page.
+//!
+//! The keychain is read only once every cheaper gate has passed.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -28,8 +32,9 @@ use serde_json::json;
 /// The cabin's app.json key.
 pub const KEY: &str = "imagineWall";
 
-/// Sent with the new cover when one lands, so the Imagine page reloads.
-pub const PAINTED_EVENT: &str = "imagine://wall";
+/// Sent as a cover starts and ends ([`News`]), so the Imagine page shows it
+/// painting, offers Stop, and reloads when it lands.
+pub const EVENT: &str = "imagine://wall";
 
 /// How often the thread looks. The wall's own interval bounds real paints.
 const EVERY: Duration = Duration::from_secs(60);
@@ -75,6 +80,15 @@ pub enum Hold {
     Making,
 }
 
+/// What the Imagine page hears about a cover.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum News {
+    Painting { title: String },
+    Painted { title: String },
+    Failed,
+}
+
 /// What one look did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Look {
@@ -92,8 +106,11 @@ pub struct Cx<'a> {
     pub offset_min: Option<i32>,
     /// A chat is running, a decision waits or a game is on.
     pub busy: bool,
-    /// Something can sign an Imagine call (`imagine::ready`).
-    pub signed_in: bool,
+    /// No paint before this time: a failed cover's retry, kept by the thread.
+    pub not_before: u64,
+    /// Something can sign an Imagine call (`imagine::ready`). It reads the
+    /// keychain, so it is asked last.
+    pub signed_in: &'a dyn Fn() -> bool,
 }
 
 /// Paints one cover: the seed, its id, and the page's Stop.
@@ -120,7 +137,10 @@ pub fn look(cx: &Cx<'_>, paint: &Paint<'_>) -> Look {
     if grokhub_agent::scratch::is_scratch(&settings.last_chat) {
         return Look::Held(Hold::Scratch);
     }
-    if !cx.signed_in {
+    if cx.now < cx.not_before {
+        return Look::Held(Hold::NotDue);
+    }
+    if !(cx.signed_in)() {
         return Look::Held(Hold::NoSignIn);
     }
     let Ok((last_ms, titles)) = crate::imagine::wall_state(dir) else {
@@ -141,8 +161,18 @@ pub fn look(cx: &Cx<'_>, paint: &Paint<'_>) -> Look {
     let taken: Vec<&str> = titles.iter().map(String::as_str).collect();
     let seed = grokhub_core::pick_fresh_seed(cx.now, &taken);
     let id = format!("{:x}", cx.now);
-    let painted = paint(seed, &id, &|| run.stopped())
-        .and_then(|gif| crate::imagine::pin_cover(dir, gif.clone(), cx.now).map(|()| gif));
+    let painted = paint(seed, &id, &|| run.stopped()).and_then(|gif| {
+        match crate::imagine::pin_cover(dir, gif.clone(), cx.now) {
+            Ok(()) => Ok(gif),
+            Err(err) => {
+                // No row points at these frames now, so nothing would ever
+                // evict them.
+                let _ = std::fs::remove_file(&gif.path_a);
+                let _ = std::fs::remove_file(&gif.path_b);
+                Err(err)
+            }
+        }
+    });
     match painted {
         Ok(gif) => Look::Painted(gif),
         Err(err) => {
@@ -153,6 +183,15 @@ pub fn look(cx: &Cx<'_>, paint: &Paint<'_>) -> Look {
             let _ = crate::imagine::hold_wall(dir, retry.max(1));
             Look::Failed(err)
         }
+    }
+}
+
+/// The thread's own hold after a look: a failed cover waits [`RETRY_MS`]
+/// even when the wall file couldn't take the hold.
+pub fn next_try(look: &Look, now: u64, not_before: u64) -> u64 {
+    match look {
+        Look::Failed(_) => now.saturating_add(RETRY_MS),
+        _ => not_before,
     }
 }
 
@@ -179,29 +218,41 @@ fn paint_here(
 }
 
 /// Start the thread. `busy` is a running chat, a waiting decision or a game;
-/// `painted` runs with each new cover.
-pub fn start<B, P>(config_dir: PathBuf, busy: B, painted: P)
+/// `tell` hears each cover start and end.
+pub fn start<B, T>(config_dir: PathBuf, busy: B, tell: T)
 where
     B: Fn() -> bool + Send + 'static,
-    P: Fn(&WallGif) + Send + 'static,
+    T: Fn(News) + Send + 'static,
 {
     let _ = std::thread::Builder::new()
         .name("living-wall".into())
-        .spawn(move || loop {
-            std::thread::sleep(EVERY);
-            let cx = Cx {
-                config_dir: &config_dir,
-                pid: std::process::id(),
-                now: grokhub_core::now_ms(),
-                offset_min: crate::scheduler::utc_offset(),
-                busy: busy(),
-                signed_in: crate::imagine::ready(),
-            };
-            let paint = |seed: &WallSeed, id: &str, stop: &dyn Fn() -> bool| {
-                paint_here(&config_dir, seed, id, stop)
-            };
-            if let Look::Painted(gif) = look(&cx, &paint) {
-                painted(&gif);
+        .spawn(move || {
+            let mut not_before = 0;
+            loop {
+                std::thread::sleep(EVERY);
+                let now = grokhub_core::now_ms();
+                let cx = Cx {
+                    config_dir: &config_dir,
+                    pid: std::process::id(),
+                    now,
+                    offset_min: crate::scheduler::utc_offset(),
+                    busy: busy(),
+                    not_before,
+                    signed_in: &crate::imagine::ready,
+                };
+                let paint = |seed: &WallSeed, id: &str, stop: &dyn Fn() -> bool| {
+                    tell(News::Painting {
+                        title: seed.title.to_string(),
+                    });
+                    paint_here(&config_dir, seed, id, stop)
+                };
+                let looked = look(&cx, &paint);
+                not_before = next_try(&looked, now, not_before);
+                match looked {
+                    Look::Painted(gif) => tell(News::Painted { title: gif.title }),
+                    Look::Failed(_) => tell(News::Failed),
+                    Look::Held(_) => {}
+                }
             }
         });
 }

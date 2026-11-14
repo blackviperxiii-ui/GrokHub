@@ -4094,11 +4094,14 @@ export function setLivingWall(on: boolean): Promise<LivingWall> {
   return invoke<LivingWall>("set_living_wall", { on });
 }
 
-/** A new living wall cover landed in the Imagine gallery: its title. */
+/** The living wall's cover as it starts, lands in the Imagine gallery, or
+ * fails (`living_wall::News`). */
+export type WallNews = { state: "painting"; title: string } | { state: "painted"; title: string } | { state: "failed" };
+
 export const IMAGINE_WALL_EVENT = "imagine://wall";
 
-export function onWallCover(handler: (cover: { title: string }) => void): Promise<UnlistenFn> {
-  return subscribe<{ title: string }>(IMAGINE_WALL_EVENT, handler);
+export function onWallNews(handler: (news: WallNews) => void): Promise<UnlistenFn> {
+  return subscribe<WallNews>(IMAGINE_WALL_EVENT, handler);
 }
 
 /** Settings → Pulse: one kind of fix that may run without its tap (`app.json` autoFixes). */
