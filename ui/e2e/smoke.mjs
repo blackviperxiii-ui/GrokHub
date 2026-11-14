@@ -482,7 +482,7 @@ const KEY_LOG_START = `
     // React's "Maximum update depth" error carries the stack of the setState
     // that looped; keep it so the frames can be mapped to the source.
     window.addEventListener("error", (e) => {
-      const stack = String(e.error?.stack || "").split("\n").slice(1, 16).map((l) => l.trim()).join(" < ");
+      const stack = String(e.error?.stack || "").split("\\n").slice(1, 16).map((l) => l.trim()).join(" < ");
       push(["error", "", "", at(), String(e.message) + " | " + stack, ""]);
     }, true);
     // Before React sees an input on the box: note the props it renders with,
