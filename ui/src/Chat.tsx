@@ -6,6 +6,7 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import {
   addAutomation,
@@ -69,7 +70,8 @@ import { appendDraft, Mic } from "./Mic";
 import { useVoiceMode, VoiceButton } from "./VoiceMode";
 import { ElicitCard, type ElicitItem } from "./Modes";
 import { SIDE_MARK, SideCards, withSide, type Side } from "./Side";
-import { NyxDock } from "./NyxDock";
+import { NyxDock, SIDE_MIN_WIDTH } from "./NyxDock";
+import { useMinWidth } from "./useMinWidth";
 import { NyxFace } from "./NyxFace";
 import { Orb, orbFor, orbLabel } from "./Orb";
 import { activityOf, useNyx } from "./nyx";
@@ -638,6 +640,7 @@ export function Chat({
   grokSignIn = false,
   embedded = false,
   lead = false,
+  side,
   onConversation,
   onBusy,
   onRan,
@@ -670,6 +673,8 @@ export function Chat({
   embedded?: boolean;
   /** The agent window's session has a lead: its plan card can be edited. */
   lead?: boolean;
+  /** Cards for the right column under the docked companion, on wide windows. */
+  side?: ReactNode;
   /** The conversation on screen, at the start and each time it changes. */
   onConversation?: (conversationId: string) => void;
   /** A reply started or ended. */
@@ -754,6 +759,7 @@ export function Chat({
   // Nyx's pose follows what the chat does, not each chunk of text.
   const activity = activityOf(items, busy);
   const nyx = useNyx(activity, active);
+  const sideWide = useMinWidth(SIDE_MIN_WIDTH);
 
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
@@ -1675,14 +1681,13 @@ export function Chat({
     return () => window.clearTimeout(timer);
   }, [queueAct]);
 
-  return (
+  const lane = (
     <section
-      className={embedded ? "chat embedded" : nyx ? "chat has-nyx" : "chat"}
+      className={embedded ? "chat embedded" : "chat"}
       aria-label={embedded ? "Agent" : "Chat"}
       onDragOver={attach.onDragOver}
       onDrop={attach.onDrop}
     >
-      {nyx && !embedded && <NyxDock url={nyx.url} path={nyx.path} mood={nyx.mood} />}
       {!remote && !embedded && (
         <>
           <ChatTabs
@@ -1883,5 +1888,20 @@ export function Chat({
       {!remote && <BudgetCard busy={busy} onOpenSettings={onOpenSettings} />}
       <ChipRow chips={row.chips} busy={busy} keys={active} onTap={tapChip} onHide={row.hide} />
     </section>
+  );
+  if (embedded) return lane;
+  // The right column: the docked companion from 900px, and the side cards
+  // under it from SIDE_MIN_WIDTH (slides 02 and 20).
+  const cards = side !== undefined && sideWide;
+  return (
+    <div className="chat-frame">
+      {lane}
+      {(nyx || cards) && (
+        <div className="chat-side">
+          {nyx && <NyxDock url={nyx.url} path={nyx.path} mood={nyx.mood} />}
+          {cards && side}
+        </div>
+      )}
+    </div>
   );
 }

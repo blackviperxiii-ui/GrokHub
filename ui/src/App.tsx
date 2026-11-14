@@ -57,6 +57,7 @@ import { applyTheme } from "./theme";
 import { inShell } from "./transport";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
 import { Rail } from "./Rail";
+import { ChatSide } from "./ChatSide";
 import { StatusPills } from "./StatusPills";
 import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
 import { AutoNote, FirstRun, useAutoSetup } from "./AutoSetup";
@@ -696,6 +697,14 @@ export function App() {
               active={view === "chat"}
               remote={Boolean(caps.remote)}
               grokSignIn={Boolean(caps.grokSignIn)}
+              side={
+                <ChatSide
+                  active={view === "chat"}
+                  conversationId={chatSession}
+                  pulse={Boolean(caps.pulse)}
+                  onOpen={openView}
+                />
+              }
             />
           </div>
           <div hidden={view !== "automations"}>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import RAW_CSS from "./styles.css?raw";
+import { DOCK_MIN_WIDTH, SIDE_MIN_WIDTH } from "./NyxDock";
 
 // A Windows checkout reads the file with CRLF; the multi-line selectors
 // below are matched with LF.
@@ -133,6 +134,13 @@ describe("styles.css views rail and top bar", () => {
     expect(row).toContain("flex-direction: row;");
     expect(row).toContain("flex-wrap: nowrap;");
     expect(row).not.toMatch(/overflow/);
+  });
+
+  it("opens Chat's right column at the widths NyxDock.tsx uses", () => {
+    const dock = mediaBlocks(CSS, `(min-width: ${DOCK_MIN_WIDTH}px)`).find((b) => b.includes(".chat-side {")) ?? "";
+    expect(rule(dock, ".chat-side {")).toContain("width: 180px;");
+    const side = mediaBlocks(CSS, `(min-width: ${SIDE_MIN_WIDTH}px)`).find((b) => b.includes(".chat-side {")) ?? "";
+    expect(rule(side, ".chat-side {")).toContain("width: 320px;");
   });
 
   it("gives the phone composer textarea a full row above its buttons", () => {

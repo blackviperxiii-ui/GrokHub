@@ -251,6 +251,28 @@ describe("Nyx in the chat", () => {
     expect(await screen.findByRole("complementary", { name: "Nyx" })).toBeVisible();
   });
 
+  it("puts the side cards under her from 1280px, and keeps her alone below that", async () => {
+    const { unmount } = render(<Chat onOpenSettings={() => {}} side={<p>Side cards</p>} />);
+    const dock = await screen.findByRole("complementary", { name: "Nyx" });
+    const column = dock.parentElement;
+    expect(column).toHaveClass("chat-side");
+    expect(column).toContainElement(screen.getByText("Side cards"));
+    unmount();
+
+    window.innerWidth = 1200;
+    render(<Chat onOpenSettings={() => {}} side={<p>Side cards</p>} />);
+    expect(await screen.findByRole("complementary", { name: "Nyx" })).toBeVisible();
+    expect(screen.queryByText("Side cards")).toBeNull();
+  });
+
+  it("gives the agent window no column, side cards or dock", async () => {
+    const { container } = render(<Chat onOpenSettings={() => {}} embedded side={<p>Side cards</p>} />);
+    await waitFor(() => expect(nyxLookCalls().length).toBeGreaterThan(0));
+    expect(container.querySelector(".chat-frame, .chat-side")).toBeNull();
+    expect(screen.queryByText("Side cards")).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Nyx" })).toBeNull();
+  });
+
   it("shows no Nyx at all for a voice with no art", async () => {
     desktop.call.mockReset().mockResolvedValue(null);
     const { container } = render(<Chat onOpenSettings={() => {}} />);

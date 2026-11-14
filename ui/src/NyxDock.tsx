@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, useSyncExternalStore } from "react";
+import { memo, useEffect, useState } from "react";
 import { COMPANION_NAME } from "./brand";
 import {
   desktopNyxDock,
@@ -10,34 +10,19 @@ import {
 import { NyxCard } from "./NyxCard";
 import { MOOD_LABEL, type Mood } from "./nyx";
 import { inShell } from "./transport";
+import { useMinWidth } from "./useMinWidth";
 
 /** Narrower windows keep the whole width for the chat. Keep in step with the
- * `.chat.has-nyx` rule in styles.css. */
+ * `.chat-side` rule in styles.css. */
 export const DOCK_MIN_WIDTH = 900;
 
-const QUERY = `(min-width: ${DOCK_MIN_WIDTH}px)`;
+/** From this width the column also holds Chat's side cards (ChatSide.tsx).
+ * Keep in step with the wider `.chat-side` rule in styles.css. */
+export const SIDE_MIN_WIDTH = 1280;
 
-function isWide(): boolean {
-  if (typeof window === "undefined") return false;
-  if (typeof window.matchMedia === "function") return window.matchMedia(QUERY).matches;
-  return window.innerWidth >= DOCK_MIN_WIDTH;
-}
-
-function onWidthChange(update: () => void): () => void {
-  if (typeof window.matchMedia === "function") {
-    const query = window.matchMedia(QUERY);
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }
-  window.addEventListener("resize", update);
-  return () => window.removeEventListener("resize", update);
-}
-
-/** True while the window is at least DOCK_MIN_WIDTH wide. A store, not state
- * plus an effect: React reads the width again once it is listening, so a
- * resize between the first render and the listener isn't lost. */
+/** True while the window is at least DOCK_MIN_WIDTH wide. */
 export function useWide(): boolean {
-  return useSyncExternalStore(onWidthChange, isWide, () => false);
+  return useMinWidth(DOCK_MIN_WIDTH);
 }
 
 /** Nyx docked at the chat's right, in the pose for what the chat is doing.

@@ -1311,30 +1311,43 @@ button.pill:focus-visible {
   margin: 0;
 }
 
-.chat > .nyx-dock {
+/* Chat with its right column: the docked companion from 900px (DOCK_MIN_WIDTH
+   in NyxDock.tsx), and the side cards under it from 1280px (SIDE_MIN_WIDTH,
+   slides 02 and 20). A narrower window gives the whole width to the chat. */
+.chat-frame {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  gap: 24px;
+}
+
+.chat-frame > .chat {
+  min-width: 0;
+}
+
+.chat-side {
   display: none;
 }
 
-/* Keep the width in step with DOCK_MIN_WIDTH in NyxDock.tsx. */
 @media (min-width: 900px) {
-  .chat.has-nyx {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 180px;
-    grid-template-rows: minmax(0, 1fr);
-    column-gap: 24px;
+  .chat-side {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    width: 180px;
+    min-height: 0;
+    gap: 12px;
   }
 
-  .chat.has-nyx > :not(.nyx-dock) {
-    grid-column: 1;
+  .chat-side:empty {
+    display: none;
   }
 
-  .chat.has-nyx > .nyx-dock {
-    grid-column: 2;
-    grid-row: 1;
+  .chat-side > .nyx-dock {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    align-self: start;
     max-width: none;
     padding: 8px;
     overflow: hidden;
@@ -1372,6 +1385,94 @@ button.pill:focus-visible {
   .nyx-dock-outfit select {
     width: 100%;
   }
+}
+
+/* The side column scrolls on its own when its cards outrun a short window;
+   it holds no rail or tab strip, so a scroll box is safe here. */
+@media (min-width: 1280px) {
+  .chat-side {
+    width: 320px;
+    overflow-y: auto;
+  }
+}
+
+/* Each item keeps its own height: the column scrolls instead of squeezing
+   the companion's note or a card's rows out of sight. */
+.chat-side > * {
+  flex: none;
+}
+
+.chat-side > .card {
+  align-self: stretch;
+  max-width: none;
+}
+
+.side-glance {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+.side-glance > button {
+  align-self: flex-start;
+}
+
+.side-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.side-head h3 {
+  margin: 0;
+  font-family: var(--font-family-display);
+  font-size: var(--font-caption);
+  font-weight: 600;
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.side-count {
+  font-family: var(--font-family-display);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.side-strong {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.side-steps,
+.side-pairs,
+.side-posts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.side-steps .done {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.side-pairs li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.side-posts li {
+  display: flex;
+  flex-direction: column;
 }
 
 /* Desktop companion window (NyxDesk.tsx / nyx-desk.html). Transparent stage. */
