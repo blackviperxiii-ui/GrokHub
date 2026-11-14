@@ -888,6 +888,12 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.palette-none {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--muted);
+}
+
 .shortcuts h2 {
   font-size: var(--font-prose);
   margin: 0;

@@ -1,8 +1,11 @@
-// Small line icons for the view tabs. They carry the tabs on narrow windows,
-// where the labels fold away so every tab fits on one row.
+// Small line icons for the views. They carry the left rail, whose labels stay
+// hidden (each button's title and accessible name still say the page).
 import type { View } from "./Palette";
 
-const PATHS: Record<View, string> = {
+/** A view, or the rail's More, which opens the rest of the pages. */
+export type IconName = View | "more";
+
+const PATHS: Record<IconName, string> = {
   home: "M3 11l9-7 9 7M5 9.5V20h5v-6h4v6h5V9.5",
   objectives: "M4 7l2 2 3-3M4 14l2 2 3-3M12 8h8M12 15h8M4 20h16",
   chat: "M4 5h16v11H9l-5 4z",
@@ -22,16 +25,17 @@ const PATHS: Record<View, string> = {
   workboard: "M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z",
   updates: "M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14",
   library: "M6 7h12a4 4 0 0 1 4 4v2a3 3 0 0 1-5.4 1.8L15 13H9l-1.6 1.8A3 3 0 0 1 2 13v-2a4 4 0 0 1 4-4zM7 10v3M5.5 11.5h3M15.5 11h0M18 12h0",
+  more: "M5 12h0M12 12h0M19 12h0",
   mods: "M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z",
 };
 
-export function TabIcon({ view }: { view: View }) {
+export function TabIcon({ view, size = 16 }: { view: IconName; size?: 16 | 20 }) {
   return (
     <svg
       className="tab-icon"
       viewBox="0 0 24 24"
-      width="16"
-      height="16"
+      width={size}
+      height={size}
       fill="none"
       stroke="currentColor"
       strokeWidth="1.8"
