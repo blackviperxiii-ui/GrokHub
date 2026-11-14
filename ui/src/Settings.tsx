@@ -31,6 +31,7 @@ import { AiModels } from "./AiModels";
 import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
 import { GameWatch } from "./GameWatch";
+import { LivingWall } from "./LivingWall";
 import { PcHelpers } from "./PcHelpers";
 import { ScreenshotExplain } from "./ScreenshotExplain";
 import { SteamPulseSources } from "./SteamPulseSources";
@@ -274,6 +275,7 @@ export function Settings({
             )}
             {section === "behavior" && <ScreenshotExplain />}
             {section === "behavior" && <GameWatch />}
+            {section === "behavior" && <LivingWall />}
             {section === "behavior" && <MemoryRetention />}
             {section === "behavior" && <ChatArchive />}
             {section === "behavior" && <WorkboardTidy />}

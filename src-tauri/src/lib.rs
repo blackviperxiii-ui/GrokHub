@@ -77,6 +77,8 @@ pub mod journal;
 pub mod know_me;
 mod lead;
 pub mod library;
+#[cfg(desktop)]
+mod living_wall;
 pub mod local_ai;
 pub mod local_engine;
 #[cfg(desktop)]
@@ -4429,6 +4431,24 @@ async fn set_game_watch(
         .await?
 }
 
+/// Settings → Behavior → Living wall: off until switched on.
+#[cfg(desktop)]
+#[tauri::command]
+async fn get_living_wall(state: State<'_, ShellState>) -> Result<living_wall::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || living_wall::view(&dir)).await
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn set_living_wall(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<living_wall::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || living_wall::set(&dir, on)).await?
+}
+
 /// Settings → Pulse: PC health while gaming, off until switched on.
 #[tauri::command]
 async fn get_pc_health(state: State<'_, ShellState>) -> Result<pc_health::View, String> {
@@ -7179,6 +7199,21 @@ pub fn run() {
                     },
                 );
             }
+            // The living wall's covers, while the cabin is closed.
+            #[cfg(desktop)]
+            {
+                let watched = app.handle().clone();
+                let told = app.handle().clone();
+                living_wall::start(
+                    app.state::<ShellState>().config_dir.clone(),
+                    move || {
+                        background_busy(&watched) || grokhub_desktop::game_guard::current().gaming
+                    },
+                    move |news| {
+                        let _ = told.emit(living_wall::EVENT, news);
+                    },
+                );
+            }
             start_budget_tally(app.handle().clone());
             // A no-route pause re-checks on a backoff and resumes its chat.
             let told = app.handle().clone();
@@ -7649,6 +7684,10 @@ pub fn run() {
             companion_frame,
             companion_set_note,
             get_game_watch,
+            #[cfg(desktop)]
+            get_living_wall,
+            #[cfg(desktop)]
+            set_living_wall,
             set_game_watch,
             get_pulse_auto,
             get_pc_health,
