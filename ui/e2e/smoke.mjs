@@ -1943,13 +1943,9 @@ async function skipFirstRun(s) {
       }),
     20000,
   ).catch(() => null);
-  if (!skip) {
-    console.log("first run: no window (auto setup off)");
-    return;
-  }
-  await wd("POST", `${s}/element/${skip[ELEMENT]}/click`, {});
+  if (skip) await wd("POST", `${s}/element/${skip[ELEMENT]}/click`, {});
   // Get to know you (GetToKnowYou.tsx) is the next stage and uses the
-  // same backdrop; skip it too.
+  // same backdrop; skip it too. With auto setup off it can open on its own.
   const later = await waitFor(
     "the get-to-know-you stage",
     () =>
@@ -1960,6 +1956,10 @@ async function skipFirstRun(s) {
     10000,
   ).catch(() => null);
   if (later) await wd("POST", `${s}/element/${later[ELEMENT]}/click`, {});
+  if (!skip && !later) {
+    console.log("first run: no window (auto setup off)");
+    return;
+  }
   await waitFor("the first-run window to close", async () => {
     const open = await wd("POST", `${s}/elements`, { using: "css selector", value: ".first-run-backdrop" });
     return open.length === 0;
@@ -1968,7 +1968,7 @@ async function skipFirstRun(s) {
   const notes = await wd("POST", `${s}/elements`, { using: "css selector", value: ".auto-note.card .chip" });
   if (notes.length > 0) await wd("POST", `${s}/element/${notes[0][ELEMENT]}/click`, {});
   const also = [later && "get to know you skipped", notes.length > 0 && "corner note closed"].filter(Boolean);
-  console.log(`first run: skipped${also.map((a) => `, ${a}`).join("")}`);
+  console.log(`first run: ${skip ? "skipped" : "no window (auto setup off)"}${also.map((a) => `, ${a}`).join("")}`);
 }
 
 async function main() {
