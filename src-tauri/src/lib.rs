@@ -4257,12 +4257,12 @@ fn desktop_nyx_watch(app: AppHandle) {
         .name("desktop-nyx".into())
         .spawn(move || loop {
             std::thread::sleep(desktop_nyx::CURSOR_FRAME);
-            let Some((pos, monitor)) = desktop_nyx::tick(&app) else {
+            let Some(drop) = desktop_nyx::tick(&app) else {
                 continue;
             };
             let state = app.state::<ShellState>();
             let _ = tauri::async_runtime::block_on(desktop_nyx_write(&app, &state, false, |now| {
-                Ok(desktop_nyx::save_pos(now, pos, monitor))
+                Ok(desktop_nyx::save_pos(now, drop.pos, drop.origin, drop.size))
             }));
         });
 }
@@ -7695,8 +7695,8 @@ pub fn run() {
             #[cfg(desktop)]
             desktop_nyx_set_outfit,
             #[cfg(desktop)]
-            #[cfg(desktop)]
             desktop_nyx_set_hit,
+            #[cfg(desktop)]
             desktop_nyx_drag,
             get_queue,
             stop_task,

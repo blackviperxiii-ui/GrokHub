@@ -235,13 +235,19 @@ pub fn set_outfit(
     }
 }
 
+/// Saves where she was dropped. `pos` and the monitor's `origin` are desktop
+/// coordinates; snapping and keeping her on screen work within that monitor.
 pub fn save_pos(
     mut settings: crate::settings::ShellSettings,
     pos: [f64; 2],
-    monitor: [f64; 2],
+    origin: [f64; 2],
+    size: [f64; 2],
 ) -> crate::settings::ShellSettings {
-    let [x, y] = settled_pos(pos, monitor);
-    settings.desktop_nyx_pos = Some([x.round() as i32, y.round() as i32]);
+    let [x, y] = settled_pos([pos[0] - origin[0], pos[1] - origin[1]], size);
+    settings.desktop_nyx_pos = Some([
+        (x + origin[0]).round() as i32,
+        (y + origin[1]).round() as i32,
+    ]);
     settings
 }
 
@@ -392,57 +398,90 @@ pub fn clean_hit(boxes: Vec<HitBox>) -> Vec<HitBox> {
         .collect()
 }
 
-/// Whether the cursor (desktop pixels) is over one of her boxes, in a window
-/// whose page starts at `origin` (desktop pixels) and is drawn at `scale`.
-pub fn over_her(cursor: [f64; 2], origin: [f64; 2], scale: f64, boxes: &[HitBox]) -> bool {
+/// A point on the desktop and the scale it was read at (desktop pixels per
+/// CSS pixel).
+pub type Scaled = ([f64; 2], f64);
+
+fn unscale((at, scale): Scaled) -> [f64; 2] {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
     } else {
         1.0
     };
-    let x = (cursor[0] - origin[0]) / scale;
-    let y = (cursor[1] - origin[1]) / scale;
+    [at[0] / scale, at[1] / scale]
+}
+
+/// Whether the cursor is over one of her boxes, in a window whose page
+/// starts at `origin`. Each point carries its own scale: macOS reads the
+/// cursor at the main screen's scale and the window at its own.
+pub fn over_her(cursor: Scaled, origin: Scaled, boxes: &[HitBox]) -> bool {
+    let [cx, cy] = unscale(cursor);
+    let [ox, oy] = unscale(origin);
+    let (x, y) = (cx - ox, cy - oy);
     boxes
         .iter()
         .any(|b| x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h)
 }
 
 /// Whether her window should let clicks through: yes over empty pixels, no
-/// over her. When the cursor or the window can't be read (Wayland), or the
-/// page hasn't reported her boxes yet, never: she stays clickable.
+/// over her. When the cursor or the window can't be read (Wayland reads
+/// both as 0,0, so it passes `None`), or the page hasn't reported her boxes
+/// yet, never: she stays clickable.
 pub fn passthrough_wanted(
-    cursor: Option<[f64; 2]>,
-    origin: Option<[f64; 2]>,
-    scale: f64,
+    cursor: Option<Scaled>,
+    origin: Option<Scaled>,
     boxes: &[HitBox],
 ) -> bool {
     match (cursor, origin) {
-        (Some(c), Some(o)) if !boxes.is_empty() => !over_her(c, o, scale, boxes),
+        (Some(c), Some(o)) if !boxes.is_empty() => !over_her(c, o, boxes),
         _ => false,
     }
 }
 
-/// Where a dragged window was last seen, until it has been still for
-/// [`POS_SETTLE`]. Positions and monitor sizes are logical pixels.
+/// Where a dragged window was dropped, in logical desktop pixels, with the
+/// monitor it landed on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Landing {
+    pub pos: [f64; 2],
+    pub origin: [f64; 2],
+    pub size: [f64; 2],
+}
+
+/// Her window's moves after a drag, until it has been still for
+/// [`POS_SETTLE`]. Moves before the first drag (the window placed at open,
+/// or a window manager restacking it) are not hers to save.
 #[derive(Debug, Default)]
 pub struct Moves {
-    last: Option<(std::time::Instant, [f64; 2], [f64; 2])>,
+    dragged: bool,
+    last: Option<(std::time::Instant, Landing)>,
+    saved: Option<[f64; 2]>,
 }
 
 impl Moves {
-    pub fn note(&mut self, pos: [f64; 2], monitor: [f64; 2], at: std::time::Instant) {
-        self.last = Some((at, pos, monitor));
+    /// A drag starts: from now on, moves are where she is being put.
+    pub fn drag(&mut self) {
+        self.dragged = true;
     }
 
-    /// The spot to save, once, after the window has been still long enough.
-    pub fn settled(&mut self, now: std::time::Instant) -> Option<([f64; 2], [f64; 2])> {
-        match self.last {
-            Some((at, pos, monitor)) if now.saturating_duration_since(at) >= POS_SETTLE => {
-                self.last = None;
-                Some((pos, monitor))
-            }
-            _ => None,
+    pub fn note(&mut self, drop: Landing, at: std::time::Instant) {
+        if self.dragged {
+            self.last = Some((at, drop));
         }
+    }
+
+    /// The spot to save, once, after the window has been still long enough
+    /// and only when it differs from the last one saved.
+    pub fn settled(&mut self, now: std::time::Instant) -> Option<Landing> {
+        let (at, drop) = self.last?;
+        if now.saturating_duration_since(at) < POS_SETTLE {
+            return None;
+        }
+        self.last = None;
+        if self.saved == Some(drop.pos) {
+            return None;
+        }
+        self.saved = Some(drop.pos);
+        Some(drop)
     }
 }
 
@@ -459,7 +498,11 @@ struct Desk {
 static DESK: std::sync::Mutex<Desk> = std::sync::Mutex::new(Desk {
     boxes: Vec::new(),
     passthrough: None,
-    moves: Moves { last: None },
+    moves: Moves {
+        dragged: false,
+        last: None,
+        saved: None,
+    },
 });
 
 #[cfg(desktop)]
@@ -473,26 +516,33 @@ pub fn set_hit(boxes: Vec<HitBox>) {
     desk().boxes = clean_hit(boxes);
 }
 
-/// Her window moved (a drag, or the window placed at open).
+/// Her window moved. Only moves after a drag count (see [`Moves`]). On
+/// Wayland the window can't read where it is, so nothing is saved.
 #[cfg(desktop)]
 pub fn note_moved(window: &tauri::Window, pos: tauri::PhysicalPosition<i32>) {
+    if wayland_now() {
+        return;
+    }
     let scale = window.scale_factor().unwrap_or(1.0);
-    let monitor = window
+    let logical = |x: f64, y: f64| unscale(([x, y], scale));
+    let (origin, size) = window
         .current_monitor()
         .ok()
         .flatten()
         .map(|m| {
-            let size = m.size();
-            [
-                f64::from(size.width) / scale,
-                f64::from(size.height) / scale,
-            ]
+            let (at, size) = (m.position(), m.size());
+            (
+                logical(f64::from(at.x), f64::from(at.y)),
+                logical(f64::from(size.width), f64::from(size.height)),
+            )
         })
-        .unwrap_or([1920.0, 1080.0]);
-    let logical = [f64::from(pos.x) / scale, f64::from(pos.y) / scale];
-    desk()
-        .moves
-        .note(logical, monitor, std::time::Instant::now());
+        .unwrap_or(([0.0, 0.0], [1920.0, 1080.0]));
+    let drop = Landing {
+        pos: logical(f64::from(pos.x), f64::from(pos.y)),
+        origin,
+        size,
+    };
+    desk().moves.note(drop, std::time::Instant::now());
 }
 
 /// A press on her: the system moves the window until the button comes up.
@@ -502,6 +552,7 @@ pub fn start_drag(app: &tauri::AppHandle) -> Result<(), String> {
     let Some(w) = app.get_webview_window(LABEL) else {
         return Ok(());
     };
+    desk().moves.drag();
     w.start_dragging().map_err(|e| e.to_string())
 }
 
@@ -511,7 +562,7 @@ pub fn start_drag(app: &tauri::AppHandle) -> Result<(), String> {
 /// dropped position to save. The desk lock is never held across a window
 /// call: those wait on the main thread, which takes the lock on a move.
 #[cfg(desktop)]
-pub fn tick(app: &tauri::AppHandle) -> Option<([f64; 2], [f64; 2])> {
+pub fn tick(app: &tauri::AppHandle) -> Option<Landing> {
     use tauri::Manager;
     let Some(w) = app.get_webview_window(LABEL) else {
         *desk() = Desk::default();
@@ -521,13 +572,25 @@ pub fn tick(app: &tauri::AppHandle) -> Option<([f64; 2], [f64; 2])> {
         let d = desk();
         (d.boxes.clone(), d.passthrough)
     };
-    let cursor = app.cursor_position().ok().map(|p| [p.x, p.y]);
+    let scale = w.scale_factor().unwrap_or(1.0);
+    // macOS reads the cursor at the main screen's scale.
+    let cursor_scale = if cfg!(target_os = "macos") {
+        app.primary_monitor()
+            .ok()
+            .flatten()
+            .map_or(scale, |m| m.scale_factor())
+    } else {
+        scale
+    };
+    let cursor = (!wayland_now())
+        .then(|| app.cursor_position().ok())
+        .flatten()
+        .map(|p| ([p.x, p.y], cursor_scale));
     let origin = w
         .inner_position()
         .ok()
-        .map(|p| [f64::from(p.x), f64::from(p.y)]);
-    let scale = w.scale_factor().unwrap_or(1.0);
-    let want = passthrough_wanted(cursor, origin, scale, &boxes);
+        .map(|p| ([f64::from(p.x), f64::from(p.y)], scale));
+    let want = passthrough_wanted(cursor, origin, &boxes);
     let applied = (had != Some(want) && w.set_ignore_cursor_events(want).is_ok()).then_some(want);
     let mut d = desk();
     if applied.is_some() {
@@ -582,40 +645,58 @@ mod tests {
     fn clicks_pass_through_only_beside_her() {
         let stage = [hit(40.0, 100.0, 240.0, 360.0)];
         // A window at (1000, 500) on a 2x screen: page (50, 150) is desktop (1100, 800).
-        let at = Some([1000.0, 500.0]);
-        assert!(!passthrough_wanted(Some([1100.0, 800.0]), at, 2.0, &stage));
-        assert!(passthrough_wanted(Some([1010.0, 510.0]), at, 2.0, &stage));
+        let at = Some(([1000.0, 500.0], 2.0));
+        let cursor = |x, y| Some(([x, y], 2.0));
+        assert!(!passthrough_wanted(cursor(1100.0, 800.0), at, &stage));
+        assert!(passthrough_wanted(cursor(1010.0, 510.0), at, &stage));
         // The right edge is outside: 40 + 240 = 280 page px = desktop 1560.
-        assert!(passthrough_wanted(Some([1560.0, 800.0]), at, 2.0, &stage));
-        assert!(!passthrough_wanted(Some([1559.0, 800.0]), at, 2.0, &stage));
+        assert!(passthrough_wanted(cursor(1560.0, 800.0), at, &stage));
+        assert!(!passthrough_wanted(cursor(1559.0, 800.0), at, &stage));
         // An open menu takes the mouse too.
         let with_menu = [stage[0], hit(0.0, 0.0, 120.0, 80.0)];
-        assert!(!passthrough_wanted(
-            Some([1010.0, 510.0]),
-            at,
-            2.0,
-            &with_menu
+        assert!(!passthrough_wanted(cursor(1010.0, 510.0), at, &with_menu));
+    }
+
+    #[test]
+    fn the_cursor_and_the_window_may_be_read_at_different_scales() {
+        // macOS: the cursor at a 2x main screen's scale, her window on a 1x
+        // monitor at (2000, 100). Page (50, 150) is the cursor (4100, 500).
+        let stage = [hit(40.0, 100.0, 240.0, 360.0)];
+        assert!(over_her(
+            ([4100.0, 500.0], 2.0),
+            ([2000.0, 100.0], 1.0),
+            &stage
+        ));
+        assert!(!over_her(
+            ([4100.0, 500.0], 1.0),
+            ([2000.0, 100.0], 1.0),
+            &stage
         ));
     }
 
     #[test]
     fn she_stays_clickable_when_nothing_can_be_read() {
         let stage = [hit(40.0, 100.0, 240.0, 360.0)];
+        let origin = Some(([0.0, 0.0], 1.0));
         assert!(
-            !passthrough_wanted(None, Some([0.0, 0.0]), 1.0, &stage),
+            !passthrough_wanted(None, origin, &stage),
             "no cursor (Wayland)"
         );
         assert!(
-            !passthrough_wanted(Some([5.0, 5.0]), None, 1.0, &stage),
+            !passthrough_wanted(Some(([5.0, 5.0], 1.0)), None, &stage),
             "no window position"
         );
         assert!(
-            !passthrough_wanted(Some([5.0, 5.0]), Some([0.0, 0.0]), 1.0, &[]),
+            !passthrough_wanted(Some(([5.0, 5.0], 1.0)), origin, &[]),
             "no boxes yet"
         );
         // A bad scale reads as 1.
-        assert!(over_her([50.0, 150.0], [0.0, 0.0], 0.0, &stage));
-        assert!(over_her([50.0, 150.0], [0.0, 0.0], f64::NAN, &stage));
+        assert!(over_her(([50.0, 150.0], 0.0), ([0.0, 0.0], 1.0), &stage));
+        assert!(over_her(
+            ([50.0, 150.0], f64::NAN),
+            ([0.0, 0.0], 1.0),
+            &stage
+        ));
     }
 
     #[test]
@@ -630,32 +711,57 @@ mod tests {
 
     #[test]
     fn a_drag_is_saved_once_after_she_has_been_still() {
+        let ms = std::time::Duration::from_millis;
+        let screen = |x, y| Landing {
+            pos: [x, y],
+            origin: [0.0, 0.0],
+            size: [1920.0, 1080.0],
+        };
         let t0 = std::time::Instant::now();
         let mut moves = Moves::default();
-        assert_eq!(moves.settled(t0), None);
-        moves.note([10.0, 20.0], [1920.0, 1080.0], t0);
-        moves.note(
-            [30.0, 40.0],
-            [1920.0, 1080.0],
-            t0 + std::time::Duration::from_millis(100),
-        );
+        moves.note(screen(1576.0, 544.0), t0);
         assert_eq!(
-            moves.settled(t0 + std::time::Duration::from_millis(600)),
+            moves.settled(t0 + ms(5000)),
             None,
-            "still moving"
+            "placed at open: not a drag"
         );
+        moves.drag();
+        moves.note(screen(10.0, 20.0), t0);
+        moves.note(screen(30.0, 40.0), t0 + ms(100));
+        assert_eq!(moves.settled(t0 + ms(600)), None, "still moving");
         assert_eq!(
-            moves.settled(t0 + std::time::Duration::from_millis(700)),
-            Some(([30.0, 40.0], [1920.0, 1080.0])),
+            moves.settled(t0 + ms(700)),
+            Some(screen(30.0, 40.0)),
             "the last spot wins"
         );
+        assert_eq!(moves.settled(t0 + ms(2000)), None, "once");
+        moves.note(screen(30.0, 40.0), t0 + ms(3000));
         assert_eq!(
-            moves.settled(t0 + std::time::Duration::from_millis(2000)),
+            moves.settled(t0 + ms(4000)),
             None,
-            "once"
+            "the same spot again is not saved"
         );
         assert_eq!(CURSOR_FRAME.as_millis(), 100);
         assert_eq!(POS_SETTLE.as_millis(), 600);
+    }
+
+    #[test]
+    fn a_drop_on_another_monitor_stays_there() {
+        let s = ShellSettings::default();
+        // Right of a 1920-wide primary: 580 px into the second monitor.
+        let right = save_pos(s.clone(), [2500.0, 300.0], [1920.0, 0.0], [1920.0, 1080.0]);
+        assert_eq!(right.desktop_nyx_pos, Some([2500, 300]));
+        // Left of it, snapped to that monitor's left edge.
+        let left = save_pos(
+            s.clone(),
+            [-1910.0, 300.0],
+            [-1920.0, 0.0],
+            [1920.0, 1080.0],
+        );
+        assert_eq!(left.desktop_nyx_pos, Some([-1920, 300]));
+        // Above it, kept on that monitor.
+        let above = save_pos(s, [500.0, -1070.0], [0.0, -1080.0], [1920.0, 1080.0]);
+        assert_eq!(above.desktop_nyx_pos, Some([500, -1080]));
     }
 
     #[test]
@@ -743,7 +849,7 @@ mod tests {
         );
         assert_eq!(default_position(1920.0, 1080.0), [1576.0, 544.0]);
         let mut s = ShellSettings::default();
-        s = save_pos(s, [10.0, 300.0], mon);
+        s = save_pos(s, [10.0, 300.0], [0.0, 0.0], mon);
         assert_eq!(s.desktop_nyx_pos, Some([0, 300]));
     }
 
