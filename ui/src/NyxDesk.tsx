@@ -3,10 +3,11 @@ import { COMPANION_NAME } from "./brand";
 import { NyxCard } from "./NyxCard";
 import {
   desktopNyxDock,
-  desktopNyxSavePos,
   desktopNyxSet,
   desktopNyxSetOutfit,
-  desktopNyxSetPassthrough,
+  desktopNyxDrag,
+  desktopNyxSetHit,
+  type DesktopNyxHitBox,
 } from "./desktopNyxApi";
 import { useDesktopNyx } from "./useDesktopNyx";
 
@@ -21,7 +22,8 @@ export function deskArtUrl(path: string): string | null {
   return Object.hasOwn(ART, `../../${path}`) ? ART[`../../${path}`] : null;
 }
 
-const POS_SETTLE_MS = 600;
+/** How far a press on her moves before it drags her window. */
+const DRAG_AFTER_PX = 4;
 
 /** The desktop companion page: pedestal + figure, wardrobe, dock back. */
 export function NyxDesk() {
@@ -29,53 +31,87 @@ export function NyxDesk() {
   const [state, setState] = useDesktopNyx();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const artRef = useRef<HTMLDivElement>(null);
-  const settle = useRef<number | null>(null);
-  const dragging = useRef(false);
+  const menuRef = useRef<HTMLUListElement>(null);
+  const press = useRef<{ x: number; y: number } | null>(null);
 
+  // A click on the desktop beside her passes through, so the page hears no
+  // click: leaving the window, or Escape, closes the menu too.
   useEffect(() => {
     function onDoc() {
       setMenu(null);
     }
-    document.addEventListener("click", onDoc);
-    return () => document.removeEventListener("click", onDoc);
-  }, []);
-
-  // Click-through when the pointer is over empty pixels.
-  useEffect(() => {
-    function onMove(event: PointerEvent) {
-      const root = artRef.current;
-      if (!root || typeof document.elementFromPoint !== "function") return;
-      const hit = document.elementFromPoint(event.clientX, event.clientY);
-      const over = !!hit && root.contains(hit);
-      void desktopNyxSetPassthrough(!over);
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setMenu(null);
     }
-    window.addEventListener("pointermove", onMove);
-    return () => window.removeEventListener("pointermove", onMove);
+    document.addEventListener("click", onDoc);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onDoc);
+    return () => {
+      document.removeEventListener("click", onDoc);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onDoc);
+    };
   }, []);
 
-  function scheduleSavePos() {
-    if (settle.current != null) window.clearTimeout(settle.current);
-    settle.current = window.setTimeout(() => {
-      settle.current = null;
-      void desktopNyxSavePos(
-        window.screenX,
-        window.screenY,
-        window.screen.width,
-        window.screen.height,
-      ).then(setState);
-    }, POS_SETTLE_MS);
-  }
+  // Her pedestal and figure (the stage's children: the stage itself fills
+  // the window) and an open menu take the mouse; the app lets clicks
+  // through everywhere else, watching the cursor itself (a window that lets
+  // clicks through hears no pointer). Sent again whenever they change size.
+  useEffect(() => {
+    const parts = () => [...(artRef.current?.children ?? []), ...(menuRef.current ? [menuRef.current] : [])];
+    function report() {
+      const boxes: DesktopNyxHitBox[] = parts().map((el) => {
+        const r = el.getBoundingClientRect();
+        return { x: r.left, y: r.top, w: r.width, h: r.height };
+      });
+      void desktopNyxSetHit(boxes);
+    }
+    const sizes = typeof ResizeObserver === "function" ? new ResizeObserver(report) : null;
+    function watch() {
+      sizes?.disconnect();
+      for (const el of parts()) sizes?.observe(el);
+      report();
+    }
+    watch();
+    // Her figure swaps its own element (clip, still, offline), with no new
+    // state here: watch the new one.
+    const swaps = new MutationObserver(watch);
+    if (artRef.current) swaps.observe(artRef.current, { childList: true, subtree: true });
+    window.addEventListener("resize", report);
+    return () => {
+      window.removeEventListener("resize", report);
+      swaps.disconnect();
+      sizes?.disconnect();
+    };
+  }, [state, menu]);
 
+  // A press on her closes her menu; moving a few pixels with the button
+  // down drags her window (a press alone stays a click, since the system
+  // keeps the release once a drag starts).
   function onPointerDown(event: ReactPointerEvent) {
     if (event.button !== 0) return;
-    dragging.current = true;
-    void desktopNyxSetPassthrough(false);
+    if (!artRef.current?.contains(event.target as Node)) return;
+    setMenu(null);
+    press.current = { x: event.clientX, y: event.clientY };
+    // The release comes back here even off her, so a stale press can't
+    // drag her on a later hover.
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // No capture (an old webview): the release over her still clears it.
+    }
+  }
+
+  function onPointerMove(event: ReactPointerEvent) {
+    const from = press.current;
+    if (!from) return;
+    if (Math.hypot(event.clientX - from.x, event.clientY - from.y) < DRAG_AFTER_PX) return;
+    press.current = null;
+    void desktopNyxDrag();
   }
 
   function onPointerUp() {
-    if (!dragging.current) return;
-    dragging.current = false;
-    scheduleSavePos();
+    press.current = null;
   }
 
   if (!state) {
@@ -94,6 +130,7 @@ export function NyxDesk() {
         setMenu({ x: event.clientX, y: event.clientY });
       }}
       onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
@@ -118,6 +155,7 @@ export function NyxDesk() {
       </div>
       {menu && (
         <ul
+          ref={menuRef}
           className="nyx-desk-menu"
           style={{ left: menu.x, top: menu.y }}
           role="menu"
