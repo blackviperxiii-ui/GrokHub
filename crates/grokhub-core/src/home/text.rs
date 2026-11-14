@@ -424,11 +424,6 @@ pub fn frame_rate_text(read: Option<FpsRead>, windows: bool, presenter: Option<&
     }
 }
 
-/// The PC Loadout details sheet's title, and what it says before the
-/// launch hardware read lands.
-pub const PC_SHEET_TITLE: &str = "This PC";
-pub const PC_SHEET_READING: &str = "Reading this PC…";
-
 /// Sizes on the details sheet: MB under 1 GB, otherwise whole GB.
 fn sheet_gb(mb: u64) -> String {
     if mb < 1_024 {
@@ -478,7 +473,9 @@ pub fn pc_sheet_rows(p: &LocalProfile) -> Vec<TileRow> {
     }
     let c = &p.cpu;
     if c.logical > 0 {
-        let mut v = format!("{} cores, {} threads", c.physical.max(1), c.logical);
+        let cores = c.physical.max(1);
+        let unit = if cores == 1 { "core" } else { "cores" };
+        let mut v = format!("{cores} {unit}, {} threads", c.logical);
         if c.e_cores > 0 {
             v.push_str(&format!(
                 " ({} performance + {} efficient)",
@@ -765,14 +762,26 @@ mod tests {
             assert_eq!(
                 sheet(&p),
                 pairs(&[
-                    ("CPU", "1 cores, 8 threads · NEON"),
+                    ("CPU", "1 core, 8 threads · NEON"),
                     ("Power", "Battery · plugged in"),
                     ("Thermal", word),
                 ])
             );
         }
         p.cpu.simd = CpuSimd::NoAvx;
-        assert_eq!(sheet(&p)[0].1, "1 cores, 8 threads · no AVX");
+        assert_eq!(sheet(&p)[0].1, "1 core, 8 threads · no AVX");
+    }
+
+    #[test]
+    fn sheet_sizes_round_to_the_nearest_gb_from_1_gb() {
+        let shown: Vec<String> = [900, 1_023, 1_024, 1_535, 1_536, 15_906]
+            .into_iter()
+            .map(sheet_gb)
+            .collect();
+        assert_eq!(
+            shown,
+            ["900 MB", "1023 MB", "1 GB", "1 GB", "2 GB", "16 GB"]
+        );
     }
 
     #[test]

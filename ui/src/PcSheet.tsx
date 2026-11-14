@@ -45,7 +45,11 @@ export function PcSheet({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // Esc belongs to a window on top of the sheet, such as the palette.
+      const owner = (e.target as HTMLElement | null)?.closest?.("[role='dialog']");
+      if (owner && owner !== box.current) return;
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
