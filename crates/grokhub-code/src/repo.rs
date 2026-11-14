@@ -6,7 +6,7 @@
 //! fsmonitor hooks off, so a repo's own config can't start other programs.
 
 use grokhub_agent::perm::ConfigGuard;
-use grokhub_agent::{plugins, SkillSource, BUILTIN_SKILL_BODIES};
+use grokhub_agent::{plugins, SkillSource, BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES};
 use serde::Serialize;
 use std::io::Read;
 use std::path::{Component, Path};
@@ -290,16 +290,17 @@ pub struct Builtin {
     pub overridden_by: Option<OverriddenBy>,
 }
 
-/// The app's built-in skills, in ship order, with whatever currently overrides
-/// each one (existing skill resolution). A built-in can't be deleted; removing
+/// The built-in skills every Code tab session carries, in ship order, with
+/// whatever currently overrides each one (existing skill resolution). A built-in can't be deleted; removing
 /// the override brings it back.
 pub fn builtins(workspace: &Path, home: Option<&Path>, config_dir: &Path) -> Vec<Builtin> {
     let _config = ConfigGuard::set(config_dir);
     let found =
         grokhub_agent::discover_all_skills(workspace, home, &plugins::skill_dirs(workspace));
-    BUILTIN_SKILL_BODIES
+    BUILTIN_ALWAYS_ON
         .iter()
-        .filter_map(|(folder, text)| {
+        .filter_map(|folder| {
+            let (_, text) = BUILTIN_SKILL_BODIES.iter().find(|(n, _)| n == folder)?;
             let (name, description, body) = parse_builtin(folder, text)?;
             let overridden_by = found.iter().find_map(|skill| {
                 if skill.name != name || skill.source == SkillSource::Builtin {
