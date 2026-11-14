@@ -273,6 +273,23 @@ fn pc_loadout_shows_temps_and_what_starts_with_the_pc() {
 }
 
 #[test]
+fn chat_side_gets_the_same_pc_loadout_tile_on_its_own() {
+    let d = std::env::temp_dir().join(format!("shell-pc-tile-{}", std::process::id()));
+    std::fs::create_dir_all(&d).unwrap();
+    let v = pc_tile(&d);
+    assert_eq!(v.state, TileState::Ready);
+    assert_eq!(
+        v.buttons
+            .iter()
+            .map(|b| b.label.as_str())
+            .collect::<Vec<_>>(),
+        ["Tune-up", "Details"]
+    );
+    assert_eq!(v.tap, Some(TileAction::details("pc_loadout")));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn a_playbooks_row_runs_its_playbook() {
     let page = crate::playbooks::Page {
         rows: vec![crate::playbooks::Row {

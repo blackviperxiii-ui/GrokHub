@@ -745,6 +745,10 @@ export function initScript(theme = "ops-dark") {
         case "get_home":
         case "home_view":
           return fix.home;
+        case "get_pc_snapshot": {
+          const pc = fix.home.slots.find((s) => s.module === "pc_loadout");
+          return pc && pc.tile.kind === "view" ? pc.tile.view : null;
+        }
         case "get_code":
         case "code_page":
           return { repos: [], sessions: [], note: "" };

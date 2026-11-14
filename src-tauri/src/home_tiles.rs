@@ -49,7 +49,7 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         }
     };
     let v = match module {
-        "pc_loadout" => pc_only(&|| pc_view(&machine(src.config_dir), &pc_extras())),
+        "pc_loadout" => pc_tile(src.config_dir),
         "speeds" => speeds_view(&grokhub_core::net_log::load(src.config_dir), now),
         "frame_rate" => frame_rate(),
         "storage" => pc_only(&|| storage_view(&drives())),
@@ -363,6 +363,16 @@ fn drives() -> Vec<grokhub_core::disk::DiskUse> {
 }
 
 /// This computer's GPUs and RAM, read at most every ten minutes.
+/// The PC Loadout tile on its own, for Chat's side column: the cached
+/// hardware read and temps, never a fresh slow read. A phone has no PC to show.
+pub fn pc_tile(config_dir: &Path) -> TileView {
+    if cfg!(mobile) {
+        TileView::unsupported(&on_pc())
+    } else {
+        pc_view(&machine(config_dir), &pc_extras())
+    }
+}
+
 fn machine(config_dir: &Path) -> local_ai::Machine {
     static SLOT: Mutex<Option<(Instant, local_ai::Machine)>> = Mutex::new(None);
     let mut slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());

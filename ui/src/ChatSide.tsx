@@ -1,10 +1,12 @@
 // Chat's right column on wide windows (slides 02 and 20): under the docked
 // companion, the open mission's Objectives, the PC loadout and the newest
 // Pulse posts. Each card is a glance with a way to its page; a card whose
-// data doesn't come (no mission yet, the tile off Home, Pulse off, a desktop
-// that refuses) says so or stays out. Amber stays on the chat's own Send.
+// data doesn't come (no mission yet, Pulse off, a desktop that refuses) says
+// so or stays out. The PC card reads this PC's tile on its own, whether or not
+// Home shows it; a paired browser reads it from the host's Home instead.
+// Amber stays on the chat's own Send.
 import { useEffect, useState } from "react";
-import { getHome, getMission, getPulse, type MissionPage, type PulsePage, type TileView } from "./api";
+import { getHome, getMission, getPcSnapshot, getPulse, type MissionPage, type PulsePage, type TileView } from "./api";
 import { NO_STEPS, XpBar } from "./Home";
 import type { View } from "./Palette";
 
@@ -131,6 +133,7 @@ export function ChatSide({
   active,
   conversationId,
   pulse,
+  remote = false,
   onOpen,
 }: {
   /** Chat shows: the cards read only then. */
@@ -139,17 +142,21 @@ export function ChatSide({
   conversationId?: string;
   /** This app has Pulse. */
   pulse: boolean;
+  /** A paired browser: the PC tile comes from the host's Home. */
+  remote?: boolean;
   onOpen: (view: View) => void;
 }) {
   const id = conversationId ?? "";
   const mission = usePoll(active, () => getMission(conversationId), `mission:${id}`);
-  const home = usePoll(active, () => getHome(conversationId), `home:${id}`);
+  const snapshot = usePoll(active && !remote, () => getPcSnapshot(), "pc");
+  const home = usePoll(active && remote, () => getHome(conversationId), `home:${id}`);
   const feed = usePoll(active && pulse, () => getPulse(), "pulse");
-  const pc = home?.slots.find((slot) => slot.module === "pc_loadout" && slot.tile.kind === "view")?.tile;
+  const slot = home?.slots.find((s) => s.module === "pc_loadout")?.tile;
+  const pc = remote ? (slot?.kind === "view" ? slot.view : null) : snapshot;
   return (
     <>
       {mission && <Objectives page={mission} onOpen={() => onOpen("objectives")} />}
-      {pc?.kind === "view" && <PcCard view={pc.view} onOpen={() => onOpen("home")} />}
+      {pc && pc.state !== "unsupported" && <PcCard view={pc} onOpen={() => onOpen("home")} />}
       {pulse && feed && <FromPulse page={feed} onOpen={() => onOpen("pulse")} />}
     </>
   );
