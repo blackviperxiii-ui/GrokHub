@@ -35,15 +35,20 @@ export function NyxDesk() {
   const press = useRef<{ x: number; y: number } | null>(null);
 
   // A click on the desktop beside her passes through, so the page hears no
-  // click: leaving the window closes the menu too.
+  // click: leaving the window, or Escape, closes the menu too.
   useEffect(() => {
     function onDoc() {
       setMenu(null);
     }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setMenu(null);
+    }
     document.addEventListener("click", onDoc);
+    document.addEventListener("keydown", onKey);
     window.addEventListener("blur", onDoc);
     return () => {
       document.removeEventListener("click", onDoc);
+      document.removeEventListener("keydown", onKey);
       window.removeEventListener("blur", onDoc);
     };
   }, []);
@@ -61,12 +66,21 @@ export function NyxDesk() {
       });
       void desktopNyxSetHit(boxes);
     }
-    report();
-    window.addEventListener("resize", report);
     const sizes = typeof ResizeObserver === "function" ? new ResizeObserver(report) : null;
-    for (const el of parts()) sizes?.observe(el);
+    function watch() {
+      sizes?.disconnect();
+      for (const el of parts()) sizes?.observe(el);
+      report();
+    }
+    watch();
+    // Her figure swaps its own element (clip, still, offline), with no new
+    // state here: watch the new one.
+    const swaps = new MutationObserver(watch);
+    if (artRef.current) swaps.observe(artRef.current, { childList: true, subtree: true });
+    window.addEventListener("resize", report);
     return () => {
       window.removeEventListener("resize", report);
+      swaps.disconnect();
       sizes?.disconnect();
     };
   }, [state, menu]);

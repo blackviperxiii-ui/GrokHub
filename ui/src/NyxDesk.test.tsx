@@ -128,6 +128,31 @@ describe("NyxDesk", () => {
     expect(api.desktopNyxDrag).toHaveBeenCalledTimes(1);
   });
 
+  it("closes her menu on Escape", async () => {
+    render(<NyxDesk />);
+    const root = await screen.findByLabelText("Nyx");
+    await userEvent.pointer({ keys: "[MouseRight]", target: root });
+    await screen.findByRole("menu");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("reports again when her figure swaps its element on its own", async () => {
+    const { container } = render(<NyxDesk />);
+    await screen.findByLabelText("Nyx");
+    const stage = container.querySelector(".nyx-desk-stage");
+    if (!stage) throw new Error("no stage");
+    await waitFor(() => expect(api.desktopNyxSetHit).toHaveBeenCalled());
+    const before = api.desktopNyxSetHit.mock.calls.length;
+    const swapped = document.createElement("img");
+    swapped.className = "nyx-desk-figure";
+    await act(async () => {
+      stage.replaceChildren(stage.children[0], swapped);
+    });
+    await waitFor(() => expect(api.desktopNyxSetHit.mock.calls.length).toBeGreaterThan(before));
+    expect(api.desktopNyxSetHit.mock.lastCall?.[0]).toHaveLength(2);
+  });
+
   it("closes her menu when the click lands on the desktop beside her", async () => {
     render(<NyxDesk />);
     const root = await screen.findByLabelText("Nyx");

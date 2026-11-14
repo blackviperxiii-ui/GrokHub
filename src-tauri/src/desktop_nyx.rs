@@ -447,36 +447,49 @@ pub struct Landing {
     pub size: [f64; 2],
 }
 
-/// Her window's moves after a drag, until it has been still for
-/// [`POS_SETTLE`]. Moves before the first drag (the window placed at open,
-/// or a window manager restacking it) are not hers to save.
+/// A drag paused longer than [`POS_SETTLE`] but resumed within this still
+/// counts as the same drag.
+pub const DRAG_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Her window's moves during a drag, until it has been still for
+/// [`POS_SETTLE`]. Every other move (the window placed at open, a window
+/// manager restacking it, Windows parking a minimized window at -32000, a
+/// monitor unplugged) is not hers to save.
 #[derive(Debug, Default)]
 pub struct Moves {
-    dragged: bool,
+    dragging: bool,
     last: Option<(std::time::Instant, Landing)>,
+    settled_at: Option<std::time::Instant>,
     saved: Option<[f64; 2]>,
 }
 
 impl Moves {
-    /// A drag starts: from now on, moves are where she is being put.
+    /// A drag starts: until she settles, moves are where she is being put.
     pub fn drag(&mut self) {
-        self.dragged = true;
+        self.dragging = true;
     }
 
     pub fn note(&mut self, drop: Landing, at: std::time::Instant) {
-        if self.dragged {
+        let resumed = self
+            .settled_at
+            .is_some_and(|then| at.saturating_duration_since(then) <= DRAG_GRACE);
+        if self.dragging || resumed {
+            self.dragging = true;
             self.last = Some((at, drop));
         }
     }
 
     /// The spot to save, once, after the window has been still long enough
-    /// and only when it differs from the last one saved.
+    /// and only when it differs from the last one saved. Settling ends the
+    /// drag.
     pub fn settled(&mut self, now: std::time::Instant) -> Option<Landing> {
         let (at, drop) = self.last?;
         if now.saturating_duration_since(at) < POS_SETTLE {
             return None;
         }
         self.last = None;
+        self.dragging = false;
+        self.settled_at = Some(now);
         if self.saved == Some(drop.pos) {
             return None;
         }
@@ -499,8 +512,9 @@ static DESK: std::sync::Mutex<Desk> = std::sync::Mutex::new(Desk {
     boxes: Vec::new(),
     passthrough: None,
     moves: Moves {
-        dragged: false,
+        dragging: false,
         last: None,
+        settled_at: None,
         saved: None,
     },
 });
@@ -516,11 +530,12 @@ pub fn set_hit(boxes: Vec<HitBox>) {
     desk().boxes = clean_hit(boxes);
 }
 
-/// Her window moved. Only moves after a drag count (see [`Moves`]). On
-/// Wayland the window can't read where it is, so nothing is saved.
+/// Her window moved. Only moves during a drag count (see [`Moves`]), never
+/// a minimize. On Wayland the window can't read where it is, so nothing is
+/// saved.
 #[cfg(desktop)]
 pub fn note_moved(window: &tauri::Window, pos: tauri::PhysicalPosition<i32>) {
-    if wayland_now() {
+    if wayland_now() || window.is_minimized().unwrap_or(false) {
         return;
     }
     let scale = window.scale_factor().unwrap_or(1.0);
@@ -735,12 +750,19 @@ mod tests {
             "the last spot wins"
         );
         assert_eq!(moves.settled(t0 + ms(2000)), None, "once");
-        moves.note(screen(30.0, 40.0), t0 + ms(3000));
+        // A drag that pauses and goes on within 2 s is the same drag.
+        moves.note(screen(30.0, 40.0), t0 + ms(2500));
         assert_eq!(
-            moves.settled(t0 + ms(4000)),
+            moves.settled(t0 + ms(3500)),
             None,
             "the same spot again is not saved"
         );
+        moves.note(screen(50.0, 60.0), t0 + ms(4000));
+        assert_eq!(moves.settled(t0 + ms(4700)), Some(screen(50.0, 60.0)));
+        // Long after the drop, the system moving her is not saved.
+        moves.note(screen(-32000.0, -32000.0), t0 + ms(9000));
+        assert_eq!(moves.settled(t0 + ms(10_000)), None, "a move with no drag");
+        assert_eq!(DRAG_GRACE.as_secs(), 2);
         assert_eq!(CURSOR_FRAME.as_millis(), 100);
         assert_eq!(POS_SETTLE.as_millis(), 600);
     }
