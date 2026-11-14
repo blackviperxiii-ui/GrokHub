@@ -22,6 +22,24 @@
   src: url("/fonts/Inter-SemiBold.woff2") format("woff2");
 }
 
+/* Display face: the wordmark, page titles, tile eyebrows and tab and CTA labels.
+   Inter stays for body text and prose (docs/design/type.md). */
+@font-face {
+  font-family: "Chakra Petch";
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/ChakraPetch-Medium.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Chakra Petch";
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/ChakraPetch-SemiBold.woff2") format("woff2");
+}
+
 /* Shared shape, depth and focus tokens. Colors come from the theme blocks below. */
 :root {
   /* The one spacing scale, same as the cabin (docs/design/spacing.md). */
@@ -62,12 +80,30 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.18), 0 1px 1px rgb(0 0 0 / 0.1);
-  --shadow-2: 0 6px 20px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12);
-  --shadow-3: 0 18px 48px rgb(0 0 0 / 0.38), 0 4px 12px rgb(0 0 0 / 0.2);
+  /* Elevation: bg → surface → raised. The dark themes tint the outer shadow
+     red (--elev-tint) and give raised cards a 1px top highlight. */
+  --edge-highlight: inset 0 1px 0 rgb(255 255 255 / 0.03);
+  --elev-1:
+    var(--edge-highlight), 0 1px 2px rgb(0 0 0 / 0.18), 0 1px 1px rgb(0 0 0 / 0.1),
+    0 4px 14px color-mix(in srgb, var(--elev-tint) 10%, transparent);
+  --elev-2:
+    0 6px 20px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12),
+    0 8px 28px color-mix(in srgb, var(--elev-tint) 14%, transparent);
+  --elev-3:
+    0 18px 48px rgb(0 0 0 / 0.38), 0 4px 12px rgb(0 0 0 / 0.2),
+    0 12px 40px color-mix(in srgb, var(--elev-tint) 18%, transparent);
+  /* Glows: red on hover and focus of an outline, amber only on the live CTA and the XP fill. */
+  --glow-red: var(--red-glow);
+  --glow-amber: var(--amber-glow);
+  --glow-xp: 0 0 10px color-mix(in srgb, var(--amber) 55%, transparent);
+  --font-family-display: "Chakra Petch", "Inter", system-ui, sans-serif;
+  /* Uppercase display labels (tabs, the CTA) and tile eyebrows. */
+  --tracking-label: 0.12em;
+  --tracking-eyebrow: 0.14em;
   --ring: var(--red-glow, 0 0 0 3px color-mix(in srgb, var(--accent) 38%, transparent));
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --t-fast: 120ms;
+  --t-stroke: 160ms;
   --t-base: 200ms;
 }
 
@@ -137,6 +173,11 @@
   /* A text field under the pointer, and the extra ring a focused one gets. */
   --field-hover: var(--muted);
   --field-focus-outline: none;
+  /* Depth on dark only: red-tinted shadows, a red glow in the top-right corner
+     behind the Nyx dock, and a faint 24px grid. */
+  --elev-tint: transparent;
+  --vignette: none;
+  --backdrop-grid: none;
   color-scheme: light dark;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -206,6 +247,9 @@
     --section-rule: var(--red);
     --field-hover: var(--red-hover);
     --field-focus-outline: 2px solid var(--red-hover);
+    --elev-tint: var(--red);
+    --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+    --backdrop-grid: linear-gradient(rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(90deg, rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px;
   }
 }
 
@@ -249,6 +293,9 @@
   --section-rule: var(--red);
   --field-hover: var(--red-hover);
   --field-focus-outline: 2px solid var(--red-hover);
+  --elev-tint: var(--red);
+  --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+  --backdrop-grid: linear-gradient(rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(90deg, rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px;
   color-scheme: dark;
 }
 
@@ -292,6 +339,9 @@
   --section-rule: var(--red);
   --field-hover: var(--red-hover);
   --field-focus-outline: 2px solid var(--red-hover);
+  --elev-tint: var(--red);
+  --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+  --backdrop-grid: none;
   color-scheme: dark;
 }
 
@@ -335,6 +385,9 @@
   --section-rule: var(--red);
   --field-hover: var(--red-hover);
   --field-focus-outline: 2px solid var(--red-hover);
+  --elev-tint: var(--red);
+  --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+  --backdrop-grid: linear-gradient(rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(90deg, rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px;
   color-scheme: dark;
 }
 
@@ -419,7 +472,8 @@ body {
   margin: 0;
   font-size: var(--font-body);
   line-height: var(--lh-body);
-  background: var(--bg);
+  background: var(--vignette), var(--backdrop-grid), var(--bg);
+  background-attachment: fixed;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -448,8 +502,8 @@ button {
   cursor: pointer;
   transition:
     background-color var(--t-fast) var(--ease-out),
-    border-color var(--t-fast) var(--ease-out),
-    box-shadow var(--t-fast) var(--ease-out),
+    border-color var(--t-stroke) var(--ease-out),
+    box-shadow var(--t-stroke) var(--ease-out),
     transform var(--t-fast) var(--ease-out),
     filter var(--t-fast) var(--ease-out);
 }
@@ -785,7 +839,7 @@ select:focus-visible {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--elev-3);
   padding: 12px;
   width: min(420px, 100%);
   display: flex;
@@ -1025,6 +1079,13 @@ select:focus-visible {
   outline: none;
 }
 
+/* Wide windows: the conversation is a centered lane, and a message tops out at 70ch. */
+@media (min-width: 1280px) {
+  .log {
+    padding-inline: max(2px, calc(50% - 48ch));
+  }
+}
+
 .empty {
   color: var(--muted);
   margin: auto;
@@ -1040,7 +1101,7 @@ select:focus-visible {
   overflow-wrap: anywhere;
   background: var(--panel);
   border: 1.5px solid transparent;
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--elev-1);
 }
 
 .bubble.assistant {
@@ -1110,7 +1171,7 @@ select:focus-visible {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 180px;
     grid-template-rows: minmax(0, 1fr);
-    column-gap: 12px;
+    column-gap: 24px;
   }
 
   .chat.has-nyx > :not(.nyx-dock) {
@@ -1745,7 +1806,8 @@ button.md-copy {
   width: 200px;
   overflow-y: auto;
   padding-left: 16px;
-  border-left: 1px solid var(--border);
+  /* Same red rule as the page title, standing up beside the section nav. */
+  border-left: 1px solid var(--section-rule);
 }
 
 .settings-side h2 {
@@ -1913,11 +1975,11 @@ button.md-copy {
 .card {
   align-self: flex-start;
   max-width: 80%;
-  padding: 8px 12px;
+  padding: 12px 16px;
   border-radius: var(--radius-md);
   border: 1.5px solid var(--red);
   background: var(--panel);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--elev-1);
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
@@ -3606,7 +3668,7 @@ label.toggle-row {
 }
 
 .activity-dot.running {
-  background: var(--accent);
+  background: var(--amber);
 }
 
 .activity-list {
@@ -3879,6 +3941,81 @@ label.toggle-row {
   animation: pop-in var(--t-base) var(--ease-out) backwards;
 }
 
+/* Glam motion: a running dot that pulses amber, an open tab's underline that
+   slides up, cards that fade up 4px, and an XP bar and streak that fill in.
+   Only when nobody asked for less motion, from the OS or from Settings. */
+@keyframes dot-pulse {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--amber) 60%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@keyframes tab-open {
+  from {
+    box-shadow: inset 0 0 0 var(--amber);
+  }
+}
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes xp-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes streak-fill {
+  from {
+    background: var(--selected);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-reduce-motion="true"]) .activity-dot.running {
+    animation: dot-pulse 1.6s var(--ease-out) infinite;
+  }
+
+  :root:not([data-reduce-motion="true"]) :is(.tabs button, .settings-tabs button, .pulse-head .switch button)[aria-pressed="true"],
+  :root:not([data-reduce-motion="true"]) :is(.chat-tab, .code-side-tabs [role="tab"])[aria-selected="true"] {
+    animation: tab-open var(--t-base) var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) :is(.home-tile, .card.feed-card) {
+    animation: card-enter var(--t-base) var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) .xp-fill {
+    transform-origin: left;
+    transition: width var(--t-base) var(--ease-out);
+    animation: xp-grow 600ms var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) .streak-days li.on {
+    animation: streak-fill 600ms var(--ease-out) backwards;
+  }
+}
+
+/* Less motion also drops the backdrop grid. */
+:root[data-reduce-motion="true"] {
+  --backdrop-grid: none;
+}
+
+/* :root:root matches the theme blocks' (0,2,0) specificity, so this later rule
+   wins over the dark themes that turn the grid on. */
+@media (prefers-reduced-motion: reduce) {
+  :root:root {
+    --backdrop-grid: none;
+  }
+}
+
 /* People who ask for less motion get none: state changes still happen, instantly. */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -4039,6 +4176,56 @@ label.toggle-row {
 
 .brand-mark img {
   display: block;
+}
+
+/* Display type (Chakra Petch): the wordmark, page titles, tile eyebrows, and
+   the uppercase labels on tabs and the CTA. Body text and prose stay Inter. */
+.brand-mark span,
+.brand-lockup,
+:is(h1, h2):not(.md-heading),
+.settings-title {
+  font-family: var(--font-family-display);
+}
+
+.brand-mark span {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
+}
+
+.home-tile h3,
+.xp-line {
+  font-family: var(--font-family-display);
+  letter-spacing: var(--tracking-eyebrow);
+}
+
+.tabs button,
+.settings-tabs button,
+.settings-nav button,
+.pulse-head .switch button,
+.code-side-tabs [role="tab"],
+.code-run,
+button.cta,
+button.primary:not(.quick-chip) {
+  font-family: var(--font-family-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+
+/* Tracked capitals run wide, so labels step down a size to keep the width
+   they had in mixed case. */
+.tabs button,
+.settings-nav button,
+.pulse-head .switch button,
+.code-side-tabs [role="tab"],
+.code-run,
+button.cta,
+button.primary:not(.quick-chip) {
+  font-size: var(--font-caption);
+}
+
+.settings-tabs button {
+  font-size: var(--font-body);
 }
 
 .tabs button {
@@ -5132,11 +5319,11 @@ label.toggle-row {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  padding: 12px;
+  padding: 16px;
   border: 1.5px solid var(--red-dim);
   border-radius: var(--radius-md);
   background: var(--panel);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--elev-1);
 }
 
 .home-tile.large {
@@ -5165,7 +5352,6 @@ label.toggle-row {
 .home-tile h3 {
   margin: 0;
   font-size: var(--font-caption);
-  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -5347,7 +5533,6 @@ label.toggle-row {
   justify-content: space-between;
   gap: 8px;
   font-size: var(--font-caption);
-  letter-spacing: 0.06em;
 }
 
 .xp-level {
@@ -5364,12 +5549,15 @@ label.toggle-row {
   height: 6px;
   border-radius: 3px;
   background: var(--selected);
-  overflow: hidden;
 }
 
+/* The track no longer clips, so the fill rounds itself and its glow shows. */
 .xp-fill {
   height: 100%;
+  max-width: 100%;
+  border-radius: inherit;
   background: var(--amber);
+  box-shadow: var(--glow-xp);
 }
 
 .streak-days {

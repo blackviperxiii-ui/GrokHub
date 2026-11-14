@@ -614,9 +614,12 @@ describe("Code tab", () => {
     const run = await screen.findByRole("button", { name: "Run tests" });
     expect(run).toBeDisabled();
     expect(run).not.toHaveClass("cta");
+    // code-run keeps the label type the same in both states, so the row
+    // does not reflow when the first character is typed.
+    expect(run).toHaveClass("code-run");
     await userEvent.type(screen.getByLabelText("Test command"), "cargo test");
     expect(run).toBeEnabled();
-    expect(run).toHaveClass("cta");
+    expect(run).toHaveClass("code-run cta");
   });
 
   it("says why a run could not be stopped", async () => {
