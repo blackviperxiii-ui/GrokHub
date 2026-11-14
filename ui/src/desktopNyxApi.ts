@@ -63,20 +63,20 @@ export function desktopNyxSetOutfit(id: string | null): Promise<DesktopNyxState>
   return call<DesktopNyxState>("desktop_nyx_set_outfit", { id });
 }
 
-export function desktopNyxSavePos(
-  x: number,
-  y: number,
-  monitorW: number,
-  monitorH: number,
-): Promise<DesktopNyxState> {
-  return call<DesktopNyxState>("desktop_nyx_save_pos", {
-    x,
-    y,
-    monitorW,
-    monitorH,
-  });
+/** A part of her page that takes the mouse, in CSS pixels from the window's
+ * top-left. Clicks pass through everywhere else. */
+export interface DesktopNyxHitBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
-export function desktopNyxSetPassthrough(ignore: boolean): Promise<void> {
-  return call<void>("desktop_nyx_set_passthrough", { ignore });
+export function desktopNyxSetHit(boxes: DesktopNyxHitBox[]): Promise<void> {
+  return call<void>("desktop_nyx_set_hit", { boxes });
+}
+
+/** A press on her: the system drags her window; where she lands is saved. */
+export function desktopNyxDrag(): Promise<void> {
+  return call<void>("desktop_nyx_drag");
 }

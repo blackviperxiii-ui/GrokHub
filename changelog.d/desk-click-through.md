@@ -1,0 +1,1 @@
+- The desktop companion stays clickable: the app now watches the cursor itself, so clicks pass through the empty space around her but never stick once the pointer has crossed it. A left press on her drags her window, and where she lands is saved. Her menu closes when you click elsewhere on the desktop.

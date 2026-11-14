@@ -4214,22 +4214,6 @@ async fn desktop_nyx_set_outfit(
     desktop_nyx_write(&app, &state, false, |now| desktop_nyx::set_outfit(now, id)).await
 }
 
-#[cfg(desktop)]
-#[tauri::command]
-async fn desktop_nyx_save_pos(
-    app: AppHandle,
-    state: State<'_, ShellState>,
-    x: f64,
-    y: f64,
-    monitor_w: f64,
-    monitor_h: f64,
-) -> Result<desktop_nyx::State, String> {
-    desktop_nyx_write(&app, &state, false, |now| {
-        Ok(desktop_nyx::save_pos(now, [x, y], [monitor_w, monitor_h]))
-    })
-    .await
-}
-
 /// The tray's "Nyx on desktop". The settings decide, never the item's own
 /// tick, and the window work runs off the menu callback.
 #[cfg(desktop)]
@@ -4249,10 +4233,38 @@ fn desktop_nyx_from_tray(app: &AppHandle) {
     });
 }
 
+/// Her page's parts that take the mouse; the desk watch lets clicks
+/// through everywhere else.
 #[cfg(desktop)]
 #[tauri::command]
-fn desktop_nyx_set_passthrough(app: AppHandle, ignore: bool) -> Result<(), String> {
-    desktop_nyx::set_passthrough(&app, ignore)
+fn desktop_nyx_set_hit(boxes: Vec<desktop_nyx::HitBox>) {
+    desktop_nyx::set_hit(boxes);
+}
+
+/// A press on her: the system drags her window, and the desk watch saves
+/// where she lands. Sync, so it runs on the main thread, as dragging needs.
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_drag(app: AppHandle) -> Result<(), String> {
+    desktop_nyx::start_drag(&app)
+}
+
+/// The desk watch: every frame, click-through follows the cursor, and a
+/// dropped window saves its spot through the one desktop-companion write.
+#[cfg(desktop)]
+fn desktop_nyx_watch(app: AppHandle) {
+    let _ = std::thread::Builder::new()
+        .name("desktop-nyx".into())
+        .spawn(move || loop {
+            std::thread::sleep(desktop_nyx::CURSOR_FRAME);
+            let Some((pos, monitor)) = desktop_nyx::tick(&app) else {
+                continue;
+            };
+            let state = app.state::<ShellState>();
+            let _ = tauri::async_runtime::block_on(desktop_nyx_write(&app, &state, false, |now| {
+                Ok(desktop_nyx::save_pos(now, pos, monitor))
+            }));
+        });
 }
 
 #[tauri::command]
@@ -7320,6 +7332,8 @@ pub fn run() {
             #[cfg(desktop)]
             build_tray(app)?;
             #[cfg(desktop)]
+            desktop_nyx_watch(app.handle().clone());
+            #[cfg(desktop)]
             watch_for_updates(app.handle().clone(), grokhub_agent::perm::config_dir());
             Ok(())
         })
@@ -7334,6 +7348,12 @@ pub fn run() {
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .tick(*focused, on);
+                }
+            }
+            #[cfg(desktop)]
+            if let WindowEvent::Moved(at) = event {
+                if window.label() == desktop_nyx::LABEL {
+                    desktop_nyx::note_moved(window, *at);
                 }
             }
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -7675,9 +7695,9 @@ pub fn run() {
             #[cfg(desktop)]
             desktop_nyx_set_outfit,
             #[cfg(desktop)]
-            desktop_nyx_save_pos,
             #[cfg(desktop)]
-            desktop_nyx_set_passthrough,
+            desktop_nyx_set_hit,
+            desktop_nyx_drag,
             get_queue,
             stop_task,
             ship_status,
@@ -7926,7 +7946,7 @@ mod command_tests {
             "async fn desktop_nyx_undock(",
             "async fn desktop_nyx_dock(",
             "async fn desktop_nyx_set_outfit(",
-            "async fn desktop_nyx_save_pos(",
+            "fn desktop_nyx_watch(",
             "fn desktop_nyx_from_tray(",
         ] {
             let body = item_after(&src, name);
@@ -7955,8 +7975,9 @@ mod command_tests {
         )));
         assert!(!commit.contains("show_window(app,&next)?"));
         let close = src
-            .split("if window.label() == desktop_nyx::LABEL {")
+            .split("if let WindowEvent::CloseRequested")
             .nth(1)
+            .and_then(|s| s.split("if window.label() == desktop_nyx::LABEL {").nth(1))
             .and_then(|s| s.split("return;").next())
             .expect("the desk's close arm");
         assert!(close.contains("desktop_nyx::publish(window.app_handle(), &next)"));

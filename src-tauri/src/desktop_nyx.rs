@@ -364,14 +364,176 @@ pub fn hide_window(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// How often the desk watch looks at the cursor (the cabin's frame).
+pub const CURSOR_FRAME: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// A dragged window counts as dropped once it has been still this long.
+pub const POS_SETTLE: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// Most boxes her page may report; anything past it is dropped.
+pub const MAX_HIT_BOXES: usize = 8;
+
+/// A part of her page that takes the mouse (her stage, an open menu), in
+/// CSS pixels from the window's top-left.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct HitBox {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// The page's boxes, keeping only real ones and at most [`MAX_HIT_BOXES`].
+pub fn clean_hit(boxes: Vec<HitBox>) -> Vec<HitBox> {
+    boxes
+        .into_iter()
+        .filter(|b| [b.x, b.y, b.w, b.h].iter().all(|v| v.is_finite()) && b.w > 0.0 && b.h > 0.0)
+        .take(MAX_HIT_BOXES)
+        .collect()
+}
+
+/// Whether the cursor (desktop pixels) is over one of her boxes, in a window
+/// whose page starts at `origin` (desktop pixels) and is drawn at `scale`.
+pub fn over_her(cursor: [f64; 2], origin: [f64; 2], scale: f64, boxes: &[HitBox]) -> bool {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let x = (cursor[0] - origin[0]) / scale;
+    let y = (cursor[1] - origin[1]) / scale;
+    boxes
+        .iter()
+        .any(|b| x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h)
+}
+
+/// Whether her window should let clicks through: yes over empty pixels, no
+/// over her. When the cursor or the window can't be read (Wayland), or the
+/// page hasn't reported her boxes yet, never: she stays clickable.
+pub fn passthrough_wanted(
+    cursor: Option<[f64; 2]>,
+    origin: Option<[f64; 2]>,
+    scale: f64,
+    boxes: &[HitBox],
+) -> bool {
+    match (cursor, origin) {
+        (Some(c), Some(o)) if !boxes.is_empty() => !over_her(c, o, scale, boxes),
+        _ => false,
+    }
+}
+
+/// Where a dragged window was last seen, until it has been still for
+/// [`POS_SETTLE`]. Positions and monitor sizes are logical pixels.
+#[derive(Debug, Default)]
+pub struct Moves {
+    last: Option<(std::time::Instant, [f64; 2], [f64; 2])>,
+}
+
+impl Moves {
+    pub fn note(&mut self, pos: [f64; 2], monitor: [f64; 2], at: std::time::Instant) {
+        self.last = Some((at, pos, monitor));
+    }
+
+    /// The spot to save, once, after the window has been still long enough.
+    pub fn settled(&mut self, now: std::time::Instant) -> Option<([f64; 2], [f64; 2])> {
+        match self.last {
+            Some((at, pos, monitor)) if now.saturating_duration_since(at) >= POS_SETTLE => {
+                self.last = None;
+                Some((pos, monitor))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// What the desk watch keeps between frames while her window is open.
 #[cfg(desktop)]
-pub fn set_passthrough(app: &tauri::AppHandle, ignore: bool) -> Result<(), String> {
+#[derive(Debug, Default)]
+struct Desk {
+    boxes: Vec<HitBox>,
+    passthrough: Option<bool>,
+    moves: Moves,
+}
+
+#[cfg(desktop)]
+static DESK: std::sync::Mutex<Desk> = std::sync::Mutex::new(Desk {
+    boxes: Vec::new(),
+    passthrough: None,
+    moves: Moves { last: None },
+});
+
+#[cfg(desktop)]
+fn desk() -> std::sync::MutexGuard<'static, Desk> {
+    DESK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Her page's boxes; the next frame of the desk watch applies them.
+#[cfg(desktop)]
+pub fn set_hit(boxes: Vec<HitBox>) {
+    desk().boxes = clean_hit(boxes);
+}
+
+/// Her window moved (a drag, or the window placed at open).
+#[cfg(desktop)]
+pub fn note_moved(window: &tauri::Window, pos: tauri::PhysicalPosition<i32>) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|m| {
+            let size = m.size();
+            [
+                f64::from(size.width) / scale,
+                f64::from(size.height) / scale,
+            ]
+        })
+        .unwrap_or([1920.0, 1080.0]);
+    let logical = [f64::from(pos.x) / scale, f64::from(pos.y) / scale];
+    desk()
+        .moves
+        .note(logical, monitor, std::time::Instant::now());
+}
+
+/// A press on her: the system moves the window until the button comes up.
+#[cfg(desktop)]
+pub fn start_drag(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     let Some(w) = app.get_webview_window(LABEL) else {
         return Ok(());
     };
-    w.set_ignore_cursor_events(ignore)
-        .map_err(|e| e.to_string())
+    w.start_dragging().map_err(|e| e.to_string())
+}
+
+/// One frame of the desk watch: click-through follows the cursor, so she
+/// can be clicked again after the pointer crossed an empty pixel (once the
+/// window lets clicks through, her page hears no pointer at all). Returns a
+/// dropped position to save. The desk lock is never held across a window
+/// call: those wait on the main thread, which takes the lock on a move.
+#[cfg(desktop)]
+pub fn tick(app: &tauri::AppHandle) -> Option<([f64; 2], [f64; 2])> {
+    use tauri::Manager;
+    let Some(w) = app.get_webview_window(LABEL) else {
+        *desk() = Desk::default();
+        return None;
+    };
+    let (boxes, had) = {
+        let d = desk();
+        (d.boxes.clone(), d.passthrough)
+    };
+    let cursor = app.cursor_position().ok().map(|p| [p.x, p.y]);
+    let origin = w
+        .inner_position()
+        .ok()
+        .map(|p| [f64::from(p.x), f64::from(p.y)]);
+    let scale = w.scale_factor().unwrap_or(1.0);
+    let want = passthrough_wanted(cursor, origin, scale, &boxes);
+    let applied = (had != Some(want) && w.set_ignore_cursor_events(want).is_ok()).then_some(want);
+    let mut d = desk();
+    if applied.is_some() {
+        d.passthrough = applied;
+    }
+    d.moves.settled(std::time::Instant::now())
 }
 
 #[cfg(desktop)]
@@ -410,6 +572,90 @@ mod tests {
             enabled,
             checked,
         }
+    }
+
+    fn hit(x: f64, y: f64, w: f64, h: f64) -> HitBox {
+        HitBox { x, y, w, h }
+    }
+
+    #[test]
+    fn clicks_pass_through_only_beside_her() {
+        let stage = [hit(40.0, 100.0, 240.0, 360.0)];
+        // A window at (1000, 500) on a 2x screen: page (50, 150) is desktop (1100, 800).
+        let at = Some([1000.0, 500.0]);
+        assert!(!passthrough_wanted(Some([1100.0, 800.0]), at, 2.0, &stage));
+        assert!(passthrough_wanted(Some([1010.0, 510.0]), at, 2.0, &stage));
+        // The right edge is outside: 40 + 240 = 280 page px = desktop 1560.
+        assert!(passthrough_wanted(Some([1560.0, 800.0]), at, 2.0, &stage));
+        assert!(!passthrough_wanted(Some([1559.0, 800.0]), at, 2.0, &stage));
+        // An open menu takes the mouse too.
+        let with_menu = [stage[0], hit(0.0, 0.0, 120.0, 80.0)];
+        assert!(!passthrough_wanted(
+            Some([1010.0, 510.0]),
+            at,
+            2.0,
+            &with_menu
+        ));
+    }
+
+    #[test]
+    fn she_stays_clickable_when_nothing_can_be_read() {
+        let stage = [hit(40.0, 100.0, 240.0, 360.0)];
+        assert!(
+            !passthrough_wanted(None, Some([0.0, 0.0]), 1.0, &stage),
+            "no cursor (Wayland)"
+        );
+        assert!(
+            !passthrough_wanted(Some([5.0, 5.0]), None, 1.0, &stage),
+            "no window position"
+        );
+        assert!(
+            !passthrough_wanted(Some([5.0, 5.0]), Some([0.0, 0.0]), 1.0, &[]),
+            "no boxes yet"
+        );
+        // A bad scale reads as 1.
+        assert!(over_her([50.0, 150.0], [0.0, 0.0], 0.0, &stage));
+        assert!(over_her([50.0, 150.0], [0.0, 0.0], f64::NAN, &stage));
+    }
+
+    #[test]
+    fn the_page_boxes_are_checked_at_the_boundary() {
+        let boxes: Vec<HitBox> =
+            serde_json::from_str(r#"[{"x":1,"y":2,"w":3,"h":4},{"x":0,"y":0,"w":0,"h":9}]"#)
+                .expect("the page's JSON");
+        assert_eq!(clean_hit(boxes), vec![hit(1.0, 2.0, 3.0, 4.0)]);
+        assert_eq!(clean_hit(vec![hit(f64::INFINITY, 0.0, 5.0, 5.0)]), vec![]);
+        assert_eq!(clean_hit(vec![hit(0.0, 0.0, 5.0, 5.0); 20]).len(), 8);
+    }
+
+    #[test]
+    fn a_drag_is_saved_once_after_she_has_been_still() {
+        let t0 = std::time::Instant::now();
+        let mut moves = Moves::default();
+        assert_eq!(moves.settled(t0), None);
+        moves.note([10.0, 20.0], [1920.0, 1080.0], t0);
+        moves.note(
+            [30.0, 40.0],
+            [1920.0, 1080.0],
+            t0 + std::time::Duration::from_millis(100),
+        );
+        assert_eq!(
+            moves.settled(t0 + std::time::Duration::from_millis(600)),
+            None,
+            "still moving"
+        );
+        assert_eq!(
+            moves.settled(t0 + std::time::Duration::from_millis(700)),
+            Some(([30.0, 40.0], [1920.0, 1080.0])),
+            "the last spot wins"
+        );
+        assert_eq!(
+            moves.settled(t0 + std::time::Duration::from_millis(2000)),
+            None,
+            "once"
+        );
+        assert_eq!(CURSOR_FRAME.as_millis(), 100);
+        assert_eq!(POS_SETTLE.as_millis(), 600);
     }
 
     #[test]

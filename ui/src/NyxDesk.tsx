@@ -3,10 +3,11 @@ import { COMPANION_NAME } from "./brand";
 import { NyxCard } from "./NyxCard";
 import {
   desktopNyxDock,
-  desktopNyxSavePos,
   desktopNyxSet,
   desktopNyxSetOutfit,
-  desktopNyxSetPassthrough,
+  desktopNyxDrag,
+  desktopNyxSetHit,
+  type DesktopNyxHitBox,
 } from "./desktopNyxApi";
 import { useDesktopNyx } from "./useDesktopNyx";
 
@@ -21,61 +22,55 @@ export function deskArtUrl(path: string): string | null {
   return Object.hasOwn(ART, `../../${path}`) ? ART[`../../${path}`] : null;
 }
 
-const POS_SETTLE_MS = 600;
-
 /** The desktop companion page: pedestal + figure, wardrobe, dock back. */
 export function NyxDesk() {
   // The dock's wardrobe, Labs and the tray change her too.
   const [state, setState] = useDesktopNyx();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const artRef = useRef<HTMLDivElement>(null);
-  const settle = useRef<number | null>(null);
-  const dragging = useRef(false);
+  const menuRef = useRef<HTMLUListElement>(null);
 
+  // A click on the desktop beside her passes through, so the page hears no
+  // click: leaving the window closes the menu too.
   useEffect(() => {
     function onDoc() {
       setMenu(null);
     }
     document.addEventListener("click", onDoc);
-    return () => document.removeEventListener("click", onDoc);
+    window.addEventListener("blur", onDoc);
+    return () => {
+      document.removeEventListener("click", onDoc);
+      window.removeEventListener("blur", onDoc);
+    };
   }, []);
 
-  // Click-through when the pointer is over empty pixels.
+  // Her stage and an open menu take the mouse; the app lets clicks through
+  // everywhere else, watching the cursor itself (a window that lets clicks
+  // through hears no pointer). Sent again whenever they move or resize.
   useEffect(() => {
-    function onMove(event: PointerEvent) {
-      const root = artRef.current;
-      if (!root || typeof document.elementFromPoint !== "function") return;
-      const hit = document.elementFromPoint(event.clientX, event.clientY);
-      const over = !!hit && root.contains(hit);
-      void desktopNyxSetPassthrough(!over);
+    function report() {
+      const boxes: DesktopNyxHitBox[] = [artRef.current, menuRef.current]
+        .filter((el) => el !== null)
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          return { x: r.left, y: r.top, w: r.width, h: r.height };
+        });
+      void desktopNyxSetHit(boxes);
     }
-    window.addEventListener("pointermove", onMove);
-    return () => window.removeEventListener("pointermove", onMove);
-  }, []);
-
-  function scheduleSavePos() {
-    if (settle.current != null) window.clearTimeout(settle.current);
-    settle.current = window.setTimeout(() => {
-      settle.current = null;
-      void desktopNyxSavePos(
-        window.screenX,
-        window.screenY,
-        window.screen.width,
-        window.screen.height,
-      ).then(setState);
-    }, POS_SETTLE_MS);
-  }
+    report();
+    window.addEventListener("resize", report);
+    const sizes = typeof ResizeObserver === "function" ? new ResizeObserver(report) : null;
+    if (artRef.current) sizes?.observe(artRef.current);
+    return () => {
+      window.removeEventListener("resize", report);
+      sizes?.disconnect();
+    };
+  }, [state, menu]);
 
   function onPointerDown(event: ReactPointerEvent) {
     if (event.button !== 0) return;
-    dragging.current = true;
-    void desktopNyxSetPassthrough(false);
-  }
-
-  function onPointerUp() {
-    if (!dragging.current) return;
-    dragging.current = false;
-    scheduleSavePos();
+    if (!artRef.current?.contains(event.target as Node)) return;
+    void desktopNyxDrag();
   }
 
   if (!state) {
@@ -94,8 +89,6 @@ export function NyxDesk() {
         setMenu({ x: event.clientX, y: event.clientY });
       }}
       onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
     >
       <div className="nyx-desk-stage" ref={artRef}>
         <div className="nyx-desk-pedestal" aria-hidden="true">
@@ -118,6 +111,7 @@ export function NyxDesk() {
       </div>
       {menu && (
         <ul
+          ref={menuRef}
           className="nyx-desk-menu"
           style={{ left: menu.x, top: menu.y }}
           role="menu"
