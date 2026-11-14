@@ -20,6 +20,8 @@ pub mod capabilities;
 pub mod card_chat;
 pub mod change_rows;
 pub mod changes;
+#[cfg(desktop)]
+pub mod chat_review;
 pub mod chat_tabs;
 pub mod chat_trials;
 pub mod chips;

@@ -2,7 +2,8 @@
 //! cabin: the nightly review's learned automations first, then the built-in
 //! seeds, minus any already running. Adding one turns its seed into a row.
 //! The review's state lives in `suggestions.json`, the same file the cabin
-//! wrote.
+//! wrote. The nightly review's reply is read here too: what it suggests,
+//! kept only when it answers work the user repeats.
 
 use std::path::Path;
 
@@ -10,7 +11,14 @@ use serde::Serialize;
 
 use crate::automation::{route_schedule, AutoHealth, Automation, ScheduleRoute};
 use crate::grok_loop::{loop_interval_ms, parse_loop_line};
-use crate::review::{LearnedSuggestion, SuggestionKind, SuggestionStore};
+use crate::ideas::{idea_has_reason, same_topic, IdeaGround, IdeaKind};
+use crate::organs::LocalClock;
+use crate::review::{
+    dedupe_suggestions, drop_echoed_suggestions, merge_suggestion_store, parse_suggest_lines,
+    partition_suggestions, prune_live_suggestions, review_due, suggestions_from_sessions,
+    DigestLine, LearnedSuggestion, SuggestionKind, SuggestionStore, CABIN_GITHUB_TOOLS,
+};
+use crate::update_feed::{turned_down_topic, FeedPulse};
 
 /// The review's state, in the config folder.
 pub const SUGGESTIONS_FILE: &str = "suggestions.json";
@@ -241,6 +249,187 @@ pub fn save_suggestions(config_dir: &Path, store: &SuggestionStore) -> Result<()
     crate::pulse_writer::write_atomic(&config_dir.join(SUGGESTIONS_FILE), &text)
 }
 
+/// What they asked lately, newest first: real asks only (no slash commands,
+/// tool output or "no, still…" feedback), each once, first line only.
+/// `lines` is `(role, text)`, newest first.
+pub fn recent_asks_from<'a>(
+    lines: impl IntoIterator<Item = (&'a str, &'a str)>,
+    n: usize,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (role, text) in lines {
+        if out.len() >= n {
+            break;
+        }
+        if role != "user" {
+            continue;
+        }
+        let t = text.trim();
+        if t.len() < 8
+            || t.starts_with('/')
+            || crate::is_workload_user(t)
+            || crate::is_feedback_ask(t)
+            || !crate::is_plain_text(t)
+        {
+            continue;
+        }
+        let line: String = t.lines().next().unwrap_or("").chars().take(200).collect();
+        if !out.iter().any(|o| o.eq_ignore_ascii_case(&line)) {
+            out.push(line);
+        }
+    }
+    out
+}
+
+/// What they said, for dropping a suggestion that only quotes them: the
+/// first 40 of their lines, 280 characters each.
+pub fn said_lines<'a>(lines: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<String> {
+    let mut out = Vec::new();
+    for (role, text) in lines {
+        if out.len() >= 40 {
+            break;
+        }
+        if role != "user" {
+            continue;
+        }
+        let line: String = text.chars().take(280).collect();
+        if !line.trim().is_empty() {
+            out.push(line);
+        }
+    }
+    out
+}
+
+/// Lasting context a suggestion may stand on: memory lines of 12 or more
+/// characters (bullets and headings stripped), then the open board cards.
+pub fn lasting_lines(user_md: &str, memory_md: &str, open_cards: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = user_md
+        .lines()
+        .chain(memory_md.lines())
+        .map(|l| l.trim().trim_start_matches(['-', '*', '#', ' ']).trim())
+        .filter(|l| l.len() >= 12)
+        .map(str::to_string)
+        .collect();
+    out.extend(open_cards.iter().cloned());
+    out
+}
+
+/// Keep a skill or automation only when it answers work they repeat or
+/// lasting context, one per topic, and never one they turned down.
+pub fn keep_reasoned_suggestions(
+    items: &mut Vec<LearnedSuggestion>,
+    ground: &IdeaGround,
+    pulse: &FeedPulse,
+) {
+    let mut kept: Vec<String> = Vec::new();
+    items.retain(|item| {
+        let kind = match item.kind {
+            SuggestionKind::Skill => IdeaKind::Skill,
+            SuggestionKind::Auto => IdeaKind::Automation,
+            SuggestionKind::Connector => return true,
+        };
+        let topic = format!(
+            "{} {} {} {}",
+            item.title,
+            item.body,
+            item.seed.as_deref().unwrap_or(""),
+            item.trigger.as_deref().unwrap_or("")
+        );
+        if !idea_has_reason(kind, &topic, ground)
+            || kept.iter().any(|k| same_topic(k, &topic))
+            || turned_down_topic(pulse, &item.title)
+            || item
+                .name
+                .as_deref()
+                .is_some_and(|n| turned_down_topic(pulse, n))
+        {
+            return false;
+        }
+        kept.push(topic);
+        true
+    });
+}
+
+/// The quiet daily pass over recent chat, with no model call: a need asked
+/// on two or more occasions becomes a Suggested tile. Once a local day, at
+/// or after `night_hour` the first time. Returns whether it ran.
+pub fn session_pass(
+    store: &mut SuggestionStore,
+    lines: &[DigestLine],
+    skills: &[String],
+    autos: &[String],
+    today: &str,
+    clock: &LocalClock,
+    night_hour: u32,
+) -> bool {
+    if !review_due(
+        store.last_session_suggest_day.as_deref(),
+        today,
+        clock,
+        night_hour,
+    ) {
+        return false;
+    }
+    let items = suggestions_from_sessions(lines, skills, autos);
+    store.last_session_suggest_day = Some(today.to_string());
+    if !items.is_empty() {
+        *store = merge_suggestion_store(store, partition_suggestions(items));
+    }
+    true
+}
+
+/// What a review reply is checked against.
+#[derive(Debug, Clone, Copy)]
+pub struct ReplyGround<'a> {
+    pub skills: &'a [String],
+    pub automations: &'a [String],
+    /// [`said_lines`].
+    pub said: &'a [String],
+    pub ideas: IdeaGround<'a>,
+    /// What they turned down.
+    pub pulse: &'a FeedPulse,
+}
+
+/// Fold tonight's review reply into the store and stamp the day. A failed
+/// call stamps the day too, so the review waits for tomorrow. Returns how
+/// many suggestions were kept. Skill patches are applied apart.
+pub fn apply_reply(
+    store: &mut SuggestionStore,
+    reply: Result<&str, &str>,
+    today: &str,
+    now_ms: u64,
+    ground: &ReplyGround,
+) -> usize {
+    let day = Some(today.to_string());
+    let Ok(text) = reply else {
+        store.last_review_day = day;
+        store.last_review_ms = now_ms;
+        return 0;
+    };
+    // Every allowlisted GitHub tool counts as wired, as in the cabin: the
+    // desktop app shows no connector tiles.
+    let live: Vec<String> = CABIN_GITHUB_TOOLS.iter().map(|t| t.to_string()).collect();
+    let mut items = dedupe_suggestions(
+        drop_echoed_suggestions(parse_suggest_lines(text), ground.said),
+        ground.skills,
+        ground.automations,
+        &live,
+    );
+    keep_reasoned_suggestions(&mut items, &ground.ideas, ground.pulse);
+    let kept = items.len();
+    if items.is_empty() {
+        store.last_review_day = day;
+        store.last_review_ms = now_ms;
+    } else {
+        let mut incoming = partition_suggestions(items);
+        incoming.last_review_day = day;
+        incoming.last_review_ms = now_ms;
+        *store = merge_suggestion_store(store, incoming);
+    }
+    prune_live_suggestions(store, &live);
+    kept
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,5 +619,242 @@ mod tests {
             Some("check the build")
         );
         assert_eq!(heartbeat_prompt("heartbeat every day"), None);
+    }
+
+    const TIDY_REPLY: &str = "Here is what I found.\n\
+        SUGGEST_SKILL: tidy-board | Tidy the board | Sort open cards | when the board is full | sort cards by due date\n\
+        SUGGEST_AUTO: Garden log | Water the plants | every day at 7, water the tomato plants\n";
+
+    fn tidy_asks() -> Vec<String> {
+        vec![
+            "Can you tidy the board cards for me".to_string(),
+            "Please tidy the board cards again today".to_string(),
+        ]
+    }
+
+    #[test]
+    fn recent_asks_skip_slash_short_and_repeats() {
+        let lines = [
+            ("user", "/help"),
+            ("user", "ok"),
+            ("assistant", "Here is the workboard summary you asked for."),
+            ("user", "Summarize the workboard please\nand list due cards"),
+            ("user", "summarize the workboard please"),
+        ];
+        assert_eq!(
+            recent_asks_from(lines, 30),
+            vec!["Summarize the workboard please".to_string()]
+        );
+        let many = [
+            ("user", "first long ask here"),
+            ("user", "second long ask here"),
+        ];
+        assert_eq!(
+            recent_asks_from(many, 1),
+            vec!["first long ask here".to_string()]
+        );
+    }
+
+    #[test]
+    fn said_lines_keep_forty_user_lines_cut_to_280() {
+        let long = "x".repeat(300);
+        let mut lines = vec![
+            ("assistant", "a reply"),
+            ("user", "  "),
+            ("user", long.as_str()),
+        ];
+        lines.extend(std::iter::repeat_n(("user", "again"), 50));
+        let said = said_lines(lines);
+        assert_eq!(said.len(), 40);
+        assert_eq!(said[0].len(), 280);
+        assert_eq!(said[1], "again");
+    }
+
+    #[test]
+    fn lasting_lines_strip_bullets_and_drop_short_ones() {
+        let lasting = lasting_lines(
+            "# About\n- Works on the garden plans weekly\n- short\n",
+            "* Keeps a reading list in notes\n",
+            &["Ship the beta build".to_string()],
+        );
+        assert_eq!(
+            lasting,
+            vec![
+                "Works on the garden plans weekly".to_string(),
+                "Keeps a reading list in notes".to_string(),
+                "Ship the beta build".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reply_keeps_only_what_their_asks_back() {
+        let asks = tidy_asks();
+        let pulse = FeedPulse::default();
+        let ground = ReplyGround {
+            skills: &[],
+            automations: &[],
+            said: &[],
+            ideas: IdeaGround {
+                asks: &asks,
+                lasting: &[],
+            },
+            pulse: &pulse,
+        };
+        let mut store = SuggestionStore {
+            reviewed_turns: 8,
+            ..SuggestionStore::default()
+        };
+        let kept = apply_reply(&mut store, Ok(TIDY_REPLY), "2026-10-07", 9, &ground);
+        assert_eq!(kept, 1, "the garden job has no ask behind it");
+        assert_eq!(store.skills.len(), 1);
+        assert_eq!(store.skills[0].name.as_deref(), Some("tidy-board"));
+        assert_eq!(
+            store.skills[0].instructions.as_deref(),
+            Some("sort cards by due date")
+        );
+        assert!(store.autos.is_empty());
+        assert_eq!(store.last_review_day.as_deref(), Some("2026-10-07"));
+        assert_eq!(store.last_review_ms, 9);
+        assert_eq!(store.reviewed_turns, 8);
+
+        // A skill they already have, or turned down, is not kept.
+        let have = vec!["tidy-board".to_string()];
+        let mut store = SuggestionStore::default();
+        let kept = apply_reply(
+            &mut store,
+            Ok(TIDY_REPLY),
+            "2026-10-07",
+            9,
+            &ReplyGround {
+                skills: &have,
+                ..ground
+            },
+        );
+        assert_eq!((kept, store.skills.len()), (0, 0));
+        let no = FeedPulse {
+            turned_down: vec!["Tidy the board".into()],
+            ..FeedPulse::default()
+        };
+        let mut store = SuggestionStore::default();
+        let kept = apply_reply(
+            &mut store,
+            Ok(TIDY_REPLY),
+            "2026-10-07",
+            9,
+            &ReplyGround {
+                pulse: &no,
+                ..ground
+            },
+        );
+        assert_eq!((kept, store.skills.len()), (0, 0));
+        assert_eq!(store.last_review_day.as_deref(), Some("2026-10-07"));
+    }
+
+    #[test]
+    fn a_failed_reply_stamps_the_day_and_keeps_the_tiles() {
+        let pulse = FeedPulse::default();
+        let mut store = SuggestionStore {
+            autos: vec![learned("Inbox sweep", "every day at 8, sweep the inbox")],
+            ..SuggestionStore::default()
+        };
+        let ground = ReplyGround {
+            skills: &[],
+            automations: &[],
+            said: &[],
+            ideas: IdeaGround::default(),
+            pulse: &pulse,
+        };
+        assert_eq!(
+            apply_reply(&mut store, Err("no key"), "2026-10-07", 9, &ground),
+            0
+        );
+        assert_eq!(store.last_review_day.as_deref(), Some("2026-10-07"));
+        assert_eq!(store.last_review_ms, 9);
+        assert_eq!(store.autos.len(), 1);
+    }
+
+    #[test]
+    fn merge_keeps_reviewed_turns_and_idea_titles() {
+        let existing = SuggestionStore {
+            reviewed_turns: 8,
+            idea_titles: vec!["Tidy the board".into()],
+            ..SuggestionStore::default()
+        };
+        let merged = merge_suggestion_store(&existing, SuggestionStore::default());
+        assert_eq!(merged.reviewed_turns, 8);
+        assert_eq!(merged.idea_titles, vec!["Tidy the board".to_string()]);
+        let newer = SuggestionStore {
+            reviewed_turns: 12,
+            idea_titles: vec!["Inbox sweep".into()],
+            ..SuggestionStore::default()
+        };
+        let merged = merge_suggestion_store(&existing, newer);
+        assert_eq!(merged.reviewed_turns, 12);
+        assert_eq!(merged.idea_titles, vec!["Inbox sweep".to_string()]);
+    }
+
+    #[test]
+    fn the_session_pass_runs_once_a_day_after_the_hour() {
+        let line = |t: &str| DigestLine {
+            role: "user".into(),
+            text: t.into(),
+        };
+        let lines = vec![
+            line("summarize the workboard for me"),
+            line("what is on the workboard now"),
+        ];
+        let at = |hour| LocalClock {
+            now_ms: 1,
+            weekday: 3,
+            hour,
+            minute: 0,
+        };
+        let mut store = SuggestionStore::default();
+        assert!(!session_pass(
+            &mut store,
+            &lines,
+            &[],
+            &[],
+            "2026-10-07",
+            &at(20),
+            21
+        ));
+        assert!(store.autos.is_empty());
+        assert!(session_pass(
+            &mut store,
+            &lines,
+            &[],
+            &[],
+            "2026-10-07",
+            &at(21),
+            21
+        ));
+        assert_eq!(store.autos.len(), 1);
+        assert_eq!(store.autos[0].title, "Midday board");
+        assert_eq!(
+            store.last_session_suggest_day.as_deref(),
+            Some("2026-10-07")
+        );
+        assert!(!session_pass(
+            &mut store,
+            &lines,
+            &[],
+            &[],
+            "2026-10-07",
+            &at(23),
+            21
+        ));
+        // A later day runs at any hour.
+        assert!(session_pass(
+            &mut store,
+            &lines,
+            &[],
+            &[],
+            "2026-10-08",
+            &at(9),
+            21
+        ));
+        assert_eq!(store.autos.len(), 1, "one tile per title");
     }
 }

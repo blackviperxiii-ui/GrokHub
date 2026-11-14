@@ -32,6 +32,7 @@ export const SAVED_NOTE = "Saved. A new post is on its way.";
 export const MORE_LIKE_NOTE = "Got it. More ideas like this next time.";
 export const NOT_INTERESTED_NOTE = "Got it. Fewer ideas like this.";
 export const DISLIKE_NOTE = "Got it. A few less like that.";
+export const SKILL_ADDED = "Skill added. It is on the Skills page.";
 export const FOR_YOU_LABEL = "For You";
 export const DAY_END = "That's all for today";
 export const ADD_INTERESTS = "Add interests";
@@ -485,6 +486,7 @@ export function Pulse({
                     idea={idea}
                     busy={busy}
                     onDo={() => void run(idea)}
+                    onAddSkill={() => void act(idea.id, "addSkill", SKILL_ADDED)}
                     onFix={() => setFixing(idea)}
                     onMoreLike={() =>
                       void act(

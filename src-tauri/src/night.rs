@@ -3,14 +3,17 @@
 //! `app.json`, the same hour as the Sunday self-review):
 //! - the episode lessons' tidy (merge near-duplicates, drop stale ones), in
 //!   any memory mode;
+//! - the nightly chat review (`chat_review`): Suggested tiles, skill ideas
+//!   and reviewed skill patches. Its own file says when it last ran, so it
+//!   also catches up at any hour after a night it missed;
 //! - the memory dream, in memory repo mode only. It merges repeat notes,
 //!   retires unsure ones past Memory retention and proposes missing
 //!   preferences, then writes `amr/dreams/<local day>.md`. With
 //!   `"dream_model": true` it also runs the model pass and posts its
 //!   "Memory dream" card.
 //!
-//! A running chat or a waiting decision puts the dream off to the next look.
-//! Halt skips the night. The report on disk marks the night as dreamed, so a
+//! A running chat or a waiting decision puts the review and the dream off
+//! to the next look. Halt skips the night. The report on disk marks the night as dreamed, so a
 //! cabin or a relaunch the same night does not dream again.
 
 use std::path::{Path, PathBuf};
@@ -21,6 +24,8 @@ use grokhub_core::amr::{dream_report_path, ModelDreamOpts, MODEL_DREAM_OUTPUT_TO
 use grokhub_core::scheduler_lease::{read_lease, shell_may_fire};
 use grokhub_core::{HeartbeatPace, HeartbeatThrottle, PACE_NORMAL};
 
+use crate::chat_review::Reviewed;
+
 /// How often the thread looks.
 const TICK: Duration = Duration::from_secs(5 * 60);
 
@@ -29,8 +34,14 @@ const TICK: Duration = Duration::from_secs(5 * 60);
 #[derive(Debug, Default)]
 pub struct NightState {
     lessons_day: Option<String>,
+    review_day: Option<String>,
+    /// Too few new turns: the review looks again after this.
+    review_after_ms: u64,
     dream_day: Option<String>,
 }
+
+/// How long a review with too few new turns waits before it counts again.
+const REVIEW_RECOUNT_MS: u64 = 60 * 60 * 1000;
 
 /// What tonight's dream did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,10 +75,13 @@ pub enum Look {
     Ran(Night),
 }
 
-/// Tonight's passes. `lessons` is true when the lesson tidy ran this look.
+/// Tonight's passes. `lessons` is true when the lesson tidy ran this look;
+/// `review` is `None` when the review did not look (busy, halted, or it
+/// already ran or waits to count again).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Night {
     pub lessons: bool,
+    pub review: Option<Reviewed>,
     pub dream: Dream,
 }
 
@@ -98,19 +112,20 @@ where
                     &model,
                     &mut state,
                 );
-                if let Look::Ran(Night {
-                    dream: Dream::Failed(why),
-                    ..
-                }) = look
-                {
-                    eprintln!("night: dream failed: {why}");
+                if let Look::Ran(night) = look {
+                    if let Some(Reviewed::Held(why)) = night.review {
+                        eprintln!("night: chat review held: {why}");
+                    }
+                    if let Dream::Failed(why) = night.dream {
+                        eprintln!("night: dream failed: {why}");
+                    }
                 }
             }
         });
 }
 
 /// One look: the lease, the clock, then each pass once a night at or after
-/// the dream hour. Lessons first, then the dream.
+/// the dream hour. Lessons first, then the review, then the dream.
 pub fn look(
     config_dir: &Path,
     pid: u32,
@@ -127,17 +142,24 @@ pub fn look(
         return Look::NoClock;
     };
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
-    let due = crate::scheduler::local_clock(now, offset).hour
-        >= crate::self_review::dream_hour(config_dir);
+    let clock = crate::scheduler::local_clock(now, offset);
+    let hour = crate::self_review::dream_hour(config_dir);
+    let due = clock.hour >= hour;
     let today = crate::self_review::local_day(now, offset);
     let mut lessons = false;
     if due && state.lessons_day.as_deref() != Some(today.as_str()) {
         state.lessons_day = Some(today.clone());
         lessons = grokhub_agent::episode::lessons::dream_store(config_dir, now).is_ok();
     }
+    let review = (!busy
+        && state.review_day.as_deref() != Some(today.as_str())
+        && now >= state.review_after_ms
+        && !halted(config_dir, now))
+    .then(|| review_tonight(config_dir, &today, &clock, hour, now, model, state));
     if !due || state.dream_day.as_deref() == Some(today.as_str()) {
         return Look::Ran(Night {
             lessons,
+            review,
             dream: Dream::NotDue,
         });
     }
@@ -150,8 +172,41 @@ pub fn look(
     }
     Look::Ran(Night {
         lessons,
+        review,
         dream: dream_tonight(config_dir, &today, now, model),
     })
+}
+
+/// Tonight's chat review. The model is asked for only when the review calls.
+fn review_tonight(
+    config_dir: &Path,
+    today: &str,
+    clock: &grokhub_core::LocalClock,
+    hour: u32,
+    now: u64,
+    model: &Model<'_>,
+    state: &mut NightState,
+) -> Reviewed {
+    let call = |system: &str, digest: &str| {
+        let client = model()?;
+        crate::pulse_feed::ask_as(
+            client.as_ref(),
+            grokhub_core::model_for_mode("balanced"),
+            "background:review",
+            &[
+                ("system".to_string(), system.to_string()),
+                ("user".to_string(), digest.to_string()),
+            ],
+        )
+    };
+    let reviewed = crate::chat_review::review_step(config_dir, today, clock, hour, now, &call);
+    match &reviewed {
+        // Once a night, even when the file could not take the stamp.
+        Reviewed::Ran { .. } | Reviewed::Held(_) => state.review_day = Some(today.to_string()),
+        Reviewed::NotWorth { .. } => state.review_after_ms = now + REVIEW_RECOUNT_MS,
+        Reviewed::NotDue => {}
+    }
+    reviewed
 }
 
 /// Tonight's dream over the pinned config folder's memory repo.

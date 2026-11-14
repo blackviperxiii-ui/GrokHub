@@ -127,6 +127,7 @@ fn a_night_runs_once_after_the_hour_and_tries_again_when_busy() {
         run(&d, AT_2AM, 0, false, &mut state),
         Look::Ran(Night {
             lessons: false,
+            review: Some(Reviewed::NotDue),
             dream: Dream::NotDue
         })
     );
@@ -143,6 +144,7 @@ fn a_night_runs_once_after_the_hour_and_tries_again_when_busy() {
         run(&d, AT_305, 0, false, &mut state),
         Look::Ran(Night {
             lessons: false,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
             dream: Dream::Dreamed { card: false }
         })
     );
@@ -164,6 +166,7 @@ fn a_night_runs_once_after_the_hour_and_tries_again_when_busy() {
         run(&d, AT_11PM, 0, false, &mut state),
         Look::Ran(Night {
             lessons: false,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
             dream: Dream::NotDue
         })
     );
@@ -172,6 +175,7 @@ fn a_night_runs_once_after_the_hour_and_tries_again_when_busy() {
         run(&d, AT_11PM, 0, false, &mut NightState::default()),
         Look::Ran(Night {
             lessons: true,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
             dream: Dream::AlreadyDone
         })
     );
@@ -196,6 +200,7 @@ fn a_halt_skips_the_night_and_a_later_send_does_not_bring_it_back() {
         run(&d, AT_3AM + 20 * MIN, 0, false, &mut state),
         Look::Ran(Night {
             lessons: false,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
             dream: Dream::NotDue
         })
     );
@@ -277,6 +282,7 @@ fn legacy_memory_never_dreams_or_makes_a_memory_repo() {
         run(&d, AT_3AM, 0, false, &mut NightState::default()),
         Look::Ran(Night {
             lessons: true,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
             dream: Dream::Legacy
         })
     );
@@ -292,6 +298,7 @@ fn memory_writes_off_dreams_nothing() {
         run(&d, AT_3AM, 0, false, &mut NightState::default()),
         Look::Ran(Night {
             lessons: true,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
             dream: Dream::WritesOff
         })
     );
@@ -310,6 +317,7 @@ fn the_report_is_named_by_the_local_day() {
         run(&d, late_utc, 0, false, &mut NightState::default()),
         Look::Ran(Night {
             lessons: false,
+            review: Some(Reviewed::NotDue),
             dream: Dream::NotDue
         })
     );
@@ -317,6 +325,7 @@ fn the_report_is_named_by_the_local_day() {
         run(&d, late_utc, 600, false, &mut NightState::default()),
         Look::Ran(Night {
             lessons: true,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
             dream: Dream::Dreamed { card: false }
         })
     );
@@ -330,6 +339,7 @@ fn the_report_is_named_by_the_local_day() {
         run(&west, late_utc, -300, false, &mut NightState::default()),
         Look::Ran(Night {
             lessons: true,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
             dream: Dream::Dreamed { card: false }
         })
     );
@@ -347,6 +357,7 @@ fn the_dream_hour_is_the_one_in_app_json() {
         run(&d, AT_305, 0, false, &mut state),
         Look::Ran(Night {
             lessons: false,
+            review: Some(Reviewed::NotDue),
             dream: Dream::NotDue
         })
     );
@@ -354,6 +365,7 @@ fn the_dream_hour_is_the_one_in_app_json() {
         run(&d, AT_11PM, 0, false, &mut state),
         Look::Ran(Night {
             lessons: true,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
             dream: Dream::Dreamed { card: false }
         })
     );
@@ -424,6 +436,7 @@ fn the_model_dream_posts_its_card_and_signed_out_falls_back() {
         ),
         Look::Ran(Night {
             lessons: true,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
             dream: Dream::Dreamed { card: false }
         })
     );
@@ -452,6 +465,7 @@ fn the_model_dream_posts_its_card_and_signed_out_falls_back() {
         ),
         Look::Ran(Night {
             lessons: true,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
             dream: Dream::Dreamed { card: true }
         })
     );
@@ -505,6 +519,7 @@ fn missing_preferences_are_proposed_even_with_no_user_md() {
             run(d, AT_3AM, 0, false, &mut NightState::default()),
             Look::Ran(Night {
                 lessons: true,
+                review: Some(Reviewed::NotWorth { new_turns: 0 }),
                 dream: Dream::Dreamed { card: false }
             })
         );
@@ -589,6 +604,7 @@ fn a_failed_dream_is_not_retried_the_same_night() {
             &first,
             Look::Ran(Night {
                 lessons: true,
+                review: Some(Reviewed::NotWorth { new_turns: 0 }),
                 dream: Dream::Failed(_)
             })
         ),
@@ -598,6 +614,7 @@ fn a_failed_dream_is_not_retried_the_same_night() {
         run(&d, AT_305, 0, false, &mut state),
         Look::Ran(Night {
             lessons: false,
+            review: None,
             dream: Dream::NotDue
         })
     );
@@ -647,4 +664,112 @@ fn slash_dream_names_its_report_by_your_day_and_never_waits_on_the_night() {
         assert!(report(&d, day).is_file(), "no report for {day}");
     }
     assert_eq!(reports(), 2);
+}
+
+/// Answers every call with `text`, counting calls and keeping the last
+/// conversation id.
+struct Answer {
+    text: &'static str,
+    calls: Arc<AtomicU32>,
+    conversation: Arc<std::sync::Mutex<String>>,
+}
+
+impl ModelClient for Answer {
+    fn stream(
+        &self,
+        req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        _sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        *self.conversation.lock().unwrap() = req.conversation_id.clone();
+        Ok(TurnOutput {
+            text: self.text.into(),
+            ..TurnOutput::default()
+        })
+    }
+}
+
+#[test]
+fn the_chat_review_runs_before_the_dream_on_the_same_look() {
+    let d = temp_dir("review");
+    app_json(&d, "{\"memory_backend\":\"amr\"}\n");
+    repeat_notes(&d);
+    {
+        let _config = grokhub_agent::perm::ConfigGuard::set(&d);
+        let say = |role: &str, text: &str| InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        };
+        let asks = [
+            "Can you tidy the board cards for me",
+            "Please tidy the board cards again today",
+            "Draft a note about the garden plans",
+            "Read me the last release notes",
+            "Find the receipt from the bike shop",
+            "Rename the photos from the trip",
+            "Open the reading list in notes",
+            "What is the weather like in the harbor",
+        ];
+        let items: Vec<InputItem> = asks
+            .iter()
+            .flat_map(|a| [say("user", a), say("assistant", "Done.")])
+            .collect();
+        grokhub_agent::record_turn(
+            &grokhub_agent::scratch::shell_id(false, "1"),
+            "/home/user",
+            "grok-test",
+            &items,
+            &Usage::default(),
+            "",
+            asks[0],
+        )
+        .unwrap();
+    }
+    let calls = Arc::new(AtomicU32::new(0));
+    let conversation = Arc::new(std::sync::Mutex::new(String::new()));
+    let model = || -> Result<Box<dyn ModelClient>, String> {
+        Ok(Box::new(Answer {
+            text: "SUGGEST_SKILL: tidy-board | Tidy the board | Sort open cards | when the board is full | sort cards by due date",
+            calls: Arc::clone(&calls),
+            conversation: Arc::clone(&conversation),
+        }))
+    };
+    let mut state = NightState::default();
+    // Busy: neither the review nor the dream runs.
+    assert_eq!(
+        look(&d, PID, AT_3AM, Some(0), true, &model, &mut state),
+        Look::Busy
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        look(&d, PID, AT_305, Some(0), false, &model, &mut state),
+        Look::Ran(Night {
+            lessons: false,
+            review: Some(Reviewed::Ran {
+                kept: 1,
+                ideas: 1,
+                patched: 0
+            }),
+            dream: Dream::Dreamed { card: false }
+        })
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the dream made no call");
+    assert_eq!(*conversation.lock().unwrap(), "background:review");
+    let ideas: Vec<String> = crate::pulse::cards(&d)
+        .unwrap()
+        .into_iter()
+        .map(|c| c.source_id)
+        .collect();
+    assert_eq!(ideas, vec!["skill-tidy-board".to_string()]);
+    // Later the same night: the review does not look again.
+    assert_eq!(
+        look(&d, PID, AT_11PM, Some(0), false, &model, &mut state),
+        Look::Ran(Night {
+            lessons: false,
+            review: None,
+            dream: Dream::NotDue
+        })
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
