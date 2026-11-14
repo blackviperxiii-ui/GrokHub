@@ -134,6 +134,9 @@
   /* Red used as small text: brighter than --red on dark so it clears 4.5:1. */
   --red-text: var(--accent);
   --section-rule: var(--border);
+  /* A text field under the pointer, and the extra ring a focused one gets. */
+  --field-hover: var(--muted);
+  --field-focus-outline: none;
   color-scheme: light dark;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -201,6 +204,8 @@
     --warn-text: var(--amber);
     --red-text: var(--red-hover);
     --section-rule: var(--red);
+    --field-hover: var(--red-hover);
+    --field-focus-outline: 2px solid var(--red-hover);
   }
 }
 
@@ -242,6 +247,8 @@
   --warn-text: var(--amber);
   --red-text: var(--red-hover);
   --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
   color-scheme: dark;
 }
 
@@ -283,6 +290,8 @@
   --warn-text: var(--amber);
   --red-text: var(--red-hover);
   --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
   color-scheme: dark;
 }
 
@@ -324,6 +333,8 @@
   --warn-text: var(--amber);
   --red-text: #f05468;
   --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
   color-scheme: dark;
 }
 
@@ -341,6 +352,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  white-space: nowrap;
 }
 
 /* A theme chip's preview: the page color with a red and an amber dot. */
@@ -618,13 +630,15 @@ select option {
 input:hover:not(:disabled):not(:focus),
 textarea:hover:not(:disabled):not(:focus),
 select:hover:not(:disabled):not(:focus) {
-  border-color: var(--muted);
+  border-color: var(--field-hover);
 }
 
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: none;
+  /* On dark the resting border is red already, so focus adds a ring a step out. */
+  outline: var(--field-focus-outline);
+  outline-offset: 1px;
   border-color: var(--accent);
   box-shadow: var(--ring);
 }
@@ -1547,7 +1561,9 @@ button.md-copy {
 }
 
 .composer .voice-mode[aria-pressed="true"] {
-  border-color: currentColor;
+  border-color: var(--red);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
 }
 
 .composer-ghost-wrap {
@@ -3122,6 +3138,16 @@ label.toggle-row {
 .toggle[aria-checked="true"] {
   background: var(--toggle-on);
   border-color: var(--toggle-on);
+}
+
+/* Hover keeps the switch's own track (the generic button hover would wash it
+   red and hide the dark thumb of a switch that is on). */
+.toggle:hover:not(:disabled) {
+  background: var(--toggle-off);
+}
+
+.toggle[aria-checked="true"]:hover:not(:disabled) {
+  background: var(--toggle-on);
 }
 
 .toggle:disabled {
@@ -5841,6 +5867,11 @@ label.toggle-row {
   box-shadow: inset 3px 0 0 var(--red);
 }
 
+.code-file[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--red-wash);
+  box-shadow: inset 3px 0 0 var(--red), var(--red-glow);
+}
+
 .code-status {
   display: inline-block;
   min-width: 7.5em;
@@ -6558,8 +6589,9 @@ fieldset.channel label {
 
 .code-side-tabs [role="tab"][aria-selected="true"] {
   border-color: var(--red);
-  background: var(--red);
-  color: var(--on-red);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
+  box-shadow: inset 0 -2px 0 var(--amber);
 }
 
 .code-side-panel {

@@ -11,6 +11,8 @@ import css from "./styles.css?raw";
 /** Rules whose literals are art, not chrome: the placeholder covers mix hues from --art-hue. */
 const ART = new Set([".library-art.placeholder"]);
 
+/** A theme block's own selector: `:root`, maybe with attribute or :not() filters, no descendants. */
+const THEME_HEAD = /^:root(\[[^\]]*\]|:not\([^)]*\))*$/;
 const LITERAL = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\(/g;
 const BLACK = /^(#000|#000000|rgba?\(\s*0[\s,]+0[\s,]+0\s*([,/][^)]*)?\))$/;
 
@@ -29,7 +31,7 @@ export function strayColors(source: string): Hit[] {
       stack.push(text.slice(start, i).split(";").pop()!.trim());
       start = i + 1;
     } else if (ch === "}") {
-      const theme = stack.some((head) => head.split(",").every((s) => s.trim().startsWith(":root")));
+      const theme = stack.some((head) => head.split(",").every((s) => THEME_HEAD.test(s.trim())));
       const selector = stack[stack.length - 1] ?? "";
       if (!theme && !ART.has(selector)) {
         const body = text.slice(start, i);
@@ -59,7 +61,12 @@ describe("color tokens", () => {
       ".badge {",
       "  color: #f0b429;",
       "}",
+      '@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --red: #d7263d; } }',
+      ':root[data-theme="soft-charcoal"] .queued { color: #9a9a9a; }',
     ].join("\n");
-    expect(strayColors(sample)).toEqual([{ line: 6, literal: "#f0b429", selector: ".badge" }]);
+    expect(strayColors(sample)).toEqual([
+      { line: 6, literal: "#f0b429", selector: ".badge" },
+      { line: 9, literal: "#9a9a9a", selector: ':root[data-theme="soft-charcoal"] .queued' },
+    ]);
   });
 });

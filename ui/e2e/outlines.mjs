@@ -8,7 +8,17 @@
 /** Runs in the page: `[{ el, color, text }]` for each gray-outlined element. */
 export function sweep() {
   const out = [];
-  const nums = (c) => (c.match(/[\d.]+/g) || []).map(Number);
+  // Paint each color onto a 1px canvas and read it back as 0–255 RGBA, so any
+  // computed form (rgb(), color(srgb …) from color-mix, oklab …) compares alike.
+  const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+  const rgba = (c) => {
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = "#000";
+    ctx.fillStyle = c;
+    ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+    return [r, g, b, a / 255];
+  };
   for (const el of document.querySelectorAll("body *")) {
     if (el.closest(".cm-editor, .xterm, svg")) continue;
     const box = el.getBoundingClientRect();
@@ -19,7 +29,7 @@ export function sweep() {
       if (parseFloat(cs[`border${side}Width`]) <= 0) continue;
       const style = cs[`border${side}Style`];
       if (style === "none" || style === "hidden") continue;
-      const [r, g, b, a = 1] = nums(cs[`border${side}Color`]);
+      const [r, g, b, a] = rgba(cs[`border${side}Color`]);
       if (a < 0.05) continue;
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
       // Neutral: no hue to speak of, and light enough to read as a line.
