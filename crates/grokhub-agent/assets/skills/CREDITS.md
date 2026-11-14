@@ -16,7 +16,6 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 
 - architect
 - av-qa-walkthrough
-- bag-and-tag
 - benchmark-checklist
 - blast-radius
 - correct
@@ -53,8 +52,6 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - principle-test-behavior-not-implementation
 - principle-type-system-discipline
 - qa-walkthrough
-- recall
-- reflect
 - sharpen
 - show-me-your-work
 - statechart
@@ -69,11 +66,14 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 
 Left out:
 
+- bag-and-tag: vstack's own release ritual: it bumps plugin manifests and checks installers other repos don't have
 - ketchup-video: renders a slide video and embeds it in chat; the app has no video pipeline for it
+- recall: rebuilds context from Cursor's agent-transcripts folder, which the app doesn't keep
+- reflect: writes skill edits into Cursor's skill folders, not the app's skill store
 - setup-vstack: installs vstack into a coding agent; the app ships these skills itself
 - stageshow: ships a 2 MB React kit of example screens beside its text
 - updater: runs its 52 KB scripts/updater.py from the skill folder, which is over the skill tool's file size and has no folder on disk to run from
 
 Do not install these as a Cursor plugin from this tree; they are app built-ins.
 
-Bundle SHA-256: `d6e67dd1d63e52777621b46882ba9e7be1f3ebf2912e0dde0109fb5d38432adb`
+Bundle SHA-256: `f6e54de8266b7a7ae343d9d65d6d256a50d78f9a09c0d73b86866493a3eace9c`

@@ -51,9 +51,24 @@ jobs:
         run: |
           set -euo pipefail
           branch="bot/vstack-sync-$TAG"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            echo "$branch already exists, so its PR is open or was closed on purpose."; exit 0
+          # A PR opened with the workflow token starts no workflows by itself,
+          # so this starts the checks beta requires.
+          start_checks() {
+            gh workflow run ci.yml --ref "$branch"
+            gh workflow run pii-guard.yml --ref "$branch"
+          }
+          # One PR per tag. A closed one was closed on purpose. An open one whose
+          # head has no checks yet (a run that stopped after opening it) gets them.
+          state=$(gh pr list --head "$branch" --state all --json state --jq '.[0].state // ""')
+          if [[ "$state" == "OPEN" ]]; then
+            sha=$(gh pr view "$branch" --json headRefOid --jq .headRefOid)
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs" --jq .total_count)
+            if [[ "$runs" == "0" ]]; then start_checks; fi
+            echo "The PR for $branch is open."; exit 0
+          elif [[ -n "$state" ]]; then
+            echo "The PR for $branch was closed; not opening it again."; exit 0
           fi
+          base=$(git rev-parse --short HEAD)
           python3 .github/scripts/vstack_sync.py sync --tag "$TAG" --summary body.md
           python3 .github/scripts/vstack_sync.py check
           if [[ -z "$(git status --porcelain -- crates/grokhub-agent)" ]]; then
@@ -61,24 +76,57 @@ jobs:
           fi
           printf -- '- Built-in skills: the bundled vstack skills now come from vstack %s.\n' "$TAG" \
             > "changelog.d/vstack-sync-${TAG//./-}.md"
-          python3 scripts/pii-guard/pii_guard.py
-          {
-            echo
-            echo "Base: \`beta\` at \`$(git rev-parse --short HEAD)\`."
-            echo
-            echo "Proof: the sync job ran \`test_vstack_sync.py\` and \`vstack_sync.py check\`, and \`pii_guard.py\` is clean. CI runs the Rust tests that load every bundled skill."
-            echo
-            echo "Skipped / not verified: no person has read the new skill text."
-          } >> body.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
           git add -A crates/grokhub-agent changelog.d
           git commit -m "vstack sync: $TAG"
+          # After the commit, so new upstream files and the commit are scanned.
+          python3 scripts/pii-guard/pii_guard.py HEAD~1
+          # A branch left by a run that stopped before its PR is stale: drop it
+          # and push this run's commit, which is on today's beta.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            git push origin --delete "$branch"
+          fi
           git push -u origin "$branch"
-          gh pr create --base beta --head "$branch" --title "vstack sync: $TAG" --body-file body.md
-          # A PR opened with the workflow token starts no workflows by itself,
-          # so start CI and turn on the squash auto-merge auto-merge.yml would.
-          gh workflow run ci.yml --ref "$branch"
-          gh pr merge "$branch" --auto --squash \
-            || echo "::warning::could not turn on auto-merge for $branch"
+          new_skills=yes
+          grep -qx -- '- New upstream, now bundled: none.' body.md && new_skills=no
+          {
+            echo
+            echo "Base: \`beta\` at \`$base\`."
+            echo
+            echo "Proof: the sync job ran \`test_vstack_sync.py\`, \`vstack_sync.py check\` and \`pii_guard.py\` on the commit. CI runs the Rust tests that load every bundled skill."
+            echo
+            if [[ "$new_skills" == yes ]]; then
+              echo "**Waiting for a person:** this release adds skills, so the PR is a draft. Read them, move any that don't fit the app to \`exclude\` in \`vstack.json\` (then run \`vstack_sync.py sync --tag $TAG\`), and mark the PR ready to merge it."
+            else
+              echo "Auto-merge is on: this PR merges when CI is green."
+            fi
+            echo
+            echo "Skipped / not verified: no person has read the changed skill text."
+          } >> body.md
+          if [[ "$new_skills" == yes ]]; then
+            # auto-merge.yml leaves a draft alone until a person marks it ready.
+            gh pr create --draft --base beta --head "$branch" --title "vstack sync: $TAG" --body-file body.md
+            start_checks
+          else
+            gh pr create --base beta --head "$branch" --title "vstack sync: $TAG" --body-file body.md
+            start_checks
+            gh pr merge "$branch" --auto --squash \
+              || echo "::warning::could not turn on auto-merge for $branch"
+          fi
+          # Close older-tag sync PRs that only the bot touched: this PR carries
+          # their changes. Leave newer ones and any a person pushed to.
+          gh pr list --state open --base beta --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("bot/vstack-sync-v")) | "\(.number) \(.headRefName)"' |
+            while read -r old ref; do
+              old_tag=${ref#bot/vstack-sync-}
+              [[ "$old_tag" != "$TAG" ]] || continue
+              [[ "$(printf '%s\n%s\n' "$old_tag" "$TAG" | sort -V | head -n1)" == "$old_tag" ]] || continue
+              commits=$(gh pr view "$old" --json commits --jq '.commits | length') || continue
+              if [[ "$commits" != "1" ]]; then
+                echo "Leaving #$old open: someone else pushed to it."; continue
+              fi
+              gh pr close "$old" --delete-branch --comment "Replaced by vstack sync: $TAG." \
+                || echo "::warning::could not close #$old"
+            done

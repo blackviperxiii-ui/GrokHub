@@ -82,7 +82,7 @@ def validate(doc):
     if missing:
         raise SyncError(f"always-on skills not in `skills`: {', '.join(missing)}")
     if not isinstance(exclude, dict) or not all(
-        isinstance(r, str) and r.strip() for r in exclude.values()
+        k and "/" not in k and isinstance(r, str) and r.strip() for k, r in exclude.items()
     ):
         raise SyncError("vstack.json `exclude` must map each skill to a reason")
     if list(exclude) != sorted(exclude):
@@ -110,19 +110,26 @@ def git(src, *args, text=True):
 
 
 def upstream_files(src, tag):
-    """{skill: {relpath: bytes}} for every skill folder at `tag`."""
-    names = git(src, "ls-tree", "-r", "-z", "--name-only", tag, "--", "skills/")
+    """{skill: {relpath: bytes or None}} for every skill folder at `tag`. A
+    symlink or submodule is None, so a bundled skill that has one is refused."""
+    rows = git(src, "ls-tree", "-r", "-z", tag, "--", "skills/")
     out = {}
-    for path in filter(None, names.split("\0")):
+    for row in filter(None, rows.split("\0")):
+        meta, path = row.split("\t", 1)
+        mode, kind, _ = meta.split(" ")
         parts = path.split("/")
         if len(parts) < 3 or parts[0] != "skills":
             continue
         skill, rel = parts[1], "/".join(parts[2:])
-        out.setdefault(skill, {})[rel] = git(src, "cat-file", "blob", f"{tag}:{path}", text=False)
+        plain = kind == "blob" and mode in ("100644", "100755")
+        data = git(src, "cat-file", "blob", f"{tag}:{path}", text=False) if plain else None
+        out.setdefault(skill, {})[rel] = data
     return out
 
 
 def check_file(skill, rel, data):
+    if data is None:
+        raise SyncError(f"{skill}/{rel} is a symlink or submodule; exclude {skill} in vstack.json")
     if not all(PART.match(p) for p in rel.split("/")):
         raise SyncError(f"{skill}/{rel}: unexpected characters in the path")
     if b"\0" in data:
@@ -143,9 +150,11 @@ def check_file(skill, rel, data):
 def plan(doc, upstream):
     """The next manifest and the skill changes, for the upstream skill set."""
     have = set(upstream)
-    for name in have:
+    for name in have - set(doc["exclude"]):
         if not NAME.match(name):
-            raise SyncError(f"upstream skill folder `{name}` is not a plain name")
+            raise SyncError(
+                f"upstream skill folder `{name}` is not a plain name; exclude it in vstack.json"
+            )
     gone_on = [s for s in doc["always_on"] if s not in have]
     if gone_on:
         raise SyncError(
@@ -287,6 +296,24 @@ def write(path, text):
         fh.write(text)
 
 
+def squash(text):
+    """Rust source without whitespace or trailing commas, which rustfmt adds or
+    drops as a line wraps. No generated literal holds a space or `,]`."""
+    return re.sub(r",(?=[\])])", "", re.sub(r"\s+", "", text))
+
+
+def rustfmt(path):
+    """Format the generated table the way the CI fmt job does, when rustfmt is here."""
+    exe = shutil.which("rustfmt")
+    if exe is None:
+        return
+    cmd = [exe, "--edition", "2021"]
+    config = os.path.join(ROOT, "rustfmt.toml")
+    if os.path.isfile(config):
+        cmd += ["--config-path", config]
+    subprocess.run(cmd + [path], check=True)
+
+
 def regenerate(doc):
     """The generated files' expected text, from the manifest and the folders on disk."""
     files = disk_files()
@@ -318,16 +345,21 @@ def check():
         problems.append("LICENSE-upstream is missing")
     for path, want in regenerate(doc).items():
         with open(path, encoding="utf-8", newline="") as fh:
-            if fh.read() != want:
-                problems.append(f"{os.path.relpath(path, ROOT)} is stale")
+            have = fh.read()
+        if path == TABLE:
+            # rustfmt (the CI fmt job) owns the table's layout; compare tokens.
+            have, want = squash(have), squash(want)
+        if have != want:
+            problems.append(f"{os.path.relpath(path, ROOT)} is stale")
     if problems:
         raise SyncError("; ".join(problems) + ". Run: vstack_sync.py sync --tag " + doc["tag"])
     print(f"vstack-sync: {len(files)} skills match vstack.json ({doc['tag']})")
 
 
 def sync(tag, src, summary):
-    tag_key(tag)
     doc = load()
+    if tag_key(tag) < tag_key(doc["tag"]):
+        raise SyncError(f"{tag} is older than the pinned {doc['tag']}; edit vstack.json to go back")
     tmp = None
     if src is None:
         tmp = tempfile.mkdtemp(prefix="vstack-")
@@ -350,6 +382,9 @@ def sync(tag, src, summary):
         for rel, data in upstream[name].items():
             check_file(name, rel, data)
     for name in os.listdir(ASSETS):
+        if name not in OWN_FILES and not os.path.isdir(os.path.join(ASSETS, name)):
+            raise SyncError(f"stray file assets/skills/{name}; move it before syncing")
+    for name in os.listdir(ASSETS):
         path = os.path.join(ASSETS, name)
         if name not in OWN_FILES and os.path.isdir(path):
             shutil.rmtree(path)
@@ -363,6 +398,7 @@ def sync(tag, src, summary):
         fh.write(license_text)
     for path, text in regenerate(nxt).items():
         write(path, text)
+    rustfmt(TABLE)
     note = [
         f"Syncs the built-in vstack skills from `{doc['tag']}` to `{tag}` (commit `{commit[:12]}`).",
         "",

@@ -14,10 +14,6 @@ pub const BUILTIN_SKILL_BODIES: &[(&str, &str)] = &[
         include_str!("../assets/skills/av-qa-walkthrough/SKILL.md"),
     ),
     (
-        "bag-and-tag",
-        include_str!("../assets/skills/bag-and-tag/SKILL.md"),
-    ),
-    (
         "benchmark-checklist",
         include_str!("../assets/skills/benchmark-checklist/SKILL.md"),
     ),
@@ -148,8 +144,6 @@ pub const BUILTIN_SKILL_BODIES: &[(&str, &str)] = &[
         "qa-walkthrough",
         include_str!("../assets/skills/qa-walkthrough/SKILL.md"),
     ),
-    ("recall", include_str!("../assets/skills/recall/SKILL.md")),
-    ("reflect", include_str!("../assets/skills/reflect/SKILL.md")),
     ("sharpen", include_str!("../assets/skills/sharpen/SKILL.md")),
     (
         "show-me-your-work",
@@ -180,11 +174,6 @@ pub const BUILTIN_SKILL_BODIES: &[(&str, &str)] = &[
 
 /// The other files in a bundled skill's folder: folder, path inside it, text.
 pub const BUILTIN_SKILL_FILES: &[(&str, &str, &str)] = &[
-    (
-        "bag-and-tag",
-        "GUIDE.md",
-        include_str!("../assets/skills/bag-and-tag/GUIDE.md"),
-    ),
     (
         "elevate",
         "GUIDE.md",

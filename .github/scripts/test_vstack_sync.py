@@ -86,6 +86,15 @@ class Plan(unittest.TestCase):
             vs.plan(manifest(), self.upstream("tdd"))
         self.assertIn("always-on skills left vstack: qa", str(err.exception))
 
+    def test_an_excluded_folder_may_have_any_name(self):
+        doc = manifest(exclude={"_shared": "helpers", "setup": "installs into an agent"})
+        nxt, added, _ = vs.plan(doc, self.upstream("qa", "tdd", "_shared"))
+        self.assertEqual(added, [])
+        self.assertEqual(nxt["exclude"], {"_shared": "helpers"})
+        with self.assertRaises(vs.SyncError) as err:
+            vs.plan(manifest(), self.upstream("qa", "tdd", "_shared"))
+        self.assertIn("`_shared` is not a plain name; exclude it", str(err.exception))
+
     def test_a_skill_without_skill_md_stops_the_sync(self):
         up = self.upstream("qa")
         up["tdd"] = {"GUIDE.md": b"x"}
@@ -109,6 +118,7 @@ class Files(unittest.TestCase):
         self.refused("big.py", b"x" * (48 * 1024 + 1), "over the skill tool's 49152")
         self.refused("crlf.md", b"a\r\nb\r\n", "CR line endings")
         self.refused("../up.md", b"x", "unexpected characters")
+        self.refused("GUIDE.md", None, "is a symlink or submodule")
 
 
 class Rust(unittest.TestCase):
@@ -226,9 +236,11 @@ class EndToEnd(unittest.TestCase):
         self.assertNotIn(assets + "setup/SKILL.md", first)
 
         table = first["agent/src/builtin_skills.rs"].decode()
-        self.assertIn('    ("qa", include_str!("../assets/skills/qa/SKILL.md")),\n', table)
-        self.assertIn('        "GUIDE.md",\n        include_str!("../assets/skills/elevate/GUIDE.md"),\n', table)
-        self.assertIn('pub const BUILTIN_ALWAYS_ON: &[&str] = &[\n    "qa",\n];\n', table)
+        # rustfmt, when present, owns the layout; check the tokens.
+        flat = vs.squash(table)
+        self.assertIn('("qa",include_str!("../assets/skills/qa/SKILL.md"))', flat)
+        self.assertIn('("elevate","GUIDE.md",include_str!("../assets/skills/elevate/GUIDE.md"))', flat)
+        self.assertIn('pubconstBUILTIN_ALWAYS_ON:&[&str]=&["qa"];', flat)
         credits = first[assets + "CREDITS.md"].decode()
         self.assertIn(f"release\n[`v2.0.0`](https://example.invalid/vstack/releases/tag/v2.0.0) (commit `{self.commit}`)", credits)
         self.assertIn("Skills shipped here (read-only built-ins inside Loadout / GrokHub):\n\n- elevate\n- qa\n- tdd\n", credits)
@@ -253,6 +265,50 @@ class EndToEnd(unittest.TestCase):
         with self.assertRaises(vs.SyncError) as err:
             vs.check()
         self.assertIn("extra ['extra']", str(err.exception))
+
+    def test_a_symlink_in_a_bundled_skill_stops_the_sync(self):
+        os.symlink("SKILL.md", os.path.join(self.src, "skills", "tdd", "LINK.md"))
+        run("git", "add", "-A", cwd=self.src)
+        run("git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+            "commit", "-q", "-m", "link", cwd=self.src)
+        run("git", "tag", "v2.0.1", cwd=self.src)
+        self.assertIsNone(vs.upstream_files(self.src, "v2.0.1")["tdd"]["LINK.md"])
+        before = self.snapshot()
+        with self.assertRaises(vs.SyncError) as err:
+            vs.sync("v2.0.1", self.src, None)
+        self.assertIn("tdd/LINK.md is a symlink or submodule", str(err.exception))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_stray_file_stops_the_sync_before_anything_is_deleted(self):
+        with open(os.path.join(vs.ASSETS, "README.md"), "w") as fh:
+            fh.write("notes\n")
+        before = self.snapshot()
+        with self.assertRaises(vs.SyncError) as err:
+            vs.sync("v2.0.0", self.src, None)
+        self.assertIn("stray file assets/skills/README.md", str(err.exception))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_check_ignores_layout_but_not_content_in_the_table(self):
+        vs.sync("v2.0.0", self.src, None)
+        with open(vs.TABLE) as fh:
+            table = fh.read()
+        with open(vs.TABLE, "w", newline="") as fh:
+            fh.write(table.replace("\n", "\r\n").replace('("qa", ', '(\n    "qa",\n    '))
+        vs.check()
+        with open(vs.TABLE, "w") as fh:
+            fh.write(table.replace("skills/tdd/SKILL.md", "skills/qa/SKILL.md"))
+        with self.assertRaises(vs.SyncError) as err:
+            vs.check()
+        self.assertIn("builtin_skills.rs is stale", str(err.exception))
+
+    def test_a_tag_older_than_the_pin_is_refused(self):
+        vs.sync("v2.0.0", self.src, None)
+        before = self.snapshot()
+        run("git", "tag", "v1.9.0", cwd=self.src)
+        with self.assertRaises(vs.SyncError) as err:
+            vs.sync("v1.9.0", self.src, None)
+        self.assertIn("v1.9.0 is older than the pinned v2.0.0", str(err.exception))
+        self.assertEqual(self.snapshot(), before)
 
     def test_a_failed_sync_leaves_the_bundle_alone(self):
         with open(vs.MANIFEST, "w") as fh:

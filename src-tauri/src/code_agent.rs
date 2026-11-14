@@ -36,27 +36,42 @@ fn body(text: &str) -> &str {
     }
 }
 
+/// A skill's `---` front matter, or "" without one.
+fn front(text: &str) -> &str {
+    text.strip_prefix("---")
+        .and_then(|rest| rest.split_once("\n---"))
+        .map_or("", |(front, _)| front)
+}
+
 /// A skill's `description:` front matter line, or "" without one.
 fn description(text: &str) -> &str {
-    text.lines()
+    front(text)
+        .lines()
         .find_map(|line| line.strip_prefix("description:"))
         .map(|v| v.trim().trim_matches('"'))
         .unwrap_or("")
 }
 
+/// Upstream marks some skills to start only when the user asks for them.
+fn user_only(text: &str) -> bool {
+    front(text)
+        .lines()
+        .any(|line| line.trim() == "disable-model-invocation: true")
+}
+
 /// The block a Code tab session's rules carry: the always-on bundled skills in
-/// full, then one line for each other bundled skill the skill tool loads.
+/// full, then one line for each other bundled skill the model may load itself.
+/// A skill upstream marks user-only still loads when the user names it.
 pub fn skills_block() -> String {
     let mut out = format!("{SKILLS_HEAD}\n\n{SKILLS_NOTE}\n\n{PUSH_NOTE}");
-    let bundled = grokhub_agent::BUILTIN_SKILL_BODIES;
     for name in grokhub_agent::BUILTIN_ALWAYS_ON {
-        if let Some((_, text)) = bundled.iter().find(|(n, _)| n == name) {
-            out.push_str(&format!("\n\n### {name}\n\n{}", body(text)));
+        if let Some(text) = grokhub_agent::builtin_text(name) {
+            out.push_str(&format!("\n\n### {name}\n\n{}", body(&text)));
         }
     }
     out.push_str(&format!("\n\n{MORE_HEAD}\n\n{MORE_NOTE}\n"));
-    for (name, text) in bundled {
-        if !grokhub_agent::BUILTIN_ALWAYS_ON.contains(name) {
+    for (name, text) in grokhub_agent::BUILTIN_SKILL_BODIES {
+        if !grokhub_agent::BUILTIN_ALWAYS_ON.contains(name) && !user_only(text) {
             out.push_str(&format!("\n- {name}: {}", description(text)));
         }
     }
