@@ -62,6 +62,7 @@ import { StatusPills } from "./StatusPills";
 import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
 import { AutoNote, FirstRun, useAutoSetup } from "./AutoSetup";
 import { OnboardStage } from "./GetToKnowYou";
+import { WindowControls } from "./WindowControls";
 
 // Chat and Automations stay mounted, so they load up front. The other screens
 // load the first time they open, and again in the background once the app is
@@ -212,6 +213,8 @@ export function App() {
   const auto = useAutoSetup();
   // Halt is the computer's own: phones and the web app have no desktop control.
   const canHalt = caps.desktopControl && !caps.remote;
+  /** No system title bar: the top bar drags the window and holds its buttons. */
+  const drags = Boolean(caps.windowControls) && !caps.remote;
   const busy = Object.values(activity).some((item) => item.status === "running" || item.status === "waiting");
   // The open chat for the Agents page: the conversation the window last heard from.
   const [openChat, setOpenChat] = useState<string>();
@@ -572,12 +575,12 @@ export function App() {
   }
   return (
     <div className={barAway ? "app bar-away" : "app"}>
-      <header className="topbar">
-        <div className="brand-mark">
+      <header className="topbar" {...(drags ? { "data-tauri-drag-region": "" } : {})}>
+        <div className="brand-mark" {...(drags ? { "data-tauri-drag-region": "deep" } : {})}>
           <img src={LOGO_MARK_URL} alt="" width={22} height={22} />
           <span>{PRODUCT_NAME}</span>
         </div>
-        <div className="topbar-fill" />
+        <div className="topbar-fill" {...(drags ? { "data-tauri-drag-region": "" } : {})} />
         <StatusPills
           remote={Boolean(caps.remote)}
           refresh={`${view === "settings"}:${busy}`}
@@ -631,6 +634,7 @@ export function App() {
         >
           Command
         </button>
+        {drags && <WindowControls />}
       </header>
       <div className="app-body">
         <Rail

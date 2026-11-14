@@ -189,9 +189,15 @@ describe("Settings", () => {
     expect(api.getHaltKeys).not.toHaveBeenCalled();
   });
 
-  it("Save settings is the one call to action in Settings", async () => {
+  it("Save settings is the one call to action in Settings, and only while there is a change to save", async () => {
     render(<Settings caps={DESKTOP} />);
-    expect(await screen.findByRole("button", { name: "Save settings" })).toHaveClass("cta");
+    const save = await screen.findByRole("button", { name: "Save settings" });
+    expect(save).not.toHaveClass("cta");
+    const control = screen.getByRole("switch", { name: /control the desktop/ });
+    await userEvent.click(control);
+    expect(save).toHaveClass("cta");
+    await userEvent.click(control);
+    expect(save).not.toHaveClass("cta");
     await openSection("Account");
     await userEvent.type(await screen.findByLabelText("API key"), "sk-abcdefghijklmnopqrstuv");
     expect(screen.getByRole("button", { name: "Save key" })).not.toHaveClass("cta");

@@ -1,0 +1,2 @@
+- Loadout UI shell: on Linux and Windows the top bar is the window's title bar. Drag it to move the window, double-click it to maximize, and use its minimize, maximize and close buttons; Close still keeps the app in the tray when that setting is on. macOS keeps its own title bar.
+- Loadout UI shell: switches that are on are red, and Save settings turns amber only while there is a change to save, so amber stays on the one action that needs you.

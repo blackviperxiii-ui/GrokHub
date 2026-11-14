@@ -239,8 +239,8 @@
     --frame: var(--red);
     --tab-open-bg: var(--selected);
     --tab-open-text: var(--text);
-    --toggle-on: var(--amber);
-    --toggle-on-thumb: var(--void);
+    --toggle-on: var(--red);
+    --toggle-on-thumb: var(--on-red);
     --toggle-off: var(--red-dim);
     --warn-text: var(--amber);
     --red-text: var(--red-hover);
@@ -285,8 +285,8 @@
   --frame: var(--red);
   --tab-open-bg: var(--selected);
   --tab-open-text: var(--text);
-  --toggle-on: var(--amber);
-  --toggle-on-thumb: var(--void);
+  --toggle-on: var(--red);
+  --toggle-on-thumb: var(--on-red);
   --toggle-off: var(--red-dim);
   --warn-text: var(--amber);
   --red-text: var(--red-hover);
@@ -331,8 +331,8 @@
   --frame: var(--red);
   --tab-open-bg: var(--selected);
   --tab-open-text: var(--text);
-  --toggle-on: var(--amber);
-  --toggle-on-thumb: var(--void);
+  --toggle-on: var(--red);
+  --toggle-on-thumb: var(--on-red);
   --toggle-off: var(--red-dim);
   --warn-text: var(--amber);
   --red-text: var(--red-hover);
@@ -377,8 +377,8 @@
   --frame: var(--red);
   --tab-open-bg: var(--selected);
   --tab-open-text: var(--text);
-  --toggle-on: var(--amber);
-  --toggle-on-thumb: var(--void);
+  --toggle-on: var(--red);
+  --toggle-on-thumb: var(--on-red);
   --toggle-off: var(--red-dim);
   --warn-text: var(--amber);
   --red-text: #f05468;
@@ -764,6 +764,40 @@ select:focus-visible {
 .topbar-fill {
   flex: 1;
   min-width: 0;
+}
+
+/* The window buttons (Linux, Windows): quiet icons at the bar's right end;
+   Close turns red under the pointer. */
+.window-controls {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.window-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.window-controls button:hover:not(:disabled),
+.window-controls button:focus-visible {
+  filter: none;
+  background: var(--hover);
+  color: var(--text);
+}
+
+.window-controls .window-close:hover:not(:disabled),
+.window-controls .window-close:focus-visible {
+  background: var(--red);
+  color: var(--on-red);
 }
 
 /* The status pills: the default personality and what left the computer this
