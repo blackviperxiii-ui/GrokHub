@@ -21,6 +21,9 @@ export interface Settings {
   /** The folder the agent actually works in. */
   workspacePath: string;
   approvals: Approvals;
+  /** Settings → Defaults → Always collapse: thoughts start folded in every
+   * chat. Missing from a desktop older than the setting. */
+  alwaysCollapseThoughts?: boolean;
   /** Settings → Let the app control the desktop. */
   desktopControl: boolean;
   /** Settings → Appearance. */
@@ -115,6 +118,8 @@ export interface Decision {
 
 export type ChatEvent =
   | { kind: "text"; text: string }
+  /** The model's thinking as it streams; never part of the reply. */
+  | { kind: "thought"; text: string }
   | { kind: "tool"; id: string; title: string; status: string; detail: string }
   | {
       kind: "permission";
@@ -3575,8 +3580,9 @@ export function forgetPcRhythm(): Promise<PcHelpers> {
 export function saveDefaults(
   workspace: string,
   approvals: Approvals,
+  alwaysCollapseThoughts: boolean,
 ): Promise<Settings> {
-  return invoke<Settings>("save_defaults", { workspace, approvals });
+  return invoke<Settings>("save_defaults", { workspace, approvals, alwaysCollapseThoughts });
 }
 
 /** Settings → Privacy & data (src-tauri/src/privacy.rs). */

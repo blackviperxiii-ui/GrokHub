@@ -167,6 +167,23 @@ describe("slash commands typed while a reply runs", () => {
     );
   });
 
+  it("a command's line goes above the thought being written, which stays one thought", async () => {
+    turns();
+    api.runSlash.mockResolvedValue({ kind: "notice", text: "Background · index the repo" });
+    const { container } = render(<Chat onOpenSettings={() => {}} />);
+    const id = await replying();
+    emit(id, { kind: "thought", text: "Need a " });
+    await userEvent.type(screen.getByLabelText("Message"), "/bg index the repo{Enter}");
+    const line = await screen.findByRole("status", { name: "/bg result" });
+    emit(id, { kind: "thought", text: "snapshot." });
+    const thoughts = container.querySelectorAll('[data-role="thought"]');
+    expect(thoughts).toHaveLength(1);
+    expect(thoughts[0]).toHaveTextContent("Need a snapshot.");
+    expect(line.compareDocumentPosition(thoughts[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
   it("a command that needs the reply to end says so and stays in the box", async () => {
     turns();
     render(<Chat onOpenSettings={() => {}} />);

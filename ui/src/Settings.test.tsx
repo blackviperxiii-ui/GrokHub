@@ -5,7 +5,7 @@ import type { Capabilities, Settings as Shape } from "./api";
 
 const api = vi.hoisted(() => ({
   getSettings: vi.fn<() => Promise<Shape>>(),
-  saveDefaults: vi.fn<(workspace: string, approvals: string) => Promise<Shape>>(),
+  saveDefaults: vi.fn<(workspace: string, approvals: string, alwaysCollapseThoughts: boolean) => Promise<Shape>>(),
   saveSettings:
     vi.fn<
       (
@@ -142,7 +142,7 @@ describe("Settings", () => {
     await userEvent.type(screen.getByLabelText("Work folder"), "/work");
     await userEvent.selectOptions(screen.getByLabelText("When the AI wants to change things"), "always");
     await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
-    expect(api.saveDefaults).toHaveBeenCalledWith("/work", "always");
+    expect(api.saveDefaults).toHaveBeenCalledWith("/work", "always", false);
     await openSection("Behavior");
     await userEvent.click(screen.getByRole("button", { name: "Behavior panel" }));
 

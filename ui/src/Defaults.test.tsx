@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "./api";
 
 const api = vi.hoisted(() => ({
-  saveDefaults: vi.fn<(workspace: string, approvals: string) => Promise<Settings>>(),
+  saveDefaults: vi.fn<(workspace: string, approvals: string, alwaysCollapseThoughts: boolean) => Promise<Settings>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -65,9 +65,32 @@ describe("Defaults", () => {
     await userEvent.type(screen.getByLabelText("Work folder"), " /work ");
     await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
 
-    expect(api.saveDefaults).toHaveBeenCalledWith("/work", "always");
+    expect(api.saveDefaults).toHaveBeenCalledWith("/work", "always", false);
     expect(onSaved).toHaveBeenCalledWith(saved);
     expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+  });
+
+  it("saves Always collapse with the button and reads it back", async () => {
+    api.saveDefaults.mockResolvedValue(shape({ alwaysCollapseThoughts: true }));
+    render(<Defaults settings={shape()} />);
+    const toggle = screen.getByRole("switch", { name: "Always collapse" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(
+      screen.getByText("Thoughts start collapsed in every session. Expand opens one at a time."),
+    ).toBeInTheDocument();
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(api.saveDefaults).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+    expect(api.saveDefaults).toHaveBeenCalledWith("", "ask", true);
+    expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Always collapse" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("an untouched Always collapse takes the value read again", () => {
+    const view = render(<Defaults settings={shape()} />);
+    view.rerender(<Defaults settings={shape({ alwaysCollapseThoughts: true })} />);
+    expect(screen.getByRole("switch", { name: "Always collapse" })).toHaveAttribute("aria-checked", "true");
   });
 
   it("shows a save error", async () => {
@@ -81,7 +104,9 @@ describe("Defaults", () => {
     render(<Defaults settings={shape({ approvals: "auto" })} readOnly />);
     expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
     expect(screen.getByText("Only ask for risky things")).toBeInTheDocument();
+    expect(screen.getByText("Always collapse").nextElementSibling).toHaveTextContent("Off");
     expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 });

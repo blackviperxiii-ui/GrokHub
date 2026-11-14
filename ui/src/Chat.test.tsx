@@ -450,6 +450,144 @@ describe("Chat", () => {
     expect(screen.getByText("read_file")).toBeVisible();
   });
 
+  it("thinking streams into one thought above the reply, and a tool between starts another", () => {
+    let items: Item[] = [{ kind: "user", text: "snap it" }];
+    for (const event of [
+      { kind: "thought", text: "Need a " },
+      { kind: "thought", text: "snapshot." },
+      { kind: "tool", id: "t1", title: "read_file", status: "done", detail: "" },
+      { kind: "thought", text: "Now write." },
+      { kind: "text", text: "Done." },
+    ] satisfies ChatEvent[]) {
+      items = applyEvent(items, event);
+    }
+    expect(items).toEqual([
+      { kind: "user", text: "snap it" },
+      { kind: "thought", text: "Need a snapshot." },
+      { kind: "tool", id: "t1", title: "read_file", status: "done", detail: "" },
+      { kind: "thought", text: "Now write." },
+      { kind: "assistant", text: "Done.", streaming: true },
+    ]);
+  });
+
+  it("thinking that lands mid-reply goes above it, so the reply stays one bubble for its recap", () => {
+    let items: Item[] = [{ kind: "user", text: "write it" }];
+    for (const event of [
+      { kind: "tool", id: "t1", title: "read_file", status: "done", detail: "" },
+      { kind: "text", text: "Let me write it." },
+      { kind: "thought", text: "Waiting for the " },
+      { kind: "thought", text: "model to come back." },
+      { kind: "text", text: " Done.\n\nFinished\n- Done: wrote" },
+      { kind: "recap", body: "Let me write it. Done.", lines: [], needsYou: [], undo: [], steps: [] },
+    ] satisfies ChatEvent[]) {
+      items = applyEvent(items, event);
+    }
+    expect(items.filter((item) => item.kind === "assistant")).toEqual([
+      { kind: "assistant", text: "Let me write it. Done.", streaming: true },
+    ]);
+    expect(items.map((item) => item.kind)).toEqual(["user", "tool", "thought", "assistant", "recap"]);
+    expect(items[2]).toEqual({ kind: "thought", text: "Waiting for the model to come back." });
+  });
+
+  it("Collapse and Expand leave the log where it is", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("snap it");
+    emit(id, { kind: "thought", text: "Need a snapshot." });
+    emit(id, { kind: "text", text: "Done." });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await waitFor(() => expect(screen.getByRole("button", { name: "New chat" })).toBeEnabled());
+    // jsdom draws nothing, so it has no scrollIntoView; the log calls it when there is one.
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      await userEvent.click(screen.getByRole("button", { name: "Collapse" }));
+      await userEvent.click(screen.getByRole("button", { name: "Expand" }));
+      expect(screen.getByText("Need a snapshot.")).toBeVisible();
+      expect(scroll).not.toHaveBeenCalled();
+    } finally {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
+  });
+
+  it("Collapse folds every thought in the chat and Expand opens one", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    const id = await startTurn("snap it");
+    emit(id, { kind: "thought", text: "Need a snapshot." });
+    emit(id, { kind: "tool", id: "t1", title: "read_file", status: "done", detail: "" });
+    emit(id, { kind: "thought", text: "Now write." });
+    emit(id, { kind: "text", text: "Done." });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+
+    expect(screen.getAllByText("Thought process")).toHaveLength(2);
+    expect(screen.getByText("Need a snapshot.")).toBeVisible();
+    expect(document.querySelector('[data-role="assistant"]')?.textContent).toBe("Done.");
+    const [first] = screen.getAllByRole("button", { name: "Collapse" });
+    expect(first).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(first);
+
+    expect(screen.queryByText("Need a snapshot.")).toBeNull();
+    expect(screen.queryByText("Now write.")).toBeNull();
+    expect(screen.queryByText("Thought process")).toBeNull();
+    expect(screen.getAllByText("Thought")).toHaveLength(2);
+    const expands = screen.getAllByRole("button", { name: "Expand" });
+    expect(expands).toHaveLength(2);
+    await userEvent.click(expands[0]);
+    expect(screen.getByText("Need a snapshot.")).toBeVisible();
+    expect(screen.queryByText("Now write.")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Expand" })).toHaveLength(1);
+    expect(screen.getByText("Done.")).toBeVisible();
+    // Collapse on the one opened by hand folds it again with the rest.
+    await userEvent.click(screen.getByRole("button", { name: "Collapse" }));
+    expect(screen.queryByText("Need a snapshot.")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Expand" })).toHaveLength(2);
+  });
+
+  it("after Collapse a new thought in that chat starts folded, and a fresh chat starts open", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    const id = await startTurn("first");
+    emit(id, { kind: "thought", text: "Plan one." });
+    await userEvent.click(screen.getByRole("button", { name: "Collapse" }));
+    emit(id, { kind: "tool", id: "t1", title: "read_file", status: "done", detail: "" });
+    emit(id, { kind: "thought", text: "Plan two." });
+    expect(screen.queryByText("Plan two.")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Expand" })).toHaveLength(2);
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+
+    api.sendChat.mockResolvedValue("end_turn");
+    await waitFor(() => expect(screen.getByRole("button", { name: "New chat" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "New chat" }));
+    holdTurn();
+    const next = await startTurn("second");
+    expect(next).not.toBe(id);
+    emit(next, { kind: "thought", text: "Plan three." });
+    expect(screen.getByText("Plan three.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Collapse" })).toBeVisible();
+  });
+
+  it("with Always collapse on, a thought starts as one Thought row and the reply still shows", async () => {
+    api.getSettings.mockResolvedValue({ ...SETTINGS, alwaysCollapseThoughts: true });
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    const id = await startTurn("snap it");
+    emit(id, { kind: "thought", text: "Need a snapshot." });
+    emit(id, { kind: "text", text: "Done." });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await waitFor(() => expect(screen.queryByText("Need a snapshot.")).toBeNull());
+    expect(screen.getByText("Thought")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Expand" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Done.")).toBeVisible();
+  });
+
   it("a plan card's chips fill its reply box or answer it, and picks are remembered", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

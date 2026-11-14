@@ -1,0 +1,2 @@
+- Chat shows the model's thinking as it streams, in a quiet "Thought process" card above the reply. Collapse folds every thought in that chat and keeps new ones folded; Expand opens one. Another chat starts open again.
+- Settings → Defaults → Always collapse starts every thought folded, in every chat.
