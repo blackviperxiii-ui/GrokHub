@@ -1,0 +1,1 @@
+- Desktop companion: she hides while a game or another app's fullscreen window is up and comes back about 4 seconds after it ends, and her window is kept out of screenshots, recordings and screen shares on Windows and macOS. Labs says "On the desktop, hidden while you game." while she is hidden.

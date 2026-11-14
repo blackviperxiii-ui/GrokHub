@@ -24,6 +24,7 @@ function state(over: Partial<DesktopNyxState> = {}): DesktopNyxState {
     pos: null,
     effects: { transparent: true, onTop: true },
     companion: "Nyx",
+    hiddenForGame: false,
     ...over,
   };
 }

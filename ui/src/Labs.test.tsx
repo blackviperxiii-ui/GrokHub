@@ -27,6 +27,7 @@ const desk = vi.hoisted(() => ({
       pos: null,
       effects: { transparent: true, onTop: true },
       companion: "Nyx",
+      hiddenForGame: false,
     }),
   ),
   desktopNyxSet: vi.fn(),
@@ -95,6 +96,24 @@ describe("Labs", () => {
       act(() => deskHeard.fn?.({ ...on, enabled: false }));
       expect(screen.queryByText("Stay behind windows")).toBeNull();
       expect(desk.desktopNyxSet).not.toHaveBeenCalled();
+    } finally {
+      transport.shell = false;
+    }
+  });
+
+  it("says she is hidden while you game, and shows the usual note again after", async () => {
+    transport.shell = true;
+    try {
+      api.getPlugins.mockResolvedValue(page([]));
+      const out = { ...(await desk.desktopNyxGet()), enabled: true, undocked: true };
+      desk.desktopNyxGet.mockResolvedValueOnce({ ...out, hiddenForGame: true });
+      render(<Labs />);
+      expect(await screen.findByText("On the desktop, hidden while you game.")).toBeVisible();
+      act(() => deskHeard.fn?.(out));
+      expect(screen.queryByText("On the desktop, hidden while you game.")).toBeNull();
+      expect(
+        screen.getByText("On the desktop. Use Bring her back on her dock or right-click menu."),
+      ).toBeVisible();
     } finally {
       transport.shell = false;
     }

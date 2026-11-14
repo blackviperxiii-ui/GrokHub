@@ -32,6 +32,9 @@ pub struct WindowSpec {
     pub resizable: bool,
     pub skip_taskbar: bool,
     pub always_on_top: bool,
+    /// Kept out of screenshots, recordings and screen shares (Windows and
+    /// macOS; Linux has no such flag).
+    pub content_protected: bool,
 }
 
 /// Spec for the desktop window. `behind` flips always-on-top off.
@@ -42,6 +45,7 @@ pub fn window_spec(behind: bool) -> WindowSpec {
         resizable: false,
         skip_taskbar: true,
         always_on_top: !behind,
+        content_protected: true,
     }
 }
 
@@ -162,6 +166,8 @@ pub struct State {
     pub pos: Option<[i32; 2]>,
     pub effects: Effects,
     pub companion: String,
+    /// Out on the desktop but hidden while a game or fullscreen app runs.
+    pub hidden_for_game: bool,
 }
 
 pub fn state_of(settings: &crate::settings::ShellSettings, wayland: bool) -> State {
@@ -179,6 +185,16 @@ pub fn state_of(settings: &crate::settings::ShellSettings, wayland: bool) -> Sta
         pos: settings.desktop_nyx_pos,
         effects: effects_likely(wayland),
         companion: brand::companion_name().to_string(),
+        hidden_for_game: false,
+    }
+}
+
+/// [`state_of`] with this session's Wayland probe and game hiding.
+#[cfg(desktop)]
+pub fn state_now(settings: &crate::settings::ShellSettings) -> State {
+    State {
+        hidden_for_game: desk().hidden,
+        ..state_of(settings, wayland_now())
     }
 }
 
@@ -265,8 +281,8 @@ pub struct TrayItem {
 }
 
 /// Enabled only with Labs → Desktop companion on; checked while she is out
-/// on the desktop. (Later, a game hiding her leaves it checked: she is still
-/// out, only hidden.)
+/// on the desktop. A game hiding her leaves it checked: she is still out,
+/// only hidden.
 pub fn tray_item(settings: &crate::settings::ShellSettings) -> TrayItem {
     TrayItem {
         text: tray_label(),
@@ -319,7 +335,7 @@ pub fn refresh_tray(settings: &crate::settings::ShellSettings) {
 pub fn publish(app: &tauri::AppHandle, settings: &crate::settings::ShellSettings) -> State {
     use tauri::Emitter;
     refresh_tray(settings);
-    let state = state_of(settings, wayland_now());
+    let state = state_now(settings);
     let _ = app.emit(EVENT, &state);
     state
 }
@@ -338,9 +354,17 @@ pub fn show_window(
     let spec = window_spec(settings.desktop_nyx_behind);
     if let Some(existing) = app.get_webview_window(LABEL) {
         let _ = existing.set_always_on_top(spec.always_on_top);
-        existing.show().map_err(|e| e.to_string())?;
+        // Hidden for a game: the desk watch shows her again after it.
+        if !desk().hidden {
+            existing.show().map_err(|e| e.to_string())?;
+        }
         return Ok(());
     }
+    // Opened mid-game she starts hidden; the desk watch takes it from there.
+    let gaming = gaming_now(
+        &grokhub_desktop::game_guard::peek(),
+        grokhub_desktop::signals::fullscreen_other_app(),
+    );
     let mut builder = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App(PAGE.into()))
         .title(brand::companion_name())
         .inner_size(WIDTH, HEIGHT)
@@ -349,8 +373,9 @@ pub fn show_window(
         .resizable(spec.resizable)
         .skip_taskbar(spec.skip_taskbar)
         .always_on_top(spec.always_on_top)
+        .content_protected(spec.content_protected)
         .shadow(false)
-        .visible(true);
+        .visible(!gaming);
     if let Some([x, y]) = settings.desktop_nyx_pos {
         builder = builder.position(f64::from(x), f64::from(y));
     } else {
@@ -498,6 +523,46 @@ impl Moves {
     }
 }
 
+/// How long the screen must be clear of games before she comes back.
+pub const RETURN_AFTER: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// A game or another app's fullscreen window is up: the game guard (any
+/// anti-cheat, a game process, Steam, exclusive fullscreen) or a fullscreen
+/// reader where this PC has one.
+pub fn gaming_now(guard: &grokhub_core::game_guard::GameGuard, fullscreen: Option<bool>) -> bool {
+    !guard.is_clear() || fullscreen == Some(true)
+}
+
+/// Whether she shows now: out on the desktop and no game for
+/// [`RETURN_AFTER`]. She hides at once when a game starts. `clear_since` is
+/// when the screen last became clear; `None` while gaming.
+pub fn visible_now(
+    undocked: bool,
+    gaming: bool,
+    clear_since: &mut Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
+    if !undocked {
+        return false;
+    }
+    if gaming {
+        *clear_since = None;
+        return false;
+    }
+    let since = *clear_since.get_or_insert(now);
+    now.duration_since(since) >= RETURN_AFTER
+}
+
+/// One desk watch frame's news for the rest of the app.
+#[cfg(desktop)]
+#[derive(Debug, Default)]
+pub struct Frame {
+    /// A drag ended here; save it.
+    pub landing: Option<Landing>,
+    /// She was just hidden for a game or shown after one; tell every page.
+    pub game_changed: bool,
+}
+
 /// What the desk watch keeps between frames while her window is open.
 #[cfg(desktop)]
 #[derive(Debug, Default)]
@@ -505,6 +570,11 @@ struct Desk {
     boxes: Vec<HitBox>,
     passthrough: Option<bool>,
     moves: Moves,
+    /// The watch has seen this window; a new one starts clear of games.
+    seen: bool,
+    clear_since: Option<std::time::Instant>,
+    /// Hidden with `hide()` (never closed, which would dock her) for a game.
+    hidden: bool,
 }
 
 #[cfg(desktop)]
@@ -517,6 +587,9 @@ static DESK: std::sync::Mutex<Desk> = std::sync::Mutex::new(Desk {
         settled_at: None,
         saved: None,
     },
+    seen: false,
+    clear_since: None,
+    hidden: false,
 });
 
 #[cfg(desktop)]
@@ -571,24 +644,81 @@ pub fn start_drag(app: &tauri::AppHandle) -> Result<(), String> {
     w.start_dragging().map_err(|e| e.to_string())
 }
 
-/// One frame of the desk watch: click-through follows the cursor, so she
-/// can be clicked again after the pointer crossed an empty pixel (once the
-/// window lets clicks through, her page hears no pointer at all). Returns a
-/// dropped position to save. The desk lock is never held across a window
-/// call: those wait on the main thread, which takes the lock on a move.
+/// One frame of the desk watch.
+///
+/// - She hides at once while a game or another app's fullscreen window is
+///   up, and comes back [`RETURN_AFTER`] after it ends. Her window is hidden,
+///   never closed: closing it docks her.
+/// - Click-through follows the cursor, so she can be clicked again after the
+///   pointer crossed an empty pixel (once the window lets clicks through, her
+///   page hears no pointer at all).
+///
+/// The desk lock is never held across a window call: those wait on the main
+/// thread, which takes the lock on a move.
 #[cfg(desktop)]
-pub fn tick(app: &tauri::AppHandle) -> Option<Landing> {
+pub fn tick(app: &tauri::AppHandle) -> Frame {
     use tauri::Manager;
     let Some(w) = app.get_webview_window(LABEL) else {
         *desk() = Desk::default();
+        return Frame::default();
+    };
+    let now = std::time::Instant::now();
+    let gaming = gaming_now(
+        &grokhub_desktop::game_guard::peek(),
+        grokhub_desktop::signals::fullscreen_other_app(),
+    );
+    let (boxes, had, flip) = {
+        let mut d = desk();
+        if !d.seen {
+            d.seen = true;
+            d.clear_since = now.checked_sub(RETURN_AFTER);
+        }
+        let mut since = d.clear_since;
+        let hide = !visible_now(true, gaming, &mut since, now);
+        d.clear_since = since;
+        (
+            d.boxes.clone(),
+            d.passthrough,
+            (hide != d.hidden).then_some(hide),
+        )
+    };
+    // A failed hide or show is tried again next frame.
+    let flipped = match flip {
+        Some(true) => w.hide().is_ok(),
+        Some(false) => w.show().is_ok(),
+        None => false,
+    };
+    let hidden = {
+        let mut d = desk();
+        if flipped {
+            d.hidden = flip == Some(true);
+        }
+        d.hidden
+    };
+    let applied = if hidden {
+        None
+    } else {
+        let want = passthrough_wanted(cursor_now(app, &w), origin_now(&w), &boxes);
+        (had != Some(want) && w.set_ignore_cursor_events(want).is_ok()).then_some(want)
+    };
+    let mut d = desk();
+    if applied.is_some() {
+        d.passthrough = applied;
+    }
+    Frame {
+        landing: d.moves.settled(now),
+        game_changed: flipped,
+    }
+}
+
+/// The cursor and the scale it reads at. macOS reads it at the main screen's
+/// scale; Wayland can't read it at all.
+#[cfg(desktop)]
+fn cursor_now(app: &tauri::AppHandle, w: &tauri::WebviewWindow) -> Option<Scaled> {
+    if wayland_now() {
         return None;
-    };
-    let (boxes, had) = {
-        let d = desk();
-        (d.boxes.clone(), d.passthrough)
-    };
+    }
     let scale = w.scale_factor().unwrap_or(1.0);
-    // macOS reads the cursor at the main screen's scale.
     let cursor_scale = if cfg!(target_os = "macos") {
         app.primary_monitor()
             .ok()
@@ -597,21 +727,16 @@ pub fn tick(app: &tauri::AppHandle) -> Option<Landing> {
     } else {
         scale
     };
-    let cursor = (!wayland_now())
-        .then(|| app.cursor_position().ok())
-        .flatten()
-        .map(|p| ([p.x, p.y], cursor_scale));
-    let origin = w
-        .inner_position()
-        .ok()
-        .map(|p| ([f64::from(p.x), f64::from(p.y)], scale));
-    let want = passthrough_wanted(cursor, origin, &boxes);
-    let applied = (had != Some(want) && w.set_ignore_cursor_events(want).is_ok()).then_some(want);
-    let mut d = desk();
-    if applied.is_some() {
-        d.passthrough = applied;
-    }
-    d.moves.settled(std::time::Instant::now())
+    let p = app.cursor_position().ok()?;
+    Some(([p.x, p.y], cursor_scale))
+}
+
+/// Her window's top-left inside its frame, at its own scale.
+#[cfg(desktop)]
+fn origin_now(w: &tauri::WebviewWindow) -> Option<Scaled> {
+    let scale = w.scale_factor().unwrap_or(1.0);
+    let p = w.inner_position().ok()?;
+    Some(([f64::from(p.x), f64::from(p.y)], scale))
 }
 
 #[cfg(desktop)]
@@ -853,6 +978,9 @@ mod tests {
         assert!(on.skip_taskbar);
         assert!(on.always_on_top);
         assert!(!window_spec(true).always_on_top);
+        // Kept out of screen captures, behind windows or not.
+        assert!(on.content_protected);
+        assert!(window_spec(true).content_protected);
         assert_eq!(LABEL, "desktop-nyx");
         assert_eq!(PAGE, "nyx-desk.html");
         assert_eq!((WIDTH, HEIGHT), (320.0, 480.0));
@@ -969,5 +1097,74 @@ mod tests {
         assert_eq!(st.companion, brand::companion_name());
         assert!(!st.outfit_file.is_empty());
         assert!(st.outfit_file.starts_with("brand/"));
+        assert!(!st.hidden_for_game);
+    }
+
+    #[test]
+    fn she_hides_at_once_and_comes_back_four_seconds_after_the_game() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now() + Duration::from_secs(60);
+        let s = |n: u64| t0 + Duration::from_secs(n);
+        let mut since = Some(t0 - RETURN_AFTER);
+        assert!(visible_now(true, false, &mut since, t0));
+        assert!(!visible_now(false, false, &mut since, t0));
+        assert!(!visible_now(true, true, &mut since, t0));
+        assert_eq!(since, None);
+        assert!(!visible_now(true, false, &mut since, s(1)));
+        assert_eq!(since, Some(s(1)));
+        assert!(!visible_now(true, false, &mut since, s(4)));
+        assert!(visible_now(true, false, &mut since, s(5)));
+        assert!(!visible_now(true, true, &mut since, s(6)));
+        assert!(!visible_now(true, false, &mut since, s(9)));
+        assert!(visible_now(true, false, &mut since, s(13)));
+    }
+
+    #[test]
+    fn a_game_an_anticheat_or_a_fullscreen_app_counts_as_gaming() {
+        use grokhub_core::game_guard::GameGuard;
+        let clear = GameGuard::default();
+        assert!(!gaming_now(&clear, None));
+        assert!(!gaming_now(&clear, Some(false)));
+        assert!(gaming_now(&clear, Some(true)));
+        let game = GameGuard {
+            gaming: true,
+            ..GameGuard::default()
+        };
+        assert!(gaming_now(&game, None));
+        let anticheat = GameGuard {
+            anticheat: Some("EasyAntiCheat"),
+            ..GameGuard::default()
+        };
+        assert!(gaming_now(&anticheat, Some(false)));
+        // An installed anti-cheat with no game running hides nothing.
+        let idle = GameGuard {
+            idle_anticheat: Some("Vanguard"),
+            ..GameGuard::default()
+        };
+        assert!(!gaming_now(&idle, None));
+    }
+
+    #[test]
+    fn the_game_hide_hides_her_window_and_never_closes_it() {
+        let src = include_str!("desktop_nyx.rs");
+        let body = src
+            .split("pub fn tick(app: &tauri::AppHandle) -> Frame {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .expect("tick body");
+        assert!(body.contains("Some(true) => w.hide().is_ok()"));
+        assert!(body.contains("Some(false) => w.show().is_ok()"));
+        assert!(!body.contains(concat!(".clo", "se()")));
+        assert!(!body.contains(concat!("hide_", "window(")));
+        // Every other writer shows her through show_window, which leaves a
+        // game hide alone.
+        let show = src
+            .split("pub fn show_window(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .expect("show_window body");
+        assert!(show.contains("if !desk().hidden {"));
+        assert!(show.contains(".visible(!gaming)"));
+        assert!(show.contains(".content_protected(spec.content_protected)"));
     }
 }
