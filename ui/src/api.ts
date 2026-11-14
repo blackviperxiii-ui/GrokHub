@@ -66,6 +66,9 @@ export interface Capabilities {
   code?: boolean;
   /** The Mods page: this computer's moddable games (desktops). */
   mods?: boolean;
+  /** No system title bar (Linux, Windows): the top bar drags the window and
+   * draws minimize, maximize and close. */
+  windowControls?: boolean;
 }
 
 /** Until the report loads, or if it fails, only the core features show. */

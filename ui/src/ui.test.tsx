@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { Activity } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -11,7 +11,7 @@ const transport = vi.hoisted(() => ({
 vi.mock("./transport", () => transport);
 
 import { externalUrlOk, openExternal } from "./external";
-import { ConfirmRow, ExternalLink, needsSettings, StatusLine, useCardFocus } from "./ui";
+import { ConfirmRow, ExternalLink, needsSettings, StatusLine, useCardFocus, useDismiss } from "./ui";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -160,5 +160,36 @@ describe("a confirm card's focus", () => {
     rerender(<Page shown card={null} />);
     rerender(<Page shown card="second" />);
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep" }));
+  });
+});
+
+describe("useDismiss", () => {
+  function Menu({ onClose }: { onClose: () => void }) {
+    const ref = useDismiss<HTMLDivElement>(true, onClose);
+    return (
+      <>
+        <div ref={ref}>menu</div>
+        <header data-tauri-drag-region="">bar</header>
+      </>
+    );
+  }
+
+  it("closes on a press on the title bar even though the drag script stops it there", () => {
+    // Tauri's drag script listens on the document first and stops a press on
+    // a drag region before any later listener sees it.
+    const drag = (event: Event) => {
+      if ((event.target as HTMLElement).hasAttribute("data-tauri-drag-region")) event.stopImmediatePropagation();
+    };
+    document.addEventListener("mousedown", drag);
+    try {
+      const onClose = vi.fn();
+      render(<Menu onClose={onClose} />);
+      fireEvent.mouseDown(screen.getByText("menu"));
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.mouseDown(screen.getByText("bar"));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener("mousedown", drag);
+    }
   });
 });

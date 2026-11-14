@@ -6419,6 +6419,10 @@ fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
     };
     let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
         .title(grokhub_core::brand::product_name());
+    // On Linux and Windows the top bar is the title bar: it drags the window
+    // and holds the window buttons (capabilities/main-window.json allows them).
+    #[cfg(desktop)]
+    let builder = builder.decorations(!capabilities::current().window_controls);
     // A start at login stays in the tray when closing keeps it there.
     #[cfg(desktop)]
     let builder = builder.visible(!os_extras::starts_hidden(

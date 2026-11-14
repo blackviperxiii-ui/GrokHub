@@ -444,6 +444,30 @@ describe("App", () => {
     }
   });
 
+  it("with no system title bar the top bar drags the window and holds its buttons; macOS and the web app don't", async () => {
+    api.getCapabilities.mockResolvedValue({ ...DESKTOP, windowControls: true });
+    const { container, unmount } = render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    const bar = container.querySelector(".topbar");
+    expect(bar).toHaveAttribute("data-tauri-drag-region", "");
+    expect(bar?.querySelector(".brand-mark")).toHaveAttribute("data-tauri-drag-region", "deep");
+    expect(bar?.querySelector(".topbar-fill")).toHaveAttribute("data-tauri-drag-region", "");
+    const buttons = [...(bar?.querySelectorAll(".window-controls button") ?? [])].map((b) => b.getAttribute("aria-label"));
+    expect(buttons).toEqual(["Minimize", "Maximize", "Close"]);
+    // The buttons themselves never start a drag.
+    expect(bar?.querySelector(".window-controls [data-tauri-drag-region]")).toBeNull();
+    unmount();
+
+    for (const caps of [DESKTOP, { ...api.WEB, windowControls: true }]) {
+      api.getCapabilities.mockResolvedValue(caps);
+      const view = render(<App />);
+      await screen.findByRole("button", { name: "Pulse" });
+      expect(view.container.querySelector(".window-controls")).toBeNull();
+      expect(view.container.querySelector("[data-tauri-drag-region]")).toBeNull();
+      view.unmount();
+    }
+  });
+
   it("hides Pulse on a phone", async () => {
     api.getCapabilities.mockResolvedValue(api.CORE_ONLY);
     render(<App />);

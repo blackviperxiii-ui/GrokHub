@@ -186,6 +186,15 @@ fn short(text: &str, max: usize) -> String {
     cut
 }
 
+/// What a window gets back from its last run. Place and size come back;
+/// visibility doesn't, so a window hidden in the tray never comes back hidden;
+/// and decorations don't, so the window builder alone decides whether there is
+/// a system title bar (a saved one from an older build would sit over the top
+/// bar's own window buttons).
+fn restored_state() -> StateFlags {
+    StateFlags::all() - StateFlags::VISIBLE - StateFlags::DECORATIONS
+}
+
 /// The desktop plugins, single-instance first so a second launch hands over
 /// before anything else starts.
 pub fn plugins(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
@@ -196,11 +205,9 @@ pub fn plugins(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
                 crate::show_main(app);
             }
         }))
-        // Place and size come back; visibility doesn't, so a window hidden
-        // in the tray never comes back hidden.
         .plugin(
             tauri_plugin_window_state::Builder::new()
-                .with_state_flags(StateFlags::all() - StateFlags::VISIBLE)
+                .with_state_flags(restored_state())
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -522,6 +529,14 @@ pub fn set_notifications(state: State<'_, ShellState>, on: bool) -> Result<Setti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restart_restores_place_and_size_but_not_visibility_or_decorations() {
+        let flags = restored_state();
+        assert!(flags.contains(StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED));
+        assert!(!flags.contains(StateFlags::VISIBLE));
+        assert!(!flags.contains(StateFlags::DECORATIONS));
+    }
 
     #[test]
     fn deny_and_open_are_the_only_clicks() {

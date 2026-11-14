@@ -40,6 +40,9 @@ describe("styles.css spacing", () => {
   it("tightens the page margin on narrow windows", () => {
     expect(CSS).toContain("--page-pad: 24px;");
     expect(CSS).toMatch(/@media \(max-width: 899px\) \{\s*:root \{\s*--page-pad: 16px;/);
-    expect(CSS).toMatch(/\.app \{[^}]*padding: 12px var\(--page-pad\);/);
+    // The sides use the page margin; the top 12px belongs to the top bar so
+    // the window's top edge drags it.
+    expect(CSS).toMatch(/\.app \{[^}]*padding: 0 var\(--page-pad\) 12px;/);
+    expect(CSS).toMatch(/\.topbar \{[^}]*padding-top: 12px;[^}]*padding-bottom: 8px;/);
   });
 });

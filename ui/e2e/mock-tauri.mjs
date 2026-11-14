@@ -39,6 +39,7 @@ export function capabilities() {
     autoSetup: false,
     code: true,
     mods: true,
+    windowControls: true,
   };
 }
 

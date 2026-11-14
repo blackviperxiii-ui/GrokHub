@@ -338,7 +338,8 @@ export function Settings({
           </Toggle>
           {desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
           {globalHalt !== null && <p className="note">{globalHalt ? HALT_KEYS_NOTE : HALT_KEYS_LOCAL}</p>}
-          <button type="submit" className="cta">
+          {/* Amber only while there is a change to save. */}
+          <button type="submit" className={settings && desktopControl !== settings.desktopControl ? "cta" : undefined}>
             Save settings
           </button>
         </form>
