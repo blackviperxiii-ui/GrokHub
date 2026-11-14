@@ -18,6 +18,17 @@ describe("onlyFoldsChanged", () => {
     expect(onlyFoldsChanged(log, [...log, { kind: "assistant", text: "more", streaming: false }])).toBe(false);
   });
 
+  it("is true when a panel is only dismissed, and false when its spec changes", () => {
+    const spec = { title: "CI", elements: [{ type: "text" as const, text: "ok" }] };
+    const shown: Item[] = [...log, { kind: "panel", id: "call-1", spec }];
+    const hidden = shown.map((item) => (item.kind === "panel" ? { ...item, dismissed: true } : item));
+    expect(onlyFoldsChanged(shown, hidden)).toBe(true);
+    const replaced = shown.map((item) =>
+      item.kind === "panel" ? { ...item, spec: { ...spec, title: "CI (green)" } } : item,
+    );
+    expect(onlyFoldsChanged(shown, replaced)).toBe(false);
+  });
+
   it("is false when a thought or reply grows in place", () => {
     const grown = log.map((item) => (item.kind === "thought" ? { ...item, text: "hmm, well" } : item));
     expect(onlyFoldsChanged(log, grown)).toBe(false);

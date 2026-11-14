@@ -153,6 +153,9 @@ export type ChatEvent =
       /** Predicted replies for this card, ranked by past picks. */
       chips?: ReplyChipData[];
     }
+  /** A panel the agent drew with show_panel (generative UI), keyed by the
+   * call that made it. The shell sends only specs the core rules allow. */
+  | { kind: "panel"; id: string; spec: PanelSpec }
   /** A report_findings card: one pill per fix; a pill fills the composer. */
   | {
       kind: "findings";
@@ -3532,7 +3535,12 @@ export interface Behavior {
   /** Tokens a day, one of `budgets`; 0 is off. */
   dailyTokenBudget: number;
   pauseOverBudget: boolean;
+  /** Which way the composer's near-tied suggestions lean. */
+  lane: Lane;
 }
+
+/** Coding or Life, for Settings → Behavior. */
+export type Lane = "coding" | "life";
 
 export interface BehaviorPage {
   closeToTray: boolean;
@@ -4868,3 +4876,20 @@ export function modsNotForMe(source: string, id: string): Promise<void> {
 export function modsHideGame(game: string, hidden: boolean): Promise<void> {
   return invoke<void>("mods_hide_game", { game, hidden });
 }
+
+/** grokhub_core::panel_spec: what show_panel draws. Plain text only; a
+ * button names an action id, never a link or a command. */
+export interface PanelSpec {
+  title?: string;
+  elements: PanelElement[];
+}
+
+export type PanelElement =
+  | { type: "heading"; level: number; text: string }
+  | { type: "text"; text: string }
+  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "table"; headers: string[]; rows: string[][] }
+  | { type: "key_value"; pairs: { key: string; value: string }[] }
+  | { type: "button"; label: string; action: string }
+  | { type: "input"; id: string; label: string; placeholder?: string; value?: string }
+  | { type: "progress"; label: string; value: number };

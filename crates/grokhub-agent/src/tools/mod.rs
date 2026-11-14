@@ -441,6 +441,7 @@ pub(crate) fn dry_imagine_body(args: &Value) -> Result<Value, String> {
 }
 
 pub use media::{imagine_client, run_media_tool, ImagineApi};
+pub use show_panel::SHOW_PANEL;
 
 /// Install fetch and Imagine clients for this thread. An empty bearer installs
 /// adapters that refuse without dialing. The guard restores the previous ports.

@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { AUTOCOMPLETE_NOTE, Behavior, SCHEDULE_NOTE, SUGGESTIONS_NOTE } from "./Behavior";
+import { AUTOCOMPLETE_NOTE, Behavior, LANE_NOTE, SCHEDULE_NOTE, SUGGESTIONS_NOTE } from "./Behavior";
 
 const OFF: Shape = {
   autocomplete: false,
@@ -20,6 +20,7 @@ const OFF: Shape = {
   quietEnd: "",
   dailyTokenBudget: 0,
   pauseOverBudget: false,
+  lane: "coding",
 };
 
 function page(over: Partial<Shape> = {}, closeToTray = true): BehaviorPage {
@@ -72,6 +73,30 @@ describe("Behavior", () => {
     await userEvent.click(toggle);
     expect(api.saveBehavior).toHaveBeenLastCalledWith(true, { ...OFF, suggestions: false });
     expect(await screen.findByLabelText("Suggestions")).not.toBeChecked();
+  });
+
+  it("suggestions lean toward Coding until Life is picked, which saves at once", async () => {
+    api.saveBehavior.mockResolvedValueOnce(page({ lane: "life" }));
+    render(<Behavior tray />);
+    const lane = await screen.findByLabelText("Suggestions lean toward");
+    expect(lane).toHaveValue("coding");
+    expect(screen.getByText(LANE_NOTE)).toBeInTheDocument();
+    await userEvent.selectOptions(lane, "life");
+    expect(api.saveBehavior).toHaveBeenLastCalledWith(true, { ...OFF, lane: "life" });
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Suggestions lean toward")).toHaveValue("life");
+  });
+
+  it("hides the lean while suggestions are off, and the web app reads it as text", async () => {
+    api.getBehavior.mockResolvedValue(page({ suggestions: false, lane: "life" }));
+    const off = render(<Behavior tray />);
+    await screen.findByLabelText("Suggestions");
+    expect(screen.queryByLabelText("Suggestions lean toward")).toBeNull();
+    off.unmount();
+    api.getBehavior.mockResolvedValue(page({ lane: "life" }));
+    render(<Behavior tray={false} readOnly />);
+    const term = await screen.findByText("Suggestions lean toward");
+    expect(term.nextElementSibling).toHaveTextContent("Life");
   });
 
   it("each toggle saves at once", async () => {

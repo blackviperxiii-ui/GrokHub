@@ -180,6 +180,12 @@ pub enum AcpEvent {
     Plan(String),
     /// A findings card body (`grokhub_core::findings`), shown after the reply.
     Findings(String),
+    /// A panel spec (`grokhub_core::panel_spec`), checked and whole, from the
+    /// `show_panel` call `id`.
+    Panel {
+        id: String,
+        spec: Value,
+    },
     Permission(PermissionAsk),
     Elicit(ElicitAsk),
     ElicitComplete {

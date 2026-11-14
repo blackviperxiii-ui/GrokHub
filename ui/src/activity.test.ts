@@ -50,6 +50,19 @@ describe("chatActivity", () => {
     expect(done?.steps).toBe(1);
   });
 
+  it("a panel leaves the chat's row and its step count as they are", () => {
+    const panel: ChatEvent = {
+      kind: "panel",
+      id: "call-3",
+      spec: { title: "Linux CI", elements: [{ type: "text", text: "ok" }] },
+    };
+    const before = fold([tool("completed"), tool("completed"), tool("in_progress", "show_panel")]);
+    expect(before?.steps).toBe(2);
+    const after = fold([panel], before);
+    expect(after).toBe(before);
+    expect(fold([tool("completed", "show_panel")], after)?.steps).toBe(3);
+  });
+
   it("more reply text leaves a running item as it is, so the dock skips a render", () => {
     const running = fold([{ kind: "text", text: "Looking" }, tool("in_progress")]);
     const more = chatActivity(running, { conversationId: "shell-1", event: { kind: "text", text: " more" } }, 9000);

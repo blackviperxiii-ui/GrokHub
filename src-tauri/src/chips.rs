@@ -13,6 +13,8 @@ use std::sync::Mutex;
 use grokhub_core::{ChipAction, ChipInput, ChipMemory, ChipSignals, QuickChip, RankCtx};
 use serde::{Deserialize, Serialize};
 
+use crate::settings::Lane;
+
 /// The composer's row and Home's row, as the cabin names them in the log.
 pub const COMPOSER: &str = "composer";
 pub const HOME: &str = "home";
@@ -219,6 +221,8 @@ pub struct RowAsk<'a> {
     pub now_ms: u64,
     /// Feature chips (focus help) prepended into the pool.
     pub extra: &'a [QuickChip],
+    /// Settings → Behavior: the composer's near ties lean this way.
+    pub lane: Lane,
 }
 
 /// What a row keeps in this process between showing it and the tap: the
@@ -235,7 +239,11 @@ pub fn row(dir: &Path, rows: &Mutex<Rows>, ask: RowAsk<'_>) -> Vec<Chip> {
     let mut held = rows.lock().unwrap_or_else(|e| e.into_inner());
     let mut mem = grokhub_core::load_chip_memory(dir);
     mem.ranker.last = std::mem::take(&mut held.ranked);
-    let pool = pool(&mem, &ask);
+    let mut pool = pool(&mem, &ask);
+    // Only the open chat's row leans; Home and the palette stay as ranked.
+    if ask.surface == COMPOSER {
+        lean(&mut pool, ask.lane);
+    }
     let seed = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -300,6 +308,61 @@ fn pool(mem: &ChipMemory, ask: &RowAsk<'_>) -> Vec<QuickChip> {
         },
         extra: ask.extra,
     })
+}
+
+/// Lean the pool toward the lane before the ranker sees it, as the cabin
+/// did. The lane only breaks near ties: an on-lane chip gains at most two
+/// thirds of a tenth of the top score, so a much stronger suggestion is never
+/// pushed down for being off-lane, and the ranker weighs the leaned score
+/// like any other, so the row it logs is the row that shows.
+pub fn lean(chips: &mut [QuickChip], lane: Lane) {
+    let top = chips.iter().map(|c| c.score).fold(0.0_f32, f32::max);
+    let step = (top * 0.1).max(f32::EPSILON) / 3.0;
+    for c in chips.iter_mut() {
+        c.score += step * f32::from(2 - lane_rank(c, lane));
+    }
+    chips.sort_by(|a, b| b.score.total_cmp(&a.score));
+}
+
+/// A feature's own offers (code resume, focus help, backup and the rest)
+/// keep the order the feature gave them.
+const FEATURE_OFFER_IDS: &[&str] = &[
+    "model:", "resume:", "backup:", "tidy:", "radar:", "game:", "focus:",
+];
+
+/// 0 on the lane, 1 neither way, 2 the other lane's.
+fn lane_rank(c: &QuickChip, lane: Lane) -> u8 {
+    if FEATURE_OFFER_IDS.iter().any(|p| c.id.starts_with(p)) {
+        return 0;
+    }
+    let (on, off) = match lane {
+        Lane::Coding => (leans_coding(c), leans_life(c)),
+        Lane::Life => (leans_life(c), leans_coding(c)),
+    };
+    if on {
+        0
+    } else if off {
+        2
+    } else {
+        1
+    }
+}
+
+fn chip_blob(c: &QuickChip) -> String {
+    format!("{} {} {}", c.id, c.label, c.value).to_ascii_lowercase()
+}
+
+/// Life is Imagine only: the lane doesn't rebrand any other chip.
+fn leans_life(c: &QuickChip) -> bool {
+    chip_blob(c).contains("imagine")
+}
+
+fn leans_coding(c: &QuickChip) -> bool {
+    let blob = chip_blob(c);
+    c.kind == grokhub_core::ChipKind::Shell
+        || ["ship", "fix", "skill", "/sh"]
+            .iter()
+            .any(|w| blob.contains(w))
 }
 
 /// The person sent a message while `surface` was up: the row there notes
@@ -512,6 +575,7 @@ mod tests {
             quiet_hours: false,
             now_ms: 1_000,
             extra: &[],
+            lane: Lane::Coding,
         };
         let shown = row(&dir, &rows, ask());
         assert!(
@@ -544,5 +608,205 @@ mod tests {
             None
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn scored(id: &str, label: &str, value: &str, kind: ChipKind, score: f32) -> QuickChip {
+        QuickChip {
+            label: label.into(),
+            score,
+            ..chip(id, value, kind)
+        }
+    }
+
+    #[test]
+    fn the_lane_flips_a_tie_and_life_is_only_imagine() {
+        let mut chips = vec![
+            scored(
+                "imagine",
+                "Open Imagine",
+                "__nav:imagine",
+                ChipKind::Nav,
+                1.0,
+            ),
+            scored(
+                "ship",
+                "Ship it",
+                "Ship a minimal solid slice.",
+                ChipKind::Chat,
+                1.0,
+            ),
+            scored(
+                "plan",
+                "Plan my weekend",
+                "Plan my weekend",
+                ChipKind::Chat,
+                1.0,
+            ),
+        ];
+        lean(&mut chips, Lane::Coding);
+        let ids: Vec<_> = chips.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["ship", "plan", "imagine"]);
+        lean(&mut chips, Lane::Life);
+        let ids: Vec<_> = chips.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["imagine", "plan", "ship"]);
+        // Leaning moves chips, it never relabels one.
+        assert_eq!(chips[0].label, "Open Imagine");
+        assert_eq!(chips[0].value, "__nav:imagine");
+    }
+
+    #[test]
+    fn the_lane_only_breaks_near_ties() {
+        let mut chips = vec![
+            scored(
+                "imagine",
+                "Open Imagine",
+                "__nav:imagine",
+                ChipKind::Nav,
+                100.0,
+            ),
+            scored(
+                "ship",
+                "Ship it",
+                "Ship a minimal solid slice.",
+                ChipKind::Chat,
+                40.0,
+            ),
+        ];
+        lean(&mut chips, Lane::Coding);
+        assert_eq!(chips[0].id, "imagine", "a far stronger chip keeps its spot");
+        // The off-lane chip gains nothing; the on-lane one two steps of 10/3.
+        assert_eq!(chips[0].score, 100.0);
+        chips[1].score = 95.0;
+        lean(&mut chips, Lane::Coding);
+        assert_eq!(chips[0].id, "ship", "inside one band the lane decides");
+        // The band is a tenth of the top: 8 behind stays behind.
+        let mut chips = vec![
+            scored(
+                "imagine",
+                "Open Imagine",
+                "__nav:imagine",
+                ChipKind::Nav,
+                100.0,
+            ),
+            scored(
+                "ship",
+                "Ship it",
+                "Ship a minimal solid slice.",
+                ChipKind::Chat,
+                92.0,
+            ),
+        ];
+        lean(&mut chips, Lane::Coding);
+        assert_eq!(chips[0].id, "imagine");
+    }
+
+    #[test]
+    fn each_coding_word_leads_a_plain_chip_on_the_coding_lane() {
+        for (id, label) in [
+            ("ship", "Ship it"),
+            ("fix", "Fix the build"),
+            ("skill", "Make a skill"),
+            ("sh", "Run /sh ls"),
+        ] {
+            let mut chips = vec![
+                scored(
+                    "plan",
+                    "Plan my weekend",
+                    "Plan my weekend",
+                    ChipKind::Chat,
+                    1.0,
+                ),
+                scored(id, label, label, ChipKind::Chat, 1.0),
+            ];
+            lean(&mut chips, Lane::Coding);
+            assert_eq!(chips[0].id, id);
+        }
+    }
+
+    #[test]
+    fn a_features_own_offer_counts_as_on_lane_both_ways() {
+        for lane in [Lane::Coding, Lane::Life] {
+            let mut chips = vec![
+                scored(
+                    "plan",
+                    "Plan my weekend",
+                    "Plan my weekend",
+                    ChipKind::Chat,
+                    1.0,
+                ),
+                scored(
+                    "focus:help",
+                    "Help me focus",
+                    "Help me focus",
+                    ChipKind::Chat,
+                    1.0,
+                ),
+            ];
+            lean(&mut chips, lane);
+            assert_eq!(chips[0].id, "focus:help", "{lane:?}");
+        }
+    }
+
+    #[test]
+    fn the_open_chats_row_leans_with_the_setting() {
+        let follow = [
+            QuickChip {
+                label: "Imagine a cover".into(),
+                ..chip("reply-art", "Imagine a cover for it", ChipKind::Chat)
+            },
+            QuickChip {
+                label: "Fix the build".into(),
+                ..chip("reply-fix", "Fix the failing build", ChipKind::Chat)
+            },
+        ];
+        let chat = [
+            ("user".to_string(), "Draft the release post".to_string()),
+            ("assistant".to_string(), "Here is a draft.".to_string()),
+        ];
+        let extra = [
+            QuickChip {
+                label: "Imagine a poster".into(),
+                ..chip("home-art", "Imagine a poster", ChipKind::Chat)
+            },
+            QuickChip {
+                label: "Fix my setup".into(),
+                ..chip("home-fix", "Fix my setup", ChipKind::Chat)
+            },
+        ];
+        let order = |surface: &'static str, lane: Lane| {
+            let dir = temp_dir(&format!("lane-{surface}-{lane:?}"));
+            let rows = Mutex::new(Rows::default());
+            let shown = row(
+                &dir,
+                &rows,
+                RowAsk {
+                    surface,
+                    chat: &chat,
+                    draft: "",
+                    follow_ups: &follow,
+                    mode: "chat",
+                    signed_in: true,
+                    first_run: false,
+                    hour: 10,
+                    weekday: 2,
+                    quiet_hours: false,
+                    now_ms: 1_000,
+                    extra: if surface == HOME { &extra } else { &[] },
+                    lane,
+                },
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+            shown
+                .into_iter()
+                .map(|c| c.id)
+                .filter(|id| id.starts_with("reply-") || id.starts_with("home-"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(order(COMPOSER, Lane::Coding), ["reply-fix", "reply-art"]);
+        assert_eq!(order(COMPOSER, Lane::Life), ["reply-art", "reply-fix"]);
+        // Home ranks as it always has, whichever way the lane points.
+        let home = order(HOME, Lane::Life);
+        assert_eq!(home.len(), 2, "{home:?}");
+        assert_eq!(order(HOME, Lane::Coding), home);
     }
 }
