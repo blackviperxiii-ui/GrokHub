@@ -1972,6 +1972,20 @@ fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
     clock.at(grokhub_core::now_ms())
 }
 
+/// The top bar's "Quiet until HH:MM" chip while Settings → Behavior's quiet
+/// hours hold right now on the page's clock; `None` outside them or with none set.
+#[tauri::command]
+fn quiet_chip(state: State<'_, ShellState>, clock: automations::Clock) -> Option<String> {
+    quiet_chip_at(&current(&state).behavior, &now_clock(clock).hm())
+}
+
+fn quiet_chip_at(behavior: &settings::Behavior, now_hm: &str) -> Option<String> {
+    if behavior.quiet_start.is_empty() {
+        return None;
+    }
+    grokhub_core::quiet_until_chip(now_hm, &behavior.quiet_start, &behavior.quiet_end)
+}
+
 /// The chat's transcript (without its chips blocks) and its follow-ups
 /// while they still belong to its last reply, which rank in its row (a chat
 /// opened from History, or the last chat after a restart, keeps them). A
@@ -7191,6 +7205,7 @@ pub fn run() {
             change_rows::change_row_restore,
             save_defaults,
             get_privacy,
+            quiet_chip,
             get_diagnostics,
             set_diagnostics,
             diagnostics_preview,
@@ -7441,6 +7456,27 @@ mod defaults_tests {
         let back = with_defaults(next, "", settings::Approvals::Ask, false);
         assert!(!back.always_collapse_thoughts);
         assert_eq!(back.workspace, "");
+    }
+}
+
+#[cfg(test)]
+mod quiet_chip_tests {
+    use crate::settings::Behavior;
+
+    #[test]
+    fn the_chip_names_the_end_only_inside_quiet_hours() {
+        let night = Behavior {
+            quiet_start: "22:00".into(),
+            quiet_end: "07:00".into(),
+            ..Behavior::default()
+        };
+        assert_eq!(
+            super::quiet_chip_at(&night, "23:30"),
+            Some("Quiet until 07:00".to_string())
+        );
+        assert_eq!(super::quiet_chip_at(&night, "12:00"), None);
+        // The default has no quiet hours, so no chip at any time.
+        assert_eq!(super::quiet_chip_at(&Behavior::default(), "03:00"), None);
     }
 }
 

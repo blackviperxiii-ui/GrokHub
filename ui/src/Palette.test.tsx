@@ -310,18 +310,24 @@ describe("paletteRows suggestions", () => {
 });
 
 describe("shellKeys", () => {
-  it("lists the palette, the commands the shell can run, Settings and the chat box", () => {
+  it("lists the palette, the commands the shell can run, Settings, the chat and the chat box", () => {
     expect(shellKeys(DESKTOP, { "new-chat": run, shortcuts: run, "sign-in": run })).toEqual([
       { keys: "Ctrl+K", action: "Command palette" },
       { keys: "Ctrl+N", action: "New chat" },
       { keys: "Ctrl+/", action: "This sheet" },
       { keys: "Ctrl+,", action: "Settings" },
+      { keys: "Ctrl+F", action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)" },
+      { keys: "Ctrl+Shift+A", action: "Archive or unarchive this chat" },
       { keys: "Enter", action: "Send message" },
       { keys: "Shift+Enter", action: "New line" },
       { keys: "Esc", action: "Close the palette or this sheet" },
     ]);
     expect(shellKeys(DESKTOP, ALL_RUNNERS)[2]).toEqual({ keys: "Ctrl+Alt+H", action: "Halt" });
     expect(shellKeys(PHONE, ALL_RUNNERS).map((k) => k.keys)).not.toContain("Ctrl+Alt+H");
+    // The web app finds in the chat but has no chat tabs to archive.
+    const web = shellKeys({ ...DESKTOP, remote: true }, ALL_RUNNERS).map((k) => k.keys);
+    expect(web).toContain("Ctrl+F");
+    expect(web).not.toContain("Ctrl+Shift+A");
   });
 });
 

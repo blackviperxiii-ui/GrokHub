@@ -1,4 +1,5 @@
 import {
+  Fragment,
   memo,
   useEffect,
   useEffectEvent,
@@ -94,6 +95,9 @@ import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
+import { ChatFindBar } from "./ChatFind";
+import { findLabel, findRows, findStep, itemText } from "./chatFind";
+import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { splitSources } from "./replySources";
 import { SourceChips } from "./SourceChips";
 import {
@@ -160,6 +164,13 @@ export interface QueueAct {
 }
 
 /** Text to put back in the box, after what is typed there. */
+/** The log row a find match is on: each row sits right after its hidden
+ * `data-row` marker. */
+function findRow(log: HTMLElement, i: number): Element | null {
+  const next = log.querySelector(`[data-row="${i}"]`)?.nextElementSibling;
+  return next && !next.hasAttribute("data-row") ? next : null;
+}
+
 function withQueued(draft: string, texts: readonly string[]): string {
   const back = texts.join("\n\n");
   return draft.trim() ? `${draft.trimEnd()}\n\n${back}` : back;
@@ -1177,14 +1188,89 @@ export function Chat({
     };
   }, [conversationId, voiceSession]);
 
-  /** The log as last scrolled: folding a thought adds nothing at the end, so
-   * the view stays on it. */
+  // Find in this chat (Ctrl+F). `at` is the row of the match the person is
+  // on, so rows that stream in, load above or go away don't move it; a new
+  // query starts on the newest match, as the old app did. `seek` counts typed
+  // queries and steps, the only things that move the view onto the match.
+  const [find, setFind] = useState<{ query: string; at: Item | null; seek: number } | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const hits = find ? findRows(items.map(itemText), find.query) : [];
+  // A folded or opened thought is a new object with the same words.
+  const isAt = (item: Item) =>
+    item === find?.at || (item.kind === "thought" && find?.at?.kind === "thought" && item.text === find.at.text);
+  const atHit = find?.at ? hits.findIndex((row) => isAt(items[row])) : -1;
+  const pick = atHit >= 0 ? atHit : Math.max(hits.length - 1, 0);
+  const findOpen = find !== null;
+  const seek = find?.seek ?? 0;
+
+  function findQuery(query: string) {
+    const rows = findRows(items.map(itemText), query);
+    setFind({ query, at: items[rows[rows.length - 1]] ?? null, seek: seek + 1 });
+  }
+
+  function findNext(forward: boolean) {
+    if (!find) return;
+    setFind({ query: find.query, at: items[hits[findStep(pick, hits.length, forward)]] ?? null, seek: seek + 1 });
+  }
+  // Another chat, or an emptied one, closes the bar.
+  const [findChat, setFindChat] = useState(conversationId);
+  if (findChat !== conversationId || (find && items.length === 0)) {
+    setFindChat(conversationId);
+    setFind(null);
+  }
+
+  function closeFind() {
+    setFind(null);
+    composerRef.current?.focus();
+  }
+
+  const onFindKey = useEffectEvent((event: globalThis.KeyboardEvent) => {
+    if (!isChatShortcut(event, "f", false)) return;
+    event.preventDefault();
+    // Holding the keys toggles once; a dialog over the chat keeps the keyboard.
+    if (event.repeat || dialogOpen()) return;
+    if (findOpen) closeFind();
+    else if (items.length > 0) setFind({ query: "", at: null, seek: 0 });
+  });
+  useEffect(() => {
+    if (!active || embedded) return;
+    const onKey = (event: globalThis.KeyboardEvent) => onFindKey(event);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, embedded]);
+
+  // Each row sits right after a hidden `data-row` marker, so a match is
+  // marked on the row's own element and each kind of row keeps its markup.
+  const hitRows = hits.join(",");
+  const current = hits[pick] ?? -1;
+  useEffect(() => {
+    const log = logRef.current;
+    if (!log) return;
+    for (const el of log.querySelectorAll("[data-find]")) el.removeAttribute("data-find");
+    if (!hitRows) return;
+    for (const i of hitRows.split(",").map(Number)) findRow(log, i)?.setAttribute("data-find", i === current ? "current" : "hit");
+  }, [hitRows, current, items]);
+  const centreMatch = useEffectEvent(() => {
+    const log = logRef.current;
+    if (log) findRow(log, current)?.scrollIntoView?.({ block: "center" });
+  });
+  useEffect(() => {
+    if (seek > 0) centreMatch();
+  }, [seek]);
+
+  // The log follows new rows to the end. Folding a thought adds nothing at
+  // the end, so the view stays on it; while find is open the log stays put,
+  // and closing find leaves the view on the match.
   const scrolledFor = useRef<Item[]>([]);
+  const followEnd = useEffectEvent((before: Item[]) => {
+    if (findOpen) return;
+    if (items.length > 0 && onlyFoldsChanged(before, items)) return;
+    endRef.current?.scrollIntoView?.({ block: "end" });
+  });
   useEffect(() => {
     const before = scrolledFor.current;
     scrolledFor.current = items;
-    if (items.length > 0 && onlyFoldsChanged(before, items)) return;
-    endRef.current?.scrollIntoView?.({ block: "end" });
+    followEnd(before);
   }, [items]);
 
   function startOver() {
@@ -1811,6 +1897,8 @@ export function Chat({
         <>
           <ChatTabs
             activeId={conversationId}
+            active={active}
+            busy={busy}
             draftEmpty={items.length === 0}
             onSwitch={openChat}
             onNew={startOver}
@@ -1829,8 +1917,18 @@ export function Chat({
       <Inbox
         onOpenChat={openChat}
       />
+      {find && (
+        <ChatFindBar
+          query={find.query}
+          label={findLabel(pick, hits.length, find.query)}
+          hasHits={hits.length > 0}
+          onQuery={findQuery}
+          onStep={findNext}
+          onClose={closeFind}
+        />
+      )}
       {/* Focusable so the keyboard can scroll a long conversation. */}
-      <div className="log" role="log" aria-live="polite" tabIndex={0}>
+      <div ref={logRef} className="log" role="log" aria-live="polite" tabIndex={0}>
         {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (
           <SignedOut remote={remote} grok={grokSignIn} onSignIn={onSignIn} />
         ) : (
@@ -1853,26 +1951,29 @@ export function Chat({
           </button>
         )}
         {items.map((item, i) => (
-          <LogItem
-            key={i}
-            item={item}
-            busy={busy}
-            thoughtsFolded={thoughtsFolded}
-            onFold={(fold) => foldThought(i, fold)}
-            onMenu={remote ? undefined : (x, y) => setMsgMenu({ i, at: { x, y } })}
-            nyxUrl={nyx?.url}
-            onAnswer={answer}
-            onAnswerCard={answerCard}
-            editable={embedded && lead}
-            onConfirm={settleConfirm}
-            onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
-            onFix={(text) => setDraft(text)}
-            onChipPick={(key) => {
-              void Promise.resolve()
-                .then(() => replyPick(key))
-                .catch(() => {});
-            }}
-          />
+          <Fragment key={i}>
+            {/* Find's marker for row i (display: none takes no gap). */}
+            <span hidden data-row={i} />
+            <LogItem
+              item={item}
+              busy={busy}
+              thoughtsFolded={thoughtsFolded}
+              onFold={(fold) => foldThought(i, fold)}
+              onMenu={remote ? undefined : (x, y) => setMsgMenu({ i, at: { x, y } })}
+              nyxUrl={nyx?.url}
+              onAnswer={answer}
+              onAnswerCard={answerCard}
+              editable={embedded && lead}
+              onConfirm={settleConfirm}
+              onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
+              onFix={(text) => setDraft(text)}
+              onChipPick={(key) => {
+                void Promise.resolve()
+                  .then(() => replyPick(key))
+                  .catch(() => {});
+              }}
+            />
+          </Fragment>
         ))}
         {busy && waiting && (
           <div className="bubble assistant streaming" data-role="assistant">
