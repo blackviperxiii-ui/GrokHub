@@ -700,7 +700,7 @@ select:focus-visible {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 12px var(--page-pad);
+  padding: 0 var(--page-pad) 12px;
   gap: 12px;
 }
 
@@ -757,6 +757,8 @@ select:focus-visible {
   align-items: center;
   flex-wrap: nowrap;
   min-width: 0;
+  /* The bar reaches the window's top edge, so all of it drags the window. */
+  padding-top: 12px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--red-dim);
 }
@@ -769,6 +771,9 @@ select:focus-visible {
 /* The window buttons (Linux, Windows): quiet icons at the bar's right end;
    Close turns red under the pointer. */
 .window-controls {
+  position: relative;
+  /* Over every dialog's backdrop, as a system title bar's buttons would be. */
+  z-index: 70;
   display: flex;
   flex: none;
   gap: 4px;
