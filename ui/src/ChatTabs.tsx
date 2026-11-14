@@ -16,6 +16,7 @@ import {
   listDeletedChats,
   type ChatTab,
 } from "./api";
+import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { ClearChatDialog } from "./ClearChat";
 import { useDismiss } from "./ui";
 
@@ -36,6 +37,8 @@ type Menu =
 
 export function ChatTabs({
   activeId,
+  active = true,
+  busy = false,
   draftEmpty,
   onSwitch,
   onNew,
@@ -43,6 +46,10 @@ export function ChatTabs({
   onError,
 }: {
   activeId: string;
+  /** The Chat tab is on screen, so Ctrl+Shift+A archives or unarchives this chat. */
+  active?: boolean;
+  /** A reply is running, so the open chat can't close yet and the key waits. */
+  busy?: boolean;
   /** Open empty draft shows as "New chat" until the first message names it. */
   draftEmpty: boolean;
   onSwitch: (id: string) => void;
@@ -159,6 +166,40 @@ export function ChatTabs({
   const shown = tabs.length > 0 ? tabs : [];
   const activeInList = shown.some((t) => t.id === activeId);
   const isMain = (id: string) => shown.some((t) => t.id === id && t.main);
+
+  /** Ctrl+Shift+A: archive the open chat, or unarchive it when it is archived
+   * (opened from History). Main and a chat with nothing saved yet stay. The
+   * lists load only when the open chat changes, so a chat they don't know yet
+   * (saved since, or the lists not in) is looked up first. */
+  const keyRunning = useRef(false);
+  async function archiveByKey(id: string) {
+    let live = tabs;
+    let arch = archived;
+    if (!live.some((t) => t.id === id) && !arch.some((t) => t.id === id)) {
+      try {
+        [live, arch] = await Promise.all([listChatTabs(), listArchivedChats()]);
+      } catch {
+        return;
+      }
+    }
+    if (arch.some((t) => t.id === id)) await restoreArchived(id);
+    else if (live.some((t) => t.id === id && !t.main)) await archive(id);
+  }
+  const archiveKey = useEffectEvent((event: KeyboardEvent) => {
+    if (!isChatShortcut(event, "a", true)) return;
+    event.preventDefault();
+    if (event.repeat || dialogOpen() || busy || draftEmpty || keyRunning.current) return;
+    keyRunning.current = true;
+    void archiveByKey(activeId).finally(() => {
+      keyRunning.current = false;
+    });
+  });
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (event: KeyboardEvent) => archiveKey(event);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active]);
 
   async function clear(id: string) {
     try {

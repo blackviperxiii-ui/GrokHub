@@ -1,0 +1,2 @@
+- Chat: Ctrl+F opens Find in this chat. It starts on the newest match, Enter and Shift+Enter step through matches (wrapping at both ends), and Esc closes it. It searches the messages on screen.
+- Chat: Ctrl+Shift+A archives the open chat, or unarchives one opened from the archive. The shortcut sheet (Ctrl+/) lists both keys.
