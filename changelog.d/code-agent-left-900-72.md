@@ -1,0 +1,1 @@
+- Code tab: agent panel on the left (~60%), editor on the right with Editor/Tests/Skills tabs and a drag handle.
