@@ -1,0 +1,2 @@
+- Pulse: screen recording and audio check cards open to their full report, and when the report has steps to try they offer Fix it. Fix it puts the steps, each with how to undo it, in the card's own chat. Nothing runs until you send it, and Grok then does the steps with its usual tools, so every step still goes through the approval checks.
+- Pulse: when a card folds in a newer run of the same source, it now shows the newest run's report and keeps what the app already did for it.

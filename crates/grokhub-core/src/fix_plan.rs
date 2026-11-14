@@ -3,6 +3,7 @@
 //! each step with the same hard-class vocabulary the harness uses.
 
 use crate::audio_check::AudioReport;
+use crate::card_report::{CardReport, FixOffer, DETAILS_MAX};
 use crate::host_plan::strip_host_cmd_line;
 use crate::recipe::{computer_cmd_line, parse_computer_op};
 use crate::screen_record::ScreenReport;
@@ -473,6 +474,54 @@ const DELETE_PHRASES: &[&str] = &[
     "sendtorecyclebin",
     "-exec rm ",
 ];
+/// The chip a diagnosis card shows when its report has steps to try.
+pub const FIX_LABEL: &str = "Fix it";
+
+/// What Fix it asks in the card's chat: the plan's steps in order, each with
+/// how to undo it. Grok does them with its usual tools, so every step still
+/// goes through the approval gate, and a hard step asks every time.
+pub fn fix_prompt(plan: &FixPlan) -> String {
+    let what = match plan.kind {
+        DiagnosisKind::Screen => "my screen recording",
+        DiagnosisKind::Audio => "my audio check",
+    };
+    let mut out = format!("Fix what {what} found, using the report's steps, one at a time:");
+    for (i, step) in plan.steps.iter().enumerate() {
+        out.push_str(&format!("\n{}. {}", i + 1, step.description));
+        if !step.rollback.is_empty() {
+            out.push_str(&format!(" (Undo: {})", step.rollback));
+        }
+    }
+    out.push_str("\n\nBefore each step, say what it will change. Ask me before anything that changes settings, files or devices, and stop if a step fails. Tell me which steps I have to do by hand.");
+    out
+}
+
+/// A diagnosis card's report: the full report to open, plus Fix it when the
+/// plan has steps. An empty plan (nothing to fix, or not fixable from here)
+/// offers nothing. The card's own title and line stay its headline, so a
+/// report that opens with the title drops that line.
+pub fn diagnosis_report(title: &str, details: &str, plan: &PlanBuild) -> CardReport {
+    let details = details.trim();
+    let title = title.trim();
+    let details = match details.split_once("\n\n") {
+        Some((first, rest)) if !title.is_empty() && first.trim().starts_with(title) => rest,
+        _ => details,
+    };
+    let offers = match plan {
+        PlanBuild::Plan(p) if !p.steps.is_empty() => vec![FixOffer {
+            label: FIX_LABEL.into(),
+            prompt: fix_prompt(p),
+            ..FixOffer::default()
+        }],
+        _ => Vec::new(),
+    };
+    CardReport {
+        details: details.trim().chars().take(DETAILS_MAX).collect(),
+        offers,
+        ..CardReport::default()
+    }
+}
+
 const MONEY_PHRASES: &[&str] = &["checkout", "purchase", "pay now", "place order", "buy now"];
 const SEND_PHRASES: &[&str] = &["send email", "send message", "publish post", "post to"];
 
@@ -607,5 +656,79 @@ mod tests {
             Some("pactl set-source-mute mic 0")
         );
         assert_eq!(plan.steps[1].approval, ApprovalNeed::None);
+    }
+
+    #[test]
+    fn a_report_with_steps_offers_fix_it_with_each_step_and_its_undo() {
+        let report = ScreenReport {
+            seen: "The settings menu opens slowly.".into(),
+            cause: "The menu loads every plugin first.".into(),
+            steps: vec!["Turn off unused plugins.".into(), "Restart the app.".into()],
+        };
+        let built = from_screen(&report);
+        let card = diagnosis_report(
+            "Screen recording 0:07",
+            "  Screen recording 0:07\n\nWhat I saw: slow.\n\nThe recording is in /home/user/r.  ",
+            &built,
+        );
+        // The title is the card's headline already.
+        assert_eq!(
+            card.details,
+            "What I saw: slow.\n\nThe recording is in /home/user/r."
+        );
+        assert_eq!(card.found, "");
+        assert_eq!(card.summary, "");
+        assert_eq!(card.offers.len(), 1);
+        assert_eq!(card.offers[0].label, "Fix it");
+        assert_eq!(
+            card.offers[0].prompt,
+            "Fix what my screen recording found, using the report's steps, one at a time:\n1. Turn off unused plugins. (Undo: Reverse the change manually in the same app or settings screen.)\n2. Restart the app. (Undo: Reverse the change manually in the same app or settings screen.)\n\nBefore each step, say what it will change. Ask me before anything that changes settings, files or devices, and stop if a step fails. Tell me which steps I have to do by hand."
+        );
+    }
+
+    #[test]
+    fn a_clean_or_unfixable_report_keeps_its_text_but_offers_nothing() {
+        let clean = from_screen(&ScreenReport {
+            seen: "All looks fine.".into(),
+            ..ScreenReport::default()
+        });
+        let unfixable = from_screen(&ScreenReport {
+            seen: "The screen is cracked.".into(),
+            cause: "Physical damage; no software fix.".into(),
+            steps: vec!["Replace the display panel.".into()],
+        });
+        for built in [clean, unfixable] {
+            let card = diagnosis_report("Screen recording 0:07", "The report.", &built);
+            assert_eq!(card.details, "The report.");
+            assert!(card.offers.is_empty(), "{built:?}");
+        }
+        let long = "x".repeat(DETAILS_MAX + 50);
+        assert_eq!(
+            diagnosis_report(
+                "",
+                &long,
+                &PlanBuild::Empty {
+                    reason: String::new()
+                }
+            )
+            .details
+            .len(),
+            DETAILS_MAX
+        );
+    }
+
+    #[test]
+    fn an_audio_fix_it_says_it_is_the_audio_check() {
+        let report = AudioReport {
+            title: "t".into(),
+            card_title: "t".into(),
+            summary: "s".into(),
+            text: "Problems:\n- Mic muted.\nSuggested fixes:\n1. Unmute Mic in System Settings → Sound.\n".into(),
+        };
+        let card = diagnosis_report("Audio check: Mic muted", &report.text, &from_audio(&report));
+        assert_eq!(
+            card.offers[0].prompt,
+            "Fix what my audio check found, using the report's steps, one at a time:\n1. Unmute Mic in System Settings → Sound. (Undo: Mute it again in System Settings → Sound if you want the previous state.)\n\nBefore each step, say what it will change. Ask me before anything that changes settings, files or devices, and stop if a step fails. Tell me which steps I have to do by hand."
+        );
     }
 }
