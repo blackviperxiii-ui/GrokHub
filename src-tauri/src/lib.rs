@@ -5255,8 +5255,10 @@ async fn pulse_done_undo(
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
     off_main(move || {
-        let line = done_for_you::undo(&dir, &id)?;
-        let page = pulse::load(&dir, Some(&day), grokhub_core::now_ms())?;
+        let now = grokhub_core::now_ms();
+        let clock = scheduler::local_clock(now, scheduler::utc_offset().unwrap_or(0));
+        let line = done_for_you::undo(&dir, &id, clock)?;
+        let page = pulse::load(&dir, Some(&day), now)?;
         Ok(ReviewDone { line, page })
     })
     .await?

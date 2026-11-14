@@ -98,7 +98,10 @@ fn every_switch_starts_off() {
             pause: PauseRow {
                 on: false,
                 label: "Pause an automation that keeps failing".into(),
-                note: crate::done_for_you::switch_note(),
+                note: format!(
+                    "Changes a {} setting, not your computer. Only after 5 failed runs in a row, only when \"When the AI wants to change things\" isn't \"Ask me first\", and only after you've tapped Pause it once yourself. A card says what it did, with Undo.",
+                    grokhub_core::brand::product_name()
+                ),
                 held: None,
             },
         }

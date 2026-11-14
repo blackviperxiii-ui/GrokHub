@@ -62,6 +62,19 @@ struct State {
     budget: AutoBudget,
     /// The last miss an `ask` span was written for: `[automation id, miss]`.
     last_ask: Option<(String, String)>,
+    /// Jobs the user turned back on, with their failure streak right then:
+    /// none is paused again until it fails [`PAUSE_AFTER`] more times.
+    resumed: Vec<(String, u32)>,
+    /// Pause lines (ledger seqs) whose undo MindCheck already heard.
+    answered: Vec<u64>,
+}
+
+/// How many `resumed` and `answered` entries the state keeps.
+const KEEP: usize = 32;
+
+fn keep_newest<T>(list: &mut Vec<T>) {
+    let extra = list.len().saturating_sub(KEEP);
+    list.drain(..extra);
 }
 
 fn state_path(config_dir: &Path) -> PathBuf {
@@ -108,12 +121,62 @@ pub fn set_on(config_dir: &Path, on: bool) -> Result<(), String> {
     grokhub_core::app_json::patch(config_dir, &[(SWITCH_KEY, json!(on))])
 }
 
+/// Error words that point at the account, the key, the model or the network,
+/// not at the job: every job fails on them, and pausing one would not help.
+const ACCOUNT_WIDE: [&str; 24] = [
+    "401",
+    "403",
+    "429",
+    "500",
+    "502",
+    "503",
+    "504",
+    "unauthori",
+    "forbidden",
+    "api key",
+    "credit",
+    "quota",
+    "rate limit",
+    "too many requests",
+    "billing",
+    "sign in",
+    "signed out",
+    "timed out",
+    "timeout",
+    "network",
+    "connection",
+    "offline",
+    "overloaded",
+    "unavailable",
+];
+
+fn account_wide(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    ACCOUNT_WIDE.iter().any(|word| error.contains(word))
+}
+
+/// Turned back on by the user, and not yet failed [`PAUSE_AFTER`] more times
+/// since. A streak below the one noted means it ran fine in between.
+fn resumed_lately(a: &Automation, resumed: &[(String, u32)]) -> bool {
+    resumed.iter().any(|(id, at)| {
+        *id == a.id
+            && a.health.fail_streak >= *at
+            && a.health.fail_streak < at.saturating_add(PAUSE_AFTER)
+    })
+}
+
 /// The job a pass may pause, if any: enabled, failing at least
-/// [`PAUSE_AFTER`] times in a row, an id the ledger can name as written, and
-/// an error no other failing job shares (a route or key error fails every
-/// job, and pausing one would not help). Nothing while the model route itself
-/// is down. The longest streak wins, ties by id.
-pub fn pausable(list: &[Automation], route_ok: bool) -> Option<&Automation> {
+/// [`PAUSE_AFTER`] times in a row, an id the ledger can name as written, an
+/// error that is about the job and that no other failing job shares (a route,
+/// key or network error fails every job, and pausing one would not help), and
+/// not turned back on by the user since its last [`PAUSE_AFTER`] failures.
+/// Nothing while the model route itself is down. The longest streak wins,
+/// ties by id.
+pub fn pausable<'a>(
+    list: &'a [Automation],
+    route_ok: bool,
+    resumed: &[(String, u32)],
+) -> Option<&'a Automation> {
     if !route_ok {
         return None;
     }
@@ -125,7 +188,8 @@ pub fn pausable(list: &[Automation], route_ok: bool) -> Option<&Automation> {
     list.iter()
         .filter(|a| a.enabled && a.health.failing() && a.health.fail_streak >= PAUSE_AFTER)
         .filter(|a| hx::entry_id(&a.id).is_ok_and(|id| id == a.id))
-        .filter(|a| !shared(a))
+        .filter(|a| !shared(a) && !account_wide(&a.health.error))
+        .filter(|a| !resumed_lately(a, resumed))
         .min_by(|a, b| {
             b.health
                 .fail_streak
@@ -248,8 +312,12 @@ pub fn tick_one(
         return None;
     }
     let list = crate::automations::load(config_dir).ok()?;
-    let job = pausable(&list, route_ok)?.clone();
+    let resumed = load_state(config_dir).resumed;
+    let job = pausable(&list, route_ok, &resumed)?.clone();
     let c = candidate(&job);
+    // The card's words are settled before anything runs: a pause must never
+    // happen without the card that says so and offers Undo.
+    let (title, why) = card_words(&c, &job, now_ms)?;
     let mind = hx::proactive_mind(config_dir, Arc::new(At(now_ms)));
     let day = crate::nudges::local_day(now_ms, offset_min);
     let ctx = ceiling_ctx(config_dir, &c.key, &mind, &day, quiet, busy);
@@ -261,9 +329,10 @@ pub fn tick_one(
         }
     };
     let run = crate::automations::with_store(config_dir, |list| {
-        // Read again under the lock: the job may have changed since.
-        let still = list.ok()?.into_iter().find(|a| a.id == job.id)?;
-        if !still.enabled {
+        // Ask again under the lock: the job may have run, recovered or been
+        // turned off since.
+        let list = list.ok()?;
+        if pausable(&list, route_ok, &resumed).map(|a| a.id.as_str()) != Some(job.id.as_str()) {
             return None;
         }
         let _pin = grokhub_agent::perm::ConfigGuard::set(config_dir);
@@ -282,27 +351,78 @@ pub fn tick_one(
         s.budget.spend(&day, act.candidate().undo);
         s.last_ask = None;
     });
-    let card = grokhub_core::update_feed::done_for_you_card(
-        &c.summary,
-        &c.why,
-        DoneForYou {
-            kind: KIND.into(),
-            target: job.id.clone(),
-            undo_ref: change.seq,
-            mind_key: c.key.clone(),
-            answered: false,
-        },
-        now_ms,
-    );
+    let card = done_card(&title, &why, &job.id, change.seq, &c.key, now_ms);
+    // The job's own failing card loses its Pause it chip: it is paused now.
+    retire_chips(config_dir, &job.id);
     match crate::pulse::add_post(config_dir, card.clone()) {
         Ok(true) => Some(card),
-        Ok(false) => None,
+        Ok(false) => {
+            eprintln!("done for you: Pulse turned down the card for {}", job.id);
+            None
+        }
         Err(e) => {
             // The job is paused and its ledger row in Settings > Behavior
             // still offers Undo.
             eprintln!("done for you: {e}");
             None
         }
+    }
+}
+
+fn done_card(
+    title: &str,
+    why: &str,
+    id: &str,
+    seq: u64,
+    key: &str,
+    now_ms: u64,
+) -> UpdateCard {
+    grokhub_core::update_feed::done_for_you_card(
+        title,
+        why,
+        DoneForYou {
+            kind: KIND.into(),
+            target: id.into(),
+            undo_ref: seq,
+            mind_key: key.into(),
+            answered: false,
+        },
+        now_ms,
+    )
+}
+
+/// The Done card's title and line. A job name or error that Pulse would turn
+/// down (it reads like "this job") falls back to plain words without them.
+fn card_words(c: &AutoCandidate, a: &Automation, now_ms: u64) -> Option<(String, String)> {
+    let named = (c.summary.clone(), c.why.clone());
+    let plain = (
+        format!(
+            "Paused an automation: it failed {} times in a row",
+            a.health.fail_streak
+        ),
+        "Undo turns it back on.".to_string(),
+    );
+    [named, plain].into_iter().find(|(title, why)| {
+        grokhub_core::update_feed::names_its_item(&done_card(title, why, &a.id, 0, &c.key, now_ms))
+    })
+}
+
+/// Take the Pause it chip off every card that offers it for job `id`.
+fn retire_chips(config_dir: &Path, id: &str) {
+    let edited = crate::pulse::edit_cards(config_dir, &mut |cards| {
+        let mut changed = 0;
+        for card in cards.iter_mut() {
+            if chip_target(card).as_deref() == Some(id) {
+                if let Some(meta) = card.pulse.proactive.as_mut() {
+                    meta.arguments = None;
+                    changed += 1;
+                }
+            }
+        }
+        changed
+    });
+    if let Err(e) = edited {
+        eprintln!("done for you: {e}");
     }
 }
 
@@ -394,18 +514,21 @@ pub fn pause_from_card(config_dir: &Path, card_id: &str, now_ms: u64) -> Result<
             return 0;
         };
         add_receipt(stored, receipt.clone());
-        if let Some(meta) = stored.pulse.proactive.as_mut() {
-            meta.arguments = None;
-        }
         1
     })?;
+    retire_chips(config_dir, &id);
     crate::proactive::card_acted(config_dir, &card, crate::proactive::Feedback::Used, now_ms);
     Ok(format!("Paused {name}. Undo is in Settings > Behavior."))
 }
 
-/// A Done card's Undo: turns the job back on from the exact ledger line the
-/// pause wrote. A newer change on the same job is refused.
-pub fn undo(config_dir: &Path, card_id: &str) -> Result<String, String> {
+/// A Done card's Undo: turns the job back on as it is now, through the
+/// ledger line the pause wrote. Edits and runs since the pause stay. A newer
+/// ledger change on the same job is refused.
+pub fn undo(
+    config_dir: &Path,
+    card_id: &str,
+    clock: grokhub_core::LocalClock,
+) -> Result<String, String> {
     let card = find_card(config_dir, card_id)?;
     let done = card
         .done_for_you
@@ -429,13 +552,10 @@ pub fn undo(config_dir: &Path, card_id: &str) -> Result<String, String> {
             mark_answered(config_dir, &done.target, Some(done.undo_ref));
             Ok(format!("{} is already back on.", job_name(&a)))
         }
-        Some(_) => crate::changes::undo_seq(
-            config_dir,
-            ChangeKind::Automation,
-            &done.target,
-            Some(done.undo_ref),
-            true,
-        ),
+        Some(a) => {
+            crate::changes::undo_pause(config_dir, &done.target, done.undo_ref, clock)?;
+            Ok(format!("Turned {} back on.", job_name(&a)))
+        }
     }
 }
 
@@ -455,46 +575,60 @@ pub fn turned_back_on(config_dir: &Path, id: &str) {
     answer_undo(config_dir, id, None);
 }
 
+/// A paused job is on again. Its streak is noted so it is not paused again
+/// until it fails [`PAUSE_AFTER`] more times. When the pause was a Done for
+/// you or Pause it one (the line undone, else the line still in effect on
+/// `id`), MindCheck hears one `undo` for it, and its Done card's buttons go.
 fn answer_undo(config_dir: &Path, id: &str, seq: Option<u64>) {
-    let cards = crate::pulse::cards(config_dir).unwrap_or_default();
-    let ours = |c: &&UpdateCard| {
-        c.done_for_you.as_ref().is_some_and(|d| {
-            d.kind == KIND && d.target == id && seq.is_none_or(|s| d.undo_ref == s)
-        })
-    };
-    let seqs: Vec<u64> = match seq {
-        Some(s) => vec![s],
-        None => cards
-            .iter()
-            .filter(ours)
-            .filter_map(|c| c.done_for_you.as_ref())
-            .filter(|d| !d.answered)
-            .map(|d| d.undo_ref)
-            .collect(),
-    };
-    if seqs.is_empty() {
-        return;
-    }
-    let spans = hx::read_spans(config_dir, hx::PROACTIVE_TRACE).unwrap_or_default();
-    for s in &seqs {
-        let undo_ref = format!("{KIND}:{s}");
-        let answered = cards.iter().filter(ours).any(|c| {
-            c.done_for_you
-                .as_ref()
-                .is_some_and(|d| d.undo_ref == *s && d.answered)
+    let streak = crate::automations::load(config_dir)
+        .ok()
+        .and_then(|list| list.into_iter().find(|a| a.id == id))
+        .map(|a| a.health.fail_streak);
+    if let Some(streak) = streak {
+        change_state(config_dir, |s| {
+            s.resumed.retain(|(job, _)| job != id);
+            s.resumed.push((id.to_string(), streak));
+            keep_newest(&mut s.resumed);
         });
-        let auto = spans
+    }
+    let seq = seq.or_else(|| {
+        hx::ChangeLedger::load_kind(config_dir, ChangeKind::Automation)
+            .undo_target(id)
+            .map(|c| c.seq)
+    });
+    let Some(seq) = seq else {
+        return;
+    };
+    let undo_ref = format!("{KIND}:{seq}");
+    let spans = hx::read_spans(config_dir, hx::PROACTIVE_TRACE).unwrap_or_default();
+    let pause = spans.iter().find(|sp| {
+        sp.tool == TOOL
+            && sp.undo_ref == undo_ref
+            && (sp.decision == hx::DECISION_AUTO || sp.decision == hx::DECISION_APPROVE)
+    });
+    if let Some(pause) = pause {
+        let card_answered = crate::pulse::cards(config_dir)
+            .unwrap_or_default()
             .iter()
-            .find(|sp| sp.decision == hx::DECISION_AUTO && sp.undo_ref == undo_ref);
-        if let (Some(auto), false) = (auto, answered) {
-            let key = hx::mind_key(auto);
+            .filter_map(|c| c.done_for_you.as_ref())
+            .any(|d| d.kind == KIND && d.target == id && d.undo_ref == seq && d.answered);
+        let fresh = !card_answered
+            && change_state(config_dir, |s| {
+                if s.answered.contains(&seq) {
+                    return false;
+                }
+                s.answered.push(seq);
+                keep_newest(&mut s.answered);
+                true
+            });
+        if fresh {
             hx::note_proactive(
                 config_dir,
-                &hx::answer_span(&key, hx::DECISION_UNDO, AccessMode::Supervised),
+                &hx::answer_span(&hx::mind_key(pause), hx::DECISION_UNDO, AccessMode::Supervised),
             );
         }
-        mark_answered(config_dir, id, Some(*s));
     }
+    mark_answered(config_dir, id, Some(seq));
 }
 
 fn mark_answered(config_dir: &Path, id: &str, seq: Option<u64>) {
