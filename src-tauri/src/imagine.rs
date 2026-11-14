@@ -510,7 +510,15 @@ pub fn paint_cover(
         Ok(dest.display().to_string())
     };
     let path_a = frame(seed.prompt, "a")?;
-    let path_b = frame(seed.prompt_b, "b").unwrap_or_else(|_| path_a.clone());
+    let path_b = match frame(seed.prompt_b, "b") {
+        Ok(path) => path,
+        // Stop between the stills is a stop, not a one-frame cover.
+        Err(_) if stop() => {
+            let _ = std::fs::remove_file(&path_a);
+            return Err(STOPPED.into());
+        }
+        Err(_) => path_a.clone(),
+    };
     Ok(WallGif {
         id: id.to_string(),
         title: seed.title.to_string(),
@@ -920,6 +928,19 @@ mod tests {
         assert_eq!(files(&wall_dir(&d.config)), 1);
         // Pinning and the wall file are the look's job, not the paint's.
         assert!(!d.config.join(WALL_FILE).exists());
+    }
+
+    #[test]
+    fn stop_after_the_first_still_paints_no_cover_and_keeps_no_frame() {
+        let d = dirs("cover-stopped");
+        let seed = &grokhub_core::WALL_SEEDS[0];
+        let api = FakeImagine::default();
+        // Stop lands once the first still has gone out.
+        let stop = || !api.posts.lock().unwrap().is_empty();
+        let err = paint_cover(&d.config, &api, &stop, seed, "abc", NOW).unwrap_err();
+        assert_eq!(err, "Stopped.");
+        assert_eq!(api.posts.lock().unwrap().len(), 1);
+        assert_eq!(files(&wall_dir(&d.config)), 0);
     }
 
     #[test]

@@ -13,10 +13,10 @@
 //! - Halt holds background work (`night::halted`);
 //! - a chat is running, a decision waits or a game is on;
 //! - the chat you have open is a scratch chat;
-//! - there is nothing to sign an Imagine call with;
 //! - the last cover (or Make) is under three hours old, or it is quiet hours;
 //! - a failed cover is under fifteen minutes old (kept in memory as well as
 //!   on disk, so a wall file that can't be written still holds it);
+//! - there is nothing to sign an Imagine call with;
 //! - Imagine is already making something on the page.
 //!
 //! The keychain is read only once every cheaper gate has passed.
@@ -140,9 +140,6 @@ pub fn look(cx: &Cx<'_>, paint: &Paint<'_>) -> Look {
     if cx.now < cx.not_before {
         return Look::Held(Hold::NotDue);
     }
-    if !(cx.signed_in)() {
-        return Look::Held(Hold::NoSignIn);
-    }
     let Ok((last_ms, titles)) = crate::imagine::wall_state(dir) else {
         return Look::Held(Hold::NotDue);
     };
@@ -154,6 +151,9 @@ pub fn look(cx: &Cx<'_>, paint: &Paint<'_>) -> Look {
         } else {
             Hold::NotDue
         });
+    }
+    if !(cx.signed_in)() {
+        return Look::Held(Hold::NoSignIn);
     }
     let Ok(run) = crate::imagine::start() else {
         return Look::Held(Hold::Making);

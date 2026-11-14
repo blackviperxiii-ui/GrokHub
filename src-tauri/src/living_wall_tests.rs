@@ -191,8 +191,18 @@ fn the_next_cover_waits_three_hours_and_quiet_hours_hold_it() {
     let calls = Cell::new(0);
     let paint = painter(&config, &calls);
     let almost = NOON + WALL_GIF_EVERY_MS - 1;
-    assert_eq!(look(&cx(&config, almost), &paint), Look::Held(Hold::NotDue));
-    assert_eq!(calls.get(), 0);
+    // Not due yet: the keychain stays shut.
+    let asked = Cell::new(0);
+    let keychain = || {
+        asked.set(asked.get() + 1);
+        true
+    };
+    let early = Cx {
+        signed_in: &keychain,
+        ..cx(&config, almost)
+    };
+    assert_eq!(look(&early, &paint), Look::Held(Hold::NotDue));
+    assert_eq!((calls.get(), asked.get()), (0, 0));
 
     let mut settings = crate::settings::load(&config);
     settings.behavior.quiet_start = "00:00".into();
