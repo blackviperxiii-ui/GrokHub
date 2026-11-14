@@ -285,7 +285,7 @@ pub fn report_text(title: &str, report: &ScreenReport, dir: &Path) -> String {
         }
     }
     out.push_str(&format!(
-        "\nNothing was changed on this computer. The recording is in {}. Delete it from its card in the feed.",
+        "\nNothing was changed on this computer. The recording is in {}.",
         dir.display()
     ));
     out
@@ -411,7 +411,7 @@ mod tests {
         let dir = Path::new("/home/ada/GrokHub/recordings/r1");
         assert_eq!(
             report_text("Screen recording 0:42: video stutters", &report, dir),
-            "Screen recording 0:42: video stutters\n\nWhat I saw: Firefox plays a 4K YouTube video. The picture freezes every few seconds.\nLikely cause: Hardware video decoding is off.\nSuggested fix steps:\n1. Open about:support and check Hardware Video Decoding.\n2. Set media.ffmpeg.vaapi.enabled to true.\n3. Restart Firefox.\n\nNothing was changed on this computer. The recording is in /home/ada/GrokHub/recordings/r1. Delete it from its card in the feed."
+            "Screen recording 0:42: video stutters\n\nWhat I saw: Firefox plays a 4K YouTube video. The picture freezes every few seconds.\nLikely cause: Hardware video decoding is off.\nSuggested fix steps:\n1. Open about:support and check Hardware Video Decoding.\n2. Set media.ffmpeg.vaapi.enabled to true.\n3. Restart Firefox.\n\nNothing was changed on this computer. The recording is in /home/ada/GrokHub/recordings/r1."
         );
         let loose = parse_report("The screen looks fine.");
         assert_eq!(loose.seen, "The screen looks fine.");

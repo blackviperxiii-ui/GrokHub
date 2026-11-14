@@ -133,6 +133,9 @@ export type ChatEvent =
   | { kind: "error"; message: string }
   | { kind: "done"; stop: string }
   | { kind: "plan"; text: string }
+  /** A report written into the chat after its reply ended, such as a screen
+   * recording's. It comes as a helper event and is saved with the chat. */
+  | { kind: "report"; text: string }
   /** One-tap follow-ups for the reply that just ended; most replies get none. */
   | { kind: "suggestions"; items: QuickChip[] }
   /** A game goal the reply noticed, to Track or leave with Not now. */
@@ -4763,11 +4766,15 @@ export interface RecordEvent {
   kind: "record" | "audio";
   ok: boolean;
   text: string;
+  /** The chat a recording's report went into; empty when none did. */
+  chat: string;
 }
 
 export interface RecordStatus {
   recording: RecordLine | null;
   listening: RecordLine | null;
+  /** After Stop, while Grok looks at the recording's stills. */
+  diagnosing: RecordLine | null;
   events: RecordEvent[];
 }
 

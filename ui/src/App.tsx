@@ -615,7 +615,12 @@ export function App() {
         {canHalt && (
           <RecordIndicator
             onEvent={(event) =>
-              notify(event.ok ? "success" : "error", event.text, undefined, event.kind === "audio" ? "Audio check" : "Screen recording")
+              notify(
+                event.ok ? "success" : "error",
+                event.text,
+                event.chat ? { kind: "chat", label: "Open report", id: event.chat } : undefined,
+                event.kind === "audio" ? "Audio check" : "Screen recording",
+              )
             }
             onLive={setRecLive}
           />

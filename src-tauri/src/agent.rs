@@ -240,6 +240,12 @@ pub enum UiEvent {
         recovery: String,
         tool_ran_not_verified: bool,
     },
+    /// A report something on this computer wrote into the chat after its
+    /// reply ended, such as a screen recording's diagnosis. It is saved as
+    /// an assistant message, so it reads the same when the chat opens later.
+    Report {
+        text: String,
+    },
 }
 
 /// One finding on a findings card.
@@ -1095,6 +1101,82 @@ struct Worker {
     desk_on: Arc<AtomicBool>,
 }
 
+/// Reports written into a chat from outside its worker, such as a screen
+/// recording's, and what the worker must do about them.
+#[derive(Default)]
+struct Late {
+    /// The worker is in a turn: a report waits for the turn to be saved, so
+    /// it lands after it, and after a compaction that turn wrote.
+    running: bool,
+    /// The chat's file gained a report: the next message reads it back.
+    reload: bool,
+    /// Reports that came mid-turn, with the folder their chat works in.
+    pending: Vec<(String, String)>,
+}
+
+type LateMap = std::collections::HashMap<String, Late>;
+
+fn late() -> std::sync::MutexGuard<'static, LateMap> {
+    static LATE: std::sync::LazyLock<Mutex<LateMap>> = std::sync::LazyLock::new(Mutex::default);
+    LATE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn write_report(chat: &str, cwd: &str, text: &str) -> Result<(), String> {
+    grokhub_agent::record_turn(
+        chat,
+        cwd,
+        grokhub_core::model_for_mode("fast"),
+        &[grokhub_agent::InputItem::Message {
+            role: "assistant".into(),
+            content: vec![grokhub_agent::ContentPart::InputText(text.to_string())],
+        }],
+        &grokhub_agent::Usage::default(),
+        "",
+        "",
+    )
+}
+
+/// Save `text` into `chat` as Grok's message, so it shows when the chat
+/// opens and Grok reads it with the next message. During a turn it is saved
+/// when the turn ends.
+pub fn save_report(chat: &str, cwd: &str, text: &str) -> Result<(), String> {
+    let mut late = late();
+    let entry = late.entry(chat.to_string()).or_default();
+    if entry.running {
+        entry.pending.push((cwd.to_string(), text.to_string()));
+        return Ok(());
+    }
+    write_report(chat, cwd, text)?;
+    entry.reload = true;
+    Ok(())
+}
+
+/// A turn starts: reports wait until it ends. True when the chat's file
+/// gained a report since the last turn, so the engine reads it back.
+fn turn_starts(chat: &str) -> bool {
+    let mut late = late();
+    let entry = late.entry(chat.to_string()).or_default();
+    entry.running = true;
+    std::mem::take(&mut entry.reload)
+}
+
+/// The turn is saved: the reports that came meanwhile go in after it.
+fn turn_ends(chat: &str) {
+    let mut late = late();
+    let Some(entry) = late.get_mut(chat) else {
+        return;
+    };
+    entry.running = false;
+    for (cwd, text) in std::mem::take(&mut entry.pending) {
+        if write_report(chat, &cwd, &text).is_ok() {
+            entry.reload = true;
+        }
+    }
+    if !entry.reload {
+        late.remove(chat);
+    }
+}
+
 fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     let Worker {
         id: conversation_id,
@@ -1173,8 +1255,16 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         if route.lead {
             crate::task_feed::touch(&conversation_id);
         }
+        let reload = turn_starts(&conversation_id);
         let engine = match (&mut engine, inbox.take()) {
             (Some(engine), _) => {
+                // A report was saved into this chat between turns: read the
+                // chat back from its file, so the model sees it too.
+                if reload {
+                    if let Ok(info) = grokhub_agent::load_session(&conversation_id) {
+                        engine.resume(info.input(), info.usage);
+                    }
+                }
                 engine.set_workspace(route.workspace);
                 engine.set_gate(gate);
                 engine.set_route(route.client, model, effort, system, route.auth_kind);
@@ -1182,6 +1272,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             }
             (none, inbox) => {
                 let Some(inbox) = inbox else {
+                    turn_ends(&conversation_id);
                     let _ = done.send(Err("The chat worker stopped.".into()));
                     return;
                 };
@@ -1382,6 +1473,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             }
             emit(ui);
         });
+        turn_ends(&conversation_id);
         crate::helper_asks::turn_ended(&conversation_id);
         if route.lead {
             crate::task_feed::touch(&conversation_id);
@@ -2799,6 +2891,180 @@ mod tests {
             })
             .unwrap_or_default();
         (result, user)
+    }
+
+    /// [`Answers`], but its first call waits for `go`, so a test can act
+    /// while that turn runs.
+    struct Gated {
+        requests: Mutex<Vec<ResponsesRequest>>,
+        go: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    }
+
+    impl ModelClient for Gated {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            self.requests.lock().expect("requests").push(req.clone());
+            let wait = self.go.lock().expect("go").take();
+            if let Some(go) = wait {
+                go.recv_timeout(Duration::from_secs(10)).expect("go");
+            }
+            sink(StreamEvent::TextDelta("Seen.".into()));
+            Ok(TurnOutput {
+                text: "Seen.".into(),
+                ..TurnOutput::default()
+            })
+        }
+    }
+
+    const REPORT: &str = "Screen recording 0:12: slow menu\n\nWhat I saw: The menu opens slowly.";
+
+    /// The chat's messages in a request: the system rules and each user
+    /// message's per-turn notes left out.
+    fn said(req: &ResponsesRequest) -> Vec<(String, String)> {
+        req.input
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::Message { role, content } if role == "user" || role == "assistant" => {
+                    let text = texts(content);
+                    let words = text
+                        .rsplit_once("</cabin-volatile>\n\n")
+                        .map_or(text.as_str(), |(_, words)| words);
+                    Some((role.clone(), words.to_string()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn chat_route(client: &Arc<Gated>, workspace: &std::path::Path) -> Route {
+        Route {
+            client: Arc::clone(client) as Arc<dyn ModelClient + Send + Sync>,
+            auth_kind: AuthKind::ApiKey,
+            workspace: workspace.to_path_buf(),
+            mode: PermMode::Ask,
+            desktop: false,
+            session: SessionMode::Chat,
+            voice: String::new(),
+            voice_session: None,
+            suggestions: false,
+            lead: false,
+        }
+    }
+
+    /// A report saved into the chat between turns reaches the model with
+    /// the next message, though the chat's worker was already running.
+    #[test]
+    fn a_report_saved_between_turns_reaches_the_next_request() {
+        let (workspace, config) = (temp_dir("report-ws"), temp_dir("report-cfg"));
+        let id = "shell-report-reload";
+        let client = Arc::new(Gated {
+            requests: Mutex::new(Vec::new()),
+            go: Mutex::new(None),
+        });
+        let session = Session::spawn_with(id, config.clone(), fake_desktop);
+        let first = session.prompt(
+            "record my screen",
+            vec![],
+            chat_route(&client, &workspace),
+            Box::new(|_| {}),
+        );
+        assert_eq!(first, Ok("end_turn".to_string()));
+        {
+            let _config = grokhub_agent::perm::ConfigGuard::set(&config);
+            save_report(id, &workspace.display().to_string(), REPORT).expect("saved");
+        }
+        let second = session.prompt(
+            "what was step one?",
+            vec![],
+            chat_route(&client, &workspace),
+            Box::new(|_| {}),
+        );
+        assert_eq!(second, Ok("end_turn".to_string()));
+        let requests = client.requests.lock().expect("requests");
+        let pair = |role: &str, text: &str| (role.to_string(), text.to_string());
+        assert_eq!(
+            said(&requests[1]),
+            vec![
+                pair("user", "record my screen"),
+                pair("assistant", "Seen."),
+                pair("assistant", REPORT),
+                pair("user", "what was step one?"),
+            ]
+        );
+        assert!(!turn_starts(id), "the mark is spent");
+        turn_ends(id);
+    }
+
+    /// A report that comes while a turn runs waits for the turn to be saved,
+    /// then lands after it, on screen order, for the next message.
+    #[test]
+    fn a_report_during_a_turn_lands_after_it() {
+        let (workspace, config) = (temp_dir("report-mid-ws"), temp_dir("report-mid-cfg"));
+        let id = "shell-report-mid";
+        let (go, wait) = std::sync::mpsc::channel();
+        let client = Arc::new(Gated {
+            requests: Mutex::new(Vec::new()),
+            go: Mutex::new(Some(wait)),
+        });
+        let session = Arc::new(Session::spawn_with(id, config.clone(), fake_desktop));
+        let running = {
+            let (session, client, workspace) =
+                (Arc::clone(&session), Arc::clone(&client), workspace.clone());
+            std::thread::spawn(move || {
+                session.prompt(
+                    "record my screen",
+                    vec![],
+                    chat_route(&client, &workspace),
+                    Box::new(|_| {}),
+                )
+            })
+        };
+        let t = std::time::Instant::now();
+        while client.requests.lock().expect("requests").is_empty() {
+            assert!(
+                t.elapsed() < Duration::from_secs(10),
+                "the turn never asked"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let file = config.join("sessions").join(format!("{id}.jsonl"));
+        {
+            let _config = grokhub_agent::perm::ConfigGuard::set(&config);
+            save_report(id, &workspace.display().to_string(), REPORT).expect("queued");
+        }
+        let mid = std::fs::read_to_string(&file).unwrap_or_default();
+        assert!(
+            !mid.contains("What I saw"),
+            "nothing is written mid-turn: {mid}"
+        );
+        go.send(()).expect("go");
+        assert_eq!(running.join().expect("join"), Ok("end_turn".to_string()));
+        let saved = std::fs::read_to_string(&file).expect("saved");
+        let seen = saved.find("Seen.").expect("the reply");
+        let report = saved.find("What I saw").expect("the report");
+        assert!(seen < report, "the report comes after the turn: {saved}");
+        let next = session.prompt(
+            "what was step one?",
+            vec![],
+            chat_route(&client, &workspace),
+            Box::new(|_| {}),
+        );
+        assert_eq!(next, Ok("end_turn".to_string()));
+        let requests = client.requests.lock().expect("requests");
+        let pair = |role: &str, text: &str| (role.to_string(), text.to_string());
+        assert_eq!(
+            said(&requests[1]),
+            vec![
+                pair("user", "record my screen"),
+                pair("assistant", "Seen."),
+                pair("assistant", REPORT),
+                pair("user", "what was step one?"),
+            ]
+        );
     }
 
     fn png_bytes() -> Vec<u8> {

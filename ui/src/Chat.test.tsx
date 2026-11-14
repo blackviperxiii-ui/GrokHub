@@ -1589,6 +1589,39 @@ describe("Chat", () => {
     expect(api.answerPermission).toHaveBeenLastCalledWith(id, "h1", "allow");
   });
 
+  it("shows a screen recording's report in its own chat after the reply ended", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("record it");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeDisabled());
+
+    const text = "Screen recording 0:12: slow menu\n\nWhat I saw: The menu opens slowly.";
+    act(() => api.handler?.({ conversationId: id, event: { kind: "report", text }, helper: true }));
+    act(() =>
+      api.handler?.({ conversationId: "another-chat", event: { kind: "report", text: "Not this chat" }, helper: true }),
+    );
+
+    expect(await screen.findByText(/What I saw: The menu opens slowly\./)).toBeInTheDocument();
+    expect(screen.queryByText("Not this chat")).toBeNull();
+  });
+
+  it("keeps a streaming reply in one bubble when a report arrives mid-reply", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("go");
+    emit(id, { kind: "text", text: "First half, " });
+    act(() =>
+      api.handler?.({ conversationId: id, event: { kind: "report", text: "Screen recording report" }, helper: true }),
+    );
+    emit(id, { kind: "text", text: "second half." });
+    act(() => finish());
+
+    expect(await screen.findByText("First half, second half.")).toBeInTheDocument();
+    const report = screen.getByText("Screen recording report");
+    const reply = screen.getByText("First half, second half.");
+    expect(report.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("a turn's end retires its own cards but leaves a helper's question open", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

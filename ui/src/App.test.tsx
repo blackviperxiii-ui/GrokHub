@@ -53,7 +53,7 @@ const api = vi.hoisted(() => ({
   shareSchedulerClock: vi.fn(() => Promise.resolve()),
   quickChips: vi.fn(() => Promise.resolve([])),
   chipOutcome: vi.fn(() => Promise.resolve(true)),
-  recordStatus: vi.fn<() => Promise<RecordStatus>>(() => Promise.resolve({ recording: null, listening: null, events: [] })),
+  recordStatus: vi.fn<() => Promise<RecordStatus>>(() => Promise.resolve({ recording: null, listening: null, diagnosing: null, events: [] })),
   recordStop: vi.fn(() => Promise.resolve(false)),
   getPrivacy: vi.fn(() => Promise.reject(new Error("not mocked"))),
   getPersonalities: vi.fn(() => Promise.reject(new Error("not mocked"))),
@@ -872,6 +872,7 @@ describe("App", () => {
       api.recordStatus.mockResolvedValue({
         recording: { secs: 42, text: "● Recording 0:42 of 2:00" },
         listening: null,
+        diagnosing: null,
         events: [],
       });
       const live = render(<App />);
@@ -880,7 +881,7 @@ describe("App", () => {
       expect(live.container.querySelector(".app")).not.toHaveClass("bar-away");
       expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     } finally {
-      api.recordStatus.mockResolvedValue({ recording: null, listening: null, events: [] });
+      api.recordStatus.mockResolvedValue({ recording: null, listening: null, diagnosing: null, events: [] });
       vi.unstubAllGlobals();
     }
   });

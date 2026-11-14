@@ -5,10 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RecordStatus } from "./api";
 import { RecordIndicator, STOP_TITLE } from "./RecordIndicator";
 
-const IDLE: RecordStatus = { recording: null, listening: null, events: [] };
+const IDLE: RecordStatus = { recording: null, listening: null, diagnosing: null, events: [] };
 const LIVE: RecordStatus = {
   recording: { secs: 42, text: "● Recording 0:42 of 2:00" },
   listening: null,
+  diagnosing: null,
   events: [],
 };
 
@@ -91,9 +92,30 @@ describe("RecordIndicator", () => {
     expect(onLive.mock.calls).toEqual([[true], [false]]);
   });
 
+  it("swaps the clock for a quiet line while Grok looks at the stills", async () => {
+    vi.useFakeTimers();
+    const onLive = vi.fn();
+    const looking = { ...IDLE, diagnosing: { secs: 0, text: "Looking at 6 stills…" } };
+    const poll = vi.fn().mockResolvedValueOnce(LIVE).mockResolvedValueOnce(looking).mockResolvedValue(IDLE);
+    const { container } = render(<RecordIndicator onEvent={vi.fn()} onLive={onLive} poll={poll} everyMs={1000} />);
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(screen.getByText("Looking at 6 stills…")).toBeInTheDocument();
+    expect(screen.queryByText("● Recording 0:42 of 2:00")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(container).toBeEmptyDOMElement();
+    expect(onLive.mock.calls).toEqual([[true], [false]]);
+  });
+
   it("hands each finished run over once", async () => {
     const onEvent = vi.fn();
-    const done = { kind: "record" as const, ok: true, text: "Screen recording 0:07: 4 stills saved" };
+    const done = { kind: "record" as const, ok: true, text: "Screen recording 0:07: 4 stills saved", chat: "chat-1" };
     const poll = vi.fn().mockResolvedValue({ ...IDLE, events: [done] });
     render(<RecordIndicator onEvent={onEvent} poll={poll} />);
     await act(async () => {});

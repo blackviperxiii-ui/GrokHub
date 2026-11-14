@@ -170,7 +170,7 @@ fn chat_folder(config_dir: &Path, conversation_id: &str) -> Result<PathBuf, Stri
         .join("attach"))
 }
 
-fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+pub(crate) fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
         Some("image/png")
     } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
@@ -182,7 +182,7 @@ fn image_mime(bytes: &[u8]) -> Option<&'static str> {
 
 /// Width and height from the header only, never a decode: a tiny file can
 /// claim 50k by 50k.
-fn image_size(bytes: &[u8]) -> Option<(u32, u32)> {
+pub(crate) fn image_size(bytes: &[u8]) -> Option<(u32, u32)> {
     match image_mime(bytes)? {
         "image/png" => png_ihdr_size(bytes),
         _ => image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Jpeg)

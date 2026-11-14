@@ -2,7 +2,9 @@
 // indicator. While a recording runs it shows the red clock and a Stop button
 // and never hides; the audio check shows its own line while the microphone is
 // open. `onLive` tells the app when either starts and ends, so the bar it
-// sits in stays on screen meanwhile. Finished runs go to the notice bell once.
+// sits in stays on screen meanwhile. After Stop the clock goes at once and a
+// quiet line says Grok is looking at the stills. Finished runs go to the
+// notice bell once.
 import { useEffect, useEffectEvent, useState } from "react";
 import { recordStatus, recordStop, type RecordEvent, type RecordStatus } from "./api";
 
@@ -39,7 +41,7 @@ export function RecordIndicator({
         if (!live) return;
         setStatus(next);
         if (!next.recording) setStopping(false);
-        const now = Boolean(next.recording || next.listening);
+        const now = Boolean(next.recording || next.listening || next.diagnosing);
         if (now !== running) {
           running = now;
           report(now);
@@ -57,7 +59,7 @@ export function RecordIndicator({
     };
   }, [poll, everyMs]);
 
-  if (!status || (!status.recording && !status.listening)) return null;
+  if (!status || (!status.recording && !status.listening && !status.diagnosing)) return null;
   return (
     <div className="record-indicator" role="status" aria-live="polite">
       {status.recording && (
@@ -78,6 +80,7 @@ export function RecordIndicator({
         </>
       )}
       {status.listening && <span className="record-line">{status.listening.text}</span>}
+      {status.diagnosing && <span className="record-line">{status.diagnosing.text}</span>}
     </div>
   );
 }
