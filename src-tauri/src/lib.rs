@@ -5678,6 +5678,30 @@ async fn new_share_code(
     off_main(move || share.new_code()).await
 }
 
+/// The chat's device glance: "Sharing" while this computer's hub is on, or
+/// the newest screenshot, from desktop control in any chat or from a paired
+/// computer. Memory only; `None` hides it. Desktop only.
+#[cfg(desktop)]
+#[tauri::command]
+fn get_device_glance(
+    state: State<'_, ShellState>,
+    share: State<'_, Arc<hub_share::HubShare>>,
+) -> Option<hub_share::DeviceGlance> {
+    let chats: Vec<Arc<agent::Session>> = state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .cloned()
+        .collect();
+    let (sharing, theirs) = share.glance();
+    let frames = chats
+        .iter()
+        .filter_map(|chat| chat.stamped_frame())
+        .chain(theirs);
+    hub_share::device_glance(sharing, frames)
+}
+
 /// Settings → Behavior: the tray, the composer and the limits on scheduled work.
 #[tauri::command]
 fn get_behavior(state: State<'_, ShellState>) -> settings::BehaviorView {
@@ -7108,6 +7132,8 @@ pub fn run() {
             forget_all_devices,
             #[cfg(desktop)]
             get_share,
+            #[cfg(desktop)]
+            get_device_glance,
             #[cfg(desktop)]
             start_share,
             #[cfg(desktop)]

@@ -673,6 +673,11 @@ impl Session {
         self.frames.get()
     }
 
+    /// The chat's latest screenshot with the time it was taken.
+    pub fn stamped_frame(&self) -> Option<(String, u64)> {
+        self.frames.stamped()
+    }
+
     /// A message with desktop control on opens the chat's episode, or goes on
     /// in the open one (a paused one runs again). `resume`: the message is
     /// the window's [`RESUME_TEXT`], not a new goal step.

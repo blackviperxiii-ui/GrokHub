@@ -1369,6 +1369,30 @@ button.pill:focus-visible {
   margin: 0;
 }
 
+/* The empty chat's device glance: Sharing, or the newest screenshot. */
+.device-glance {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
+}
+
+.device-glance:hover:not(:disabled) {
+  background: var(--hover);
+  box-shadow: none;
+}
+
+.device-glance > img {
+  border-radius: 4px;
+  object-fit: cover;
+}
+
 /* Chat with its right column: the docked companion from 900px (DOCK_MIN_WIDTH
    in NyxDock.tsx), and the side cards under it from 1280px (SIDE_MIN_WIDTH,
    slides 02 and 20). A narrower window gives the whole width to the chat. */

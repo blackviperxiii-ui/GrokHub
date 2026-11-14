@@ -2675,6 +2675,19 @@ export function newShareCode(): Promise<Share> {
   return invoke<Share>("new_share_code");
 }
 
+/** The chat's device glance (src-tauri/src/hub_share.rs); desktop only. */
+export interface DeviceGlance {
+  /** This computer's hub is on (Devices → Start share). */
+  sharing: boolean;
+  /** The newest screenshot as a checked `data:image/...;base64,` URL. */
+  frame: string | null;
+}
+
+/** Null when there is nothing to show: not sharing and no screenshot held. */
+export function getDeviceGlance(): Promise<DeviceGlance | null> {
+  return invoke<DeviceGlance | null>("get_device_glance");
+}
+
 /** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */
 export interface PluginRow {
   name: string;

@@ -95,6 +95,7 @@ import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
+import { DeviceGlanceRow } from "./DeviceGlance";
 import { ChatFindBar } from "./ChatFind";
 import { findLabel, findRows, findStep, itemText } from "./chatFind";
 import { dialogOpen, isChatShortcut } from "./chatKeys";
@@ -1937,6 +1938,9 @@ export function Chat({
             <div className="nyx-empty">
               {nyx && <NyxFace url={nyx.url} size={96} />}
               <p className="empty">{embedded ? AGENT_EMPTY : CHAT_EMPTY}</p>
+              {!embedded && !remote && onOpenView && (
+                <DeviceGlanceRow onOpen={() => onOpenView("devices")} />
+              )}
             </div>
           )
         )}
