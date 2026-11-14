@@ -2160,8 +2160,11 @@ export function Chat({
     return () => window.clearTimeout(timer);
   }, [queueAct]);
 
+  // Keyed so turning Objectives beside chat on or off moves the lane instead
+  // of mounting a new one: the draft, focus and scroll stay.
   const lane = (
     <section
+      key="lane"
       className={embedded ? "chat embedded" : "chat"}
       aria-label={embedded ? "Agent" : "Chat"}
       onDragOver={attach.onDragOver}

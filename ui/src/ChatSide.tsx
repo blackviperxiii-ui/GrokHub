@@ -257,7 +257,7 @@ export function ChatLeft({
           <p className="home-muted">{RECENT_EMPTY}</p>
         )}
       </section>
-      <NyxDeskControls framed />
+      <NyxDeskControls framed active={active} />
     </aside>
   );
 }

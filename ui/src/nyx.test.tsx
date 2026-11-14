@@ -323,12 +323,21 @@ describe("Nyx in the chat", () => {
     const columns = { left: <aside aria-label="Objectives" />, snapshot: <aside aria-label="Snapshot" /> };
     const view = render(<Chat onOpenSettings={() => {}} {...columns} tuned={{ n: 1 }} />);
     expect(await screen.findByRole("complementary", { name: "Nyx" })).toBeVisible();
+    const lane = screen.getByRole("region", { name: "Chat" });
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, "half a thought");
 
     // Yes on the wide-screen offer: a new auto setup reply, the chat still open.
     api.getSettings.mockResolvedValue({ ...SETTINGS, chatObjectives: true });
     view.rerender(<Chat onOpenSettings={() => {}} {...columns} tuned={{ n: 2 }} />);
     expect(await screen.findByRole("complementary", { name: "Objectives" })).toBeVisible();
     expect(screen.queryByRole("complementary", { name: "Nyx" })).toBeNull();
+    // The lane moved rather than starting over: same box, same draft, focus kept.
+    expect(screen.getByRole("region", { name: "Chat" })).toBe(lane);
+    expect(screen.getByLabelText("Message")).toBe(box);
+    expect(box).toHaveValue("half a thought");
+    expect(box).toHaveFocus();
+    await userEvent.clear(box);
 
     // "undo that", typed in this chat, puts it back.
     api.getSettings.mockResolvedValue(SETTINGS);
