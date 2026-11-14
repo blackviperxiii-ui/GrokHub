@@ -642,7 +642,7 @@ function CodeWorkspace({
           </label>
           <button
             type="button"
-            className={command.trim() ? "cta" : undefined}
+            className={command.trim() ? "code-run cta" : "code-run"}
             onClick={() => void requestRun()}
             disabled={running || !command.trim()}
           >

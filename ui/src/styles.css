@@ -96,7 +96,7 @@
   --glow-red: var(--red-glow);
   --glow-amber: var(--amber-glow);
   --glow-xp: 0 0 10px color-mix(in srgb, var(--amber) 55%, transparent);
-  --font-display: "Chakra Petch", "Inter", system-ui, sans-serif;
+  --font-family-display: "Chakra Petch", "Inter", system-ui, sans-serif;
   /* Uppercase display labels (tabs, the CTA) and tile eyebrows. */
   --tracking-label: 0.12em;
   --tracking-eyebrow: 0.14em;
@@ -4008,8 +4008,10 @@ label.toggle-row {
   --backdrop-grid: none;
 }
 
+/* :root:root matches the theme blocks' (0,2,0) specificity, so this later rule
+   wins over the dark themes that turn the grid on. */
 @media (prefers-reduced-motion: reduce) {
-  :root {
+  :root:root {
     --backdrop-grid: none;
   }
 }
@@ -4182,7 +4184,7 @@ label.toggle-row {
 .brand-lockup,
 :is(h1, h2):not(.md-heading),
 .settings-title {
-  font-family: var(--font-display);
+  font-family: var(--font-family-display);
 }
 
 .brand-mark span {
@@ -4192,7 +4194,7 @@ label.toggle-row {
 
 .home-tile h3,
 .xp-line {
-  font-family: var(--font-display);
+  font-family: var(--font-family-display);
   letter-spacing: var(--tracking-eyebrow);
 }
 
@@ -4201,9 +4203,10 @@ label.toggle-row {
 .settings-nav button,
 .pulse-head .switch button,
 .code-side-tabs [role="tab"],
+.code-run,
 button.cta,
 button.primary:not(.quick-chip) {
-  font-family: var(--font-display);
+  font-family: var(--font-family-display);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
@@ -4215,6 +4218,7 @@ button.primary:not(.quick-chip) {
 .settings-nav button,
 .pulse-head .switch button,
 .code-side-tabs [role="tab"],
+.code-run,
 button.cta,
 button.primary:not(.quick-chip) {
   font-size: var(--font-caption);
@@ -5348,7 +5352,6 @@ button.primary:not(.quick-chip) {
 .home-tile h3 {
   margin: 0;
   font-size: var(--font-caption);
-  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -5530,7 +5533,6 @@ button.primary:not(.quick-chip) {
   justify-content: space-between;
   gap: 8px;
   font-size: var(--font-caption);
-  letter-spacing: 0.06em;
 }
 
 .xp-level {

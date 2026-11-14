@@ -87,7 +87,14 @@ describe("glam motion and reduce motion", () => {
 
   it("drops the backdrop grid under either reduce-motion setting", () => {
     expect(css).toMatch(/:root\[data-reduce-motion="true"\] \{\s*--backdrop-grid: none;\s*\}/);
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*:root \{\s*--backdrop-grid: none;\s*\}\s*\}/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*:root:root \{\s*--backdrop-grid: none;\s*\}\s*\}/);
+  });
+
+  it("keeps the display size and the display family in separate tokens", () => {
+    const sizes = [...css.matchAll(/--font-display:\s*([^;]+);/g)].map((m) => m[1]);
+    expect(sizes).toEqual(["2rem", "1.5rem"]);
+    const families = [...css.matchAll(/--font-family-display:\s*([^;]+);/g)].map((m) => m[1]);
+    expect(families).toEqual(['"Chakra Petch", "Inter", system-ui, sans-serif']);
   });
 
   it("loads the display face without blocking first paint", () => {

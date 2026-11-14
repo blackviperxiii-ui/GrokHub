@@ -147,6 +147,11 @@ async function openSettingsSection(page, { section, category }) {
 
 async function shoot(page, path) {
   mkdirSync(dirname(path), { recursive: true });
+  // Jump entrance and fill animations to their end so a shot shows the final
+  // XP fill and streak cells, not a mid-tween frame.
+  await page.evaluate(() => {
+    for (const a of document.getAnimations()) a.finish();
+  });
   await page.screenshot({ path, fullPage: false });
 }
 
