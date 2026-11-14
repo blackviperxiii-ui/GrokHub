@@ -185,6 +185,7 @@ pub mod release_verify;
 pub mod reply_chips;
 pub mod reply_sources;
 pub mod review;
+pub mod review_pass;
 pub mod rewind;
 pub mod rhythm;
 pub mod run_metrics;

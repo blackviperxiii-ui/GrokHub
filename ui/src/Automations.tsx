@@ -1,14 +1,17 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   addAutomation,
+  addSuggestedAutomation,
   editAutomation,
   listAutomations,
+  listSuggestedAutomations,
   onAutomationRan,
   removeAutomation,
   runAutomation,
   setAutomationEnabled,
   type AutomationRow,
   type RunResult,
+  type SuggestedTile,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
 import { ConfirmRow } from "./ui";
@@ -17,6 +20,8 @@ export function resultLine(result: RunResult): string {
   if (result.error) return result.error;
   return result.text.trim() || "Finished with no reply.";
 }
+
+export const SUGGESTED_NOTE = "Suggested from your recent work";
 
 export const AUTOMATIONS_EMPTY =
   "No automations yet. Describe one above in plain words and it runs on its own schedule.";
@@ -44,9 +49,14 @@ export function Automations({
   const [results, setResults] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
+  const [tiles, setTiles] = useState<SuggestedTile[]>([]);
+  const [adding, setAdding] = useState<string | null>(null);
 
   useEffect(() => {
-    if (active) listAutomations().then(setRows, (err) => setNote(String(err)));
+    if (!active) return;
+    listAutomations().then(setRows, (err) => setNote(String(err)));
+    // Tiles are extras: a page that can't list them shows none.
+    listSuggestedAutomations().then(setTiles, () => setTiles([]));
   }, [active]);
 
   // A scheduled run the shell fired: show its reply and the row's new count.
@@ -98,6 +108,19 @@ export function Automations({
       setNote(null);
     } catch (err) {
       setNote(String(err));
+    }
+  }
+
+  async function addTile(seed: string) {
+    setAdding(seed);
+    try {
+      setRows(await addSuggestedAutomation(seed));
+      setNote(null);
+      setTiles(await listSuggestedAutomations());
+    } catch (err) {
+      setNote(String(err));
+    } finally {
+      setAdding(null);
     }
   }
 
@@ -213,6 +236,29 @@ export function Automations({
           </li>
         ))}
       </ul>
+      {tiles.length > 0 && (
+        <section className="suggested" aria-label="Suggested">
+          <h3>Suggested</h3>
+          <p className="note">{SUGGESTED_NOTE}</p>
+          <ul className="rows">
+            {tiles.map((tile) => (
+              <li key={tile.seed} className="card automation" aria-label={tile.title}>
+                <div className="card-title">{tile.title}</div>
+                <div className="card-status">{tile.body}</div>
+                <div className="card-buttons">
+                  <button
+                    type="button"
+                    disabled={adding !== null}
+                    onClick={() => void addTile(tile.seed)}
+                  >
+                    {adding === tile.seed ? "Adding…" : "Add"}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </section>
   );
 }

@@ -922,6 +922,24 @@ export function addAutomation(text: string): Promise<AutomationRow[]> {
   });
 }
 
+/** A Suggested tile on the Automations page; Add saves `seed`. */
+export interface SuggestedTile {
+  title: string;
+  body: string;
+  seed: string;
+}
+
+export function listSuggestedAutomations(): Promise<SuggestedTile[]> {
+  return invoke<SuggestedTile[]>("list_suggested_automations");
+}
+
+export function addSuggestedAutomation(seed: string): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("add_suggested_automation", {
+    seed,
+    clock: wallClock(),
+  });
+}
+
 export function setAutomationEnabled(
   id: string,
   enabled: boolean,

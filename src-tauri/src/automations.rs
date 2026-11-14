@@ -144,10 +144,20 @@ pub const ADD_HINT: &str =
     "Say when, like \"every weekday at 9am summarize my inbox\" or \"heartbeat every 30 min check the build\".";
 
 pub fn add(config_dir: &Path, text: &str, clock: LocalClock) -> Result<Vec<Automation>, String> {
-    let mut a = grokhub_core::parse_nl_automation(text).ok_or_else(|| ADD_HINT.to_string())?;
+    let a = grokhub_core::parse_nl_automation(text).ok_or_else(|| ADD_HINT.to_string())?;
     if a.name.trim().is_empty() {
         return Err(ADD_HINT.into());
     }
+    add_parsed(config_dir, a, clock)
+}
+
+/// Save an automation already parsed (a Suggested tile's seed), with a new
+/// id and its next run.
+pub fn add_parsed(
+    config_dir: &Path,
+    mut a: Automation,
+    clock: LocalClock,
+) -> Result<Vec<Automation>, String> {
     let _store = store();
     let mut list = load_unlocked(config_dir)?;
     a.id = grokhub_core::uid("auto");

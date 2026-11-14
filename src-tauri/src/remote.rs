@@ -83,6 +83,8 @@ pub const WEB_COMMANDS: &[&str] = &[
     "remove_attachment",
     "list_automations",
     "add_automation",
+    "list_suggested_automations",
+    "add_suggested_automation",
     "set_automation_enabled",
     "remove_automation",
     "edit_automation",
@@ -1291,10 +1293,11 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-        const REVIEWED: [&str; 88] = [
+        const REVIEWED: [&str; 90] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
+            "add_suggested_automation",
             "answer_elicit",
             "answer_inbox",
             "answer_permission",
@@ -1334,6 +1337,7 @@ mod tests {
             "imagine_image",
             "list_automations",
             "list_connectors",
+            "list_suggested_automations",
             "nyx_look",
             "pause_memory_row",
             "pulse_act",

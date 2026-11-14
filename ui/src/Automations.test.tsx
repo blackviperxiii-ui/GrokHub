@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
-import type { AutomationRow, RunResult, ScheduledRun } from "./api";
+import type { AutomationRow, RunResult, ScheduledRun, SuggestedTile } from "./api";
 
 const ranHandlers = vi.hoisted(() => [] as ((run: ScheduledRun) => void)[]);
 
@@ -13,6 +13,8 @@ const api = vi.hoisted(() => ({
   removeAutomation: vi.fn<(id: string) => Promise<AutomationRow[]>>(),
   runAutomation: vi.fn<(id: string) => Promise<RunResult>>(),
   editAutomation: vi.fn<(id: string, text: string) => Promise<AutomationRow[]>>(),
+  listSuggestedAutomations: vi.fn<() => Promise<SuggestedTile[]>>(),
+  addSuggestedAutomation: vi.fn<(seed: string) => Promise<AutomationRow[]>>(),
   onAutomationRan: vi.fn((handler: (run: ScheduledRun) => void) => {
     ranHandlers.push(handler);
     return Promise.resolve(() => {
@@ -48,9 +50,41 @@ describe("Automations", () => {
       api.removeAutomation,
       api.runAutomation,
       api.editAutomation,
+      api.addSuggestedAutomation,
     ])
       fn.mockReset();
+    api.listSuggestedAutomations.mockReset().mockResolvedValue([]);
     ranHandlers.length = 0;
+  });
+
+  it("adds a Suggested tile and drops it from the list", async () => {
+    const midday = { title: "Midday board", body: "Every 12h — summarize the workboard.", seed: "/loop 12h summarize the workboard" };
+    const brief = { title: "Morning brief", body: "Every 1d — workboard and last host receipt.", seed: "/loop 1d summarize the workboard and last host receipt" };
+    api.listAutomations.mockResolvedValue([]);
+    api.listSuggestedAutomations.mockResolvedValueOnce([midday, brief]).mockResolvedValueOnce([brief]);
+    api.addSuggestedAutomation.mockResolvedValue([
+      row({ id: "auto-2", name: "summarize the workboard", summary: "every 12h · next 8:00 AM" }),
+    ]);
+    render(<Automations />);
+    const suggested = within(await screen.findByRole("region", { name: "Suggested" }));
+    expect(suggested.getByText("Suggested from your recent work")).toBeInTheDocument();
+    const tile = within(suggested.getByRole("listitem", { name: "Midday board" }));
+    expect(tile.getByText("Every 12h — summarize the workboard.")).toBeInTheDocument();
+    await userEvent.click(tile.getByRole("button", { name: "Add" }));
+    expect(api.addSuggestedAutomation).toHaveBeenCalledWith("/loop 12h summarize the workboard");
+    expect(await screen.findByRole("listitem", { name: "summarize the workboard" })).toBeInTheDocument();
+    expect(screen.queryByRole("listitem", { name: "Midday board" })).toBeNull();
+    expect(screen.getByRole("listitem", { name: "Morning brief" })).toBeInTheDocument();
+    expect(screen.queryByText("No automations yet. Describe one above in plain words and it runs on its own schedule.")).toBeNull();
+  });
+
+  it("shows no Suggested section when there are no tiles or they can't load", async () => {
+    api.listAutomations.mockResolvedValue([]);
+    api.listSuggestedAutomations.mockRejectedValue("unknown command");
+    render(<Automations />);
+    expect(await screen.findByText("No automations yet. Describe one above in plain words and it runs on its own schedule.")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Suggested" })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("lists jobs with their schedule and health", async () => {
@@ -187,6 +221,7 @@ describe("Automations", () => {
 describe("Automations edit and schedule", () => {
   beforeEach(() => {
     for (const fn of [api.listAutomations, api.editAutomation]) fn.mockReset();
+    api.listSuggestedAutomations.mockReset().mockResolvedValue([]);
     ranHandlers.length = 0;
   });
 
