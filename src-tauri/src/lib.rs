@@ -87,6 +87,8 @@ pub mod mods;
 pub mod mods_install;
 #[cfg(desktop)]
 mod net_watch;
+#[cfg(desktop)]
+mod night;
 mod nudges;
 pub mod nyx;
 pub use grokhub_agent::xai_keychain as oauth;
@@ -709,6 +711,9 @@ async fn send_chat(
     clock: Option<automations::Clock>,
 ) -> Result<String, String> {
     set_last_chat(&state, &conversation_id);
+    // A message you send ends a Halt's hold on the background passes.
+    #[cfg(desktop)]
+    night::note_send(&state.config_dir, grokhub_core::now_ms());
     // How long the composer's chip row stood before this message; off the
     // send's path.
     let timing = app.clone();
@@ -1178,6 +1183,20 @@ fn steer_chat(state: State<'_, ShellState>, conversation_id: String, text: Strin
         .unwrap_or_else(|e| e.into_inner())
         .get(&conversation_id)
         .is_some_and(|session| session.steer(&text))
+}
+
+/// Background work waits while a chat is running or a decision waits for
+/// you.
+#[cfg(desktop)]
+fn background_busy(app: &tauri::AppHandle) -> bool {
+    let state = app.state::<ShellState>();
+    let chatting = state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .any(|s| s.busy());
+    chatting || !inbox::decisions(&state.config_dir).is_empty()
 }
 
 /// Halt from the top bar, Ctrl+Alt+H, the tray or Super+Shift+Esc: stops
@@ -7059,23 +7078,29 @@ pub fn run() {
             {
                 let pinged = app.handle().clone();
                 let watched = app.handle().clone();
-                let config_dir = app.state::<ShellState>().config_dir.clone();
-                let decisions_dir = config_dir.clone();
                 proactive::start(
-                    config_dir,
+                    app.state::<ShellState>().config_dir.clone(),
                     move |title: &str| os_extras::proactive_reminder(&pinged, title),
                     // A running chat or a waiting decision holds Done for you.
-                    move || {
-                        let state = watched.state::<ShellState>();
-                        let chatting = state
-                            .chats
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .values()
-                            .any(|s| s.busy());
-                        chatting || !inbox::decisions(&decisions_dir).is_empty()
-                    },
+                    move || background_busy(&watched),
                     || chat_client().is_ok(),
+                );
+            }
+            // The nightly lesson tidy and memory dream, while the cabin is closed.
+            #[cfg(desktop)]
+            {
+                let watched = app.handle().clone();
+                let config_dir = app.state::<ShellState>().config_dir.clone();
+                let batch_dir = config_dir.clone();
+                night::start(
+                    config_dir,
+                    move || background_busy(&watched),
+                    move || {
+                        // The dream can wait: on an API key it goes through the Batch API.
+                        let client: Box<dyn grokhub_agent::ModelClient> =
+                            Box::new(model_client()?.0.deferrable(&batch_dir));
+                        Ok(client)
+                    },
                 );
             }
             start_budget_tally(app.handle().clone());

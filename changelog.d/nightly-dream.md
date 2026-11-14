@@ -1,0 +1,1 @@
+- The desktop app runs the memory dream and the episode-lesson tidy once a night again, at the dream hour (3 AM by default), while the cabin is closed. A running chat or a waiting decision puts the dream off; Halt skips that night. With the model dream on, its Memory dream card lands in Pulse.
