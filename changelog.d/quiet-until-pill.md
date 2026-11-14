@@ -1,0 +1,1 @@
+- Top bar: while quiet hours from Settings → Behavior are on, a "Quiet until 07:00" pill shows before the personality pill. It reads the time again at each minute's turn, and a click opens Behavior. With no quiet hours set, nothing shows.

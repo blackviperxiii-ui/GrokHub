@@ -3604,6 +3604,11 @@ export interface PrivacyPage {
   canOpenFolder: boolean;
 }
 
+/** "Quiet until 07:00" while Settings → Behavior's quiet hours hold now, else null. */
+export function quietChip(): Promise<string | null> {
+  return invoke<string | null>("quiet_chip", { clock: wallClock() });
+}
+
 export function getPrivacy(): Promise<PrivacyPage> {
   return invoke<PrivacyPage>("get_privacy");
 }
