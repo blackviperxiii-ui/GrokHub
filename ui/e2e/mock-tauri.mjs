@@ -276,6 +276,27 @@ const EMPTY_BACKGROUND = {
   rows: [],
 };
 
+const SKILLS = {
+  rows: [
+    { name: "tidy", description: "Tidy the repo", trigger: "Use the tidy skill.", source: "user", folder: "/home/user/.config/GrokHub/skills/tidy", on: true },
+    { name: "summarize", description: "Summarize a file", trigger: "Use the summarize skill.", source: "builtin", folder: "", on: false },
+  ],
+};
+
+const MEMORY_FILES = {
+  soul: "# Soul\n\nCalm and direct.\n",
+  user: "# User\n\nPlays ranked on weekends.\n",
+  memory: "# Memory\n\n- Prefers short answers.\n",
+  soulPath: "/home/user/.config/GrokHub/SOUL.md",
+  userPath: "/home/user/.config/GrokHub/USER.md",
+  memoryPath: "/home/user/.config/GrokHub/MEMORY.md",
+  soulPrev: false,
+  userPrev: false,
+  memoryPrev: false,
+  rawLines: [],
+  rawTidyDone: true,
+};
+
 const EMPTY_PERSONALITY = {
   presets: [
     {
@@ -477,6 +498,9 @@ export function initScript(theme = "ops-dark") {
     memory: EMPTY_MEMORY,
     privacy: EMPTY_PRIVACY,
     background: EMPTY_BACKGROUND,
+    skills: SKILLS,
+    memoryFiles: MEMORY_FILES,
+    xp: XP,
     days: DAYS,
     personality: EMPTY_PERSONALITY,
     playbooks: EMPTY_PLAYBOOKS,
@@ -755,6 +779,14 @@ export function initScript(theme = "ops-dark") {
           return { id: "default", name: "Default", note: "" };
         case "get_defaults":
           return { model: "grok", temperature: 0.7 };
+        case "get_skills":
+          return fix.skills;
+        case "get_memory_files":
+          return fix.memoryFiles;
+        case "get_battlenet":
+          return { found: false, games: [] };
+        case "get_mission":
+          return { mission: null, xp: fix.xp };
         case "get_about":
           return { version: fix.settings.version, channel: "beta" };
         default:

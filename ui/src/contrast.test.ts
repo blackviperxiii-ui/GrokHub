@@ -96,6 +96,15 @@ const PAIRS: [string, string, number][] = [
   ["accent", "panel", 3],
   ["field-border", "bg", 3],
   ["field-border", "panel", 3],
+  // Red and amber used as small text (queued badges, medium severity).
+  ["red-text", "bg", 4.5],
+  ["red-text", "panel", 4.5],
+  ["warn-text", "bg", 4.5],
+  ["warn-text", "panel", 4.5],
+  // A switch that is on: its fill against the page, and its thumb against the fill.
+  ["toggle-on", "bg", 3],
+  ["toggle-on", "panel", 3],
+  ["toggle-on-thumb", "toggle-on", 3],
 ];
 
 describe("theme contrast", () => {

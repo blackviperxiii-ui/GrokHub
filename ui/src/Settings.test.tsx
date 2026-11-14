@@ -189,6 +189,14 @@ describe("Settings", () => {
     expect(api.getHaltKeys).not.toHaveBeenCalled();
   });
 
+  it("Save settings is the one call to action in Settings", async () => {
+    render(<Settings caps={DESKTOP} />);
+    expect(await screen.findByRole("button", { name: "Save settings" })).toHaveClass("cta");
+    await openSection("Account");
+    await userEvent.type(await screen.findByLabelText("API key"), "sk-abcdefghijklmnopqrstuv");
+    expect(screen.getByRole("button", { name: "Save key" })).not.toHaveClass("cta");
+  });
+
   it("saves a key without echoing it, then removes it", async () => {
     api.setApiKey.mockResolvedValue(shape({ hasApiKey: true }));
     api.clearApiKey.mockResolvedValue(shape({}));
@@ -486,6 +494,15 @@ describe("Settings", () => {
     await userEvent.click(screen.getByRole("button", { name: "System" }));
     expect(document.documentElement.dataset.theme).toBeUndefined();
     expect(screen.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("each theme chip previews that theme's colors", async () => {
+    render(<Settings caps={DESKTOP} />);
+    await openSection("Appearance");
+    const swatches = ["System", "Ops Dark", "OLED Black", "Soft Charcoal", "Light"].map(
+      (name) => screen.getByRole("button", { name }).querySelector(".theme-swatch")?.getAttribute("data-swatch"),
+    );
+    expect(swatches).toEqual(["system", "ops-dark", "oled-black", "soft-charcoal", "light"]);
   });
 
   it("puts the theme back when saving it fails", async () => {

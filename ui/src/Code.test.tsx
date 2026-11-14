@@ -606,6 +606,19 @@ describe("Code tab", () => {
     expect(screen.getByRole("log", { name: "Test output" })).toHaveTextContent("running 12 tests");
   });
 
+  it("makes Run tests the call to action only once a command is set", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeTestPlan.mockResolvedValue({ command: "", needsConfirm: false, remembered: "" });
+    render(<Code shown onOpenSettings={() => {}} />);
+    await openSideTab("Tests");
+    const run = await screen.findByRole("button", { name: "Run tests" });
+    expect(run).toBeDisabled();
+    expect(run).not.toHaveClass("cta");
+    await userEvent.type(screen.getByLabelText("Test command"), "cargo test");
+    expect(run).toBeEnabled();
+    expect(run).toHaveClass("cta");
+  });
+
   it("says why a run could not be stopped", async () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
