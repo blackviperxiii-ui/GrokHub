@@ -1,0 +1,1 @@
+- An empty chat shows a small device glance under "Ask … anything", as the cabin's home did: "Sharing" while Devices → Start share is on, or "Last frame" with a thumbnail of the newest screenshot (from desktop control in any chat, or from a paired computer). Tapping it opens Devices. With neither, nothing shows. Desktop only; the frame stays in memory.

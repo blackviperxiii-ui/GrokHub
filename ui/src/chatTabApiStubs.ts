@@ -22,6 +22,8 @@ export function chatTabApiStubs() {
     chatTabSoftDelete: () => Promise.resolve({ ...emptyTab }),
     chatTabRestoreDeleted: () => Promise.resolve({ ...emptyTab }),
     clearChat: () => Promise.resolve(null),
+    // No hub and no screenshot: the empty chat shows no device glance.
+    getDeviceGlance: () => Promise.resolve(null),
     // Sentence autocomplete stays off in tests unless a suite turns it on.
     getBehavior: () =>
       Promise.resolve({
