@@ -22,12 +22,13 @@ const api = vi.hoisted(() => ({
   imagineSignInStart: vi.fn<() => Promise<GrokSignInStart>>(),
   imagineSignInPoll: vi.fn<() => Promise<GrokSignInPoll>>(),
   imagineSignOut: vi.fn<() => Promise<ImaginePage>>(),
+  onWallCover: vi.fn<(handler: (cover: { title: string }) => void) => Promise<() => void>>(),
 }));
 
 vi.mock("./api", () => api);
 vi.mock("./external", () => ({ openExternal: () => Promise.resolve() }));
 
-import { GALLERY_EMPTY, Imagine, makingLine, NEED_SIGNIN } from "./Imagine";
+import { GALLERY_EMPTY, Imagine, makingLine, NEED_SIGNIN, wallLine } from "./Imagine";
 import { requestImagine } from "./imagineAsk";
 
 function tile(over: Partial<ImagineTile> = {}): ImagineTile {
@@ -50,6 +51,28 @@ describe("Imagine", () => {
     for (const fn of Object.values(api)) fn.mockReset();
     api.imagineImage.mockImplementation((name) => Promise.resolve(`data:image/png;base64,${name}`));
     api.imagineCancel.mockResolvedValue(true);
+    api.onWallCover.mockResolvedValue(() => {});
+  });
+
+  it("shows a new living wall cover when one lands, and stops listening on close", async () => {
+    let land: (cover: { title: string }) => void = () => {};
+    const unlisten = vi.fn();
+    api.onWallCover.mockImplementation((handler) => {
+      land = handler;
+      return Promise.resolve(unlisten);
+    });
+    api.getImagine
+      .mockResolvedValueOnce(EMPTY)
+      .mockResolvedValue({ ...EMPTY, tiles: [tile({ id: "abc", name: "abc_a.png", title: "Snow porch" })] });
+    const { unmount } = render(<Imagine />);
+    expect(await screen.findByText(GALLERY_EMPTY)).toBeVisible();
+    act(() => land({ title: "Snow porch" }));
+    expect(await screen.findByText("Snow porch")).toBeVisible();
+    expect(screen.getByText(wallLine("Snow porch"))).toBeVisible();
+    expect(wallLine("Snow porch")).toBe("New cover on the wall: Snow porch");
+    expect(api.getImagine).toHaveBeenCalledTimes(2);
+    unmount();
+    await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(1));
   });
 
   it("starts square, one image, video off", async () => {

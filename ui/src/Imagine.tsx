@@ -7,6 +7,7 @@ import {
   imagineSignInPoll,
   imagineSignInStart,
   imagineSignOut,
+  onWallCover,
   type ImagineKind,
   type ImaginePage,
   type ImagineTile,
@@ -21,7 +22,7 @@ export const SIGNIN_HINT = "Sign in with Grok here, or add an xAI API key in Set
 export const IMAGINE_SIGN_IN = "Imagine sign-in";
 export const IMAGINE_SIGN_IN_NOTE =
   "Use your Grok subscription for images and videos. Your sign-in is kept in this device's keychain.";
-export const GALLERY_EMPTY = "Nothing yet. What you make shows up here and on the cabin's wall.";
+export const GALLERY_EMPTY = "Nothing yet. What you make, and the living wall's covers, show up here.";
 
 /** Square first: the default. Values are what the shell accepts. */
 export const ASPECTS: { value: string; label: string }[] = [
@@ -36,6 +37,11 @@ export const COUNTS = [1, 2, 3, 4];
 export function makingLine(kind: ImagineKind, count: number): string {
   if (kind === "video") return "Making a video… this can take a few minutes.";
   return count === 1 ? "Making 1 image…" : `Making ${count} images…`;
+}
+
+/** The status line when a living wall cover lands. */
+export function wallLine(title: string): string {
+  return `New cover on the wall: ${title}`;
 }
 
 function madeLine(made: number, note: string): string {
@@ -151,6 +157,25 @@ export function Imagine() {
 
   useEffect(() => {
     getImagine().then(setPage, (err) => setError(String(err)));
+  }, []);
+
+  // A living wall cover painted while the page is open.
+  useEffect(() => {
+    let live = true;
+    const off = onWallCover((cover) => {
+      getImagine().then(
+        (next) => {
+          if (!live) return;
+          setPage(next);
+          setStatus(wallLine(cover.title));
+        },
+        () => {},
+      );
+    });
+    return () => {
+      live = false;
+      void off.then((unlisten) => unlisten());
+    };
   }, []);
 
   /** Imagine's own sign-in, shown on this page as the cabin did. */

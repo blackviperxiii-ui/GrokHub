@@ -582,6 +582,9 @@ export function initScript(theme = "ops-dark") {
         case "get_game_watch":
         case "set_game_watch":
           return { on: false, note: "" };
+        case "get_living_wall":
+        case "set_living_wall":
+          return { on: false };
         case "get_workboard_tidy":
         case "set_workboard_tidy":
           return { autoArchiveDays: 30, autoDeleteDays: 0 };

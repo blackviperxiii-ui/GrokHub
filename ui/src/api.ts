@@ -4081,6 +4081,26 @@ export function setGameWatch(on: boolean): Promise<GameWatch> {
   return invoke<GameWatch>("set_game_watch", { on });
 }
 
+/** Settings → Behavior → Living wall (`app.json` imagineWall). Desktops only. */
+export interface LivingWall {
+  on: boolean;
+}
+
+export function getLivingWall(): Promise<LivingWall> {
+  return invoke<LivingWall>("get_living_wall");
+}
+
+export function setLivingWall(on: boolean): Promise<LivingWall> {
+  return invoke<LivingWall>("set_living_wall", { on });
+}
+
+/** A new living wall cover landed in the Imagine gallery: its title. */
+export const IMAGINE_WALL_EVENT = "imagine://wall";
+
+export function onWallCover(handler: (cover: { title: string }) => void): Promise<UnlistenFn> {
+  return subscribe<{ title: string }>(IMAGINE_WALL_EVENT, handler);
+}
+
 /** Settings → Pulse: one kind of fix that may run without its tap (`app.json` autoFixes). */
 export interface PulseAutoFix {
   id: string;
