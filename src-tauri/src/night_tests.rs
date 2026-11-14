@@ -1,9 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use grokhub_agent::episode::lessons::{self, Lesson};
 use grokhub_agent::CancelToken;
-use grokhub_agent::{ClientError, ResponsesRequest, StreamEvent, TurnOutput};
+use grokhub_agent::{ClientError, ContentPart, InputItem, ResponsesRequest, StreamEvent};
+use grokhub_agent::{TurnOutput, Usage};
 use grokhub_core::amr::{AmrStore, NodeDraft, NodeType, Sensitivity};
 use grokhub_core::scheduler_lease::{write_lease, LeaseOwner, SchedulerLease};
 
@@ -15,6 +17,7 @@ const AT_3AM: u64 = 1_791_342_000_000;
 const AT_305: u64 = 1_791_342_300_000;
 const AT_11PM: u64 = 1_791_414_000_000;
 const MIN: u64 = 60_000;
+const DAY: u64 = 24 * 60 * MIN;
 const PID: u32 = 4242;
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -36,31 +39,51 @@ fn run(dir: &Path, now: u64, offset: i32, busy: bool, state: &mut NightState) ->
     look(dir, PID, now, Some(offset), busy, &no_model, state)
 }
 
-/// Two notes that say the same thing, as the cabin's dream test seeds.
-fn repeat_notes(dir: &Path) -> AmrStore {
+/// One learned note, updated at `at`.
+fn note(store: &AmrStore, id: &str, node_type: NodeType, body: &str, confidence: f32, at: u64) {
+    let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(at);
+    store
+        .remember(&NodeDraft {
+            id: id.into(),
+            node_type,
+            created: stamp.clone(),
+            updated: stamp,
+            source: "user".into(),
+            confidence,
+            tags: vec![],
+            body: format!("{body}\n"),
+            sensitivity: Sensitivity::Plain,
+            consent_ref: String::new(),
+        })
+        .unwrap();
+}
+
+fn store(dir: &Path) -> AmrStore {
     let _config = grokhub_agent::perm::ConfigGuard::set(dir);
     let store = grokhub_agent::amr_store();
     store.init().unwrap();
-    let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(AT_2AM);
-    for (id, body, confidence) in [
-        ("quay-a", "The quay lantern is green at night", 0.9),
-        ("quay-b", "the quay lantern is green at night.", 0.5),
-    ] {
-        store
-            .remember(&NodeDraft {
-                id: id.into(),
-                node_type: NodeType::Fact,
-                created: stamp.clone(),
-                updated: stamp.clone(),
-                source: "user".into(),
-                confidence,
-                tags: vec![],
-                body: format!("{body}\n"),
-                sensitivity: Sensitivity::Plain,
-                consent_ref: String::new(),
-            })
-            .unwrap();
-    }
+    store
+}
+
+/// Two notes that say the same thing, as the cabin's dream test seeds.
+fn repeat_notes(dir: &Path) -> AmrStore {
+    let store = store(dir);
+    note(
+        &store,
+        "quay-a",
+        NodeType::Fact,
+        "The quay lantern is green at night",
+        0.9,
+        AT_2AM,
+    );
+    note(
+        &store,
+        "quay-b",
+        NodeType::Fact,
+        "the quay lantern is green at night.",
+        0.5,
+        AT_2AM,
+    );
     store
 }
 
@@ -195,6 +218,43 @@ fn the_halt_hold_ends_after_its_minutes_or_at_zero_lasts() {
 }
 
 #[test]
+fn only_a_message_you_send_ends_the_hold() {
+    let d = temp_dir("sent");
+    app_json(&d, "{\"heartbeat\":{\"haltHoldMin\":0}}\n");
+    std::fs::write(
+        d.join(grokhub_core::desktop_mcp::HALT_STAMP_FILE),
+        (AT_3AM - 5 * MIN).to_string(),
+    )
+    .unwrap();
+    // A turn saved after the Halt (a halted reply, an automation) is not a send.
+    {
+        let _config = grokhub_agent::perm::ConfigGuard::set(&d);
+        let say = |role: &str, text: &str| InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        };
+        grokhub_agent::record_turn(
+            &grokhub_agent::scratch::shell_id(false, "1"),
+            "/home/user",
+            "grok-test",
+            &[say("user", "check the feed"), say("assistant", "Stopped.")],
+            &Usage::default(),
+            "",
+            "check the feed",
+        )
+        .unwrap();
+    }
+    let saved = crate::history::list(&d).iter().map(|r| r.updated).max();
+    assert!(saved.is_some_and(|at| at > AT_3AM), "{saved:?}");
+    assert!(halted(&d, AT_3AM));
+
+    note_send(&d, AT_3AM - 6 * MIN);
+    assert!(halted(&d, AT_3AM), "a send before the Halt doesn't end it");
+    note_send(&d, AT_3AM - MIN);
+    assert!(!halted(&d, AT_3AM));
+}
+
+#[test]
 fn a_send_after_the_halt_ends_the_hold() {
     let forever = HeartbeatPace {
         halt_hold_min: 0,
@@ -324,7 +384,7 @@ fn an_open_cabin_or_no_clock_runs_nothing() {
 }
 
 struct Script {
-    calls: AtomicU32,
+    calls: Arc<AtomicU32>,
 }
 
 impl ModelClient for Script {
@@ -336,7 +396,7 @@ impl ModelClient for Script {
     ) -> Result<TurnOutput, ClientError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(TurnOutput {
-            text: r#"{"lessons":[],"insights":[]}"#.into(),
+            text: r#"{"lessons":[{"text":"Save the quay chart before closing Gedit","source":"ep-7"}],"insights":[]}"#.into(),
             ..TurnOutput::default()
         })
     }
@@ -371,11 +431,13 @@ fn the_model_dream_posts_its_card_and_signed_out_falls_back() {
     assert!(report(&d, "2026-10-07").is_file());
     assert!(crate::pulse::cards(&d).unwrap().is_empty());
 
-    // The next night, signed in: the model pass runs once and posts its card.
-    let next = AT_3AM + 24 * 60 * MIN;
+    // The next night, signed in: the model is called once, its lesson is
+    // learned, and the card is posted.
+    let next = AT_3AM + DAY;
+    let calls = Arc::new(AtomicU32::new(0));
     let signed_in = || -> Result<Box<dyn ModelClient>, String> {
         Ok(Box::new(Script {
-            calls: AtomicU32::new(0),
+            calls: Arc::clone(&calls),
         }))
     };
     assert_eq!(
@@ -393,8 +455,196 @@ fn the_model_dream_posts_its_card_and_signed_out_falls_back() {
             dream: Dream::Dreamed { card: true }
         })
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let skill =
+        std::fs::read_to_string(d.join("skills").join("dream-lessons").join("SKILL.md")).unwrap();
+    assert!(
+        skill.contains("Save the quay chart before closing Gedit (ep-7)\n"),
+        "{skill}"
+    );
     let cards = crate::pulse::cards(&d).unwrap();
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].title, "Memory dream");
     assert!(report(&d, "2026-10-08").is_file());
+}
+
+#[test]
+fn missing_preferences_are_proposed_even_with_no_user_md() {
+    let seeded = |name: &str| {
+        let d = temp_dir(name);
+        app_json(&d, "{\"memory_backend\":\"amr\"}\n");
+        let store = store(&d);
+        note(
+            &store,
+            "pref-dark",
+            NodeType::Preference,
+            "Prefers dark mode in every editor",
+            0.95,
+            AT_2AM,
+        );
+        note(
+            &store,
+            "pref-terse",
+            NodeType::Preference,
+            "Wants terse replies without emoji",
+            0.95,
+            AT_2AM,
+        );
+        note(
+            &store,
+            "pref-maybe",
+            NodeType::Preference,
+            "Might like tabs over spaces",
+            0.5,
+            AT_2AM,
+        );
+        d
+    };
+    let proposed = |d: &Path| {
+        assert_eq!(
+            run(d, AT_3AM, 0, false, &mut NightState::default()),
+            Look::Ran(Night {
+                lessons: true,
+                dream: Dream::Dreamed { card: false }
+            })
+        );
+        let text = std::fs::read_to_string(report(d, "2026-10-07")).unwrap();
+        let (_, diff) = text
+            .split_once("## Proposed USER.md changes (not applied)")
+            .unwrap_or_else(|| panic!("no proposals: {text}"));
+        diff.lines()
+            .filter(|l| l.starts_with("+- "))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+
+    let with = seeded("prefs");
+    memory_file(&with, "USER.md", "- Prefers dark mode in every editor\n");
+    assert_eq!(
+        proposed(&with),
+        ["+- Wants terse replies without emoji"],
+        "only the one missing from USER.md"
+    );
+    assert_eq!(
+        std::fs::read_to_string(with.join("memory").join("USER.md")).unwrap(),
+        "- Prefers dark mode in every editor\n",
+        "USER.md is never written"
+    );
+
+    let without = seeded("prefs-none");
+    assert_eq!(
+        proposed(&without),
+        [
+            "+- Prefers dark mode in every editor",
+            "+- Wants terse replies without emoji"
+        ]
+    );
+    assert!(!without.join("memory").join("USER.md").exists());
+}
+
+#[test]
+fn memory_retention_sets_when_an_unsure_note_is_retired() {
+    let seeded = |name: &str, app: &str| {
+        let d = temp_dir(name);
+        app_json(&d, app);
+        let store = store(&d);
+        note(
+            &store,
+            "old-guess",
+            NodeType::Fact,
+            "The ferry might leave at noon",
+            0.2,
+            AT_3AM - 40 * DAY,
+        );
+        (d, store)
+    };
+    let (month, store) = seeded(
+        "retain-30",
+        "{\"memory_backend\":\"amr\",\"amrRetentionDays\":30}\n",
+    );
+    run(&month, AT_3AM, 0, false, &mut NightState::default());
+    let text = std::fs::read_to_string(report(&month, "2026-10-07")).unwrap();
+    assert!(text.contains("- Retired: 1\n"), "{text}");
+    assert!(text.contains("Retired `old-guess`"), "{text}");
+    assert!(text.contains("(over 30 days)"), "{text}");
+    assert!(store.is_forgotten("old-guess"));
+
+    let (default, store) = seeded("retain-90", "{\"memory_backend\":\"amr\"}\n");
+    run(&default, AT_3AM, 0, false, &mut NightState::default());
+    let text = std::fs::read_to_string(report(&default, "2026-10-07")).unwrap();
+    assert!(text.contains("- Retired: 0\n"), "{text}");
+    assert!(!store.is_forgotten("old-guess"));
+}
+
+#[test]
+fn a_failed_dream_is_not_retried_the_same_night() {
+    let d = temp_dir("failed");
+    app_json(&d, "{\"memory_backend\":\"amr\"}\n");
+    // A file where the memory repo should be.
+    std::fs::write(d.join("amr"), "not a folder").unwrap();
+    let mut state = NightState::default();
+    let first = run(&d, AT_3AM, 0, false, &mut state);
+    assert!(
+        matches!(
+            &first,
+            Look::Ran(Night {
+                lessons: true,
+                dream: Dream::Failed(_)
+            })
+        ),
+        "{first:?}"
+    );
+    assert_eq!(
+        run(&d, AT_305, 0, false, &mut state),
+        Look::Ran(Night {
+            lessons: false,
+            dream: Dream::NotDue
+        })
+    );
+    assert!(d.join("amr").is_file());
+}
+
+#[test]
+fn slash_dream_names_its_report_by_your_day_and_never_waits_on_the_night() {
+    let d = temp_dir("slash");
+    app_json(&d, "{\"memory_backend\":\"amr\"}\n");
+    repeat_notes(&d);
+    let _config = grokhub_agent::perm::ConfigGuard::set(&d);
+    {
+        // The night holds the dream through its model call.
+        let _night = crate::memory::DREAM.lock().unwrap();
+        assert_eq!(
+            crate::memory::dream_now(&d).unwrap(),
+            "A dream is already running. Its report shows here when it's done."
+        );
+    }
+    let reports = || {
+        std::fs::read_dir(d.join("amr").join("dreams"))
+            .map(|dir| dir.count())
+            .unwrap_or(0)
+    };
+    assert_eq!(reports(), 0);
+
+    // UTC+14 and UTC-12 are always on different days.
+    let mut days = Vec::new();
+    for offset in [840, -720] {
+        let now = grokhub_core::now_ms();
+        let at = crate::scheduler::local_clock(now, offset);
+        crate::scheduler::note_ui_clock(
+            crate::automations::Clock {
+                weekday: at.weekday,
+                hour: at.hour,
+                minute: at.minute,
+            },
+            now,
+        );
+        let said = crate::memory::dream_now(&d).unwrap();
+        assert!(said.contains("# Memory dream"), "{said}");
+        days.push(crate::self_review::local_day(now, offset));
+    }
+    assert_ne!(days[0], days[1]);
+    for day in &days {
+        assert!(report(&d, day).is_file(), "no report for {day}");
+    }
+    assert_eq!(reports(), 2);
 }

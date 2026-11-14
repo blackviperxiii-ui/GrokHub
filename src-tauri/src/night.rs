@@ -162,6 +162,11 @@ fn dream_tonight(config_dir: &Path, today: &str, now: u64, model: &Model<'_>) ->
     if !grokhub_agent::memory_writes_enabled() {
         return Dream::WritesOff;
     }
+    // Held through the model call too, so `/dream` says one is running
+    // rather than merging the same notes under it.
+    let _one = crate::memory::DREAM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let store = grokhub_agent::amr_store();
     if dream_report_path(&store, today).is_file() {
         return Dream::AlreadyDone;
@@ -170,9 +175,6 @@ fn dream_tonight(config_dir: &Path, today: &str, now: u64, model: &Model<'_>) ->
         return Dream::Failed(e.to_string());
     }
     let opts = crate::memory::dream_opts(Some(today));
-    let _one = crate::memory::DREAM
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
     // Signed out, the model pass is skipped and the plain dream runs.
     let client = grokhub_agent::dream_model_enabled()
         .then(model)
@@ -204,18 +206,31 @@ fn dream_tonight(config_dir: &Path, today: &str, now: u64, model: &Model<'_>) ->
     }
 }
 
+/// Your last send, written by `send_chat`. Only a message you send ends a
+/// Halt's hold; turns that automations or a halted reply save do not.
+pub(crate) const SENT_STAMP_FILE: &str = "desktop-sent.stamp";
+
+/// Note that you sent a message at `now`.
+pub(crate) fn note_send(config_dir: &Path, now: u64) {
+    let _ = std::fs::write(config_dir.join(SENT_STAMP_FILE), now.to_string());
+}
+
+fn last_send(config_dir: &Path) -> Option<u64> {
+    std::fs::read_to_string(config_dir.join(SENT_STAMP_FILE))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// Halt holds background work as the cabin's heartbeat did: for
 /// `haltHoldMin` minutes after the stamp (`heartbeat` in `app.json`, 15 by
-/// default; 0 holds until you send), or until a chat turn saved after it.
+/// default; 0 holds until you send), or until you send a message after it.
 pub(crate) fn halted(config_dir: &Path, now: u64) -> bool {
     let Some(stamp) = grokhub_core::desktop_mcp::read_halt_stamp_in(config_dir) else {
         return false;
     };
-    let sent = crate::history::list(config_dir)
-        .iter()
-        .map(|row| row.updated)
-        .max();
-    halt_holds(stamp, sent, &pace(config_dir), now)
+    halt_holds(stamp, last_send(config_dir), &pace(config_dir), now)
 }
 
 /// The cabin's own hold: a Halt at `stamp`, then a send at `sent` ends it.
