@@ -518,6 +518,21 @@ describe("Home", () => {
     expect(go.onOpen).toHaveBeenLastCalledWith("connectors");
   });
 
+  it("the objective surface follows the Objectives module, not the large slot", async () => {
+    api.getHome.mockResolvedValue({
+      ...PAGE,
+      slots: [
+        slot({ slot: "large", size: "large", module: "pc_loadout", name: "PC Loadout", tile: { kind: "view", view: PC } }),
+        slot({ slot: "small-1", module: "objectives", name: "Objectives", tile: { kind: "objectives", mission: null, xp: XP } }),
+      ],
+    });
+    render(<Home {...routes()} remote={false} />);
+    expect(await screen.findByText(NO_STEPS)).toBeInTheDocument();
+    expect(tile("PC Loadout")).toHaveClass("large");
+    expect(tile("PC Loadout")).not.toHaveClass("objective-tile");
+    expect(tile("Objectives")).toHaveClass("small", "objective-tile");
+  });
+
   it("an empty checklist asks for a plan, and the streak tile shows weeks in a row", async () => {
     api.getHome.mockResolvedValue({
       ...PAGE,

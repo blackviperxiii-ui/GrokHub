@@ -100,6 +100,9 @@
   --field-border: #8a8a86;
   /* The window's 1px frame; the dark (Loadout) themes draw it red. */
   --frame: transparent;
+  /* The open tab: a solid red fill on light, a red-tinted fill on dark. */
+  --tab-open-bg: var(--red);
+  --tab-open-text: #ffffff;
   color-scheme: light dark;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -159,6 +162,8 @@
     --danger-text: #ff4d5e;
     --field-border: #626266;
     --frame: var(--red);
+    --tab-open-bg: var(--selected);
+    --tab-open-text: var(--text);
   }
 }
 
@@ -192,6 +197,8 @@
   --danger-text: #ff4d5e;
   --field-border: #626266;
   --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
   color-scheme: dark;
 }
 
@@ -225,6 +232,8 @@
   --danger-text: #ff4d5e;
   --field-border: #5c5c60;
   --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
   color-scheme: dark;
 }
 
@@ -258,6 +267,8 @@
   --danger-text: #ff4d5e;
   --field-border: #6a6a6e;
   --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
   color-scheme: dark;
 }
 
@@ -416,15 +427,15 @@ button.quiet:hover:not(:disabled),
 .pulse-head .switch button[aria-pressed="true"],
 .chat-tab[aria-selected="true"] {
   border-color: var(--red);
-  background: var(--selected);
-  color: var(--text);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
   box-shadow: inset 0 -2px 0 var(--amber);
 }
 
 .tabs button[aria-pressed="true"]:hover:not(:disabled),
 .pulse-head .switch button[aria-pressed="true"]:hover:not(:disabled),
 .chat-tab[aria-selected="true"]:hover:not(:disabled) {
-  background: var(--selected);
+  background: var(--tab-open-bg);
   box-shadow: inset 0 -2px 0 var(--amber), var(--red-glow);
 }
 
@@ -495,7 +506,16 @@ select:focus-visible {
   height: 100vh;
   padding: 12px var(--page-pad);
   gap: 12px;
-  /* The 1px window frame (inset, so it never adds to the layout). */
+}
+
+/* The 1px window frame: a fixed layer over everything but dialogs, so the
+   phone's bottom bar never covers it. It takes no clicks. */
+.app::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
   box-shadow: inset 0 0 0 1px var(--frame);
 }
 
@@ -824,7 +844,7 @@ select:focus-visible {
   gap: 8px;
 }
 
-/* TALK / TYPE: red outline tabs; the one on is a full red stroke on the raised fill. */
+/* TALK / TYPE: red outline tabs; the one on is a full red stroke on the open-tab fill. */
 .hangout-mode {
   min-width: 64px;
   height: 28px;
@@ -844,9 +864,9 @@ select:focus-visible {
 
 .hangout-mode.on,
 .hangout-mode[aria-pressed="true"] {
-  color: var(--text);
+  color: var(--tab-open-text);
   border-color: var(--red);
-  background: var(--raised);
+  background: var(--tab-open-bg);
 }
 
 .log {

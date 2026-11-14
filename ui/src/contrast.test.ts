@@ -81,8 +81,8 @@ const PAIRS: [string, string, number][] = [
   ["muted", "bg", 4.5],
   ["muted", "panel", 4.5],
   ["muted", "raised", 4.5],
-  // The open tab's label on its red-tinted fill.
-  ["text", "selected", 4.5],
+  // The open tab's label on its fill (solid red on light, red-tinted on dark).
+  ["tab-open-text", "tab-open-bg", 4.5],
   ["steel", "panel", 4.5],
   // Code in a reply: strings and numbers on the code well.
   ["steel", "bg", 4.5],
