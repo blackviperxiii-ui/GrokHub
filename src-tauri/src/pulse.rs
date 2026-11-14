@@ -258,6 +258,9 @@ pub struct Idea {
     pub chips: Vec<Chip>,
     /// Like was tapped and is still on: the row shows a filled heart.
     pub loved: bool,
+    /// A skill the nightly review suggested: the main button is Add skill,
+    /// which saves it.
+    pub skill: bool,
 }
 
 /// A PC health card's options window: the verdict, what to try, and the
@@ -313,6 +316,8 @@ pub enum Act {
     Opened,
     /// Let's do it (or Run) took the idea to chat.
     Accept,
+    /// Add skill on a skill idea: the skill is saved and the idea goes.
+    AddSkill,
     /// More like this: the next idea run writes more in its spirit.
     MoreLike,
     /// Not interested: the idea goes, and so does some of its topics' weight.
@@ -594,6 +599,7 @@ fn idea(card: &UpdateCard, now_ms: u64) -> Idea {
             Vec::new()
         },
         loved: card.reaction == Some(CardReaction::Up),
+        skill: card.skill.is_some(),
     }
 }
 
@@ -779,7 +785,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         Act::NotThis | Act::NotInterested => (Some(Outcome::Dismissed), Some(false)),
         // Love on a source post also absorbs More like this (shift true).
         Act::Love if source => (Some(Outcome::Accepted), Some(true)),
-        Act::Love | Act::Accept | Act::Save => (Some(Outcome::Accepted), None),
+        Act::Love | Act::Accept | Act::AddSkill | Act::Save => (Some(Outcome::Accepted), None),
         Act::Unlove => (None, None),
         Act::MoreLike if card.reaction == Some(CardReaction::Up) => (None, None),
         Act::MoreLike => (Some(Outcome::Accepted), Some(true)),
@@ -896,6 +902,20 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             note(&card.title, LedgerReason::Accepted, &day.date)?;
             grokhub_core::mark_update_opened(&mut cards, id)
         }
+        Act::AddSkill => {
+            // Checked before the ledger note, so a refusal changes nothing.
+            let (md, write) = skill_to_add(config_dir, &card)?;
+            note(&card.title, LedgerReason::Accepted, &day.date)?;
+            if write {
+                grokhub_agent::skill_write::save_skill_logged(
+                    config_dir,
+                    &md,
+                    grokhub_agent::harness::Origin::User,
+                    "added from Suggested",
+                )?;
+            }
+            grokhub_core::dismiss_idea(&mut cards, id)
+        }
         Act::MoreLike => {
             if card.reaction == Some(CardReaction::Up) {
                 false
@@ -946,7 +966,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         Act::Snooze => Some(crate::proactive::Feedback::Later(pc::snooze_until(
             now_ms, day.hour, day.minute,
         ))),
-        Act::Accept | Act::Love => Some(crate::proactive::Feedback::Used),
+        Act::Accept | Act::AddSkill | Act::Love => Some(crate::proactive::Feedback::Used),
         Act::Unlove | Act::Opened | Act::MoreLike | Act::Save | Act::Dwell => None,
     };
     if let Some(feedback) = feedback {
@@ -956,6 +976,34 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         crate::nudges::dismissed(config_dir, &card);
     }
     Ok(page(config_dir, &cards, now_ms))
+}
+
+/// A skill idea's skill, with the steps as the idea now reads them, and
+/// whether it still needs writing: `false` when that very skill is already
+/// saved (an earlier Add whose card stayed up). A different skill you
+/// already have by that name is left alone.
+fn skill_to_add(
+    config_dir: &Path,
+    card: &UpdateCard,
+) -> Result<(grokhub_core::SkillMd, bool), String> {
+    let mut skill = card
+        .skill
+        .clone()
+        .ok_or_else(|| "This idea is not a skill.".to_string())?;
+    let steps = card.idea_action();
+    if !steps.is_empty() {
+        skill.instructions = Some(steps);
+    }
+    let md = grokhub_core::skill_from_suggestion(&skill)
+        .ok_or_else(|| "Need a real skill name and steps.".to_string())?;
+    let path = grokhub_agent::skill_write::skill_folder(config_dir, &md.name).join("SKILL.md");
+    if !path.exists() {
+        return Ok((md, true));
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(saved) if saved == grokhub_core::render_skill_md(&md) => Ok((md, false)),
+        _ => Err(format!("You already have a skill called {}.", md.name)),
+    }
 }
 
 /// More like this on a source post: topic weight, source nudge, related search, place.

@@ -857,6 +857,16 @@ pub fn export_markdown(id: &str) -> Result<String, String> {
 }
 
 pub fn transcript_pairs(info: &SessionInfo) -> Vec<(String, String)> {
+    pairs_of(info, true)
+}
+
+/// [`transcript_pairs`] without the tool calls and their results: only
+/// what was said.
+pub fn message_pairs(info: &SessionInfo) -> Vec<(String, String)> {
+    pairs_of(info, false)
+}
+
+fn pairs_of(info: &SessionInfo, tools: bool) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
     for record in &visible_records(&info.records) {
         match record {
@@ -874,10 +884,10 @@ pub fn transcript_pairs(info: &SessionInfo) -> Vec<(String, String)> {
             }
             Record::Item(InputItem::FunctionCall {
                 name, arguments, ..
-            }) => {
+            }) if tools => {
                 pairs.push(("assistant".into(), format!("Tool {name}\n{arguments}")));
             }
-            Record::Item(InputItem::FunctionCallOutput { output, .. }) => {
+            Record::Item(InputItem::FunctionCallOutput { output, .. }) if tools => {
                 pairs.push(("assistant".into(), format!("Tool result\n{output}")));
             }
             _ => {}

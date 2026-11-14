@@ -378,6 +378,8 @@ pub struct IdeaLine {
     pub title: String,
     /// What Let's do it puts in the chat box.
     pub action: String,
+    /// A skill idea: the row saves the skill instead of asking.
+    pub skill: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -667,6 +669,7 @@ fn pulse_tile(src: &Sources<'_>) -> Tile {
                     id: i.id,
                     title: i.title,
                     action: i.action,
+                    skill: i.skill,
                 }),
         },
         Err(message) => Tile::Error { message },

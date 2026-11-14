@@ -149,7 +149,12 @@ const PAGE: HomePage = {
       tile: {
         kind: "pulse",
         post: { id: "p1", title: "New GPU driver", summary: "", ago: "2h ago" },
-        idea: { id: "i1", title: "I can tidy your downloads", action: "tidy my downloads folder" },
+        idea: {
+          id: "i1",
+          title: "I can tidy your downloads",
+          action: "tidy my downloads folder",
+          skill: false,
+        },
       },
     }),
     slot({
@@ -493,6 +498,30 @@ describe("Home", () => {
     } finally {
       open.mockRestore();
     }
+  });
+
+  it("a skill idea on the Pulse tile opens Pulse and asks nothing", async () => {
+    const skillPage = {
+      ...PAGE,
+      slots: PAGE.slots.map((s) =>
+        s.tile.kind === "pulse"
+          ? {
+              ...s,
+              tile: {
+                ...s.tile,
+                idea: { id: "i2", title: "Tidy the board", action: "sort cards", skill: true },
+              },
+            }
+          : s,
+      ),
+    };
+    api.getHome.mockResolvedValue(skillPage);
+    const go = routes();
+    render(<Home {...go} remote={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Tidy the board" }));
+    expect(go.onOpen).toHaveBeenLastCalledWith("pulse");
+    expect(go.onAsk).not.toHaveBeenCalled();
+    expect(api.pulseAct).not.toHaveBeenCalled();
   });
 
   it("a tile click opens its page, a chat row its chat, and an idea fills the chat box", async () => {

@@ -172,6 +172,14 @@ pub fn list(config_dir: &Path) -> Vec<ChatRow> {
     shell_sessions().into_iter().map(|(row, _)| row).collect()
 }
 
+/// Every chat as saved, newest activity first, pins left out of the order.
+pub fn all_saved(config_dir: &Path) -> Vec<SessionInfo> {
+    let _config = ConfigGuard::set(config_dir);
+    let mut found = shell_sessions();
+    found.sort_by(|(a, _), (b, _)| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
+    found.into_iter().map(|(_, info)| info).collect()
+}
+
 /// Chats whose title or transcript holds `query`, ignoring case. A blank
 /// query lists them all.
 pub fn search(config_dir: &Path, query: &str) -> Vec<ChatRow> {

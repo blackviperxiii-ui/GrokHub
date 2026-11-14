@@ -480,6 +480,8 @@ export interface IdeaRowProps {
   idea: PulseIdea;
   busy: boolean;
   onDo: () => void;
+  /** A skill idea's main button: save the skill. */
+  onAddSkill?: () => void;
   /** A PC health card's main button: open its options window. */
   onFix?: () => void;
   /** Like, or take it back when the idea is already liked. */
@@ -502,6 +504,7 @@ export function IdeaRow({
   idea,
   busy,
   onDo,
+  onAddSkill,
   onFix,
   onMoreLike,
   onNotInterested,
@@ -511,7 +514,8 @@ export function IdeaRow({
 }: IdeaRowProps) {
   const chips = idea.chips ?? [];
   const fix = idea.fix && onFix ? onFix : null;
-  const main = fix ?? onDo;
+  const addSkill = idea.skill && onAddSkill ? onAddSkill : null;
+  const main = fix ?? addSkill ?? onDo;
   const [asking, setAsking] = useState(false);
   return (
     <li className="idea-row" aria-label={idea.title}>
@@ -556,7 +560,7 @@ export function IdeaRow({
         {chips.length === 0 ? (
           <>
             <button type="button" className="quiet" disabled={busy} onClick={main}>
-              {fix ? idea.fix : "Let's do it"}
+              {fix ? idea.fix : addSkill ? "Add skill" : "Let's do it"}
             </button>
             {fix && (
               <button type="button" className="quiet" disabled={busy} onClick={onDo}>

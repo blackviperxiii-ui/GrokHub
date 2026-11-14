@@ -50,6 +50,7 @@ import {
   PAGE_SIZE,
   Pulse,
   REFRESH_MS,
+  SKILL_ADDED,
   SAVED_NOTE,
 } from "./Pulse";
 
@@ -94,6 +95,7 @@ const IDEA: PulseIdea = {
   more: "",
   chips: [],
   loved: false,
+  skill: false,
 };
 
 const PAGE: PulsePage = {
@@ -631,6 +633,45 @@ describe("Pulse", () => {
     await userEvent.click(within(idea).getByRole("button", { name: /I can tidy the workboard/ }));
     expect(api.pulseAct).toHaveBeenCalledWith("idea-1", "accept");
     expect(onRun).toHaveBeenCalledWith("close every done card on the workboard");
+  });
+
+  it("a skill idea's Add skill saves the skill and sends nothing to chat", async () => {
+    const skill: PulseIdea = {
+      ...IDEA,
+      id: "idea-skill",
+      title: "Tidy the board",
+      kind: "Learn",
+      summary: "Sort open cards",
+      action: "sort cards by due date",
+      skill: true,
+    };
+    const page: PulsePage = { ...PAGE, ideas: [{ label: "", ideas: [skill] }] };
+    const after: PulsePage = { ...PAGE, ideas: [] };
+    api.getPulse.mockResolvedValue(page);
+    api.pulseAct.mockResolvedValue(after);
+    const onRun = vi.fn();
+    render(<Pulse onRun={onRun} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
+    const row = screen.getByRole("listitem", { name: "Tidy the board" });
+    expect(within(row).queryByRole("button", { name: "Let's do it" })).not.toBeInTheDocument();
+    await userEvent.click(within(row).getByRole("button", { name: "Add skill" }));
+    expect(api.pulseAct).toHaveBeenCalledTimes(1);
+    expect(api.pulseAct).toHaveBeenCalledWith("idea-skill", "addSkill");
+    expect(await screen.findByRole("status")).toHaveTextContent(SKILL_ADDED);
+    expect(onRun).not.toHaveBeenCalled();
+    expect(screen.queryByRole("listitem", { name: "Tidy the board" })).not.toBeInTheDocument();
+  });
+
+  it("a paired browser shows no Add skill: the skill is added on the computer", async () => {
+    const skill: PulseIdea = { ...IDEA, id: "idea-skill", title: "Tidy the board", skill: true };
+    api.getPulse.mockResolvedValue({ ...PAGE, ideas: [{ label: "", ideas: [skill] }] });
+    api.pulseAct.mockResolvedValue(PAGE);
+    render(<Pulse onRun={() => {}} remote />);
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
+    const row = screen.getByRole("listitem", { name: "Tidy the board" });
+    expect(within(row).queryByRole("button", { name: "Add skill" })).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Let's do it" })).toBeInTheDocument();
   });
 
   it("an idea shows the same row as every card: Like, Let's do it, Not interested, Dismiss", async () => {

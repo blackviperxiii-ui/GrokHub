@@ -765,7 +765,11 @@ export function App() {
           )}
           {opened.has("pulse") && caps.pulse && (
             <Page shown={view === "pulse"}>
-              <Pulse onRun={ask} onOpenInterests={() => run({ kind: "settings", section: "pulse" })} />
+              <Pulse
+                onRun={ask}
+                onOpenInterests={() => run({ kind: "settings", section: "pulse" })}
+                remote={Boolean(caps.remote)}
+              />
             </Page>
           )}
           {opened.has("workboard") && (
