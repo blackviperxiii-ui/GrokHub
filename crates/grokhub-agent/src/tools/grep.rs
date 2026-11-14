@@ -42,6 +42,11 @@ enum Mode {
 }
 
 pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
+    run_in(workspace, args, false)
+}
+
+/// [`run`], and with `skip_memory` no `MEMORY.md` is searched.
+pub fn run_in(workspace: &Path, args: &Value, skip_memory: bool) -> ToolOutput {
     let pattern = str_field(args, "pattern");
     if pattern.is_empty() {
         return ToolOutput::err("pattern is required");
@@ -110,6 +115,9 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
             continue;
         }
         let path = ent.path();
+        if skip_memory && crate::memory::is_memory_file(path) {
+            continue;
+        }
         if let Some(glob) = &glob {
             let rel = path.strip_prefix(&workspace_c).unwrap_or(path);
             if !glob.is_match(rel) {
@@ -236,6 +244,7 @@ mod tests {
         std::fs::write(dir.join("src/b.txt"), "needle text\n").unwrap();
         let out = execute(
             &dir,
+            "shell-a-b",
             "grep",
             r#"{"pattern":"needle","glob":"*.rs","-A":1,"-B":1}"#,
         );
@@ -257,16 +266,22 @@ mod tests {
         std::fs::write(dir.join("src/b.rs"), "NEEDLE\n").unwrap();
         std::fs::write(dir.join("src/c.rs"), "hay only\n").unwrap();
 
-        let out = execute(&dir, "grep", r#"{"pattern":"needle"}"#);
+        let out = execute(&dir, "shell-a-b", "grep", r#"{"pattern":"needle"}"#);
         assert!(out.text.contains("src/a.rs:2:needle two"), "{}", out.text);
         assert!(!out.text.contains("Needle one"), "case matters by default");
 
-        let out = execute(&dir, "grep", r#"{"pattern":"needle","-i":true}"#);
+        let out = execute(
+            &dir,
+            "shell-a-b",
+            "grep",
+            r#"{"pattern":"needle","-i":true}"#,
+        );
         assert!(out.text.contains("src/a.rs:1:Needle one"), "{}", out.text);
         assert!(out.text.contains("src/b.rs:1:NEEDLE"), "{}", out.text);
 
         let out = execute(
             &dir,
+            "shell-a-b",
             "grep",
             r#"{"pattern":"needle","-i":true,"output_mode":"files"}"#,
         );
@@ -276,6 +291,7 @@ mod tests {
 
         let out = execute(
             &dir,
+            "shell-a-b",
             "grep",
             r#"{"pattern":"needle","-i":true,"output_mode":"count"}"#,
         );
@@ -283,7 +299,12 @@ mod tests {
         counts.sort_unstable();
         assert_eq!(counts, ["src/a.rs:2", "src/b.rs:1"]);
 
-        let out = execute(&dir, "grep", r#"{"pattern":"x","output_mode":"lines"}"#);
+        let out = execute(
+            &dir,
+            "shell-a-b",
+            "grep",
+            r#"{"pattern":"x","output_mode":"lines"}"#,
+        );
         assert!(out.failed, "an unknown mode is an error");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -294,9 +315,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("big.txt"), "hit\n".repeat(500)).unwrap();
-        let out = execute(&dir, "grep", r#"{"pattern":"hit"}"#);
+        let out = execute(&dir, "shell-a-b", "grep", r#"{"pattern":"hit"}"#);
         assert!(out.text.contains("stopped at 200 lines"), "{}", out.text);
-        let out = execute(&dir, "grep", r#"{"pattern":"hit","output_mode":"count"}"#);
+        let out = execute(
+            &dir,
+            "shell-a-b",
+            "grep",
+            r#"{"pattern":"hit","output_mode":"count"}"#,
+        );
         assert_eq!(out.text, "big.txt:500");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -316,7 +342,7 @@ mod tests {
         std::fs::write(dir.join("src/z.rs"), "needle z\n").unwrap();
         std::fs::write(dir.join("src/a.rs"), "needle a\n").unwrap();
 
-        let out = execute(&dir, "grep", r#"{"pattern":"needle"}"#);
+        let out = execute(&dir, "shell-a-b", "grep", r#"{"pattern":"needle"}"#);
         assert!(!out.text.contains(".git"), "{}", out.text);
         assert!(
             out.text.len() < 5_000,
@@ -324,7 +350,7 @@ mod tests {
             out.text.len()
         );
         assert!(out.text.contains("…[+"), "the long line says it was cut");
-        let again = execute(&dir, "grep", r#"{"pattern":"needle"}"#);
+        let again = execute(&dir, "shell-a-b", "grep", r#"{"pattern":"needle"}"#);
         assert_eq!(out.text, again.text, "the same search gives the same bytes");
         let a = out.text.find("src/a.rs").unwrap();
         let z = out.text.find("src/z.rs").unwrap();
@@ -357,12 +383,12 @@ mod tests {
             )
             .unwrap();
 
-            let out = execute(&dir, "grep", r#"{"pattern":"needle","path":"src"}"#);
+            let out = execute(&dir, "shell-a-b", "grep", r#"{"pattern":"needle","path":"src"}"#);
             assert_eq!(out.text, "src/a.rs:1:needle a");
             assert!(!fence::run_saw_untrusted(), "a code search stays clean");
 
             let out = execute(
-                &dir,
+                &dir, "shell-a-b",
                 "grep",
                 r#"{"pattern":"drop","path":".grokhub/tool-output-compact"}"#,
             );
@@ -385,7 +411,7 @@ mod tests {
             // A file marked as written from outside text: its lines go in the
             // fence, after the plain hits, and its role framing is defanged.
             std::fs::write(dir.join(".grokhub/tainted-files"), "notes.md\n").unwrap();
-            let out = execute(&dir, "grep", r#"{"pattern":"needle|role","glob":"*.{rs,md}"}"#);
+            let out = execute(&dir, "shell-a-b", "grep", r#"{"pattern":"needle|role","glob":"*.{rs,md}"}"#);
             assert_eq!(
                 out.text,
                 format!(
@@ -399,7 +425,7 @@ mod tests {
 
             // Where and how many are not the file's text: they stay plain.
             let out = execute(
-                &dir,
+                &dir, "shell-a-b",
                 "grep",
                 r#"{"pattern":"needle","glob":"*.md","output_mode":"count"}"#,
             );
@@ -421,7 +447,12 @@ mod tests {
             std::fs::create_dir_all(dir.join(".grokhub")).unwrap();
             std::fs::write(dir.join("page.txt"), "hit\n".repeat(500)).unwrap();
             std::fs::write(dir.join(".grokhub/tainted-files"), "page.txt\n").unwrap();
-            let out = execute(&dir, "grep", r#"{"pattern":"hit","path":"page.txt"}"#);
+            let out = execute(
+                &dir,
+                "shell-a-b",
+                "grep",
+                r#"{"pattern":"hit","path":"page.txt"}"#,
+            );
             let lines: Vec<&str> = out.text.lines().collect();
             assert_eq!(lines.len(), 203, "{}", out.text);
             assert!(lines[0].starts_with("<<<UNTRUSTED source=grep:stored nonce="));
@@ -444,7 +475,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "1\nhit\n3\nhit\n5\n").unwrap();
-        let out = execute(&dir, "grep", r#"{"pattern":"hit","-A":3,"-B":3}"#);
+        let out = execute(
+            &dir,
+            "shell-a-b",
+            "grep",
+            r#"{"pattern":"hit","-A":3,"-B":3}"#,
+        );
         let lines: Vec<&str> = out.text.lines().collect();
         assert_eq!(
             lines,

@@ -58,6 +58,7 @@ pub mod route;
 mod run;
 pub mod sandbox;
 mod scan;
+pub mod scratch;
 pub mod self_manage;
 mod session;
 mod session_tools;

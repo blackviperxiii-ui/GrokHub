@@ -692,7 +692,13 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             prior: super::ask::prior(key),
         };
         let read = super::ask::read(call.text, &cx);
-        super::knn::blend_turn(config_dir, key, call.text, turn, &cx, read, now_ms)
+        // A scratch chat's turns blend with the bank but never join it.
+        let bank_key = if crate::scratch::is_scratch(call.session) {
+            ""
+        } else {
+            key
+        };
+        super::knn::blend_turn(config_dir, bank_key, call.text, turn, &cx, read, now_ms)
     });
     let lane = ask.as_ref().map(|a| a.lane());
     let d = match &ask {

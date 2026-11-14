@@ -180,8 +180,10 @@ import {
   EVENTS_LOST,
   HALTED_LINE,
   NO_PLAN,
+  isScratchChat,
   itemsFrom,
   MISSION_BUSY,
+  newConversationId,
   OPEN_BUSY,
   PLAN_NEXT,
   STOP_ASKING_DONE,
@@ -1013,6 +1015,34 @@ describe("Chat", () => {
     await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());
     expect(screen.getByText("There are 12 files.")).toBeVisible();
     expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
+  });
+
+  it("/scratch opens a scratch chat that says it reads and saves no memory", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const first = await startTurn("hello");
+    await act(async () => finish());
+    expect(screen.queryByText("Scratch chat · no memory read or saved")).toBeNull();
+    api.runSlash.mockReset().mockResolvedValue({ kind: "newScratch" });
+    await userEvent.type(screen.getByLabelText("Message"), "/scratch{Enter}");
+    expect(
+      await screen.findByText("Scratch chat: it doesn't read your memory, and nothing said here is saved to it."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("hello")).toBeNull();
+    api.sendChat.mockResolvedValue("end_turn");
+    await userEvent.type(screen.getByLabelText("Message"), "just thinking out loud{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    const id = api.sendChat.mock.calls[1][0];
+    expect(id).toMatch(/^shell-scratch-[a-z0-9]+-[a-z0-9]+$/);
+    expect(first).toMatch(/^shell-(?!scratch-)/);
+    // The mark stays while the chat is open, not only as the first note.
+    expect(screen.getByText("Scratch chat · no memory read or saved")).toHaveClass("scratch-mark");
+  });
+
+  it("only a scratch chat id is a scratch chat", () => {
+    expect(isScratchChat(newConversationId(true))).toBe(true);
+    expect(isScratchChat(newConversationId())).toBe(false);
+    expect(isScratchChat("shell-m3x9-scratch-")).toBe(false);
   });
 
   it("/deep-research sends the line as typed and runs no second command", async () => {

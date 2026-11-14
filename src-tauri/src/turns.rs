@@ -41,7 +41,8 @@ pub fn pick_mode(state: &ShellState, conversation_id: &str, text: &str) -> agent
     let mut reads = state.turn_reads.0.lock().unwrap_or_else(|e| e.into_inner());
     let fix = intent::correction_of_previous(text);
     if let (Some(fix), Some((prev, was))) = (fix, reads.remove(conversation_id)) {
-        if fix != was {
+        // A scratch chat teaches the reader nothing.
+        if fix != was && !grokhub_agent::scratch::is_scratch(conversation_id) {
             intent::note_correction(&state.config_dir, &prev, false, fix);
         }
     }
@@ -208,7 +209,9 @@ pub fn tell_main(
     question: String,
     answer: String,
 ) -> Told {
-    intent::note_correction(&state.config_dir, &question, true, TurnRoute::Steer);
+    if !grokhub_agent::scratch::is_scratch(&conversation_id) {
+        intent::note_correction(&state.config_dir, &question, true, TurnRoute::Steer);
+    }
     let text = intent::tell_main_text(&question, &answer);
     let steered = state
         .chats

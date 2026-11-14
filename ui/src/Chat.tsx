@@ -287,8 +287,20 @@ function runsBesideReply(line: string, remote?: boolean): boolean {
   return (/^\/(stop|undo)$/i.test(line) && !remote) || BESIDE_REPLY.test(line);
 }
 
-export function newConversationId(): string {
-  return `shell-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+/** A scratch chat's id starts `shell-scratch-` (`grokhub_agent::scratch`):
+ * the engine reads no memory into it and writes none from it. */
+export function newConversationId(scratch = false): string {
+  return `shell-${scratch ? "scratch-" : ""}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** What `/scratch` says once its chat opens. */
+export const SCRATCH_NOTE = "Scratch chat: it doesn't read your memory, and nothing said here is saved to it.";
+
+/** The line a scratch chat keeps above its log, reopened or not. */
+export const SCRATCH_MARK = "Scratch chat · no memory read or saved";
+
+export function isScratchChat(conversationId: string): boolean {
+  return conversationId.trimStart().startsWith("shell-scratch-");
 }
 
 /** Folds one engine event into the log. Errors and Done are handled by the caller. */
@@ -1006,7 +1018,7 @@ export function Chat({
     }
   }
 
-  function startFresh() {
+  function startFresh(scratch = false) {
     openAfter.current = null;
     queueBackToBox();
     leaveSides();
@@ -1015,7 +1027,7 @@ export function Chat({
     setItems([]);
     setEarlier(0);
     setError(null);
-    setConversationId(newConversationId());
+    setConversationId(newConversationId(scratch));
   }
 
   function show(transcript: Transcript) {
@@ -1317,11 +1329,12 @@ export function Chat({
     followEnd(before);
   }, [items]);
 
-  function startOver() {
-    if (busy) return;
+  function startOver(scratch = false) {
+    if (busy) return false;
     // A browser's chat with no message sent is refused; the new chat starts anyway.
     closeChat(conversationId).catch(() => {});
-    startFresh();
+    startFresh(scratch);
+    return true;
   }
 
   /** Sends `text` and `files`. `as` (`/plan <text>`, a plan's follow-up chip)
@@ -1633,6 +1646,9 @@ export function Chat({
     switch (effect.kind) {
       case "newChat":
         startOver();
+        break;
+      case "newScratch":
+        if (startOver(true)) setItems([{ kind: "slash", command, text: SCRATCH_NOTE }]);
         break;
       case "mode": {
         const text = effect.text?.trim();
@@ -1962,7 +1978,7 @@ export function Chat({
             busy={busy}
             draftEmpty={items.length === 0}
             onSwitch={openChat}
-            onNew={startOver}
+            onNew={() => startOver()}
             onClear={async (id) => {
               touched.current = true;
               const fresh = await clearChat(id);
@@ -1987,6 +2003,11 @@ export function Chat({
           onStep={findNext}
           onClose={closeFind}
         />
+      )}
+      {isScratchChat(conversationId) && (
+        <p className="scratch-mark" role="note">
+          {SCRATCH_MARK}
+        </p>
       )}
       {/* Focusable so the keyboard can scroll a long conversation. */}
       <div ref={logRef} className="log" role="log" aria-live="polite" tabIndex={0}>
@@ -2165,7 +2186,7 @@ export function Chat({
             Send
           </button>
         )}
-        <button type="button" className="quiet" onClick={startOver} disabled={busy}>
+        <button type="button" className="quiet" onClick={() => startOver()} disabled={busy}>
           {embedded ? "New session" : "New chat"}
         </button>
       </form>

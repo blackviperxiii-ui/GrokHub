@@ -986,6 +986,16 @@ pub fn reflect(config_dir: &Path, chat_id: Option<&str>) -> Result<ReflectResult
             let chat = crate::settings::load(config_dir).last_chat;
             (!chat.is_empty()).then_some(chat)
         });
+    if id
+        .as_deref()
+        .is_some_and(grokhub_agent::scratch::is_scratch)
+    {
+        return Ok(ReflectResult {
+            status: "Scratch — no reflect".into(),
+            diff: String::new(),
+            files: load_files()?,
+        });
+    }
     let pairs: Vec<(String, String)> = match &id {
         Some(id) => crate::history::saved(config_dir, id)
             .map(|info| grokhub_agent::transcript_pairs(&info))
@@ -1515,6 +1525,26 @@ mod tests {
         let done = reflect(&grokhub_agent::perm::config_dir(), None).unwrap();
         assert_eq!(done.status, "Reflect: nothing new");
         assert!(done.diff.is_empty());
+    }
+
+    #[test]
+    fn reflect_refuses_a_scratch_chat() {
+        let _d = dirs("reflect-scratch");
+        let done = reflect(
+            &grokhub_agent::perm::config_dir(),
+            Some("shell-scratch-a-b"),
+        )
+        .unwrap();
+        assert_eq!(done.status, "Scratch — no reflect");
+        assert!(done.diff.is_empty());
+        // Reflect with no chat named falls back to the last chat: a scratch
+        // one is refused the same way.
+        let dir = grokhub_agent::perm::config_dir();
+        let mut saved = crate::settings::load(&dir);
+        saved.last_chat = "shell-scratch-c-d".into();
+        crate::settings::save(&dir, &saved).unwrap();
+        let fallback = reflect(&dir, None).unwrap();
+        assert_eq!(fallback.status, "Scratch — no reflect");
     }
 
     #[test]

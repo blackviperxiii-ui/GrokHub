@@ -266,7 +266,7 @@ fn marketplace_install_reload_and_deferred_tools_both_offer_mcp() {
     );
     assert!(!many.iter().any(|n| n == "box__t0"));
 
-    let found = execute(&dir, "search_tool", r#"{"query":"widget"}"#);
+    let found = execute(&dir, "shell-a-b", "search_tool", r#"{"query":"widget"}"#);
     assert!(
         found.text.contains("box__t0"),
         "search_tool finds deferred MCP tools: {found:?}"

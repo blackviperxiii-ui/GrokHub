@@ -78,6 +78,7 @@ impl TurnVolatile {
         playbook: Option<&str>,
         already: &[String],
         intentions: Option<String>,
+        recall: bool,
     ) -> Self {
         let style = style
             .map(|s| s.prompt_block(soft_caps))
@@ -86,7 +87,10 @@ impl TurnVolatile {
             .map(|block| block.trim())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        let memory = if first_turn {
+        // A scratch chat reads no memory.
+        let memory = if !recall {
+            None
+        } else if first_turn {
             crate::memory::first_turn_injection(workspace, user_text)
         } else {
             crate::memory::followup_injection(workspace, user_text, already)
