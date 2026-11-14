@@ -36,6 +36,8 @@ pub struct Finished {
     pub summary: String,
     /// Grok looked at the stills (false when nothing was diagnosed).
     pub sent: bool,
+    /// What Grok said, for the card's Fix it. `None` when nothing was diagnosed.
+    pub report: Option<sr::ScreenReport>,
 }
 
 /// One line for the feed card under the recording's title.
@@ -55,6 +57,7 @@ fn local_only(title: &str, dir: &Path, why: &str) -> Finished {
         text: sr::local_only_text(title, dir, why),
         summary: format!("Saved on this computer, not diagnosed: {}", why.trim()),
         sent: false,
+        report: None,
     }
 }
 
@@ -159,6 +162,7 @@ pub fn diagnose(
                 text: sr::report_text(title, &report, dir),
                 summary: report_summary(&report),
                 sent: true,
+                report: Some(report),
             }
         }
         Ok(_) => local_only(title, dir, "Grok sent back nothing"),
@@ -374,6 +378,7 @@ mod tests {
                 ),
                 summary: "Saved on this computer, not diagnosed: Connect Grok in Settings".into(),
                 sent: false,
+                report: None,
             }
         );
         let junk = dir.join("frame-009.png");

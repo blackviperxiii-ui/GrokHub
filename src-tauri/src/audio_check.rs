@@ -64,13 +64,18 @@ fn finish(
 ) -> Event {
     match done {
         Ok((input, report)) => {
-            let card = grokhub_core::audio_check_card(
+            let mut card = grokhub_core::audio_check_card(
                 &input,
                 &report.card_title,
                 &report.summary,
                 chat,
                 now,
             );
+            // The full report opens under the card, with Fix it when it has steps.
+            card.pulse.report = Some(grokhub_core::fix_plan::diagnosis_report(
+                &report.text,
+                &grokhub_core::fix_plan::from_audio(&report),
+            ));
             if let Err(why) = crate::pulse::add_post(config_dir, card) {
                 eprintln!("audio check card: {why}");
             }
@@ -351,7 +356,7 @@ mod tests {
                 kind: "audio",
                 chat: String::new(),
                 ok: true,
-                text
+                text: text.clone()
             }
         );
         let cards = audio_cards(&dir);
@@ -379,6 +384,15 @@ mod tests {
             .find(|p| p.title == card.title)
             .expect("on the feed");
         assert_eq!(post.source, "Audio check");
+        // It opens to the full report, and Fix it asks the steps in its chat.
+        let report = card.pulse.report.as_ref().expect("a report");
+        assert_eq!(report.details, text.trim());
+        assert_eq!(post.chips[0].label, "Fix it");
+        let seed = crate::pulse::offer(&dir, &card.id, 0, NOW).unwrap();
+        assert_eq!(
+            seed.text,
+            "Fix what my audio check found, using the report's steps, one at a time:\n1. Lower Yeti Stereo Microphone's input volume or gain knob until loud speech peaks around -6 dBFS. (Undo: Lower the volume or gain again to where it was.)\n\nBefore each step, say what it will change. Ask me before anything that changes settings, files or devices, and stop if a step fails. Tell me which steps I have to do by hand."
+        );
     }
 
     #[test]
@@ -408,6 +422,14 @@ mod tests {
         );
         assert_eq!(cards[0].runs, 2);
         assert_eq!(cards[0].created_at, NOW + 60_000);
+        // The clean check's report replaces the clipping one, so no Fix it is left.
+        let report = cards[0].pulse.report.as_ref().expect("a report");
+        assert!(
+            report.details.contains("No problems found."),
+            "{}",
+            report.details
+        );
+        assert!(report.offers.is_empty(), "{:?}", report.offers);
         assert_eq!(
             cards[0].action,
             Some(grokhub_core::UpdateAction::OpenSession {

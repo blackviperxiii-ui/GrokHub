@@ -9,6 +9,7 @@
 
 use crate::slash::Effect;
 use grokhub_agent::CancelToken;
+use grokhub_core::fix_plan;
 use grokhub_core::screen_record as sr;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -581,13 +582,20 @@ fn report(
         reporter.client,
         &cancel,
     );
-    let card = grokhub_core::screen_recording_card(
+    let mut card = grokhub_core::screen_recording_card(
         &done.dir.display().to_string(),
         &title,
         &found.summary,
         chat,
         now_ms(),
     );
+    if let Some(seen) = &found.report {
+        // The full report opens under the card, with Fix it when it has steps.
+        card.pulse.report = Some(fix_plan::diagnosis_report(
+            &found.text,
+            &fix_plan::from_screen(seen),
+        ));
+    }
     let _ = crate::pulse::add_post(config_dir, card);
     if !chat.is_empty() {
         let text = if found.sent {
@@ -1014,6 +1022,28 @@ mod tests {
             Some(grokhub_core::UpdateAction::OpenSession {
                 thread_id: "chat-1".into()
             })
+        );
+        // The card opens to the full report and offers Fix it.
+        let report = delivered[0]
+            .1
+            .trim_end_matches("\n\nTo keep the steps you showed as a skill, send /record --skill.");
+        assert_eq!(
+            cards[0].pulse.report.as_ref().map(|r| r.details.as_str()),
+            Some(report)
+        );
+        let page = crate::pulse::load(&cfg, None, now_ms()).unwrap();
+        let post = page.feed.iter().find(|p| p.id == cards[0].id).unwrap();
+        assert_eq!(post.chips[0].label, "Fix it");
+        assert_eq!((post.chips[0].act, post.chips[0].index), ("offer", 0));
+        let seed = crate::pulse::offer(&cfg, &cards[0].id, 0, now_ms()).unwrap();
+        assert_eq!(
+            seed.text,
+            "Fix what my screen recording found, using the report's steps, one at a time:\n1. Turn off unused plugins. (Undo: Reverse the change manually in the same app or settings screen.)\n\nBefore each step, say what it will change. Ask me before anything that changes settings, files or devices, and stop if a step fails. Tell me which steps I have to do by hand."
+        );
+        let carry = seed.carry.unwrap();
+        assert!(
+            carry.contains(&format!("Full report:\n{report}")),
+            "{carry}"
         );
         let after = status();
         assert_eq!((after.recording, after.diagnosing), (None, None));

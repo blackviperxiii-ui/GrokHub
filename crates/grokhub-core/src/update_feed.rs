@@ -733,6 +733,20 @@ fn merge_event(mut existing: UpdateCard, new: UpdateCard) -> UpdateCard {
     existing.why = new.why;
     existing.dismissed_at = 0;
     existing.source_id = new.source_id;
+    // The newest run's report is the one the card opens to and offers fixes
+    // from; what the app already did for the card stays in its receipts.
+    if let Some(mut report) = new.pulse.report {
+        if let Some(old) = existing.pulse.report.take() {
+            let mut receipts = old.receipts;
+            receipts.append(&mut report.receipts);
+            let extra = receipts
+                .len()
+                .saturating_sub(crate::card_report::RECEIPTS_MAX);
+            receipts.drain(..extra);
+            report.receipts = receipts;
+        }
+        existing.pulse.report = Some(report);
+    }
     refresh_event_why(&mut existing);
     existing
 }
@@ -4648,6 +4662,36 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert!(blank.body.is_some());
         let done = automation_done_card("a1", "Board summary", "ok", 5);
         assert_ne!(c.id, done.id, "a failure must not replace the done card");
+    }
+
+    #[test]
+    fn a_later_run_of_the_same_source_brings_its_report_and_keeps_the_receipts() {
+        let mut cards = Vec::new();
+        let first = automation_report_card("a1", "Backup", "Copied 3 files. One failed.", 1_000);
+        assert!(post_update(&mut cards, first));
+        crate::card_report::add_receipt(
+            &mut cards[0],
+            crate::card_report::CardReceipt {
+                at_ms: 1_500,
+                what: "Looked into the failure".into(),
+                result: vec!["The disk was full.".into()],
+            },
+        );
+        let second =
+            automation_report_card("a1", "Backup", "Copied 5 files. All went fine.", 2_000);
+        assert!(post_update(&mut cards, second));
+        assert_eq!(cards.len(), 1);
+        let report = cards[0].pulse.report.as_ref().unwrap();
+        assert_eq!(report.details, "Copied 5 files. All went fine.");
+        assert_eq!(
+            report.receipts,
+            vec![crate::card_report::CardReceipt {
+                at_ms: 1_500,
+                what: "Looked into the failure".into(),
+                result: vec!["The disk was full.".into()],
+            }]
+        );
+        assert_eq!(cards[0].runs, 2);
     }
 
     #[test]
