@@ -7,8 +7,8 @@ import { sourceHost, splitSources } from "./replySources";
 // drifts from grokhub_core::reply_sources.
 describe("the TypeScript Sources split matches the core split", () => {
   it("has the fixtures, not an empty table", () => {
-    expect(fixtures.cases.length).toBeGreaterThanOrEqual(30);
-    expect(fixtures.cases.filter((c) => c.split !== null).length).toBeGreaterThanOrEqual(15);
+    expect(fixtures.cases.length).toBeGreaterThanOrEqual(45);
+    expect(fixtures.cases.filter((c) => c.split !== null).length).toBeGreaterThanOrEqual(25);
   });
 
   for (const [n, c] of fixtures.cases.entries()) {
@@ -31,6 +31,17 @@ describe("splitSources", () => {
         { url: "https://www.phoronix.com/news/Rust-1.92", site: "phoronix.com" },
       ],
     });
+  });
+
+  it("splits a long reply with a long run of spaces in linear time", () => {
+    // An anchored `\s+$` trim retries at every space of an inner run, which
+    // took seconds on this input; a scan takes well under a millisecond.
+    const body = `a${" ".repeat(60_000)}b\n\nSources:\n- https://a.com`;
+    const started = performance.now();
+    const split = splitSources(body);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(split?.sources).toEqual([{ url: "https://a.com", site: "a.com" }]);
+    expect(split?.answer.length).toBe(60_002);
   });
 
   it("leaves a reply with no trailing list whole", () => {

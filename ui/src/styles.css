@@ -4721,6 +4721,13 @@ button.primary:not(.quick-chip) {
   list-style: none;
 }
 
+/* min-width 0 lets a long site name shrink to the bubble and end in an
+   ellipsis instead of pushing the chat sideways. */
+.source-chips > li {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .bubble .source-chips:first-child {
   margin-top: 0;
 }

@@ -41,6 +41,22 @@ const INPUTS: &[&str] = &[
     "Answer.\n\nSources:\n- [Broken](https://a.com\n",
     "Answer.\n\n### **Sources:**\n1. https://a.com\n",
     "Answer.\u{a0}\u{a0}\n\nSources:\u{2003}\n1.\u{2003}https://a.com\u{3000}\n",
+    // Each input below pins one branch the ones above leave open.
+    "Opensources: https://a.com",
+    "Answer.\nSources:",
+    "Answer.\n**Sources:**\n",
+    "See the sources below. Sources: https://a.com",
+    "Answer.\nSources: https://a.com\n- https://b.com",
+    "Answer.\nSources:\n- https://www./a",
+    "Answer.\nSources:\n- http://a",
+    "Answer.\nSources:\n- http://é",
+    "Answer.\nSources:\n- https://a.com?q=1\n- https://b.com#top",
+    "Answer.\n\nSources:\n\u{feff}1. https://a.com",
+    "Answer.\u{85}\n\nSources:\u{85}\n1. https://a.com\u{85}",
+    "Answer.\n\nSources:\n- https://a.com\n   \n- https://b.com",
+    "Answer.\n\nSources:\n1. https://a.com,\n2. https://b.com\tTitle",
+    "Answer. ## Sources: https://a.com",
+    "Answer. __Sources:__ https://a.com",
 ];
 
 fn expected() -> Value {

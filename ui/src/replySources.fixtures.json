@@ -312,6 +312,142 @@
           }
         ]
       }
+    },
+    {
+      "input": "Opensources: https://a.com",
+      "split": null
+    },
+    {
+      "input": "Answer.\nSources:",
+      "split": null
+    },
+    {
+      "input": "Answer.\n**Sources:**\n",
+      "split": null
+    },
+    {
+      "input": "See the sources below. Sources: https://a.com",
+      "split": {
+        "answer": "See the sources below.",
+        "sources": [
+          {
+            "site": "a.com",
+            "url": "https://a.com"
+          }
+        ]
+      }
+    },
+    {
+      "input": "Answer.\nSources: https://a.com\n- https://b.com",
+      "split": null
+    },
+    {
+      "input": "Answer.\nSources:\n- https://www./a",
+      "split": null
+    },
+    {
+      "input": "Answer.\nSources:\n- http://a",
+      "split": null
+    },
+    {
+      "input": "Answer.\nSources:\n- http://é",
+      "split": {
+        "answer": "Answer.",
+        "sources": [
+          {
+            "site": "é",
+            "url": "http://é"
+          }
+        ]
+      }
+    },
+    {
+      "input": "Answer.\nSources:\n- https://a.com?q=1\n- https://b.com#top",
+      "split": {
+        "answer": "Answer.",
+        "sources": [
+          {
+            "site": "a.com",
+            "url": "https://a.com?q=1"
+          },
+          {
+            "site": "b.com",
+            "url": "https://b.com#top"
+          }
+        ]
+      }
+    },
+    {
+      "input": "Answer.\n\nSources:\n﻿1. https://a.com",
+      "split": null
+    },
+    {
+      "input": "Answer.\n\nSources:\n1. https://a.com",
+      "split": {
+        "answer": "Answer.",
+        "sources": [
+          {
+            "site": "a.com",
+            "url": "https://a.com"
+          }
+        ]
+      }
+    },
+    {
+      "input": "Answer.\n\nSources:\n- https://a.com\n   \n- https://b.com",
+      "split": {
+        "answer": "Answer.",
+        "sources": [
+          {
+            "site": "a.com",
+            "url": "https://a.com"
+          },
+          {
+            "site": "b.com",
+            "url": "https://b.com"
+          }
+        ]
+      }
+    },
+    {
+      "input": "Answer.\n\nSources:\n1. https://a.com,\n2. https://b.com\tTitle",
+      "split": {
+        "answer": "Answer.",
+        "sources": [
+          {
+            "site": "a.com",
+            "url": "https://a.com"
+          },
+          {
+            "site": "b.com",
+            "url": "https://b.com"
+          }
+        ]
+      }
+    },
+    {
+      "input": "Answer. ## Sources: https://a.com",
+      "split": {
+        "answer": "Answer.",
+        "sources": [
+          {
+            "site": "a.com",
+            "url": "https://a.com"
+          }
+        ]
+      }
+    },
+    {
+      "input": "Answer. __Sources:__ https://a.com",
+      "split": {
+        "answer": "Answer.",
+        "sources": [
+          {
+            "site": "a.com",
+            "url": "https://a.com"
+          }
+        ]
+      }
     }
   ]
 }

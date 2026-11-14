@@ -12,9 +12,22 @@ export interface ReplySource {
 }
 
 // Rust's whitespace and trims, by Unicode property, so both split the same way.
+// The trims scan code units instead of an anchored regex: `\p{White_Space}+$`
+// retries at every spot in an inner run of spaces, which is quadratic on a
+// long reply. Every White_Space code point is in the BMP, so one unit is one.
+const WS = /^\p{White_Space}$/u;
+const isWs = (c: string) => WS.test(c);
 const WS_START = /^\p{White_Space}/u;
-const trimStart = (s: string) => s.replace(/^\p{White_Space}+/u, "");
-const trimEnd = (s: string) => s.replace(/\p{White_Space}+$/u, "");
+function trimStart(s: string): string {
+  let i = 0;
+  while (i < s.length && isWs(s[i])) i++;
+  return s.slice(i);
+}
+function trimEnd(s: string): string {
+  let i = s.length;
+  while (i > 0 && isWs(s[i - 1])) i--;
+  return s.slice(0, i);
+}
 const trim = (s: string) => trimEnd(trimStart(s));
 const asciiLower = (s: string) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
 const utf8Len = (s: string) => new TextEncoder().encode(s).length;
