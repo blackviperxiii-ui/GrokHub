@@ -219,16 +219,12 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             Err(e) => return reject_body(req, e),
         };
         let snap = body.get("snapshot").cloned().unwrap_or(body);
-        let local = {
-            let st = lock(state);
-            st.snapshot.clone()
-        };
-        match grokhub_core::merge_put_snapshot(local.as_deref(), snap) {
-            Ok(merged) => {
-                let mut st = lock(state);
-                st.snapshot = Some(std::sync::Arc::new(merged));
-                st.last_incoming_at = grokhub_core::now_ms();
-                drop(st);
+        // A /sync from this computer landing meanwhile is merged, not lost.
+        match grokhub_core::swap_hub_snapshot(state, |local| {
+            grokhub_core::merge_put_snapshot(local, snap.clone())
+        }) {
+            Ok(()) => {
+                lock(state).last_incoming_at = grokhub_core::now_ms();
                 return send_json(req, 200, json!({ "ok": true }));
             }
             Err(e) => return send_json(req, 400, json!({ "ok": false, "error": e })),
@@ -959,14 +955,17 @@ mod tests {
             drop_at < read_at,
             "PUT snapshot must not read the body while holding the hub lock: {put_snap}"
         );
-        let clone_at = put_snap
-            .find("snapshot.clone()")
-            .expect("PUT clones the Arc");
+        // swap_hub_snapshot clones the Arc and merges off the lock; its own
+        // tests lock the hub from inside the merge, which would deadlock
+        // under it.
+        let swap_at = put_snap
+            .find("swap_hub_snapshot")
+            .expect("PUT merges off lock");
         let merge_at = put_snap
             .find("merge_put_snapshot")
-            .expect("PUT merges off lock");
+            .expect("PUT merges a hub snapshot");
         assert!(
-            read_at < clone_at && clone_at < merge_at && !put_snap.contains(".put_snapshot("),
+            read_at < swap_at && swap_at < merge_at && !put_snap.contains(".put_snapshot("),
             "PUT snapshot must not from_value 8MB under hub.lock(): {put_snap}"
         );
         let get_frame = src

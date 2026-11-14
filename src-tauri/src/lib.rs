@@ -5757,7 +5757,7 @@ async fn stop_share(
 
 /// Send on a `/sync` or `/inhabit` card. Its own command, not a slash line,
 /// so typing can't stand in for the click; the browser never reaches it.
-/// Reads chats and memory and writes the hub's file, so off the main thread.
+/// Reads chats and memory and writes the send log, so off the main thread.
 #[cfg(desktop)]
 #[tauri::command]
 async fn hub_send_approve(

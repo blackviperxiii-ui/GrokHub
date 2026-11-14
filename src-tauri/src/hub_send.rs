@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use grokhub_agent::harness as hx;
-use grokhub_core::{now_ms, redact_secret_words, state::Peer, HubMemoryFile, InhabitBundle};
+use grokhub_core::{now_ms, redact_for_share, state::Peer, HubMemoryFile, InhabitBundle};
 use serde_json::{json, Value};
 
 use crate::hub_share::{HubPeers, HubShare};
@@ -176,7 +176,9 @@ fn send_now(
         None => {
             let snap = snapshot(config_dir, hub)?;
             log(config_dir, &req, basis)?;
-            share.publish(snap);
+            share
+                .publish(snap)
+                .map_err(|why| format!("Nothing was shared: {why}"))?;
             Ok(synced(hub.peers.len()))
         }
     }
@@ -197,18 +199,17 @@ fn log(config_dir: &Path, req: &hx::EgressReq<'_>, basis: Basis) -> Result<(), S
     }
 }
 
-/// Every string in `v` with its key- and password-shaped words masked.
+/// Every string in `v` with its keys, tokens and passwords masked.
 fn scrub(v: &mut Value) {
     match v {
-        Value::String(s) => *s = redact_secret_words(s),
+        Value::String(s) => *s = redact_for_share(s),
         Value::Array(items) => items.iter_mut().for_each(scrub),
         Value::Object(map) => map.values_mut().for_each(scrub),
         _ => {}
     }
 }
 
-/// The memory tabs, the skills in this app's folder that are on, and the
-/// goal pin, read as the config folder has them.
+/// The memory tabs, read from `config_dir`.
 fn memory_files(config_dir: &Path) -> Result<Vec<(&'static str, String, u64)>, String> {
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
     crate::memory::tab_files()
@@ -216,7 +217,7 @@ fn memory_files(config_dir: &Path) -> Result<Vec<(&'static str, String, u64)>, S
 
 /// `/sync`: the saved chats (newest first, scratch chats left out, tool
 /// steps left out), the memory tabs, skills, automations and the board,
-/// with key- and password-shaped words masked.
+/// with keys, tokens and passwords masked.
 fn snapshot(config_dir: &Path, hub: &HubPeers) -> Result<grokhub_core::HubSnapshot, String> {
     let mut threads: Vec<Value> = crate::history::list(config_dir)
         .into_iter()
@@ -248,7 +249,7 @@ fn snapshot(config_dir: &Path, hub: &HubPeers) -> Result<grokhub_core::HubSnapsh
         .into_iter()
         .map(|(name, body, at)| HubMemoryFile {
             name: name.into(),
-            content: redact_secret_words(&body),
+            content: redact_for_share(&body),
             updated_at: at,
         })
         .collect();
@@ -277,19 +278,19 @@ fn snapshot(config_dir: &Path, hub: &HubPeers) -> Result<grokhub_core::HubSnapsh
 }
 
 /// `/inhabit`: SOUL.md, the names of your skills that are on, and the goal
-/// pin, addressed to `peer` by its device id.
+/// pin, addressed to `peer` by its device id, with keys, tokens and
+/// passwords masked. Only SOUL.md is read of the memory tabs.
 fn hand_off(config_dir: &Path, hub: &HubPeers, peer: &Peer) -> Result<InhabitBundle, String> {
-    let soul = memory_files(config_dir)?
-        .into_iter()
-        .find(|(name, _, _)| *name == "SOUL.md")
-        .map(|(_, body, _)| redact_secret_words(&body))
-        .unwrap_or_default();
-    let goal = crate::slash_ops::goal_pin(config_dir);
+    let soul = {
+        let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
+        redact_for_share(&crate::memory::tab_file("SOUL.md")?.0)
+    };
+    let goal = redact_for_share(&crate::slash_ops::goal_pin(config_dir));
     let bundle = InhabitBundle {
         soul,
         skill_ids: crate::skills::shared(config_dir)
             .into_iter()
-            .map(|(name, _)| name)
+            .map(|(name, _)| redact_for_share(&name))
             .collect(),
         goal: (!goal.trim().is_empty()).then_some(goal),
         project_snapshot_id: None,
@@ -315,6 +316,8 @@ mod tests {
     use std::sync::Arc;
 
     const KEY: &str = "sk-abcdefghijklmnopqrstuv";
+    /// A password the key prefixes alone would miss.
+    const PASSWORD: &str = "hunter2fake";
 
     struct Hub {
         cfg: PathBuf,
@@ -370,7 +373,7 @@ mod tests {
             &cfg,
             "shell-harbor",
             "plan the harbor trip",
-            "Tuesday at nine.",
+            &format!("Tuesday at nine. DB_PASSWORD={PASSWORD}"),
         );
         chat(
             &cfg,
@@ -378,7 +381,10 @@ mod tests {
             "a scratch question",
             "A scratch answer.",
         );
-        write(&cfg.join("memory/SOUL.md"), "Be brief.");
+        write(
+            &cfg.join("memory/SOUL.md"),
+            &format!("Be brief. API_KEY={PASSWORD}"),
+        );
         write(&cfg.join("memory/USER.md"), "Likes tea.");
         write(&cfg.join("memory/MEMORY.md"), &format!("deploy key {KEY}"));
         write(
@@ -387,8 +393,20 @@ mod tests {
         );
         write(
             &cfg.join("app.json"),
-            r#"{"goalPin":"ship the harbor app"}"#,
+            &format!(r#"{{"goalPin":"ship the harbor app with {KEY}"}}"#),
         );
+        crate::automations::add(
+            &cfg,
+            &format!("every weekday at 9am check the build with token={PASSWORD}"),
+            crate::automations::Clock {
+                weekday: 2,
+                hour: 8,
+                minute: 0,
+            }
+            .at(1_800_000_000_000),
+        )
+        .expect("automation");
+        crate::workboard::add(&cfg, "Fix the harbor app", &format!("uses {KEY}")).expect("card");
         let share = HubShare::on_loopback(&cfg);
         Hub { cfg, share, keys }
     }
@@ -509,7 +527,7 @@ mod tests {
             threads[0]["messages"],
             json!([
                 { "role": "user", "content": "plan the harbor trip" },
-                { "role": "assistant", "content": "Tuesday at nine." },
+                { "role": "assistant", "content": "Tuesday at nine. DB_PASSWORD=[redacted]" },
             ])
         );
         let files: Vec<(&str, &str)> = snap["memoryFiles"]
@@ -521,13 +539,26 @@ mod tests {
         assert_eq!(
             files,
             vec![
-                ("SOUL.md", "Be brief."),
+                ("SOUL.md", "Be brief. API_KEY=[redacted]"),
                 ("USER.md", "Likes tea."),
                 ("MEMORY.md", "deploy key [redacted]"),
             ]
         );
         assert_eq!(snap["skills"][0]["name"], "tidy");
-        assert!(!got.to_string().contains(KEY), "a key left this computer");
+        let jobs = snap["automations"].as_array().expect("automations");
+        assert_eq!(jobs.len(), 1, "{jobs:?}");
+        assert!(
+            jobs[0].to_string().contains("check the build"),
+            "{}",
+            jobs[0]
+        );
+        let cards = snap["workboard"]["items"].as_array().expect("board");
+        assert_eq!(cards.len(), 1, "{cards:?}");
+        assert_eq!(cards[0]["title"], "Fix the harbor app");
+        assert_eq!(cards[0]["detail"], "uses [redacted]");
+        let all = got.to_string();
+        assert!(!all.contains(KEY), "a key left this computer");
+        assert!(!all.contains(PASSWORD), "a password left this computer");
 
         // Stop share keeps the listener: the paired computer gets nothing.
         hub.share.stop();
@@ -619,6 +650,9 @@ mod tests {
             })
         );
         assert_eq!(sent(&hub.cfg), Vec::<(String, String)>::new());
+        // Only SOUL.md goes, so a MEMORY.md that can't be read doesn't matter.
+        std::fs::remove_file(hub.cfg.join("memory/MEMORY.md")).expect("memory");
+        std::fs::create_dir(hub.cfg.join("memory/MEMORY.md")).expect("not a file");
         assert_eq!(
             approve(
                 &hub.cfg,
@@ -636,9 +670,9 @@ mod tests {
         let (status, got) = call(port, "GET", "/v1/inhabit", &desk, "");
         assert_eq!(status, 200);
         let bundle = &got["bundle"];
-        assert_eq!(bundle["soul"], "Be brief.");
+        assert_eq!(bundle["soul"], "Be brief. API_KEY=[redacted]");
         assert_eq!(bundle["skillIds"], json!(["tidy"]));
-        assert_eq!(bundle["goal"], "ship the harbor app");
+        assert_eq!(bundle["goal"], "ship the harbor app with [redacted]");
         assert_eq!(bundle["toId"], "d-desk");
         assert_eq!(bundle["toName"], "Desk PC");
         // Claimed once.

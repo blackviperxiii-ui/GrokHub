@@ -1730,7 +1730,8 @@ export function Chat({
   }
 
   /** Send on a `/sync` or `/inhabit` card. The reply is not touched, so it
-   * does not wait for one. */
+   * does not wait for one. A chat opened meanwhile still says what happened,
+   * on the line under the box. */
   async function settleHub(item: Extract<Item, { kind: "hub" }>, yes: boolean) {
     setItems((now) => now.filter((it) => it !== item));
     if (!yes) {
@@ -1745,6 +1746,7 @@ export function Chat({
       text = String(err);
     }
     if (openNow.current === from) setItems((now) => [...now, { kind: "slash", command: item.command, text }]);
+    else setAck(`${item.command}: ${text}`);
   }
 
   /** Runs a slash line and applies what it did. `box` is what the box held

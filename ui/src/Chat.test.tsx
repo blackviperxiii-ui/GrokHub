@@ -1178,6 +1178,29 @@ describe("Chat", () => {
     expect(api.sendChat).not.toHaveBeenCalled();
   });
 
+  it("a /sync sent while another chat opens still says what happened", async () => {
+    api.loadChat.mockResolvedValue(SAVED);
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    api.runSlash.mockReset().mockResolvedValue({
+      kind: "hubAsk",
+      send: { what: "sync" },
+      prompt: "Share your chats and memory with your paired computers?",
+      note: "Send shares them once; Cancel sends nothing.",
+    });
+    let done: (text: string) => void = () => {};
+    api.hubSendApprove.mockReset().mockReturnValue(new Promise((resolve) => (done = resolve)));
+    await userEvent.type(screen.getByLabelText("Message"), "/sync{Enter}");
+    const card = await screen.findByRole("group", { name: "/sync asks first" });
+    await userEvent.click(within(card).getByRole("button", { name: "Send" }));
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(await screen.findByText("pick a paint colour")).toBeVisible();
+    await act(async () => done("Shared chats and memory with your paired computer."));
+    expect(
+      await screen.findByText("/sync: Shared chats and memory with your paired computer."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "/sync result" })).toBeNull();
+  });
+
   it("/inhabit Cancel sends nothing, and a refused Send says why", async () => {
     render(<Chat onOpenSettings={() => {}} />);
     const ask = {
