@@ -2011,7 +2011,8 @@ async function main() {
       using: "css selector",
       value: "form.composer button[type='submit']",
     });
-    await wd("POST", `${s}/element/${send[ELEMENT]}/click`, {});
+    // The chip row comes in once the draft settles and moves Send with it.
+    await clickStill(s, send[ELEMENT], "Send");
 
     const card = await waitFor("the permission card", async () => {
       const el = await wd("POST", `${s}/element`, {
