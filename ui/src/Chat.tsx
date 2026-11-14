@@ -94,10 +94,25 @@ import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
+import {
+  collapseAll,
+  COLLAPSE,
+  expandOne,
+  EXPAND,
+  foldOf,
+  onlyFoldsChanged,
+  startsCollapsed,
+  THOUGHT_LABEL,
+  THOUGHT_ROW_LABEL,
+  type Fold,
+} from "./thoughts";
 
 export type Item =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string; streaming: boolean }
+  /** The model's thinking before or between replies. `fold` is set once the
+   * person collapses or expands it (thoughts.ts). Never saved with the chat. */
+  | { kind: "thought"; text: string; fold?: Fold }
   | { kind: "tool"; id: string; title: string; status: string; detail: string }
   | {
       kind: "permission";
@@ -268,6 +283,18 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
       }
       return [...items, { kind: "assistant", text: event.text, streaming: true }];
     }
+    // Thinking streams into the thought just above, until a tool card or
+    // anything else comes between; then a new thought starts. Thinking that
+    // lands mid-reply (a resume or rate-wait note) goes above the streaming
+    // reply, so the reply stays one bubble for its next words and its recap.
+    case "thought": {
+      const at = liveStart(items);
+      const above = items[at - 1];
+      if (above?.kind === "thought") {
+        return [...items.slice(0, at - 1), { ...above, text: above.text + event.text }, ...items.slice(at)];
+      }
+      return [...items.slice(0, at), { kind: "thought", text: event.text }, ...items.slice(at)];
+    }
     case "tool": {
       const card: Item = { ...event };
       const at = items.findIndex((item) => item.kind === "tool" && item.id === event.id);
@@ -313,12 +340,20 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
   }
 }
 
-/** Adds a command's line to the log. A reply that is streaming stays the last
- * item, so its next words join the same bubble: the line goes just above it. */
-function withNotice(items: Item[], notice: Item): Item[] {
+/** Where the live end of the log starts: the reply that is streaming, or the
+ * end when none is. Thinking and command lines go just above it. */
+function liveStart(items: Item[]): number {
   const last = items[items.length - 1];
-  if (last?.kind === "assistant" && last.streaming) return [...items.slice(0, -1), notice, last];
-  return [...items, notice];
+  return last?.kind === "assistant" && last.streaming ? items.length - 1 : items.length;
+}
+
+/** Adds a command's line to the log. A reply that is streaming stays the last
+ * item, so its next words join the same bubble, and the thought being written
+ * stays last, so its next words join the same thought: the line goes above both. */
+function withNotice(items: Item[], notice: Item): Item[] {
+  let at = liveStart(items);
+  if (items[at - 1]?.kind === "thought") at -= 1;
+  return [...items.slice(0, at), notice, ...items.slice(at)];
 }
 
 /** The turn ended: stop streaming, and retire cards nobody answered. A
@@ -417,6 +452,41 @@ const AssistantBubble = memo(function AssistantBubble({
   );
 });
 
+/** One thought: open with its text and Collapse, or one folded row with Expand. */
+const ThoughtCard = memo(function ThoughtCard({
+  text,
+  fold,
+  onFold,
+}: {
+  text: string;
+  fold: Fold;
+  onFold: (fold: Fold) => void;
+}) {
+  if (fold === "minimized") {
+    return (
+      <div className="thought minimized" data-role="thought">
+        <span className="thought-label">{THOUGHT_ROW_LABEL}</span>
+        <button type="button" className="link thought-fold" aria-expanded={false} onClick={() => onFold("expanded")}>
+          {EXPAND}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="thought" data-role="thought">
+      <div className="thought-head">
+        <span className="thought-label">{THOUGHT_LABEL}</span>
+        <button type="button" className="link thought-fold" aria-expanded={true} onClick={() => onFold("minimized")}>
+          {COLLAPSE}
+        </button>
+      </div>
+      <div className="thought-body">
+        <Markdown text={displayText(text)} />
+      </div>
+    </div>
+  );
+});
+
 const ToolCard = memo(function ToolCard({
   title,
   status,
@@ -510,9 +580,15 @@ function LogItem({
   onChipPick,
   nyxUrl,
   editable,
+  thoughtsFolded,
+  onFold,
 }: {
   item: Item;
   busy: boolean;
+  /** New thoughts in this chat start folded (thoughts.ts startsCollapsed). */
+  thoughtsFolded: boolean;
+  /** Collapse or Expand on this item's thought. */
+  onFold: (fold: Fold) => void;
   /** The agent window: a plan card can be edited and sent back. */
   editable: boolean;
   /** The bubble's Delete message… menu; absent where it can't be offered. */
@@ -545,6 +621,8 @@ function LogItem({
         );
       return <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} onMenu={menu} />;
     }
+    case "thought":
+      return <ThoughtCard text={item.text} fold={foldOf(item.fold, thoughtsFolded)} onFold={onFold} />;
     case "tool":
       return <ToolCard title={item.title} status={item.status} detail={item.detail} />;
     case "permission":
@@ -685,6 +763,9 @@ export function Chat({
   "use memo";
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
+  /** The chat whose thoughts were collapsed: its new thoughts start folded.
+   * Another chat starts open again; nothing of this is saved. */
+  const [foldedChat, setFoldedChat] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   /** Hangout TALK / TYPE — keeps the draft when switching (card 732). */
   const [hangoutMode, setHangout] = useState<HangoutMode>("type");
@@ -1084,7 +1165,13 @@ export function Chat({
     };
   }, [conversationId, voiceSession]);
 
+  /** The log as last scrolled: folding a thought adds nothing at the end, so
+   * the view stays on it. */
+  const scrolledFor = useRef<Item[]>([]);
   useEffect(() => {
+    const before = scrolledFor.current;
+    scrolledFor.current = items;
+    if (items.length > 0 && onlyFoldsChanged(before, items)) return;
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [items]);
 
@@ -1657,6 +1744,18 @@ export function Chat({
     }
   }
 
+  const thoughtsFolded = startsCollapsed(Boolean(settings?.alwaysCollapseThoughts), foldedChat === conversationId);
+  /** Collapse folds every thought in this chat and keeps new ones folded;
+   * Expand opens only this one. */
+  function foldThought(at: number, fold: Fold) {
+    if (fold === "minimized") {
+      setFoldedChat(conversationId);
+      setItems(collapseAll);
+    } else {
+      setItems((now) => expandOne(now, at));
+    }
+  }
+
   // The "…" bubble shows only while nothing else in the log is moving.
   const last = items[items.length - 1];
   const waiting =
@@ -1746,6 +1845,8 @@ export function Chat({
             key={i}
             item={item}
             busy={busy}
+            thoughtsFolded={thoughtsFolded}
+            onFold={(fold) => foldThought(i, fold)}
             onMenu={remote ? undefined : (x, y) => setMsgMenu({ i, at: { x, y } })}
             nyxUrl={nyx?.url}
             onAnswer={answer}

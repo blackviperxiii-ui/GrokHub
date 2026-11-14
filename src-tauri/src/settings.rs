@@ -58,6 +58,10 @@ pub struct ShellSettings {
     /// The folder the agent works in. Empty means the cabin's default.
     pub workspace: String,
     pub approvals: Approvals,
+    /// Settings → Defaults → Always collapse: thoughts start folded in every
+    /// chat. Off until the person turns it on. Same camelCase key as the
+    /// cabin (`alwaysCollapseThoughts`).
+    pub always_collapse_thoughts: bool,
     /// Settings → Let Grok control the desktop. Off until the person turns it on.
     pub desktop_control: bool,
     /// Settings → Personality: the preset id. Empty is the default voice.
@@ -240,6 +244,7 @@ impl Default for ShellSettings {
             close_to_tray: true,
             workspace: String::new(),
             approvals: Approvals::Ask,
+            always_collapse_thoughts: false,
             desktop_control: false,
             personality: String::new(),
             explicit_personalities: false,
@@ -405,6 +410,7 @@ mod tests {
                 close_to_tray: true,
                 workspace: String::new(),
                 approvals: Approvals::Ask,
+                always_collapse_thoughts: false,
                 desktop_control: false,
                 personality: "nyx".into(),
                 explicit_personalities: false,
@@ -467,6 +473,7 @@ mod tests {
             close_to_tray: false,
             workspace: "/work/notes".into(),
             approvals: Approvals::Always,
+            always_collapse_thoughts: true,
             desktop_control: true,
             personality: "pirate".into(),
             explicit_personalities: true,
@@ -504,6 +511,7 @@ mod tests {
         assert!(raw.contains("\"closeToTray\": false"), "{raw}");
         assert!(raw.contains("\"workspace\": \"/work/notes\""), "{raw}");
         assert!(raw.contains("\"approvals\": \"always\""), "{raw}");
+        assert!(raw.contains("\"alwaysCollapseThoughts\": true"), "{raw}");
         assert!(raw.contains("\"desktopControl\": true"), "{raw}");
         assert!(raw.contains("\"personality\": \"pirate\""), "{raw}");
         assert!(raw.contains("\"explicitPersonalities\": true"), "{raw}");
@@ -529,6 +537,17 @@ mod tests {
     }
 
     #[test]
+    fn thoughts_start_open_until_always_collapse_is_saved() {
+        let dir = temp_dir("collapse");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(path(&dir), r#"{"closeToTray":false}"#).expect("write");
+        assert!(!load(&dir).always_collapse_thoughts);
+        std::fs::write(path(&dir), r#"{"alwaysCollapseThoughts":true}"#).expect("write");
+        assert!(load(&dir).always_collapse_thoughts);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn junk_falls_back_to_the_defaults() {
         let dir = temp_dir("junk");
         std::fs::create_dir_all(&dir).expect("dir");
@@ -541,6 +560,7 @@ mod tests {
                 close_to_tray: false,
                 workspace: String::new(),
                 approvals: Approvals::Ask,
+                always_collapse_thoughts: false,
                 desktop_control: false,
                 personality: String::new(),
                 explicit_personalities: false,
@@ -584,6 +604,7 @@ mod tests {
                 close_to_tray: false,
                 workspace: String::new(),
                 approvals: Approvals::Auto,
+                always_collapse_thoughts: false,
                 desktop_control: false,
                 personality: "pirate".into(),
                 explicit_personalities: false,

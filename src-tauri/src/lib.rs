@@ -202,6 +202,8 @@ pub struct SettingsView {
     /// The folder the agent actually works in.
     pub workspace_path: String,
     pub approvals: settings::Approvals,
+    /// Settings → Defaults → Always collapse: thoughts start folded.
+    pub always_collapse_thoughts: bool,
     pub desktop_control: bool,
     pub theme: settings::Theme,
     /// Settings → About.
@@ -236,6 +238,7 @@ fn view(settings: &ShellSettings) -> SettingsView {
             .display()
             .to_string(),
         approvals: settings.approvals,
+        always_collapse_thoughts: settings.always_collapse_thoughts,
         desktop_control: settings.desktop_control,
         theme: settings.theme,
         version: shell_update::version(),
@@ -5681,21 +5684,39 @@ fn save_behavior(
     Ok(settings::behavior_view(&next))
 }
 
-/// Settings → Defaults: the work folder and how chat handles changes.
+/// Settings → Defaults: the work folder, how chat handles changes, and
+/// whether thoughts start folded.
 #[tauri::command]
 fn save_defaults(
     state: State<'_, ShellState>,
     workspace: String,
     approvals: settings::Approvals,
+    always_collapse_thoughts: bool,
 ) -> Result<SettingsView, String> {
-    let next = ShellSettings {
-        workspace: workspace.trim().to_string(),
+    let next = with_defaults(
+        current(&state),
+        &workspace,
         approvals,
-        ..current(&state)
-    };
+        always_collapse_thoughts,
+    );
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     Ok(view(&next))
+}
+
+/// The settings with the Defaults form's three answers in place.
+fn with_defaults(
+    settings: ShellSettings,
+    workspace: &str,
+    approvals: settings::Approvals,
+    always_collapse_thoughts: bool,
+) -> ShellSettings {
+    ShellSettings {
+        workspace: workspace.trim().to_string(),
+        approvals,
+        always_collapse_thoughts,
+        ..settings
+    }
 }
 
 /// Settings → Privacy & data. Reads `offline.toml` again and may wait on the
@@ -7397,6 +7418,27 @@ mod command_tests {
         assert!(!quitting_saves_the_share(
             &src.replace("                    share.save();\n", "")
         ));
+    }
+}
+
+#[cfg(test)]
+mod defaults_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_save_the_folder_approvals_and_thought_fold_only() {
+        let before = ShellSettings {
+            personality: "pirate".into(),
+            ..ShellSettings::default()
+        };
+        let next = with_defaults(before, "  /work/notes ", settings::Approvals::Auto, true);
+        assert_eq!(next.workspace, "/work/notes");
+        assert_eq!(next.approvals, settings::Approvals::Auto);
+        assert!(next.always_collapse_thoughts);
+        assert_eq!(next.personality, "pirate");
+        let back = with_defaults(next, "", settings::Approvals::Ask, false);
+        assert!(!back.always_collapse_thoughts);
+        assert_eq!(back.workspace, "");
     }
 }
 

@@ -134,6 +134,11 @@ pub enum UiEvent {
     Text {
         text: String,
     },
+    /// The model's thinking as it streams: shown above the reply, open or
+    /// folded, and never part of the reply or the saved chat.
+    Thought {
+        text: String,
+    },
     Tool {
         id: String,
         title: String,
@@ -414,6 +419,7 @@ pub fn suggestions_for(ups: &crate::chips::FollowUps) -> Option<UiEvent> {
 pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
     Some(match event {
         AcpEvent::Text(text) => UiEvent::Text { text },
+        AcpEvent::Thought(text) => UiEvent::Thought { text },
         AcpEvent::Tool(card) => UiEvent::Tool {
             id: card.id,
             title: card.title,
@@ -1264,6 +1270,9 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     }
                     reply.push_str(text);
                 }
+                // Thinking goes to the page only: the reply, the recap and
+                // the saved chat never see it.
+                UiEvent::Thought { text } if text.is_empty() => return,
                 UiEvent::Tool {
                     id,
                     title,
@@ -2203,7 +2212,14 @@ mod tests {
                 message: "boom".into()
             })
         );
-        assert_eq!(ui_event(AcpEvent::Thought("hmm".into())), None);
+        assert_eq!(
+            ui_event(AcpEvent::Thought("hmm".into())),
+            Some(UiEvent::Thought { text: "hmm".into() })
+        );
+        assert_eq!(
+            serde_json::to_value(UiEvent::Thought { text: "hmm".into() }).expect("json"),
+            serde_json::json!({"kind": "thought", "text": "hmm"})
+        );
         let json = serde_json::to_value(UiEvent::Permission {
             id: "c".into(),
             title: "write".into(),
