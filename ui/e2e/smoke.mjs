@@ -1129,7 +1129,8 @@ async function localAi(s, config) {
       await shot(s, "settings-local-ai-get-engine");
       console.log("shot Get engine before install");
 
-      await wd("POST", `${s}/element/${getEngine[0][ELEMENT]}/click`, {});
+      // The page's sticky heading can sit over a button scrolled to the top.
+      await clickCentered(s, ".local-ai button.get-engine");
       // 2) Progress / verifying while the pinned zip downloads.
       const progress = await waitFor(
         "engine download progress",
