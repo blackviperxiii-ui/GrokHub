@@ -155,6 +155,7 @@ describe("ChatSide", () => {
   it("reads no Pulse where the app has none, and nothing while Chat is hidden", async () => {
     vi.useFakeTimers();
     const { rerender } = render(<ChatSide active={false} pulse={false} onOpen={() => {}} />);
+    render(<ChatSide active={false} pulse={false} remote onOpen={() => {}} />);
     // Let a read that a hidden column wrongly starts land, and a poll tick pass.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(31_000);
@@ -176,5 +177,21 @@ describe("ChatSide", () => {
     await screen.findByRole("region", { name: "PC loadout" });
     expect(screen.queryByRole("region", { name: "Objectives" })).toBeNull();
     expect(screen.queryByRole("region", { name: "From Pulse" })).toBeNull();
+  });
+
+  it("drops the PC card when this PC's read starts failing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<ChatSide active pulse={false} onOpen={() => {}} />);
+      expect(await screen.findByRole("region", { name: "PC loadout" })).toBeVisible();
+      api.getPcSnapshot.mockRejectedValue(new Error("refused"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(api.getPcSnapshot).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("region", { name: "PC loadout" })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
