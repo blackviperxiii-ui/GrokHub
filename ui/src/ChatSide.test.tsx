@@ -2,11 +2,12 @@ import "@testing-library/jest-dom/vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HomePage, MissionPage, PulsePage } from "./api";
+import type { HomePage, MissionPage, PulsePage, TileView } from "./api";
 
 const api = vi.hoisted(() => ({
   getMission: vi.fn<(id?: string) => Promise<MissionPage>>(),
   getHome: vi.fn<(id?: string) => Promise<HomePage>>(),
+  getPcSnapshot: vi.fn<() => Promise<TileView>>(),
   getPulse: vi.fn<() => Promise<PulsePage>>(),
 }));
 vi.mock("./api", () => api);
@@ -78,6 +79,7 @@ describe("ChatSide", () => {
   beforeEach(() => {
     api.getMission.mockReset().mockResolvedValue(MISSION);
     api.getHome.mockReset().mockResolvedValue(home([PC_SLOT]));
+    api.getPcSnapshot.mockReset().mockResolvedValue(PC_SLOT.tile.view as unknown as TileView);
     api.getPulse.mockReset().mockResolvedValue(PULSE);
   });
 
@@ -113,19 +115,47 @@ describe("ChatSide", () => {
     expect(onOpen.mock.calls).toEqual([["objectives"], ["home"], ["pulse"]]);
   });
 
-  it("says there is nothing planned yet, and leaves out a PC tile Home doesn't hold", async () => {
+  it("says there is nothing planned yet, and shows this PC without reading Home", async () => {
     api.getMission.mockResolvedValue({ mission: null, xp: XP });
     api.getHome.mockResolvedValue(home([]));
     render(<ChatSide active pulse onOpen={() => {}} />);
     const objectives = await screen.findByRole("region", { name: "Objectives" });
     expect(within(objectives).getByText(NO_STEPS)).toBeVisible();
     await screen.findByRole("region", { name: "From Pulse" });
+    // The PC card is this PC's own tile, whether or not Home holds it.
+    const pc = await screen.findByRole("region", { name: "PC loadout" });
+    expect(within(pc).getByText("GPU 74° · driver latest")).toBeVisible();
+    expect(api.getPcSnapshot).toHaveBeenCalledTimes(1);
+    expect(api.getHome).not.toHaveBeenCalled();
+  });
+
+  it("a paired browser takes the PC card from the host's Home, and none when Home lacks it", async () => {
+    const { unmount } = render(<ChatSide active pulse remote onOpen={() => {}} />);
+    const pc = await screen.findByRole("region", { name: "PC loadout" });
+    expect(within(pc).getByText("92%")).toBeVisible();
+    expect(api.getHome).toHaveBeenCalledWith(undefined);
+    unmount();
+    api.getHome.mockResolvedValue(home([]));
+    render(<ChatSide active pulse remote onOpen={() => {}} />);
+    await screen.findByRole("region", { name: "From Pulse" });
+    await act(async () => {});
+    expect(screen.queryByRole("region", { name: "PC loadout" })).toBeNull();
+    expect(api.getPcSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("leaves the PC card out on a phone, which has no PC to show", async () => {
+    api.getPcSnapshot.mockResolvedValue({ ...(PC_SLOT.tile.view as unknown as TileView), state: "unsupported" });
+    render(<ChatSide active pulse onOpen={() => {}} />);
+    await screen.findByRole("region", { name: "From Pulse" });
+    await act(async () => {});
+    expect(api.getPcSnapshot).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("region", { name: "PC loadout" })).toBeNull();
   });
 
   it("reads no Pulse where the app has none, and nothing while Chat is hidden", async () => {
     vi.useFakeTimers();
     const { rerender } = render(<ChatSide active={false} pulse={false} onOpen={() => {}} />);
+    render(<ChatSide active={false} pulse={false} remote onOpen={() => {}} />);
     // Let a read that a hidden column wrongly starts land, and a poll tick pass.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(31_000);
@@ -133,6 +163,7 @@ describe("ChatSide", () => {
     vi.useRealTimers();
     expect(api.getMission).not.toHaveBeenCalled();
     expect(api.getHome).not.toHaveBeenCalled();
+    expect(api.getPcSnapshot).not.toHaveBeenCalled();
     rerender(<ChatSide active pulse={false} onOpen={() => {}} />);
     await screen.findByRole("region", { name: "Objectives" });
     expect(api.getPulse).not.toHaveBeenCalled();
@@ -146,5 +177,21 @@ describe("ChatSide", () => {
     await screen.findByRole("region", { name: "PC loadout" });
     expect(screen.queryByRole("region", { name: "Objectives" })).toBeNull();
     expect(screen.queryByRole("region", { name: "From Pulse" })).toBeNull();
+  });
+
+  it("drops the PC card when this PC's read starts failing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<ChatSide active pulse={false} onOpen={() => {}} />);
+      expect(await screen.findByRole("region", { name: "PC loadout" })).toBeVisible();
+      api.getPcSnapshot.mockRejectedValue(new Error("refused"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(api.getPcSnapshot).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("region", { name: "PC loadout" })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

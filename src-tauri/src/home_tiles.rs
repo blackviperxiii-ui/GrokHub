@@ -49,7 +49,7 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         }
     };
     let v = match module {
-        "pc_loadout" => pc_only(&|| pc_view(&machine(src.config_dir), &pc_extras())),
+        "pc_loadout" => pc_tile(src.config_dir),
         "speeds" => speeds_view(&grokhub_core::net_log::load(src.config_dir), now),
         "frame_rate" => frame_rate(),
         "storage" => pc_only(&|| storage_view(&drives())),
@@ -360,6 +360,18 @@ fn library_or(src: &Sources<'_>, build: impl Fn(&[library::Game]) -> TileView) -
 fn drives() -> Vec<grokhub_core::disk::DiskUse> {
     use grokhub_agent::indexers::{paths::PlatformDirs, system_state};
     system_state::local_drives(&system_state::OsProbe, &PlatformDirs::from_env())
+}
+
+/// The PC Loadout tile on its own, for Chat's side column as well as Home.
+/// It shares Home's caches: the hardware read is redone at most every ten
+/// minutes (the first call after launch does it), temps every 30 seconds and
+/// startup apps every ten minutes. A phone has no PC to show.
+pub fn pc_tile(config_dir: &Path) -> TileView {
+    if cfg!(mobile) {
+        TileView::unsupported(&on_pc())
+    } else {
+        pc_view(&machine(config_dir), &pc_extras())
+    }
 }
 
 /// This computer's GPUs and RAM, read at most every ten minutes.

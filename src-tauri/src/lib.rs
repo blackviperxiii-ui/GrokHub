@@ -2515,6 +2515,15 @@ async fn get_home(
     home_read(home_args(&state, clock, conversation_id, None), home::page).await
 }
 
+/// Chat's side column: the PC Loadout tile, without reading the rest of Home.
+#[tauri::command]
+async fn get_pc_snapshot(
+    state: State<'_, ShellState>,
+) -> Result<grokhub_core::home::TileView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || home_tiles::pc_tile(&dir)).await
+}
+
 /// Objectives: the open chat's checklist, level, XP and weekly streak.
 #[tauri::command]
 async fn get_mission(
@@ -7622,6 +7631,7 @@ pub fn run() {
             reveal_saved,
             get_background,
             get_home,
+            get_pc_snapshot,
             get_mission,
             set_mission_done,
             get_goals,

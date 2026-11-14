@@ -1,0 +1,1 @@
+- Chat's side column shows the PC loadout card from this PC's own read, even when the PC Loadout tile is off Home, and no longer reads all of Home every 30 seconds to get it. A paired browser still takes it from the computer's Home.

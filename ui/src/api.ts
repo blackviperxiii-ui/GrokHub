@@ -2223,6 +2223,11 @@ export function getHome(conversationId?: string): Promise<HomePage> {
   return invoke<HomePage>("get_home", { clock: wallClock(), conversationId });
 }
 
+/** Home's PC Loadout tile on its own, for Chat's side column. Not on the web. */
+export function getPcSnapshot(): Promise<TileView> {
+  return invoke<TileView>("get_pc_snapshot");
+}
+
 /** Which module sits in each slot. "" or null hides a Medium or Small slot. */
 export interface HomePick {
   preset: string;

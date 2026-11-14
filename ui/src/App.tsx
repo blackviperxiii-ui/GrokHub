@@ -711,6 +711,7 @@ export function App() {
                   active={view === "chat"}
                   conversationId={chatSession}
                   pulse={Boolean(caps.pulse)}
+                  remote={Boolean(caps.remote)}
                   onOpen={openView}
                 />
               }
