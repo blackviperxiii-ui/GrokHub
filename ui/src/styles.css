@@ -98,6 +98,11 @@
   --signal: #d7263d;
   --danger-text: var(--danger);
   --field-border: #8a8a86;
+  /* The window's 1px frame; the dark (Loadout) themes draw it red. */
+  --frame: transparent;
+  /* The open tab: a solid red fill on light, a red-tinted fill on dark. */
+  --tab-open-bg: var(--red);
+  --tab-open-text: #ffffff;
   color-scheme: light dark;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -156,6 +161,9 @@
     --signal: var(--ops-signal);
     --danger-text: #ff4d5e;
     --field-border: #626266;
+    --frame: var(--red);
+    --tab-open-bg: var(--selected);
+    --tab-open-text: var(--text);
   }
 }
 
@@ -188,6 +196,9 @@
   --signal: var(--ops-signal);
   --danger-text: #ff4d5e;
   --field-border: #626266;
+  --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
   color-scheme: dark;
 }
 
@@ -220,6 +231,9 @@
   --signal: #d7263d;
   --danger-text: #ff4d5e;
   --field-border: #5c5c60;
+  --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
   color-scheme: dark;
 }
 
@@ -252,6 +266,9 @@
   --signal: #c8304a;
   --danger-text: #ff4d5e;
   --field-border: #6a6a6e;
+  --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
   color-scheme: dark;
 }
 
@@ -394,7 +411,6 @@ button.quiet:hover:not(:disabled),
   background: var(--hover);
 }
 
-.tabs button[aria-pressed="true"],
 .switch button[aria-pressed="true"],
 .settings-nav button[aria-pressed="true"],
 .settings-tabs button[aria-pressed="true"] {
@@ -403,6 +419,24 @@ button.quiet:hover:not(:disabled),
   background: var(--red);
   color: #ffffff;
   box-shadow: none;
+}
+
+/* Tabs (the views bar, chat tabs, Pulse's views): the open one is a red
+   stroke over a red-tinted fill with an amber underline, never an amber box. */
+.tabs button[aria-pressed="true"],
+.pulse-head .switch button[aria-pressed="true"],
+.chat-tab[aria-selected="true"] {
+  border-color: var(--red);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
+  box-shadow: inset 0 -2px 0 var(--amber);
+}
+
+.tabs button[aria-pressed="true"]:hover:not(:disabled),
+.pulse-head .switch button[aria-pressed="true"]:hover:not(:disabled),
+.chat-tab[aria-selected="true"]:hover:not(:disabled) {
+  background: var(--tab-open-bg);
+  box-shadow: inset 0 -2px 0 var(--amber), var(--red-glow);
 }
 
 button.link {
@@ -474,6 +508,17 @@ select:focus-visible {
   gap: 12px;
 }
 
+/* The 1px window frame: a fixed layer over everything but dialogs, so the
+   phone's bottom bar never covers it. It takes no clicks. */
+.app::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--frame);
+}
+
 @media (max-width: 899px) {
   :root {
     --page-pad: 16px;
@@ -495,6 +540,8 @@ select:focus-visible {
   display: flex;
   gap: 8px;
   align-items: flex-start;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--red-dim);
 }
 
 .tabs {
@@ -510,8 +557,10 @@ select:focus-visible {
   border-color: var(--border);
 }
 
-.palette-open:hover:not(:disabled) {
+.palette-open:hover:not(:disabled),
+.palette-open:focus-visible {
   color: var(--text);
+  border-color: var(--red);
 }
 
 /* Phones: the views bar sits at the bottom in one row and slides away while
@@ -540,6 +589,7 @@ select:focus-visible {
     padding: 0 12px env(safe-area-inset-bottom);
     background: var(--panel);
     border-top: 1px solid var(--border);
+    border-bottom: none;
     transition: transform 200ms ease;
   }
 
@@ -674,7 +724,7 @@ select:focus-visible {
 }
 
 .chat-tabs {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--red-dim);
   padding: 0 0 8px;
 }
 
@@ -692,19 +742,19 @@ select:focus-visible {
   max-width: 180px;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
-  color: var(--fg);
+  border: 1px solid var(--red-dim);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
   font-size: var(--font-body);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.chat-tab[aria-selected="true"] {
-  border-color: var(--fg);
-  background: var(--bg);
+.chat-tab:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--text);
 }
 
 .chat-tab.pinned .chat-tab-pin {
@@ -731,16 +781,17 @@ select:focus-visible {
   flex: 0 0 auto;
   width: 28px;
   height: 28px;
+  padding: 0;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
 }
 
 .chat-tab-plus:hover,
 .chat-tab-tools:hover {
-  color: var(--fg);
-  border-color: var(--border);
+  color: var(--text);
+  border-color: var(--red);
 }
 
 .chat-tab-rename {
@@ -763,9 +814,9 @@ select:focus-visible {
   height: 32px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--panel);
-  color: var(--fg);
+  color: var(--text);
 }
 
 .hangout-header {
@@ -793,23 +844,29 @@ select:focus-visible {
   gap: 8px;
 }
 
+/* TALK / TYPE: red outline tabs; the one on is a full red stroke on the open-tab fill. */
 .hangout-mode {
   min-width: 64px;
   height: 28px;
   padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
+  border: 1px solid var(--red-dim);
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
   font-size: var(--font-body);
   letter-spacing: 0.04em;
 }
 
+.hangout-mode:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--text);
+}
+
 .hangout-mode.on,
 .hangout-mode[aria-pressed="true"] {
-  color: var(--fg);
-  border-color: var(--fg);
-  background: var(--bg);
+  color: var(--tab-open-text);
+  border-color: var(--red);
+  background: var(--tab-open-bg);
 }
 
 .log {
@@ -1338,6 +1395,11 @@ button.md-copy {
   align-items: flex-end;
 }
 
+/* Every composer control is a red outline; Send is the one amber fill. */
+.composer button.quiet:not(:disabled):not(.recording) {
+  border-color: var(--red);
+}
+
 /* Push to talk: held, it reads as on. */
 .composer .mic {
   min-height: 52px;
@@ -1402,6 +1464,15 @@ button.md-copy {
   resize: none;
   font-size: var(--font-prose);
   line-height: var(--lh-prose);
+}
+
+.composer textarea:hover:not(:disabled):not(:focus) {
+  border-color: var(--red-hover);
+}
+
+.composer textarea:focus-visible {
+  border-color: var(--red-hover);
+  box-shadow: var(--red-glow);
 }
 
 /* Files waiting on the composer; they wrap on a phone. */
@@ -2807,23 +2878,26 @@ span.chip.quiet {
   border-radius: 999px;
   background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
-}
-
-.quick-chip.primary {
-  background: var(--amber);
-  border-color: var(--amber);
-  color: var(--void, #0a0a0b);
-  font-weight: 600;
-}
-
-.quick-chip.primary:hover:not(:disabled) {
-  filter: brightness(1.06);
-  background: var(--amber);
+  border: 1px solid var(--red-dim);
 }
 
 .quick-chip:hover:not(:disabled) {
   background: var(--hover);
+  border-color: var(--red);
+}
+
+/* The suggested chip: an amber stroke, never a fill (Send is the one amber fill). */
+.quick-chip.primary {
+  background: transparent;
+  border-color: var(--amber);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.quick-chip.primary:hover:not(:disabled) {
+  background: var(--amber-wash);
+  border-color: var(--amber);
+  box-shadow: none;
 }
 
 /* The × sits tight against its chip, still a full-height target. */
@@ -2988,6 +3062,17 @@ label.toggle-row {
   align-items: stretch;
   gap: 8px;
   padding: 12px 16px;
+  border-color: var(--red-dim);
+  transition: border-color var(--t-fast) var(--ease-out);
+}
+
+.card.feed-card:hover,
+.card.feed-card:focus-within {
+  border-color: var(--red);
+}
+
+.pulse-head .switch button:not([aria-pressed="true"]) {
+  border-color: var(--red-dim);
 }
 
 .feed-head {
@@ -3183,7 +3268,8 @@ label.toggle-row {
   display: block;
   height: 12px;
   border-radius: 6px;
-  background: var(--user);
+  /* Red-tinted, so a loading card reads as part of the palette, not gray. */
+  background: var(--selected);
   animation: skeleton-pulse 1.2s ease-in-out infinite;
 }
 
@@ -3508,8 +3594,8 @@ label.toggle-row {
   height: 18px;
   padding: 0 4px;
   border-radius: 9px;
-  background: var(--danger);
-  color: #fff;
+  background: var(--amber);
+  color: var(--void, #0a0a0b);
   font-size: var(--font-badge);
   font-weight: 600;
   line-height: 1;
@@ -4900,7 +4986,14 @@ label.toggle-row {
 .home-tile.large {
   grid-column: span 2;
   grid-row: span 2;
+}
+
+/* Objectives is the "objective" surface: a red stroke over a faint amber wash. */
+.home-tile.objective-tile {
   border-color: var(--red);
+  background:
+    linear-gradient(160deg, rgb(255 159 26 / 0.09), rgb(255 159 26 / 0.03) 55%, transparent),
+    var(--panel);
 }
 
 .home-tile.medium {
@@ -5010,6 +5103,11 @@ label.toggle-row {
   font-size: var(--font-headline);
   letter-spacing: var(--tracking-headline);
   font-weight: 600;
+  color: var(--text);
+}
+
+/* Amber is for objectives, XP and warnings: only the Objectives count wears it. */
+.objective-tile .home-count {
   color: var(--amber);
 }
 
@@ -5032,15 +5130,22 @@ label.toggle-row {
   flex-wrap: wrap;
 }
 
+/* Glance chips: red-dim outline pills. */
 .home-glance button {
   background: transparent;
   color: var(--text);
-  border-color: var(--border);
+  border: 1px solid var(--red-dim);
+  border-radius: 999px;
 }
 
 .home-glance button:hover:not(:disabled) {
   filter: none;
   background: var(--hover);
+  border-color: var(--red);
+}
+
+.home-foot button.link {
+  text-underline-offset: 3px;
 }
 
 .home-foot {
@@ -5799,8 +5904,17 @@ fieldset.channel label {
   white-space: nowrap;
 }
 
+/* Dismiss is the quiet way out: plain muted text until hovered. */
 .card-row > .card-dismiss {
   margin-left: auto;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.card-row > .card-dismiss:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
 }
 
 /* Like → filled heart. The heart keeps the accent colour; a one-shot pop plays

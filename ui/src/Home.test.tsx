@@ -195,6 +195,9 @@ describe("Home", () => {
       .map((h) => h.textContent);
     expect(names).toEqual(["Objectives", "PC Loadout", "Recent Chats", "Automations", "Pulse · For You", "Up Next", "Squad"]);
     expect(tile("Objectives")).toHaveClass("home-tile", "large");
+    // The amber-washed objective surface follows the module, not the large slot.
+    expect(tile("Objectives")).toHaveClass("objective-tile");
+    expect(tile("PC Loadout")).not.toHaveClass("objective-tile");
     expect(tile("Recent Chats")).toHaveClass("medium");
     expect(tile("Automations")).toHaveClass("small");
 
@@ -513,6 +516,21 @@ describe("Home", () => {
     expect(go.onOpen).toHaveBeenLastCalledWith("memory");
     await userEvent.click(screen.getByRole("button", { name: /^Connectors/ }));
     expect(go.onOpen).toHaveBeenLastCalledWith("connectors");
+  });
+
+  it("the objective surface follows the Objectives module, not the large slot", async () => {
+    api.getHome.mockResolvedValue({
+      ...PAGE,
+      slots: [
+        slot({ slot: "large", size: "large", module: "pc_loadout", name: "PC Loadout", tile: { kind: "view", view: PC } }),
+        slot({ slot: "small-1", module: "objectives", name: "Objectives", tile: { kind: "objectives", mission: null, xp: XP } }),
+      ],
+    });
+    render(<Home {...routes()} remote={false} />);
+    expect(await screen.findByText(NO_STEPS)).toBeInTheDocument();
+    expect(tile("PC Loadout")).toHaveClass("large");
+    expect(tile("PC Loadout")).not.toHaveClass("objective-tile");
+    expect(tile("Objectives")).toHaveClass("small", "objective-tile");
   });
 
   it("an empty checklist asks for a plan, and the streak tile shows weeks in a row", async () => {

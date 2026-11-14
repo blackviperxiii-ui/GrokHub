@@ -562,7 +562,7 @@ export function Home({
             {page.slots.map((slot) => (
               <li
                 key={slot.slot}
-                className={`home-tile ${slot.size}${away(slot.tile) ? " away" : ""}`}
+                className={`home-tile ${slot.size}${slot.tile.kind === "objectives" ? " objective-tile" : ""}${away(slot.tile) ? " away" : ""}`}
                 aria-label={slot.name}
               >
                 <h3>
@@ -586,7 +586,7 @@ export function Home({
           <p className="home-muted home-foot">
             {PRESETS[page.preset] ?? "Your own"} layout.{" "}
             {!editing && (
-              <button type="button" className="quiet" onClick={() => setEditing(true)}>
+              <button type="button" className="link" onClick={() => setEditing(true)}>
                 Edit Home
               </button>
             )}
