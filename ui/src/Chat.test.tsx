@@ -428,6 +428,81 @@ describe("Chat", () => {
     expect(api.sendChat).toHaveBeenCalledTimes(1);
   });
 
+  it("Ctrl+F finds in the chat: newest match first, Enter and Shift+Enter step and wrap, Esc closes", async () => {
+    api.getStartChat.mockResolvedValue({
+      id: "shell-find",
+      title: "build",
+      lines: [
+        { role: "user", text: "build the cabin" },
+        { role: "assistant", text: "Building it." },
+        { role: "user", text: "now test" },
+        { role: "assistant", text: "Tests pass. Build is green." },
+      ],
+      earlier: 0,
+    });
+    render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("now test");
+    await userEvent.keyboard("{Control>}f{/Control}");
+    const box = screen.getByRole("textbox", { name: "Find in this chat" });
+    expect(box).toHaveFocus();
+    await userEvent.type(box, "BUILD");
+    const bar = screen.getByRole("search", { name: "Find in chat" });
+    expect(bar).toHaveTextContent("3 of 3");
+    const row = (text: string) => screen.getByText(text).closest("[data-role]");
+    expect(row("Tests pass. Build is green.")).toHaveAttribute("data-find", "current");
+    expect(row("build the cabin")).toHaveAttribute("data-find", "hit");
+    expect(row("now test")).not.toHaveAttribute("data-find");
+    await userEvent.keyboard("{Enter}");
+    expect(bar).toHaveTextContent("1 of 3");
+    expect(row("build the cabin")).toHaveAttribute("data-find", "current");
+    expect(row("Tests pass. Build is green.")).toHaveAttribute("data-find", "hit");
+    await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(bar).toHaveTextContent("3 of 3");
+    await userEvent.clear(box);
+    await userEvent.type(box, "zzz");
+    expect(bar).toHaveTextContent("No matches");
+    expect(screen.getByRole("button", { name: "Next match" })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("search", { name: "Find in chat" })).toBeNull();
+    expect(screen.getByLabelText("Message")).toHaveFocus();
+    expect(document.querySelector("[data-find]")).toBeNull();
+  });
+
+  it("while find is open a streaming reply keeps the view on the match", async () => {
+    api.getStartChat.mockResolvedValue(SAVED);
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    const id = await startTurn("and the trim?");
+    await userEvent.keyboard("{Control>}f{/Control}");
+    await userEvent.type(screen.getByRole("textbox", { name: "Find in this chat" }), "paint");
+    // jsdom draws nothing, so it has no scrollIntoView; the log calls it when there is one.
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      emit(id, { kind: "text", text: "White trim." });
+      expect(screen.getByText("White trim.")).toBeVisible();
+      expect(scroll.mock.calls).not.toContainEqual([{ block: "end" }]);
+      expect(scroll.mock.calls).toContainEqual([{ block: "center" }]);
+    } finally {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+  });
+
+  it("Ctrl+F does nothing on an empty chat or while the Chat tab is hidden", async () => {
+    const view = render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.keyboard("{Control>}f{/Control}");
+    expect(screen.queryByRole("search", { name: "Find in chat" })).toBeNull();
+    api.getStartChat.mockResolvedValue(SAVED);
+    view.unmount();
+    render(<Chat onOpenSettings={() => {}} active={false} />);
+    await screen.findByText("pick a paint colour");
+    await userEvent.keyboard("{Control>}f{/Control}");
+    expect(screen.queryByRole("search", { name: "Find in chat" })).toBeNull();
+  });
+
   it("a recap card swaps the Finished block out of the bubble", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

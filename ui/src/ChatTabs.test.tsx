@@ -157,6 +157,57 @@ describe("ChatTabs", () => {
     expect(onSwitch).toHaveBeenCalledWith("shell-old");
   });
 
+  it("Ctrl+Shift+A archives the open chat, or unarchives one opened from the archive", async () => {
+    const onNew = vi.fn();
+    const onSwitch = vi.fn();
+    const view = render(
+      <ChatTabs activeId="shell-a" draftEmpty={false} onSwitch={onSwitch} onNew={onNew} onClear={async () => {}} onError={() => {}} />,
+    );
+    await screen.findByRole("tab", { name: /Alpha chat/i });
+    await userEvent.keyboard("{Control>}{Shift>}A{/Shift}{/Control}");
+    await waitFor(() => expect(api.chatTabArchive).toHaveBeenCalledWith("shell-a"));
+    expect(onNew).toHaveBeenCalledTimes(1);
+    expect(api.chatTabUnarchive).not.toHaveBeenCalled();
+    view.unmount();
+
+    api.listArchivedChats.mockResolvedValue([tab("shell-old", "Old chat")]);
+    render(
+      <ChatTabs activeId="shell-old" draftEmpty={false} onSwitch={onSwitch} onNew={onNew} onClear={async () => {}} onError={() => {}} />,
+    );
+    await screen.findByRole("tab", { name: /Alpha chat/i });
+    await userEvent.keyboard("{Control>}{Shift>}A{/Shift}{/Control}");
+    await waitFor(() => expect(api.chatTabUnarchive).toHaveBeenCalledWith("shell-old"));
+    expect(onSwitch).toHaveBeenCalledWith("shell-old");
+    expect(api.chatTabArchive).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ctrl+Shift+A leaves Main, an unsaved chat, and a hidden Chat tab alone", async () => {
+    api.listChatTabs.mockResolvedValue([tab("main", "Main", true, true), tab("shell-b", "Beta chat")]);
+    const view = render(
+      <ChatTabs activeId="main" draftEmpty={false} onSwitch={() => {}} onNew={() => {}} onClear={async () => {}} onError={() => {}} />,
+    );
+    await screen.findByRole("tab", { name: /Beta chat/i });
+    await userEvent.keyboard("{Control>}{Shift>}A{/Shift}{/Control}");
+    view.rerender(
+      <ChatTabs activeId="shell-new" draftEmpty onSwitch={() => {}} onNew={() => {}} onClear={async () => {}} onError={() => {}} />,
+    );
+    await userEvent.keyboard("{Control>}{Shift>}A{/Shift}{/Control}");
+    view.rerender(
+      <ChatTabs
+        activeId="shell-b"
+        active={false}
+        draftEmpty={false}
+        onSwitch={() => {}}
+        onNew={() => {}}
+        onClear={async () => {}}
+        onError={() => {}}
+      />,
+    );
+    await userEvent.keyboard("{Control>}{Shift>}A{/Shift}{/Control}");
+    expect(api.chatTabArchive).not.toHaveBeenCalled();
+    expect(api.chatTabUnarchive).not.toHaveBeenCalled();
+  });
+
   it("empty open draft reads New chat", async () => {
     api.listChatTabs.mockResolvedValue([tab("shell-a", "Chat")]);
     render(

@@ -36,6 +36,7 @@ type Menu =
 
 export function ChatTabs({
   activeId,
+  active = true,
   draftEmpty,
   onSwitch,
   onNew,
@@ -43,6 +44,8 @@ export function ChatTabs({
   onError,
 }: {
   activeId: string;
+  /** The Chat tab is on screen, so Ctrl+Shift+A archives or unarchives this chat. */
+  active?: boolean;
   /** Open empty draft shows as "New chat" until the first message names it. */
   draftEmpty: boolean;
   onSwitch: (id: string) => void;
@@ -159,6 +162,23 @@ export function ChatTabs({
   const shown = tabs.length > 0 ? tabs : [];
   const activeInList = shown.some((t) => t.id === activeId);
   const isMain = (id: string) => shown.some((t) => t.id === id && t.main);
+
+  /** Ctrl+Shift+A: archive the open chat, or unarchive it when it is archived
+   * (opened from History). A chat with nothing saved yet and Main stay. */
+  const archiveKey = useEffectEvent((event: KeyboardEvent) => {
+    if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
+    if (event.code !== "KeyA" && event.key.toLowerCase() !== "a") return;
+    event.preventDefault();
+    if (draftEmpty || isMain(activeId)) return;
+    if (archived.some((t) => t.id === activeId)) void restoreArchived(activeId);
+    else void archive(activeId);
+  });
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (event: KeyboardEvent) => archiveKey(event);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active]);
 
   async function clear(id: string) {
     try {

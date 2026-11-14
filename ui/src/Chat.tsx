@@ -1,4 +1,5 @@
 import {
+  Fragment,
   memo,
   useEffect,
   useEffectEvent,
@@ -94,6 +95,8 @@ import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
+import { findLabel, findRows, findStep, itemText } from "./chatFind";
+import { ChatFindBar } from "./ChatFind";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -1084,9 +1087,61 @@ export function Chat({
     };
   }, [conversationId, voiceSession]);
 
+  // Find in this chat (Ctrl+F). `pick` indexes `hits`; a new query starts on
+  // the newest match, as the old app did.
+  const [find, setFind] = useState<{ query: string; pick: number } | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const hits = find ? findRows(items.map(itemText), find.query) : [];
+  const pick = find ? Math.min(find.pick, Math.max(hits.length - 1, 0)) : 0;
+  const findOpen = find !== null;
+  // Another chat, or an emptied one, closes the bar.
+  const [findChat, setFindChat] = useState(conversationId);
+  if (findChat !== conversationId || (find && items.length === 0)) {
+    setFindChat(conversationId);
+    setFind(null);
+  }
+
+  function closeFind() {
+    setFind(null);
+    composerRef.current?.focus();
+  }
+
+  const onFindKey = useEffectEvent((event: globalThis.KeyboardEvent) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+    if (event.code !== "KeyF" && event.key.toLowerCase() !== "f") return;
+    event.preventDefault();
+    if (findOpen) closeFind();
+    else if (items.length > 0) setFind({ query: "", pick: 0 });
+  });
   useEffect(() => {
+    if (!active || embedded) return;
+    const onKey = (event: globalThis.KeyboardEvent) => onFindKey(event);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, embedded]);
+
+  // Each row sits right after a hidden `data-row` marker, so a match is
+  // marked on the row's own element and each kind of row keeps its markup.
+  const hitRows = hits.join(",");
+  const current = hits[pick] ?? -1;
+  useEffect(() => {
+    const log = logRef.current;
+    if (!log) return;
+    for (const el of log.querySelectorAll("[data-find]")) el.removeAttribute("data-find");
+    if (!hitRows) return;
+    const row = (i: number) => {
+      const next = log.querySelector(`[data-row="${i}"]`)?.nextElementSibling;
+      return next && !next.hasAttribute("data-row") ? next : null;
+    };
+    for (const i of hitRows.split(",").map(Number)) row(i)?.setAttribute("data-find", i === current ? "current" : "hit");
+    row(current)?.scrollIntoView?.({ block: "center" });
+  }, [hitRows, current, items]);
+
+  useEffect(() => {
+    // While find is open, a streaming reply does not pull the view off the match.
+    if (findOpen) return;
     endRef.current?.scrollIntoView?.({ block: "end" });
-  }, [items]);
+  }, [items, findOpen]);
 
   function startOver() {
     if (busy) return;
@@ -1700,6 +1755,7 @@ export function Chat({
         <>
           <ChatTabs
             activeId={conversationId}
+            active={active}
             draftEmpty={items.length === 0}
             onSwitch={openChat}
             onNew={startOver}
@@ -1718,8 +1774,18 @@ export function Chat({
       <Inbox
         onOpenChat={openChat}
       />
+      {find && (
+        <ChatFindBar
+          query={find.query}
+          label={findLabel(pick, hits.length, find.query)}
+          hasHits={hits.length > 0}
+          onQuery={(query) => setFind({ query, pick: Number.MAX_SAFE_INTEGER })}
+          onStep={(forward) => setFind({ query: find.query, pick: findStep(pick, hits.length, forward) })}
+          onClose={closeFind}
+        />
+      )}
       {/* Focusable so the keyboard can scroll a long conversation. */}
-      <div className="log" role="log" aria-live="polite" tabIndex={0}>
+      <div ref={logRef} className="log" role="log" aria-live="polite" tabIndex={0}>
         {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (
           <SignedOut remote={remote} grok={grokSignIn} onSignIn={onSignIn} />
         ) : (
@@ -1742,24 +1808,27 @@ export function Chat({
           </button>
         )}
         {items.map((item, i) => (
-          <LogItem
-            key={i}
-            item={item}
-            busy={busy}
-            onMenu={remote ? undefined : (x, y) => setMsgMenu({ i, at: { x, y } })}
-            nyxUrl={nyx?.url}
-            onAnswer={answer}
-            onAnswerCard={answerCard}
-            editable={embedded && lead}
-            onConfirm={settleConfirm}
-            onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
-            onFix={(text) => setDraft(text)}
-            onChipPick={(key) => {
-              void Promise.resolve()
-                .then(() => replyPick(key))
-                .catch(() => {});
-            }}
-          />
+          <Fragment key={i}>
+            {/* Find's marker for row i (display: none takes no gap). */}
+            <span hidden data-row={i} />
+            <LogItem
+              item={item}
+              busy={busy}
+              onMenu={remote ? undefined : (x, y) => setMsgMenu({ i, at: { x, y } })}
+              nyxUrl={nyx?.url}
+              onAnswer={answer}
+              onAnswerCard={answerCard}
+              editable={embedded && lead}
+              onConfirm={settleConfirm}
+              onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
+              onFix={(text) => setDraft(text)}
+              onChipPick={(key) => {
+                void Promise.resolve()
+                  .then(() => replyPick(key))
+                  .catch(() => {});
+              }}
+            />
+          </Fragment>
         ))}
         {busy && waiting && (
           <div className="bubble assistant streaming" data-role="assistant">

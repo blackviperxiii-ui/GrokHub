@@ -4659,6 +4659,40 @@ button.primary:not(.quick-chip) {
   overflow-wrap: anywhere;
 }
 
+/* Find in this chat (Ctrl+F): a slim bar over the log. Matches get a thin
+   outline; the one picked gets the focus ring. */
+.chat-find {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.chat-find input {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-find-count {
+  min-width: 10ch;
+  color: var(--muted);
+  font-size: var(--font-caption);
+  white-space: nowrap;
+}
+
+/* A reply beside Nyx's face is marked on its bubble, not the whole row. */
+.log [data-find]:not(.nyx-row),
+.log .nyx-row[data-find] > .bubble {
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.log [data-find="current"]:not(.nyx-row),
+.log .nyx-row[data-find="current"] > .bubble {
+  outline: 2px solid var(--accent);
+  box-shadow: var(--ring);
+}
+
 /* A reopened chat's tool steps: one quiet line instead of cards. */
 .tools-ran {
   margin: 0;
