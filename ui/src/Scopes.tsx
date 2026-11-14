@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type MouseEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type MouseEvent } from "react";
 import { ConfirmRow } from "./ui";
 import {
   allowScope,
@@ -41,15 +41,22 @@ export function Scopes() {
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const [forgetting, setForgetting] = useState<string | null>(null);
+  // Bumped by every load and every answer, so a slower load that started
+  // before a Revoke or Forget answered never shows the old view again.
+  const latest = useRef(0);
 
   useEffect(() => {
-    getScopes().then(setView, (err) => setStatus(String(err)));
+    const load = (failed: (err: unknown) => void) => {
+      const ticket = ++latest.current;
+      getScopes().then((got) => {
+        if (ticket === latest.current) setView(got);
+      }, failed);
+    };
+    load((err) => setStatus(String(err)));
     // What a scope taught shows as soon as an indexer look writes it.
     let stop: (() => void) | undefined;
     let dropped = false;
-    void onScopesChanged(() => {
-      getScopes().then(setView, () => {});
-    }).then((unlisten) => {
+    void onScopesChanged(() => load(() => {})).then((unlisten) => {
       if (dropped) unlisten();
       else stop = unlisten;
     });
@@ -64,6 +71,7 @@ export function Scopes() {
     setForgetting(null);
     try {
       const got = await work();
+      latest.current += 1;
       setView(got.view);
       setStatus(got.status);
       after?.();

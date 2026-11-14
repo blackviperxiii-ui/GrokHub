@@ -9,7 +9,7 @@
 //! - the window hasn't reported its clock (quiet hours need it);
 //! - Halt holds background work (`night::halted`);
 //! - a chat is running, a decision waits or a game is on;
-//! - your latest chat is a scratch chat, which learns nothing from you.
+//! - the chat you have open is a scratch chat, which learns nothing from you.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -57,9 +57,6 @@ pub struct Cx<'a> {
     pub offset_min: Option<i32>,
     /// A chat is running, a decision waits or a game is on.
     pub busy: bool,
-    /// The id of the chat you used last, read only when the look gets that
-    /// far.
-    pub latest_chat: &'a dyn Fn() -> Option<String>,
 }
 
 /// The machine the scheduler reads. Tests pass fakes.
@@ -91,15 +88,16 @@ impl Driver {
         if cx.busy {
             return Step::Held(Hold::Busy);
         }
-        if (cx.latest_chat)().is_some_and(|id| grokhub_agent::scratch::is_scratch(&id)) {
+        // The chat Chat has open, as the window last set it.
+        let settings = crate::settings::load(cx.config_dir);
+        if grokhub_agent::scratch::is_scratch(&settings.last_chat) {
             return Step::Held(Hold::Scratch);
         }
         let clock = crate::scheduler::local_clock(cx.now, offset);
-        let behavior = crate::settings::load(cx.config_dir).behavior;
         let env = TickEnv {
             config_dir: cx.config_dir,
             now_ms: cx.now,
-            quiet: crate::proactive::is_quiet(&behavior, clock.hour, clock.minute),
+            quiet: crate::proactive::is_quiet(&settings.behavior, clock.hour, clock.minute),
             power: machine.power,
             fs: machine.fs,
             probe: machine.probe,
@@ -107,14 +105,6 @@ impl Driver {
         };
         Step::Ticked(self.sched.tick(&env))
     }
-}
-
-/// The chat you used last: the newest saved turn across your chats.
-fn latest_chat(config_dir: &Path) -> Option<String> {
-    crate::history::list(config_dir)
-        .into_iter()
-        .max_by_key(|row| row.updated)
-        .map(|row| row.id)
 }
 
 /// Start the thread. `busy` is a running chat, a waiting decision or a game;
@@ -132,14 +122,12 @@ where
             let mut driver = Driver::default();
             loop {
                 std::thread::sleep(EVERY);
-                let latest = || latest_chat(&config_dir);
                 let cx = Cx {
                     config_dir: &config_dir,
                     pid: std::process::id(),
                     now: grokhub_core::now_ms(),
                     offset_min: crate::scheduler::utc_offset(),
                     busy: busy(),
-                    latest_chat: &latest,
                 };
                 let machine = Machine {
                     power: &OsPower,

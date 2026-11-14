@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScopeAnswer, ScopesView } from "./scopesApi";
@@ -204,5 +204,29 @@ describe("Scopes", () => {
     expect(api.getScopes).toHaveBeenCalledTimes(2);
     unmount();
     expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a Revoke's answer when an older reload lands after it", async () => {
+    let changed = () => {};
+    api.onScopesChanged.mockImplementation((handler) => {
+      changed = handler;
+      return Promise.resolve(() => {});
+    });
+    render(<Scopes />);
+    const apps = within(await screen.findByRole("listitem", { name: "Installed apps" }));
+    // An indexer look starts a reload that reads the scopes before the Revoke.
+    let stale: (v: ScopesView) => void = () => {};
+    api.getScopes.mockReturnValueOnce(new Promise((resolve) => (stale = resolve)));
+    changed();
+    const off = view({
+      rows: [{ kind: "apps", granted: [], add: { title: "Installed apps", hint: "Off. Installed apps and how often you open them." } }],
+    });
+    api.revokeScope.mockResolvedValue({ view: off, status: "Installed apps revoked. It's off until you allow it again." });
+    await userEvent.click(apps.getByRole("button", { name: "Revoke" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Installed apps revoked.");
+    await act(async () => stale(view()));
+    const row = within(screen.getByRole("listitem", { name: "Installed apps" }));
+    expect(row.queryByRole("button", { name: "Revoke" })).toBeNull();
+    expect(row.getByRole("button", { name: "Allow" })).toBeInTheDocument();
   });
 });

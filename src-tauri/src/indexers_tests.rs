@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -66,14 +65,7 @@ fn granted_notes(config: &Path) -> PathBuf {
     notes
 }
 
-fn look(
-    driver: &mut Driver,
-    config: &Path,
-    now: u64,
-    busy: bool,
-    latest: &dyn Fn() -> Option<String>,
-    battery: bool,
-) -> Step {
+fn look(driver: &mut Driver, config: &Path, now: u64, busy: bool, battery: bool) -> Step {
     let dirs = PlatformDirs::from_env();
     let power = Power(battery);
     driver.step(
@@ -83,7 +75,6 @@ fn look(
             now,
             offset_min: Some(0),
             busy,
-            latest_chat: latest,
         },
         &Machine {
             power: &power,
@@ -94,8 +85,11 @@ fn look(
     )
 }
 
-fn no_chat() -> Option<String> {
-    None
+/// Chat opens `id`, as the window's chat load does.
+fn open_chat(config: &Path, id: &str) {
+    let mut settings = crate::settings::load(config);
+    settings.last_chat = id.into();
+    crate::settings::save(config, &settings).unwrap();
 }
 
 fn facts(config: &Path) -> usize {
@@ -111,7 +105,7 @@ fn a_granted_folder_is_read_once_and_permissions_shows_it() {
     let config = dir("read");
     granted_notes(&config);
     let mut driver = Driver::default();
-    let first = look(&mut driver, &config, NOON, false, &no_chat, false);
+    let first = look(&mut driver, &config, NOON, false, false);
     let Step::Ticked(TickOutcome::Ran { kind, written, .. }) = &first else {
         panic!("expected a read, got {first:?}");
     };
@@ -125,7 +119,7 @@ fn a_granted_folder_is_read_once_and_permissions_shows_it() {
     assert!(lines.iter().any(|l| l.contains("Zebra Plan Fixture")));
 
     // The scope was just read: nothing is due for 10 minutes.
-    let next = look(&mut driver, &config, NOON + 60_000, false, &no_chat, false);
+    let next = look(&mut driver, &config, NOON + 60_000, false, false);
     assert_eq!(next, Step::Ticked(TickOutcome::Idle));
     assert!(!next.learned());
 }
@@ -135,24 +129,34 @@ fn each_hold_reads_nothing() {
     let config = dir("holds");
     granted_notes(&config);
     let mut driver = Driver::default();
-    let asked = Cell::new(0);
-    let scratch = || {
-        asked.set(asked.get() + 1);
-        Some(grokhub_agent::scratch::shell_id(true, "1"))
-    };
-    let plain = || Some(grokhub_agent::scratch::shell_id(false, "1"));
-
-    // Busy is checked before your latest chat is looked up.
     assert_eq!(
-        look(&mut driver, &config, NOON, true, &scratch, false),
+        look(&mut driver, &config, NOON, true, false),
         Step::Held(Hold::Busy)
     );
-    assert_eq!(asked.get(), 0);
+    open_chat(&config, &grokhub_agent::scratch::shell_id(true, "1"));
     assert_eq!(
-        look(&mut driver, &config, NOON, false, &scratch, false),
+        look(&mut driver, &config, NOON, false, false),
         Step::Held(Hold::Scratch)
     );
-    assert_eq!(asked.get(), 1);
+    // Back in a plain chat, even with the scratch chat's turn saved last.
+    {
+        let _config = grokhub_agent::perm::ConfigGuard::set(&*config);
+        let say = |role: &str, text: &str| grokhub_agent::InputItem::Message {
+            role: role.into(),
+            content: vec![grokhub_agent::ContentPart::InputText(text.into())],
+        };
+        grokhub_agent::record_turn(
+            &grokhub_agent::scratch::shell_id(true, "1"),
+            HOME,
+            "grok-test",
+            &[say("user", "try this"), say("assistant", "Done.")],
+            &grokhub_agent::Usage::default(),
+            "",
+            "try this",
+        )
+        .unwrap();
+    }
+    open_chat(&config, &grokhub_agent::scratch::shell_id(false, "1"));
 
     std::fs::write(
         config.join(grokhub_core::desktop_mcp::HALT_STAMP_FILE),
@@ -160,7 +164,7 @@ fn each_hold_reads_nothing() {
     )
     .unwrap();
     assert_eq!(
-        look(&mut driver, &config, NOON, false, &plain, false),
+        look(&mut driver, &config, NOON, false, false),
         Step::Held(Hold::Halted)
     );
     std::fs::remove_file(config.join(grokhub_core::desktop_mcp::HALT_STAMP_FILE)).unwrap();
@@ -175,7 +179,7 @@ fn each_hold_reads_nothing() {
     )
     .unwrap();
     assert_eq!(
-        look(&mut driver, &config, NOON, false, &plain, false),
+        look(&mut driver, &config, NOON, false, false),
         Step::Held(Hold::CabinOpen)
     );
     std::fs::remove_file(config.join(grokhub_core::scheduler_lease::LEASE_FILE)).unwrap();
@@ -188,7 +192,6 @@ fn each_hold_reads_nothing() {
             now: NOON,
             offset_min: None,
             busy: false,
-            latest_chat: &plain,
         },
         &Machine {
             power: &Power(false),
@@ -201,7 +204,7 @@ fn each_hold_reads_nothing() {
     assert_eq!(facts(&config), 0, "a held look reads nothing");
 
     // Nothing holds now, and the first read happens.
-    let read = look(&mut driver, &config, NOON, false, &plain, false);
+    let read = look(&mut driver, &config, NOON, false, false);
     assert!(read.learned(), "{read:?}");
 }
 
@@ -211,7 +214,7 @@ fn battery_and_quiet_hours_come_from_the_scheduler() {
     granted_notes(&config);
     let mut driver = Driver::default();
     assert_eq!(
-        look(&mut driver, &config, NOON, false, &no_chat, true),
+        look(&mut driver, &config, NOON, false, true),
         Step::Ticked(TickOutcome::OnBattery)
     );
     let mut settings = crate::settings::load(&config);
@@ -219,19 +222,12 @@ fn battery_and_quiet_hours_come_from_the_scheduler() {
     settings.behavior.quiet_end = "13:00".into();
     crate::settings::save(&config, &settings).unwrap();
     assert_eq!(
-        look(&mut driver, &config, NOON, false, &no_chat, false),
+        look(&mut driver, &config, NOON, false, false),
         Step::Ticked(TickOutcome::QuietHours)
     );
     assert_eq!(facts(&config), 0);
     // 13:30 is past quiet hours.
-    let later = look(
-        &mut driver,
-        &config,
-        NOON + 90 * 60_000,
-        false,
-        &no_chat,
-        false,
-    );
+    let later = look(&mut driver, &config, NOON + 90 * 60_000, false, false);
     assert!(later.learned(), "{later:?}");
 }
 

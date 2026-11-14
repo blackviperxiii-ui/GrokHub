@@ -6978,6 +6978,9 @@ pub fn run() {
             // Provider keys are read from the OS keyring from the first chat,
             // not only once Settings → AI models has been opened.
             grokhub_agent::route::providers::use_os_vault();
+            // The learned-tier key (sealed memory, scope grants and what the
+            // indexers learn) lives in the OS keyring too, as in the cabin.
+            grokhub_agent::harness::use_os_keyring();
             // The full device profile, shared with the cabin: sizes local
             // model launches and sets the router's battery and low-end tier.
             #[cfg(desktop)]
@@ -7095,9 +7098,9 @@ pub fn run() {
                 let told = app.handle().clone();
                 indexers::start(
                     app.state::<ShellState>().config_dir.clone(),
+                    // A fresh game reading: this thread can wait for it.
                     move || {
-                        let game = grokhub_desktop::game_guard::peek();
-                        background_busy(&watched) || game.gaming
+                        background_busy(&watched) || grokhub_desktop::game_guard::current().gaming
                     },
                     move || {
                         let _ = told.emit(scopes::SCOPES_EVENT, ());
