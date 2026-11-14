@@ -27,17 +27,20 @@ export function useWide(): boolean {
 
 /** Labs → Desktop companion's controls: Put her on the desktop / Bring her
  * back and the wardrobe. Nothing while that Lab is off or off the shell.
- * `framed` gives them their own card, for a column without the dock. */
-export function NyxDeskControls({ framed = false }: { framed?: boolean }) {
+ * `framed` gives them their own card, for a column without the dock; it
+ * reads again each time `active` turns true, so a Lab turned on (or her
+ * docking from the desktop) shows on the way back. */
+export function NyxDeskControls({ framed = false, active = true }: { framed?: boolean; active?: boolean }) {
   const [desk, setDesk] = useState<DesktopNyxState | null>(null);
 
-  // Mount load only. Inlined like Memory: no refresh wrapper that setStates
-  // from the effect (react-hooks/set-state-in-effect). Off the shell, desk
-  // stays null; button handlers refresh via their own .then(setDesk).
+  // Loads on mount and when shown again. Inlined like Memory: no refresh
+  // wrapper that setStates from the effect (react-hooks/set-state-in-effect).
+  // Off the shell, desk stays null; button handlers refresh via their own
+  // .then(setDesk).
   useEffect(() => {
-    if (!inShell()) return;
+    if (!inShell() || !active) return;
     void desktopNyxGet().then(setDesk, () => setDesk(null));
-  }, []);
+  }, [active]);
 
   if (desk?.enabled !== true) return null;
   const controls = (

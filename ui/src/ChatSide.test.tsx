@@ -155,6 +155,7 @@ describe("ChatSide", () => {
     await act(async () => {});
     expect(screen.queryByRole("region", { name: "PC loadout" })).toBeNull();
     expect(api.getPcSnapshot).not.toHaveBeenCalled();
+    expect(desk.desktopNyxGet).not.toHaveBeenCalled();
   });
 
   it("leaves the PC card out on a phone, which has no PC to show", async () => {
@@ -220,6 +221,7 @@ const chat = (id: string, title: string, updated: number, extra: Partial<ChatRow
 
 describe("Objectives beside chat", () => {
   beforeEach(() => {
+    for (const fn of Object.values(desk)) fn.mockClear();
     api.getMission.mockReset().mockResolvedValue(MISSION);
     api.getPcSnapshot.mockReset().mockResolvedValue(PC_SLOT.tile.view as TileView);
     api.listChats
@@ -288,6 +290,24 @@ describe("Objectives beside chat", () => {
     expect(desk.desktopNyxUndock).toHaveBeenCalledTimes(1);
     expect(await within(card).findByRole("button", { name: "Bring her back" })).toBeVisible();
     expect(within(card).getByLabelText("Outfit")).toHaveValue("");
+  });
+
+  it("shows the companion card on the way back once the Lab is turned on", async () => {
+    const left = (active: boolean) => (
+      <ChatLeft active={active} conversationId="c1" onOpen={() => {}} onOpenChat={() => {}} />
+    );
+    const view = render(left(true));
+    await screen.findByRole("region", { name: "Steps" });
+    await act(async () => {});
+    expect(screen.queryByRole("region", { name: "Nyx" })).toBeNull();
+
+    // Off to Settings → Labs, where Desktop companion is turned on.
+    view.rerender(left(false));
+    desk.desktopNyxGet.mockResolvedValueOnce({ enabled: true, undocked: false, outfit: null, outfits: [] });
+    view.rerender(left(true));
+    const card = await screen.findByRole("region", { name: "Nyx" });
+    expect(within(card).getByRole("button", { name: "Put her on the desktop" })).toBeVisible();
+    expect(desk.desktopNyxGet).toHaveBeenCalledTimes(2);
   });
 
   it("reads nothing while Chat is hidden", async () => {
