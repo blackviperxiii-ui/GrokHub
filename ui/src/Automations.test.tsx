@@ -78,6 +78,21 @@ describe("Automations", () => {
     expect(screen.queryByText("No automations yet. Describe one above in plain words and it runs on its own schedule.")).toBeNull();
   });
 
+  it("brings a tile back when its job is removed", async () => {
+    const midday = { title: "Midday board", body: "Every 12h — summarize the workboard.", seed: "/loop 12h summarize the workboard" };
+    api.listAutomations.mockResolvedValue([row({ id: "auto-2", name: "summarize the workboard" })]);
+    api.listSuggestedAutomations.mockResolvedValueOnce([]).mockResolvedValueOnce([midday]);
+    api.removeAutomation.mockResolvedValue([]);
+    render(<Automations />);
+    const job = within(await screen.findByRole("listitem", { name: "summarize the workboard" }));
+    expect(screen.queryByRole("region", { name: "Suggested" })).toBeNull();
+    await userEvent.click(job.getByRole("button", { name: "Remove…" }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(api.removeAutomation).toHaveBeenCalledWith("auto-2");
+    expect(await screen.findByRole("listitem", { name: "Midday board" })).toBeInTheDocument();
+    expect(api.listSuggestedAutomations).toHaveBeenCalledTimes(2);
+  });
+
   it("shows no Suggested section when there are no tiles or they can't load", async () => {
     api.listAutomations.mockResolvedValue([]);
     api.listSuggestedAutomations.mockRejectedValue("unknown command");

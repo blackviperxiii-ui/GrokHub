@@ -53,11 +53,22 @@ export function Automations({
   const [adding, setAdding] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!active) return;
-    listAutomations().then(setRows, (err) => setNote(String(err)));
-    // Tiles are extras: a page that can't list them shows none.
-    listSuggestedAutomations().then(setTiles, () => setTiles([]));
+    if (active) listAutomations().then(setRows, (err) => setNote(String(err)));
   }, [active]);
+
+  // The tiles hide jobs already running, so they follow every change to the
+  // list. They are extras: a page that can't list them shows none.
+  useEffect(() => {
+    if (!active || rows === null) return;
+    let stale = false;
+    listSuggestedAutomations().then(
+      (got) => !stale && setTiles(got),
+      () => !stale && setTiles([]),
+    );
+    return () => {
+      stale = true;
+    };
+  }, [active, rows]);
 
   // A scheduled run the shell fired: show its reply and the row's new count.
   useEffect(() => {
@@ -116,7 +127,6 @@ export function Automations({
     try {
       setRows(await addSuggestedAutomation(seed));
       setNote(null);
-      setTiles(await listSuggestedAutomations());
     } catch (err) {
       setNote(String(err));
     } finally {

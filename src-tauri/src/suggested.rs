@@ -6,40 +6,49 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use grokhub_core::review_pass::{
-    automation_from_seed, load_suggestions, merge_suggested_autos, save_suggestions, SuggestedTile,
+    automation_from_seed, load_suggestions, merge_suggested_autos, read_suggestions,
+    save_suggestions, seed_running, SuggestedTile,
 };
 use grokhub_core::{Automation, LocalClock, SuggestionStore};
 
 /// One read-modify-write of `suggestions.json` at a time.
 static STORE: Mutex<()> = Mutex::new(());
 
-/// Change `suggestions.json` under its lock.
+/// Change `suggestions.json` under its lock. A file that can't be read is
+/// left alone, and an edit that changes nothing writes nothing.
 pub fn with_suggestions<T>(
     config_dir: &Path,
     edit: impl FnOnce(&mut SuggestionStore) -> T,
 ) -> Result<T, String> {
     let _one = STORE.lock().unwrap_or_else(|e| e.into_inner());
-    let mut store = load_suggestions(config_dir);
+    let before = read_suggestions(config_dir)?;
+    let mut store = before.clone();
     let out = edit(&mut store);
-    save_suggestions(config_dir, &store)?;
+    if store != before {
+        save_suggestions(config_dir, &store)?;
+    }
     Ok(out)
-}
-
-/// What each automation is known by: its name and its instructions.
-fn active(list: &[Automation]) -> Vec<String> {
-    list.iter()
-        .flat_map(|a| [a.name.clone(), a.instructions.clone()])
-        .collect()
 }
 
 /// The tiles to show now.
 pub fn suggested(config_dir: &Path) -> Vec<SuggestedTile> {
-    let list = crate::automations::load(config_dir).unwrap_or_default();
+    let running = crate::automations::load(config_dir).unwrap_or_default();
     let learned = {
         let _one = STORE.lock().unwrap_or_else(|e| e.into_inner());
         load_suggestions(config_dir).autos
     };
-    merge_suggested_autos(&learned, &active(&list))
+    merge_suggested_autos(&learned, &running)
+}
+
+/// Take a learned tile with this seed off the list. The job is what
+/// matters, so a file that can't be written only leaves a tile that hides
+/// anyway while its job runs.
+fn dismiss(config_dir: &Path, seed: &str) {
+    if let Err(e) = with_suggestions(config_dir, |s| {
+        grokhub_core::dismiss_accepted_auto(s, seed, "")
+    }) {
+        eprintln!("suggested: {e}");
+    }
 }
 
 /// Add a tile: its seed becomes an automation, and a learned tile with that
@@ -52,16 +61,12 @@ pub fn add_suggested(
     let a = automation_from_seed(seed)
         .ok_or_else(|| "That suggestion has no schedule to save.".to_string())?;
     let running = crate::automations::load(config_dir)?;
-    let known = active(&running);
-    if known.iter().any(|k| {
-        k.eq_ignore_ascii_case(a.name.trim()) || k.eq_ignore_ascii_case(a.instructions.trim())
-    }) {
+    if seed_running(seed, &running) {
+        dismiss(config_dir, seed);
         return Err(format!("{} is already an automation.", a.name.trim()));
     }
     let list = crate::automations::add_parsed(config_dir, a, clock)?;
-    with_suggestions(config_dir, |s| {
-        grokhub_core::dismiss_accepted_auto(s, seed, "")
-    })?;
+    dismiss(config_dir, seed);
     Ok(list)
 }
 
@@ -149,5 +154,88 @@ mod tests {
         assert!(store.autos.is_empty(), "{store:?}");
         assert_eq!(store.last_review_day.as_deref(), Some("2026-10-06"));
         assert!(!suggested(&d).iter().any(|t| t.title == "Inbox sweep"));
+    }
+
+    #[test]
+    fn a_suggestions_file_that_cannot_be_read_is_never_replaced() {
+        let d = dir("broken");
+        let path = d.join(grokhub_core::review_pass::SUGGESTIONS_FILE);
+        let broken = r#"{"autos":[{"kind":"widget","title":"Inbox sweep","body":"b"}]}"#;
+        std::fs::write(&path, broken).unwrap();
+        // The page still lists the built-in tiles, and Add still saves.
+        assert_eq!(suggested(&d).len(), 6);
+        let list = add_suggested(&d, "/loop 12h summarize the workboard", clock()).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+        // Adding a built-in tile writes no file when there was none.
+        let fresh = dir("none");
+        add_suggested(&fresh, "/loop 1d replay the last desktop task", clock()).unwrap();
+        assert!(!fresh
+            .join(grokhub_core::review_pass::SUGGESTIONS_FILE)
+            .exists());
+    }
+
+    #[test]
+    fn a_change_to_a_broken_suggestions_file_is_refused() {
+        let d = dir("refused");
+        let path = d.join(grokhub_core::review_pass::SUGGESTIONS_FILE);
+        std::fs::write(&path, "{ not json").unwrap();
+        let said = with_suggestions(&d, |s| s.last_review_day = Some("2026-10-07".into()));
+        assert!(said.unwrap_err().starts_with("suggestions.json: "));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+        std::fs::remove_file(&path).unwrap();
+        with_suggestions(&d, |s| s.last_review_day = Some("2026-10-07".into())).unwrap();
+        assert_eq!(
+            load_suggestions(&d).last_review_day.as_deref(),
+            Some("2026-10-07")
+        );
+    }
+
+    #[test]
+    fn a_suggestions_file_that_cannot_be_written_still_saves_the_job() {
+        let d = dir("unwritable");
+        let learned = r#"{"autos":[{"kind":"auto","title":"Inbox sweep","body":"b","seed":"every day at 8, sweep the inbox"}]}"#;
+        std::fs::write(d.join(grokhub_core::review_pass::SUGGESTIONS_FILE), learned).unwrap();
+        // The temp file the save writes through is a folder, so the save fails.
+        std::fs::create_dir_all(
+            d.join(format!("suggestions.{}.tmp", std::process::id()))
+                .join("block"),
+        )
+        .unwrap();
+        let list = add_suggested(&d, "every day at 8, sweep the inbox", clock()).unwrap();
+        assert_eq!(list[0].name, "sweep the inbox");
+        assert_eq!(crate::automations::load(&d).unwrap().len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(d.join(grokhub_core::review_pass::SUGGESTIONS_FILE)).unwrap(),
+            learned,
+            "the save failed"
+        );
+        // The tile hides anyway: its job runs.
+        assert!(!suggested(&d).iter().any(|t| t.title == "Inbox sweep"));
+    }
+
+    #[test]
+    fn a_tile_whose_job_runs_under_other_words_is_hidden_and_refused() {
+        let d = dir("edited");
+        add_suggested(&d, "/loop 12h summarize the workboard", clock()).unwrap();
+        let id = crate::automations::load(&d).unwrap()[0].id.clone();
+        // Edit, then Save the words the box shows.
+        crate::automations::edit(
+            &d,
+            &id,
+            "heartbeat every 720 min summarize the workboard",
+            clock(),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::automations::load(&d).unwrap()[0].name,
+            "720 min summarize the workboard"
+        );
+        assert!(!suggested(&d).iter().any(|t| t.title == "Midday board"));
+        assert_eq!(
+            add_suggested(&d, "/loop 12h summarize the workboard", clock()),
+            Err("summarize the workboard is already an automation.".into())
+        );
+        assert_eq!(crate::automations::load(&d).unwrap().len(), 1);
     }
 }
