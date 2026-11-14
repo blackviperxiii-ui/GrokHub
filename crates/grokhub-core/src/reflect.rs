@@ -35,6 +35,9 @@ where
             let c = c.trim();
             !c.is_empty()
                 && !c.starts_with('/')
+                // A shell line (`$ ls`, as a chat shows `/sh`) is no fact,
+                // and may hold a key.
+                && !c.starts_with("$ ")
                 && !c.starts_with("HOST_")
                 && !c.starts_with("VERIFY_")
                 && c.len() < 200
@@ -58,6 +61,10 @@ mod tests {
         let facts = fact_candidates(&[
             ("user".into(), "prefer nvim".into()),
             ("user".into(), "/forget".into()),
+            (
+                "user".into(),
+                "$ aws configure set aws_access_key_id AKIAABCDEFGHIJKLMNOP".into(),
+            ),
             ("user".into(), "hi how are you".into()),
             ("user".into(), "say hi in one sentence".into()),
             (

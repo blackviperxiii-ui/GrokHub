@@ -431,6 +431,19 @@ fn run_slash_line(
     {
         return Err(grokhub_agent::scratch::NO_WRITES.into());
     }
+    if let slash::Action::Shell(line) = &action {
+        // `parse` refuses it for a browser already; the line runs here only.
+        if remote {
+            return Err("/sh works on your computer.".into());
+        }
+        let check = command_box::check(
+            &state.config_dir,
+            &workspace_of(state, conversation_id),
+            line,
+            current(state).code_ship,
+        );
+        return Ok(slash::Effect::Shell { check });
+    }
     let op = match action {
         slash::Action::Op(op) => op,
         other => return slash::apply(other, &workspace_of(state, conversation_id)),
@@ -2976,18 +2989,24 @@ async fn command_box_view(state: State<'_, ShellState>) -> Result<command_box::V
 async fn command_box_check(
     state: State<'_, ShellState>,
     line: String,
+    conversation_id: Option<String>,
 ) -> Result<command_box::Verdict, String> {
-    let dir = workspace(&state);
+    let dir = workspace_of(&state, conversation_id.as_deref());
     let config = state.config_dir.clone();
     let ship = current(&state).code_ship;
     off_main(move || command_box::check(&config, &dir, &line, ship)).await
 }
 
-/// Command page: the yes on a first run. The checks run again, the line is
+/// Command page, and Yes on a `/sh` card: the checks run again, the line is
 /// remembered for this repo, and the agent's message comes back to queue.
+/// A chat's line is checked in that chat's folder (a Code tab session's own).
 #[tauri::command]
-async fn command_box_approve(state: State<'_, ShellState>, line: String) -> Result<String, String> {
-    let dir = workspace(&state);
+async fn command_box_approve(
+    state: State<'_, ShellState>,
+    line: String,
+    conversation_id: Option<String>,
+) -> Result<String, String> {
+    let dir = workspace_of(&state, conversation_id.as_deref());
     let config = state.config_dir.clone();
     let ship = current(&state).code_ship;
     off_main(move || command_box::approve(&config, &dir, &line, ship)).await?

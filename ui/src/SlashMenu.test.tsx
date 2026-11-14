@@ -45,7 +45,7 @@ vi.mock("./api", async () => {
 
 import { Chat, NO_PLAN, PLAN_NEXT, UNDO_NA } from "./Chat";
 import { subscribeImagine } from "./imagineAsk";
-import { isSlashCommand } from "./SlashMenu";
+import { isShellLine, isSlashCommand } from "./SlashMenu";
 
 const SETTINGS: Settings = {
   closeToTray: true,
@@ -88,6 +88,22 @@ describe("composer slash commands", () => {
     expect(isSlashCommand("/usr/bin is slow")).toBe(false);
     expect(isSlashCommand("/ hi")).toBe(false);
     expect(isSlashCommand("hello /plan")).toBe(false);
+    expect(isSlashCommand("$ git status")).toBe(true);
+    expect(isSlashCommand("  $ ls")).toBe(true);
+    expect(isSlashCommand("$5 is cheap")).toBe(false);
+    expect(isSlashCommand("$ ")).toBe(false);
+    expect(isSlashCommand("$  ls")).toBe(false);
+    expect(isSlashCommand("costs $ 5")).toBe(false);
+    // A browser sends `$ ` lines as messages.
+    expect(isSlashCommand("$ git status", true)).toBe(false);
+    expect(isSlashCommand("/plan", true)).toBe(true);
+    // Whitespace reads as Rust's `char::is_whitespace` does.
+    expect(isShellLine("\u0085$ ls")).toBe(true);
+    expect(isShellLine("\ufeff$ ls")).toBe(false);
+    expect(isShellLine("$ \u0085ls")).toBe(false);
+    expect(isShellLine("$ \ufeffls")).toBe(true);
+    expect(isShellLine("$\tls")).toBe(false);
+    expect(isShellLine("$ \u00a0ls")).toBe(false);
   });
 
   it("opens on / with the cabin's commands greyed, and Escape closes it", async () => {

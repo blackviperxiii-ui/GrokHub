@@ -887,13 +887,17 @@ pub fn transcript_pairs(info: &SessionInfo) -> Vec<(String, String)> {
 }
 
 /// A message as the person saw it: a user turn loses the `<cabin-volatile>`
-/// notes the cabin put in front of it for the model.
+/// notes the cabin put in front of it for the model, and a shell line sent
+/// from `/sh`, `$ ` or the Command page shows as the line typed.
 fn visible_text(role: &str, content: &[ContentPart]) -> String {
     let text = message_text(content);
-    if role == "user" {
-        crate::prefix_cache::visible_user_text(&text).to_string()
-    } else {
-        text
+    if role != "user" {
+        return text;
+    }
+    let shown = crate::prefix_cache::visible_user_text(&text);
+    match grokhub_core::shell_line::command_of(shown) {
+        Some(command) => format!("$ {command}"),
+        None => shown.to_string(),
     }
 }
 
@@ -2145,6 +2149,43 @@ mod tests {
         assert!(md.contains("hi there"));
         assert!(!md.contains("Talk style for this turn"));
         assert!(!md.contains("cabin-volatile"));
+    }
+
+    #[test]
+    fn a_reopened_shell_line_shows_as_typed_and_the_model_keeps_the_ask() {
+        let (_dir, _guard) = isolated("shell-line");
+        let id = "native-shell-line";
+        let sent = grokhub_core::shell_line::prompt("ls -la");
+        let stored = crate::prefix_cache::user_message_text("Talk style: casual.", &sent);
+        let typed = InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(stored.clone())],
+        };
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &[typed.clone(), assistant("total 0")],
+            &Usage::default(),
+            "SuperGrok pool",
+            &sent,
+        )
+        .unwrap();
+        let loaded = load_session(id).unwrap();
+        assert_eq!(loaded.input()[0], typed);
+        assert_eq!(
+            transcript_pairs(&loaded)[0],
+            ("user".to_string(), "$ ls -la".to_string())
+        );
+        // Any other message shows as it was.
+        assert_eq!(
+            visible_text("user", &[ContentPart::InputText("run ls -la".into())]),
+            "run ls -la"
+        );
+        assert_eq!(
+            visible_text("assistant", &[ContentPart::InputText(sent.clone())]),
+            sent
+        );
     }
 
     /// An xAI compaction item is opaque: saved, loaded, rewritten (rename) and

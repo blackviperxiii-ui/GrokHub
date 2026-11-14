@@ -330,8 +330,8 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
     row("/resume", "Open History", "/resume"),
     row("/palette", "Command palette", "/palette"),
     ShellCmd {
-        ready: false,
-        ..row("/sh", "Run a shell line…", "/sh ")
+        desktop_only: true,
+        ..row("/sh", "Run a shell line in the project folder…", "/sh ")
     },
     row(
         "/scratch",
@@ -425,6 +425,9 @@ pub enum Effect {
     Imagine { media: &'static str, prompt: String },
     /// `/plugins`: Settings → Labs, where the plugin list lives.
     OpenSection { section: &'static str },
+    /// `/sh <line>` or `$ <line>`: the Command page's checks on the line. A
+    /// queued line goes to the agent; a confirm asks with its own Yes.
+    Shell { check: crate::command_box::Verdict },
 }
 
 /// What `run` needs done outside this module.
@@ -434,6 +437,8 @@ pub enum Action {
     Remember(String),
     /// A command that acts on the saved chat or the project list.
     Op(Op),
+    /// `/sh <line>` or `$ <line>`: one shell line for the agent to run.
+    Shell(String),
 }
 
 /// What `slash_ops` runs.
@@ -488,9 +493,21 @@ pub enum Op {
     Consult(String),
 }
 
+/// The shell line after a leading `$ `. `$5 is cheap` and `$  ls` are
+/// messages, not shell lines (the cabin took `$  ls` too; one space is
+/// asked for here so fewer messages read as commands).
+fn dollar_line(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix("$ ")?;
+    rest.starts_with(|c: char| !c.is_whitespace())
+        .then_some(rest)
+}
+
 /// The command word, when `line` is a slash command at all. `/usr/bin` and
-/// `/ hi` are messages, not commands.
+/// `/ hi` are messages, not commands. A `$ ` line is `/sh`.
 pub fn command_word(line: &str) -> Option<String> {
+    if dollar_line(line).is_some() {
+        return Some("/sh".into());
+    }
     let t = line.trim_start();
     let word = t.split_whitespace().next()?;
     let name = word.strip_prefix('/')?;
@@ -573,6 +590,12 @@ pub fn help() -> String {
 
 /// Reads a slash line. `remote` is a paired browser.
 pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
+    let dollar = dollar_line(line).map(|rest| format!("/sh {rest}"));
+    // A browser sends a `$ ` line as a message; it never gets here as one.
+    if remote && dollar.is_some() {
+        return Err("That isn't a command.".into());
+    }
+    let line = dollar.as_deref().unwrap_or(line);
     let Some(word) = command_word(line) else {
         return Err("That isn't a command.".into());
     };
@@ -760,6 +783,8 @@ fn extras(word: &str, rest: &str) -> Option<Result<Action, String>> {
     let fx = |e: Effect| Some(Ok(Action::Effect(e)));
     let open = |view: &'static str| fx(Effect::Open { view });
     match word {
+        "/sh" if rest.is_empty() => Some(Err("Type the command after /sh.".into())),
+        "/sh" => Some(Ok(Action::Shell(rest.to_string()))),
         "/deep-research" if rest.is_empty() => {
             Some(Err("Type what to research after /deep-research.".into()))
         }
@@ -863,6 +888,7 @@ pub fn apply(action: Action, workspace: &std::path::Path) -> Result<Effect, Stri
             text: crate::memory::add(workspace, &note, false)?,
         }),
         Action::Op(_) => Err("That command needs a saved chat.".into()),
+        Action::Shell(_) => Err("A shell line needs this computer's project folder.".into()),
     }
 }
 
@@ -1640,8 +1666,60 @@ mod tests {
     }
 
     #[test]
+    fn a_dollar_or_sh_line_is_one_shell_line_on_this_computer() {
+        assert_eq!(command_word("$ git status").as_deref(), Some("/sh"));
+        assert_eq!(command_word("  $ ls").as_deref(), Some("/sh"));
+        for message in ["$5 is cheap", "$ ", "$  ls", "$", "costs $ 5"] {
+            assert_eq!(command_word(message), None, "{message:?}");
+        }
+        for line in ["$ git status", "/sh git status", "/SH   git status  "] {
+            assert_eq!(
+                parse(line, false),
+                Ok(Action::Shell("git status".into())),
+                "{line}"
+            );
+        }
+        assert_eq!(
+            parse("/sh", false),
+            Err("Type the command after /sh.".into())
+        );
+        assert_eq!(
+            parse("/sh   ", false),
+            Err("Type the command after /sh.".into())
+        );
+        assert_eq!(
+            parse("/sh ls", true),
+            Err("/sh works on your computer.".into())
+        );
+        assert_eq!(parse("$ ls", true), Err("That isn't a command.".into()));
+        // No yes word: the line is checked as typed, every word of it.
+        assert_eq!(
+            parse("/sh --yes rm -rf build", false),
+            Ok(Action::Shell("--yes rm -rf build".into()))
+        );
+        assert_eq!(
+            parse("/sh rm x yes", false),
+            Ok(Action::Shell("rm x yes".into()))
+        );
+        let hit = |remote| {
+            hits("/sh", remote)
+                .into_iter()
+                .find(|h| h.cmd == "/sh")
+                .expect("/sh")
+        };
+        assert_eq!(hit(true).disabled.as_deref(), Some(ON_YOUR_COMPUTER));
+        assert_eq!(hit(false).disabled, None);
+        assert!(help().contains("/sh — Run a shell line in the project folder"));
+        // A shell line on its own never reaches memory or the workspace.
+        assert_eq!(
+            apply(Action::Shell("ls".into()), std::path::Path::new(".")),
+            Err("A shell line needs this computer's project folder.".into())
+        );
+    }
+
+    #[test]
     fn what_waits_on_another_card_is_greyed_not_in_the_cabin() {
-        for cmd in ["/sh", "/sync", "/inhabit"] {
+        for cmd in ["/sync", "/inhabit"] {
             let hit = hits(cmd, false)
                 .into_iter()
                 .find(|h| h.cmd == cmd)

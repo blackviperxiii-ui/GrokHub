@@ -1098,7 +1098,9 @@ export type SlashEffect =
   /** `/imagine` and `/imagine-video`. An empty prompt just opens the page. */
   | { kind: "imagine"; media: "image" | "video"; prompt: string }
   /** `/plugins`: Settings → Labs. */
-  | { kind: "openSection"; section: "labs" };
+  | { kind: "openSection"; section: "labs" }
+  /** `/sh <line>` or `$ <line>`: the Command page's checks on the line. */
+  | { kind: "shell"; check: CommandBoxVerdict };
 
 export function slashHits(draft: string): Promise<SlashHit[]> {
   return invoke<SlashHit[]>("slash_hits", { draft });
@@ -4352,10 +4354,10 @@ export interface CommandBoxView {
 }
 
 /** What the Command page does with a line: queue it to the agent now, ask
- * first (a first run, or a destructive line every time), or refuse it. */
+ * first (a first run, or a destructive or keyed line every time), or refuse it. */
 export type CommandBoxVerdict =
   | { verdict: "queue"; command: string; prompt: string }
-  | { verdict: "confirm"; command: string; destructive: boolean }
+  | { verdict: "confirm"; command: string; destructive: boolean; secret: boolean }
   | { verdict: "blocked"; command: string; message: string };
 
 export function commandBoxView(): Promise<CommandBoxView> {
@@ -4366,9 +4368,11 @@ export function commandBoxCheck(line: string): Promise<CommandBoxVerdict> {
   return invoke<CommandBoxVerdict>("command_box_check", { line });
 }
 
-/** The yes on a first run: the checks run again, and the agent's message comes back. */
-export function commandBoxApprove(line: string): Promise<string> {
-  return invoke<string>("command_box_approve", { line });
+/** The yes on a first run: the checks run again, and the agent's message
+ * comes back. A chat's `/sh` line names its chat, so it is checked in that
+ * chat's folder. */
+export function commandBoxApprove(line: string, conversationId?: string): Promise<string> {
+  return invoke<string>("command_box_approve", { line, conversationId });
 }
 
 export function commandBoxForget(): Promise<CommandBoxView> {
