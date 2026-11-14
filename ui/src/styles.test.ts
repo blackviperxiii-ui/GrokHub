@@ -152,6 +152,23 @@ describe("styles.css views rail and top bar", () => {
     expect(rule(phone, ".composer-ghost-wrap {")).toContain("order: -1;");
     expect(rule(phone, ".composer-ghost-wrap {")).toContain("flex: 1 0 100%;");
   });
+
+  it("keeps the composer glow steady outside the motion gate, and breathes on another property", () => {
+    const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+    // Outside any @media: the steady light that stays under reduced motion.
+    expect(rule(bare, ".composer.glowing .composer-ghost-wrap::before {")).toBe(
+      ".composer.glowing .composer-ghost-wrap::before { opacity: 0.75; }",
+    );
+    expect(rule(bare, ".composer-ghost-wrap::before {")).toContain("transition: opacity var(--t-base) var(--ease-out);");
+    // The breath moves filter, never opacity, so the fade in and out still runs.
+    const breath = bare.slice(bare.indexOf("@keyframes composer-glow {"));
+    expect(breath.slice(0, breath.indexOf("}\n}") + 3).replace(/\s+/g, " ")).toBe(
+      "@keyframes composer-glow { from { filter: opacity(1); } to { filter: opacity(0.6); } }",
+    );
+    // A narrow Code tab scrolls edge to edge, so the embedded glow stays off the sides.
+    const narrow = mediaBlocks(CSS, "(max-width: 899px)").find((b) => b.includes(".chat.embedded")) ?? "";
+    expect(rule(narrow, ".chat.embedded .composer-ghost-wrap::before {")).toContain("inset: 0 20px;");
+  });
 });
 
 // The Code tab is a column flex box that scrolls. A section allowed to shrink

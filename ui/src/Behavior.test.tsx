@@ -11,10 +11,18 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { AUTOCOMPLETE_NOTE, Behavior, LANE_NOTE, SCHEDULE_NOTE, SUGGESTIONS_NOTE } from "./Behavior";
+import {
+  AUTOCOMPLETE_NOTE,
+  Behavior,
+  COMPOSER_GLOW_NOTE,
+  LANE_NOTE,
+  SCHEDULE_NOTE,
+  SUGGESTIONS_NOTE,
+} from "./Behavior";
 
 const OFF: Shape = {
   autocomplete: false,
+  composerGlow: false,
   suggestions: true,
   quietStart: "",
   quietEnd: "",
@@ -133,6 +141,18 @@ describe("Behavior", () => {
     });
   });
 
+  it("composer glow starts off and saves at once", async () => {
+    render(<Behavior tray onCloseToTray={() => {}} />);
+    const glow = await screen.findByLabelText("Composer glow");
+    expect(glow).not.toBeChecked();
+    expect(COMPOSER_GLOW_NOTE).toBe("Soft light around the composer while a reply comes in. Off by default.");
+    expect(screen.getByText(COMPOSER_GLOW_NOTE)).toBeVisible();
+    api.saveBehavior.mockResolvedValueOnce(page({ composerGlow: true }));
+    await userEvent.click(glow);
+    expect(api.saveBehavior).toHaveBeenLastCalledWith(true, { ...OFF, composerGlow: true });
+    expect(await screen.findByLabelText("Composer glow")).toBeChecked();
+  });
+
   it("saves quiet hours and shows a refusal", async () => {
     api.saveBehavior.mockRejectedValueOnce("Set both times, or clear both for no quiet hours.");
     render(<Behavior tray={false} />);
@@ -177,6 +197,7 @@ describe("Behavior", () => {
     render(<Behavior tray readOnly />);
     expect(await screen.findByText("22:00–07:00")).toBeInTheDocument();
     expect(screen.getByText("1.0M tokens a day")).toBeInTheDocument();
+    expect(screen.getByText("Composer glow").nextElementSibling).toHaveTextContent("Off");
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByRole("combobox")).toBeNull();

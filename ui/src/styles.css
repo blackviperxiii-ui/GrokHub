@@ -2021,6 +2021,26 @@ button.md-copy {
   box-shadow: var(--red-glow);
 }
 
+/* Composer glow (Settings → Behavior): soft red light behind the box while a
+   reply comes in. The light is a layer under the textarea. Its opacity fades it
+   in and out; the breath multiplies in through filter: opacity(), a separate
+   property, so the two never fight and the box never repaints. Less motion
+   keeps it steady. */
+.composer-ghost-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 18px 2px color-mix(in srgb, var(--red) 55%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-base) var(--ease-out);
+}
+
+.composer.glowing .composer-ghost-wrap::before {
+  opacity: 0.75;
+}
+
 /* Files waiting on the composer; they wrap on a phone. */
 .attach-chips {
   display: flex;
@@ -4417,6 +4437,21 @@ label.toggle-row {
 
   :root:not([data-reduce-motion="true"]) .streak-days li.on {
     animation: streak-fill 600ms var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) .composer.glowing .composer-ghost-wrap::before {
+    animation: composer-glow 1.6s ease-in-out infinite alternate;
+  }
+}
+
+/* Starts at full strength, so the fade-in under it shows no step. */
+@keyframes composer-glow {
+  from {
+    filter: opacity(1);
+  }
+
+  to {
+    filter: opacity(0.6);
   }
 }
 
@@ -7337,6 +7372,12 @@ fieldset.channel label {
     min-width: 0;
     min-height: 55vh;
     padding-right: 0;
+  }
+
+  /* The box spans the scrolling column edge to edge, which would cut the
+     composer glow flat at both sides; keep its light above and below. */
+  .chat.embedded .composer-ghost-wrap::before {
+    inset: 0 20px;
   }
 
   .code-split-handle {
