@@ -205,6 +205,12 @@ pub enum LoopEvent {
     /// A findings card body ([`grokhub_core::findings::Findings::to_body`]),
     /// shown after the reply.
     Findings(String),
+    /// A panel `show_panel` drew, whole, for the chat to show. The tool row
+    /// is clipped, so the spec travels on its own. `id` is the call's.
+    Panel {
+        id: String,
+        spec: serde_json::Value,
+    },
 }
 
 #[derive(Clone)]
@@ -2090,6 +2096,29 @@ fn record_turn_truncated(conversation_id: &str, reason: Option<&str>, streak: u3
     let _ = crate::harness::append_span(&crate::perm::config_dir(), &span);
 }
 
+/// A finished show_panel hands the chat its whole panel, before the clipped
+/// row. The tool only finishes on a spec that parses, and only with generative
+/// UI on, so a refused or failed call never draws one. The chat loop and the
+/// desktop episode kernel both call this.
+pub(crate) fn emit_panel(
+    on_event: &mut dyn FnMut(LoopEvent),
+    id: &str,
+    call: &FunctionCall,
+    status: &str,
+) {
+    if status != "completed" || call.name != crate::tools::SHOW_PANEL {
+        return;
+    }
+    if let Ok(spec) = grokhub_core::panel_spec::panel_spec_from_args(&call.arguments) {
+        if let Ok(spec) = serde_json::to_value(spec) {
+            on_event(LoopEvent::Panel {
+                id: id.to_string(),
+                spec,
+            });
+        }
+    }
+}
+
 pub(crate) fn emit_tool(
     on_event: &mut dyn FnMut(LoopEvent),
     id: &str,
@@ -2098,6 +2127,7 @@ pub(crate) fn emit_tool(
     detail: &str,
     image: Option<String>,
 ) {
+    emit_panel(on_event, id, call, status);
     // The row shows what the tool said, not the untrusted fence around it.
     let detail = crate::tools::fence::display_text(detail);
     on_event(LoopEvent::Tool {
@@ -6520,6 +6550,75 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A panel a long way past the row's 180-character clip.
+    // Non-ASCII on purpose: a byte-stepping URL scan once panicked on "—".
+    const PANEL_ARGS: &str = r#"{"title":"Linux CI — beta ✓","elements":[{"type":"heading","level":2,"text":"Checks"},{"type":"key_value","pairs":[{"key":"Workflow","value":"ci"},{"key":"Branch","value":"beta"}]},{"type":"button","label":"Re-run","action":"rerun_ci"}]}"#;
+
+    fn panel_run(name: &str, generative: bool) -> Vec<LoopEvent> {
+        let dir = workspace(&format!("panel-{name}-{generative}"));
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        if generative {
+            std::fs::write(config.join("generative_ui.toml"), "enabled = true\n").unwrap();
+        }
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let conv = format!("panel-{name}-{generative}-{}", std::process::id());
+        let script = Script {
+            turns: Mutex::new(vec![
+                turn("", vec![call("call-1", name, PANEL_ARGS)]),
+                turn("Here is the panel.", Vec::new()),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (_, _, events) = run_drive(&script, &dir, &conv);
+        let _ = std::fs::remove_dir_all(&dir);
+        events
+    }
+
+    #[test]
+    fn show_panel_sends_the_whole_panel_before_its_clipped_row() {
+        assert!(PANEL_ARGS.len() > 180);
+        let events = panel_run("show_panel", true);
+        let panels: Vec<(&str, &serde_json::Value)> = events
+            .iter()
+            .filter_map(|ev| match ev {
+                LoopEvent::Panel { id, spec } => Some((id.as_str(), spec)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(panels.len(), 1, "{events:?}");
+        let (id, spec) = panels[0];
+        assert_eq!(id, "call-1");
+        assert_eq!(spec["title"], "Linux CI — beta ✓");
+        assert_eq!(spec["elements"][1]["pairs"][1]["value"], "beta");
+        assert_eq!(spec["elements"][2]["action"], "rerun_ci");
+        // It comes just before the finished row, which keeps its clip.
+        let at = events
+            .iter()
+            .position(|ev| matches!(ev, LoopEvent::Panel { .. }))
+            .unwrap();
+        match &events[at + 1] {
+            LoopEvent::Tool { id, status, .. } => {
+                assert_eq!((id.as_str(), status.as_str()), ("call-1", "completed"));
+            }
+            other => panic!("the row follows the panel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_panel_when_generative_ui_is_off_or_the_tool_is_another() {
+        let off = panel_run("show_panel", false);
+        assert!(!off.iter().any(|ev| matches!(ev, LoopEvent::Panel { .. })));
+        assert!(off.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Tool { status, .. } if status == "failed"
+        )));
+        let other = panel_run("read_file", true);
+        assert!(!other.iter().any(|ev| matches!(ev, LoopEvent::Panel { .. })));
+    }
+
     #[test]
     fn report_findings_posts_the_card_after_the_reply() {
         let dir = workspace("findings");
@@ -7925,7 +8024,6 @@ mod tests {
         covered.sort_unstable();
         covered.dedup();
         let mut native = gate::native_names();
-        native.push("show_panel");
         native.extend(crate::self_manage::SELF_TOOLS.iter().map(|(name, _)| *name));
         native.extend(
             crate::self_manage::work::WORK_TOOLS

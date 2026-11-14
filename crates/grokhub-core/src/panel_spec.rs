@@ -122,6 +122,21 @@ fn default_heading_level() -> u8 {
     2
 }
 
+/// How a tapped panel button reaches the model: `[panel action] <action> on
+/// <panel id>`, sent as the next message. The action id is the model's own
+/// text, so the harness never counts such a message as the person's words.
+pub const PANEL_ACTION_PREFIX: &str = "[panel action]";
+
+/// The spec a `show_panel` call carries, checked the way the tool checks it:
+/// the arguments re-serialized compact, then [`parse_panel_spec`]. Spacing a
+/// provider left in the raw arguments never decides whether a panel shows.
+pub fn panel_spec_from_args(arguments: &str) -> Result<PanelSpec, String> {
+    let value: Value = serde_json::from_str(arguments)
+        .map_err(|e| format!("panel arguments are not JSON: {e}"))?;
+    let compact = serde_json::to_string(&value).map_err(|e| format!("panel arguments: {e}"))?;
+    parse_panel_spec(&compact)
+}
+
 /// Parse and validate panel JSON. Unknown fields are rejected at deserialize time.
 pub fn parse_panel_spec(json: &str) -> Result<PanelSpec, String> {
     if json.len() > PANEL_JSON_MAX {
@@ -316,7 +331,8 @@ fn scan_urls(s: &str, field: &str) -> Result<(), String> {
         if s[i..].starts_with("//") {
             return Err(format!("{field} must not use protocol-relative URLs"));
         }
-        i += 1;
+        // Step a whole character: a byte step would slice inside "é" or "—".
+        i += s[i..].chars().next().map_or(1, char::len_utf8);
     }
     Ok(())
 }
@@ -730,5 +746,37 @@ mod tests {
         let json = format!(r#"{{"elements":[{{"type":"text","text":"{body}"}}]}}"#);
         let err = parse_panel_spec(&json).unwrap_err();
         assert!(err.contains("over"), "{err}");
+    }
+
+    #[test]
+    fn non_ascii_text_parses_and_its_urls_are_still_checked() {
+        let spec = parse_panel_spec(
+            r#"{"title":"Café ✓","elements":[{"type":"text","text":"Linux CI — all green 日本 🎉 see https://ci.example/run"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(spec.title.as_deref(), Some("Café ✓"));
+        let err = parse_panel_spec(
+            r#"{"elements":[{"type":"text","text":"é — then http://ci.example/run"}]}"#,
+        )
+        .unwrap_err();
+        assert_eq!(err, "element 0: text must use https URLs, not http");
+    }
+
+    #[test]
+    fn args_are_checked_compact_so_spacing_never_hides_a_panel() {
+        // Under the cap compact, over it with the provider's spacing.
+        let body = "a".repeat(TEXT_MAX - 10);
+        let compact = format!(
+            r#"{{"elements":[{{"type":"text","text":"{body}"}},{{"type":"text","text":"{body}"}},{{"type":"text","text":"{body}"}}]}}"#
+        );
+        assert!(compact.len() < PANEL_JSON_MAX, "{}", compact.len());
+        let spaced = format!("{compact}{}", " ".repeat(PANEL_JSON_MAX));
+        assert!(parse_panel_spec(&spaced).is_err());
+        let spec = panel_spec_from_args(&spaced).unwrap();
+        assert_eq!(spec.elements.len(), 3);
+        assert_eq!(
+            panel_spec_from_args("{not json").unwrap_err(),
+            "panel arguments are not JSON: key must be a string at line 1 column 2"
+        );
     }
 }

@@ -36,7 +36,12 @@ export function onlyFoldsChanged(before: readonly Item[], after: readonly Item[]
     before.length === after.length &&
     after.every((item, i) => {
       const was = before[i];
-      return item === was || (item.kind === "thought" && was.kind === "thought" && item.text === was.text);
+      return (
+        item === was ||
+        (item.kind === "thought" && was.kind === "thought" && item.text === was.text) ||
+        // Dismiss hides a panel in place: no new content to follow.
+        (item.kind === "panel" && was.kind === "panel" && item.id === was.id && item.spec === was.spec)
+      );
     })
   );
 }
