@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
-import { getBehavior, saveBehavior, type Behavior as Shape, type BehaviorPage } from "./api";
+import { getBehavior, saveBehavior, type Behavior as Shape, type BehaviorPage, type Lane } from "./api";
 import { PRODUCT_NAME } from "./brand";
 import { ChangeRows } from "./ChangeRows";
 import { SelfImprove } from "./SelfImprove";
@@ -9,6 +9,13 @@ export const AUTOCOMPLETE_NOTE =
   "Muted ghost text finishes your line in the composer; Tab accepts. Off by default.";
 export const SUGGESTIONS_NOTE =
   "A few next steps to tap, under the box, on Home and after replies. They learn from what you pick.";
+export const LANE_NOTE =
+  "When two suggestions in a chat are close, the one on this side goes first. A much stronger one still leads.";
+const LANES: { value: Lane; label: string }[] = [
+  { value: "coding", label: "Coding" },
+  { value: "life", label: "Life" },
+];
+const laneLabel = (lane: Lane) => LANES.find((l) => l.value === lane)?.label ?? "Coding";
 export const QUIET_NOTE = "Leave both empty for no quiet hours.";
 export const SCHEDULE_NOTE = `Quiet hours and the budget are saved for scheduled work in this app. Automations here run only when you choose Run now, so nothing waits on them yet. The ${PRODUCT_NAME} cabin keeps its own quiet hours and budget.`;
 export const PAUSE_NOTE = "Scheduled work waits until tomorrow once today is over budget. Chat still sends.";
@@ -72,6 +79,12 @@ export function Behavior({
         )}
         <dt>Suggestions</dt>
         <dd>{b.suggestions ? "On" : "Off"}</dd>
+        {b.suggestions && (
+          <>
+            <dt>Suggestions lean toward</dt>
+            <dd>{laneLabel(b.lane)}</dd>
+          </>
+        )}
         <dt>Sentence autocomplete</dt>
         <dd>{b.autocomplete ? "On" : "Off"}</dd>
         <dt>Quiet hours</dt>
@@ -123,6 +136,21 @@ export function Behavior({
         Suggestions
       </Toggle>
       <p className="note">{SUGGESTIONS_NOTE}</p>
+      {b.suggestions && (
+        <>
+          <label>
+            Suggestions lean toward
+            <select value={b.lane} onChange={(e) => change({ lane: e.target.value as Lane })}>
+              {LANES.map((l) => (
+                <option key={l.value} value={l.value}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="note">{LANE_NOTE}</p>
+        </>
+      )}
       <Toggle checked={b.autocomplete} onChange={(on) => change({ autocomplete: on })}>
         Sentence autocomplete
       </Toggle>
