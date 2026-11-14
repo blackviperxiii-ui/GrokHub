@@ -1,0 +1,1 @@
+- Built-in skills: Loadout now bundles 52 vstack skills from vstack v1.3.0, including elevate and its GUIDE.md. The skill tool serves each skill's extra files, the Code tab lists the ones it doesn't carry in full, and a daily job opens a "vstack sync" PR when vstack ships a new release.

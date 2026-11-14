@@ -284,7 +284,10 @@ fn skill_list(ctx: &SelfCtx<'_>) -> String {
             format!("{id}: {}", s.description)
         })
         .collect();
-    // Built-in Loadout skills (vstack QA / verify / follow-through).
+    // The user's own skills first, then the built-in Loadout skills (the
+    // bundled vstack skills), each group sorted.
+    rows.sort();
+    let mut builtins = Vec::new();
     for (name, body) in crate::skills::BUILTIN_SKILL_BODIES {
         let desc = body
             .lines()
@@ -293,9 +296,10 @@ fn skill_list(ctx: &SelfCtx<'_>) -> String {
                     .map(|v| v.trim().trim_matches('"').to_string())
             })
             .unwrap_or_default();
-        rows.push(format!("{name}: {desc} [builtin]"));
+        builtins.push(format!("{name}: {desc} [builtin]"));
     }
-    rows.sort();
+    builtins.sort();
+    rows.extend(builtins);
     if rows.is_empty() {
         "no skills".into()
     } else {

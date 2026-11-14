@@ -5,8 +5,8 @@
 //! Project skills (`.grok/skills`, then `.claude/skills`, from the workspace up to the
 //! git root) win over the user directory, then cabin skills under
 //! `{GROKHUB_CONFIG}/skills` (the same store `skill_list` / `skill_create` use),
-//! then plugins, then Loadout built-ins shipped under `assets/skills/` (vstack
-//! QA / verify / follow-through). Same-name duplicates keep the winner; the walk
+//! then plugins, then Loadout built-ins shipped under `assets/skills/` (the
+//! vstack skills listed in `assets/skills/vstack.json`). Same-name duplicates keep the winner; the walk
 //! order is sorted so the choice does not depend on directory iteration.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,35 +57,100 @@ impl SkillSource {
     }
 }
 
-/// Bundled vstack skills (MIT; see `assets/skills/CREDITS.md`).
-pub const BUILTIN_SKILL_BODIES: &[(&str, &str)] = &[
-    (
-        "qa-walkthrough",
-        include_str!("../assets/skills/qa-walkthrough/SKILL.md"),
-    ),
-    (
-        "av-qa-walkthrough",
-        include_str!("../assets/skills/av-qa-walkthrough/SKILL.md"),
-    ),
-    (
-        "create-verification-skill",
-        include_str!("../assets/skills/create-verification-skill/SKILL.md"),
-    ),
-    (
-        "maintain-verification-skill",
-        include_str!("../assets/skills/maintain-verification-skill/SKILL.md"),
-    ),
-    (
-        "follow-through",
-        include_str!("../assets/skills/follow-through/SKILL.md"),
-    ),
-];
+// Bundled vstack skills (MIT; see `assets/skills/CREDITS.md`). The table is
+// generated from `assets/skills/vstack.json` by `.github/scripts/vstack_sync.py`.
+pub use crate::builtin_skills::{BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES, BUILTIN_SKILL_FILES};
 
 fn builtin_body(name: &str) -> Option<&'static str> {
     BUILTIN_SKILL_BODIES
         .iter()
         .find(|(n, _)| *n == name || normalize_name(n) == normalize_name(name))
         .map(|(_, body)| *body)
+}
+
+/// The other files in a built-in skill's folder: path inside it and text.
+fn builtin_files(name: &str) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
+    BUILTIN_SKILL_FILES
+        .iter()
+        .filter(move |(n, _, _)| *n == name || normalize_name(n) == normalize_name(name))
+        .map(|(_, rel, text)| (*rel, *text))
+}
+
+/// Where a built-in skill's own files are written, under the config dir, so a
+/// script its text names can run.
+const BUILTIN_DIR: &str = "builtin-skills";
+/// How a vstack skill's text names its own folder.
+const THIS_SKILL: &str = "<this skill>";
+
+/// For a built-in skill whose text runs files from `<this skill>/`, writes its
+/// extra files to `{GROKHUB_CONFIG}/builtin-skills/<skill>/` (only the ones that
+/// differ) and returns that folder. `None` for any other skill, or when a write
+/// fails.
+fn builtin_folder(name: &str) -> Option<PathBuf> {
+    let (folder, text) = BUILTIN_SKILL_BODIES
+        .iter()
+        .find(|(n, _)| *n == name || normalize_name(n) == normalize_name(name))?;
+    if !text.contains(THIS_SKILL) {
+        return None;
+    }
+    let mut files = builtin_files(folder).peekable();
+    files.peek()?;
+    let dir = crate::perm::config_dir().join(BUILTIN_DIR).join(folder);
+    for (rel, text) in files {
+        let path = dir.join(rel);
+        if fs::read_to_string(&path).is_ok_and(|have| have == text) {
+            continue;
+        }
+        fs::create_dir_all(path.parent()?).ok()?;
+        // Write aside, then rename, so a session running the script never
+        // reads it half written.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_extension(format!("tmp-{}-{n}", std::process::id()));
+        fs::write(&tmp, text).ok()?;
+        if fs::rename(&tmp, &path).is_err() {
+            let _ = fs::remove_file(&tmp);
+            return None;
+        }
+    }
+    Some(dir)
+}
+
+/// A folder as the skill text shows it, with `/` on every platform.
+fn slashed(dir: &Path) -> String {
+    dir.display().to_string().replace('\\', "/")
+}
+
+/// A built-in skill's `SKILL.md`, with each `<this skill>/path` turned into the
+/// quoted path under the folder its files were written to. `None` for a name
+/// that isn't built in.
+pub fn builtin_text(name: &str) -> Option<String> {
+    let text = builtin_body(name)?;
+    Some(match builtin_folder(name) {
+        Some(dir) => quote_folder(text, &slashed(&dir)),
+        None => text.to_string(),
+    })
+}
+
+/// `<this skill>/scripts/x.py` becomes `"<dir>/scripts/x.py"`: quoted, so a
+/// folder with a space in it still runs.
+fn quote_folder(text: &str, dir: &str) -> String {
+    let mut out = String::with_capacity(text.len() + dir.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(THIS_SKILL) {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at + THIS_SKILL.len()..];
+        let end = tail
+            .find(|c: char| c.is_whitespace() || c == '`')
+            .unwrap_or(tail.len());
+        out.push('"');
+        out.push_str(dir);
+        out.push_str(&tail[..end]);
+        out.push('"');
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn builtin_skills() -> Vec<Skill> {
@@ -442,8 +507,8 @@ pub fn tool_run(workspace: &Path, args: &Value) -> ToolOutput {
 
 fn render(skill: &Skill, rel: Option<&str>) -> ToolOutput {
     let body = if skill.source == SkillSource::Builtin {
-        match builtin_body(&skill.name) {
-            Some(text) => clip_chars(&skill_body(text), BODY_CAP),
+        match builtin_text(&skill.name) {
+            Some(text) => clip_chars(&skill_body(&text), BODY_CAP),
             None => {
                 return ToolOutput::err(format!("unknown builtin skill `{}`", skill.name));
             }
@@ -474,12 +539,30 @@ fn render(skill: &Skill, rel: Option<&str>) -> ToolOutput {
     out.push_str("Files:\n");
     if skill.source == SkillSource::Builtin {
         out.push_str("- SKILL.md\n");
+        for (file, _) in builtin_files(&skill.name) {
+            out.push_str("- ");
+            out.push_str(file);
+            out.push('\n');
+        }
+        if let Some(dir) = builtin_folder(&skill.name) {
+            out.push_str("Folder on disk: ");
+            out.push_str(&slashed(&dir));
+            out.push('\n');
+        }
         if let Some(rel) = rel {
-            if rel != "SKILL.md" && rel != "./SKILL.md" {
-                return ToolOutput::err("path is not available");
-            }
-            out.push_str("\nFile SKILL.md:\n");
-            out.push_str(&body);
+            let rel = rel.strip_prefix("./").unwrap_or(rel);
+            let text = if rel == "SKILL.md" {
+                body
+            } else {
+                match builtin_files(&skill.name).find(|(file, _)| *file == rel) {
+                    Some((_, text)) => clip_chars(text, BODY_CAP),
+                    None => return ToolOutput::err("path is not available"),
+                }
+            };
+            out.push_str("\nFile ");
+            out.push_str(rel);
+            out.push_str(":\n");
+            out.push_str(&text);
         }
         return ToolOutput::ok(out);
     }
@@ -1115,6 +1198,188 @@ mod tests {
         assert!(!text.contains(&"d".repeat(400)));
     }
 
+    fn bundled_names(doc: &Value, key: &str) -> Vec<String> {
+        doc[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("vstack.json `{key}`"))
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// The bullet list under `heading` in CREDITS.md, up to the next blank line.
+    fn credit_list(credits: &str, heading: &str) -> Vec<String> {
+        let (_, rest) = credits
+            .split_once(&format!("{heading}\n\n"))
+            .unwrap_or_else(|| panic!("CREDITS.md has no `{heading}`"));
+        rest.lines()
+            .take_while(|line| line.starts_with("- "))
+            .map(|line| line[2..].split(':').next().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn every_manifest_skill_is_bundled_loads_and_is_credited() {
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
+        let doc: Value =
+            serde_json::from_str(&fs::read_to_string(assets.join("vstack.json")).unwrap()).unwrap();
+        let skills = bundled_names(&doc, "skills");
+        let table: Vec<&str> = BUILTIN_SKILL_BODIES.iter().map(|(n, _)| *n).collect();
+        assert_eq!(table, skills, "run .github/scripts/vstack_sync.py sync");
+        assert_eq!(
+            BUILTIN_ALWAYS_ON,
+            bundled_names(&doc, "always_on").as_slice()
+        );
+        assert!(skills.iter().any(|s| s == "elevate"), "{skills:?}");
+
+        let root = scratch("manifest");
+        let repo = root.join("repo");
+        let home = root.join("empty-home");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(root.join("cfg"));
+        let found = discover(&repo, Some(&home), &[]);
+        for name in &skills {
+            let skill = found
+                .iter()
+                .find(|s| &s.name == name)
+                .unwrap_or_else(|| panic!("{name} is not discovered"));
+            assert_eq!(skill.source, SkillSource::Builtin, "{name}");
+            assert!(!skill.description.is_empty(), "{name}");
+            let loaded = load_in(&repo, name, None);
+            assert!(!loaded.failed, "{name}: {}", loaded.text);
+            assert!(
+                loaded
+                    .text
+                    .starts_with(&format!("<skill name=\"{name}\" source=\"builtin\"")),
+                "{name}: {}",
+                loaded.text
+            );
+        }
+        for (name, rel, text) in BUILTIN_SKILL_FILES {
+            let on_disk = fs::read_to_string(assets.join(name).join(rel)).unwrap();
+            assert_eq!(*text, on_disk, "{name}/{rel}");
+            let listed = load_in(&repo, name, None);
+            assert!(
+                listed.text.contains(&format!("\n- {rel}\n")),
+                "{}",
+                listed.text
+            );
+            let read = load_in(&repo, name, Some(rel));
+            assert!(!read.failed, "{name}/{rel}: {}", read.text);
+            assert!(
+                read.text.ends_with(&format!("\nFile {rel}:\n{text}")),
+                "{name}/{rel}"
+            );
+        }
+        let guide = load_in(&repo, "elevate", Some("GUIDE.md"));
+        assert!(!guide.failed, "{}", guide.text);
+        let missing = load_in(&repo, "elevate", Some("NOPE.md"));
+        assert!(missing.failed);
+        assert_eq!(missing.text, "path is not available");
+        // Left-out skills stay out.
+        for name in ["setup-vstack", "stageshow"] {
+            assert!(doc["exclude"][name].is_string(), "{name}");
+            assert!(found.iter().all(|s| s.name != name), "{name}");
+        }
+
+        let credits = fs::read_to_string(assets.join("CREDITS.md")).unwrap();
+        let tag = doc["tag"].as_str().unwrap();
+        let commit = doc["commit"].as_str().unwrap();
+        assert!(
+            credits.contains(&format!("release\n[`{tag}`]")),
+            "{credits}"
+        );
+        assert!(
+            credits.contains(&format!("(commit `{commit}`)")),
+            "{credits}"
+        );
+        assert_eq!(
+            credit_list(
+                &credits,
+                "Skills shipped here (read-only built-ins inside Loadout / GrokHub):"
+            ),
+            skills
+        );
+        let left: Vec<String> = doc["exclude"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(credit_list(&credits, "Left out:"), left);
+        assert!(assets.join("LICENSE-upstream").is_file());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The skill tool's answer with an empty home, so a skill installed in the
+    /// real home can't shadow a built-in.
+    fn load_in(repo: &Path, name: &str, path: Option<&str>) -> ToolOutput {
+        let home = repo.join("empty-home");
+        fs::create_dir_all(&home).unwrap();
+        let skill = discover(repo, Some(&home), &[])
+            .into_iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("{name} is not discovered"));
+        render(&skill, path)
+    }
+
+    #[test]
+    fn a_path_under_this_skill_is_quoted() {
+        assert_eq!(
+            quote_folder(
+                "Run `python3 <this skill>/scripts/a.py --x` and read <this skill>/G.md.\n",
+                "C:/Users/A B/cfg"
+            ),
+            "Run `python3 \"C:/Users/A B/cfg/scripts/a.py\" --x` and read \"C:/Users/A B/cfg/G.md.\"\n"
+        );
+        assert_eq!(quote_folder("no folder here", "/x"), "no folder here");
+    }
+
+    #[test]
+    fn a_builtin_script_gets_a_real_folder_and_its_text_names_it() {
+        let root = scratch("builtin-folder");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let cfg = root.join("cfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let dir = cfg.join("builtin-skills").join("follow-through");
+        let script = dir.join("scripts").join("closeout.py");
+        let shipped = include_str!("../assets/skills/follow-through/scripts/closeout.py");
+
+        let text = builtin_text("follow-through").unwrap();
+        assert!(
+            text.contains(&format!(
+                "`python3 \"{}/scripts/closeout.py\"`",
+                slashed(&dir)
+            )),
+            "{text}"
+        );
+        assert!(!text.contains("<this skill>"), "{text}");
+        assert_eq!(fs::read_to_string(&script).unwrap(), shipped);
+
+        // A stale copy is put back; the skill tool names the folder.
+        fs::write(&script, "old").unwrap();
+        let loaded = load_in(&root, "follow-through", None);
+        assert!(!loaded.failed, "{}", loaded.text);
+        assert!(
+            loaded.text.contains(&format!(
+                "\n- scripts/closeout.py\nFolder on disk: {}\n",
+                slashed(&dir)
+            )),
+            "{}",
+            loaded.text
+        );
+        assert_eq!(fs::read_to_string(&script).unwrap(), shipped);
+
+        // A skill that runs nothing from its folder writes nothing.
+        let elevate = builtin_text("elevate").unwrap();
+        assert_eq!(elevate, builtin_body("elevate").unwrap());
+        assert!(!cfg.join("builtin-skills").join("elevate").exists());
+        let loaded = load_in(&root, "elevate", None);
+        assert!(!loaded.text.contains("Folder on disk"), "{}", loaded.text);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn builtins_are_discovered_and_loadable_via_skill_tool() {
         let root = scratch("builtins");
@@ -1122,6 +1387,8 @@ mod tests {
         let home = root.join("empty-home");
         fs::create_dir_all(repo.join(".git")).unwrap();
         fs::create_dir_all(&home).unwrap();
+        // follow-through writes its script under the config dir when it loads.
+        let _guard = crate::perm::ConfigGuard::set(root.join("cfg"));
         let skills = discover(&repo, Some(&home), &[]);
         for name in [
             "qa-walkthrough",
