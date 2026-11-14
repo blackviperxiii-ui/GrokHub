@@ -103,6 +103,12 @@ function tab(name: string) {
   return within(screen.getByRole("navigation", { name: "Views" })).getByRole("button", { name });
 }
 
+/** Opens a page that is not on the rail, through More. */
+async function openPage(name: string) {
+  await userEvent.click(tab("More"));
+  await userEvent.click(await within(screen.getByRole("dialog", { name: "More pages" })).findByRole("option", { name }));
+}
+
 describe("App pages", () => {
   beforeEach(() => {
     api.chatHandlers.length = 0;
@@ -169,7 +175,7 @@ describe("App pages", () => {
     expect(within(nav).getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
     // The way out names the screen it goes back to.
     await userEvent.click(screen.getByRole("button", { name: "Back to Chat" }));
-    expect(tab("Chat")).toHaveAttribute("aria-pressed", "true");
+    expect(tab("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("a reply that streams in while Settings shows is in the chat log", async () => {
@@ -200,13 +206,13 @@ describe("App pages", () => {
     };
     api.getMemory.mockResolvedValue(notes);
     render(<App />);
-    await userEvent.click(tab("Personal"));
+    await openPage("Personal");
     const project = await screen.findByLabelText("Project notes");
     await userEvent.type(project, "half typed");
 
     api.getMemory.mockResolvedValue({ ...notes, global: "I like long answers\n" });
     await userEvent.click(tab("Chat"));
-    await userEvent.click(tab("Personal"));
+    await openPage("Personal");
 
     await waitFor(() => expect(screen.getByLabelText("Global notes")).toHaveValue("I like long answers\n"));
     expect(screen.getByLabelText("Project notes")).toHaveValue("the build needs node 22\nhalf typed");

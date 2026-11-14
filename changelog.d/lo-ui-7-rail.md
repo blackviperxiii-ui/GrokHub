@@ -1,0 +1,4 @@
+- Loadout UI shell: a left rail replaces the three-row views bar. Home, Chat, Code, Pulse and Library sit on the rail, Settings sits at its foot, and More opens the rest of the pages in a page-only search list. A page opened from More, a tile or a notice gets its own rail slot while it is open. Arrow keys, Home and End move along the rail.
+- Loadout UI shell: the top bar shows two pills, the default personality and how many calls left the computer this week. Each opens its Settings section.
+- Loadout UI shell: Chat gets a side column. From 900px wide it holds the Nyx dock; from 1280px it also shows Objectives, the PC card and the newest Pulse posts, refreshed every 30 seconds while Chat is open.
+- Updates & Drivers is now in the command palette and the More list.

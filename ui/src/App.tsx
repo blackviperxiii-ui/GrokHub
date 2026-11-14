@@ -47,7 +47,7 @@ import { Chat, newConversationId, type Prefill, type QueueAct } from "./Chat";
 import { useChipRow } from "./Chips";
 import { RecordIndicator } from "./RecordIndicator";
 import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
-import { NO_SOURCES, Palette, VIEW_LABELS, hasPage, views, type PaletteAction, type View } from "./Palette";
+import { NO_SOURCES, Palette, VIEW_LABELS, hasPage, moreViews, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
 import { Shortcuts } from "./Shortcuts";
 import type { Section } from "./sections";
@@ -56,7 +56,9 @@ import { useHidingBar } from "./tabBar";
 import { applyTheme } from "./theme";
 import { inShell } from "./transport";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
-import { TabIcon } from "./TabIcon";
+import { Rail } from "./Rail";
+import { ChatSide } from "./ChatSide";
+import { StatusPills } from "./StatusPills";
 import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
 import { AutoNote, FirstRun, useAutoSetup } from "./AutoSetup";
 import { OnboardStage } from "./GetToKnowYou";
@@ -176,9 +178,10 @@ export function App() {
   // A browser is the web app from its first render: it must not run a
   // desktop-only step (the last chat, say) while its capabilities load.
   const [caps, setCaps] = useState<Capabilities>(() => (inShell() ? CORE_ONLY : WEB));
-  const [palette, setPalette] = useState(false);
+  // The palette: everything (Ctrl+K, Command), or the rail's More, pages only.
+  const [palette, setPalette] = useState<false | "all" | "more">(false);
   const [sheet, setSheet] = useState(false);
-  const paletteChips = useChipRow({ surface: "palette", active: palette });
+  const paletteChips = useChipRow({ surface: "palette", active: palette === "all" });
   const [signedOut, setSignedOut] = useState(false);
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notices, setNotices] = useState<Notices>(NO_NOTICES);
@@ -227,7 +230,7 @@ export function App() {
   // A screen recording or an audio check is running: the bar holding its
   // clock and Stop stays on screen in a narrow window too.
   const [recLive, setRecLive] = useState(false);
-  const barAway = useHidingBar(palette || (canHalt && recLive));
+  const barAway = useHidingBar(palette !== false || (canHalt && recLive));
   // Closing Settings goes back to the screen that was open before it, and its
   // Back button names that screen.
   const [before, setBefore] = useState<View>("chat");
@@ -320,7 +323,7 @@ export function App() {
   // The palette's Sign in row follows the key and the Grok sign-in, which
   // Settings may have added.
   useEffect(() => {
-    if (palette) getSettings().then((s) => setSignedOut(!s.hasApiKey && !s.signedIn), () => {});
+    if (palette === "all") getSettings().then((s) => setSignedOut(!s.hasApiKey && !s.signedIn), () => {});
   }, [palette]);
   // The Activity Dock follows every chat turn, whichever view is open.
   useEffect(() => {
@@ -471,7 +474,7 @@ export function App() {
       const key = event.key.toLowerCase();
       if (key === "k") {
         event.preventDefault();
-        setPalette((open) => !open);
+        setPalette((open) => (open === "all" ? false : "all"));
       } else if (key === "n" || key === "," || key === "/") {
         event.preventDefault();
         setPalette(false);
@@ -574,31 +577,12 @@ export function App() {
           <img src={LOGO_MARK_URL} alt="" width={22} height={22} />
           <span>{PRODUCT_NAME}</span>
         </div>
-        <nav className="tabs" aria-label="Views">
-          {tabMenu && (
-            <ChatTabMenu at={tabMenu} onClear={() => setAskClear(true)} onClose={() => setTabMenu(null)} />
-          )}
-          {views(caps).map((name) => (
-            <button
-              key={name}
-              type="button"
-              aria-pressed={view === name}
-              title={VIEW_LABELS[name]}
-              onClick={() => setView(name)}
-              onContextMenu={
-                name === "chat" && !caps.remote
-                  ? (event) => {
-                      event.preventDefault();
-                      setTabMenu({ x: event.clientX, y: event.clientY });
-                    }
-                  : undefined
-              }
-            >
-              <TabIcon view={name} />
-              <span className="tab-label">{VIEW_LABELS[name]}</span>
-            </button>
-          ))}
-        </nav>
+        <div className="topbar-fill" />
+        <StatusPills
+          remote={Boolean(caps.remote)}
+          refresh={`${view === "settings"}:${busy}`}
+          onSettings={(section) => run({ kind: "settings", section })}
+        />
         {canHalt && haltShown(desktopOn, busy) && <HaltButton onHalt={halt} />}
         <ActivityDock
           items={[
@@ -643,237 +627,261 @@ export function App() {
           type="button"
           className="palette-open"
           title="Command palette (Ctrl+K)"
-          onClick={() => setPalette(true)}
+          onClick={() => setPalette("all")}
         >
           Command
         </button>
       </header>
-      {haltNote && <HaltNote text={haltNote} onDismiss={() => setHaltNote(undefined)} />}
-      {caps.autoSetup && auto.reply?.firstRun && <FirstRun reply={auto.reply} act={auto.act} />}
-      {caps.autoSetup && <OnboardStage after={auto.reply !== null && !auto.reply.firstRun} />}
-      {caps.autoSetup && auto.note && !auto.reply?.firstRun && (
-        <AutoNote note={auto.note} act={auto.act} onClose={auto.closeNote} />
-      )}
-      {palette && (
-        <Palette
+      <div className="app-body">
+        <Rail
           caps={caps}
-          sources={{
-            ...NO_SOURCES,
-            runners,
-            signedOut,
-            slash: COMPOSER_SLASH,
-            chips: paletteChips.chips,
-            onChip: paletteChips.picked,
-          }}
-          onPick={run}
-          onClose={() => setPalette(false)}
+          view={view}
+          moreOpen={palette === "more"}
+          onOpen={setView}
+          onMore={() => setPalette((open) => (open === "more" ? false : "more"))}
+          onChatMenu={setTabMenu}
         />
-      )}
-      {sheet && <Shortcuts keys={shellKeys(caps, runners)} onClose={() => setSheet(false)} />}
-      {/* Chat and Automations stay mounted so a reply or a Run now in flight
-          is not lost when another tab opens. */}
-      {askClear && (
-        <ClearChatDialog
-          onConfirm={() => {
-            setAskClear(false);
-            setView("chat");
-            setClear((now) => ({ n: (now?.n ?? 0) + 1 }));
-          }}
-          onClose={() => setAskClear(false)}
-        />
-      )}
-      <div hidden={view !== "chat"}>
-        <Chat
-          onOpenSettings={() => setView("settings")}
-          onSignIn={() => run({ kind: "settings", section: "account" })}
-          onOpenView={openView}
-          onOpenSection={(section) => run({ kind: "settings", section })}
-          onOpenPalette={() => setPalette(true)}
-          onQueue={onQueue}
-          queueAct={queueAct}
-          prefill={prefill}
-          open={open}
-          deleted={deleted}
-          clear={clear}
-          onConversation={setChatSession}
-          active={view === "chat"}
-          remote={Boolean(caps.remote)}
-          grokSignIn={Boolean(caps.grokSignIn)}
-        />
-      </div>
-      <div hidden={view !== "automations"}>
-        <Automations
-          active={view === "automations"}
-          onStarted={(id, name) =>
-            setActivity((now) => ({
-              ...pruneActivity(now, Date.now()),
-              [`run:${id}`]: routineStarted(id, name, Date.now()),
-            }))
-          }
-          onFinished={(run) => {
-            notifyRun(run);
-            setActivity((now) => {
-              const key = `run:${run.id}`;
-              const item = now[key] ?? routineStarted(run.id, run.name, Date.now());
-              return {
-                ...pruneActivity(now, Date.now()),
-                [key]: routineFinished(item, run.ok, run.text, Date.now()),
-              };
-            });
-          }}
-        />
-      </div>
-      {/* Chat and Automations are not in <Activity>: hidden there, their
-          listeners would stop and a reply landing meanwhile would be lost. */}
-      {opened.has("home") && (
-        <Page shown={view === "home"}>
-          <Home
-            conversationId={openChat}
-            remote={Boolean(caps.remote)}
-            onOpen={openView}
-            onOpenChat={openSaved}
-            onAsk={ask}
-            onSettings={(section) => run({ kind: "settings", section })}
-          />
-        </Page>
-      )}
-      {opened.has("objectives") && (
-        <Page shown={view === "objectives"}>
-          <Objectives
-            conversationId={openChat}
-            remote={Boolean(caps.remote)}
-            onOpenChat={openSaved}
-            onHome={() => setView("home")}
-            onAsk={ask}
-          />
-        </Page>
-      )}
-      {opened.has("pulse") && caps.pulse && (
-        <Page shown={view === "pulse"}>
-          <Pulse onRun={ask} onOpenInterests={() => run({ kind: "settings", section: "pulse" })} />
-        </Page>
-      )}
-      {opened.has("workboard") && (
-        <Page shown={view === "workboard"}>
-          <Workboard
-            onWork={ask}
-            resumable={!caps.remote}
-            openCard={openCard}
-            onCards={setCardChats}
-            onSwept={noteSweep}
-            onResume={({ prompt, conversationId }) => {
-              // The resume block goes once, as the resume turn's input.
-              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true, conversationId }));
-              setView("chat");
-            }}
-          />
-        </Page>
-      )}
-      {/* Code hides its own pages: its agent window stays mounted like Chat. */}
-      {opened.has("code") && !caps.remote && (
-        <PageBoundary shown={view === "code"}>
-          <Suspense fallback={null}>
-            <Code
-              shown={view === "code"}
+        <main className="views">
+          {haltNote && <HaltNote text={haltNote} onDismiss={() => setHaltNote(undefined)} />}
+          {caps.autoSetup && auto.reply?.firstRun && <FirstRun reply={auto.reply} act={auto.act} />}
+          {caps.autoSetup && <OnboardStage after={auto.reply !== null && !auto.reply.firstRun} />}
+          {caps.autoSetup && auto.note && !auto.reply?.firstRun && (
+            <AutoNote note={auto.note} act={auto.act} onClose={auto.closeNote} />
+          )}
+          {palette === "all" && (
+            <Palette
+              caps={caps}
+              sources={{
+                ...NO_SOURCES,
+                runners,
+                signedOut,
+                slash: COMPOSER_SLASH,
+                chips: paletteChips.chips,
+                onChip: paletteChips.picked,
+              }}
+              onPick={run}
+              onClose={() => setPalette(false)}
+            />
+          )}
+          {palette === "more" && (
+            <Palette caps={caps} only={moreViews(caps)} onPick={run} onClose={() => setPalette(false)} />
+          )}
+          {tabMenu && <ChatTabMenu at={tabMenu} onClear={() => setAskClear(true)} onClose={() => setTabMenu(null)} />}
+          {sheet && <Shortcuts keys={shellKeys(caps, runners)} onClose={() => setSheet(false)} />}
+          {/* Chat and Automations stay mounted so a reply or a Run now in flight
+              is not lost when another tab opens. */}
+          {askClear && (
+            <ClearChatDialog
+              onConfirm={() => {
+                setAskClear(false);
+                setView("chat");
+                setClear((now) => ({ n: (now?.n ?? 0) + 1 }));
+              }}
+              onClose={() => setAskClear(false)}
+            />
+          )}
+          <div hidden={view !== "chat"}>
+            <Chat
               onOpenSettings={() => setView("settings")}
               onSignIn={() => run({ kind: "settings", section: "account" })}
               onOpenView={openView}
-              onOpenPalette={() => setPalette(true)}
-              grokSignIn={Boolean(caps.grokSignIn)}
-              chatSession={chatSession}
-              onShowChat={() => setView("chat")}
-              onSession={onAgentSession}
+              onOpenSection={(section) => run({ kind: "settings", section })}
+              onOpenPalette={() => setPalette("all")}
+              onQueue={onQueue}
+              queueAct={queueAct}
+              prefill={prefill}
+              open={open}
               deleted={deleted}
+              clear={clear}
+              onConversation={setChatSession}
+              active={view === "chat"}
+              remote={Boolean(caps.remote)}
+              grokSignIn={Boolean(caps.grokSignIn)}
+              side={
+                <ChatSide
+                  active={view === "chat"}
+                  conversationId={chatSession}
+                  pulse={Boolean(caps.pulse)}
+                  onOpen={openView}
+                />
+              }
             />
-          </Suspense>
-        </PageBoundary>
-      )}
-      {opened.has("command") && !caps.remote && (
-        <Page shown={view === "command"}>
-          <CommandBox
-            onRun={askNow}
-          />
-        </Page>
-      )}
-      {opened.has("journal") && !caps.remote && (
-        <Page shown={view === "journal"}>
-          <Journal
-            onMission={({ prompt, conversationId }) => {
-              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
-              setView("chat");
-            }}
-          />
-        </Page>
-      )}
-      {opened.has("history") && !caps.remote && (
-        <Page shown={view === "history"}>
-          <History
-            onOpen={openSaved}
-            onDeleted={(id) =>
-              setDeleted((now) => ({ id, ids: [...(now?.ids ?? []), id], n: (now?.n ?? 0) + 1 }))
-            }
-          />
-        </Page>
-      )}
-      {opened.has("memory") && (
-        <Page shown={view === "memory"}>
-          <Memory />
-        </Page>
-      )}
-      {opened.has("skills") && (
-        <Page shown={view === "skills"}>
-          <Skills onUse={ask} onOpenConnectors={() => setView("connectors")} remote={Boolean(caps.remote)} />
-        </Page>
-      )}
-      {opened.has("connectors") && (
-        <Page shown={view === "connectors"}>
-          <Connectors remote={Boolean(caps.remote)} />
-        </Page>
-      )}
-      {opened.has("updates") && !caps.remote && (
-        <Page shown={view === "updates"}>
-          <UpdatesDrivers />
-        </Page>
-      )}
-      {opened.has("library") && caps.library && (
-        <Page shown={view === "library"}>
-          <Library />
-        </Page>
-      )}
-      {opened.has("mods") && caps.mods && !caps.remote && (
-        <Page shown={view === "mods"}>
-          <Mods />
-        </Page>
-      )}
-      {opened.has("settings") && (
-        <Page shown={view === "settings"}>
-          <Settings
-            caps={caps}
-            goTo={goTo}
-            onClose={() => setView(before)}
-            backTo={VIEW_LABELS[before]}
-          />
-        </Page>
-      )}
-      {opened.has("devices") && caps.webAccess && !caps.remote && (
-        <Page shown={view === "devices"}>
-          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} onRun={askNow} />
-        </Page>
-      )}
-      {opened.has("imagine") && (
-        <Page shown={view === "imagine"}>
-          <Imagine />
-        </Page>
-      )}
-      {opened.has("agents") && (
-        <Page shown={view === "agents"}>
-          <Agents
-            conversationId={openChat}
-            onOpenChat={() => setView("chat")}
-            onRun={(prompt, threadId) => runQueued(prompt, threadId)}
-          />
-        </Page>
-      )}
+          </div>
+          <div hidden={view !== "automations"}>
+            <Automations
+              active={view === "automations"}
+              onStarted={(id, name) =>
+                setActivity((now) => ({
+                  ...pruneActivity(now, Date.now()),
+                  [`run:${id}`]: routineStarted(id, name, Date.now()),
+                }))
+              }
+              onFinished={(run) => {
+                notifyRun(run);
+                setActivity((now) => {
+                  const key = `run:${run.id}`;
+                  const item = now[key] ?? routineStarted(run.id, run.name, Date.now());
+                  return {
+                    ...pruneActivity(now, Date.now()),
+                    [key]: routineFinished(item, run.ok, run.text, Date.now()),
+                  };
+                });
+              }}
+            />
+          </div>
+          {/* Chat and Automations are not in <Activity>: hidden there, their
+              listeners would stop and a reply landing meanwhile would be lost. */}
+          {opened.has("home") && (
+            <Page shown={view === "home"}>
+              <Home
+                conversationId={openChat}
+                remote={Boolean(caps.remote)}
+                onOpen={openView}
+                onOpenChat={openSaved}
+                onAsk={ask}
+                onSettings={(section) => run({ kind: "settings", section })}
+              />
+            </Page>
+          )}
+          {opened.has("objectives") && (
+            <Page shown={view === "objectives"}>
+              <Objectives
+                conversationId={openChat}
+                remote={Boolean(caps.remote)}
+                onOpenChat={openSaved}
+                onHome={() => setView("home")}
+                onAsk={ask}
+              />
+            </Page>
+          )}
+          {opened.has("pulse") && caps.pulse && (
+            <Page shown={view === "pulse"}>
+              <Pulse onRun={ask} onOpenInterests={() => run({ kind: "settings", section: "pulse" })} />
+            </Page>
+          )}
+          {opened.has("workboard") && (
+            <Page shown={view === "workboard"}>
+              <Workboard
+                onWork={ask}
+                resumable={!caps.remote}
+                openCard={openCard}
+                onCards={setCardChats}
+                onSwept={noteSweep}
+                onResume={({ prompt, conversationId }) => {
+                  // The resume block goes once, as the resume turn's input.
+                  setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true, conversationId }));
+                  setView("chat");
+                }}
+              />
+            </Page>
+          )}
+          {/* Code hides its own pages: its agent window stays mounted like Chat. */}
+          {opened.has("code") && !caps.remote && (
+            <PageBoundary shown={view === "code"}>
+              <Suspense fallback={null}>
+                <Code
+                  shown={view === "code"}
+                  onOpenSettings={() => setView("settings")}
+                  onSignIn={() => run({ kind: "settings", section: "account" })}
+                  onOpenView={openView}
+                  onOpenPalette={() => setPalette("all")}
+                  grokSignIn={Boolean(caps.grokSignIn)}
+                  chatSession={chatSession}
+                  onShowChat={() => setView("chat")}
+                  onSession={onAgentSession}
+                  deleted={deleted}
+                />
+              </Suspense>
+            </PageBoundary>
+          )}
+          {opened.has("command") && !caps.remote && (
+            <Page shown={view === "command"}>
+              <CommandBox
+                onRun={askNow}
+              />
+            </Page>
+          )}
+          {opened.has("journal") && !caps.remote && (
+            <Page shown={view === "journal"}>
+              <Journal
+                onMission={({ prompt, conversationId }) => {
+                  setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
+                  setView("chat");
+                }}
+              />
+            </Page>
+          )}
+          {opened.has("history") && !caps.remote && (
+            <Page shown={view === "history"}>
+              <History
+                onOpen={openSaved}
+                onDeleted={(id) =>
+                  setDeleted((now) => ({ id, ids: [...(now?.ids ?? []), id], n: (now?.n ?? 0) + 1 }))
+                }
+              />
+            </Page>
+          )}
+          {opened.has("memory") && (
+            <Page shown={view === "memory"}>
+              <Memory />
+            </Page>
+          )}
+          {opened.has("skills") && (
+            <Page shown={view === "skills"}>
+              <Skills onUse={ask} onOpenConnectors={() => setView("connectors")} remote={Boolean(caps.remote)} />
+            </Page>
+          )}
+          {opened.has("connectors") && (
+            <Page shown={view === "connectors"}>
+              <Connectors remote={Boolean(caps.remote)} />
+            </Page>
+          )}
+          {opened.has("updates") && !caps.remote && (
+            <Page shown={view === "updates"}>
+              <UpdatesDrivers />
+            </Page>
+          )}
+          {opened.has("library") && caps.library && (
+            <Page shown={view === "library"}>
+              <Library />
+            </Page>
+          )}
+          {opened.has("mods") && caps.mods && !caps.remote && (
+            <Page shown={view === "mods"}>
+              <Mods />
+            </Page>
+          )}
+          {opened.has("settings") && (
+            <Page shown={view === "settings"}>
+              <Settings
+                caps={caps}
+                goTo={goTo}
+                onClose={() => setView(before)}
+                backTo={VIEW_LABELS[before]}
+              />
+            </Page>
+          )}
+          {opened.has("devices") && caps.webAccess && !caps.remote && (
+            <Page shown={view === "devices"}>
+              <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} onRun={askNow} />
+            </Page>
+          )}
+          {opened.has("imagine") && (
+            <Page shown={view === "imagine"}>
+              <Imagine />
+            </Page>
+          )}
+          {opened.has("agents") && (
+            <Page shown={view === "agents"}>
+              <Agents
+                conversationId={openChat}
+                onOpenChat={() => setView("chat")}
+                onRun={(prompt, threadId) => runQueued(prompt, threadId)}
+              />
+            </Page>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

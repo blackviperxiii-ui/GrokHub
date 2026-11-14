@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Capabilities, QuickChip } from "./api";
-import { hasPage, NO_SOURCES, Palette, paletteRows, type PaletteExtras, type PaletteSources } from "./Palette";
+import { hasPage, moreViews, NO_SOURCES, Palette, paletteRows, railViews, type PaletteExtras, type PaletteSources } from "./Palette";
 import { answersTo, PALETTE_SYNONYMS, shellKeys, type ChatHit, type CommandRunners } from "./paletteCommands";
 
 vi.mock("./api", () => ({}));
@@ -52,6 +52,7 @@ describe("paletteRows", () => {
       "Workboard",
       "Devices",
       "Library",
+      "Updates & Drivers",
       "Settings",
       "Settings: General",
       "Settings: Account",
@@ -85,6 +86,7 @@ describe("paletteRows", () => {
       "Skills",
       "Connectors",
       "Workboard",
+      "Updates & Drivers",
       "Settings",
       "Settings: General",
       "Settings: Account",
@@ -139,7 +141,7 @@ describe("paletteRows", () => {
   });
 
   it("hides Halt without desktop control, and Halt and Sign in on the web", () => {
-    expect(withExtras(PHONE, "").slice(13, 16)).toEqual(["New chat", "Sign in", "Shortcuts"]);
+    expect(withExtras(PHONE, "").slice(14, 17)).toEqual(["New chat", "Sign in", "Shortcuts"]);
     expect(withExtras(WEB, "")).toEqual([
       "Home",
       "Objectives",
@@ -202,7 +204,7 @@ describe("paletteRows", () => {
   it("lists recent chats, five at most, before the Settings sections", () => {
     const chats = Array.from({ length: 7 }, (_, i) => ({ id: `c${i}`, title: `Trip ${i}` }));
     const rows = paletteRows(PHONE, "", { ...EXTRAS, chats }).map((r) => r.label);
-    expect(rows.slice(16, 22)).toEqual([
+    expect(rows.slice(17, 23)).toEqual([
       "Chat: Trip 0",
       "Chat: Trip 1",
       "Chat: Trip 2",
@@ -229,6 +231,68 @@ describe("hasPage", () => {
     expect(hasPage(WEB, "updates")).toBe(false);
     expect(hasPage(WEB, "workboard")).toBe(true);
     expect(hasPage(WEB, "history")).toBe(false);
+  });
+});
+
+describe("the rail and its More list", () => {
+  it("puts six pages on the rail and the rest under More, by platform", () => {
+    expect(railViews(DESKTOP)).toEqual(["home", "chat", "pulse", "library", "settings"]);
+    expect(railViews({ ...DESKTOP, code: true })).toEqual(["home", "chat", "code", "pulse", "library", "settings"]);
+    expect(railViews(WEB)).toEqual(["home", "chat", "settings"]);
+    expect(moreViews(DESKTOP)).toEqual([
+      "objectives",
+      "history",
+      "imagine",
+      "journal",
+      "automations",
+      "agents",
+      "memory",
+      "skills",
+      "connectors",
+      "workboard",
+      "devices",
+      "updates",
+    ]);
+    expect(moreViews(WEB)).toEqual(["objectives", "imagine", "automations", "agents", "memory", "skills", "connectors", "workboard"]);
+  });
+
+  it("lists only the given pages: no suggestions, commands, chats, sections or Ask", () => {
+    const extras = { ...EXTRAS, chips: [PLAN], chats: [{ id: "c1", title: "Journal trip" }], only: moreViews(DESKTOP) };
+    expect(withExtras(DESKTOP, "", extras)).toEqual([
+      "Objectives",
+      "History",
+      "Imagine",
+      "Journal",
+      "Automations",
+      "Agents",
+      "Personal",
+      "Skills",
+      "Connectors",
+      "Workboard",
+      "Devices",
+      "Updates & Drivers",
+    ]);
+    expect(withExtras(DESKTOP, "jour", extras)).toEqual(["Journal"]);
+    expect(withExtras(DESKTOP, "zzz", extras)).toEqual([]);
+  });
+
+  it("opens as More pages, and an empty match says so without picking", async () => {
+    const onPick = vi.fn();
+    const onClose = vi.fn();
+    render(<Palette caps={DESKTOP} only={moreViews(DESKTOP)} onPick={onPick} onClose={onClose} />);
+    expect(screen.getByRole("dialog", { name: "More pages" })).toBeInTheDocument();
+    const search = screen.getByRole("combobox", { name: "Search pages" });
+    expect(search).toHaveAttribute("aria-activedescendant", "palette-row-0");
+    await userEvent.type(search, "zzz");
+    expect(screen.queryAllByRole("option")).toEqual([]);
+    expect(screen.getByText("No page matches “zzz”.")).toBeInTheDocument();
+    expect(search).not.toHaveAttribute("aria-activedescendant");
+    await userEvent.keyboard("{ArrowDown}{ArrowUp}{Enter}");
+    expect(onPick).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    await userEvent.clear(search);
+    await userEvent.type(search, "upd{Enter}");
+    expect(onPick).toHaveBeenCalledExactlyOnceWith({ kind: "view", view: "updates" });
   });
 });
 
@@ -398,8 +462,8 @@ describe("Palette", () => {
     it("wrapping up to the last row lands at the bottom, instantly with reduced motion", async () => {
       const { scrollTo } = layout(true);
       await userEvent.keyboard("{ArrowUp}");
-      // Row 23, the last, ends at 956.
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 856, behavior: "auto" });
+      // Row 24, the last, ends at 996.
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 896, behavior: "auto" });
     });
 
     it("a hover picks without scrolling", async () => {

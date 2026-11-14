@@ -396,34 +396,40 @@ async function clickCentered(s, css) {
   await wd("POST", `${s}/element/${id}/click`, {});
 }
 
-/** A top tab by its label, so adding a tab moves no test. */
-// Waits for the tab, since Pulse shows only once the capability report loads.
+/** A view by its label, so adding a view moves no test. The rail holds the
+ * main views; any other opens from the rail's More list, after which the rail
+ * gives it a slot of its own, marked as the current page. */
+// Waits for the item, since Pulse shows only once the capability report loads.
 // Right after a turn ends the window can still be moving (the reply settles,
 // a card leaves), and WebKitGTK then refuses the click as "not interactable".
-// So click only once the tab sits still, and click again until it is pressed.
+// So click only once the item sits still, and click again until it is current.
+const RAIL = "//nav[@aria-label='Views']";
 async function tab(s, label) {
-  const button = `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}']`;
+  const button = `${RAIL}//button[normalize-space()='${label}']`;
+  const option = `//div[@aria-label='More pages']//li[@role='option'][normalize-space()='${label}']`;
+  const one = async (xpath) => (await wd("POST", `${s}/elements`, { using: "xpath", value: xpath }))[0];
   await waitFor(`the ${label} view`, async () => {
-    const [on] = await wd("POST", `${s}/elements`, {
-      using: "xpath",
-      value: `${button}[@aria-pressed='true']`,
-    });
-    if (on) return true;
-    const [el] = await wd("POST", `${s}/elements`, { using: "xpath", value: button });
-    if (el && (await settled(s, el[ELEMENT]))) {
-      await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+    if (await one(`${button}[@aria-current='page']`)) return true;
+    const el = (await one(button)) ?? (await one(option));
+    if (el) {
+      if (await settled(s, el[ELEMENT])) await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+      return null;
+    }
+    const more = await one(`${RAIL}//button[@aria-haspopup='dialog']`);
+    if (more && !(await one("//div[@aria-label='More pages']")) && (await settled(s, more[ELEMENT]))) {
+      await wd("POST", `${s}/element/${more[ELEMENT]}/click`, {});
     }
     return null;
   });
 }
 
-/** Waits until the top tab `label` is the one pressed. A page stays mounted
- * once opened, so finding its content proves nothing about what shows. */
+/** Waits until the view `label` is the rail's current page. A page stays
+ * mounted once opened, so finding its content proves nothing about what shows. */
 async function onView(s, label) {
   await waitFor(`the ${label} view`, () =>
     wd("POST", `${s}/element`, {
       using: "xpath",
-      value: `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}'][@aria-pressed='true']`,
+      value: `${RAIL}//button[normalize-space()='${label}'][@aria-current='page']`,
     }),
   );
 }
@@ -1845,10 +1851,10 @@ async function codeShip(s, config, workspace) {
  * and mouseup, no click, nothing sent). Checked once the capability report
  * has added every tab (Pulse is the last to arrive) and the dock shows. */
 async function noSidewaysScroll(s, when) {
-  await waitFor("the Pulse tab", () =>
+  await waitFor("the Pulse rail item", () =>
     wd("POST", `${s}/element`, {
       using: "xpath",
-      value: "//nav[contains(@class,'tabs')]/button[normalize-space()='Pulse']",
+      value: `${RAIL}//button[normalize-space()='Pulse']`,
     }),
   );
   const [wide, fits] = await wd("POST", `${s}/execute/sync`, {
