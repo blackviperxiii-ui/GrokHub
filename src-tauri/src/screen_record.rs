@@ -12,6 +12,7 @@ use grokhub_agent::CancelToken;
 use grokhub_core::screen_record as sr;
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -135,7 +136,8 @@ struct Diag {
 /// Names each report's [`Diag`].
 static NEXT_DIAG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-/// The newest recording with stills: what `/record --skill` learns from.
+/// A chat's newest recording whose stills went to Grok: what `/record
+/// --skill` in that chat learns from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recorded {
     pub dir: PathBuf,
@@ -160,23 +162,26 @@ pub(crate) fn end_call(id: u64) {
     hub().diag.retain(|d| d.id != id);
 }
 
-/// The newest recording that took stills, if any.
-pub(crate) fn last_recorded() -> Option<Recorded> {
-    hub().last.clone()
+/// The newest recording diagnosed for `chat`, the one its report offered
+/// to save. A halted or local-only recording never takes its place, so its
+/// stills are never sent by a later `/record --skill`.
+pub(crate) fn last_recorded(chat: &str) -> Option<Recorded> {
+    hub().offered.get(chat).cloned()
 }
 
 #[derive(Default)]
 struct Hub {
     rec: Option<Live>,
     diag: Vec<Diag>,
-    last: Option<Recorded>,
+    /// Keyed by chat.
+    offered: BTreeMap<String, Recorded>,
     events: Vec<Event>,
 }
 
 static HUB: Mutex<Hub> = Mutex::new(Hub {
     rec: None,
     diag: Vec::new(),
-    last: None,
+    offered: BTreeMap::new(),
     events: Vec::new(),
 });
 
@@ -563,11 +568,6 @@ fn report(
                 chat: String::new(),
             };
         }
-        h.last = Some(Recorded {
-            dir: done.dir.clone(),
-            note: note.to_string(),
-            secs: done.secs,
-        });
     }
     let stills = sr::sample_keyframes(done.frames.len(), sr::KEYFRAMES).len();
     let id = begin_call(&cancel, stills, "Looking at");
@@ -591,6 +591,14 @@ fn report(
     let _ = crate::pulse::add_post(config_dir, card);
     if !chat.is_empty() {
         let text = if found.sent {
+            hub().offered.insert(
+                chat.to_string(),
+                Recorded {
+                    dir: done.dir.clone(),
+                    note: note.to_string(),
+                    secs: done.secs,
+                },
+            );
             format!("{}\n\n{}", found.text, crate::screen_skill::OFFER)
         } else {
             found.text.clone()
@@ -1233,7 +1241,7 @@ mod tests {
         let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = scratch("skill-no").join("cfg");
         std::fs::write(cfg.join("app.json"), CONSENTED).unwrap();
-        hub().last = None;
+        hub().offered.clear();
         let no = |line: &str, chat: Option<&str>, remote: bool| {
             slash(line, &cfg, remote, chat, Reporter::local)
                 .unwrap()
@@ -1241,7 +1249,7 @@ mod tests {
         };
         assert_eq!(
             no("/record --skill", Some("chat-s"), false),
-            "No recording to learn from yet. Show the steps with /record first."
+            "No diagnosed recording in this chat to learn from. Show the steps with /record first."
         );
         assert_eq!(
             no("/record --skill", None, false),
@@ -1262,7 +1270,7 @@ mod tests {
         let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = scratch("skill-none").join("cfg");
         std::fs::write(cfg.join("app.json"), CONSENTED).unwrap();
-        record_one(&cfg, "", Reporter::local());
+        record_one(&cfg, "", says(REPLY).0);
         let (learn, delivered, asked) = says("The screen shows a desktop.");
         slash("/record --skill", &cfg, false, Some("chat-s"), || learn)
             .unwrap()
@@ -1275,6 +1283,99 @@ mod tests {
             "{text}"
         );
         assert!(asked.lock().unwrap().is_empty());
+        assert!(!cfg.join("skills").exists());
+    }
+
+    /// How many recordings in `cfg` have their first still.
+    fn with_stills(cfg: &Path) -> usize {
+        std::fs::read_dir(recordings(cfg)).map_or(0, |d| {
+            d.filter_map(Result::ok)
+                .filter(|e| e.path().join("frame-001.png").exists())
+                .count()
+        })
+    }
+
+    /// Learns in `chat` with a model that answers `steps`, and returns the
+    /// draft's question, or the chat's answer when no draft came.
+    fn learn_in(cfg: &Path, chat: &str, steps: &'static str) -> Result<String, String> {
+        let (learn, delivered, asked) = says(steps);
+        slash("/record --skill", cfg, false, Some(chat), || learn).unwrap()?;
+        wait_for("the draft or the answer", || {
+            !asked.lock().unwrap().is_empty() || !delivered.lock().unwrap().is_empty()
+        });
+        let asked = asked.lock().unwrap().clone();
+        match asked.first() {
+            Some((at, prompt, _)) => {
+                assert_eq!(at, chat);
+                Ok(prompt.clone())
+            }
+            None => Err(delivered.lock().unwrap()[0].1.clone()),
+        }
+    }
+
+    #[test]
+    fn save_as_skill_learns_from_the_chats_sent_recording_never_a_halted_or_local_one() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = scratch("skill-which").join("cfg");
+        std::fs::write(cfg.join("app.json"), CONSENTED).unwrap();
+        hub().offered.clear();
+        record_one(&cfg, "export the report", says(REPLY).0);
+        // A second recording in the same chat, halted while Grok looks.
+        let (reporter, _go, asked, _) = held_reporter();
+        start(
+            &cfg,
+            "rename the files",
+            "chat-s",
+            || None,
+            || real_png,
+            reporter,
+        )
+        .unwrap();
+        wait_for("the second still", || with_stills(&cfg) == 2);
+        assert!(stop());
+        wait_for("the call", || asked.load(Ordering::SeqCst) == 1);
+        halt();
+        let _ = events_now();
+        // And a third, which stays local: no sign-in.
+        start(
+            &cfg,
+            "clean the desktop",
+            "chat-s",
+            || None,
+            || real_png,
+            Reporter::local(),
+        )
+        .unwrap();
+        wait_for("the third still", || with_stills(&cfg) == 3);
+        assert!(stop());
+        let _ = events_now();
+        assert_eq!(
+            learn_in(&cfg, "chat-s", STEPS).unwrap(),
+            "Save these steps as the skill /export-the-report?\n\n1. Open the Reports menu.\n2. Click Export.\n3. Choose PDF.\n\nSteps that need your approval still ask every time it runs.",
+            "the sent recording, not the halted or the local one"
+        );
+        assert_eq!(
+            learn_in(&cfg, "chat-t", STEPS).unwrap_err(),
+            "No diagnosed recording in this chat to learn from. Show the steps with /record first."
+        );
+    }
+
+    #[test]
+    fn a_note_with_no_usable_name_takes_the_first_steps_name_or_says_why_it_cant() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = scratch("skill-name").join("cfg");
+        std::fs::write(cfg.join("app.json"), CONSENTED).unwrap();
+        record_one(&cfg, "导出报告", says(REPLY).0);
+        let prompt = learn_in(&cfg, "chat-s", STEPS).unwrap();
+        assert!(
+            prompt.starts_with("Save these steps as the skill /open-the-reports-menu?\n\n"),
+            "{prompt}"
+        );
+        let text = learn_in(&cfg, "chat-s", "1. 打开报告菜单。\n2. 点击导出。").unwrap_err();
+        assert!(
+            text.ends_with("\n\nFound the steps, but they can't be kept as a skill: a skill needs a name made of letters or digits and steps that are safe to replay. Nothing was saved."),
+            "{text}"
+        );
         assert!(!cfg.join("skills").exists());
     }
 

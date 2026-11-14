@@ -2340,6 +2340,7 @@ fn report_into_chat(
 ) -> screen_record::Reporter {
     let (app, asks) = (app.clone(), app.clone());
     let cwd = workspace_of(state, conversation_id);
+    let ask_cwd = cwd.clone();
     screen_record::Reporter {
         client: Box::new(|| {
             model_client()
@@ -2347,6 +2348,12 @@ fn report_into_chat(
         }),
         deliver: Box::new(move |chat, text| deliver_report(&app, &cwd, chat, text)),
         confirm: Box::new(move |chat, prompt, yes| {
+            // Kept in the chat too, so a closed or reloaded chat still has
+            // the draft and the line that saves it. The open chat shows the card.
+            let kept = screen_skill::kept_ask(prompt, yes);
+            if agent::save_report(chat, &ask_cwd.display().to_string(), &kept).is_err() {
+                return;
+            }
             let _ = asks.emit(
                 CHAT_EVENT,
                 serde_json::json!({

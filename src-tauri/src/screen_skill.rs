@@ -99,8 +99,12 @@ fn learn(config_dir: &Path, chat: &str, reporter: Reporter) -> Result<String, St
     if !crate::screen_record::consented(config_dir) {
         return Err("Screen recording is off. Record the steps with /record first.".into());
     }
-    let Some(rec) = crate::screen_record::last_recorded() else {
-        return Err("No recording to learn from yet. Show the steps with /record first.".into());
+    let chat = chat.trim().to_string();
+    let Some(rec) = crate::screen_record::last_recorded(&chat) else {
+        return Err(
+            "No diagnosed recording in this chat to learn from. Show the steps with /record first."
+                .into(),
+        );
     };
     let frames = crate::screen_report::frames_in(&rec.dir);
     if frames.is_empty() {
@@ -116,7 +120,6 @@ fn learn(config_dir: &Path, chat: &str, reporter: Reporter) -> Result<String, St
     let stills = sr::sample_keyframes(frames.len(), sr::KEYFRAMES).len();
     let cancel = CancelToken::new();
     let call = crate::screen_record::begin_call(&cancel, stills, "Reading the steps from");
-    let chat = chat.trim().to_string();
     let config_dir = config_dir.to_path_buf();
     std::thread::spawn(move || {
         let _config = grokhub_agent::perm::ConfigGuard::set(&config_dir);
@@ -128,16 +131,17 @@ fn learn(config_dir: &Path, chat: &str, reporter: Reporter) -> Result<String, St
             &cancel,
         );
         let title = sr::recording_title(rec.secs, &rec.note);
-        match steps.map(|steps| grokhub_core::watch_learn::skill_draft(&rec.note, &steps)) {
-            Ok(Some(draft)) => {
+        match steps.map(|steps| (steps.is_empty(), draft_of(&rec.note, &steps))) {
+            Ok((_, Some(draft))) => {
                 let prompt = draft_prompt(&draft);
                 let n = keep(draft);
                 (reporter.confirm)(&chat, &prompt, &format!("/record {SAVE} {n}"));
             }
-            Ok(None) => (reporter.deliver)(
+            Ok((true, None)) => (reporter.deliver)(
                 &chat,
                 &format!("{title}\n\nNo clear steps found in the recording. Nothing was saved."),
             ),
+            Ok((false, None)) => (reporter.deliver)(&chat, &format!("{title}\n\n{UNSAVABLE}")),
             Err(why) => (reporter.deliver)(
                 &chat,
                 &format!("{title}\n\nCould not turn this recording into a skill: {why}. Nothing was saved."),
@@ -150,6 +154,21 @@ fn learn(config_dir: &Path, chat: &str, reporter: Reporter) -> Result<String, St
         1 => "Reading the steps from 1 still…".into(),
         n => format!("Reading the steps from {n} stills…"),
     })
+}
+
+const UNSAVABLE: &str = "Found the steps, but they can't be kept as a skill: a skill needs a name made of letters or digits and steps that are safe to replay. Nothing was saved.";
+
+/// The draft for `steps`, named from the note, or from the first step when
+/// the note gives no usable name (say, a note in another script).
+fn draft_of(note: &str, steps: &[grokhub_core::watch_learn::WatchedStep]) -> Option<SkillMd> {
+    use grokhub_core::watch_learn::skill_draft;
+    skill_draft(note, steps).or_else(|| skill_draft("", steps))
+}
+
+/// What the chat keeps of a draft's question, so a chat that was closed
+/// when it came, or reloaded since, still has it and the line that saves it.
+pub fn kept_ask(prompt: &str, yes: &str) -> String {
+    format!("{prompt}\n\nTo save it, send {yes}.")
 }
 
 /// The draft's question: its name, the steps, and whether some still ask.
@@ -230,6 +249,14 @@ mod tests {
             "No hard approval steps; soft path still goes through the existing gates on replay."
                 .into();
         assert!(!draft_prompt(&draft).contains("still ask"));
+    }
+
+    #[test]
+    fn the_chat_keeps_the_question_with_the_line_that_saves_it() {
+        assert_eq!(
+            kept_ask("Save these steps as the skill /clean-temp?\n\n1. Open the folder.", "/record --save-skill 7"),
+            "Save these steps as the skill /clean-temp?\n\n1. Open the folder.\n\nTo save it, send /record --save-skill 7."
+        );
     }
 
     #[test]
