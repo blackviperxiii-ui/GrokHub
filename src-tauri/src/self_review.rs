@@ -211,7 +211,7 @@ fn post_all(
 
 /// `YYYY-MM-DD` for the local day holding `now` at `offset_min` from UTC,
 /// the key the cabin writes as `last_day`.
-fn local_day(now: u64, offset_min: i32) -> String {
+pub(crate) fn local_day(now: u64, offset_min: i32) -> String {
     let local = (now as i64)
         .saturating_add(i64::from(offset_min) * 60_000)
         .max(0);

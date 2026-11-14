@@ -1174,6 +1174,30 @@ pub fn dream_report(config_dir: &Path) -> String {
     }
 }
 
+/// One dream at a time: `/dream` and the nightly pass share the store.
+pub(crate) static DREAM: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// USER.md read for the dream's preference proposals, at most this much.
+const USER_MD_CAP: u64 = 1024 * 1024;
+
+/// The dream's options for the pinned config folder: Memory retention as
+/// the stale cutoff (0 keeps everything), USER.md as it is now, and the
+/// report named `date` (`None` uses the UTC date).
+pub(crate) fn dream_opts(date: Option<&str>) -> grokhub_core::amr::DreamOpts {
+    let days = retention_days();
+    let user = grokhub_agent::global_memory_path().with_file_name("USER.md");
+    let user_md = std::fs::metadata(&user)
+        .ok()
+        .filter(|m| m.len() <= USER_MD_CAP)
+        .and_then(|_| std::fs::read_to_string(&user).ok());
+    grokhub_core::amr::DreamOpts {
+        date: date.map(str::to_string),
+        ttl_days: if days == 0 { u64::MAX } else { days },
+        user_md,
+        ..Default::default()
+    }
+}
+
 /// `/dream`: one dream pass now over the learned notes (merge repeats, retire
 /// unsure ones, propose missing preferences), then its report.
 pub fn dream_now(config_dir: &Path) -> Result<String, String> {
@@ -1181,17 +1205,9 @@ pub fn dream_now(config_dir: &Path) -> Result<String, String> {
         return Ok("Dreaming runs in memory repo mode only.".into());
     }
     let store = open_store()?;
-    let days = retention_days();
-    let opts = grokhub_core::amr::DreamOpts {
-        ttl_days: if days == 0 { u64::MAX } else { days },
-        user_md: std::fs::read_to_string(
-            grokhub_agent::global_memory_path().with_file_name("USER.md"),
-        )
-        .ok(),
-        ..Default::default()
-    };
+    let _one = DREAM.lock().unwrap_or_else(|e| e.into_inner());
     let done = store
-        .dream_once(grokhub_core::now_ms(), &opts)
+        .dream_once(grokhub_core::now_ms(), &dream_opts(None))
         .map_err(|e| e.to_string())?;
     Ok(format!(
         "{}\n\n{}",
