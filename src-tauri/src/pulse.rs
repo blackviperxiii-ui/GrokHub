@@ -139,6 +139,15 @@ pub struct Post {
     pub review: String,
     /// A code-idea card also offers Copy as GitHub issue.
     pub issue: bool,
+    /// A Done for you card: its Undo and Stop doing this show until answered.
+    pub done: Option<DoneView>,
+}
+
+/// A Done for you card's state, as the page needs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DoneView {
+    pub answered: bool,
 }
 
 /// One update inside a digest card.
@@ -150,8 +159,9 @@ pub struct Item {
     pub summary: String,
 }
 
-/// One chip under a card. `act` is "offer", "discuss", "ignore" or "remind";
-/// `index` is the offer's place on the card.
+/// One chip under a card. `act` is "offer", "discuss", "ignore", "remind"
+/// or "pause" (Pause it on a failing automation's card); `index` is the
+/// offer's place on the card.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Chip {
@@ -170,7 +180,7 @@ fn chips(card: &UpdateCard, now_ms: u64) -> Vec<Chip> {
         wind_down: None,
         start: None,
     };
-    card_chips(card, &day, None)
+    let mut out: Vec<Chip> = card_chips(card, &day, None)
         .into_iter()
         .map(|c| {
             let (act, index) = match c.act {
@@ -185,7 +195,23 @@ fn chips(card: &UpdateCard, now_ms: u64) -> Vec<Chip> {
                 index,
             }
         })
-        .collect()
+        .collect();
+    // Pause it sits right after the card's own fixes (Find out why).
+    if crate::done_for_you::offers_pause(card) {
+        let at = out
+            .iter()
+            .rposition(|c| c.act == "offer")
+            .map_or(0, |i| i + 1);
+        out.insert(
+            at,
+            Chip {
+                label: "Pause it".into(),
+                act: "pause",
+                index: 0,
+            },
+        );
+    }
+    out
 }
 
 /// A card's one-line read of its own numbers, with how worried to be.
@@ -535,6 +561,9 @@ fn post(
             crate::review_cards::label(card).to_string()
         },
         issue: crate::review_cards::copies_issue(card),
+        done: card.done_for_you.as_ref().map(|d| DoneView {
+            answered: d.answered,
+        }),
     }
 }
 

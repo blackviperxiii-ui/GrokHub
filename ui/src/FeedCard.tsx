@@ -269,6 +269,10 @@ export interface FeedCardProps {
   onReview?: () => void;
   /** A code-idea card's Copy as GitHub issue, in the ⋯ menu. */
   onIssue?: () => void;
+  /** A Done for you card's Undo, after its confirm. */
+  onUndo?: () => void;
+  /** A Done for you card's Stop doing this. */
+  onStop?: () => void;
 }
 
 /** One Feed post, always fully open: icon, title, where it is from and why,
@@ -291,11 +295,15 @@ export function FeedCard({
   onChip,
   onReview,
   onIssue,
+  onUndo,
+  onStop,
 }: FeedCardProps) {
   const chips = post.chips ?? [];
   const [menu, setMenu] = useState(false);
   const [why, setWhy] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
+  const [undoing, setUndoing] = useState(false);
+  const openDone = post.done != null && !post.done.answered;
   const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
   async function askWhy() {
     setMenu(false);
@@ -383,6 +391,18 @@ export function FeedCard({
           onCancel={() => setAsking(false)}
         />
       )}
+      {undoing && openDone && (
+        <ConfirmRow
+          question="Turn it back on?"
+          action="Undo"
+          busy={busy}
+          onConfirm={() => {
+            setUndoing(false);
+            onUndo?.();
+          }}
+          onCancel={() => setUndoing(false)}
+        />
+      )}
       <CardButtons
         liked={post.loved}
         busy={busy}
@@ -410,6 +430,24 @@ export function FeedCard({
         {post.review && onReview && (
           <button type="button" className="quiet" disabled={busy} onClick={onReview}>
             {post.review}
+          </button>
+        )}
+        {openDone && onUndo && (
+          <button
+            type="button"
+            className="quiet"
+            disabled={busy}
+            // A pointer click only: Enter or Space on a focused button does nothing.
+            onClick={(e) => {
+              if (e.detail > 0) setUndoing(true);
+            }}
+          >
+            Undo
+          </button>
+        )}
+        {openDone && onStop && (
+          <button type="button" className="quiet" disabled={busy} onClick={onStop}>
+            Stop doing this
           </button>
         )}
         {post.link && onOpen && (

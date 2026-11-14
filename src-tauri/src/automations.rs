@@ -82,6 +82,18 @@ fn store() -> MutexGuard<'static, ()> {
     STORE.lock().unwrap_or_else(|err| err.into_inner())
 }
 
+/// Run `f` with the list read under the store lock, so nothing here writes
+/// the file while `f` changes it through the agent's own tools (a Done for
+/// you pause, a ledger Undo). `f` must not call [`load`] or any writer here:
+/// the lock is not reentrant.
+pub(crate) fn with_store<T>(
+    config_dir: &Path,
+    f: impl FnOnce(Result<Vec<Automation>, String>) -> T,
+) -> T {
+    let _store = store();
+    f(load_unlocked(config_dir))
+}
+
 /// A missing file is an empty list. A broken one is an error, so a save can
 /// never replace jobs the shell failed to read. Rows with no id get one, and
 /// it is written back so the next command finds the same row.
@@ -175,6 +187,10 @@ pub fn set_enabled(
         enabled,
         grokhub_core::now_ms(),
     ));
+    // Turning a job back on by hand answers a Done for you pause of it.
+    if enabled {
+        crate::done_for_you::turned_back_on(config_dir, id);
+    }
     Ok(out)
 }
 

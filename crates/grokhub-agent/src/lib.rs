@@ -156,7 +156,7 @@ pub use retry::{
 };
 pub use run::{
     bind_job_tool_set, clear_job_tool_set, run_loop, HaltCheck, JobToolSetGuard, LoopEvent, LoopIn,
-    LoopOut, SteerQueue, StopReason, REPEAT_REPLAN, TRUNCATED_TOOL,
+    LoopOut, SteerQueue, StopReason, BUSY_GAVE_UP, REPEAT_REPLAN, TRUNCATED_TOOL,
 };
 pub use session::{
     attach_run, cancel_session, delete_forks_of, delete_session, export_markdown, forget_message,

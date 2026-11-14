@@ -8,6 +8,11 @@
 //!   puts its receipt on the card.
 //! - Reminder notifications (`proactiveReminders`): one OS notice for a
 //!   proactive card due within the hour.
+//! - Done for you (`pauseFailingAutomations`): the one switch here that
+//!   changes something on its own. It pauses an automation that keeps
+//!   failing, which is one of the app's own settings, never the computer,
+//!   and its card offers Undo (`crate::done_for_you`). The fix switches above
+//!   still only read.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -48,6 +53,17 @@ pub struct FixRow {
 pub struct View {
     pub fixes: Vec<FixRow>,
     pub reminders: bool,
+    pub pause: PauseRow,
+}
+
+/// Done for you's one switch, and what holds it back while it is on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PauseRow {
+    pub on: bool,
+    pub label: String,
+    pub note: String,
+    pub held: Option<String>,
 }
 
 fn fix_id(fix: FixType) -> String {
@@ -83,6 +99,16 @@ pub fn view(config_dir: &Path) -> View {
             })
             .collect(),
         reminders: reminders_on(config_dir),
+        pause: PauseRow {
+            on: crate::done_for_you::on(config_dir),
+            label: crate::done_for_you::SWITCH_LABEL.to_string(),
+            note: crate::done_for_you::switch_note(),
+            held: crate::done_for_you::held(
+                config_dir,
+                grokhub_core::now_ms(),
+                crate::done_for_you::utc_offset(),
+            ),
+        },
     }
 }
 
@@ -100,6 +126,11 @@ pub fn set_fix(config_dir: &Path, id: &str, on: bool) -> Result<View, String> {
 
 pub fn set_reminders(config_dir: &Path, on: bool) -> Result<View, String> {
     grokhub_core::app_json::patch(config_dir, &[(REMINDERS_KEY, json!(on))])?;
+    Ok(view(config_dir))
+}
+
+pub fn set_pause(config_dir: &Path, on: bool) -> Result<View, String> {
+    crate::done_for_you::set_on(config_dir, on)?;
     Ok(view(config_dir))
 }
 

@@ -1180,6 +1180,40 @@ pub(crate) fn rollback_change(
     Ok(done)
 }
 
+/// Undo line `seq` only while it is still the change in effect on this
+/// target, putting back the bytes `rebuild` makes from what is there now
+/// (`None` when the target is gone). The check and the write hold the ledger
+/// lock together, so a newer line can't slip in between. `Ok(None)` when a
+/// newer line took its place.
+pub fn undo_change_at(
+    config_dir: &Path,
+    target: &dyn ChangeTarget,
+    seq: u64,
+    _ask: UndoAsk,
+    rebuild: impl FnOnce(Option<Vec<u8>>) -> Result<Option<Vec<u8>>, String>,
+) -> Result<Option<Reverted>, String> {
+    guard(config_dir, target)?;
+    let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (kind, id) = (target.kind(), target.id()?);
+    let ledger = ChangeLedger::load_kind(config_dir, kind);
+    let Some(line) = ledger.undo_target(&id).filter(|c| c.seq == seq).cloned() else {
+        return Ok(None);
+    };
+    let bytes = rebuild(target.read()?)?;
+    let mut change = new_change_for(
+        kind,
+        &id,
+        ChangeOp::Undo,
+        Origin::User,
+        &format!("undo #{seq} ({})", line.reason),
+        now_ms(),
+    );
+    change.undoes = Some(seq);
+    let mut done = put_back(config_dir, target, bytes, change)?;
+    done.reverted = Some(line);
+    Ok(Some(done))
+}
+
 /// The kept bytes of one version (a canary's parent for its control runs).
 pub fn kept_bytes(
     config_dir: &Path,
@@ -1361,6 +1395,76 @@ mod tests {
         assert!(ledger.undone_by_user("weekly-report", &content_hash(V2.as_bytes())));
         assert!(!ledger.undone_by_user("weekly-report", &content_hash(b"other")));
         assert!(ledger.kept_by_user("weekly-report"));
+    }
+
+    #[test]
+    fn undo_at_a_seq_builds_from_the_bytes_now_and_refuses_a_newer_line() {
+        let (root, skills) = dirs("ledger-undo-at");
+        put(&skills, "weekly-report", V1).unwrap();
+        let first = record_skill_change(
+            &root,
+            &skills,
+            "weekly-report",
+            Origin::SelfManage,
+            "p1",
+            || put(&skills, "weekly-report", V2),
+        )
+        .unwrap()
+        .expect("a change");
+        // Someone edits the file after the change, outside the ledger.
+        put(&skills, "weekly-report", "edited by hand\n").unwrap();
+        let back = undo_change_at(
+            &root,
+            &SkillTarget {
+                skills_dir: &skills,
+                name: "weekly-report",
+            },
+            first.seq,
+            UndoAsk::from_click(),
+            |now| {
+                let now = String::from_utf8(now.expect("there")).unwrap();
+                Ok(Some(format!("{now}and undone\n").into_bytes()))
+            },
+        )
+        .unwrap()
+        .expect("still in effect");
+        assert_eq!(
+            md(&skills, "weekly-report").as_deref(),
+            Some("edited by hand\nand undone\n")
+        );
+        assert_eq!(back.change.op, ChangeOp::Undo);
+        assert_eq!(back.change.undoes, Some(1));
+        assert_eq!(back.change.reason, "undo #1 (p1)");
+        assert_eq!(back.reverted.map(|c| c.seq), Some(1));
+
+        record_skill_change(
+            &root,
+            &skills,
+            "weekly-report",
+            Origin::SelfManage,
+            "p3",
+            || put(&skills, "weekly-report", V1),
+        )
+        .unwrap();
+        let mut built = false;
+        let refused = undo_change_at(
+            &root,
+            &SkillTarget {
+                skills_dir: &skills,
+                name: "weekly-report",
+            },
+            first.seq,
+            UndoAsk::from_click(),
+            |_| {
+                built = true;
+                Ok(None)
+            },
+        )
+        .unwrap();
+        assert_eq!(refused, None);
+        assert!(!built, "a refused undo builds nothing");
+        assert_eq!(md(&skills, "weekly-report").as_deref(), Some(V1));
+        assert_eq!(ChangeLedger::load(&root).all().len(), 3);
     }
 
     #[test]

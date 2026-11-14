@@ -120,11 +120,11 @@ pub use changes::{
     accept_change, change_id, content_hash, entry_id, findings_path, history_dir, kept_bytes,
     ledger_path, note_proposal_finding, read_scope_findings, record_change, record_outside_edit,
     record_skill_change, restore_change, restore_skill, scope_guard, skill_history_dir,
-    skill_ledger_path, snippet_path, take_self_changes, undo_change, undo_skill_change, Change,
-    ChangeKind, ChangeLedger, ChangeOp, ChangeTarget, Reverted, ScopeFinding, SkillTarget,
-    SnippetTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR, CONNECTION_LEDGER_FILE,
-    FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION, MODEL_LEDGER_FILE,
-    SKILL_LEDGER_FILE, SNIPPET_LEDGER_FILE,
+    skill_ledger_path, snippet_path, take_self_changes, undo_change, undo_change_at,
+    undo_skill_change, Change, ChangeKind, ChangeLedger, ChangeOp, ChangeTarget, Reverted,
+    ScopeFinding, SkillTarget, SnippetTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR,
+    CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION,
+    MODEL_LEDGER_FILE, SKILL_LEDGER_FILE, SNIPPET_LEDGER_FILE,
 };
 pub use consent::{
     consent_path, grant_destination, grant_premium, grant_scope, revoke_grant, scope_excluded,

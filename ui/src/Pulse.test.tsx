@@ -30,6 +30,9 @@ const api = vi.hoisted(() => ({
   pulseUnsave: vi.fn<(url: string) => Promise<SavedFind[]>>(),
   pulseReviewApply: vi.fn<(id: string) => Promise<PulseReviewDone>>(),
   pulseReviewIssue: vi.fn<(id: string) => Promise<{ text: string; copied: string }>>(),
+  pulsePauseAutomation: vi.fn<(id: string) => Promise<PulseReviewDone>>(),
+  pulseDoneUndo: vi.fn<(id: string) => Promise<PulseReviewDone>>(),
+  pulseDoneStop: vi.fn<() => Promise<PulseReviewDone>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -783,6 +786,99 @@ describe("Pulse", () => {
     expect(onRun).toHaveBeenLastCalledWith("Read bluetoothd's crash history.", "pulse-crash-1");
 
     expect(within(row).getByRole("button", { name: "Not interested" })).toBeInTheDocument();
+  });
+
+  it("Pause it on a failing automation's card pauses it here and never opens a chat", async () => {
+    const failing: PulseIdea = {
+      ...IDEA,
+      id: "auto-card",
+      title: '"Sync notes" failed 6 times in a row',
+      chips: [
+        { label: "Find out why", act: "offer", index: 0 },
+        { label: "Pause it", act: "pause", index: 0 },
+        { label: "Discuss", act: "discuss", index: 0 },
+      ],
+    };
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [], ideas: [{ label: "", ideas: [failing] }] });
+    api.pulsePauseAutomation.mockResolvedValue({
+      line: 'Paused "Sync notes". Undo is in Settings > Behavior.',
+      page: { ...PAGE, feed: [], ideas: [] },
+    });
+    const onRun = vi.fn();
+    render(<Pulse onRun={onRun} />);
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
+    const row = screen.getByRole("listitem", { name: '"Sync notes" failed 6 times in a row' });
+    await userEvent.click(within(row).getByRole("button", { name: "Pause it" }));
+    expect(api.pulsePauseAutomation).toHaveBeenCalledWith("auto-card");
+    expect(api.pulseOffer).not.toHaveBeenCalled();
+    expect(onRun).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText('Paused "Sync notes". Undo is in Settings > Behavior.'),
+    ).toBeInTheDocument();
+  });
+
+  it("a Done for you card's Undo needs a pointer click and a confirm, and Stop turns it off", async () => {
+    const done = post({
+      id: "dfy-1",
+      title: 'Paused "Sync notes": it failed 6 times in a row',
+      summary: "Last error: disk full. Undo turns it back on.",
+      link: "",
+      done: { answered: false },
+    });
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [done] });
+    api.pulseDoneUndo.mockResolvedValue({
+      line: 'Undid GrokHub\'s change to the automation auto-sync.',
+      page: { ...PAGE, feed: [{ ...done, done: { answered: true } }] },
+    });
+    api.pulseDoneStop.mockResolvedValue({
+      line: "Turned off. GrokHub won't pause automations on its own.",
+      page: { ...PAGE, feed: [done] },
+    });
+    render(<Pulse onRun={() => {}} />);
+    const card = await screen.findByRole("listitem", { name: done.title });
+    const undo = within(card).getByRole("button", { name: "Undo" });
+    // Enter on the focused button does nothing.
+    undo.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(within(card).queryByRole("group", { name: "Turn it back on?" })).toBeNull();
+    await userEvent.click(undo);
+    const ask = within(card).getByRole("group", { name: "Turn it back on?" });
+    expect(api.pulseDoneUndo).not.toHaveBeenCalled();
+    await userEvent.click(within(ask).getByRole("button", { name: "Undo" }));
+    expect(api.pulseDoneUndo).toHaveBeenCalledWith("dfy-1");
+    expect(
+      await screen.findByText("Undid GrokHub's change to the automation auto-sync."),
+    ).toBeInTheDocument();
+    // Answered: the buttons go away.
+    const after = screen.getByRole("listitem", { name: done.title });
+    expect(within(after).queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(within(after).queryByRole("button", { name: "Stop doing this" })).toBeNull();
+  });
+
+  it("Stop doing this on a Done for you card turns the switch off", async () => {
+    const done = post({
+      id: "dfy-2",
+      title: 'Paused "Mail digest": it failed 5 times in a row',
+      link: "",
+      done: { answered: false },
+    });
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [done, post()] });
+    api.pulseDoneStop.mockResolvedValue({
+      line: "Turned off. GrokHub won't pause automations on its own.",
+      page: { ...PAGE, feed: [done] },
+    });
+    render(<Pulse onRun={() => {}} />);
+    const card = await screen.findByRole("listitem", { name: done.title });
+    // An ordinary post has neither button.
+    const plain = screen.getByRole("listitem", { name: TITLE });
+    expect(within(plain).queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(within(plain).queryByRole("button", { name: "Stop doing this" })).toBeNull();
+    await userEvent.click(within(card).getByRole("button", { name: "Stop doing this" }));
+    expect(api.pulseDoneStop).toHaveBeenCalledTimes(1);
+    expect(api.pulseDoneUndo).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Turned off. GrokHub won't pause automations on its own."),
+    ).toBeInTheDocument();
   });
 
   it("a PC health card reads its verdict and Fix it opens its options, which only advise", async () => {

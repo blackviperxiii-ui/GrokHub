@@ -314,7 +314,10 @@ Pulse ledger (`memory/pulse-ledger.md`) as input (`src-tauri/src/pulse.rs`).
   to `memory/pulse-ledger.md` (older lines still in MEMORY.md are read too),
   so the next ranking learns from them. Snooze hides
   a card until the next 9 AM local.
-- Not yet: Undo on done-for-you posts. The cabin still makes the cards. A dismissed
+- Done for you (Settings → Pulse, off by default) pauses an automation
+  that failed 5 runs in a row, and its card has Undo and Stop doing this
+  (`src-tauri/src/done_for_you.rs`). A failing automation's card also has
+  Pause it. A dismissed
   idea is not added to the cabin's turned-down list (that lives in its
   `config.json`, which the shell does not write), so the cabin's next idea
   pass can offer a reworded copy.

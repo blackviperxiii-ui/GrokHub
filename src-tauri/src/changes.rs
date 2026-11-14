@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use grokhub_agent::harness::{self as hx, ChangeKind, ChangeOp, Origin};
+use grokhub_core::Automation;
 use serde::Serialize;
 
 /// Ledger lines a report lists.
@@ -241,12 +242,80 @@ pub fn undo(config_dir: &Path, kind: ChangeKind, id: &str, click: bool) -> Resul
             done?
         }
         ChangeKind::Automation => {
+            // A pause Done for you or Pause it made comes back on as the job
+            // is now, so edits made while it was paused stay.
+            if let Some(seq) = crate::done_for_you::open_pause(config_dir, id) {
+                match undo_pause_as(config_dir, id, seq, ask) {
+                    Ok(back) => return Ok(format!("Turned {} back on.", shown_job(&back))),
+                    Err(e) if e == CHANGED_SINCE => {}
+                    Err(e) => return Err(e),
+                }
+            }
             let path = crate::automations::path(config_dir);
-            hx::undo_change(config_dir, &hx::AutomationsFile { path: &path, id }, ask)?
+            let done = crate::automations::with_store(config_dir, |_| {
+                hx::undo_change(
+                    config_dir,
+                    &hx::AutomationsFile { path: &path, id },
+                    self::ask(click),
+                )
+            })?;
+            // After the lock: this reads spans and edits Pulse cards.
+            if done.reverted.is_some() {
+                crate::done_for_you::after_undo(config_dir, kind, id);
+            }
+            done
         }
         _ => return Err("That kind of change is undone in the cabin.".into()),
     };
     Ok(revert_line(kind, id, &done))
+}
+
+/// A Done for you card's Undo found a newer change on the same automation.
+pub const CHANGED_SINCE: &str = "It changed again since. Turn it back on from Automations.";
+
+/// A Done for you card's Undo: turn the job back on as it is now, so edits,
+/// runs and health since the pause stay, and only while the pause (ledger line
+/// `seq`) is still the change in effect on it. It writes the ledger's `undo`
+/// line for `seq` and returns the row as it is now.
+pub fn undo_pause(config_dir: &Path, id: &str, seq: u64) -> Result<Automation, String> {
+    undo_pause_as(config_dir, id, seq, ask(true))
+}
+
+fn undo_pause_as(
+    config_dir: &Path,
+    id: &str,
+    seq: u64,
+    ask: hx::UndoAsk,
+) -> Result<Automation, String> {
+    let path = crate::automations::path(config_dir);
+    let now = grokhub_core::now_ms();
+    let clock = grokhub_core::LocalClock::at_offset(now, crate::done_for_you::utc_offset());
+    let mut back = None;
+    crate::automations::with_store(config_dir, |_| {
+        let target = hx::AutomationsFile { path: &path, id };
+        hx::undo_change_at(config_dir, &target, seq, ask, |now| {
+            let now = now.ok_or_else(|| "That automation is gone.".to_string())?;
+            let mut job: Automation = serde_json::from_slice(&now).map_err(|e| e.to_string())?;
+            job.enabled = true;
+            let job = grokhub_core::ensure_automation_schedule(job, clock);
+            let bytes = serde_json::to_vec_pretty(&job).map_err(|e| e.to_string())?;
+            back = Some(job);
+            Ok(Some(bytes))
+        })
+    })?
+    .ok_or_else(|| CHANGED_SINCE.to_string())?;
+    // After the lock: this reads spans and edits Pulse cards.
+    crate::done_for_you::after_undo(config_dir, ChangeKind::Automation, id);
+    back.ok_or_else(|| "That automation is gone.".to_string())
+}
+
+fn shown_job(a: &Automation) -> String {
+    let name = a.name.trim();
+    if name.is_empty() {
+        a.id.clone()
+    } else {
+        format!("\"{name}\"")
+    }
 }
 
 /// Bring back a skill that is gone, from the version it had just before it left.

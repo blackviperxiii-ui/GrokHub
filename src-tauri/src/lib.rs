@@ -46,6 +46,7 @@ pub mod credential;
 #[cfg(desktop)]
 pub mod desktop_nyx;
 pub mod diagnostics;
+pub mod done_for_you;
 pub mod episode;
 pub mod export;
 pub mod game_companion;
@@ -4403,6 +4404,15 @@ async fn set_pulse_auto_fix(
 }
 
 #[tauri::command]
+async fn set_pulse_auto_pause(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<auto_fixes::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || auto_fixes::set_pause(&dir, on)).await?
+}
+
+#[tauri::command]
 async fn set_proactive_reminders(
     state: State<'_, ShellState>,
     on: bool,
@@ -5212,6 +5222,57 @@ async fn pulse_review_apply(
         pulse::act(&dir, &id, pulse::Act::Accept, &day, now)?;
         let line = review_cards::apply(&dir, &id, now)?;
         let page = pulse::load(&dir, Some(&day), now)?;
+        Ok(ReviewDone { line, page })
+    })
+    .await?
+}
+
+/// A failing automation card's Pause it: the tap pauses that job once.
+#[tauri::command]
+async fn pulse_pause_automation(
+    state: State<'_, ShellState>,
+    id: String,
+    day: pulse::Day,
+) -> Result<ReviewDone, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let now = grokhub_core::now_ms();
+        let line = done_for_you::pause_from_card(&dir, &id, now)?;
+        let page = pulse::load(&dir, Some(&day), now)?;
+        Ok(ReviewDone { line, page })
+    })
+    .await?
+}
+
+/// A Done for you card's Undo: turns the paused job back on.
+#[tauri::command]
+async fn pulse_done_undo(
+    state: State<'_, ShellState>,
+    id: String,
+    day: pulse::Day,
+) -> Result<ReviewDone, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let line = done_for_you::undo(&dir, &id)?;
+        let page = pulse::load(&dir, Some(&day), grokhub_core::now_ms())?;
+        Ok(ReviewDone { line, page })
+    })
+    .await?
+}
+
+/// A Done for you card's Stop doing this: the switch goes off.
+#[tauri::command]
+async fn pulse_done_stop(
+    state: State<'_, ShellState>,
+    day: pulse::Day,
+) -> Result<ReviewDone, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let line = done_for_you::stop(&dir)?;
+        let page = pulse::load(&dir, Some(&day), grokhub_core::now_ms())?;
         Ok(ReviewDone { line, page })
     })
     .await?
@@ -6997,9 +7058,24 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 let pinged = app.handle().clone();
+                let watched = app.handle().clone();
+                let config_dir = app.state::<ShellState>().config_dir.clone();
+                let decisions_dir = config_dir.clone();
                 proactive::start(
-                    app.state::<ShellState>().config_dir.clone(),
+                    config_dir,
                     move |title: &str| os_extras::proactive_reminder(&pinged, title),
+                    // A running chat or a waiting decision holds Done for you.
+                    move || {
+                        let state = watched.state::<ShellState>();
+                        let chatting = state
+                            .chats
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .values()
+                            .any(|s| s.busy());
+                        chatting || !inbox::decisions(&decisions_dir).is_empty()
+                    },
+                    || chat_client().is_ok(),
                 );
             }
             start_budget_tally(app.handle().clone());
@@ -7283,6 +7359,9 @@ pub fn run() {
             get_pulse,
             pulse_act,
             pulse_review_apply,
+            pulse_pause_automation,
+            pulse_done_undo,
+            pulse_done_stop,
             model_resume,
             budget_card,
             answer_budget_card,
@@ -7472,6 +7551,7 @@ pub fn run() {
             set_pc_health,
             set_pulse_auto_fix,
             set_proactive_reminders,
+            set_pulse_auto_pause,
             get_steam_pulse,
             set_steam_achievements,
             set_steam_wishlist,
