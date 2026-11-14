@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HomePage, HomeSlot, PulseAct, PulsePage, QuickChip, TileView, Xp } from "./api";
+import type { HomePage, HomeSlot, PulseAct, PulsePage, QuickChip, TileRow, TileView, Xp } from "./api";
 
 const api = vi.hoisted(() => ({
   getHome: vi.fn<(conversationId?: string) => Promise<HomePage>>(),
@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
   libraryPlay: vi.fn<(appId: number) => Promise<string>>(),
   homeOpenClip: vi.fn<(index: number) => Promise<void>>(),
+  homePcDetails: vi.fn<() => Promise<TileRow[] | null>>(),
   libraryFriends: vi.fn<() => Promise<void>>(),
   librarySteamSettings: vi.fn<() => Promise<void>>(),
   homeRunPlaybook: vi.fn<(id: string) => Promise<{ prompt: string }>>(),
@@ -66,7 +67,11 @@ const PC: TileView = view({
     tone: label === "Free for models" ? "warn" : "normal",
     tap: null,
   })),
-  buttons: [{ label: "Tune-up", action: { kind: "ask", ask: "Check this PC and suggest a tune-up." }, primary: true }],
+  buttons: [
+    { label: "Tune-up", action: { kind: "ask", ask: "Check this PC and suggest a tune-up." }, primary: true },
+    { label: "Details", action: { kind: "details", module: "pc_loadout" }, primary: false },
+  ],
+  tap: { kind: "details", module: "pc_loadout" },
 });
 
 const SQUAD: TileView = view({
@@ -251,6 +256,117 @@ describe("Home", () => {
     await userEvent.click(within(squad).getByRole("button"));
     expect(go.onAsk).toHaveBeenLastCalledWith("Find a duo tonight");
     expect(screen.queryByText(/cabin\b(?! to change)/)).toBeNull();
+  });
+
+  it("PC Loadout → Details opens This PC from the hardware read, and Esc closes it", async () => {
+    api.getHome.mockResolvedValue(PAGE);
+    api.homePcDetails.mockReset().mockResolvedValue([
+      { label: "CPU", value: "16 cores, 32 threads · AVX2", tone: "normal", tap: null },
+      { label: "RAM", value: "64 GB (40 GB free)", tone: "normal", tap: null },
+    ]);
+    const go = routes();
+    render(<Home {...go} remote={false} />);
+    const pc = await screen.findByRole("listitem", { name: "PC Loadout" });
+    const details = within(pc).getByRole("button", { name: "Details" });
+    await userEvent.click(details);
+    const sheet = await screen.findByRole("dialog", { name: "This PC" });
+    expect(await within(sheet).findByText("16 cores, 32 threads · AVX2")).toBeVisible();
+    expect(within(sheet).getByText("CPU")).toBeVisible();
+    expect(within(sheet).getByText("64 GB (40 GB free)")).toBeVisible();
+    expect(api.homePcDetails).toHaveBeenCalledTimes(1);
+    expect(within(sheet).getByRole("button", { name: "Close" })).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(details).toHaveFocus();
+    expect(go.onAsk).not.toHaveBeenCalled();
+    // A tap on the tile itself opens the same sheet.
+    await userEvent.click(within(pc).getByRole("button", { name: "RTX 4070" }));
+    expect(await screen.findByRole("dialog", { name: "This PC" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("This PC says it is still reading until the launch read lands", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.getHome.mockResolvedValue(PAGE);
+      api.homePcDetails
+        .mockReset()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue([{ label: "Power", value: "Plugged in", tone: "normal", tap: null }]);
+      render(<Home {...routes()} remote={false} />);
+      const pc = await screen.findByRole("listitem", { name: "PC Loadout" });
+      await userEvent.click(within(pc).getByRole("button", { name: "Details" }));
+      const sheet = await screen.findByRole("dialog", { name: "This PC" });
+      expect(await within(sheet).findByText("Reading this PC…")).toBeVisible();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await within(sheet).findByText("Plugged in")).toBeVisible();
+      expect(within(sheet).queryByText("Reading this PC…")).toBeNull();
+      expect(api.homePcDetails).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a paired browser gets no Details, and a Small PC tile taps Tune-up there", async () => {
+    api.getHome.mockResolvedValue(PAGE);
+    api.homePcDetails.mockReset().mockResolvedValue([]);
+    const go = routes();
+    const { unmount } = render(<Home {...go} remote />);
+    const pc = await screen.findByRole("listitem", { name: "PC Loadout" });
+    expect(within(pc).getAllByRole("button").map((b) => b.textContent)).toEqual(["Tune-up"]);
+    unmount();
+
+    api.getHome.mockResolvedValue({
+      ...PAGE,
+      slots: PAGE.slots.map((s) => (s.module === "pc_loadout" ? { ...s, size: "small" } : s)),
+    });
+    render(<Home {...go} remote />);
+    const small = await screen.findByRole("listitem", { name: "PC Loadout" });
+    await userEvent.click(within(small).getByRole("button", { name: "RTX 4070" }));
+    expect(go.onAsk).toHaveBeenLastCalledWith("Check this PC and suggest a tune-up.");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.homePcDetails).not.toHaveBeenCalled();
+  });
+
+  it("This PC stops reading once rows land, shows a failed read, and leaves Esc to a window on top", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.getHome.mockResolvedValue(PAGE);
+      api.homePcDetails
+        .mockReset()
+        .mockResolvedValue([{ label: "Power", value: "Plugged in", tone: "normal", tap: null }]);
+      const { unmount } = render(<Home {...routes()} remote={false} />);
+      const pc = await screen.findByRole("listitem", { name: "PC Loadout" });
+      await userEvent.click(within(pc).getByRole("button", { name: "Details" }));
+      const sheet = await screen.findByRole("dialog", { name: "This PC" });
+      expect(await within(sheet).findByText("Plugged in")).toBeVisible();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(api.homePcDetails).toHaveBeenCalledTimes(1);
+
+      // Esc pressed in another window (the palette) is that window's.
+      const top = document.createElement("div");
+      top.setAttribute("role", "dialog");
+      top.tabIndex = -1;
+      document.body.append(top);
+      top.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      expect(screen.getByRole("dialog", { name: "This PC" })).toBeVisible();
+      const handled = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      handled.preventDefault();
+      window.dispatchEvent(handled);
+      expect(screen.getByRole("dialog", { name: "This PC" })).toBeVisible();
+      top.remove();
+      unmount();
+
+      api.homePcDetails.mockReset().mockRejectedValue("The hardware read failed.");
+      render(<Home {...routes()} remote={false} />);
+      const again = await screen.findByRole("listitem", { name: "PC Loadout" });
+      await userEvent.click(within(again).getByRole("button", { name: "Details" }));
+      const failed = await screen.findByRole("dialog", { name: "This PC" });
+      expect(await within(failed).findByRole("status")).toHaveTextContent("The hardware read failed.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a clip row plays that clip on the PC, by its place in the list", async () => {

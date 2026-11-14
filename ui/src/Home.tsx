@@ -24,6 +24,7 @@ import {
 import { ChipRow, useChipRow } from "./Chips";
 import { FollowUpRow } from "./Goals";
 import { HomeEdit } from "./HomeEdit";
+import { PcSheet } from "./PcSheet";
 import { COMPANION_NAME } from "./brand";
 import { openExternal } from "./external";
 import { NyxCard } from "./NyxCard";
@@ -102,6 +103,8 @@ export interface HomeRoutes {
   /** Puts the text in the chat box; nothing is sent. */
   onAsk: (text: string) => void;
   onSettings: (section: Section) => void;
+  /** Opens a module's details sheet (PC Loadout → Details). */
+  onDetails?: (module: string) => void;
 }
 
 /** The pages a tile may open; anything else stays put. */
@@ -184,6 +187,10 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
       // The OS prompt shows on the computer, so a paired browser can't run it.
       if (!remote) void homeSetup(a.module, a.undo).then(reload, reload);
       return;
+    case "details":
+      // The sheet reads this computer's hardware, so a paired browser stays put.
+      if (!remote) go.onDetails?.(a.module);
+      return;
     case "copySetup":
       if (!remote) {
         void homeSetupSteps(a.module)
@@ -239,7 +246,11 @@ function ViewBody({
   const fit = FIT[size];
   const run = (a: TileAction) => runAction(a, go, remote, reload);
   const rows = view.rows.slice(0, fit.rows);
-  const buttons = view.buttons.slice(0, fit.buttons);
+  // A paired browser can't open this computer's Details sheet, so it gets
+  // neither the button nor that tap; a Small tile falls back to its button.
+  const here = (a: TileAction | null) => (a && !(remote && a.kind === "details") ? a : null);
+  const usable = view.buttons.filter((b) => here(b.action));
+  const buttons = usable.slice(0, fit.buttons);
   const head = (
     <>
       <span className={`home-big tone-${view.text.tone}`}>{view.text.big}</span>
@@ -253,7 +264,7 @@ function ViewBody({
     </>
   );
   // A Small tile is one tap; so is any tile whose state wants its one button.
-  const tap = view.tap ?? (size === "small" ? (view.buttons[0]?.action ?? null) : null);
+  const tap = here(view.tap) ?? (size === "small" ? (usable[0]?.action ?? null) : null);
   return (
     <div className={`home-stack state-${view.state}`}>
       {tap ? (
@@ -478,6 +489,9 @@ export function Home({
   const [reads, setReads] = useState(0);
   const reload = () => setReads((n) => n + 1);
   const [editing, setEditing] = useState(false);
+  // The module whose details sheet is open (only "pc_loadout" has one).
+  const [sheet, setSheet] = useState<string | null>(null);
+  const routes: HomeRoutes = { ...go, onDetails: setSheet };
   // When the last read was tried, so tiles can say how old their data is.
   const [now, setNow] = useState(() => Date.now());
   // Home has shown data before, so a failed read keeps it and says so.
@@ -561,6 +575,7 @@ export function Home({
           }}
         />
       )}
+      {sheet === "pc_loadout" && <PcSheet onClose={() => setSheet(null)} />}
       {page && (
         <>
           <ul className="home-grid" aria-label="Tiles">
@@ -574,7 +589,7 @@ export function Home({
                   {slot.name}
                   {slot.tile.kind === "view" && slot.tile.view.tag && <span className="home-tag">{slot.tile.view.tag}</span>}
                 </h3>
-                {body(slot.tile, slot, go, remote, reload, now)}
+                {body(slot.tile, slot, routes, remote, reload, now)}
               </li>
             ))}
           </ul>

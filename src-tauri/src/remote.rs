@@ -1202,6 +1202,7 @@ mod tests {
             "game_minecraft",
             "game_rl",
             "home_open_clip",
+            "home_pc_details",
             "library_friends",
             "library_steam_settings",
             "mods_games",

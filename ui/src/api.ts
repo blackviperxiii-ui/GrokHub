@@ -2167,19 +2167,24 @@ export type TileAction =
   | { kind: "steamSettings" }
   | { kind: "setup"; module: string; undo: boolean }
   | { kind: "copySetup"; module: string }
+  /** Open the module's details sheet on this computer. */
+  | { kind: "details"; module: string }
   | { kind: "reroll" }
   | { kind: "retry" };
+
+/** One label and value line on a tile or a details sheet. */
+export interface TileRow {
+  label: string;
+  value: string;
+  tone: TileTone;
+  tap: TileAction | null;
+}
 
 export interface TileView {
   state: TileState;
   tag: string | null;
   text: { big: string; caption: string; detail: string | null; tone: TileTone };
-  rows: {
-    label: string;
-    value: string;
-    tone: TileTone;
-    tap: TileAction | null;
-  }[];
+  rows: TileRow[];
   progress: number | null;
   buttons: { label: string; action: TileAction; primary: boolean }[];
   tap: TileAction | null;
@@ -4202,6 +4207,12 @@ export function homeRunPlaybook(id: string): Promise<BoardWork> {
 /** Plays the clip at this place in Home's Clips tile with the PC's player. */
 export function homeOpenClip(index: number): Promise<void> {
   return invoke<void>("home_open_clip", { index });
+}
+
+/** PC Loadout → Details: this PC's hardware read as rows, or null until the
+ * launch read lands. Desktop only. */
+export function homePcDetails(): Promise<TileRow[] | null> {
+  return invoke<TileRow[] | null>("home_pc_details");
 }
 
 /** Home's Updates & Drivers page (src-tauri/src/home_updates.rs, core home::updates). */

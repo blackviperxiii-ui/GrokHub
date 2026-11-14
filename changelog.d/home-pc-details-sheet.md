@@ -1,0 +1,1 @@
+- Home: PC Loadout has a Details button again. It opens This PC, listing every GPU, the CPU's cores and AVX level, RAM, free disk, power and heat from this PC's hardware read. A tap on the tile opens it too; Tune-up still asks for a check.

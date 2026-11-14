@@ -135,6 +135,8 @@ pub enum TileAction {
     Setup { module: String, undo: bool },
     /// Copy a module's setup steps, to paste into a terminal by hand.
     CopySetup { module: String },
+    /// Open the module's details sheet on this computer.
+    Details { module: String },
     /// Ask the tile for another pick.
     Reroll,
     /// Read the tile again.
@@ -165,6 +167,12 @@ impl TileAction {
 
     pub fn copy_setup(module: &str) -> Self {
         Self::CopySetup {
+            module: module.into(),
+        }
+    }
+
+    pub fn details(module: &str) -> Self {
+        Self::Details {
             module: module.into(),
         }
     }
@@ -436,5 +444,9 @@ mod tests {
         let play = serde_json::to_value(TileAction::Play { app_id: 570 }).unwrap();
         assert_eq!(play["kind"], "play");
         assert_eq!(play["appId"], 570);
+        assert_eq!(
+            serde_json::to_value(TileAction::details("pc_loadout")).unwrap(),
+            serde_json::json!({"kind": "details", "module": "pc_loadout"})
+        );
     }
 }

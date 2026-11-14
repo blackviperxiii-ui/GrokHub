@@ -5680,6 +5680,24 @@ button.primary:not(.quick-chip) {
   font-size: var(--font-prose);
 }
 
+/* Home → PC Loadout → Details: one caption over one value per line. */
+.pc-sheet {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.pc-sheet dt {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.pc-sheet dd {
+  margin: 0;
+  font-size: var(--font-body);
+  overflow-wrap: anywhere;
+}
+
 .fix-title {
   font-weight: 600;
 }
