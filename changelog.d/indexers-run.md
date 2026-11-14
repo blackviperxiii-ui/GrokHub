@@ -1,0 +1,1 @@
+- The desktop app reads the scopes you allowed in Settings → Permissions again, on a low-priority thread: never on battery, in quiet hours, while Halt holds, during a chat, a waiting decision or a game, or while your latest chat is a scratch chat. Permissions shows new facts as soon as they land.

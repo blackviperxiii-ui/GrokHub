@@ -2,7 +2,7 @@
 
 ## Owns
 - `crates/grokhub-agent/src/indexers/`: one module per scope (`files`, `apps`, `browser_history`, `system_state`), the `Scheduler` that runs one scope per heartbeat tick, `scope:` AMR nodes, the in-memory `ScopeIndex`, `forget_facts` ("Forget these"), and `ScopeAsks` (in-context ask cards).
-- Cabin glue in the retired cabin's indexer_ui.rs: tick_indexers (Housekeep slot, low-priority worker), paint_scope_asks (Work tree), ui_scope_facts under each granted row in the retired cabin's scope_ui.rs.
+- `src-tauri/src/indexers.rs`: the Tauri app's driver. One low-priority thread keeps one `Scheduler` and looks every minute, held while the cabin's lease is fresh, before the window reports its clock, while Halt holds (the cabin's hold), while a chat runs, a decision waits or a game is on, and while your latest chat is a scratch chat. A look that writes facts emits scopes://changed, and Permissions reloads. Cabin glue in the retired cabin's indexer_ui.rs: tick_indexers (Housekeep slot, low-priority worker), paint_scope_asks (Work tree), ui_scope_facts under each granted row in the retired cabin's scope_ui.rs.
 ## Quick commands
 - `cargo test -p grokhub-agent indexers -- --test-threads=1` (acceptance tests, counting fake FS, fake power and clock)
 - `cargo test -p grokhub-app scope -- --test-threads=1` (Settings rows, ask card, Forget these; isolate `GROKHUB_CONFIG`)

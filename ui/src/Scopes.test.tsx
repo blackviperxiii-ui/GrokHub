@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   revokeScope: vi.fn<(id: string) => Promise<ScopeAnswer>>(),
   pickScopeFolder: vi.fn<() => Promise<string | null>>(),
   forgetScopeFacts: vi.fn<(id: string) => Promise<ScopeAnswer>>(),
+  onScopesChanged: vi.fn<(handler: () => void) => Promise<() => void>>(),
 }));
 vi.mock("./scopesApi", () => api);
 
@@ -59,6 +60,7 @@ function view(over: Partial<ScopesView> = {}): ScopesView {
 beforeEach(() => {
   vi.clearAllMocks();
   api.getScopes.mockResolvedValue(view());
+  api.onScopesChanged.mockResolvedValue(() => {});
 });
 
 describe("Scopes", () => {
@@ -166,5 +168,41 @@ describe("Scopes", () => {
       apps.getByText("Nothing learned to show. Loadout reads it on a heartbeat, never on battery or in quiet hours."),
     ).toBeInTheDocument();
     expect(apps.queryByRole("button", { name: "Forget these" })).toBeNull();
+  });
+
+  it("reloads when the indexers learn something new", async () => {
+    let changed = () => {};
+    const unlisten = vi.fn();
+    api.onScopesChanged.mockImplementation((handler) => {
+      changed = handler;
+      return Promise.resolve(unlisten);
+    });
+    const { unmount } = render(<Scopes />);
+    const apps = within(await screen.findByRole("listitem", { name: "Installed apps" }));
+    expect(apps.getByText(NOTHING.note)).toBeInTheDocument();
+    api.getScopes.mockResolvedValue(
+      view({
+        rows: [
+          {
+            kind: "apps",
+            granted: [
+              {
+                id: "g-apps",
+                title: "Installed apps",
+                hint: "On since 1m ago. Installed apps and how often you open them.",
+                detail: null,
+                learned: { head: "Learned 1 thing, sealed on this computer:", lines: ["Firefox, opened 3 times"], more: null, note: null, canForget: true },
+              },
+            ],
+            add: null,
+          },
+        ],
+      }),
+    );
+    changed();
+    expect(await screen.findByText("Firefox, opened 3 times")).toBeInTheDocument();
+    expect(api.getScopes).toHaveBeenCalledTimes(2);
+    unmount();
+    expect(unlisten).toHaveBeenCalledTimes(1);
   });
 });

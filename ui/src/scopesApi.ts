@@ -1,5 +1,6 @@
 // Settings → Permissions → "What Loadout can read" (src-tauri/src/scopes.rs).
-import { call } from "./transport";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { call, subscribe } from "./transport";
 
 export interface GrantedScope {
   id: string;
@@ -47,3 +48,11 @@ export const allowScope = (kind: string, value: string) =>
 export const revokeScope = (id: string) => call<ScopeAnswer>("revoke_scope", { id });
 export const pickScopeFolder = () => call<string | null>("pick_scope_folder");
 export const forgetScopeFacts = (id: string) => call<ScopeAnswer>("forget_scope_facts", { id });
+
+/** New facts landed from an indexer look (`scopes::SCOPES_EVENT`). */
+export const SCOPES_EVENT = "scopes://changed";
+
+/** Runs `handler` each time the indexers learn something new. */
+export function onScopesChanged(handler: () => void): Promise<UnlistenFn> {
+  return subscribe<null>(SCOPES_EVENT, () => handler());
+}

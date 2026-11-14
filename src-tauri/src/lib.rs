@@ -68,6 +68,8 @@ pub mod hub_send;
 pub mod hub_share;
 pub mod imagine;
 pub mod inbox;
+#[cfg(desktop)]
+mod indexers;
 pub mod interests;
 pub mod journal;
 pub mod know_me;
@@ -7081,6 +7083,22 @@ pub fn run() {
                     // A running chat or a waiting decision holds Done for you.
                     move || background_busy(&watched),
                     || chat_client().is_ok(),
+                );
+            }
+            // The local indexers read the scopes allowed in Permissions.
+            #[cfg(desktop)]
+            {
+                let watched = app.handle().clone();
+                let told = app.handle().clone();
+                indexers::start(
+                    app.state::<ShellState>().config_dir.clone(),
+                    move || {
+                        let game = grokhub_desktop::game_guard::peek();
+                        background_busy(&watched) || game.gaming
+                    },
+                    move || {
+                        let _ = told.emit(scopes::SCOPES_EVENT, ());
+                    },
                 );
             }
             // The nightly lesson tidy and memory dream, while the cabin is closed.

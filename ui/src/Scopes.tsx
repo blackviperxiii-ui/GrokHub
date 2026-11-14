@@ -4,6 +4,7 @@ import {
   allowScope,
   forgetScopeFacts,
   getScopes,
+  onScopesChanged,
   pickScopeFolder,
   revokeScope,
   type ScopeAnswer,
@@ -43,6 +44,19 @@ export function Scopes() {
 
   useEffect(() => {
     getScopes().then(setView, (err) => setStatus(String(err)));
+    // What a scope taught shows as soon as an indexer look writes it.
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onScopesChanged(() => {
+      getScopes().then(setView, () => {});
+    }).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
   }, []);
 
   async function run(work: () => Promise<ScopeAnswer>, after?: () => void) {
