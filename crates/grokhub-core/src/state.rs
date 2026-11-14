@@ -477,9 +477,91 @@ fn hostname() -> String {
         .unwrap_or_else(|_| "This computer".into())
 }
 
+/// How often [`swap_hub_snapshot`] merges off the lock before it merges
+/// under it.
+const SWAP_TRIES: usize = 3;
+
+/// Sets the hub's snapshot to `merge(current)`. The merge reads megabytes of
+/// JSON, so it runs off the lock the LAN server answers under; when another
+/// write landed meanwhile, it merges again with that one, and after
+/// [`SWAP_TRIES`] it merges under the lock. No write is lost either way.
+pub fn swap_hub_snapshot<E>(
+    state: &std::sync::Mutex<HubState>,
+    mut merge: impl FnMut(Option<&Value>) -> Result<Value, E>,
+) -> Result<(), E> {
+    let lock = || state.lock().unwrap_or_else(|e| e.into_inner());
+    for _ in 0..SWAP_TRIES {
+        let held = lock().snapshot.clone();
+        let merged = merge(held.as_deref())?;
+        let mut st = lock();
+        let same = match (&st.snapshot, &held) {
+            (Some(now), Some(then)) => Arc::ptr_eq(now, then),
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            st.snapshot = Some(Arc::new(merged));
+            return Ok(());
+        }
+    }
+    let mut st = lock();
+    let merged = merge(st.snapshot.as_deref())?;
+    st.snapshot = Some(Arc::new(merged));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_snapshot_written_during_a_merge_is_merged_again_not_lost() {
+        let state = std::sync::Mutex::new(HubState::empty());
+        state.lock().unwrap().snapshot = Some(Arc::new(serde_json::json!(["a"])));
+        let mut seen = Vec::new();
+        swap_hub_snapshot(&state, |held| {
+            let held = held.cloned().unwrap_or(Value::Null);
+            seen.push(held.clone());
+            if seen.len() == 1 {
+                // Another writer lands while this merge runs.
+                state.lock().unwrap().snapshot = Some(Arc::new(serde_json::json!(["a", "b"])));
+            }
+            let mut rows = held.as_array().cloned().unwrap_or_default();
+            rows.push("mine".into());
+            Ok::<_, ()>(Value::Array(rows))
+        })
+        .unwrap();
+        assert_eq!(
+            seen,
+            vec![serde_json::json!(["a"]), serde_json::json!(["a", "b"])]
+        );
+        assert_eq!(
+            state.lock().unwrap().snapshot.as_deref(),
+            Some(&serde_json::json!(["a", "b", "mine"]))
+        );
+    }
+
+    #[test]
+    fn a_merge_that_keeps_racing_runs_under_the_lock() {
+        let state = std::sync::Mutex::new(HubState::empty());
+        let mut calls = 0;
+        swap_hub_snapshot(&state, |held| {
+            calls += 1;
+            if calls <= SWAP_TRIES {
+                state.lock().unwrap().snapshot =
+                    Some(Arc::new(serde_json::json!({ "other": calls })));
+            }
+            let mut v = held.cloned().unwrap_or_else(|| serde_json::json!({}));
+            v["mine"] = true.into();
+            Ok::<_, ()>(v)
+        })
+        .unwrap();
+        assert_eq!(calls, SWAP_TRIES + 1);
+        assert_eq!(
+            state.lock().unwrap().snapshot.as_deref(),
+            Some(&serde_json::json!({ "other": SWAP_TRIES, "mine": true }))
+        );
+    }
 
     #[test]
     fn pair_then_local_task() {

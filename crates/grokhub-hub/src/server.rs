@@ -86,6 +86,9 @@ impl Drop for InFlight {
     }
 }
 
+/// What a paired computer hears while this hub isn't sharing.
+const SHARING_OFF: &str = "Sharing is off on this computer.";
+
 fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     let method = req.method().clone();
     let url = req.url().to_string();
@@ -160,6 +163,13 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             json!({ "ok": false, "error": "Pair this computer first (Settings → Devices)." }),
         );
     }
+    // Stop share keeps the listener bound, so a paired computer's token
+    // still reaches here: while sharing is off it gets nothing, not even
+    // the paired list, and the call doesn't count as a use.
+    if !st.sharing {
+        drop(st);
+        return send_json(req, 403, json!({ "ok": false, "error": SHARING_OFF }));
+    }
     if let Some(p) = st.peer_for_token_mut(&token) {
         p.last_seen = grokhub_core::now_ms();
     }
@@ -209,16 +219,12 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             Err(e) => return reject_body(req, e),
         };
         let snap = body.get("snapshot").cloned().unwrap_or(body);
-        let local = {
-            let st = lock(state);
-            st.snapshot.clone()
-        };
-        match grokhub_core::merge_put_snapshot(local.as_deref(), snap) {
-            Ok(merged) => {
-                let mut st = lock(state);
-                st.snapshot = Some(std::sync::Arc::new(merged));
-                st.last_incoming_at = grokhub_core::now_ms();
-                drop(st);
+        // A /sync from this computer landing meanwhile is merged, not lost.
+        match grokhub_core::swap_hub_snapshot(state, |local| {
+            grokhub_core::merge_put_snapshot(local, snap.clone())
+        }) {
+            Ok(()) => {
+                lock(state).last_incoming_at = grokhub_core::now_ms();
                 return send_json(req, 200, json!({ "ok": true }));
             }
             Err(e) => return send_json(req, 400, json!({ "ok": false, "error": e })),
@@ -429,7 +435,7 @@ mod tests {
 
     #[test]
     fn pair_frame_contract() {
-        let mut st = HubState::empty();
+        let mut st = sharing();
         let code = st.rotate_pair().code;
         let state = Arc::new(Mutex::new(st));
         let port = serve_background(state.clone(), 0).expect("bind");
@@ -583,7 +589,7 @@ mod tests {
     /// The phone routes are gone. A paired caller gets the unknown-route 404 for each.
     #[test]
     fn phone_routes_are_gone() {
-        let mut st = HubState::empty();
+        let mut st = sharing();
         let code = st.rotate_pair().code;
         let state = Arc::new(Mutex::new(st));
         let port = serve_background(state, 0).expect("bind");
@@ -680,7 +686,7 @@ mod tests {
 
     #[test]
     fn paired_computer_claims_inhabit() {
-        let mut st = HubState::empty();
+        let mut st = sharing();
         let code = st.rotate_pair().code;
         let state = Arc::new(Mutex::new(st));
         let port = serve_background(state, 0).expect("bind");
@@ -707,6 +713,70 @@ mod tests {
         assert_eq!(st_ok, 200, "{}", String::from_utf8_lossy(&body));
         let got: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(got["bundle"]["soul"], "stay kind");
+    }
+
+    /// Stop share keeps the listener: a paired computer's token then gets
+    /// no share, hand-off, frame or paired list, and isn't marked as used.
+    #[test]
+    fn a_paired_computer_gets_nothing_while_sharing_is_off() {
+        let (state, port) = hub();
+        let (_, token) = pair_as(&state, port, "d-desk", "desk");
+        let token = token.expect("paired");
+        {
+            let mut st = lock(&state);
+            st.snapshot = Some(Arc::new(serde_json::json!({ "threads": ["old chat"] })));
+            st.sharing = false;
+        }
+        stage(&state, Some("d-desk"), Some("desk"));
+        let seen = lock(&state).peers[0].last_seen;
+        let off = serde_json::json!({ "ok": false, "error": "Sharing is off on this computer." });
+        for (method, path, body) in [
+            ("GET", "/v1/status", ""),
+            ("GET", "/v1/snapshot", ""),
+            ("PUT", "/v1/snapshot", r#"{"snapshot":{}}"#),
+            ("GET", "/v1/inhabit", ""),
+            (
+                "POST",
+                "/v1/inhabit",
+                r#"{"bundle":{"soul":"x","toId":"d-desk"}}"#,
+            ),
+            ("GET", "/v1/frame", ""),
+            (
+                "POST",
+                "/v1/frame",
+                r#"{"dataUrl":"data:image/png;base64,iVBORw0KGgo="}"#,
+            ),
+        ] {
+            let req = format!(
+                "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let (status, _, out) = http(port, &req);
+            let got: Value = serde_json::from_slice(&out).unwrap_or(Value::Null);
+            assert_eq!((status, got), (403, off.clone()), "{method} {path}");
+        }
+        // A wrong token still hears it must pair first.
+        let (status, _, _) = http(
+            port,
+            "GET /v1/snapshot HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer nope\r\n\r\n",
+        );
+        assert_eq!(status, 401);
+        let st = lock(&state);
+        assert_eq!(st.peers[0].last_seen, seen, "an answer refused is no use");
+        assert_eq!(
+            st.inhabit.as_ref().map(|b| b.soul.as_str()),
+            Some("stay kind"),
+            "nothing claimed"
+        );
+        assert!(st.last_frame.is_none(), "no frame stored");
+        assert_eq!(
+            st.snapshot.as_deref(),
+            Some(&serde_json::json!({ "threads": ["old chat"] })),
+            "nothing merged in"
+        );
+        drop(st);
+        lock(&state).sharing = true;
+        assert_eq!(claim(port, &token).1["bundle"]["soul"], "stay kind");
     }
 
     /// Pair `name` under `id` on a fresh code; the status and the token, if any.
@@ -748,8 +818,15 @@ mod tests {
         });
     }
 
+    /// A hub that is sharing, as Start share or `grokhub-hub` leaves it.
+    fn sharing() -> HubState {
+        let mut st = HubState::empty();
+        st.sharing = true;
+        st
+    }
+
     fn hub() -> (Arc<Mutex<HubState>>, u16) {
-        let state = Arc::new(Mutex::new(HubState::empty()));
+        let state = Arc::new(Mutex::new(sharing()));
         let port = serve_background(state.clone(), 0).expect("bind");
         std::thread::sleep(std::time::Duration::from_millis(40));
         (state, port)
@@ -878,14 +955,17 @@ mod tests {
             drop_at < read_at,
             "PUT snapshot must not read the body while holding the hub lock: {put_snap}"
         );
-        let clone_at = put_snap
-            .find("snapshot.clone()")
-            .expect("PUT clones the Arc");
+        // swap_hub_snapshot clones the Arc and merges off the lock; its own
+        // tests lock the hub from inside the merge, which would deadlock
+        // under it.
+        let swap_at = put_snap
+            .find("swap_hub_snapshot")
+            .expect("PUT merges off lock");
         let merge_at = put_snap
             .find("merge_put_snapshot")
-            .expect("PUT merges off lock");
+            .expect("PUT merges a hub snapshot");
         assert!(
-            read_at < clone_at && clone_at < merge_at && !put_snap.contains(".put_snapshot("),
+            read_at < swap_at && swap_at < merge_at && !put_snap.contains(".put_snapshot("),
             "PUT snapshot must not from_value 8MB under hub.lock(): {put_snap}"
         );
         let get_frame = src

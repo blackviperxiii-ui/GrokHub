@@ -62,6 +62,8 @@ mod home_fps;
 pub mod home_tiles;
 mod home_updates;
 #[cfg(desktop)]
+pub mod hub_send;
+#[cfg(desktop)]
 pub mod hub_share;
 pub mod imagine;
 pub mod inbox;
@@ -407,19 +409,30 @@ fn slash_hits(draft: String) -> Vec<slash::Hit> {
 /// `conversation_id` is the chat the line was typed in.
 #[tauri::command]
 async fn run_slash(
+    app: AppHandle,
     state: State<'_, ShellState>,
     line: String,
     conversation_id: Option<String>,
 ) -> Result<slash::Effect, String> {
-    run_slash_line(&state, &line, false, conversation_id.as_deref(), None)
+    run_slash_line(
+        &state,
+        &line,
+        false,
+        conversation_id.as_deref(),
+        None,
+        Some(&app),
+    )
 }
 
+/// `app` reaches this computer's hub for `/sync` and `/inhabit`; a paired
+/// browser has none.
 fn run_slash_line(
     state: &ShellState,
     line: &str,
     remote: bool,
     conversation_id: Option<&str>,
     owned: Option<&dyn Fn(&str) -> bool>,
+    app: Option<&AppHandle>,
 ) -> Result<slash::Effect, String> {
     // Screen recording and the audio check run on this computer only.
     if let Some(done) = screen_record::slash(line, &state.config_dir, remote) {
@@ -443,6 +456,9 @@ fn run_slash_line(
             current(state).code_ship,
         );
         return Ok(slash::Effect::Shell { check });
+    }
+    if let slash::Action::Hub(send) = action {
+        return hub_slash(&state.config_dir, remote, app, send);
     }
     let op = match action {
         slash::Action::Op(op) => op,
@@ -2281,6 +2297,31 @@ fn workspace(state: &ShellState) -> PathBuf {
 
 /// The folder a line typed in `conversation_id` works in: a Code tab
 /// session's own, else the app's.
+/// `/sync` and `/inhabit` ask this computer's hub, which a browser can't reach.
+#[cfg(desktop)]
+fn hub_slash(
+    config_dir: &Path,
+    remote: bool,
+    app: Option<&AppHandle>,
+    send: slash::HubSend,
+) -> Result<slash::Effect, String> {
+    let share = app
+        .filter(|_| !remote)
+        .and_then(|app| app.try_state::<Arc<hub_share::HubShare>>())
+        .ok_or_else(|| "That works on your computer.".to_string())?;
+    hub_send::check(config_dir, &share, send)
+}
+
+#[cfg(not(desktop))]
+fn hub_slash(
+    _config_dir: &Path,
+    _remote: bool,
+    _app: Option<&AppHandle>,
+    _send: slash::HubSend,
+) -> Result<slash::Effect, String> {
+    Err("That works on your computer.".into())
+}
+
 fn workspace_of(state: &ShellState, conversation_id: Option<&str>) -> PathBuf {
     conversation_id
         .and_then(|id| state.code_sessions.of(id))
@@ -5714,6 +5755,21 @@ async fn stop_share(
     off_main(move || share.stop()).await
 }
 
+/// Send on a `/sync` or `/inhabit` card. Its own command, not a slash line,
+/// so typing can't stand in for the click; the browser never reaches it.
+/// Reads chats and memory and writes the send log, so off the main thread.
+#[cfg(desktop)]
+#[tauri::command]
+async fn hub_send_approve(
+    state: State<'_, ShellState>,
+    share: State<'_, Arc<hub_share::HubShare>>,
+    send: slash::HubSend,
+) -> Result<String, String> {
+    let share = Arc::clone(&share);
+    let config_dir = state.config_dir.clone();
+    off_main(move || hub_send::approve(&config_dir, &share, send)).await?
+}
+
 #[cfg(desktop)]
 #[tauri::command]
 async fn new_share_code(
@@ -6159,6 +6215,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 true,
                 id.as_deref(),
                 Some(&owned as &dyn Fn(&str) -> bool),
+                None,
             )?)
         }
         "search_memory" => out(search_memory(state, arg(args, "query")?)?),
@@ -7190,6 +7247,8 @@ pub fn run() {
             stop_share,
             #[cfg(desktop)]
             new_share_code,
+            #[cfg(desktop)]
+            hub_send_approve,
             get_update_status,
             set_update_channel,
             check_shell_update,

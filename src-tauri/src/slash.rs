@@ -3,13 +3,12 @@
 //! never reaches the model: it runs here and comes back as an effect the
 //! chat applies (a new chat, a mode, a view, or a short notice).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Greyed rows from the cabin's list carry this reason.
 pub const IN_THE_CABIN: &str = "In the cabin";
 /// A row the paired browser can't run.
 pub const ON_YOUR_COMPUTER: &str = "On your computer";
-pub const NOT_YET: &str = "Not in this app yet";
 
 /// One command the shell runs.
 pub struct ShellCmd {
@@ -21,8 +20,6 @@ pub struct ShellCmd {
     pub run_on_pick: bool,
     /// Only the window on this computer can run it.
     pub desktop_only: bool,
-    /// Listed but not runnable yet.
-    pub ready: bool,
 }
 
 const fn row(cmd: &'static str, hint: &'static str, insert: &'static str) -> ShellCmd {
@@ -32,7 +29,6 @@ const fn row(cmd: &'static str, hint: &'static str, insert: &'static str) -> She
         insert,
         run_on_pick: insert.len() == cmd.len(),
         desktop_only: false,
-        ready: true,
     }
 }
 
@@ -339,14 +335,18 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         "/scratch",
     ),
     ShellCmd {
-        ready: false,
-        ..row("/sync", "Sync with paired computers", "/sync")
+        desktop_only: true,
+        ..row(
+            "/sync",
+            "Share chats and memory with paired computers",
+            "/sync",
+        )
     },
     ShellCmd {
-        ready: false,
+        desktop_only: true,
         ..row(
             "/inhabit",
-            "Hand this chat to another computer…",
+            "Hand your soul, skills and goal to a paired computer…",
             "/inhabit ",
         )
     },
@@ -428,6 +428,24 @@ pub enum Effect {
     /// `/sh <line>` or `$ <line>`: the Command page's checks on the line. A
     /// queued line goes to the agent; a confirm asks with its own Yes.
     Shell { check: crate::command_box::Verdict },
+    /// `/sync` or `/inhabit` with no standing grant: a card whose Send asks
+    /// the hub on its own call, so typing a line can't stand in for it.
+    HubAsk {
+        send: HubSend,
+        prompt: String,
+        note: String,
+    },
+}
+
+/// What `/sync` and `/inhabit` hand to the computers paired with this hub.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "what", rename_all = "camelCase")]
+pub enum HubSend {
+    /// Chats, memory, skills, automations and the board, to every one.
+    Sync,
+    /// SOUL.md, skill names and the goal pin, for one to claim. `peer` is
+    /// its device id, or the name or id typed after `/inhabit`.
+    Inhabit { peer: String },
 }
 
 /// What `run` needs done outside this module.
@@ -439,6 +457,8 @@ pub enum Action {
     Op(Op),
     /// `/sh <line>` or `$ <line>`: one shell line for the agent to run.
     Shell(String),
+    /// `/sync` or `/inhabit <computer>`: this computer's hub.
+    Hub(HubSend),
 }
 
 /// What `slash_ops` runs.
@@ -531,13 +551,7 @@ fn find(cmd: &str) -> Option<&'static ShellCmd> {
 }
 
 fn shell_hit(c: &ShellCmd, remote: bool) -> Hit {
-    let disabled = if !c.ready {
-        Some(NOT_YET.to_string())
-    } else if remote && c.desktop_only {
-        Some(ON_YOUR_COMPUTER.to_string())
-    } else {
-        None
-    };
+    let disabled = (remote && c.desktop_only).then(|| ON_YOUR_COMPUTER.to_string());
     Hit {
         cmd: c.cmd.into(),
         hint: c.hint.into(),
@@ -581,7 +595,7 @@ pub fn hits(draft: &str, remote: bool) -> Vec<Hit> {
 pub fn help() -> String {
     let mut lines: Vec<String> = SHELL_SLASH
         .iter()
-        .filter(|c| c.ready && !c.cmd.contains(' '))
+        .filter(|c| !c.cmd.contains(' '))
         .map(|c| format!("{} — {}", c.insert.trim_end(), c.hint.trim_end_matches('…')))
         .collect();
     lines.push("Other commands run in the cabin.".into());
@@ -626,9 +640,6 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         }
         return Err(format!("Unknown command {word}. Type /help for the list."));
     };
-    if !cmd.ready {
-        return Err(format!("{word} isn't in this app yet."));
-    }
     if remote && cmd.desktop_only {
         return Err(format!("{word} works on your computer."));
     }
@@ -785,6 +796,14 @@ fn extras(word: &str, rest: &str) -> Option<Result<Action, String>> {
     match word {
         "/sh" if rest.is_empty() => Some(Err("Type the command after /sh.".into())),
         "/sh" => Some(Ok(Action::Shell(rest.to_string()))),
+        "/sync" if !rest.is_empty() => Some(Err("Type /sync on its own.".into())),
+        "/sync" => Some(Ok(Action::Hub(HubSend::Sync))),
+        "/inhabit" if rest.is_empty() => Some(Err(
+            "Type the name of a paired computer after /inhabit.".into(),
+        )),
+        "/inhabit" => Some(Ok(Action::Hub(HubSend::Inhabit {
+            peer: rest.to_string(),
+        }))),
         "/deep-research" if rest.is_empty() => {
             Some(Err("Type what to research after /deep-research.".into()))
         }
@@ -889,6 +908,7 @@ pub fn apply(action: Action, workspace: &std::path::Path) -> Result<Effect, Stri
         }),
         Action::Op(_) => Err("That command needs a saved chat.".into()),
         Action::Shell(_) => Err("A shell line needs this computer's project folder.".into()),
+        Action::Hub(_) => Err("That needs this computer's hub.".into()),
     }
 }
 
@@ -1718,19 +1738,56 @@ mod tests {
     }
 
     #[test]
-    fn what_waits_on_another_card_is_greyed_not_in_the_cabin() {
+    fn sync_and_inhabit_ask_this_computers_hub() {
+        assert_eq!(parse("/sync", false), Ok(Action::Hub(HubSend::Sync)));
+        assert_eq!(
+            parse("/sync now", false),
+            Err("Type /sync on its own.".into())
+        );
+        assert_eq!(
+            parse("/inhabit  Desk PC ", false),
+            Ok(Action::Hub(HubSend::Inhabit {
+                peer: "Desk PC".into()
+            }))
+        );
+        assert_eq!(
+            parse("/inhabit", false),
+            Err("Type the name of a paired computer after /inhabit.".into())
+        );
         for cmd in ["/sync", "/inhabit"] {
-            let hit = hits(cmd, false)
-                .into_iter()
-                .find(|h| h.cmd == cmd)
-                .expect(cmd);
-            assert_eq!(hit.disabled.as_deref(), Some(NOT_YET), "{cmd}");
+            let hit = |remote| {
+                hits(cmd, remote)
+                    .into_iter()
+                    .find(|h| h.cmd == cmd)
+                    .expect(cmd)
+            };
+            assert_eq!(hit(false).disabled, None, "{cmd}");
             assert_eq!(
-                parse(cmd, false),
-                Err(format!("{cmd} isn't in this app yet.")),
+                hit(true).disabled.as_deref(),
+                Some(ON_YOUR_COMPUTER),
+                "{cmd}"
+            );
+            assert_eq!(
+                parse(&format!("{cmd} desk"), true),
+                Err(format!("{cmd} works on your computer.")),
                 "{cmd}"
             );
         }
+        assert!(help().contains("/sync — Share chats and memory with paired computers"));
+        assert!(help().contains("/inhabit — Hand your soul, skills and goal to a paired computer"));
+        assert_eq!(
+            apply(Action::Hub(HubSend::Sync), std::path::Path::new(".")),
+            Err("That needs this computer's hub.".into())
+        );
+        // The card's Send names what goes, in the shape the chat sends back.
+        assert_eq!(
+            serde_json::to_value(HubSend::Inhabit { peer: "d-1".into() }).unwrap(),
+            serde_json::json!({ "what": "inhabit", "peer": "d-1" })
+        );
+        assert_eq!(
+            serde_json::from_value::<HubSend>(serde_json::json!({ "what": "sync" })).unwrap(),
+            HubSend::Sync
+        );
     }
 
     #[test]
