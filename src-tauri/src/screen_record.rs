@@ -282,14 +282,22 @@ fn finished_text(done: &Done, note: &str) -> (bool, String) {
 }
 
 /// `/record`, `/record stop` and `/audiocheck` for a line typed on this
-/// computer. `None` when `line` is some other command.
-pub fn slash(line: &str, config_dir: &Path, remote: bool) -> Option<Result<Effect, String>> {
+/// computer, in the chat `chat`. `None` when `line` is some other command.
+pub fn slash(
+    line: &str,
+    config_dir: &Path,
+    remote: bool,
+    chat: Option<&str>,
+) -> Option<Result<Effect, String>> {
     use grokhub_core::Slash;
     let parsed = grokhub_core::parse_slash(line)?;
     let result = match parsed {
         Slash::Record(note) => start_or_ask(config_dir, &note, remote),
         Slash::RecordStop => stop_line(remote),
-        Slash::AudioCheck(want) => crate::audio_check::start(&want, remote).map_err(Ask::No),
+        Slash::AudioCheck(want) => {
+            crate::audio_check::start(config_dir, chat.unwrap_or(""), &want, remote)
+                .map_err(Ask::No)
+        }
         _ => return None,
     };
     Some(
@@ -535,7 +543,7 @@ mod tests {
     fn no_consent_means_a_question_and_no_folder() {
         let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = scratch("consent").join("cfg");
-        let got = slash("/record video stutters", &cfg, false)
+        let got = slash("/record video stutters", &cfg, false, None)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -573,7 +581,7 @@ mod tests {
         let cfg = scratch("remote").join("cfg");
         std::fs::write(cfg.join("app.json"), r#"{"screen_record":true}"#).unwrap();
         for line in ["/record", "/record stop", "/audiocheck"] {
-            let err = slash(line, &cfg, true).unwrap().unwrap_err();
+            let err = slash(line, &cfg, true, None).unwrap().unwrap_err();
             assert!(err.contains("your computer"), "{line}: {err}");
         }
         assert!(hub().rec.is_none());
@@ -582,8 +590,8 @@ mod tests {
     #[test]
     fn other_commands_are_not_ours() {
         let cfg = scratch("other").join("cfg");
-        assert!(slash("/new", &cfg, false).is_none());
-        assert!(slash("hello", &cfg, false).is_none());
+        assert!(slash("/new", &cfg, false, None).is_none());
+        assert!(slash("hello", &cfg, false, None).is_none());
     }
 
     #[test]
@@ -596,7 +604,9 @@ mod tests {
         assert!(said.starts_with("Recording your screen into "));
         assert!(said.ends_with("It stops on its own at 2:00."));
         assert_eq!(
-            slash("/record again", &cfg, false).unwrap().unwrap_err(),
+            slash("/record again", &cfg, false, None)
+                .unwrap()
+                .unwrap_err(),
             "Already recording. Stop it first."
         );
         let live = status();
@@ -616,7 +626,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert_eq!(
-            slash("/record stop", &cfg, false).unwrap().unwrap(),
+            slash("/record stop", &cfg, false, None).unwrap().unwrap(),
             Effect::Notice {
                 text: "Stopping the recording…".into()
             }

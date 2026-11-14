@@ -422,7 +422,7 @@ fn run_slash_line(
     owned: Option<&dyn Fn(&str) -> bool>,
 ) -> Result<slash::Effect, String> {
     // Screen recording and the audio check run on this computer only.
-    if let Some(done) = screen_record::slash(line, &state.config_dir, remote) {
+    if let Some(done) = screen_record::slash(line, &state.config_dir, remote, conversation_id) {
         return done;
     }
     let action = slash::parse(line, remote)?;
@@ -6009,6 +6009,17 @@ fn web_drive(
     Ok(id)
 }
 
+/// What a paired browser may answer from the decision inbox: its own chats'
+/// asks. A park (a hard card, such as a key or a command waiting on the
+/// computer) is the desktop's alone, so a browser that names one by id is
+/// refused, as the inbox list already leaves parks out.
+fn web_inbox_kind(kind: &str) -> Result<(), String> {
+    if kind == "park" {
+        return Err(remote::refused());
+    }
+    Ok(())
+}
+
 /// One of `remote::WEB_COMMANDS` from a paired browser, run as the window
 /// would run it. A web chat never gets the desktop tools.
 fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, String> {
@@ -6328,14 +6339,18 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 .collect();
             out(rows)
         }
-        "answer_inbox" => out(answer_inbox(
-            app.clone(),
-            state,
-            drive(args)?,
-            arg(args, "id")?,
-            arg(args, "kind")?,
-            arg(args, "approve")?,
-        )?),
+        "answer_inbox" => {
+            let kind: String = arg(args, "kind")?;
+            web_inbox_kind(&kind)?;
+            out(answer_inbox(
+                app.clone(),
+                state,
+                drive(args)?,
+                arg(args, "id")?,
+                kind,
+                arg(args, "approve")?,
+            )?)
+        }
         "reply_pick" => {
             reply_pick(state, arg(args, "key")?);
             Ok(Value::Null)
@@ -7609,6 +7624,19 @@ mod web_command_tests {
             .collect();
         assert_eq!(unlisted, Vec::<&str>::new());
         assert_eq!(arms.len(), crate::remote::WEB_COMMANDS.len());
+    }
+
+    /// A browser never answers a hard card: the inbox it lists has no
+    /// parks, and naming one by id is refused before anything is answered.
+    #[test]
+    fn a_browser_cannot_answer_a_park() {
+        assert_eq!(super::web_inbox_kind("park"), Err(crate::remote::refused()));
+        assert_eq!(super::web_inbox_kind("permission"), Ok(()));
+        let body = remote_call_src();
+        let answer = arm(&body, "answer_inbox");
+        let check = answer.find("web_inbox_kind(&kind)?").expect("checked");
+        let call = answer.find("out(answer_inbox(").expect("answered");
+        assert!(check < call, "{answer}");
     }
 
     /// The phone that started a chat can't steer it, or answer its asks,

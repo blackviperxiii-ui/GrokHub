@@ -2848,6 +2848,8 @@ pub fn audio_check_card(
         });
     }
     card.source_id = source;
+    // Pulse names the source line from this; the kind alone reads "Automation".
+    card.pulse.source_name = Some("Audio check".into());
     refresh_event_why(&mut card);
     card
 }
@@ -4704,6 +4706,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             })
         );
         assert_eq!(c.source_id, "audiocheck:alsa_input.usb-Yeti");
+        assert_eq!(c.pulse.source_name.as_deref(), Some("Audio check"));
         assert_eq!(c.id, "audiocheck-audiocheck:alsa_input.usb-Yeti");
         assert_eq!(
             audio_check_card("alsa_input.usb-Yeti", "Audio check: later", "", "", 9).id,
