@@ -865,6 +865,7 @@ export function Chat({
   side,
   left,
   snapshot,
+  tuned,
   onConversation,
   onBusy,
   onRan,
@@ -905,6 +906,9 @@ export function Chat({
   /** Objectives beside chat: the PC snapshot on the right, from
    * SIDE_MIN_WIDTH. */
   snapshot?: ReactNode;
+  /** Auto setup's latest reply. A new one may have changed settings (Yes on
+   * an offer, the first-run summary), so the chat reads them again. */
+  tuned?: object | null;
   /** The conversation on screen, at the start and each time it changes. */
   onConversation?: (conversationId: string) => void;
   /** A reply started or ended. */
@@ -1010,7 +1014,7 @@ export function Chat({
 
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
-  }, [active]);
+  }, [active, tuned]);
 
   useEffect(() => {
     if (!active) return;
@@ -2030,6 +2034,8 @@ export function Chat({
     // "make the text bigger", "undo that": a setting, answered here.
     const said = files.length === 0 && !remote ? await settingAsk(text) : null;
     if (said) {
+      // "undo that" may have put back a setting this chat lays out by.
+      getSettings().then(setSettings, () => {});
       setDraft("");
       setItems((now) => [...now, { kind: "user", text }, { kind: "assistant", text: said, streaming: false }]);
       return;
