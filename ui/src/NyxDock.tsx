@@ -1,15 +1,10 @@
-import { memo, useEffect, useState } from "react";
+import { memo } from "react";
 import { COMPANION_NAME } from "./brand";
-import {
-  desktopNyxDock,
-  desktopNyxGet,
-  desktopNyxSetOutfit,
-  desktopNyxUndock,
-  type DesktopNyxState,
-} from "./desktopNyxApi";
+import { desktopNyxDock, desktopNyxSetOutfit, desktopNyxUndock } from "./desktopNyxApi";
 import { NyxCard } from "./NyxCard";
 import { MOOD_LABEL, type Mood } from "./nyx";
 import { inShell } from "./transport";
+import { useDesktopNyx } from "./useDesktopNyx";
 import { useMinWidth } from "./useMinWidth";
 
 /** Narrower windows keep the whole width for the chat. Keep in step with the
@@ -28,19 +23,12 @@ export function useWide(): boolean {
 /** Labs → Desktop companion's controls: Put her on the desktop / Bring her
  * back and the wardrobe. Nothing while that Lab is off or off the shell.
  * `framed` gives them their own card, for a column without the dock; it
- * reads again each time `active` turns true, so a Lab turned on (or her
- * docking from the desktop) shows on the way back. */
+ * reads again each time `active` turns true, so a Lab turned on while it was
+ * hidden shows on the way back. */
 export function NyxDeskControls({ framed = false, active = true }: { framed?: boolean; active?: boolean }) {
-  const [desk, setDesk] = useState<DesktopNyxState | null>(null);
-
-  // Loads on mount and when shown again. Inlined like Memory: no refresh
-  // wrapper that setStates from the effect (react-hooks/set-state-in-effect).
-  // Off the shell, desk stays null; button handlers refresh via their own
-  // .then(setDesk).
-  useEffect(() => {
-    if (!inShell() || !active) return;
-    void desktopNyxGet().then(setDesk, () => setDesk(null));
-  }, [active]);
+  // Off the shell it stays null. Every change, from here, the desk or the
+  // tray, arrives as an event.
+  const [desk, setDesk] = useDesktopNyx(inShell() && active);
 
   if (desk?.enabled !== true) return null;
   const controls = (

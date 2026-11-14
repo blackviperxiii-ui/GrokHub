@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopNyxState } from "./desktopNyxApi";
@@ -11,7 +11,10 @@ const api = vi.hoisted(() => ({
   desktopNyxSetOutfit: vi.fn<(id: string | null) => Promise<DesktopNyxState>>(),
   desktopNyxSavePos: vi.fn(() => Promise.resolve(state())),
   desktopNyxSetPassthrough: vi.fn(() => Promise.resolve()),
+  onDesktopNyx: vi.fn<(fn: (s: DesktopNyxState) => void) => Promise<() => void>>(),
 }));
+
+let heard: ((s: DesktopNyxState) => void) | null = null;
 
 vi.mock("./desktopNyxApi", () => api);
 
@@ -46,6 +49,20 @@ describe("NyxDesk", () => {
     api.desktopNyxSet.mockImplementation(async (patch) => state(patch as Partial<DesktopNyxState>));
     api.desktopNyxSavePos.mockResolvedValue(state());
     api.desktopNyxSetPassthrough.mockResolvedValue();
+    heard = null;
+    api.onDesktopNyx.mockImplementation((fn) => {
+      heard = fn;
+      return Promise.resolve(() => {});
+    });
+  });
+
+  it("changes her outfit when the dock's wardrobe does", async () => {
+    const { container } = render(<NyxDesk />);
+    const figure = () => container.querySelector(".nyx-desk-figure")?.outerHTML ?? "";
+    await waitFor(() => expect(figure()).toContain("nyx-hanging-out"));
+    act(() => heard?.(state({ outfit: "working", outfitFile: "brand/nyx-working.jpg" })));
+    expect(figure()).toContain("nyx-working");
+    expect(figure()).not.toContain("nyx-hanging-out");
   });
 
   it("docks her back from the context menu", async () => {
