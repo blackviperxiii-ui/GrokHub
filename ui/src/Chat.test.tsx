@@ -497,6 +497,8 @@ describe("Chat", () => {
     emit(id, { kind: "text", text: "Done." });
     emit(id, { kind: "done", stop: "end_turn" });
     finish();
+    // The turn has settled: the reply stopped streaming, so nothing new is coming.
+    await waitFor(() => expect(document.querySelector(".bubble.assistant.streaming")).toBeNull());
     await waitFor(() => expect(screen.getByRole("button", { name: "New chat" })).toBeEnabled());
     // jsdom draws nothing, so it has no scrollIntoView; the log calls it when there is one.
     const scroll = vi.fn();

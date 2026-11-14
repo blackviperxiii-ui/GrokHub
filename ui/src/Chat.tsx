@@ -100,6 +100,7 @@ import {
   expandOne,
   EXPAND,
   foldOf,
+  onlyFoldsChanged,
   startsCollapsed,
   THOUGHT_LABEL,
   THOUGHT_ROW_LABEL,
@@ -1164,13 +1165,13 @@ export function Chat({
     };
   }, [conversationId, voiceSession]);
 
-  /** A thought was folded or opened in place: the log stays where it is. */
-  const foldedInPlace = useRef(false);
+  /** The log as last scrolled: folding a thought adds nothing at the end, so
+   * the view stays on it. */
+  const scrolledFor = useRef<Item[]>([]);
   useEffect(() => {
-    if (foldedInPlace.current) {
-      foldedInPlace.current = false;
-      return;
-    }
+    const before = scrolledFor.current;
+    scrolledFor.current = items;
+    if (items.length > 0 && onlyFoldsChanged(before, items)) return;
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [items]);
 
@@ -1747,7 +1748,6 @@ export function Chat({
   /** Collapse folds every thought in this chat and keeps new ones folded;
    * Expand opens only this one. */
   function foldThought(at: number, fold: Fold) {
-    foldedInPlace.current = true;
     if (fold === "minimized") {
       setFoldedChat(conversationId);
       setItems(collapseAll);

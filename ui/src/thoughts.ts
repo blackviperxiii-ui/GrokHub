@@ -29,6 +29,18 @@ export function collapseAll(items: Item[]): Item[] {
   return items.map((item) => (item.kind === "thought" ? { ...item, fold: "minimized" } : item));
 }
 
+/** Nothing new in the log, only thoughts folded or opened (or the same rows
+ * again): the view stays where the person is reading. */
+export function onlyFoldsChanged(before: readonly Item[], after: readonly Item[]): boolean {
+  return (
+    before.length === after.length &&
+    after.every((item, i) => {
+      const was = before[i];
+      return item === was || (item.kind === "thought" && was.kind === "thought" && item.text === was.text);
+    })
+  );
+}
+
 /** Expand: only the thought at `index` opens; the rest keep their fold. */
 export function expandOne(items: Item[], index: number): Item[] {
   return items.map((item, i) => (i === index && item.kind === "thought" ? { ...item, fold: "expanded" } : item));
