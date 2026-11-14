@@ -260,6 +260,7 @@ const EMPTY_PRIVACY = {
   offlineOnly: false,
   localReady: false,
   sent: "0 calls sent off-device this week",
+  sentCalls: 0,
   hosts: [],
   encrypted: true,
   encryptedNote: "Personal memory and the logs are sealed with your keyring.",
@@ -785,8 +786,12 @@ export function initScript(theme = "ops-dark") {
           return fix.memoryFiles;
         case "get_battlenet":
           return { found: false, games: [] };
+        case "nyx_look":
+          // The companion docked beside the chat, as on a desktop with her art.
+          return { set: "hanging-out", poses: ["brand/nyx-hanging-out.jpg"], explicit: false, mood: "hanging-out" };
         case "get_mission":
-          return { mission: null, xp: fix.xp };
+          // The same mission Home's Objectives tile shows, for Chat's side column.
+          return { mission: fix.home.slots.find((s) => s.tile.kind === "objectives")?.tile.mission ?? null, xp: fix.xp };
         case "get_about":
           return { version: fix.settings.version, channel: "beta" };
         default:

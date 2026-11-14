@@ -24,7 +24,7 @@ export function onScroll(state: BarState, top: number, delta: number): BarState 
   return { hidden: state.hidden, run };
 }
 
-const SHOWS_BAR = "input, textarea, select, [contenteditable], .topbar, .topbar *";
+const SHOWS_BAR = "input, textarea, select, [contenteditable], .rail, .rail *";
 
 function usePhone(): boolean {
   const [phone, setPhone] = useState(() => window.matchMedia?.(PHONE_QUERY).matches ?? false);
@@ -38,7 +38,7 @@ function usePhone(): boolean {
   return phone;
 }
 
-/** Whether the views bar should slide away: only on phones, while the user
+/** Whether the rail (the views bar on phones) should slide away: only on phones, while the user
  * scrolls down, and never while `pinned` (a dialog is open). Focusing a field
  * or the bar itself brings it back, so it stays reachable from the keyboard. */
 export function useHidingBar(pinned: boolean): boolean {
@@ -66,7 +66,7 @@ export function useHidingBar(pinned: boolean): boolean {
     };
     const scroll = (event: Event) => {
       const el = event.target === document ? document.scrollingElement : event.target;
-      if (!(el instanceof Element) || el.closest(".topbar")) return;
+      if (!(el instanceof Element) || el.closest(".rail")) return;
       const top = el.scrollTop;
       const before = last.get(el) ?? top;
       last.set(el, top);

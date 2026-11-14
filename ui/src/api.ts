@@ -3583,6 +3583,9 @@ export interface PrivacyPage {
   localReady: boolean;
   /** "3 calls sent off-device this week". */
   sent: string;
+  /** The same count as a number; null while the log is sealed and the keyring
+   * locked. Missing from an older desktop the web app talks to. */
+  sentCalls?: number | null;
   hosts: { host: string; calls: number }[];
   encrypted: boolean;
   encryptedNote: string;

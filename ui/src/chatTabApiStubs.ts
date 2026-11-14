@@ -37,5 +37,8 @@ export function chatTabApiStubs() {
         budgets: [] as { value: number; label: string }[],
       }),
     composerGhostSuggest: () => Promise.resolve(""),
+    // The top bar's pills read these; a suite that cares mocks its own.
+    getPersonalities: () => Promise.reject(new Error("not mocked")),
+    getPrivacy: () => Promise.reject(new Error("not mocked")),
   };
 }

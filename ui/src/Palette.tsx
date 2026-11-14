@@ -81,6 +81,8 @@ export interface PaletteExtras {
   chats: readonly ChatHit[];
   slash: readonly SlashHit[];
   chips?: readonly QuickChip[];
+  /** Only these pages, and nothing else: the rail's More list. */
+  only?: readonly View[];
 }
 
 const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], slash: [] };
@@ -143,22 +145,39 @@ export function views(caps: Capabilities): View[] {
   ];
 }
 
-/** Every page the palette opens: the tabs, Objectives right after Home, and
- * the Command line right after Code. Neither has a tab of its own; Home's
- * objectives tiles open Objectives too. Updates & Drivers opens from its Home
- * tile only. */
+/** Every page the palette opens: the tabs, Objectives right after Home, the
+ * Command line right after Code, and Updates & Drivers (this computer's
+ * drivers, so not in the web app) right before Settings. Home's tiles open
+ * Objectives and Updates & Drivers too. */
 export function pageViews(caps: Capabilities): View[] {
   const tabs = views(caps);
   const at = tabs.indexOf("home") + 1;
   const pages: View[] = [...tabs.slice(0, at), "objectives", ...tabs.slice(at)];
   const code = pages.indexOf("code");
-  return code < 0 ? pages : [...pages.slice(0, code + 1), "command", ...pages.slice(code + 1)];
+  const withCommand: View[] = code < 0 ? pages : [...pages.slice(0, code + 1), "command", ...pages.slice(code + 1)];
+  if (caps.remote) return withCommand;
+  const settings = withCommand.indexOf("settings");
+  return [...withCommand.slice(0, settings), "updates", ...withCommand.slice(settings)];
 }
 
-/** Whether this app has `view` to open. Updates & Drivers has no tab, and
- * reads this computer. */
+/** Whether this app has `view` to open. */
 export function hasPage(caps: Capabilities, view: View): boolean {
-  return pageViews(caps).includes(view) || (view === "updates" && !caps.remote);
+  return pageViews(caps).includes(view);
+}
+
+/** The pages on the left rail, top to bottom; Settings sits at the rail's foot. */
+export const RAIL: readonly View[] = ["home", "chat", "code", "pulse", "library", "settings"];
+
+/** The rail pages this platform has. */
+export function railViews(caps: Capabilities): View[] {
+  const shown = views(caps);
+  return RAIL.filter((view) => shown.includes(view));
+}
+
+/** The pages the rail's More opens: every page that is not on the rail. */
+export function moreViews(caps: Capabilities): View[] {
+  const rail = railViews(caps);
+  return pageViews(caps).filter((view) => !rail.includes(view));
 }
 
 /** The rows for `query`, in order: suggestions (while nothing is typed),
@@ -179,6 +198,10 @@ export function paletteRows(caps: Capabilities, query: string, extras: PaletteEx
     action: { kind: "settings", section },
   }));
   const named = (rows: PaletteRow[]) => (q ? rows.filter((row) => answersTo(row.label, q)) : rows);
+  if (extras.only) {
+    const only = extras.only;
+    return named(pages.filter((row) => row.action.kind === "view" && only.includes(row.action.view)));
+  }
   const views = pageViews(caps);
   const suggested = q ? [] : (extras.chips ?? []).flatMap((chip) => chipRow(chip, views) ?? []);
   const all = [
@@ -214,11 +237,14 @@ const paletteRoom = () => window.innerHeight * 0.5;
 export function Palette({
   caps,
   sources = NO_SOURCES,
+  only,
   onPick,
   onClose,
 }: {
   caps: Capabilities;
   sources?: PaletteSources;
+  /** Only these pages: the rail's More list, with no commands, chats or Ask. */
+  only?: readonly View[];
   onPick: (action: PaletteAction) => void;
   onClose: () => void;
 }) {
@@ -234,6 +260,7 @@ export function Palette({
   // row opens Chat, where the inbox sits.
   const [waiting, setWaiting] = useState(0);
   useEffect(() => {
+    if (only) return;
     let live = true;
     Promise.resolve()
       .then(() => decisionInbox())
@@ -244,13 +271,16 @@ export function Palette({
     return () => {
       live = false;
     };
-  }, []);
+  }, [only]);
   const inboxLabel = `Decisions waiting · ${waiting}`;
   const inboxRow: PaletteRow[] =
     waiting > 0 && (!query.trim() || answersTo(inboxLabel, query.trim().toLowerCase()))
       ? [{ label: inboxLabel, action: { kind: "view", view: "chat" } }]
       : [];
-  const rows = [...inboxRow, ...paletteRows(caps, query, { ...sources, ...found })];
+  const rows = only
+    ? paletteRows(caps, query, { ...NO_EXTRAS, only })
+    : [...inboxRow, ...paletteRows(caps, query, { ...sources, ...found })];
+  const none = rows.length === 0;
   const { onChip } = sources;
   const { chats: findChats, slash: findSlash } = sources;
   const at = Math.min(pick, rows.length - 1);
@@ -264,6 +294,7 @@ export function Palette({
   // Chats and slash commands come from the desktop, so they arrive a moment
   // later; an answer for an older query is dropped.
   useEffect(() => {
+    if (only) return;
     let live = true;
     const q = query.trim();
     const keep = (next: typeof found) => {
@@ -276,7 +307,7 @@ export function Palette({
     return () => {
       live = false;
     };
-  }, [query, findChats, findSlash]);
+  }, [query, findChats, findSlash, only]);
 
   useEffect(() => {
     const dir = moved.current;
@@ -295,6 +326,8 @@ export function Palette({
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
+    } else if (none && ["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) {
+      event.preventDefault();
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
       moved.current = 1;
@@ -316,26 +349,26 @@ export function Palette({
         className="palette"
         role="dialog"
         aria-modal="true"
-        aria-label="Command palette"
+        aria-label={only ? "More pages" : "Command palette"}
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
         <input
           ref={input}
-          aria-label="Search pages and commands"
-          placeholder="Search pages and commands"
+          aria-label={only ? "Search pages" : "Search pages and commands"}
+          placeholder={only ? "Search pages" : "Search pages and commands"}
           value={query}
           role="combobox"
           aria-expanded="true"
           aria-controls="palette-rows"
-          aria-activedescendant={`palette-row-${at}`}
+          aria-activedescendant={none ? undefined : `palette-row-${at}`}
           onChange={(e) => {
             setQuery(e.target.value);
             moved.current = null;
             setPick(0);
           }}
         />
-        <ul ref={list} id="palette-rows" role="listbox" aria-label="Pages and commands">
+        <ul ref={list} id="palette-rows" role="listbox" aria-label={only ? "Pages" : "Pages and commands"}>
           {rows.map((row, i) => (
             <li
               key={rowKey(row)}
@@ -351,6 +384,7 @@ export function Palette({
             </li>
           ))}
         </ul>
+        {none && <p className="palette-none">No page matches “{query.trim()}”.</p>}
         <button type="button" className="quiet" onClick={onClose}>
           Close
         </button>
