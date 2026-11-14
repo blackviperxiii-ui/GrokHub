@@ -24,6 +24,7 @@ import { Labs } from "./Labs";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
 import { KnowMe } from "./KnowMe";
+import { PcHealth } from "./PcHealth";
 import { PulseAuto } from "./PulseAuto";
 import { PulseSources } from "./PulseSources";
 import { AiModels } from "./AiModels";
@@ -297,6 +298,7 @@ export function Settings({
             {section === "pulse" && caps.pulse && <KnowMe />}
             {section === "pulse" && caps.pulse && <PulseSources />}
             {section === "pulse" && caps.pulse && <PulseAuto />}
+            {section === "pulse" && caps.pulse && <PcHealth />}
             {section === "localAi" && caps.localAi && <LocalAi />}
             {section === "aiModels" && caps.localAi && <AiModels />}
             {section === "webAccess" && caps.webAccess && <WebAccess />}
