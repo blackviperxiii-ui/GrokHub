@@ -479,7 +479,12 @@ const KEY_LOG_START = `
       window.addEventListener(type, (e) => queueMicrotask(() => push([type, e.key ?? e.inputType ?? "", e.data ?? "", at(), e.defaultPrevented ? "taken" : "", e.target.value?.length ?? ""])), true);
     }
     window.addEventListener("blur", () => push(["window-blur", "", "", at(), "", ""]), true);
-    window.addEventListener("error", (e) => push(["error", "", "", at(), String(e.message), ""]), true);
+    // React's "Maximum update depth" error carries the stack of the setState
+    // that looped; keep it so the frames can be mapped to the source.
+    window.addEventListener("error", (e) => {
+      const stack = String(e.error?.stack || "").split("\n").slice(1, 16).map((l) => l.trim()).join(" < ");
+      push(["error", "", "", at(), String(e.message) + " | " + stack, ""]);
+    }, true);
     // Before React sees an input on the box: note the props it renders with,
     // and log its onChange, so a put-back value shows whether React ever
     // committed the typed one (new props) or not (the same props).
