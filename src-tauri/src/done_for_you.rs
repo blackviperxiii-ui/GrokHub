@@ -92,8 +92,15 @@ fn note_paused(config_dir: &Path, job: &Automation, seq: u64, key: &str) {
             key: key.to_string(),
             answered: false,
         });
-        let extra = s.paused.len().saturating_sub(KEEP);
-        s.paused.drain(..extra);
+        // Over the cap, the oldest answered pauses go first. An unanswered
+        // one is a job still paused, and its record is what holds it, hears
+        // its Undo and keeps its edits, so it stays.
+        while s.paused.len() > KEEP {
+            let Some(at) = s.paused.iter().position(|p| p.answered) else {
+                break;
+            };
+            s.paused.remove(at);
+        }
     });
 }
 
@@ -146,10 +153,12 @@ pub fn set_on(config_dir: &Path, on: bool) -> Result<(), String> {
 /// not help. They match whole words, and include the run loop's own outage
 /// lines (`run::BUSY_GAVE_UP`, `ClientError`'s transport, idle and
 /// disconnect errors).
-const ACCOUNT_WIDE: [&str; 27] = [
+const ACCOUNT_WIDE: [&str; 32] = [
     "api key",
     "sign-in was rejected",
+    "sign in again",
     "signed out",
+    "keychain",
     "unauthorized",
     "forbidden",
     "rate limit",
@@ -171,12 +180,16 @@ const ACCOUNT_WIDE: [&str; 27] = [
     "timeout",
     "connection refused",
     "connection reset",
+    "connection failed",
+    "dns",
+    "service unavailable",
     "network",
     "offline",
     "overloaded",
 ];
 
-/// HTTP statuses that come from the account or the server, after `HTTP`.
+/// HTTP statuses that come from the account or the server, after `HTTP` or
+/// `status code`.
 fn account_status(code: &str) -> bool {
     matches!(code, "401" | "402" | "403" | "408" | "429")
         || (code.len() == 3 && code.starts_with('5'))
@@ -196,8 +209,7 @@ fn account_wide(error: &str) -> bool {
     ACCOUNT_WIDE.iter().any(|p| has(&words(p)))
         || said
             .windows(2)
-            .any(|w| w[0] == "http" && account_status(&w[1]))
-        || has(&words("service unavailable"))
+            .any(|w| (w[0] == "http" || w[0] == "code") && account_status(&w[1]))
 }
 
 /// Paused by this feature, turned back on since, and not yet run
@@ -364,6 +376,11 @@ pub fn tick_one(
     }
     let paused = load_state(config_dir).paused;
     let job = pausable(&list, route_ok, &paused)?.clone();
+    // A run of it is going right now (Run now leaves the old health until it
+    // ends): its result may be the fix.
+    if crate::automations::is_running(&job.id) {
+        return None;
+    }
     let c = candidate(&job);
     // The card's words are settled before anything runs: a pause must never
     // happen without the card that says so and offers Undo.
@@ -384,7 +401,7 @@ pub fn tick_one(
         let list = list.ok()?;
         let paused = load_state(config_dir).paused;
         let still = pausable(&list, route_ok, &paused)
-            .filter(|a| a.id == job.id)?
+            .filter(|a| a.id == job.id && !crate::automations::is_running(&a.id))?
             .clone();
         let _pin = grokhub_agent::perm::ConfigGuard::set(config_dir);
         let run = hx::run_auto_act(config_dir, config_dir, &act, &mind, AccessMode::Supervised);
@@ -621,15 +638,18 @@ pub fn turned_back_on(config_dir: &Path, id: &str) {
     answer_resumed(config_dir, id);
 }
 
-/// The open pause on `id`, while it is the newest one: what Settings >
-/// Behavior's Undo hands to [`crate::changes::undo_pause`].
+/// The ledger line Undo would undo next on `id`, when it is a pause this
+/// feature made: what Settings > Behavior's Undo hands to
+/// [`crate::changes::undo_pause`].
 pub fn open_pause(config_dir: &Path, id: &str) -> Option<u64> {
+    let seq = hx::ChangeLedger::load_kind(config_dir, ChangeKind::Automation)
+        .undo_target(id)?
+        .seq;
     load_state(config_dir)
         .paused
         .iter()
-        .rev()
-        .find(|p| p.id == id)
-        .map(|p| p.seq)
+        .any(|p| p.id == id && p.seq == seq)
+        .then_some(seq)
 }
 
 /// When job `id` is on, every pause of it MindCheck has not heard about

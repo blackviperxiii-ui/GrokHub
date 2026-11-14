@@ -242,6 +242,11 @@ fn only_a_running_job_failing_5_times_for_its_own_reason_can_be_paused() {
         "rate limited: slow down",
         "HTTP 503: upstream connect error",
         "HTTP 402: payment required",
+        grokhub_agent::xai_keychain::EXPIRED,
+        grokhub_core::XAI_NEED_SIGNIN,
+        "The system keychain is not available: no secret service",
+        "https://auth.example/token: status code 503",
+        "transport: dns failed for api.example",
         "OpenRouter has no credits left.",
         "429 Too Many Requests",
         "request timed out",
@@ -928,6 +933,82 @@ fn an_undo_that_leaves_the_job_off_teaches_nothing() {
     assert_eq!(spans(&d).iter().filter(|s| s.decision == "undo").count(), 0);
     assert!(!card(&d, &done.id).done_for_you.unwrap().answered);
     drain(&d);
+}
+
+#[test]
+fn a_job_paused_twice_keeps_its_edits_when_settings_undoes_the_first_pause() {
+    let d = scratch("twice");
+    let _pin = grokhub_agent::perm::ConfigGuard::set(&*d);
+    write_jobs(&d, &[job("auto-sync", "Sync notes", true, 6, "disk full")]);
+    open(&d);
+    tick(&d, false, false).expect("first pause");
+    // On again with its switch, fixed, then 5 more failed runs.
+    crate::automations::set_enabled(&d, "auto-sync", true, clock()).unwrap();
+    crate::automations::edit(
+        &d,
+        "auto-sync",
+        "every day at 8am sync my notes folder",
+        clock(),
+    )
+    .unwrap();
+    fail_more(&d, "auto-sync", 5);
+    // Paused again, the way a Pause it tap runs it, then that pause undone
+    // in Settings.
+    let args = r#"{"id":"auto-sync","reason":"paused from its Pulse card"}"#;
+    let again = hx::run_offered_step(&d, &d, TOOL, args, AccessMode::Supervised);
+    let hx::AutoRun::Done { change, .. } = again else {
+        panic!("second pause");
+    };
+    let job_now = rows(&d).into_iter().find(|a| a.id == "auto-sync").unwrap();
+    note_paused(&d, &job_now, change.seq, &hx::proactive_key(TOOL, args));
+    assert!(!enabled(&d, "auto-sync"));
+    crate::change_rows::undo(&d, "automation", "auto-sync").unwrap();
+    assert!(enabled(&d, "auto-sync"));
+    let edited = rows(&d).into_iter().find(|a| a.id == "auto-sync").unwrap();
+    // Settings > Behavior now lists the first pause: its Undo turns the job
+    // on as it is, never back to the row from before the first pause.
+    crate::automations::set_enabled(&d, "auto-sync", false, clock()).unwrap();
+    crate::change_rows::undo(&d, "automation", "auto-sync").unwrap();
+    let back = rows(&d).into_iter().find(|a| a.id == "auto-sync").unwrap();
+    assert!(back.enabled);
+    assert_eq!(back.instructions, edited.instructions);
+    assert_eq!(back.run_count, edited.run_count);
+    drain(&d);
+}
+
+#[test]
+fn a_job_that_is_running_now_is_not_paused() {
+    let d = scratch("running");
+    let _pin = grokhub_agent::perm::ConfigGuard::set(&*d);
+    write_jobs(&d, &[job("auto-run", "Sync notes", true, 6, "disk full")]);
+    open(&d);
+    let held = crate::automations::Running::claim("auto-run").unwrap();
+    assert_eq!(tick(&d, false, false), None);
+    assert!(enabled(&d, "auto-run"));
+    drop(held);
+    assert!(tick(&d, false, false).is_some());
+    assert!(!enabled(&d, "auto-run"));
+    drain(&d);
+}
+
+#[test]
+fn the_cap_drops_answered_pauses_and_keeps_a_job_that_is_still_paused() {
+    let d = scratch("cap");
+    let old = Automation {
+        id: "auto-old".into(),
+        ..auto("auto-old", false, 6, "x")
+    };
+    note_paused(&d, &old, 1, "k");
+    for i in 0..(KEEP as u64 + 4) {
+        let other = auto(&format!("auto-{i}"), true, 6, "x");
+        note_paused(&d, &other, i + 2, "k");
+        change_state(&d, |s| s.paused.last_mut().unwrap().answered = true);
+    }
+    let kept = load_state(&d).paused;
+    assert_eq!(kept.len(), KEEP);
+    assert_eq!(kept[0].id, "auto-old");
+    assert!(!kept[0].answered);
+    assert_eq!(kept.last().unwrap().seq, KEEP as u64 + 5);
 }
 
 #[test]
