@@ -54,6 +54,14 @@ pub fn holds_secret(text: &str) -> bool {
         || crate::diagnostics::has_credential_value(text)
 }
 
+/// Text that leaves this computer for another one: all three redactors
+/// [`holds_secret`] asks, so whatever it calls a secret is masked here.
+pub fn redact_for_share(input: &str) -> String {
+    let s = redact_secret_words(input);
+    let s = redact_token_shapes(&s);
+    crate::diagnostics::redact_credential_values(&s)
+}
+
 fn redact_patterns(input: &str, word_start: bool) -> String {
     let mut s = input.to_string();
     for (needle, _) in PATTERNS {
@@ -498,6 +506,27 @@ pub fn forget_topic(markdown: &str, topic: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_share_masks_every_secret_shape_and_keeps_the_words() {
+        let text = "key sk-abcdefghijklmnopqrstuv\n\
+                    DB_PASSWORD=hunter2fake\n\
+                    aws AKIAABCDEFGHIJKLMNOP\n\
+                    open https://user:pw-fake@example.com/x\n\
+                    notes in /tmp/task-runner-notes.md";
+        let out = redact_for_share(text);
+        for secret in [
+            "sk-abcdefghijklmnopqrstuv",
+            "hunter2fake",
+            "AKIAABCDEFGHIJKLMNOP",
+            "pw-fake",
+        ] {
+            assert!(!out.contains(secret), "{secret} left in {out}");
+        }
+        assert!(out.contains("/tmp/task-runner-notes.md"), "{out}");
+        assert!(!holds_secret(&out), "{out}");
+        assert_eq!(redact_for_share("Tuesday at nine."), "Tuesday at nine.");
+    }
 
     #[test]
     fn held_secret_never_lands_in_the_transcript() {

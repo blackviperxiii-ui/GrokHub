@@ -10,6 +10,11 @@
 //! written when the paired list is seen to have changed: on the page's poll
 //! (`view`) and when the app quits (`save`). Another app on this computer
 //! writes the same file; what it saved meanwhile is kept.
+//!
+//! What a paired computer fetches (the `/sync` share and the `/inhabit`
+//! hand-off) lives in memory for one launch and is never written to the
+//! file, so no hub started later serves it. A copy an earlier launch left in
+//! the file is dropped, and the hub answers nothing while sharing is off.
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -17,9 +22,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use grokhub_core::{
     hub_pair_url, load_hub_state, now_ms, pair::pair_code_is_live, pair::start_hub_rotates_pair,
-    save_hub_state, HubState, DEFAULT_PORT,
+    save_hub_state, state::Peer, HubSnapshot, HubState, InhabitBundle, DEFAULT_PORT,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// One computer paired with this hub.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -59,24 +65,41 @@ fn peer_keys(st: &HubState) -> Vec<PeerKey> {
         .collect()
 }
 
+/// The share and the hand-off the file held at launch. This app never writes
+/// either, so a copy in the file is another app's when it differs from this.
+#[derive(Default)]
+struct Ours {
+    snapshot: Option<Arc<Value>>,
+    inhabit: Option<InhabitBundle>,
+}
+
 /// What another app saved to the file since this one read it stays: its
-/// paired computers, and its snapshot, inbox and inhabit bundle where this
-/// app holds none.
-fn keep_theirs(mine: &mut HubState, theirs: HubState) {
+/// paired computers, its inbox where this app holds none, and its snapshot
+/// and inhabit bundle where they aren't the copy dropped at launch.
+fn keep_theirs(mine: &mut HubState, theirs: HubState, ours: &Ours) {
     for peer in theirs.peers {
         if !mine.peers.iter().any(|p| p.id == peer.id) {
             mine.peers.push(peer);
         }
     }
-    if mine.snapshot.is_none() {
+    if mine.snapshot.is_none() && theirs.snapshot.as_deref() != ours.snapshot.as_deref() {
         mine.snapshot = theirs.snapshot;
     }
     if mine.inbox.is_empty() {
         mine.inbox = theirs.inbox;
     }
-    if mine.inhabit.is_none() {
+    if mine.inhabit.is_none() && theirs.inhabit != ours.inhabit {
         mine.inhabit = theirs.inhabit;
     }
+}
+
+/// Who this hub is, whether it is sharing, and who is paired with it.
+#[derive(Debug, Clone)]
+pub struct HubPeers {
+    pub sharing: bool,
+    pub device_id: String,
+    pub device_name: String,
+    pub peers: Vec<Peer>,
 }
 
 pub struct HubShare {
@@ -84,6 +107,8 @@ pub struct HubShare {
     path: PathBuf,
     /// The paired computers as the file last had them from this app.
     saved: Mutex<Vec<PeerKey>>,
+    /// The share and hand-off the file held at launch.
+    ours: Ours,
     /// The paired computers when the current pairing code was made. A code
     /// that is gone was used if the list changed since, and burned otherwise.
     at_code: Mutex<Vec<PeerKey>>,
@@ -104,9 +129,21 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl HubShare {
     /// The hub as the config folder has it: its paired computers stay, but
-    /// sharing is off and no pairing code carries over.
+    /// sharing is off, and no pairing code, share or hand-off carries over.
     pub fn open(config_dir: &Path) -> Self {
         Self::with(config_dir, grokhub_hub::serve_lan, crate::remote::lan_ip)
+    }
+
+    /// The hub on loopback, on any free port, for tests elsewhere in the app.
+    #[cfg(test)]
+    pub(crate) fn on_loopback(config_dir: &Path) -> Self {
+        fn bind(state: Arc<Mutex<HubState>>, _port: u16) -> Result<u16, String> {
+            grokhub_hub::serve_background(state, 0)
+        }
+        fn none() -> Option<IpAddr> {
+            None
+        }
+        Self::with(config_dir, bind, none)
     }
 
     fn with(
@@ -118,11 +155,18 @@ impl HubShare {
         let mut state = load_hub_state(&path).unwrap_or_else(HubState::empty);
         state.sharing = false;
         state.pair = None;
+        // A share or hand-off from an earlier launch is old news: chats and
+        // memory have moved on, and nobody asked to send them again.
+        let ours = Ours {
+            snapshot: state.snapshot.take(),
+            inhabit: state.inhabit.take(),
+        };
         let peers = peer_keys(&state);
         Self {
             hub: Arc::new(Mutex::new(state)),
             path,
             saved: Mutex::new(peers.clone()),
+            ours,
             at_code: Mutex::new(peers),
             bound: Mutex::new(None),
             bind,
@@ -255,6 +299,36 @@ impl HubShare {
         (sharing, frame.map(|f| (f.data_url.clone(), f.at)))
     }
 
+    /// Who is paired, and whether sharing is on. Memory only.
+    pub fn peers(&self) -> HubPeers {
+        let st = lock(&self.hub);
+        HubPeers {
+            sharing: st.sharing,
+            device_id: st.device_id.clone(),
+            device_name: st.device_name.clone(),
+            peers: st.peers.clone(),
+        }
+    }
+
+    /// `/sync`: the share paired computers fetch, merged record by record
+    /// with what is already there (a paired computer's own upload keeps its
+    /// newer rows). Memory only; the merge is slow, so call it off the main
+    /// thread.
+    pub fn publish(&self, snap: HubSnapshot) -> Result<(), String> {
+        grokhub_core::swap_hub_snapshot(&self.hub, |held| {
+            let merged = match held.and_then(|v| HubSnapshot::deserialize(v).ok()) {
+                Some(held) => grokhub_core::merge_hub_snapshots(&snap, &held),
+                None => snap.clone(),
+            };
+            serde_json::to_value(&merged).map_err(|e| e.to_string())
+        })
+    }
+
+    /// `/inhabit`: the hand-off one paired computer claims once. Memory only.
+    pub fn stage(&self, bundle: InhabitBundle) {
+        lock(&self.hub).inhabit = Some(bundle);
+    }
+
     /// Writes the file when a computer paired since the last write, and
     /// nothing otherwise. The page's poll and the app quitting both call it.
     pub fn save(&self) {
@@ -265,14 +339,17 @@ impl HubShare {
         }
     }
 
-    /// Writes the hub's file without the pairing code or the sharing flag.
+    /// Writes the hub's file without the pairing code, the sharing flag, the
+    /// `/sync` share or the `/inhabit` hand-off.
     fn persist(&self) {
         let mut disk = lock(&self.hub).clone();
         disk.pair = None;
         disk.sharing = false;
+        disk.snapshot = None;
+        disk.inhabit = None;
         let mine = peer_keys(&disk);
         if let Some(theirs) = load_hub_state(&self.path) {
-            keep_theirs(&mut disk, theirs);
+            keep_theirs(&mut disk, theirs, &self.ours);
         }
         if save_hub_state(&self.path, &disk).is_ok() {
             *lock(&self.saved) = mine;
@@ -527,6 +604,156 @@ mod tests {
         let disk = load_hub_state(&path).unwrap();
         let ids: Vec<&str> = disk.peers.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, ["laptop-1", "desk-2"]);
+    }
+
+    fn get(port: u16, path: &str, token: &str) -> serde_json::Value {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            s,
+            "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\n\r\n"
+        )
+        .unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        serde_json::from_str(out.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+    }
+
+    fn bundle(soul: &str) -> InhabitBundle {
+        InhabitBundle {
+            soul: soul.into(),
+            to_id: Some("desk-2".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_share_or_hand_off_from_an_earlier_launch_is_never_served_again() {
+        let dir = temp("stale");
+        let path = dir.join("hub-state.json");
+        let mut before = HubState::empty();
+        before.peers.push(grokhub_core::state::Peer {
+            id: "desk-2".into(),
+            name: "Desk".into(),
+            token: "t-desk".into(),
+            last_seen: 5,
+        });
+        before.snapshot = Some(Arc::new(serde_json::json!({ "threads": ["old chat"] })));
+        before.inhabit = Some(bundle("old soul"));
+        save_hub_state(&path, &before).unwrap();
+
+        let share = HubShare::with(&dir, loopback, no_lan);
+        let on = share.start().unwrap();
+        assert_eq!(
+            get(on.port, "/v1/snapshot", "t-desk"),
+            serde_json::json!({ "ok": true, "snapshot": null })
+        );
+        assert_eq!(
+            get(on.port, "/v1/inhabit", "t-desk"),
+            serde_json::json!({ "ok": true, "bundle": null })
+        );
+        // Start share wrote the file: the old copies are gone from it too,
+        // and the paired computer stays.
+        let disk = load_hub_state(&path).unwrap();
+        assert!(disk.snapshot.is_none() && disk.inhabit.is_none());
+        assert_eq!(disk.peers[0].id, "desk-2");
+    }
+
+    fn desk_saved(path: &Path) {
+        let mut before = HubState::empty();
+        before.peers.push(grokhub_core::state::Peer {
+            id: "desk-2".into(),
+            name: "Desk".into(),
+            token: "t-desk".into(),
+            last_seen: 5,
+        });
+        save_hub_state(path, &before).unwrap();
+    }
+
+    fn snap(thread: &str, at: u64) -> HubSnapshot {
+        grokhub_core::build_hub_snapshot(
+            "home-1",
+            "Home",
+            at,
+            vec![serde_json::json!({ "id": thread, "title": thread, "updatedAt": at })],
+            serde_json::json!({ "items": [] }),
+            vec![],
+            vec![],
+            vec![],
+        )
+    }
+
+    fn thread_ids(port: u16) -> Vec<String> {
+        get(port, "/v1/snapshot", "t-desk")["snapshot"]["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_share_and_hand_off_never_reach_the_file() {
+        let dir = temp("memory-only");
+        let path = dir.join("hub-state.json");
+        desk_saved(&path);
+        let share = HubShare::with(&dir, loopback, no_lan);
+        let on = share.start().unwrap();
+        share.publish(snap("harbor-chat", 10)).unwrap();
+        share.stage(bundle("stay kind"));
+        assert_eq!(thread_ids(on.port), ["harbor-chat"]);
+        // Claimed once, then one left unclaimed.
+        assert_eq!(
+            get(on.port, "/v1/inhabit", "t-desk")["bundle"]["soul"],
+            "stay kind"
+        );
+        share.stage(bundle("left for later"));
+        // Every write: a new pairing seen on the poll, Stop share, quitting.
+        assert_eq!(pair(on.port, &on.code, "Laptop").0, 200);
+        share.view();
+        share.stop();
+        share.save();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        for sent in ["harbor-chat", "stay kind", "left for later"] {
+            assert!(!raw.contains(sent), "{sent} is in the file: {raw}");
+        }
+        let disk = load_hub_state(&path).unwrap();
+        assert!(disk.snapshot.is_none() && disk.inhabit.is_none());
+        let ids: Vec<&str> = disk.peers.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["desk-2", "laptop-1"]);
+        // So a hub started from the file later has nothing to serve.
+        let next = HubShare::with(&dir, loopback, no_lan);
+        let on = next.start().unwrap();
+        assert_eq!(
+            get(on.port, "/v1/snapshot", "t-desk"),
+            serde_json::json!({ "ok": true, "snapshot": null })
+        );
+        assert_eq!(
+            get(on.port, "/v1/inhabit", "t-desk")["bundle"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn a_sync_keeps_what_a_paired_computer_uploaded() {
+        let dir = temp("merge");
+        desk_saved(&dir.join("hub-state.json"));
+        let share = HubShare::with(&dir, loopback, no_lan);
+        let on = share.start().unwrap();
+        let body = serde_json::json!({ "snapshot": snap("desk-chat", 20) }).to_string();
+        let mut s = TcpStream::connect(("127.0.0.1", on.port)).unwrap();
+        write!(
+            s,
+            "PUT /v1/snapshot HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer t-desk\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        assert_eq!(out.split(' ').nth(1), Some("200"), "{out}");
+        share.publish(snap("harbor-chat", 30)).unwrap();
+        let mut ids = thread_ids(on.port);
+        ids.sort();
+        assert_eq!(ids, ["desk-chat", "harbor-chat"]);
     }
 
     #[test]

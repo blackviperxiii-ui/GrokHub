@@ -630,7 +630,8 @@ pub use recipe::{
     RecipeDoc, ReplayOp, ScreenSize, TabAction,
 };
 pub use redact::{
-    forget_topic, is_plain_text, redact_held_secrets, redact_secret_words, redact_secrets,
+    forget_topic, is_plain_text, redact_for_share, redact_held_secrets, redact_secret_words,
+    redact_secrets,
 };
 pub use reflect::{
     fact_candidates, fact_candidates_from, restore_memory_prev, should_idle_reflect, MemoryEdit,
@@ -677,7 +678,8 @@ pub use ssrf::{
 };
 pub use state::{
     clear_pending_after_complete, is_phone_name, load_hub_state, merge_put_snapshot,
-    save_hub_state, state_for_disk, CompleteError, HubState, PairError, DEFAULT_PORT, HUB_KIND,
+    save_hub_state, state_for_disk, swap_hub_snapshot, CompleteError, HubState, PairError,
+    DEFAULT_PORT, HUB_KIND,
 };
 pub use stream::{
     chat_include_usage, chat_stream_flag, fold_sse_acc, fold_stream_fields, fold_stream_token,

@@ -114,6 +114,24 @@ fn cabin_rows(config_dir: &Path) -> Vec<(Row, PathBuf)> {
     out
 }
 
+/// The skills in this app's own folder that are on, by name, each with when
+/// its SKILL.md last changed: what `/sync` and `/inhabit` name to a paired
+/// computer. Project and plugin skills belong to their folder, not to you.
+pub fn shared(config_dir: &Path) -> Vec<(String, u64)> {
+    cabin_rows(config_dir)
+        .into_iter()
+        .filter(|(row, _)| row.on)
+        .map(|(row, dir)| {
+            let at = fs::metadata(dir.join("SKILL.md"))
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis() as u64);
+            (row.name, at)
+        })
+        .collect()
+}
+
 /// Cabin skills first, then what the engine discovers for this workspace,
 /// each with the folder it lives in (none for a built-in).
 fn gather(config_dir: &Path, workspace: &Path, home: Option<&Path>) -> Vec<(Row, Option<PathBuf>)> {
