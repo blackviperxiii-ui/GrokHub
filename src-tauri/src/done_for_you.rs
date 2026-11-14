@@ -83,7 +83,26 @@ pub struct Paused {
 /// How many pauses the state keeps.
 const KEEP: usize = 32;
 
-fn note_paused(config_dir: &Path, job: &Automation, seq: u64, key: &str) {
+/// Keep pause `seq` of `job`. `list` is the automations list under the
+/// store lock. A record stays while its job is there and it still matters:
+/// the job is still paused (it waits for its answer), it is holding the job
+/// back, or its ledger line was never undone (Settings > Behavior can still
+/// reach it). Over the cap, the oldest record that only waits on the ledger
+/// goes first.
+fn note_paused(config_dir: &Path, list: &[Automation], job: &Automation, seq: u64, key: &str) {
+    let ledger = hx::ChangeLedger::load_kind(config_dir, ChangeKind::Automation);
+    let undone = |p: &Paused| {
+        ledger
+            .all()
+            .iter()
+            .any(|c| c.id == p.id && c.undoes == Some(p.seq))
+    };
+    let holds = |p: &Paused| {
+        !p.answered
+            || list
+                .iter()
+                .any(|a| a.id == p.id && a.run_count < p.runs.saturating_add(PAUSE_AFTER))
+    };
     change_state(config_dir, |s| {
         s.paused.push(Paused {
             id: job.id.clone(),
@@ -92,13 +111,10 @@ fn note_paused(config_dir: &Path, job: &Automation, seq: u64, key: &str) {
             key: key.to_string(),
             answered: false,
         });
-        // Over the cap, the oldest answered pauses go first. An unanswered
-        // one is a job still paused, and its record is what holds it, hears
-        // its Undo and keeps its edits, so it stays.
+        s.paused
+            .retain(|p| list.iter().any(|a| a.id == p.id) && (holds(p) || !undone(p)));
         while s.paused.len() > KEEP {
-            let Some(at) = s.paused.iter().position(|p| p.answered) else {
-                break;
-            };
+            let at = s.paused.iter().position(|p| !holds(p)).unwrap_or(0);
             s.paused.remove(at);
         }
     });
@@ -203,7 +219,32 @@ fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whole lines the router, the run loop and sign-in write when no model can
+/// answer. A job's error is clipped to its first line and
+/// [`grokhub_core::AUTO_ERROR_CHARS`], so the start of each line is enough.
+fn router_lines() -> [&'static str; 8] {
+    use grokhub_agent::route::local;
+    [
+        *grokhub_agent::route::live::NO_ROUTE_MSG,
+        local::OFFLINE_NO_LOCAL_MSG,
+        local::LOCAL_PAUSED_MSG,
+        local::NO_RUNTIME_MSG,
+        grokhub_agent::route::providers::POLICY_REFUSED,
+        grokhub_agent::BUSY_GAVE_UP,
+        grokhub_agent::xai_keychain::EXPIRED,
+        grokhub_core::XAI_NEED_SIGNIN,
+    ]
+}
+
+fn says_line(error: &str, line: &str) -> bool {
+    let head: String = line.chars().take(40).collect();
+    !head.is_empty() && error.contains(&head)
+}
+
 fn account_wide(error: &str) -> bool {
+    if router_lines().iter().any(|line| says_line(error, line)) {
+        return true;
+    }
     let said = words(error);
     let has = |phrase: &[String]| said.windows(phrase.len()).any(|w| w == phrase);
     ACCOUNT_WIDE.iter().any(|p| has(&words(p)))
@@ -406,7 +447,7 @@ pub fn tick_one(
         let _pin = grokhub_agent::perm::ConfigGuard::set(config_dir);
         let run = hx::run_auto_act(config_dir, config_dir, &act, &mind, AccessMode::Supervised);
         if let hx::AutoRun::Done { change, .. } = &run {
-            note_paused(config_dir, &still, change.seq, &c.key);
+            note_paused(config_dir, &list, &still, change.seq, &c.key);
         }
         Some(run)
     })?;
@@ -541,9 +582,11 @@ pub fn pause_from_card(config_dir: &Path, card_id: &str, now_ms: u64) -> Result<
     let id = chip_target(&card).ok_or_else(|| NOT_PAUSABLE.to_string())?;
     let arguments = json!({ "id": id, "reason": "paused from its Pulse card" }).to_string();
     let (run, name) = crate::automations::with_store(config_dir, |list| {
-        let job = list?
-            .into_iter()
+        let list = list?;
+        let job = list
+            .iter()
             .find(|a| a.id == id)
+            .cloned()
             .ok_or_else(|| "That automation is gone.".to_string())?;
         if !job.enabled {
             return Err("That automation is already paused.".to_string());
@@ -559,6 +602,7 @@ pub fn pause_from_card(config_dir: &Path, card_id: &str, now_ms: u64) -> Result<
         if let hx::AutoRun::Done { change, .. } = &run {
             note_paused(
                 config_dir,
+                &list,
                 &job,
                 change.seq,
                 &hx::proactive_key(TOOL, &arguments),
@@ -639,9 +683,17 @@ pub fn turned_back_on(config_dir: &Path, id: &str) {
 }
 
 /// The ledger line Undo would undo next on `id`, when it is a pause this
-/// feature made: what Settings > Behavior's Undo hands to
-/// [`crate::changes::undo_pause`].
+/// feature made and the job is still there: what Settings > Behavior's Undo
+/// hands to [`crate::changes::undo_pause`]. A job deleted since goes back
+/// through the normal Undo, which brings it back.
 pub fn open_pause(config_dir: &Path, id: &str) -> Option<u64> {
+    let there = crate::automations::load(config_dir)
+        .ok()?
+        .iter()
+        .any(|a| a.id == id);
+    if !there {
+        return None;
+    }
     let seq = hx::ChangeLedger::load_kind(config_dir, ChangeKind::Automation)
         .undo_target(id)?
         .seq;

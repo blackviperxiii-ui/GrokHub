@@ -247,6 +247,7 @@ fn only_a_running_job_failing_5_times_for_its_own_reason_can_be_paused() {
         "The system keychain is not available: no secret service",
         "https://auth.example/token: status code 503",
         "transport: dns failed for api.example",
+        "transport: connection failed",
         "OpenRouter has no credits left.",
         "429 Too Many Requests",
         "request timed out",
@@ -257,6 +258,11 @@ fn only_a_running_job_failing_5_times_for_its_own_reason_can_be_paused() {
             None,
             "{error}"
         );
+    }
+    // The router's and sign-in's own lines, clipped the way a run stores them.
+    for line in router_lines() {
+        let failed = grokhub_core::mark_automation_failed(auto("auto-a", true, 8, ""), line);
+        assert_eq!(pausable(&[failed], true, &[]), None, "{line}");
     }
     // Words and numbers that only look like one are the job's own errors.
     for error in [
@@ -959,8 +965,14 @@ fn a_job_paused_twice_keeps_its_edits_when_settings_undoes_the_first_pause() {
     let hx::AutoRun::Done { change, .. } = again else {
         panic!("second pause");
     };
-    let job_now = rows(&d).into_iter().find(|a| a.id == "auto-sync").unwrap();
-    note_paused(&d, &job_now, change.seq, &hx::proactive_key(TOOL, args));
+    let list = rows(&d);
+    note_paused(
+        &d,
+        &list,
+        &list[0],
+        change.seq,
+        &hx::proactive_key(TOOL, args),
+    );
     assert!(!enabled(&d, "auto-sync"));
     crate::change_rows::undo(&d, "automation", "auto-sync").unwrap();
     assert!(enabled(&d, "auto-sync"));
@@ -992,23 +1004,87 @@ fn a_job_that_is_running_now_is_not_paused() {
 }
 
 #[test]
-fn the_cap_drops_answered_pauses_and_keeps_a_job_that_is_still_paused() {
-    let d = scratch("cap");
-    let old = Automation {
-        id: "auto-old".into(),
-        ..auto("auto-old", false, 6, "x")
-    };
-    note_paused(&d, &old, 1, "k");
-    for i in 0..(KEEP as u64 + 4) {
-        let other = auto(&format!("auto-{i}"), true, 6, "x");
-        note_paused(&d, &other, i + 2, "k");
-        change_state(&d, |s| s.paused.last_mut().unwrap().answered = true);
-    }
+fn a_pause_record_stays_only_while_it_matters() {
+    let d = scratch("prune");
+    let held = ran(auto("auto-held", true, 6, "x"), 3);
+    let spent = ran(auto("auto-spent", true, 0, ""), 10);
+    let waiting = ran(auto("auto-waiting", false, 6, "x"), 4);
+    let fresh = ran(auto("auto-new", true, 6, "x"), 7);
+    change_state(&d, |s| {
+        s.paused = vec![
+            paused("auto-held", 0),
+            Paused {
+                seq: 2,
+                ..paused("auto-spent", 0)
+            },
+            Paused {
+                seq: 3,
+                answered: false,
+                ..paused("auto-waiting", 4)
+            },
+            Paused {
+                seq: 4,
+                answered: false,
+                ..paused("auto-deleted", 1)
+            },
+        ]
+    });
+    let list = [held, spent, waiting, fresh.clone()];
+    note_paused(&d, &list, &fresh, 9, "k");
+    let kept: Vec<(String, u64)> = load_state(&d)
+        .paused
+        .into_iter()
+        .map(|p| (p.id, p.seq))
+        .collect();
+    // The deleted job's record goes. The spent one stays: its pause line was
+    // never undone, so Settings > Behavior can still undo it.
+    assert_eq!(
+        kept,
+        vec![
+            ("auto-held".to_string(), 1),
+            ("auto-spent".to_string(), 2),
+            ("auto-waiting".to_string(), 3),
+            ("auto-new".to_string(), 9),
+        ]
+    );
+
+    // Over the cap, spent records go first, oldest first; the ones that hold
+    // a job or wait for an answer stay.
+    change_state(&d, |s| {
+        for i in 0..(KEEP as u64 + 4) {
+            s.paused.insert(
+                0,
+                Paused {
+                    seq: 100 + i,
+                    ..paused("auto-spent", 0)
+                },
+            );
+        }
+    });
+    note_paused(&d, &list, &fresh, 10, "k");
     let kept = load_state(&d).paused;
     assert_eq!(kept.len(), KEEP);
-    assert_eq!(kept[0].id, "auto-old");
-    assert!(!kept[0].answered);
-    assert_eq!(kept.last().unwrap().seq, KEEP as u64 + 5);
+    let seqs: Vec<u64> = kept.iter().map(|p| p.seq).collect();
+    for seq in [1, 3, 9, 10] {
+        assert!(seqs.contains(&seq), "{seq} in {seqs:?}");
+    }
+    assert!(!seqs.contains(&(100 + KEEP as u64 + 3)), "{seqs:?}");
+}
+
+#[test]
+fn settings_undo_of_a_pause_whose_job_was_deleted_brings_it_back() {
+    let d = scratch("deleted");
+    let _pin = grokhub_agent::perm::ConfigGuard::set(&*d);
+    write_jobs(&d, &[job("auto-sync", "Sync notes", true, 6, "disk full")]);
+    open(&d);
+    tick(&d, false, false).expect("a Done card");
+    crate::automations::remove(&d, "auto-sync").unwrap();
+    crate::change_rows::undo(&d, "automation", "auto-sync").unwrap();
+    let back = rows(&d);
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].id, "auto-sync");
+    assert!(back[0].enabled);
+    drain(&d);
 }
 
 #[test]
