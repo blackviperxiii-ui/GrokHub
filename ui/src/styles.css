@@ -2022,8 +2022,10 @@ button.md-copy {
 }
 
 /* Composer glow (Settings → Behavior): soft red light behind the box while a
-   reply comes in. The light is a layer under the textarea, so the breath only
-   fades its opacity and never repaints the box. Less motion keeps it steady. */
+   reply comes in. The light is a layer under the textarea. Its opacity fades it
+   in and out; the breath multiplies in through filter: opacity(), a separate
+   property, so the two never fight and the box never repaints. Less motion
+   keeps it steady. */
 .composer-ghost-wrap::before {
   content: "";
   position: absolute;
@@ -2036,7 +2038,7 @@ button.md-copy {
 }
 
 .composer.glowing .composer-ghost-wrap::before {
-  opacity: 0.6;
+  opacity: 0.75;
 }
 
 /* Files waiting on the composer; they wrap on a phone. */
@@ -4442,13 +4444,14 @@ label.toggle-row {
   }
 }
 
+/* Starts at full strength, so the fade-in under it shows no step. */
 @keyframes composer-glow {
   from {
-    opacity: 0.45;
+    filter: opacity(1);
   }
 
   to {
-    opacity: 1;
+    filter: opacity(0.6);
   }
 }
 
@@ -7369,6 +7372,12 @@ fieldset.channel label {
     min-width: 0;
     min-height: 55vh;
     padding-right: 0;
+  }
+
+  /* The box spans the scrolling column edge to edge, which would cut the
+     composer glow flat at both sides; keep its light above and below. */
+  .chat.embedded .composer-ghost-wrap::before {
+    inset: 0 20px;
   }
 
   .code-split-handle {

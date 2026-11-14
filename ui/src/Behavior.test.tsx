@@ -197,6 +197,7 @@ describe("Behavior", () => {
     render(<Behavior tray readOnly />);
     expect(await screen.findByText("22:00–07:00")).toBeInTheDocument();
     expect(screen.getByText("1.0M tokens a day")).toBeInTheDocument();
+    expect(screen.getByText("Composer glow").nextElementSibling).toHaveTextContent("Off");
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByRole("combobox")).toBeNull();
