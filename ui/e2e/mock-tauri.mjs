@@ -193,7 +193,11 @@ const HOME = {
             { label: "GPU", value: "74°", tone: "warn", tap: null },
             { label: "Driver", value: "Latest", tone: "normal", tap: null },
           ],
-          buttons: [{ label: "Tune-up", action: { kind: "ask", ask: "Check this PC and suggest a tune-up." }, primary: true }],
+          buttons: [
+            { label: "Tune-up", action: { kind: "ask", ask: "Check this PC and suggest a tune-up." }, primary: true },
+            { label: "Details", action: { kind: "details", module: "pc_loadout" }, primary: false },
+          ],
+          tap: { kind: "details", module: "pc_loadout" },
         }),
       },
     },
