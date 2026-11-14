@@ -1,7 +1,6 @@
 ---
 name: qa-walkthrough
 description: Ultimate ship check. Walk the real app, review all code, hunt security holes, vulnerabilities, slop, missing tests and optimizations; fix safe items; one ranked ship/no-ship report. /qa-walkthrough
-disable-model-invocation: true
 ---
 
 # QA Walkthrough

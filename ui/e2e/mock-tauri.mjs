@@ -80,6 +80,20 @@ const EMPTY_PULSE = {
       link: "",
       loved: false,
     },
+    {
+      id: "shot-post-2",
+      source: "pulse:writer",
+      title: "Season patch: your main got a buff",
+      summary: "Faster reload and a smaller recoil kick.",
+      because: "",
+      icon: "🎮",
+      why: "Harness fixture.",
+      images: [],
+      createdAt: Date.now() - 3 * 3_600_000,
+      ago: "3h ago",
+      link: "",
+      loved: true,
+    },
   ],
   ideas: [],
 };
@@ -95,6 +109,133 @@ const EMPTY_TRANSCRIPT = {
 };
 
 const EMPTY_TAB = { id: "shot-chat", title: "Hangout", pinned: false, updated: 0, main: false };
+const SECOND_TAB = { id: "shot-chat-2", title: "Fan curve", pinned: false, updated: 0, main: false };
+
+/** Composer and Home chip row: two plain chips and the one primary. */
+const QUICK_CHIPS = [
+  { id: "c1", label: "Plan my weekend", value: "Plan my weekend", action: "ask", hint: "", primary: false },
+  { id: "c2", label: "Roast my build", value: "Roast my build", action: "ask", hint: "", primary: false },
+  { id: "c3", label: "Fix my stutter", value: "Fix my stutter", action: "ask", hint: "", primary: true },
+];
+
+const XP = {
+  level: 14,
+  title: "Grinder",
+  xp: 2340,
+  nextLevelXp: 2600,
+  frac: 0.78,
+  today: 110,
+  week: { days: [true, true, false, true, false, false, false], today: 3, active: 3, target: 4, inARow: 5, played: 7, freezes: 1 },
+};
+
+function homeView(over) {
+  return {
+    state: "ready",
+    tag: null,
+    text: { big: "", caption: "", detail: null, tone: "normal" },
+    rows: [],
+    progress: null,
+    buttons: [],
+    tap: null,
+    updatedMs: null,
+    ...over,
+  };
+}
+
+/** Mission Control with the tiles the shell fills (same shape as Home.test.tsx). */
+const HOME = {
+  preset: "mission_control",
+  xpBar: true,
+  xp: XP,
+  glance: { memories: 12, proposed: 2, connectors: 3, connected: 2, failing: 0 },
+  slots: [
+    {
+      slot: "large",
+      size: "large",
+      module: "objectives",
+      name: "Objectives",
+      purpose: "",
+      refreshSecs: null,
+      tile: {
+        kind: "objectives",
+        xp: XP,
+        mission: {
+          conversationId: "shot-chat",
+          title: "Diamond by Sunday",
+          status: "active",
+          done: 1,
+          total: 3,
+          canAccept: false,
+          accepted: false,
+          steps: [
+            { id: "1", text: "Aim routine 12/20", status: "verified" },
+            { id: "2", text: "Three ranked wins", status: "attempted" },
+            { id: "3", text: "Review one replay", status: "attempted" },
+          ],
+        },
+      },
+    },
+    {
+      slot: "medium-1",
+      size: "medium",
+      module: "pc_loadout",
+      name: "PC Loadout",
+      purpose: "",
+      refreshSecs: null,
+      tile: {
+        kind: "view",
+        view: homeView({
+          text: { big: "92%", caption: "GPU 74° · driver latest", detail: null, tone: "normal" },
+          rows: [
+            { label: "GPU", value: "74°", tone: "warn", tap: null },
+            { label: "Driver", value: "Latest", tone: "normal", tap: null },
+          ],
+          buttons: [{ label: "Tune-up", action: { kind: "ask", ask: "Check this PC and suggest a tune-up." }, primary: true }],
+        }),
+      },
+    },
+    {
+      slot: "medium-2",
+      size: "medium",
+      module: "recent_chats",
+      name: "Recent Chats",
+      purpose: "",
+      refreshSecs: null,
+      tile: { kind: "recentChats", chats: [{ id: "shot-chat", title: "Hangout", updated: 2 }, { id: "shot-chat-2", title: "Fan curve", updated: 1 }] },
+    },
+    {
+      slot: "small-1",
+      size: "small",
+      module: "automations",
+      name: "Automations",
+      purpose: "",
+      refreshSecs: null,
+      tile: { kind: "automations", active: 2, next: [{ id: "a1", name: "Morning brief", summary: "daily at 08:00" }] },
+    },
+    {
+      slot: "small-2",
+      size: "small",
+      module: "pulse",
+      name: "Pulse · For You",
+      purpose: "",
+      refreshSecs: null,
+      tile: {
+        kind: "pulse",
+        post: { id: "shot-post", title: "New GPU driver", summary: "", ago: "2h ago" },
+        idea: { id: "i1", title: "I can tidy your downloads", action: "tidy my downloads folder" },
+      },
+    },
+    {
+      slot: "small-3",
+      size: "small",
+      module: "streak",
+      name: "Streak",
+      purpose: "",
+      refreshSecs: null,
+      tile: { kind: "streak", xp: XP },
+    },
+  ],
+};
 
 const EMPTY_MEMORY = {
   global: "",
@@ -133,6 +274,27 @@ const EMPTY_BACKGROUND = {
   quiet: "No quiet hours",
   budget: "Daily token budget: Off",
   rows: [],
+};
+
+const SKILLS = {
+  rows: [
+    { name: "tidy", description: "Tidy the repo", trigger: "Use the tidy skill.", source: "user", folder: "/home/user/.config/GrokHub/skills/tidy", on: true },
+    { name: "summarize", description: "Summarize a file", trigger: "Use the summarize skill.", source: "builtin", folder: "", on: false },
+  ],
+};
+
+const MEMORY_FILES = {
+  soul: "# Soul\n\nCalm and direct.\n",
+  user: "# User\n\nPlays ranked on weekends.\n",
+  memory: "# Memory\n\n- Prefers short answers.\n",
+  soulPath: "/home/user/.config/GrokHub/SOUL.md",
+  userPath: "/home/user/.config/GrokHub/USER.md",
+  memoryPath: "/home/user/.config/GrokHub/MEMORY.md",
+  soulPrev: false,
+  userPrev: false,
+  memoryPrev: false,
+  rawLines: [],
+  rawTidyDone: true,
 };
 
 const EMPTY_PERSONALITY = {
@@ -329,10 +491,16 @@ export function initScript(theme = "ops-dark") {
     pulse: EMPTY_PULSE,
     chat: EMPTY_TRANSCRIPT,
     tab: EMPTY_TAB,
+    tab2: SECOND_TAB,
+    chips: QUICK_CHIPS,
+    home: HOME,
     behavior: BEHAVIOR,
     memory: EMPTY_MEMORY,
     privacy: EMPTY_PRIVACY,
     background: EMPTY_BACKGROUND,
+    skills: SKILLS,
+    memoryFiles: MEMORY_FILES,
+    xp: XP,
     days: DAYS,
     personality: EMPTY_PERSONALITY,
     playbooks: EMPTY_PLAYBOOKS,
@@ -484,7 +652,7 @@ export function initScript(theme = "ops-dark") {
         case "list_chats":
           return [{ id: "shot-chat", title: "Hangout", updated: 0 }];
         case "list_chat_tabs":
-          return [{ ...fix.tab }];
+          return [{ ...fix.tab }, { ...fix.tab2 }];
         case "list_archived_chats":
         case "list_deleted_chats":
           return emptyList;
@@ -539,7 +707,6 @@ export function initScript(theme = "ops-dark") {
         case "list_code_repos":
         case "decision_inbox":
         case "helper_questions":
-        case "quick_chips":
         case "plugin_list":
         case "list_plugins":
         case "list_notices":
@@ -559,9 +726,11 @@ export function initScript(theme = "ops-dark") {
         case "list_library":
         case "list_mods":
           return emptyList;
+        case "quick_chips":
+          return fix.chips;
         case "get_home":
         case "home_view":
-          return { tiles: [], objectives: [], note: "" };
+          return fix.home;
         case "get_code":
         case "code_page":
           return { repos: [], sessions: [], note: "" };
@@ -610,6 +779,14 @@ export function initScript(theme = "ops-dark") {
           return { id: "default", name: "Default", note: "" };
         case "get_defaults":
           return { model: "grok", temperature: 0.7 };
+        case "get_skills":
+          return fix.skills;
+        case "get_memory_files":
+          return fix.memoryFiles;
+        case "get_battlenet":
+          return { found: false, games: [] };
+        case "get_mission":
+          return { mission: null, xp: fix.xp };
         case "get_about":
           return { version: fix.settings.version, channel: "beta" };
         default:

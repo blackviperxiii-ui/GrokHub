@@ -714,24 +714,38 @@ pub fn load_intentions(config_dir: &Path, conversation_id: &str) -> Intentions {
 
 /// Read a file that [`write_intentions`] may be replacing right now. On
 /// Windows, an open that lands in the instant the old copy is swapped out
-/// can fail with access denied though the file is there before and after;
-/// that read is tried again for up to about 100 ms, so a goal list never
-/// reads as empty (and is never saved back empty) because of the swap.
+/// can fail though the file is there before and after (see
+/// [`swap_in_progress`]); that read is tried again for up to about 100 ms,
+/// so a goal list never reads as empty (and is never saved back empty)
+/// because of the swap.
 fn read_settled(path: &Path) -> std::io::Result<String> {
     let mut tries = 0;
     loop {
         match fs::read_to_string(path) {
-            Err(err)
-                if cfg!(windows)
-                    && err.kind() == std::io::ErrorKind::PermissionDenied
-                    && tries < 20 =>
-            {
+            Err(err) if swap_in_progress(&err) && tries < 20 => {
                 tries += 1;
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             read => return read,
         }
     }
+}
+
+/// Whether a failed open looks like Windows swapping the file in: access
+/// denied (the old copy is being deleted), a sharing violation (raw error
+/// 32, another handle such as a virus scan still holds the new copy) or a
+/// pending delete (raw error 303). std reports the last two as
+/// `Uncategorized`, so they are matched by code. A rename is atomic
+/// elsewhere, and a missing file is really missing, so neither is retried.
+fn swap_in_progress(err: &std::io::Error) -> bool {
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    const ERROR_DELETE_PENDING: i32 = 303;
+    cfg!(windows)
+        && (err.kind() == std::io::ErrorKind::PermissionDenied
+            || matches!(
+                err.raw_os_error(),
+                Some(ERROR_SHARING_VIOLATION | ERROR_DELETE_PENDING)
+            ))
 }
 
 pub fn save_intentions(
@@ -893,25 +907,41 @@ mod tests {
         let reader = {
             let (path, stop, missing) = (path.clone(), stop.clone(), missing.clone());
             std::thread::spawn(move || {
+                let mut first_error = None;
                 while !stop.load(Ordering::Relaxed) {
-                    if read_settled(&path).is_err() {
+                    if let Err(err) = read_settled(&path) {
                         missing.fetch_add(1, Ordering::Relaxed);
+                        first_error.get_or_insert_with(|| format!("{err:?}"));
                     }
                 }
+                first_error
             })
         };
         for i in 0..500 {
             write_intentions(&path, format!("[{i}]").as_bytes()).unwrap();
         }
         stop.store(true, Ordering::Relaxed);
-        reader.join().unwrap();
+        let first_error = reader.join().unwrap();
         assert_eq!(
             missing.load(Ordering::Relaxed),
             0,
-            "the old copy stays until the new one is in place"
+            "the old copy stays until the new one is in place; first failed read: {first_error:?}"
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), "[499]");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_a_windows_file_swap_is_read_again() {
+        // 5 access denied, 32 sharing violation, 303 delete pending, 2 not found.
+        let retried =
+            [5, 32, 303, 2].map(|code| swap_in_progress(&std::io::Error::from_raw_os_error(code)));
+        let expected = if cfg!(windows) {
+            [true, true, true, false]
+        } else {
+            [false, false, false, false]
+        };
+        assert_eq!(retried, expected);
     }
 
     #[test]

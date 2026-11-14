@@ -8,6 +8,10 @@
 //   npm run shots --prefix ui
 //   SHOTS_OUT=ui/e2e/shots npm run shots --prefix ui
 //
+// It also sweeps every page in the views bar (and every Settings section) for
+// gray or white outlines (e2e/outlines.mjs), writes them to outlines.json and
+// exits nonzero when any remain.
+//
 // Needs Playwright's Chromium (`npx playwright install chromium`).
 
 import { spawn } from "node:child_process";
@@ -16,6 +20,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initScript } from "./mock-tauri.mjs";
+import { sweep } from "./outlines.mjs";
 
 const { chromium } = createRequire(import.meta.url)("playwright");
 
@@ -142,6 +147,11 @@ async function openSettingsSection(page, { section, category }) {
 
 async function shoot(page, path) {
   mkdirSync(dirname(path), { recursive: true });
+  // Jump entrance and fill animations to their end so a shot shows the final
+  // XP fill and streak cells, not a mid-tween frame.
+  await page.evaluate(() => {
+    for (const a of document.getAnimations()) a.finish();
+  });
   await page.screenshot({ path, fullPage: false });
 }
 
@@ -153,6 +163,11 @@ async function run() {
     await vite.wait();
     const browser = await chromium.launch({ headless: true });
     const manifest = [];
+    const outlines = [];
+    // Records the gray outlines on the screen that is open now.
+    const check = async (page, where) => {
+      for (const hit of await page.evaluate(sweep)) outlines.push({ where, ...hit });
+    };
     try {
       for (const theme of THEMES) {
         for (const vp of VIEWPORTS) {
@@ -161,7 +176,8 @@ async function run() {
             deviceScaleFactor: 1,
           });
           const page = await context.newPage();
-          page.on("pageerror", (err) => errors.push(`${theme.label}/${vp.name}: ${err.message}`));
+          let at = "start";
+          page.on("pageerror", (err) => errors.push(`${theme.label}/${vp.name}/${at}: ${err.message}`));
           await page.addInitScript(initScript(theme.id));
           await page.goto(ORIGIN, { waitUntil: "networkidle", timeout: 60_000 });
           await sleep(800);
@@ -170,14 +186,17 @@ async function run() {
 
           for (const view of VIEWS) {
             const label = view === "settings" ? "Settings" : view[0].toUpperCase() + view.slice(1);
+            at = label;
             await openTab(page, label);
             if (view === "settings") {
               for (const row of SETTINGS_SECTIONS) {
+                at = `Settings/${row.section}`;
                 await openSettingsSection(page, row);
                 const slug = `settings-${row.section.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
                 const file = `${theme.label}_${vp.name}_${slug}.png`;
                 const path = join(OUT, file);
                 await shoot(page, path);
+                await check(page, file);
                 manifest.push({
                   file,
                   theme: theme.id,
@@ -190,8 +209,20 @@ async function run() {
               const file = `${theme.label}_${vp.name}_${view}.png`;
               const path = join(OUT, file);
               await shoot(page, path);
+              await check(page, file);
               manifest.push({ file, theme: theme.id, viewport: vp.name, view });
             }
+          }
+          // The rest of the views bar: swept, not shot.
+          const shot = new Set(VIEWS.map((v) => (v === "settings" ? "Settings" : v[0].toUpperCase() + v.slice(1))));
+          const labels = await page
+            .getByRole("navigation", { name: "Views" })
+            .getByRole("button")
+            .evaluateAll((buttons) => buttons.map((b) => b.getAttribute("title") || b.textContent.trim()));
+          for (const label of labels.filter((l) => !shot.has(l))) {
+            at = label;
+            await openTab(page, label);
+            await check(page, `${theme.label}_${vp.name}_${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
           }
           await context.close();
         }
@@ -202,6 +233,14 @@ async function run() {
 
     writeFileSync(join(OUT, "manifest.json"), JSON.stringify({ out: OUT, shots: manifest }, null, 2));
     console.log(`wrote ${manifest.length} shots to ${OUT}`);
+    writeFileSync(join(OUT, "outlines.json"), JSON.stringify(outlines, null, 2));
+    if (outlines.length) {
+      console.error(`${outlines.length} gray outlines (outlines.json):`);
+      for (const o of outlines.slice(0, 40)) console.error(`  ${o.where}: ${o.el} ${o.color} "${o.text}"`);
+      process.exitCode = 1;
+    } else {
+      console.log("0 gray outlines");
+    }
     if (errors.length) {
       console.error("page errors:");
       for (const e of errors) console.error(`  ${e}`);

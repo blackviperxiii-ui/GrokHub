@@ -22,6 +22,24 @@
   src: url("/fonts/Inter-SemiBold.woff2") format("woff2");
 }
 
+/* Display face: the wordmark, page titles, tile eyebrows and tab and CTA labels.
+   Inter stays for body text and prose (docs/design/type.md). */
+@font-face {
+  font-family: "Chakra Petch";
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/ChakraPetch-Medium.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Chakra Petch";
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/ChakraPetch-SemiBold.woff2") format("woff2");
+}
+
 /* Shared shape, depth and focus tokens. Colors come from the theme blocks below. */
 :root {
   /* The one spacing scale, same as the cabin (docs/design/spacing.md). */
@@ -62,12 +80,30 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.18), 0 1px 1px rgb(0 0 0 / 0.1);
-  --shadow-2: 0 6px 20px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12);
-  --shadow-3: 0 18px 48px rgb(0 0 0 / 0.38), 0 4px 12px rgb(0 0 0 / 0.2);
+  /* Elevation: bg → surface → raised. The dark themes tint the outer shadow
+     red (--elev-tint) and give raised cards a 1px top highlight. */
+  --edge-highlight: inset 0 1px 0 rgb(255 255 255 / 0.03);
+  --elev-1:
+    var(--edge-highlight), 0 1px 2px rgb(0 0 0 / 0.18), 0 1px 1px rgb(0 0 0 / 0.1),
+    0 4px 14px color-mix(in srgb, var(--elev-tint) 10%, transparent);
+  --elev-2:
+    0 6px 20px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12),
+    0 8px 28px color-mix(in srgb, var(--elev-tint) 14%, transparent);
+  --elev-3:
+    0 18px 48px rgb(0 0 0 / 0.38), 0 4px 12px rgb(0 0 0 / 0.2),
+    0 12px 40px color-mix(in srgb, var(--elev-tint) 18%, transparent);
+  /* Glows: red on hover and focus of an outline, amber only on the live CTA and the XP fill. */
+  --glow-red: var(--red-glow);
+  --glow-amber: var(--amber-glow);
+  --glow-xp: 0 0 10px color-mix(in srgb, var(--amber) 55%, transparent);
+  --font-family-display: "Chakra Petch", "Inter", system-ui, sans-serif;
+  /* Uppercase display labels (tabs, the CTA) and tile eyebrows. */
+  --tracking-label: 0.12em;
+  --tracking-eyebrow: 0.14em;
   --ring: var(--red-glow, 0 0 0 3px color-mix(in srgb, var(--accent) 38%, transparent));
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --t-fast: 120ms;
+  --t-stroke: 160ms;
   --t-base: 200ms;
 }
 
@@ -89,6 +125,28 @@
   --red-glow: 0 0 0 1px rgb(215 38 61 / 0.18), 0 0 18px rgb(215 38 61 / 0.22);
   --amber: #ff9f1a;
   --amber-wash: rgb(255 159 26 / 0.12);
+  --amber-glow: 0 0 0 1px rgb(255 159 26 / 0.18), 0 0 18px rgb(255 159 26 / 0.22);
+  /* Text on a solid red or danger fill, and on the amber CTA. */
+  --on-red: #ffffff;
+  --void: #0a0a0b;
+  /* A healthy, all-clear dot (Pulse verdicts). */
+  --ok: #2f9e5b;
+  /* Text over the generated cover art, which is always dark. */
+  --art-text: #f2f2f4;
+  /* Settings → Appearance swatches: each theme's page, red and amber, shown
+     side by side whatever theme is on now. */
+  --swatch-light-bg: #f6f6f4;
+  --swatch-light-red: #d7263d;
+  --swatch-light-amber: #ff9f1a;
+  --swatch-ops-bg: #0b0b0d;
+  --swatch-ops-red: #d7263d;
+  --swatch-ops-amber: #ff9f1a;
+  --swatch-oled-bg: #000000;
+  --swatch-oled-red: #d7263d;
+  --swatch-oled-amber: #ff9f1a;
+  --swatch-soft-bg: #17181b;
+  --swatch-soft-red: #c8304a;
+  --swatch-soft-amber: #ff9f1a;
   --line: #dcdcd6;
   --user: #e9e9e4;
   --border: var(--line);
@@ -98,6 +156,28 @@
   --signal: #d7263d;
   --danger-text: var(--danger);
   --field-border: #8a8a86;
+  /* The window's 1px frame; the dark (Loadout) themes draw it red. */
+  --frame: transparent;
+  /* The open tab: a solid red fill on light, a red-tinted fill on dark. */
+  --tab-open-bg: var(--red);
+  --tab-open-text: #ffffff;
+  /* Switches: the accent in light, amber on dark. */
+  --toggle-on: var(--accent);
+  --toggle-on-thumb: var(--accent-text);
+  --toggle-off: var(--hover);
+  /* Medium severity and other warnings in text. */
+  --warn-text: var(--accent);
+  /* Red used as small text: brighter than --red on dark so it clears 4.5:1. */
+  --red-text: var(--accent);
+  --section-rule: var(--border);
+  /* A text field under the pointer, and the extra ring a focused one gets. */
+  --field-hover: var(--muted);
+  --field-focus-outline: none;
+  /* Depth on dark only: red-tinted shadows, a red glow in the top-right corner
+     behind the Nyx dock, and a faint 24px grid. */
+  --elev-tint: transparent;
+  --vignette: none;
+  --backdrop-grid: none;
   color-scheme: light dark;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -155,7 +235,21 @@
     --danger: var(--ops-signal);
     --signal: var(--ops-signal);
     --danger-text: #ff4d5e;
-    --field-border: #626266;
+    --field-border: #c02a3e;
+    --frame: var(--red);
+    --tab-open-bg: var(--selected);
+    --tab-open-text: var(--text);
+    --toggle-on: var(--amber);
+    --toggle-on-thumb: var(--void);
+    --toggle-off: var(--red-dim);
+    --warn-text: var(--amber);
+    --red-text: var(--red-hover);
+    --section-rule: var(--red);
+    --field-hover: var(--red-hover);
+    --field-focus-outline: 2px solid var(--red-hover);
+    --elev-tint: var(--red);
+    --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+    --backdrop-grid: linear-gradient(rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(90deg, rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px;
   }
 }
 
@@ -187,7 +281,21 @@
   --danger: var(--ops-signal);
   --signal: var(--ops-signal);
   --danger-text: #ff4d5e;
-  --field-border: #626266;
+  --field-border: #c02a3e;
+  --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
+  --toggle-on: var(--amber);
+  --toggle-on-thumb: var(--void);
+  --toggle-off: var(--red-dim);
+  --warn-text: var(--amber);
+  --red-text: var(--red-hover);
+  --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
+  --elev-tint: var(--red);
+  --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+  --backdrop-grid: linear-gradient(rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(90deg, rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px;
   color-scheme: dark;
 }
 
@@ -219,7 +327,21 @@
   --danger: #d7263d;
   --signal: #d7263d;
   --danger-text: #ff4d5e;
-  --field-border: #5c5c60;
+  --field-border: #c02a3e;
+  --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
+  --toggle-on: var(--amber);
+  --toggle-on-thumb: var(--void);
+  --toggle-off: var(--red-dim);
+  --warn-text: var(--amber);
+  --red-text: var(--red-hover);
+  --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
+  --elev-tint: var(--red);
+  --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+  --backdrop-grid: none;
   color-scheme: dark;
 }
 
@@ -251,7 +373,21 @@
   --danger: #c8304a;
   --signal: #c8304a;
   --danger-text: #ff4d5e;
-  --field-border: #6a6a6e;
+  --field-border: var(--red);
+  --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
+  --toggle-on: var(--amber);
+  --toggle-on-thumb: var(--void);
+  --toggle-off: var(--red-dim);
+  --warn-text: var(--amber);
+  --red-text: #f05468;
+  --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
+  --elev-tint: var(--red);
+  --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+  --backdrop-grid: linear-gradient(rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(90deg, rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px;
   color-scheme: dark;
 }
 
@@ -265,6 +401,69 @@
   gap: 8px;
 }
 
+.appearance .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* A theme chip's preview: the page color with a red and an amber dot. */
+.theme-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--sw-bg);
+}
+
+.theme-swatch i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.theme-swatch i:first-child {
+  background: var(--sw-red);
+}
+
+.theme-swatch i:last-child {
+  background: var(--sw-amber);
+}
+
+.theme-swatch[data-swatch="light"] {
+  --sw-bg: var(--swatch-light-bg);
+  --sw-red: var(--swatch-light-red);
+  --sw-amber: var(--swatch-light-amber);
+}
+
+.theme-swatch[data-swatch="ops-dark"] {
+  --sw-bg: var(--swatch-ops-bg);
+  --sw-red: var(--swatch-ops-red);
+  --sw-amber: var(--swatch-ops-amber);
+}
+
+.theme-swatch[data-swatch="oled-black"] {
+  --sw-bg: var(--swatch-oled-bg);
+  --sw-red: var(--swatch-oled-red);
+  --sw-amber: var(--swatch-oled-amber);
+}
+
+.theme-swatch[data-swatch="soft-charcoal"] {
+  --sw-bg: var(--swatch-soft-bg);
+  --sw-red: var(--swatch-soft-red);
+  --sw-amber: var(--swatch-soft-amber);
+}
+
+/* System: half light, half Ops Dark. */
+.theme-swatch[data-swatch="system"] {
+  --sw-red: var(--swatch-ops-red);
+  --sw-amber: var(--swatch-ops-amber);
+  background: linear-gradient(90deg, var(--swatch-light-bg) 50%, var(--swatch-ops-bg) 50%);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -273,7 +472,8 @@ body {
   margin: 0;
   font-size: var(--font-body);
   line-height: var(--lh-body);
-  background: var(--bg);
+  background: var(--vignette), var(--backdrop-grid), var(--bg);
+  background-attachment: fixed;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -302,8 +502,8 @@ button {
   cursor: pointer;
   transition:
     background-color var(--t-fast) var(--ease-out),
-    border-color var(--t-fast) var(--ease-out),
-    box-shadow var(--t-fast) var(--ease-out),
+    border-color var(--t-stroke) var(--ease-out),
+    box-shadow var(--t-stroke) var(--ease-out),
     transform var(--t-fast) var(--ease-out),
     filter var(--t-fast) var(--ease-out);
 }
@@ -339,14 +539,14 @@ button.cta,
 button.primary {
   background: var(--amber);
   border-color: var(--amber);
-  color: var(--void, #0a0a0b);
+  color: var(--void);
 }
 
 button.cta:hover:not(:disabled),
 button.primary:hover:not(:disabled) {
   filter: brightness(1.06);
   background: var(--amber);
-  box-shadow: 0 0 0 1px rgb(255 159 26 / 0.18), 0 0 18px rgb(255 159 26 / 0.22);
+  box-shadow: var(--amber-glow);
 }
 
 button.cta:disabled,
@@ -394,15 +594,44 @@ button.quiet:hover:not(:disabled),
   background: var(--hover);
 }
 
-.tabs button[aria-pressed="true"],
-.switch button[aria-pressed="true"],
-.settings-nav button[aria-pressed="true"],
-.settings-tabs button[aria-pressed="true"] {
+.switch button[aria-pressed="true"] {
   /* Solid red selected chrome — amber stays on the one CTA fill (color-share). */
   border-color: var(--red);
   background: var(--red);
-  color: #ffffff;
+  color: var(--on-red);
   box-shadow: none;
+}
+
+/* Tabs (the views bar, chat tabs, Pulse's views): the open one is a red
+   stroke over a red-tinted fill with an amber underline, never an amber box. */
+.tabs button[aria-pressed="true"],
+.pulse-head .switch button[aria-pressed="true"],
+.chat-tab[aria-selected="true"],
+.settings-tabs button[aria-pressed="true"],
+.settings-nav button[aria-pressed="true"] {
+  border-color: var(--red);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
+  box-shadow: inset 0 -2px 0 var(--amber);
+}
+
+.tabs button[aria-pressed="true"]:hover:not(:disabled),
+.pulse-head .switch button[aria-pressed="true"]:hover:not(:disabled),
+.chat-tab[aria-selected="true"]:hover:not(:disabled),
+.settings-tabs button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--tab-open-bg);
+  box-shadow: inset 0 -2px 0 var(--amber), var(--red-glow);
+}
+
+/* The side nav runs down the page, so its open item carries the amber bar on
+   the left instead of underneath. */
+.settings-nav button[aria-pressed="true"] {
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.settings-nav button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--tab-open-bg);
+  box-shadow: inset 2px 0 0 var(--amber), var(--red-glow);
 }
 
 button.link {
@@ -455,13 +684,15 @@ select option {
 input:hover:not(:disabled):not(:focus),
 textarea:hover:not(:disabled):not(:focus),
 select:hover:not(:disabled):not(:focus) {
-  border-color: var(--muted);
+  border-color: var(--field-hover);
 }
 
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: none;
+  /* On dark the resting border is red already, so focus adds a ring a step out. */
+  outline: var(--field-focus-outline);
+  outline-offset: 1px;
   border-color: var(--accent);
   box-shadow: var(--ring);
 }
@@ -472,6 +703,17 @@ select:focus-visible {
   height: 100vh;
   padding: 12px var(--page-pad);
   gap: 12px;
+}
+
+/* The 1px window frame: a fixed layer over everything but dialogs, so the
+   phone's bottom bar never covers it. It takes no clicks. */
+.app::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--frame);
 }
 
 @media (max-width: 899px) {
@@ -495,6 +737,8 @@ select:focus-visible {
   display: flex;
   gap: 8px;
   align-items: flex-start;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--red-dim);
 }
 
 .tabs {
@@ -510,8 +754,10 @@ select:focus-visible {
   border-color: var(--border);
 }
 
-.palette-open:hover:not(:disabled) {
+.palette-open:hover:not(:disabled),
+.palette-open:focus-visible {
   color: var(--text);
+  border-color: var(--red);
 }
 
 /* Phones: the views bar sits at the bottom in one row and slides away while
@@ -540,6 +786,7 @@ select:focus-visible {
     padding: 0 12px env(safe-area-inset-bottom);
     background: var(--panel);
     border-top: 1px solid var(--border);
+    border-bottom: none;
     transition: transform 200ms ease;
   }
 
@@ -592,7 +839,7 @@ select:focus-visible {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--elev-3);
   padding: 12px;
   width: min(420px, 100%);
   display: flex;
@@ -674,7 +921,7 @@ select:focus-visible {
 }
 
 .chat-tabs {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--red-dim);
   padding: 0 0 8px;
 }
 
@@ -692,19 +939,19 @@ select:focus-visible {
   max-width: 180px;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
-  color: var(--fg);
+  border: 1px solid var(--red-dim);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
   font-size: var(--font-body);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.chat-tab[aria-selected="true"] {
-  border-color: var(--fg);
-  background: var(--bg);
+.chat-tab:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--text);
 }
 
 .chat-tab.pinned .chat-tab-pin {
@@ -731,16 +978,17 @@ select:focus-visible {
   flex: 0 0 auto;
   width: 28px;
   height: 28px;
+  padding: 0;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
 }
 
 .chat-tab-plus:hover,
 .chat-tab-tools:hover {
-  color: var(--fg);
-  border-color: var(--border);
+  color: var(--text);
+  border-color: var(--red);
 }
 
 .chat-tab-rename {
@@ -763,9 +1011,9 @@ select:focus-visible {
   height: 32px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--panel);
-  color: var(--fg);
+  color: var(--text);
 }
 
 .hangout-header {
@@ -793,23 +1041,29 @@ select:focus-visible {
   gap: 8px;
 }
 
+/* TALK / TYPE: red outline tabs; the one on is a full red stroke on the open-tab fill. */
 .hangout-mode {
   min-width: 64px;
   height: 28px;
   padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
+  border: 1px solid var(--red-dim);
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
   font-size: var(--font-body);
   letter-spacing: 0.04em;
 }
 
+.hangout-mode:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--text);
+}
+
 .hangout-mode.on,
 .hangout-mode[aria-pressed="true"] {
-  color: var(--fg);
-  border-color: var(--fg);
-  background: var(--bg);
+  color: var(--tab-open-text);
+  border-color: var(--red);
+  background: var(--tab-open-bg);
 }
 
 .log {
@@ -823,6 +1077,13 @@ select:focus-visible {
 
 .log:focus-visible {
   outline: none;
+}
+
+/* Wide windows: the conversation is a centered lane, and a message tops out at 70ch. */
+@media (min-width: 1280px) {
+  .log {
+    padding-inline: max(2px, calc(50% - 48ch));
+  }
 }
 
 .empty {
@@ -840,7 +1101,7 @@ select:focus-visible {
   overflow-wrap: anywhere;
   background: var(--panel);
   border: 1.5px solid transparent;
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--elev-1);
 }
 
 .bubble.assistant {
@@ -910,7 +1171,7 @@ select:focus-visible {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 180px;
     grid-template-rows: minmax(0, 1fr);
-    column-gap: 12px;
+    column-gap: 24px;
   }
 
   .chat.has-nyx > :not(.nyx-dock) {
@@ -1003,7 +1264,7 @@ select:focus-visible {
   bottom: 8%;
   height: 28%;
   border-radius: 50%;
-  background: radial-gradient(ellipse at center, rgba(20, 16, 12, 0.85), rgba(0, 0, 0, 0.55));
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--void) 85%, transparent), rgb(0 0 0 / 0.55));
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
 }
 
@@ -1013,7 +1274,7 @@ select:focus-visible {
   right: 18%;
   bottom: 22%;
   height: 70%;
-  background: linear-gradient(to top, rgba(255, 176, 0, 0.28), transparent 70%);
+  background: linear-gradient(to top, color-mix(in srgb, var(--amber) 28%, transparent), transparent 70%);
   clip-path: polygon(10% 100%, 90% 100%, 70% 0, 30% 0);
   filter: blur(0.5px);
 }
@@ -1025,7 +1286,7 @@ select:focus-visible {
   bottom: 10%;
   height: 24%;
   border-radius: 50%;
-  border: 1.5px dashed rgba(255, 176, 0, 0.55);
+  border: 1.5px dashed color-mix(in srgb, var(--amber) 55%, transparent);
   animation: nyx-desk-spin 14s linear infinite;
 }
 
@@ -1034,7 +1295,7 @@ select:focus-visible {
   right: 14%;
   bottom: 14%;
   height: 16%;
-  border-color: rgba(255, 176, 0, 0.4);
+  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
   animation-duration: 9s;
   animation-direction: reverse;
 }
@@ -1085,8 +1346,8 @@ select:focus-visible {
   padding: 8px;
   list-style: none;
   min-width: 170px;
-  background: var(--panel, #111113);
-  border: 1px solid var(--border, #333);
+  background: var(--panel);
+  border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
 }
@@ -1104,7 +1365,7 @@ select:focus-visible {
 }
 
 .nyx-desk-menu button:hover {
-  background: var(--hover, #1c1c1f);
+  background: var(--hover);
 }
 
 .nyx-desk-menu-label {
@@ -1338,6 +1599,11 @@ button.md-copy {
   align-items: flex-end;
 }
 
+/* Every composer control is a red outline; Send is the one amber fill. */
+.composer button.quiet:not(:disabled):not(.recording) {
+  border-color: var(--red);
+}
+
 /* Push to talk: held, it reads as on. */
 .composer .mic {
   min-height: 52px;
@@ -1356,7 +1622,9 @@ button.md-copy {
 }
 
 .composer .voice-mode[aria-pressed="true"] {
-  border-color: currentColor;
+  border-color: var(--red);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
 }
 
 .composer-ghost-wrap {
@@ -1402,6 +1670,15 @@ button.md-copy {
   resize: none;
   font-size: var(--font-prose);
   line-height: var(--lh-prose);
+}
+
+.composer textarea:hover:not(:disabled):not(:focus) {
+  border-color: var(--red-hover);
+}
+
+.composer textarea:focus-visible {
+  border-color: var(--red-hover);
+  box-shadow: var(--red-glow);
 }
 
 /* Files waiting on the composer; they wrap on a phone. */
@@ -1513,7 +1790,8 @@ button.md-copy {
   margin-bottom: 12px;
   padding: 4px 0 8px;
   background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  /* The page title's rule is the section's red line (light keeps it quiet). */
+  border-bottom: 1px solid var(--section-rule);
 }
 
 .settings-head h1 {
@@ -1528,7 +1806,8 @@ button.md-copy {
   width: 200px;
   overflow-y: auto;
   padding-left: 16px;
-  border-left: 1px solid var(--border);
+  /* Same red rule as the page title, standing up beside the section nav. */
+  border-left: 1px solid var(--section-rule);
 }
 
 .settings-side h2 {
@@ -1696,11 +1975,11 @@ button.md-copy {
 .card {
   align-self: flex-start;
   max-width: 80%;
-  padding: 8px 12px;
+  padding: 12px 16px;
   border-radius: var(--radius-md);
   border: 1.5px solid var(--red);
   background: var(--panel);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--elev-1);
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
@@ -1765,19 +2044,19 @@ button.md-copy {
 button.danger:not(:disabled) {
   background: var(--red);
   border-color: var(--red);
-  color: #ffffff;
+  color: var(--on-red);
 }
 
 button.danger:not(:disabled)::before {
   content: "! ";
-  color: #ff4d5e;
+  color: var(--on-red);
   font-weight: 600;
 }
 
 button.danger:hover:not(:disabled):not([role="menuitem"]) {
   filter: none;
-  background: var(--red-hover, #e8384f);
-  border-color: var(--red-hover, #e8384f);
+  background: var(--red-hover);
+  border-color: var(--red-hover);
   box-shadow: var(--red-glow);
 }
 
@@ -1823,8 +2102,8 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 }
 
 .severity-medium {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--warn-text);
+  border-color: var(--warn-text);
 }
 
 .fix-pills,
@@ -2625,8 +2904,8 @@ textarea.code {
 }
 
 .work-badge.queued {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--red);
+  color: var(--red-text);
 }
 
 .work-badge.priority.high {
@@ -2769,7 +3048,7 @@ textarea.code {
 .chip[aria-pressed="true"] {
   border-color: var(--red);
   background: var(--red);
-  color: #ffffff;
+  color: var(--on-red);
   box-shadow: none;
   font-weight: 600;
 }
@@ -2807,23 +3086,26 @@ span.chip.quiet {
   border-radius: 999px;
   background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
-}
-
-.quick-chip.primary {
-  background: var(--amber);
-  border-color: var(--amber);
-  color: var(--void, #0a0a0b);
-  font-weight: 600;
-}
-
-.quick-chip.primary:hover:not(:disabled) {
-  filter: brightness(1.06);
-  background: var(--amber);
+  border: 1px solid var(--red-dim);
 }
 
 .quick-chip:hover:not(:disabled) {
   background: var(--hover);
+  border-color: var(--red);
+}
+
+/* The suggested chip: an amber stroke, never a fill (Send is the one amber fill). */
+.quick-chip.primary {
+  background: transparent;
+  border-color: var(--amber);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.quick-chip.primary:hover:not(:disabled) {
+  background: var(--amber-wash);
+  border-color: var(--amber);
+  box-shadow: none;
 }
 
 /* The × sits tight against its chip, still a full-height target. */
@@ -2908,7 +3190,7 @@ label.toggle-row {
   padding: 0;
   border: 1px solid var(--field-border);
   border-radius: 999px;
-  background: var(--hover);
+  background: var(--toggle-off);
   cursor: pointer;
   transition:
     background-color var(--t-base) var(--ease-out),
@@ -2916,8 +3198,18 @@ label.toggle-row {
 }
 
 .toggle[aria-checked="true"] {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--toggle-on);
+  border-color: var(--toggle-on);
+}
+
+/* Hover keeps the switch's own track (the generic button hover would wash it
+   red and hide the dark thumb of a switch that is on). */
+.toggle:hover:not(:disabled) {
+  background: var(--toggle-off);
+}
+
+.toggle[aria-checked="true"]:hover:not(:disabled) {
+  background: var(--toggle-on);
 }
 
 .toggle:disabled {
@@ -2943,7 +3235,7 @@ label.toggle-row {
 }
 
 .toggle[aria-checked="true"] .toggle-thumb {
-  background: var(--accent-text);
+  background: var(--toggle-on-thumb);
   transform: translateX(18px);
 }
 
@@ -2988,6 +3280,17 @@ label.toggle-row {
   align-items: stretch;
   gap: 8px;
   padding: 12px 16px;
+  border-color: var(--red-dim);
+  transition: border-color var(--t-fast) var(--ease-out);
+}
+
+.card.feed-card:hover,
+.card.feed-card:focus-within {
+  border-color: var(--red);
+}
+
+.pulse-head .switch button:not([aria-pressed="true"]) {
+  border-color: var(--red-dim);
 }
 
 .feed-head {
@@ -3183,7 +3486,8 @@ label.toggle-row {
   display: block;
   height: 12px;
   border-radius: 6px;
-  background: var(--user);
+  /* Red-tinted, so a loading card reads as part of the palette, not gray. */
+  background: var(--selected);
   animation: skeleton-pulse 1.2s ease-in-out infinite;
 }
 
@@ -3315,7 +3619,7 @@ label.toggle-row {
 .brand-lockup img {
   width: 1.3em;
   height: 1.3em;
-  background: #0b0b0d;
+  background: var(--void);
   border-radius: 0.2em;
 }
 
@@ -3364,7 +3668,7 @@ label.toggle-row {
 }
 
 .activity-dot.running {
-  background: var(--accent);
+  background: var(--amber);
 }
 
 .activity-list {
@@ -3508,8 +3812,8 @@ label.toggle-row {
   height: 18px;
   padding: 0 4px;
   border-radius: 9px;
-  background: var(--danger);
-  color: #fff;
+  background: var(--amber);
+  color: var(--void);
   font-size: var(--font-badge);
   font-weight: 600;
   line-height: 1;
@@ -3635,6 +3939,81 @@ label.toggle-row {
 
 .palette {
   animation: pop-in var(--t-base) var(--ease-out) backwards;
+}
+
+/* Glam motion: a running dot that pulses amber, an open tab's underline that
+   slides up, cards that fade up 4px, and an XP bar and streak that fill in.
+   Only when nobody asked for less motion, from the OS or from Settings. */
+@keyframes dot-pulse {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--amber) 60%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@keyframes tab-open {
+  from {
+    box-shadow: inset 0 0 0 var(--amber);
+  }
+}
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes xp-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes streak-fill {
+  from {
+    background: var(--selected);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-reduce-motion="true"]) .activity-dot.running {
+    animation: dot-pulse 1.6s var(--ease-out) infinite;
+  }
+
+  :root:not([data-reduce-motion="true"]) :is(.tabs button, .settings-tabs button, .pulse-head .switch button)[aria-pressed="true"],
+  :root:not([data-reduce-motion="true"]) :is(.chat-tab, .code-side-tabs [role="tab"])[aria-selected="true"] {
+    animation: tab-open var(--t-base) var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) :is(.home-tile, .card.feed-card) {
+    animation: card-enter var(--t-base) var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) .xp-fill {
+    transform-origin: left;
+    transition: width var(--t-base) var(--ease-out);
+    animation: xp-grow 600ms var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) .streak-days li.on {
+    animation: streak-fill 600ms var(--ease-out) backwards;
+  }
+}
+
+/* Less motion also drops the backdrop grid. */
+:root[data-reduce-motion="true"] {
+  --backdrop-grid: none;
+}
+
+/* :root:root matches the theme blocks' (0,2,0) specificity, so this later rule
+   wins over the dark themes that turn the grid on. */
+@media (prefers-reduced-motion: reduce) {
+  :root:root {
+    --backdrop-grid: none;
+  }
 }
 
 /* People who ask for less motion get none: state changes still happen, instantly. */
@@ -3797,6 +4176,56 @@ label.toggle-row {
 
 .brand-mark img {
   display: block;
+}
+
+/* Display type (Chakra Petch): the wordmark, page titles, tile eyebrows, and
+   the uppercase labels on tabs and the CTA. Body text and prose stay Inter. */
+.brand-mark span,
+.brand-lockup,
+:is(h1, h2):not(.md-heading),
+.settings-title {
+  font-family: var(--font-family-display);
+}
+
+.brand-mark span {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
+}
+
+.home-tile h3,
+.xp-line {
+  font-family: var(--font-family-display);
+  letter-spacing: var(--tracking-eyebrow);
+}
+
+.tabs button,
+.settings-tabs button,
+.settings-nav button,
+.pulse-head .switch button,
+.code-side-tabs [role="tab"],
+.code-run,
+button.cta,
+button.primary:not(.quick-chip) {
+  font-family: var(--font-family-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+
+/* Tracked capitals run wide, so labels step down a size to keep the width
+   they had in mixed case. */
+.tabs button,
+.settings-nav button,
+.pulse-head .switch button,
+.code-side-tabs [role="tab"],
+.code-run,
+button.cta,
+button.primary:not(.quick-chip) {
+  font-size: var(--font-caption);
+}
+
+.settings-tabs button {
+  font-size: var(--font-body);
 }
 
 .tabs button {
@@ -3975,7 +4404,7 @@ label.toggle-row {
 .topbar .halt {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-red);
   font-weight: 600;
 }
 
@@ -4060,7 +4489,7 @@ label.toggle-row {
   cursor: pointer;
 }
 .slash-row[aria-selected="true"] {
-  background: var(--accent-soft, rgb(127 127 127 / 0.18));
+  background: var(--selected);
 }
 .slash-row.off {
   opacity: 0.55;
@@ -4170,7 +4599,7 @@ label.toggle-row {
     hsl(var(--art-hue) 45% 32%),
     hsl(calc(var(--art-hue) + 40) 40% 16%)
   );
-  color: #f2f2f4;
+  color: var(--art-text);
   font-size: var(--font-headline);
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -4290,7 +4719,7 @@ label.toggle-row {
 
 .game-screen-running {
   margin: 0;
-  color: #f0b429;
+  color: var(--amber);
   font-weight: 600;
   font-size: var(--font-caption);
 }
@@ -4661,7 +5090,7 @@ label.toggle-row {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #2f9e5b;
+  background: var(--ok);
   transform: translateY(-1px);
 }
 
@@ -4890,17 +5319,24 @@ label.toggle-row {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  padding: 12px;
+  padding: 16px;
   border: 1.5px solid var(--red-dim);
   border-radius: var(--radius-md);
   background: var(--panel);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--elev-1);
 }
 
 .home-tile.large {
   grid-column: span 2;
   grid-row: span 2;
+}
+
+/* Objectives is the "objective" surface: a red stroke over a faint amber wash. */
+.home-tile.objective-tile {
   border-color: var(--red);
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--amber) 9%, transparent), color-mix(in srgb, var(--amber) 3%, transparent) 55%, transparent),
+    var(--panel);
 }
 
 .home-tile.medium {
@@ -4916,7 +5352,6 @@ label.toggle-row {
 .home-tile h3 {
   margin: 0;
   font-size: var(--font-caption);
-  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -5010,6 +5445,11 @@ label.toggle-row {
   font-size: var(--font-headline);
   letter-spacing: var(--tracking-headline);
   font-weight: 600;
+  color: var(--text);
+}
+
+/* Amber is for objectives, XP and warnings: only the Objectives count wears it. */
+.objective-tile .home-count {
   color: var(--amber);
 }
 
@@ -5032,15 +5472,22 @@ label.toggle-row {
   flex-wrap: wrap;
 }
 
+/* Glance chips: red-dim outline pills. */
 .home-glance button {
   background: transparent;
   color: var(--text);
-  border-color: var(--border);
+  border: 1px solid var(--red-dim);
+  border-radius: 999px;
 }
 
 .home-glance button:hover:not(:disabled) {
   filter: none;
   background: var(--hover);
+  border-color: var(--red);
+}
+
+.home-foot button.link {
+  text-underline-offset: 3px;
 }
 
 .home-foot {
@@ -5086,7 +5533,6 @@ label.toggle-row {
   justify-content: space-between;
   gap: 8px;
   font-size: var(--font-caption);
-  letter-spacing: 0.06em;
 }
 
 .xp-level {
@@ -5103,12 +5549,15 @@ label.toggle-row {
   height: 6px;
   border-radius: 3px;
   background: var(--selected);
-  overflow: hidden;
 }
 
+/* The track no longer clips, so the fill rounds itself and its glow shows. */
 .xp-fill {
   height: 100%;
+  max-width: 100%;
+  border-radius: inherit;
   background: var(--amber);
+  box-shadow: var(--glow-xp);
 }
 
 .streak-days {
@@ -5599,9 +6048,16 @@ label.toggle-row {
   overflow-wrap: anywhere;
 }
 
+/* The open file: a red wash with a red bar down its left edge. */
 .code-file[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: var(--red);
+  background: var(--red-wash);
+  box-shadow: inset 3px 0 0 var(--red);
+}
+
+.code-file[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--red-wash);
+  box-shadow: inset 3px 0 0 var(--red), var(--red-glow);
 }
 
 .code-status {
@@ -5799,8 +6255,17 @@ fieldset.channel label {
   white-space: nowrap;
 }
 
+/* Dismiss is the quiet way out: plain muted text until hovered. */
 .card-row > .card-dismiss {
   margin-left: auto;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.card-row > .card-dismiss:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
 }
 
 /* Like → filled heart. The heart keeps the accent colour; a one-shot pop plays
@@ -6053,7 +6518,7 @@ fieldset.channel label {
 
 .code-editor-host .cm-activeLine,
 .code-editor-host .cm-activeLineGutter {
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  background: color-mix(in srgb, var(--red) 6%, transparent);
 }
 
 .code-terminal-host {
@@ -6075,12 +6540,12 @@ fieldset.channel label {
 .code-editor-host .cm-selectionBackground,
 .code-editor-host .cm-focused .cm-selectionBackground,
 .code-editor-host .cm-content ::selection {
-  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--red) 28%, transparent);
 }
 
 .code-editor-host .cm-matchingBracket {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--red) 50%, transparent);
 }
 
 .episode {
@@ -6191,7 +6656,7 @@ fieldset.channel label {
 .episode-actions .halt {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-red);
   font-weight: 600;
 }
 
@@ -6217,7 +6682,7 @@ fieldset.channel label {
 .topbar .record-stop {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-red);
   font-weight: 600;
 }
 
@@ -6247,25 +6712,20 @@ fieldset.channel label {
   margin-top: var(--space-4);
 }
 
-/* Code tab: the project and its workspace on the left, the agent window and
-   its tasks down the right. Each side scrolls by itself. */
+/* Code tab: agent LEFT (wide), editor/side tabs RIGHT (narrow), drag handle. */
 .code-tab {
-  gap: var(--space-8);
-}
-
-.code-tab > .code {
-  min-width: 0;
+  gap: 0;
+  align-items: stretch;
 }
 
 .code-agent {
-  flex: 0 0 clamp(340px, 46%, 560px);
-  min-width: 0;
+  flex: 1 1 var(--code-agent-pct, 62%);
+  min-width: 420px;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-8);
-  padding-left: var(--space-8);
-  border-left: 1px solid var(--border);
+  padding-right: var(--space-8);
 }
 
 .code-agent > .code-head {
@@ -6276,8 +6736,62 @@ fieldset.channel label {
   margin: 0;
 }
 
-/* In the narrow column the message box takes a row of its own, with the
-   buttons under it. */
+.code-split-handle {
+  flex: 0 0 6px;
+  margin: 0 2px;
+  border-radius: 999px;
+  background: var(--red-dim);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.code-split-handle:hover,
+.code-split-handle:focus-visible {
+  background: var(--red);
+  outline: none;
+}
+
+.code-tab > .code-side {
+  flex: 1 1 calc(100% - var(--code-agent-pct, 62%));
+  min-width: 300px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding-left: var(--space-8);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.code-side-tabs {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.code-side-tabs [role="tab"] {
+  min-height: 32px;
+  padding: 4px 12px;
+}
+
+.code-side-tabs [role="tab"][aria-selected="true"] {
+  border-color: var(--red);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
+  box-shadow: inset 0 -2px 0 var(--amber);
+}
+
+.code-side-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Wide agent column: composer stays one row when there is room. */
 .chat.embedded .composer {
   flex-wrap: wrap;
 }
@@ -6307,21 +6821,28 @@ fieldset.channel label {
   margin: 0;
 }
 
-/* A narrow window stacks them: the agent window under the workspace. */
+/* A narrow window stacks them: agent on top, side column under. */
 @media (max-width: 899px) {
   .app > .code-tab:not([hidden]) {
     flex-direction: column;
     overflow-y: auto;
   }
 
-  .code-tab > .code {
-    flex: 0 0 auto;
-    overflow-y: visible;
-  }
-
   .code-agent {
     flex: 0 0 auto;
-    min-height: 70vh;
+    min-width: 0;
+    min-height: 55vh;
+    padding-right: 0;
+  }
+
+  .code-split-handle {
+    display: none;
+  }
+
+  .code-tab > .code-side {
+    flex: 0 0 auto;
+    min-width: 0;
+    overflow-y: visible;
     padding-left: 0;
     border-left: none;
     border-top: 1px solid var(--border);

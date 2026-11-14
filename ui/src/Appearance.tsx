@@ -56,6 +56,10 @@ export function Appearance({
             aria-pressed={shown === c.value}
             onClick={() => void choose(c.value)}
           >
+            <span className="theme-swatch" data-swatch={c.value} aria-hidden="true">
+              <i />
+              <i />
+            </span>
             {c.label}
           </button>
         ))}

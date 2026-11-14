@@ -736,9 +736,9 @@ mod tests {
         let config = temp_dir("main-order");
         let main = ensure_main(&config, 0x60).expect("main");
         // Both outrank Main in history's own order: one pinned, one newer.
-        // Pinned chats rank by `updated` (file mtime or `created`), so the
-        // pinned chat's stamp is far ahead of Main's: written back to back,
-        // the two files can share an mtime tick and tie on the id instead.
+        // History orders pinned chats by last change, and Main is pinned, so
+        // the pinned chat's time is set past Main's: file times written in
+        // the same clock tick tie, and the tie would put Main first.
         write_session(&config, "shell-pinned", "Pinned", u64::MAX / 8);
         history::toggle_pin(&config, "shell-pinned").expect("pin");
         write_session(&config, "shell-newer", "Newer", u64::MAX / 4);

@@ -397,7 +397,7 @@ export function Settings({
             value={key}
             onChange={(e) => setKey(e.target.value)}
           />
-          <button type="button" className="cta" onClick={saveKey} disabled={!key.trim()}>
+          <button type="button" onClick={saveKey} disabled={!key.trim()}>
             Save key
           </button>
           {loaded.hasApiKey && (
