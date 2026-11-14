@@ -321,6 +321,12 @@ pub fn quiet_hours_active(now_hm: &str, start: &str, end: &str) -> bool {
     }
 }
 
+/// The top bar's chip while quiet hours are on now: "Quiet until 07:00".
+/// `None` outside the window, or with no window (start equal to end).
+pub fn quiet_until_chip(now_hm: &str, start: &str, end: &str) -> Option<String> {
+    quiet_hours_active(now_hm, start, end).then(|| format!("Quiet until {end}"))
+}
+
 pub fn hm_min(hm: &str) -> Option<u32> {
     let mut p = hm.trim().split(':');
     let h = p.next()?.parse::<u32>().ok()?;
@@ -560,5 +566,21 @@ mod tests {
                 "clicked 10,20".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn quiet_chip_shows_only_inside_the_window() {
+        assert_eq!(quiet_until_chip("10:00", "22:00", "07:00"), None);
+        assert_eq!(
+            quiet_until_chip("23:30", "22:00", "07:00"),
+            Some("Quiet until 07:00".into())
+        );
+        assert_eq!(
+            quiet_until_chip("06:59", "22:00", "07:00"),
+            Some("Quiet until 07:00".into())
+        );
+        assert_eq!(quiet_until_chip("07:00", "22:00", "07:00"), None);
+        assert_eq!(quiet_until_chip("12:00", "00:00", "00:00"), None);
+        assert_eq!(quiet_until_chip("12:00", "", ""), None);
     }
 }

@@ -849,7 +849,8 @@ button.pill:focus-visible {
   background: var(--red);
 }
 
-.pill-local .pill-dot {
+.pill-local .pill-dot,
+.pill-quiet .pill-dot {
   background: var(--muted);
 }
 

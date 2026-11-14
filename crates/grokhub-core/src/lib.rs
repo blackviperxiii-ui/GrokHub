@@ -577,9 +577,9 @@ pub use organs::{
     cap_from_text, cap_label, daily_units_blocked, date_out_from, greet_from_last_job,
     last_user_scan, last_user_text, normalize_hm, on_wheel_grab, parse_local_clock,
     passenger_label, plan_room, presence_orb_state, presence_should_stream, quiet_hours_active,
-    quiet_hours_choice_label, quiet_hours_menu, redirect_prompt, should_keep_frame,
-    thread_host_receipts, thread_host_receipts_from, LocalClock, MidThoughtGreet, RoomPlan,
-    WallClock, PRESENCE_RING_MS,
+    quiet_hours_choice_label, quiet_hours_menu, quiet_until_chip, redirect_prompt,
+    should_keep_frame, thread_host_receipts, thread_host_receipts_from, LocalClock,
+    MidThoughtGreet, RoomPlan, WallClock, PRESENCE_RING_MS,
 };
 pub use pair::{
     devices_shows_pair_code, hub_pair_url, lan_bind_in_use, make_pair_code, normalize_code,

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PersonalityPage, PrivacyPage } from "./api";
@@ -7,6 +7,7 @@ import type { PersonalityPage, PrivacyPage } from "./api";
 const api = vi.hoisted(() => ({
   getPersonalities: vi.fn<() => Promise<PersonalityPage>>(),
   getPrivacy: vi.fn<() => Promise<PrivacyPage>>(),
+  quietChip: vi.fn<() => Promise<string | null>>(),
 }));
 vi.mock("./api", () => api);
 
@@ -54,6 +55,54 @@ describe("StatusPills", () => {
   beforeEach(() => {
     api.getPersonalities.mockReset().mockResolvedValue(PERSONALITY);
     api.getPrivacy.mockReset().mockResolvedValue(PRIVACY);
+    api.quietChip.mockReset().mockResolvedValue(null);
+  });
+
+  it("shows Quiet until while quiet hours hold, and it opens Behavior", async () => {
+    api.quietChip.mockResolvedValue("Quiet until 07:00");
+    const onSettings = vi.fn();
+    render(<StatusPills remote={false} refresh="a" onSettings={onSettings} />);
+    const quiet = await screen.findByRole("button", { name: "Quiet until 07:00" });
+    expect(quiet).toHaveAttribute("title", "Automations wait until then. Opens Behavior.");
+    await userEvent.click(quiet);
+    expect(onSettings).toHaveBeenLastCalledWith("behavior");
+    // The pill sits first in the row, ahead of the personality.
+    expect(screen.getAllByRole("button")[0]).toBe(quiet);
+  });
+
+  it("hides Quiet until outside quiet hours, when the desktop doesn't answer, and on the web app", async () => {
+    const view = render(<StatusPills remote={false} refresh="a" onSettings={() => {}} />);
+    await screen.findByRole("button", { name: "Personality · Viper" });
+    expect(screen.queryByRole("button", { name: /^Quiet until/ })).toBeNull();
+    view.unmount();
+    api.quietChip.mockRejectedValue(new Error("refused"));
+    const failed = render(<StatusPills remote={false} refresh="a" onSettings={() => {}} />);
+    await screen.findByRole("button", { name: "Personality · Viper" });
+    expect(screen.queryByRole("button", { name: /^Quiet until/ })).toBeNull();
+    failed.unmount();
+    api.quietChip.mockClear().mockResolvedValue("Quiet until 07:00");
+    render(<StatusPills remote refresh="a" onSettings={() => {}} />);
+    await screen.findByRole("button", { name: "Local first · 3 sent" });
+    expect(api.quietChip).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /^Quiet until/ })).toBeNull();
+  });
+
+  it("reads quiet hours again at the turn of each minute, so the pill comes and goes on time", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.setSystemTime(new Date(2026, 10, 14, 21, 59, 30));
+      render(<StatusPills remote={false} refresh="a" onSettings={() => {}} />);
+      await screen.findByRole("button", { name: "Personality · Viper" });
+      expect(api.quietChip).toHaveBeenCalledTimes(1);
+      api.quietChip.mockResolvedValue("Quiet until 07:00");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_100);
+      });
+      expect(api.quietChip).toHaveBeenCalledTimes(2);
+      expect(await screen.findByRole("button", { name: "Quiet until 07:00" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows the voice and the week's count, and each opens its Settings section", async () => {
