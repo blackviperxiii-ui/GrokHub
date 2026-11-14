@@ -246,9 +246,13 @@ impl HubShare {
     /// Whether sharing is on, and the newest frame a paired computer sent,
     /// with the time it came. Memory only: writes no file.
     pub fn glance(&self) -> (bool, Option<(String, u64)>) {
-        let st = lock(&self.hub);
-        let frame = st.last_frame.as_ref().map(|f| (f.data_url.clone(), f.at));
-        (st.sharing, frame)
+        // Only the Arc is cloned under the lock, as the hub's own GET frame
+        // does: a 400 KB copy would hold up the LAN server meanwhile.
+        let (sharing, frame) = {
+            let st = lock(&self.hub);
+            (st.sharing, st.last_frame.clone())
+        };
+        (sharing, frame.map(|f| (f.data_url.clone(), f.at)))
     }
 
     /// Writes the file when a computer paired since the last write, and

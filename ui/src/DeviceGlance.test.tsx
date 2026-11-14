@@ -52,4 +52,18 @@ describe("device glance", () => {
     expect(row.querySelector("img")).toBeNull();
     expect(api.getDeviceGlance).toHaveBeenCalledTimes(3);
   });
+
+  it("reads only while the chat is on screen", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.getDeviceGlance.mockResolvedValue({ sharing: true, frame: null });
+    const { rerender } = render(<DeviceGlanceRow active={false} onOpen={() => {}} />);
+    await act(() => vi.advanceTimersByTimeAsync(GLANCE_MS * 4));
+    expect(api.getDeviceGlance).not.toHaveBeenCalled();
+    rerender(<DeviceGlanceRow active onOpen={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Sharing. Open Devices" })).toBeInTheDocument();
+    expect(api.getDeviceGlance).toHaveBeenCalledTimes(1);
+    rerender(<DeviceGlanceRow active={false} onOpen={() => {}} />);
+    await act(() => vi.advanceTimersByTimeAsync(GLANCE_MS * 4));
+    expect(api.getDeviceGlance).toHaveBeenCalledTimes(1);
+  });
 });

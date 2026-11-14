@@ -17,10 +17,13 @@ export function glanceThumb(glance: DeviceGlance): string | null {
   return /^data:image\/[a-z0-9.+-]+;base64,/i.test(frame) ? frame : null;
 }
 
-export function DeviceGlanceRow({ onOpen }: { onOpen: () => void }) {
+/** `active`: the chat is the page on screen. A hidden chat stays mounted,
+ * so the row reads only while it shows. */
+export function DeviceGlanceRow({ active = true, onOpen }: { active?: boolean; onOpen: () => void }) {
   const [glance, setGlance] = useState<DeviceGlance | null>(null);
 
   useEffect(() => {
+    if (!active) return;
     let live = true;
     function read() {
       // A build with no hub (the phone app, the web app) refuses the call:
@@ -42,7 +45,7 @@ export function DeviceGlanceRow({ onOpen }: { onOpen: () => void }) {
       live = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [active]);
 
   if (!glance) return null;
   const line = glanceLine(glance);

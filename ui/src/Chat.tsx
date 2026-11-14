@@ -1939,7 +1939,7 @@ export function Chat({
               {nyx && <NyxFace url={nyx.url} size={96} />}
               <p className="empty">{embedded ? AGENT_EMPTY : CHAT_EMPTY}</p>
               {!embedded && !remote && onOpenView && (
-                <DeviceGlanceRow onOpen={() => onOpenView("devices")} />
+                <DeviceGlanceRow active={active} onOpen={() => onOpenView("devices")} />
               )}
             </div>
           )
