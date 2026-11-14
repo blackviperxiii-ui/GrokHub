@@ -143,6 +143,10 @@ fn text_size<'de, D: Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
 pub struct Behavior {
     /// Sentence autocomplete in the composer.
     pub autocomplete: bool,
+    /// Soft light around the composer while a reply comes in. Off until
+    /// Settings turns it on.
+    #[serde(default)]
+    pub composer_glow: bool,
     /// A few next steps to tap, under the box, on Home and after replies.
     /// On until the person turns it off; off, no chip shows and the reply's
     /// chips block leaves the chat's rules.
@@ -188,6 +192,7 @@ impl Default for Behavior {
     fn default() -> Self {
         Self {
             autocomplete: false,
+            composer_glow: false,
             suggestions: true,
             quiet_start: String::new(),
             quiet_end: String::new(),
@@ -247,6 +252,7 @@ fn lenient_behavior<'de, D: Deserializer<'de>>(d: D) -> Result<Behavior, D::Erro
         quiet_hours(text("quietStart"), text("quietEnd")).unwrap_or_default();
     Ok(Behavior {
         autocomplete: flag("autocomplete"),
+        composer_glow: flag("composerGlow"),
         suggestions: raw
             .get("suggestions")
             .and_then(Value::as_bool)
@@ -510,6 +516,7 @@ mod tests {
             last_chat: "shell-abc-123".into(),
             behavior: Behavior {
                 autocomplete: true,
+                composer_glow: true,
                 // Off round-trips, though a missing value reads as on.
                 suggestions: false,
                 quiet_start: "22:00".into(),
@@ -695,13 +702,14 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(
             path(&dir),
-            r#"{"model":"grok-5","behavior":{"autocomplete":"yes","suggestions":"nope","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1,"lane":"travel"}}"#,
+            r#"{"model":"grok-5","behavior":{"autocomplete":"yes","composerGlow":"on","suggestions":"nope","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1,"lane":"travel"}}"#,
         )
         .expect("write");
         assert_eq!(
             load(&dir).behavior,
             Behavior {
                 autocomplete: false,
+                composer_glow: false,
                 suggestions: true,
                 quiet_start: String::new(),
                 quiet_end: String::new(),
@@ -715,13 +723,14 @@ mod tests {
         // One bad field leaves the good ones alone.
         std::fs::write(
             path(&dir),
-            r#"{"behavior":{"autocomplete":true,"suggestions":false,"quietStart":"23:00","quietEnd":"6:30","dailyTokenBudget":"lots","lane":" Life "}}"#,
+            r#"{"behavior":{"autocomplete":true,"composerGlow":true,"suggestions":false,"quietStart":"23:00","quietEnd":"6:30","dailyTokenBudget":"lots","lane":" Life "}}"#,
         )
         .expect("write");
         assert_eq!(
             load(&dir).behavior,
             Behavior {
                 autocomplete: true,
+                composer_glow: true,
                 suggestions: false,
                 quiet_start: "23:00".into(),
                 quiet_end: "06:30".into(),

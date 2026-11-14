@@ -1,0 +1,1 @@
+- Settings → Behavior has Composer glow again: a soft red light around the composer while a reply comes in. It is off by default, and with less motion it stays steady instead of breathing.

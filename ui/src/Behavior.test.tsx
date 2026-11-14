@@ -11,10 +11,18 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { AUTOCOMPLETE_NOTE, Behavior, LANE_NOTE, SCHEDULE_NOTE, SUGGESTIONS_NOTE } from "./Behavior";
+import {
+  AUTOCOMPLETE_NOTE,
+  Behavior,
+  COMPOSER_GLOW_NOTE,
+  LANE_NOTE,
+  SCHEDULE_NOTE,
+  SUGGESTIONS_NOTE,
+} from "./Behavior";
 
 const OFF: Shape = {
   autocomplete: false,
+  composerGlow: false,
   suggestions: true,
   quietStart: "",
   quietEnd: "",
@@ -131,6 +139,18 @@ describe("Behavior", () => {
       dailyTokenBudget: 1000000,
       pauseOverBudget: true,
     });
+  });
+
+  it("composer glow starts off and saves at once", async () => {
+    render(<Behavior tray onCloseToTray={() => {}} />);
+    const glow = await screen.findByLabelText("Composer glow");
+    expect(glow).not.toBeChecked();
+    expect(COMPOSER_GLOW_NOTE).toBe("Soft light around the composer while a reply comes in. Off by default.");
+    expect(screen.getByText(COMPOSER_GLOW_NOTE)).toBeVisible();
+    api.saveBehavior.mockResolvedValueOnce(page({ composerGlow: true }));
+    await userEvent.click(glow);
+    expect(api.saveBehavior).toHaveBeenLastCalledWith(true, { ...OFF, composerGlow: true });
+    expect(await screen.findByLabelText("Composer glow")).toBeChecked();
   });
 
   it("saves quiet hours and shows a refusal", async () => {

@@ -7,6 +7,7 @@ import { Toggle } from "./Toggle";
 
 export const AUTOCOMPLETE_NOTE =
   "Muted ghost text finishes your line in the composer; Tab accepts. Off by default.";
+export const COMPOSER_GLOW_NOTE = "Soft light around the composer while a reply comes in. Off by default.";
 export const SUGGESTIONS_NOTE =
   "A few next steps to tap, under the box, on Home and after replies. They learn from what you pick.";
 export const LANE_NOTE =
@@ -87,6 +88,8 @@ export function Behavior({
         )}
         <dt>Sentence autocomplete</dt>
         <dd>{b.autocomplete ? "On" : "Off"}</dd>
+        <dt>Composer glow</dt>
+        <dd>{b.composerGlow ? "On" : "Off"}</dd>
         <dt>Quiet hours</dt>
         <dd>{quietLabel(b)}</dd>
         <dt>Daily token budget</dt>
@@ -155,6 +158,10 @@ export function Behavior({
         Sentence autocomplete
       </Toggle>
       <p className="note">{AUTOCOMPLETE_NOTE}</p>
+      <Toggle checked={b.composerGlow} onChange={(on) => change({ composerGlow: on })}>
+        Composer glow
+      </Toggle>
+      <p className="note">{COMPOSER_GLOW_NOTE}</p>
       <h2>Automations &amp; limits</h2>
       <form onSubmit={saveQuiet}>
         <label>

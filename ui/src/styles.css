@@ -2021,6 +2021,24 @@ button.md-copy {
   box-shadow: var(--red-glow);
 }
 
+/* Composer glow (Settings → Behavior): soft red light behind the box while a
+   reply comes in. The light is a layer under the textarea, so the breath only
+   fades its opacity and never repaints the box. Less motion keeps it steady. */
+.composer-ghost-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 18px 2px color-mix(in srgb, var(--red) 55%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-base) var(--ease-out);
+}
+
+.composer.glowing .composer-ghost-wrap::before {
+  opacity: 0.6;
+}
+
 /* Files waiting on the composer; they wrap on a phone. */
 .attach-chips {
   display: flex;
@@ -4417,6 +4435,20 @@ label.toggle-row {
 
   :root:not([data-reduce-motion="true"]) .streak-days li.on {
     animation: streak-fill 600ms var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) .composer.glowing .composer-ghost-wrap::before {
+    animation: composer-glow 1.6s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes composer-glow {
+  from {
+    opacity: 0.45;
+  }
+
+  to {
+    opacity: 1;
   }
 }
 

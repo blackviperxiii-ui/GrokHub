@@ -32,6 +32,7 @@ const api = vi.hoisted(() => ({
       closeToTray: true,
       behavior: {
         autocomplete: false,
+        composerGlow: false,
         suggestions: true,
         quietStart: "",
         quietEnd: "",
@@ -303,6 +304,7 @@ describe("Chat", () => {
       closeToTray: true,
       behavior: {
         autocomplete: false,
+        composerGlow: false,
         suggestions: true,
         quietStart: "",
         quietEnd: "",
@@ -322,6 +324,7 @@ describe("Chat", () => {
       closeToTray: true,
       behavior: {
         autocomplete: true,
+        composerGlow: false,
         suggestions: true,
         quietStart: "",
         quietEnd: "",
@@ -346,6 +349,41 @@ describe("Chat", () => {
     api.composerGhostSuggest.mockClear().mockResolvedValue(" again");
     await userEvent.type(box, "!");
     expect(document.querySelector(".composer-ghost-sug")).toBeNull();
+  });
+
+  it("lights the composer while a reply runs only with Composer glow on", async () => {
+    const form = () => document.querySelector("form.composer")!;
+    let finish = holdTurn();
+    const { unmount } = render(<Chat onOpenSettings={() => {}} />);
+    await startTurn("hello");
+    expect(form().classList.contains("glowing")).toBe(false);
+    act(() => finish());
+    unmount();
+
+    api.getBehavior.mockResolvedValue({
+      closeToTray: true,
+      behavior: {
+        autocomplete: false,
+        composerGlow: true,
+        suggestions: true,
+        quietStart: "",
+        quietEnd: "",
+        dailyTokenBudget: 0,
+        pauseOverBudget: false,
+        lane: "coding",
+      },
+      budgets: [],
+    });
+    api.sendChat.mockReset();
+    finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() => expect(api.getBehavior).toHaveBeenCalled());
+    await screen.findByRole("textbox", { name: "Message" });
+    expect(form().classList.contains("glowing")).toBe(false);
+    await startTurn("hello again");
+    expect(form().classList.contains("glowing")).toBe(true);
+    act(() => finish());
+    await waitFor(() => expect(form().classList.contains("glowing")).toBe(false));
   });
 
   it("says part of the reply may be missing after a gap in the web app's events", async () => {

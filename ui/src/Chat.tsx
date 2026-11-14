@@ -970,6 +970,8 @@ export function Chat({
   const [settings, setSettings] = useState<Settings | null>(null);
   /** Behavior → Sentence autocomplete; off until the page says otherwise. */
   const [autocomplete, setAutocomplete] = useState(false);
+  // Settings → Behavior → Composer glow: light around the box while a reply runs here.
+  const [glow, setGlow] = useState(false);
   /** The ghost suggestion, and the draft it was suggested for. */
   const [ghostFor, setGhostFor] = useState<{ draft: string; text: string } | null>(null);
   const ghostGen = useRef(0);
@@ -1004,8 +1006,14 @@ export function Chat({
   useEffect(() => {
     if (!active) return;
     getBehavior().then(
-      (page) => setAutocomplete(page.behavior.autocomplete),
-      () => setAutocomplete(false),
+      (page) => {
+        setAutocomplete(page.behavior.autocomplete);
+        setGlow(page.behavior.composerGlow);
+      },
+      () => {
+        setAutocomplete(false);
+        setGlow(false);
+      },
     );
   }, [active]);
 
@@ -2296,7 +2304,7 @@ export function Chat({
         }}
       />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
-      <form className="composer slash-wrap" onSubmit={send}>
+      <form className={glow && busyHere ? "composer slash-wrap glowing" : "composer slash-wrap"} onSubmit={send}>
         {slashOpen && (
           <SlashMenu
             hits={slashRows}

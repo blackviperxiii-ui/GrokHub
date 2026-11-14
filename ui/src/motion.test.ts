@@ -3,11 +3,11 @@ import css from "./styles.css?raw";
 
 /**
  * The glam motion (pulsing dot, tab underline, card entrance, XP and streak
- * fill) runs only when nobody asked for less motion: not under the OS
- * setting, and not under Settings → Appearance → Reduce motion.
+ * fill, composer glow) runs only when nobody asked for less motion: not under
+ * the OS setting, and not under Settings → Appearance → Reduce motion.
  */
 
-const GLAM = ["dot-pulse", "tab-open", "card-enter", "xp-grow", "streak-fill"];
+const GLAM = ["dot-pulse", "tab-open", "card-enter", "xp-grow", "streak-fill", "composer-glow"];
 const GATE_MEDIA = "@media (prefers-reduced-motion: no-preference)";
 const GATE_ROOT = ':root:not([data-reduce-motion="true"])';
 

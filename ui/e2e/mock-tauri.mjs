@@ -47,6 +47,7 @@ const BEHAVIOR = {
   closeToTray: true,
   behavior: {
     autocomplete: false,
+    composerGlow: false,
     suggestions: true,
     quietStart: "",
     quietEnd: "",

@@ -30,6 +30,7 @@ export function chatTabApiStubs() {
         closeToTray: true,
         behavior: {
           autocomplete: false,
+          composerGlow: false,
           suggestions: true,
           quietStart: "",
           quietEnd: "",

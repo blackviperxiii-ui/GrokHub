@@ -3578,6 +3578,8 @@ export function getTaskDetail(conversationId: string, taskId: string): Promise<T
 /** Settings → Behavior, saved in shell.json. Everything starts off. */
 export interface Behavior {
   autocomplete: boolean;
+  /** Soft light around the composer while a reply comes in. */
+  composerGlow: boolean;
   /** A few next steps to tap, under the box, on Home and after replies. */
   suggestions: boolean;
   /** Quiet hours for automations as HH:MM; both empty is none. */
