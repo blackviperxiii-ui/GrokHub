@@ -143,6 +143,17 @@ describe("styles.css views rail and top bar", () => {
     expect(rule(side, ".chat-side {")).toContain("width: 320px;");
   });
 
+  it("opens Objectives beside chat's columns at the same widths, hidden below them", () => {
+    expect(rule(CSS, ".chat-left,\n.chat-snapshot {")).toContain("display: none;");
+    const left = mediaBlocks(CSS, `(min-width: ${DOCK_MIN_WIDTH}px)`).find((b) => b.includes(".chat-left {")) ?? "";
+    expect(rule(left, ".chat-left {")).toContain("width: 260px;");
+    expect(rule(left, ".chat-left {")).toContain("display: flex;");
+    const right =
+      mediaBlocks(CSS, `(min-width: ${SIDE_MIN_WIDTH}px)`).find((b) => b.includes(".chat-snapshot {")) ?? "";
+    expect(rule(right, ".chat-snapshot {")).toContain("width: 240px;");
+    expect(rule(right, ".chat-snapshot {")).toContain("display: flex;");
+  });
+
   it("gives the phone composer textarea a full row above its buttons", () => {
     const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
     const phone = mediaBlocks(CSS, "(max-width: 600px)").find((b) => b.includes(".composer {")) ?? "";

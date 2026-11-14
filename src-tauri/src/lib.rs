@@ -228,6 +228,9 @@ pub struct SettingsView {
     pub summon_hotkey: bool,
     /// Settings → General → notifications while the window is in the background.
     pub notifications: bool,
+    /// Settings → Appearance → Objectives beside chat: Chat draws the
+    /// objective and recent chats on its left and a PC snapshot on its right.
+    pub chat_objectives: bool,
     /// Settings → Account under a live Grok sign-in: the SuperGrok pool's
     /// room, or that xAI's plan gate refused the sign-in.
     pub plan_note: Option<String>,
@@ -260,6 +263,7 @@ fn view(settings: &ShellSettings) -> SettingsView {
         version: shell_update::version(),
         summon_hotkey: settings.summon_hotkey,
         notifications: settings.notifications,
+        chat_objectives: settings.chat_objectives,
     }
 }
 

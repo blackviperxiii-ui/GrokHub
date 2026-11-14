@@ -128,6 +128,11 @@ pub struct ShellSettings {
     /// Outfit pinned from the wardrobe; `None` lets her default mode choose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop_nyx_outfit: Option<String>,
+    /// Settings → Appearance → Objectives beside chat: the open objective's
+    /// steps and recent chats on the chat's left, a PC snapshot on its right,
+    /// in place of the companion dock. Off by default. Same camelCase key as
+    /// the cabin (`chatObjectives`).
+    pub chat_objectives: bool,
 }
 
 /// A size this build doesn't offer reads as the step at or below it.
@@ -298,6 +303,7 @@ impl Default for ShellSettings {
             desktop_nyx_pos: None,
             desktop_nyx_adult: false,
             desktop_nyx_outfit: None,
+            chat_objectives: false,
         }
     }
 }
@@ -464,6 +470,7 @@ mod tests {
                 desktop_nyx_pos: None,
                 desktop_nyx_adult: false,
                 desktop_nyx_outfit: None,
+                chat_objectives: false,
             }
         );
     }
@@ -537,6 +544,7 @@ mod tests {
             desktop_nyx_pos: Some([100, 200]),
             desktop_nyx_adult: false,
             desktop_nyx_outfit: Some("gaming".into()),
+            chat_objectives: true,
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -566,6 +574,7 @@ mod tests {
         assert!(raw.contains("\"desktopNyx\": true"), "{raw}");
         assert!(raw.contains("\"desktopNyxUndocked\": true"), "{raw}");
         assert!(raw.contains("\"desktopNyxOutfit\": \"gaming\""), "{raw}");
+        assert!(raw.contains("\"chatObjectives\": true"), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -617,6 +626,7 @@ mod tests {
                 desktop_nyx_pos: None,
                 desktop_nyx_adult: false,
                 desktop_nyx_outfit: None,
+                chat_objectives: false,
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -661,6 +671,7 @@ mod tests {
                 desktop_nyx_pos: None,
                 desktop_nyx_adult: false,
                 desktop_nyx_outfit: None,
+                chat_objectives: false,
             }
         );
         save(&dir, &loaded).expect("save");
@@ -884,5 +895,17 @@ mod tests {
         for heat in Heat::DIAL {
             assert_eq!(dial_heat(heat), heat);
         }
+    }
+
+    #[test]
+    fn objectives_beside_chat_is_off_until_turned_on() {
+        assert!(!ShellSettings::default().chat_objectives);
+        let dir = temp_dir("chat-objectives");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(path(&dir), r#"{"theme":"light"}"#).expect("write");
+        assert!(!load(&dir).chat_objectives);
+        std::fs::write(path(&dir), r#"{"chatObjectives":true}"#).expect("write");
+        assert!(load(&dir).chat_objectives);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

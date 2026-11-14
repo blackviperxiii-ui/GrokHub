@@ -57,6 +57,7 @@ const WELCOME: AutoReply = {
   firstRun: true,
   textSize: 100,
   reduceMotion: false,
+  chatObjectives: false,
   theme: "system",
   question: null,
   summary: false,

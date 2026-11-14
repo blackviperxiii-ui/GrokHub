@@ -1564,6 +1564,84 @@ button.pill:focus-visible {
   flex-direction: column;
 }
 
+/* Objectives beside chat (Settings → Appearance, deck slide 10): the
+   objective and recent chats on the chat's left from 900px (DOCK_MIN_WIDTH),
+   a PC snapshot on its right from 1280px (SIDE_MIN_WIDTH). No companion dock.
+   A narrower window gives the whole width to the chat. */
+.chat-left,
+.chat-snapshot {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .chat-left {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    width: 260px;
+    min-height: 0;
+    gap: 12px;
+    overflow-y: auto;
+  }
+}
+
+@media (min-width: 1280px) {
+  .chat-snapshot {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    width: 240px;
+    min-height: 0;
+    gap: 12px;
+    overflow-y: auto;
+  }
+}
+
+.chat-left > .card,
+.chat-snapshot > .card {
+  flex: none;
+  align-self: stretch;
+  max-width: none;
+}
+
+.side-steps .current {
+  padding-left: 8px;
+  box-shadow: inset 2px 0 0 var(--red);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.snapshot-tiles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.snapshot-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  min-width: 0;
+}
+
+.snapshot-value {
+  font-family: var(--font-family-display);
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.snapshot-tile.lead .snapshot-value {
+  font-size: var(--font-section);
+  line-height: var(--lh-section);
+}
+
 /* Desktop companion window (NyxDesk.tsx / nyx-desk.html). Transparent stage. */
 .nyx-desk {
   position: relative;

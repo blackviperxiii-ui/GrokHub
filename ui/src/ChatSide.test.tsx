@@ -2,17 +2,18 @@ import "@testing-library/jest-dom/vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HomePage, MissionPage, PulsePage, TileView } from "./api";
+import type { ChatRow, HomePage, MissionPage, PulsePage, TileView } from "./api";
 
 const api = vi.hoisted(() => ({
   getMission: vi.fn<(id?: string) => Promise<MissionPage>>(),
   getHome: vi.fn<(id?: string) => Promise<HomePage>>(),
   getPcSnapshot: vi.fn<() => Promise<TileView>>(),
   getPulse: vi.fn<() => Promise<PulsePage>>(),
+  listChats: vi.fn<() => Promise<ChatRow[]>>(),
 }));
 vi.mock("./api", () => api);
 
-import { ChatSide } from "./ChatSide";
+import { ChatLeft, ChatSide, ChatSnapshot, RECENT_EMPTY, recentChats } from "./ChatSide";
 import { NO_STEPS } from "./Home";
 
 const XP = { level: 14, title: "Grinder", xp: 2340, nextLevelXp: 2600, frac: 0.9, today: 0, week: { days: [], streak: 0 } } as unknown as MissionPage["xp"];
@@ -176,5 +177,101 @@ describe("ChatSide", () => {
     await screen.findByRole("region", { name: "PC loadout" });
     expect(screen.queryByRole("region", { name: "Objectives" })).toBeNull();
     expect(screen.queryByRole("region", { name: "From Pulse" })).toBeNull();
+  });
+});
+
+const chat = (id: string, title: string, updated: number, extra: Partial<ChatRow> = {}): ChatRow => ({
+  id,
+  title,
+  created: 0,
+  updated,
+  ...extra,
+});
+
+describe("Objectives beside chat", () => {
+  beforeEach(() => {
+    api.getMission.mockReset().mockResolvedValue(MISSION);
+    api.getPcSnapshot.mockReset().mockResolvedValue(PC_SLOT.tile.view as TileView);
+    api.listChats
+      .mockReset()
+      .mockResolvedValue([
+        chat("main", "Main", 900, { main: true }),
+        chat("c1", "Open", 800),
+        chat("c2", "Fan curve tweak", 300),
+        chat("c3", "Backlog sort", 700, { pinned: true }),
+        chat("c4", "  ", 500),
+      ]);
+  });
+
+  it("lists the objective's steps with the current one marked and done ones struck", async () => {
+    render(<ChatLeft active conversationId="c1" onOpen={() => {}} onOpenChat={() => {}} />);
+    const steps = await screen.findByRole("region", { name: "Steps" });
+    const items = within(steps).getAllByRole("listitem");
+    expect(items.map((li) => li.textContent)).toEqual(["Aim routine 12/20", "Three ranked wins", "Review one replay"]);
+    expect(items.map((li) => li.getAttribute("aria-current"))).toEqual([null, "step", null]);
+    expect(items.map((li) => li.className)).toEqual(["done", "current", ""]);
+    expect(within(steps).getByText("1 / 3")).toBeVisible();
+    expect(within(steps).getByText("Diamond by Sunday")).toBeVisible();
+    expect(api.getMission).toHaveBeenCalledWith("c1");
+  });
+
+  it("lists other chats newest first, without the open one or Main, and opens a pick", async () => {
+    const onOpenChat = vi.fn();
+    render(<ChatLeft active conversationId="c1" onOpen={() => {}} onOpenChat={onOpenChat} />);
+    const recent = await screen.findByRole("region", { name: "Recent chats" });
+    const rows = await within(recent).findAllByRole("button");
+    expect(rows.map((b) => b.textContent)).toEqual(["Backlog sort", "Untitled chat", "Fan curve tweak"]);
+    await userEvent.click(rows[0]);
+    expect(onOpenChat).toHaveBeenCalledWith("c3");
+  });
+
+  it("keeps five recent chats at most", () => {
+    const rows = Array.from({ length: 8 }, (_, i) => chat(`r${i}`, `Chat ${i}`, i));
+    expect(recentChats(rows, "r7").map((r) => r.id)).toEqual(["r6", "r5", "r4", "r3", "r2"]);
+  });
+
+  it("says so when there is no objective or no other chat", async () => {
+    api.getMission.mockResolvedValue({ xp: XP, mission: null });
+    api.listChats.mockResolvedValue([chat("c1", "Open", 800)]);
+    const onOpen = vi.fn();
+    render(<ChatLeft active conversationId="c1" onOpen={onOpen} onOpenChat={() => {}} />);
+    expect(await screen.findByText(NO_STEPS)).toBeVisible();
+    expect(await screen.findByText(RECENT_EMPTY)).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Open Objectives" }));
+    expect(onOpen).toHaveBeenCalledWith("objectives");
+  });
+
+  it("reads nothing while Chat is hidden", async () => {
+    render(<ChatLeft active={false} conversationId="c1" onOpen={() => {}} onOpenChat={() => {}} />);
+    render(<ChatSnapshot active={false} onOpen={() => {}} />);
+    await act(async () => {});
+    expect(api.getMission).not.toHaveBeenCalled();
+    expect(api.listChats).not.toHaveBeenCalled();
+    expect(api.getPcSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("shows three readings from this PC, the main one first", async () => {
+    const onOpen = vi.fn();
+    render(<ChatSnapshot active onOpen={onOpen} />);
+    const snap = await screen.findByRole("complementary", { name: "Snapshot" });
+    const tiles = within(snap).getAllByRole("listitem");
+    expect(tiles.map((li) => li.textContent)).toEqual(["92%GPU 74° · driver latest", "74°GPU", "LatestDriver"]);
+    expect(tiles[0]).toHaveClass("lead");
+    expect(within(tiles[1]).getByText("74°")).toHaveClass("tone-warn");
+    await userEvent.click(within(snap).getByRole("button", { name: "Open Home" }));
+    expect(onOpen).toHaveBeenCalledWith("home");
+  });
+
+  it("shows no snapshot on a phone or when the read fails", async () => {
+    api.getPcSnapshot.mockResolvedValue({ ...(PC_SLOT.tile.view as TileView), state: "unsupported" });
+    const { unmount } = render(<ChatSnapshot active onOpen={() => {}} />);
+    await act(async () => {});
+    expect(screen.queryByRole("complementary", { name: "Snapshot" })).toBeNull();
+    unmount();
+    api.getPcSnapshot.mockRejectedValue(new Error("no"));
+    render(<ChatSnapshot active onOpen={() => {}} />);
+    await act(async () => {});
+    expect(screen.queryByRole("complementary", { name: "Snapshot" })).toBeNull();
+    expect(api.getPcSnapshot).toHaveBeenCalledTimes(2);
   });
 });

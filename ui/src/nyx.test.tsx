@@ -265,6 +265,51 @@ describe("Nyx in the chat", () => {
     expect(screen.queryByText("Side cards")).toBeNull();
   });
 
+  it("puts Objectives beside chat on the left and the snapshot on the right in place of her", async () => {
+    api.getSettings.mockResolvedValue({ ...SETTINGS, chatObjectives: true });
+    const columns = { side: <p>Side cards</p>, left: <aside aria-label="Objectives" />, snapshot: <aside aria-label="Snapshot" /> };
+    const { container, unmount } = render(<Chat onOpenSettings={() => {}} {...columns} />);
+    const left = await screen.findByRole("complementary", { name: "Objectives" });
+    const frame = container.querySelector(".chat-frame");
+    expect(frame).toHaveClass("chat-first");
+    expect(Array.from(frame?.children ?? []).map((el) => el.getAttribute("aria-label"))).toEqual([
+      "Objectives",
+      "Chat",
+      "Snapshot",
+    ]);
+    expect(left).toBeVisible();
+    await waitFor(() => expect(nyxLookCalls().length).toBeGreaterThan(0));
+    expect(screen.queryByRole("complementary", { name: "Nyx" })).toBeNull();
+    expect(screen.queryByText("Side cards")).toBeNull();
+    unmount();
+
+    window.innerWidth = 1000;
+    const mid = render(<Chat onOpenSettings={() => {}} {...columns} />);
+    expect(await screen.findByRole("complementary", { name: "Objectives" })).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "Snapshot" })).toBeNull();
+    mid.unmount();
+
+    window.innerWidth = 800;
+    const narrow = render(<Chat onOpenSettings={() => {}} {...columns} />);
+    await waitFor(() => expect(narrow.container.querySelector(".chat-first")).not.toBeNull());
+    expect(screen.queryByRole("complementary", { name: "Objectives" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Snapshot" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Nyx" })).toBeNull();
+  });
+
+  it("keeps her dock when Objectives beside chat is off, and on a paired browser", async () => {
+    const columns = { left: <aside aria-label="Objectives" />, snapshot: <aside aria-label="Snapshot" /> };
+    const { unmount } = render(<Chat onOpenSettings={() => {}} {...columns} />);
+    expect(await screen.findByRole("complementary", { name: "Nyx" })).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "Objectives" })).toBeNull();
+    unmount();
+
+    api.getSettings.mockResolvedValue({ ...SETTINGS, chatObjectives: true });
+    render(<Chat onOpenSettings={() => {}} remote {...columns} />);
+    expect(await screen.findByRole("complementary", { name: "Nyx" })).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "Objectives" })).toBeNull();
+  });
+
   it("gives the agent window no column, side cards or dock", async () => {
     const { container } = render(<Chat onOpenSettings={() => {}} embedded side={<p>Side cards</p>} />);
     await waitFor(() => expect(nyxLookCalls().length).toBeGreaterThan(0));

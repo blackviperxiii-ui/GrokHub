@@ -74,7 +74,7 @@ import { appendDraft, Mic } from "./Mic";
 import { useVoiceMode, VoiceButton } from "./VoiceMode";
 import { ElicitCard, type ElicitItem } from "./Modes";
 import { SIDE_MARK, SideCards, withSide, type Side } from "./Side";
-import { NyxDock, SIDE_MIN_WIDTH } from "./NyxDock";
+import { DOCK_MIN_WIDTH, NyxDock, SIDE_MIN_WIDTH } from "./NyxDock";
 import { useMinWidth } from "./useMinWidth";
 import { NyxFace } from "./NyxFace";
 import { Orb, orbFor, orbLabel } from "./Orb";
@@ -863,6 +863,8 @@ export function Chat({
   embedded = false,
   lead = false,
   side,
+  left,
+  snapshot,
   onConversation,
   onBusy,
   onRan,
@@ -897,6 +899,12 @@ export function Chat({
   lead?: boolean;
   /** Cards for the right column under the docked companion, on wide windows. */
   side?: ReactNode;
+  /** Objectives beside chat (Settings → Appearance): the column on the
+   * chat's left from DOCK_MIN_WIDTH, in place of the companion dock. */
+  left?: ReactNode;
+  /** Objectives beside chat: the PC snapshot on the right, from
+   * SIDE_MIN_WIDTH. */
+  snapshot?: ReactNode;
   /** The conversation on screen, at the start and each time it changes. */
   onConversation?: (conversationId: string) => void;
   /** A reply started or ended. */
@@ -998,6 +1006,7 @@ export function Chat({
   const activity = activityOf(items, busy);
   const nyx = useNyx(activity, active);
   const sideWide = useMinWidth(SIDE_MIN_WIDTH);
+  const leftWide = useMinWidth(DOCK_MIN_WIDTH);
 
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
@@ -2380,6 +2389,18 @@ export function Chat({
     </section>
   );
   if (embedded) return lane;
+  // Objectives beside chat (deck slide 10): the objective and recent chats on
+  // the left from 900px, a PC snapshot on the right from SIDE_MIN_WIDTH, and
+  // no companion dock. A paired browser keeps the dock layout.
+  if (!remote && settings?.chatObjectives && left !== undefined) {
+    return (
+      <div className="chat-frame chat-first">
+        {leftWide && left}
+        {lane}
+        {sideWide && snapshot}
+      </div>
+    );
+  }
   // The right column: the docked companion from 900px, and the side cards
   // under it from SIDE_MIN_WIDTH (slides 02 and 20).
   const cards = side !== undefined && sideWide;
