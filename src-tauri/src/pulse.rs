@@ -1199,17 +1199,6 @@ pub fn remind(config_dir: &Path, id: &str, day: &Day, now_ms: u64) -> Result<Rem
     })
 }
 
-/// The PC health settings the desktop app saved in its `app.json`, or the
-/// defaults when it has none.
-fn pc_health_settings(config_dir: &Path) -> grokhub_core::PcHealthSettings {
-    std::fs::read_to_string(config_dir.join("app.json"))
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|v| v.get("pcHealth").cloned())
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default()
-}
-
 /// The options window for a PC health card. Sessions come from the same
 /// ledger the desktop app writes; nothing here changes the PC.
 pub fn fix(config_dir: &Path, id: &str) -> Result<FixView, String> {
@@ -1222,7 +1211,7 @@ pub fn fix(config_dir: &Path, id: &str) -> Result<FixView, String> {
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default();
-    let settings = pc_health_settings(config_dir);
+    let settings = crate::pc_health::settings(config_dir);
     let stat = advice::card_session(&card.source_id, &ledger.history);
     let options = advice::sheet_options(stat, &ledger.history, &settings)
         .into_iter()

@@ -99,6 +99,7 @@ mod os_extras;
 pub mod pc_files;
 #[cfg(desktop)]
 pub mod pc_files_run;
+pub mod pc_health;
 pub mod pc_helpers;
 pub mod permissions;
 pub mod personality;
@@ -4371,6 +4372,19 @@ async fn set_game_watch(
         .await?
 }
 
+/// Settings → Pulse: PC health while gaming, off until switched on.
+#[tauri::command]
+async fn get_pc_health(state: State<'_, ShellState>) -> Result<pc_health::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_health::view(&dir)).await
+}
+
+#[tauri::command]
+async fn set_pc_health(state: State<'_, ShellState>, on: bool) -> Result<pc_health::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_health::set_enabled(&dir, on)).await?
+}
+
 /// Settings → Pulse: fixes that run on their own and reminder notifications.
 #[tauri::command]
 async fn get_pulse_auto(state: State<'_, ShellState>) -> Result<auto_fixes::View, String> {
@@ -6903,6 +6917,7 @@ pub fn run() {
             });
             steam_checks::start(config_dir.clone());
             game_companion::start(config_dir.clone());
+            pc_health::start(config_dir.clone());
             // The learning engine: chips, cards and runs record to it from
             // here on. Memory only, with one small write when one is due.
             grokhub_core::learn::hub::start(&config_dir);
@@ -7453,6 +7468,8 @@ pub fn run() {
             get_game_watch,
             set_game_watch,
             get_pulse_auto,
+            get_pc_health,
+            set_pc_health,
             set_pulse_auto_fix,
             set_proactive_reminders,
             get_steam_pulse,
