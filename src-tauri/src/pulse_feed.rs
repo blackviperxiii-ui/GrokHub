@@ -411,6 +411,16 @@ fn ask(
     model: &str,
     messages: &[(String, String)],
 ) -> Result<String, String> {
+    ask_as(client, model, "pulse-writer", messages)
+}
+
+/// [`ask`] under another conversation id, for other background writers.
+pub(crate) fn ask_as(
+    client: &dyn ModelClient,
+    model: &str,
+    conversation_id: &str,
+    messages: &[(String, String)],
+) -> Result<String, String> {
     let req = ResponsesRequest {
         text_format: None,
         model: model.to_string(),
@@ -422,7 +432,7 @@ fn ask(
                 content: vec![ContentPart::InputText(text.clone())],
             })
             .collect(),
-        conversation_id: "pulse-writer".into(),
+        conversation_id: conversation_id.into(),
         tools: Vec::new(),
         hosted_search: false,
         call_timeout: Some(Duration::from_secs(120)),

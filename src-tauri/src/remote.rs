@@ -63,6 +63,12 @@ pub fn web_may_act(act: &crate::workboard::Act) -> bool {
     !matches!(act, crate::workboard::Act::Queue)
 }
 
+/// A Pulse change a browser may make. Add skill writes a skill on this
+/// computer, so like Create skill it stays here.
+pub fn web_may_pulse(act: &crate::pulse::Act) -> bool {
+    !matches!(act, crate::pulse::Act::AddSkill)
+}
+
 /// The web app's commands: chat with approvals, automations, memory,
 /// connectors, Pulse, Imagine, the Agents page and the workboard, reading the settings and the skills list, and which Nyx picture shows.
 /// Home and Objectives are read only, with only the browser's own chats.
@@ -1456,6 +1462,10 @@ mod tests {
         assert!(web_may_act(&act(json!({"kind": "unqueue"}))));
         assert!(web_may_act(&act(json!({"kind": "archive"}))));
         assert!(web_may_act(&act(json!({"kind": "move", "to": "doing"}))));
+        let pulse = |v: Value| serde_json::from_value::<crate::pulse::Act>(v).unwrap();
+        assert!(!web_may_pulse(&pulse(json!("addSkill"))));
+        assert!(web_may_pulse(&pulse(json!("accept"))));
+        assert!(web_may_pulse(&pulse(json!("dismiss"))));
         // Playbooks live on the computer, so starting one stays there too.
         assert!(!web_command("workboard_playbook"));
         // The tidy setting stays on the computer, like the rest of Settings.

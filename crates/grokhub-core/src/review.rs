@@ -111,6 +111,12 @@ pub struct SuggestionStore {
     pub skills: Vec<LearnedSuggestion>,
     #[serde(default)]
     pub connectors: Vec<LearnedSuggestion>,
+    /// User turns the last review covered, so a quiet day spends no call.
+    #[serde(default)]
+    pub reviewed_turns: u32,
+    /// Skill ideas already posted. One the user dismissed is not posted again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub idea_titles: Vec<String>,
 }
 
 /// Whether the built-in nightly review should fire.
@@ -659,6 +665,12 @@ pub fn merge_suggestion_store(
         autos: merge_suggest_bucket(&existing.autos, incoming.autos),
         skills: merge_suggest_bucket(&existing.skills, incoming.skills),
         connectors: merge_suggest_bucket(&existing.connectors, incoming.connectors),
+        reviewed_turns: incoming.reviewed_turns.max(existing.reviewed_turns),
+        idea_titles: if incoming.idea_titles.is_empty() {
+            existing.idea_titles.clone()
+        } else {
+            incoming.idea_titles
+        },
     }
 }
 

@@ -958,14 +958,20 @@ pub fn daily_drop_view(page: &pulse::Page) -> TileView {
             TileAction::nav("pulse"),
         );
     };
-    TileView::ready(TileText::new(
+    let view = TileView::ready(TileText::new(
         idea.title.clone(),
         "Today's pick",
         Tone::Normal,
-    ))
-    .primary("Let's do it", TileAction::ask(&idea.action))
-    .button("Open Pulse", TileAction::nav("pulse"))
-    .on_tap(TileAction::nav("pulse"))
+    ));
+    // A skill idea is added from Pulse, not asked about in a chat.
+    if idea.skill {
+        return view
+            .primary("Open Pulse", TileAction::nav("pulse"))
+            .on_tap(TileAction::nav("pulse"));
+    }
+    view.primary("Let's do it", TileAction::ask(&idea.action))
+        .button("Open Pulse", TileAction::nav("pulse"))
+        .on_tap(TileAction::nav("pulse"))
 }
 
 #[cfg(test)]
