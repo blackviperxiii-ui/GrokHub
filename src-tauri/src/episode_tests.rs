@@ -267,6 +267,23 @@ fn a_locked_screen_an_oversized_picture_or_a_failed_shot_never_reach_the_page() 
 }
 
 #[test]
+fn a_frame_carries_the_time_it_was_set_and_clearing_drops_both() {
+    let slot = FrameSlot::default();
+    assert_eq!(slot.stamped(), None);
+    let before = grokhub_core::now_ms();
+    slot.set(Some("data:image/png;base64,AAAA".into()));
+    let (frame, at) = slot.stamped().expect("a frame");
+    assert_eq!(frame, "data:image/png;base64,AAAA");
+    assert!(
+        at >= before && at <= grokhub_core::now_ms(),
+        "{at} vs {before}"
+    );
+    assert_eq!(slot.get().as_deref(), Some("data:image/png;base64,AAAA"));
+    slot.set(None);
+    assert_eq!(slot.stamped(), None);
+}
+
+#[test]
 fn the_watcher_emits_when_the_panel_changes_and_marks_a_closed_episode_ended() {
     let d = dir("watch");
     let open = Open {

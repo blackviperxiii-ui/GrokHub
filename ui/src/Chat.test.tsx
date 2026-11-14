@@ -16,6 +16,9 @@ import type {
 
 const api = vi.hoisted(() => ({
   handler: null as ((envelope: ChatEnvelope) => void) | null,
+  getDeviceGlance: vi.fn<() => Promise<{ sharing: boolean; frame: string | null } | null>>(() =>
+    Promise.resolve(null),
+  ),
   gap: null as (() => void) | null,
   sendChat: vi.fn<(id: string, text: string, mode?: SessionMode) => Promise<string>>(),
   answerElicit:
@@ -105,6 +108,7 @@ const auto = vi.hoisted(() => ({
 vi.mock("./autoSetupApi", () => auto);
 
 vi.mock("./api", () => ({
+  getDeviceGlance: api.getDeviceGlance,
   sendChat: api.sendChat,
   answerElicit: api.answerElicit,
   getSettings: api.getSettings,
@@ -260,6 +264,7 @@ function question(id: string, message: string, labels: string[]): ChatEvent {
 
 describe("Chat", () => {
   beforeEach(() => {
+    api.getDeviceGlance.mockReset().mockResolvedValue(null);
     for (const fn of [
       api.sendChat,
       api.answerPermission,
@@ -971,6 +976,18 @@ describe("Chat", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Hide Explain it" }));
     expect(api.chipOutcome).toHaveBeenLastCalledWith("composer", "pred-1", false);
+  });
+
+  it("an empty chat shows the device glance, and a tap opens Devices", async () => {
+    const onOpenView = vi.fn();
+    api.getDeviceGlance.mockResolvedValue({ sharing: true, frame: null });
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sharing. Open Devices" }));
+    expect(onOpenView).toHaveBeenCalledWith("devices");
+    // Once the chat has a message, the empty view and its glance go.
+    api.sendChat.mockResolvedValue("end_turn");
+    await userEvent.type(screen.getByLabelText("Message"), "hi{Enter}");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Sharing. Open Devices" })).toBeNull());
   });
 
   it("Alt+2 taps the second chip", async () => {

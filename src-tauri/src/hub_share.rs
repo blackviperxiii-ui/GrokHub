@@ -243,6 +243,18 @@ impl HubShare {
         }
     }
 
+    /// Whether sharing is on, and the newest frame a paired computer sent,
+    /// with the time it came. Memory only: writes no file.
+    pub fn glance(&self) -> (bool, Option<(String, u64)>) {
+        // Only the Arc is cloned under the lock, as the hub's own GET frame
+        // does: a 400 KB copy would hold up the LAN server meanwhile.
+        let (sharing, frame) = {
+            let st = lock(&self.hub);
+            (st.sharing, st.last_frame.clone())
+        };
+        (sharing, frame.map(|f| (f.data_url.clone(), f.at)))
+    }
+
     /// Writes the file when a computer paired since the last write, and
     /// nothing otherwise. The page's poll and the app quitting both call it.
     pub fn save(&self) {
@@ -268,6 +280,35 @@ impl HubShare {
     }
 }
 
+/// The chat's device glance, as the cabin's: "Sharing" while this
+/// computer's hub is on, or the newest screenshot otherwise.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceGlance {
+    pub sharing: bool,
+    /// The newest frame as a `data:image/...;base64,` URL, checked by
+    /// [`grokhub_core::store_frame`]; `None` when there is none.
+    pub frame: Option<String>,
+}
+
+/// None when sharing is off and no frame is held: the glance stays hidden.
+/// Of `frames`, the newest one that is a whole image under the frame cap wins.
+pub fn device_glance(
+    sharing: bool,
+    frames: impl IntoIterator<Item = (String, u64)>,
+) -> Option<DeviceGlance> {
+    let mut frames: Vec<(String, u64)> = frames.into_iter().collect();
+    frames.sort_by_key(|f| std::cmp::Reverse(f.1));
+    let frame = frames
+        .into_iter()
+        .find_map(|(url, at)| grokhub_core::store_frame(&url, at))
+        .map(|f| f.data_url);
+    if !sharing && frame.is_none() {
+        return None;
+    }
+    Some(DeviceGlance { sharing, frame })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +332,73 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    const PNG: &str = "data:image/png;base64,iVBORw0KGgo=";
+    const JPG: &str = "data:image/jpeg;base64,/9j/4AA=";
+
+    #[test]
+    fn the_device_glance_hides_until_sharing_or_a_frame() {
+        assert_eq!(device_glance(false, []), None);
+        // Not an image, or past the cap: as if no frame came.
+        let huge = format!(
+            "data:image/png;base64,{}",
+            "A".repeat(grokhub_core::FRAME_CAP)
+        );
+        assert_eq!(
+            device_glance(
+                false,
+                [
+                    ("https://example.com/a.png".to_string(), 9),
+                    ("data:text/html;base64,PGI+".to_string(), 8),
+                    (huge, 7),
+                ]
+            ),
+            None
+        );
+        assert_eq!(
+            device_glance(true, []),
+            Some(DeviceGlance {
+                sharing: true,
+                frame: None
+            })
+        );
+    }
+
+    #[test]
+    fn the_device_glance_shows_the_newest_whole_frame() {
+        let got = device_glance(
+            false,
+            [
+                (PNG.to_string(), 100),
+                (JPG.to_string(), 300),
+                ("data:image/png;base64,***".to_string(), 500),
+            ],
+        );
+        assert_eq!(
+            got,
+            Some(DeviceGlance {
+                sharing: false,
+                frame: Some(JPG.to_string())
+            })
+        );
+        let json = serde_json::to_value(got.unwrap()).unwrap();
+        assert_eq!(json, serde_json::json!({ "sharing": false, "frame": JPG }));
+    }
+
+    #[test]
+    fn the_glance_reads_sharing_and_a_paired_computers_frame() {
+        let dir = temp("glance");
+        let share = HubShare::with(&dir, loopback, no_lan);
+        assert_eq!(share.glance(), (false, None));
+        lock(&share.hub).store_frame(PNG);
+        let (on, frame) = share.glance();
+        assert!(!on);
+        assert_eq!(frame.map(|(url, _)| url), Some(PNG.to_string()));
+        share.start().unwrap();
+        assert!(share.glance().0);
+        share.stop();
+        assert!(!share.glance().0);
     }
 
     fn pair(port: u16, code: &str, name: &str) -> (u16, String) {

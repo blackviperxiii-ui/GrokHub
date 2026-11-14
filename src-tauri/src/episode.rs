@@ -431,18 +431,25 @@ pub fn allowed(config_dir: &Path, id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// The latest screenshot, held in memory only: never written to a span, a
-/// park file or the chat's saved turns.
+/// The latest screenshot and when it was taken (Unix ms), held in memory
+/// only: never written to a span, a park file or the chat's saved turns.
 #[derive(Clone, Default)]
-pub struct FrameSlot(Arc<Mutex<Option<String>>>);
+pub struct FrameSlot(Arc<Mutex<Option<(String, u64)>>>);
 
 impl FrameSlot {
     pub fn get(&self) -> Option<String> {
+        self.stamped().map(|(frame, _)| frame)
+    }
+
+    /// The frame with the time it was set, so the chat's device glance can
+    /// pick the newest across chats.
+    pub fn stamped(&self) -> Option<(String, u64)> {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn set(&self, frame: Option<String>) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = frame;
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) =
+            frame.map(|f| (f, grokhub_core::now_ms()));
     }
 }
 
