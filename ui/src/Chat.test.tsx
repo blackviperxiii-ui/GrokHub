@@ -61,6 +61,7 @@ const api = vi.hoisted(() => ({
   loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
   slashHits: vi.fn(() => Promise.resolve([])),
   runSlash: vi.fn(),
+  commandBoxApprove: vi.fn<(line: string, conversationId?: string) => Promise<string>>(),
   exportChat: vi.fn(),
   openSaved: vi.fn(),
   revealSaved: vi.fn(),
@@ -108,6 +109,7 @@ const auto = vi.hoisted(() => ({
 vi.mock("./autoSetupApi", () => auto);
 
 vi.mock("./api", () => ({
+  commandBoxApprove: api.commandBoxApprove,
   getDeviceGlance: api.getDeviceGlance,
   sendChat: api.sendChat,
   answerElicit: api.answerElicit,
@@ -183,6 +185,9 @@ import {
   isScratchChat,
   itemsFrom,
   MISSION_BUSY,
+  SHELL_NOTE,
+  SLASH_WAITS,
+  SHELL_SECRET,
   newConversationId,
   OPEN_BUSY,
   PLAN_NEXT,
@@ -230,6 +235,13 @@ function chip(id: string, label: string, value: string, over: Partial<QuickChip>
 }
 
 /** Holds sendChat open until `finish` is called, like a turn in flight. */
+const COMMAND_DESTRUCTIVE_TEXT = "This can delete or overwrite files, so it asks every time.";
+/** `grokhub_core::shell_line::prompt("git status")`. */
+const GIT_STATUS_PROMPT =
+  "Run this shell command in the project folder, exactly as written and once, " +
+  "then show me what it printed and its exit code. Don't change it or run " +
+  "anything else.\n\n```sh\ngit status\n```";
+
 function holdTurn() {
   let finish: (stop?: string) => void = () => {};
   api.sendChat.mockImplementation(
@@ -1043,6 +1055,102 @@ describe("Chat", () => {
     expect(isScratchChat(newConversationId(true))).toBe(true);
     expect(isScratchChat(newConversationId())).toBe(false);
     expect(isScratchChat("shell-m3x9-scratch-")).toBe(false);
+  });
+
+  it("a first-run $ line asks on a card whose Run checks it again, and the chat shows the line", async () => {
+    render(<Chat onOpenSettings={() => {}} />);
+    api.runSlash.mockReset().mockResolvedValue({
+      kind: "shell",
+      check: { verdict: "confirm", command: "git status", destructive: false, secret: false },
+    });
+    api.commandBoxApprove.mockReset().mockResolvedValue(GIT_STATUS_PROMPT);
+    api.sendChat.mockResolvedValue("end_turn");
+    await userEvent.type(screen.getByLabelText("Message"), "$ git status{Enter}");
+    const card = await screen.findByRole("group", { name: "/sh asks first" });
+    expect(card).toHaveTextContent("$ git status");
+    expect(card).toHaveTextContent(SHELL_NOTE);
+    expect(api.runSlash.mock.calls[0][0]).toBe("$ git status");
+    expect(api.sendChat).not.toHaveBeenCalled();
+    await userEvent.click(within(card).getByRole("button", { name: "Run" }));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.runSlash.mock.calls[0][1];
+    expect(api.commandBoxApprove).toHaveBeenCalledWith("git status", id);
+    expect(api.sendChat.mock.calls[0][0]).toBe(id);
+    expect(api.sendChat.mock.calls[0][1]).toBe(GIT_STATUS_PROMPT);
+    expect(api.sendChat.mock.calls[0][2]).toBe("chat");
+    expect(await screen.findByText("$ git status")).toBeInTheDocument();
+    expect(screen.queryByText(/Run this shell command/)).toBeNull();
+    expect(screen.queryByRole("group", { name: "/sh asks first" })).toBeNull();
+    // /retry sends the same message again, still shown as the line.
+    api.runSlash.mockResolvedValue({ kind: "retry" });
+    await userEvent.type(screen.getByLabelText("Message"), "/retry{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1][1]).toBe(GIT_STATUS_PROMPT);
+    expect(screen.getAllByText("$ git status")).toHaveLength(2);
+  });
+
+  it("Run waits while a reply runs, and the line runs once it ends", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    api.runSlash.mockReset().mockResolvedValue({
+      kind: "shell",
+      check: { verdict: "confirm", command: "rm -r build", destructive: true, secret: false },
+    });
+    api.commandBoxApprove.mockReset().mockResolvedValue(GIT_STATUS_PROMPT);
+    await userEvent.type(screen.getByLabelText("Message"), "$ rm -r build{Enter}");
+    const card = await screen.findByRole("group", { name: "/sh asks first" });
+    expect(card).toHaveTextContent("Run this command?");
+    expect(card).toHaveTextContent(COMMAND_DESTRUCTIVE_TEXT);
+    await startTurn("hello");
+    await userEvent.click(within(card).getByRole("button", { name: "Run" }));
+    expect(await screen.findByText(SLASH_WAITS)).toBeInTheDocument();
+    expect(api.commandBoxApprove).not.toHaveBeenCalled();
+    await act(async () => finish());
+    api.sendChat.mockResolvedValue("end_turn");
+    await userEvent.click(within(card).getByRole("button", { name: "Run" }));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.commandBoxApprove).toHaveBeenCalledTimes(1);
+  });
+
+  it("a remembered /sh line goes at once, a refused one says why, and Cancel runs nothing", async () => {
+    render(<Chat onOpenSettings={() => {}} />);
+    api.commandBoxApprove.mockReset();
+    api.sendChat.mockResolvedValue("end_turn");
+    api.runSlash.mockReset().mockResolvedValueOnce({
+      kind: "shell",
+      check: { verdict: "queue", command: "git status", prompt: GIT_STATUS_PROMPT },
+    });
+    await userEvent.type(screen.getByLabelText("Message"), "/sh git status{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    expect(api.sendChat.mock.calls[0][1]).toBe(GIT_STATUS_PROMPT);
+    expect(await screen.findByText("$ git status")).toBeInTheDocument();
+
+    api.runSlash.mockResolvedValueOnce({
+      kind: "shell",
+      check: { verdict: "blocked", command: "git push --force", message: "Force pushes never run from here." },
+    });
+    await userEvent.type(screen.getByLabelText("Message"), "$ git push --force{Enter}");
+    expect(await screen.findByText("Force pushes never run from here.")).toBeInTheDocument();
+
+    api.runSlash.mockResolvedValueOnce({
+      kind: "shell",
+      check: {
+        verdict: "confirm",
+        command: "curl -H 'Authorization: Bearer sk-abcdefghijklmnopqrstuv' x",
+        destructive: false,
+        secret: true,
+      },
+    });
+    await userEvent.type(
+      screen.getByLabelText("Message"),
+      "$ curl -H 'Authorization: Bearer sk-abcdefghijklmnopqrstuv' x{Enter}",
+    );
+    const card = await screen.findByRole("group", { name: "/sh asks first" });
+    expect(card).toHaveTextContent(SHELL_SECRET);
+    await userEvent.click(within(card).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Cancelled. Nothing ran.")).toBeInTheDocument();
+    expect(api.commandBoxApprove).not.toHaveBeenCalled();
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
   });
 
   it("/deep-research sends the line as typed and runs no second command", async () => {

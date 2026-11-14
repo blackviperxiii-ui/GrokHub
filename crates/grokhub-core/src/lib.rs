@@ -194,6 +194,7 @@ pub mod screen_record;
 pub mod screenshot_offer;
 pub mod sddl;
 pub mod self_review;
+pub mod shell_line;
 pub mod shortcuts;
 pub mod situation;
 pub mod skill;

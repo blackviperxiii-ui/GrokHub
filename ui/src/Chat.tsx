@@ -30,6 +30,7 @@ import {
   onEventGap,
   readTurn,
   replyPick,
+  commandBoxApprove,
   runSlash,
   saveSettings,
   sendChat,
@@ -77,7 +78,9 @@ import { NyxFace } from "./NyxFace";
 import { Orb, orbFor, orbLabel } from "./Orb";
 import { activityOf, useNyx } from "./nyx";
 import { PRODUCT_NAME } from "./brand";
-import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
+import { isShellLine, isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
+import { COMMAND_DESTRUCTIVE, COMMAND_FIRST } from "./commandText";
+import { shownText } from "./shellLine";
 import {
   acceptSuggestion,
   cursorAtEnd,
@@ -116,7 +119,9 @@ import {
 } from "./thoughts";
 
 export type Item =
-  | { kind: "user"; text: string }
+  /** `sent` is what went to the model when the bubble shows something else:
+   * a shell line's message, shown as `$ <line>`. */
+  | { kind: "user"; text: string; sent?: string }
   | { kind: "assistant"; text: string; streaming: boolean }
   /** The model's thinking before or between replies. `fold` is set once the
    * person collapses or expands it (thoughts.ts). Never saved with the chat. */
@@ -144,6 +149,9 @@ export type Item =
   | { kind: "saved"; saved: SavedFile }
   /** A destructive slash command asks first; Yes runs `yes`. */
   | { kind: "confirm"; command: string; prompt: string; yes: string }
+  /** A `/sh` or `$ ` line asks first. Its Yes is the Command page's, which
+   * runs the checks again; no typed line can stand in for it. */
+  | { kind: "shell"; line: string; destructive: boolean; secret: boolean }
   /** A show_panel panel. Dismissed stays in the list, so the same panel
    * sent again stays hidden; a changed one comes back. */
   | (Extract<ChatEvent, { kind: "panel" }> & { dismissed?: boolean })
@@ -276,6 +284,14 @@ function stillBusy(now: string | null) {
 const BESIDE_REPLY = /^\/(queue|bg|background|send|consult|deep-research)(\s|$)/i;
 /** Every other slash line typed during a reply stays in the box with this. */
 export const SLASH_WAITS = "That command waits for the reply. /stop ends it.";
+/** A `/sh` card's question for a line that asks every time. */
+export const SHELL_ASK = "Run this command?";
+/** Under a `/sh` card: where the line runs, and that it is remembered. */
+export const SHELL_NOTE =
+  "It goes to the agent, which runs it in the project folder with the usual approvals. After a yes, this exact line runs without asking here again.";
+/** Under a `/sh` card for a line with a key or token in it. */
+export const SHELL_SECRET =
+  "This line has a key or token in it. It goes to the model and stays in this chat, so it asks every time.";
 /** The web app has no /stop. */
 export const SLASH_WAITS_REMOTE = "That command waits for the reply.";
 /** Enter again on a slash line whose answer is still out. */
@@ -729,6 +745,31 @@ function LogItem({
           <p className="card-detail-line plain">{item.text}</p>
         </div>
       );
+    case "shell":
+      return (
+        <div className="card notice slash-notice" role="group" aria-label="/sh asks first">
+          <span className="card-title">/sh</span>
+          <p className="card-detail-line plain">{item.destructive || item.secret ? SHELL_ASK : COMMAND_FIRST}</p>
+          <pre className="card-detail-line">
+            <code>$ {item.line}</code>
+          </pre>
+          <p className="card-detail-line plain">
+            {item.secret ? SHELL_SECRET : item.destructive ? COMMAND_DESTRUCTIVE : SHELL_NOTE}
+          </p>
+          <div className="card-buttons">
+            <button
+              type="button"
+              className={item.destructive ? "quiet danger" : "quiet"}
+              onClick={() => onConfirm(item, true)}
+            >
+              Run
+            </button>
+            <button type="button" onClick={() => onConfirm(item, false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      );
     case "confirm":
       return (
         <div className="card notice slash-notice" role="group" aria-label={`${item.command} asks first`}>
@@ -878,7 +919,11 @@ export function Chat({
     as?: SessionMode;
     /** Files from the box that go with it; the box is cleared once it is sent. */
     files?: typeof attach.files;
+    /** The bubble's text when it isn't `text`: `$ <line>` for a shell line. */
+    shown?: string;
   }>();
+  /** A reopened chat's shell line that `/retry` runs through the checks again. */
+  const [checkAgain, setCheckAgain] = useState<{ line: string; n: number }>();
   /** `/plan` or `/chat` named how the next message runs; otherwise the app reads it. */
   const nextAs = useRef<SessionMode | undefined>(undefined);
   /** Questions answered beside the running reply. */
@@ -1175,7 +1220,16 @@ export function Chat({
     if (next.send && next.text) {
       touched.current = true;
       if (busyRef.current) changeQueue([...queueRef.current, next.text]);
-      else setNextUp((now) => ({ text: next.text, n: (now?.n ?? 0) + 1, as: "chat" }));
+      else {
+        // The Command page's line shows as typed, as `/sh` does.
+        const shown = shownText(next.text);
+        setNextUp((now) => ({
+          text: next.text,
+          n: (now?.n ?? 0) + 1,
+          as: "chat",
+          shown: shown === next.text ? undefined : shown,
+        }));
+      }
       return;
     }
     // Opening the chat that is already open brings no text: keep what is typed.
@@ -1349,6 +1403,8 @@ export function Chat({
     fromDraft: boolean | "files",
     as?: SessionMode,
     again = false,
+    /** The bubble's text when it isn't `text`. */
+    shown?: string,
   ) {
     if ((!text && files.length === 0) || busy) return;
     touched.current = true;
@@ -1358,8 +1414,8 @@ export function Chat({
       setError(`${unread.name}: ${unread.status}`);
       return;
     }
-    const said = [text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
-    if (!again) setItems((now) => [...now, { kind: "user", text: said }]);
+    const said = [shown ?? text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
+    if (!again) setItems((now) => [...now, shown ? { kind: "user", text: said, sent: text } : { kind: "user", text: said }]);
     if (fromDraft) {
       if (fromDraft === true) setDraft("");
       attach.clear();
@@ -1619,6 +1675,39 @@ export function Chat({
     changeQueue([...queueRef.current, text]);
   }
 
+  /** A checked shell line's message goes to the chat it was checked for,
+   * shown as typed. It never waits in the queue: a reply that started
+   * meanwhile puts the line back in the box, to be checked again. */
+  function sendShell(prompt: string, line: string, from: string) {
+    if (openNow.current !== from) return;
+    if (busyRef.current) {
+      setDraft((now) => (now.trim() ? now : `$ ${line}`));
+      setError(SLASH_WAITS);
+      return;
+    }
+    setNextUp((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, as: "chat", shown: `$ ${line}` }));
+  }
+
+  /** Run on a `/sh` card: the checks run again in this chat's folder. */
+  async function settleShell(item: Extract<Item, { kind: "shell" }>, yes: boolean) {
+    if (yes && busyRef.current) {
+      setError(SLASH_WAITS);
+      return;
+    }
+    setItems((now) => now.filter((it) => it !== item));
+    if (!yes) {
+      setItems((now) => [...now, { kind: "slash", command: "/sh", text: "Cancelled. Nothing ran." }]);
+      return;
+    }
+    const from = conversationId;
+    try {
+      sendShell(await commandBoxApprove(item.line, from), item.line, from);
+    } catch (err) {
+      if (openNow.current === from)
+        setItems((now) => [...now, { kind: "slash", command: "/sh", text: String(err) }]);
+    }
+  }
+
   /** Runs a slash line and applies what it did. `box` is what the box held
    * when the line was sent, and `files` what was attached to it. */
   async function slash(line: string, box = line, files: typeof attach.files = []) {
@@ -1707,7 +1796,12 @@ export function Chat({
         break;
       case "retry": {
         const last = [...items].reverse().find((it) => it.kind === "user");
-        if (last?.kind === "user") void deliver(last.text, [], false);
+        // A shell line goes again as it was sent; one from a reopened chat
+        // (shown as `$ <line>`) takes the checks again.
+        if (last?.kind === "user" && last.sent) void deliver(last.sent, [], false, undefined, false, last.text);
+        else if (last?.kind === "user" && isShellLine(last.text, remote))
+          setCheckAgain((now) => ({ line: last.text, n: (now?.n ?? 0) + 1 }));
+        else if (last?.kind === "user") void deliver(last.text, [], false);
         else setItems((now) => [...now, { kind: "slash", command, text: "Nothing to retry" }]);
         break;
       }
@@ -1765,6 +1859,17 @@ export function Chat({
         setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
         onOpenView?.(effect.view);
         break;
+      case "shell": {
+        const check = effect.check;
+        if (check.verdict === "queue") sendShell(check.prompt, check.command, conversationId);
+        else if (check.verdict === "confirm")
+          setItems((now) => [
+            ...now,
+            { kind: "shell", line: check.command, destructive: check.destructive, secret: check.secret },
+          ]);
+        else setItems((now) => [...now, { kind: "slash", command: "/sh", text: check.message }]);
+        break;
+      }
       default: {
         const _unhandled: never = effect;
         return _unhandled;
@@ -1774,6 +1879,10 @@ export function Chat({
 
   /** Yes runs the command's own `yes` line; Cancel drops the question. */
   function settleConfirm(item: Item, yes: boolean) {
+    if (item.kind === "shell") {
+      void settleShell(item, yes);
+      return;
+    }
     if (item.kind !== "confirm") return;
     setItems((now) => now.filter((it) => it !== item));
     if (yes) void slash(item.yes);
@@ -1814,7 +1923,7 @@ export function Chat({
         return;
       }
       if (!text) return;
-      if (isSlashCommand(text) && !/^\/(btw|side)\s+\S/i.test(text)) {
+      if (isSlashCommand(text, remote) && !/^\/(btw|side)\s+\S/i.test(text)) {
         setError(remote ? SLASH_WAITS_REMOTE : SLASH_WAITS);
         return;
       }
@@ -1836,7 +1945,7 @@ export function Chat({
     }
     if (!text && files.length === 0) return;
     touched.current = true;
-    if (isSlashCommand(text)) {
+    if (isSlashCommand(text, remote)) {
       // A line that becomes a message (/queue, /deep-research) takes the files.
       await slash(text, text, files);
       return;
@@ -1866,7 +1975,7 @@ export function Chat({
       return;
     }
     touched.current = true;
-    if (isSlashCommand(chip.value)) void slash(chip.value);
+    if (isSlashCommand(chip.value, remote)) void slash(chip.value);
     else void deliver(chip.value, [], false, as);
   }
 
@@ -1946,13 +2055,18 @@ export function Chat({
     if (act.op === "remove") removeQueued(act.index);
     else void steerQueued(act.index);
   });
-  const sendNext = useEffectEvent((text: string, as?: SessionMode, files: typeof attach.files = []) =>
-    void deliver(text, files, files.length > 0 && "files", as),
+  const sendNext = useEffectEvent(
+    (text: string, as?: SessionMode, files: typeof attach.files = [], shown?: string) =>
+      void deliver(text, files, files.length > 0 && "files", as, false, shown),
   );
+  const runAgain = useEffectEvent((line: string) => void slash(line));
+  useEffect(() => {
+    if (checkAgain) runAgain(checkAgain.line);
+  }, [checkAgain]);
   useEffect(() => {
     if (!nextUp) return;
-    const { text, as, files } = nextUp;
-    const timer = window.setTimeout(() => sendNext(text, as, files), 0);
+    const { text, as, files, shown } = nextUp;
+    const timer = window.setTimeout(() => sendNext(text, as, files, shown), 0);
     return () => window.clearTimeout(timer);
   }, [nextUp]);
   useEffect(() => {
@@ -2168,7 +2282,7 @@ export function Chat({
         )}
         {busyHere ? (
           <>
-            {draft.trim() && !isSlashCommand(draft.trim()) && (
+            {draft.trim() && !isSlashCommand(draft.trim(), remote) && (
               <button
                 type="submit"
                 className="quiet"
