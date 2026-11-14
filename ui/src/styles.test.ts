@@ -153,7 +153,7 @@ describe("styles.css Code tab layout", () => {
       ".code > .code-split > .rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }",
     );
     expect(rule(CSS, '.code-file[aria-pressed="true"] {')).toBe(
-      '.code-file[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }',
+      '.code-file[aria-pressed="true"] { border-color: var(--red); background: var(--red-wash); box-shadow: inset 3px 0 0 var(--red); }',
     );
     expect(CSS).not.toContain('.code-tree .code-file[aria-pressed="true"]');
   });

@@ -640,7 +640,12 @@ function CodeWorkspace({
               }}
             />
           </label>
-          <button type="button" onClick={() => void requestRun()} disabled={running || !command.trim()}>
+          <button
+            type="button"
+            className={command.trim() ? "cta" : undefined}
+            onClick={() => void requestRun()}
+            disabled={running || !command.trim()}
+          >
             {running ? "Running…" : "Run tests"}
           </button>
           {running && (
@@ -657,7 +662,7 @@ function CodeWorkspace({
               {command.trim()}
             </pre>
             <div className="card-buttons">
-              <button type="button" onClick={() => void confirmRun()} disabled={running}>
+              <button type="button" className="cta" onClick={() => void confirmRun()} disabled={running}>
                 Run tests
               </button>
               <button ref={cancel} type="button" className="quiet" onClick={() => setConfirming(false)} disabled={running}>

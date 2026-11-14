@@ -89,6 +89,28 @@
   --red-glow: 0 0 0 1px rgb(215 38 61 / 0.18), 0 0 18px rgb(215 38 61 / 0.22);
   --amber: #ff9f1a;
   --amber-wash: rgb(255 159 26 / 0.12);
+  --amber-glow: 0 0 0 1px rgb(255 159 26 / 0.18), 0 0 18px rgb(255 159 26 / 0.22);
+  /* Text on a solid red or danger fill, and on the amber CTA. */
+  --on-red: #ffffff;
+  --void: #0a0a0b;
+  /* A healthy, all-clear dot (Pulse verdicts). */
+  --ok: #2f9e5b;
+  /* Text over the generated cover art, which is always dark. */
+  --art-text: #f2f2f4;
+  /* Settings → Appearance swatches: each theme's page, red and amber, shown
+     side by side whatever theme is on now. */
+  --swatch-light-bg: #f6f6f4;
+  --swatch-light-red: #d7263d;
+  --swatch-light-amber: #ff9f1a;
+  --swatch-ops-bg: #0b0b0d;
+  --swatch-ops-red: #d7263d;
+  --swatch-ops-amber: #ff9f1a;
+  --swatch-oled-bg: #000000;
+  --swatch-oled-red: #d7263d;
+  --swatch-oled-amber: #ff9f1a;
+  --swatch-soft-bg: #17181b;
+  --swatch-soft-red: #c8304a;
+  --swatch-soft-amber: #ff9f1a;
   --line: #dcdcd6;
   --user: #e9e9e4;
   --border: var(--line);
@@ -103,6 +125,18 @@
   /* The open tab: a solid red fill on light, a red-tinted fill on dark. */
   --tab-open-bg: var(--red);
   --tab-open-text: #ffffff;
+  /* Switches: the accent in light, amber on dark. */
+  --toggle-on: var(--accent);
+  --toggle-on-thumb: var(--accent-text);
+  --toggle-off: var(--hover);
+  /* Medium severity and other warnings in text. */
+  --warn-text: var(--accent);
+  /* Red used as small text: brighter than --red on dark so it clears 4.5:1. */
+  --red-text: var(--accent);
+  --section-rule: var(--border);
+  /* A text field under the pointer, and the extra ring a focused one gets. */
+  --field-hover: var(--muted);
+  --field-focus-outline: none;
   color-scheme: light dark;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -160,10 +194,18 @@
     --danger: var(--ops-signal);
     --signal: var(--ops-signal);
     --danger-text: #ff4d5e;
-    --field-border: #626266;
+    --field-border: #c02a3e;
     --frame: var(--red);
     --tab-open-bg: var(--selected);
     --tab-open-text: var(--text);
+    --toggle-on: var(--amber);
+    --toggle-on-thumb: var(--void);
+    --toggle-off: var(--red-dim);
+    --warn-text: var(--amber);
+    --red-text: var(--red-hover);
+    --section-rule: var(--red);
+    --field-hover: var(--red-hover);
+    --field-focus-outline: 2px solid var(--red-hover);
   }
 }
 
@@ -195,10 +237,18 @@
   --danger: var(--ops-signal);
   --signal: var(--ops-signal);
   --danger-text: #ff4d5e;
-  --field-border: #626266;
+  --field-border: #c02a3e;
   --frame: var(--red);
   --tab-open-bg: var(--selected);
   --tab-open-text: var(--text);
+  --toggle-on: var(--amber);
+  --toggle-on-thumb: var(--void);
+  --toggle-off: var(--red-dim);
+  --warn-text: var(--amber);
+  --red-text: var(--red-hover);
+  --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
   color-scheme: dark;
 }
 
@@ -230,10 +280,18 @@
   --danger: #d7263d;
   --signal: #d7263d;
   --danger-text: #ff4d5e;
-  --field-border: #5c5c60;
+  --field-border: #c02a3e;
   --frame: var(--red);
   --tab-open-bg: var(--selected);
   --tab-open-text: var(--text);
+  --toggle-on: var(--amber);
+  --toggle-on-thumb: var(--void);
+  --toggle-off: var(--red-dim);
+  --warn-text: var(--amber);
+  --red-text: var(--red-hover);
+  --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
   color-scheme: dark;
 }
 
@@ -265,10 +323,18 @@
   --danger: #c8304a;
   --signal: #c8304a;
   --danger-text: #ff4d5e;
-  --field-border: #6a6a6e;
+  --field-border: var(--red);
   --frame: var(--red);
   --tab-open-bg: var(--selected);
   --tab-open-text: var(--text);
+  --toggle-on: var(--amber);
+  --toggle-on-thumb: var(--void);
+  --toggle-off: var(--red-dim);
+  --warn-text: var(--amber);
+  --red-text: #f05468;
+  --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
   color-scheme: dark;
 }
 
@@ -280,6 +346,69 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.appearance .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* A theme chip's preview: the page color with a red and an amber dot. */
+.theme-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--sw-bg);
+}
+
+.theme-swatch i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.theme-swatch i:first-child {
+  background: var(--sw-red);
+}
+
+.theme-swatch i:last-child {
+  background: var(--sw-amber);
+}
+
+.theme-swatch[data-swatch="light"] {
+  --sw-bg: var(--swatch-light-bg);
+  --sw-red: var(--swatch-light-red);
+  --sw-amber: var(--swatch-light-amber);
+}
+
+.theme-swatch[data-swatch="ops-dark"] {
+  --sw-bg: var(--swatch-ops-bg);
+  --sw-red: var(--swatch-ops-red);
+  --sw-amber: var(--swatch-ops-amber);
+}
+
+.theme-swatch[data-swatch="oled-black"] {
+  --sw-bg: var(--swatch-oled-bg);
+  --sw-red: var(--swatch-oled-red);
+  --sw-amber: var(--swatch-oled-amber);
+}
+
+.theme-swatch[data-swatch="soft-charcoal"] {
+  --sw-bg: var(--swatch-soft-bg);
+  --sw-red: var(--swatch-soft-red);
+  --sw-amber: var(--swatch-soft-amber);
+}
+
+/* System: half light, half Ops Dark. */
+.theme-swatch[data-swatch="system"] {
+  --sw-red: var(--swatch-ops-red);
+  --sw-amber: var(--swatch-ops-amber);
+  background: linear-gradient(90deg, var(--swatch-light-bg) 50%, var(--swatch-ops-bg) 50%);
 }
 
 * {
@@ -356,14 +485,14 @@ button.cta,
 button.primary {
   background: var(--amber);
   border-color: var(--amber);
-  color: var(--void, #0a0a0b);
+  color: var(--void);
 }
 
 button.cta:hover:not(:disabled),
 button.primary:hover:not(:disabled) {
   filter: brightness(1.06);
   background: var(--amber);
-  box-shadow: 0 0 0 1px rgb(255 159 26 / 0.18), 0 0 18px rgb(255 159 26 / 0.22);
+  box-shadow: var(--amber-glow);
 }
 
 button.cta:disabled,
@@ -411,13 +540,11 @@ button.quiet:hover:not(:disabled),
   background: var(--hover);
 }
 
-.switch button[aria-pressed="true"],
-.settings-nav button[aria-pressed="true"],
-.settings-tabs button[aria-pressed="true"] {
+.switch button[aria-pressed="true"] {
   /* Solid red selected chrome — amber stays on the one CTA fill (color-share). */
   border-color: var(--red);
   background: var(--red);
-  color: #ffffff;
+  color: var(--on-red);
   box-shadow: none;
 }
 
@@ -425,7 +552,9 @@ button.quiet:hover:not(:disabled),
    stroke over a red-tinted fill with an amber underline, never an amber box. */
 .tabs button[aria-pressed="true"],
 .pulse-head .switch button[aria-pressed="true"],
-.chat-tab[aria-selected="true"] {
+.chat-tab[aria-selected="true"],
+.settings-tabs button[aria-pressed="true"],
+.settings-nav button[aria-pressed="true"] {
   border-color: var(--red);
   background: var(--tab-open-bg);
   color: var(--tab-open-text);
@@ -434,9 +563,21 @@ button.quiet:hover:not(:disabled),
 
 .tabs button[aria-pressed="true"]:hover:not(:disabled),
 .pulse-head .switch button[aria-pressed="true"]:hover:not(:disabled),
-.chat-tab[aria-selected="true"]:hover:not(:disabled) {
+.chat-tab[aria-selected="true"]:hover:not(:disabled),
+.settings-tabs button[aria-pressed="true"]:hover:not(:disabled) {
   background: var(--tab-open-bg);
   box-shadow: inset 0 -2px 0 var(--amber), var(--red-glow);
+}
+
+/* The side nav runs down the page, so its open item carries the amber bar on
+   the left instead of underneath. */
+.settings-nav button[aria-pressed="true"] {
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.settings-nav button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--tab-open-bg);
+  box-shadow: inset 2px 0 0 var(--amber), var(--red-glow);
 }
 
 button.link {
@@ -489,13 +630,15 @@ select option {
 input:hover:not(:disabled):not(:focus),
 textarea:hover:not(:disabled):not(:focus),
 select:hover:not(:disabled):not(:focus) {
-  border-color: var(--muted);
+  border-color: var(--field-hover);
 }
 
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: none;
+  /* On dark the resting border is red already, so focus adds a ring a step out. */
+  outline: var(--field-focus-outline);
+  outline-offset: 1px;
   border-color: var(--accent);
   box-shadow: var(--ring);
 }
@@ -1060,7 +1203,7 @@ select:focus-visible {
   bottom: 8%;
   height: 28%;
   border-radius: 50%;
-  background: radial-gradient(ellipse at center, rgba(20, 16, 12, 0.85), rgba(0, 0, 0, 0.55));
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--void) 85%, transparent), rgb(0 0 0 / 0.55));
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
 }
 
@@ -1070,7 +1213,7 @@ select:focus-visible {
   right: 18%;
   bottom: 22%;
   height: 70%;
-  background: linear-gradient(to top, rgba(255, 176, 0, 0.28), transparent 70%);
+  background: linear-gradient(to top, color-mix(in srgb, var(--amber) 28%, transparent), transparent 70%);
   clip-path: polygon(10% 100%, 90% 100%, 70% 0, 30% 0);
   filter: blur(0.5px);
 }
@@ -1082,7 +1225,7 @@ select:focus-visible {
   bottom: 10%;
   height: 24%;
   border-radius: 50%;
-  border: 1.5px dashed rgba(255, 176, 0, 0.55);
+  border: 1.5px dashed color-mix(in srgb, var(--amber) 55%, transparent);
   animation: nyx-desk-spin 14s linear infinite;
 }
 
@@ -1091,7 +1234,7 @@ select:focus-visible {
   right: 14%;
   bottom: 14%;
   height: 16%;
-  border-color: rgba(255, 176, 0, 0.4);
+  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
   animation-duration: 9s;
   animation-direction: reverse;
 }
@@ -1142,8 +1285,8 @@ select:focus-visible {
   padding: 8px;
   list-style: none;
   min-width: 170px;
-  background: var(--panel, #111113);
-  border: 1px solid var(--border, #333);
+  background: var(--panel);
+  border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
 }
@@ -1161,7 +1304,7 @@ select:focus-visible {
 }
 
 .nyx-desk-menu button:hover {
-  background: var(--hover, #1c1c1f);
+  background: var(--hover);
 }
 
 .nyx-desk-menu-label {
@@ -1418,7 +1561,9 @@ button.md-copy {
 }
 
 .composer .voice-mode[aria-pressed="true"] {
-  border-color: currentColor;
+  border-color: var(--red);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
 }
 
 .composer-ghost-wrap {
@@ -1584,7 +1729,8 @@ button.md-copy {
   margin-bottom: 12px;
   padding: 4px 0 8px;
   background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  /* The page title's rule is the section's red line (light keeps it quiet). */
+  border-bottom: 1px solid var(--section-rule);
 }
 
 .settings-head h1 {
@@ -1836,19 +1982,19 @@ button.md-copy {
 button.danger:not(:disabled) {
   background: var(--red);
   border-color: var(--red);
-  color: #ffffff;
+  color: var(--on-red);
 }
 
 button.danger:not(:disabled)::before {
   content: "! ";
-  color: #ff4d5e;
+  color: var(--on-red);
   font-weight: 600;
 }
 
 button.danger:hover:not(:disabled):not([role="menuitem"]) {
   filter: none;
-  background: var(--red-hover, #e8384f);
-  border-color: var(--red-hover, #e8384f);
+  background: var(--red-hover);
+  border-color: var(--red-hover);
   box-shadow: var(--red-glow);
 }
 
@@ -1894,8 +2040,8 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 }
 
 .severity-medium {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--warn-text);
+  border-color: var(--warn-text);
 }
 
 .fix-pills,
@@ -2696,8 +2842,8 @@ textarea.code {
 }
 
 .work-badge.queued {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--red);
+  color: var(--red-text);
 }
 
 .work-badge.priority.high {
@@ -2840,7 +2986,7 @@ textarea.code {
 .chip[aria-pressed="true"] {
   border-color: var(--red);
   background: var(--red);
-  color: #ffffff;
+  color: var(--on-red);
   box-shadow: none;
   font-weight: 600;
 }
@@ -2982,7 +3128,7 @@ label.toggle-row {
   padding: 0;
   border: 1px solid var(--field-border);
   border-radius: 999px;
-  background: var(--hover);
+  background: var(--toggle-off);
   cursor: pointer;
   transition:
     background-color var(--t-base) var(--ease-out),
@@ -2990,8 +3136,18 @@ label.toggle-row {
 }
 
 .toggle[aria-checked="true"] {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--toggle-on);
+  border-color: var(--toggle-on);
+}
+
+/* Hover keeps the switch's own track (the generic button hover would wash it
+   red and hide the dark thumb of a switch that is on). */
+.toggle:hover:not(:disabled) {
+  background: var(--toggle-off);
+}
+
+.toggle[aria-checked="true"]:hover:not(:disabled) {
+  background: var(--toggle-on);
 }
 
 .toggle:disabled {
@@ -3017,7 +3173,7 @@ label.toggle-row {
 }
 
 .toggle[aria-checked="true"] .toggle-thumb {
-  background: var(--accent-text);
+  background: var(--toggle-on-thumb);
   transform: translateX(18px);
 }
 
@@ -3401,7 +3557,7 @@ label.toggle-row {
 .brand-lockup img {
   width: 1.3em;
   height: 1.3em;
-  background: #0b0b0d;
+  background: var(--void);
   border-radius: 0.2em;
 }
 
@@ -3595,7 +3751,7 @@ label.toggle-row {
   padding: 0 4px;
   border-radius: 9px;
   background: var(--amber);
-  color: var(--void, #0a0a0b);
+  color: var(--void);
   font-size: var(--font-badge);
   font-weight: 600;
   line-height: 1;
@@ -4061,7 +4217,7 @@ label.toggle-row {
 .topbar .halt {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-red);
   font-weight: 600;
 }
 
@@ -4146,7 +4302,7 @@ label.toggle-row {
   cursor: pointer;
 }
 .slash-row[aria-selected="true"] {
-  background: var(--accent-soft, rgb(127 127 127 / 0.18));
+  background: var(--selected);
 }
 .slash-row.off {
   opacity: 0.55;
@@ -4256,7 +4412,7 @@ label.toggle-row {
     hsl(var(--art-hue) 45% 32%),
     hsl(calc(var(--art-hue) + 40) 40% 16%)
   );
-  color: #f2f2f4;
+  color: var(--art-text);
   font-size: var(--font-headline);
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -4376,7 +4532,7 @@ label.toggle-row {
 
 .game-screen-running {
   margin: 0;
-  color: #f0b429;
+  color: var(--amber);
   font-weight: 600;
   font-size: var(--font-caption);
 }
@@ -4747,7 +4903,7 @@ label.toggle-row {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #2f9e5b;
+  background: var(--ok);
   transform: translateY(-1px);
 }
 
@@ -4992,7 +5148,7 @@ label.toggle-row {
 .home-tile.objective-tile {
   border-color: var(--red);
   background:
-    linear-gradient(160deg, rgb(255 159 26 / 0.09), rgb(255 159 26 / 0.03) 55%, transparent),
+    linear-gradient(160deg, color-mix(in srgb, var(--amber) 9%, transparent), color-mix(in srgb, var(--amber) 3%, transparent) 55%, transparent),
     var(--panel);
 }
 
@@ -5704,9 +5860,16 @@ label.toggle-row {
   overflow-wrap: anywhere;
 }
 
+/* The open file: a red wash with a red bar down its left edge. */
 .code-file[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: var(--red);
+  background: var(--red-wash);
+  box-shadow: inset 3px 0 0 var(--red);
+}
+
+.code-file[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--red-wash);
+  box-shadow: inset 3px 0 0 var(--red), var(--red-glow);
 }
 
 .code-status {
@@ -6167,7 +6330,7 @@ fieldset.channel label {
 
 .code-editor-host .cm-activeLine,
 .code-editor-host .cm-activeLineGutter {
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  background: color-mix(in srgb, var(--red) 6%, transparent);
 }
 
 .code-terminal-host {
@@ -6189,12 +6352,12 @@ fieldset.channel label {
 .code-editor-host .cm-selectionBackground,
 .code-editor-host .cm-focused .cm-selectionBackground,
 .code-editor-host .cm-content ::selection {
-  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--red) 28%, transparent);
 }
 
 .code-editor-host .cm-matchingBracket {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--red) 50%, transparent);
 }
 
 .episode {
@@ -6305,7 +6468,7 @@ fieldset.channel label {
 .episode-actions .halt {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-red);
   font-weight: 600;
 }
 
@@ -6331,7 +6494,7 @@ fieldset.channel label {
 .topbar .record-stop {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-red);
   font-weight: 600;
 }
 
@@ -6426,8 +6589,9 @@ fieldset.channel label {
 
 .code-side-tabs [role="tab"][aria-selected="true"] {
   border-color: var(--red);
-  background: var(--red);
-  color: #ffffff;
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
+  box-shadow: inset 0 -2px 0 var(--amber);
 }
 
 .code-side-panel {
