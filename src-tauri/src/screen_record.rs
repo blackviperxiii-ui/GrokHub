@@ -122,22 +122,27 @@ pub struct Event {
     pub chat: String,
 }
 
-/// A finished recording while Grok looks at its stills.
+/// A finished recording while Grok looks at its stills. A new recording can
+/// start meanwhile, so each report keeps its own entry.
 struct Diag {
+    id: u64,
     cancel: CancelToken,
     stills: usize,
 }
 
+/// Names each report's [`Diag`].
+static NEXT_DIAG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 #[derive(Default)]
 struct Hub {
     rec: Option<Live>,
-    diag: Option<Diag>,
+    diag: Vec<Diag>,
     events: Vec<Event>,
 }
 
 static HUB: Mutex<Hub> = Mutex::new(Hub {
     rec: None,
-    diag: None,
+    diag: Vec::new(),
     events: Vec::new(),
 });
 
@@ -175,7 +180,7 @@ pub fn status() -> Status {
             }
         }),
         listening: crate::audio_check::listening(),
-        diagnosing: h.diag.as_ref().map(|d| Line {
+        diagnosing: h.diag.last().map(|d| Line {
             secs: 0,
             text: match d.stills {
                 1 => "Looking at 1 still…".into(),
@@ -198,7 +203,7 @@ pub fn halt() {
         live.stop.store(true, Ordering::Relaxed);
         live.cancel.cancel();
     }
-    if let Some(diag) = h.diag.as_ref() {
+    for diag in &h.diag {
         diag.cancel.cancel();
     }
 }
@@ -450,7 +455,15 @@ fn start<G: FnMut() -> Result<Still, String>>(
         grokhub_core::user_files::UserFolder::Recordings,
     )
     .map_err(|e| grokhub_core::user_files::plain_io_error(&e))?;
-    let dir = sr::recording_dir(&recordings, &stamp(now_ms()));
+    // Two recordings in the same second get their own folders.
+    let at = stamp(now_ms());
+    let mut dir = sr::recording_dir(&recordings, &at);
+    for n in 2.. {
+        if !dir.exists() {
+            break;
+        }
+        dir = sr::recording_dir(&recordings, &format!("{at}-{n}"));
+    }
     let stop = Arc::new(AtomicBool::new(false));
     let cancel = CancelToken::new();
     {
@@ -495,6 +508,7 @@ fn report(
     reporter: Reporter,
     cancel: CancelToken,
 ) -> Event {
+    let id = NEXT_DIAG.fetch_add(1, Ordering::Relaxed);
     {
         let mut h = hub();
         h.rec = None;
@@ -506,7 +520,8 @@ fn report(
                 chat: String::new(),
             };
         }
-        h.diag = Some(Diag {
+        h.diag.push(Diag {
+            id,
             cancel: cancel.clone(),
             stills: sr::sample_keyframes(done.frames.len(), sr::KEYFRAMES).len(),
         });
@@ -532,7 +547,7 @@ fn report(
     if !chat.is_empty() {
         (reporter.deliver)(chat, &found.text);
     }
-    hub().diag = None;
+    hub().diag.retain(|d| d.id != id);
     Event {
         kind: "record",
         ok: true,
@@ -973,6 +988,59 @@ mod tests {
             "{}",
             delivered[0].1
         );
+        assert_eq!(status().diagnosing, None);
+    }
+
+    /// A second recording can start while Grok still looks at the first.
+    /// Each report keeps its own line and its own Halt.
+    #[test]
+    fn two_reports_in_flight_each_keep_their_line_and_their_halt() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = scratch("two").join("cfg");
+        let _ = status();
+        let (first, go_first, asked_first, _) = held_reporter();
+        start(&cfg, "one", "chat-a", || None, || real_png, first).unwrap();
+        wait_for("the first still", || first_still(&cfg));
+        assert!(stop());
+        wait_for("the first call", || asked_first.load(Ordering::SeqCst) == 1);
+        let (second, _go_second, asked_second, delivered_second) = held_reporter();
+        start(&cfg, "two", "chat-b", || None, || real_png, second).unwrap();
+        let stills = || {
+            std::fs::read_dir(recordings(&cfg))
+                .map(|d| {
+                    d.flatten()
+                        .filter(|e| e.path().join("frame-001.png").exists())
+                        .count()
+                })
+                .unwrap_or(0)
+        };
+        wait_for("the second recording's own folder", || stills() == 2);
+        assert!(stop());
+        wait_for("the second call", || {
+            asked_second.load(Ordering::SeqCst) == 1
+        });
+        go_first.send(()).unwrap();
+        let events = events_now();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].chat, "chat-a");
+        assert_eq!(
+            status().diagnosing.map(|l| l.text).as_deref(),
+            Some("Looking at 1 still…"),
+            "the second report still shows its line"
+        );
+        halt();
+        let events = events_now();
+        assert_eq!(events[0].chat, "chat-b");
+        assert!(
+            events[0]
+                .text
+                .ends_with("Saved on this computer, not diagnosed: Halt stopped it."),
+            "{}",
+            events[0].text
+        );
+        assert!(delivered_second.lock().unwrap()[0]
+            .1
+            .contains("not diagnosed: Halt stopped it."));
         assert_eq!(status().diagnosing, None);
     }
 

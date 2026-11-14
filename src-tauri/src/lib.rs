@@ -2348,25 +2348,12 @@ fn report_into_chat(
     }
 }
 
-/// Saves `text` as an assistant turn in `chat` and tells the page. The
-/// chat's next message reads its file back first, so Grok sees the report.
+/// Saves `text` into `chat` as Grok's message and tells the page. Grok
+/// reads it with the chat's next message (`agent::save_report`).
 fn deliver_report(app: &AppHandle, cwd: &Path, chat: &str, text: &str) {
-    let saved = grokhub_agent::record_turn(
-        chat,
-        &cwd.display().to_string(),
-        grokhub_core::model_for_mode("fast"),
-        &[grokhub_agent::InputItem::Message {
-            role: "assistant".into(),
-            content: vec![grokhub_agent::ContentPart::InputText(text.to_string())],
-        }],
-        &grokhub_agent::Usage::default(),
-        "",
-        "",
-    );
-    if saved.is_err() {
+    if agent::save_report(chat, &cwd.display().to_string(), text).is_err() {
         return;
     }
-    agent::reload_on_next_turn(chat);
     let _ = app.emit(
         CHAT_EVENT,
         serde_json::json!({

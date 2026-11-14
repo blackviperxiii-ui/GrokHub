@@ -444,10 +444,11 @@ export function withHelperAsk(items: Item[], event: ChatEvent): Item[] {
   return shown ? items : [...items, { ...event, answer: null, helper: true }];
 }
 
-/** A report written into the chat after its reply ended (a screen
- * recording's): it reads as Grok's message, as it does when the chat opens. */
+/** A report written into the chat from this computer (a screen
+ * recording's): it reads as Grok's message, as it does when the chat opens.
+ * A reply that is streaming stays last, so its next words join its bubble. */
 export function withHelperEvent(items: Item[], event: ChatEvent): Item[] {
-  if (event.kind === "report") return [...items, { kind: "assistant", text: event.text, streaming: false }];
+  if (event.kind === "report") return withNotice(items, { kind: "assistant", text: event.text, streaming: false });
   return withHelperAsk(items, event);
 }
 

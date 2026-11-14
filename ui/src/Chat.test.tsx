@@ -1605,6 +1605,23 @@ describe("Chat", () => {
     expect(screen.queryByText("Not this chat")).toBeNull();
   });
 
+  it("keeps a streaming reply in one bubble when a report arrives mid-reply", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("go");
+    emit(id, { kind: "text", text: "First half, " });
+    act(() =>
+      api.handler?.({ conversationId: id, event: { kind: "report", text: "Screen recording report" }, helper: true }),
+    );
+    emit(id, { kind: "text", text: "second half." });
+    act(() => finish());
+
+    expect(await screen.findByText("First half, second half.")).toBeInTheDocument();
+    const report = screen.getByText("Screen recording report");
+    const reply = screen.getByText("First half, second half.");
+    expect(report.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("a turn's end retires its own cards but leaves a helper's question open", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
