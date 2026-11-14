@@ -112,6 +112,8 @@ pub mod queue;
 pub mod remote;
 pub mod remote_devices;
 pub mod remote_tls;
+#[cfg(test)]
+mod reply_sources_fixtures;
 pub mod review_cards;
 pub mod run_resume;
 #[cfg(desktop)]
