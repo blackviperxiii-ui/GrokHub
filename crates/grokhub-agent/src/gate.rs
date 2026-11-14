@@ -34,6 +34,8 @@ const READONLY: &[&str] = &[
     "mods_search",
     "mods_detail",
     "mods_installed",
+    // Checks a panel spec for the chat to draw; only on with generative UI.
+    "show_panel",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
@@ -455,6 +457,24 @@ mod tests {
             readonly_session: readonly,
             attended,
             desktop,
+        }
+    }
+
+    #[test]
+    fn show_panel_runs_without_a_card_in_every_mode() {
+        // It only checks a panel spec and hands it to the chat: no file, no
+        // network, no action. The engine refused it as unknown before.
+        let ws = std::path::Path::new("/home/user/my-app");
+        let args = r#"{"title":"Linux CI","elements":[{"type":"text","text":"ok"}]}"#;
+        for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
+            for readonly in [false, true] {
+                let g = gate(mode, readonly, true, false);
+                assert_eq!(decide(&g, "show_panel", false, None), Decision::Run);
+                assert_eq!(
+                    decide_with(&g, "show_panel", args, false, None, ws, None),
+                    Decision::Run
+                );
+            }
         }
     }
 

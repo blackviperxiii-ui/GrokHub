@@ -2415,6 +2415,80 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   border-color: var(--warn-text);
 }
 
+/* A show_panel panel: plain text, tables and buttons inside a turn card. */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-heading {
+  margin: 0;
+  font-weight: 600;
+}
+
+.panel-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.panel-list {
+  margin: 0;
+  padding-left: 24px;
+}
+
+.panel-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.panel-table {
+  border-collapse: collapse;
+  font-size: var(--font-caption);
+}
+
+.panel-table th,
+.panel-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.panel-pairs {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.panel-pair {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.panel-pair dt {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.panel-pair dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.panel-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.panel-progress progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 .fix-pills,
 .reply-chips {
   display: flex;

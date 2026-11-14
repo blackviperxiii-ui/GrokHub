@@ -206,6 +206,13 @@ pub enum UiEvent {
         /// together (`Findings::do_all`).
         do_all: Option<Vec<String>>,
     },
+    /// A panel the agent drew with `show_panel` (generative UI): the checked
+    /// spec, keyed by the call that made it. A button on it names an action
+    /// the page sends back as a turn; nothing runs from the panel itself.
+    Panel {
+        id: String,
+        spec: serde_json::Value,
+    },
     /// The reply's `Finished` block as a card. `body` is the reply with the
     /// block taken out, so the page swaps the bubble's text for it.
     Recap {
@@ -436,6 +443,12 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
         AcpEvent::Done { stop_reason } => UiEvent::Done { stop: stop_reason },
         AcpEvent::Plan(text) => UiEvent::Plan { text },
         AcpEvent::Findings(body) => findings_event(&body),
+        // Checked again here, so the page only ever gets a spec the core
+        // rules allow (plain text, intent ids, size caps).
+        AcpEvent::Panel { id, spec } => {
+            grokhub_core::panel_spec::parse_panel_spec(&spec.to_string()).ok()?;
+            UiEvent::Panel { id, spec }
+        }
         AcpEvent::Elicit(ask) => UiEvent::Elicit {
             id: ask.tool_call_id,
             server: ask.server_name,
@@ -2198,6 +2211,42 @@ mod tests {
             fixes[0].prompt,
             "Fix port 53 conflict: Stop the other service and restart"
         );
+    }
+
+    #[test]
+    fn a_checked_panel_reaches_the_page_whole_and_a_bad_one_never_does() {
+        let spec = serde_json::json!({
+            "title": "Linux CI",
+            "elements": [
+                {"type": "key_value", "pairs": [{"key": "Workflow", "value": "ci"}]},
+                {"type": "button", "label": "Re-run", "action": "rerun_ci"}
+            ]
+        });
+        let event = ui_event(AcpEvent::Panel {
+            id: "call-1".into(),
+            spec: spec.clone(),
+        })
+        .expect("a panel");
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({"kind": "panel", "id": "call-1", "spec": spec})
+        );
+        // Raw HTML, a script link or an action that isn't an id stay off the page.
+        for bad in [
+            serde_json::json!({"elements": [{"type": "text", "text": "<b>hi</b>"}]}),
+            serde_json::json!({"elements": [{"type": "text", "text": "javascript:alert(1)"}]}),
+            serde_json::json!({"elements": [{"type": "button", "label": "Go", "action": "Rerun!"}]}),
+            serde_json::json!({"elements": []}),
+        ] {
+            assert_eq!(
+                ui_event(AcpEvent::Panel {
+                    id: "call-2".into(),
+                    spec: bad.clone(),
+                }),
+                None,
+                "{bad}"
+            );
+        }
     }
 
     #[test]

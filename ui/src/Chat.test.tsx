@@ -428,6 +428,57 @@ describe("Chat", () => {
     expect(api.sendChat).toHaveBeenCalledTimes(1);
   });
 
+  const PANEL = {
+    title: "Linux CI",
+    elements: [
+      { type: "heading" as const, level: 2, text: "Checks" },
+      { type: "key_value" as const, pairs: [{ key: "Workflow", value: "ci" }, { key: "Branch", value: "beta" }] },
+      { type: "button" as const, label: "Re-run", action: "rerun_ci" },
+    ],
+  };
+
+  it("a panel button sends its action as the next turn, and waits behind a running reply", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("show CI");
+    emit(id, { kind: "panel", id: "call-1", spec: PANEL });
+    const card = await screen.findByRole("group", { name: "Linux CI" });
+    expect(card).toHaveTextContent("Workflow:ci");
+    expect(card).toHaveTextContent("Branch:beta");
+    // While the reply runs, the tap lines up behind it.
+    await userEvent.click(screen.getByRole("button", { name: "Re-run" }));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await waitFor(() =>
+      expect(api.sendChat).toHaveBeenLastCalledWith(id, "[panel action] rerun_ci on call-1", undefined),
+    );
+  });
+
+  it("a panel tapped when idle sends at once; a new spec for its id replaces it, and Dismiss keeps the same one away", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("show CI");
+    emit(id, { kind: "panel", id: "call-1", spec: PANEL });
+    emit(id, { kind: "panel", id: "call-1", spec: { ...PANEL, title: "Linux CI (rerun)" } });
+    expect(await screen.findByRole("group", { name: "Linux CI (rerun)" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Linux CI" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("group", { name: "Linux CI (rerun)" })).toBeNull();
+    emit(id, { kind: "panel", id: "call-1", spec: { ...PANEL, title: "Linux CI (rerun)" } });
+    await act(() => Promise.resolve());
+    expect(screen.queryByRole("group", { name: "Linux CI (rerun)" })).toBeNull();
+    emit(id, { kind: "panel", id: "call-1", spec: { ...PANEL, title: "Linux CI (green)" } });
+    expect(await screen.findByRole("group", { name: "Linux CI (green)" })).toBeInTheDocument();
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Re-run" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Re-run" }));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1].slice(1)).toEqual(["[panel action] rerun_ci on call-1", undefined]);
+    expect(await screen.findByText("[panel action] rerun_ci on call-1")).toBeInTheDocument();
+  });
+
   it("Ctrl+F finds in the chat: newest match first, Enter and Shift+Enter step and wrap, Esc closes", async () => {
     api.getStartChat.mockResolvedValue({
       id: "shell-find",

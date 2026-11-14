@@ -95,6 +95,7 @@ import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
+import { PanelCard, panelActionText } from "./PanelCard";
 import { findLabel, findRows, findStep, itemText } from "./chatFind";
 import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { ChatFindBar } from "./ChatFind";
@@ -140,6 +141,9 @@ export type Item =
   | { kind: "saved"; saved: SavedFile }
   /** A destructive slash command asks first; Yes runs `yes`. */
   | { kind: "confirm"; command: string; prompt: string; yes: string }
+  /** A show_panel panel. Dismissed stays in the list, so the same panel
+   * sent again stays hidden; a changed one comes back. */
+  | (Extract<ChatEvent, { kind: "panel" }> & { dismissed?: boolean })
   /** A report_findings card under the reply (Order 733). */
   | Extract<ChatEvent, { kind: "findings" }>
   /** The reply's Finished block as a card (Order 733). */
@@ -324,6 +328,14 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     // The plan comes again on its approval card; one copy is enough.
     case "elicit":
       return [...items, { ...event, answer: null }];
+    // One card per panel id: a new spec replaces it in place.
+    case "panel": {
+      const at = items.findIndex((item) => item.kind === "panel" && item.id === event.id);
+      if (at < 0) return [...items, { ...event }];
+      const was = items[at];
+      if (was.kind === "panel" && JSON.stringify(was.spec) === JSON.stringify(event.spec)) return items;
+      return items.map((item, i) => (i === at ? { ...event } : item));
+    }
     case "findings":
     case "evidence":
       return [...items, { ...event }];
@@ -587,6 +599,8 @@ function LogItem({
   onAnswerCard,
   onConfirm,
   onStopAsking,
+  onPanelAction,
+  onPanelDismiss,
   onFix,
   onChipPick,
   nyxUrl,
@@ -614,6 +628,9 @@ function LogItem({
   onStopAsking?: (id: string) => void;
   /** A findings pill: put the fix in the composer, unsent. */
   onFix: (text: string) => void;
+  /** A panel button: the chat sends its action as the next turn. */
+  onPanelAction: (panelId: string, action: string) => void;
+  onPanelDismiss: (panelId: string) => void;
   /** A reply chip was picked; the shell remembers it for the next card. */
   onChipPick: (key: string) => void;
 }) {
@@ -652,6 +669,15 @@ function LogItem({
           editable={editable}
           onAnswer={(action, value, field) => onAnswerCard(item, action, value, field)}
           onChipPick={onChipPick}
+        />
+      );
+    case "panel":
+      return item.dismissed ? null : (
+        <PanelCard
+          id={item.id}
+          spec={item.spec}
+          onAction={(action) => onPanelAction(item.id, action)}
+          onDismiss={() => onPanelDismiss(item.id)}
         />
       );
     case "findings":
@@ -1381,6 +1407,21 @@ export function Chat({
     }, showVoiceNote),
   );
 
+  /** A panel button sends its action as a turn, behind a running reply if
+   * there is one, so any step it leads to asks like any other. */
+  function panelAction(panelId: string, action: string) {
+    const text = panelActionText(panelId, action);
+    if (!text) return;
+    if (busyRef.current) changeQueue([...queueRef.current, text]);
+    else void deliver(text, [], false);
+  }
+
+  function dismissPanel(panelId: string) {
+    setItems((now) =>
+      now.map((item) => (item.kind === "panel" && item.id === panelId ? { ...item, dismissed: true } : item)),
+    );
+  }
+
   /** Stop: the reply ends, and the messages lined up behind it come back to
    * the box instead of sending. */
   function stopReply() {
@@ -1955,6 +1996,8 @@ export function Chat({
               onConfirm={settleConfirm}
               onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
               onFix={(text) => setDraft(text)}
+              onPanelAction={panelAction}
+              onPanelDismiss={dismissPanel}
               onChipPick={(key) => {
                 void Promise.resolve()
                   .then(() => replyPick(key))
