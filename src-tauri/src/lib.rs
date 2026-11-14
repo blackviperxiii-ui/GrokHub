@@ -122,6 +122,7 @@ pub mod run_resume;
 pub mod scheduler;
 pub mod scopes;
 pub mod screen_record;
+pub mod screen_report;
 pub mod screenshot_offer;
 pub mod self_improve;
 #[cfg(desktop)]
@@ -435,7 +436,13 @@ fn run_slash_line(
     app: Option<&AppHandle>,
 ) -> Result<slash::Effect, String> {
     // Screen recording and the audio check run on this computer only.
-    if let Some(done) = screen_record::slash(line, &state.config_dir, remote, conversation_id) {
+    let reporter = || match app {
+        Some(app) => report_into_chat(state, app, conversation_id),
+        None => screen_record::Reporter::local(),
+    };
+    if let Some(done) =
+        screen_record::slash(line, &state.config_dir, remote, conversation_id, reporter)
+    {
         return done;
     }
     let action = slash::parse(line, remote)?;
@@ -1176,8 +1183,8 @@ fn steer_chat(state: State<'_, ShellState>, conversation_id: String, text: Strin
 #[cfg(desktop)]
 fn halt_now(app: &AppHandle) -> Vec<String> {
     let state = app.state::<ShellState>();
-    // Halt ends a screen recording too.
-    screen_record::stop();
+    // Halt ends a screen recording too, and its report sends nothing more.
+    screen_record::halt();
     let (busy, open) = {
         let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
         // Halt ends an idle chat's desktop session itself; the page is told.
@@ -2320,6 +2327,54 @@ fn hub_slash(
     _send: slash::HubSend,
 ) -> Result<slash::Effect, String> {
     Err("That works on your computer.".into())
+}
+
+/// How a screen recording's report reaches the chat that asked: Grok
+/// through the usual model client, then the report saved into the chat as
+/// an assistant message and shown at once if the chat is open.
+fn report_into_chat(
+    state: &ShellState,
+    app: &AppHandle,
+    conversation_id: Option<&str>,
+) -> screen_record::Reporter {
+    let app = app.clone();
+    let cwd = workspace_of(state, conversation_id);
+    screen_record::Reporter {
+        client: Box::new(|| {
+            model_client()
+                .map(|(client, _)| Box::new(client) as Box<dyn grokhub_agent::ModelClient>)
+        }),
+        deliver: Box::new(move |chat, text| deliver_report(&app, &cwd, chat, text)),
+    }
+}
+
+/// Saves `text` as an assistant turn in `chat` and tells the page. The
+/// chat's next message reads its file back first, so Grok sees the report.
+fn deliver_report(app: &AppHandle, cwd: &Path, chat: &str, text: &str) {
+    let saved = grokhub_agent::record_turn(
+        chat,
+        &cwd.display().to_string(),
+        grokhub_core::model_for_mode("fast"),
+        &[grokhub_agent::InputItem::Message {
+            role: "assistant".into(),
+            content: vec![grokhub_agent::ContentPart::InputText(text.to_string())],
+        }],
+        &grokhub_agent::Usage::default(),
+        "",
+        "",
+    );
+    if saved.is_err() {
+        return;
+    }
+    agent::reload_on_next_turn(chat);
+    let _ = app.emit(
+        CHAT_EVENT,
+        serde_json::json!({
+            "conversationId": chat,
+            "event": agent::UiEvent::Report { text: text.to_string() },
+            "helper": true,
+        }),
+    );
 }
 
 fn workspace_of(state: &ShellState, conversation_id: Option<&str>) -> PathBuf {

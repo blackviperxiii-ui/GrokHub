@@ -240,6 +240,12 @@ pub enum UiEvent {
         recovery: String,
         tool_ran_not_verified: bool,
     },
+    /// A report something on this computer wrote into the chat after its
+    /// reply ended, such as a screen recording's diagnosis. It is saved as
+    /// an assistant message, so it reads the same when the chat opens later.
+    Report {
+        text: String,
+    },
 }
 
 /// One finding on a findings card.
@@ -1095,6 +1101,22 @@ struct Worker {
     desk_on: Arc<AtomicBool>,
 }
 
+fn reloads() -> std::sync::MutexGuard<'static, std::collections::HashSet<String>> {
+    static RELOAD: std::sync::LazyLock<Mutex<std::collections::HashSet<String>>> =
+        std::sync::LazyLock::new(Mutex::default);
+    RELOAD.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Something wrote a turn into `chat`'s saved file outside its worker. The
+/// chat's next message reads the file back first.
+pub fn reload_on_next_turn(chat: &str) {
+    reloads().insert(chat.to_string());
+}
+
+fn take_reload(chat: &str) -> bool {
+    reloads().remove(chat)
+}
+
 fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     let Worker {
         id: conversation_id,
@@ -1175,6 +1197,13 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         }
         let engine = match (&mut engine, inbox.take()) {
             (Some(engine), _) => {
+                // A report was saved into this chat between turns: read the
+                // chat back from its file, so the model sees it too.
+                if take_reload(&conversation_id) {
+                    if let Ok(info) = grokhub_agent::load_session(&conversation_id) {
+                        engine.resume(info.input(), info.usage);
+                    }
+                }
                 engine.set_workspace(route.workspace);
                 engine.set_gate(gate);
                 engine.set_route(route.client, model, effort, system, route.auth_kind);
@@ -2799,6 +2828,79 @@ mod tests {
             })
             .unwrap_or_default();
         (result, user)
+    }
+
+    /// A report saved into the chat between turns reaches the model with
+    /// the next message, though the chat's worker was already running.
+    #[test]
+    fn a_report_saved_between_turns_reaches_the_next_request() {
+        let (workspace, config) = (temp_dir("report-ws"), temp_dir("report-cfg"));
+        let id = "shell-report-reload";
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let session = Session::spawn_with(id, config.clone(), fake_desktop);
+        let route = || Route {
+            client: Arc::clone(&client) as Arc<dyn ModelClient + Send + Sync>,
+            auth_kind: AuthKind::ApiKey,
+            workspace: workspace.clone(),
+            mode: PermMode::Ask,
+            desktop: false,
+            session: SessionMode::Chat,
+            voice: String::new(),
+            voice_session: None,
+            suggestions: false,
+            lead: false,
+        };
+        assert_eq!(
+            session.prompt("record my screen", vec![], route(), Box::new(|_| {})),
+            Ok("end_turn".to_string())
+        );
+        const REPORT: &str =
+            "Screen recording 0:12: slow menu\n\nWhat I saw: The menu opens slowly.";
+        {
+            let _config = grokhub_agent::perm::ConfigGuard::set(&config);
+            grokhub_agent::record_turn(
+                id,
+                &workspace.display().to_string(),
+                "grok-test",
+                &[InputItem::Message {
+                    role: "assistant".into(),
+                    content: vec![ContentPart::InputText(REPORT.into())],
+                }],
+                &grokhub_agent::Usage::default(),
+                "",
+                "",
+            )
+            .expect("saved");
+        }
+        reload_on_next_turn(id);
+        assert_eq!(
+            session.prompt("what was step one?", vec![], route(), Box::new(|_| {})),
+            Ok("end_turn".to_string())
+        );
+        let requests = client.requests.lock().expect("requests");
+        let said: Vec<(String, String)> = requests[1]
+            .input
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::Message { role, content } if role != "system" && role != "developer" => {
+                    Some((role.clone(), texts(content)))
+                }
+                _ => None,
+            })
+            .collect();
+        let report_at = said
+            .iter()
+            .position(|(role, text)| role == "assistant" && text == REPORT)
+            .unwrap_or_else(|| panic!("the report rides along: {said:?}"));
+        assert!(
+            said[report_at + 1..]
+                .iter()
+                .any(|(role, text)| role == "user" && text.contains("what was step one?")),
+            "{said:?}"
+        );
+        assert!(!take_reload(id), "the mark is spent");
     }
 
     fn png_bytes() -> Vec<u8> {

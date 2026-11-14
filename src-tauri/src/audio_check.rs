@@ -76,12 +76,14 @@ fn finish(
             }
             Event {
                 kind: "audio",
+                chat: String::new(),
                 ok: true,
                 text: report.text,
             }
         }
         Err(why) => Event {
             kind: "audio",
+            chat: String::new(),
             ok: false,
             text: why,
         },
@@ -347,6 +349,7 @@ mod tests {
             finish(&dir, "chat-1", done, NOW),
             Event {
                 kind: "audio",
+                chat: String::new(),
                 ok: true,
                 text
             }
@@ -425,6 +428,7 @@ mod tests {
             ),
             Event {
                 kind: "audio",
+                chat: String::new(),
                 ok: false,
                 text: "No input matches \"rode\".".into()
             }

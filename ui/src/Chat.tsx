@@ -444,6 +444,13 @@ export function withHelperAsk(items: Item[], event: ChatEvent): Item[] {
   return shown ? items : [...items, { ...event, answer: null, helper: true }];
 }
 
+/** A report written into the chat after its reply ended (a screen
+ * recording's): it reads as Grok's message, as it does when the chat opens. */
+export function withHelperEvent(items: Item[], event: ChatEvent): Item[] {
+  if (event.kind === "report") return [...items, { kind: "assistant", text: event.text, streaming: false }];
+  return withHelperAsk(items, event);
+}
+
 /** Halt ended the turn: its cards read halted, and one line says so. */
 function settleHalted(items: Item[]): Item[] {
   const settled = settle(items, "halted");
@@ -1275,9 +1282,9 @@ export function Chat({
         else if (event.kind === "error") setSides((now) => now.map((s) => (s.id === id ? { ...s, failed: true } : s)));
         return;
       }
-      // A helper's question shows whether or not a reply runs.
+      // A helper's question or a report shows whether or not a reply runs.
       if (helper) {
-        if (id === conversationId) setItems((now) => withHelperAsk(now, event));
+        if (id === conversationId) setItems((now) => withHelperEvent(now, event));
         return;
       }
       // An event that lands after the turn ended must not reopen it.

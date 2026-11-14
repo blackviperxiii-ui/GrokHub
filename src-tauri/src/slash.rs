@@ -68,7 +68,7 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         desktop_only: true,
         ..row(
             "/record",
-            "Record my screen as stills, 2 minutes at most (say what's wrong)",
+            "Record my screen for up to 2 minutes, then get a report (say what's wrong)",
             "/record ",
         )
     },
