@@ -128,21 +128,55 @@ struct Diag {
     id: u64,
     cancel: CancelToken,
     stills: usize,
+    /// "Looking at" for a report, "Reading the steps from" for a skill.
+    doing: &'static str,
 }
 
 /// Names each report's [`Diag`].
 static NEXT_DIAG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// The newest recording with stills: what `/record --skill` learns from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recorded {
+    pub dir: PathBuf,
+    pub note: String,
+    pub secs: u64,
+}
+
+/// A call about a recording's stills is under way: it shows on the top bar
+/// as "`doing` N stills…" and Halt cancels it. Hand the id to [`end_call`].
+pub(crate) fn begin_call(cancel: &CancelToken, stills: usize, doing: &'static str) -> u64 {
+    let id = NEXT_DIAG.fetch_add(1, Ordering::Relaxed);
+    hub().diag.push(Diag {
+        id,
+        cancel: cancel.clone(),
+        stills,
+        doing,
+    });
+    id
+}
+
+pub(crate) fn end_call(id: u64) {
+    hub().diag.retain(|d| d.id != id);
+}
+
+/// The newest recording that took stills, if any.
+pub(crate) fn last_recorded() -> Option<Recorded> {
+    hub().last.clone()
+}
+
 #[derive(Default)]
 struct Hub {
     rec: Option<Live>,
     diag: Vec<Diag>,
+    last: Option<Recorded>,
     events: Vec<Event>,
 }
 
 static HUB: Mutex<Hub> = Mutex::new(Hub {
     rec: None,
     diag: Vec::new(),
+    last: None,
     events: Vec::new(),
 });
 
@@ -183,8 +217,8 @@ pub fn status() -> Status {
         diagnosing: h.diag.last().map(|d| Line {
             secs: 0,
             text: match d.stills {
-                1 => "Looking at 1 still…".into(),
-                n => format!("Looking at {n} stills…"),
+                1 => format!("{} 1 still…", d.doing),
+                n => format!("{} {n} stills…", d.doing),
             },
         }),
         events: std::mem::take(&mut h.events),
@@ -334,10 +368,15 @@ pub struct Reporter {
     pub client: Box<dyn FnOnce() -> crate::screen_report::Client + Send>,
     /// Puts the report in the chat `chat` (never called with an empty one).
     pub deliver: Deliver,
+    /// Shows a question with Yes in the chat: the chat, the prompt, and the
+    /// line Yes sends. Saved nowhere; Yes runs that line as if typed.
+    pub confirm: ConfirmIn,
 }
 
 /// Puts a report (the second argument) into a chat (the first).
 pub type Deliver = Box<dyn FnOnce(&str, &str) + Send>;
+/// Asks in a chat (first), with this prompt (second) and Yes line (third).
+pub type ConfirmIn = Box<dyn FnOnce(&str, &str, &str) + Send>;
 
 impl Reporter {
     /// No sign-in and no chat: the report stays on the card. For a
@@ -346,6 +385,7 @@ impl Reporter {
         Self {
             client: Box::new(|| Err("no client".into())),
             deliver: Box::new(|_, _| {}),
+            confirm: Box::new(|_, _, _| {}),
         }
     }
 }
@@ -362,9 +402,13 @@ pub fn slash(
     use grokhub_core::Slash;
     let parsed = grokhub_core::parse_slash(line)?;
     let result = match parsed {
-        Slash::Record(note) => {
-            start_or_ask(config_dir, &note, remote, chat.unwrap_or(""), reporter)
-        }
+        Slash::Record(note) => match crate::screen_skill::parse(&note) {
+            Some(ask) => {
+                crate::screen_skill::run(config_dir, ask, remote, chat.unwrap_or(""), reporter)
+                    .map_err(Ask::No)
+            }
+            None => start_or_ask(config_dir, &note, remote, chat.unwrap_or(""), reporter),
+        },
         Slash::RecordStop => stop_line(remote),
         Slash::AudioCheck(want) => {
             crate::audio_check::start(config_dir, chat.unwrap_or(""), &want, remote)
@@ -508,7 +552,6 @@ fn report(
     reporter: Reporter,
     cancel: CancelToken,
 ) -> Event {
-    let id = NEXT_DIAG.fetch_add(1, Ordering::Relaxed);
     {
         let mut h = hub();
         h.rec = None;
@@ -520,12 +563,14 @@ fn report(
                 chat: String::new(),
             };
         }
-        h.diag.push(Diag {
-            id,
-            cancel: cancel.clone(),
-            stills: sr::sample_keyframes(done.frames.len(), sr::KEYFRAMES).len(),
+        h.last = Some(Recorded {
+            dir: done.dir.clone(),
+            note: note.to_string(),
+            secs: done.secs,
         });
     }
+    let stills = sr::sample_keyframes(done.frames.len(), sr::KEYFRAMES).len();
+    let id = begin_call(&cancel, stills, "Looking at");
     let title = sr::recording_title(done.secs, note);
     let found = crate::screen_report::diagnose(
         &title,
@@ -545,9 +590,14 @@ fn report(
     );
     let _ = crate::pulse::add_post(config_dir, card);
     if !chat.is_empty() {
-        (reporter.deliver)(chat, &found.text);
+        let text = if found.sent {
+            format!("{}\n\n{}", found.text, crate::screen_skill::OFFER)
+        } else {
+            found.text.clone()
+        };
+        (reporter.deliver)(chat, &text);
     }
-    hub().diag.retain(|d| d.id != id);
+    end_call(id);
     Event {
         kind: "record",
         ok: true,
@@ -838,6 +888,7 @@ mod tests {
             deliver: Box::new(move |chat, text| {
                 into.lock().unwrap().push((chat.into(), text.into()));
             }),
+            confirm: Box::new(|_, _, _| {}),
         };
         (reporter, tx, asked, delivered)
     }
@@ -934,7 +985,7 @@ mod tests {
         assert_eq!(
             delivered[0].1,
             format!(
-                "{title}\n\nWhat I saw: The settings menu opens slowly.\nLikely cause: The menu loads every plugin first.\nSuggested fix steps:\n1. Turn off unused plugins.\n\nNothing was changed on this computer. The recording is in {}.",
+                "{title}\n\nWhat I saw: The settings menu opens slowly.\nLikely cause: The menu loads every plugin first.\nSuggested fix steps:\n1. Turn off unused plugins.\n\nNothing was changed on this computer. The recording is in {}.\n\nTo keep the steps you showed as a skill, send /record --skill.",
                 dir.display()
             )
         );
@@ -1063,6 +1114,168 @@ mod tests {
         );
         assert_eq!(asked.load(Ordering::SeqCst), 0, "Grok was never asked");
         assert_eq!(delivered.lock().unwrap().len(), 1);
+    }
+
+    /// Answers every call with `reply` at once.
+    struct Says(&'static str);
+
+    impl ModelClient for Says {
+        fn stream(
+            &self,
+            _req: &grokhub_agent::ResponsesRequest,
+            _cancel: &CancelToken,
+            _sink: &mut dyn FnMut(grokhub_agent::StreamEvent),
+        ) -> Result<grokhub_agent::TurnOutput, grokhub_agent::ClientError> {
+            Ok(grokhub_agent::TurnOutput {
+                text: self.0.into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    type Asked3 = Arc<Mutex<Vec<(String, String, String)>>>;
+
+    /// A reporter that answers `reply` and keeps what it shows.
+    fn says(reply: &'static str) -> (Reporter, Delivered, Asked3) {
+        let delivered: Delivered = Arc::default();
+        let asked: Asked3 = Arc::default();
+        let (into, ask_into) = (Arc::clone(&delivered), Arc::clone(&asked));
+        let reporter = Reporter {
+            client: Box::new(move || Ok(Box::new(Says(reply)) as Box<dyn ModelClient>)),
+            deliver: Box::new(move |chat, text| {
+                into.lock().unwrap().push((chat.into(), text.into()));
+            }),
+            confirm: Box::new(move |chat, prompt, yes| {
+                ask_into
+                    .lock()
+                    .unwrap()
+                    .push((chat.into(), prompt.into(), yes.into()));
+            }),
+        };
+        (reporter, delivered, asked)
+    }
+
+    /// Records one still in `cfg` with the note, and waits for the report.
+    fn record_one(cfg: &Path, note: &str, reporter: Reporter) -> Vec<Event> {
+        let _ = status();
+        start(cfg, note, "chat-s", || None, || real_png, reporter).unwrap();
+        wait_for("the first still", || first_still(cfg));
+        assert!(stop());
+        events_now()
+    }
+
+    const STEPS: &str = "1. Open the Reports menu.\n2. Click Export.\n3. Choose PDF.";
+
+    #[test]
+    fn a_diagnosed_report_offers_save_as_skill_and_yes_saves_it_through_the_ledger() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = scratch("skill").join("cfg");
+        std::fs::write(cfg.join("app.json"), CONSENTED).unwrap();
+        let (first, delivered, _) = says(REPLY);
+        record_one(&cfg, "export the report", first);
+        let report = delivered.lock().unwrap()[0].1.clone();
+        assert!(
+            report.ends_with("\n\nTo keep the steps you showed as a skill, send /record --skill."),
+            "{report}"
+        );
+        let (learn, delivered, asked) = says(STEPS);
+        assert_eq!(
+            slash("/record --skill", &cfg, false, Some("chat-s"), || learn)
+                .unwrap()
+                .unwrap(),
+            Effect::Notice {
+                text: "Reading the steps from 1 still…".into()
+            }
+        );
+        wait_for("the draft", || !asked.lock().unwrap().is_empty());
+        let (chat, prompt, yes) = asked.lock().unwrap()[0].clone();
+        assert_eq!(chat, "chat-s");
+        assert_eq!(
+            prompt,
+            "Save these steps as the skill /export-the-report?\n\n1. Open the Reports menu.\n2. Click Export.\n3. Choose PDF.\n\nSteps that need your approval still ask every time it runs."
+        );
+        assert!(yes.starts_with("/record --save-skill "), "{yes}");
+        assert!(delivered.lock().unwrap().is_empty());
+        let file = cfg.join("skills/export-the-report/SKILL.md");
+        assert!(!file.exists(), "nothing is saved before Yes");
+        assert_eq!(
+            slash(&yes, &cfg, false, Some("chat-s"), Reporter::local)
+                .unwrap()
+                .unwrap(),
+            Effect::Notice {
+                text: "Saved the skill /export-the-report. /skills undo export-the-report takes it back. Steps that need your approval still ask every time it runs.".into()
+            }
+        );
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            saved.contains("1. Open the Reports menu.\n2. Click Export.\n3. Choose PDF."),
+            "{saved}"
+        );
+        assert_eq!(
+            slash(&yes, &cfg, false, Some("chat-s"), Reporter::local)
+                .unwrap()
+                .unwrap_err(),
+            "That skill draft is gone. Send /record --skill to read the steps again."
+        );
+        crate::changes::undo(
+            &cfg,
+            grokhub_agent::harness::ChangeKind::Skill,
+            "export-the-report",
+            false,
+        )
+        .unwrap();
+        assert!(!file.exists(), "undo takes the new skill back");
+        assert_eq!(status().diagnosing, None);
+    }
+
+    #[test]
+    fn save_as_skill_refuses_without_a_recording_a_chat_or_from_a_browser() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = scratch("skill-no").join("cfg");
+        std::fs::write(cfg.join("app.json"), CONSENTED).unwrap();
+        hub().last = None;
+        let no = |line: &str, chat: Option<&str>, remote: bool| {
+            slash(line, &cfg, remote, chat, Reporter::local)
+                .unwrap()
+                .unwrap_err()
+        };
+        assert_eq!(
+            no("/record --skill", Some("chat-s"), false),
+            "No recording to learn from yet. Show the steps with /record first."
+        );
+        assert_eq!(
+            no("/record --skill", None, false),
+            "Send /record --skill from a chat, so the draft has somewhere to go."
+        );
+        assert_eq!(
+            no("/record --skill", Some("chat-s"), true),
+            "Save as skill works on your computer, not from a browser."
+        );
+        assert_eq!(
+            no("/record --save-skill 1", Some("chat-s"), true),
+            "Save as skill works on your computer, not from a browser."
+        );
+    }
+
+    #[test]
+    fn a_recording_with_no_clear_steps_saves_nothing_and_says_so() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = scratch("skill-none").join("cfg");
+        std::fs::write(cfg.join("app.json"), CONSENTED).unwrap();
+        record_one(&cfg, "", Reporter::local());
+        let (learn, delivered, asked) = says("The screen shows a desktop.");
+        slash("/record --skill", &cfg, false, Some("chat-s"), || learn)
+            .unwrap()
+            .unwrap();
+        wait_for("the answer", || !delivered.lock().unwrap().is_empty());
+        let (chat, text) = delivered.lock().unwrap()[0].clone();
+        assert_eq!(chat, "chat-s");
+        assert!(
+            text.ends_with("\n\nNo clear steps found in the recording. Nothing was saved."),
+            "{text}"
+        );
+        assert!(asked.lock().unwrap().is_empty());
+        assert!(!cfg.join("skills").exists());
     }
 
     #[test]

@@ -136,6 +136,9 @@ export type ChatEvent =
   /** A report written into the chat after its reply ended, such as a screen
    * recording's. It comes as a helper event and is saved with the chat. */
   | { kind: "report"; text: string }
+  /** A question with Yes from this computer, such as a skill draft from a
+   * recording: Yes sends `yes` as a slash line. */
+  | { kind: "confirm"; command: string; prompt: string; yes: string }
   /** One-tap follow-ups for the reply that just ended; most replies get none. */
   | { kind: "suggestions"; items: QuickChip[] }
   /** A game goal the reply noticed, to Track or leave with Not now. */

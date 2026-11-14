@@ -123,6 +123,7 @@ pub mod scheduler;
 pub mod scopes;
 pub mod screen_record;
 pub mod screen_report;
+pub mod screen_skill;
 pub mod screenshot_offer;
 pub mod self_improve;
 #[cfg(desktop)]
@@ -2337,7 +2338,7 @@ fn report_into_chat(
     app: &AppHandle,
     conversation_id: Option<&str>,
 ) -> screen_record::Reporter {
-    let app = app.clone();
+    let (app, asks) = (app.clone(), app.clone());
     let cwd = workspace_of(state, conversation_id);
     screen_record::Reporter {
         client: Box::new(|| {
@@ -2345,6 +2346,20 @@ fn report_into_chat(
                 .map(|(client, _)| Box::new(client) as Box<dyn grokhub_agent::ModelClient>)
         }),
         deliver: Box::new(move |chat, text| deliver_report(&app, &cwd, chat, text)),
+        confirm: Box::new(move |chat, prompt, yes| {
+            let _ = asks.emit(
+                CHAT_EVENT,
+                serde_json::json!({
+                    "conversationId": chat,
+                    "event": agent::UiEvent::Confirm {
+                        command: "/record --skill".into(),
+                        prompt: prompt.into(),
+                        yes: yes.into(),
+                    },
+                    "helper": true,
+                }),
+            );
+        }),
     }
 }
 

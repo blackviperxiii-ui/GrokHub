@@ -246,6 +246,13 @@ pub enum UiEvent {
     Report {
         text: String,
     },
+    /// A question with Yes from this computer, such as a skill draft from a
+    /// recording. Yes sends `yes` as a slash line; nothing is saved till then.
+    Confirm {
+        command: String,
+        prompt: String,
+        yes: String,
+    },
 }
 
 /// One finding on a findings card.
