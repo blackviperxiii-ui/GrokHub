@@ -227,6 +227,22 @@ fn ask(click: bool) -> hx::UndoAsk {
 /// still in effect. Goes through the ledger, which keeps the bytes it
 /// replaced and writes the `undo` line.
 pub fn undo(config_dir: &Path, kind: ChangeKind, id: &str, click: bool) -> Result<String, String> {
+    undo_seq(config_dir, kind, id, None, click)
+}
+
+/// A Done for you card's Undo found a newer change on the same automation.
+pub const CHANGED_SINCE: &str = "It changed again since. Undo it from Settings > Behavior.";
+
+/// [`undo`], and when `expect` is set, only if the line still in effect on
+/// `id` is that ledger seq: a Done for you card undoes exactly what it did,
+/// never a later change. An automation undo runs under the automations lock.
+pub fn undo_seq(
+    config_dir: &Path,
+    kind: ChangeKind,
+    id: &str,
+    expect: Option<u64>,
+    click: bool,
+) -> Result<String, String> {
     let ask = ask(click);
     let done = match kind {
         ChangeKind::Skill => {
@@ -242,7 +258,20 @@ pub fn undo(config_dir: &Path, kind: ChangeKind, id: &str, click: bool) -> Resul
         }
         ChangeKind::Automation => {
             let path = crate::automations::path(config_dir);
-            hx::undo_change(config_dir, &hx::AutomationsFile { path: &path, id }, ask)?
+            let done = crate::automations::with_store(config_dir, |_| {
+                if let Some(seq) = expect {
+                    let ledger = hx::ChangeLedger::load_kind(config_dir, kind);
+                    if ledger.undo_target(id).map(|c| c.seq) != Some(seq) {
+                        return Err(CHANGED_SINCE.to_string());
+                    }
+                }
+                hx::undo_change(config_dir, &hx::AutomationsFile { path: &path, id }, ask)
+            })?;
+            // After the lock: this reads spans and edits Pulse cards.
+            if let Some(reverted) = &done.reverted {
+                crate::done_for_you::after_undo(config_dir, kind, id, reverted.seq);
+            }
+            done
         }
         _ => return Err("That kind of change is undone in the cabin.".into()),
     };

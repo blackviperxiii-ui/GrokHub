@@ -95,6 +95,12 @@ fn every_switch_starts_off() {
                 on: false,
             }],
             reminders: false,
+            pause: PauseRow {
+                on: false,
+                label: "Pause an automation that keeps failing".into(),
+                note: crate::done_for_you::switch_note(),
+                held: None,
+            },
         }
     );
 }

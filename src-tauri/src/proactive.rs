@@ -160,6 +160,8 @@ fn gather(
     let health: Vec<grokhub_core::AutomationAlert> = crate::automations::load(config_dir)
         .unwrap_or_default()
         .iter()
+        // A paused job is not failing anyone: no health card for it.
+        .filter(|a| a.enabled)
         .filter_map(grokhub_core::automation_alert)
         .collect();
     let watch = pro::Watch {
@@ -337,9 +339,17 @@ pub fn is_quiet(behavior: &crate::settings::Behavior, hour: u32, minute: u32) ->
 /// minutes. It waits for the window's clock like the scheduler does.
 /// A posted card due within the hour goes to `remind` when reminder
 /// notifications are on; a crash card whose look is switched on gets it now.
+/// Before the cards, Done for you may pause one failing automation (the
+/// cabin's order); `busy` and `route_ok` are its "a chat is running or a
+/// decision waits" and "chat has a model route" reads.
 /// Desktop only: the scheduler clock it reads is not built on phones.
 #[cfg(desktop)]
-pub fn start(config_dir: PathBuf, remind: impl Fn(&str) + Send + 'static) {
+pub fn start(
+    config_dir: PathBuf,
+    remind: impl Fn(&str) + Send + 'static,
+    busy: impl Fn() -> bool + Send + 'static,
+    route_ok: impl Fn() -> bool + Send + 'static,
+) {
     std::thread::spawn(move || {
         std::thread::sleep(FIRST_LOOK);
         loop {
@@ -350,6 +360,18 @@ pub fn start(config_dir: PathBuf, remind: impl Fn(&str) + Send + 'static) {
                 let quiet = is_quiet(&behavior, clock.hour, clock.minute);
                 // A game running counts as busy: nothing proactive goes up mid-game.
                 if !grokhub_desktop::game_guard::peek().gaming {
+                    // Read busy and the route only when the switch is on.
+                    if crate::done_for_you::on(&config_dir) {
+                        crate::done_for_you::tick_one(
+                            &config_dir,
+                            std::process::id(),
+                            now,
+                            offset,
+                            quiet,
+                            busy(),
+                            route_ok(),
+                        );
+                    }
                     let posted = tick(&config_dir, std::process::id(), now, quiet, clock.hour)
                         .unwrap_or_default();
                     let on = crate::auto_fixes::reminders_on(&config_dir);

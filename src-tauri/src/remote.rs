@@ -1228,6 +1228,11 @@ mod tests {
             "change_row_restore",
             "pulse_review_apply",
             "pulse_review_issue",
+            // Done for you changes an automation on this computer.
+            "pulse_pause_automation",
+            "pulse_done_undo",
+            "pulse_done_stop",
+            "set_pulse_auto_pause",
             // Provider keys, grants and spend limits stay on the computer.
             "get_ai_models",
             "add_ai_provider",

@@ -5,7 +5,10 @@ import {
   openUrl,
   pulseAct,
   pulseDiscuss,
+  pulseDoneStop,
+  pulseDoneUndo,
   pulseOffer,
+  pulsePauseAutomation,
   pulseRemind,
   pulseReviewApply,
   pulseReviewIssue,
@@ -15,6 +18,7 @@ import {
   type PulseChip,
   type PulseIdea,
   type PulsePage,
+  type PulseReviewDone,
 } from "./api";
 import { FeedCard, IdeaRow, SkeletonRows } from "./FeedCard";
 import { SavedPage } from "./SavedPage";
@@ -250,12 +254,14 @@ export function Pulse({
     }
   }
 
-  /** A self-review card's Apply change, Revert or Save idea. */
-  async function review(id: string) {
+  /** A card button that changes something and hands back the new page:
+   * a self-review card's Apply change, Revert or Save idea; Pause it; a
+   * Done for you card's Undo and Stop doing this. */
+  async function apply(work: () => Promise<PulseReviewDone>) {
     setBusy(true);
     acting.current = true;
     try {
-      const done = await pulseReviewApply(id);
+      const done = await work();
       setPage(done.page);
       ok(done.line);
     } catch (err) {
@@ -265,6 +271,10 @@ export function Pulse({
       acting.current = false;
       setBusy(false);
     }
+  }
+
+  function review(id: string) {
+    return apply(() => pulseReviewApply(id));
   }
 
   function copyIssue(id: string) {
@@ -303,6 +313,11 @@ export function Pulse({
   async function chip(id: string, c: PulseChip) {
     if (c.act === "ignore") {
       await act(id, "ignore", IGNORED_NOTE);
+      return;
+    }
+    // Pause it runs here and now; nothing goes to a chat.
+    if (c.act === "pause") {
+      await apply(() => pulsePauseAutomation(id));
       return;
     }
     try {
@@ -429,6 +444,8 @@ export function Pulse({
                 onChip={(c) => void chip(post.id, c)}
                 onReview={() => void review(post.id)}
                 onIssue={() => copyIssue(post.id)}
+                onUndo={() => void apply(() => pulseDoneUndo(post.id))}
+                onStop={() => void apply(() => pulseDoneStop())}
               />
               {i === today - 1 && i < total - 1 && (
                 <li className="day-end" role="separator">

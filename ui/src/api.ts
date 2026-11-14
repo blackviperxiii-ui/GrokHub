@@ -1442,6 +1442,8 @@ export interface PulsePost {
   review?: string;
   /** A code-idea card also offers Copy as GitHub issue. */
   issue?: boolean;
+  /** A Done for you card: Undo and Stop doing this show until it is answered. */
+  done?: { answered: boolean } | null;
 }
 
 /** A card kept with Save, on the Saved page. Stored apart from the feed
@@ -1475,7 +1477,8 @@ export interface PulseItem {
 /** One chip under a card. `index` is the fix's place on the card. */
 export interface PulseChip {
   label: string;
-  act: "offer" | "discuss" | "ignore" | "remind";
+  /** `pause` is Pause it on a failing automation's card: it pauses that job. */
+  act: "offer" | "discuss" | "ignore" | "remind" | "pause";
   index: number;
 }
 
@@ -1613,6 +1616,21 @@ export interface PulseReviewDone {
 
 export function pulseReviewApply(id: string): Promise<PulseReviewDone> {
   return invoke<PulseReviewDone>("pulse_review_apply", { id, day: localDay() });
+}
+
+/** Pause it on a failing automation's card: pauses that job once. */
+export function pulsePauseAutomation(id: string): Promise<PulseReviewDone> {
+  return invoke<PulseReviewDone>("pulse_pause_automation", { id, day: localDay() });
+}
+
+/** A Done for you card's Undo: turns the paused job back on. */
+export function pulseDoneUndo(id: string): Promise<PulseReviewDone> {
+  return invoke<PulseReviewDone>("pulse_done_undo", { id, day: localDay() });
+}
+
+/** A Done for you card's Stop doing this: the switch in Settings → Pulse goes off. */
+export function pulseDoneStop(): Promise<PulseReviewDone> {
+  return invoke<PulseReviewDone>("pulse_done_stop", { day: localDay() });
 }
 
 /** A code-idea card's Copy as GitHub issue: the redacted text and the note. */
@@ -4036,9 +4054,19 @@ export interface PulseAutoFix {
 }
 
 /** Settings → Pulse: fixes that run on their own, and reminder notifications. */
+/** Done for you's switch: pause an automation that keeps failing. `held`
+ * says what holds it back while it is on, or is null. */
+export interface PulseAutoPause {
+  on: boolean;
+  label: string;
+  note: string;
+  held: string | null;
+}
+
 export interface PulseAuto {
   fixes: PulseAutoFix[];
   reminders: boolean;
+  pause: PulseAutoPause;
 }
 
 /** Settings → Pulse: PC health while gaming (the cabin's `pcHealth` key). */
@@ -4062,6 +4090,10 @@ export function setPulseAutoFix(id: string, on: boolean): Promise<PulseAuto> {
 
 export function setProactiveReminders(on: boolean): Promise<PulseAuto> {
   return invoke<PulseAuto>("set_proactive_reminders", { on });
+}
+
+export function setPulseAutoPause(on: boolean): Promise<PulseAuto> {
+  return invoke<PulseAuto>("set_pulse_auto_pause", { on });
 }
 
 /** Settings → Pulse: Steam achievement nudges and wishlist sale alerts. */
