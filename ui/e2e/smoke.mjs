@@ -1065,7 +1065,8 @@ async function localAi(s, config) {
       await shot(s, "settings-local-ai-get-engine");
       console.log("shot Get engine before install");
 
-      await wd("POST", `${s}/element/${getEngine[0][ELEMENT]}/click`, {});
+      // The page's sticky heading can sit over a button scrolled to the top.
+      await clickCentered(s, ".local-ai button.get-engine");
       // 2) Progress / verifying while the pinned zip downloads.
       const progress = await waitFor(
         "engine download progress",
@@ -1878,13 +1879,9 @@ async function skipFirstRun(s) {
       }),
     20000,
   ).catch(() => null);
-  if (!skip) {
-    console.log("first run: no window (auto setup off)");
-    return;
-  }
-  await wd("POST", `${s}/element/${skip[ELEMENT]}/click`, {});
+  if (skip) await wd("POST", `${s}/element/${skip[ELEMENT]}/click`, {});
   // Get to know you (GetToKnowYou.tsx) is the next stage and uses the
-  // same backdrop; skip it too.
+  // same backdrop; skip it too. With auto setup off it can open on its own.
   const later = await waitFor(
     "the get-to-know-you stage",
     () =>
@@ -1895,6 +1892,10 @@ async function skipFirstRun(s) {
     10000,
   ).catch(() => null);
   if (later) await wd("POST", `${s}/element/${later[ELEMENT]}/click`, {});
+  if (!skip && !later) {
+    console.log("first run: no window (auto setup off)");
+    return;
+  }
   await waitFor("the first-run window to close", async () => {
     const open = await wd("POST", `${s}/elements`, { using: "css selector", value: ".first-run-backdrop" });
     return open.length === 0;
@@ -1903,7 +1904,7 @@ async function skipFirstRun(s) {
   const notes = await wd("POST", `${s}/elements`, { using: "css selector", value: ".auto-note.card .chip" });
   if (notes.length > 0) await wd("POST", `${s}/element/${notes[0][ELEMENT]}/click`, {});
   const also = [later && "get to know you skipped", notes.length > 0 && "corner note closed"].filter(Boolean);
-  console.log(`first run: skipped${also.map((a) => `, ${a}`).join("")}`);
+  console.log(`first run: ${skip ? "skipped" : "no window (auto setup off)"}${also.map((a) => `, ${a}`).join("")}`);
 }
 
 async function main() {
@@ -1966,7 +1967,8 @@ async function main() {
       using: "css selector",
       value: "form.composer button[type='submit']",
     });
-    await wd("POST", `${s}/element/${send[ELEMENT]}/click`, {});
+    // The chip row comes in once the draft settles and moves Send with it.
+    await clickStill(s, send[ELEMENT], "Send");
 
     const card = await waitFor("the permission card", async () => {
       const el = await wd("POST", `${s}/element`, {

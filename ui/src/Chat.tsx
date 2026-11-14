@@ -735,7 +735,8 @@ export function Chat({
   const [settings, setSettings] = useState<Settings | null>(null);
   /** Behavior → Sentence autocomplete; off until the page says otherwise. */
   const [autocomplete, setAutocomplete] = useState(false);
-  const [ghost, setGhost] = useState("");
+  /** The ghost suggestion, and the draft it was suggested for. */
+  const [ghostFor, setGhostFor] = useState<{ draft: string; text: string } | null>(null);
   const ghostGen = useRef(0);
   const ghostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -773,13 +774,20 @@ export function Chat({
     );
   }, [active]);
 
-  // Debounced ghost suggestion while autocomplete is on.
+  // Debounced ghost suggestion while autocomplete is on. A suggestion shows
+  // only while the draft it was made for is still the draft, so a change
+  // hides it without a state update here: one per keystroke would queue a
+  // render that a fast typist (or a dictation tool) never lets run, and
+  // past 50 of them React throws "Maximum update depth" and drops the key.
+  const ghost =
+    ghostFor && ghostFor.draft === draft && autocomplete && shouldRequest(draft, slashOpen, busyHere)
+      ? ghostFor.text
+      : "";
   useEffect(() => {
     if (ghostTimer.current) {
       clearTimeout(ghostTimer.current);
       ghostTimer.current = null;
     }
-    setGhost("");
     if (!autocomplete || !shouldRequest(draft, slashOpen, busyHere)) {
       ghostGen.current += 1;
       return;
@@ -794,10 +802,10 @@ export function Chat({
         (suggestion) => {
           if (gen !== ghostGen.current) return;
           if (draftKey(draft, composerRef.current?.selectionStart ?? draft.length) !== key) return;
-          setGhost(suggestion);
+          setGhostFor({ draft, text: suggestion });
         },
         () => {
-          if (gen === ghostGen.current) setGhost("");
+          if (gen === ghostGen.current) setGhostFor(null);
         },
       );
     }, GHOST_DEBOUNCE_MS);
@@ -1634,12 +1642,12 @@ export function Chat({
     } else if (event.key === "Tab" && !event.shiftKey && ghost) {
       event.preventDefault();
       setDraft(acceptSuggestion(draft, ghost));
-      setGhost("");
+      setGhostFor(null);
       ghostGen.current += 1;
       return;
     } else if (event.key === "Escape" && ghost) {
       event.preventDefault();
-      setGhost("");
+      setGhostFor(null);
       ghostGen.current += 1;
       return;
     }
@@ -1845,7 +1853,6 @@ export function Chat({
             onChange={(e) => {
               setDraft(e.target.value);
               setSlashAt(0);
-              setGhost("");
               ghostGen.current += 1;
             }}
             onKeyDown={onKeyDown}
