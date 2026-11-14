@@ -97,6 +97,8 @@ fn note_paused(config_dir: &Path, list: &[Automation], job: &Automation, seq: u6
             .iter()
             .any(|c| c.id == p.id && c.undoes == Some(p.seq))
     };
+    // The pause is the line Settings > Behavior would undo next for its job.
+    let current = |p: &Paused| ledger.undo_target(&p.id).map(|c| c.seq) == Some(p.seq);
     let holds = |p: &Paused| {
         !p.answered
             || list
@@ -111,10 +113,15 @@ fn note_paused(config_dir: &Path, list: &[Automation], job: &Automation, seq: u6
             key: key.to_string(),
             answered: false,
         });
-        s.paused
-            .retain(|p| list.iter().any(|a| a.id == p.id) && (holds(p) || !undone(p)));
+        // A record stays while it holds the job, waits for an answer (even
+        // with the job deleted, since Settings can bring it back), or its
+        // pause line can still be undone.
+        s.paused.retain(|p| holds(p) || !undone(p));
         while s.paused.len() > KEEP {
-            let at = s.paused.iter().position(|p| !holds(p)).unwrap_or(0);
+            let pick = |keep: &dyn Fn(&Paused) -> bool| s.paused.iter().position(|p| !keep(p));
+            let at = pick(&|p| holds(p) || current(p))
+                .or_else(|| pick(&current))
+                .unwrap_or(0);
             s.paused.remove(at);
         }
     });

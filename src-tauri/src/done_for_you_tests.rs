@@ -1036,14 +1036,16 @@ fn a_pause_record_stays_only_while_it_matters() {
         .into_iter()
         .map(|p| (p.id, p.seq))
         .collect();
-    // The deleted job's record goes. The spent one stays: its pause line was
-    // never undone, so Settings > Behavior can still undo it.
+    // The deleted job's record stays: Settings > Behavior can bring the job
+    // back, and its undo is still unheard. The spent one stays too: its
+    // pause line was never undone.
     assert_eq!(
         kept,
         vec![
             ("auto-held".to_string(), 1),
             ("auto-spent".to_string(), 2),
             ("auto-waiting".to_string(), 3),
+            ("auto-deleted".to_string(), 4),
             ("auto-new".to_string(), 9),
         ]
     );
@@ -1084,6 +1086,69 @@ fn settings_undo_of_a_pause_whose_job_was_deleted_brings_it_back() {
     assert_eq!(back.len(), 1);
     assert_eq!(back[0].id, "auto-sync");
     assert!(back[0].enabled);
+    drain(&d);
+}
+
+#[test]
+fn a_job_deleted_while_paused_keeps_its_record_until_settings_brings_it_back() {
+    let d = scratch("deleted-then-other");
+    let _pin = grokhub_agent::perm::ConfigGuard::set(&*d);
+    write_jobs(
+        &d,
+        &[
+            job("auto-sync", "Sync notes", true, 7, "disk full"),
+            job("auto-mail", "Mail digest", true, 6, "bad template"),
+        ],
+    );
+    open(&d);
+    tick(&d, false, false).expect("first pause");
+    assert!(!enabled(&d, "auto-sync"));
+    crate::automations::remove(&d, "auto-sync").unwrap();
+    tick(&d, false, false).expect("second pause");
+    assert!(!enabled(&d, "auto-mail"));
+    crate::change_rows::undo(&d, "automation", "auto-sync").unwrap();
+    assert!(enabled(&d, "auto-sync"));
+    // The next pass hears that pause was undone and leaves the job on.
+    assert!(tick(&d, false, false).is_none());
+    assert!(enabled(&d, "auto-sync"));
+    let undos = spans(&d).iter().filter(|s| s.decision == "undo").count();
+    assert_eq!(undos, 1);
+    drain(&d);
+}
+
+#[test]
+fn over_the_cap_the_pause_still_in_effect_is_kept() {
+    let d = scratch("cap-current");
+    let _pin = grokhub_agent::perm::ConfigGuard::set(&*d);
+    write_jobs(
+        &d,
+        &[
+            job("auto-sync", "Sync notes", true, 6, "disk full"),
+            job("auto-mail", "Mail digest", true, 0, ""),
+        ],
+    );
+    open(&d);
+    tick(&d, false, false).expect("a pause");
+    let current = load_state(&d).paused[0].clone();
+    // On again from its switch (no ledger line), and past the run hold.
+    crate::automations::set_enabled(&d, "auto-sync", true, clock()).unwrap();
+    edit_row(&d, "auto-sync", |r| r["runCount"] = json!(current.runs + 9));
+    // A pile of older, superseded records fills the cap behind it.
+    change_state(&d, |s| {
+        for i in 0..(KEEP as u64 + 2) {
+            s.paused.push(Paused {
+                seq: 500 + i,
+                ..paused("auto-sync", 0)
+            });
+        }
+    });
+    let list = rows(&d);
+    let mail = list.iter().find(|a| a.id == "auto-mail").unwrap().clone();
+    note_paused(&d, &list, &mail, 900, "k");
+    let seqs: Vec<u64> = load_state(&d).paused.iter().map(|p| p.seq).collect();
+    assert_eq!(seqs.len(), KEEP);
+    assert!(seqs.contains(&current.seq), "{seqs:?}");
+    assert!(seqs.contains(&900), "{seqs:?}");
     drain(&d);
 }
 
