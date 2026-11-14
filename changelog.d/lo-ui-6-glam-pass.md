@@ -1,0 +1,6 @@
+- Loadout UI: glam pass.
+  - **Type:** Chakra Petch is the display face, used for the wordmark, page titles, tile eyebrows and uppercase tab and CTA labels. It is bundled and loads without delaying first paint. Inter stays for body text.
+  - **Depth:** on the dark themes cards get a red-tinted shadow and a hairline top highlight, the page has a faint red glow in the top-right corner, and a 24px grid sits behind it, except on OLED Black or with reduced motion.
+  - **Glow:** the XP bar glows amber and the running activity dot pulses amber.
+  - **Motion:** open tabs slide their underline in, Home tiles and Pulse cards fade up, and the XP bar and streak fill in. Reduce motion (system or Settings) turns all of it off.
+  - **Layout:** cards get more padding, the chat sits 24px from the Nyx dock, and on wide windows the conversation is a centered lane.
