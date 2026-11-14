@@ -1283,6 +1283,13 @@ button.pill:focus-visible {
   padding: 4px 2px 8px;
 }
 
+/* A scratch chat says so above its log for as long as it is open. */
+.scratch-mark {
+  margin: 0 2px 4px;
+  font-size: var(--font-caption);
+  color: var(--muted);
+}
+
 .log:focus-visible {
   outline: none;
 }

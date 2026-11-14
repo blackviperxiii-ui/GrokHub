@@ -379,7 +379,7 @@ fn run_compact_pass(
     // it if it is still running; it falls through when it failed or no
     // longer fits the history.
     let background = if crate::compact::bg::has(&key) {
-        if input.depth == 0 {
+        if input.depth == 0 && !crate::scratch::is_scratch(input.conversation_id) {
             let _ = crate::memory::flush_pending(input.workspace, history);
         }
         crate::compact::bg::take(&key, history)
@@ -562,6 +562,7 @@ fn run_turn(
         playbook.as_deref(),
         &already,
         volatile_intentions,
+        !crate::scratch::is_scratch(input.conversation_id),
     )
     .with_voice(
         (input.depth == 0)

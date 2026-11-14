@@ -333,10 +333,11 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         ready: false,
         ..row("/sh", "Run a shell line…", "/sh ")
     },
-    ShellCmd {
-        ready: false,
-        ..row("/scratch", "New scratch chat (no memory)", "/scratch")
-    },
+    row(
+        "/scratch",
+        "New scratch chat (no memory read or written)",
+        "/scratch",
+    ),
     ShellCmd {
         ready: false,
         ..row("/sync", "Sync with paired computers", "/sync")
@@ -379,6 +380,8 @@ pub struct Hit {
 pub enum Effect {
     /// `/new` and `/clear`: start a fresh chat.
     NewChat,
+    /// `/scratch`: start a chat that reads and writes no memory.
+    NewScratch,
     /// `/chat`, `/plan`, `/btw`. Text after the command is sent in that mode.
     Mode {
         mode: &'static str,
@@ -613,6 +616,7 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
     let effect = match word.as_str() {
         "/help" => Effect::Notice { text: help() },
         "/new" | "/clear" => Effect::NewChat,
+        "/scratch" => Effect::NewScratch,
         "/chat" => Effect::Mode { mode: "chat", text },
         "/plan" => Effect::Mode { mode: "plan", text },
         "/btw" => Effect::Mode { mode: "btw", text },
@@ -645,6 +649,15 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         _ => return Err(format!("Unknown command {word}. Type /help for the list.")),
     };
     Ok(Action::Effect(effect))
+}
+
+/// Whether `action` writes the person's memory, which a scratch chat refuses.
+pub fn writes_memory(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Remember(_)
+            | Action::Op(Op::Learn | Op::Dream | Op::Forget { .. } | Op::MemoryPrune { .. })
+    )
 }
 
 /// A line ending in `yes` for a destructive command, without the yes.
@@ -1011,6 +1024,37 @@ mod tests {
         assert!(help.contains("/remember — Save a memory note"));
         assert!(help.contains("/history — Open History"));
         assert!(help.contains("/deep-research — Research a question with cited sources"));
+    }
+
+    #[test]
+    fn scratch_starts_a_chat_with_no_memory_and_refuses_memory_writes() {
+        assert_eq!(
+            parse("/scratch", false),
+            Ok(Action::Effect(Effect::NewScratch))
+        );
+        assert_eq!(
+            parse("/scratch", true),
+            Ok(Action::Effect(Effect::NewScratch))
+        );
+        let hit = hits("/scr", false);
+        assert_eq!(cmds(&hit), vec!["/scratch"]);
+        assert_eq!(hit[0].disabled, None);
+        assert!(hit[0].run_on_pick);
+        for line in [
+            "/remember a",
+            "/memory note a",
+            "/learn",
+            "/dream",
+            "/forget a",
+            "/memory prune",
+        ] {
+            let action = parse(line, false).expect(line);
+            assert!(writes_memory(&action), "{line}");
+        }
+        for line in ["/recall a", "/memory dream", "/learned", "/new", "/help"] {
+            let action = parse(line, false).expect(line);
+            assert!(!writes_memory(&action), "{line}");
+        }
     }
 
     #[test]
@@ -1597,7 +1641,7 @@ mod tests {
 
     #[test]
     fn what_waits_on_another_card_is_greyed_not_in_the_cabin() {
-        for cmd in ["/sh", "/scratch", "/sync", "/inhabit"] {
+        for cmd in ["/sh", "/sync", "/inhabit"] {
             let hit = hits(cmd, false)
                 .into_iter()
                 .find(|h| h.cmd == cmd)

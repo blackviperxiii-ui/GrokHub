@@ -160,7 +160,8 @@ pub fn note_turn_brief(session: &str, brief: &crate::brain::Brief) {
     registry::note_brief(session, brief);
 }
 
-pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
+/// A read-only tool for `session`'s chat, off the loop's thread.
+pub fn execute(workspace: &Path, session: &str, name: &str, arguments: &str) -> ToolOutput {
     if !is_readonly(name) {
         return ToolOutput::err(gate::readonly_refusal(name));
     }
@@ -168,6 +169,9 @@ pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
         Ok(args) => args,
         Err(output) => return output,
     };
+    if let Some(refused) = crate::scratch::refuse_tool(session, name, &args) {
+        return ToolOutput::err(refused);
+    }
     let stop = || false;
     let ctx = ToolCtx {
         workspace,
@@ -175,7 +179,7 @@ pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
         stop: &stop,
         tasks: None,
         owner: None,
-        session: None,
+        session: Some(session),
     };
     dispatch_readonly(&ctx, name, &args)
 }
@@ -206,6 +210,12 @@ pub fn dispatch_for_job(
         Ok(args) => args,
         Err(output) => return output,
     };
+    if let Some(refused) = ctx
+        .session
+        .and_then(|session| crate::scratch::refuse_tool(session, name, &args))
+    {
+        return ToolOutput::err(refused);
+    }
     if name == registry::LOAD_TOOL_SCHEMA {
         return registry::run_load_tool_schema(&args);
     }
@@ -321,6 +331,10 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
     match name {
         "read_file" => read_file::run(ctx.workspace, args),
         "list_dir" => list_dir::run(ctx.workspace, args),
+        // A scratch chat's search skips every MEMORY.md.
+        "grep" if ctx.session.is_some_and(crate::scratch::is_scratch) => {
+            grep::run_in(ctx.workspace, args, true)
+        }
         "grep" => grep::run(ctx.workspace, args),
         "glob" => glob::run(ctx.workspace, args),
         "get_command_or_subagent_output" => control::output(ctx.tasks.as_ref(), args),
@@ -617,7 +631,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gh-tools-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let out = execute(&dir, "write", r#"{"path":"x.txt","content":"no"}"#);
+        let out = execute(
+            &dir,
+            "shell-a-b",
+            "write",
+            r#"{"path":"x.txt","content":"no"}"#,
+        );
         assert!(out.failed);
         assert!(out.text.contains(READ_ONLY_PHASE));
         assert!(!dir.join("x.txt").exists());
@@ -628,7 +647,7 @@ mod tests {
             "bash",
             "run_terminal_command",
         ] {
-            let out = execute(&dir, name, "{}");
+            let out = execute(&dir, "shell-a-b", name, "{}");
             assert!(out.text.contains(READ_ONLY_PHASE), "{name}");
         }
         assert!(confine(&dir, "../outside").is_err());

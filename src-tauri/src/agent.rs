@@ -94,9 +94,12 @@ fn volatile_tail(voice: &str, config_dir: &std::path::Path, conversation_id: &st
     if !voice.trim().is_empty() {
         parts.push(voice.to_string());
     }
-    let identity = grokhub_agent::identity_blocks(config_dir);
-    if !identity.is_empty() {
-        parts.push(identity);
+    // A scratch chat reads none of SOUL.md, USER.md or the user model.
+    if !grokhub_agent::scratch::is_scratch(conversation_id) {
+        let identity = grokhub_agent::identity_blocks(config_dir);
+        if !identity.is_empty() {
+            parts.push(identity);
+        }
     }
     let intentions =
         grokhub_core::intentions_block(&grokhub_core::load_intentions(config_dir, conversation_id));
@@ -1353,7 +1356,12 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                             emit(card);
                         }
                     }
-                    if !btw && s != "error" && error.is_none() {
+                    // A scratch chat keeps no goals from what was said.
+                    if !btw
+                        && s != "error"
+                        && error.is_none()
+                        && !grokhub_agent::scratch::is_scratch(&conversation_id)
+                    {
                         let raw = std::mem::take(&mut raw);
                         let ask = crate::goals::read_chat_turn(
                             &config_dir,
@@ -2546,6 +2554,25 @@ mod tests {
             "{prompt}"
         );
         assert!(!rules.contains("HARBOR_SOUL_MARK"));
+        // A scratch chat's prompt carries neither, and keeps its voice.
+        let scratch = system_prompt_for(
+            std::path::Path::new("/tmp"),
+            false,
+            voice,
+            "shell-scratch-a-b",
+            false,
+        );
+        assert!(scratch.contains(voice), "{scratch}");
+        assert!(!scratch.contains("HARBOR_SOUL_MARK"), "{scratch}");
+        assert!(!scratch.contains("HARBOR_USER_MARK"), "{scratch}");
+        let normal = system_prompt_for(
+            std::path::Path::new("/tmp"),
+            false,
+            voice,
+            "shell-a-b",
+            false,
+        );
+        assert!(normal.contains("HARBOR_SOUL_MARK"), "{normal}");
     }
 
     #[test]

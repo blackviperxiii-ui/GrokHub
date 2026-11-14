@@ -1128,7 +1128,10 @@ pub fn compact_after_flush(
     modified_paths: &[String],
     tools: &[Value],
 ) -> Result<Compacted, CompactError> {
-    let _ = crate::memory::flush_pending(workspace, history);
+    // A scratch chat's words never go to the memory flush file.
+    if !crate::scratch::is_scratch(conversation_id) {
+        let _ = crate::memory::flush_pending(workspace, history);
+    }
     compact_transcript(
         client,
         cancel,
@@ -2775,6 +2778,43 @@ mod tests {
         )
         .expect("compact after flush");
         assert!(message_text(&history[0]).contains("kept the quay"));
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_scratch_chat_compacts_without_writing_the_flush_file() {
+        let dir = workspace();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        struct Summary;
+        impl ModelClient for Summary {
+            fn stream(
+                &self,
+                _req: &ResponsesRequest,
+                _cancel: &CancelToken,
+                _sink: &mut dyn FnMut(StreamEvent),
+            ) -> Result<TurnOutput, ClientError> {
+                Ok(TurnOutput {
+                    text: "kept the quay".into(),
+                    ..Default::default()
+                })
+            }
+        }
+        let mut history = vec![text_message("user", "keep the quay lantern")];
+        compact_after_flush(
+            &dir,
+            &Summary,
+            &CancelToken::new(),
+            "grok-4.7",
+            Some("low"),
+            "shell-scratch-a-b",
+            &mut history,
+            &[],
+            &[],
+        )
+        .expect("compact");
+        assert!(message_text(&history[0]).contains("kept the quay"));
+        assert!(!crate::memory::flush_memory_path(&dir).exists());
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }

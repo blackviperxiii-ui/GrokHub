@@ -1058,6 +1058,7 @@ export interface SlashHit {
 /** What a slash line asked the chat to do. Slash lines never reach the model. */
 export type SlashEffect =
   | { kind: "newChat" }
+  | { kind: "newScratch" }
   | { kind: "mode"; mode: SessionMode; text: string | null }
   | {
       kind: "open";

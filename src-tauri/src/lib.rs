@@ -425,7 +425,13 @@ fn run_slash_line(
     if let Some(done) = screen_record::slash(line, &state.config_dir, remote) {
         return done;
     }
-    let op = match slash::parse(line, remote)? {
+    let action = slash::parse(line, remote)?;
+    if conversation_id.is_some_and(grokhub_agent::scratch::is_scratch)
+        && slash::writes_memory(&action)
+    {
+        return Err(grokhub_agent::scratch::NO_WRITES.into());
+    }
+    let op = match action {
         slash::Action::Op(op) => op,
         other => return slash::apply(other, &workspace_of(state, conversation_id)),
     };
@@ -466,6 +472,8 @@ fn engine_op(
     let notice = |text: String| Ok(Some(slash::Effect::Notice { text }));
     // Typed in a Code tab session, the work runs in that session's folder.
     let own_folder = conversation_id.and_then(|id| state.code_sessions.of(id));
+    // Work started from a scratch chat runs as scratch too: no memory in, none out.
+    let scratch = conversation_id.is_some_and(grokhub_agent::scratch::is_scratch);
     match op {
         slash::Op::Bg(arg) if arg.trim().is_empty() => notice(bg_runs::status()),
         slash::Op::Bg(arg) if arg.trim().eq_ignore_ascii_case("stop") => {
@@ -480,6 +488,7 @@ fn engine_op(
                 grokhub_agent::route::host::chat_start().0,
                 own_folder.unwrap_or(route.workspace),
                 task,
+                scratch,
             )?;
             let sent = matches!(op, slash::Op::Send(_));
             notice(bg_runs::started_text(sent, &title))
@@ -492,7 +501,10 @@ fn engine_op(
                 route.client,
                 grokhub_core::model_for_mode("fast"),
                 own_folder.unwrap_or(route.workspace),
-                format!("shell-consult-{}", grokhub_core::now_ms()),
+                grokhub_agent::scratch::shell_id(
+                    scratch,
+                    &format!("consult-{}", grokhub_core::now_ms()),
+                ),
                 question.clone(),
                 grokhub_agent::CancelToken::new(),
             );
@@ -771,7 +783,10 @@ async fn chat_turn(
     // bundled skills always on.
     let coding = own_folder.is_some();
     code_agent::bind(&state.config_dir, &conversation_id, coding);
-    if capabilities::current().pulse {
+    // A scratch chat feeds nothing that outlives it: no taste note, no
+    // repeated-ask offers, no task outcomes.
+    let scratch = grokhub_agent::scratch::is_scratch(&conversation_id);
+    if capabilities::current().pulse && !scratch {
         // What the person says in chat steers the Feed writer's taste note.
         pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
         // Typed asks also feed the repeated-ask automate offers.
@@ -780,7 +795,9 @@ async fn chat_turn(
     // "That was wrong" fails the chat's last task before this turn runs; the
     // turn's own outcome is written when it ends (as the cabin does).
     let started = grokhub_core::now_ms();
-    chat_trials::said(&config_dir, &conversation_id, &text, started);
+    if !scratch {
+        chat_trials::said(&config_dir, &conversation_id, &text, started);
+    }
     let stop = tauri::async_runtime::spawn_blocking(move || {
         let mut route = route(&settings, mode, &config_dir)?;
         // A resumed card's turn runs no looser than its run started.
@@ -852,7 +869,9 @@ async fn chat_turn(
             home::turn_done_for(&config_dir, &conversation_id, now, offset);
             // The turn's task outcome and run metrics, for the weekly
             // self-review and skill trials.
-            chat_trials::turn_end(&config_dir, &conversation_id, &text, started, now);
+            if !scratch {
+                chat_trials::turn_end(&config_dir, &conversation_id, &text, started, now);
+            }
         }
         stop
     })

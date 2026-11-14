@@ -42,7 +42,7 @@ pub fn is_command(line: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -93,22 +93,33 @@ mod tests {
     /// The newest user turn after a run of each ask in one chat: its notes
     /// and the words shown.
     fn newest_turn(asks: &[&str], name: &str) -> (String, String) {
+        let conv = format!("research-{name}-{}", std::process::id());
+        newest_turn_in(&conv, asks, name, |_| {})
+    }
+
+    /// [`newest_turn`] in chat `conv`, after `setup` fills the workspace.
+    pub(crate) fn newest_turn_in(
+        conv: &str,
+        asks: &[&str],
+        name: &str,
+        setup: impl Fn(&std::path::Path),
+    ) -> (String, String) {
         let dir = std::env::temp_dir().join(format!(
-            "gh-research-{name}-{}-{}",
+            "gh-turn-{name}-{}-{}",
             std::process::id(),
             grokhub_core::now_ms()
         ));
         let config = dir.join("config");
         std::fs::create_dir_all(&config).unwrap();
         let _guard = crate::perm::ConfigGuard::set(&config);
-        let conv = format!("research-{name}-{}", std::process::id());
+        setup(&dir);
         let input = crate::run::LoopIn {
             client: &Done,
             workspace: &dir,
             model: "test/model",
             effort: None,
             system: "",
-            conversation_id: &conv,
+            conversation_id: conv,
             max_turns: 0,
             usage_base: crate::client::Usage::default(),
             cancel: &crate::client::CancelToken::new(),

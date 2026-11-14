@@ -1020,10 +1020,14 @@ impl NativeEngine {
 
     /// `/flush` is not a model call and is not stored as a user turn.
     fn flush_now(&mut self, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
-        let status = match crate::memory::flush_pending(&self.workspace, &self.history) {
-            Ok(true) => "Flushed memory".to_string(),
-            Ok(false) => "Nothing to flush".to_string(),
-            Err(err) => format!("Flush failed: {err}"),
+        let status = if crate::scratch::is_scratch(&self.conversation_id) {
+            crate::scratch::NO_WRITES.to_string()
+        } else {
+            match crate::memory::flush_pending(&self.workspace, &self.history) {
+                Ok(true) => "Flushed memory".to_string(),
+                Ok(false) => "Nothing to flush".to_string(),
+                Err(err) => format!("Flush failed: {err}"),
+            }
         };
         crate::memory::queue_memory_status(status);
         emit(AcpEvent::Done {
@@ -1035,6 +1039,13 @@ impl NativeEngine {
     /// `/dream` is one low-effort call on the session client. A failure leaves
     /// MEMORY.md as it was. The command is not stored as a user turn.
     fn dream_now(&mut self, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
+        if crate::scratch::is_scratch(&self.conversation_id) {
+            crate::memory::queue_memory_status(crate::scratch::NO_WRITES.to_string());
+            emit(AcpEvent::Done {
+                stop_reason: "end_turn".into(),
+            });
+            return Ok(());
+        }
         let mut spent = Usage::default();
         let status = match crate::memory::dream(
             self.client.as_ref(),
