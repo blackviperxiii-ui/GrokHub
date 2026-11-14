@@ -22,6 +22,8 @@ pub const BROWSERS: &[(&str, &str)] = &[
     ("brave", "Brave"),
 ];
 
+/// New facts landed from an indexer look: Permissions reloads.
+pub const SCOPES_EVENT: &str = "scopes://changed";
 pub const CHOOSE_FOLDER: &str = "Choose folder…";
 pub const ADD_FOLDER: &str = "Add a folder";
 const ADD_BROWSER: &str = "Add a browser";

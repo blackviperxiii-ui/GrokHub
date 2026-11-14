@@ -68,6 +68,8 @@ pub mod hub_send;
 pub mod hub_share;
 pub mod imagine;
 pub mod inbox;
+#[cfg(desktop)]
+mod indexers;
 pub mod interests;
 pub mod journal;
 pub mod know_me;
@@ -7002,6 +7004,9 @@ pub fn run() {
             // Provider keys are read from the OS keyring from the first chat,
             // not only once Settings → AI models has been opened.
             grokhub_agent::route::providers::use_os_vault();
+            // The learned-tier key (sealed memory, scope grants and what the
+            // indexers learn) lives in the OS keyring too, as in the cabin.
+            grokhub_agent::harness::use_os_keyring();
             // The full device profile, shared with the cabin: sizes local
             // model launches and sets the router's battery and low-end tier.
             #[cfg(desktop)]
@@ -7110,6 +7115,22 @@ pub fn run() {
                     // A running chat or a waiting decision holds Done for you.
                     move || background_busy(&watched),
                     || chat_client().is_ok(),
+                );
+            }
+            // The local indexers read the scopes allowed in Permissions.
+            #[cfg(desktop)]
+            {
+                let watched = app.handle().clone();
+                let told = app.handle().clone();
+                indexers::start(
+                    app.state::<ShellState>().config_dir.clone(),
+                    // A fresh game reading: this thread can wait for it.
+                    move || {
+                        background_busy(&watched) || grokhub_desktop::game_guard::current().gaming
+                    },
+                    move || {
+                        let _ = told.emit(scopes::SCOPES_EVENT, ());
+                    },
                 );
             }
             // The nightly lesson tidy and memory dream, while the cabin is closed.

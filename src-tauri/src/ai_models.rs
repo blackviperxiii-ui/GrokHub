@@ -784,15 +784,20 @@ mod tests {
         assert!(!kept.exists());
     }
 
+    const VAULT: &str = "grokhub_agent::route::providers::use_os_vault();";
+    const LEARNED: &str = "grokhub_agent::harness::use_os_keyring();";
+
     /// Whether `setup` (the body of the app's start) calls the keyring
     /// install as a statement of its own, before the state is managed.
     fn installs_keyring_first(setup: &str) -> bool {
+        installs_first(setup, VAULT)
+    }
+
+    fn installs_first(setup: &str, call: &str) -> bool {
         let Some(state) = setup.find("app.manage(ShellState") else {
             return false;
         };
-        setup[..state]
-            .lines()
-            .any(|line| line.trim() == "grokhub_agent::route::providers::use_os_vault();")
+        setup[..state].lines().any(|line| line.trim() == call)
     }
 
     #[test]
@@ -805,6 +810,13 @@ mod tests {
             .and_then(|s| s.split(".on_window_event(").next())
             .expect("run setup");
         assert!(installs_keyring_first(setup), "{setup}");
+        // Sealed memory, scope grants and the indexers' facts use the
+        // learned-tier key; without it they all stay locked.
+        assert!(installs_first(setup, LEARNED), "{setup}");
+        assert!(!installs_first(
+            &format!("    // {LEARNED}\n    app.manage(ShellState::new());\n"),
+            LEARNED
+        ));
         // The check reads code, not words: a call that is commented out, sits
         // in a string or comes after the state is not an install.
         let call = "grokhub_agent::route::providers::use_os_vault();";
