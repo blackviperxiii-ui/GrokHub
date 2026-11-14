@@ -490,7 +490,28 @@ pub fn pc_view(m: &local_ai::Machine, extras: &PcExtras) -> TileView {
     TileView::ready(TileText::new(big, caption, Tone::Normal))
         .rows(rows)
         .primary("Tune-up", TileAction::ask(TUNE_UP_ASK))
-        .on_tap(TileAction::ask(TUNE_UP_ASK))
+        .button("Details", TileAction::details("pc_loadout"))
+        .on_tap(TileAction::details("pc_loadout"))
+}
+
+/// PC Loadout → Details: the launch hardware read as rows, with free RAM,
+/// power and (on Linux) heat read again now, since those go stale. None
+/// until the launch read lands. Never runs the slow full read.
+#[cfg(desktop)]
+pub fn pc_details() -> Option<Vec<TileRow>> {
+    use grokhub_agent::device;
+    let mut p = grokhub_agent::route::local_autoconfig::profile()?;
+    if let Some(free) = device::free_ram_now() {
+        p.free_ram_mb = Some(free);
+    }
+    if let Some(power) = device::power_quick() {
+        p.power = power;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        p.thermal = device::thermal_now();
+    }
+    Some(tt::pc_sheet_rows(&p))
 }
 
 pub fn speeds_view(log: &grokhub_core::net_log::NetLog, now: u64) -> TileView {

@@ -258,6 +258,18 @@ fn pc_loadout_shows_temps_and_what_starts_with_the_pc() {
     let bare = pc_view(&m, &PcExtras::default());
     assert!(bare.rows.iter().all(|r| !r.label.contains("temp")));
     assert!(bare.rows.iter().all(|r| r.label != "Startup apps"));
+    // Tune-up asks; Details and a tap on the tile open the hardware sheet.
+    assert_eq!(
+        v.buttons
+            .iter()
+            .map(|b| (b.label.as_str(), b.primary, b.action.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("Tune-up", true, TileAction::ask(TUNE_UP_ASK)),
+            ("Details", false, TileAction::details("pc_loadout")),
+        ]
+    );
+    assert_eq!(v.tap, Some(TileAction::details("pc_loadout")));
 }
 
 #[test]

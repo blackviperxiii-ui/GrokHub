@@ -5,7 +5,8 @@
 use super::view::{TileRow, TileText, Tone};
 use crate::disk::DiskUse;
 use crate::game_guard::GameGuard;
-use crate::local_profile::Thermal;
+use crate::local_picker::CpuSimd;
+use crate::local_profile::{Gpu, LocalProfile, Thermal};
 use crate::{budget_level, compact_tokens, BudgetLevel};
 
 /// The Small PC tile: the main GPU's °C when the OS reports it, else the
@@ -423,9 +424,356 @@ pub fn frame_rate_text(read: Option<FpsRead>, windows: bool, presenter: Option<&
     }
 }
 
+/// The PC Loadout details sheet's title, and what it says before the
+/// launch hardware read lands.
+pub const PC_SHEET_TITLE: &str = "This PC";
+pub const PC_SHEET_READING: &str = "Reading this PC…";
+
+/// Sizes on the details sheet: MB under 1 GB, otherwise whole GB.
+fn sheet_gb(mb: u64) -> String {
+    if mb < 1_024 {
+        format!("{mb} MB")
+    } else {
+        format!("{} GB", (mb + 512) / 1_024)
+    }
+}
+
+fn gpu_line(g: &Gpu) -> String {
+    let kind = if g.unified {
+        "Unified memory"
+    } else if g.integrated {
+        "Integrated"
+    } else {
+        "Graphics card"
+    };
+    let mem = match (g.unified, g.integrated, g.vram_mb, g.free_vram_mb) {
+        (true, _, mb, _) if mb > 0 => Some(format!("up to {} of RAM", sheet_gb(mb))),
+        (true, _, _, _) | (_, true, 0, _) => Some("shares RAM".to_string()),
+        (_, true, mb, _) => Some(format!("{} carved from RAM", sheet_gb(mb))),
+        (_, false, 0, _) => None,
+        (_, false, mb, Some(free)) => {
+            Some(format!("{} VRAM, {} free", sheet_gb(mb), sheet_gb(free)))
+        }
+        (_, false, mb, None) => Some(format!("{} VRAM", sheet_gb(mb))),
+    };
+    let mut parts = vec![kind.to_string()];
+    parts.extend(mem);
+    let driver = g.driver.trim();
+    if !driver.is_empty() {
+        parts.push(format!("driver {driver}"));
+    }
+    parts.join(" · ")
+}
+
+/// The PC Loadout details sheet: every GPU, then CPU, RAM, free disk, power
+/// and heat, in reading order. A fact the hardware read missed is left out;
+/// power always shows.
+pub fn pc_sheet_rows(p: &LocalProfile) -> Vec<TileRow> {
+    let mut rows = Vec::new();
+    for g in &p.gpus {
+        let name = g.name.trim();
+        if !name.is_empty() {
+            rows.push(TileRow::new(name, gpu_line(g), Tone::Normal));
+        }
+    }
+    let c = &p.cpu;
+    if c.logical > 0 {
+        let mut v = format!("{} cores, {} threads", c.physical.max(1), c.logical);
+        if c.e_cores > 0 {
+            v.push_str(&format!(
+                " ({} performance + {} efficient)",
+                c.p_cores, c.e_cores
+            ));
+        }
+        v.push_str(match c.simd {
+            CpuSimd::Avx2 => " · AVX2",
+            CpuSimd::AvxOnly => " · AVX",
+            CpuSimd::NoAvx => " · no AVX",
+            CpuSimd::Neon => " · NEON",
+        });
+        rows.push(TileRow::new("CPU", v, Tone::Normal));
+    }
+    if p.ram_mb > 0 {
+        let v = match p.free_ram_mb {
+            Some(free) => format!("{} ({} free)", sheet_gb(p.ram_mb), sheet_gb(free)),
+            None => sheet_gb(p.ram_mb),
+        };
+        rows.push(TileRow::new("RAM", v, Tone::Normal));
+    }
+    if p.free_disk_mb > 0 {
+        rows.push(TileRow::new(
+            "Disk free",
+            sheet_gb(p.free_disk_mb),
+            Tone::Normal,
+        ));
+    }
+    let pw = &p.power;
+    let power = if pw.battery {
+        let mut v = match pw.percent {
+            Some(pct) => format!("Battery {pct}%"),
+            None => "Battery".to_string(),
+        };
+        v.push_str(if pw.on_ac {
+            " · plugged in"
+        } else {
+            " · on battery"
+        });
+        if pw.power_saver {
+            v.push_str(" · power saver");
+        }
+        v
+    } else if pw.power_saver {
+        "Plugged in · power saver".to_string()
+    } else {
+        "Plugged in".to_string()
+    };
+    rows.push(TileRow::new("Power", power, Tone::Normal));
+    let heat = match p.thermal {
+        Thermal::Unknown => None,
+        Thermal::Nominal => Some("Cool"),
+        Thermal::Fair => Some("Warm"),
+        Thermal::Serious => Some("Hot"),
+        Thermal::Critical => Some("Critical"),
+    };
+    if let Some(h) = heat {
+        rows.push(TileRow::new("Thermal", h, Tone::Normal));
+    }
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::local_profile::{CpuInfo, GpuVendor, PowerInfo};
+
+    fn gpu(
+        vendor: GpuVendor,
+        name: &str,
+        vram_mb: u64,
+        free: Option<u64>,
+        integrated: bool,
+        unified: bool,
+        driver: &str,
+    ) -> Gpu {
+        Gpu {
+            vendor,
+            name: name.into(),
+            vram_mb,
+            free_vram_mb: free,
+            integrated,
+            unified,
+            driver: driver.into(),
+        }
+    }
+
+    fn sheet(p: &LocalProfile) -> Vec<(String, String)> {
+        pc_sheet_rows(p)
+            .into_iter()
+            .map(|r| (r.label, r.value))
+            .collect()
+    }
+
+    fn pairs(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+        rows.iter()
+            .map(|(l, v)| (l.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn the_pc_sheet_lists_each_gpu_and_the_rest_of_the_pc() {
+        let p = LocalProfile {
+            os: "linux",
+            arch: "x86_64",
+            gpus: vec![
+                gpu(
+                    GpuVendor::Amd,
+                    "AMD Radeon Graphics (Raphael)",
+                    4096,
+                    None,
+                    true,
+                    false,
+                    "amdgpu (kernel)",
+                ),
+                gpu(
+                    GpuVendor::Amd,
+                    "AMD Radeon RX 9070/9070 XT/9070 GRE",
+                    16384,
+                    Some(15360),
+                    false,
+                    false,
+                    "amdgpu (kernel)",
+                ),
+            ],
+            cpu: CpuInfo {
+                logical: 32,
+                physical: 16,
+                p_cores: 16,
+                e_cores: 0,
+                simd: CpuSimd::Avx2,
+            },
+            ram_mb: 65536,
+            free_ram_mb: Some(40960),
+            power: PowerInfo::default(),
+            thermal: Thermal::Unknown,
+            free_disk_mb: 512_000,
+        };
+        assert_eq!(
+            sheet(&p),
+            pairs(&[
+                (
+                    "AMD Radeon Graphics (Raphael)",
+                    "Integrated · 4 GB carved from RAM · driver amdgpu (kernel)"
+                ),
+                (
+                    "AMD Radeon RX 9070/9070 XT/9070 GRE",
+                    "Graphics card · 16 GB VRAM, 15 GB free · driver amdgpu (kernel)"
+                ),
+                ("CPU", "16 cores, 32 threads · AVX2"),
+                ("RAM", "64 GB (40 GB free)"),
+                ("Disk free", "500 GB"),
+                ("Power", "Plugged in"),
+            ])
+        );
+        assert!(pc_sheet_rows(&p)
+            .iter()
+            .all(|r| r.tone == Tone::Normal && r.tap.is_none()));
+    }
+
+    #[test]
+    fn a_laptop_sheet_names_hybrid_cores_battery_and_heat() {
+        let p = LocalProfile {
+            os: "macos",
+            arch: "aarch64",
+            gpus: vec![gpu(
+                GpuVendor::Apple,
+                "Apple M3 Pro",
+                36864,
+                None,
+                false,
+                true,
+                "",
+            )],
+            cpu: CpuInfo {
+                logical: 20,
+                physical: 14,
+                p_cores: 6,
+                e_cores: 8,
+                simd: CpuSimd::AvxOnly,
+            },
+            ram_mb: 16384,
+            free_ram_mb: None,
+            power: PowerInfo {
+                battery: true,
+                on_ac: false,
+                percent: Some(42),
+                power_saver: true,
+            },
+            thermal: Thermal::Serious,
+            free_disk_mb: 900,
+        };
+        assert_eq!(
+            sheet(&p),
+            pairs(&[
+                ("Apple M3 Pro", "Unified memory · up to 36 GB of RAM"),
+                (
+                    "CPU",
+                    "14 cores, 20 threads (6 performance + 8 efficient) · AVX"
+                ),
+                ("RAM", "16 GB"),
+                ("Disk free", "900 MB"),
+                ("Power", "Battery 42% · on battery · power saver"),
+                ("Thermal", "Hot"),
+            ])
+        );
+    }
+
+    #[test]
+    fn unread_facts_are_left_out_and_power_always_shows() {
+        let mut p = LocalProfile {
+            os: "linux",
+            arch: "x86_64",
+            gpus: vec![
+                gpu(GpuVendor::Other, "  ", 8192, None, false, false, "x"),
+                gpu(
+                    GpuVendor::Other,
+                    "Basic Display",
+                    0,
+                    None,
+                    false,
+                    false,
+                    " ",
+                ),
+                gpu(
+                    GpuVendor::Intel,
+                    "Intel UHD 620",
+                    0,
+                    None,
+                    true,
+                    false,
+                    "i915",
+                ),
+                gpu(GpuVendor::Apple, "Apple M1", 0, None, false, true, ""),
+            ],
+            cpu: CpuInfo {
+                logical: 0,
+                physical: 0,
+                p_cores: 0,
+                e_cores: 0,
+                simd: CpuSimd::NoAvx,
+            },
+            ram_mb: 0,
+            free_ram_mb: Some(100),
+            power: PowerInfo {
+                battery: false,
+                on_ac: true,
+                percent: None,
+                power_saver: true,
+            },
+            thermal: Thermal::Unknown,
+            free_disk_mb: 0,
+        };
+        assert_eq!(
+            sheet(&p),
+            pairs(&[
+                ("Basic Display", "Graphics card"),
+                ("Intel UHD 620", "Integrated · shares RAM · driver i915"),
+                ("Apple M1", "Unified memory · shares RAM"),
+                ("Power", "Plugged in · power saver"),
+            ])
+        );
+        p.gpus.clear();
+        p.cpu = CpuInfo {
+            logical: 8,
+            physical: 0,
+            p_cores: 0,
+            e_cores: 0,
+            simd: CpuSimd::Neon,
+        };
+        p.power = PowerInfo {
+            battery: true,
+            on_ac: true,
+            percent: None,
+            power_saver: false,
+        };
+        let cases = [
+            (Thermal::Nominal, "Cool"),
+            (Thermal::Fair, "Warm"),
+            (Thermal::Critical, "Critical"),
+        ];
+        for (heat, word) in cases {
+            p.thermal = heat;
+            assert_eq!(
+                sheet(&p),
+                pairs(&[
+                    ("CPU", "1 cores, 8 threads · NEON"),
+                    ("Power", "Battery · plugged in"),
+                    ("Thermal", word),
+                ])
+            );
+        }
+        p.cpu.simd = CpuSimd::NoAvx;
+        assert_eq!(sheet(&p)[0].1, "1 cores, 8 threads · no AVX");
+    }
 
     #[test]
     fn count_sends_keeps_the_last_day_and_names_the_busiest_place() {

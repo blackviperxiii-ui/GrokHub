@@ -5032,6 +5032,14 @@ async fn home_open_clip(index: usize) -> Result<(), String> {
     off_main(move || home_tiles::open_clip(index)).await?
 }
 
+/// Home's PC Loadout → Details: the hardware read as rows, or None until the
+/// launch read lands.
+#[cfg(desktop)]
+#[tauri::command]
+async fn home_pc_details() -> Result<Option<Vec<grokhub_core::home::TileRow>>, String> {
+    off_main(home_tiles::pc_details).await
+}
+
 /// Settings → Privacy & data → What the app learned: the learning engine's
 /// beliefs as lines (`grokhub_core::learn::view`), the same ones the cabin's
 /// `/learned` prints.
@@ -7660,6 +7668,8 @@ pub fn run() {
             game_minecraft,
             game_rl,
             home_open_clip,
+            #[cfg(desktop)]
+            home_pc_details,
             library_friends,
             library_steam_settings,
             mods_games,

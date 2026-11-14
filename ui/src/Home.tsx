@@ -24,6 +24,7 @@ import {
 import { ChipRow, useChipRow } from "./Chips";
 import { FollowUpRow } from "./Goals";
 import { HomeEdit } from "./HomeEdit";
+import { PcSheet } from "./PcSheet";
 import { COMPANION_NAME } from "./brand";
 import { openExternal } from "./external";
 import { NyxCard } from "./NyxCard";
@@ -102,6 +103,8 @@ export interface HomeRoutes {
   /** Puts the text in the chat box; nothing is sent. */
   onAsk: (text: string) => void;
   onSettings: (section: Section) => void;
+  /** Opens a module's details sheet (PC Loadout → Details). */
+  onDetails?: (module: string) => void;
 }
 
 /** The pages a tile may open; anything else stays put. */
@@ -183,6 +186,10 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
     case "setup":
       // The OS prompt shows on the computer, so a paired browser can't run it.
       if (!remote) void homeSetup(a.module, a.undo).then(reload, reload);
+      return;
+    case "details":
+      // The sheet reads this computer's hardware, so a paired browser stays put.
+      if (!remote) go.onDetails?.(a.module);
       return;
     case "copySetup":
       if (!remote) {
@@ -473,6 +480,9 @@ export function Home({
   const [reads, setReads] = useState(0);
   const reload = () => setReads((n) => n + 1);
   const [editing, setEditing] = useState(false);
+  // The module whose details sheet is open (only "pc_loadout" has one).
+  const [sheet, setSheet] = useState<string | null>(null);
+  const routes: HomeRoutes = { ...go, onDetails: setSheet };
   // When the last read was tried, so tiles can say how old their data is.
   const [now, setNow] = useState(() => Date.now());
   // Home has shown data before, so a failed read keeps it and says so.
@@ -556,6 +566,7 @@ export function Home({
           }}
         />
       )}
+      {sheet === "pc_loadout" && <PcSheet onClose={() => setSheet(null)} />}
       {page && (
         <>
           <ul className="home-grid" aria-label="Tiles">
@@ -569,7 +580,7 @@ export function Home({
                   {slot.name}
                   {slot.tile.kind === "view" && slot.tile.view.tag && <span className="home-tag">{slot.tile.view.tag}</span>}
                 </h3>
-                {body(slot.tile, slot, go, remote, reload, now)}
+                {body(slot.tile, slot, routes, remote, reload, now)}
               </li>
             ))}
           </ul>
