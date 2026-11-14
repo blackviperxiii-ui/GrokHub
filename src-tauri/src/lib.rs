@@ -711,6 +711,9 @@ async fn send_chat(
     clock: Option<automations::Clock>,
 ) -> Result<String, String> {
     set_last_chat(&state, &conversation_id);
+    // A message you send ends a Halt's hold on the background passes.
+    #[cfg(desktop)]
+    night::note_send(&state.config_dir, grokhub_core::now_ms());
     // How long the composer's chip row stood before this message; off the
     // send's path.
     let timing = app.clone();

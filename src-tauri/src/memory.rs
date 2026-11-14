@@ -1181,21 +1181,37 @@ pub(crate) static DREAM: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const USER_MD_CAP: u64 = 1024 * 1024;
 
 /// The dream's options for the pinned config folder: Memory retention as
-/// the stale cutoff (0 keeps everything), USER.md as it is now, and the
-/// report named `date` (`None` uses the UTC date).
+/// the stale cutoff (0 keeps everything), USER.md as it is now (its first
+/// 1 MiB; none yet reads as empty, so every confident preference is
+/// proposed), and the report named `date` (`None` uses the UTC date).
 pub(crate) fn dream_opts(date: Option<&str>) -> grokhub_core::amr::DreamOpts {
+    use std::io::Read;
     let days = retention_days();
     let user = grokhub_agent::global_memory_path().with_file_name("USER.md");
-    let user_md = std::fs::metadata(&user)
-        .ok()
-        .filter(|m| m.len() <= USER_MD_CAP)
-        .and_then(|_| std::fs::read_to_string(&user).ok());
+    let mut bytes = Vec::new();
+    if let Ok(file) = std::fs::File::open(&user) {
+        let _ = file.take(USER_MD_CAP).read_to_end(&mut bytes);
+    }
     grokhub_core::amr::DreamOpts {
         date: date.map(str::to_string),
         ttl_days: if days == 0 { u64::MAX } else { days },
-        user_md,
+        user_md: Some(String::from_utf8_lossy(&bytes).into_owned()),
         ..Default::default()
     }
+}
+
+/// Your local day, once the window has reported its clock, so `/dream` and
+/// the nightly pass name the same report.
+#[cfg(desktop)]
+fn local_today(config_dir: &Path, now: u64) -> Option<String> {
+    crate::scheduler::utc_offset()
+        .or_else(|| crate::pulse_feed::state(config_dir).utc_offset_min)
+        .map(|offset| crate::self_review::local_day(now, offset))
+}
+
+#[cfg(not(desktop))]
+fn local_today(_config_dir: &Path, _now: u64) -> Option<String> {
+    None
 }
 
 /// `/dream`: one dream pass now over the learned notes (merge repeats, retire
@@ -1205,9 +1221,18 @@ pub fn dream_now(config_dir: &Path) -> Result<String, String> {
         return Ok("Dreaming runs in memory repo mode only.".into());
     }
     let store = open_store()?;
-    let _one = DREAM.lock().unwrap_or_else(|e| e.into_inner());
+    // The nightly pass may be waiting on its model call: say so, don't wait.
+    let _one = match DREAM.try_lock() {
+        Ok(one) => one,
+        Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            return Ok("A dream is already running. Its report shows here when it's done.".into())
+        }
+    };
+    let now = grokhub_core::now_ms();
+    let today = local_today(config_dir, now);
     let done = store
-        .dream_once(grokhub_core::now_ms(), &dream_opts(None))
+        .dream_once(now, &dream_opts(today.as_deref()))
         .map_err(|e| e.to_string())?;
     Ok(format!(
         "{}\n\n{}",
