@@ -2,10 +2,12 @@
 //! [input]` lists the outputs and inputs, listens to the chosen input for a
 //! few seconds and says what is wrong (level, clipping, silence, dropouts,
 //! crackle). Asking for it is the consent; the clip stays in memory, is never
-//! saved or sent, and nothing on the computer is changed.
+//! saved or sent, and nothing on the computer is changed. The report also
+//! lands on a Pulse card that names the input, as the cabin's did.
 
 use crate::screen_record::{push_event, Event, Line};
 use grokhub_core::audio_check as ac;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -31,12 +33,13 @@ pub fn listening() -> Option<Line> {
 }
 
 /// The check: pick the input, record it, measure it. The default input is
-/// recorded as "default" so any recorder can take it.
+/// recorded as "default" so any recorder can take it. Comes back with the
+/// input's device name ("" when no input was listed) for the card.
 pub fn run_check(
     want: &str,
     list: impl FnOnce() -> Devices,
     record: impl FnOnce(Option<&str>) -> Result<(u32, Vec<u8>), String>,
-) -> Result<ac::AudioReport, String> {
+) -> Result<(String, ac::AudioReport), String> {
     let (outputs, inputs) = list();
     let input = ac::pick_input(&inputs, want)?;
     let target = input.filter(|d| !d.is_default).map(|d| d.name.as_str());
@@ -45,7 +48,44 @@ pub fn run_check(
         .unwrap_or("the default input");
     let (rate, pcm) = record(target).map_err(|e| format!("Couldn't record from {label}: {e}"))?;
     let levels = ac::measure(&ac::pcm_samples(&pcm), rate);
-    Ok(ac::audio_report(&outputs, &inputs, input, &levels))
+    let name = input.map(|d| d.name.clone()).unwrap_or_default();
+    Ok((name, ac::audio_report(&outputs, &inputs, input, &levels)))
+}
+
+/// A finished check: a good one also goes on a Pulse card naming the input,
+/// posted before the event so Pulse has it when the bell rings. A new check
+/// of the same input folds into that input's card. A failed check posts no
+/// card. `chat` is the chat that asked, for the card's Open.
+fn finish(
+    config_dir: &Path,
+    chat: &str,
+    done: Result<(String, ac::AudioReport), String>,
+    now: u64,
+) -> Event {
+    match done {
+        Ok((input, report)) => {
+            let card = grokhub_core::audio_check_card(
+                &input,
+                &report.card_title,
+                &report.summary,
+                chat,
+                now,
+            );
+            if let Err(why) = crate::pulse::add_post(config_dir, card) {
+                eprintln!("audio check card: {why}");
+            }
+            Event {
+                kind: "audio",
+                ok: true,
+                text: report.text,
+            }
+        }
+        Err(why) => Event {
+            kind: "audio",
+            ok: false,
+            text: why,
+        },
+    }
 }
 
 /// The recorders and the device list are Linux tools (`parecord`, `pw-record`,
@@ -54,12 +94,19 @@ fn supported(os: &str) -> bool {
     os == "linux"
 }
 
-/// `/audiocheck [input]`. The report arrives as an event when the clip is done.
-pub fn start(want: &str, remote: bool) -> Result<String, String> {
-    start_on(std::env::consts::OS, want, remote)
+/// `/audiocheck [input]` typed in `chat`. The report arrives as an event when
+/// the clip is done, and on a Pulse card.
+pub fn start(config_dir: &Path, chat: &str, want: &str, remote: bool) -> Result<String, String> {
+    start_on(std::env::consts::OS, config_dir, chat, want, remote)
 }
 
-fn start_on(os: &str, want: &str, remote: bool) -> Result<String, String> {
+fn start_on(
+    os: &str,
+    config_dir: &Path,
+    chat: &str,
+    want: &str,
+    remote: bool,
+) -> Result<String, String> {
     if remote {
         return Err("The audio check works on your computer.".into());
     }
@@ -74,21 +121,11 @@ fn start_on(os: &str, want: &str, remote: bool) -> Result<String, String> {
         *at = Some(Instant::now());
     }
     let want = want.to_string();
+    let (dir, chat): (PathBuf, String) = (config_dir.to_path_buf(), chat.to_string());
     std::thread::spawn(move || {
         let done = run_check(&want, list_devices, record_clip);
         *live() = None;
-        push_event(match done {
-            Ok(report) => Event {
-                kind: "audio",
-                ok: true,
-                text: report.text,
-            },
-            Err(why) => Event {
-                kind: "audio",
-                ok: false,
-                text: why,
-            },
-        });
+        push_event(finish(&dir, &chat, done, grokhub_core::now_ms()));
     });
     Ok(format!(
         "Checking your audio: finding the input, then listening for {} seconds. Talk or play something at your usual loudness. The clip stays in memory and isn't saved or sent.",
@@ -258,23 +295,141 @@ mod tests {
     #[test]
     fn the_default_input_is_recorded_as_default_and_a_named_one_by_name() {
         let mut asked = Vec::new();
-        let report = run_check("", devices, |d| {
+        let (name, report) = run_check("", devices, |d| {
             asked.push(d.map(str::to_string));
             Ok((48_000, clipped_pcm()))
         })
         .unwrap();
         assert_eq!(asked, vec![None]);
+        assert_eq!(name, "yeti");
         assert_eq!(
             report.title,
             "Audio check: Yeti Stereo Microphone input clipping at 0.0 dBFS; default output is Navi 21 HDMI / DisplayPort"
         );
         let mut asked = Vec::new();
-        run_check("built-in", devices, |d| {
+        let (name, _) = run_check("built-in", devices, |d| {
             asked.push(d.map(str::to_string));
             Ok((48_000, clipped_pcm()))
         })
         .unwrap();
         assert_eq!(asked, vec![Some("builtin".to_string())]);
+        assert_eq!(name, "builtin");
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-shell-audio-card-{name}-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn audio_cards(dir: &Path) -> Vec<grokhub_core::UpdateCard> {
+        crate::pulse::cards(dir)
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.source_id.starts_with("audiocheck:"))
+            .collect()
+    }
+
+    const NOW: u64 = 1_800_000_000_000;
+
+    #[test]
+    fn a_finished_check_posts_a_card_naming_the_device() {
+        let dir = temp("posts");
+        let _config = grokhub_agent::perm::ConfigGuard::set(&dir);
+        let done = run_check("", devices, |_| Ok((48_000, clipped_pcm())));
+        let text = done.as_ref().unwrap().1.text.clone();
+        assert_eq!(
+            finish(&dir, "chat-1", done, NOW),
+            Event {
+                kind: "audio",
+                ok: true,
+                text
+            }
+        );
+        let cards = audio_cards(&dir);
+        assert_eq!(cards.len(), 1);
+        let card = &cards[0];
+        assert_eq!(card.source_id, "audiocheck:yeti");
+        assert_eq!(
+            card.title,
+            "Audio check: Yeti Stereo Microphone input clipping at 0.0 dBFS"
+        );
+        assert_eq!(
+            card.body.as_deref(),
+            Some("Lower Yeti Stereo Microphone's input volume or gain knob until loud speech peaks around -6 dBFS. Default output: Navi 21 HDMI / DisplayPort.")
+        );
+        assert_eq!(
+            card.action,
+            Some(grokhub_core::UpdateAction::OpenSession {
+                thread_id: "chat-1".into()
+            })
+        );
+        let page = crate::pulse::peek(&dir, NOW).unwrap();
+        let post = page
+            .feed
+            .iter()
+            .find(|p| p.title == card.title)
+            .expect("on the feed");
+        assert_eq!(post.source, "Audio check");
+    }
+
+    #[test]
+    fn a_second_check_of_the_same_input_folds_into_its_card() {
+        let dir = temp("again");
+        let _config = grokhub_agent::perm::ConfigGuard::set(&dir);
+        finish(
+            &dir,
+            "chat-1",
+            run_check("", devices, |_| Ok((48_000, clipped_pcm()))),
+            NOW,
+        );
+        let quiet: Vec<u8> = (0..48_000)
+            .flat_map(|i| (((i % 40) as i16 - 20) * 400).to_le_bytes())
+            .collect();
+        finish(
+            &dir,
+            "chat-2",
+            run_check("", devices, |_| Ok((48_000, quiet))),
+            NOW + 60_000,
+        );
+        let cards = audio_cards(&dir);
+        assert_eq!(cards.len(), 1, "{cards:?}");
+        assert_eq!(
+            cards[0].title,
+            "Audio check: Yeti Stereo Microphone input sounds fine (peak -12.2 dBFS)"
+        );
+        assert_eq!(cards[0].runs, 2);
+        assert_eq!(cards[0].created_at, NOW + 60_000);
+        assert_eq!(
+            cards[0].action,
+            Some(grokhub_core::UpdateAction::OpenSession {
+                thread_id: "chat-2".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_failed_check_posts_no_card() {
+        let dir = temp("failed");
+        assert_eq!(
+            finish(
+                &dir,
+                "chat-1",
+                Err("No input matches \"rode\".".into()),
+                NOW
+            ),
+            Event {
+                kind: "audio",
+                ok: false,
+                text: "No input matches \"rode\".".into()
+            }
+        );
+        assert_eq!(audio_cards(&dir), Vec::new());
     }
 
     #[test]
@@ -302,7 +457,7 @@ mod tests {
         assert!(!supported("macos"));
         for os in ["windows", "macos"] {
             assert_eq!(
-                start_on(os, "", false).unwrap_err(),
+                start_on(os, &std::env::temp_dir(), "chat-1", "", false).unwrap_err(),
                 "The audio check works on Linux for now. On this computer, use the system's sound settings to test the microphone.",
                 "{os}"
             );
@@ -310,17 +465,19 @@ mod tests {
         }
         // A browser is told about the computer first, whatever that computer runs.
         assert_eq!(
-            start_on("windows", "", true).unwrap_err(),
+            start_on("windows", &std::env::temp_dir(), "chat-1", "", true).unwrap_err(),
             "The audio check works on your computer."
         );
     }
 
     #[test]
     fn a_browser_cannot_open_the_microphone() {
+        let dir = temp("browser");
         assert_eq!(
-            start("", true).unwrap_err(),
+            start(&dir, "chat-1", "", true).unwrap_err(),
             "The audio check works on your computer."
         );
         assert!(listening().is_none());
+        assert_eq!(audio_cards(&dir), Vec::new());
     }
 }

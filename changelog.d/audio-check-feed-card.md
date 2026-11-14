@@ -1,0 +1,2 @@
+- Pulse: `/audiocheck` also posts a feed card naming the input it checked ("Audio check: Yeti Stereo Microphone input clipping at 0.0 dBFS"). A new check of the same input folds into that card.
+- Web app: a paired browser can no longer answer a desktop hard card (a park) by naming its id; the inbox it lists already leaves them out.
