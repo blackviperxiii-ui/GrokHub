@@ -663,6 +663,17 @@ describe("Pulse", () => {
     expect(screen.queryByRole("listitem", { name: "Tidy the board" })).not.toBeInTheDocument();
   });
 
+  it("a paired browser shows no Add skill: the skill is added on the computer", async () => {
+    const skill: PulseIdea = { ...IDEA, id: "idea-skill", title: "Tidy the board", skill: true };
+    api.getPulse.mockResolvedValue({ ...PAGE, ideas: [{ label: "", ideas: [skill] }] });
+    api.pulseAct.mockResolvedValue(PAGE);
+    render(<Pulse onRun={() => {}} remote />);
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
+    const row = screen.getByRole("listitem", { name: "Tidy the board" });
+    expect(within(row).queryByRole("button", { name: "Add skill" })).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Let's do it" })).toBeInTheDocument();
+  });
+
   it("an idea shows the same row as every card: Like, Let's do it, Not interested, Dismiss", async () => {
     const written = { ...IDEA, id: "idea-2", title: "Rust 1.99 upgrade plan", icon: "🦀" };
     const page: PulsePage = {

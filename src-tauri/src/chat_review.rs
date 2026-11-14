@@ -64,11 +64,25 @@ struct Chats {
 
 /// Every saved chat but scratch ones, newest first, as `(role, text)`
 /// pairs. A scratch chat is never learned from.
+/// Only what was said: tool calls and their output (file contents,
+/// connector results) never reach the review.
 fn chat_pairs(config_dir: &Path) -> Vec<Vec<(String, String)>> {
     crate::history::all_saved(config_dir)
         .iter()
         .filter(|info| !grokhub_agent::scratch::is_scratch(&info.id))
-        .map(crate::chips::chat_pairs)
+        .map(|info| {
+            grokhub_agent::message_pairs(info)
+                .into_iter()
+                .map(|(role, text)| {
+                    if role == "assistant" {
+                        let (shown, _) = grokhub_core::split_chip_trailer(&text);
+                        (role, shown)
+                    } else {
+                        (role, text)
+                    }
+                })
+                .collect()
+        })
         .collect()
 }
 
@@ -182,12 +196,12 @@ fn turned_down(config_dir: &Path) -> Vec<String> {
 /// Post the review's skills as Learn ideas on the Pulse page, then take them
 /// off the list. One already posted, on the board, or saved is not posted
 /// again. Returns how many landed.
-fn post_ideas(config_dir: &Path, skills: &[SkillMd]) -> usize {
+fn post_ideas(config_dir: &Path, skill_names: &[String]) -> usize {
     let store = load_suggestions(config_dir);
     if store.skills.is_empty() {
         return 0;
     }
-    let have: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+    let have: Vec<&str> = skill_names.iter().map(String::as_str).collect();
     let mut pulse = FeedPulse {
         turned_down: turned_down(config_dir),
         idea_titles: store.idea_titles.clone(),
@@ -274,6 +288,29 @@ fn apply_skill_patches(
     written
 }
 
+/// Every skill you have, switched off or not: each folder that holds a
+/// `SKILL.md` (the name Add skill checks), and the name its file gives.
+fn skill_names(config_dir: &Path, skills: &[SkillMd]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |name: &str| {
+        if !name.is_empty() && !out.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            out.push(name.to_string());
+        }
+    };
+    if let Ok(dir) = std::fs::read_dir(config_dir.join("skills")) {
+        for entry in dir.flatten() {
+            if entry.path().join("SKILL.md").is_file() {
+                add(&entry.file_name().to_string_lossy());
+            }
+        }
+    }
+    for s in skills {
+        add(&s.name);
+    }
+    out.sort();
+    out
+}
+
 /// One look: the quiet pass, then the review when it is due and worth a
 /// call. `call` runs only then. `night_hour` is the dream hour.
 pub fn review_step(
@@ -290,8 +327,9 @@ pub fn review_step(
         Ok(s) => s,
         Err(e) => return Reviewed::Held(e),
     };
+    // Patches go to switched-on skills only; every skill counts as had.
     let skills = wr::cabin_skills(&config_dir.join("skills"));
-    let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+    let skill_names = skill_names(config_dir, &skills);
     let autos = automation_names(config_dir);
     let mut read: Option<Chats> = None;
     if review_due(
@@ -307,17 +345,35 @@ pub fn review_step(
             eprintln!("chat review: {e}");
         }
     }
-    post_ideas(config_dir, &skills);
+    post_ideas(config_dir, &skill_names);
     if !review_due(store.last_review_day.as_deref(), today, clock, night_hour) {
         return Reviewed::NotDue;
     }
     let chats = read.unwrap_or_else(|| chats(config_dir));
     let total = chats.user_turns;
-    let reviewed = store.reviewed_turns.min(total);
+    // Fewer turns than last time (a chat deleted or compacted): count new
+    // turns from here, or the review would wait until the old count came back.
+    let reviewed = if store.reviewed_turns > total {
+        if let Err(e) = with_suggestions(config_dir, |s| s.reviewed_turns = total) {
+            eprintln!("chat review: {e}");
+        }
+        total
+    } else {
+        store.reviewed_turns
+    };
     if !review_worth_tokens(total, reviewed) {
         return Reviewed::NotWorth {
             new_turns: total - reviewed,
         };
+    }
+    // Stamp tonight before the call, so a file that can't take the stamp
+    // spends no call, and a call cut short is not made again tonight.
+    if let Err(e) = with_suggestions(config_dir, |s| {
+        s.last_review_day = Some(today.to_string());
+        s.last_review_ms = now;
+        s.reviewed_turns = total;
+    }) {
+        return Reviewed::Held(e);
     }
     let user_md = memory_note(config_dir, "USER.md");
     let memory_md = memory_note(config_dir, "MEMORY.md");
@@ -359,7 +415,6 @@ pub fn review_step(
     };
     // Re-read under the lock, so a tile added meanwhile stays added.
     let kept = with_suggestions(config_dir, |s| {
-        s.reviewed_turns = total;
         apply_reply(
             s,
             reply.as_deref().map_err(String::as_str),
@@ -375,7 +430,7 @@ pub fn review_step(
     match reply {
         Ok(_) => Reviewed::Ran {
             kept,
-            ideas: post_ideas(config_dir, &skills),
+            ideas: post_ideas(config_dir, &skill_names),
             patched,
         },
         Err(e) => Reviewed::Held(e),

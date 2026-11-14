@@ -172,11 +172,14 @@ function useFeedDwell(listRef: { current: HTMLUListElement | null }, idsKey: str
 export function Pulse({
   onRun,
   onOpenInterests,
+  remote = false,
 }: {
   /** `conversationId`: the card's own chat, opened (or reopened) first. */
   onRun: (text: string, conversationId?: string) => void;
   /** Settings → Pulse, where interests are added. */
   onOpenInterests?: () => void;
+  /** A paired browser: Add skill stays on the computer. */
+  remote?: boolean;
 }) {
   const [page, setPage] = useState<PulsePage | null>(null);
   const [tab, setTab] = useState<Tab>("feed");
@@ -486,7 +489,9 @@ export function Pulse({
                     idea={idea}
                     busy={busy}
                     onDo={() => void run(idea)}
-                    onAddSkill={() => void act(idea.id, "addSkill", SKILL_ADDED)}
+                    onAddSkill={
+                      remote ? undefined : () => void act(idea.id, "addSkill", SKILL_ADDED)
+                    }
                     onFix={() => setFixing(idea)}
                     onMoreLike={() =>
                       void act(

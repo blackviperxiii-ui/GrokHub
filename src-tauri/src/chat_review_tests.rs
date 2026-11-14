@@ -466,3 +466,141 @@ fn the_quiet_pass_adds_a_tile_without_a_call() {
     // It shows first on the Automations page.
     assert_eq!(crate::suggested::suggested(&d)[0].title, "Midday board");
 }
+
+#[test]
+fn tool_calls_and_their_output_never_reach_the_digest() {
+    let d = temp_dir("tools");
+    tidy_week(&d, "shell-1");
+    {
+        let _config = grokhub_agent::perm::ConfigGuard::set(&d);
+        let say = |role: &str, text: &str| InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        };
+        grokhub_agent::record_turn(
+            "shell-2",
+            "/home/user",
+            "grok-test",
+            &[
+                say("user", "Read my diary file please"),
+                InputItem::FunctionCall {
+                    call_id: "c1".into(),
+                    name: "read_file".into(),
+                    arguments: r#"{"path":"diary.md"}"#.into(),
+                },
+                InputItem::FunctionCallOutput {
+                    call_id: "c1".into(),
+                    output: "Dear diary, the harbor key is under the mat".into(),
+                },
+                say("assistant", "Here is your diary."),
+            ],
+            &Usage::default(),
+            "",
+            "Read my diary file please",
+        )
+        .unwrap();
+    }
+    let seen = std::cell::RefCell::new(String::new());
+    let call = |_: &str, digest: &str| {
+        *seen.borrow_mut() = digest.to_string();
+        Ok(String::new())
+    };
+    review_step(&d, TODAY, &at(21), HOUR, NOW, &call);
+    let digest = seen.borrow();
+    assert!(
+        digest.contains("user: Read my diary file please"),
+        "{digest}"
+    );
+    assert!(
+        digest.contains("assistant: Here is your diary."),
+        "{digest}"
+    );
+    assert!(!digest.contains("harbor key"), "{digest}");
+    assert!(!digest.contains("Tool"), "{digest}");
+}
+
+#[test]
+fn a_deleted_chat_does_not_stop_the_review_counting() {
+    let d = temp_dir("deleted");
+    // Its own id: a deleted chat's id stays refused for this process.
+    tidy_week(&d, "shell-deleted-1");
+    let model = Model::answering("");
+    assert!(matches!(model.step(&d, TODAY, 21), Reviewed::Ran { .. }));
+    assert_eq!(load_suggestions(&d).reviewed_turns, 8);
+    crate::history::delete(&d, "shell-deleted-1").unwrap();
+    assert_eq!(
+        model.step(&d, TOMORROW, 21),
+        Reviewed::NotWorth { new_turns: 0 }
+    );
+    assert_eq!(load_suggestions(&d).reviewed_turns, 0, "counted from here");
+    tidy_week(&d, "shell-deleted-2");
+    assert!(matches!(model.step(&d, TOMORROW, 22), Reviewed::Ran { .. }));
+    assert_eq!(model.calls.get(), 2);
+}
+
+#[test]
+fn a_suggestions_file_that_cannot_be_written_spends_no_call() {
+    let d = temp_dir("unwritable");
+    tidy_week(&d, "shell-1");
+    std::fs::write(d.join(SUGGESTIONS_FILE), "{}").unwrap();
+    // The temp file the save writes through is a folder, so the save fails.
+    std::fs::create_dir_all(
+        d.join(format!("suggestions.{}.tmp", std::process::id()))
+            .join("block"),
+    )
+    .unwrap();
+    let model = Model::answering(TIDY_SKILL);
+    assert!(matches!(model.step(&d, TODAY, 21), Reviewed::Held(_)));
+    assert_eq!(model.calls.get(), 0);
+}
+
+#[test]
+fn a_skill_you_turned_off_still_counts_as_one_you_have() {
+    let d = temp_dir("off");
+    let mine = d.join("skills/tidy-board");
+    std::fs::create_dir_all(&mine).unwrap();
+    std::fs::write(
+        mine.join("SKILL.md"),
+        "---\nname: tidy-board\n---\n\nmy steps\n",
+    )
+    .unwrap();
+    grokhub_agent::set_skill_off_in(&d.join("skills"), "tidy-board", true).unwrap();
+    tidy_week(&d, "shell-1");
+    let seen = std::cell::RefCell::new(String::new());
+    let call = |_: &str, digest: &str| {
+        *seen.borrow_mut() = digest.to_string();
+        Ok(TIDY_SKILL.to_string())
+    };
+    assert_eq!(
+        review_step(&d, TODAY, &at(21), HOUR, NOW, &call),
+        Reviewed::Ran {
+            kept: 0,
+            ideas: 0,
+            patched: 0
+        }
+    );
+    assert!(
+        seen.borrow().contains("Existing skills: tidy-board"),
+        "{}",
+        seen.borrow()
+    );
+    assert!(skill_ideas(&d).is_empty());
+}
+
+#[test]
+fn add_skill_again_after_a_save_that_stuck_takes_the_idea_off() {
+    let d = temp_dir("again");
+    tidy_week(&d, "shell-1");
+    Model::answering(TIDY_SKILL).step(&d, TODAY, 21);
+    let card = crate::pulse::cards(&d).unwrap().remove(0);
+    // An earlier Add saved the skill, but the card stayed up.
+    let md = grokhub_core::skill_from_suggestion(card.skill.as_ref().unwrap()).unwrap();
+    grokhub_agent::skill_write::save_skill(&d, &md).unwrap();
+    let _config = grokhub_agent::perm::ConfigGuard::set(&d);
+    crate::pulse::act(&d, &card.id, crate::pulse::Act::AddSkill, &day(), NOW).unwrap();
+    assert!(skill_ideas(&d).is_empty());
+    assert!(
+        !hx::skill_ledger_path(&d).exists(),
+        "nothing was written again"
+    );
+}

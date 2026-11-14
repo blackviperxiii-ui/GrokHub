@@ -691,7 +691,7 @@ impl ModelClient for Answer {
 }
 
 #[test]
-fn the_chat_review_runs_before_the_dream_on_the_same_look() {
+fn the_chat_review_runs_before_the_dream_and_the_dream_waits_a_look() {
     let d = temp_dir("review");
     app_json(&d, "{\"memory_backend\":\"amr\"}\n");
     repeat_notes(&d);
@@ -751,6 +751,28 @@ fn the_chat_review_runs_before_the_dream_on_the_same_look() {
                 ideas: 1,
                 patched: 0
             }),
+            dream: Dream::NotDue
+        })
+    );
+    // The dream waits for the next look, which reads busy again.
+    assert_eq!(
+        look(&d, PID, AT_305 + 5 * MIN, Some(0), true, &model, &mut state),
+        Look::Busy
+    );
+    assert!(!report(&d, "2026-10-07").exists());
+    assert_eq!(
+        look(
+            &d,
+            PID,
+            AT_305 + 10 * MIN,
+            Some(0),
+            false,
+            &model,
+            &mut state
+        ),
+        Look::Ran(Night {
+            lessons: false,
+            review: None,
             dream: Dream::Dreamed { card: false }
         })
     );
@@ -772,4 +794,23 @@ fn the_chat_review_runs_before_the_dream_on_the_same_look() {
         })
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_heartbeat_pace_that_is_off_spends_no_review_call() {
+    let d = temp_dir("pace-off");
+    app_json(
+        &d,
+        "{\"memory_backend\":\"amr\",\"heartbeat\":{\"maxPerDay\":0}}\n",
+    );
+    let off = pace(&d);
+    assert!(off.is_off(), "{off:?}");
+    assert_eq!(
+        run(&d, AT_3AM, 0, false, &mut NightState::default()),
+        Look::Ran(Night {
+            lessons: true,
+            review: None,
+            dream: Dream::Dreamed { card: false }
+        })
+    );
 }

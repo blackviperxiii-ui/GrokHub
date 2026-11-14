@@ -46,7 +46,9 @@ const REVIEW_RECOUNT_MS: u64 = 60 * 60 * 1000;
 /// What tonight's dream did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dream {
-    /// Before the dream hour, or it already ran tonight.
+    /// Before the dream hour, it already ran tonight, or the chat review
+    /// took this look (the dream waits for the next one, which checks
+    /// busy again).
     NotDue,
     /// Legacy memory mode: nothing to dream over, and no `amr/` is made.
     Legacy,
@@ -151,12 +153,17 @@ pub fn look(
         state.lessons_day = Some(today.clone());
         lessons = grokhub_agent::episode::lessons::dream_store(config_dir, now).is_ok();
     }
+    // A heartbeat pace that is off spends nothing proactive, as in the cabin.
     let review = (!busy
         && state.review_day.as_deref() != Some(today.as_str())
         && now >= state.review_after_ms
-        && !halted(config_dir, now))
+        && !halted(config_dir, now)
+        && !pace(config_dir).is_off())
     .then(|| review_tonight(config_dir, &today, &clock, hour, now, model, state));
-    if !due || state.dream_day.as_deref() == Some(today.as_str()) {
+    // The review's call can take a long while (a batched request waits for
+    // hours), so busy is stale by now: the dream waits for the next look.
+    let reviewed = matches!(review, Some(Reviewed::Ran { .. } | Reviewed::Held(_)));
+    if reviewed || !due || state.dream_day.as_deref() == Some(today.as_str()) {
         return Look::Ran(Night {
             lessons,
             review,

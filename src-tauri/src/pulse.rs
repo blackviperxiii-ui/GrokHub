@@ -903,8 +903,17 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             grokhub_core::mark_update_opened(&mut cards, id)
         }
         Act::AddSkill => {
-            add_skill(config_dir, &card)?;
+            // Checked before the ledger note, so a refusal changes nothing.
+            let (md, write) = skill_to_add(config_dir, &card)?;
             note(&card.title, LedgerReason::Accepted, &day.date)?;
+            if write {
+                grokhub_agent::skill_write::save_skill_logged(
+                    config_dir,
+                    &md,
+                    grokhub_agent::harness::Origin::User,
+                    "added from Suggested",
+                )?;
+            }
             grokhub_core::dismiss_idea(&mut cards, id)
         }
         Act::MoreLike => {
@@ -969,9 +978,14 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
     Ok(page(config_dir, &cards, now_ms))
 }
 
-/// Save a skill idea's skill, with the steps as the idea now reads them.
-/// A skill you already have by that name is left alone.
-fn add_skill(config_dir: &Path, card: &UpdateCard) -> Result<(), String> {
+/// A skill idea's skill, with the steps as the idea now reads them, and
+/// whether it still needs writing: `false` when that very skill is already
+/// saved (an earlier Add whose card stayed up). A different skill you
+/// already have by that name is left alone.
+fn skill_to_add(
+    config_dir: &Path,
+    card: &UpdateCard,
+) -> Result<(grokhub_core::SkillMd, bool), String> {
     let mut skill = card
         .skill
         .clone()
@@ -982,16 +996,14 @@ fn add_skill(config_dir: &Path, card: &UpdateCard) -> Result<(), String> {
     }
     let md = grokhub_core::skill_from_suggestion(&skill)
         .ok_or_else(|| "Need a real skill name and steps.".to_string())?;
-    let folder = grokhub_agent::skill_write::skill_folder(config_dir, &md.name);
-    if folder.join("SKILL.md").exists() {
-        return Err(format!("You already have a skill called {}.", md.name));
+    let path = grokhub_agent::skill_write::skill_folder(config_dir, &md.name).join("SKILL.md");
+    if !path.exists() {
+        return Ok((md, true));
     }
-    grokhub_agent::skill_write::save_skill_logged(
-        config_dir,
-        &md,
-        grokhub_agent::harness::Origin::User,
-        "added from Suggested",
-    )
+    match std::fs::read_to_string(&path) {
+        Ok(saved) if saved == grokhub_core::render_skill_md(&md) => Ok((md, false)),
+        _ => Err(format!("You already have a skill called {}.", md.name)),
+    }
 }
 
 /// More like this on a source post: topic weight, source nudge, related search, place.
