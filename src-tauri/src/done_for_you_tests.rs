@@ -151,14 +151,39 @@ fn pause_chips(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Set one job's failure streak, as runs that failed again would.
-fn set_streak(dir: &Path, id: &str, streak: u32) {
+/// One job's row in the file, changed in place, as a run or another part of
+/// the app would leave it (no ledger line).
+fn edit_row(dir: &Path, id: &str, edit: impl FnOnce(&mut serde_json::Value)) {
     let path = crate::automations::path(dir);
     let mut jobs: Vec<serde_json::Value> =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    let row = jobs.iter_mut().find(|j| j["id"] == json!(id)).unwrap();
-    row["health"]["failStreak"] = json!(streak);
+    edit(jobs.iter_mut().find(|j| j["id"] == json!(id)).unwrap());
     write_jobs(dir, &jobs);
+}
+
+/// `n` more runs that failed.
+fn fail_more(dir: &Path, id: &str, n: u32) {
+    edit_row(dir, id, |row| {
+        let streak = row["health"]["failStreak"].as_u64().unwrap_or(0) as u32;
+        let runs = row["runCount"].as_u64().unwrap_or(0) as u32;
+        row["health"]["failStreak"] = json!(streak + n);
+        row["runCount"] = json!(runs + n);
+    });
+}
+
+fn paused(id: &str, runs: u32) -> Paused {
+    Paused {
+        id: id.into(),
+        seq: 1,
+        runs,
+        key: "proactive:automation_disable".into(),
+        answered: true,
+    }
+}
+
+fn ran(mut a: Automation, runs: u32) -> Automation {
+    a.run_count = runs;
+    a
 }
 
 #[test]
@@ -205,10 +230,19 @@ fn only_a_running_job_failing_5_times_for_its_own_reason_can_be_paused() {
     ];
     assert_eq!(pausable(&shared, true, &[]), None);
     // A key, credit, rate or network error fails every job, even when only
-    // one job has run into it so far.
+    // one job has run into it so far. These are the lines the run loop and
+    // the model client write.
     for error in [
+        grokhub_agent::BUSY_GAVE_UP,
+        "transport: error sending request for url (https://openrouter.ai/api/v1/chat)",
+        "model stopped responding",
+        "stream disconnected before it completed",
+        "API key rejected (HTTP 401): invalid key",
+        "sign-in was rejected (HTTP 403): expired",
+        "rate limited: slow down",
+        "HTTP 503: upstream connect error",
+        "HTTP 402: payment required",
         "OpenRouter has no credits left.",
-        "HTTP 401 Unauthorized",
         "429 Too Many Requests",
         "request timed out",
         "503 Service Unavailable",
@@ -219,21 +253,41 @@ fn only_a_running_job_failing_5_times_for_its_own_reason_can_be_paused() {
             "{error}"
         );
     }
+    // Words and numbers that only look like one are the job's own errors.
+    for error in [
+        "HTTP 400: maximum context length is 131072 tokens, you requested 150043 tokens",
+        "The credit card statement PDF has no pages",
+        "Couldn't design in the sheet: tab Totals is missing",
+        "localhost:5000 returned an empty page",
+    ] {
+        assert_eq!(
+            pausable(&[auto("auto-a", true, 9, error)], true, &[]).map(|a| a.id.as_str()),
+            Some("auto-a"),
+            "{error}"
+        );
+    }
     assert_eq!(pausable(&[auto("auto-a", false, 9, "x")], true, &[]), None);
     assert_eq!(pausable(&list, false, &[]), None);
     // An id the ledger can't name as written is left alone.
     assert_eq!(pausable(&[auto("auto a", true, 9, "x")], true, &[]), None);
-    // Turned back on at a streak of 6: held until 5 more failures, and free
-    // again once it ran fine in between.
-    let resumed = [("auto-a".to_string(), 6)];
-    assert_eq!(pausable(&[auto("auto-a", true, 6, "x")], true, &resumed), None);
-    assert_eq!(pausable(&[auto("auto-a", true, 10, "x")], true, &resumed), None);
+    // Paused at run 20 and on again: held until 5 more runs, whatever the
+    // streak says, then free, also when it ran fine in between and the new
+    // streak is back at 5.
+    let once = [paused("auto-a", 20)];
+    let a = |streak, runs| ran(auto("auto-a", true, streak, "x"), runs);
+    assert_eq!(pausable(&[a(6, 20)], true, &once), None);
+    assert_eq!(pausable(&[a(10, 24)], true, &once), None);
     assert_eq!(
-        pausable(&[auto("auto-a", true, 11, "x")], true, &resumed).map(|a| a.id.as_str()),
+        pausable(&[a(11, 25)], true, &once).map(|a| a.id.as_str()),
         Some("auto-a")
     );
     assert_eq!(
-        pausable(&[auto("auto-a", true, 5, "x")], true, &resumed).map(|a| a.id.as_str()),
+        pausable(&[a(5, 31)], true, &once).map(|a| a.id.as_str()),
+        Some("auto-a")
+    );
+    // Another job's pause holds nothing back.
+    assert_eq!(
+        pausable(&[a(6, 20)], true, &[paused("auto-b", 20)]).map(|a| a.id.as_str()),
         Some("auto-a")
     );
 }
@@ -566,7 +620,7 @@ fn undo_on_the_card_turns_it_back_on_and_holds_the_next_pause() {
     let done = tick(&d, false, false).expect("a Done card");
     let seq = done.done_for_you.as_ref().unwrap().undo_ref;
 
-    let line = undo(&d, &done.id, clock()).unwrap();
+    let line = undo(&d, &done.id).unwrap();
     assert_eq!(line, "Turned \"Sync notes\" back on.");
     assert!(enabled(&d, "auto-sync"));
     let undo_line = ledger(&d).last().cloned().unwrap();
@@ -580,15 +634,18 @@ fn undo_on_the_card_turns_it_back_on_and_holds_the_next_pause() {
     assert_eq!(undos, vec!["proactive:automation_disable".to_string()]);
     assert!(card(&d, &done.id).done_for_you.unwrap().answered);
 
-    // Turned back on at 6 failures: the next pass leaves it alone, with no
-    // ask, and no Done card goes up.
+    // On again with its 6 failures from before: the next pass leaves it
+    // alone, with no ask, and no Done card goes up.
     let cards_before = crate::pulse::cards(&d).unwrap().len();
     let spans_before = spans(&d).len();
     assert_eq!(tick(&d, false, false), None);
     assert_eq!(spans(&d).len(), spans_before);
     assert!(enabled(&d, "auto-sync"));
-    // Five failures later it is a candidate again, and MindCheck asks first.
-    set_streak(&d, "auto-sync", 11);
+    // Five failed runs later it is a candidate again, and MindCheck asks first.
+    fail_more(&d, "auto-sync", 4);
+    assert_eq!(tick(&d, false, false), None);
+    assert_eq!(spans(&d).len(), spans_before);
+    fail_more(&d, "auto-sync", 1);
     assert_eq!(tick(&d, false, false), None);
     assert_eq!(
         decisions(&d).last().unwrap(),
@@ -599,7 +656,7 @@ fn undo_on_the_card_turns_it_back_on_and_holds_the_next_pause() {
 
     // A second Undo changes nothing.
     let ledger_len = ledger(&d).len();
-    assert_eq!(undo(&d, &done.id, clock()).unwrap(), ALREADY_ANSWERED);
+    assert_eq!(undo(&d, &done.id).unwrap(), ALREADY_ANSWERED);
     assert_eq!(ledger(&d).len(), ledger_len);
     assert_eq!(spans(&d).iter().filter(|s| s.decision == "undo").count(), 1);
     drain(&d);
@@ -633,7 +690,7 @@ fn undo_refuses_a_newer_change_and_a_job_that_is_gone() {
     .unwrap();
     let jobs = std::fs::read(&path).unwrap();
     assert_eq!(
-        undo(&d, &done.id, clock()),
+        undo(&d, &done.id),
         Err(crate::changes::CHANGED_SINCE.to_string())
     );
     assert_eq!(std::fs::read(&path).unwrap(), jobs);
@@ -642,7 +699,7 @@ fn undo_refuses_a_newer_change_and_a_job_that_is_gone() {
     // The job is gone: nothing to turn back on, and the card is answered.
     write_jobs(&d, &[]);
     assert_eq!(
-        undo(&d, &done.id, clock()).unwrap(),
+        undo(&d, &done.id).unwrap(),
         "That automation is gone, so there is nothing to turn back on."
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), "[]");
@@ -658,16 +715,21 @@ fn undo_keeps_what_changed_while_the_job_was_paused() {
     open(&d);
     let done = tick(&d, false, false).expect("a Done card");
     // Fixed on the Automations page while paused: no ledger line.
-    crate::automations::edit(&d, "auto-sync", "every day at 8am sync my notes folder", clock())
-        .unwrap();
+    crate::automations::edit(
+        &d,
+        "auto-sync",
+        "every day at 8am sync my notes folder",
+        clock(),
+    )
+    .unwrap();
     // And a run that failed again (as Run now would leave it).
-    set_streak(&d, "auto-sync", 7);
+    fail_more(&d, "auto-sync", 1);
     let edited = rows(&d).into_iter().find(|a| a.id == "auto-sync").unwrap();
     assert!(!edited.enabled);
     assert_ne!(edited.instructions, "Sync notes for me");
     let ledger_len = ledger(&d).len();
 
-    undo(&d, &done.id, clock()).unwrap();
+    undo(&d, &done.id).unwrap();
     let back = rows(&d).into_iter().find(|a| a.id == "auto-sync").unwrap();
     assert!(back.enabled);
     assert_eq!(back.name, edited.name);
@@ -679,7 +741,10 @@ fn undo_keeps_what_changed_while_the_job_was_paused() {
     assert!(back.next_run.is_some_and(|t| t > now() - 1_000));
     let lines = ledger(&d);
     assert_eq!(lines.len(), ledger_len + 1);
-    assert_eq!(lines.last().unwrap().undoes, Some(done.done_for_you.unwrap().undo_ref));
+    assert_eq!(
+        lines.last().unwrap().undoes,
+        Some(done.done_for_you.unwrap().undo_ref)
+    );
     drain(&d);
 }
 
@@ -699,9 +764,24 @@ fn turning_it_back_on_elsewhere_counts_as_the_same_undo() {
     let second = tick(&d, false, false).expect("second Done card");
     assert_eq!(second.done_for_you.as_ref().unwrap().target, "auto-mail");
 
-    // Settings > Behavior's Undo on the pause line.
-    crate::change_rows::undo(&d, "automation", "auto-sync").unwrap();
-    assert!(enabled(&d, "auto-sync"));
+    // Fixed on the Automations page while paused, then Settings >
+    // Behavior's Undo on the pause line: it comes back on with the fix.
+    crate::automations::edit(
+        &d,
+        "auto-sync",
+        "every day at 8am sync my notes folder",
+        clock(),
+    )
+    .unwrap();
+    let edited = rows(&d).into_iter().find(|a| a.id == "auto-sync").unwrap();
+    assert_eq!(
+        crate::change_rows::undo(&d, "automation", "auto-sync").unwrap(),
+        format!("Turned \"{}\" back on.", edited.name)
+    );
+    let back = rows(&d).into_iter().find(|a| a.id == "auto-sync").unwrap();
+    assert!(back.enabled);
+    assert_eq!(back.instructions, edited.instructions);
+    assert_eq!(back.times, edited.times);
     assert!(card(&d, &first.id).done_for_you.unwrap().answered);
     assert!(!card(&d, &second.id).done_for_you.unwrap().answered);
     assert_eq!(spans(&d).iter().filter(|s| s.decision == "undo").count(), 1);
@@ -755,14 +835,98 @@ fn turning_it_back_on_by_hand_counts_with_no_card_and_is_not_undone_next_pass() 
     crate::automations::set_enabled(&d, "auto-sync", true, clock()).unwrap();
     assert_eq!(undos(&d), 2);
 
-    // Both still show 5 or more failures, but the user just turned them on.
-    approvals(&d, crate::settings::Approvals::Always);
-    for _ in 0..3 {
-        approve_once(&d);
-    }
+    // Both still show 5 or more failures, but the user just turned them on:
+    // the pass holds them back itself, before MindCheck (no ask span).
+    let before = spans(&d).len();
     assert_eq!(tick(&d, false, false), None);
+    assert_eq!(spans(&d).len(), before);
     assert!(enabled(&d, "auto-sync"));
     assert!(enabled(&d, "auto-mail"));
+    drain(&d);
+}
+
+#[test]
+fn a_job_turned_back_on_outside_the_switch_is_heard_on_the_next_pass() {
+    let d = scratch("outside");
+    let _pin = grokhub_agent::perm::ConfigGuard::set(&*d);
+    write_jobs(&d, &[job("auto-sync", "Sync notes", true, 6, "disk full")]);
+    open(&d);
+    let done = tick(&d, false, false).expect("a Done card");
+    // Chat turns it back on with a new interval: the row changes, and no
+    // switch or Undo in this app ran.
+    edit_row(&d, "auto-sync", |row| {
+        row["enabled"] = json!(true);
+        row["time"] = json!("07:30");
+    });
+    let before = spans(&d).len();
+    assert_eq!(tick(&d, false, false), None);
+    assert!(enabled(&d, "auto-sync"));
+    let new: Vec<String> = spans(&d)[before..]
+        .iter()
+        .map(|s| s.decision.clone())
+        .collect();
+    assert_eq!(new, vec!["undo".to_string()]);
+    assert!(card(&d, &done.id).done_for_you.unwrap().answered);
+    assert_eq!(undo(&d, &done.id).unwrap(), ALREADY_ANSWERED);
+    // Heard once: the next pass adds nothing.
+    assert_eq!(tick(&d, false, false), None);
+    assert_eq!(spans(&d).len(), before + 1);
+    drain(&d);
+}
+
+#[test]
+fn undo_on_a_card_whose_job_is_already_on_again_counts_once() {
+    let d = scratch("already-on");
+    let _pin = grokhub_agent::perm::ConfigGuard::set(&*d);
+    write_jobs(&d, &[job("auto-sync", "Sync notes", true, 6, "disk full")]);
+    open(&d);
+    let done = tick(&d, false, false).expect("a Done card");
+    edit_row(&d, "auto-sync", |row| row["enabled"] = json!(true));
+    let ledger_len = ledger(&d).len();
+    assert_eq!(
+        undo(&d, &done.id).unwrap(),
+        "\"Sync notes\" is already back on."
+    );
+    assert_eq!(ledger(&d).len(), ledger_len);
+    let undos = |d: &Path| spans(d).iter().filter(|s| s.decision == "undo").count();
+    assert_eq!(undos(&d), 1);
+    assert!(card(&d, &done.id).done_for_you.unwrap().answered);
+    assert_eq!(tick(&d, false, false), None);
+    assert_eq!(undos(&d), 1);
+    drain(&d);
+}
+
+#[test]
+fn an_undo_that_leaves_the_job_off_teaches_nothing() {
+    let d = scratch("still-off");
+    let _pin = grokhub_agent::perm::ConfigGuard::set(&*d);
+    write_jobs(&d, &[job("auto-sync", "Sync notes", true, 6, "disk full")]);
+    open(&d);
+    let done = tick(&d, false, false).expect("a Done card");
+    // A newer ledger change while it is paused, then Settings > Behavior's
+    // Undo of that change: the job stays off.
+    let path = crate::automations::path(&d);
+    hx::record_change(
+        &d,
+        &hx::AutomationsFile {
+            path: &path,
+            id: "auto-sync",
+        },
+        hx::Origin::SelfManage,
+        "renamed it",
+        || {
+            edit_row(&d, "auto-sync", |row| {
+                row["name"] = json!("Sync notes daily")
+            });
+            Ok(())
+        },
+    )
+    .unwrap();
+    crate::change_rows::undo(&d, "automation", "auto-sync").unwrap();
+    assert!(!enabled(&d, "auto-sync"));
+    assert_eq!(rows(&d)[0].name, "Sync notes");
+    assert_eq!(spans(&d).iter().filter(|s| s.decision == "undo").count(), 0);
+    assert!(!card(&d, &done.id).done_for_you.unwrap().answered);
     drain(&d);
 }
 
