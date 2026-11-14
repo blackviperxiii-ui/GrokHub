@@ -96,9 +96,11 @@ import { Inbox } from "./Inbox";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
 import { PanelCard, panelActionText } from "./PanelCard";
+import { ChatFindBar } from "./ChatFind";
 import { findLabel, findRows, findStep, itemText } from "./chatFind";
 import { dialogOpen, isChatShortcut } from "./chatKeys";
-import { ChatFindBar } from "./ChatFind";
+import { splitSources } from "./replySources";
+import { SourceChips } from "./SourceChips";
 import {
   collapseAll,
   COLLAPSE,
@@ -463,13 +465,23 @@ const AssistantBubble = memo(function AssistantBubble({
   onMenu?: MenuAt;
 }) {
   // Capped like the cabin's bubble, so a runaway stream can't stall the page.
+  const shown = displayText(text);
+  // A list is only trailing once the reply stops, so it splits after the stream.
+  const split = streaming ? null : splitSources(shown);
   return (
     <div
       className={`bubble assistant${streaming ? " streaming" : ""}`}
       data-role="assistant"
       onContextMenu={contextMenuAt(onMenu)}
     >
-      <Markdown text={displayText(text)} />
+      {split ? (
+        <>
+          {split.answer && <Markdown text={split.answer} />}
+          <SourceChips sources={split.sources} />
+        </>
+      ) : (
+        <Markdown text={shown} />
+      )}
       {onMenu && <MoreButton onMenu={onMenu} />}
     </div>
   );
