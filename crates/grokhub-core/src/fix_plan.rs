@@ -498,8 +498,15 @@ pub fn fix_prompt(plan: &FixPlan) -> String {
 
 /// A diagnosis card's report: the full report to open, plus Fix it when the
 /// plan has steps. An empty plan (nothing to fix, or not fixable from here)
-/// offers nothing. The card's own title and line stay its headline.
-pub fn diagnosis_report(details: &str, plan: &PlanBuild) -> CardReport {
+/// offers nothing. The card's own title and line stay its headline, so a
+/// report that opens with the title drops that line.
+pub fn diagnosis_report(title: &str, details: &str, plan: &PlanBuild) -> CardReport {
+    let details = details.trim();
+    let title = title.trim();
+    let details = match details.split_once("\n\n") {
+        Some((first, rest)) if !title.is_empty() && first.trim().starts_with(title) => rest,
+        _ => details,
+    };
     let offers = match plan {
         PlanBuild::Plan(p) if !p.steps.is_empty() => vec![FixOffer {
             label: FIX_LABEL.into(),
@@ -659,8 +666,16 @@ mod tests {
             steps: vec!["Turn off unused plugins.".into(), "Restart the app.".into()],
         };
         let built = from_screen(&report);
-        let card = diagnosis_report("  Screen recording 0:07\n\nWhat I saw: slow.  ", &built);
-        assert_eq!(card.details, "Screen recording 0:07\n\nWhat I saw: slow.");
+        let card = diagnosis_report(
+            "Screen recording 0:07",
+            "  Screen recording 0:07\n\nWhat I saw: slow.\n\nThe recording is in /home/user/r.  ",
+            &built,
+        );
+        // The title is the card's headline already.
+        assert_eq!(
+            card.details,
+            "What I saw: slow.\n\nThe recording is in /home/user/r."
+        );
         assert_eq!(card.found, "");
         assert_eq!(card.summary, "");
         assert_eq!(card.offers.len(), 1);
@@ -683,13 +698,14 @@ mod tests {
             steps: vec!["Replace the display panel.".into()],
         });
         for built in [clean, unfixable] {
-            let card = diagnosis_report("The report.", &built);
+            let card = diagnosis_report("Screen recording 0:07", "The report.", &built);
             assert_eq!(card.details, "The report.");
             assert!(card.offers.is_empty(), "{built:?}");
         }
         let long = "x".repeat(DETAILS_MAX + 50);
         assert_eq!(
             diagnosis_report(
+                "",
                 &long,
                 &PlanBuild::Empty {
                     reason: String::new()
@@ -709,7 +725,7 @@ mod tests {
             summary: "s".into(),
             text: "Problems:\n- Mic muted.\nSuggested fixes:\n1. Unmute Mic in System Settings → Sound.\n".into(),
         };
-        let card = diagnosis_report(&report.text, &from_audio(&report));
+        let card = diagnosis_report("Audio check: Mic muted", &report.text, &from_audio(&report));
         assert_eq!(
             card.offers[0].prompt,
             "Fix what my audio check found, using the report's steps, one at a time:\n1. Unmute Mic in System Settings → Sound. (Undo: Mute it again in System Settings → Sound if you want the previous state.)\n\nBefore each step, say what it will change. Ask me before anything that changes settings, files or devices, and stop if a step fails. Tell me which steps I have to do by hand."

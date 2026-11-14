@@ -73,6 +73,7 @@ fn finish(
             );
             // The full report opens under the card, with Fix it when it has steps.
             card.pulse.report = Some(grokhub_core::fix_plan::diagnosis_report(
+                &report.card_title,
                 &report.text,
                 &grokhub_core::fix_plan::from_audio(&report),
             ));
@@ -386,7 +387,10 @@ mod tests {
         assert_eq!(post.source, "Audio check");
         // It opens to the full report, and Fix it asks the steps in its chat.
         let report = card.pulse.report.as_ref().expect("a report");
-        assert_eq!(report.details, text.trim());
+        // Its first line is the card's title, which the card already shows.
+        let (first, opened) = text.trim().split_once("\n\n").unwrap();
+        assert!(first.starts_with(&card.title), "{first}");
+        assert_eq!(report.details, opened);
         assert_eq!(post.chips[0].label, "Fix it");
         let seed = crate::pulse::offer(&dir, &card.id, 0, NOW).unwrap();
         assert_eq!(

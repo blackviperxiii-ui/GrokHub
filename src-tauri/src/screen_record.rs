@@ -592,6 +592,7 @@ fn report(
     if let Some(seen) = &found.report {
         // The full report opens under the card, with Fix it when it has steps.
         card.pulse.report = Some(fix_plan::diagnosis_report(
+            &title,
             &found.text,
             &fix_plan::from_screen(seen),
         ));
@@ -1027,9 +1028,11 @@ mod tests {
         let report = delivered[0]
             .1
             .trim_end_matches("\n\nTo keep the steps you showed as a skill, send /record --skill.");
+        let opened = report.strip_prefix(&format!("{title}\n\n")).unwrap();
+        assert!(opened.starts_with("What I saw: The settings menu opens slowly."));
         assert_eq!(
             cards[0].pulse.report.as_ref().map(|r| r.details.as_str()),
-            Some(report)
+            Some(opened)
         );
         let page = crate::pulse::load(&cfg, None, now_ms()).unwrap();
         let post = page.feed.iter().find(|p| p.id == cards[0].id).unwrap();
@@ -1042,7 +1045,7 @@ mod tests {
         );
         let carry = seed.carry.unwrap();
         assert!(
-            carry.contains(&format!("Full report:\n{report}")),
+            carry.contains(&format!("Full report:\n{opened}")),
             "{carry}"
         );
         let after = status();
@@ -1078,6 +1081,13 @@ mod tests {
             delivered[0].1
         );
         assert_eq!(status().diagnosing, None);
+        // Nothing was diagnosed, so the card has no report and no Fix it.
+        let card = crate::pulse::cards(&cfg)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.source_id.starts_with("screenrec:"))
+            .unwrap();
+        assert_eq!(card.pulse.report, None);
     }
 
     /// A second recording can start while Grok still looks at the first.

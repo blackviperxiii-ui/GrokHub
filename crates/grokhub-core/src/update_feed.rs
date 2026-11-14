@@ -4692,6 +4692,37 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             }]
         );
         assert_eq!(cards[0].runs, 2);
+        // The receipts keep their cap across folds.
+        for n in 0..crate::card_report::RECEIPTS_MAX as u64 {
+            crate::card_report::add_receipt(
+                &mut cards[0],
+                crate::card_report::CardReceipt {
+                    at_ms: 3_000 + n,
+                    what: format!("Run {n}"),
+                    result: Vec::new(),
+                },
+            );
+        }
+        let mut third = automation_report_card("a1", "Backup", "Copied 6 files.", 4_000);
+        crate::card_report::add_receipt(
+            &mut third,
+            crate::card_report::CardReceipt {
+                at_ms: 4_000,
+                what: "Newest".into(),
+                result: Vec::new(),
+            },
+        );
+        assert!(post_update(&mut cards, third));
+        let whats: Vec<String> = cards[0]
+            .pulse
+            .report
+            .as_ref()
+            .unwrap()
+            .receipts
+            .iter()
+            .map(|r| r.what.clone())
+            .collect();
+        assert_eq!(whats, vec!["Run 1", "Run 2", "Run 3", "Run 4", "Newest"]);
     }
 
     #[test]
