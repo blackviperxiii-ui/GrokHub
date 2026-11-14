@@ -33,6 +33,9 @@ pub struct Page {
     pub local_ready: bool,
     /// "3 calls sent off-device this week".
     pub sent: String,
+    /// The same week's count as a number for the top bar's pill; `None` while
+    /// the off-device log is sealed and the keyring is locked.
+    pub sent_calls: Option<u32>,
     /// The busiest hosts this week, most calls first.
     pub hosts: Vec<Host>,
     /// Personal memory and the logs are sealed with the keyring.
@@ -119,6 +122,7 @@ pub fn page(config_dir: &Path, lock: Option<Option<Locked>>, now_ms: u64) -> Pag
         offline_only: offline::enabled(),
         local_ready: grokhub_agent::route::local::installed(),
         sent: sent_line(calls),
+        sent_calls: calls,
         hosts,
         encrypted,
         encrypted_note,
@@ -263,8 +267,8 @@ mod tests {
         let dir = temp_dir("empty");
         let got = page(&dir, Some(None), NOW);
         assert_eq!(
-            (got.sent.as_str(), got.hosts, got.encrypted),
-            ("0 calls sent off-device this week", vec![], true)
+            (got.sent.as_str(), got.sent_calls, got.hosts, got.encrypted),
+            ("0 calls sent off-device this week", Some(0), vec![], true)
         );
         assert_eq!(got.data_folder, dir.display().to_string());
     }

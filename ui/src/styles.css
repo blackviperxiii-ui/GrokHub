@@ -766,6 +766,69 @@ select:focus-visible {
   min-width: 0;
 }
 
+/* The status pills: the default personality and what left the computer this
+   week. Red strokes and dots; amber stays on the one CTA. */
+.pills {
+  display: flex;
+  flex: none;
+  min-width: 0;
+  gap: 8px;
+}
+
+button.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border-color: var(--red);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-family-display);
+  font-size: var(--font-caption);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  white-space: nowrap;
+}
+
+button.pill:hover:not(:disabled),
+button.pill:focus-visible {
+  filter: none;
+  background: var(--hover);
+  box-shadow: var(--red-glow);
+}
+
+.pill-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+.pill-local .pill-dot {
+  background: var(--muted);
+}
+
+.pill-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Narrower windows keep each pill's value; the key stays for screen readers. */
+@media (max-width: 1099px) {
+  .pill-personality .pill-key {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 /* The left rail: icons only (each label stays for screen readers and the
    tooltip), More and Settings at the foot. It is never a scroll box:
    WebKitGTK's hit test misses buttons inside one, so no item would take a
@@ -4331,9 +4394,11 @@ button.primary:not(.quick-chip) {
   min-height: 0;
 }
 
-/* Phones: the logo stays, the name gives its room to the controls. */
+/* Phones: the logo stays, the name and the pills give their room to the
+   controls (Settings shows both). */
 @media (max-width: 600px) {
-  .brand-mark span {
+  .brand-mark span,
+  .pills {
     display: none;
   }
 }

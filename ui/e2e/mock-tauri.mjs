@@ -260,6 +260,7 @@ const EMPTY_PRIVACY = {
   offlineOnly: false,
   localReady: false,
   sent: "0 calls sent off-device this week",
+  sentCalls: 0,
   hosts: [],
   encrypted: true,
   encryptedNote: "Personal memory and the logs are sealed with your keyring.",

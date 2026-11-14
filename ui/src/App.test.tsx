@@ -55,6 +55,8 @@ const api = vi.hoisted(() => ({
   chipOutcome: vi.fn(() => Promise.resolve(true)),
   recordStatus: vi.fn<() => Promise<RecordStatus>>(() => Promise.resolve({ recording: null, listening: null, events: [] })),
   recordStop: vi.fn(() => Promise.resolve(false)),
+  getPrivacy: vi.fn(() => Promise.reject(new Error("not mocked"))),
+  getPersonalities: vi.fn(() => Promise.reject(new Error("not mocked"))),
 }));
 
 vi.mock("./api", async () => {
@@ -379,6 +381,28 @@ describe("App", () => {
     expect(view("Home")).toHaveFocus();
     await userEvent.keyboard("{Enter}");
     expect(await screen.findByText("Home page for the last chat")).toBeVisible();
+  });
+
+  it("the top bar's pills open Personality and Privacy & data, and the web app has no personality pill", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getPrivacy.mockResolvedValue({ offlineOnly: false, sent: "0 calls sent off-device this week", sentCalls: 0 } as never);
+    api.getPersonalities.mockResolvedValue({ current: "viper", presets: [{ id: "viper", name: "Viper" }] } as never);
+    const { unmount } = render(<App />);
+    const bar = document.querySelector(".topbar") as HTMLElement;
+    await userEvent.click(await within(bar).findByRole("button", { name: "Personality · Viper" }));
+    expect(await screen.findByText("Settings for a desktop at personality")).toBeInTheDocument();
+    await userEvent.click(within(bar).getByRole("button", { name: "Local · 0 sent" }));
+    expect(await screen.findByText("Settings for a desktop at privacy")).toBeInTheDocument();
+    unmount();
+
+    api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
+    render(<App />);
+    await waitFor(() => expect(api.getCapabilities).toHaveBeenCalledTimes(2));
+    const webBar = document.querySelector(".topbar") as HTMLElement;
+    expect(await within(webBar).findByRole("button", { name: "Local · 0 sent" })).toBeInTheDocument();
+    expect(within(webBar).queryByRole("button", { name: /^Personality/ })).toBeNull();
+    api.getPrivacy.mockImplementation(() => Promise.reject(new Error("not mocked")));
+    api.getPersonalities.mockImplementation(() => Promise.reject(new Error("not mocked")));
   });
 
   it("opens Devices, whose Web access link goes to that Settings section", async () => {

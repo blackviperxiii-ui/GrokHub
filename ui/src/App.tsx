@@ -57,6 +57,7 @@ import { applyTheme } from "./theme";
 import { inShell } from "./transport";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
 import { Rail } from "./Rail";
+import { StatusPills } from "./StatusPills";
 import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
 import { AutoNote, FirstRun, useAutoSetup } from "./AutoSetup";
 import { OnboardStage } from "./GetToKnowYou";
@@ -576,6 +577,11 @@ export function App() {
           <span>{PRODUCT_NAME}</span>
         </div>
         <div className="topbar-fill" />
+        <StatusPills
+          remote={Boolean(caps.remote)}
+          refresh={`${view === "settings"}:${busy}`}
+          onSettings={(section) => run({ kind: "settings", section })}
+        />
         {canHalt && haltShown(desktopOn, busy) && <HaltButton onHalt={halt} />}
         <ActivityDock
           items={[
