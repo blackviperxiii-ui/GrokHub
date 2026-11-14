@@ -362,9 +362,10 @@ fn drives() -> Vec<grokhub_core::disk::DiskUse> {
     system_state::local_drives(&system_state::OsProbe, &PlatformDirs::from_env())
 }
 
-/// This computer's GPUs and RAM, read at most every ten minutes.
-/// The PC Loadout tile on its own, for Chat's side column: the cached
-/// hardware read and temps, never a fresh slow read. A phone has no PC to show.
+/// The PC Loadout tile on its own, for Chat's side column as well as Home.
+/// It shares Home's caches: the hardware read is redone at most every ten
+/// minutes (the first call after launch does it), temps every 30 seconds and
+/// startup apps every ten minutes. A phone has no PC to show.
 pub fn pc_tile(config_dir: &Path) -> TileView {
     if cfg!(mobile) {
         TileView::unsupported(&on_pc())
@@ -373,6 +374,7 @@ pub fn pc_tile(config_dir: &Path) -> TileView {
     }
 }
 
+/// This computer's GPUs and RAM, read at most every ten minutes.
 fn machine(config_dir: &Path) -> local_ai::Machine {
     static SLOT: Mutex<Option<(Instant, local_ai::Machine)>> = Mutex::new(None);
     let mut slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());

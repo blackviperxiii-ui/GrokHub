@@ -308,14 +308,65 @@ describe("Home", () => {
     }
   });
 
-  it("a paired browser can't open This PC", async () => {
+  it("a paired browser gets no Details, and a Small PC tile taps Tune-up there", async () => {
     api.getHome.mockResolvedValue(PAGE);
     api.homePcDetails.mockReset().mockResolvedValue([]);
-    render(<Home {...routes()} remote />);
+    const go = routes();
+    const { unmount } = render(<Home {...go} remote />);
     const pc = await screen.findByRole("listitem", { name: "PC Loadout" });
-    await userEvent.click(within(pc).getByRole("button", { name: "Details" }));
+    expect(within(pc).getAllByRole("button").map((b) => b.textContent)).toEqual(["Tune-up"]);
+    unmount();
+
+    api.getHome.mockResolvedValue({
+      ...PAGE,
+      slots: PAGE.slots.map((s) => (s.module === "pc_loadout" ? { ...s, size: "small" } : s)),
+    });
+    render(<Home {...go} remote />);
+    const small = await screen.findByRole("listitem", { name: "PC Loadout" });
+    await userEvent.click(within(small).getByRole("button", { name: "RTX 4070" }));
+    expect(go.onAsk).toHaveBeenLastCalledWith("Check this PC and suggest a tune-up.");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(api.homePcDetails).not.toHaveBeenCalled();
+  });
+
+  it("This PC stops reading once rows land, shows a failed read, and leaves Esc to a window on top", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.getHome.mockResolvedValue(PAGE);
+      api.homePcDetails
+        .mockReset()
+        .mockResolvedValue([{ label: "Power", value: "Plugged in", tone: "normal", tap: null }]);
+      const { unmount } = render(<Home {...routes()} remote={false} />);
+      const pc = await screen.findByRole("listitem", { name: "PC Loadout" });
+      await userEvent.click(within(pc).getByRole("button", { name: "Details" }));
+      const sheet = await screen.findByRole("dialog", { name: "This PC" });
+      expect(await within(sheet).findByText("Plugged in")).toBeVisible();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(api.homePcDetails).toHaveBeenCalledTimes(1);
+
+      // Esc pressed in another window (the palette) is that window's.
+      const top = document.createElement("div");
+      top.setAttribute("role", "dialog");
+      top.tabIndex = -1;
+      document.body.append(top);
+      top.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      expect(screen.getByRole("dialog", { name: "This PC" })).toBeVisible();
+      const handled = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      handled.preventDefault();
+      window.dispatchEvent(handled);
+      expect(screen.getByRole("dialog", { name: "This PC" })).toBeVisible();
+      top.remove();
+      unmount();
+
+      api.homePcDetails.mockReset().mockRejectedValue("The hardware read failed.");
+      render(<Home {...routes()} remote={false} />);
+      const again = await screen.findByRole("listitem", { name: "PC Loadout" });
+      await userEvent.click(within(again).getByRole("button", { name: "Details" }));
+      const failed = await screen.findByRole("dialog", { name: "This PC" });
+      expect(await within(failed).findByRole("status")).toHaveTextContent("The hardware read failed.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a clip row plays that clip on the PC, by its place in the list", async () => {
