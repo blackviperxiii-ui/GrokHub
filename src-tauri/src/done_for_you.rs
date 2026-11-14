@@ -363,9 +363,29 @@ fn pill(config_dir: &Path) -> PillMode {
 }
 
 /// Halt after this run started: auto-acts stay off until the next start.
+/// Phones have no Halt and never run a pass.
+#[cfg(desktop)]
 fn halted(config_dir: &Path) -> bool {
     grokhub_core::desktop_mcp::read_halt_stamp_in(config_dir)
         .is_some_and(|at| at > grokhub_desktop::process_started_ms())
+}
+
+#[cfg(not(desktop))]
+fn halted(_config_dir: &Path) -> bool {
+    false
+}
+
+/// The window's UTC offset in minutes, as the scheduler last heard it; 0
+/// before it reports and on phones, which have no scheduler.
+pub fn utc_offset() -> i32 {
+    #[cfg(desktop)]
+    {
+        crate::scheduler::utc_offset().unwrap_or(0)
+    }
+    #[cfg(not(desktop))]
+    {
+        0
+    }
 }
 
 fn ceiling_ctx(

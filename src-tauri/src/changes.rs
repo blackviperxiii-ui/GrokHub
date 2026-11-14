@@ -289,7 +289,7 @@ fn undo_pause_as(
 ) -> Result<Automation, String> {
     let path = crate::automations::path(config_dir);
     let now = grokhub_core::now_ms();
-    let clock = crate::scheduler::local_clock(now, crate::scheduler::utc_offset().unwrap_or(0));
+    let clock = grokhub_core::LocalClock::at_offset(now, crate::done_for_you::utc_offset());
     let mut back = None;
     crate::automations::with_store(config_dir, |_| {
         let target = hx::AutomationsFile { path: &path, id };

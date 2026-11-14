@@ -106,7 +106,7 @@ pub fn view(config_dir: &Path) -> View {
             held: crate::done_for_you::held(
                 config_dir,
                 grokhub_core::now_ms(),
-                crate::scheduler::utc_offset().unwrap_or(0),
+                crate::done_for_you::utc_offset(),
             ),
         },
     }
