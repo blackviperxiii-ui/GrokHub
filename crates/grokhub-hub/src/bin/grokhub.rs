@@ -27,8 +27,16 @@ fn forwards(args: &[String]) -> bool {
         && args.get(1).map(String::as_str) == Some("local");
     bench
         || args.iter().any(|a| {
-            a.starts_with("--mcp-")
-                || matches!(a.as_str(), "--doctor" | "--oauth" | "--update" | "--hub")
+            matches!(
+                a.as_str(),
+                "--mcp-self"
+                    | "--mcp-desktop"
+                    | "--mcp-cua"
+                    | "--doctor"
+                    | "--oauth"
+                    | "--update"
+                    | "--hub"
+            )
         })
 }
 
@@ -97,6 +105,9 @@ mod tests {
         assert!(!forwards(&args(&["--tray"])));
         assert!(!forwards(&args(&["--doctor-ish"])));
         assert!(!forwards(&args(&["--oauth-ish"])));
+        // A mistyped tool name would start the LAN hub, so it never forwards.
+        assert!(!forwards(&args(&["--mcp-selfx"])));
+        assert!(!forwards(&args(&["--mcp-desk"])));
     }
 
     #[test]

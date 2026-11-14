@@ -1110,6 +1110,10 @@ fn cancel_chat(state: State<'_, ShellState>, conversation_id: String) {
 /// reply at its next step. False when that chat has no reply running.
 #[tauri::command]
 fn steer_chat(state: State<'_, ShellState>, conversation_id: String, text: String) -> bool {
+    // A research line needs a turn of its own, so it stays in line.
+    if grokhub_agent::research::is_command(&text) {
+        return false;
+    }
     state
         .chats
         .lock()

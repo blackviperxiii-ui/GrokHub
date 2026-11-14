@@ -4,7 +4,8 @@
 
 const COMMAND: &str = "/deep-research";
 
-const RECIPE: &str = "Deep research: the person's message is /deep-research followed by \
+pub(crate) const RECIPE: &str =
+    "Deep research: the person's message is /deep-research followed by \
 what to research. Work in this order, then answer.\n\
 \n\
 1. Plan a few distinct questions that cover the query. Each question needs its own evidence.\n\
@@ -89,8 +90,9 @@ mod tests {
         }
     }
 
-    /// The newest user turn after one run: its notes and the words shown.
-    fn newest_turn(ask: &str, name: &str) -> (String, String) {
+    /// The newest user turn after a run of each ask in one chat: its notes
+    /// and the words shown.
+    fn newest_turn(asks: &[&str], name: &str) -> (String, String) {
         let dir = std::env::temp_dir().join(format!(
             "gh-research-{name}-{}-{}",
             std::process::id(),
@@ -125,7 +127,9 @@ mod tests {
             shared_desktop: None,
         };
         let mut history = Vec::new();
-        crate::run_loop(&input, &mut history, ask, None, &mut |_| {});
+        for ask in asks {
+            crate::run_loop(&input, &mut history, ask, None, &mut |_| {});
+        }
         let text = history
             .iter()
             .rev()
@@ -143,12 +147,39 @@ mod tests {
 
     #[test]
     fn a_research_turn_carries_the_recipe_and_keeps_the_line_as_typed() {
-        let (notes, words) = newest_turn("/deep-research harbor tides", "on");
+        let (notes, words) = newest_turn(&["/deep-research harbor tides"], "on");
         assert!(notes.contains(RECIPE), "{notes}");
         assert_eq!(words, "/deep-research harbor tides");
-        let (plain, words) = newest_turn("what are harbor tides", "off");
+        let (plain, words) = newest_turn(&["what are harbor tides"], "off");
         assert!(!plain.contains("Deep research:"), "{plain}");
         assert_eq!(words, "what are harbor tides");
+    }
+
+    #[test]
+    fn the_turn_after_research_says_the_recipe_is_old() {
+        let (notes, words) = newest_turn(&["/deep-research harbor tides", "thanks"], "after");
+        assert!(
+            notes.starts_with(crate::prefix_cache::SUPERSEDES_NOTE),
+            "{notes}"
+        );
+        assert!(!notes.contains(RECIPE), "{notes}");
+        assert_eq!(words, "thanks");
+    }
+
+    #[test]
+    fn a_research_line_never_runs_as_a_desktop_episode() {
+        assert!(!crate::events::runs_as_episode(
+            true,
+            "/deep-research harbor tides"
+        ));
+        assert!(crate::events::runs_as_episode(
+            true,
+            "open the settings app"
+        ));
+        assert!(!crate::events::runs_as_episode(
+            false,
+            "open the settings app"
+        ));
     }
 
     #[test]

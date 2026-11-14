@@ -96,13 +96,12 @@ pub fn plan_room(utterance: &str, home: &str) -> RoomPlan {
     let stripped = u.trim_start_matches(|_c| false).to_string();
     let stripped = strip_stage_prefix(&stripped);
     let slug = slugify(if stripped.is_empty() { "lab" } else { stripped });
+    // Whole words, so `docker` or `doctor` get a room of their own.
     let docs_only = {
         let l = u.to_ascii_lowercase();
-        l.contains("doc")
-            && !(l.contains("flash")
-                || l.contains("lab")
-                || l.contains("firmware")
-                || l.contains("code"))
+        let words: Vec<&str> = l.split(|c: char| !c.is_ascii_alphanumeric()).collect();
+        let has = |names: &[&str]| words.iter().any(|w| names.contains(w));
+        has(&["doc", "docs", "documentation"]) && !has(&["flash", "lab", "firmware", "code"])
     };
     let workspace = if docs_only {
         "docs".into()
@@ -158,9 +157,20 @@ fn slugify(s: &str) -> String {
     let s: String = s.chars().take(40).collect();
     if s.is_empty() {
         "room".into()
+    } else if is_windows_device_name(&s) {
+        // `nul` or `com1` can't be a folder on Windows.
+        format!("{s}-room")
     } else {
         s
     }
+}
+
+fn is_windows_device_name(s: &str) -> bool {
+    matches!(s, "con" | "prn" | "aux" | "nul")
+        || ["com", "lpt"].iter().any(|p| {
+            s.strip_prefix(p)
+                .is_some_and(|n| n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9'))
+        })
 }
 
 fn sh_single(s: &str) -> String {
@@ -479,6 +489,15 @@ mod tests {
         assert_eq!(g.last_fail.as_deref(), Some("verify fail"));
         let r = plan_room("stage a docs desk", "/home/user");
         assert_eq!(r.workspace, "docs");
+        assert_eq!(plan_room("docker", "/home/user").workspace, "docker");
+        assert_eq!(
+            plan_room("doctor visits", "/home/user").workspace,
+            "doctor-visits"
+        );
+        assert_eq!(plan_room("docs lab", "/home/user").workspace, "docs-lab");
+        assert_eq!(plan_room("nul", "/home/user").workspace, "nul-room");
+        assert_eq!(plan_room("COM1", "/home/user").workspace, "com1-room");
+        assert_eq!(plan_room("com10", "/home/user").workspace, "com10");
         assert_eq!(r.project_rel, "GrokHub-Work/docs");
         assert!(
             r.host_script.contains("'/home/user/GrokHub-Work/docs'"),

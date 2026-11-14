@@ -160,11 +160,19 @@ pub fn steering_changed(items: &[InputItem], volatile: &TurnVolatile) -> bool {
     }) else {
         return false;
     };
+    // The research recipe steers only its own turn: a turn without it says
+    // the earlier notes are old.
+    let research_ended = notes.contains(crate::research::RECIPE)
+        && !volatile
+            .intentions
+            .as_deref()
+            .is_some_and(|block| block.contains(crate::research::RECIPE));
     !notes.is_empty()
-        && [&volatile.style, &volatile.playbook]
-            .into_iter()
-            .flatten()
-            .any(|block| !notes.contains(block.as_str()))
+        && (research_ended
+            || [&volatile.style, &volatile.playbook]
+                .into_iter()
+                .flatten()
+                .any(|block| !notes.contains(block.as_str())))
 }
 
 pub fn push_stable_system(history: &mut Vec<InputItem>, stable_system: &str) {
