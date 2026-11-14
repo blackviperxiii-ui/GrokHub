@@ -266,8 +266,8 @@ async function main() {
     const box = page.getByRole("textbox", { name: "Message" });
     await box.waitFor({ timeout: 30000 });
     check(!page.url().includes("code="), `the pairing code stayed in the address: ${page.url()}`);
-    const tabs = await page.locator("nav.tabs button").allTextContents();
-    console.log(`paired; tabs=${tabs.join(",")}`);
+    const tabs = await page.locator("nav.rail button").allTextContents();
+    console.log(`paired; rail=${tabs.join(",")}`);
     check(tabs.includes("Pulse"), "the web app hid Pulse");
 
     await box.fill(PROMPT);
@@ -286,11 +286,11 @@ async function main() {
       screen: document.documentElement.clientWidth,
     }));
     check(wide.page <= wide.screen, `the chat is wider than a phone: ${JSON.stringify(wide)}`);
-    // The views bar sits over the bottom edge; Send must stay clickable. The
-    // page makes room for the bar with a short transition, so wait for it.
+    // The rail sits over the bottom edge; Send must stay clickable. The page
+    // makes room for the rail with a short transition, so wait for it.
     await page.waitForFunction(() => {
       const room = parseFloat(getComputedStyle(document.querySelector(".app")).paddingBottom);
-      return room >= document.querySelector(".topbar").getBoundingClientRect().height;
+      return room >= document.querySelector(".rail").getBoundingClientRect().height;
     });
     const covered = await page.evaluate(() => {
       const send = document.querySelector("form.composer button[type='submit']");
@@ -299,17 +299,17 @@ async function main() {
       return send.contains(hit) ? "" : (hit?.outerHTML.slice(0, 80) ?? "nothing");
     });
     check(covered === "", `the views bar covers Send on a phone: ${covered}`);
-    // One row: no tab spills out of the bar over the page.
+    // One row: no rail item spills out of the bar over the page.
     const spill = await page.evaluate(() => {
-      const bar = document.querySelector(".topbar").getBoundingClientRect();
-      return [...document.querySelectorAll("nav.tabs button")]
+      const bar = document.querySelector(".rail").getBoundingClientRect();
+      return [...document.querySelectorAll("nav.rail button")]
         .map((b) => b.getBoundingClientRect())
         .filter((r) => r.top < bar.top - 1 || r.bottom > bar.bottom + 1).length;
     });
     check(spill === 0, `${spill} tab(s) spill out of the phone's views bar`);
     await page.setViewportSize({ width: 1280, height: 720 });
 
-    await page.locator("nav.tabs button", { hasText: "Pulse" }).click();
+    await page.locator("nav.rail button", { hasText: "Pulse" }).click();
     const post = page.getByRole("listitem", { name: POST_TITLE });
     await post.getByRole("button", { name: "Open image 1" }).waitFor({ timeout: 30000 });
     await post.getByRole("button", { name: "Like", exact: true }).click();
@@ -337,15 +337,17 @@ async function main() {
 
     // Every view renders on what the desktop sends; a missing field here
     // once blanked the whole page.
+    // They are not on the rail: More lists them.
     for (const view of ["Automations", "Connectors", "Personal"]) {
-      await page.locator("nav.tabs button", { hasText: view }).click();
-      await page.getByRole("button", { name: "Chat" }).waitFor({ timeout: 10000 });
+      await page.locator("nav.rail button.rail-more").click();
+      await page.getByRole("dialog", { name: "More pages" }).getByRole("option", { name: view, exact: true }).click();
+      await page.getByRole("button", { name: "Chat", exact: true }).waitFor({ timeout: 10000 });
     }
     await page.getByLabel("Add something about you").waitFor({ timeout: 10000 });
     check((await page.getByRole("button", { name: "Wipe everything" }).count()) === 0, "the web app offered Wipe");
     console.log("automations, personal and connectors render");
 
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByText("Change settings and the API key there.").waitFor();
     check((await page.getByLabel("API key").count()) === 0, "the web app offered to set the key");
     await page.getByText("0 calls sent off-device this week").waitFor();

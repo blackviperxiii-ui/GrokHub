@@ -87,41 +87,52 @@ describe("styles.css OS-dark fallback", () => {
   });
 });
 
-// The window opens 900px wide (src-tauri/tauri.conf.json), where the tabs fold
-// to icons. Fifteen of them, the brand, the Activity dock and Command are wider
-// than that, so the icons wrap to a second row: a page that scrolls sideways
-// puts a scrollbar along the window's bottom edge, over the composer's Send,
-// and a views bar that scrolls in place takes no clicks in WebKitGTK. The shell
-// smoke checks the real width and clicks the tabs.
-describe("styles.css views bar in a narrow window", () => {
-  const narrow = mediaBlocks(CSS, "(max-width: 900px)").find((b) => b.includes(".tab-label")) ?? "";
-
-  it("wraps the icons to another row instead of widening the page", () => {
-    const tabs = rule(narrow, ".tabs {");
-    expect(tabs).toContain("flex-wrap: wrap;");
-    expect(tabs).toContain("min-width: 0;");
-  });
-
-  it("keeps the tab row out of scroll boxes, where WebKitGTK cannot click its tabs", () => {
-    expect(rule(narrow, ".tabs {")).not.toMatch(/overflow/);
-    const base = rule(CSS, ".tabs {");
+// The views live on a left rail. The window opens 900px wide
+// (src-tauri/tauri.conf.json) and can be as short as 360px, so the rail and the
+// top bar must never widen the page (a page that scrolls sideways puts a
+// scrollbar along the window's bottom edge, over the composer's Send) and the
+// rail must never be a scroll box: WebKitGTK's hit test misses buttons inside
+// an overflow container, so no view would take a click. The shell smoke checks
+// the real width and clicks the rail.
+describe("styles.css views rail and top bar", () => {
+  it("lays the rail out as a column that is never a scroll box", () => {
+    const base = rule(CSS, ".rail {");
     expect(base).toContain("display: flex;");
+    expect(base).toContain("flex-direction: column;");
+    expect(base).toContain("flex: none;");
     expect(base).not.toMatch(/overflow/);
+    for (const block of mediaBlocks(CSS, "(max-height: 560px)")) expect(rule(block, ".rail {")).not.toMatch(/overflow/);
   });
 
-  it("keeps each tab at its own width so a row wraps rather than squashing icons", () => {
-    expect(rule(narrow, ".tabs button {")).toContain("flex: none;");
+  it("shrinks the rail's buttons in a short window instead of scrolling it", () => {
+    const short = mediaBlocks(CSS, "(max-height: 560px)").find((b) => b.includes(".rail button {")) ?? "";
+    expect(rule(short, ".rail button {")).toContain("width: 32px;");
+    expect(rule(short, ".rail button {")).toContain("height: 32px;");
   });
 
-  // A phone also matches the 900px query. The phone bar is one fixed 52px row,
-  // so the last phone rule for .tabs must come after the wrap and undo it, or
-  // the icons stack into rows over the composer.
-  it("keeps the phone bar on one row after the narrow-window wrap", () => {
-    const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
-    const phones = mediaBlocks(CSS, "(max-width: 600px)").filter((b) => rule(b, ".tabs {") !== "");
+  it("keeps each rail label for screen readers and the tooltip, out of sight", () => {
+    const label = rule(CSS, ".rail-label {");
+    expect(label).toContain("position: absolute;");
+    expect(label).toContain("clip-path: inset(50%);");
+  });
+
+  it("keeps the top bar on one row that gives way rather than widening the page", () => {
+    const bar = rule(CSS, ".topbar {");
+    expect(bar).toContain("flex-wrap: nowrap;");
+    expect(bar).toContain("min-width: 0;");
+    expect(rule(CSS, ".topbar-fill {")).toContain("min-width: 0;");
+  });
+
+  // On a phone the rail is one fixed 52px row at the bottom; it must not wrap
+  // into rows over the composer or scroll in place.
+  it("turns the rail into one fixed row at the bottom of a phone", () => {
+    const phones = mediaBlocks(CSS, "(max-width: 600px)").filter((b) => rule(b, ".rail {") !== "");
     const last = phones[phones.length - 1] ?? "";
-    expect(bare.indexOf(last)).toBeGreaterThan(bare.indexOf(narrow));
-    expect(rule(last, ".tabs {")).toContain("flex-wrap: nowrap;");
+    const row = rule(last, ".rail {");
+    expect(row).toContain("position: fixed;");
+    expect(row).toContain("flex-direction: row;");
+    expect(row).toContain("flex-wrap: nowrap;");
+    expect(row).not.toMatch(/overflow/);
   });
 
   it("gives the phone composer textarea a full row above its buttons", () => {

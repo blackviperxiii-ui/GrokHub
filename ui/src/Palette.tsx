@@ -154,7 +154,7 @@ export function pageViews(caps: Capabilities): View[] {
   const at = tabs.indexOf("home") + 1;
   const pages: View[] = [...tabs.slice(0, at), "objectives", ...tabs.slice(at)];
   const code = pages.indexOf("code");
-  const withCommand = code < 0 ? pages : [...pages.slice(0, code + 1), "command", ...pages.slice(code + 1)];
+  const withCommand: View[] = code < 0 ? pages : [...pages.slice(0, code + 1), "command", ...pages.slice(code + 1)];
   if (caps.remote) return withCommand;
   const settings = withCommand.indexOf("settings");
   return [...withCommand.slice(0, settings), "updates", ...withCommand.slice(settings)];

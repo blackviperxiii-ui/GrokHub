@@ -33,6 +33,8 @@ const VITE_BIN = join(ROOT, "node_modules", "vite", "bin", "vite.js");
 const VIEWPORTS = [
   { name: "wide", width: 1600, height: 900 },
   { name: "mid", width: 1100, height: 720 },
+  // The window's default size (src-tauri/tauri.conf.json).
+  { name: "narrow", width: 900, height: 700 },
 ];
 
 const THEMES = [
@@ -164,9 +166,12 @@ async function run() {
     const browser = await chromium.launch({ headless: true });
     const manifest = [];
     const outlines = [];
-    // Records the gray outlines on the screen that is open now.
+    // Records the gray outlines on the screen that is open now, and whether
+    // the page scrolls sideways (a scrollbar over the composer).
     const check = async (page, where) => {
       for (const hit of await page.evaluate(sweep)) outlines.push({ where, ...hit });
+      const [wide, fits] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+      if (wide > fits) errors.push(`${where}: the page scrolls sideways, ${wide}px wide in a ${fits}px window`);
     };
     try {
       for (const theme of THEMES) {
@@ -213,16 +218,30 @@ async function run() {
               manifest.push({ file, theme: theme.id, viewport: vp.name, view });
             }
           }
-          // The rest of the views bar: swept, not shot.
+          // The rest of the rail, then every page More lists: swept, not shot.
           const shot = new Set(VIEWS.map((v) => (v === "settings" ? "Settings" : v[0].toUpperCase() + v.slice(1))));
-          const labels = await page
-            .getByRole("navigation", { name: "Views" })
+          const slug = (label) => `${theme.label}_${vp.name}_${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+          const rail = page.getByRole("navigation", { name: "Views" });
+          const labels = await rail
             .getByRole("button")
             .evaluateAll((buttons) => buttons.map((b) => b.getAttribute("title") || b.textContent.trim()));
-          for (const label of labels.filter((l) => !shot.has(l))) {
+          for (const label of labels.filter((l) => !shot.has(l) && l !== "More")) {
             at = label;
             await openTab(page, label);
-            await check(page, `${theme.label}_${vp.name}_${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
+            await check(page, slug(label));
+          }
+          at = "More";
+          await rail.getByRole("button", { name: "More", exact: true }).click({ timeout: 15_000 });
+          const more = page.getByRole("dialog", { name: "More pages" });
+          const pages = await more.getByRole("option").allTextContents();
+          await check(page, slug("more"));
+          await page.keyboard.press("Escape");
+          for (const label of pages) {
+            at = label;
+            await rail.getByRole("button", { name: "More", exact: true }).click({ timeout: 15_000 });
+            await more.getByRole("option", { name: label, exact: true }).click({ timeout: 15_000 });
+            await sleep(400);
+            await check(page, slug(label));
           }
           await context.close();
         }

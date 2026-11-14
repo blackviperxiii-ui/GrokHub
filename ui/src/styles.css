@@ -562,7 +562,6 @@ button.quiet:disabled,
 button.link:disabled,
 .chip:disabled,
 .quick-chip:disabled,
-.tabs button:disabled,
 .switch button:disabled,
 .settings-nav button:disabled,
 .settings-tabs button:disabled {
@@ -576,7 +575,6 @@ button.link:disabled,
 }
 
 button.quiet,
-.tabs button,
 .switch button,
 .settings-nav button,
 .settings-tabs button {
@@ -586,7 +584,6 @@ button.quiet,
 }
 
 button.quiet:hover:not(:disabled),
-.tabs button:hover:not(:disabled),
 .switch button:hover:not(:disabled),
 .settings-nav button:hover:not(:disabled),
 .settings-tabs button:hover:not(:disabled) {
@@ -602,9 +599,9 @@ button.quiet:hover:not(:disabled),
   box-shadow: none;
 }
 
-/* Tabs (the views bar, chat tabs, Pulse's views): the open one is a red
-   stroke over a red-tinted fill with an amber underline, never an amber box. */
-.tabs button[aria-pressed="true"],
+/* Tabs (the rail, chat tabs, Pulse's views): the open one is a red stroke
+   over a red-tinted fill with an amber underline, never an amber box. */
+.rail button[aria-current="page"],
 .pulse-head .switch button[aria-pressed="true"],
 .chat-tab[aria-selected="true"],
 .settings-tabs button[aria-pressed="true"],
@@ -615,7 +612,7 @@ button.quiet:hover:not(:disabled),
   box-shadow: inset 0 -2px 0 var(--amber);
 }
 
-.tabs button[aria-pressed="true"]:hover:not(:disabled),
+.rail button[aria-current="page"]:hover:not(:disabled),
 .pulse-head .switch button[aria-pressed="true"]:hover:not(:disabled),
 .chat-tab[aria-selected="true"]:hover:not(:disabled),
 .settings-tabs button[aria-pressed="true"]:hover:not(:disabled) {
@@ -623,12 +620,14 @@ button.quiet:hover:not(:disabled),
   box-shadow: inset 0 -2px 0 var(--amber), var(--red-glow);
 }
 
-/* The side nav runs down the page, so its open item carries the amber bar on
-   the left instead of underneath. */
+/* The rail and the side nav run down the page, so their open item carries
+   the amber bar on the left instead of underneath. */
+.rail button[aria-current="page"],
 .settings-nav button[aria-pressed="true"] {
   box-shadow: inset 2px 0 0 var(--amber);
 }
 
+.rail button[aria-current="page"]:hover:not(:disabled),
 .settings-nav button[aria-pressed="true"]:hover:not(:disabled) {
   background: var(--tab-open-bg);
   box-shadow: inset 2px 0 0 var(--amber), var(--red-glow);
@@ -727,25 +726,109 @@ select:focus-visible {
   }
 }
 
-.app > div:not([hidden]) {
+/* The shell: the slim top bar, then the rail beside the open page. */
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+}
+
+.views {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  gap: 12px;
+}
+
+.views > div:not([hidden]) {
   flex: 1;
   min-height: 0;
   display: flex;
 }
 
+/* One row that never wraps or widens the page: the fill between the brand
+   and the controls gives way first. */
 .topbar {
   display: flex;
   gap: 8px;
-  align-items: flex-start;
-  padding-bottom: 12px;
+  align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
+  padding-bottom: 8px;
   border-bottom: 1px solid var(--red-dim);
 }
 
-.tabs {
-  display: flex;
+.topbar-fill {
   flex: 1;
-  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* The left rail: icons only (each label stays for screen readers and the
+   tooltip), More and Settings at the foot. It is never a scroll box:
+   WebKitGTK's hit test misses buttons inside one, so no item would take a
+   click. Short windows shrink the buttons instead (below). */
+.rail {
+  display: flex;
+  flex-direction: column;
+  flex: none;
   gap: 4px;
+  padding: 8px 12px 8px 0;
+  border-right: 1px solid var(--red-dim);
+}
+
+.rail button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  border-color: transparent;
+}
+
+.rail button:hover:not(:disabled),
+.rail button:focus-visible {
+  filter: none;
+  color: var(--text);
+  background: var(--hover);
+  border-color: var(--red);
+}
+
+.rail-end {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: auto;
+}
+
+.rail-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-height: 560px) {
+  .rail button {
+    width: 32px;
+    height: 32px;
+  }
+
+  .rail,
+  .rail-end {
+    gap: 2px;
+  }
+
+  .rail {
+    padding-block: 4px;
+  }
 }
 
 .palette-open {
@@ -760,9 +843,9 @@ select:focus-visible {
   border-color: var(--red);
 }
 
-/* Phones: the views bar sits at the bottom in one row and slides away while
-   the user scrolls down (tabBar.ts). Its space is released with it, so
-   nothing stays hidden behind it. */
+/* Phones: the rail sits at the bottom in one row and slides away while the
+   user scrolls down (tabBar.ts). Its space is released with it, so nothing
+   stays hidden behind it. The top bar stays at the top. */
 @media (max-width: 600px) {
   .app {
     --tabbar: 52px;
@@ -774,7 +857,7 @@ select:focus-visible {
     padding-bottom: 12px;
   }
 
-  .topbar {
+  .rail {
     position: fixed;
     left: 0;
     right: 0;
@@ -782,26 +865,24 @@ select:focus-visible {
     z-index: 5;
     box-sizing: border-box;
     height: calc(var(--tabbar) + env(safe-area-inset-bottom));
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: space-between;
     align-items: center;
     padding: 0 12px env(safe-area-inset-bottom);
     background: var(--panel);
     border-top: 1px solid var(--border);
-    border-bottom: none;
+    border-right: none;
     transition: transform 200ms ease;
   }
 
-  .bar-away .topbar {
+  .rail-end {
+    flex-direction: row;
+    margin-top: 0;
+  }
+
+  .bar-away .rail {
     transform: translateY(100%);
-  }
-
-  .tabs {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-  }
-
-  .tabs button,
-  .palette-open {
-    flex: none;
   }
 
   /* These scroll the window on wider screens; here they scroll inside the
@@ -817,7 +898,7 @@ select:focus-visible {
 
 @media (max-width: 600px) and (prefers-reduced-motion: reduce) {
   .app,
-  .topbar {
+  .rail {
     transition: none;
   }
 }
@@ -3630,12 +3711,11 @@ label.toggle-row {
 }
 
 /* Activity Dock: what the agent is running, what waits on the user, and
-   what just finished. It sits in the views bar, so every view shows it; the
+   what just finished. It sits in the top bar, so every view shows it; the
    list drops down from it. */
 .activity-dock {
   position: relative;
   flex: none;
-  margin-left: auto;
 }
 
 .activity-dock + .palette-open {
@@ -3792,7 +3872,6 @@ label.toggle-row {
 .notice-bell {
   position: relative;
   flex: none;
-  margin-left: auto;
 }
 
 .activity-dock + .notice-bell,
@@ -3878,8 +3957,8 @@ label.toggle-row {
   color: var(--danger-text);
 }
 
-/* Phones: the bar is at the bottom, so the dock is a dot and a count and its
-   list opens upward across the screen. */
+/* Phones: the dock is a dot and a count, and its list opens across the
+   screen, above the rail at the bottom. */
 @media (max-width: 600px) {
   .activity-label {
     display: none;
@@ -3928,7 +4007,7 @@ label.toggle-row {
 
 /* Switching views: the incoming screen eases up. Chat and Automations stay
    mounted and are shown and hidden, which also restarts the animation. */
-.app > :is(div, section):not(.topbar, .palette-backdrop, [hidden]) {
+.views > :is(div, section):not(.palette-backdrop, [hidden]) {
   animation: view-in var(--t-base) var(--ease-out) backwards;
 }
 
@@ -3989,7 +4068,8 @@ label.toggle-row {
     animation: dot-pulse 1.6s var(--ease-out) infinite;
   }
 
-  :root:not([data-reduce-motion="true"]) :is(.tabs button, .settings-tabs button, .pulse-head .switch button)[aria-pressed="true"],
+  :root:not([data-reduce-motion="true"]) .rail button[aria-current="page"],
+  :root:not([data-reduce-motion="true"]) :is(.settings-tabs button, .pulse-head .switch button)[aria-pressed="true"],
   :root:not([data-reduce-motion="true"]) :is(.chat-tab, .code-side-tabs [role="tab"])[aria-selected="true"] {
     animation: tab-open var(--t-base) var(--ease-out) backwards;
   }
@@ -4169,7 +4249,7 @@ label.toggle-row {
   flex: 1 1 100%;
 }
 
-/* Top bar: the brand mark and name, then the view tabs with their icons. */
+/* Top bar: the brand mark and name, then the status pills and controls. */
 .brand-mark {
   display: flex;
   flex: none;
@@ -4204,7 +4284,6 @@ label.toggle-row {
   letter-spacing: var(--tracking-eyebrow);
 }
 
-.tabs button,
 .settings-tabs button,
 .settings-nav button,
 .pulse-head .switch button,
@@ -4220,7 +4299,6 @@ button.primary:not(.quick-chip) {
 
 /* Tracked capitals run wide, so labels step down a size to keep the width
    they had in mixed case. */
-.tabs button,
 .settings-nav button,
 .pulse-head .switch button,
 .code-side-tabs [role="tab"],
@@ -4232,13 +4310,6 @@ button.primary:not(.quick-chip) {
 
 .settings-tabs button {
   font-size: var(--font-body);
-}
-
-.tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
 }
 
 .tab-icon {
@@ -4260,45 +4331,10 @@ button.primary:not(.quick-chip) {
   min-height: 0;
 }
 
-/* Narrow windows: the tabs fold to their icons. The label stays for screen
-   readers and the tooltip. A full set of icons, the brand, the Activity dock
-   and Command outgrow the 900px default window, so the icons wrap to a second
-   row instead of widening the page: a page that scrolls sideways puts a
-   scrollbar along the bottom edge, over the composer. The row must not be a
-   scroll box either: WebKitGTK's hit test misses buttons inside an
-   overflow-x: auto views bar, so no tab would take a click. */
-@media (max-width: 900px) {
-  .tabs {
-    flex-wrap: wrap;
-    min-width: 0;
-  }
-
-  .tabs button {
-    flex: none;
-    padding-inline: 12px;
-  }
-
-  .tab-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-}
-
-/* Phones keep the one-row bar from the phone block above (a fixed 52px bar
-   that scrolls sideways). The 900px rule's wrap comes later in this file, so
-   without this the icons stack into rows that spill over the composer. */
+/* Phones: the logo stays, the name gives its room to the controls. */
 @media (max-width: 600px) {
-  .brand-mark {
+  .brand-mark span {
     display: none;
-  }
-
-  .tabs {
-    justify-content: space-between;
-    flex-wrap: nowrap;
   }
 }
 
@@ -6829,7 +6865,7 @@ fieldset.channel label {
 
 /* A narrow window stacks them: agent on top, side column under. */
 @media (max-width: 899px) {
-  .app > .code-tab:not([hidden]) {
+  .views > .code-tab:not([hidden]) {
     flex-direction: column;
     overflow-y: auto;
   }

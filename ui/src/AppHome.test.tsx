@@ -142,7 +142,7 @@ describe("where Home and the chat can take you", () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Home" }));
     const stillHome = () => {
-      expect(tab("Home")).toHaveAttribute("aria-pressed", "true");
+      expect(tab("Home")).toHaveAttribute("aria-current", "page");
       expect(screen.getByRole("listitem", { name: "Game Mode" })).toBeVisible();
     };
 
@@ -165,7 +165,7 @@ describe("where Home and the chat can take you", () => {
     render(<App />);
     await screen.findByRole("button", { name: "Home" });
     await userEvent.click(screen.getByRole("button", { name: "Recent chats from chat" }));
-    expect(tab("Chat")).toHaveAttribute("aria-pressed", "true");
+    expect(tab("Chat")).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("Chat page")).toBeVisible();
     expect(screen.queryByText("History page")).toBeNull();
   });
@@ -175,7 +175,7 @@ describe("where Home and the chat can take you", () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Recent chats from chat" }));
     expect(await screen.findByText("History page")).toBeVisible();
-    expect(tab("History")).toHaveAttribute("aria-pressed", "true");
+    expect(tab("History")).toHaveAttribute("aria-current", "page");
 
     await userEvent.click(tab("Home"));
     await userEvent.click(within(await screen.findByRole("listitem", { name: "Journal" })).getByRole("button", { name: "Open Journal" }));
@@ -189,7 +189,7 @@ describe("where Home and the chat can take you", () => {
     // This desktop has no Library page, so its tile stays on Home.
     await userEvent.click(tab("Home"));
     await userEvent.click(within(screen.getByRole("listitem", { name: "Game Mode" })).getByRole("button", { name: "Library" }));
-    expect(tab("Home")).toHaveAttribute("aria-pressed", "true");
+    expect(tab("Home")).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("listitem", { name: "Game Mode" })).toBeVisible();
     expect(screen.queryByText("Library page")).toBeNull();
   });
