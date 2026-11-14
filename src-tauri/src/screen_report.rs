@@ -34,6 +34,8 @@ pub type Client = Result<Box<dyn ModelClient>, String>;
 pub struct Finished {
     pub text: String,
     pub summary: String,
+    /// Grok looked at the stills (false when nothing was diagnosed).
+    pub sent: bool,
 }
 
 /// One line for the feed card under the recording's title.
@@ -52,6 +54,7 @@ fn local_only(title: &str, dir: &Path, why: &str) -> Finished {
     Finished {
         text: sr::local_only_text(title, dir, why),
         summary: format!("Saved on this computer, not diagnosed: {}", why.trim()),
+        sent: false,
     }
 }
 
@@ -96,9 +99,14 @@ pub fn keyframe_urls(frames: &[PathBuf]) -> Vec<String> {
 /// The one call: the cabin's system prompt, then the note and the stills in
 /// order, on the fast model.
 pub fn vision_request(note: &str, secs: u64, stills: &[String]) -> ResponsesRequest {
+    stills_request(sr::diagnosis_messages(note, secs, stills.len()), stills)
+}
+
+/// `messages` with the stills after the user's words, on the fast model.
+fn stills_request(messages: Vec<(String, String)>, stills: &[String]) -> ResponsesRequest {
     let model = grokhub_core::model_for_mode("fast");
     let mut input = Vec::new();
-    for (role, text) in sr::diagnosis_messages(note, secs, stills.len()) {
+    for (role, text) in messages {
         let mut content = vec![ContentPart::InputText(text)];
         if role == "user" {
             content.extend(stills.iter().cloned().map(ContentPart::InputImage));
@@ -150,11 +158,58 @@ pub fn diagnose(
             Finished {
                 text: sr::report_text(title, &report, dir),
                 summary: report_summary(&report),
+                sent: true,
             }
         }
         Ok(_) => local_only(title, dir, "Grok sent back nothing"),
         Err(e) => local_only(title, dir, &e.to_string()),
     }
+}
+
+/// The steps a recording shows, for Save as skill: the same stills go once
+/// more with the watch-and-learn prompt. `Err` says why nothing came back.
+pub fn read_steps(
+    note: &str,
+    secs: u64,
+    frames: &[PathBuf],
+    client: impl FnOnce() -> Client,
+    cancel: &CancelToken,
+) -> Result<Vec<grokhub_core::watch_learn::WatchedStep>, String> {
+    if cancel.is_cancelled() {
+        return Err(HALTED_FIRST.into());
+    }
+    let stills = keyframe_urls(frames);
+    if stills.is_empty() {
+        return Err(UNREADABLE.into());
+    }
+    let client = client().map_err(|_| NO_SIGN_IN.to_string())?;
+    if cancel.is_cancelled() {
+        return Err(HALTED_FIRST.into());
+    }
+    let messages = grokhub_core::watch_learn::steps_messages(note, secs, stills.len());
+    match client.stream(&stills_request(messages, &stills), cancel, &mut |_| {}) {
+        _ if cancel.is_cancelled() => Err(HALTED.into()),
+        Ok(out) => Ok(grokhub_core::watch_learn::parse_steps(&out.text)),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// A recording's stills in order, read from its folder.
+pub fn frames_in(dir: &Path) -> Vec<PathBuf> {
+    let mut frames: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                        n.starts_with("frame-") && (n.ends_with(".png") || n.ends_with(".jpg"))
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    frames.sort();
+    frames
 }
 
 #[cfg(test)]
@@ -318,6 +373,7 @@ mod tests {
                     dir.display()
                 ),
                 summary: "Saved on this computer, not diagnosed: Connect Grok in Settings".into(),
+                sent: false,
             }
         );
         let junk = dir.join("frame-009.png");

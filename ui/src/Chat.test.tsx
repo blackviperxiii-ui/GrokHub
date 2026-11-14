@@ -1605,6 +1605,34 @@ describe("Chat", () => {
     expect(screen.queryByText("Not this chat")).toBeNull();
   });
 
+  it("shows a recording's skill draft as a question and Yes sends its save line", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("record it");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeDisabled());
+    const prompt = "Save these steps as the skill /export-the-report?\n\n1. Open the Reports menu.";
+    act(() =>
+      api.handler?.({
+        conversationId: id,
+        event: { kind: "confirm", command: "/record --skill", prompt, yes: "/record --save-skill 1" },
+        helper: true,
+      }),
+    );
+    const card = await screen.findByRole("group", { name: "/record --skill asks first" });
+    expect(card).toHaveTextContent("Save these steps as the skill /export-the-report?");
+    expect(api.runSlash).not.toHaveBeenCalled();
+    api.runSlash.mockReset().mockResolvedValue({
+      kind: "notice",
+      text: "Saved the skill /export-the-report. /skills undo export-the-report takes it back.",
+    });
+    await userEvent.click(within(card).getByRole("button", { name: "Yes" }));
+    expect(api.runSlash.mock.calls[0][0]).toBe("/record --save-skill 1");
+    expect(
+      await screen.findByText("Saved the skill /export-the-report. /skills undo export-the-report takes it back."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "/record --skill asks first" })).toBeNull();
+  });
+
   it("keeps a streaming reply in one bubble when a report arrives mid-reply", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
