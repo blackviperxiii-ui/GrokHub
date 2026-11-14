@@ -4041,6 +4041,17 @@ export interface PulseAuto {
   reminders: boolean;
 }
 
+/** Settings → Pulse: PC health while gaming (the cabin's `pcHealth` key). */
+export type PcHealth = { on: boolean };
+
+export function getPcHealth(): Promise<PcHealth> {
+  return invoke<PcHealth>("get_pc_health");
+}
+
+export function setPcHealth(on: boolean): Promise<PcHealth> {
+  return invoke<PcHealth>("set_pc_health", { on });
+}
+
 export function getPulseAuto(): Promise<PulseAuto> {
   return invoke<PulseAuto>("get_pulse_auto");
 }
