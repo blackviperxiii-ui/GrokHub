@@ -51,7 +51,7 @@ pub mod prefix_guard;
 mod prompt;
 mod recovery;
 pub mod repair;
-mod research;
+pub mod research;
 mod retry;
 pub mod review;
 pub mod route;
@@ -148,7 +148,6 @@ pub use recovery::{
     project as project_recovery, state_for_rung, DriveFact, RecoveryFacts, RecoverySnapshot,
     RecoveryState,
 };
-pub use research::native_deep_research_prompt;
 pub use retry::{
     decide_retry, jitter_backoff, resolve_max_retries_with_env, retry_after_or_backoff,
     retry_backoff_with_jitter, DEFAULT_MAX_RETRIES, MAX_RETRY_BACKOFF, RATE_LIMIT_RETRY_THRESHOLD,

@@ -545,6 +545,14 @@ fn run_turn(
         (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
         (a, b) => a.or(b),
     };
+    // `/deep-research <query>`: this turn works to the research recipe.
+    let research = (input.depth == 0)
+        .then(|| crate::research::turn_note(user_text))
+        .flatten();
+    let volatile_intentions = match (volatile_intentions, research) {
+        (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
+        (a, b) => a.or(b.map(str::to_string)),
+    };
     let volatile = crate::prefix_cache::TurnVolatile::assemble(
         input.workspace,
         user_text,

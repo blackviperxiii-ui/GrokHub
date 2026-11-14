@@ -1,0 +1,4 @@
+- Chat: `/history` opens History, as `/resume` does.
+- Chat: `/room <name>` binds a work folder named for the room (for example `/room harbor` binds `GrokHub-Work/harbor`; a docs room shares `GrokHub-Work/docs`). It works on this computer only. The cabin's Hyprland and KWin workspace switch is not ported, because the cabin's own project guard always blocked it.
+- Chat: `/deep-research <question>` runs one turn that plans, searches, cross-checks and writes a cited report. The chat shows the line as you typed it, and the research steps go to the model in that turn's notes only.
+- `grokhub` shim: `--oauth`, `--update`, `--hub` and `bench local` now forward to `grokhub-hub`. `--agent` and `--tray` name `grokhub-shell --autostart` instead.

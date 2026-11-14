@@ -14,11 +14,15 @@ pub enum Op {
     Show,
     New(String),
     Bind(String),
+    /// `/room <name>`: bind a folder named for the room under the work root.
+    Room(String),
     Clear,
     Rename(String),
     Move(String),
     Folder(String),
-    Delete { yes: bool },
+    Delete {
+        yes: bool,
+    },
 }
 
 /// What a `/project` form did: the line to show, and the folder the chat
@@ -136,6 +140,23 @@ pub fn run_in(
             save(config_dir, &nodes)?;
             Ok(Done {
                 text: format!("Bound {p}"),
+                workspace: Some(p),
+                ask: None,
+            })
+        }
+        Op::Room(name) => {
+            // The cabin also ran a desktop-switch script here, which its own
+            // project guard always blocked; only the bind is kept.
+            let plan = grokhub_core::plan_room(&name, home.unwrap_or("."));
+            let p = Path::new(work_root)
+                .join(&plan.workspace)
+                .to_string_lossy()
+                .into_owned();
+            std::fs::create_dir_all(&p).map_err(|e| e.to_string())?;
+            grokhub_core::upsert_bound(&mut nodes, &p);
+            save(config_dir, &nodes)?;
+            Ok(Done {
+                text: format!("Room {} → {p}", plan.slug),
                 workspace: Some(p),
                 ask: None,
             })
@@ -309,6 +330,27 @@ mod tests {
         // Binding it again adds no second row.
         go(&config, &bound, Op::Bind(bound.clone()), &root).expect("again");
         assert_eq!(load(&config).expect("load").len(), 1);
+    }
+
+    #[test]
+    fn a_room_binds_its_folder_under_the_work_root() {
+        let (config, root) = (temp_dir("room-cfg"), temp_dir("room-root"));
+        let done = go(&config, "", Op::Room("Harbor Lab".into()), &root).expect("room");
+        let folder = root.join("harbor-lab");
+        let p = folder.to_string_lossy().into_owned();
+        assert_eq!(done.text, format!("Room harbor-lab → {p}"));
+        assert_eq!(done.workspace.as_deref(), Some(p.as_str()));
+        assert!(folder.is_dir(), "the folder is made");
+        let saved = load(&config).expect("load");
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].kind, ProjectKind::Project);
+        assert_eq!(saved[0].path, p);
+        // A docs room shares one docs folder, as in the cabin.
+        let docs = go(&config, &p, Op::Room("stage a docs desk".into()), &root).expect("docs");
+        let docs_dir = root.join("docs").to_string_lossy().into_owned();
+        assert_eq!(docs.text, format!("Room docs-desk → {docs_dir}"));
+        assert_eq!(docs.workspace.as_deref(), Some(docs_dir.as_str()));
+        assert_eq!(load(&config).expect("load").len(), 2);
     }
 
     #[test]

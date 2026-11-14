@@ -1,6 +1,6 @@
 //! `grokhub` was the cabin's binary. The cabin is retired, and its headless
-//! tools (`--mcp-self`, `--mcp-desktop`, `--mcp-cua`, `--doctor`) live in
-//! `grokhub-hub`. This shim keeps old MCP configs and scripts working for at
+//! modes (`--mcp-self`, `--mcp-desktop`, `--mcp-cua`, `--doctor`, `--oauth`,
+//! `--update`, `--hub` and `bench local`) live in `grokhub-hub`. This shim keeps old MCP configs and scripts working for at
 //! least one release cycle: it hands those flags to `grokhub-hub` with the
 //! same arguments, returns its exit code, and prints one line on stderr naming
 //! the new binary. Stdout is the target's own, so MCP stdio is untouched.
@@ -15,15 +15,21 @@ const TARGET: &str = "grokhub-hub";
 const RENAMED_NOTE: &str = "grokhub was renamed to grokhub-hub; this grokhub shim forwards for at least one more release, so point your config at grokhub-hub.";
 
 /// Anything else (the old window, `--agent`, `--tray`): nothing to forward.
-const RETIRED_NOTE: &str = "grokhub was renamed: the desktop app is grokhub-shell, and --mcp-* and --doctor are in grokhub-hub.";
+const RETIRED_NOTE: &str = "grokhub was renamed: the desktop app is grokhub-shell (grokhub-shell --autostart starts it in the tray; --agent and --tray work there too), and --mcp-*, --doctor, --oauth, --update, --hub and bench local are in grokhub-hub.";
 
 /// Test hook: run this file instead of the `grokhub-hub` next to the shim.
 const TARGET_ENV: &str = "GROKHUB_SHIM_TARGET";
 
-/// Only the headless tools move over; the rest of the old flags had a window.
+/// Only the headless modes move over; the rest of the old flags had a window.
+/// `bench local` is read by position, as `grokhub-hub` reads it.
 fn forwards(args: &[String]) -> bool {
-    args.iter()
-        .any(|a| a.starts_with("--mcp-") || a == "--doctor")
+    let bench = args.first().map(String::as_str) == Some("bench")
+        && args.get(1).map(String::as_str) == Some("local");
+    bench
+        || args.iter().any(|a| {
+            a.starts_with("--mcp-")
+                || matches!(a.as_str(), "--doctor" | "--oauth" | "--update" | "--hub")
+        })
 }
 
 /// `grokhub-hub` beside the shim (both install into the same folder), else
@@ -80,10 +86,17 @@ mod tests {
         assert!(forwards(&args(&["--mcp-cua"])));
         assert!(forwards(&args(&["--doctor"])));
         assert!(forwards(&args(&["--hub", "--mcp-self"])));
+        assert!(forwards(&args(&["--oauth"])));
+        assert!(forwards(&args(&["--update"])));
+        assert!(forwards(&args(&["--hub"])));
+        assert!(forwards(&args(&["bench", "local"])));
         assert!(!forwards(&args(&[])));
+        assert!(!forwards(&args(&["bench"])));
+        assert!(!forwards(&args(&["local", "bench"])));
         assert!(!forwards(&args(&["--agent"])));
         assert!(!forwards(&args(&["--tray"])));
         assert!(!forwards(&args(&["--doctor-ish"])));
+        assert!(!forwards(&args(&["--oauth-ish"])));
     }
 
     #[test]
@@ -94,7 +107,7 @@ mod tests {
         );
         assert_eq!(
             RETIRED_NOTE,
-            "grokhub was renamed: the desktop app is grokhub-shell, and --mcp-* and --doctor are in grokhub-hub."
+            "grokhub was renamed: the desktop app is grokhub-shell (grokhub-shell --autostart starts it in the tray; --agent and --tray work there too), and --mcp-*, --doctor, --oauth, --update, --hub and bench local are in grokhub-hub."
         );
         assert!(!RENAMED_NOTE.contains('\n') && !RETIRED_NOTE.contains('\n'));
     }
