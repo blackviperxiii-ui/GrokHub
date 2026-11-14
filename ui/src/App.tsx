@@ -724,6 +724,7 @@ export function App() {
                 />
               }
               snapshot={<ChatSnapshot active={view === "chat"} onOpen={openView} />}
+              tuned={auto.reply}
             />
           </div>
           <div hidden={view !== "automations"}>

@@ -56,6 +56,15 @@ vi.mock("./api", async () => {
 };
 });
 
+// "undo that" in the chat is answered by auto setup.
+const auto = vi.hoisted(() => ({
+  settingAsk: vi.fn<(text: string) => Promise<string | null>>(() => Promise.resolve(null)),
+}));
+vi.mock("./autoSetupApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./autoSetupApi")>()),
+  settingAsk: auto.settingAsk,
+}));
+
 vi.mock("./transport", () => ({
   call: desktop.call,
   inShell: () => false,
@@ -308,6 +317,27 @@ describe("Nyx in the chat", () => {
     render(<Chat onOpenSettings={() => {}} remote {...columns} />);
     expect(await screen.findByRole("complementary", { name: "Nyx" })).toBeVisible();
     expect(screen.queryByRole("complementary", { name: "Objectives" })).toBeNull();
+  });
+
+  it("lays out again when auto setup turns Objectives beside chat on or off while the chat is open", async () => {
+    const columns = { left: <aside aria-label="Objectives" />, snapshot: <aside aria-label="Snapshot" /> };
+    const view = render(<Chat onOpenSettings={() => {}} {...columns} tuned={{ n: 1 }} />);
+    expect(await screen.findByRole("complementary", { name: "Nyx" })).toBeVisible();
+
+    // Yes on the wide-screen offer: a new auto setup reply, the chat still open.
+    api.getSettings.mockResolvedValue({ ...SETTINGS, chatObjectives: true });
+    view.rerender(<Chat onOpenSettings={() => {}} {...columns} tuned={{ n: 2 }} />);
+    expect(await screen.findByRole("complementary", { name: "Objectives" })).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "Nyx" })).toBeNull();
+
+    // "undo that", typed in this chat, puts it back.
+    api.getSettings.mockResolvedValue(SETTINGS);
+    auto.settingAsk.mockResolvedValueOnce("Objectives beside chat is off again.");
+    await userEvent.type(screen.getByLabelText("Message"), "undo that{Enter}");
+    expect(await screen.findByText("Objectives beside chat is off again.")).toBeVisible();
+    expect(await screen.findByRole("complementary", { name: "Nyx" })).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "Objectives" })).toBeNull();
+    expect(api.sendChat).not.toHaveBeenCalled();
   });
 
   it("gives the agent window no column, side cards or dock", async () => {

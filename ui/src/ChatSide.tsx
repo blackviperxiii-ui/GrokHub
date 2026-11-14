@@ -18,6 +18,7 @@ import {
   type TileView,
 } from "./api";
 import { NO_STEPS, XpBar } from "./Home";
+import { NyxDeskControls } from "./NyxDock";
 import type { View } from "./Palette";
 
 /** How often the cards read again while Chat shows, in ms. */
@@ -256,6 +257,7 @@ export function ChatLeft({
           <p className="home-muted">{RECENT_EMPTY}</p>
         )}
       </section>
+      <NyxDeskControls framed />
     </aside>
   );
 }

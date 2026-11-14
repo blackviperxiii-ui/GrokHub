@@ -13,6 +13,19 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("./api", () => api);
 
+// Labs → Desktop companion, for the left column's companion card.
+const desk = vi.hoisted(() => ({
+  desktopNyxGet: vi.fn(() => Promise.resolve({ enabled: false, undocked: false, outfit: null, outfits: [] })),
+  desktopNyxUndock: vi.fn(() => Promise.resolve({ enabled: true, undocked: true, outfit: null, outfits: [] })),
+  desktopNyxDock: vi.fn(),
+  desktopNyxSetOutfit: vi.fn(),
+}));
+vi.mock("./desktopNyxApi", () => desk);
+vi.mock("./transport", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./transport")>()),
+  inShell: () => true,
+}));
+
 import { ChatLeft, ChatSide, ChatSnapshot, RECENT_EMPTY, recentChats } from "./ChatSide";
 import { NO_STEPS } from "./Home";
 
@@ -223,7 +236,7 @@ describe("Objectives beside chat", () => {
   it("lists the objective's steps with the current one marked and done ones struck", async () => {
     render(<ChatLeft active conversationId="c1" onOpen={() => {}} onOpenChat={() => {}} />);
     const steps = await screen.findByRole("region", { name: "Steps" });
-    const items = within(steps).getAllByRole("listitem");
+    const items = await within(steps).findAllByRole("listitem");
     expect(items.map((li) => li.textContent)).toEqual(["Aim routine 12/20", "Three ranked wins", "Review one replay"]);
     expect(items.map((li) => li.getAttribute("aria-current"))).toEqual([null, "step", null]);
     expect(items.map((li) => li.className)).toEqual(["done", "current", ""]);
@@ -256,6 +269,25 @@ describe("Objectives beside chat", () => {
     expect(await screen.findByText(RECENT_EMPTY)).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Open Objectives" }));
     expect(onOpen).toHaveBeenCalledWith("objectives");
+  });
+
+  it("shows no companion card while Labs → Desktop companion is off", async () => {
+    render(<ChatLeft active conversationId="c1" onOpen={() => {}} onOpenChat={() => {}} />);
+    await screen.findByRole("region", { name: "Steps" });
+    await act(async () => {});
+    expect(screen.queryByRole("region", { name: "Nyx" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Put her on the desktop" })).toBeNull();
+  });
+
+  it("shows the companion card with its controls when Labs → Desktop companion is on", async () => {
+    desk.desktopNyxGet.mockResolvedValueOnce({ enabled: true, undocked: false, outfit: null, outfits: [] });
+    render(<ChatLeft active conversationId="c1" onOpen={() => {}} onOpenChat={() => {}} />);
+    const card = await screen.findByRole("region", { name: "Nyx" });
+    expect(screen.getByRole("complementary", { name: "Objectives" })).toContainElement(card);
+    await userEvent.click(within(card).getByRole("button", { name: "Put her on the desktop" }));
+    expect(desk.desktopNyxUndock).toHaveBeenCalledTimes(1);
+    expect(await within(card).findByRole("button", { name: "Bring her back" })).toBeVisible();
+    expect(within(card).getByLabelText("Outfit")).toHaveValue("");
   });
 
   it("reads nothing while Chat is hidden", async () => {
