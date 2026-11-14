@@ -422,7 +422,16 @@ const EMPTY_PULSE_SOURCES = {
   hobbyPaths: { tips: false, projects: false },
   releaseRadarOn: false,
 };
-const EMPTY_PULSE_AUTO = { fixes: [], reminders: false };
+const EMPTY_PULSE_AUTO = {
+  fixes: [],
+  reminders: false,
+  pause: {
+    on: false,
+    label: "Pause an automation that keeps failing",
+    note: "Changes an app setting, not your computer. Only after 5 failed runs in a row. A card says what it did, with Undo.",
+    held: null,
+  },
+};
 const EMPTY_STEAM_PULSE = {
   achievementsOn: false,
   wishlistOn: false,
@@ -628,6 +637,7 @@ export function initScript(theme = "ops-dark") {
         case "get_pulse_auto":
         case "set_pulse_auto_fix":
         case "set_proactive_reminders":
+        case "set_pulse_auto_pause":
           return fix.pulseAuto;
         case "get_steam_pulse":
         case "set_steam_achievements":
