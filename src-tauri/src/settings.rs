@@ -155,6 +155,29 @@ pub struct Behavior {
     pub daily_token_budget: u64,
     /// Pause scheduled work over the daily budget.
     pub pause_over_budget: bool,
+    /// Which way the composer's suggestions lean when two are close.
+    #[serde(default)]
+    pub lane: Lane,
+}
+
+/// Coding or Life: the composer's near-tied suggestions lean this way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Lane {
+    #[default]
+    Coding,
+    Life,
+}
+
+impl Lane {
+    /// Any spelling of "life" is Life; anything else is Coding.
+    pub fn read(raw: &str) -> Self {
+        if raw.trim().eq_ignore_ascii_case("life") {
+            Lane::Life
+        } else {
+            Lane::Coding
+        }
+    }
 }
 
 fn on() -> bool {
@@ -170,6 +193,7 @@ impl Default for Behavior {
             quiet_end: String::new(),
             daily_token_budget: 0,
             pause_over_budget: false,
+            lane: Lane::Coding,
         }
     }
 }
@@ -235,6 +259,7 @@ fn lenient_behavior<'de, D: Deserializer<'de>>(d: D) -> Result<Behavior, D::Erro
             .filter(|b| grokhub_core::TOKEN_BUDGETS.contains(b))
             .unwrap_or(0),
         pause_over_budget: flag("pauseOverBudget"),
+        lane: Lane::read(text("lane")),
     })
 }
 
@@ -491,6 +516,7 @@ mod tests {
                 quiet_end: "07:00".into(),
                 daily_token_budget: 1_000_000,
                 pause_over_budget: true,
+                lane: Lane::Life,
             },
             summon_hotkey: true,
             notifications: false,
@@ -527,6 +553,7 @@ mod tests {
         assert!(raw.contains("\"quietStart\": \"22:00\""), "{raw}");
         assert!(raw.contains("\"dailyTokenBudget\": 1000000"), "{raw}");
         assert!(raw.contains("\"pauseOverBudget\": true"), "{raw}");
+        assert!(raw.contains("\"lane\": \"life\""), "{raw}");
         assert!(raw.contains("\"summonHotkey\": true"), "{raw}");
         assert!(raw.contains("\"notifications\": false"), "{raw}");
         assert!(raw.contains("\"desktopNyx\": true"), "{raw}");
@@ -668,7 +695,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(
             path(&dir),
-            r#"{"model":"grok-5","behavior":{"autocomplete":"yes","suggestions":"nope","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1}}"#,
+            r#"{"model":"grok-5","behavior":{"autocomplete":"yes","suggestions":"nope","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1,"lane":"travel"}}"#,
         )
         .expect("write");
         assert_eq!(
@@ -680,6 +707,7 @@ mod tests {
                 quiet_end: String::new(),
                 daily_token_budget: 0,
                 pause_over_budget: false,
+                lane: Lane::Coding,
             }
         );
         std::fs::write(path(&dir), r#"{"model":"grok-5","behavior":"loud"}"#).expect("write");
@@ -687,7 +715,7 @@ mod tests {
         // One bad field leaves the good ones alone.
         std::fs::write(
             path(&dir),
-            r#"{"behavior":{"autocomplete":true,"suggestions":false,"quietStart":"23:00","quietEnd":"6:30","dailyTokenBudget":"lots"}}"#,
+            r#"{"behavior":{"autocomplete":true,"suggestions":false,"quietStart":"23:00","quietEnd":"6:30","dailyTokenBudget":"lots","lane":" Life "}}"#,
         )
         .expect("write");
         assert_eq!(
@@ -699,6 +727,7 @@ mod tests {
                 quiet_end: "06:30".into(),
                 daily_token_budget: 0,
                 pause_over_budget: false,
+                lane: Lane::Life,
             }
         );
         let _ = std::fs::remove_dir_all(&dir);

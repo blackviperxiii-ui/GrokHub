@@ -52,6 +52,7 @@ const BEHAVIOR = {
     quietEnd: "",
     dailyTokenBudget: 0,
     pauseOverBudget: false,
+    lane: "coding",
   },
   budgets: [
     { value: 0, label: "Off" },

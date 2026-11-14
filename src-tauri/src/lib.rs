@@ -2056,6 +2056,7 @@ fn chip_row(
             quiet_hours: quiet,
             now_ms: local.now_ms,
             extra,
+            lane: settings.behavior.lane,
         },
     )
 }

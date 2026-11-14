@@ -33,6 +33,7 @@ export function chatTabApiStubs() {
           quietEnd: "",
           dailyTokenBudget: 0,
           pauseOverBudget: false,
+          lane: "coding",
         },
         budgets: [] as { value: number; label: string }[],
       }),

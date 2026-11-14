@@ -3519,7 +3519,12 @@ export interface Behavior {
   /** Tokens a day, one of `budgets`; 0 is off. */
   dailyTokenBudget: number;
   pauseOverBudget: boolean;
+  /** Which way the composer's near-tied suggestions lean. */
+  lane: Lane;
 }
+
+/** Coding or Life, for Settings → Behavior. */
+export type Lane = "coding" | "life";
 
 export interface BehaviorPage {
   closeToTray: boolean;
