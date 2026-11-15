@@ -1,10 +1,15 @@
 // Mods 2 of 2 (src-tauri/src/mods_install.rs): a mod's files, the install
 // sheet, uninstall and updates. Desktop only.
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import type { ModRow } from "./api";
 import { call, inShell, subscribe } from "./transport";
 
 /** Progress lines for the one install at a time. */
 export const MODS_JOB_EVENT = "mods://job";
+/** The chat put a new Install card on the Mods page. */
+export const MODS_REQUESTED_EVENT = "mods://requested";
+/** The page now waits for a browser download: "I downloaded it" shows. */
+export const MODS_PICKUP_EVENT = "mods://pickup";
 
 export type ModOffer =
   | { kind: "install" }
@@ -64,6 +69,43 @@ export interface ModInstalled {
   ours: ModOurs[];
   others: ModOther[];
   recovered: string | null;
+}
+
+/** The mod the chat asked to set up, as its Install card shows it. */
+export interface ModRequested {
+  /** The ask's number: Dismiss drops this ask and no newer one. */
+  ask: number;
+  /** `source:id`. */
+  key: string;
+  game: string;
+  source: string;
+  sourceLabel: string;
+  /** "Install Sodium for Minecraft: Java Edition?" */
+  title: string;
+  /** "sodium.jar · 0.6.0 · 1.0 MB · from Modrinth · asked for in chat" */
+  line: string;
+  risk: string;
+  blocked: string | null;
+  mod: ModRow;
+  file: ModFileRow;
+}
+
+export function modsRequested(): Promise<ModRequested | null> {
+  return call<ModRequested | null>("mods_requested");
+}
+
+export function modsDropRequest(ask: number): Promise<void> {
+  return call<void>("mods_drop_request", { ask });
+}
+
+export function onModsRequested(handler: () => void): Promise<UnlistenFn> {
+  if (!inShell()) return Promise.resolve(() => {});
+  return subscribe<null>(MODS_REQUESTED_EVENT, () => handler());
+}
+
+export function onModsPickup(handler: () => void): Promise<UnlistenFn> {
+  if (!inShell()) return Promise.resolve(() => {});
+  return subscribe<null>(MODS_PICKUP_EVENT, () => handler());
 }
 
 export function modsFiles(
