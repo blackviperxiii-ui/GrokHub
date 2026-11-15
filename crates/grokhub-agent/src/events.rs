@@ -44,7 +44,7 @@ pub struct NativeEngine {
     context_length: u64,
     /// The main engine clears a previous Halt. A `/bg` engine does not.
     reopen_tasks: bool,
-    /// Imagine and web_fetch bearer. Empty means those tools do not dial.
+    /// Imagine's bearer. Empty leaves Imagine unset; web_fetch never uses it.
     imagine_bearer: String,
     /// Who started the next prompt (Spike-4c): egress lines carry it.
     origin: crate::harness::Origin,
@@ -167,7 +167,8 @@ impl NativeEngine {
         self.origin = origin;
     }
 
-    /// Credential for `web_fetch` and Imagine. Empty refuses those tools without a dial.
+    /// Credential for Imagine. Empty leaves Imagine unset, so a picture falls back to
+    /// the on-device model or asks to sign in. `web_fetch` works either way.
     pub fn set_imagine_bearer(&mut self, bearer: &str) {
         self.imagine_bearer = bearer.trim().to_string();
     }

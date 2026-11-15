@@ -746,6 +746,42 @@ fn plan_mode_and_desktop_stay_on_gate_v0() {
     );
 }
 
+#[test]
+fn plan_mode_keeps_web_fetch_and_search_rules() {
+    let plan = Gate {
+        mode: PermMode::Always,
+        readonly_session: true,
+        attended: true,
+        desktop: false,
+    };
+    let fetch = r#"{"url":"https://example.com/a"}"#;
+    let decide = |policy: &Policy, name: &str, args: &str| {
+        let base = gate::decide(&plan, name, false, None);
+        govern(base, &plan, name, args, Path::new("/work"), policy)
+    };
+    let deny = policy_of(
+        &[
+            ("WebFetch(domain:example.com)", Action::Deny),
+            ("WebSearch", Action::Deny),
+        ],
+        &[],
+    );
+    assert_eq!(
+        decide(&deny, "web_fetch", fetch),
+        Decision::Refuse(gate::unattended_deny("web_fetch"))
+    );
+    assert_eq!(
+        decide(&deny, "web_search", r#"{"query":"rust"}"#),
+        Decision::Refuse(gate::unattended_deny("web_search"))
+    );
+    // With no rule, Plan runs a lookup as the gate already decided.
+    let none = Policy::empty();
+    assert_eq!(
+        decide(&none, "web_fetch", fetch),
+        gate::decide(&plan, "web_fetch", false, None)
+    );
+}
+
 struct Quiet;
 impl HaltCheck for Quiet {
     fn halted(&self) -> bool {
