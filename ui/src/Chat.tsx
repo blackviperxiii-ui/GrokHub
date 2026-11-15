@@ -71,7 +71,7 @@ import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
 import { appendDraft, Mic } from "./Mic";
-import { useVoiceMode, VoiceButton } from "./VoiceMode";
+import { useVoiceMode, VoiceButton, VoiceCaption } from "./VoiceMode";
 import { ElicitCard, type ElicitItem } from "./Modes";
 import { SIDE_MARK, SideCards, withSide, type Side } from "./Side";
 import { DOCK_MIN_WIDTH, NyxDock, SIDE_MIN_WIDTH } from "./NyxDock";
@@ -2355,6 +2355,7 @@ export function Chat({
         }}
       />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
+      {!remote && <VoiceCaption text={voice.caption} state={voice.state} />}
       <form className={glow && busyHere ? "composer slash-wrap glowing" : "composer slash-wrap"} onSubmit={send}>
         {slashOpen && (
           <SlashMenu

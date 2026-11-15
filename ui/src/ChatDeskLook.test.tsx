@@ -42,6 +42,8 @@ vi.mock("./desktopNyxApi", async (load) => ({
 const voices = vi.hoisted(() => ({
   set: [] as ((state: VoiceState) => void)[],
   talk: [] as ((talk: DesktopNyxTalk | null) => void)[],
+  /** What every chat's voice mode heard so far. */
+  caption: "",
 }));
 vi.mock("./VoiceMode", async (load) => {
   const real = await load<typeof import("./VoiceMode")>();
@@ -65,7 +67,7 @@ vi.mock("./VoiceMode", async (load) => {
       }, []);
       // Where the chat sends a spoken piece's loudness.
       session.talkTo = (talk) => void voices.talk.push(talk);
-      return { state, session };
+      return { state, session, caption: voices.caption };
     },
   };
 });
@@ -83,6 +85,7 @@ describe("Chat and her desktop pedestal", () => {
     voices.talk.length = 0;
     replies.ends.length = 0;
     voices.set.length = 0;
+    voices.caption = "";
   });
 
   it("says idle, then thinking while a reply runs here", async () => {
@@ -214,5 +217,15 @@ describe("Chat and her desktop pedestal", () => {
     await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("idle", "hanging-out"));
     voices.talk[1](null);
     expect(desk.desktopNyxTalk.mock.calls).toEqual([[talk], [null]]);
+  });
+
+  it("shows what voice mode hears above the composer while it listens", async () => {
+    voices.caption = "remind me to call";
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() => expect(voices.set).toHaveLength(1));
+    expect(screen.queryByText("“remind me to call”")).toBeNull();
+    act(() => voices.set[0]("listening"));
+    const line = await screen.findByText("“remind me to call”");
+    expect(line.nextElementSibling).toHaveClass("composer");
   });
 });

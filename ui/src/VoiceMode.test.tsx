@@ -21,10 +21,12 @@ vi.mock("./api", () => api);
 
 import {
   BLOCK,
+  captionLine,
   PAUSED_NOTE,
   QUIET_NOTE,
   toPcm16,
   VoiceButton,
+  VoiceCaption,
   VoiceSession,
   voiceStep,
   type Playing,
@@ -41,6 +43,8 @@ interface Rig {
   states: VoiceState[];
   notes: string[];
   sent: string[];
+  /** Every live caption, "" when one was cleared. */
+  captions: string[];
   played: string[];
   /** What each piece's loudness went to. */
   talks: unknown[];
@@ -59,7 +63,7 @@ afterEach(async () => {
 });
 
 function rig(): Rig {
-  const r = { states: [], notes: [], sent: [], played: [], talks: [], ends: [], stops: 0, closed: 0 } as unknown as Rig;
+  const r = { states: [], notes: [], sent: [], captions: [], played: [], talks: [], ends: [], stops: 0, closed: 0 } as unknown as Rig;
   let take: ((s: Float32Array, rate: number) => void) | null = null;
   r.session = new VoiceSession({
     openMic: async (t) => {
@@ -83,6 +87,7 @@ function rig(): Rig {
     send: (w) => r.sent.push(w),
     onState: (s) => r.states.push(s),
     onNote: (n) => r.notes.push(n),
+    onCaption: (c) => r.captions.push(c),
   });
   made.push(r.session);
   r.hear = async (...events) => {
@@ -387,5 +392,52 @@ describe("VoiceButton", () => {
     await flush();
     expect(api.voiceLiveStart).toHaveBeenCalled();
     expect(r.session.state).toBe("listening");
+  });
+});
+
+describe("live captions", () => {
+  it("shows live captions while they talk and clears them when the turn is heard", async () => {
+    const r = rig();
+    await r.session.start();
+    await r.hear({ kind: "caption", text: "remind me" });
+    expect(r.captions).toEqual(["remind me"]);
+    api.voiceLiveHear.mockResolvedValueOnce("Remind me.");
+    await r.hear({ kind: "turn", ms: 1200 });
+    expect(r.sent).toEqual(["Remind me."]);
+    expect(r.captions).toEqual(["remind me", ""]);
+  });
+
+  it("clears the caption when the mic heard only noise", async () => {
+    const r = rig();
+    await r.session.start();
+    await r.hear({ kind: "caption", text: "uh" }, { kind: "nothing" });
+    expect(r.captions).toEqual(["uh", ""]);
+  });
+
+  it("stopping clears the caption", async () => {
+    const r = rig();
+    await r.session.start();
+    await r.hear({ kind: "caption", text: "remind me" });
+    await r.session.stop();
+    expect(r.captions.at(-1)).toBe("");
+  });
+
+  it("a long caption shows only its end", () => {
+    expect(captionLine("hi there")).toBe("“hi there”");
+    const long = captionLine("word ".repeat(40) + "end");
+    expect(long.startsWith("“…")).toBe(true);
+    expect(long.endsWith("word end”")).toBe(true);
+    expect(Array.from(long)).toHaveLength(83);
+    // Characters, not UTF-16 units: an emoji is never cut in half.
+    expect(captionLine("🎉".repeat(81))).toBe(`“…${"🎉".repeat(80)}”`);
+  });
+
+  it("the caption shows only while listening", () => {
+    const { rerender } = render(<VoiceCaption text="remind me" state="listening" />);
+    expect(screen.getByText("“remind me”")).toHaveAttribute("aria-live", "off");
+    rerender(<VoiceCaption text="remind me" state="thinking" />);
+    expect(screen.queryByText("“remind me”")).toBeNull();
+    rerender(<VoiceCaption text="" state="listening" />);
+    expect(document.querySelector(".voice-caption")).toBeNull();
   });
 });
