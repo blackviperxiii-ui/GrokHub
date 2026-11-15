@@ -2486,6 +2486,15 @@ export interface LocalAiView {
   draftOffers: LocalDraftOffer[];
   draftProgress: LocalDraftProgress | null;
   running: LocalRunning;
+  /** Tidy typos on this computer. */
+  tidy: LocalTidy;
+}
+
+/** Tidy typos on this computer: the saved choice, whether it can run, and its line. */
+export interface LocalTidy {
+  on: boolean;
+  available: boolean;
+  hint: string;
 }
 
 /** What runs now, with its two controls: keep loaded and unload now. */
@@ -2535,6 +2544,11 @@ export function setLocalKeepLoaded(on: boolean): Promise<LocalAiView> {
 
 export function setLocalDynamic(on: boolean): Promise<LocalAiView> {
   return invoke<LocalAiView>("set_local_dynamic", { on });
+}
+
+/** Tidy typos on this computer, on or off; it applies at once. */
+export function setPromptTidy(on: boolean): Promise<LocalAiView> {
+  return invoke<LocalAiView>("set_prompt_tidy", { on });
 }
 
 export function unloadLocalModel(): Promise<LocalAiView> {

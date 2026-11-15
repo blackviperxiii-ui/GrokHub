@@ -25,13 +25,14 @@ pub fn path(config_dir: &Path) -> PathBuf {
 
 /// The file's top-level object. A missing file is an empty object; anything
 /// else that doesn't parse as an object is an error, so nothing writes over it.
+/// A leading byte-order mark is skipped, as the router's reader does.
 pub fn read(config_dir: &Path) -> Result<Map<String, Value>, String> {
     let text = match std::fs::read_to_string(path(config_dir)) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
         Err(e) => return Err(format!("Couldn't read {FILE_NAME}: {e}")),
     };
-    match serde_json::from_str::<Value>(&text) {
+    match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
         Ok(Value::Object(map)) => Ok(map),
         _ => Err(format!(
             "{FILE_NAME} isn't readable, so nothing was changed."
@@ -135,6 +136,20 @@ mod tests {
         patch(&d, &[("focusHelp", json!(true))]).unwrap();
         assert_eq!(read(&d).unwrap().len(), 1);
         assert!(bool_or(&d, "focusHelp", false));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_file_saved_with_a_byte_order_mark_still_patches() {
+        let d = dir("bom");
+        std::fs::write(path(&d), "\u{feff}{\"promptCleanup\":true}").unwrap();
+        assert!(!bool_or(&d, "missing", false));
+        assert!(bool_or(&d, "promptCleanup", false));
+        patch(&d, &[("promptCleanup", json!(false))]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path(&d)).unwrap(),
+            "{\n  \"promptCleanup\": false\n}"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

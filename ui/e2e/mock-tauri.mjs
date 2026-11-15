@@ -411,6 +411,7 @@ const EMPTY_LOCAL_AI = {
     dynamic: true,
     dynamicHint: "On: each task runs on the model on disk that's best at it.",
   },
+  tidy: { on: false, available: false, hint: "Off. Set up a local engine and model first." },
 };
 
 const EMPTY_PULSE_SOURCES = {
@@ -638,6 +639,7 @@ export function initScript(theme = "ops-dark") {
         case "reset_local_ai":
         case "set_local_keep_loaded":
         case "set_local_dynamic":
+        case "set_prompt_tidy":
         case "unload_local_model":
           return fix.localAi;
         case "get_pulse_sources":
