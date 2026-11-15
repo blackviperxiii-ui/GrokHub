@@ -29,6 +29,10 @@ use crate::{capabilities, mods, ShellState};
 /// Progress lines for the one install at a time ("Downloading x.zip…").
 pub const JOB_EVENT: &str = "mods://job";
 
+/// The page now waits for a browser download, so the drawer and the chat's
+/// Install card both offer "I downloaded it".
+pub const PICKUP_EVENT: &str = "mods://pickup";
+
 /// How many files the drawer lists, newest first as the source sends them.
 pub const FILES_SHOWN: usize = 6;
 
@@ -158,9 +162,10 @@ struct Work {
     next: u64,
     pickup: Option<Pickup>,
     recovered: bool,
-    /// The mod the chat asked to set up, waiting on the Mods page. One at a
-    /// time: a newer ask replaces it.
-    requested: Option<Requested>,
+    /// The mod the chat asked to set up, waiting on the Mods page, by its
+    /// ask number. One at a time: a newer ask replaces it.
+    requested: Option<(u64, Requested)>,
+    asks: u64,
 }
 
 fn work() -> std::sync::MutexGuard<'static, Work> {
@@ -188,18 +193,24 @@ impl Requested {
 }
 
 /// Put the chat's ask on the Mods page, in place of any earlier one.
-pub fn request(r: Requested) {
-    work().requested = Some(r);
+/// Returns its number, which Dismiss names.
+pub fn request(r: Requested) -> u64 {
+    let mut w = work();
+    w.asks += 1;
+    let n = w.asks;
+    w.requested = Some((n, r));
+    n
 }
 
-pub fn requested() -> Option<Requested> {
+pub fn requested() -> Option<(u64, Requested)> {
     work().requested.clone()
 }
 
-/// Dismiss: only the ask the page showed, never a newer one.
-pub fn drop_request(key: &str) {
+/// Dismiss: only the ask the page showed, never a newer one, even for the
+/// same mod.
+pub fn drop_request(ask: u64) {
     let mut w = work();
-    if w.requested.as_ref().is_some_and(|r| r.key() == key) {
+    if w.requested.as_ref().is_some_and(|(n, _)| *n == ask) {
         w.requested = None;
     }
 }
@@ -565,6 +576,8 @@ pub fn drawer_rows(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestedView {
+    /// The ask's number: Dismiss drops this ask and no newer one.
+    pub ask: u64,
     pub key: String,
     pub game: String,
     pub source: &'static str,
@@ -585,7 +598,7 @@ pub struct RequestedView {
 /// The card for the chat's ask, given what is installed and why the game
 /// can't be written, if it can't.
 pub fn requested_view(
-    r: &Requested,
+    (ask, r): (u64, &Requested),
     installed: &[Manifest],
     blocked: Option<String>,
     pickup: Option<&Pickup>,
@@ -608,6 +621,7 @@ pub fn requested_view(
         .collect::<Vec<_>>()
         .join(" · ");
     RequestedView {
+        ask,
         game: r.game.entry.id.to_string(),
         source: r.source.id(),
         source_label: r.source.label(),
@@ -895,7 +909,7 @@ pub fn begin_plan(key: &str) -> Result<(), String> {
         return Err("Another install is getting ready. Wait for it first.".into());
     }
     w.busy = true;
-    if w.requested.as_ref().is_some_and(|r| r.key() == key) {
+    if w.requested.as_ref().is_some_and(|(_, r)| r.key() == key) {
         w.requested = None;
     }
     Ok(())
@@ -1052,6 +1066,7 @@ pub(crate) async fn mods_plan_install(
 /// it from Downloads. Opening the page is the page's own link.
 #[tauri::command]
 pub(crate) async fn mods_wait_for_browser(
+    app: AppHandle,
     state: State<'_, ShellState>,
     game: String,
     source: String,
@@ -1069,6 +1084,7 @@ pub(crate) async fn mods_wait_for_browser(
             size: f.size,
             since: SystemTime::now() - std::time::Duration::from_secs(5),
         });
+        let _ = app.emit(PICKUP_EVENT, ());
         Ok(())
     })
     .await
@@ -1166,14 +1182,14 @@ pub(crate) async fn mods_requested(
     capabilities::needs(capabilities::current().mods, "Mods")?;
     let dir = state.config_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let Some(r) = requested() else {
+        let Some((ask, r)) = requested() else {
             return Ok(None);
         };
         let blocked = target(&r.game).err();
         let installed = engine::installed(&dir, Some(r.game.entry.id));
         let pickup = work().pickup.clone();
         Ok(Some(requested_view(
-            &r,
+            (ask, &r),
             &installed,
             blocked,
             pickup.as_ref(),
@@ -1185,9 +1201,9 @@ pub(crate) async fn mods_requested(
 
 /// The Install card's Dismiss.
 #[tauri::command]
-pub(crate) fn mods_drop_request(key: String) -> Result<(), String> {
+pub(crate) fn mods_drop_request(ask: u64) -> Result<(), String> {
     capabilities::needs(capabilities::current().mods, "Mods")?;
-    drop_request(&key);
+    drop_request(ask);
     Ok(())
 }
 

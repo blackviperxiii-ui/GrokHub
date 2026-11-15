@@ -24,8 +24,12 @@ const inst = vi.hoisted(() => ({
     asked.handler = handler;
     return Promise.resolve(() => {});
   }),
+  onModsPickup: vi.fn((handler: () => void) => {
+    asked.pickups.push(handler);
+    return Promise.resolve(() => {});
+  }),
 }));
-const asked = vi.hoisted(() => ({ handler: null as (() => void) | null }));
+const asked = vi.hoisted(() => ({ handler: null as (() => void) | null, pickups: [] as (() => void)[] }));
 vi.mock("./modsInstallApi", () => inst);
 
 import { InstalledTab, InstallSheet, ModDrawerPanel, RequestedCard, StepLine, useInstall } from "./ModsInstall";
@@ -105,6 +109,7 @@ function Asked({ offline = false }: { offline?: boolean }) {
 }
 
 const ASKED: ModRequested = {
+  ask: 3,
   key: "nexus:2100",
   game: "stardew",
   source: "nexus",
@@ -120,6 +125,7 @@ const ASKED: ModRequested = {
 beforeEach(() => {
   vi.clearAllMocks();
   asked.handler = null;
+  asked.pickups = [];
   inst.modsRequested.mockResolvedValue(null);
   inst.modsFiles.mockResolvedValue({
     files: [
@@ -223,9 +229,51 @@ describe("the chat's Install card", () => {
     render(<Asked />);
     const card = within(await screen.findByRole("region", { name: "Asked for in chat" }));
     await user.click(card.getByRole("button", { name: "Dismiss" }));
-    expect(inst.modsDropRequest).toHaveBeenCalledWith("nexus:2100");
+    expect(inst.modsDropRequest).toHaveBeenCalledWith(3);
     expect(screen.queryByRole("region", { name: "Asked for in chat" })).not.toBeInTheDocument();
     expect(inst.modsPlanInstall).not.toHaveBeenCalled();
+  });
+
+  it("a read already on its way when Dismiss is clicked can't bring the card back", async () => {
+    const user = userEvent.setup();
+    inst.modsRequested.mockResolvedValueOnce(ASKED);
+    render(<Asked />);
+    const card = within(await screen.findByRole("region", { name: "Asked for in chat" }));
+    let answer: (r: ModRequested) => void = () => {};
+    inst.modsRequested.mockReturnValueOnce(new Promise<ModRequested>((done) => (answer = done)));
+    act(() => asked.handler?.());
+    await user.click(card.getByRole("button", { name: "Dismiss" }));
+    await act(async () => answer(ASKED));
+    expect(screen.queryByRole("region", { name: "Asked for in chat" })).not.toBeInTheDocument();
+    // A newer ask still shows.
+    inst.modsRequested.mockResolvedValueOnce({ ...ASKED, ask: 4 });
+    act(() => asked.handler?.());
+    expect(await screen.findByRole("region", { name: "Asked for in chat" })).toBeInTheDocument();
+  });
+
+  it("Download on the site in the drawer offers I downloaded it on the card too", async () => {
+    const user = userEvent.setup();
+    const browser: ModRequested = {
+      ...ASKED,
+      file: { ...ASKED.file, offer: { kind: "browser", url: "https://www.nexusmods.com/f/7" } },
+    };
+    inst.modsRequested.mockResolvedValueOnce(browser);
+    render(
+      <>
+        <Asked />
+        <Drawer />
+      </>,
+    );
+    const card = within(await screen.findByRole("region", { name: "Asked for in chat" }));
+    expect(card.queryByRole("button", { name: "I downloaded it" })).not.toBeInTheDocument();
+    const files = within(await screen.findByRole("region", { name: "Files" }));
+    await user.click(files.getByRole("button", { name: "Download on Nexus Mods" }));
+    await waitFor(() => expect(inst.modsFiles).toHaveBeenCalledTimes(2));
+    // The shell then says the page waits for that download; both read again.
+    inst.modsRequested.mockResolvedValueOnce({ ...browser, file: { ...browser.file, waiting: true } });
+    act(() => asked.pickups.forEach((p) => p()));
+    expect(await card.findByRole("button", { name: "I downloaded it" })).toBeInTheDocument();
+    await waitFor(() => expect(inst.modsFiles).toHaveBeenCalledTimes(3));
   });
 
   it("a new ask from the chat shows without reopening the page", async () => {

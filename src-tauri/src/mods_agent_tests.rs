@@ -273,7 +273,8 @@ fn the_card_waits_for_its_own_click_and_a_newer_ask_replaces_it() {
         NOW,
     )
     .unwrap();
-    let v = requested_view(&r, &[], None, None);
+    let v = requested_view((4, &r), &[], None, None);
+    assert_eq!(v.ask, 4);
     assert_eq!(v.title, "Install Sodium for Minecraft: Java Edition?");
     assert_eq!(
         v.line,
@@ -281,23 +282,35 @@ fn the_card_waits_for_its_own_click_and_a_newer_ask_replaces_it() {
     );
     assert_eq!(v.file.offer, Offer::Install);
     assert_eq!((v.game.as_str(), v.source), ("minecraft", "modrinth"));
-    let shut = requested_view(&r, &[], Some("Close Minecraft first.".into()), None);
+    let shut = requested_view((4, &r), &[], Some("Close Minecraft first.".into()), None);
     assert_eq!(shut.file.offer, Offer::Blocked);
     assert_eq!(shut.blocked.as_deref(), Some("Close Minecraft first."));
 
-    mods_install::request(r.clone());
-    let mut newer = r.clone();
-    newer.m.id = "P7dR8mSH".into();
-    mods_install::request(newer);
+    let first = mods_install::request(r.clone());
+    let mut other_mod = r.clone();
+    other_mod.m.id = "P7dR8mSH".into();
+    let second = mods_install::request(other_mod);
+    assert_eq!(second, first + 1);
     assert_eq!(
-        mods_install::requested().map(|r| r.key()).as_deref(),
+        mods_install::requested().map(|(_, r)| r.key()).as_deref(),
         Some("modrinth:P7dR8mSH")
     );
-    // Dismiss on the card the page showed leaves a newer one alone.
-    mods_install::drop_request("modrinth:AANobbMI");
-    assert!(mods_install::requested().is_some());
-    mods_install::drop_request("modrinth:P7dR8mSH");
+    // Dismiss on the card the page showed leaves a newer one alone, even a
+    // newer ask for the same mod with another file.
+    mods_install::drop_request(first);
+    assert_eq!(mods_install::requested().map(|(n, _)| n), Some(second));
+    mods_install::drop_request(second);
     assert_eq!(mods_install::requested(), None);
+    let shown = mods_install::request(r.clone());
+    let mut other_file = r.clone();
+    other_file.f.id = "y".into();
+    let newer = mods_install::request(other_file);
+    mods_install::drop_request(shown);
+    assert_eq!(
+        mods_install::requested().map(|(n, r)| (n, r.f.id)),
+        Some((newer, "y".to_string()))
+    );
+    mods_install::drop_request(newer);
 
     // Starting that mod's install answers the ask; another mod's doesn't.
     mods_install::request(r);

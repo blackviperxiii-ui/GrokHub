@@ -30,6 +30,7 @@ const install = vi.hoisted(() => ({
   modsRequested: vi.fn(() => Promise.resolve(null)),
   modsDropRequest: vi.fn(() => Promise.resolve()),
   onModsRequested: vi.fn(() => Promise.resolve(() => {})),
+  onModsPickup: vi.fn(() => Promise.resolve(() => {})),
 }));
 
 vi.mock("./modsInstallApi", () => install);

@@ -22,6 +22,7 @@ import {
   modsRequested,
   modsWaitForBrowser,
   onModsJob,
+  onModsPickup,
   onModsRequested,
   type ModDrawer,
   type ModFileRow,
@@ -269,6 +270,20 @@ function FileActions({
   }
 }
 
+/** Subscribe to each event; the returned cleanup unsubscribes them all,
+ * including any that only finish subscribing after it runs. */
+function listenAll(subs: Promise<() => void>[]): () => void {
+  let live = true;
+  const offs: (() => void)[] = [];
+  for (const sub of subs) {
+    void sub.then((off) => (live ? offs.push(off) : off()));
+  }
+  return () => {
+    live = false;
+    offs.forEach((off) => off());
+  };
+}
+
 /** The mod the chat asked to set up: one card, the same one way to get the
  * file as in the drawer, and Dismiss. Nothing has been fetched yet. It reads
  * the ask again when the chat makes a new one and whenever the install job
@@ -282,23 +297,17 @@ export function RequestedCard({
 }) {
   const [got, setGot] = useState<ModRequested | null>(null);
   const [ask, setAsk] = useState(0);
+  // A read already on its way when Dismiss is clicked can't bring it back.
+  const dismissed = useRef(0);
   const moved = `${install.generation}|${install.step?.kind ?? ""}|${ask}`;
   useEffect(() => {
-    let off: (() => void) | undefined;
-    let live = true;
-    void onModsRequested(() => setAsk((n) => n + 1)).then((f) => {
-      if (live) off = f;
-      else f();
-    });
-    return () => {
-      live = false;
-      off?.();
-    };
+    const again = () => setAsk((n) => n + 1);
+    return listenAll([onModsRequested(again), onModsPickup(again)]);
   }, []);
   useEffect(() => {
     let live = true;
     modsRequested().then(
-      (r) => live && setGot(r),
+      (r) => live && setGot(r && r.ask !== dismissed.current ? r : null),
       () => live && setGot(null),
     );
     return () => {
@@ -330,8 +339,9 @@ export function RequestedCard({
           type="button"
           className="quiet"
           onClick={() => {
+            dismissed.current = r.ask;
             setGot(null);
-            void modsDropRequest(r.key).catch(() => {});
+            void modsDropRequest(r.ask).catch(() => {});
           }}
         >
           Dismiss
@@ -364,6 +374,8 @@ export function ModDrawerPanel({
     null,
   );
   const [ask, setAsk] = useState(0);
+  // The chat's Install card can start the same browser download.
+  useEffect(() => listenAll([onModsPickup(() => setAsk((n) => n + 1))]), []);
   const key = `${game.id}|${source}|${mod.id}|${install.generation}|${ask}`;
   useEffect(() => {
     let live = true;

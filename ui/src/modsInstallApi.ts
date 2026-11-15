@@ -8,6 +8,8 @@ import { call, inShell, subscribe } from "./transport";
 export const MODS_JOB_EVENT = "mods://job";
 /** The chat put a new Install card on the Mods page. */
 export const MODS_REQUESTED_EVENT = "mods://requested";
+/** The page now waits for a browser download: "I downloaded it" shows. */
+export const MODS_PICKUP_EVENT = "mods://pickup";
 
 export type ModOffer =
   | { kind: "install" }
@@ -71,7 +73,9 @@ export interface ModInstalled {
 
 /** The mod the chat asked to set up, as its Install card shows it. */
 export interface ModRequested {
-  /** `source:id`, what Dismiss names. */
+  /** The ask's number: Dismiss drops this ask and no newer one. */
+  ask: number;
+  /** `source:id`. */
   key: string;
   game: string;
   source: string;
@@ -90,13 +94,18 @@ export function modsRequested(): Promise<ModRequested | null> {
   return call<ModRequested | null>("mods_requested");
 }
 
-export function modsDropRequest(key: string): Promise<void> {
-  return call<void>("mods_drop_request", { key });
+export function modsDropRequest(ask: number): Promise<void> {
+  return call<void>("mods_drop_request", { ask });
 }
 
 export function onModsRequested(handler: () => void): Promise<UnlistenFn> {
   if (!inShell()) return Promise.resolve(() => {});
   return subscribe<null>(MODS_REQUESTED_EVENT, () => handler());
+}
+
+export function onModsPickup(handler: () => void): Promise<UnlistenFn> {
+  if (!inShell()) return Promise.resolve(() => {});
+  return subscribe<null>(MODS_PICKUP_EVENT, () => handler());
 }
 
 export function modsFiles(
