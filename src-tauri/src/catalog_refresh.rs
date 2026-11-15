@@ -114,7 +114,7 @@ fn download(dir: &Path, url: &str, cap: u64) -> Result<Vec<u8>, String> {
     resp.into_reader()
         .take(cap + 1)
         .read_to_end(&mut body)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("{name}: {e}"))?;
     if body.len() as u64 > cap {
         return Err(format!("{name} is larger than expected"));
     }
