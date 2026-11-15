@@ -1,1 +1,1 @@
-- Voice mode: while you talk, a quiet line above the message box shows what it has heard so far, from the streamed speech. It shows only while voice mode listens, and long captions show their end.
+- Voice mode: while you talk, a quiet line above the message box shows what it has heard so far, from the streamed speech. It shows only while voice mode listens, and a long caption shows its newest words.

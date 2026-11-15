@@ -87,6 +87,8 @@ pub struct Live {
     open: Option<Opener>,
     /// Samples heard while listening, for the length of a Smart Turn turn.
     heard: usize,
+    /// The page shows a caption from this listen's stream.
+    captioned: bool,
 }
 
 impl Live {
@@ -109,10 +111,10 @@ impl Live {
         let block = s16le(bytes);
         if self.mic.armed() {
             self.heard += block.len();
+            // A stream that already ended can't take audio; its news still
+            // waits in the channel, so the link stays until that is read.
             if let Some(link) = &self.stt {
-                if link.audio.send(block.clone()).is_err() {
-                    self.stt = None;
-                }
+                let _ = link.audio.send(block.clone());
             }
         }
         let heard = self.mic.push(&block);
@@ -141,17 +143,27 @@ impl Live {
                 }
             })
             .collect();
-        match self.stream_news() {
-            (_, Some(words)) => {
-                self.mic.stop();
-                self.stt = None;
-                self.turn = Some(Pending::Words(words));
-                events.push(LiveEvent::Turn {
-                    ms: ms_of(self.heard),
+        let streaming = self.stt.is_some();
+        let (caption, words) = self.stream_news();
+        if let Some(words) = words {
+            self.mic.stop();
+            self.stt = None;
+            self.captioned = false;
+            self.turn = Some(Pending::Words(words));
+            events.push(LiveEvent::Turn {
+                ms: ms_of(self.heard),
+            });
+        } else if streaming && self.stt.is_none() {
+            // The stream went away mid-listen: its caption would stand still
+            // while they talk on, so it goes.
+            if std::mem::take(&mut self.captioned) {
+                events.push(LiveEvent::Caption {
+                    text: String::new(),
                 });
             }
-            (Some(text), None) => events.push(LiveEvent::Caption { text }),
-            (None, None) => {}
+        } else if let Some(text) = caption {
+            self.captioned = true;
+            events.push(LiveEvent::Caption { text });
         }
         Ok(events)
     }
@@ -185,15 +197,25 @@ impl Live {
         self.mic.set_playing(playing);
         self.mic.listen();
         self.heard = 0;
+        self.captioned = false;
         self.stt = None;
         if !playing {
             self.stt = self.open.as_mut().and_then(|open| open());
         }
     }
 
-    /// The reply stopped or finished playing.
+    /// The reply started, stopped or finished playing. Once it is over and
+    /// nobody is mid-turn, the next turn gets a stream. A turn already under
+    /// way (talking over the reply) keeps the upload: a stream opened now
+    /// would miss its start.
     pub fn set_playing(&mut self, playing: bool) {
         self.mic.set_playing(playing);
+        if playing {
+            self.stt = None;
+        } else if self.mic.armed() && !self.mic.talking() && self.stt.is_none() {
+            self.heard = 0;
+            self.stt = self.open.as_mut().and_then(|open| open());
+        }
     }
 
     /// End the turn now (a tap while they talk).
