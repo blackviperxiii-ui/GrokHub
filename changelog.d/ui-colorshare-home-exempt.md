@@ -1,0 +1,1 @@
+- UI checks: the color-share check no longer fails Home for having more amber than red, since its XP bars and streak days are amber on purpose. Every other screen still needs red ≥ amber, and Home still has to keep amber under 10%.
