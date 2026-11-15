@@ -1,0 +1,1 @@
+- Windows desktop builds work again: the Chat find bar and its helpers were imported as `./ChatFind` and `./chatFind`, which Windows reads as the same file, so every beta build since Find in this chat landed had failed. CI now fails when two file, folder or JS/TS import names differ only by letter case.

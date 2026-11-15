@@ -107,7 +107,7 @@ import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
 import { DeviceGlanceRow } from "./DeviceGlance";
 import { PanelCard, panelActionText } from "./PanelCard";
-import { ChatFindBar } from "./ChatFind";
+import { ChatFindBar } from "./ChatFindBar";
 import { findLabel, findRows, findStep, itemText } from "./chatFind";
 import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { splitSources } from "./replySources";

@@ -4,6 +4,8 @@
 # shared one. A guard sets fail=1 to fail the job. Today's guards fail CI when:
 #   10) conflict markers are committed
 #   15) a scratch test file (`tests/zz_*`, `ui/src/zz_*`) is committed
+#   17) two tracked names in one folder, or two JS/TS import names, differ
+#       only by letter case, which Windows and macOS treat as the same name
 #   20) god-file line budgets are exceeded (ratchet; raise only when intentional)
 #   30) a PR edits Cargo.lock without a Cargo.toml dep edit or the dependencies
 #       label, or a non-release PR touches version lockstep files
