@@ -381,8 +381,33 @@ describe("LocalAi", () => {
     expect(await within(rows).findByRole("button", { name: "Let it unload" })).toBeInTheDocument();
     await userEvent.click(within(rows).getByRole("button", { name: "Unload now" }));
     expect(api.unloadLocalModel).toHaveBeenCalled();
-    expect(await screen.findByText(/Unloaded the model/)).toBeInTheDocument();
+    expect(await screen.findByText("Unloaded the model. It loads again with the next reply.")).toBeInTheDocument();
     expect(within(rows).queryByRole("button", { name: "Unload now" })).toBeNull();
+  });
+
+  it("unloads without promising a reload while Local AI is off", async () => {
+    const off = {
+      ...PROFILES["16 GB GPU"],
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    };
+    api.getLocalAi.mockResolvedValue({
+      ...off,
+      running: {
+        lines: ["Running now: Gemma 4 12B (Q4_K), loaded on the GPU, 6.9 GB."],
+        loaded: true,
+        keptLoaded: false,
+        dynamic: false,
+        dynamicHint: "Off: your pick answers every task.",
+      },
+    });
+    api.unloadLocalModel.mockResolvedValue(off);
+    render(<LocalAi />);
+    const rows = await screen.findByLabelText("Running now");
+    await userEvent.click(within(rows).getByRole("button", { name: "Unload now" }));
+    expect(api.unloadLocalModel).toHaveBeenCalled();
+    expect(await screen.findByText("Unloaded the model.")).toBeInTheDocument();
+    expect(screen.queryByText("Unloaded the model. It loads again with the next reply.")).toBeNull();
   });
 
   it("turns Dynamic off and on from the running rows", async () => {
