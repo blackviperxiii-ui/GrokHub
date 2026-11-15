@@ -869,6 +869,11 @@ fn guide_dismisses(memory: &ChipMemory) -> u32 {
 }
 
 fn chip_family(id: &str, value: &str, label: &str) -> &'static str {
+    // A live-state chip's text names a game, a release or an app, so a word
+    // in that name ("Hollow Knight") says nothing about its kind.
+    if LIVE_STATE_CHIP_IDS.iter().any(|p| id.starts_with(p)) {
+        return "";
+    }
     let blob = format!("{id} {value} {label}").to_ascii_lowercase();
     if blob.contains("guide-") || blob.contains("start here") || blob.contains("what you can do") {
         return "guide";
@@ -4323,6 +4328,50 @@ mod tests {
             "no filler chips if ranking yields none: {:?}",
             labels(&rest)
         );
+    }
+
+    #[test]
+    fn a_hidden_night_chip_quiets_its_family_but_not_a_game_named_for_the_night() {
+        let night = QuickChip {
+            id: "empty-night".into(),
+            label: "Set a night job".into(),
+            value: "Set a night job".into(),
+            kind: ChipKind::Chat,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        };
+        let mut mem = ChipMemory::default();
+        remember_chip_dismiss(&mut mem, &night, 5, 22);
+        assert!(family_quiet_this_hour(
+            &mem,
+            "night-backup",
+            "Back up tonight",
+            "Back up tonight",
+            22
+        ));
+        assert!(!family_quiet_this_hour(
+            &mem,
+            "night-backup",
+            "Back up tonight",
+            "Back up tonight",
+            9
+        ));
+        let knight = crate::steam::SteamGame {
+            app_id: 367520,
+            name: "Hollow Knight".into(),
+            last_played: 0,
+            playtime_min: 0,
+        };
+        for ended in [false, true] {
+            for chip in crate::game_companion::chips(&knight, ended) {
+                assert!(
+                    !family_quiet_this_hour(&mem, &chip.id, &chip.value, &chip.label, 22),
+                    "{}",
+                    chip.label
+                );
+            }
+        }
     }
 
     #[test]
