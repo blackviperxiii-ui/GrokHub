@@ -3,7 +3,8 @@
 //
 // Counts red / amber / neutral-gray / black pixels in each PNG and prints a
 // table. Exits nonzero when any screen fails:
-//   - red pixels ≥ amber pixels
+//   - red pixels ≥ amber pixels, except on Home, where XP bars and streak
+//     days stay amber by design
 //   - amber ≤ 10% of non-black pixels
 //   - neutral-gray outline pixels ≥ 50% lower than a baseline (when given)
 //
@@ -120,10 +121,20 @@ function pct(n, d) {
   return d ? ((100 * n) / d).toFixed(2) : "0.00";
 }
 
+/** Screens where amber may outweigh red: Home's XP bars and streak days are amber by design. */
+const RED_RULE_EXEMPT = new Set(["home"]);
+
+/** The view slug from `<theme>_<viewport>_<view>.png` (shots.mjs names). */
+function viewOf(file) {
+  return file.replace(/\.png$/, "").split("_").pop();
+}
+
 function check(row, baselineGray) {
   const nonBlack = row.total - row.black;
   const fails = [];
-  if (row.red < row.amber) fails.push(`red(${row.red}) < amber(${row.amber})`);
+  if (row.red < row.amber && !RED_RULE_EXEMPT.has(viewOf(row.file))) {
+    fails.push(`red(${row.red}) < amber(${row.amber})`);
+  }
   const amberShare = nonBlack ? row.amber / nonBlack : 0;
   if (amberShare > 0.1) fails.push(`amber ${pct(row.amber, nonBlack)}% > 10% of non-black`);
   if (baselineGray != null) {
@@ -160,7 +171,7 @@ async function run() {
           baselineGray = base.gray;
         }
       }
-      const fails = check(counts, baselineGray);
+      const fails = check({ file, ...counts }, baselineGray);
       rows.push({ file, ...counts, baselineGray, fails });
     }
   } finally {
