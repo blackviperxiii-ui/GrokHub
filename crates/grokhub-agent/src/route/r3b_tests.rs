@@ -383,6 +383,19 @@ fn base_urls_are_https_hosts_and_xai_is_built_in() {
         parse_base_url("https://10.0.0.5/v1").unwrap_err(),
         "That address isn't a public https URL."
     );
+    // A provider's key is saved under its id, so no id may be a named key's.
+    assert_eq!(
+        parse_base_url("https://cabin-web-search-brave.example.com/v1").unwrap_err(),
+        "That provider name is reserved."
+    );
+    for key in providers::NamedKey::ALL {
+        let url = format!("https://{}.example.com/v1", key.account());
+        assert_ne!(
+            parse_base_url(&url).map(|(_, _, id)| id).as_deref(),
+            Ok(key.account()),
+            "{url}"
+        );
+    }
     let a = providers::Provider {
         id: "anthropic".into(),
         kind: ProviderKind::Anthropic,

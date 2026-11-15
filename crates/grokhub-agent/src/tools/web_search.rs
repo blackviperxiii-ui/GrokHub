@@ -24,9 +24,6 @@ const QUERY_CAP: usize = 400;
 const OFFLINE_MSG: &str =
     "Web search is unavailable (no network or the search host did not answer). Continue without live sources, or try again when online.";
 
-/// Keyring account for an optional Brave Search API key (never in app.json),
-/// in the provider keys' vault (`route::providers::named_key`).
-pub const BRAVE_KEY_ACCOUNT: &str = "cabin-web-search-brave";
 /// Where the search settings live, named in the tool's errors.
 const SETTINGS_PATH: &str = "Settings → AI models → Web search";
 /// A non-http SearXNG URL is refused when saved.
@@ -491,12 +488,16 @@ fn parse_brave_json(body: &str) -> Result<Vec<Hit>, String> {
 }
 
 fn brave_key(config_dir: &std::path::Path) -> Result<Option<Zeroizing<String>>, String> {
-    crate::route::providers::named_key(config_dir, BRAVE_KEY_ACCOUNT)
+    crate::route::providers::named_key(config_dir, crate::route::providers::NamedKey::BraveSearch)
 }
 
 /// Save a Brave Search API key to the keyring (Settings). Empty clears it.
 pub fn seal_brave_key(config_dir: &std::path::Path, key: &str) -> Result<(), String> {
-    crate::route::providers::set_named_key(config_dir, BRAVE_KEY_ACCOUNT, key)
+    crate::route::providers::set_named_key(
+        config_dir,
+        crate::route::providers::NamedKey::BraveSearch,
+        key,
+    )
 }
 
 pub fn brave_key_present(config_dir: &std::path::Path) -> bool {

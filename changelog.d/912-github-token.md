@@ -1,0 +1,1 @@
+- Connectors has a GitHub section: save a personal access token to your keyring, then run Who am I or List repos. Both are read-only, and the token goes to api.github.com only.

@@ -3019,6 +3019,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 
 .card.connector,
 .card.hook,
+.card.github-repo,
 .card.post {
   max-width: none;
   flex-direction: column;
@@ -3032,19 +3033,21 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   overflow-wrap: anywhere;
 }
 
-/* Hooks follow the list, so an empty list stays at the top. */
+/* Hooks and GitHub follow the list, so an empty list stays at the top. */
 .connectors > .empty {
   margin: 0;
 }
 
-.hooks {
+.hooks,
+.github {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 8px;
 }
 
-.hooks h2 {
+.hooks h2,
+.github h2 {
   font-size: var(--font-prose);
   margin: 8px 0 0;
 }

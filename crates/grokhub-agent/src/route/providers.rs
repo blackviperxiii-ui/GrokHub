@@ -74,6 +74,30 @@ const BODY_CAP: u64 = 8 * 1024 * 1024;
 /// Provider ids GrokHub keeps for itself.
 const RESERVED_IDS: &[&str] = &["xai", "local", "grok_build", "grok", "x"];
 
+/// A key saved in the provider keys' vault that isn't a provider's. Provider
+/// keys are saved under the provider's id, so no provider may take one of
+/// these accounts: [`parse_base_url`] refuses them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamedKey {
+    /// Web search through Brave (Settings → AI models → Web search).
+    BraveSearch,
+    /// The GitHub personal access token (Connectors → GitHub).
+    GithubToken,
+}
+
+impl NamedKey {
+    pub const ALL: [NamedKey; 2] = [NamedKey::BraveSearch, NamedKey::GithubToken];
+
+    /// The keyring account. The GitHub one has a dot, which no provider id
+    /// can hold; the Brave one keeps the name older versions saved under.
+    pub const fn account(self) -> &'static str {
+        match self {
+            Self::BraveSearch => "cabin-web-search-brave",
+            Self::GithubToken => "connectors.github-pat",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
@@ -208,7 +232,10 @@ pub fn parse_base_url(raw: &str) -> Result<(String, ProviderKind, String), Strin
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
         .collect::<String>()
         .to_ascii_lowercase();
-    if id.is_empty() || RESERVED_IDS.contains(&id.as_str()) {
+    if id.is_empty()
+        || RESERVED_IDS.contains(&id.as_str())
+        || NamedKey::ALL.iter().any(|k| k.account() == id)
+    {
         return Err("That provider name is reserved.".into());
     }
     Ok((url.to_string(), kind, id))
@@ -596,14 +623,15 @@ fn vault_for(config_dir: &Path) -> Option<Arc<dyn KeyVault>> {
 
 /// A key under its own keyring account (not a provider's), such as the Brave
 /// Search key. A blank stored value reads as none.
-pub fn named_key(config_dir: &Path, account: &str) -> Result<Option<Zeroizing<String>>, String> {
+pub fn named_key(config_dir: &Path, key: NamedKey) -> Result<Option<Zeroizing<String>>, String> {
     let vault = vault_for(config_dir).ok_or_else(|| KEYRING_OFF.to_string())?;
-    Ok(vault.get(account)?.filter(|k| !k.trim().is_empty()))
+    Ok(vault.get(key.account())?.filter(|k| !k.trim().is_empty()))
 }
 
 /// Save a key under its own keyring account; empty (after trimming) deletes it.
-pub fn set_named_key(config_dir: &Path, account: &str, value: &str) -> Result<(), String> {
+pub fn set_named_key(config_dir: &Path, key: NamedKey, value: &str) -> Result<(), String> {
     let vault = vault_for(config_dir).ok_or_else(|| KEYRING_OFF.to_string())?;
+    let account = key.account();
     let value = value.trim();
     let done = if value.is_empty() {
         vault.delete(account)
