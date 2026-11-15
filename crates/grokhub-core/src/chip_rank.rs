@@ -31,7 +31,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::chip_store::{chip_log_key, ChipOutcome};
-use crate::chips::{chip_intent, chip_memory_key, ChipKind, ChipMemory, QuickChip};
+use crate::chips::{chip_memory_key, quick_chip_intent, ChipKind, ChipMemory, QuickChip};
 use crate::learn::{Beliefs, Standing, Subject};
 
 /// Chips a row shows at most, on every surface.
@@ -312,10 +312,7 @@ fn select(
     let lo = scores.iter().copied().fold(f32::MAX, f32::min);
     let hi = scores.iter().copied().fold(f32::MIN, f32::max);
     let norm = |s: f32| if hi > lo { (s - lo) / (hi - lo) } else { 1.0 };
-    let intents: Vec<Option<&'static str>> = pool
-        .iter()
-        .map(|c| chip_intent(&c.label, &c.value))
-        .collect();
+    let intents: Vec<Option<&'static str>> = pool.iter().map(quick_chip_intent).collect();
     let mut picked: Vec<usize> = Vec::new();
     while picked.len() < max {
         let mut best: Option<(usize, f32)> = None;
@@ -590,6 +587,14 @@ mod tests {
         ];
         let row = rank_quick_chips(&mut mem, pool, ctx(1));
         assert_eq!(ids(&row), ["a", "c"]);
+        // A game's name is no intent: its note chip and a real fix share
+        // the row.
+        let pool = vec![
+            chip("game:note:1", "Note for Crash Bandicoot", 9.0),
+            chip("b", "Why is it failing", 8.0),
+        ];
+        let row = rank_quick_chips(&mut mem, pool, ctx(1));
+        assert_eq!(ids(&row), ["game:note:1", "b"]);
     }
 
     #[test]

@@ -54,6 +54,7 @@ import {
   type Transcript,
   type TurnRead,
 } from "./api";
+import { GameNote, useNoteStatus } from "./GameNote";
 import { ChipRow, useChipRow } from "./Chips";
 import { ChatTabs, HangoutHeader } from "./ChatTabs";
 import { GoalAsk } from "./Goals";
@@ -1014,6 +1015,9 @@ export function Chat({
   const [slashShut, setSlashShut] = useState<string | null>(null);
   const slashOpen = slashRows.length > 0 && slashShut !== draft;
   const slashPick = Math.min(slashAt, slashRows.length - 1);
+  // The game a "Leave a note" chip opened the note dialog for.
+  const [noteFor, setNoteFor] = useState<number | null>(null);
+  const [noteSaved, setNoteSaved] = useNoteStatus();
   const row = useChipRow({
     surface: "composer",
     // The computer refuses a browser chips for a chat it has not sent in, so
@@ -2118,6 +2122,10 @@ export function Chat({
    * otherwise. A follow-up from a plan's reply plans again. */
   function tapChip(chip: QuickChip) {
     row.picked(chip);
+    if (chip.action === "note") {
+      if (chip.noteFor) setNoteFor(chip.noteFor);
+      return;
+    }
     if (chip.action === "go") {
       if (chip.view) onOpenView?.(chip.view as View);
       return;
@@ -2475,6 +2483,20 @@ export function Chat({
       ) : null}
       {!remote && <BudgetCard busy={busy} onOpenSettings={onOpenSettings} />}
       <ChipRow chips={row.chips} busy={busy} keys={active} onTap={tapChip} onHide={row.hide} />
+      {noteSaved && (
+        <p className="note" role="status">
+          {noteSaved}
+        </p>
+      )}
+      {noteFor !== null && (
+        <GameNote
+          appId={noteFor}
+          onDone={(status) => {
+            setNoteFor(null);
+            setNoteSaved(status);
+          }}
+        />
+      )}
     </section>
   );
   if (embedded) return lane;

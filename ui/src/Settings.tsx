@@ -32,6 +32,7 @@ import { PulseSources } from "./PulseSources";
 import { AiModels } from "./AiModels";
 import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
+import { GameCompanionSetting } from "./GameCompanionSetting";
 import { GameWatch } from "./GameWatch";
 import { LivingWall } from "./LivingWall";
 import { PcHelpers } from "./PcHelpers";
@@ -288,6 +289,11 @@ export function Settings({
               />
             )}
             {section === "behavior" && <ScreenshotExplain />}
+            {section === "behavior" && caps.pulse && (
+              <GameCompanionSetting
+                notifications={Boolean(loaded.notifications && caps.notifications)}
+              />
+            )}
             {section === "behavior" && <GameWatch />}
             {section === "behavior" && <LivingWall />}
             {section === "behavior" && <MemoryRetention />}

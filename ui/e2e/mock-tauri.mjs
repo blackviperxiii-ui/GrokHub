@@ -648,6 +648,14 @@ export function initScript(theme = "ops-dark") {
         case "get_game_watch":
         case "set_game_watch":
           return { on: false, note: "" };
+        case "get_game_companion":
+        case "set_game_companion":
+        case "set_game_companion_ping":
+          return { on: false, ping: false, note: "" };
+        case "companion_note":
+          return { game: "Hades", note: "" };
+        case "companion_set_note":
+          return "";
         case "get_living_wall":
         case "set_living_wall":
           return { on: false };

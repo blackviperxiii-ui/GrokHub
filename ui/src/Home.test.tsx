@@ -21,6 +21,8 @@ const api = vi.hoisted(() => ({
   homeCatalog: vi.fn(),
   setHomeLayout: vi.fn(),
   openUrl: vi.fn<(url: string) => Promise<void>>(),
+  companionNote: vi.fn<(appId: number) => Promise<{ game: string; note: string }>>(),
+  companionSetNote: vi.fn<(appId: number, text: string) => Promise<string>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -735,6 +737,34 @@ describe("Home", () => {
     expect(api.chipOutcome).toHaveBeenCalledWith("home", "pred-1", true);
     await userEvent.click(await screen.findByRole("button", { name: "Automations" }));
     expect(go.onOpen).toHaveBeenCalledWith("automations");
+  });
+
+  it("a game's note chip opens the note dialog instead of asking, and Save keeps the note", async () => {
+    const note: QuickChip = {
+      id: "game:note:7",
+      label: "Leave a note for Hades next time",
+      value: "note 7",
+      action: "note",
+      noteFor: 7,
+      hint: "Shown on the card the next time you launch it",
+      primary: false,
+    };
+    api.getHome.mockResolvedValue(PAGE);
+    api.quickChips.mockResolvedValue([note]);
+    api.companionNote.mockResolvedValue({ game: "Hades", note: "" });
+    api.companionSetNote.mockResolvedValue("beat Megaera next");
+    const go = routes();
+    render(<Home {...go} remote={false} />);
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    await userEvent.click(within(row).getByRole("button", { name: "Leave a note for Hades next time" }));
+    const dialog = await screen.findByRole("dialog", { name: "Note for Hades" });
+    expect(go.onAsk).not.toHaveBeenCalled();
+    expect(api.chipOutcome).toHaveBeenCalledWith("home", "game:note:7", true);
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Your note" }), "beat Megaera next");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(api.companionSetNote).toHaveBeenCalledWith(7, "beat Megaera next");
+    expect(await screen.findByText("Saved. It shows on the card next time you launch it.")).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "Note for Hades" })).toBeNull();
   });
 
   it("says why when Home can't load, and tries again on a tap", async () => {

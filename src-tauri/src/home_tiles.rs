@@ -230,19 +230,17 @@ fn played(games: &[library::Game]) -> Vec<tiles::PlayedGame> {
 }
 
 /// Achievements, Deals and Patch Notes: the cards their Pulse source posted
-/// on this computer. Achievements and Deals turn on right here (the Steam
-/// account signed in on this PC) and their checks run in this app; the game
-/// companion's switch still lives in the desktop app's settings.
+/// on this computer. All three turn on and off right here: Achievements and
+/// Deals with the Steam account signed in on this PC, Patch Notes with the
+/// game companion's own switch (an old desktop app's switch carries over to
+/// it once).
 fn feed(module: &str, config_dir: &Path, now: u64) -> TileView {
-    // Patch Notes counts as on when either app's companion is on; only this
-    // app's own switch can be turned off here.
-    let (on, ours) = match module {
-        "achievements" => (grokhub_core::steam_achievements::load(config_dir).on, true),
-        "deals" => (grokhub_core::steam_wishlist::load(config_dir).on, true),
+    let on = match module {
+        "achievements" => grokhub_core::steam_achievements::load(config_dir).on,
+        "deals" => grokhub_core::steam_wishlist::load(config_dir).on,
         _ => {
-            let ours = crate::game_companion::is_on(config_dir);
-            // app.json keeps its keys in camelCase.
-            (ours || desktop_flag(config_dir, "gameCompanion"), ours)
+            let _ = crate::game_companion::migrate_legacy(config_dir);
+            crate::game_companion::is_on(config_dir)
         }
     };
     let cards = match pulse::cards(config_dir) {
@@ -251,14 +249,12 @@ fn feed(module: &str, config_dir: &Path, now: u64) -> TileView {
     };
     let view = tiles::feed_view(module, on, &tiles::feed_items(&cards, module), now);
     let note = crate::steam_checks::note(module);
-    feed_turn(module, view, note, ours)
+    feed_turn(module, view, note)
 }
 
 /// The feed tile's switch: Turn on in place (with what the last try or check
-/// said, for the Steam checks), and Turn off once on, when it was this app
-/// that turned it on (`ours`). Patch Notes turned on in the desktop app stays
-/// that app's to turn off.
-pub fn feed_turn(module: &str, mut view: TileView, note: Option<String>, ours: bool) -> TileView {
+/// said, for the Steam checks), and Turn off once on.
+pub fn feed_turn(module: &str, mut view: TileView, note: Option<String>) -> TileView {
     if let Some(note) = note.filter(|_| matches!(module, "achievements" | "deals")) {
         view.text.detail = Some(note);
     }
@@ -272,24 +268,7 @@ pub fn feed_turn(module: &str, mut view: TileView, note: Option<String>, ours: b
             .on_tap(TileAction::setup(module, false))
             .primary("Turn on", TileAction::setup(module, false));
     }
-    if ours {
-        return view.button("Turn off", TileAction::setup(module, true));
-    }
-    view
-}
-
-/// One on/off setting from the desktop app's own settings file, read only.
-/// Missing, unreadable or oversized reads as off.
-fn desktop_flag(config_dir: &Path, key: &str) -> bool {
-    let path = config_dir.join("app.json");
-    if !std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() <= 1024 * 1024) {
-        return false;
-    }
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|v| v.get(key).and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
+    view.button("Turn off", TileAction::setup(module, true))
 }
 
 /// Tiles that scan the disk or ask the OS (the Steam library, drives, audio
