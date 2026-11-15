@@ -1,13 +1,13 @@
 # Loadout
 
-Native Rust cabin. No Electron. No Tauri in the egui cabin; the cross-platform Tauri shell is planned in [`docs/cross-platform/README.md`](cross-platform/README.md). One repo, one `main`, one version — two ship artifacts.
+The Tauri desktop app (`grokhub-shell`) and its LAN hub (`grokhub-hub`). No Electron. The cross-platform plan is in [`docs/cross-platform/README.md`](cross-platform/README.md). One repo, one `main`, one version.
 
 **v3.5.0** — The Loadout look: one brand file names the app and its companion, Nyx becomes the default personality for new installs, Ops Dark, OLED Black and Soft Charcoal themes arrive, the cabin's chat home gets a dock, Pulse reflows from side-by-side to one column and can follow your Steam library's game news, and the shell gets an Activity Dock for running chats, approvals and automation runs.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v3.5.0.tar.gz`, AUR | **v3.5.0** |
-| **Windows** (x86_64) | `GrokHub-Setup-3.5.0.exe`, `grokhub-windows-v3.5.0.zip` | **v3.5.0** |
+| **Linux** (x86_64) | `grokhub-shell-v*-linux-amd64.AppImage`, `.deb`, Arch recipe in [`packaging/aur/`](../packaging/aur/) | **v3.5.0** |
+| **Windows** (x86_64) | `GrokHub-Shell-Setup-*.exe` | **v3.5.0** |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
 
@@ -216,14 +216,12 @@ Pair code `ABC-234`. Devices paints a real LAN IPv4 (`http://192.168.x.x:18766`)
 
 | Path | Role |
 |------|------|
-| `~/.local/bin/grokhub` | User install (`./scripts/install.sh --user`) |
-| `/usr/bin/grokhub` | System / makepkg |
+| `~/.local/bin/grokhub-shell` | User install (`./scripts/install.sh --user`) |
+| `/usr/bin/grokhub-shell` | System install, `.deb` or makepkg |
 | `~/.config/GrokHub` | Linux user data (`app.json`, `projects.json`, `secrets.json`, memory) |
-| `%LOCALAPPDATA%\Programs\GrokHub` | Windows cabin (`grokhub.exe`) |
 | `%APPDATA%\GrokHub` | Windows user data |
 
-Linux tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.  
-Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A `vX.Y.Z` tag publishes both as a release; each push to `beta`, the nightly beta build and a `vX.Y.Z-beta.N` tag publish them as a pre-release named `v<version>-beta.<N>`, as described under the two channels above. On tags, when SignPath secrets are configured, the Setup and portable zip are Authenticode-signed (certificate by SignPath Foundation); see [CODE_SIGNING.md](CODE_SIGNING.md).
+Release builds come from `.github/workflows/release.yml`, which runs `tauri build` and names the bundles with `scripts/name-shell-bundles.sh`: the Linux AppImage and `.deb`, the Windows NSIS installer `GrokHub-Shell-Setup-<version>.exe`, and, on tags and nightly builds, the macOS `.dmg`. A `vX.Y.Z` tag publishes them as a release; each push to `beta`, the nightly beta build and a `vX.Y.Z-beta.N` tag publish them as a pre-release named `v<version>-beta.<N>`, as described under the two channels above.
 
 Every release and pre-release also carries `SHA256SUMS` (the SHA-256 of each file) and `SHA256SUMS.minisig`, a [minisign](https://jedisct1.github.io/minisign/) signature of it. The public key is [`packaging/minisign.pub`](../packaging/minisign.pub); the private key exists only as the `MINISIGN_SECRET_KEY` Actions secret. To check a download by hand:
 

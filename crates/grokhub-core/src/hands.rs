@@ -281,41 +281,11 @@ mod tests {
             PYATSPI_MISSING.contains("python-atspi") && PYATSPI_MISSING.contains("wmctrl"),
             "leftover hands copy still mentions pyatspi"
         );
-        let bundle = include_str!("../../../scripts/make-release-bundle.sh");
-        assert!(
-            !bundle.contains("build-hands.sh")
-                && !bundle.contains("ydotoold.service")
-                && bundle.contains("grokhub-hub.service")
-                && bundle.contains("enable --now grokhub-hub.service")
-                && bundle.contains("release-binary-size-ceiling"),
-            "release tarball install must skip sidecars, keep cabin/hub, and size-check: {bundle}"
-        );
-        let ceiling = include_str!("../../../packaging/release-binary-size-ceiling");
-        let ceiling_bytes: u64 = ceiling
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty() && !line.starts_with('#'))
-            .and_then(|line| line.parse().ok())
-            .expect("packaging/release-binary-size-ceiling must name a byte count");
-        assert!(
-            (1_048_576..=209_715_200).contains(&ceiling_bytes),
-            "release size ceiling must stay a plausible binary size: {ceiling_bytes}"
-        );
-        assert!(
-            !bundle.contains("sudo pacman -S --needed ydotool"),
-            "release tarball must not hard-require pacman ydotool"
-        );
         let aur_install = include_str!("../../../packaging/aur/grokhub.install");
         assert!(
             aur_install.contains("update-desktop-database")
-                && aur_install.contains("Run:    grokhub"),
-            "AUR post_install refreshes the menu and names the cabin: {aur_install}"
-        );
-        let iss = include_str!("../../../packaging/windows/grokhub.iss");
-        assert!(
-            iss.contains(r#"Source: "stage\grokhub.exe"; DestDir: "{app}""#)
-                && iss.contains(r#"Source: "stage\grokhub-hub.exe"; DestDir: "{app}""#),
-            "Windows Setup installs the cabin and hub: {iss}"
+                && aur_install.contains("Run:    grokhub-shell\n"),
+            "AUR post_install refreshes the menu and names the desktop app: {aur_install}"
         );
         assert_eq!(
             ydotool_socket_path(None, Some("/run/user/1000")),
@@ -331,36 +301,114 @@ mod tests {
     /// running binary, so both PKGBUILDs must rewrite the relative Exec.
     #[test]
     fn pkgbuilds_install_desktop_entry_with_absolute_exec() {
-        let rewrite = "sed -e 's|^Exec=grokhub$|Exec=/usr/bin/grokhub|' \\\n      -e 's|^TryExec=grokhub$|TryExec=/usr/bin/grokhub|' \\\n      packaging/grokhub.desktop >";
+        let rewrite = "sed -e 's|^Exec=grokhub-shell$|Exec=/usr/bin/grokhub-shell|' \\\n      -e 's|^TryExec=grokhub-shell$|TryExec=/usr/bin/grokhub-shell|' \\\n      packaging/grokhub-shell.desktop >";
         for (name, pkg, dest) in [
             (
                 "packaging/PKGBUILD",
                 include_str!("../../../packaging/PKGBUILD"),
-                "\"$pkgdir/usr/share/applications/grokhub.desktop\"",
+                "\"$pkgdir/usr/share/applications/grokhub-shell.desktop\"",
             ),
             (
                 "packaging/aur/PKGBUILD",
                 include_str!("../../../packaging/aur/PKGBUILD"),
-                "\"${pkgdir}/usr/share/applications/grokhub.desktop\"",
+                "\"${pkgdir}/usr/share/applications/grokhub-shell.desktop\"",
             ),
         ] {
             let pkg = pkg.replace("\r\n", "\n");
             assert!(
                 pkg.contains(&format!("{rewrite}{dest}\n")),
-                "{name} must write Exec=/usr/bin/grokhub"
+                "{name} must write Exec=/usr/bin/grokhub-shell"
             );
             assert!(
-                !pkg.contains("install -Dm644 packaging/grokhub.desktop"),
+                !pkg.contains("install -Dm644 packaging/grokhub-shell.desktop"),
                 "{name} must not install the relative-Exec .desktop unchanged"
             );
         }
-        let desktop = include_str!("../../../packaging/grokhub.desktop").replace("\r\n", "\n");
+        let desktop =
+            include_str!("../../../packaging/grokhub-shell.desktop").replace("\r\n", "\n");
         let lines: Vec<&str> = desktop.lines().collect();
         assert!(lines.contains(&"X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
         assert!(
-            lines.contains(&"Exec=grokhub"),
+            lines.contains(&"Exec=grokhub-shell"),
             "the PKGBUILD sed matches this exact line"
         );
-        assert!(lines.contains(&"TryExec=grokhub"));
+        assert!(lines.contains(&"TryExec=grokhub-shell"));
+    }
+
+    /// Both recipes build the Tauri shell and the hub the way install.sh
+    /// does, never the removed cabin crate, and point the packaged hub unit
+    /// at /usr/bin.
+    #[test]
+    fn pkgbuilds_build_and_install_the_shell_and_hub() {
+        for (name, pkg, pkgdir) in [
+            (
+                "packaging/PKGBUILD",
+                include_str!("../../../packaging/PKGBUILD"),
+                "$pkgdir",
+            ),
+            (
+                "packaging/aur/PKGBUILD",
+                include_str!("../../../packaging/aur/PKGBUILD"),
+                "${pkgdir}",
+            ),
+        ] {
+            let pkg = pkg.replace("\r\n", "\n");
+            let build = pkg
+                .split("build() {\n")
+                .nth(1)
+                .and_then(|rest| rest.split("\n}\n").next())
+                .unwrap_or_else(|| panic!("{name} has no build()"));
+            let steps: Vec<&str> = build
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("cd "))
+                .collect();
+            assert_eq!(
+                steps,
+                [
+                    "cargo build --release --locked -p grokhub-hub",
+                    "npm ci --prefix ui",
+                    "ui/node_modules/.bin/tauri build --no-bundle -- --locked",
+                ],
+                "{name} build() must match scripts/install.sh"
+            );
+            for line in [
+                format!("install -Dm755 \"$shell/grokhub-shell\" \"{pkgdir}/usr/bin/grokhub-shell\""),
+                format!("install -Dm755 \"$hub/grokhub-hub\" \"{pkgdir}/usr/bin/grokhub-hub\""),
+                format!("install -Dm755 \"$hub/grokhub\" \"{pkgdir}/usr/bin/grokhub\""),
+                "sed -e 's|^ExecStart=%h/.local/bin/grokhub-hub$|ExecStart=/usr/bin/grokhub-hub|' \\".to_string(),
+                format!("packaging/systemd/grokhub-hub.service >\"{pkgdir}/usr/lib/systemd/user/grokhub-hub.service\""),
+            ] {
+                assert!(
+                    pkg.lines().any(|l| l.trim() == line),
+                    "{name} must contain {line:?}"
+                );
+            }
+            for dep in ["'webkit2gtk-4.1'", "'libayatana-appindicator'"] {
+                let depends = pkg
+                    .lines()
+                    .find(|l| l.starts_with("depends=("))
+                    .unwrap_or_else(|| panic!("{name} has no depends"));
+                assert!(depends.contains(dep), "{name} depends needs {dep}");
+            }
+            for dep in ["'nodejs'", "'npm'"] {
+                let make = pkg
+                    .lines()
+                    .find(|l| l.starts_with("makedepends=("))
+                    .unwrap_or_else(|| panic!("{name} has no makedepends"));
+                assert!(make.contains(dep), "{name} makedepends needs {dep}");
+            }
+            assert!(
+                !pkg.contains("grokhub-app"),
+                "{name} names the removed cabin crate"
+            );
+        }
+        let unit =
+            include_str!("../../../packaging/systemd/grokhub-hub.service").replace("\r\n", "\n");
+        assert!(
+            unit.lines()
+                .any(|l| l == "ExecStart=%h/.local/bin/grokhub-hub"),
+            "the PKGBUILD sed matches this exact line: {unit}"
+        );
     }
 }

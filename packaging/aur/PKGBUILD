@@ -2,18 +2,20 @@
 pkgname=grokhub
 pkgver=3.5.0
 pkgrel=1
-pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
+pkgdesc="Loadout: a gaming and PC companion desktop app (Tauri) and its LAN hub, no Electron"
 arch=('x86_64')
 url="https://github.com/blackviperxiii-ui/GrokHub"
 license=('MIT')
-depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme')
+# The shell links the system webview and loads the tray library at runtime.
+depends=('webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'hicolor-icon-theme')
 optdepends=(
   'ffmpeg: Imagine video'
   'alsa-utils: Hey Grok mic'
   # CPU llama.cpp in extra; add ggml-vulkan / ggml-cuda / ggml-hip for GPU backends.
   'llama-cpp: local model engine (alternative to in-app download)'
 )
-makedepends=('cargo' 'rust' 'pkgconf' 'git')
+# npm builds the web UI and supplies the pinned tauri CLI (ui/package.json).
+makedepends=('cargo' 'rust' 'pkgconf' 'nodejs' 'npm' 'git')
 options=('!debug')
 install=grokhub.install
 source=("${pkgname}::git+https://github.com/blackviperxiii-ui/GrokHub.git#tag=v${pkgver}")
@@ -21,25 +23,38 @@ sha256sums=('SKIP')
 
 build() {
   cd "${srcdir}/${pkgname}"
-  cargo build --release --locked -p grokhub-app -p grokhub-hub
+  # The same steps as scripts/install.sh. src-tauri is its own workspace, so
+  # the shell lands in src-tauri/target unless CARGO_TARGET_DIR is set.
+  cargo build --release --locked -p grokhub-hub
+  npm ci --prefix ui
+  ui/node_modules/.bin/tauri build --no-bundle -- --locked
 }
 
 package() {
   cd "${srcdir}/${pkgname}"
-  install -Dm755 target/release/grokhub "${pkgdir}/usr/bin/grokhub"
-  install -Dm755 target/release/grokhub-hub "${pkgdir}/usr/bin/grokhub-hub"
-  # KWin matches the .desktop by its Exec path, so ScreenShot2 needs it absolute.
+  local hub="${CARGO_TARGET_DIR:-target}/release"
+  local shell="${CARGO_TARGET_DIR:-src-tauri/target}/release"
+  install -Dm755 "$shell/grokhub-shell" "${pkgdir}/usr/bin/grokhub-shell"
+  install -Dm755 "$hub/grokhub-hub" "${pkgdir}/usr/bin/grokhub-hub"
+  # The renamed-binary shim: old `grokhub --mcp-*` / `--doctor` configs keep
+  # working for at least one release.
+  install -Dm755 "$hub/grokhub" "${pkgdir}/usr/bin/grokhub"
+  # Menus and KWin match the entry by its Exec path, so it is absolute.
   install -dm755 "${pkgdir}/usr/share/applications"
-  sed -e 's|^Exec=grokhub$|Exec=/usr/bin/grokhub|' \
-      -e 's|^TryExec=grokhub$|TryExec=/usr/bin/grokhub|' \
-      packaging/grokhub.desktop >"${pkgdir}/usr/share/applications/grokhub.desktop"
-  chmod 644 "${pkgdir}/usr/share/applications/grokhub.desktop"
+  sed -e 's|^Exec=grokhub-shell$|Exec=/usr/bin/grokhub-shell|' \
+      -e 's|^TryExec=grokhub-shell$|TryExec=/usr/bin/grokhub-shell|' \
+      packaging/grokhub-shell.desktop >"${pkgdir}/usr/share/applications/grokhub-shell.desktop"
+  chmod 644 "${pkgdir}/usr/share/applications/grokhub-shell.desktop"
   install -Dm644 packaging/grokhub.svg \
     "${pkgdir}/usr/share/icons/hicolor/scalable/apps/grokhub.svg"
   if [[ -d packaging/icons/hicolor ]]; then
     cp -a packaging/icons/hicolor/. "${pkgdir}/usr/share/icons/hicolor/"
   fi
-  install -Dm644 packaging/systemd/grokhub-hub.service \
-    "${pkgdir}/usr/lib/systemd/user/grokhub-hub.service"
+  # The unit's ExecStart names the user install (~/.local/bin); a package
+  # puts the hub in /usr/bin.
+  install -dm755 "${pkgdir}/usr/lib/systemd/user"
+  sed -e 's|^ExecStart=%h/.local/bin/grokhub-hub$|ExecStart=/usr/bin/grokhub-hub|' \
+      packaging/systemd/grokhub-hub.service >"${pkgdir}/usr/lib/systemd/user/grokhub-hub.service"
+  chmod 644 "${pkgdir}/usr/lib/systemd/user/grokhub-hub.service"
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/grokhub/LICENSE"
 }

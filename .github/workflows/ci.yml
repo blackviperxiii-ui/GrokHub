@@ -713,9 +713,6 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path target/release/grokhub-hub.exe)) { throw 'missing grokhub-hub.exe' }
-      - name: Pack script locks
-        shell: pwsh
-        run: ./scripts/make-windows-release.tests.ps1
       - name: No Electron leftover
         shell: pwsh
         run: |
