@@ -655,38 +655,6 @@ pub fn recipe_from_json(raw: &str) -> Result<(String, Recipe), String> {
     ))
 }
 
-pub fn user_asks_cabin_eyes(text: &str) -> bool {
-    let t = text.to_ascii_lowercase();
-    const NEEDLES: &[&str] = &[
-        "cabin eyes",
-        "look at my screen",
-        "look at the screen",
-        "look at this screen",
-        "look at my desktop",
-        "look at the desktop",
-        "what's on my screen",
-        "whats on my screen",
-        "what's on the screen",
-        "whats on the screen",
-        "what's on my desktop",
-        "whats on my desktop",
-        "what do you see",
-        "what can you see",
-        "see my screen",
-        "see the screen",
-        "see my desktop",
-        "take a screenshot",
-        "grab a screenshot",
-        "use your eyes",
-        "open your eyes",
-        "wake your eyes",
-        "look at this",
-        "what's wrong on",
-        "whats wrong on",
-    ];
-    NEEDLES.iter().any(|n| t.contains(n))
-}
-
 pub fn user_asks_takeover(text: &str) -> bool {
     let t = text.to_ascii_lowercase();
     const NEEDLES: &[&str] = &[
@@ -937,12 +905,6 @@ pub fn hands_step_label(receipt: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// Attach a room frame only when this turn asked for eyes or hands.
-/// The Cabin eyes setting being on is not a trigger.
-pub fn should_attach_hands_frame(eyes_turn: bool, hands_turn: bool, has_frame: bool) -> bool {
-    has_frame && (eyes_turn || hands_turn)
 }
 
 pub fn lock_blocks_hands(titles: &[&str]) -> bool {
@@ -1250,14 +1212,6 @@ mod tests {
         let (id, loaded) = recipe_from_json(&json).unwrap();
         assert_eq!(id, "last");
         assert_eq!(loaded, rec);
-        assert!(user_asks_cabin_eyes("look at my screen"));
-        assert!(user_asks_cabin_eyes("what do you see?"));
-        assert!(user_asks_cabin_eyes("Cabin eyes — what's on the desktop"));
-        assert!(!user_asks_cabin_eyes("what is rust ownership?"));
-        assert!(!user_asks_cabin_eyes("tell me about chowder"));
-        assert!(should_attach_hands_frame(false, true, true));
-        assert!(!should_attach_hands_frame(false, false, true));
-        assert!(should_attach_hands_frame(true, false, true));
         assert!(lock_blocks_hands(&["Lock screen", "nvim"]));
         assert!(!lock_blocks_hands(&["GrokHub", "Terminal"]));
         assert_eq!(
@@ -1379,17 +1333,6 @@ mod tests {
         );
         assert!(screen_from_extents(0, 1080).is_none());
         assert!(screen_from_extents(1920, 0).is_none());
-    }
-
-    #[test]
-    fn cabin_eyes_stay_dormant_until_called() {
-        assert!(!should_attach_hands_frame(false, false, true));
-        assert!(!should_attach_hands_frame(false, false, false));
-        assert!(should_attach_hands_frame(true, false, true));
-        assert!(should_attach_hands_frame(false, true, true));
-        assert!(!user_asks_cabin_eyes("what's in the bowl"));
-        assert!(!user_asks_cabin_eyes("tell me about rust"));
-        assert!(user_asks_cabin_eyes("look at my screen"));
     }
 
     #[test]

@@ -108,7 +108,7 @@ pub fn read_defs() -> &'static [ToolDef] {
         },
         ToolDef {
             name: "skill",
-            blurb: "Load a cabin skill by name",
+            blurb: "Load an app skill by name",
             defer: false,
             schema: || crate::skills::schema(),
             visible: always,

@@ -398,7 +398,7 @@ pub fn panel_spec_json_schema() -> Value {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://grokhub.local/schemas/panel_spec.json",
         "title": "GrokHubPanelSpec",
-        "description": "A small declarative UI panel. Buttons reference action ids; the cabin runs actions only through the normal approval flow.",
+        "description": "A small declarative UI panel. Buttons reference action ids; the app runs actions only through the normal approval flow.",
         "type": "object",
         "additionalProperties": false,
         "properties": {

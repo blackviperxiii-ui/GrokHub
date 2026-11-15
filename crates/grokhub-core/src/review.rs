@@ -283,11 +283,11 @@ fn push_capped(out: &mut String, label: &str, raw: &str) {
     out.push('\n');
 }
 
-/// System prompt for the quiet Balanced review. Cabin-real verbs only.
+/// System prompt for the quiet Balanced review. Only verbs the app really has.
 pub fn review_system_prompt() -> &'static str {
     crate::brand::filled(
-        "You are {product}'s nightly cabin review. Read the digest and propose only \
-     things this cabin can actually do on this computer. Allowed verbs: Grok Build tools \
+        "You are {product}'s nightly chat review. Read the digest and propose only \
+     things this app can actually do on this computer. Allowed verbs: Grok Build tools \
      (shell, files, grep, web), workboard cards, Imagine stills (no video), \
      computer-use (Grok looks at and drives the desktop), GitHub MCP if configured. \
      Do not propose Outlook, Gmail, \

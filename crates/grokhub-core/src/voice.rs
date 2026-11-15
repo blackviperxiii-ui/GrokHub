@@ -236,25 +236,6 @@ pub fn voice_tts_script(complete: &str) -> String {
     assistant_prose(complete)
 }
 
-pub fn encode_session_update() -> String {
-    serde_json::json!({
-        "type": "session.update",
-        "session": {
-            "voice": DEFAULT_VOICE,
-            "instructions": crate::brand::filled("You are Grok in the {product} cabin. Be brief."),
-            "turn_detection": { "type": "server_vad" },
-            "audio": {
-                "input": {
-                    "format": { "type": "audio/pcm", "rate": 24000 },
-                    "transcription": { "model": "grok-transcribe", "language_hint": "en" }
-                },
-                "output": { "format": { "type": "audio/pcm", "rate": 24000 } }
-            }
-        }
-    })
-    .to_string()
-}
-
 pub fn parse_realtime_event(v: &Value) -> Option<VoiceEvent> {
     let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
     match t {
@@ -314,20 +295,6 @@ pub fn parse_realtime_event(v: &Value) -> Option<VoiceEvent> {
         )),
         _ => None,
     }
-}
-
-pub fn redact_cabin_from_memory(text: &str) -> String {
-    let mut s = text.to_string();
-    for n in ["faces", "webcam", "face"] {
-        loop {
-            let low = s.to_ascii_lowercase();
-            let Some(i) = low.find(n) else {
-                break;
-            };
-            s.replace_range(i..i + n.len(), "[cabin-redacted]");
-        }
-    }
-    s
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -616,12 +583,7 @@ mod tests {
         );
         assert!(voice_can_connect("xai-1"));
         assert!(!voice_can_connect(""));
-        assert!(encode_session_update().contains("session.update"));
         assert!(should_mute_speaker(true));
-        assert!(redact_cabin_from_memory("a face here").contains("[cabin-redacted]"));
-        let twice = redact_cabin_from_memory("face by the webcam and another face");
-        assert!(!twice.to_ascii_lowercase().contains("face"), "{twice}");
-        assert!(!twice.to_ascii_lowercase().contains("webcam"), "{twice}");
         assert_eq!(
             reduce_voice_state(
                 VoiceState::Speaking,
@@ -751,13 +713,6 @@ mod tests {
         assert!(speech_can_connect("tok"));
         assert!(speech_can_connect("xai-k"));
         assert!(!speech_can_connect(""));
-        let sess = encode_session_update();
-        assert!(sess.contains("\"voice\":\"ara\"") || sess.contains("\"voice\": \"ara\""));
-        assert!(sess.contains("server_vad"));
-        assert!(sess.contains("audio/pcm"));
-        assert!(sess.contains("24000"));
-        assert!(!sess.contains("whisper-1"));
-        assert!(!sess.contains("modalities"));
         assert!(!voice_transcript_sends_chat(true));
         assert!(voice_transcript_sends_chat(false));
         assert!(!hey_grok_starts_ptt(true, false));
@@ -846,12 +801,6 @@ mod tests {
             voice_log_role(&asst),
             Some(("assistant", "hello from grok"))
         );
-        let sess = encode_session_update();
-        assert!(sess.contains("language_hint") || sess.contains("\"en\""));
-        assert!(sess.contains("grok-transcribe"));
-        assert!(!sess
-            .to_ascii_lowercase()
-            .contains("host and computer tools"));
     }
 
     #[test]
