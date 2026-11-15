@@ -91,7 +91,13 @@ const LABELS: [(&str, &str, bool); 7] = [
 /// those are stripped as one block rather than line by line. A line with no
 /// known label belongs to the part above it. When the header doesn't match,
 /// the whole summary comes back as one unlabelled part, so nothing is lost.
-fn parts(summary: &str, name: &str, version: &str, description: &str) -> Vec<Part> {
+fn parts(info: &PluginInfo) -> Vec<Part> {
+    let (summary, name, version, description) = (
+        info.summary.as_str(),
+        info.name.as_str(),
+        info.version.as_str(),
+        info.description.as_str(),
+    );
     let whole = || {
         vec![Part {
             label: String::new(),
@@ -113,7 +119,6 @@ fn parts(summary: &str, name: &str, version: &str, description: &str) -> Vec<Par
         None if rest.is_empty() => return Vec::new(),
         None => return whole(),
     };
-    let mcp_key = format!("plugin__{name}__");
     let mut out: Vec<Part> = Vec::new();
     for line in rest.lines() {
         let known = LABELS.iter().find_map(|(prefix, label, warn)| {
@@ -121,13 +126,10 @@ fn parts(summary: &str, name: &str, version: &str, description: &str) -> Vec<Par
         });
         match (known, out.last_mut()) {
             (Some((label, text, warn)), _) => {
-                // Only each server's own key carries the prefix; a command,
-                // argument or URL that holds the same text shows as it runs.
-                let text = if label == "MCP servers" {
-                    text.split("; ")
-                        .map(|entry| entry.strip_prefix(&mcp_key).unwrap_or(entry))
-                        .collect::<Vec<_>>()
-                        .join("; ")
+                // The servers come one by one with their own names; the
+                // summary line joins keys and commands too tightly to split.
+                let text = if label == "MCP servers" && !info.mcp_servers.is_empty() {
+                    info.mcp_servers.join("; ")
                 } else {
                     text.to_string()
                 };
@@ -153,7 +155,7 @@ fn parts(summary: &str, name: &str, version: &str, description: &str) -> Vec<Par
 
 fn row(info: PluginInfo) -> Row {
     Row {
-        parts: parts(&info.summary, &info.name, &info.version, &info.description),
+        parts: parts(&info),
         name: info.name,
         version: info.version,
         summary: info.summary,
@@ -215,21 +217,35 @@ pub fn install(config_dir: &Path, workspace: &Path, source: &str) -> Page {
 pub fn fetch_market(config_dir: &Path, workspace: &Path, url: &str) -> Market {
     let _config = ConfigGuard::set(config_dir);
     let url = url.trim();
-    let (entries, note, read) = match plugins::set_marketplace_url(url) {
+    let (entries, note, read) = market_outcome(
+        plugins::set_marketplace_url(url),
+        url,
+        plugins::fetch_marketplace,
+    );
+    Market {
+        entries,
+        page: page(workspace, note),
+        read,
+    }
+}
+
+/// What a fetch shows: only an index that was really read counts as read,
+/// so the page never calls a cleared, refused or failed one empty.
+fn market_outcome(
+    saved: Result<(), String>,
+    url: &str,
+    fetch: impl FnOnce(&str) -> Result<Vec<MarketEntry>, String>,
+) -> (Vec<Entry>, String, bool) {
+    match saved {
         Err(err) => (Vec::new(), err, false),
         Ok(()) if url.is_empty() => (Vec::new(), "Marketplace URL cleared.".to_string(), false),
-        Ok(()) => match plugins::fetch_marketplace(url) {
+        Ok(()) => match fetch(url) {
             Ok(list) => {
                 let note = format!("{} entries. Nothing was installed.", list.len());
                 (list.into_iter().map(entry).collect(), note, true)
             }
             Err(err) => (Vec::new(), err, false),
         },
-    };
-    Market {
-        entries,
-        page: page(workspace, note),
-        read,
     }
 }
 
@@ -301,6 +317,29 @@ mod tests {
         src
     }
 
+    fn parts_of(summary: &str, name: &str, version: &str, description: &str) -> Vec<Part> {
+        parts(&info(summary, name, version, description, &[]))
+    }
+
+    fn info(
+        summary: &str,
+        name: &str,
+        version: &str,
+        description: &str,
+        mcp_servers: &[&str],
+    ) -> PluginInfo {
+        PluginInfo {
+            name: name.into(),
+            version: version.into(),
+            description: description.into(),
+            enabled: false,
+            trusted: false,
+            installed: true,
+            summary: summary.into(),
+            mcp_servers: mcp_servers.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
     fn part(label: &str, text: &str, warn: bool) -> Part {
         Part {
             label: label.into(),
@@ -340,7 +379,7 @@ mod tests {
     #[test]
     fn a_description_with_newlines_is_stripped_whole() {
         assert_eq!(
-            parts(
+            parts_of(
                 "kit 2.0\nLine one\nLine two\nskills: s",
                 "kit",
                 "2.0",
@@ -349,7 +388,7 @@ mod tests {
             vec![part("Skills", "s", false)]
         );
         assert_eq!(
-            parts("kit 2.0\nOnly words", "kit", "2.0", "Only words"),
+            parts_of("kit 2.0\nOnly words", "kit", "2.0", "Only words"),
             Vec::new()
         );
     }
@@ -357,7 +396,7 @@ mod tests {
     #[test]
     fn an_unlabelled_line_joins_the_part_above_it() {
         assert_eq!(
-            parts(
+            parts_of(
                 "kit 2.0\nhooks: echo a\nstill a\nagents: r",
                 "kit",
                 "2.0",
@@ -369,23 +408,82 @@ mod tests {
             ]
         );
         assert_eq!(
-            parts("kit 2.0\nunusable: hash mismatch", "kit", "2.0", ""),
+            parts_of("kit 2.0\nunusable: hash mismatch", "kit", "2.0", ""),
             vec![part("Can't be trusted", "hash mismatch", true)]
         );
     }
 
     #[test]
-    fn only_each_mcp_servers_own_key_loses_its_prefix() {
+    fn only_an_index_that_was_read_counts_as_read_even_when_it_is_empty() {
+        let unused = |_: &str| -> Result<Vec<MarketEntry>, String> { panic!("no fetch") };
         assert_eq!(
-            parts(
-                "kit 2.0\nmcp: plugin__kit__files: npx files --peer=plugin__kit__notes; plugin__kit__web: https://h/plugin__kit__x",
+            market_outcome(Ok(()), "https://h/i.json", |_| Ok(Vec::new())),
+            (
+                Vec::new(),
+                "0 entries. Nothing was installed.".to_string(),
+                true
+            )
+        );
+        let one = MarketEntry {
+            name: "kit".into(),
+            version: "2.0".into(),
+            description: "Tidy".into(),
+            source: "https://h/kit.zip".into(),
+        };
+        let (entries, note, read) = market_outcome(Ok(()), "https://h/i.json", move |url| {
+            assert_eq!(url, "https://h/i.json");
+            Ok(vec![one])
+        });
+        assert_eq!(
+            entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["kit"]
+        );
+        assert_eq!(
+            (note.as_str(), read),
+            ("1 entries. Nothing was installed.", true)
+        );
+        assert_eq!(
+            market_outcome(Ok(()), "https://h/i.json", |_| Err(
+                "index not reachable".into()
+            )),
+            (Vec::new(), "index not reachable".to_string(), false)
+        );
+        assert_eq!(
+            market_outcome(Err("refused".into()), "http://h", unused),
+            (Vec::new(), "refused".to_string(), false)
+        );
+        assert_eq!(
+            market_outcome(Ok(()), "", unused),
+            (Vec::new(), "Marketplace URL cleared.".to_string(), false)
+        );
+    }
+
+    #[test]
+    fn the_mcp_part_lists_each_server_as_the_bundle_names_it() {
+        let summary = "kit 2.0\nmcp: plugin__kit__files: sh -c start; plugin__kit__helper; plugin__kit__web: https://h/plugin__kit__x";
+        assert_eq!(
+            parts(&info(
+                summary,
                 "kit",
                 "2.0",
-                ""
-            ),
+                "",
+                &[
+                    "files: sh -c start; plugin__kit__helper",
+                    "web: https://h/plugin__kit__x"
+                ]
+            )),
             vec![part(
                 "MCP servers",
-                "files: npx files --peer=plugin__kit__notes; web: https://h/plugin__kit__x",
+                "files: sh -c start; plugin__kit__helper; web: https://h/plugin__kit__x",
+                false
+            )]
+        );
+        // With no server list, the line shows as the summary has it.
+        assert_eq!(
+            parts_of(summary, "kit", "2.0", ""),
+            vec![part(
+                "MCP servers",
+                &summary["kit 2.0\nmcp: ".len()..],
                 false
             )]
         );
@@ -394,11 +492,11 @@ mod tests {
     #[test]
     fn a_summary_in_another_shape_comes_back_whole() {
         assert_eq!(
-            parts("x 9\nfoo", "y", "9", ""),
+            parts_of("x 9\nfoo", "y", "9", ""),
             vec![part("", "x 9\nfoo", false)]
         );
         assert_eq!(
-            parts("y 9\nother words\nskills: s", "y", "9", "Demo"),
+            parts_of("y 9\nother words\nskills: s", "y", "9", "Demo"),
             vec![part("", "y 9\nother words\nskills: s", false)]
         );
     }
@@ -480,7 +578,7 @@ mod tests {
         assert_eq!(market.entries, Vec::new());
         assert_eq!(market.page.market_url, "");
         assert!(!market.read);
-        // A refused URL reads nothing, even with an older one still saved.
+        // A refused URL reads nothing.
         let refused = fetch_market(&cfg, &ws, "http://example.com/index.json");
         assert!(!refused.read);
         assert_eq!(refused.entries, Vec::new());

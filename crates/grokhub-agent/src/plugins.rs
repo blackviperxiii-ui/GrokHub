@@ -35,6 +35,9 @@ pub struct PluginInfo {
     pub trusted: bool,
     pub installed: bool,
     pub summary: String,
+    /// Each MCP server on its own, named as the bundle names it (no
+    /// `plugin__<name>__` key), with its command or URL as it runs.
+    pub mcp_servers: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1515,7 +1518,20 @@ fn info_of(bundle: &Bundle, state: &StateFile) -> PluginInfo {
         trusted: is_trusted(state, bundle),
         installed: bundle.installed,
         summary: summary_of(bundle),
+        mcp_servers: mcp_servers_of(bundle),
     }
+}
+
+/// Every MCP line starts with its server's own key, so taking the key's
+/// prefix off each line alone leaves a command or URL that holds the same
+/// text as it is.
+fn mcp_servers_of(bundle: &Bundle) -> Vec<String> {
+    let prefix = format!("plugin__{}__", bundle.name);
+    bundle
+        .mcp_lines
+        .iter()
+        .map(|line| one_line(line.strip_prefix(&prefix).unwrap_or(line)))
+        .collect()
 }
 
 /// A bundle's own text on one summary line: a newline or other control
@@ -2322,6 +2338,7 @@ mod tests {
         assert!(info.trusted && !info.enabled);
         assert!(info.summary.contains("echo plugin-hook"));
         assert!(info.summary.contains("plugin-mcp"));
+        assert_eq!(info.mcp_servers, ["files: plugin-mcp --stdio"]);
         enable_plugin(&iso.workspace, "demo").unwrap();
         assert_eq!(contributes(&iso), (true, true, true, true));
         let prompt = crate::system_prompt("", &iso.workspace);

@@ -196,6 +196,24 @@ describe("Labs", () => {
     expect(screen.queryByText(MARKET_EMPTY)).toBeNull();
   });
 
+  it("a fetch that is refused after an empty one drops the empty note", async () => {
+    api.getPlugins.mockResolvedValue(page([], "", "https://example.com/index.json"));
+    api.fetchPluginMarket
+      .mockResolvedValueOnce({
+        entries: [],
+        page: page([], "0 entries. Nothing was installed.", "https://example.com/index.json"),
+        read: true,
+      })
+      .mockRejectedValueOnce(new Error("Can't reach your computer."));
+    render(<Labs />);
+    await screen.findByText(PLUGINS_EMPTY);
+    await userEvent.click(screen.getByRole("button", { name: "Fetch list" }));
+    expect(await screen.findByText(MARKET_EMPTY)).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Fetch list" }));
+    expect(await screen.findByText(/Can't reach your computer\./)).toBeVisible();
+    expect(screen.queryByText(MARKET_EMPTY)).toBeNull();
+  });
+
   it("follows a desktop companion change made elsewhere, such as the tray", async () => {
     transport.shell = true;
     try {
