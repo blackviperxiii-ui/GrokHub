@@ -33,6 +33,8 @@ pub enum Tap {
     Ask,
     /// Opens `view`.
     Go,
+    /// Opens the note dialog for the game `note_for` names.
+    Note,
 }
 
 /// A chip as the page gets it.
@@ -53,6 +55,9 @@ pub struct Chip {
     /// `plan`), which the tap puts back.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub mode: String,
+    /// For a Note chip: the Steam app id of the game.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_for: Option<u32>,
 }
 
 /// The shell page for a cabin page a chip opens, if the shell has one.
@@ -72,8 +77,9 @@ pub fn shell_view(nav: &str) -> Option<&'static str> {
 }
 
 /// The chip as the page gets it, or `None` when the page can't do it: a
-/// retired model or effort chip, the cabin's Undo, a one-tap Do chip, a
-/// review chip (the shell has no `/sh`), or a page the shell doesn't have.
+/// retired model or effort chip, the old Undo, a one-tap Do chip, a review
+/// chip other than a game note (the shell has no `/sh`), or a page the shell
+/// doesn't have.
 pub fn wire(chip: &QuickChip, mode: &str) -> Option<Chip> {
     if grokhub_core::retired_mode_value(&chip.value) || chip.id == grokhub_core::UNDO_CHIP_ID {
         return None;
@@ -84,6 +90,7 @@ pub fn wire(chip: &QuickChip, mode: &str) -> Option<Chip> {
             Tap::Go,
             Some(grokhub_core::nav_from_chip_value(&chip.value).and_then(shell_view)?),
         ),
+        ChipAction::Review if note_for(chip).is_some() => (Tap::Note, None),
         ChipAction::Do | ChipAction::Review => return None,
     };
     let follow_up = chip
@@ -102,7 +109,17 @@ pub fn wire(chip: &QuickChip, mode: &str) -> Option<Chip> {
         } else {
             String::new()
         },
+        note_for: if action == Tap::Note {
+            note_for(chip)
+        } else {
+            None
+        },
     })
+}
+
+/// The game a game-note chip is for.
+fn note_for(chip: &QuickChip) -> Option<u32> {
+    grokhub_core::game_companion::note_app_id(&chip.id)
 }
 
 /// The chips the page can show, in order.
@@ -221,6 +238,8 @@ pub struct RowAsk<'a> {
     pub now_ms: u64,
     /// Feature chips (focus help) prepended into the pool.
     pub extra: &'a [QuickChip],
+    /// A paired browser asked, not the desktop window.
+    pub remote: bool,
     /// Settings → Behavior: the composer's near ties lean this way.
     pub lane: Lane,
 }
@@ -231,6 +250,13 @@ pub struct RowAsk<'a> {
 pub struct Rows {
     ranked: Vec<grokhub_core::chip_rank::RankedChip>,
     shown: HashMap<String, Vec<QuickChip>>,
+}
+
+/// The desktop and a paired browser each keep their own last row per
+/// surface: their rows differ (a browser gets no game chips), so one
+/// asking never drops the chip the other is about to tap.
+fn shown_key(surface: &str, remote: bool) -> String {
+    format!("{}:{surface}", if remote { "web" } else { "app" })
 }
 
 /// The ranked row for one surface, logged as shown. Chip memory is read
@@ -269,7 +295,7 @@ pub fn row(dir: &Path, rows: &Mutex<Rows>, ask: RowAsk<'_>) -> Vec<Chip> {
     grokhub_core::log_chips_shown(&mut mem, ask.surface, &shown, ask.now_ms);
     held.ranked = std::mem::take(&mut mem.ranker.last);
     let out = wired(&shown, ask.mode);
-    held.shown.insert(ask.surface.to_string(), shown);
+    held.shown.insert(shown_key(ask.surface, ask.remote), shown);
     // Saved under the lock: a tap and a row never write over each other.
     let _ = grokhub_core::save_chip_memory(dir, &mem);
     drop(held);
@@ -391,12 +417,14 @@ pub fn outcome(
     id: &str,
     picked: bool,
     clock: (u8, u8, u64),
+    remote: bool,
 ) -> Option<QuickChip> {
     let (hour, weekday, now) = clock;
+    let key = shown_key(surface, remote);
     let mut held = rows.lock().unwrap_or_else(|e| e.into_inner());
     let chip = held
         .shown
-        .get(surface)
+        .get(&key)
         .and_then(|row| row.iter().find(|c| c.id == id))
         .cloned()?;
     let mut mem = grokhub_core::load_chip_memory(dir);
@@ -404,12 +432,15 @@ pub fn outcome(
     grokhub_core::log_chip_outcome(&mut mem, surface, &chip, picked, now);
     if picked {
         grokhub_core::remember_chip_click(&mut mem, &chip, None, now, hour);
-        grokhub_core::remember_intent(&mut mem, &chip.label, &chip.value, now, hour, weekday);
+        // A live-state chip's label names a game or an app, not a habit.
+        if grokhub_core::quick_chip_intent(&chip).is_some() {
+            grokhub_core::remember_intent(&mut mem, &chip.label, &chip.value, now, hour, weekday);
+        }
     } else {
         grokhub_core::remember_chip_dismiss(&mut mem, &chip, now, hour);
     }
     // The row was acted on: the next showing is a new one.
-    held.shown.remove(surface);
+    held.shown.remove(&key);
     // Saved under the lock: a tap and a row never write over each other.
     let _ = grokhub_core::save_chip_memory(dir, &mem);
     drop(held);
@@ -439,6 +470,310 @@ pub fn wire_follow_ups(ups: &FollowUps) -> Vec<Chip> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_game_note_chip_opens_the_note_dialog_and_a_guides_chip_stays_out() {
+        let hades = grokhub_core::steam::SteamGame {
+            app_id: 7,
+            name: "Hades".into(),
+            last_played: 0,
+            playtime_min: 0,
+        };
+        let chips = grokhub_core::game_companion::chips(&hades, false);
+        let guides = chips.iter().find(|c| c.id == "game:guides:7").unwrap();
+        assert_eq!(wire(guides, "chat"), None);
+        let note = chips.iter().find(|c| c.id == "game:note:7").unwrap();
+        let wired = wire(note, "chat").expect("a note chip shows");
+        assert_eq!(wired.action, Tap::Note);
+        assert_eq!(wired.note_for, Some(7));
+        assert_eq!(wired.label, "Note for Hades");
+        assert_eq!(
+            serde_json::to_value(&wired).unwrap()["action"],
+            serde_json::json!("note")
+        );
+        assert_eq!(serde_json::to_value(&wired).unwrap()["noteFor"], 7);
+    }
+    #[test]
+    fn a_game_sessions_note_offers_lead_home_and_the_composer_as_note_taps() {
+        let game = |app_id, name: &str| grokhub_core::steam::SteamGame {
+            app_id,
+            name: name.into(),
+            last_played: 0,
+            playtime_min: 0,
+        };
+        let session = crate::game_companion::Session {
+            playing: Some(game(8, "Celeste")),
+            ended: Some((game(7, "Hades"), 500)),
+        };
+        // A first look takes the guide's path; a chat under way is ranked,
+        // where only the offers' own score puts them at the front.
+        let talked = [
+            ("user".to_string(), "what's new".to_string()),
+            ("assistant".to_string(), "Not much.".to_string()),
+        ];
+        for (surface, chat) in [
+            (HOME, &[][..]),
+            (COMPOSER, &[][..]),
+            (HOME, &talked[..]),
+            (COMPOSER, &talked[..]),
+        ] {
+            let extra = crate::game_companion::row_extra(&session, surface, false, 1_000);
+            let dir = temp_dir(&format!("game-notes-{surface}-{}", chat.len()));
+            let rows = Mutex::new(Rows::default());
+            let shown = row(
+                &dir,
+                &rows,
+                RowAsk {
+                    surface,
+                    chat,
+                    draft: "",
+                    follow_ups: &[],
+                    mode: "chat",
+                    signed_in: true,
+                    first_run: false,
+                    hour: 10,
+                    weekday: 2,
+                    quiet_hours: false,
+                    now_ms: 1_000,
+                    extra: &extra,
+                    lane: Lane::default(),
+                    remote: false,
+                },
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+            // On a first look the guide's start chip leads and both offers
+            // follow it; in a chat under way both offers lead. Either way
+            // they keep the session's order.
+            assert_eq!(shown.len(), 3, "{surface} {shown:?}");
+            let after = usize::from(chat.is_empty());
+            if chat.is_empty() {
+                assert_eq!(shown[0].id, "guide-start");
+            }
+            let lead: Vec<_> = shown
+                .iter()
+                .skip(after)
+                .take(2)
+                .map(|c| (c.id.as_str(), c.label.as_str(), c.action, c.note_for))
+                .collect();
+            assert_eq!(
+                lead,
+                [
+                    ("game:note:8", "Note for Celeste", Tap::Note, Some(8)),
+                    (
+                        "game:note:after:7",
+                        "Leave a note for Hades next time",
+                        Tap::Note,
+                        Some(7)
+                    ),
+                ],
+                "{surface} after {} turns: {shown:?}",
+                chat.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_tired_in_play_note_chip_leaves_the_after_game_offer_its_own_shows() {
+        let hades = grokhub_core::steam::SteamGame {
+            app_id: 7,
+            name: "Hades".into(),
+            last_played: 0,
+            playtime_min: 0,
+        };
+        let dir = temp_dir("game-note-fatigue");
+        let rows = Mutex::new(Rows::default());
+        let talked = [
+            ("user".to_string(), "what's new".to_string()),
+            ("assistant".to_string(), "Not much.".to_string()),
+        ];
+        let ask_row = |session: &crate::game_companion::Session, surface: &str, now_ms: u64| {
+            let extra = crate::game_companion::row_extra(session, surface, false, now_ms);
+            let chat: &[(String, String)] = if surface == COMPOSER { &talked } else { &[] };
+            row(
+                &dir,
+                &rows,
+                RowAsk {
+                    surface,
+                    chat,
+                    draft: "",
+                    follow_ups: &[],
+                    mode: "chat",
+                    signed_in: true,
+                    first_run: false,
+                    hour: 10,
+                    weekday: 2,
+                    quiet_hours: false,
+                    now_ms,
+                    extra: &extra,
+                    lane: Lane::default(),
+                    remote: false,
+                },
+            )
+            .into_iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>()
+        };
+        let playing = crate::game_companion::Session {
+            playing: Some(hades.clone()),
+            ended: None,
+        };
+        // Shown again and again in play without a tap, the in-play chip
+        // tires and leaves the row.
+        let mut seen = Vec::new();
+        for i in 0..10u64 {
+            let surface = if i % 2 == 0 { HOME } else { COMPOSER };
+            seen.push(
+                ask_row(&playing, surface, 1_000 + i * 1_000).contains(&"game:note:7".to_string()),
+            );
+        }
+        assert_eq!(seen.first(), Some(&true));
+        assert_eq!(seen.last(), Some(&false), "{seen:?}");
+        // The game closes: its offer is new to the row, so it shows.
+        let ended = crate::game_companion::Session {
+            playing: None,
+            ended: Some((hades, 20_000)),
+        };
+        for (surface, at) in [(HOME, 21_000), (COMPOSER, 22_000)] {
+            let shown = ask_row(&ended, surface, at);
+            assert_eq!(
+                shown.first().map(String::as_str),
+                Some("game:note:after:7"),
+                "{surface} {shown:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_browser_asking_for_home_keeps_the_desktops_row_for_its_tap() {
+        let session = crate::game_companion::Session {
+            playing: None,
+            ended: Some((
+                grokhub_core::steam::SteamGame {
+                    app_id: 7,
+                    name: "Hades".into(),
+                    last_played: 0,
+                    playtime_min: 0,
+                },
+                1_000,
+            )),
+        };
+        let dir = temp_dir("two-clients");
+        let rows = Mutex::new(Rows::default());
+        let ask_row = |remote: bool| {
+            let extra = crate::game_companion::row_extra(&session, HOME, remote, 2_000);
+            row(
+                &dir,
+                &rows,
+                RowAsk {
+                    surface: HOME,
+                    chat: &[],
+                    draft: "",
+                    follow_ups: &[],
+                    mode: "chat",
+                    signed_in: true,
+                    first_run: false,
+                    hour: 10,
+                    weekday: 2,
+                    quiet_hours: false,
+                    now_ms: 2_000,
+                    extra: &extra,
+                    lane: Lane::default(),
+                    remote,
+                },
+            )
+            .into_iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>()
+        };
+        assert!(ask_row(false).contains(&"game:note:after:7".to_string()));
+        assert!(!ask_row(true).contains(&"game:note:after:7".to_string()));
+        // The desktop's hide still lands, and the browser can't act on a
+        // chip only the desktop was shown.
+        assert_eq!(
+            outcome(
+                &dir,
+                &rows,
+                HOME,
+                "game:note:after:7",
+                false,
+                (10, 2, 3_000),
+                true
+            )
+            .map(|c| c.id),
+            None
+        );
+        assert_eq!(
+            outcome(
+                &dir,
+                &rows,
+                HOME,
+                "game:note:after:7",
+                false,
+                (10, 2, 3_000),
+                false
+            )
+            .map(|c| c.id),
+            Some("game:note:after:7".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tap_on_a_note_chip_records_no_habit_from_the_games_name() {
+        let session = crate::game_companion::Session {
+            playing: None,
+            ended: Some((
+                grokhub_core::steam::SteamGame {
+                    app_id: 3,
+                    name: "Crash Bandicoot".into(),
+                    last_played: 0,
+                    playtime_min: 0,
+                },
+                1_000,
+            )),
+        };
+        let dir = temp_dir("note-tap-habit");
+        let rows = Mutex::new(Rows::default());
+        let extra = crate::game_companion::row_extra(&session, HOME, false, 2_000);
+        let shown = row(
+            &dir,
+            &rows,
+            RowAsk {
+                surface: HOME,
+                chat: &[],
+                draft: "",
+                follow_ups: &[],
+                mode: "chat",
+                signed_in: true,
+                first_run: false,
+                hour: 10,
+                weekday: 2,
+                quiet_hours: false,
+                now_ms: 2_000,
+                extra: &extra,
+                lane: Lane::default(),
+                remote: false,
+            },
+        );
+        assert!(
+            shown.iter().any(|c| c.id == "game:note:after:3"),
+            "{shown:?}"
+        );
+        let tapped = outcome(
+            &dir,
+            &rows,
+            HOME,
+            "game:note:after:3",
+            true,
+            (10, 2, 3_000),
+            false,
+        );
+        assert_eq!(tapped.map(|c| c.id), Some("game:note:after:3".to_string()));
+        assert!(grokhub_core::load_chip_memory(&dir).intents.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use grokhub_core::ChipKind;
 
     fn chip(id: &str, value: &str, kind: ChipKind) -> QuickChip {
@@ -576,6 +911,7 @@ mod tests {
             now_ms: 1_000,
             extra: &[],
             lane: Lane::Coding,
+            remote: false,
         };
         let shown = row(&dir, &rows, ask());
         assert!(
@@ -587,10 +923,27 @@ mod tests {
         assert_eq!(mem.events[0].surface, COMPOSER);
         // A chip the page never got is refused.
         assert_eq!(
-            outcome(&dir, &rows, COMPOSER, "made-up", true, (10, 2, 2_000)),
+            outcome(
+                &dir,
+                &rows,
+                COMPOSER,
+                "made-up",
+                true,
+                (10, 2, 2_000),
+                false
+            ),
             None
         );
-        let picked = outcome(&dir, &rows, COMPOSER, "reply-1", true, (10, 2, 2_000)).unwrap();
+        let picked = outcome(
+            &dir,
+            &rows,
+            COMPOSER,
+            "reply-1",
+            true,
+            (10, 2, 2_000),
+            false,
+        )
+        .unwrap();
         assert_eq!(picked.id, "reply-1");
         let mem = grokhub_core::load_chip_memory(&dir);
         assert!(matches!(
@@ -604,7 +957,15 @@ mod tests {
         assert_eq!(mem.events[0].next_at, Some(2_500));
         // The row was acted on, so the same id is not taken twice.
         assert_eq!(
-            outcome(&dir, &rows, COMPOSER, "reply-1", true, (10, 2, 3_000)),
+            outcome(
+                &dir,
+                &rows,
+                COMPOSER,
+                "reply-1",
+                true,
+                (10, 2, 3_000),
+                false
+            ),
             None
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -793,6 +1154,7 @@ mod tests {
                     now_ms: 1_000,
                     extra: if surface == HOME { &extra } else { &[] },
                     lane,
+                    remote: false,
                 },
             );
             let _ = std::fs::remove_dir_all(&dir);

@@ -644,6 +644,21 @@ pub fn post_update(cards: &mut Vec<UpdateCard>, card: UpdateCard) -> bool {
     if !names_its_item(&card) {
         return false;
     }
+    post_named(cards, card)
+}
+
+/// [`post_update`] for a card whose title already names its item and whose
+/// body quotes the user's own words, such as a game's launch card with
+/// their note. The vague-words check is for generated text, so a note that
+/// says "finish this task" still gets its card.
+pub fn post_user_worded(cards: &mut Vec<UpdateCard>, card: UpdateCard) -> bool {
+    if card.title.trim().is_empty() {
+        return false;
+    }
+    post_named(cards, card)
+}
+
+fn post_named(cards: &mut Vec<UpdateCard>, card: UpdateCard) -> bool {
     let now = card.created_at;
     if let Some(key) = feed_group_key(&card) {
         if let Some(existing) = take_live_group(cards, &key) {
@@ -4662,6 +4677,30 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert!(blank.body.is_some());
         let done = automation_done_card("a1", "Board summary", "ok", 5);
         assert_ne!(c.id, done.id, "a failure must not replace the done card");
+    }
+
+    #[test]
+    fn a_card_quoting_the_users_words_posts_even_when_they_say_this_task() {
+        let card = |title: &str| {
+            digest_card(
+                "source:game-companion:7",
+                title,
+                "No news since you last played. Your note from last time: finish this task",
+                1_000,
+            )
+        };
+        let mut cards = Vec::new();
+        assert!(!post_update(&mut cards, card("Back to Hades")));
+        assert!(cards.is_empty());
+        assert!(post_user_worded(&mut cards, card("Back to Hades")));
+        assert_eq!(
+            cards.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(),
+            ["Back to Hades"]
+        );
+        let mut blank = card("Back to Celeste");
+        blank.title = "  ".into();
+        assert!(!post_user_worded(&mut cards, blank));
+        assert_eq!(cards.len(), 1);
     }
 
     #[test]

@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { chipOutcome, quickChips, type ChipSurface, type QuickChip, type SessionMode } from "./api";
+import { dialogOpen } from "./chatKeys";
+import { onGameSession } from "./gameSession";
 import { onArrowFocus, usePeek } from "./peek";
 
 /** At most this many chips in a row, as in the cabin. */
@@ -50,7 +52,8 @@ export function ChipRow({
     if (!keys || busy || shown.length === 0) return;
     const onKey = (event: KeyboardEvent) => {
       const slot = chipSlotOf(event);
-      if (slot === null || !shown[slot]) return;
+      // A window over the page, such as a game's note, keeps its own keys.
+      if (slot === null || !shown[slot] || dialogOpen()) return;
       event.preventDefault();
       onTap(shown[slot]);
     };
@@ -130,6 +133,23 @@ export function useChipRow({
       clearTimeout(timer);
     };
   }, [wanted, surface, conversationId, draft, mode, turn, nonce]);
+
+  // A game starting or closing changes the note offers: ask again.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let live = true;
+    void onGameSession(() => setNonce((n) => n + 1)).then(
+      (off) => {
+        if (live) unlisten = off;
+        else off();
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, []);
 
   function picked(chip: QuickChip) {
     setChips([]);

@@ -216,6 +216,8 @@ struct ShellState {
     /// Focus help: the app the user was just in (chip + one context line).
     #[cfg(desktop)]
     focus_help: Mutex<focus_help::FocusHelp>,
+    /// The game launch companion's running and just-closed game.
+    game_session: Mutex<game_companion::Session>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2190,6 +2192,7 @@ fn chip_row(
     draft: &str,
     mode: agent::SessionMode,
     clock: automations::Clock,
+    remote: bool,
 ) -> Vec<chips::Chip> {
     let settings = current(state);
     if !settings.behavior.suggestions {
@@ -2227,10 +2230,16 @@ fn chip_row(
     };
     #[cfg(not(desktop))]
     let focus_extra: Vec<grokhub_core::QuickChip> = Vec::new();
-    let extra = if surface == chips::COMPOSER {
-        focus_extra.as_slice()
+    let game_extra = game_companion::row_extra(
+        &game_companion::lock(&state.game_session),
+        surface,
+        remote,
+        local.now_ms,
+    );
+    let extra: Vec<grokhub_core::QuickChip> = if surface == chips::COMPOSER {
+        game_extra.into_iter().chain(focus_extra).collect()
     } else {
-        &[]
+        game_extra
     };
     chips::row(
         dir,
@@ -2251,8 +2260,9 @@ fn chip_row(
             weekday: local.weekday,
             quiet_hours: quiet,
             now_ms: local.now_ms,
-            extra,
+            extra: &extra,
             lane: settings.behavior.lane,
+            remote,
         },
     )
 }
@@ -2275,6 +2285,7 @@ async fn quick_chips(
             &draft.unwrap_or_default(),
             mode.unwrap_or_default(),
             clock,
+            false,
         )
     })
     .await
@@ -2290,6 +2301,19 @@ async fn chip_outcome(
     picked: bool,
     clock: automations::Clock,
 ) -> Result<bool, String> {
+    chip_outcome_from(app, surface, id, picked, clock, false).await
+}
+
+/// [`chip_outcome`] for the desktop or, `remote`, a paired browser: each
+/// acts on the row it was shown.
+async fn chip_outcome_from(
+    app: AppHandle,
+    surface: String,
+    id: String,
+    picked: bool,
+    clock: automations::Clock,
+    remote: bool,
+) -> Result<bool, String> {
     off_main(move || {
         let state = app.state::<ShellState>();
         let local = now_clock(clock);
@@ -2300,6 +2324,7 @@ async fn chip_outcome(
             &id,
             picked,
             (local.hour as u8, local.weekday, local.now_ms),
+            remote,
         )
         .is_some()
     })
@@ -4661,15 +4686,110 @@ async fn companion_frame(
     .await
 }
 
+/// The note chips come from the game companion (Pulse) as well as the
+/// Library's game page, so either one lets a note be read and saved.
+fn notes_allowed() -> Result<(), String> {
+    let caps = capabilities::current();
+    capabilities::needs(caps.library || caps.pulse, "Library")
+}
+
 #[tauri::command]
 async fn companion_set_note(
+    app: AppHandle,
     state: State<'_, ShellState>,
     app_id: u32,
     text: String,
 ) -> Result<String, String> {
-    capabilities::needs(capabilities::current().library, "Library")?;
+    notes_allowed()?;
     let dir = state.config_dir.clone();
-    off_main(move || game_companion::set_note(&dir, app_id, &text)).await?
+    let saved = off_main(move || game_companion::set_note(&dir, app_id, &text)).await??;
+    // A saved note answers the closed game's offer.
+    if game_companion::lock(&state.game_session).noted(app_id) {
+        let _ = app.emit(game_companion::EVENT, ());
+    }
+    Ok(saved)
+}
+
+/// The note dialog's game name and saved note.
+#[tauri::command]
+async fn companion_note(
+    state: State<'_, ShellState>,
+    app_id: u32,
+) -> Result<game_companion::NoteFor, String> {
+    notes_allowed()?;
+    let dir = state.config_dir.clone();
+    let session = game_companion::lock(&state.game_session).clone();
+    off_main(move || {
+        game_companion::note_for(&dir, &session, app_id, || {
+            grokhub_core::steam::detect_root()
+                .map(|r| grokhub_core::steam::read_library(&r))
+                .unwrap_or_default()
+        })
+    })
+    .await
+}
+
+/// Settings → Behavior → Game launch companion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompanionSwitch {
+    on: bool,
+    ping: bool,
+    /// What the last change did; empty on a read.
+    note: String,
+}
+
+fn companion_switch(dir: &std::path::Path, note: String) -> CompanionSwitch {
+    let s = game_companion::load(dir);
+    CompanionSwitch {
+        on: s.on,
+        ping: s.ping,
+        note,
+    }
+}
+
+#[tauri::command]
+async fn get_game_companion(state: State<'_, ShellState>) -> Result<CompanionSwitch, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        // The old desktop app's switch carries over before the first read.
+        let _ = game_companion::migrate_legacy(&dir);
+        companion_switch(&dir, String::new())
+    })
+    .await
+}
+
+/// Turns the companion on or off. Off forgets the session at once, so its
+/// note chips leave the rows without waiting for the next sample.
+fn turn_companion(app: &AppHandle, state: &ShellState, on: bool) -> Result<String, String> {
+    let note = game_companion::set(&state.config_dir, on)?;
+    if !on && game_companion::lock(&state.game_session).clear() {
+        let _ = app.emit(game_companion::EVENT, ());
+    }
+    Ok(note)
+}
+
+#[tauri::command]
+async fn set_game_companion(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<CompanionSwitch, String> {
+    let note = turn_companion(&app, &state, on)?;
+    Ok(companion_switch(&state.config_dir, note))
+}
+
+#[tauri::command]
+async fn set_game_companion_ping(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<CompanionSwitch, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let note = game_companion::set_ping(&dir, on)?;
+        Ok(companion_switch(&dir, note))
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -5070,6 +5190,7 @@ async fn home_turn_on(state: State<'_, ShellState>, feature: String) -> Result<(
 /// how it went; the tile shows the rest on its next read.
 #[tauri::command]
 async fn home_setup(
+    app: AppHandle,
     state: State<'_, ShellState>,
     module: String,
     undo: bool,
@@ -5083,10 +5204,7 @@ async fn home_setup(
             off_main(move || steam_checks::turn(&dir, &module, !undo)).await?
         }
         // Patch Notes: the launch companion's own switch on this app.
-        "patch_notes" => {
-            let dir = state.config_dir.clone();
-            off_main(move || game_companion::set(&dir, !undo)).await?
-        }
+        "patch_notes" => turn_companion(&app, &state, !undo),
         _ => {
             let _ = undo;
             Err("That module has no setup here.".into())
@@ -6973,14 +7091,16 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 &arg::<Option<String>>(args, "draft")?.unwrap_or_default(),
                 arg::<Option<agent::SessionMode>>(args, "mode")?.unwrap_or_default(),
                 arg(args, "clock")?,
+                true,
             ))
         }
-        "chip_outcome" => out(block_on(chip_outcome(
+        "chip_outcome" => out(block_on(chip_outcome_from(
             app.clone(),
             arg(args, "surface")?,
             arg(args, "id")?,
             arg(args, "picked")?,
             arg(args, "clock")?,
+            true,
         ))?),
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
@@ -7454,7 +7574,6 @@ pub fn run() {
             steam_checks::start(config_dir.clone());
             catalog_refresh::start(config_dir.clone());
             local_model_checks::start(config_dir.clone());
-            game_companion::start(config_dir.clone());
             pc_health::start(config_dir.clone());
             // The learning engine: chips, cards and runs record to it from
             // here on. Memory only, with one small write when one is due.
@@ -7480,6 +7599,7 @@ pub fn run() {
                 code_sessions,
                 #[cfg(desktop)]
                 focus_help: Mutex::new(focus_help::FocusHelp::default()),
+                game_session: Mutex::default(),
             });
             if let Some(window) = app.get_webview_window("main") {
                 if text_size != 100 {
@@ -7531,6 +7651,8 @@ pub fn run() {
             // The internet log, when it's on and the cabin isn't running.
             #[cfg(desktop)]
             net_watch::start(app.state::<ShellState>().config_dir.clone());
+            // Game launch cards, the ping and the note offer after a game.
+            game_companion::start(app.handle().clone());
             // The wellbeing helpers' minute tick, while the cabin is closed.
             #[cfg(desktop)]
             helper_loop::start(
@@ -8119,6 +8241,10 @@ pub fn run() {
             battlenet_open_folder,
             companion_frame,
             companion_set_note,
+            companion_note,
+            get_game_companion,
+            set_game_companion,
+            set_game_companion_ping,
             get_game_watch,
             #[cfg(desktop)]
             get_living_wall,
@@ -8519,6 +8645,39 @@ mod web_command_tests {
             .filter(|name| !body.contains(&format!("\"{name}\"")))
             .collect();
         assert_eq!(missing, Vec::<&str>::new());
+    }
+
+    /// A browser has no game to note, so its chip row must be asked for as
+    /// remote and the desktop's as local; a swapped flag shows a browser the
+    /// game chips, or hides them from the desktop.
+    #[test]
+    fn a_browsers_chip_row_is_asked_for_as_remote_and_the_desktops_as_local() {
+        let body = remote_call_src();
+        let web = arm(&body, "quick_chips");
+        assert!(
+            web.contains("arg(args, \"clock\")?,\n                true,\n"),
+            "{web}"
+        );
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = src.find("async fn quick_chips(").expect("quick_chips");
+        let desk = &src[start..start + src[start..].find("\n}\n").expect("end")];
+        assert!(
+            desk.contains("            clock,\n            false,\n"),
+            "{desk}"
+        );
+        // A tap or hide acts on the row that client was shown.
+        let web_tap = arm(&body, "chip_outcome");
+        assert!(
+            web_tap.contains("chip_outcome_from(")
+                && web_tap.contains("arg(args, \"clock\")?,\n            true,\n"),
+            "{web_tap}"
+        );
+        let start = src.find("async fn chip_outcome(").expect("chip_outcome");
+        let desk_tap = &src[start..start + src[start..].find("\n}\n").expect("end")];
+        assert!(
+            desk_tap.contains("chip_outcome_from(app, surface, id, picked, clock, false)"),
+            "{desk_tap}"
+        );
     }
 
     /// The server refuses a name that isn't on the list before `remote_call`

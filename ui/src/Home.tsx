@@ -24,6 +24,7 @@ import {
 import { ChipRow, useChipRow } from "./Chips";
 import { FollowUpRow } from "./Goals";
 import { HomeEdit } from "./HomeEdit";
+import { GameNote, useNoteStatus } from "./GameNote";
 import { PcSheet } from "./PcSheet";
 import { COMPANION_NAME } from "./brand";
 import { openExternal } from "./external";
@@ -482,9 +483,14 @@ export function Home({
 
   function tapChip(chip: QuickChip) {
     row.picked(chip);
-    if (chip.action === "go" && chip.view) go.onOpen(chip.view as View);
+    if (chip.action === "note") {
+      if (chip.noteFor) setNoteFor(chip.noteFor);
+    } else if (chip.action === "go" && chip.view) go.onOpen(chip.view as View);
     else go.onAsk(chip.value);
   }
+  // The game a "Leave a note" chip opened the note dialog for.
+  const [noteFor, setNoteFor] = useState<number | null>(null);
+  const [noteSaved, setNoteSaved] = useNoteStatus();
 
   const [reads, setReads] = useState(0);
   const reload = () => setReads((n) => n + 1);
@@ -576,6 +582,20 @@ export function Home({
         />
       )}
       {sheet === "pc_loadout" && <PcSheet onClose={() => setSheet(null)} />}
+      {noteFor !== null && (
+        <GameNote
+          appId={noteFor}
+          onDone={(status) => {
+            setNoteFor(null);
+            setNoteSaved(status);
+          }}
+        />
+      )}
+      {noteSaved && (
+        <p className="status" role="status">
+          {noteSaved}
+        </p>
+      )}
       {page && (
         <>
           <ul className="home-grid" aria-label="Tiles">

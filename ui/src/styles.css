@@ -7845,3 +7845,14 @@ fieldset.channel label {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Settings → Behavior: the companion's ping sits under its switch. */
+.companion-ping {
+  margin-left: 24px;
+}
+
+/* The game note dialog: a short form, its box full width. */
+.game-note textarea {
+  width: 100%;
+  resize: vertical;
+}

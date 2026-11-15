@@ -1,0 +1,2 @@
+- Game launch companion: Settings, Behavior now has its switch, plus an optional quiet desktop notification that comes with the "Back to …" card and puts a line in the bell. Relaunching a game replaces its earlier card instead of stacking a new one.
+- Game launch companion: a "Note for …" chip while a game runs, and "Leave a note for … next time" for half an hour after it closes, open a small note window. The note shows on the card the next time you launch that game; saving an empty box removes it.

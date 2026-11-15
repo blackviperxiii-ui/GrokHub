@@ -196,14 +196,16 @@ export type ChatEvent =
       toolRanNotVerified: boolean;
     };
 
-/** A quick chip: the cabin's engine picked it for this moment (`chips.rs`).
+/** A quick chip: the chip engine picked it for this moment (`chips.rs`).
  * Ask puts `value` in the box, or sends it when the box is empty; Go opens
- * `view`. Only these two cross from the shell. */
+ * `view`; Note opens the note dialog for the game `noteFor` names. */
 export interface QuickChip {
   id: string;
   label: string;
   value: string;
-  action: "ask" | "go";
+  action: "ask" | "go" | "note";
+  /** For a Note chip: the Steam app id of the game. */
+  noteFor?: number;
   /** Why it is here, for the chip's tip. */
   hint: string;
   primary: boolean;
@@ -3975,6 +3977,37 @@ export function companionFrame(
 
 export function companionSetNote(appId: number, text: string): Promise<string> {
   return invoke<string>("companion_set_note", { appId, text });
+}
+
+/** The note dialog's game name and saved note (src-tauri/src/game_companion.rs `NoteFor`). */
+export interface CompanionNote {
+  game: string;
+  note: string;
+}
+
+export function companionNote(appId: number): Promise<CompanionNote> {
+  return invoke<CompanionNote>("companion_note", { appId });
+}
+
+/** Settings → Behavior → Game launch companion. */
+export interface GameCompanion {
+  on: boolean;
+  /** A quiet desktop notification comes with the launch card. */
+  ping: boolean;
+  /** What the last change did; empty on a read. */
+  note: string;
+}
+
+export function getGameCompanion(): Promise<GameCompanion> {
+  return invoke<GameCompanion>("get_game_companion");
+}
+
+export function setGameCompanion(on: boolean): Promise<GameCompanion> {
+  return invoke<GameCompanion>("set_game_companion", { on });
+}
+
+export function setGameCompanionPing(on: boolean): Promise<GameCompanion> {
+  return invoke<GameCompanion>("set_game_companion_ping", { on });
 }
 
 /** Per-game companion screens (src-tauri/src/games.rs). */

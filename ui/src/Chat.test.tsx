@@ -22,6 +22,8 @@ const api = vi.hoisted(() => ({
   ),
   gap: null as (() => void) | null,
   sendChat: vi.fn<(id: string, text: string, mode?: SessionMode) => Promise<string>>(),
+  companionNote: vi.fn(() => Promise.resolve({ game: "Hades", note: "" })),
+  companionSetNote: vi.fn<(appId: number, text: string) => Promise<string>>(),
   answerElicit:
     vi.fn<
       (id: string, callId: string, action: ElicitAction, field?: string | null, value?: string) => Promise<void>
@@ -116,6 +118,8 @@ vi.mock("./api", () => ({
   hubSendApprove: api.hubSendApprove,
   getDeviceGlance: api.getDeviceGlance,
   sendChat: api.sendChat,
+  companionNote: api.companionNote,
+  companionSetNote: api.companionSetNote,
   answerElicit: api.answerElicit,
   getSettings: api.getSettings,
   getBehavior: api.getBehavior,
@@ -1031,6 +1035,29 @@ describe("Chat", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Hide Explain it" }));
     expect(api.chipOutcome).toHaveBeenLastCalledWith("composer", "pred-1", false);
+  });
+
+  it("a game's note chip opens the note dialog, never the box, and Save leaves a status line", async () => {
+    api.quickChips.mockResolvedValue([
+      { ...chip("game:note:7", "Note for Hades", "note 7"), action: "note", noteFor: 7 },
+    ]);
+    api.companionSetNote.mockResolvedValue("beat Megaera next");
+    render(<Chat onOpenSettings={() => {}} />);
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    await userEvent.click(within(row).getByRole("button", { name: "Note for Hades" }));
+    const dialog = await screen.findByRole("dialog", { name: "Note for Hades" });
+    expect(api.chipOutcome).toHaveBeenCalledWith("composer", "game:note:7", true);
+    expect(screen.getByLabelText("Message")).toHaveValue("");
+    expect(api.sendChat).not.toHaveBeenCalled();
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Your note" }), "beat Megaera next");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(api.companionSetNote).toHaveBeenCalledWith(7, "beat Megaera next");
+    expect(await screen.findByText("Saved. It shows on the card next time you launch it.")).toHaveAttribute(
+      "role",
+      "status",
+    );
+    expect(screen.queryByRole("dialog", { name: "Note for Hades" })).toBeNull();
+    expect(screen.getByLabelText("Message")).toHaveValue("");
   });
 
   it("an empty chat shows the device glance, and a tap opens Devices", async () => {
