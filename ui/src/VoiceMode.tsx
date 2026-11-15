@@ -80,6 +80,10 @@ export interface VoiceDeps {
   onNote: (note: string) => void;
 }
 
+/** The one session voice mode is on in. The backend keeps one open mic, so
+ * voice mode starting in another chat turns it off here first. */
+let live: VoiceSession | null = null;
+
 /** One voice-mode session: mic in, turns out, reply spoken. */
 export class VoiceSession {
   state: VoiceState = "off";
@@ -131,6 +135,8 @@ export class VoiceSession {
     if (this.state !== "off") return;
     this.noVoice = false;
     this.warned = false;
+    if (live && live !== this) await live.stop();
+    live = this;
     await api.voiceLiveStart();
     this.go("start");
     try {
@@ -143,6 +149,7 @@ export class VoiceSession {
   }
 
   async stop(note?: string) {
+    if (live === this) live = null;
     const wasOn = this.state !== "off";
     this.go("stop");
     this.closeMic?.();

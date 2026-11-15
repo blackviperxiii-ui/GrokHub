@@ -3,6 +3,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "./api";
+import type { VoiceState } from "./VoiceMode";
 
 // The chat tells her desktop pedestal what it is doing: idle, then thinking
 // while a reply runs here, and nothing while the chat is off screen.
@@ -33,6 +34,33 @@ vi.mock("./desktopNyxApi", async (load) => ({
   ...(await load<typeof import("./desktopNyxApi")>()),
   desktopNyxLook: desk.desktopNyxLook,
 }));
+// Each chat's voice mode, driven by the test: `voices.set[i]` is the i-th
+// chat's.
+const voices = vi.hoisted(() => ({ set: [] as ((state: VoiceState) => void)[] }));
+vi.mock("./VoiceMode", async (load) => {
+  const real = await load<typeof import("./VoiceMode")>();
+  const { useEffect, useState } = await import("react");
+  return {
+    ...real,
+    useVoiceMode: () => {
+      const [state, setState] = useState<VoiceState>("off");
+      const [session] = useState(
+        () =>
+          new real.VoiceSession({
+            openMic: () => Promise.resolve(() => {}),
+            play: real.playSpoken,
+            send: () => {},
+            onState: () => {},
+            onNote: () => {},
+          }),
+      );
+      useEffect(() => {
+        voices.set.push(setState);
+      }, []);
+      return { state, session };
+    },
+  };
+});
 vi.mock("./transport", async (load) => ({
   ...(await load<typeof import("./transport")>()),
   inShell: () => true,
@@ -44,6 +72,7 @@ describe("Chat and her desktop pedestal", () => {
   beforeEach(() => {
     desk.desktopNyxLook.mockReset().mockResolvedValue();
     replies.ends.length = 0;
+    voices.set.length = 0;
   });
 
   it("says idle, then thinking while a reply runs here", async () => {
@@ -105,5 +134,31 @@ describe("Chat and her desktop pedestal", () => {
     const calls = desk.desktopNyxLook.mock.calls.length;
     unmount();
     expect(desk.desktopNyxLook.mock.calls.slice(calls)).toEqual([["idle", "hanging-out"]]);
+  });
+
+  it("keeps her desk with a chat whose voice talks on while another chat is on screen", async () => {
+    const both = (a: boolean, b: boolean) => (
+      <>
+        <div data-testid="a">
+          <Chat onOpenSettings={() => {}} active={a} />
+        </div>
+        <div data-testid="b">
+          <Chat onOpenSettings={() => {}} active={b} />
+        </div>
+      </>
+    );
+    const { rerender } = render(both(true, false));
+    await waitFor(() => expect(voices.set).toHaveLength(2));
+    act(() => voices.set[0]("speaking"));
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("speaking", "hanging-out"));
+    // The other chat comes on screen and starts a reply: the voice still speaks for her.
+    rerender(both(false, true));
+    const b = within(screen.getByTestId("b"));
+    await userEvent.type(b.getByLabelText("Message"), "hello{Enter}");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("speaking", "hanging-out");
+    // The voice stops: the chat on screen sends its own look.
+    act(() => voices.set[0]("off"));
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("thinking", "thinking"));
   });
 });
