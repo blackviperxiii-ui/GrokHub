@@ -45,13 +45,22 @@ vi.mock("./desktopNyxApi", () => desk);
 const transport = vi.hoisted(() => ({ shell: false }));
 vi.mock("./transport", () => ({ inShell: () => transport.shell }));
 
-import { CHANNEL_NOTE, Labs, PLUGINS_EMPTY, PLUGINS_TIP } from "./Labs";
+import {
+  CHANNEL_NOTE,
+  Labs,
+  MARKET_EMPTY,
+  PLUGINS_EMPTY,
+  PLUGINS_MCP_NOTE,
+  PLUGINS_TIP,
+} from "./Labs";
 
 function row(over: Partial<PluginRow> = {}): PluginRow {
   return {
     name: "ship-kit",
     version: "1.2.0",
-    summary: "ship-kit 1.2.0 · skills: skills/ship",
+    summary: "ship-kit 1.2.0\nskills: skills/ship",
+    description: "",
+    parts: [{ label: "Skills", text: "skills/ship", warn: false }],
     trusted: false,
     enabled: false,
     installed: true,
@@ -84,7 +93,89 @@ describe("Labs", () => {
     expect(
       screen.getByRole("heading", { name: "Plugins Preview" }),
     ).toBeVisible();
-    expect(screen.getByText("Preview")).toHaveAttribute("title", PLUGINS_TIP);
+    expect(screen.getByText("Preview")).toHaveAttribute(
+      "title",
+      "A preview: plugins work, but how they install and trust may change.",
+    );
+    expect(PLUGINS_TIP).not.toMatch(/cabin/i);
+    expect(screen.getByText(PLUGINS_MCP_NOTE)).toBeVisible();
+    expect(
+      screen.getByText("Nothing from the bundle runs. It installs off and untrusted."),
+    ).toBeVisible();
+    expect(
+      screen.getByText("An https index URL. Fetch only lists entries; Install is a separate step."),
+    ).toBeVisible();
+    expect(screen.queryByText(MARKET_EMPTY)).toBeNull();
+  });
+
+  it("lists a bundle's parts under labels, shows its description once, and flags a refused part", async () => {
+    api.getPlugins.mockResolvedValue(
+      page([
+        row({
+          description: "Ship helpers",
+          parts: [
+            { label: "Skills", text: "skills/ship", warn: false },
+            { label: "Refused", text: "hooks: path escapes the bundle", warn: true },
+          ],
+        }),
+      ]),
+    );
+    render(<Labs />);
+    await screen.findByRole("list", { name: "Installed plugins" });
+    expect(card("ship-kit").getByText("Ship helpers")).toBeVisible();
+    expect(card("ship-kit").getAllByText("ship-kit 1.2.0")).toHaveLength(1);
+    const terms = card("ship-kit").getAllByRole("term").map((t) => t.textContent);
+    const defs = card("ship-kit").getAllByRole("definition").map((d) => d.textContent);
+    expect(terms).toEqual(["Skills", "Refused"]);
+    expect(defs).toEqual(["skills/ship", "hooks: path escapes the bundle"]);
+    expect(card("ship-kit").getByText("hooks: path escapes the bundle")).toHaveClass("warn");
+    expect(card("ship-kit").getByText("skills/ship")).not.toHaveClass("warn");
+    expect(card("ship-kit").getByText("Not trusted · off · has refused parts")).toBeVisible();
+    expect(card("ship-kit").getByText("Remove the installed copy.")).toBeVisible();
+  });
+
+  it("says when a bundle can't be trusted, and shows an unlabelled summary whole", async () => {
+    api.getPlugins.mockResolvedValue(
+      page([
+        row({ parts: [{ label: "Can't be trusted", text: "hash mismatch", warn: true }] }),
+        row({
+          name: "odd-kit",
+          installed: false,
+          parts: [{ label: "", text: "odd-kit 9\nfree text", warn: false }],
+        }),
+      ]),
+    );
+    render(<Labs />);
+    await screen.findByRole("list", { name: "Installed plugins" });
+    expect(card("ship-kit").getByText("Not trusted · off · can't be trusted")).toBeVisible();
+    expect(card("odd-kit").queryAllByRole("term")).toHaveLength(0);
+    expect(card("odd-kit").getByRole("definition")).toHaveTextContent("odd-kit 9 free text", {
+      normalizeWhitespace: true,
+    });
+    expect(card("odd-kit").getByRole("definition")).toHaveClass("whole");
+    expect(card("odd-kit").queryByText("Remove the installed copy.")).toBeNull();
+  });
+
+  it("opens the Connectors page from the MCP note", async () => {
+    api.getPlugins.mockResolvedValue(page([]));
+    const open = vi.fn();
+    render(<Labs onOpenConnectors={open} />);
+    await screen.findByText(PLUGINS_EMPTY);
+    await userEvent.click(screen.getByRole("button", { name: "Connectors" }));
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the index has no entries only after a fetch that found none", async () => {
+    api.getPlugins.mockResolvedValue(page([], "", "https://example.com/index.json"));
+    api.fetchPluginMarket.mockResolvedValue({
+      entries: [],
+      page: page([], "0 entries. Nothing was installed.", "https://example.com/index.json"),
+    });
+    render(<Labs />);
+    await screen.findByText(PLUGINS_EMPTY);
+    expect(screen.queryByText(MARKET_EMPTY)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Fetch list" }));
+    expect(await screen.findByText("No marketplace entries.")).toBeVisible();
   });
 
   it("follows a desktop companion change made elsewhere, such as the tray", async () => {

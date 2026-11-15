@@ -902,6 +902,7 @@ export function App() {
                 onClose={() => setView(before)}
                 backTo={VIEW_LABELS[before]}
                 onProfile={setProfile}
+                onOpenConnectors={() => setView("connectors")}
               />
             </Page>
           )}

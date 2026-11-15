@@ -3481,6 +3481,41 @@ textarea.code {
   gap: 8px;
 }
 
+/* A bundle's parts: a label column, then the text, which wraps rather than
+   scrolling sideways. Narrow, the label sits above its text. Scoped under
+   .labs so it beats `.settings dl`. */
+.labs dl.plugin-parts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 8px;
+  margin: 0;
+}
+
+.labs dl.plugin-parts dt {
+  color: var(--muted);
+}
+
+.labs dl.plugin-parts dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.labs dl.plugin-parts dd.whole {
+  grid-column: 1 / -1;
+}
+
+.labs dl.plugin-parts dd.warn {
+  color: var(--danger-text);
+}
+
+@media (max-width: 480px) {
+  .labs dl.plugin-parts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .journal {
   display: flex;
   flex-direction: column;

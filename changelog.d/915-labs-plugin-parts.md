@@ -1,0 +1,1 @@
+- Labs, Plugins: each bundle lists its skills, hooks, MCP servers and agents under their own labels, shows its description once, and flags refused parts and a bundle that can't be trusted. The page says what Install and Fetch do, says when an index has no entries, and links to the Connectors page for your own MCP servers.
