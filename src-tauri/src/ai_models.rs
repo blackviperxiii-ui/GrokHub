@@ -526,6 +526,11 @@ pub fn start_allow(config_dir: &Path, provider_id: &str) -> Result<Card, String>
     })
 }
 
+/// True while the card waits for Save/Allow or Deny.
+pub fn card_open(card_id: &str) -> bool {
+    park(&mut CARDS.lock().unwrap_or_else(|e| e.into_inner())).contains_key(card_id)
+}
+
 /// The card's Save/Allow or Deny.
 pub fn answer(card_id: &str, approve: bool) -> Result<AiModelsView, String> {
     let pending = park(&mut CARDS.lock().unwrap_or_else(|e| e.into_inner()))

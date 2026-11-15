@@ -654,6 +654,8 @@ export function initScript(theme = "ops-dark") {
         case "get_learned":
         case "learned_act":
           return fix.learned;
+        case "openrouter_sign_in_status":
+          return { waiting: null, card: null };
         case "get_ai_models":
         case "answer_ai_models_card":
         case "remove_ai_provider":

@@ -1668,6 +1668,7 @@ fn openrouter_sign_in_buys_a_key_with_pkce_and_saves_nothing_itself() {
         &dir,
         &approving_browser("good-code", seen.clone()),
         std::time::Duration::from_secs(10),
+        &|| false,
     )
     .unwrap();
     assert_eq!(key.as_str(), KEY);
@@ -1718,9 +1719,34 @@ fn openrouter_sign_in_buys_a_key_with_pkce_and_saves_nothing_itself() {
         &dir,
         &approving_browser("bad-code", seen),
         std::time::Duration::from_secs(10),
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(err, "OpenRouter didn't hand over a key (HTTP 403)");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn offline_only_opens_no_openrouter_page() {
+    let dir = test_dir("r3b-openrouter-offline");
+    let wire = Arc::new(KeyWire::default());
+    providers::use_transport_for(&dir, wire.clone());
+    let _on = grokhub_core::offline::force_for_thread(true);
+    let opened = Mutex::new(Vec::<String>::new());
+    let err = providers::openrouter_key(
+        &dir,
+        &|link: &str| {
+            opened.lock().unwrap().push(link.to_string());
+            Ok(())
+        },
+        std::time::Duration::from_secs(1),
+        &|| false,
+    )
+    .unwrap_err();
+    assert_eq!(err, *grokhub_core::offline::OFFLINE_MSG);
+    assert!(opened.lock().unwrap().is_empty());
+    assert!(wire.0.lock().unwrap().is_empty());
+    assert!(read_egress(&dir).is_empty());
     let _ = std::fs::remove_dir_all(dir);
 }
 

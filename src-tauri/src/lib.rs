@@ -105,6 +105,7 @@ mod composer_ghost;
 mod focus_help;
 pub mod onboard;
 pub mod opener;
+pub mod openrouter_sign_in;
 #[cfg(desktop)]
 mod os_extras;
 pub mod pc_files;
@@ -5680,6 +5681,39 @@ async fn add_ai_provider(
     off_main(move || ai_models::start_add(&dir, &base_url, key)).await?
 }
 
+/// Opens OpenRouter's sign-in page in the browser, or hands back the link of
+/// the one that waits. The key it brings back lands on a key card
+/// (`wait_openrouter_sign_in`); nothing is saved yet.
+#[tauri::command]
+async fn start_openrouter_sign_in(
+    state: State<'_, ShellState>,
+) -> Result<openrouter_sign_in::SignInStarted, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || openrouter_sign_in::start(&dir, opener::open)).await?
+}
+
+/// Waits for the browser sign-in to end: the key card, or why there is none.
+#[tauri::command]
+async fn wait_openrouter_sign_in() -> Result<ai_models::Card, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    off_main(openrouter_sign_in::wait).await?
+}
+
+/// A browser sign-in a page that just loaded picks up: one that waits, or its
+/// unanswered key card.
+#[tauri::command]
+async fn openrouter_sign_in_status() -> Result<openrouter_sign_in::SignInStatus, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    off_main(openrouter_sign_in::status).await
+}
+
+/// Stops a browser sign-in that waits: its port closes and no card is posted.
+#[tauri::command]
+async fn stop_openrouter_sign_in() -> Result<(), String> {
+    off_main(openrouter_sign_in::stop).await
+}
+
 #[tauri::command]
 async fn allow_ai_provider(
     state: State<'_, ShellState>,
@@ -7796,6 +7830,10 @@ pub fn run() {
             imagine_sign_out,
             get_ai_models,
             add_ai_provider,
+            start_openrouter_sign_in,
+            wait_openrouter_sign_in,
+            stop_openrouter_sign_in,
+            openrouter_sign_in_status,
             allow_ai_provider,
             answer_ai_models_card,
             remove_ai_provider,

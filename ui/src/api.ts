@@ -4900,6 +4900,38 @@ export function addAiProvider(
   return invoke<AiModelsCard>("add_ai_provider", { baseUrl, key });
 }
 
+/** OpenRouter's sign-in page reached the browser; `opened` false means open `url` by hand. */
+export interface OpenRouterSignIn {
+  url: string;
+  opened: boolean;
+  why: string;
+}
+
+/** Opens OpenRouter's sign-in page, or hands back the one that waits. Nothing is saved; the key comes back on a card. */
+export function startOpenRouterSignIn(): Promise<OpenRouterSignIn> {
+  return invoke<OpenRouterSignIn>("start_openrouter_sign_in");
+}
+
+/** Waits for the browser sign-in to end: the key card, or why there is none. */
+export function waitOpenRouterSignIn(): Promise<AiModelsCard> {
+  return invoke<AiModelsCard>("wait_openrouter_sign_in");
+}
+
+/** What a page that just loaded picks up: a sign-in that waits, or its unanswered card. */
+export interface OpenRouterSignInStatus {
+  waiting: OpenRouterSignIn | null;
+  card: AiModelsCard | null;
+}
+
+export function openRouterSignInStatus(): Promise<OpenRouterSignInStatus> {
+  return invoke<OpenRouterSignInStatus>("openrouter_sign_in_status");
+}
+
+/** Stops a browser sign-in that waits; its wait ends with `OPENROUTER_STOPPED`. */
+export function stopOpenRouterSignIn(): Promise<void> {
+  return invoke<void>("stop_openrouter_sign_in");
+}
+
 export function allowAiProvider(id: string): Promise<AiModelsCard> {
   return invoke<AiModelsCard>("allow_ai_provider", { id });
 }
