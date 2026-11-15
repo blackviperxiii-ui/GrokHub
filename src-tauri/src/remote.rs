@@ -1248,6 +1248,8 @@ mod tests {
             // Provider keys, grants and spend limits stay on the computer.
             "get_ai_models",
             "add_ai_provider",
+            "start_openrouter_sign_in",
+            "wait_openrouter_sign_in",
             "allow_ai_provider",
             "answer_ai_models_card",
             "remove_ai_provider",

@@ -1725,6 +1725,29 @@ fn openrouter_sign_in_buys_a_key_with_pkce_and_saves_nothing_itself() {
 }
 
 #[test]
+fn offline_only_opens_no_openrouter_page() {
+    let dir = test_dir("r3b-openrouter-offline");
+    let wire = Arc::new(KeyWire::default());
+    providers::use_transport_for(&dir, wire.clone());
+    let _on = grokhub_core::offline::force_for_thread(true);
+    let opened = Mutex::new(Vec::<String>::new());
+    let err = providers::openrouter_key(
+        &dir,
+        &|link: &str| {
+            opened.lock().unwrap().push(link.to_string());
+            Ok(())
+        },
+        std::time::Duration::from_secs(1),
+    )
+    .unwrap_err();
+    assert_eq!(err, *grokhub_core::offline::OFFLINE_MSG);
+    assert!(opened.lock().unwrap().is_empty());
+    assert!(wire.0.lock().unwrap().is_empty());
+    assert!(read_egress(&dir).is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn key_pages_and_the_api_shape_pick_follow_the_address() {
     assert_eq!(
         providers::key_page("https://api.openai.com/v1"),

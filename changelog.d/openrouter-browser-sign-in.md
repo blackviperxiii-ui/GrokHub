@@ -1,0 +1,1 @@
+- Settings → AI models: Sign in with OpenRouter opens OpenRouter's page in your browser and brings back a new key on the usual Save card, with no key to paste. If the browser doesn't open, the page shows the link to open by hand. Offline only opens nothing.

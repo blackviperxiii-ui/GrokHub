@@ -424,6 +424,8 @@ pub fn openrouter_key(
     open: &dyn Fn(&str) -> Result<(), String>,
     wait: Duration,
 ) -> Result<Zeroizing<String>, String> {
+    // Offline only: no browser page and no port, not a refusal after signing in.
+    grokhub_core::offline::check_url(OPENROUTER_KEYS).map_err(String::from)?;
     let (listener, redirect) = crate::loopback::bind()?;
     let verifier = grokhub_core::pkce::pkce_verifier();
     let state = grokhub_core::pkce::oauth_nonce();

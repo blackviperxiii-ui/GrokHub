@@ -9,9 +9,12 @@ import {
   saveAiSpend,
   saveBraveKey,
   saveWebSearch,
+  startOpenRouterSignIn,
+  waitOpenRouterSignIn,
   type AiModelsCard,
   type AiModelsView,
   type AiWebSearch,
+  type OpenRouterSignIn,
 } from "./api";
 import { ConfirmRow, StatusLine, useNote } from "./ui";
 
@@ -28,6 +31,10 @@ export const BACKEND_HINT = "Default stays free. SearXNG needs your instance URL
 export const SEARXNG_NOTE =
   "Your SearXNG server must be on the public internet and allow JSON results (?format=json).";
 export const BRAVE_SET = "A Brave Search key is in your keyring. Paste a new one to replace it, or remove it.";
+export const OPENROUTER_NOTE = "No key to paste: sign in on OpenRouter's page and it hands over a new key.";
+export const OPENROUTER_WAIT = "Waiting for OpenRouter. Finish signing in in your browser.";
+export const OPENROUTER_KEY_WAIT = "OpenRouter sent a key. Save it on the card below.";
+export const OPENROUTER_BY_HAND = "Your browser didn't open. Open this link to sign in:";
 export const BRAVE_UNSET = "Paste a Brave Search API key. It stays in your keyring, never in app.json.";
 
 /** Settings → AI models → Web search: the backend, a SearXNG URL, a Brave key. */
@@ -182,6 +189,7 @@ export function AiModels() {
   const [card, setCard] = useState<AiModelsCard | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [signIn, setSignIn] = useState<OpenRouterSignIn | null>(null);
   const { note, ok, fail } = useNote();
   // The card on screen, for the moment the page is left.
   const openCard = useRef<string | null>(null);
@@ -198,15 +206,16 @@ export function AiModels() {
     };
   }, []);
 
-  function show(next: AiModelsCard) {
-    // The page was left while the card was on its way.
+  /** False when the page was left while the card was on its way. */
+  function show(next: AiModelsCard): boolean {
     if (gone.current) {
       deny(next.id);
-      return;
+      return false;
     }
     openCard.current = next.id;
     setCard(next);
     ok(null);
+    return true;
   }
 
   const apply = useCallback(
@@ -257,6 +266,37 @@ export function AiModels() {
       fail(err);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function startSignIn() {
+    setBusy(true);
+    let started: OpenRouterSignIn;
+    try {
+      started = await startOpenRouterSignIn();
+    } catch (err) {
+      fail(err);
+      return;
+    } finally {
+      setBusy(false);
+    }
+    setSignIn(started);
+    ok(OPENROUTER_WAIT);
+    try {
+      if (show(await waitOpenRouterSignIn())) ok(OPENROUTER_KEY_WAIT);
+    } catch (err) {
+      if (!gone.current) fail(err);
+    } finally {
+      if (!gone.current) setSignIn(null);
+    }
+  }
+
+  async function copyLink(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      ok("Link copied.");
+    } catch {
+      fail("Couldn't copy. Select the link and copy it.");
     }
   }
 
@@ -323,7 +363,7 @@ export function AiModels() {
             </div>
             <div className="card-buttons">
               {p.hasKey && !p.ready && (
-                <button type="button" disabled={busy || card !== null} onClick={() => void startAllow(p.id)}>
+                <button type="button" disabled={busy || card !== null || signIn !== null} onClick={() => void startAllow(p.id)}>
                   Allow {p.dest}
                 </button>
               )}
@@ -348,6 +388,28 @@ export function AiModels() {
         ))}
       </ul>
       <div className="card-buttons">
+        <button
+          type="button"
+          disabled={busy || card !== null || signIn !== null}
+          onClick={() => void startSignIn()}
+        >
+          {view.providers.some((p) => p.id === "openrouter") ? "Sign in to OpenRouter again" : "Sign in with OpenRouter"}
+        </button>
+        <span className="note">{OPENROUTER_NOTE}</span>
+      </div>
+      {signIn && !signIn.opened && (
+        <div className="card-buttons" role="group" aria-label="Open OpenRouter by hand">
+          <span>
+            {OPENROUTER_BY_HAND}
+            {signIn.why ? ` (${signIn.why})` : ""}
+          </span>
+          <input readOnly aria-label="OpenRouter sign-in link" value={signIn.url} onFocus={(e) => e.target.select()} />
+          <button type="button" className="quiet" onClick={() => void copyLink(signIn.url)}>
+            Copy link
+          </button>
+        </div>
+      )}
+      <div className="card-buttons">
         <input
           aria-label="Provider address"
           placeholder="https://openrouter.ai/api/v1"
@@ -364,7 +426,7 @@ export function AiModels() {
         />
         <button
           type="button"
-          disabled={busy || card !== null || !baseUrl.trim() || !key.trim()}
+          disabled={busy || card !== null || signIn !== null || !baseUrl.trim() || !key.trim()}
           onClick={() => void startAdd()}
         >
           Add provider
