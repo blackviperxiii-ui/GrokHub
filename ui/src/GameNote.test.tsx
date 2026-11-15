@@ -92,4 +92,21 @@ describe("useNoteStatus", () => {
       vi.useRealTimers();
     }
   });
+
+  it("a second save with the same words keeps the line for its own full time", () => {
+    vi.useFakeTimers();
+    try {
+      const saved = "Saved. It shows on the card next time you launch it.";
+      const { result } = renderHook(() => useNoteStatus());
+      act(() => result.current[1](saved));
+      act(() => vi.advanceTimersByTime(NOTE_STATUS_MS - 1000));
+      act(() => result.current[1](saved));
+      act(() => vi.advanceTimersByTime(NOTE_STATUS_MS - 1));
+      expect(result.current[0]).toBe(saved);
+      act(() => vi.advanceTimersByTime(1));
+      expect(result.current[0]).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -8631,6 +8631,26 @@ mod web_command_tests {
         assert_eq!(missing, Vec::<&str>::new());
     }
 
+    /// A browser has no game to note, so its chip row must be asked for as
+    /// remote and the desktop's as local; a swapped flag shows a browser the
+    /// game chips, or hides them from the desktop.
+    #[test]
+    fn a_browsers_chip_row_is_asked_for_as_remote_and_the_desktops_as_local() {
+        let body = remote_call_src();
+        let web = arm(&body, "quick_chips");
+        assert!(
+            web.contains("arg(args, \"clock\")?,\n                true,\n"),
+            "{web}"
+        );
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = src.find("async fn quick_chips(").expect("quick_chips");
+        let desk = &src[start..start + src[start..].find("\n}\n").expect("end")];
+        assert!(
+            desk.contains("            clock,\n            false,\n"),
+            "{desk}"
+        );
+    }
+
     /// The server refuses a name that isn't on the list before `remote_call`
     /// sees it, so an arm for one never runs.
     #[test]

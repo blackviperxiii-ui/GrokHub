@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { companionNote, companionSetNote } from "./api";
 import { useModalFocus } from "./ui";
 
@@ -13,13 +13,16 @@ export const NOTE_CHARS = 500;
 
 /** The status line a note dialog leaves under the row; it goes on its own. */
 export function useNoteStatus(): [string | null, (status: string | null) => void] {
-  const [status, setStatus] = useState<string | null>(null);
+  // Each set counts, so a second save with the same words starts its own
+  // timer instead of clearing early on the first one's.
+  const [shown, setShown] = useState<{ text: string | null; n: number }>({ text: null, n: 0 });
   useEffect(() => {
-    if (!status) return;
-    const timer = window.setTimeout(() => setStatus(null), NOTE_STATUS_MS);
+    if (!shown.text) return;
+    const timer = window.setTimeout(() => setShown((s) => ({ text: null, n: s.n })), NOTE_STATUS_MS);
     return () => window.clearTimeout(timer);
-  }, [status]);
-  return [status, setStatus];
+  }, [shown]);
+  const set = useCallback((text: string | null) => setShown((s) => ({ text, n: s.n + 1 })), []);
+  return [shown.text, set];
 }
 
 /** A game's note for next time, from a "Leave a note" chip. Save keeps it

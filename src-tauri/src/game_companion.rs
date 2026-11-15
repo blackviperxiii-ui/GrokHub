@@ -228,7 +228,8 @@ pub fn post_card(dir: &Path, card: grokhub_core::UpdateCard) -> Result<bool, Str
         // A dismissed card stays, so the store still knows it was put away.
         cards
             .retain(|c| c.source_id != source || c.status == grokhub_core::UpdateStatus::Dismissed);
-        usize::from(grokhub_core::post_update(cards, card))
+        // The body quotes the user's note, so their words are not judged.
+        usize::from(grokhub_core::post_user_worded(cards, card))
     })
     .map(|added| added > 0)
 }
@@ -302,7 +303,11 @@ pub fn on_launch(
     // lock, so reading the switch here can't refill a cleared session.
     let moved = {
         let mut session = lock(session);
-        is_on(dir) && session.note(events, library, now)
+        if !is_on(dir) {
+            // Off: nothing is read when a game starts.
+            return Vec::new();
+        }
+        session.note(events, library, now)
     };
     if moved {
         changed();
@@ -735,77 +740,74 @@ mod tests {
     }
 
     #[test]
-    fn a_launch_moves_the_session_first_then_pings_only_for_a_posted_card() {
+    fn a_launch_moves_the_session_before_the_news_read_and_pings_for_the_posted_card() {
+        use std::cell::{Cell, RefCell};
         let dir = scratch("on-launch");
         let library = [game(7, "Hades")];
-        let news = |_: &SteamGame| Some(Vec::new());
         let session = std::sync::Mutex::new(Session::default());
-        let mut heard = 0;
+        let heard = Cell::new(0);
+        // How many session changes the rows had heard at each news read.
+        let reads = RefCell::new(Vec::new());
+        let news = |_: &SteamGame| {
+            reads.borrow_mut().push(heard.get());
+            Some(Vec::new())
+        };
         let started = [Launch::Started(7)];
+        let launch = |at: u64, news: ReadNews<'_>| {
+            on_launch(&dir, &session, &started, &library, news, at, &mut || {
+                heard.set(heard.get() + 1)
+            })
+        };
+        let bodies = || -> Vec<String> {
+            let mut cards = crate::pulse::cards(&dir).unwrap();
+            cards.sort_by_key(|c| c.created_at);
+            cards
+                .into_iter()
+                .map(|c| c.body.unwrap_or_default())
+                .collect()
+        };
 
-        // Off: nothing moves and nothing posts.
-        let pings = on_launch(
-            &dir,
-            &session,
-            &started,
-            &library,
-            &news,
-            1_000,
-            &mut || heard += 1,
-        );
-        assert!(pings.is_empty());
-        assert_eq!(heard, 0);
+        // Off: nothing moves, nothing is read and nothing posts.
+        assert!(launch(1_000, &news).is_empty());
+        assert_eq!(heard.get(), 0);
+        assert!(reads.borrow().is_empty());
         assert_eq!(*lock(&session), Session::default());
-        assert!(crate::pulse::cards(&dir).unwrap().is_empty());
+        assert!(bodies().is_empty());
 
-        // On, ping off: the card goes up with no ping.
+        // On, ping off: the rows hear first, then the news is read, and the
+        // card goes up with no ping.
         set(&dir, true).unwrap();
-        let pings = on_launch(
-            &dir,
-            &session,
-            &started,
-            &library,
-            &news,
-            2_000,
-            &mut || heard += 1,
-        );
-        assert!(pings.is_empty());
-        assert_eq!(heard, 1);
+        assert!(launch(2_000, &news).is_empty());
+        assert_eq!(*reads.borrow(), [1]);
         assert_eq!(lock(&session).playing, Some(game(7, "Hades")));
-        assert_eq!(crate::pulse::cards(&dir).unwrap().len(), 1);
+        assert_eq!(bodies(), ["No news since you last played."]);
 
-        // Ping on: the posted card is the one to ping for.
+        // Ping on, and a note in the user's own words: the card still goes
+        // up, and it is the one to ping for.
         set_ping(&dir, true).unwrap();
+        set_note(&dir, 7, "finish this task").unwrap();
         lock(&session).clear();
-        let pings = on_launch(
-            &dir,
-            &session,
-            &started,
-            &library,
-            &news,
-            3_000,
-            &mut || heard += 1,
-        );
-        assert_eq!(heard, 2);
+        let pings = launch(3_000, &news);
         assert_eq!(
             pings.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(),
             ["Back to Hades"]
         );
-
-        // A card Pulse turns down (it reads like "this task") sends no ping.
-        set_note(&dir, 7, "finish this task").unwrap();
-        lock(&session).clear();
-        let pings = on_launch(
-            &dir,
-            &session,
-            &started,
-            &library,
-            &news,
-            4_000,
-            &mut || heard += 1,
+        assert_eq!(
+            bodies(),
+            ["No news since you last played. Your note from last time: finish this task"]
         );
-        assert!(pings.is_empty());
-        assert_eq!(heard, 3);
+
+        // Off lands while the news is read: no card and no ping.
+        lock(&session).clear();
+        let off_midway = |_: &SteamGame| {
+            set(&dir, false).unwrap();
+            Some(Vec::new())
+        };
+        assert!(launch(4_000, &off_midway).is_empty());
+        assert_eq!(
+            bodies(),
+            ["No news since you last played. Your note from last time: finish this task"]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
