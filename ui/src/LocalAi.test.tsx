@@ -148,7 +148,7 @@ function missingEngine(): LocalAiView["engine"] {
 }
 
 const LOCAL_ON =
-  "On. Background jobs run on this computer, and so do some chats: short ones while the model is loaded, and any while you're offline or the cloud can't answer.";
+  "On. While the model is loaded, background jobs and short chats run on this computer, and any chat does while you're offline or the cloud can't answer.";
 const LOCAL_OFF = "Off. Nothing runs on the on-device model.";
 const TIDY_LOCAL_OFF = "Off while Local AI is off. Turn on Use Local AI on this computer first.";
 
