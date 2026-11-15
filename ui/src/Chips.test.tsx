@@ -151,6 +151,8 @@ describe("useChipRow", () => {
     api.quickChips.mockResolvedValue([chip("game:note:after:7", "Leave a note for next time", { action: "note", noteFor: 7 })]);
     act(() => session.heard.forEach((fn) => fn()));
     await vi.waitFor(() => expect(api.quickChips).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: "Leave a note for next time" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "One" })).toBeNull();
     expect(session.heard).toHaveLength(1);
   });
 
