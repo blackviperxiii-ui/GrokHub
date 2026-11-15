@@ -1500,7 +1500,9 @@ export function Chat({
       endRef.current?.scrollIntoView?.({ block: "end" });
     }
   });
-  useLayoutEffect(() => keepAtEnd(), [voice.caption]);
+  // What shows: a caption appears and goes with listening, too.
+  const shownCaption = voice.state === "listening" ? voice.caption : "";
+  useLayoutEffect(() => keepAtEnd(), [shownCaption]);
 
   function startOver(scratch = false) {
     if (busy) return false;

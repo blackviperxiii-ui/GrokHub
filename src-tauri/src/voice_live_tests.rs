@@ -777,3 +777,48 @@ fn no_caption_before_the_mic_hears_a_start() {
         .expect("news");
     assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
 }
+
+/// A machine's hum: one level throughout, never a voice.
+fn hum(ms: u32) -> Vec<i16> {
+    let n = (RATE * ms / 1000) as usize;
+    (0..n)
+        .map(|i| {
+            (6000.0 * (2.0 * std::f32::consts::PI * 120.0 * i as f32 / RATE as f32).sin()) as i16
+        })
+        .collect()
+}
+
+#[test]
+fn a_start_the_mic_takes_back_ends_the_stream_and_its_caption() {
+    let (mut live, streams) = streaming();
+    let mut audio = hush(500);
+    audio.extend(hum(1500));
+    audio.extend(hush(2000));
+    let mut events = Vec::new();
+    for (i, block) in audio.chunks(1600).enumerate() {
+        if i == 12 {
+            // What the stream made of the hum.
+            streams.lock().unwrap().news[0]
+                .send(SttNews::Caption("mm".into()))
+                .expect("news");
+        }
+        events.extend(live.push(&bytes(block)).expect("block"));
+    }
+    assert_eq!(
+        events,
+        vec![
+            LiveEvent::Started,
+            LiveEvent::Caption { text: "mm".into() },
+            LiveEvent::Nothing
+        ]
+    );
+    assert!(live.stt.is_none(), "the stream that heard the hum goes");
+    assert!(!live.spoke);
+    // Room sound after it stays here.
+    let _ = streamed(&streams, 0);
+    assert_eq!(send(&mut live, &hush(300)), vec![]);
+    assert_eq!(
+        streams.lock().unwrap().audio[0].try_recv(),
+        Err(TryRecvError::Disconnected)
+    );
+}

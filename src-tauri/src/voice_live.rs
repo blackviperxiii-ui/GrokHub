@@ -168,6 +168,21 @@ impl Live {
                 }
             })
             .collect();
+        // A start the mic took back (a hum that stayed steady is never a
+        // turn): nobody is talking after all. The stream heard the hum, so it
+        // goes, and the page listens again as after noise, with a new one.
+        let over = events.iter().any(|e| {
+            matches!(
+                e,
+                LiveEvent::Turn { .. } | LiveEvent::Nothing | LiveEvent::Pause
+            )
+        });
+        if self.spoke && !over && self.mic.armed() && !self.mic.talking() {
+            self.spoke = false;
+            self.stt = None;
+            self.captioned = false;
+            events.push(LiveEvent::Nothing);
+        }
         let streaming = self.stt.is_some();
         let (caption, words) = self.stream_news();
         if let Some(words) = words {

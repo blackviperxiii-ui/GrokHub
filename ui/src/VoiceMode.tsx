@@ -99,6 +99,8 @@ export class VoiceSession {
   private player: Playing | null = null;
   private spoke = false;
   private finished = false;
+  /** The caption the page shows now. */
+  private shown = "";
   /** A piece failed to speak: the rest of this reply stays quiet. */
   private noVoice = false;
   /** The failure was shown once this session. */
@@ -125,6 +127,9 @@ export class VoiceSession {
   private go(event: VoiceEvent) {
     const next = voiceStep(this.state, event);
     if (next === this.state) return;
+    // A caption shows only while it listens: one left behind would come
+    // back, stale, the next time it listens.
+    if (next !== "listening") this.caption("");
     this.state = next;
     this.deps.onState(next);
   }
@@ -235,6 +240,8 @@ export class VoiceSession {
   }
 
   private caption(text: string) {
+    if (text === this.shown) return;
+    this.shown = text;
     this.deps.onCaption?.(text);
   }
 

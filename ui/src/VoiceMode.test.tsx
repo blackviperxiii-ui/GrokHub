@@ -414,6 +414,25 @@ describe("live captions", () => {
     expect(r.captions).toEqual(["uh", ""]);
   });
 
+  it("a reply that starts while they talk takes the caption with it", async () => {
+    const r = rig();
+    await r.session.start();
+    await r.hear({ kind: "started" }, { kind: "caption", text: "remind me to call" });
+    // A queued message's reply speaks over them.
+    api.voiceReplyFeed.mockResolvedValueOnce(["Done."]);
+    r.session.feed("Done. ");
+    await flush();
+    expect(r.states.at(-1)).toBe("speaking");
+    expect(r.captions).toEqual(["remind me to call", ""]);
+    // It ends before their turn does: no old caption comes back.
+    r.session.replyDone("");
+    await flush();
+    r.ends[0]();
+    await flush();
+    expect(r.states.at(-1)).toBe("listening");
+    expect(r.captions).toEqual(["remind me to call", ""]);
+  });
+
   it("stopping clears the caption", async () => {
     const r = rig();
     await r.session.start();
