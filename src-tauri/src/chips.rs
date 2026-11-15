@@ -495,16 +495,27 @@ mod tests {
             playing: Some(game(8, "Celeste")),
             ended: Some((game(7, "Hades"), 500)),
         };
-        for surface in [HOME, COMPOSER] {
+        // A first look takes the guide's path; a chat under way is ranked,
+        // where only the offers' own score puts them at the front.
+        let talked = [
+            ("user".to_string(), "what's new".to_string()),
+            ("assistant".to_string(), "Not much.".to_string()),
+        ];
+        for (surface, chat) in [
+            (HOME, &[][..]),
+            (COMPOSER, &[][..]),
+            (HOME, &talked[..]),
+            (COMPOSER, &talked[..]),
+        ] {
             let extra = crate::game_companion::row_extra(&session, surface, false, 1_000);
-            let dir = temp_dir(&format!("game-notes-{surface}"));
+            let dir = temp_dir(&format!("game-notes-{surface}-{}", chat.len()));
             let rows = Mutex::new(Rows::default());
             let shown = row(
                 &dir,
                 &rows,
                 RowAsk {
                     surface,
-                    chat: &[],
+                    chat,
                     draft: "",
                     follow_ups: &[],
                     mode: "chat",
@@ -519,10 +530,18 @@ mod tests {
                 },
             );
             let _ = std::fs::remove_dir_all(&dir);
-            // Both offers make the three-chip row, in the session's order.
+            // On a first look the guide's start chip leads and both offers
+            // follow it; in a chat under way both offers lead. Either way
+            // they keep the session's order.
+            assert_eq!(shown.len(), 3, "{surface} {shown:?}");
+            let after = usize::from(chat.is_empty());
+            if chat.is_empty() {
+                assert_eq!(shown[0].id, "guide-start");
+            }
             let lead: Vec<_> = shown
                 .iter()
-                .filter(|c| c.id.starts_with("game:"))
+                .skip(after)
+                .take(2)
                 .map(|c| (c.id.as_str(), c.label.as_str(), c.action, c.note_for))
                 .collect();
             assert_eq!(
@@ -536,7 +555,8 @@ mod tests {
                         Some(7)
                     ),
                 ],
-                "{surface}"
+                "{surface} after {} turns: {shown:?}",
+                chat.len()
             );
         }
     }
