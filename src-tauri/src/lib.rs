@@ -18,6 +18,7 @@ pub mod bg_runs;
 mod brand_guard;
 pub mod capabilities;
 pub mod card_chat;
+mod catalog_refresh;
 pub mod change_rows;
 pub mod changes;
 #[cfg(desktop)]
@@ -7370,6 +7371,8 @@ pub fn run() {
             if !app_guard::take_profile(app.handle(), &config_dir) {
                 return Ok(());
             }
+            // Before anything reads the local model catalog.
+            catalog_refresh::tidy(&config_dir);
             let loaded = settings::load(&config_dir);
             #[cfg(desktop)]
             {
@@ -7413,6 +7416,7 @@ pub fn run() {
                 Ok(client)
             });
             steam_checks::start(config_dir.clone());
+            catalog_refresh::start(config_dir.clone());
             game_companion::start(config_dir.clone());
             pc_health::start(config_dir.clone());
             // The learning engine: chips, cards and runs record to it from
