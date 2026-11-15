@@ -385,7 +385,7 @@ pub fn review_step(
         skill_names: skill_names.clone(),
         automation_names: autos.clone(),
         turned_down: turned_down.iter().rev().cloned().collect(),
-        github_pat: false,
+        github_pat: crate::github::token_present(config_dir),
         host_receipts: chats.receipts,
         chip_habits: grokhub_core::top_habit_labels(&grokhub_core::load_chip_memory(config_dir), 6),
         thread_lines: chats.lines,
