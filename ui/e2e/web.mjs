@@ -157,7 +157,7 @@ const COMMANDS = {
   }),
   get_background: () => ({
     ok: true,
-    value: { runner: "Here a job runs when you choose Run now.", nextDue: null, quiet: "No quiet hours", budget: "Daily token budget: Off", rows: [] },
+    value: { runner: "Loadout runs automations on their schedule while it is open or in the tray.", nextDue: null, quiet: "No quiet hours", budget: "Daily token budget: Off", rows: [] },
   }),
   send_chat: sendChat,
   answer_permission: ({ callId, answer }) => {

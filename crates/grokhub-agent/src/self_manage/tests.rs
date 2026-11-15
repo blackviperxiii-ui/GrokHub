@@ -248,11 +248,11 @@ fn scope_guard_refuses_policy_targets_before_any_write() {
     );
     assert_eq!(
         refused("skill_modify", json!({ "name": "consent-helper" })),
-        "skill_modify refused: `name` reaches a cabin policy name (`consent`). Self-manage covers skills, connections, and automations only."
+        "skill_modify refused: `name` reaches an app policy name (`consent`). Self-manage covers skills, connections, and automations only."
     );
     assert_eq!(
         refused("connection_remove", json!({ "name": "egress" })),
-        "connection_remove refused: `name` reaches a cabin policy name (`egress`). Self-manage covers skills, connections, and automations only."
+        "connection_remove refused: `name` reaches an app policy name (`egress`). Self-manage covers skills, connections, and automations only."
     );
     // Ordinary names pass the guard.
     for name in ["access-gmail", "weekly-report", "github"] {

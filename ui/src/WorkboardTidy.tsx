@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getWorkboardTidy, setWorkboardTidy, type BoardTidy } from "./api";
 
 export const TIDY_NOTE =
-  "A card with no activity for 30 days is archived, and an agent's finished card you never opened goes after a day. The cabin and this app share the setting.";
+  "A card with no activity for 30 days is archived, and an agent's finished card you never opened goes after a day.";
 export const AUTO_DELETE_CHOICES = [
   { days: 0, label: "Off" },
   { days: 30, label: "After 30 days" },

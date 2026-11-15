@@ -173,9 +173,10 @@ fn change(
 ) -> Result<Vec<Automation>, String> {
     let _store = store();
     let mut list = load_unlocked(config_dir)?;
-    let at = list.iter().position(|a| a.id == id).ok_or_else(|| {
-        "That automation is gone. It may have been removed in the cabin.".to_string()
-    })?;
+    let at = list
+        .iter()
+        .position(|a| a.id == id)
+        .ok_or_else(|| "That automation is gone.".to_string())?;
     edit(&mut list, at);
     save(config_dir, &list)?;
     Ok(list)
@@ -364,9 +365,7 @@ pub fn run_now(
     let job = load(config_dir)?
         .into_iter()
         .find(|a| a.id == id)
-        .ok_or_else(|| {
-            "That automation is gone. It may have been removed in the cabin.".to_string()
-        })?;
+        .ok_or_else(|| "That automation is gone.".to_string())?;
     let _running = Running::claim(id)?;
     let started = grokhub_core::now_ms();
     let result = run_on_board(config_dir, &job, client, model, workspace, gate, "run now");
@@ -654,7 +653,7 @@ mod tests {
         );
         assert_eq!(
             remove(&dir, &first),
-            Err("That automation is gone. It may have been removed in the cabin.".to_string())
+            Err("That automation is gone.".to_string())
         );
     }
 
@@ -761,7 +760,7 @@ mod tests {
         );
         assert_eq!(
             edit(&dir, "auto-gone", "every day at 8am x", tuesday_8am()),
-            Err("That automation is gone. It may have been removed in the cabin.".to_string())
+            Err("That automation is gone.".to_string())
         );
         assert_eq!(std::fs::read_to_string(path(&dir)).expect("after"), before);
     }

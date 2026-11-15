@@ -22,7 +22,7 @@ export const CHANNEL_NOTE = "Switch between beta and stable in About, under Upda
 export const CHANNEL_NOTE_REMOTE =
   "Switch between beta and stable on your computer, in About, under Updates.";
 export const PLUGINS_TIP =
-  "A preview: the same plugins as the cabin's Labs page, with fewer details on each bundle.";
+  "A preview. Each bundle shows only its main details for now.";
 export const PLUGINS_NOTE =
   "Bundles stay off until you trust this version and turn them on. Trust covers the hook commands, MCP server commands, skills and agents a bundle lists. Fetching a marketplace list installs nothing.";
 export const PLUGINS_EMPTY =

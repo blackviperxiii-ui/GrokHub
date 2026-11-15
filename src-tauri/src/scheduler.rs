@@ -5,8 +5,9 @@
 //!
 //! A due job gated by a check command runs that command first; only a passing
 //! check is claimed and fired. Other due jobs are claimed first (last run,
-//! count and next run saved), then run unattended and read-only, as Run now
-//! does, whatever the approvals setting.
+//! count and next run saved), then run unattended under your Approvals, as
+//! Run now does: Ask stays read-only, and anything that would need an answer
+//! is skipped.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

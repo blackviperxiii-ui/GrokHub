@@ -651,7 +651,7 @@ describe("Projects tree, Pinned group and read-only chats", () => {
       name: "Read only chats",
     });
     expect(within(group).getByText("Grok CLI · Read only")).toBeVisible();
-    expect(within(group).getByText(/^Cabin · Read only · /)).toBeVisible();
+    expect(within(group).getByText(/^Older chat · Read only · /)).toBeVisible();
     expect(
       within(group).queryByRole("button", { name: /^More for/ }),
     ).toBeNull();

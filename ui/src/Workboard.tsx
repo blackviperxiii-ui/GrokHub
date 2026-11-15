@@ -33,7 +33,7 @@ import { CardTriage, priorityChip } from "./WorkboardTriage";
 
 export const BOARD_EMPTY = "No cards yet. A chat run files one here, or add your own.";
 export const BOARD_HELP =
-  "Drag a card to move it, or drop it on a card to put it above that one. Work puts the card in the chat box for you to send. The cabin keeps this same board, and neither overwrites the other's changes.";
+  "Drag a card to move it, or drop it on a card to put it above that one. Work puts the card in the chat box for you to send. Agent runs change the board too, and this page shows their changes within a few seconds.";
 /** How often the page checks whether the cabin saved the board. */
 export const STAMP_EVERY_MS = 3000;
 /** Longest "Left off" text on a compact card, like the cabin's meta line. */
@@ -238,6 +238,8 @@ export function Workboard({
       onResume?.({ conversationId: started.conversationId, prompt: started.prompt });
     } catch (err) {
       setNote(String(err));
+      // A card that is gone leaves the page: show what the file holds now.
+      await getWorkboard().then(setPage, () => {});
     } finally {
       setBusy(false);
     }

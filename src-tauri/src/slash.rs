@@ -5,8 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Greyed rows from the cabin's list carry this reason.
-pub const IN_THE_CABIN: &str = "In the cabin";
+/// Greyed rows from the full command list carry this reason: the app has
+/// no handler for them.
+pub const NOT_IN_APP: &str = "Not in this app";
 /// A row the paired browser can't run.
 pub const ON_YOUR_COMPUTER: &str = "On your computer";
 
@@ -584,7 +585,7 @@ pub fn hits(draft: &str, remote: bool) -> Vec<Hit> {
             hint: cabin.hint,
             insert: cabin.insert,
             run_on_pick: false,
-            disabled: Some(IN_THE_CABIN.to_string()),
+            disabled: Some(NOT_IN_APP.to_string()),
         });
     }
     out.truncate(12);
@@ -598,7 +599,7 @@ pub fn help() -> String {
         .filter(|c| !c.cmd.contains(' '))
         .map(|c| format!("{} — {}", c.insert.trim_end(), c.hint.trim_end_matches('…')))
         .collect();
-    lines.push("Other commands run in the cabin.".into());
+    lines.push("Greyed commands in the / menu say why they don't run here.".into());
     lines.join("\n")
 }
 
@@ -636,7 +637,7 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         if grokhub_core::parse_slash(line).is_some()
             || !grokhub_core::filter_slash_hits(&word, &[]).is_empty()
         {
-            return Err(format!("{word} runs in the cabin, not here."));
+            return Err(format!("{word} is not in this app."));
         }
         return Err(format!("Unknown command {word}. Type /help for the list."));
     };
@@ -1325,7 +1326,15 @@ mod tests {
     }
 
     #[test]
-    fn none_of_these_say_in_the_cabin() {
+    fn help_ends_by_saying_where_the_other_commands_went() {
+        assert_eq!(
+            help().lines().last(),
+            Some("Greyed commands in the / menu say why they don't run here.")
+        );
+    }
+
+    #[test]
+    fn none_of_these_say_not_in_this_app() {
         for word in [
             "/rename",
             "/pin",
@@ -1348,9 +1357,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("{word} is listed"));
             assert_eq!(row.disabled, None, "{word}");
             assert!(
-                rows.iter().all(
-                    |h| h.disabled.as_deref() != Some(IN_THE_CABIN) || !h.cmd.starts_with(word)
-                ),
+                rows.iter()
+                    .all(|h| h.disabled.as_deref() != Some(NOT_IN_APP) || !h.cmd.starts_with(word)),
                 "{word}"
             );
         }

@@ -65,7 +65,7 @@ const ROWS: SlashHit[] = [
   { cmd: "/remember", hint: "Save a memory note…", insert: "/remember ", runOnPick: false, disabled: null },
   { cmd: "/delete", hint: "Delete this chat (asks first)", insert: "/delete", runOnPick: true, disabled: null },
   { cmd: "/rename", hint: "Rename this chat…", insert: "/rename ", runOnPick: false, disabled: null },
-  { cmd: "/diagnose", hint: "Read-only checks", insert: "/diagnose", runOnPick: false, disabled: "In the cabin" },
+  { cmd: "/diagnose", hint: "Read-only checks", insert: "/diagnose", runOnPick: false, disabled: "Not in this app" },
 ];
 
 function rowsFor(draft: string): SlashHit[] {
@@ -113,7 +113,7 @@ describe("composer slash commands", () => {
     const list = await screen.findByRole("listbox", { name: "Commands" });
     expect(list).toHaveTextContent("/plan");
     expect(screen.getByRole("option", { name: /diagnose/ })).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByText("In the cabin")).toBeInTheDocument();
+    expect(screen.getByText("Not in this app")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
   });
@@ -185,7 +185,7 @@ describe("composer slash commands", () => {
     await userEvent.type(screen.getByLabelText("Message"), "/");
     expect(await screen.findByRole("option", { name: /\/delete/ })).not.toHaveAttribute("aria-disabled");
     expect(screen.getByRole("option", { name: /\/rename/ })).not.toHaveAttribute("aria-disabled");
-    expect(screen.getAllByText("In the cabin")).toHaveLength(1);
+    expect(screen.getAllByText("Not in this app")).toHaveLength(1);
   });
 
   it("/delete asks first with the chat's name, and only Yes runs it", async () => {

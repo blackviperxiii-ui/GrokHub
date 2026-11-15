@@ -13,7 +13,7 @@ import { Toggle } from "./Toggle";
 
 export const OFFLINE_NOTE = `${PRODUCT_NAME} stays off the internet. Chat uses Local AI if it's set up; web search, cloud models and online connectors pause.`;
 export const FILES_NOTE =
-  "Chats you export, and the cabin's diagnostics, recordings, images and reports, go here.";
+  "Chats you export, diagnostics bundles, screen recordings and PC reports go here, with any images brought over from before.";
 export const DIAGNOSTICS_PRIVACY_NOTE =
   "A diagnostics bundle (Settings → Labs) hides keys, tokens, emails and your home folder name, holds chat text only for a chat you pick, is saved here and is never uploaded.";
 export const OFFLINE_NOT_READY =

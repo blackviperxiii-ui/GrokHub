@@ -513,7 +513,7 @@ describe("Workboard", () => {
         board({ doing: [card({ id: "w-2", title: "Fix the build" })] }),
       );
     api.workboardAct.mockRejectedValue(
-      "That card is gone. It may have been removed in the cabin.",
+      "That card is gone. The page now shows what is left.",
     );
     render(<Workboard onWork={() => {}} />);
     await screen.findByRole("listitem", { name: "Write release notes" });
@@ -521,7 +521,7 @@ describe("Workboard", () => {
       inCard("Write release notes").getByRole("button", { name: "Archive" }),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "That card is gone. It may have been removed in the cabin.",
+      "That card is gone. The page now shows what is left.",
     );
     expect(
       screen.queryByRole("listitem", { name: "Write release notes" }),
@@ -636,6 +636,26 @@ describe("Workboard", () => {
     const [, chat] = api.workboardResume.mock.calls[0];
     expect(PAUSED.chat).toBe("chat-p1");
     expect(chat).toMatch(/^shell-/);
+  });
+
+  it("Resume on a card that is gone says so and takes it off the page", async () => {
+    api.getWorkboard
+      .mockResolvedValueOnce(board({ blocked: [PAUSED] }))
+      .mockResolvedValue(board({}));
+    api.workboardResume.mockRejectedValue("That card is gone. The page now shows what is left.");
+    const onResume = vi.fn();
+    render(<Workboard onWork={() => {}} onResume={onResume} />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Port the lexer/ }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+    expect(
+      await screen.findByText("That card is gone. The page now shows what is left."),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /Port the lexer/ })).toBeNull(),
+    );
+    expect(onResume).not.toHaveBeenCalled();
   });
 
   it("a run that resumes in the background opens no chat and says so", async () => {
@@ -764,7 +784,7 @@ describe("Workboard", () => {
     const queued = board({ todo: [card({ queued: "Queued" })] });
     api.workboardAct.mockResolvedValue({
       ...queued,
-      queueNote: "Queued cards start in the cabin.",
+      queueNote: "Queued cards start once nothing else is running.",
     });
     // The desktop window, as App renders it there: Resume and Queue are on.
     render(<Workboard onWork={() => {}} onResume={() => {}} />);
@@ -777,7 +797,7 @@ describe("Workboard", () => {
     await userEvent.click(handOver.getByRole("button", { name: "Queue" }));
     expect(api.workboardAct).toHaveBeenCalledWith("w-1", { kind: "queue" });
     expect(
-      await screen.findByText("Queued cards start in the cabin."),
+      await screen.findByText("Queued cards start once nothing else is running."),
     ).toBeVisible();
     expect(
       inCard("Write release notes").getAllByText("Queued")[0],

@@ -20,7 +20,7 @@ const api = vi.hoisted(() => ({
   slashHits: vi.fn(async (draft: string) =>
     [
       { cmd: "/plan", hint: "Plan first", insert: "/plan ", runOnPick: false, disabled: null },
-      { cmd: "/play", hint: "", insert: "/play", runOnPick: true, disabled: "In the cabin" },
+      { cmd: "/play", hint: "", insert: "/play", runOnPick: true, disabled: "Not in this app" },
     ].filter((hit) => hit.cmd.startsWith(draft)),
   ),
   // One card, worked by chat "shell-c1", so its dock item can open it.

@@ -279,7 +279,7 @@ const EMPTY_PRIVACY = {
 };
 
 const EMPTY_BACKGROUND = {
-  runner: "Here a job runs when you choose Run now.",
+  runner: "Loadout runs automations on their schedule while it is open or in the tray.",
   nextDue: null,
   quiet: "No quiet hours",
   budget: "Daily token budget: Off",
