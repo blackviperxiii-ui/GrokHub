@@ -94,13 +94,12 @@ pub struct Live {
     /// hears a start they go to the stream first, so it gets the turn's
     /// lead-in the mic keeps too, even from before the stream opened.
     recent: std::collections::VecDeque<Vec<i16>>,
-    /// Which listen this is, unique across sessions.
-    listen_id: u64,
-}
-
-fn next_listen_id() -> u64 {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    /// A reply is playing: no stream (its echo could end a turn nobody
+    /// spoke).
+    playing: bool,
+    /// The stream closed while nobody talked and the listen still waits:
+    /// open a new one.
+    reopen: bool,
 }
 
 /// How much audio before a start the stream gets: the detector's pre-roll
@@ -218,6 +217,11 @@ impl Live {
                     return None;
                 }
                 Ok(SttNews::Ended(_) | SttNews::Caption(_)) => {}
+                Ok(SttNews::Idle) => {
+                    self.stt = None;
+                    self.reopen = true;
+                    return None;
+                }
                 Ok(SttNews::Failed(_)) | Err(TryRecvError::Disconnected) => {
                     self.stt = None;
                     return None;
@@ -244,7 +248,8 @@ impl Live {
         self.spoke = false;
         self.recent.clear();
         self.stt = None;
-        self.listen_id = next_listen_id();
+        self.playing = playing;
+        self.reopen = false;
         !playing
     }
 
@@ -254,17 +259,34 @@ impl Live {
     /// upload: a stream opened now would miss its start.
     fn playing_changed(&mut self, playing: bool) -> bool {
         self.mic.set_playing(playing);
+        self.playing = playing;
+        self.reopen = false;
         if playing {
             self.stt = None;
             false
         } else if self.mic.armed() && !self.mic.talking() && self.stt.is_none() {
             self.heard = 0;
             self.spoke = false;
-            self.listen_id = next_listen_id();
             true
         } else {
             false
         }
+    }
+
+    /// Whether this listen can take a stream now: armed, no reply playing,
+    /// none open, and nobody started talking (a stream that missed the start
+    /// would hear clipped words).
+    fn wants_stream(&self) -> bool {
+        !self.playing
+            && self.stt.is_none()
+            && self.mic.armed()
+            && !self.mic.talking()
+            && !self.spoke
+    }
+
+    /// Whether an idle stream closed under a listen that still wants one.
+    fn take_reopen(&mut self) -> bool {
+        std::mem::take(&mut self.reopen) && self.wants_stream()
     }
 
     fn open_now(&mut self) {
@@ -272,24 +294,20 @@ impl Live {
     }
 
     /// The opener, lent out so a stream opens without the session locked
-    /// (the key comes from the OS keychain), with this listen's id.
-    fn lend_opener(&mut self) -> Option<(Opener, u64)> {
-        self.open.take().map(|open| (open, self.listen_id))
+    /// (the key comes from the OS keychain).
+    fn lend_opener(&mut self) -> Option<Opener> {
+        self.open.take()
     }
 
-    /// The opener back, and its stream if it is still wanted: the same
-    /// listen, nothing open, and nobody started talking meanwhile (a stream
-    /// that missed the start would hear clipped words).
-    fn take_back(&mut self, open: Opener, listen_id: u64, link: Option<SttLink>) {
+    /// The opener back, and its stream if the listen on now still wants
+    /// one. A stream nothing was sent to yet is as good for a later listen
+    /// (one that asked while the opener was lent) as for the one it was
+    /// opened for.
+    fn take_back(&mut self, open: Opener, link: Option<SttLink>) {
         if self.open.is_none() {
             self.open = Some(open);
         }
-        if listen_id == self.listen_id
-            && self.stt.is_none()
-            && self.mic.armed()
-            && !self.mic.talking()
-            && !self.spoke
-        {
+        if self.wants_stream() {
             self.stt = link;
         }
     }
@@ -575,7 +593,12 @@ pub(crate) fn voice_live_push(block: String) -> Result<Vec<LiveEvent>, String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(block.trim())
         .map_err(|_| BAD_BLOCK.to_string())?;
-    with(|live| live.push(&bytes))?
+    let (events, reopen) = with(|live| (live.push(&bytes), live.take_reopen()))?;
+    if reopen {
+        // Off the main thread: opening reads the OS keychain.
+        tauri::async_runtime::spawn_blocking(|| then_open(&SESSION, |live| live.wants_stream()));
+    }
+    events
 }
 
 /// `change` under the session lock, then the stream it wants opened with
@@ -592,10 +615,10 @@ fn then_open(
             None
         }
     })?;
-    if let Some((mut open, listen_id)) = lent {
+    if let Some(mut open) = lent {
         let link = open();
         // Voice mode turned off meanwhile: the stream just goes.
-        let _ = with_in(cell, |live| live.take_back(open, listen_id, link));
+        let _ = with_in(cell, |live| live.take_back(open, link));
     }
     Ok(())
 }
