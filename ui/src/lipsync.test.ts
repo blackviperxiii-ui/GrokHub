@@ -17,6 +17,18 @@ describe("the envelope of a spoken reply", () => {
     expect(env[35]).toBeCloseTo(0.25, 1);
   });
 
+  it("scales to the 95th-percentile frame, so a shout clips instead of muting the rest", () => {
+    const rate = 1000; // 20 samples a frame
+    const frame = (amp: number) => new Array<number>(20).fill(amp);
+    // One shout four times as loud in 40 frames sits above the 95th
+    // percentile: the steady part stays at the top and the shout clips.
+    const one = envelopeFromPcm([...Array.from({ length: 39 }, () => frame(0.2)).flat(), ...frame(0.8)], rate);
+    expect(one.slice(0, 39)).toEqual(new Array<number>(39).fill(1));
+    expect(one[39]).toBe(1);
+    // A quiet frame is its share of the steady part.
+    expect(envelopeFromPcm([...Array.from({ length: 39 }, () => frame(0.2)).flat(), ...frame(0.1)], rate)[39]).toBe(0.5);
+  });
+
   it("is all zeros for silence and empty for nothing", () => {
     expect(envelopeFromPcm(new Array<number>(16_000).fill(0), 16_000)).toEqual(new Array<number>(50).fill(0));
     expect(envelopeFromPcm([], 16_000)).toEqual([]);
@@ -58,9 +70,11 @@ describe("envelopeOf", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("decodes the piece, mixes its channels and rounds each level", async () => {
-    // One 20 ms frame of silence, then one of voice (44.1 kHz).
-    const left = new Float32Array([...new Array<number>(882).fill(0), ...new Array<number>(882).fill(0.5)]);
-    const right = new Float32Array([...new Array<number>(882).fill(0), ...new Array<number>(882).fill(0.3)]);
+    // Three 20 ms frames (44.1 kHz): the left channel loud in the first,
+    // the right in the second, both in the third.
+    const f = (amp: number) => new Array<number>(882).fill(amp);
+    const left = new Float32Array([...f(0.6), ...f(0), ...f(0.6)]);
+    const right = new Float32Array([...f(0), ...f(0.2), ...f(0.6)]);
     const decoded: Uint8Array[] = [];
     vi.stubGlobal(
       "OfflineAudioContext",
@@ -68,7 +82,7 @@ describe("envelopeOf", () => {
         decodeAudioData(buf: ArrayBuffer) {
           decoded.push(new Uint8Array(buf));
           return Promise.resolve({
-            length: 1764,
+            length: 2646,
             numberOfChannels: 2,
             sampleRate: 44_100,
             getChannelData: (ch: number) => (ch === 0 ? left : right),
@@ -77,7 +91,8 @@ describe("envelopeOf", () => {
       },
     );
     // "hi" in base64.
-    expect(await envelopeOf({ mime: "audio/mpeg", audio: "aGk=" })).toEqual([0, 1]);
+    // Mixed: 0.3, 0.1 and 0.6; scaled to the loudest and rounded.
+    expect(await envelopeOf({ mime: "audio/mpeg", audio: "aGk=" })).toEqual([0.5, 0.17, 1]);
     expect([...decoded[0]]).toEqual([104, 105]);
   });
 

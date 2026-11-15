@@ -184,8 +184,35 @@ describe("Chat and her desktop pedestal", () => {
     const talk = { levels: [0.5, 1], startedAt: 1_000 };
     voices.talk[1](talk);
     expect(desk.desktopNyxTalk).not.toHaveBeenCalled();
+    // A stop with nothing out sends nothing.
+    voices.talk[1](null);
     voices.talk[0](talk);
     voices.talk[0](null);
+    expect(desk.desktopNyxTalk.mock.calls).toEqual([[talk], [null]]);
+  });
+
+  it("lets a live voice off screen talk for her, and a piece always gets its stop", async () => {
+    const both = (
+      <>
+        <Chat onOpenSettings={() => {}} active />
+        <Chat onOpenSettings={() => {}} active={false} />
+      </>
+    );
+    render(both);
+    await waitFor(() => expect(voices.talk).toHaveLength(2));
+    // Voice mode is on in the chat off screen: it speaks for her.
+    act(() => voices.set[1]("speaking"));
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("speaking", "hanging-out"));
+    const talk = { levels: [1], startedAt: 2_000 };
+    voices.talk[0](talk);
+    expect(desk.desktopNyxTalk).not.toHaveBeenCalled();
+    voices.talk[1](talk);
+    expect(desk.desktopNyxTalk.mock.calls).toEqual([[talk]]);
+    // Its voice turns off mid-piece: the desk goes back to the chat on
+    // screen, and the piece's stop still reaches her.
+    act(() => voices.set[1]("off"));
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("idle", "hanging-out"));
+    voices.talk[1](null);
     expect(desk.desktopNyxTalk.mock.calls).toEqual([[talk], [null]]);
   });
 });

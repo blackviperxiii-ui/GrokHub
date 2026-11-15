@@ -1031,8 +1031,15 @@ export function Chat({
   }, []);
   // A spoken reply makes her hop on the desk, from the chat that speaks for her.
   useEffect(() => {
+    // A piece this chat started always gets its stop, even once another
+    // chat speaks for her (this one going away mid-piece).
+    let out = false;
     voice.session.talkTo((talk) => {
-      if (inShell() && deskSpeaker() === deskChat.current) desktopNyxTalk(talk).catch(() => {});
+      if (!inShell()) return;
+      if (talk && deskSpeaker() !== deskChat.current) return;
+      if (!talk && !out) return;
+      out = talk !== null;
+      desktopNyxTalk(talk).catch(() => {});
     });
   }, [voice.session]);
   const sideWide = useMinWidth(SIDE_MIN_WIDTH);
