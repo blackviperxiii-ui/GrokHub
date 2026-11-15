@@ -10,6 +10,7 @@ import {
   runLocalSpeedTest,
   saveLocalAi,
   setLocalDynamic,
+  setPromptTidy,
   setLocalKeepLoaded,
   startLocalDrafterDownload,
   startLocalEngineDownload,
@@ -326,6 +327,15 @@ export function LocalAi() {
     }
   }
 
+  async function tidy(on: boolean) {
+    try {
+      setView(await setPromptTidy(on));
+      tell(on ? "Typo tidy is on: the on-device model fixes typos while it's loaded." : "Typo tidy is off: your messages go as you type them.");
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   async function keepLoaded(on: boolean) {
     try {
       setView(await setLocalKeepLoaded(on));
@@ -421,6 +431,12 @@ export function LocalAi() {
             Unload now
           </button>
         )}
+      </div>
+      <div className="local-tidy" role="group" aria-label="Typo tidy">
+        <Toggle checked={view.tidy.on} disabled={!view.tidy.available && !view.tidy.on} onChange={(on) => void tidy(on)}>
+          Tidy typos on this computer (can change wording)
+        </Toggle>
+        <p className="note">{view.tidy.hint}</p>
       </div>
       {view.limits.length > 0 && (
         <div className="local-limits">
