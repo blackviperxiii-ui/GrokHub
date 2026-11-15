@@ -155,6 +155,7 @@ fresh_pr
 sed -i '/^pkgver=/d' "$W/packaging/aur/PKGBUILD"
 commit_pr
 run_guard fail "PKGBUILD missing its pkgver line fails"
+LABELS=release run_guard fail "PKGBUILD missing its pkgver line fails even with release"
 
 fresh_pr
 printf 'name = "other"\nversion = "1.0.0"\n' >"$W/Cargo.lock"

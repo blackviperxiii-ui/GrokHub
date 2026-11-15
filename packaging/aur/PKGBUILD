@@ -51,8 +51,10 @@ package() {
   chmod 644 "${pkgdir}/usr/share/applications/grokhub-shell.desktop"
   install -Dm644 packaging/grokhub.svg \
     "${pkgdir}/usr/share/icons/hicolor/scalable/apps/grokhub.svg"
+  # install, not cp -a: the package must not carry the build user as owner.
   if [[ -d packaging/icons/hicolor ]]; then
-    cp -a packaging/icons/hicolor/. "${pkgdir}/usr/share/icons/hicolor/"
+    (cd packaging/icons/hicolor &&
+      find . -type f -exec install -Dm644 {} "${pkgdir}/usr/share/icons/hicolor/{}" \;)
   fi
   # The unit's ExecStart names the user install (~/.local/bin); a package
   # puts the hub in /usr/bin.

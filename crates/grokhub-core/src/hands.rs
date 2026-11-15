@@ -374,6 +374,9 @@ mod tests {
                 "{name} build() must match scripts/install.sh"
             );
             for line in [
+                // src-tauri is its own workspace: the shell is not under target/.
+                "local hub=\"${CARGO_TARGET_DIR:-target}/release\"".to_string(),
+                "local shell=\"${CARGO_TARGET_DIR:-src-tauri/target}/release\"".to_string(),
                 format!("install -Dm755 \"$shell/grokhub-shell\" \"{pkgdir}/usr/bin/grokhub-shell\""),
                 format!("install -Dm755 \"$hub/grokhub-hub\" \"{pkgdir}/usr/bin/grokhub-hub\""),
                 format!("install -Dm755 \"$hub/grokhub\" \"{pkgdir}/usr/bin/grokhub\""),
