@@ -312,18 +312,52 @@ fn the_card_waits_for_its_own_click_and_a_newer_ask_replaces_it() {
     );
     mods_install::drop_request(newer);
 
-    // Starting that mod's install answers the ask; another mod's doesn't.
+    // Starting that mod's install answers the ask; another mod's doesn't,
+    // and neither does the same id in another game (Nexus and Thunderstore
+    // ids mean another mod there).
     mods_install::request(r);
-    mods_install::begin_plan("modrinth:P7dR8mSH").unwrap();
+    mods_install::begin_plan("minecraft", "modrinth:P7dR8mSH").unwrap();
+    mods_install::end_plan();
+    mods_install::begin_plan("stardew", "modrinth:AANobbMI").unwrap();
     mods_install::end_plan();
     assert!(mods_install::requested().is_some());
-    mods_install::begin_plan("modrinth:AANobbMI").unwrap();
+    mods_install::begin_plan("minecraft", "modrinth:AANobbMI").unwrap();
     assert_eq!(
-        mods_install::begin_plan("modrinth:AANobbMI").unwrap_err(),
+        mods_install::begin_plan("minecraft", "modrinth:AANobbMI").unwrap_err(),
         "Another install is getting ready. Wait for it first."
     );
     mods_install::end_plan();
     assert_eq!(mods_install::requested(), None);
+}
+
+#[test]
+fn the_card_offers_i_downloaded_it_only_for_its_own_games_download() {
+    let dir = temp("pickup");
+    let (c, _) = client(&dir);
+    let (_, r) = prepare_request(
+        &c,
+        minecraft(),
+        Source::Modrinth,
+        ("AANobbMI", None),
+        false,
+        None,
+        NOW,
+    )
+    .unwrap();
+    let mut f = r.f.clone();
+    f.download = Download::Browser("https://modrinth.com/mod/sodium".into());
+    let r = Requested { f, ..r };
+    let pickup = |game: &str| mods_install::Pickup {
+        game: game.into(),
+        key: "modrinth:AANobbMI".into(),
+        file_name: "sodium-fabric-0.6.0.jar".into(),
+        size: 0,
+        since: std::time::SystemTime::now(),
+    };
+    let ours = requested_view((1, &r), &[], None, Some(&pickup("minecraft")));
+    assert!(ours.file.waiting);
+    let theirs = requested_view((1, &r), &[], None, Some(&pickup("stardew")));
+    assert!(!theirs.file.waiting);
 }
 
 #[test]

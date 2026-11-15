@@ -147,10 +147,19 @@ impl Sheet {
 /// A browser download the page waits to find in Downloads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pickup {
+    /// The game it is for: a Nexus or Thunderstore id means a different
+    /// mod in another game.
+    pub game: String,
     pub key: String,
     pub file_name: String,
     pub size: u64,
     pub since: SystemTime,
+}
+
+impl Pickup {
+    pub fn is_for(&self, game: &str, key: &str) -> bool {
+        self.game == game && self.key == key
+    }
 }
 
 #[derive(Default)]
@@ -543,7 +552,7 @@ pub struct DrawerView {
 /// The drawer's rows from the source's files and what is installed.
 pub fn drawer_rows(
     files: &[ModFile],
-    key: &str,
+    (game, key): (&str, &str),
     installed: &[Manifest],
     blocked: bool,
     pickup: Option<&Pickup>,
@@ -560,7 +569,7 @@ pub fn drawer_rows(
             },
             line: file_line(f),
             offer: offer(f, key, installed, blocked),
-            waiting: pickup.is_some_and(|p| p.key == key && p.file_name == f.file_name),
+            waiting: pickup.is_some_and(|p| p.is_for(game, key) && p.file_name == f.file_name),
         })
         .collect();
     let needs = files
@@ -606,7 +615,7 @@ pub fn requested_view(
     let key = r.key();
     let (mut rows, _) = drawer_rows(
         std::slice::from_ref(&r.f),
-        &key,
+        (r.game.entry.id, &key),
         installed,
         blocked.is_some(),
         pickup,
@@ -902,14 +911,17 @@ fn file_of(
 }
 
 /// Take the one-job flag for this mod's plan. Starting it answers the
-/// chat's ask for the same mod, so its card goes.
-pub fn begin_plan(key: &str) -> Result<(), String> {
+/// chat's ask for the same mod in the same game, so its card goes.
+pub fn begin_plan(game: &str, key: &str) -> Result<(), String> {
     let mut w = work();
     if w.busy {
         return Err("Another install is getting ready. Wait for it first.".into());
     }
     w.busy = true;
-    if w.requested.as_ref().is_some_and(|(_, r)| r.key() == key) {
+    if w.requested
+        .as_ref()
+        .is_some_and(|(_, r)| r.game.entry.id == game && r.key() == key)
+    {
         w.requested = None;
     }
     Ok(())
@@ -929,7 +941,7 @@ fn plan_job(
     f: &ModFile,
     from: Option<PathBuf>,
 ) -> Result<SheetView, String> {
-    begin_plan(&mod_key(source, mod_ref.0))?;
+    begin_plan(game.entry.id, &mod_key(source, mod_ref.0))?;
     let say = |line: String| {
         let _ = app.emit(JOB_EVENT, line);
     };
@@ -1024,8 +1036,13 @@ pub(crate) async fn mods_files(
         let key = mod_key(src, &id);
         let installed = engine::installed(&dir, Some(&game));
         let pickup = work().pickup.clone();
-        let (rows, needs) =
-            drawer_rows(&files, &key, &installed, blocked.is_some(), pickup.as_ref());
+        let (rows, needs) = drawer_rows(
+            &files,
+            (&game, &key),
+            &installed,
+            blocked.is_some(),
+            pickup.as_ref(),
+        );
         Ok(DrawerView {
             files: rows,
             blocked,
@@ -1079,6 +1096,7 @@ pub(crate) async fn mods_wait_for_browser(
         let src = source_of(&source)?;
         let f = file_of(&dir, &game, src, &id, &file)?;
         work().pickup = Some(Pickup {
+            game,
             key: mod_key(src, &id),
             file_name: f.file_name,
             size: f.size,
@@ -1111,7 +1129,7 @@ pub(crate) async fn mods_pickup_download(
         let p = work()
             .pickup
             .clone()
-            .filter(|p| p.key == key)
+            .filter(|p| p.is_for(&game, &key))
             .ok_or("Download it on the site first.")?;
         let found = grokhub_core::mods::pickup::downloads_folder()
             .and_then(|d| find_download(&d, &p))
