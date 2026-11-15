@@ -402,7 +402,8 @@ pub fn show_window(
     if let Some(existing) = app.get_webview_window(LABEL) {
         let _ = existing.set_always_on_top(spec.always_on_top);
         // Hidden for a game: the desk watch shows her again after it.
-        if !desk().game.hidden {
+        let for_game = desk().game.hidden;
+        if !for_game {
             existing.show().map_err(|e| e.to_string())?;
         }
         return Ok(());
@@ -608,6 +609,8 @@ pub struct GameHide {
     clear_since: Option<std::time::Instant>,
     /// Hidden with `hide()` (never closed, which would dock her) for a game.
     pub hidden: bool,
+    /// `hidden` changed since pages last heard.
+    news: bool,
 }
 
 impl GameHide {
@@ -623,7 +626,9 @@ impl GameHide {
     ) -> Option<bool> {
         if !self.seen {
             self.seen = true;
+            // Opened hidden mid-game: pages were told she is out, not hidden.
             self.hidden = !shown.unwrap_or(true);
+            self.news = self.hidden;
             self.clear_since = now.checked_sub(RETURN_AFTER);
         }
         let hide = !visible_now(true, gaming, &mut self.clear_since, now);
@@ -633,7 +638,13 @@ impl GameHide {
     /// The window was hidden or shown as [`GameHide::frame`] asked. A call
     /// that failed is asked for again next frame.
     pub fn done(&mut self, hide: bool) {
+        self.news |= self.hidden != hide;
         self.hidden = hide;
+    }
+
+    /// Whether pages need to hear `hidden` again; true once per change.
+    pub fn take_news(&mut self) -> bool {
+        std::mem::take(&mut self.news)
     }
 
     /// Whether the watch still has to read the window's visibility.
@@ -676,6 +687,7 @@ static DESK: std::sync::Mutex<Desk> = std::sync::Mutex::new(Desk {
         seen: false,
         clear_since: None,
         hidden: false,
+        news: false,
     },
 });
 
@@ -754,11 +766,10 @@ pub fn tick(app: &tauri::AppHandle) -> Frame {
         &grokhub_desktop::game_guard::peek(),
         grokhub_desktop::signals::fullscreen_other_app(),
     );
-    // A window call, so read before the lock; only a new window needs it.
-    let shown = desk()
-        .game
-        .new_window()
-        .then(|| w.is_visible().unwrap_or(true));
+    // A window call, so read with the lock released (a `desk()` guard in
+    // the same statement would hold it); only a new window needs it.
+    let new_window = desk().game.new_window();
+    let shown = new_window.then(|| w.is_visible().unwrap_or(true));
     let (boxes, had, flip) = {
         let mut d = desk();
         let flip = d.game.frame(gaming, shown, now);
@@ -769,12 +780,12 @@ pub fn tick(app: &tauri::AppHandle) -> Frame {
         Some(false) => show_quietly(app, &w),
         None => false,
     };
-    let hidden = {
+    let (hidden, game_changed) = {
         let mut d = desk();
         if let (true, Some(hide)) = (flipped, flip) {
             d.game.done(hide);
         }
-        d.game.hidden
+        (d.game.hidden, d.game.take_news())
     };
     let applied = if hidden {
         None
@@ -788,7 +799,7 @@ pub fn tick(app: &tauri::AppHandle) -> Frame {
     }
     Frame {
         landing: d.moves.settled(now),
-        game_changed: flipped,
+        game_changed,
     }
 }
 
@@ -1284,10 +1295,13 @@ mod tests {
         g.done(false);
         assert!(!g.hidden);
         assert_eq!(g.frame(false, None, s(200)), None);
-        // Opened hidden and the game is still on: she waits for it.
+        // Opened hidden and the game is still on: she waits for it, and pages
+        // (told she is out) hear she is hidden.
         let mut g = GameHide::default();
         assert_eq!(g.frame(true, Some(false), t0), None);
         assert!(g.hidden);
+        assert!(g.take_news());
+        assert!(!g.take_news());
         assert_eq!(g.frame(false, None, s(1_000)), None);
         assert_eq!(g.frame(false, None, s(4_900)), None);
         assert_eq!(g.frame(false, None, s(5_000)), Some(false));
@@ -1302,8 +1316,12 @@ mod tests {
         assert!(g.new_window());
         assert_eq!(g.frame(false, Some(true), t0), None);
         assert!(!g.new_window());
+        assert!(!g.take_news());
         assert_eq!(g.frame(true, None, s(100)), Some(true));
+        // Not hidden until the hide went through.
+        assert!(!g.take_news());
         g.done(true);
+        assert!(g.take_news());
         assert_eq!(g.frame(true, None, s(200)), None);
         assert_eq!(g.frame(false, None, s(300)), None);
         assert_eq!(g.frame(false, None, s(4_200)), None);
@@ -1364,7 +1382,26 @@ mod tests {
             .nth(1)
             .and_then(|rest| rest.split("\n}\n").next())
             .expect("show_window body");
-        assert!(show.contains("if !desk().game.hidden {"));
+        assert!(show.contains("let for_game = desk().game.hidden;"));
+        // The desk lock is never held across a window call: a `desk()`
+        // guard lives to the end of its statement.
+        let window_calls = [
+            "w.",
+            "existing.",
+            "show_quietly(",
+            "cursor_now(",
+            "origin_now(",
+        ];
+        for statement in body.split(';').chain(show.split(';')) {
+            if statement.contains("desk()") {
+                for call in window_calls {
+                    assert!(
+                        !statement.contains(call),
+                        "desk() and {call} in one statement: {statement}"
+                    );
+                }
+            }
+        }
         assert!(show.contains(".visible(!gaming)"));
         assert!(show.contains(".content_protected(spec.content_protected)"));
     }
