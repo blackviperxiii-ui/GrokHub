@@ -11,10 +11,12 @@ const api = vi.hoisted(() => ({
   removeAiProvider: vi.fn<(id: string) => Promise<AiModelsView>>(),
   saveAiSpend: vi.fn<(cap: number, ceiling: number) => Promise<AiModelsView>>(),
   revokeAiPremium: vi.fn<(id: string) => Promise<AiModelsView>>(),
+  saveWebSearch: vi.fn<(backend: string, searxngUrl: string) => Promise<AiModelsView>>(),
+  saveBraveKey: vi.fn<(key: string) => Promise<AiModelsView>>(),
 }));
 vi.mock("./api", () => api);
 
-import { AiModels, LOCAL_NOTE, PREMIUM_NONE } from "./AiModels";
+import { AiModels, BRAVE_SET, BRAVE_UNSET, LOCAL_NOTE, PREMIUM_NONE, SEARXNG_NOTE, WEB_SEARCH_NOTE } from "./AiModels";
 
 const EMPTY: AiModelsView = {
   providers: [],
@@ -23,8 +25,23 @@ const EMPTY: AiModelsView = {
   table: [],
   tableBuiltAt: 0,
   locked: "",
+  webSearch: {
+    backend: "duckduckgo",
+    backends: [
+      { id: "duckduckgo", label: "DuckDuckGo Lite (free, no key)" },
+      { id: "searxng", label: "SearXNG (self-hosted URL)" },
+      { id: "brave", label: "Brave Search (your API key)" },
+    ],
+    searxngUrl: "",
+    searxngProblem: "",
+    braveKeySet: false,
+  },
   status: "",
 };
+
+function searching(over: Partial<AiModelsView["webSearch"]>): AiModelsView {
+  return { ...EMPTY, webSearch: { ...EMPTY.webSearch, ...over } };
+}
 
 const WITH_PROVIDER: AiModelsView = {
   ...EMPTY,
@@ -257,5 +274,119 @@ describe("AiModels", () => {
     expect(said).toHaveClass("status--error");
     expect(screen.getByLabelText("Provider address")).toHaveValue("https://openrouter.ai/api/v1");
     expect(screen.getByLabelText("Provider API key")).toHaveValue("");
+  });
+
+  describe("web search", () => {
+    it("picks free DuckDuckGo Lite by default and shows no URL or key field", async () => {
+      render(<AiModels />);
+      expect(await screen.findByText(WEB_SEARCH_NOTE)).toBeVisible();
+      expect(WEB_SEARCH_NOTE).toBe(
+        "For OpenRouter and the local model. Free DuckDuckGo Lite by default, no account. Grok still uses xAI's own search.",
+      );
+      expect(screen.getByLabelText("Search backend")).toHaveValue("duckduckgo");
+      expect(screen.getByRole("option", { name: "DuckDuckGo Lite (free, no key)" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("SearXNG URL")).toBeNull();
+      expect(screen.queryByLabelText("Brave API key")).toBeNull();
+    });
+
+    it("saves SearXNG when picked and then shows its URL field", async () => {
+      api.saveWebSearch.mockResolvedValue({ ...searching({ backend: "searxng" }), status: "Saved." });
+      render(<AiModels />);
+      await userEvent.selectOptions(await screen.findByLabelText("Search backend"), "searxng");
+      expect(api.saveWebSearch).toHaveBeenCalledWith("searxng", "");
+      expect(await screen.findByLabelText("SearXNG URL")).toHaveValue("");
+      expect(screen.getByText(SEARXNG_NOTE)).toBeVisible();
+      expect(screen.getByText("Saved.")).toBeVisible();
+    });
+
+    it("saves the SearXNG URL trimmed, on Enter", async () => {
+      api.getAiModels.mockResolvedValue(searching({ backend: "searxng" }));
+      api.saveWebSearch.mockResolvedValue({
+        ...searching({ backend: "searxng", searxngUrl: "https://searx.example" }),
+        status: "Saved.",
+      });
+      render(<AiModels />);
+      const field = await screen.findByLabelText("SearXNG URL");
+      expect(screen.getByRole("button", { name: "Save URL" })).toBeDisabled();
+      await userEvent.type(field, "  https://searx.example  {Enter}");
+      expect(api.saveWebSearch).toHaveBeenCalledWith("searxng", "https://searx.example");
+      await waitFor(() => expect(field).toHaveValue("https://searx.example"));
+      expect(screen.getByRole("button", { name: "Save URL" })).toBeDisabled();
+    });
+
+    it("shows why a SearXNG URL wasn't saved", async () => {
+      api.getAiModels.mockResolvedValue(searching({ backend: "searxng" }));
+      api.saveWebSearch.mockRejectedValue("SearXNG URL must start with http:// or https://.");
+      render(<AiModels />);
+      await userEvent.type(await screen.findByLabelText("SearXNG URL"), "searx.example");
+      await userEvent.click(screen.getByRole("button", { name: "Save URL" }));
+      expect(await screen.findByText("SearXNG URL must start with http:// or https://.")).toHaveClass("status--error");
+      expect(screen.getByLabelText("SearXNG URL")).toHaveValue("searx.example");
+    });
+
+    it("lets you pick SearXNG with an old LAN URL and shows why it won't work", async () => {
+      api.getAiModels.mockResolvedValue(searching({ searxngUrl: "http://192.168.1.5:8888" }));
+      api.saveWebSearch.mockResolvedValue({
+        ...searching({
+          backend: "searxng",
+          searxngUrl: "http://192.168.1.5:8888",
+          searxngProblem: "Web search only reaches public addresses, so a SearXNG server on this computer or your own network can't be used.",
+        }),
+        status: "Saved.",
+      });
+      render(<AiModels />);
+      await userEvent.selectOptions(await screen.findByLabelText("Search backend"), "searxng");
+      expect(api.saveWebSearch).toHaveBeenCalledWith("searxng", "http://192.168.1.5:8888");
+      expect(await screen.findByText("Web search only reaches public addresses, so a SearXNG server on this computer or your own network can't be used.")).toHaveClass("warn");
+      expect(screen.getByLabelText("SearXNG URL")).toHaveValue("http://192.168.1.5:8888");
+      expect(screen.getByLabelText("SearXNG URL")).toBeEnabled();
+    });
+
+    it("closes the Remove key confirm when the backend changes", async () => {
+      api.getAiModels.mockResolvedValue(searching({ backend: "brave", braveKeySet: true }));
+      api.saveWebSearch
+        .mockResolvedValueOnce({ ...searching({ backend: "duckduckgo", braveKeySet: true }), status: "Saved." })
+        .mockResolvedValueOnce({ ...searching({ backend: "brave", braveKeySet: true }), status: "Saved." });
+      render(<AiModels />);
+      await userEvent.click(await screen.findByRole("button", { name: "Remove key" }));
+      expect(screen.getByRole("group", { name: "Remove the Brave Search key?" })).toBeVisible();
+      await userEvent.selectOptions(screen.getByLabelText("Search backend"), "duckduckgo");
+      await waitFor(() => expect(screen.queryByLabelText("Brave API key")).toBeNull());
+      await userEvent.selectOptions(screen.getByLabelText("Search backend"), "brave");
+      expect(await screen.findByLabelText("Brave API key")).toBeVisible();
+      expect(screen.queryByRole("group", { name: "Remove the Brave Search key?" })).toBeNull();
+      expect(api.saveBraveKey).not.toHaveBeenCalled();
+    });
+
+    it("sends the Brave key only to saveBraveKey and empties the field", async () => {
+      api.getAiModels.mockResolvedValue(searching({ backend: "brave" }));
+      api.saveBraveKey.mockResolvedValue({ ...searching({ backend: "brave", braveKeySet: true }), status: "Brave search key saved." });
+      render(<AiModels />);
+      const field = await screen.findByLabelText("Brave API key");
+      expect(field).toHaveAttribute("type", "password");
+      expect(screen.getByText(BRAVE_UNSET)).toBeVisible();
+      expect(screen.getByRole("button", { name: "Save key" })).toBeDisabled();
+      await userEvent.type(field, "sk-abcdefghijklmnopqrstuv");
+      await userEvent.click(screen.getByRole("button", { name: "Save key" }));
+      expect(api.saveBraveKey).toHaveBeenCalledWith("sk-abcdefghijklmnopqrstuv");
+      expect(api.saveWebSearch).not.toHaveBeenCalled();
+      expect(field).toHaveValue("");
+      expect(await screen.findByText(BRAVE_SET)).toBeVisible();
+      expect(screen.getByText("Brave search key saved.")).toBeVisible();
+    });
+
+    it("removes a saved Brave key only after a confirm, never on Enter", async () => {
+      api.getAiModels.mockResolvedValue(searching({ backend: "brave", braveKeySet: true }));
+      api.saveBraveKey.mockResolvedValue({ ...searching({ backend: "brave" }), status: "Brave search key cleared." });
+      render(<AiModels />);
+      await userEvent.type(await screen.findByLabelText("Brave API key"), "{Enter}");
+      expect(api.saveBraveKey).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: "Remove key" }));
+      expect(api.saveBraveKey).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+      expect(api.saveBraveKey).toHaveBeenCalledWith("");
+      expect(await screen.findByText(BRAVE_UNSET)).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Remove key" })).toBeNull();
+    });
   });
 });

@@ -7,8 +7,11 @@ import {
   removeAiProvider,
   revokeAiPremium,
   saveAiSpend,
+  saveBraveKey,
+  saveWebSearch,
   type AiModelsCard,
   type AiModelsView,
+  type AiWebSearch,
 } from "./api";
 import { ConfirmRow, StatusLine, useNote } from "./ui";
 
@@ -19,6 +22,134 @@ export const SPEND_NOTE =
   "API key only. At 80% background work moves to cheaper settings. At 100% it pauses and chats ask first. These are limits; nothing here spends money.";
 export const LOCAL_NOTE = "Models that run on this PC, and whether each task gets its own model, are set in Local AI.";
 export const PREMIUM_NONE = "None. A model over your price limit asks once before Auto uses it.";
+export const WEB_SEARCH_NOTE =
+  "For OpenRouter and the local model. Free DuckDuckGo Lite by default, no account. Grok still uses xAI's own search.";
+export const BACKEND_HINT = "Default stays free. SearXNG needs your instance URL. Brave needs a key in your keyring.";
+export const SEARXNG_NOTE =
+  "Your SearXNG server must be on the public internet and allow JSON results (?format=json).";
+export const BRAVE_SET = "A Brave Search key is in your keyring. Paste a new one to replace it, or remove it.";
+export const BRAVE_UNSET = "Paste a Brave Search API key. It stays in your keyring, never in app.json.";
+
+/** Settings → AI models → Web search: the backend, a SearXNG URL, a Brave key. */
+function WebSearch({
+  search,
+  busy,
+  run,
+}: {
+  search: AiWebSearch;
+  busy: boolean;
+  run: (step: () => Promise<AiModelsView>) => Promise<boolean>;
+}) {
+  const [url, setUrl] = useState(search.searxngUrl);
+  const [braveKey, setBraveKey] = useState("");
+  const [removingKey, setRemovingKey] = useState(false);
+
+  async function saveUrl() {
+    const sent = url.trim();
+    if (await run(() => saveWebSearch("searxng", sent))) setUrl(sent);
+  }
+
+  function saveKey() {
+    const sent = braveKey;
+    // The field is empty the moment the key leaves it, win or lose.
+    setBraveKey("");
+    void run(() => saveBraveKey(sent));
+  }
+
+  return (
+    <>
+      <h3>Web search</h3>
+      <p className="note">{WEB_SEARCH_NOTE}</p>
+      <div className="card-buttons">
+        <label>
+          Search backend
+          <select
+            aria-label="Search backend"
+            value={search.backend}
+            disabled={busy}
+            onChange={(e) => {
+              setRemovingKey(false);
+              void run(() => saveWebSearch(e.target.value, search.searxngUrl));
+            }}
+          >
+            {search.backends.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <p className="note">{BACKEND_HINT}</p>
+      {search.backend === "searxng" && (
+        <>
+          <form
+            className="card-buttons"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveUrl();
+            }}
+          >
+            <input
+              aria-label="SearXNG URL"
+              placeholder="https://searx.example"
+              value={url}
+              disabled={busy}
+              onChange={(e) => setUrl(e.target.value)}
+            />
+            <button type="submit" disabled={busy || url.trim() === search.searxngUrl}>
+              Save URL
+            </button>
+          </form>
+          {search.searxngProblem && <p className="note warn">{search.searxngProblem}</p>}
+          <p className="note">{SEARXNG_NOTE}</p>
+        </>
+      )}
+      {search.backend === "brave" && (
+        <>
+          <form
+            className="card-buttons"
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveKey();
+            }}
+          >
+            <input
+              type="password"
+              autoComplete="off"
+              aria-label="Brave API key"
+              placeholder="API key"
+              value={braveKey}
+              onChange={(e) => setBraveKey(e.target.value)}
+            />
+            <button type="submit" disabled={busy || !braveKey.trim()}>
+              Save key
+            </button>
+            {search.braveKeySet && (
+              <button type="button" className="quiet" disabled={busy} onClick={() => setRemovingKey(true)}>
+                Remove key
+              </button>
+            )}
+          </form>
+          {removingKey && (
+            <ConfirmRow
+              question="Remove the Brave Search key?"
+              detail="It leaves the keyring. Brave searches stop until you paste a key again."
+              action="Remove"
+              busy={busy}
+              onConfirm={() => {
+                setRemovingKey(false);
+                void run(() => saveBraveKey(""));
+              }}
+              onCancel={() => setRemovingKey(false)}
+            />
+          )}
+          <p className="note">{search.braveKeySet ? BRAVE_SET : BRAVE_UNSET}</p>
+        </>
+      )}
+    </>
+  );
+}
 
 export function capLabel(usd: number): string {
   return usd === 0 ? "Off" : `$${usd} a week`;
@@ -239,6 +370,8 @@ export function AiModels() {
           Add provider
         </button>
       </div>
+
+      <WebSearch search={view.webSearch} busy={busy} run={run} />
 
       <h3>Spend limits</h3>
       <p className="note">{SPEND_NOTE}</p>

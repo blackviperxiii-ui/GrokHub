@@ -1,0 +1,1 @@
+- Settings → AI models → Web search: pick free DuckDuckGo Lite (the default), your own public SearXNG server, or Brave Search with an API key kept in your keyring. The next search uses the choice. A SearXNG address on this computer or your home network is refused with a plain reason, since web search only reaches public addresses.

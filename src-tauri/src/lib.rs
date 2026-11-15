@@ -5723,6 +5723,29 @@ async fn save_ai_spend(
     .await?
 }
 
+/// Settings → AI models → Web search: the backend and SearXNG URL.
+#[tauri::command]
+async fn save_web_search(
+    state: State<'_, ShellState>,
+    backend: String,
+    searxng_url: String,
+) -> Result<ai_models::AiModelsView, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || ai_models::save_web_search(&dir, &backend, &searxng_url)).await?
+}
+
+/// Settings → AI models → Web search: the Brave Search key, to the keyring.
+#[tauri::command]
+async fn save_brave_key(
+    state: State<'_, ShellState>,
+    key: String,
+) -> Result<ai_models::AiModelsView, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || ai_models::save_brave_key(&dir, &key)).await?
+}
+
 #[tauri::command]
 async fn revoke_ai_premium(
     state: State<'_, ShellState>,
@@ -7776,6 +7799,8 @@ pub fn run() {
             answer_ai_models_card,
             remove_ai_provider,
             save_ai_spend,
+            save_web_search,
+            save_brave_key,
             revoke_ai_premium,
             get_local_ai,
             save_local_ai,

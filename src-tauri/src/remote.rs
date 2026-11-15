@@ -1258,6 +1258,8 @@ mod tests {
             "answer_ai_models_card",
             "remove_ai_provider",
             "save_ai_spend",
+            "save_web_search",
+            "save_brave_key",
             "revoke_ai_premium",
         ] {
             assert!(!web_command(name), "{name}");

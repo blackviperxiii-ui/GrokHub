@@ -4859,6 +4859,16 @@ export interface AiClassView {
   rows: AiTableRow[];
 }
 
+/** Settings → AI models → Web search. A Brave key's value never comes back. */
+export interface AiWebSearch {
+  backend: "duckduckgo" | "searxng" | "brave";
+  backends: { id: string; label: string }[];
+  searxngUrl: string;
+  /** Why searches can't use the saved SearXNG URL; empty when they can. */
+  searxngProblem: string;
+  braveKeySet: boolean;
+}
+
 export interface AiModelsView {
   providers: AiProviderRow[];
   spend: AiSpend;
@@ -4866,6 +4876,7 @@ export interface AiModelsView {
   table: AiClassView[];
   tableBuiltAt: number;
   locked: string;
+  webSearch: AiWebSearch;
   status: string;
 }
 
@@ -4913,6 +4924,15 @@ export function saveAiSpend(
 
 export function revokeAiPremium(id: string): Promise<AiModelsView> {
   return invoke<AiModelsView>("revoke_ai_premium", { id });
+}
+
+export function saveWebSearch(backend: string, searxngUrl: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("save_web_search", { backend, searxngUrl });
+}
+
+/** An empty key removes the saved one. */
+export function saveBraveKey(key: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("save_brave_key", { key });
 }
 
 /** One line of the top bar while a recording or an audio check runs. */
