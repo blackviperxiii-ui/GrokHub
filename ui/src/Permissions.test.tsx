@@ -14,9 +14,9 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { Permissions, RULES_NOTE } from "./Permissions";
+import { Permissions, RULES_NOTE, UNTRUSTED_RULES } from "./Permissions";
 
-const EMPTY: PermissionPage = { rules: [], imported: [], grants: [] };
+const EMPTY: PermissionPage = { rules: [], imported: [], grants: [], folderTrusted: false };
 
 describe("Permissions", () => {
   beforeEach(() => {
@@ -57,6 +57,7 @@ describe("Permissions", () => {
     const project = within(await screen.findByRole("list", { name: "Project rules" }));
     expect(project.getByRole("listitem", { name: "Allow Bash(npm test)" })).toBeVisible();
     expect(project.queryByRole("button")).toBeNull();
+    expect(screen.getByText(`From .claude/settings.json. Read only. ${UNTRUSTED_RULES}`)).toBeVisible();
 
     const box = screen.getByLabelText("Rule");
     await userEvent.type(box, "Nope(x){Enter}");
@@ -64,6 +65,17 @@ describe("Permissions", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "That rule could not be read: unknown tool prefix: Nope.",
     );
+  });
+
+  it("drops the trust note once the folder is trusted", async () => {
+    api.getPermissions.mockResolvedValue({
+      ...EMPTY,
+      folderTrusted: true,
+      imported: [{ action: "allow", rule: "Bash(npm test)" }],
+    });
+    render(<Permissions />);
+    expect(await screen.findByText("From .claude/settings.json. Read only.")).toBeVisible();
+    expect(screen.queryByText(new RegExp(UNTRUSTED_RULES))).toBeNull();
   });
 
   it("remembers a command for this project and forgets it", async () => {

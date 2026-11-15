@@ -3214,6 +3214,8 @@ export interface PermissionPage {
   imported: PermissionRule[];
   /** Commands remembered with Allow always for this project. */
   grants: string[];
+  /** The imported allow rules apply only in a trusted folder. */
+  folderTrusted: boolean;
 }
 
 export function getPermissions(): Promise<PermissionPage> {
@@ -3240,6 +3242,45 @@ export function rememberGrant(command: string): Promise<PermissionPage> {
 
 export function forgetGrant(command: string): Promise<PermissionPage> {
   return invoke<PermissionPage>("forget_grant", { command });
+}
+
+/** Connectors → Hooks (src-tauri/src/project_hooks.rs). */
+export type HookOrigin = "user" | "project" | "plugin";
+
+export interface HookRow {
+  /** When it runs, like PreToolUse. */
+  event: string;
+  /** The tool it runs for; empty means any. */
+  matcher: string;
+  /** The command line, or an http hook's URL. URLs show only their host,
+   * and passwords and keys are hidden. */
+  command: string;
+  /** "command" or "http". */
+  kind: string;
+  origin: HookOrigin;
+  /** The file it was read from. */
+  path: string;
+  /** Whether a turn runs it now. */
+  runs: boolean;
+  /** Why it doesn't run; empty when it does. */
+  note: string;
+}
+
+export interface HooksPage {
+  folder: string;
+  trusted: boolean;
+  /** How many of the rows come from this project. */
+  projectHooks: number;
+  rows: HookRow[];
+  status: string;
+}
+
+export function getHooks(): Promise<HooksPage> {
+  return invoke<HooksPage>("get_hooks");
+}
+
+export function setHooksTrust(trusted: boolean): Promise<HooksPage> {
+  return invoke<HooksPage>("set_hooks_trust", { trusted });
 }
 
 /** Settings → About → Updates (src-tauri/src/shell_update.rs). */

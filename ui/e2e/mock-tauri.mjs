@@ -328,7 +328,36 @@ const EMPTY_PERSONALITY = {
 };
 
 const EMPTY_PLAYBOOKS = { rows: [], problems: [] };
-const EMPTY_PERMISSIONS = { rules: [], imported: [], grants: [] };
+const EMPTY_PERMISSIONS = { rules: [], imported: [], grants: [], folderTrusted: false };
+// Connectors → Hooks: one of yours, and one of this project's waiting for trust.
+const HOOKS = {
+  folder: "/home/user/my-app",
+  trusted: false,
+  projectHooks: 1,
+  rows: [
+    {
+      event: "PreToolUse",
+      matcher: "",
+      command: "echo checked",
+      kind: "command",
+      origin: "user",
+      path: "/home/user/.grok/hooks/check.json",
+      runs: true,
+      note: "",
+    },
+    {
+      event: "PostToolUse",
+      matcher: "Edit",
+      command: "npm run lint",
+      kind: "command",
+      origin: "project",
+      path: "/home/user/my-app/.grok/hooks/lint.json",
+      runs: false,
+      note: "Runs after you trust this folder",
+    },
+  ],
+  status: "",
+};
 const EMPTY_INTERESTS = { topics: [], note: "" };
 const EMPTY_PLUGINS = { rows: [], marketUrl: "", note: "" };
 const EMPTY_WEB = { on: false, code: "", links: [], fingerprint: "" };
@@ -534,6 +563,7 @@ export function initScript(theme = "ops-dark") {
     personality: EMPTY_PERSONALITY,
     playbooks: EMPTY_PLAYBOOKS,
     permissions: EMPTY_PERMISSIONS,
+    hooks: HOOKS,
     interests: EMPTY_INTERESTS,
     plugins: EMPTY_PLUGINS,
     web: EMPTY_WEB,
@@ -639,8 +669,27 @@ export function initScript(theme = "ops-dark") {
         case "get_permissions":
         case "add_permission_rule":
         case "remove_permission_rule":
+        case "remember_grant":
         case "forget_grant":
           return fix.permissions;
+        case "get_hooks":
+          return fix.hooks;
+        case "set_hooks_trust": {
+          const trusted = Boolean(args && args.trusted);
+          fix.hooks = {
+            ...fix.hooks,
+            trusted,
+            rows: fix.hooks.rows.map((r) =>
+              r.origin === "project"
+                ? { ...r, runs: trusted, note: trusted ? "" : "Runs after you trust this folder" }
+                : r,
+            ),
+            status: trusted
+              ? "Trusted " + fix.hooks.folder + ". Its hooks run from your next message."
+              : "Stopped trusting " + fix.hooks.folder + ". Its hooks don't run from your next message.",
+          };
+          return fix.hooks;
+        }
         case "get_interests":
         case "add_interest":
         case "interest_act":

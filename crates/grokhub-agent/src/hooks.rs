@@ -114,6 +114,20 @@ impl Drop for HookGuard {
     }
 }
 
+fn info(hook: Loaded) -> HookInfo {
+    HookInfo {
+        event: hook.event,
+        matcher: hook.matcher,
+        command: hook.command,
+        kind: match hook.kind {
+            Kind::Command => "command".to_string(),
+            Kind::Http => "http".to_string(),
+        },
+        origin: hook.origin,
+        path: hook.path,
+    }
+}
+
 pub fn discover_hooks(
     workspace: &Path,
     home: Option<&Path>,
@@ -121,16 +135,91 @@ pub fn discover_hooks(
 ) -> Vec<HookInfo> {
     load_all(workspace, home, plugin_dirs)
         .into_iter()
-        .map(|hook| HookInfo {
-            event: hook.event,
-            matcher: hook.matcher,
-            command: hook.command,
-            kind: match hook.kind {
-                Kind::Command => "command".to_string(),
-                Kind::Http => "http".to_string(),
-            },
-            origin: hook.origin,
-            path: hook.path,
+        .map(info)
+        .collect()
+}
+
+/// Whether a turn runs a listed hook, and if not, why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HookRun {
+    Runs,
+    /// A project hook in a folder that isn't trusted.
+    WaitsForTrust,
+    /// The runners only run command hooks.
+    Http,
+    /// Its matcher doesn't compile, so it matches no tool.
+    BadMatcher,
+    /// Nothing fires its event (SessionEnd).
+    NotFired,
+    /// Its event only ever sends subjects its matcher misses.
+    NeverMatches,
+}
+
+/// Events accepted in hook files that nothing fires yet.
+const NEVER_FIRED: &[&str] = &["SessionEnd"];
+
+/// The only subjects these events fire with: `on_session_start` from
+/// events.rs, `on_compact`, `on_notification` and `on_stop` (StopFailure,
+/// StopCancelled) from run.rs. Keep in step with those callers.
+const FIXED_SUBJECTS: &[(&str, &[&str])] = &[
+    ("SessionStart", &["startup"]),
+    ("PreCompact", &[""]),
+    ("PostCompact", &[""]),
+    ("Notification", &["permission_prompt"]),
+    ("StopFailure", &[""]),
+    ("StopCancelled", &[""]),
+];
+
+fn run_state(hook: &Loaded, attached: bool) -> HookRun {
+    let fixed = FIXED_SUBJECTS
+        .iter()
+        .find(|(event, _)| *event == hook.event)
+        .map(|(_, subjects)| *subjects);
+    if hook.kind != Kind::Command {
+        HookRun::Http
+    } else if NEVER_FIRED.contains(&hook.event.as_str()) {
+        HookRun::NotFired
+    } else if !matcher_compiles(hook) {
+        HookRun::BadMatcher
+    } else if fixed.is_some_and(|subjects| !matcher_ok(hook, &hook.event, subjects)) {
+        HookRun::NeverMatches
+    } else if attached {
+        HookRun::Runs
+    } else {
+        HookRun::WaitsForTrust
+    }
+}
+
+/// What a chat in `workspace` attaches, then this folder's project hooks
+/// that wait for trust. A waiting hook that repeats an attached one is left
+/// out, so each row names the file a turn really reads it from. Call with
+/// the config pinned: trust is read from it.
+pub fn hooks_by_trust(
+    workspace: &Path,
+    home: Option<&Path>,
+    plugin_dirs: &[PathBuf],
+) -> Vec<(HookInfo, HookRun)> {
+    let raw = load_raw(workspace, home, plugin_dirs);
+    let (runs, waiting) = if folder_trusted(workspace) {
+        (dedupe(raw), Vec::new())
+    } else {
+        let (project, rest): (Vec<Loaded>, Vec<Loaded>) = raw
+            .into_iter()
+            .partition(|hook| hook.origin == HookOrigin::Project);
+        let runs = dedupe(rest);
+        let keys: std::collections::BTreeSet<String> = runs.iter().map(hook_key).collect();
+        let waiting = dedupe(project)
+            .into_iter()
+            .filter(|hook| !keys.contains(&hook_key(hook)))
+            .collect();
+        (runs, waiting)
+    };
+    runs.into_iter()
+        .map(|hook| (true, hook))
+        .chain(waiting.into_iter().map(|hook| (false, hook)))
+        .map(|(attached, hook)| {
+            let state = run_state(&hook, attached);
+            (info(hook), state)
         })
         .collect()
 }
@@ -929,6 +1018,16 @@ fn matcher_ok(hook: &Loaded, event: &str, subjects: &[&str]) -> bool {
     subjects.iter().any(|subject| re.is_match(subject))
 }
 
+/// False when `matcher_ok` can never pass: a matcher that matters for its
+/// event but isn't a valid pattern.
+fn matcher_compiles(hook: &Loaded) -> bool {
+    let matcher = hook.matcher.trim();
+    matches!(hook.event.as_str(), "UserPromptSubmit" | "Stop")
+        || matcher.is_empty()
+        || matcher == "*"
+        || regex::Regex::new(&hook.matcher).is_ok()
+}
+
 fn tool_subjects(name: &str) -> Vec<String> {
     let mut out = vec![name.to_string()];
     let extra: &[&str] = match name {
@@ -999,12 +1098,15 @@ fn load_raw(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> V
     raw
 }
 
+fn hook_key(hook: &Loaded) -> String {
+    format!("{}\n{}\n{}", hook.event, hook.command, hook.matcher)
+}
+
 fn dedupe(hooks: Vec<Loaded>) -> Vec<Loaded> {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for hook in hooks {
-        let key = format!("{}\n{}\n{}", hook.event, hook.command, hook.matcher);
-        if seen.insert(key) {
+        if seen.insert(hook_key(&hook)) {
             out.push(hook);
         }
     }
@@ -1506,6 +1608,47 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_attaches_project_hooks_from_disk_only_once_the_folder_is_trusted() {
+        let dir = scratch("attach-trust");
+        let _cfg = crate::perm::ConfigGuard::set(dir.join("cfg"));
+        let home = dir.join("home");
+        let repo = dir.join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        let body = |command: &str| {
+            format!(
+                r#"{{"hooks":{{"PreToolUse":[{{"matcher":"Bash","hooks":[{{"type":"command","command":"{command}"}}]}}]}}}}"#
+            )
+        };
+        write_hook(
+            &home.join(".grok").join("hooks"),
+            "u.json",
+            &body("echo user"),
+        );
+        write_hook(
+            &repo.join(".grok").join("hooks"),
+            "p.json",
+            &body("echo project"),
+        );
+        let commands = || {
+            let mut out: Vec<String> = attachable(&repo, Some(&home), &[])
+                .into_iter()
+                .map(|hook| hook.command)
+                .collect();
+            out.sort();
+            out
+        };
+        assert_eq!(commands(), vec!["echo user".to_string()]);
+        set_folder_trust(&repo, true).unwrap();
+        assert_eq!(
+            commands(),
+            vec!["echo project".to_string(), "echo user".to_string()]
+        );
+        set_folder_trust(&repo, false).unwrap();
+        assert_eq!(commands(), vec!["echo user".to_string()]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn tool_hooks_of_a_chat_also_check_its_helpers_tool_calls() {
         let dir = scratch("helper");
         let session = format!("helper-{}", std::process::id());
@@ -1676,6 +1819,102 @@ mod tests {
         let trusted = attachable(&repo, None, std::slice::from_ref(&plugin_file));
         assert_eq!(trusted.len(), 1);
         assert_eq!(trusted[0].origin, HookOrigin::Project);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_hooks_list_names_the_copy_a_turn_runs() {
+        let dir = scratch("listed");
+        let _cfg = crate::perm::ConfigGuard::set(dir.join("cfg"));
+        let repo = dir.join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        let hook = |command: &str| {
+            format!(
+                r#"{{"hooks":{{"PreToolUse":[{{"matcher":"Bash","hooks":[{{"type":"command","command":"{command}"}}]}}]}}}}"#
+            )
+        };
+        write_hook(
+            &repo.join(".grok").join("hooks"),
+            "p.json",
+            &hook("echo guard"),
+        );
+        write_hook(&repo.join(".claude"), "settings.json", &hook("echo lint"));
+        write_hook(&dir.join("plugin"), "hooks.json", &hook("echo guard"));
+        let plugin_file = dir.join("plugin").join("hooks.json");
+        let listed = || {
+            hooks_by_trust(&repo, None, std::slice::from_ref(&plugin_file))
+                .into_iter()
+                .map(|(info, run)| (info.command, info.origin, run == HookRun::Runs))
+                .collect::<Vec<_>>()
+        };
+        let ran = || {
+            attachable(&repo, None, std::slice::from_ref(&plugin_file))
+                .into_iter()
+                .map(|hook| (hook.command, hook.origin, true))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            listed(),
+            vec![
+                ("echo guard".to_string(), HookOrigin::Plugin, true),
+                ("echo lint".to_string(), HookOrigin::Project, false),
+            ]
+        );
+        // Every listed hook that runs is one a turn attaches, from the same file.
+        assert_eq!(
+            listed().into_iter().filter(|row| row.2).collect::<Vec<_>>(),
+            ran()
+        );
+        set_folder_trust(&repo, true).unwrap();
+        assert_eq!(
+            listed(),
+            vec![
+                ("echo guard".to_string(), HookOrigin::Project, true),
+                ("echo lint".to_string(), HookOrigin::Project, true),
+            ]
+        );
+        assert_eq!(listed(), ran());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hooks_a_turn_never_runs_say_why() {
+        let dir = scratch("listed-skip");
+        let _cfg = crate::perm::ConfigGuard::set(dir.join("cfg"));
+        let home = dir.join("home");
+        let repo = dir.join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        write_hook(
+            &home.join(".grok").join("hooks"),
+            "h.json",
+            r#"{"hooks":{"SessionEnd":[{"hooks":[{"type":"http","url":"https://example.com/hook"}]},{"hooks":[{"type":"command","command":"echo bye"}]}],"PreToolUse":[{"matcher":"*Write","hooks":[{"type":"command","command":"echo glob"}]},{"matcher":"Edit|Write","hooks":[{"type":"command","command":"echo fine"}]}],"SessionStart":[{"matcher":"compact","hooks":[{"type":"command","command":"echo after compact"}]},{"matcher":"startup","hooks":[{"type":"command","command":"echo hello"}]}],"PreCompact":[{"matcher":"manual","hooks":[{"type":"command","command":"echo manual"}]},{"hooks":[{"type":"command","command":"echo compacting"}]}],"StopFailure":[{"matcher":"rate_limit","hooks":[{"type":"command","command":"echo rate"}]},{"hooks":[{"type":"command","command":"echo failed"}]}]}}"#,
+        );
+        write_hook(
+            &repo.join(".grok").join("hooks"),
+            "p.json",
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash(*)","hooks":[{"type":"command","command":"echo project glob"}]}]}}"#,
+        );
+        let mut listed: Vec<(String, HookRun)> = hooks_by_trust(&repo, Some(&home), &[])
+            .into_iter()
+            .map(|(info, run)| (info.command, run))
+            .collect();
+        listed.sort();
+        assert_eq!(
+            listed,
+            vec![
+                ("echo after compact".to_string(), HookRun::NeverMatches),
+                ("echo bye".to_string(), HookRun::NotFired),
+                ("echo compacting".to_string(), HookRun::Runs),
+                ("echo failed".to_string(), HookRun::Runs),
+                ("echo fine".to_string(), HookRun::Runs),
+                ("echo glob".to_string(), HookRun::BadMatcher),
+                ("echo hello".to_string(), HookRun::Runs),
+                ("echo manual".to_string(), HookRun::NeverMatches),
+                ("echo project glob".to_string(), HookRun::BadMatcher),
+                ("echo rate".to_string(), HookRun::NeverMatches),
+                ("https://example.com/hook".to_string(), HookRun::Http),
+            ]
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

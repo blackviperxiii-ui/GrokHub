@@ -1126,6 +1126,9 @@ mod tests {
             "journal_act",
             "journal_to_mission",
             "get_permissions",
+            // Trusting a folder lets its hooks run commands here.
+            "get_hooks",
+            "set_hooks_trust",
             "get_scopes",
             "allow_scope",
             "revoke_scope",

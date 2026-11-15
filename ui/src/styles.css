@@ -3018,6 +3018,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 }
 
 .card.connector,
+.card.hook,
 .card.post {
   max-width: none;
   flex-direction: column;
@@ -3029,6 +3030,23 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   color: var(--muted);
   font-family: ui-monospace, monospace;
   overflow-wrap: anywhere;
+}
+
+/* Hooks follow the list, so an empty list stays at the top. */
+.connectors > .empty {
+  margin: 0;
+}
+
+.hooks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.hooks h2 {
+  font-size: var(--font-prose);
+  margin: 8px 0 0;
 }
 
 .connectors .error,
