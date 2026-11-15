@@ -7724,6 +7724,17 @@ fieldset.channel label {
   flex-wrap: wrap;
 }
 
+/* The chat's ask: the cabin's amber-edged card, up to 720 wide. */
+.mods-requested {
+  border-color: var(--amber);
+  max-width: 720px;
+  margin-bottom: 12px;
+}
+
+.mods-requested h3 {
+  margin: 0;
+}
+
 .mods-head input {
   flex: 0 1 260px;
   min-width: 0;

@@ -92,6 +92,7 @@ mod mission;
 pub mod model_library;
 pub mod model_wait;
 pub mod mods;
+pub mod mods_agent;
 pub mod mods_install;
 #[cfg(desktop)]
 mod net_watch;
@@ -7503,6 +7504,24 @@ pub fn run() {
             app.listen_any(CHAT_EVENT, move |event| {
                 web.broadcast(CHAT_EVENT, event.payload())
             });
+            // The chat's mod tools, on the Mods page's own client. Setting up
+            // a mod puts an Install card on the Mods page and nothing more.
+            #[cfg(desktop)]
+            if capabilities::current().mods {
+                let asked = app.handle().clone();
+                let told = app.handle().clone();
+                mods_agent::register(mods_agent::Host::new(
+                    app.state::<ShellState>().config_dir.clone(),
+                    Box::new(move || {
+                        asked
+                            .try_state::<ShellState>()
+                            .is_some_and(|s| current(&s).adults_on())
+                    }),
+                    Box::new(move || {
+                        let _ = told.emit(mods_agent::REQUESTED_EVENT, ());
+                    }),
+                ));
+            }
             #[cfg(desktop)]
             start_scheduler(app);
             // Questions from helpers that outlive their chat's reply.
@@ -8161,6 +8180,8 @@ pub fn run() {
             mods_not_for_me,
             mods_hide_game,
             mods_install::mods_files,
+            mods_install::mods_requested,
+            mods_install::mods_drop_request,
             mods_install::mods_plan_install,
             mods_install::mods_wait_for_browser,
             mods_install::mods_pickup_download,
