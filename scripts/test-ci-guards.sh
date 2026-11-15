@@ -152,6 +152,18 @@ commit_pr
 run_guard fail "AUR PKGBUILD pkgver bump without release fails"
 
 fresh_pr
+printf '1.0.1\n' >"$W/VERSION"
+commit_pr
+run_guard fail "VERSION edit without release fails"
+LABELS=release run_guard pass "VERSION edit with release passes"
+
+fresh_pr
+printf '# Changelog\n\n- Edited by hand.\n' >"$W/CHANGELOG.md"
+commit_pr
+run_guard fail "CHANGELOG.md edit without release fails"
+LABELS=release run_guard pass "CHANGELOG.md edit with release passes"
+
+fresh_pr
 sed -i '/^pkgver=/d' "$W/packaging/aur/PKGBUILD"
 commit_pr
 run_guard fail "PKGBUILD missing its pkgver line fails"
