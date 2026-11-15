@@ -1478,9 +1478,14 @@ export function Chat({
   }, [items]);
   // Voice mode's caption above the composer grows as they talk and makes
   // the log shorter: a log that was at its end stays there. With find open
-  // the log stays on the match.
+  // the match stays in view instead.
   const keepAtEnd = useEffectEvent(() => {
-    if (logAtEnd.current && !findOpen) endRef.current?.scrollIntoView?.({ block: "end" });
+    const log = logRef.current;
+    if (findOpen) {
+      if (log) findRow(log, current)?.scrollIntoView?.({ block: "nearest" });
+    } else if (logAtEnd.current) {
+      endRef.current?.scrollIntoView?.({ block: "end" });
+    }
   });
   useLayoutEffect(() => keepAtEnd(), [voice.caption]);
 

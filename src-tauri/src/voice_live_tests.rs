@@ -685,34 +685,87 @@ fn each_listen_reads_the_key_as_it_is_then() {
 }
 
 #[test]
-fn a_stream_opened_without_the_lock_lands_only_on_its_own_listen() {
+fn a_listen_that_asks_while_a_stream_opens_gets_that_stream() {
     let (mut live, streams) = streaming();
     assert!(live.restart(false), "a listen wants a stream");
-    let (mut open, id) = live.lend_opener().expect("the opener");
-    // The page listened again while the stream was opening.
+    let mut open = live.lend_opener().expect("the opener");
+    // An empty turn: the page listens again while the stream is opening,
+    // and finds the opener lent out.
     assert!(live.restart(false));
+    assert!(live.lend_opener().is_none());
     let link = open();
-    live.take_back(open, id, link);
-    assert!(live.stt.is_none(), "an old listen's stream goes");
-    // The opener came back, and this listen opens its own.
-    let (mut open, id) = live.lend_opener().expect("the opener came back");
+    live.take_back(open, link);
+    assert!(
+        live.stt.is_some(),
+        "nothing was sent to it: this listen has it"
+    );
+    assert!(live.open.is_some(), "the opener came back");
+    assert_eq!(streams.lock().unwrap().audio.len(), 2);
+}
+
+#[test]
+fn a_stream_that_opens_while_a_reply_plays_is_not_used() {
+    let (mut live, _streams) = streaming();
+    assert!(live.restart(false));
+    let mut open = live.lend_opener().expect("the opener");
+    assert!(!live.playing_changed(true));
     let link = open();
-    live.take_back(open, id, link);
-    assert!(live.stt.is_some());
-    assert_eq!(streams.lock().unwrap().audio.len(), 3);
+    live.take_back(open, link);
+    assert!(live.stt.is_none(), "its echo could end a turn nobody spoke");
 }
 
 #[test]
 fn a_stream_that_opens_after_a_start_is_not_used() {
     let (mut live, _streams) = streaming();
     assert!(live.restart(false));
-    let (mut open, id) = live.lend_opener().expect("the opener");
+    let mut open = live.lend_opener().expect("the opener");
     // They started talking while the key was being read.
     assert!(send(&mut live, &tone(1000)).contains(&LiveEvent::Started));
     let link = open();
-    live.take_back(open, id, link);
+    live.take_back(open, link);
     assert!(live.stt.is_none(), "it would have missed the start");
     assert!(live.open.is_some());
+}
+
+#[test]
+fn a_start_already_over_still_keeps_a_late_stream_out() {
+    let (mut live, _streams) = streaming();
+    assert!(live.restart(false));
+    let mut open = live.lend_opener().expect("the opener");
+    // The mic heard a start that is no longer under way.
+    live.spoke = true;
+    assert!(!live.mic.talking());
+    let link = open();
+    live.take_back(open, link);
+    assert!(live.stt.is_none());
+}
+
+#[test]
+fn a_stream_that_waited_too_long_for_a_start_is_opened_again() {
+    let (mut live, streams) = streaming();
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Idle)
+        .expect("news");
+    assert_eq!(send(&mut live, &hush(100)), vec![]);
+    assert!(live.stt.is_none());
+    assert!(live.take_reopen(), "the listen still waits");
+    assert!(!live.take_reopen(), "once");
+    let cell = Mutex::new(Some(live));
+    then_open(&cell, |live| live.wants_stream()).expect("on");
+    let live = cell.into_inner().unwrap().expect("still on");
+    assert!(live.stt.is_some());
+    assert_eq!(streams.lock().unwrap().audio.len(), 2);
+}
+
+#[test]
+fn a_stream_that_failed_is_not_opened_again_until_the_next_listen() {
+    let (mut live, streams) = streaming();
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Failed("speech stream closed".into()))
+        .expect("news");
+    assert_eq!(send(&mut live, &hush(100)), vec![]);
+    assert!(live.stt.is_none());
+    assert!(!live.take_reopen());
 }
 
 #[test]

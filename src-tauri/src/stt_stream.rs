@@ -31,12 +31,12 @@ pub const TEST_WS_ENV: &str = "GROKHUB_SHELL_STT_WS_URL";
 const MAX_STREAM: Duration = Duration::from_secs(75);
 #[cfg(test)]
 const MAX_STREAM: Duration = Duration::from_millis(2500);
-/// How long a socket may wait for someone to start talking: a quiet listen
-/// pauses after 60 s.
+/// How long a socket may wait for someone to start talking. A listen can
+/// outlast it (a cough or a hum puts off its pause), so it then reopens one.
 #[cfg(not(test))]
 const MAX_IDLE: Duration = Duration::from_secs(90);
 #[cfg(test)]
-const MAX_IDLE: Duration = Duration::from_millis(4500);
+const MAX_IDLE: Duration = Duration::from_secs(4);
 /// How long the socket waits for the words once the turn is over.
 const FINAL_WAIT: Duration = Duration::from_secs(2);
 /// Read timeout while streaming: how often new audio goes out.
@@ -59,6 +59,9 @@ pub enum SttNews {
     Ended(String),
     /// The stream stopped; the turn uses the one-shot upload.
     Failed(String),
+    /// Nobody started talking for [`MAX_IDLE`]: the socket closed, and a
+    /// listen still waiting may open a new one.
+    Idle,
 }
 
 /// One listen's stream: mic blocks go in, news comes out. Dropping `audio`
@@ -211,7 +214,7 @@ pub fn final_words(news: &Receiver<SttNews>, wait: Duration) -> Option<String> {
         match news.recv_timeout(left) {
             Ok(SttNews::Ended(words)) => return Some(words),
             Ok(SttNews::Caption(_)) => continue,
-            Ok(SttNews::Failed(_)) => return None,
+            Ok(SttNews::Failed(_) | SttNews::Idle) => return None,
             Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return None,
         }
     }
@@ -304,13 +307,6 @@ fn stream(
     let (mut ready, mut over, mut finalized) = (false, false, false);
     let mut final_by = None;
     loop {
-        let too_long = match first_sent {
-            Some(t) => t.elapsed() > MAX_STREAM,
-            None => opened.elapsed() > MAX_IDLE,
-        };
-        if too_long {
-            return Err("speech stream ran too long".into());
-        }
         loop {
             match audio.try_recv() {
                 Ok(block) => pending.push(block),
@@ -345,6 +341,20 @@ fn stream(
                 finalized = true;
                 final_by = Some(Instant::now() + FINAL_WAIT);
             }
+        }
+        // After the blocks that came in went out: a start just before the
+        // idle cap gets its stream.
+        match first_sent {
+            Some(t) if t.elapsed() > MAX_STREAM => {
+                return Err("speech stream ran too long".into());
+            }
+            None if opened.elapsed() > MAX_IDLE => {
+                let _ = ws.close(None);
+                let _ = ws.flush();
+                let _ = news.send(SttNews::Idle);
+                return Ok(());
+            }
+            _ => {}
         }
         if final_by.is_some_and(|t| Instant::now() > t) {
             return Err("speech stream: no final words".into());

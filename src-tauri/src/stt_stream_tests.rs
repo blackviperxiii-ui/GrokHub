@@ -379,3 +379,43 @@ fn a_quiet_wait_longer_than_a_turn_still_gets_the_turn_and_its_words() {
         ]
     );
 }
+
+#[test]
+fn a_turn_streaming_past_its_cap_fails_over_to_the_upload() {
+    static G: Gate = Gate::new();
+    let (url, seen) = fake(|ws, got| {
+        say(ws, r#"{"type":"transcript.created"}"#);
+        assert!(matches!(next(ws, got), Some(Got::Bin(_))));
+    });
+    let dir = temp_dir("cap");
+    let link = open_at(&dir, &url, KEY, &G, online).expect("a stream");
+    while !link.is_ready() {
+        std::thread::sleep(POLL);
+    }
+    let from = Instant::now();
+    link.audio.send(vec![1]).expect("audio");
+    // Nothing ends the turn.
+    assert_eq!(
+        link.news.recv_timeout(MAX_STREAM + WAIT),
+        Ok(SttNews::Failed("speech stream ran too long".into()))
+    );
+    let took = from.elapsed();
+    assert!(took >= MAX_STREAM, "{took:?}");
+    assert!(took < MAX_STREAM + Duration::from_millis(1500), "{took:?}");
+    drop(link);
+    let _ = seen.join();
+}
+
+#[test]
+fn a_stream_nobody_talks_into_closes_after_the_idle_cap() {
+    static G: Gate = Gate::new();
+    let (url, seen) = fake(|ws, _| say(ws, r#"{"type":"transcript.created"}"#));
+    let dir = temp_dir("idle");
+    let from = Instant::now();
+    let link = open_at(&dir, &url, KEY, &G, online).expect("a stream");
+    assert_eq!(link.news.recv_timeout(MAX_IDLE + WAIT), Ok(SttNews::Idle));
+    let took = from.elapsed();
+    assert!(took >= MAX_IDLE, "{took:?}");
+    assert!(took < MAX_IDLE + Duration::from_millis(1500), "{took:?}");
+    assert_eq!(seen.join().expect("fake").got, Vec::<Got>::new());
+}

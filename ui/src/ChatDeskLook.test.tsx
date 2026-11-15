@@ -254,7 +254,7 @@ describe("Chat and her desktop pedestal", () => {
     }
   });
 
-  it("leaves the log on a find match while the caption grows", async () => {
+  it("keeps the find match in view, not the log's end, while the caption grows", async () => {
     const scrolls = vi.fn();
     const was = Element.prototype.scrollIntoView;
     Element.prototype.scrollIntoView = scrolls;
@@ -265,11 +265,14 @@ describe("Chat and her desktop pedestal", () => {
       act(() => replies.ends[0]("end_turn"));
       act(() => voices.set[0]("listening"));
       await userEvent.keyboard("{Control>}f{/Control}");
-      expect(screen.getByRole("textbox", { name: "Find in this chat" })).toHaveFocus();
+      await userEvent.type(screen.getByRole("textbox", { name: "Find in this chat" }), "hello");
+      const match = screen.getByText("hello").closest("[data-role]");
+      expect(match).toHaveAttribute("data-find", "current");
       scrolls.mockClear();
       voices.caption = "remind me";
       rerender(<Chat onOpenSettings={() => {}} />);
-      expect(scrolls).not.toHaveBeenCalled();
+      expect(scrolls.mock.calls).toEqual([[{ block: "nearest" }]]);
+      expect(scrolls.mock.contexts[0]).toBe(match);
     } finally {
       Element.prototype.scrollIntoView = was;
     }
