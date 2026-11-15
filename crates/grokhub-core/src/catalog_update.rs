@@ -68,12 +68,29 @@ fn read(dir: &Path) -> Option<(String, String, String)> {
     Some((r(FILE)?, r(rv::SUMS_NAME)?, r(rv::SIG_NAME)?))
 }
 
-/// The saved catalog's text, when it still verifies with `pubkey` and is
-/// newer than `bundled`.
+/// The saved catalog's text, when it came from the update channel the
+/// receipt names, still verifies with `pubkey` and is newer than `bundled`.
 pub fn saved_with(config_dir: &Path, pubkey: &str, bundled: u32) -> Option<String> {
+    if !from_this_channel(config_dir) {
+        return None;
+    }
     let (text, sums, sig) = read(&dir(config_dir))?;
     let v = check(pubkey, &text, &sums, &sig).ok()?;
     (v > bundled).then_some(text)
+}
+
+/// Every process that reads the catalog (the app, the hub) agrees on this:
+/// a catalog without its channel, or from another channel than the channel
+/// receipt's, isn't used. With no receipt, the app's start-up [`tidy`]
+/// compares it with the channel the app was built for.
+fn from_this_channel(config_dir: &Path) -> bool {
+    let Some(saved) = saved_channel(config_dir) else {
+        return false;
+    };
+    std::fs::read_to_string(config_dir.join(crate::CHANNEL_RECEIPT))
+        .ok()
+        .filter(|t| !t.trim().is_empty())
+        .is_none_or(|t| crate::Channel::from_receipt(&t).as_str() == saved)
 }
 
 /// [`saved_with`] for the release key and the built-in catalog. Never
@@ -188,9 +205,10 @@ pub fn refresh(
 /// applies, else the built-in one.
 pub fn current_version(config_dir: &Path) -> u32 {
     let bundled = crate::local_setup::bundled_version();
+    // The cached parse: this runs on every daily look.
     saved(config_dir)
-        .and_then(|t| crate::local_setup::parse_catalog(&t))
-        .map_or(bundled, |(v, _)| v.max(bundled))
+        .and_then(|t| catalog_version(&t))
+        .map_or(bundled, |v| v.max(bundled))
 }
 
 /// Whether a day has passed since the last look. A missing stamp is due, and

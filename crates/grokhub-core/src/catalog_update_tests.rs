@@ -279,3 +279,21 @@ fn a_catalog_from_another_channel_or_half_saved_is_tidied_away() {
     assert!(tidy_with(&cfg, "beta", PUB, 99));
     let _ = std::fs::remove_dir_all(&cfg);
 }
+
+#[test]
+fn every_reader_skips_a_catalog_from_another_channel() {
+    let cfg = temp("receipt");
+    assert_eq!(adopt(&cfg, PUB, 2, "beta", TEXT, SUMS, SIG), Ok(Some(99)));
+    // No receipt yet: the app's start-up tidy decides.
+    assert_eq!(saved_with(&cfg, PUB, 2).as_deref(), Some(TEXT));
+    std::fs::write(cfg.join(crate::CHANNEL_RECEIPT), "beta\n").unwrap();
+    assert_eq!(saved_with(&cfg, PUB, 2).as_deref(), Some(TEXT));
+    // An installer wrote the stable receipt: the hub doesn't use it either.
+    std::fs::write(cfg.join(crate::CHANNEL_RECEIPT), "stable\n").unwrap();
+    assert_eq!(saved_with(&cfg, PUB, 2), None);
+    // A catalog saved before channels were recorded isn't used.
+    std::fs::write(cfg.join(crate::CHANNEL_RECEIPT), "beta\n").unwrap();
+    std::fs::remove_file(dir(&cfg).join("channel")).unwrap();
+    assert_eq!(saved_with(&cfg, PUB, 2), None);
+    let _ = std::fs::remove_dir_all(&cfg);
+}
