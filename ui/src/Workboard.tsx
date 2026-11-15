@@ -238,6 +238,8 @@ export function Workboard({
       onResume?.({ conversationId: started.conversationId, prompt: started.prompt });
     } catch (err) {
       setNote(String(err));
+      // A card that is gone leaves the page: show what the file holds now.
+      await getWorkboard().then(setPage, () => {});
     } finally {
       setBusy(false);
     }

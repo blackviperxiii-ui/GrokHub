@@ -638,6 +638,26 @@ describe("Workboard", () => {
     expect(chat).toMatch(/^shell-/);
   });
 
+  it("Resume on a card that is gone says so and takes it off the page", async () => {
+    api.getWorkboard
+      .mockResolvedValueOnce(board({ blocked: [PAUSED] }))
+      .mockResolvedValue(board({}));
+    api.workboardResume.mockRejectedValue("That card is gone. The page now shows what is left.");
+    const onResume = vi.fn();
+    render(<Workboard onWork={() => {}} onResume={onResume} />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Port the lexer/ }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+    expect(
+      await screen.findByText("That card is gone. The page now shows what is left."),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /Port the lexer/ })).toBeNull(),
+    );
+    expect(onResume).not.toHaveBeenCalled();
+  });
+
   it("a run that resumes in the background opens no chat and says so", async () => {
     api.getWorkboard.mockResolvedValue(board({ blocked: [PAUSED] }));
     api.workboardResume.mockResolvedValue({
