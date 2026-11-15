@@ -22,8 +22,17 @@ pub const CHECKING: &str = "Checking for new local models…";
 pub const NO_MODEL: &str = "No local model yet. Set one up under Settings → Local AI first.";
 pub const NOTHING_NEW: &str = "Checked. Nothing new that fits this PC better.";
 pub const TURN_ON_FIRST: &str = "Turn local model suggestions on first.";
+pub const LIST_UNREAD: &str = "Couldn't read Hugging Face's model list. Trying again next week.";
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
+/// Held across each load, change and save of the tracker file, so a switch
+/// in Settings and a check finishing on the timer thread can't undo each
+/// other. Never held across a request.
+static TRACKER: Mutex<()> = Mutex::new(());
+
+fn tracker_lock() -> std::sync::MutexGuard<'static, ()> {
+    TRACKER.lock().unwrap_or_else(|e| e.into_inner())
+}
 /// What the last check said, for Settings.
 static NOTE: Mutex<String> = Mutex::new(String::new());
 
@@ -122,6 +131,7 @@ pub(crate) fn finish(
     now: u64,
     post: &dyn Fn(grokhub_core::UpdateCard) -> bool,
 ) -> String {
+    let _held = tracker_lock();
     // Read again: switched off while it ran, the user's choice wins.
     let mut t = lm::load(dir);
     if !t.on {
@@ -130,6 +140,7 @@ pub(crate) fn finish(
     if run.no_model {
         return NO_MODEL.to_string();
     }
+    let unread = run.read.is_empty();
     let picks = t.check(
         run.upgrade,
         run.releases,
@@ -141,10 +152,11 @@ pub(crate) fn finish(
     if let Err(why) = lm::save(dir, &t) {
         return why;
     }
-    if added == 0 {
-        NOTHING_NEW.to_string()
-    } else {
-        format!("Checked. {added} new for this PC.")
+    match (added, unread) {
+        (0, true) => LIST_UNREAD.to_string(),
+        (0, false) => NOTHING_NEW.to_string(),
+        (n, true) => format!("Checked. {n} new for this PC. {LIST_UNREAD}"),
+        (n, false) => format!("Checked. {n} new for this PC."),
     }
 }
 
@@ -181,14 +193,17 @@ pub(crate) fn check_if_due(
     get: &mut dyn FnMut(&str) -> Result<String, String>,
     post: &dyn Fn(grokhub_core::UpdateCard) -> bool,
 ) -> Option<String> {
-    let mut t = lm::load(dir);
-    if !t.due(now) {
-        return None;
-    }
-    // Counted before any request, so a failure also waits a week.
-    t.last_check_ms = now;
-    if let Err(why) = lm::save(dir, &t) {
-        return Some(why);
+    {
+        let _held = tracker_lock();
+        let mut t = lm::load(dir);
+        if !t.due(now) {
+            return None;
+        }
+        // Counted before any request, so a failure also waits a week.
+        t.last_check_ms = now;
+        if let Err(why) = lm::save(dir, &t) {
+            return Some(why);
+        }
     }
     set_note(CHECKING);
     let run = run_check(&machine(dir), get);
@@ -214,25 +229,31 @@ pub fn status(dir: &Path) -> LocalModelNews {
 /// Turn suggestions on, or off (which forgets what was seen, so turning them
 /// on again starts fresh without a backlog).
 pub fn set_on(dir: &Path, on: bool) -> Result<LocalModelNews, String> {
-    let mut t = lm::load(dir);
-    if on {
-        t.on = true;
-    } else {
-        t.turn_off();
-        set_note("");
+    {
+        let _held = tracker_lock();
+        let mut t = lm::load(dir);
+        if on {
+            t.on = true;
+        } else {
+            t.turn_off();
+            set_note("");
+        }
+        lm::save(dir, &t)?;
     }
-    lm::save(dir, &t)?;
     Ok(status(dir))
 }
 
 /// Check now, off this thread.
 pub fn check_now(dir: &Path) -> Result<LocalModelNews, String> {
-    let mut t = lm::load(dir);
-    if !t.on {
-        return Err(TURN_ON_FIRST.into());
+    {
+        let _held = tracker_lock();
+        let mut t = lm::load(dir);
+        if !t.on {
+            return Err(TURN_ON_FIRST.into());
+        }
+        t.last_check_ms = 0;
+        lm::save(dir, &t)?;
     }
-    t.last_check_ms = 0;
-    lm::save(dir, &t)?;
     set_note(CHECKING);
     let dir_owned = dir.to_path_buf();
     std::thread::spawn(move || tick(&dir_owned, grokhub_core::now_ms()));

@@ -225,3 +225,45 @@ fn the_installed_model_is_the_picked_catalog_file() {
     assert_eq!(installed_model(&dir).map(|m| m.id), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_unread_list_says_so_and_the_next_read_still_seeds() {
+    let dir = turned_on("unread");
+    let posted = RefCell::new(Vec::new());
+    let post = |card: grokhub_core::UpdateCard| {
+        posted.borrow_mut().push(card.title);
+        true
+    };
+    let mut down = |_: &str| -> Result<String, String> { Err("offline".into()) };
+    assert_eq!(
+        check_if_due(&dir, NOW, &gaming_pc, &mut down, &post).as_deref(),
+        Some("Checked. 1 new for this PC. Couldn't read Hugging Face's model list. Trying again next week.")
+    );
+    assert!(!lm::load(&dir).seeded);
+
+    // A week on the list reads: what was already out is the backlog.
+    let week = NOW + lm::CHECK_EVERY_MS;
+    assert_eq!(
+        check_if_due(&dir, week, &gaming_pc, &mut hugging_face, &post).as_deref(),
+        Some("Checked. Nothing new that fits this PC better.")
+    );
+    assert_eq!(
+        *posted.borrow(),
+        vec!["Gemma 4 31B fits this PC".to_string()]
+    );
+    assert!(lm::load(&dir).seeded);
+
+    // Unread again with nothing else to post.
+    assert_eq!(
+        check_if_due(
+            &dir,
+            week + lm::CHECK_EVERY_MS,
+            &gaming_pc,
+            &mut down,
+            &post
+        )
+        .as_deref(),
+        Some("Couldn't read Hugging Face's model list. Trying again next week.")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

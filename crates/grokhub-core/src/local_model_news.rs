@@ -319,7 +319,8 @@ impl Tracker {
 
     /// Fold one check in and return what to post: the catalog upgrade (once
     /// per model) then up to `links` new releases. Every repo read is
-    /// remembered; the first check posts no releases.
+    /// remembered; the first check that reads any posts no releases, so a
+    /// check that couldn't read the list doesn't count as that first one.
     pub fn check(
         &mut self,
         upgrade: Option<Suggestion>,
@@ -344,7 +345,7 @@ impl Tracker {
             );
         }
         self.seen.extend(read.iter().cloned());
-        self.seeded = true;
+        self.seeded |= !read.is_empty();
         out
     }
 
@@ -482,6 +483,22 @@ mod tests {
             repos(&["ggml-org/Qwen3-14B-GGUF", "ggml-org/Qwen3-4B-GGUF"])
         );
         assert!(parse_releases("{\"error\":\"rate limited\"}").is_empty());
+    }
+
+    #[test]
+    fn a_check_that_read_no_repos_does_not_seed() {
+        let p = gpu(16_384);
+        let mut t = Tracker {
+            on: true,
+            ..Default::default()
+        };
+        assert!(t.check(None, Vec::new(), &[], 2, 10).is_empty());
+        assert!(!t.seeded, "nothing was read, so nothing is known to be old");
+        // The list comes back a week later: still the backlog, not news.
+        let read = repos(&["huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF"]);
+        let next = t.check(None, releases(&p, 5_900, &read), &read, 2, 20);
+        assert!(next.is_empty(), "a backlog never posts");
+        assert!(t.seeded);
     }
 
     #[test]
