@@ -73,6 +73,10 @@ export interface VoiceDeps {
   onNote: (note: string) => void;
 }
 
+/** The one session voice mode is on in. The backend keeps one open mic, so
+ * voice mode starting in another chat turns it off here first. */
+let live: VoiceSession | null = null;
+
 /** One voice-mode session: mic in, turns out, reply spoken. */
 export class VoiceSession {
   state: VoiceState = "off";
@@ -119,6 +123,8 @@ export class VoiceSession {
     if (this.state !== "off") return;
     this.noVoice = false;
     this.warned = false;
+    if (live && live !== this) await live.stop();
+    live = this;
     await api.voiceLiveStart();
     this.go("start");
     try {
@@ -131,6 +137,7 @@ export class VoiceSession {
   }
 
   async stop(note?: string) {
+    if (live === this) live = null;
     const wasOn = this.state !== "off";
     this.go("stop");
     this.closeMic?.();
@@ -225,7 +232,9 @@ export class VoiceSession {
   feed(delta: string) {
     if (this.state === "off") return;
     this.reply = this.reply
-      .then(() => api.voiceReplyFeed(delta))
+      // Off by now (voice mode moved to another chat): nothing reaches the
+      // backend's next session.
+      .then(() => (this.state === "off" ? [] : api.voiceReplyFeed(delta)))
       .then((pieces) => this.enqueue(pieces))
       .catch((e) => this.note(e));
   }
@@ -234,7 +243,7 @@ export class VoiceSession {
   replyDone(whole: string) {
     if (this.state === "off") return;
     this.reply = this.reply
-      .then(() => api.voiceReplyFinish(whole))
+      .then(() => (this.state === "off" ? [] : api.voiceReplyFinish(whole)))
       .then((pieces) => {
         this.enqueue(pieces);
         this.finished = true;
@@ -244,7 +253,7 @@ export class VoiceSession {
   }
 
   private enqueue(pieces: string[]) {
-    if (this.noVoice) return;
+    if (this.noVoice || this.state === "off") return;
     for (const piece of pieces) {
       this.queue.push(
         api.voiceSpeak(piece).catch((e) => {

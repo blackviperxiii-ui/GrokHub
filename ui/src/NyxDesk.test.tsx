@@ -37,6 +37,8 @@ function state(over: Partial<DesktopNyxState> = {}): DesktopNyxState {
     effects: { transparent: true, onTop: true },
     companion: "Nyx",
     hiddenForGame: false,
+    still: false,
+    look: "idle",
     ...over,
   };
 }
@@ -66,6 +68,21 @@ describe("NyxDesk", () => {
     expect(figure()).not.toContain("nyx-hanging-out");
   });
 
+  it("glows with the chat's voice and stills with reduce motion, live", async () => {
+    const { container } = render(<NyxDesk />);
+    const root = () => container.querySelector(".nyx-desk");
+    await waitFor(() => expect(root()).toHaveAttribute("data-look", "idle"));
+    expect(document.documentElement.dataset.reduceMotion).toBe("false");
+    act(() => heard?.(state({ look: "listening" })));
+    expect(root()).toHaveAttribute("data-look", "listening");
+    act(() => heard?.(state({ look: "thinking", still: true })));
+    expect(root()).toHaveAttribute("data-look", "thinking");
+    expect(document.documentElement.dataset.reduceMotion).toBe("true");
+    act(() => heard?.(state({ still: false })));
+    expect(document.documentElement.dataset.reduceMotion).toBe("false");
+    delete document.documentElement.dataset.reduceMotion;
+  });
+
   it("tells the app which parts take the mouse: her pedestal and figure, and the menu while it is open", async () => {
     // The real layout: the root and the stage fill the 320x480 window.
     const rects: Record<string, [number, number, number, number]> = {
@@ -81,7 +98,8 @@ describe("NyxDesk", () => {
       return { left, top, width, height } as DOMRect;
     });
     const pedestal = { x: 26, y: 259, w: 268, h: 202 };
-    const figure = { x: 60, y: 40, w: 200, h: 300 };
+    // Grown by her float (3 px) and breath (1.2% up, 0.6% wide).
+    const figure = { x: 59.4, y: 33.4, w: 201.2, h: 309.6 };
     try {
       render(<NyxDesk />);
       const root = await screen.findByLabelText("Nyx");

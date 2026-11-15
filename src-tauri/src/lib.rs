@@ -372,6 +372,11 @@ fn auto_setup(
     if settings.text_size != before.text_size {
         zoom(&window, settings.text_size);
     }
+    // Her desk window stops breathing and floating with reduce motion.
+    #[cfg(desktop)]
+    if settings.reduce_motion != before.reduce_motion {
+        desktop_nyx::publish(window.app_handle(), &settings);
+    }
     Ok(reply)
 }
 
@@ -4113,6 +4118,24 @@ fn desktop_nyx_get(state: State<'_, ShellState>) -> desktop_nyx::State {
     desktop_nyx::state_now(&current(&state))
 }
 
+/// What the chat on screen is doing: her voice look, and the activity (a
+/// running tool's title, else `mood`) whose outfit "Pick for me" wears.
+/// Every page and her desk hear it when it changed.
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_look(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    look: desktop_nyx::VoiceLook,
+    mood: Option<grokhub_core::companion::Mood>,
+    tool: Option<String>,
+) {
+    let mood = Some(nyx::activity(mood, tool.as_deref()));
+    if desktop_nyx::set_life(desktop_nyx::Life { look, mood }) {
+        desktop_nyx::publish(&app, &current(&state));
+    }
+}
+
 /// Every desktop-companion write: save, store, apply the window when asked
 /// (`show_window` hides it while docked), then the tray and every page hear
 /// it, even when the window couldn't be applied.
@@ -7361,6 +7384,16 @@ pub fn run() {
                     desktop_nyx::note_moved(window, *at);
                 }
             }
+            // The chats go with the main window: her desk settles.
+            #[cfg(desktop)]
+            if let WindowEvent::Destroyed = event {
+                if window.label() == "main" && desktop_nyx::set_life(desktop_nyx::Life::default()) {
+                    desktop_nyx::publish(
+                        window.app_handle(),
+                        &current(&window.state::<ShellState>()),
+                    );
+                }
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 #[cfg(desktop)]
                 if window.label() == desktop_nyx::LABEL {
@@ -7703,6 +7736,8 @@ pub fn run() {
             desktop_nyx_set_hit,
             #[cfg(desktop)]
             desktop_nyx_drag,
+            #[cfg(desktop)]
+            desktop_nyx_look,
             get_queue,
             stop_task,
             ship_status,
@@ -7986,6 +8021,17 @@ mod command_tests {
             .and_then(|s| s.split("return;").next())
             .expect("the desk's close arm");
         assert!(close.contains("desktop_nyx::publish(window.app_handle(), &next)"));
+        // The main window going settles her desk, since its chats are gone.
+        let gone = src
+            .split("if let WindowEvent::Destroyed = event {")
+            .nth(1)
+            .and_then(|s| s.split("if let WindowEvent::").next())
+            .map(squeeze)
+            .expect("the main window's destroyed arm");
+        assert!(gone.contains(&squeeze(
+            r#"window.label() == "main" && desktop_nyx::set_life(desktop_nyx::Life::default())"#
+        )));
+        assert!(gone.contains("desktop_nyx::publish("));
         assert_eq!(
             src.matches(concat!("desktop_nyx_", "undocked = ")).count(),
             1,

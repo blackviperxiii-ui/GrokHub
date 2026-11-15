@@ -126,15 +126,35 @@ pub fn outfit_choices(adults_ok: bool) -> Vec<OutfitChoice> {
         .collect()
 }
 
-/// The picture to show: pinned when allowed, else the hanging-out default.
-pub fn shown_outfit(pin: Option<&str>, adults_ok: bool) -> &companion::Outfit {
+/// The picture to show: pinned when allowed, else the one for what the chat
+/// is doing ("Pick for me"), hanging out when it does nothing.
+pub fn shown_outfit(pin: Option<&str>, mood: Option<Mood>, adults_ok: bool) -> &companion::Outfit {
     let nyx = companion::nyx();
     if let Some(id) = pin {
         if let Some(o) = nyx.outfit(id).filter(|o| adults_ok || !o.adult) {
             return o;
         }
     }
-    nyx.outfit_for(Mood::HangingOut, adults_ok)
+    nyx.outfit_for(mood.unwrap_or(Mood::HangingOut), adults_ok)
+}
+
+/// What the chat's voice is doing, as her pedestal shows it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceLook {
+    #[default]
+    Idle,
+    Listening,
+    Thinking,
+    Speaking,
+}
+
+/// What the chat on screen is doing, as her desk shows it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Life {
+    pub look: VoiceLook,
+    /// The chat's mood ("Pick for me" wears its outfit); `None` is idle.
+    pub mood: Option<Mood>,
 }
 
 /// Best-effort: Wayland often drops transparency and always-on-top.
@@ -169,11 +189,14 @@ pub struct State {
     pub companion: String,
     /// Out on the desktop but hidden while a game or fullscreen app runs.
     pub hidden_for_game: bool,
+    /// Reduce motion is on: no breath, float or flicker.
+    pub still: bool,
+    pub look: VoiceLook,
 }
 
-pub fn state_of(settings: &crate::settings::ShellSettings, wayland: bool) -> State {
+pub fn state_of(settings: &crate::settings::ShellSettings, wayland: bool, life: Life) -> State {
     let adults = adults_ok(settings);
-    let shown = shown_outfit(settings.desktop_nyx_outfit.as_deref(), adults);
+    let shown = shown_outfit(settings.desktop_nyx_outfit.as_deref(), life.mood, adults);
     State {
         enabled: settings.desktop_nyx,
         undocked: settings.desktop_nyx_undocked,
@@ -187,16 +210,39 @@ pub fn state_of(settings: &crate::settings::ShellSettings, wayland: bool) -> Sta
         effects: effects_likely(wayland),
         companion: brand::companion_name().to_string(),
         hidden_for_game: false,
+        still: settings.reduce_motion,
+        look: life.look,
     }
 }
 
-/// [`state_of`] with this session's Wayland probe and game hiding.
+/// [`state_of`] with this session's Wayland probe, chat and game hiding.
 #[cfg(desktop)]
 pub fn state_now(settings: &crate::settings::ShellSettings) -> State {
     State {
         hidden_for_game: desk().game.hidden,
-        ..state_of(settings, wayland_now())
+        ..state_of(settings, wayland_now(), *life())
     }
+}
+
+#[cfg(desktop)]
+static LIFE: std::sync::Mutex<Life> = std::sync::Mutex::new(Life {
+    look: VoiceLook::Idle,
+    mood: None,
+});
+
+#[cfg(desktop)]
+fn life() -> std::sync::MutexGuard<'static, Life> {
+    LIFE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Keep what the chat is doing. True when it changed, so every page and her
+/// desk hear it.
+#[cfg(desktop)]
+pub fn set_life(next: Life) -> bool {
+    let mut now = life();
+    let changed = *now != next;
+    *now = next;
+    changed
 }
 
 /// Patch fields from the UI; returns the next settings.
@@ -1117,14 +1163,14 @@ mod tests {
 
     #[test]
     fn pinned_outfit_wins_unless_adult_and_blocked() {
-        assert_eq!(shown_outfit(Some("gaming"), false).id, "gaming");
+        assert_eq!(shown_outfit(Some("gaming"), None, false).id, "gaming");
         assert_eq!(
-            shown_outfit(Some("raunchy"), false).id,
+            shown_outfit(Some("raunchy"), None, false).id,
             "hanging-out",
             "blocked adult falls back"
         );
-        assert_eq!(shown_outfit(Some("raunchy"), true).id, "raunchy");
-        assert_eq!(shown_outfit(None, false).id, "hanging-out");
+        assert_eq!(shown_outfit(Some("raunchy"), None, true).id, "raunchy");
+        assert_eq!(shown_outfit(None, None, false).id, "hanging-out");
         let mut s = ShellSettings::default();
         s = set_outfit(s, Some("gaming".into())).expect("gaming");
         assert_eq!(s.desktop_nyx_outfit.as_deref(), Some("gaming"));
@@ -1154,13 +1200,67 @@ mod tests {
     #[test]
     fn state_names_the_companion_and_switch_key_fields() {
         let s = ShellSettings::default();
-        let st = state_of(&s, false);
+        let st = state_of(&s, false, Life::default());
         assert!(!st.enabled);
         assert!(!st.undocked);
         assert_eq!(st.companion, brand::companion_name());
         assert!(!st.outfit_file.is_empty());
         assert!(st.outfit_file.starts_with("brand/"));
         assert!(!st.hidden_for_game);
+    }
+
+    #[test]
+    fn pick_for_me_wears_the_chats_mood_and_a_pin_still_wins() {
+        let thinking = Life {
+            look: VoiceLook::Thinking,
+            mood: Some(Mood::Thinking),
+        };
+        let s = ShellSettings::default();
+        let st = state_of(&s, false, thinking);
+        assert_eq!(st.outfit_file, "brand/nyx/actions/thinking/1.jpg");
+        assert_eq!(st.look, VoiceLook::Thinking);
+        assert_eq!(
+            shown_outfit(Some("gaming"), Some(Mood::Thinking), false).id,
+            "gaming"
+        );
+        // An adult mood without adults-only on falls back to hanging out.
+        assert_eq!(
+            shown_outfit(None, Some(Mood::Raunchy), false).id,
+            "hanging-out"
+        );
+        assert_eq!(
+            state_of(&s, false, Life::default()).outfit_file,
+            "brand/nyx-hanging-out.jpg"
+        );
+    }
+
+    #[test]
+    fn reduce_motion_reaches_her_as_still() {
+        let s = ShellSettings {
+            reduce_motion: true,
+            ..ShellSettings::default()
+        };
+        assert!(state_of(&s, false, Life::default()).still);
+        assert!(!state_of(&ShellSettings::default(), false, Life::default()).still);
+    }
+
+    #[test]
+    fn voice_looks_and_moods_cross_as_the_page_spells_them() {
+        let st = state_of(
+            &ShellSettings::default(),
+            false,
+            Life {
+                look: VoiceLook::Listening,
+                mood: None,
+            },
+        );
+        let json = serde_json::to_value(&st).expect("json");
+        assert_eq!(json["look"], "listening");
+        assert_eq!(json["still"], false);
+        let look: VoiceLook = serde_json::from_str("\"speaking\"").expect("look");
+        assert_eq!(look, VoiceLook::Speaking);
+        let mood: Mood = serde_json::from_str("\"hanging-out\"").expect("mood");
+        assert_eq!(mood, Mood::HangingOut);
     }
 
     #[test]

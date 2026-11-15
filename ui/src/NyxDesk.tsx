@@ -25,6 +25,22 @@ export function deskArtUrl(path: string): string | null {
 /** How far a press on her moves before it drags her window. */
 const DRAG_AFTER_PX = 4;
 
+/** Her float (px) and breath (share of her height, and of her width) in
+ * styles.css `nyx-desk-bob` and `nyx-desk-breath`. */
+const FLOAT_PX = 3;
+const BREATH_LIFT = 0.012;
+const BREATH_SWELL = 0.006;
+
+const tenth = (v: number) => Math.round(v * 10) / 10;
+
+/** Her figure's box grown by everywhere her float and breath can take it, so
+ * a box measured mid-breath still covers her at the top of the next one. */
+export function figureReach(r: DesktopNyxHitBox): DesktopNyxHitBox {
+  const up = FLOAT_PX + BREATH_LIFT * r.h;
+  const side = (BREATH_SWELL * r.w) / 2;
+  return { x: tenth(r.x - side), y: tenth(r.y - up), w: tenth(r.w + 2 * side), h: tenth(r.h + up + FLOAT_PX) };
+}
+
 /** The desktop companion page: pedestal + figure, wardrobe, dock back. */
 export function NyxDesk() {
   // The dock's wardrobe, Labs and the tray change her too.
@@ -33,6 +49,13 @@ export function NyxDesk() {
   const artRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLUListElement>(null);
   const press = useRef<{ x: number; y: number } | null>(null);
+
+  // Reduce motion stills her breath, float and flicker, and her figure
+  // shows its picture instead of the clip.
+  const still = state?.still;
+  useEffect(() => {
+    if (still !== undefined) document.documentElement.dataset.reduceMotion = still ? "true" : "false";
+  }, [still]);
 
   // A click on the desktop beside her passes through, so the page hears no
   // click: leaving the window, or Escape, closes the menu too.
@@ -62,7 +85,8 @@ export function NyxDesk() {
     function report() {
       const boxes: DesktopNyxHitBox[] = parts().map((el) => {
         const r = el.getBoundingClientRect();
-        return { x: r.left, y: r.top, w: r.width, h: r.height };
+        const box = { x: r.left, y: r.top, w: r.width, h: r.height };
+        return el.classList.contains("nyx-desk-figure") ? figureReach(box) : box;
       });
       void desktopNyxSetHit(boxes);
     }
@@ -125,6 +149,7 @@ export function NyxDesk() {
     <div
       className="nyx-desk"
       aria-label={name}
+      data-look={state.look}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenu({ x: event.clientX, y: event.clientY });

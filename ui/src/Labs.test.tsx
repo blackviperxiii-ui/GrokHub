@@ -28,6 +28,8 @@ const desk = vi.hoisted(() => ({
       effects: { transparent: true, onTop: true },
       companion: "Nyx",
       hiddenForGame: false,
+      still: false,
+      look: "idle",
     }),
   ),
   desktopNyxSet: vi.fn(),
