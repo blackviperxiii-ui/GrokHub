@@ -5,6 +5,8 @@
 import { useEffect, useState } from "react";
 import * as api from "./api";
 import type { LiveEvent, Spoken } from "./api";
+import type { DesktopNyxTalk } from "./desktopNyxApi";
+import { envelopeOf } from "./lipsync";
 import { CANT_RECORD, MIC_DENIED, NO_MIC, tap } from "./Mic";
 import { Downsampler, toBase64, WAV_RATE } from "./wav";
 
@@ -63,15 +65,24 @@ export interface Playing {
   stop: () => void;
 }
 
+/** Hears a spoken piece's loudness and start, or `null` once it stops. */
+export type Talk = (talk: DesktopNyxTalk | null) => void;
+
 export interface VoiceDeps {
   /** Opens the mic; samples at `rate` go to `take`. Resolves to its closer. */
   openMic: (take: (samples: Float32Array, rate: number) => void) => Promise<() => void>;
-  play: (spoken: Spoken) => Playing;
+  /** Plays a piece; `talk` hears its loudness while it plays (her desk). */
+  play: (spoken: Spoken, talk?: Talk) => Playing;
+  talk?: Talk;
   /** Sends the heard words as the person's message. */
   send: (words: string) => void;
   onState: (state: VoiceState) => void;
   onNote: (note: string) => void;
 }
+
+/** The one session voice mode is on in. The backend keeps one open mic, so
+ * voice mode starting in another chat turns it off here first. */
+let live: VoiceSession | null = null;
 
 /** One voice-mode session: mic in, turns out, reply spoken. */
 export class VoiceSession {
@@ -104,6 +115,11 @@ export class VoiceSession {
     this.deps = { ...this.deps, send, onNote };
   }
 
+  /** Where the spoken reply's loudness goes from now on (her talk hop). */
+  talkTo(talk: Talk) {
+    this.deps = { ...this.deps, talk };
+  }
+
   private go(event: VoiceEvent) {
     const next = voiceStep(this.state, event);
     if (next === this.state) return;
@@ -119,6 +135,8 @@ export class VoiceSession {
     if (this.state !== "off") return;
     this.noVoice = false;
     this.warned = false;
+    if (live && live !== this) await live.stop();
+    live = this;
     await api.voiceLiveStart();
     this.go("start");
     try {
@@ -131,6 +149,7 @@ export class VoiceSession {
   }
 
   async stop(note?: string) {
+    if (live === this) live = null;
     const wasOn = this.state !== "off";
     this.go("stop");
     this.closeMic?.();
@@ -225,7 +244,9 @@ export class VoiceSession {
   feed(delta: string) {
     if (this.state === "off") return;
     this.reply = this.reply
-      .then(() => api.voiceReplyFeed(delta))
+      // Off by now (voice mode moved to another chat): nothing reaches the
+      // backend's next session.
+      .then(() => (this.state === "off" ? [] : api.voiceReplyFeed(delta)))
       .then((pieces) => this.enqueue(pieces))
       .catch((e) => this.note(e));
   }
@@ -234,7 +255,7 @@ export class VoiceSession {
   replyDone(whole: string) {
     if (this.state === "off") return;
     this.reply = this.reply
-      .then(() => api.voiceReplyFinish(whole))
+      .then(() => (this.state === "off" ? [] : api.voiceReplyFinish(whole)))
       .then((pieces) => {
         this.enqueue(pieces);
         this.finished = true;
@@ -244,7 +265,7 @@ export class VoiceSession {
   }
 
   private enqueue(pieces: string[]) {
-    if (this.noVoice) return;
+    if (this.noVoice || this.state === "off") return;
     for (const piece of pieces) {
       this.queue.push(
         api.voiceSpeak(piece).catch((e) => {
@@ -272,7 +293,7 @@ export class VoiceSession {
         // Listen over the reply so they can talk over it.
         await api.voiceLiveListen(true).catch((e) => this.note(e));
       }
-      const playing = this.deps.play(spoken);
+      const playing = this.deps.play(spoken, this.deps.talk);
       this.player = playing;
       await playing.done.catch(() => {});
       if (this.player !== playing) return;
@@ -324,8 +345,10 @@ export async function openBrowserMic(take: (samples: Float32Array, rate: number)
   };
 }
 
-/** Plays one piece through an audio element. */
-export function playSpoken(spoken: Spoken): Playing {
+/** Plays one piece through an audio element. `talk` hears its loudness
+ * and when it began each time it starts or resumes, and `null` when it
+ * pauses or ends (her desk hops with it). */
+export function playSpoken(spoken: Spoken, talk?: Talk): Playing {
   const audio = new Audio(`data:${spoken.mime};base64,${spoken.audio}`);
   let end = () => {};
   const done = new Promise<void>((resolve) => {
@@ -333,6 +356,28 @@ export function playSpoken(spoken: Spoken): Playing {
     audio.onended = () => resolve();
     audio.onerror = () => resolve();
   });
+  if (talk) {
+    let levels: Promise<number[] | null> | null = null;
+    let over = false;
+    let told = false;
+    const quiet = () => {
+      if (told) talk(null);
+      told = false;
+    };
+    audio.onplaying = () => {
+      levels ??= envelopeOf(spoken);
+      void levels.then((l) => {
+        if (over || !l || audio.paused) return;
+        told = true;
+        talk({ levels: l, startedAt: Date.now() - audio.currentTime * 1000 });
+      });
+    };
+    audio.onpause = quiet;
+    void done.then(() => {
+      over = true;
+      quiet();
+    });
+  }
   audio.play().catch(() => end());
   return {
     done,

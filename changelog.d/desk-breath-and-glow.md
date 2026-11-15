@@ -1,0 +1,1 @@
+- Desktop companion: she breathes and floats gently on her pedestal, which glows brighter while the chat's voice listens or speaks and flickers while a reply is being worked on. "Pick for me" now wears the outfit for what the chat is doing. Reduce motion stills her breath, float and flicker at once, without reopening her.

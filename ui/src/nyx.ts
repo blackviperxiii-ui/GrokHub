@@ -90,7 +90,7 @@ export function activityOf(items: Item[], busy: boolean): string {
 }
 
 /** The mood a tool title or mood activity stands for, as nyx_look reads it. */
-function lookArgs(activity: string): { tool?: string; mood?: Mood } {
+export function lookArgs(activity: string): { tool?: string; mood?: Mood } {
   return activity.startsWith("tool:") ? { tool: activity.slice(5) } : { mood: activity as Mood };
 }
 

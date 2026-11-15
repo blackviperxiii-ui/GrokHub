@@ -98,6 +98,9 @@ import { ScreenshotOffer } from "./ScreenshotOffer";
 import { openImport } from "./onboardApi";
 import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
+import { desktopNyxLook, desktopNyxTalk } from "./desktopNyxApi";
+import { inShell } from "./transport";
+import { deskLook, deskSpeaker, leaveDesk, updateDesk } from "./nyxLife";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
 import { DeviceGlanceRow } from "./DeviceGlance";
@@ -952,6 +955,7 @@ export function Chat({
    * the Activity menu. The next one sends when the reply ends. */
   const [queue, setQueue] = useState<string[]>([]);
   const queueRef = useRef<string[]>([]);
+  const deskChat = useRef(Symbol("chat"));
   const voice = useVoiceMode();
   const voiceSession = voice.session;
   /** The queued message whose turn came: it sends after this render. */
@@ -1009,6 +1013,35 @@ export function Chat({
   // Nyx's pose follows what the chat does, not each chunk of text.
   const activity = activityOf(items, busy);
   const nyx = useNyx(activity, active);
+  // Her desktop pedestal follows the voice, and "Pick for me" wears the
+  // chat's activity. A live voice speaks for her, else the chat last on
+  // screen, so a reply that ends while Settings is open still settles her.
+  const look = deskLook(voice.state, busyHere);
+  const voiced = voice.state !== "off";
+  useEffect(() => {
+    if (!inShell()) return;
+    const send = () => void desktopNyxLook(look, activity).catch(() => {});
+    updateDesk(deskChat.current, send, { onScreen: active, voiced });
+  }, [active, voiced, look, activity]);
+  useEffect(() => {
+    const me = deskChat.current;
+    return () => {
+      if (inShell()) leaveDesk(me);
+    };
+  }, []);
+  // A spoken reply makes her hop on the desk, from the chat that speaks for her.
+  useEffect(() => {
+    // A piece this chat started always gets its stop, even once another
+    // chat speaks for her (this one going away mid-piece).
+    let out = false;
+    voice.session.talkTo((talk) => {
+      if (!inShell()) return;
+      if (talk && deskSpeaker() !== deskChat.current) return;
+      if (!talk && !out) return;
+      out = talk !== null;
+      desktopNyxTalk(talk).catch(() => {});
+    });
+  }, [voice.session]);
   const sideWide = useMinWidth(SIDE_MIN_WIDTH);
   const leftWide = useMinWidth(DOCK_MIN_WIDTH);
 

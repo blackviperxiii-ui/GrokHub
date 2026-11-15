@@ -1,6 +1,10 @@
 // Desktop companion window + wardrobe (src-tauri/src/desktop_nyx.rs).
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { lookArgs } from "./nyx";
 import { call, subscribe } from "./transport";
+
+/** What the chat's voice is doing, as her pedestal shows it. */
+export type DesktopNyxLook = "idle" | "listening" | "thinking" | "speaking";
 
 export interface DesktopNyxEffects {
   transparent: boolean;
@@ -28,6 +32,9 @@ export interface DesktopNyxState {
   companion: string;
   /** Out on the desktop but hidden while a game or fullscreen app runs. */
   hiddenForGame: boolean;
+  /** Reduce motion is on: no breath, float or flicker. */
+  still: boolean;
+  look: DesktopNyxLook;
 }
 
 export interface DesktopNyxPatch {
@@ -81,4 +88,29 @@ export function desktopNyxSetHit(boxes: DesktopNyxHitBox[]): Promise<void> {
 /** A press on her: the system drags her window; where she lands is saved. */
 export function desktopNyxDrag(): Promise<void> {
   return call<void>("desktop_nyx_drag");
+}
+
+/** What the chat on screen is doing (`activityOf`); "Pick for me" wears
+ * the outfit for that activity. */
+export function desktopNyxLook(look: DesktopNyxLook, activity: string): Promise<void> {
+  return call<void>("desktop_nyx_look", { look, ...lookArgs(activity) });
+}
+
+/** A reply spoken now: its loudness per 20 ms (`lipsync.ts`) and when it
+ * began, in ms since the Unix epoch. Her desk hops with it. */
+export interface DesktopNyxTalk {
+  levels: number[];
+  startedAt: number;
+}
+
+/** Her desk alone hears the spoken reply, for her talk hop. */
+export const DESKTOP_NYX_TALK_EVENT = "desktop-nyx://talk";
+
+/** The chat's spoken reply started (or resumed), or `null` once it stops. */
+export function desktopNyxTalk(talk: DesktopNyxTalk | null): Promise<void> {
+  return call<void>("desktop_nyx_talk", { talk });
+}
+
+export function onDesktopNyxTalk(handler: (talk: DesktopNyxTalk | null) => void): Promise<UnlistenFn> {
+  return subscribe<DesktopNyxTalk | null>(DESKTOP_NYX_TALK_EVENT, handler);
 }

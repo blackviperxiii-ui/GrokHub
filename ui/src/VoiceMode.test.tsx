@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LiveEvent, Spoken } from "./api";
 
 const api = vi.hoisted(() => ({
@@ -42,6 +42,8 @@ interface Rig {
   notes: string[];
   sent: string[];
   played: string[];
+  /** What each piece's loudness went to. */
+  talks: unknown[];
   ends: (() => void)[];
   stops: number;
   closed: number;
@@ -49,16 +51,24 @@ interface Rig {
   hear: (...events: LiveEvent[]) => Promise<void>;
 }
 
+/** Every session a test made, stopped after it: voice mode is on in one
+ * session at a time, so a session left on would change the next test. */
+const made: VoiceSession[] = [];
+afterEach(async () => {
+  for (const s of made.splice(0)) await s.stop();
+});
+
 function rig(): Rig {
-  const r = { states: [], notes: [], sent: [], played: [], ends: [], stops: 0, closed: 0 } as unknown as Rig;
+  const r = { states: [], notes: [], sent: [], played: [], talks: [], ends: [], stops: 0, closed: 0 } as unknown as Rig;
   let take: ((s: Float32Array, rate: number) => void) | null = null;
   r.session = new VoiceSession({
     openMic: async (t) => {
       take = t;
       return () => r.closed++;
     },
-    play: (spoken): Playing => {
+    play: (spoken, talk): Playing => {
       r.played.push(spoken.audio);
+      r.talks.push(talk);
       let end = () => {};
       const done = new Promise<void>((res) => (end = res));
       r.ends.push(end);
@@ -74,6 +84,7 @@ function rig(): Rig {
     onState: (s) => r.states.push(s),
     onNote: (n) => r.notes.push(n),
   });
+  made.push(r.session);
   r.hear = async (...events) => {
     api.voiceLivePush.mockResolvedValueOnce(events);
     take!(new Float32Array(BLOCK), 16000);
@@ -177,6 +188,24 @@ describe("VoiceSession", () => {
     await flush();
     expect(r.states.at(-1)).toBe("listening");
     expect(api.voiceLivePlaying).toHaveBeenLastCalledWith(false);
+  });
+
+  it("hands each piece to where its loudness goes, once the chat says where", async () => {
+    const r = rig();
+    await r.session.start();
+    await r.hear({ kind: "turn", ms: 1500 });
+    api.voiceReplyFeed.mockResolvedValueOnce(["One."]);
+    r.session.feed("One. ");
+    await flush();
+    const talk = () => {};
+    r.session.talkTo(talk);
+    api.voiceReplyFinish.mockResolvedValueOnce(["Two."]);
+    r.session.replyDone("");
+    await flush();
+    r.ends[0]();
+    await flush();
+    expect(r.played).toEqual(["One.", "Two."]);
+    expect(r.talks).toEqual([undefined, talk]);
   });
 
   it("talking over the reply stops it and hushes the rest", async () => {
@@ -292,9 +321,46 @@ describe("VoiceSession", () => {
       onState: (st) => r.states.push(st),
       onNote: () => {},
     });
+    made.push(s);
     await expect(s.start()).rejects.toThrow("No microphone found.");
     expect(s.state).toBe("off");
     expect(api.voiceLiveStop).toHaveBeenCalled();
+  });
+});
+
+describe("voice mode in two chats", () => {
+  it("sends nothing more of a reply once voice mode is off in that chat", async () => {
+    const r = rig();
+    await r.session.start();
+    await r.hear({ kind: "turn", ms: 1500 });
+    api.voiceReplyFeed.mockResolvedValue(["Sure."]);
+    r.session.feed("Sure. ");
+    r.session.replyDone("");
+    await r.session.stop();
+    await flush();
+    expect(api.voiceReplyFeed).not.toHaveBeenCalled();
+    expect(api.voiceReplyFinish).not.toHaveBeenCalled();
+    expect(api.voiceSpeak).not.toHaveBeenCalled();
+  });
+
+  it("turns off in one chat before it starts in another, since the backend has one mic", async () => {
+    const order: string[] = [];
+    api.voiceLiveStart.mockImplementation(async () => void order.push("start"));
+    api.voiceLiveStop.mockImplementation(async () => void order.push("stop"));
+    const main = rig();
+    const code = rig();
+    await main.session.start();
+    await code.session.start();
+    expect(main.session.state).toBe("off");
+    expect(main.states.at(-1)).toBe("off");
+    expect(main.closed).toBe(1);
+    expect(code.session.state).toBe("listening");
+    expect(order).toEqual(["start", "stop", "start"]);
+    // Off in the chat it moved to: nothing else is stopped.
+    await code.session.stop();
+    await main.session.start();
+    expect(order).toEqual(["start", "stop", "start", "stop", "start"]);
+    await main.session.stop();
   });
 });
 
