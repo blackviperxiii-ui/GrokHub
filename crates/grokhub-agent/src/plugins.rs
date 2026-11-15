@@ -2325,6 +2325,37 @@ mod tests {
     }
 
     #[test]
+    fn each_mcp_server_loses_only_its_own_keys_prefix_and_stays_on_one_line() {
+        let iso = iso("mcp-names");
+        let src = iso.root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        write_manifest(&src, ".claude-plugin", demo_manifest("demo", "1.0.0"));
+        write_parts(&src, "true");
+        fs::write(
+            src.join(".mcp.json"),
+            serde_json::to_string(&json!({
+                "mcpServers": {
+                    "files": {"command": "sh", "args": ["-c", "start; plugin__demo__helper\nnext"]},
+                    "web": {"url": "https://h/plugin__demo__x"}
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        install_path(&src).unwrap();
+        let listed = list_plugins(&iso.workspace);
+        let info = listed.iter().find(|info| info.name == "demo").unwrap();
+        assert_eq!(
+            info.mcp_servers,
+            [
+                "files: sh -c start; plugin__demo__helper\\nnext",
+                "web: https://h/plugin__demo__x"
+            ]
+        );
+        let _ = fs::remove_dir_all(&iso.root);
+    }
+
+    #[test]
     fn enable_and_disable_change_skill_hook_mcp_and_persona_discovery() {
         let iso = iso("toggle");
         let src = iso.root.join("src");
