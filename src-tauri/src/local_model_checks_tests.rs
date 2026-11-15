@@ -319,3 +319,25 @@ fn off_and_on_again_does_not_post_the_same_upgrade_twice() {
     assert_eq!(*posted.borrow(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_pick_is_saved_as_offered_before_it_is_posted() {
+    let dir = turned_on("order");
+    let seen_at_post = RefCell::new(Vec::new());
+    let post = |card: grokhub_core::UpdateCard| {
+        // Were the app to stop now, the next check wouldn't post it again.
+        seen_at_post.borrow_mut().push(
+            lm::load(&dir)
+                .suggested
+                .contains("catalog:gemma-4-31b-it-abliterated-q4_k"),
+        );
+        assert_eq!(card.title, "Gemma 4 31B fits this PC");
+        Ok(true)
+    };
+    assert_eq!(
+        check_if_due(&dir, NOW, &gaming_pc, &mut hugging_face, &post).as_deref(),
+        Some("Checked. 1 new for this PC.")
+    );
+    assert_eq!(*seen_at_post.borrow(), vec![true]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -342,6 +342,14 @@ impl Tracker {
                 out.push(up);
             }
         }
+        // The releases that are listed and fit: a retry outside them is let go.
+        let listed: BTreeSet<String> = releases
+            .iter()
+            .filter_map(|s| match s {
+                Suggestion::Release { repo, .. } => Some(repo.clone()),
+                Suggestion::Upgrade { .. } => None,
+            })
+            .collect();
         if self.seeded {
             let mut fresh: Vec<Suggestion> = releases
                 .into_iter()
@@ -363,19 +371,26 @@ impl Tracker {
                 Suggestion::Upgrade { .. } => None,
             })
             .collect();
+        // A retry still listed waits for a later check even when the cap
+        // left it out this time (a lower cap after Not interested). One no
+        // longer listed, or that no longer fits, is let go; an unread list
+        // lets nothing go.
+        if !read.is_empty() {
+            self.retry.retain(|r| listed.contains(r));
+        }
+        let retry = &self.retry;
         self.seen.extend(
             read.iter()
-                .filter(|r| !picked.contains(r.as_str()))
+                .filter(|r| !picked.contains(r.as_str()) && !retry.contains(*r))
                 .cloned(),
         );
         self.seeded |= !read.is_empty();
-        let seen = &self.seen;
-        self.retry.retain(|r| !seen.contains(r));
         out
     }
 
-    /// Remember a pick from [`Tracker::check`] once it is in the feed (or
-    /// the feed refused it on purpose, such as one already dismissed).
+    /// Remember a pick from [`Tracker::check`] as offered. Saved before it
+    /// is posted, so a card in the feed is never posted twice; a post that
+    /// then fails is handed back with [`Tracker::not_posted`].
     pub fn offered(&mut self, pick: &Suggestion) {
         match pick {
             Suggestion::Upgrade { .. } => {
@@ -388,11 +403,17 @@ impl Tracker {
         }
     }
 
-    /// A pick from [`Tracker::check`] that couldn't be posted: a release goes
-    /// first next check. An upgrade comes back anyway, as it isn't recorded.
+    /// A pick that couldn't be posted: it is offered again next check, and a
+    /// release goes ahead of newer ones.
     pub fn not_posted(&mut self, pick: &Suggestion) {
-        if let Suggestion::Release { repo, .. } = pick {
-            self.retry.insert(repo.clone());
+        match pick {
+            Suggestion::Upgrade { .. } => {
+                self.suggested.remove(&pick.key());
+            }
+            Suggestion::Release { repo, .. } => {
+                self.seen.remove(repo);
+                self.retry.insert(repo.clone());
+            }
         }
     }
 
@@ -576,6 +597,49 @@ mod tests {
         assert!(t.retry.is_empty());
         // The two newer ones were seen while the retries went first.
         assert_eq!(t.seen.len(), 4);
+    }
+
+    #[test]
+    fn a_retry_left_out_by_a_lower_cap_waits_for_the_next_check() {
+        let p = gpu(16_384);
+        let mut t = Tracker {
+            on: true,
+            seeded: true,
+            ..Default::default()
+        };
+        let a = "huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF";
+        let b = "huihui-ai/Huihui-Phi-5-12B-abliterated-GGUF";
+        let list = repos(&[b, a]);
+        for pick in &t.check(None, releases(&p, 5_900, &list), &list, 2, 10) {
+            t.offered(pick);
+            t.not_posted(pick);
+        }
+        // Not interested lowered the cap to one a check.
+        let first = t.check(None, releases(&p, 5_900, &list), &list, 1, 20);
+        assert_eq!(
+            first.iter().map(Suggestion::title).collect::<Vec<_>>(),
+            vec!["New on Hugging Face: Huihui-Phi-5-12B-abliterated-GGUF"]
+        );
+        t.offered(&first[0]);
+        let second = t.check(None, releases(&p, 5_900, &list), &list, 1, 30);
+        assert_eq!(
+            second.iter().map(Suggestion::title).collect::<Vec<_>>(),
+            vec!["New on Hugging Face: Huihui-Qwen3-14B-abliterated-GGUF"]
+        );
+        t.offered(&second[0]);
+        assert!(t.retry.is_empty());
+        assert!(t
+            .check(None, releases(&p, 5_900, &list), &list, 1, 40)
+            .is_empty());
+        // An unread list keeps a retry; one no longer listed is let go.
+        t.not_posted(&second[0]);
+        assert!(t.check(None, Vec::new(), &[], 1, 50).is_empty());
+        assert_eq!(t.retry.len(), 1);
+        let later = repos(&[b]);
+        assert!(t
+            .check(None, releases(&p, 5_900, &later), &later, 1, 60)
+            .is_empty());
+        assert!(t.retry.is_empty());
     }
 
     #[test]

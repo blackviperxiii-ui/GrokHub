@@ -127,8 +127,8 @@ fn bias(dir: &Path) -> i32 {
         .unwrap_or(0)
 }
 
-/// Posts one card: `Ok(true)` added, `Ok(false)` refused on purpose (already
-/// there, or dismissed), `Err` when the feed couldn't be read or saved.
+/// Posts one card: `Ok(true)` added, `Ok(false)` refused on purpose (the
+/// same card is already there), `Err` when the feed couldn't be read or saved.
 pub(crate) type Post<'a> = &'a dyn Fn(grokhub_core::UpdateCard) -> Result<bool, String>;
 
 /// Fold a check in: post the new cards and say what happened. Returns the
@@ -151,25 +151,27 @@ pub(crate) fn finish(dir: &Path, run: NewsRun, now: u64, post: Post) -> String {
         lm::links_allowed(bias(dir)),
         now,
     );
+    // Recorded before posting: a card in the feed is never posted again,
+    // even when the app stops right after. One that fails is handed back.
+    for pick in &picks {
+        t.offered(pick);
+    }
+    if let Err(why) = lm::save(dir, &t) {
+        return why;
+    }
     let mut added = 0;
     let mut failed = None;
     for pick in &picks {
         match post(pick.card(now)) {
-            Ok(new) => {
-                t.offered(pick);
-                added += usize::from(new);
-            }
+            Ok(new) => added += usize::from(new),
             Err(why) => {
                 t.not_posted(pick);
                 failed.get_or_insert(why);
             }
         }
     }
-    if let Err(why) = lm::save(dir, &t) {
-        return why;
-    }
     if let Some(why) = failed {
-        return post_failed(&why);
+        return lm::save(dir, &t).err().unwrap_or_else(|| post_failed(&why));
     }
     match (added, unread) {
         (0, true) => LIST_UNREAD.to_string(),
