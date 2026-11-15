@@ -28,6 +28,8 @@ export function ModelLibrary({ focus }: { focus?: LibraryFocus } = {}) {
   /** The focus last applied, and whether this app's list has that model. */
   const [shown, setShown] = useState<{ id: string; n: number; found: boolean } | null>(null);
   const focusedRow = useRef<HTMLLIElement>(null);
+  /** The focus `n` the row was already scrolled to and focused for. */
+  const movedFor = useRef<number | null>(null);
 
   // Applied once the rows are in, so the right tab can be picked.
   if (view && focus && focus.n !== shown?.n) {
@@ -35,12 +37,18 @@ export function ModelLibrary({ focus }: { focus?: LibraryFocus } = {}) {
     setShown({ id: focus.id, n: focus.n, found: Boolean(home) });
     if (home) setTab(home.label);
   }
+  // Opened without a card (the palette, a menu pick): no row is marked.
+  if (!focus && shown) setShown(null);
 
   useEffect(() => {
-    if (!shown?.found) return;
+    // Once per card: effects run again each time a hidden page is shown,
+    // and coming back to Settings mustn't jump to the row again.
+    if (!shown?.found || movedFor.current === shown.n) return;
+    const n = shown.n;
     // A frame later: Settings scrolls a newly opened section to the top in
     // its own effect, which runs after this one.
     const frame = requestAnimationFrame(() => {
+      movedFor.current = n;
       const row = focusedRow.current;
       row?.scrollIntoView?.({ block: "center" });
       // Download or Resume when the row offers it; never Remove, which one

@@ -1,3 +1,4 @@
+import { Activity } from "react";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -199,6 +200,35 @@ describe("ModelLibrary", () => {
     await userEvent.click(screen.getByRole("button", { name: "Download Gemma 4 12B" }));
     expect(api.downloadModels).toHaveBeenCalledTimes(1);
     expect(api.downloadModels).toHaveBeenCalledWith(["g12"]);
+  });
+
+  it("moves to the card's row once, not again each time the page is shown", async () => {
+    api.getModelLibrary.mockResolvedValue(library());
+    const page = (mode: "visible" | "hidden", focus?: { id: string; n: number }) => (
+      <>
+        <button type="button">Elsewhere</button>
+        <Activity mode={mode}>
+          <ModelLibrary focus={focus} />
+        </Activity>
+      </>
+    );
+    const { rerender } = render(page("visible", { id: "g12", n: 1 }));
+    const download = await screen.findByRole("button", { name: "Download Gemma 4 12B" });
+    await vi.waitFor(() => expect(download).toHaveFocus());
+
+    // Away from Settings and back, on the same card.
+    rerender(page("hidden", { id: "g12", n: 1 }));
+    screen.getByRole("button", { name: "Elsewhere" }).focus();
+    rerender(page("visible", { id: "g12", n: 1 }));
+    await act(() => new Promise((done) => requestAnimationFrame(() => done(undefined))));
+    expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
+
+    // Opened without a card: the row is no longer marked or focused.
+    rerender(page("visible"));
+    await act(() => new Promise((done) => requestAnimationFrame(() => done(undefined))));
+    expect(screen.getByRole("listitem", { name: "Gemma 4 12B" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
+    expect(api.downloadModels).toHaveBeenCalledTimes(0);
   });
 
   it("says so when the card's model isn't in this app's list", async () => {
