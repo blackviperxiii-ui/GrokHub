@@ -104,7 +104,13 @@ pub fn act(
             }
         }
         Act::Save { drafts: d } => {
+            // Save clears the answers, so the name is read first.
+            let typed =
+                onboard::pending(config_dir).then(|| onboard::load(config_dir).answers.name);
             let done = onboard::commit(config_dir, &d, now_ms)?;
+            if let Some(typed) = typed {
+                name_the_profile(config_dir, &typed);
+            }
             note = onboard::saved_note(config_dir, &done);
             saved = Some(done);
         }
@@ -134,6 +140,20 @@ pub fn act(
         saved,
         note,
     })
+}
+
+/// The name typed in Get to know you becomes the profile name when none is
+/// saved yet, as in the cabin. A name set in Settings → Account is never
+/// replaced by older answers, and a failed write never fails the save: the
+/// files are already in.
+fn name_the_profile(config_dir: &Path, typed: &str) {
+    let name = grokhub_core::onboard_identity::clean(typed);
+    if name.is_empty() || !crate::profile::load(config_dir, None).name.is_empty() {
+        return;
+    }
+    if let Err(e) = crate::profile::set_name(config_dir, &name) {
+        eprintln!("get to know you: the profile name wasn't saved: {e}");
+    }
 }
 
 #[cfg(test)]

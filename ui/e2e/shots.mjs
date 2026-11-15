@@ -224,11 +224,21 @@ async function run() {
           const rail = page.getByRole("navigation", { name: "Views" });
           const labels = await rail
             .getByRole("button")
-            .evaluateAll((buttons) => buttons.map((b) => b.getAttribute("title") || b.textContent.trim()));
+            .evaluateAll((buttons) =>
+              // The profile avatar is not a page: it opens Settings › Account, swept below.
+              buttons.filter((b) => !b.classList.contains("rail-avatar")).map((b) => b.getAttribute("title") || b.textContent.trim()),
+            );
           for (const label of labels.filter((l) => !shot.has(l) && l !== "More")) {
             at = label;
             await openTab(page, label);
             await check(page, slug(label));
+          }
+          const avatar = rail.locator(".rail-avatar");
+          if (await avatar.isVisible()) {
+            at = "profile";
+            await avatar.click({ timeout: 15_000 });
+            await page.getByRole("group", { name: "Profile" }).waitFor({ timeout: 15_000 });
+            await check(page, slug("profile"));
           }
           at = "More";
           await rail.getByRole("button", { name: "More", exact: true }).click({ timeout: 15_000 });

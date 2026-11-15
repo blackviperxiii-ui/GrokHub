@@ -97,6 +97,7 @@ mod net_watch;
 mod night;
 mod nudges;
 pub mod nyx;
+mod profile;
 mod prompt_tidy;
 pub use grokhub_agent::xai_keychain as oauth;
 mod composer_ghost;
@@ -287,6 +288,76 @@ fn current(state: &ShellState) -> ShellSettings {
 async fn get_settings(state: State<'_, ShellState>) -> Result<SettingsView, String> {
     let settings = current(&state);
     off_main(move || view(&settings)).await
+}
+
+/// Settings → Account → Profile and the rail's avatar. On the blocking pool:
+/// the Grok name comes from the keychain, like `get_settings`.
+#[tauri::command]
+async fn get_profile(state: State<'_, ShellState>) -> Result<profile::Profile, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || profile_now(&dir)).await
+}
+
+fn profile_now(dir: &std::path::Path) -> profile::Profile {
+    let grok = oauth::signed_in(&oauth::Keychain).and_then(|s| s.name);
+    profile::load(dir, grok.as_deref())
+}
+
+/// Settings → Account → Name; blank goes back to the Grok name.
+#[tauri::command]
+async fn set_profile_name(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<profile::Profile, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        profile::set_name(&dir, &name)?;
+        Ok(profile_now(&dir))
+    })
+    .await?
+}
+
+/// Settings → Account → Profile picture → Choose. `None` when the picker
+/// was closed without a pick.
+#[tauri::command]
+async fn pick_profile_picture(app: AppHandle) -> Result<Option<profile::Profile>, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        let dir = app.state::<ShellState>().config_dir.clone();
+        off_main(move || {
+            let Some(path) = app
+                .dialog()
+                .file()
+                .set_title("Choose a profile picture")
+                // Linux filters match case: a camera's .JPG must show too.
+                .add_filter("Images", &["png", "jpg", "jpeg", "PNG", "JPG", "JPEG"])
+                .blocking_pick_file()
+                .and_then(|p| p.into_path().ok())
+            else {
+                return Ok(None);
+            };
+            profile::install_picture(&dir, &path)?;
+            Ok(Some(profile_now(&dir)))
+        })
+        .await?
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err(attach::NO_PICKER.into())
+    }
+}
+
+/// Settings → Account → Remove picture.
+#[tauri::command]
+async fn clear_profile_picture(state: State<'_, ShellState>) -> Result<profile::Profile, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        profile::clear_picture(&dir)?;
+        Ok(profile_now(&dir))
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -6492,6 +6563,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
     };
     match command {
         "get_settings" => out(view(&current(&state))),
+        "get_profile" => out(profile_now(&state.config_dir)),
         "send_chat" => {
             let taken = |id: &str| {
                 state
@@ -7475,6 +7547,10 @@ pub fn run() {
             chip_outcome,
             get_capabilities,
             get_settings,
+            get_profile,
+            set_profile_name,
+            pick_profile_picture,
+            clear_profile_picture,
             save_settings,
             set_theme,
             open_external,

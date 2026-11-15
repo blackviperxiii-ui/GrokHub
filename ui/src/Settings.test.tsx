@@ -26,6 +26,14 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => api);
+// The profile group has its own tests (Profile.test.tsx).
+vi.mock("./Profile", () => ({
+  ProfileSettings: ({ onProfile }: { onProfile?: (p: unknown) => void }) => (
+    <button type="button" onClick={() => onProfile?.({ shownName: "Pat" })}>
+      Profile panel
+    </button>
+  ),
+}));
 // Local AI has its own tests (LocalAi.test.tsx).
 vi.mock("./LocalAi", () => ({ LocalAi: () => <p>Local AI panel</p> }));
 // AI models has its own tests (AiModels.test.tsx).
@@ -230,6 +238,17 @@ describe("Settings", () => {
     await openSection("Account");
     expect(await screen.findByRole("region", { name: "Sign in with Grok" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Or use an xAI API key" })).toBeInTheDocument();
+  });
+
+  it("puts the profile first in Account and passes its changes on", async () => {
+    const onProfile = vi.fn();
+    render(<Settings caps={{ ...DESKTOP, grokSignIn: true }} onProfile={onProfile} />);
+    await openSection("Account");
+    const panel = await screen.findByRole("button", { name: "Profile panel" });
+    const signIn = screen.getByRole("region", { name: "Sign in with Grok" });
+    expect(panel.compareDocumentPosition(signIn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await userEvent.click(panel);
+    expect(onProfile).toHaveBeenCalledWith({ shownName: "Pat" });
   });
 
   it("Android has no Grok sign-in yet, only the key", async () => {

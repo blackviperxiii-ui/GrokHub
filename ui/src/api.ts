@@ -274,6 +274,39 @@ export function getSettings(): Promise<Settings> {
   return invoke<Settings>("get_settings");
 }
 
+/** Settings → Account → Profile (src-tauri/src/profile.rs). */
+export interface Profile {
+  /** The saved name; empty when none is set. */
+  name: string;
+  /** What the rail shows: the saved name, else the Grok name, else "You". */
+  shownName: string;
+  /** The first letter of `shownName`, for the rail without a picture. */
+  initial: string;
+  /** `data:image/png;base64,…`, or null. */
+  picture: string | null;
+}
+
+/** The name and picture (src-tauri/src/profile.rs). */
+export function getProfile(): Promise<Profile> {
+  return invoke<Profile>("get_profile");
+}
+
+/** Save the name; blank goes back to the Grok name (src-tauri/src/profile.rs). */
+export function setProfileName(name: string): Promise<Profile> {
+  return invoke<Profile>("set_profile_name", { name });
+}
+
+/** The system picker, then the picture is cropped square; null when closed
+ * without a pick (src-tauri/src/profile.rs). */
+export function pickProfilePicture(): Promise<Profile | null> {
+  return invoke<Profile | null>("pick_profile_picture");
+}
+
+/** Remove the picture (src-tauri/src/profile.rs). */
+export function clearProfilePicture(): Promise<Profile> {
+  return invoke<Profile>("clear_profile_picture");
+}
+
 export type Theme =
   "system" | "dark" | "ops-dark" | "oled-black" | "soft-charcoal" | "light";
 

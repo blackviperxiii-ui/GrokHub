@@ -74,6 +74,7 @@ pub fn web_may_pulse(act: &crate::pulse::Act) -> bool {
 /// Home and Objectives are read only, with only the browser's own chats.
 pub const WEB_COMMANDS: &[&str] = &[
     "get_settings",
+    "get_profile",
     "send_chat",
     "answer_permission",
     "answer_elicit",
@@ -1042,6 +1043,7 @@ mod tests {
             "answer_permission",
             "answer_elicit",
             "get_settings",
+            "get_profile",
             "list_automations",
             "add_automation",
             "edit_automation",
@@ -1089,6 +1091,10 @@ mod tests {
             "export_personal",
             "wipe_personal",
             "save_settings",
+            // The web rail shows the profile; changing it stays on the computer.
+            "set_profile_name",
+            "pick_profile_picture",
+            "clear_profile_picture",
             "set_theme",
             "auto_setup",
             "set_api_key",
@@ -1305,7 +1311,7 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-        const REVIEWED: [&str; 90] = [
+        const REVIEWED: [&str; 91] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
@@ -1337,6 +1343,7 @@ mod tests {
             "get_memory_retention",
             "get_mission",
             "get_privacy",
+            "get_profile",
             "get_pulse",
             "get_queue",
             "get_settings",
