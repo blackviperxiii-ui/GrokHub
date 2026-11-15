@@ -64,8 +64,23 @@ pub(crate) fn run(dir: &Path, now: u64, find: Find, get: cu::Get) -> Result<Opti
     let Some(pubkey) = RELEASE_PUBKEY else {
         return Ok(None);
     };
-    let rel = find(dir, crate::shell_update::channel(dir))?;
-    cu::refresh(pubkey, &rel, dir, get)
+    let channel = crate::shell_update::channel(dir);
+    let rel = find(dir, channel)?;
+    let saved = cu::refresh(pubkey, &rel, dir, channel.as_str(), get)?;
+    // Switched channel while it downloaded: that switch's catalog wins.
+    if saved.is_some() && crate::shell_update::channel(dir) != channel {
+        cu::forget(dir);
+        return Ok(None);
+    }
+    Ok(saved)
+}
+
+/// At start, before the catalog is read: drop a saved catalog from another
+/// channel, or one that no longer applies (see [`cu::tidy`]).
+pub fn tidy(dir: &Path) {
+    if cu::tidy(dir, crate::shell_update::channel(dir).as_str()) {
+        eprintln!("model catalog: the saved one no longer applies, using the built-in one");
+    }
 }
 
 /// One release file: HTTPS to GitHub's release hosts only, behind the egress
@@ -82,6 +97,7 @@ fn download(dir: &Path, url: &str, cap: u64) -> Result<Vec<u8>, String> {
         grokhub_core::ssrf::github_download_url_ok(hop, "model catalog download")?;
         hx::guard_quiet(dir, &hx::EgressReq::new(hop, &[]))
     };
+    let name = url.rsplit('/').next().unwrap_or(url);
     let resp = grokhub_core::http::get_following(
         &agent,
         url,
@@ -89,10 +105,10 @@ fn download(dir: &Path, url: &str, cap: u64) -> Result<Vec<u8>, String> {
         REDIRECTS_MAX,
         "while downloading the model catalog",
         &check,
-    )?;
+    )
+    .map_err(|e| format!("{name}: {e}"))?;
     if resp.status() != 200 {
-        let name = url.rsplit('/').next().unwrap_or(url);
-        return Err(format!("GitHub answered HTTP {} for {name}", resp.status()));
+        return Err(format!("{name}: GitHub answered HTTP {}", resp.status()));
     }
     let mut body = Vec::new();
     resp.into_reader()
@@ -100,7 +116,6 @@ fn download(dir: &Path, url: &str, cap: u64) -> Result<Vec<u8>, String> {
         .read_to_end(&mut body)
         .map_err(|e| e.to_string())?;
     if body.len() as u64 > cap {
-        let name = url.rsplit('/').next().unwrap_or(url);
         return Err(format!("{name} is larger than expected"));
     }
     Ok(body)

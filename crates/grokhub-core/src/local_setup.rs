@@ -417,7 +417,10 @@ pub(crate) fn parse_catalog(text: &str) -> Option<(u32, Vec<LocalModel>)> {
 
 /// The version of the catalog built into this app.
 pub fn bundled_version() -> u32 {
-    parse_catalog(CATALOG_TOML).map_or(0, |(v, _)| v)
+    // Parsed once: parsing keeps the catalog's strings for the run.
+    static VERSION: LazyLock<u32> =
+        LazyLock::new(|| parse_catalog(CATALOG_TOML).map_or(0, |(v, _)| v));
+    *VERSION
 }
 
 /// Every catalog row, biggest first. Parsed once; the strings live for the

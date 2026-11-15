@@ -50,16 +50,29 @@ fn a_catalog_that_doesnt_load_whole_is_refused() {
 fn only_a_newer_catalog_is_saved_and_used() {
     let cfg = temp("adopt");
     assert_eq!(saved_with(&cfg, PUB, 2), None, "nothing saved yet");
-    assert_eq!(adopt(&cfg, PUB, 99, TEXT, SUMS, SIG), Ok(None), "not newer");
+    assert_eq!(
+        adopt(&cfg, PUB, 99, "beta", TEXT, SUMS, SIG),
+        Ok(None),
+        "not newer"
+    );
     assert!(!dir(&cfg).join(FILE).exists());
-    assert_eq!(adopt(&cfg, PUB, 2, TEXT, SUMS, SIG), Ok(Some(99)));
+    assert_eq!(adopt(&cfg, PUB, 2, "beta", TEXT, SUMS, SIG), Ok(Some(99)));
     assert_eq!(saved_with(&cfg, PUB, 2).as_deref(), Some(TEXT));
     // An app whose own catalog caught up ignores the saved one.
     assert_eq!(saved_with(&cfg, PUB, 99), None);
     // Changed on disk after saving: no longer used.
     std::fs::write(dir(&cfg).join(FILE), TEXT.replace("Test Chat", "Swapped")).unwrap();
     assert_eq!(saved_with(&cfg, PUB, 2), None);
-    assert!(adopt(&cfg, PUB, 2, &TEXT.replace("Test", "Bad"), SUMS, SIG).is_err());
+    assert!(adopt(
+        &cfg,
+        PUB,
+        2,
+        "beta",
+        &TEXT.replace("Test", "Bad"),
+        SUMS,
+        SIG
+    )
+    .is_err());
     let _ = std::fs::remove_dir_all(&cfg);
 }
 
@@ -103,7 +116,7 @@ fn a_look_waits_a_day() {
 #[test]
 fn forgetting_drops_the_saved_catalog_and_its_stamp() {
     let cfg = temp("forget");
-    assert_eq!(adopt(&cfg, PUB, 2, TEXT, SUMS, SIG), Ok(Some(99)));
+    assert_eq!(adopt(&cfg, PUB, 2, "beta", TEXT, SUMS, SIG), Ok(Some(99)));
     stamp(&cfg, 5_000);
     forget(&cfg);
     assert_eq!(saved_with(&cfg, PUB, 2), None);
@@ -114,11 +127,11 @@ fn forgetting_drops_the_saved_catalog_and_its_stamp() {
 #[test]
 fn a_save_that_cant_write_keeps_the_old_catalog_and_looks_again() {
     let cfg = temp("full");
-    assert_eq!(adopt(&cfg, PUB, 2, TEXT, SUMS, SIG), Ok(Some(99)));
+    assert_eq!(adopt(&cfg, PUB, 2, "beta", TEXT, SUMS, SIG), Ok(Some(99)));
     stamp(&cfg, 5_000);
     // The signature's part file can't be written (a folder is in the way).
     std::fs::create_dir_all(dir(&cfg).join(format!("{}.part", rv::SIG_NAME))).unwrap();
-    let got = adopt(&cfg, PUB, 2, TEXT, SUMS, SIG).unwrap_err();
+    let got = adopt(&cfg, PUB, 2, "beta", TEXT, SUMS, SIG).unwrap_err();
     assert!(got.starts_with("SHA256SUMS.minisig: "), "{got}");
     // Nothing saved was replaced, so the saved catalog still verifies.
     assert_eq!(saved_with(&cfg, PUB, 2).as_deref(), Some(TEXT));
@@ -167,7 +180,7 @@ fn a_newer_signed_catalog_from_the_release_is_saved_and_a_tampered_one_is_not() 
     let rel = release_with_catalog();
     let try_with = |files: [&str; 3]| {
         let mut asked = Vec::new();
-        let got = refresh(PUB, &rel, &cfg, &mut serve(files, &mut asked));
+        let got = refresh(PUB, &rel, &cfg, "beta", &mut serve(files, &mut asked));
         (got, asked)
     };
 
@@ -210,11 +223,11 @@ fn an_unsigned_or_foreign_release_is_never_fetched() {
     };
     let mut rel = release_with_catalog();
     rel.assets.retain(|a| a.name != rv::SIG_NAME);
-    assert_eq!(refresh(PUB, &rel, &cfg, &mut nothing), Ok(None));
+    assert_eq!(refresh(PUB, &rel, &cfg, "beta", &mut nothing), Ok(None));
 
     let mut rel = release_with_catalog();
     rel.assets[2].url = format!("https://example.com/{}", rv::SIG_NAME);
-    assert_eq!(refresh(PUB, &rel, &cfg, &mut nothing), Ok(None));
+    assert_eq!(refresh(PUB, &rel, &cfg, "beta", &mut nothing), Ok(None));
     assert!(!dir(&cfg).exists());
     let _ = std::fs::remove_dir_all(&cfg);
 }
@@ -233,9 +246,36 @@ fn a_catalog_that_isnt_text_is_refused() {
         })
     };
     assert_eq!(
-        refresh(PUB, &rel, &cfg, &mut get),
+        refresh(PUB, &rel, &cfg, "beta", &mut get),
         Err("local_catalog.toml isn't text".to_string())
     );
     assert!(!dir(&cfg).join(FILE).exists());
+    let _ = std::fs::remove_dir_all(&cfg);
+}
+
+#[test]
+fn a_catalog_from_another_channel_or_half_saved_is_tidied_away() {
+    let cfg = temp("tidy");
+    assert!(!tidy_with(&cfg, "beta", PUB, 2), "nothing saved");
+    assert_eq!(adopt(&cfg, PUB, 2, "beta", TEXT, SUMS, SIG), Ok(Some(99)));
+    assert_eq!(saved_channel(&cfg).as_deref(), Some("beta"));
+    stamp(&cfg, 5_000);
+    assert!(!tidy_with(&cfg, "beta", PUB, 2), "same channel, still good");
+    assert_eq!(saved_with(&cfg, PUB, 2).as_deref(), Some(TEXT));
+
+    // The channel changed without the switch (an installer, a script).
+    assert!(tidy_with(&cfg, "stable", PUB, 2));
+    assert_eq!(saved_with(&cfg, PUB, 2), None);
+    assert!(due(&cfg, 5_001), "the new channel is looked at at once");
+
+    // Half saved: the new catalog beside the old signature.
+    assert_eq!(adopt(&cfg, PUB, 2, "beta", TEXT, SUMS, SIG), Ok(Some(99)));
+    std::fs::write(dir(&cfg).join(rv::SIG_NAME), "untrusted comment: torn\n").unwrap();
+    assert!(tidy_with(&cfg, "beta", PUB, 2));
+    assert!(!dir(&cfg).join(FILE).exists());
+
+    // An app whose own catalog caught up drops the saved one.
+    assert_eq!(adopt(&cfg, PUB, 2, "beta", TEXT, SUMS, SIG), Ok(Some(99)));
+    assert!(tidy_with(&cfg, "beta", PUB, 99));
     let _ = std::fs::remove_dir_all(&cfg);
 }

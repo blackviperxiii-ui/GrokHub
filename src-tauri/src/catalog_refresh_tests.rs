@@ -82,19 +82,19 @@ fn downloads_go_only_to_githubs_release_hosts() {
     for (url, why) in [
         (
             "http://github.com/blackviperxiii-ui/GrokHub/releases/download/v1/local_catalog.toml",
-            "model catalog download must use HTTPS",
+            "local_catalog.toml: model catalog download must use HTTPS",
         ),
         (
             "https://example.com/local_catalog.toml",
-            "model catalog download host example.com is not on the allowlist",
+            "local_catalog.toml: model catalog download host example.com is not on the allowlist",
         ),
         (
             "https://127.0.0.1/local_catalog.toml",
-            "model catalog download host 127.0.0.1 is not on the allowlist",
+            "local_catalog.toml: model catalog download host 127.0.0.1 is not on the allowlist",
         ),
         (
             "https://localhost/local_catalog.toml",
-            "model catalog download host localhost is not allowed",
+            "local_catalog.toml: model catalog download host localhost is not allowed",
         ),
     ] {
         assert_eq!(
@@ -135,5 +135,17 @@ fn a_new_update_channel_drops_the_old_channels_catalog() {
     crate::shell_update::set_channel(&dir, Channel::Stable).expect("stable");
     assert!(!cu::dir(&dir).join(cu::FILE).exists());
     assert!(cu::due(&dir, 9_001), "the new channel is looked at at once");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn at_start_a_catalog_from_another_channel_is_dropped() {
+    let dir = temp_dir("tidy");
+    crate::shell_update::set_channel(&dir, Channel::Stable).expect("stable");
+    std::fs::create_dir_all(cu::dir(&dir)).expect("catalog dir");
+    std::fs::write(cu::dir(&dir).join(cu::FILE), "version = 99").expect("saved");
+    std::fs::write(cu::dir(&dir).join("channel"), "beta").expect("its channel");
+    tidy(&dir);
+    assert!(!cu::dir(&dir).join(cu::FILE).exists());
     let _ = std::fs::remove_dir_all(&dir);
 }

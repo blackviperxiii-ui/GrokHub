@@ -7371,6 +7371,8 @@ pub fn run() {
             if !app_guard::take_profile(app.handle(), &config_dir) {
                 return Ok(());
             }
+            // Before anything reads the local model catalog.
+            catalog_refresh::tidy(&config_dir);
             let loaded = settings::load(&config_dir);
             #[cfg(desktop)]
             {

@@ -19,6 +19,8 @@ pub const MAX_BYTES: u64 = 1 << 20;
 
 /// How often the app looks for a newer catalog.
 pub const CHECK_EVERY_MS: u64 = 24 * 60 * 60 * 1000;
+/// The update channel (its receipt word) the saved catalog came from.
+const CHANNEL_FILE: &str = "channel";
 
 const STAMP: &str = "checked_ms";
 
@@ -35,9 +37,30 @@ pub fn check(pubkey: &str, text: &str, sums: &str, sig: &str) -> Result<u32, Str
     }
     rv::verify_asset(Some(pubkey), sums, Some(sig), FILE, text.as_bytes())
         .map_err(|r| r.reason())?;
-    crate::local_setup::parse_catalog(text)
-        .map(|(v, _)| v)
+    catalog_version(text)
         .ok_or_else(|| "the catalog doesn't load in this version of the app".into())
+}
+
+/// The version of a catalog that loads whole in this app. Parsing keeps its
+/// strings for the run, so a text already parsed isn't parsed again: the
+/// daily look reads the same saved and downloaded text day after day.
+fn catalog_version(text: &str) -> Option<u32> {
+    use std::hash::{Hash, Hasher};
+    static SEEN: std::sync::Mutex<Vec<(u64, Option<u32>)>> = std::sync::Mutex::new(Vec::new());
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    let key = h.finish();
+    if let Some(&(_, v)) = SEEN.lock().ok()?.iter().find(|(k, _)| *k == key) {
+        return v;
+    }
+    let v = crate::local_setup::parse_catalog(text).map(|(v, _)| v);
+    if let Ok(mut seen) = SEEN.lock() {
+        if seen.len() >= 8 {
+            seen.remove(0);
+        }
+        seen.push((key, v));
+    }
+    v
 }
 
 fn read(dir: &Path) -> Option<(String, String, String)> {
@@ -82,6 +105,7 @@ pub fn adopt(
     config_dir: &Path,
     pubkey: &str,
     current: u32,
+    channel: &str,
     text: &str,
     sums: &str,
     sig: &str,
@@ -93,7 +117,12 @@ pub fn adopt(
     let dir = dir(config_dir);
     save_all(
         &dir,
-        [(FILE, text), (rv::SUMS_NAME, sums), (rv::SIG_NAME, sig)],
+        [
+            (FILE, text),
+            (rv::SUMS_NAME, sums),
+            (rv::SIG_NAME, sig),
+            (CHANNEL_FILE, channel),
+        ],
     )
     .inspect_err(|_| {
         // A disk or file-lock failure, not a bad catalog: look again next time.
@@ -104,7 +133,7 @@ pub fn adopt(
 
 /// Write every file beside its final name, then rename them all, so a full
 /// disk stops the save before any saved file is replaced.
-fn save_all(dir: &Path, files: [(&str, &str); 3]) -> Result<(), String> {
+fn save_all(dir: &Path, files: [(&str, &str); 4]) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("catalog folder: {e}"))?;
     for (name, body) in files {
         std::fs::write(dir.join(format!("{name}.part")), body)
@@ -131,6 +160,7 @@ pub fn refresh(
     pubkey: &str,
     rel: &Release,
     config_dir: &Path,
+    channel: &str,
     get: Get,
 ) -> Result<Option<u32>, String> {
     // Releases made before the catalog shipped have none: nothing to do.
@@ -147,6 +177,7 @@ pub fn refresh(
         config_dir,
         pubkey,
         current_version(config_dir),
+        channel,
         &cat,
         &sums,
         &sig,
@@ -176,6 +207,40 @@ pub fn due(config_dir: &Path, now_ms: u64) -> bool {
 /// channel: a catalog from the old channel's releases mustn't stay.
 pub fn forget(config_dir: &Path) {
     let _ = std::fs::remove_dir_all(dir(config_dir));
+}
+
+/// The update channel the saved catalog came from.
+pub fn saved_channel(config_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(dir(config_dir).join(CHANNEL_FILE)).ok()?;
+    Some(text.trim().to_string())
+}
+
+/// Before the catalog is read: [`forget`] a saved one that came from
+/// another channel (however the channel changed), or that no longer applies
+/// (half saved, changed on disk, or not newer than the built-in one), so the
+/// next look runs at once. `true` when it forgot one.
+pub fn tidy(config_dir: &Path, channel: &str) -> bool {
+    let bundled = crate::local_setup::bundled_version();
+    let Some(pubkey) = rv::RELEASE_PUBKEY else {
+        // A build without the release key never uses a saved catalog.
+        let had = dir(config_dir).join(FILE).exists();
+        forget(config_dir);
+        return had;
+    };
+    tidy_with(config_dir, channel, pubkey, bundled)
+}
+
+/// [`tidy`] with the key and the built-in version passed in.
+pub fn tidy_with(config_dir: &Path, channel: &str, pubkey: &str, bundled: u32) -> bool {
+    if !dir(config_dir).join(FILE).exists() {
+        return false;
+    }
+    let stale = saved_channel(config_dir).as_deref() != Some(channel)
+        || saved_with(config_dir, pubkey, bundled).is_none();
+    if stale {
+        forget(config_dir);
+    }
+    stale
 }
 
 /// Note a look, found or not, so a failure also waits a day.
