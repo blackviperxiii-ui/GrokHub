@@ -246,26 +246,40 @@ fn no_turn_hears_nothing() {
 struct Streams {
     audio: Vec<Receiver<Vec<i16>>>,
     news: Vec<std::sync::mpsc::Sender<SttNews>>,
+    /// Each stream's "the server is ready" flag; ready from the start.
+    ready: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 fn streaming() -> (Live, std::sync::Arc<std::sync::Mutex<Streams>>) {
     let streams = std::sync::Arc::new(std::sync::Mutex::new(Streams {
         audio: Vec::new(),
         news: Vec::new(),
+        ready: Vec::new(),
     }));
     let held = streams.clone();
     let live = Live::new(Some(Box::new(move || {
         let (audio_tx, audio_rx) = std::sync::mpsc::channel();
         let (news_tx, news_rx) = std::sync::mpsc::channel();
         let mut s = held.lock().unwrap();
+        let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         s.audio.push(audio_rx);
         s.news.push(news_tx);
+        s.ready.push(ready.clone());
         Some(SttLink {
             audio: audio_tx,
             news: news_rx,
+            ready,
         })
     })));
     (live, streams)
+}
+
+/// The reply started or stopped, as the page's command does it: the stream
+/// opens with the session let go.
+fn playing(live: &mut Live, now: bool) {
+    let cell = Mutex::new(Some(std::mem::replace(live, Live::new(None))));
+    then_open(&cell, |live| live.playing_changed(now)).expect("voice mode on");
+    *live = cell.into_inner().unwrap().expect("still on");
 }
 
 /// Every block the stream got so far.
@@ -277,21 +291,26 @@ fn streamed(streams: &std::sync::Mutex<Streams>, i: usize) -> Vec<Vec<i16>> {
 #[test]
 fn room_sound_stays_here_until_someone_starts_then_the_lead_in_goes_first() {
     let (mut live, streams) = streaming();
-    let _ = send(&mut live, &hush(1500));
+    let quiet = hush(1500);
+    let _ = send(&mut live, &quiet);
     assert_eq!(
         streamed(&streams, 0),
         Vec::<Vec<i16>>::new(),
         "nothing before a start"
     );
+    // Every block the mic got, in order.
+    let mut sent: Vec<Vec<i16>> = quiet.chunks(1600).map(<[i16]>::to_vec).collect();
     let talk = tone(1500);
     let mut first = Vec::new();
     for block in talk.chunks(1600) {
+        sent.push(block.to_vec());
         let heard = live.push(&bytes(block)).expect("block");
         if heard.contains(&LiveEvent::Started) {
             first = streamed(&streams, 0);
-            // The last 1.1 s, this block included: 11 blocks of 100 ms.
-            assert_eq!(first.len(), 11);
-            assert_eq!(first.last().unwrap().as_slice(), block);
+            // The last 1.1 s, this block included: 11 blocks of 100 ms, the
+            // room sound before the start first.
+            assert_eq!(first, sent[sent.len() - 11..].to_vec());
+            assert_ne!(first[0], first[1], "each block is its own");
             break;
         }
     }
@@ -400,6 +419,24 @@ fn a_silent_stream_falls_back_after_the_wait() {
 }
 
 #[test]
+fn a_turn_over_before_its_stream_got_ready_uploads_at_once() {
+    let (mut live, streams) = streaming();
+    // Still connecting: the server hasn't said it is ready.
+    streams.lock().unwrap().ready[0].store(false, std::sync::atomic::Ordering::SeqCst);
+    let mut audio = tone(1200);
+    audio.extend(hush(2000));
+    let _ = send(&mut live, &audio);
+    let _keep = streams.lock().unwrap().news[0].clone();
+    let started = Instant::now();
+    let heard = hear(live.take_turn(), |_| Ok("turn on the lights".into()));
+    assert_eq!(heard, Ok("turn on the lights".to_string()));
+    assert!(
+        started.elapsed() < crate::stt_stream::HEAR_WAIT,
+        "no wait for a stream that has no words"
+    );
+}
+
+#[test]
 fn noise_alone_listens_again() {
     let (mut live, streams) = streaming();
     let mut audio = tone(1200);
@@ -477,15 +514,15 @@ fn the_turn_after_a_spoken_reply_gets_a_stream() {
     let (mut live, streams) = streaming();
     live.listen(true);
     assert_eq!(streams.lock().unwrap().audio.len(), 1);
-    live.set_playing(false);
+    playing(&mut live, false);
     assert_eq!(streams.lock().unwrap().audio.len(), 2);
     // Already open: a second stop opens no other.
-    live.set_playing(false);
+    playing(&mut live, false);
     assert_eq!(streams.lock().unwrap().audio.len(), 2);
     assert!(send(&mut live, &tone(1000)).contains(&LiveEvent::Started));
     assert!(!streamed(&streams, 1).is_empty(), "their talk goes to it");
     // A reply playing again drops it.
-    live.set_playing(true);
+    playing(&mut live, true);
     assert_eq!(
         streams.lock().unwrap().audio[1].try_recv(),
         Err(TryRecvError::Disconnected)
@@ -500,7 +537,7 @@ fn talking_over_a_reply_keeps_the_upload_for_that_turn() {
     let _ = send(&mut live, &hush(700));
     assert_eq!(send(&mut live, &tone(1500)), vec![LiveEvent::Started]);
     assert!(live.mic.talking(), "mid-turn");
-    live.set_playing(false);
+    playing(&mut live, false);
     assert_eq!(streams.lock().unwrap().audio.len(), 1, "no stream mid-turn");
 }
 
@@ -528,7 +565,7 @@ fn a_start_just_before_a_reply_ends_still_reaches_the_stream() {
     let _ = send(&mut live, &hush(700));
     let lead = tone(300);
     assert_eq!(send(&mut live, &lead), vec![]);
-    live.set_playing(false);
+    playing(&mut live, false);
     assert_eq!(
         streams.lock().unwrap().audio.len(),
         2,
@@ -567,4 +604,35 @@ fn each_listen_reads_the_key_as_it_is_then() {
     live.listen(false);
     assert!(live.stt.is_none(), "a cleared key opens nothing");
     assert_eq!(TARGETS.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_stream_opened_without_the_lock_lands_only_on_its_own_listen() {
+    let (mut live, streams) = streaming();
+    assert!(live.restart(false), "a listen wants a stream");
+    let (mut open, id) = live.lend_opener().expect("the opener");
+    // The page listened again while the stream was opening.
+    assert!(live.restart(false));
+    let link = open();
+    live.take_back(open, id, link);
+    assert!(live.stt.is_none(), "an old listen's stream goes");
+    // The opener came back, and this listen opens its own.
+    let (mut open, id) = live.lend_opener().expect("the opener came back");
+    let link = open();
+    live.take_back(open, id, link);
+    assert!(live.stt.is_some());
+    assert_eq!(streams.lock().unwrap().audio.len(), 3);
+}
+
+#[test]
+fn a_stream_that_opens_after_a_start_is_not_used() {
+    let (mut live, _streams) = streaming();
+    assert!(live.restart(false));
+    let (mut open, id) = live.lend_opener().expect("the opener");
+    // They started talking while the key was being read.
+    assert!(send(&mut live, &tone(1000)).contains(&LiveEvent::Started));
+    let link = open();
+    live.take_back(open, id, link);
+    assert!(live.stt.is_none(), "it would have missed the start");
+    assert!(live.open.is_some());
 }

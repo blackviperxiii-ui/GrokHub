@@ -336,6 +336,7 @@ fn a_turn_over_before_the_server_is_ready_sends_nothing_and_ends() {
     let dir = temp_dir("not-ready");
     let link = open_at(&dir, &url, KEY, &G, online).expect("a stream");
     link.audio.send(vec![1]).expect("audio");
+    assert!(!link.is_ready(), "the server never said so");
     drop(link.audio);
     let from = Instant::now();
     assert!(matches!(
@@ -344,4 +345,37 @@ fn a_turn_over_before_the_server_is_ready_sends_nothing_and_ends() {
     ));
     assert!(from.elapsed() < FINAL_WAIT, "ends at once");
     assert_eq!(seen.join().expect("fake").got, Vec::<Got>::new());
+}
+
+#[test]
+fn a_quiet_wait_longer_than_a_turn_still_gets_the_turn_and_its_words() {
+    static G: Gate = Gate::new();
+    let (url, seen) = fake(|ws, got| {
+        say(ws, r#"{"type":"transcript.created"}"#);
+        assert!(matches!(next(ws, got), Some(Got::Bin(_))));
+        say(
+            ws,
+            r#"{"type":"transcript.partial","text":"call mom","is_final":false,"speech_final":false}"#,
+        );
+        assert!(matches!(next(ws, got), Some(Got::Text(_))));
+        say(ws, r#"{"type":"transcript.done","text":"Call mom."}"#);
+    });
+    let dir = temp_dir("quiet-first");
+    let link = open_at(&dir, &url, KEY, &G, online).expect("a stream");
+    // Nobody talks for longer than a turn may stream.
+    let quiet = MAX_STREAM + Duration::from_millis(500);
+    assert!(quiet < MAX_IDLE);
+    std::thread::sleep(quiet);
+    assert!(link.is_ready(), "the server said it is ready");
+    link.audio.send(vec![7]).expect("audio");
+    assert_eq!(news(&link.news), SttNews::Caption("call mom".into()));
+    drop(link.audio);
+    assert_eq!(news(&link.news), SttNews::Ended("Call mom.".into()));
+    assert_eq!(
+        seen.join().expect("fake").got,
+        vec![
+            Got::Bin(vec![7, 0]),
+            Got::Text(r#"{"type":"finalize"}"#.into()),
+        ]
+    );
 }
