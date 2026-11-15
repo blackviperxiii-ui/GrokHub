@@ -2262,6 +2262,7 @@ fn chip_row(
             now_ms: local.now_ms,
             extra: &extra,
             lane: settings.behavior.lane,
+            remote,
         },
     )
 }
@@ -2300,6 +2301,19 @@ async fn chip_outcome(
     picked: bool,
     clock: automations::Clock,
 ) -> Result<bool, String> {
+    chip_outcome_from(app, surface, id, picked, clock, false).await
+}
+
+/// [`chip_outcome`] for the desktop or, `remote`, a paired browser: each
+/// acts on the row it was shown.
+async fn chip_outcome_from(
+    app: AppHandle,
+    surface: String,
+    id: String,
+    picked: bool,
+    clock: automations::Clock,
+    remote: bool,
+) -> Result<bool, String> {
     off_main(move || {
         let state = app.state::<ShellState>();
         let local = now_clock(clock);
@@ -2310,6 +2324,7 @@ async fn chip_outcome(
             &id,
             picked,
             (local.hour as u8, local.weekday, local.now_ms),
+            remote,
         )
         .is_some()
     })
@@ -7079,12 +7094,13 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 true,
             ))
         }
-        "chip_outcome" => out(block_on(chip_outcome(
+        "chip_outcome" => out(block_on(chip_outcome_from(
             app.clone(),
             arg(args, "surface")?,
             arg(args, "id")?,
             arg(args, "picked")?,
             arg(args, "clock")?,
+            true,
         ))?),
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
@@ -8648,6 +8664,19 @@ mod web_command_tests {
         assert!(
             desk.contains("            clock,\n            false,\n"),
             "{desk}"
+        );
+        // A tap or hide acts on the row that client was shown.
+        let web_tap = arm(&body, "chip_outcome");
+        assert!(
+            web_tap.contains("chip_outcome_from(")
+                && web_tap.contains("arg(args, \"clock\")?,\n            true,\n"),
+            "{web_tap}"
+        );
+        let start = src.find("async fn chip_outcome(").expect("chip_outcome");
+        let desk_tap = &src[start..start + src[start..].find("\n}\n").expect("end")];
+        assert!(
+            desk_tap.contains("chip_outcome_from(app, surface, id, picked, clock, false)"),
+            "{desk_tap}"
         );
     }
 

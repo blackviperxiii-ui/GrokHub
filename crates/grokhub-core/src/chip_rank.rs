@@ -31,7 +31,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::chip_store::{chip_log_key, ChipOutcome};
-use crate::chips::{chip_intent, chip_memory_key, ChipKind, ChipMemory, QuickChip};
+use crate::chips::{chip_memory_key, quick_chip_intent, ChipKind, ChipMemory, QuickChip};
 use crate::learn::{Beliefs, Standing, Subject};
 
 /// Chips a row shows at most, on every surface.
@@ -312,10 +312,7 @@ fn select(
     let lo = scores.iter().copied().fold(f32::MAX, f32::min);
     let hi = scores.iter().copied().fold(f32::MIN, f32::max);
     let norm = |s: f32| if hi > lo { (s - lo) / (hi - lo) } else { 1.0 };
-    let intents: Vec<Option<&'static str>> = pool
-        .iter()
-        .map(|c| chip_intent(&c.label, &c.value))
-        .collect();
+    let intents: Vec<Option<&'static str>> = pool.iter().map(quick_chip_intent).collect();
     let mut picked: Vec<usize> = Vec::new();
     while picked.len() < max {
         let mut best: Option<(usize, f32)> = None;

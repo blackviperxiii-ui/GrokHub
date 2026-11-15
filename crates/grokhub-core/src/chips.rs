@@ -321,6 +321,16 @@ const INTENT_CATALOG: &[(&str, &[&str])] = &[
     ("explain", &["explain", "what does", "how does"]),
 ];
 
+/// The catalog intent of a row chip, or none. A live-state chip's label
+/// names a game, a release or an app ("Note for Crash Bandicoot"), so a word
+/// in that name is no intent.
+pub fn quick_chip_intent(chip: &QuickChip) -> Option<&'static str> {
+    if live_state_id(&chip.id) {
+        return None;
+    }
+    chip_intent(&chip.label, &chip.value)
+}
+
 /// The catalog intent of a chip or typed ask, or none.
 pub fn chip_intent(label: &str, value: &str) -> Option<&'static str> {
     let hay = format!(" {} {} ", label, value).to_ascii_lowercase();
@@ -370,8 +380,7 @@ pub fn remember_intent(
 /// Lift for a chip whose intent you use at this hour (or the next) and on
 /// this weekday. A habit at 9pm does nothing at 2pm.
 fn intent_boost(memory: &ChipMemory, chip: &QuickChip, hour: u8, weekday: u8) -> f32 {
-    let Some(hit) = chip_intent(&chip.label, &chip.value).and_then(|k| memory.intents.get(k))
-    else {
+    let Some(hit) = quick_chip_intent(chip).and_then(|k| memory.intents.get(k)) else {
         return 0.0;
     };
     let at = |hours: &[u32], i: usize| hours.get(i).copied().unwrap_or(0);
@@ -871,7 +880,7 @@ fn guide_dismisses(memory: &ChipMemory) -> u32 {
 fn chip_family(id: &str, value: &str, label: &str) -> &'static str {
     // A live-state chip's text names a game, a release or an app, so a word
     // in that name ("Hollow Knight") says nothing about its kind.
-    if LIVE_STATE_CHIP_IDS.iter().any(|p| id.starts_with(p)) {
+    if live_state_id(id) {
         return "";
     }
     let blob = format!("{id} {value} {label}").to_ascii_lowercase();
@@ -1750,6 +1759,12 @@ const LIVE_STATE_CHIP_IDS: &[&str] = &[
     "focus:",
     "sig-attach",
 ];
+
+/// True for a live-state chip's id, or for its memory key (`id:<id>`).
+fn live_state_id(id: &str) -> bool {
+    let id = id.strip_prefix("id:").unwrap_or(id);
+    LIVE_STATE_CHIP_IDS.iter().any(|p| id.starts_with(p))
+}
 
 /// Chips offered unasked: the PC's and the day's signals, other threads and
 /// the app's feature offers. They wait while the person is gaming.
@@ -4372,6 +4387,53 @@ mod tests {
                 );
             }
         }
+        // Nor does hiding a chip that names the game put the night family
+        // to sleep: its stored key still holds the name.
+        let mut mem = ChipMemory::default();
+        let focus = QuickChip {
+            id: "focus:gaming:hollow knight".into(),
+            label: "Help with Hollow Knight".into(),
+            value: "Help with Hollow Knight".into(),
+            kind: ChipKind::Chat,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        };
+        remember_chip_dismiss(&mut mem, &focus, 5, 22);
+        assert_eq!(mem.hits.len(), 1);
+        assert_eq!(mem.hits[0].key, "id:focus:gaming:hollow knight");
+        assert!(!family_quiet_this_hour(
+            &mem,
+            "empty-night",
+            "Set a night job",
+            "Set a night job",
+            22
+        ));
+    }
+
+    #[test]
+    fn a_game_name_on_a_note_chip_is_no_intent() {
+        let crash = crate::steam::SteamGame {
+            app_id: 1,
+            name: "Crash Bandicoot".into(),
+            last_played: 0,
+            playtime_min: 0,
+        };
+        for ended in [false, true] {
+            let note = crate::game_companion::chips(&crash, ended).pop().unwrap();
+            assert_eq!(chip_intent(&note.label, &note.value), Some("code.fix"));
+            assert_eq!(quick_chip_intent(&note), None, "{}", note.label);
+        }
+        let fix = QuickChip {
+            id: "seed-fix".into(),
+            label: "Why is it failing".into(),
+            value: "Why is it failing".into(),
+            kind: ChipKind::Chat,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        };
+        assert_eq!(quick_chip_intent(&fix), Some("code.fix"));
     }
 
     #[test]

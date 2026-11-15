@@ -238,6 +238,8 @@ pub struct RowAsk<'a> {
     pub now_ms: u64,
     /// Feature chips (focus help) prepended into the pool.
     pub extra: &'a [QuickChip],
+    /// A paired browser asked, not the desktop window.
+    pub remote: bool,
     /// Settings → Behavior: the composer's near ties lean this way.
     pub lane: Lane,
 }
@@ -248,6 +250,13 @@ pub struct RowAsk<'a> {
 pub struct Rows {
     ranked: Vec<grokhub_core::chip_rank::RankedChip>,
     shown: HashMap<String, Vec<QuickChip>>,
+}
+
+/// The desktop and a paired browser each keep their own last row per
+/// surface: their rows differ (a browser gets no game chips), so one
+/// asking never drops the chip the other is about to tap.
+fn shown_key(surface: &str, remote: bool) -> String {
+    format!("{}:{surface}", if remote { "web" } else { "app" })
 }
 
 /// The ranked row for one surface, logged as shown. Chip memory is read
@@ -286,7 +295,7 @@ pub fn row(dir: &Path, rows: &Mutex<Rows>, ask: RowAsk<'_>) -> Vec<Chip> {
     grokhub_core::log_chips_shown(&mut mem, ask.surface, &shown, ask.now_ms);
     held.ranked = std::mem::take(&mut mem.ranker.last);
     let out = wired(&shown, ask.mode);
-    held.shown.insert(ask.surface.to_string(), shown);
+    held.shown.insert(shown_key(ask.surface, ask.remote), shown);
     // Saved under the lock: a tap and a row never write over each other.
     let _ = grokhub_core::save_chip_memory(dir, &mem);
     drop(held);
@@ -408,12 +417,14 @@ pub fn outcome(
     id: &str,
     picked: bool,
     clock: (u8, u8, u64),
+    remote: bool,
 ) -> Option<QuickChip> {
     let (hour, weekday, now) = clock;
+    let key = shown_key(surface, remote);
     let mut held = rows.lock().unwrap_or_else(|e| e.into_inner());
     let chip = held
         .shown
-        .get(surface)
+        .get(&key)
         .and_then(|row| row.iter().find(|c| c.id == id))
         .cloned()?;
     let mut mem = grokhub_core::load_chip_memory(dir);
@@ -421,12 +432,15 @@ pub fn outcome(
     grokhub_core::log_chip_outcome(&mut mem, surface, &chip, picked, now);
     if picked {
         grokhub_core::remember_chip_click(&mut mem, &chip, None, now, hour);
-        grokhub_core::remember_intent(&mut mem, &chip.label, &chip.value, now, hour, weekday);
+        // A live-state chip's label names a game or an app, not a habit.
+        if grokhub_core::quick_chip_intent(&chip).is_some() {
+            grokhub_core::remember_intent(&mut mem, &chip.label, &chip.value, now, hour, weekday);
+        }
     } else {
         grokhub_core::remember_chip_dismiss(&mut mem, &chip, now, hour);
     }
     // The row was acted on: the next showing is a new one.
-    held.shown.remove(surface);
+    held.shown.remove(&key);
     // Saved under the lock: a tap and a row never write over each other.
     let _ = grokhub_core::save_chip_memory(dir, &mem);
     drop(held);
@@ -523,6 +537,7 @@ mod tests {
                     now_ms: 1_000,
                     extra: &extra,
                     lane: Lane::default(),
+                    remote: false,
                 },
             );
             let _ = std::fs::remove_dir_all(&dir);
@@ -591,6 +606,7 @@ mod tests {
                     now_ms,
                     extra: &extra,
                     lane: Lane::default(),
+                    remote: false,
                 },
             )
             .into_iter()
@@ -625,6 +641,81 @@ mod tests {
                 "{surface} {shown:?}"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_browser_asking_for_home_keeps_the_desktops_row_for_its_tap() {
+        let session = crate::game_companion::Session {
+            playing: None,
+            ended: Some((
+                grokhub_core::steam::SteamGame {
+                    app_id: 7,
+                    name: "Hades".into(),
+                    last_played: 0,
+                    playtime_min: 0,
+                },
+                1_000,
+            )),
+        };
+        let dir = temp_dir("two-clients");
+        let rows = Mutex::new(Rows::default());
+        let ask_row = |remote: bool| {
+            let extra = crate::game_companion::row_extra(&session, HOME, remote, 2_000);
+            row(
+                &dir,
+                &rows,
+                RowAsk {
+                    surface: HOME,
+                    chat: &[],
+                    draft: "",
+                    follow_ups: &[],
+                    mode: "chat",
+                    signed_in: true,
+                    first_run: false,
+                    hour: 10,
+                    weekday: 2,
+                    quiet_hours: false,
+                    now_ms: 2_000,
+                    extra: &extra,
+                    lane: Lane::default(),
+                    remote,
+                },
+            )
+            .into_iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>()
+        };
+        assert!(ask_row(false).contains(&"game:note:after:7".to_string()));
+        assert!(!ask_row(true).contains(&"game:note:after:7".to_string()));
+        // The desktop's hide still lands, and the browser can't act on a
+        // chip only the desktop was shown.
+        assert_eq!(
+            outcome(
+                &dir,
+                &rows,
+                HOME,
+                "game:note:after:7",
+                false,
+                (10, 2, 3_000),
+                true
+            )
+            .map(|c| c.id),
+            None
+        );
+        assert_eq!(
+            outcome(
+                &dir,
+                &rows,
+                HOME,
+                "game:note:after:7",
+                false,
+                (10, 2, 3_000),
+                false
+            )
+            .map(|c| c.id),
+            Some("game:note:after:7".to_string())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -765,6 +856,7 @@ mod tests {
             now_ms: 1_000,
             extra: &[],
             lane: Lane::Coding,
+            remote: false,
         };
         let shown = row(&dir, &rows, ask());
         assert!(
@@ -776,10 +868,27 @@ mod tests {
         assert_eq!(mem.events[0].surface, COMPOSER);
         // A chip the page never got is refused.
         assert_eq!(
-            outcome(&dir, &rows, COMPOSER, "made-up", true, (10, 2, 2_000)),
+            outcome(
+                &dir,
+                &rows,
+                COMPOSER,
+                "made-up",
+                true,
+                (10, 2, 2_000),
+                false
+            ),
             None
         );
-        let picked = outcome(&dir, &rows, COMPOSER, "reply-1", true, (10, 2, 2_000)).unwrap();
+        let picked = outcome(
+            &dir,
+            &rows,
+            COMPOSER,
+            "reply-1",
+            true,
+            (10, 2, 2_000),
+            false,
+        )
+        .unwrap();
         assert_eq!(picked.id, "reply-1");
         let mem = grokhub_core::load_chip_memory(&dir);
         assert!(matches!(
@@ -793,7 +902,15 @@ mod tests {
         assert_eq!(mem.events[0].next_at, Some(2_500));
         // The row was acted on, so the same id is not taken twice.
         assert_eq!(
-            outcome(&dir, &rows, COMPOSER, "reply-1", true, (10, 2, 3_000)),
+            outcome(
+                &dir,
+                &rows,
+                COMPOSER,
+                "reply-1",
+                true,
+                (10, 2, 3_000),
+                false
+            ),
             None
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -982,6 +1099,7 @@ mod tests {
                     now_ms: 1_000,
                     extra: if surface == HOME { &extra } else { &[] },
                     lane,
+                    remote: false,
                 },
             );
             let _ = std::fs::remove_dir_all(&dir);
