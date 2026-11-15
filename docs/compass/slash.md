@@ -1,25 +1,24 @@
 # Compass: slash commands
 
 ## Owns
-- Composer `/commands` (and `$ <cmd>`, which parses to `Slash::Sh`) that the cabin runs locally; they never reach the model. Parsing lives in grokhub-core, dispatch in the cabin, and native-thread parity with Grok CLI builtins in grokhub-agent.
+- Composer `/commands` (and `$ <cmd>`, which parses to `Slash::Sh`) that the desktop app runs locally; they never reach the model. Parsing lives in grokhub-core and dispatch in the desktop app (src-tauri/src/slash.rs).
 ## Quick commands
-- `cargo test -p grokhub-core slash` (parser, picker, help)
-- `cargo test -p grokhub-agent slash_parity`
-- `cargo test -p grokhub-app slash` (cabin dispatch)
+- `cargo test -p grokhub-core slash` (parser, picker)
+- `cargo test -p grokhub-shell slash`, run in src-tauri/ (desktop dispatch)
 ## Key files
-- `crates/grokhub-core/src/slash/mod.rs`: `Slash`, `parse_slash`, `slash_kind`, `SLASH_COMMANDS` (picker rows), `slash_help`, `unknown_cabin_slash`, `is_cabin_slash_turn`.
+- `crates/grokhub-core/src/slash/mod.rs`: `Slash`, `parse_slash`, `slash_kind`, `SLASH_COMMANDS` (picker rows), `unknown_cabin_slash`, `is_cabin_slash_turn`.
 - `crates/grokhub-core/src/slash/registry.rs` and `crates/grokhub-core/src/slash/cmds/`: every command, declared with `register_slash!` and listed in `SLASH_REGISTRY`; `parse_slash` (`crates/grokhub-core/src/slash/parser.rs`) splits the line and looks the command word up there. `crates/grokhub-core/src/slash/effect.rs`: `slash_effect` (Local, AgentTurn, Action) and one sample line per variant.
 - the retired cabin's slash.rs: `run_slash` (one match arm per variant), dispatch_native_slash, apply_unparsed_native_slash.
 - the retired cabin's chat_kick.rs: the send path that tries `parse_slash`, then `unknown_cabin_slash`, then native parity, then the model.
-- `crates/grokhub-agent/src/slash_parity.rs`: every Grok CLI builtin but `model` and `effort`, and what a native thread does with it.
+- `src-tauri/src/slash.rs`: the desktop composer's local slash commands (see See also).
 ## Change recipe
-- Add a `Slash` variant, `slash_kind`, `SLASH_COMMANDS` row, and `slash_help` line in `crates/grokhub-core/src/slash/mod.rs`, and a `register_slash!` entry in a `crates/grokhub-core/src/slash/cmds/` file listed in `SLASH_REGISTRY` (e.g. `/brief` → `Slash::Brief` in `cmds/views.rs`).
+- Add a `Slash` variant, `slash_kind`, and `SLASH_COMMANDS` row in `crates/grokhub-core/src/slash/mod.rs`, and a `register_slash!` entry in a `crates/grokhub-core/src/slash/cmds/` file listed in `SLASH_REGISTRY` (e.g. `/brief` → `Slash::Brief` in `cmds/views.rs`).
 - Pick its `slash_effect` and add a `SLASH_SAMPLES` line. An `Action` needs a gate row in the retired cabin's slash_gate_tests.rs naming its confirm, consent or permission path.
-- Handle it in `run_slash` (the retired cabin's slash.rs); map habits in `home_slash_cmd` (`chips.rs`) only when needed.
+- Handle it in the desktop app's src-tauri/src/slash.rs; map habits in `home_slash_cmd` (`chips.rs`) only when needed.
 ## What breaks it
 - Renaming a `slash_kind` string: it is the input to `home_slash_cmd`, so home habits stop counting.
 - Claiming a skill verb: unknown slashes and skill slashes such as `/create-skill` must still go to the native engine as a turn (`unknown_cabin_slash`). Only retired verbs are rejected locally: `/approve`, `/project binding`, and the routing verbs `/model`, `/m`, `/mode`, `/models`, `/effort` and `/why`, because the router alone picks the model and effort.
-- Changing `/help` text: `is_cabin_slash_turn` keeps that dump, and the model catalogs older builds saved, out of the next model kick by matching their first lines (`/help — this list`, model ids).
+- Changing `is_cabin_slash_turn`: it keeps the `/help` dumps and model catalogs that older builds saved out of the next model kick by matching their first lines (`/help — this list`, model ids).
 ## What depends on it
 - The composer picker (`filter_slash_hits` merges cabin rows with Grok extras from `grok_command_hits`), `/recall` and AMR, and `/workflow` forwarding.
 ## Non-obvious

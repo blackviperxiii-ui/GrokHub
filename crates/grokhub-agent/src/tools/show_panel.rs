@@ -46,7 +46,7 @@ pub fn schema() -> Value {
     json!({
         "type": "function",
         "name": SHOW_PANEL,
-        "description": "Emit a validated generative UI panel specification for the cabin to paint later. \
+        "description": "Emit a validated generative UI panel specification for the app to paint later. \
             Plain text only in panel fields; buttons name action ids (intents), never URLs or shell. \
             This tool does not render, write files, or run actions.",
         "parameters": {

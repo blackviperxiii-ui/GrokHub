@@ -65,7 +65,6 @@ mod session_tools;
 pub mod ship_tree;
 pub mod skill_write;
 mod skills;
-mod slash_parity;
 mod sse;
 mod stall;
 mod subagent;
@@ -171,7 +170,6 @@ pub use skills::{
     set_skill_off_in, skill_is_off_in, skill_name_key, skills_off_in, Skill, SkillSource,
     BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES,
 };
-pub use slash_parity::{slash_parity, unparsed_native_slash, SlashParity, UnparsedSlash};
 pub use sse::SseParser;
 pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
 pub use tasks::{

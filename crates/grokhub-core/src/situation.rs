@@ -382,7 +382,7 @@ fn move_for(kind: MoveKind) -> LearnedMove {
                 "Make this kind of still without waiting to be asked.",
             ),
             MoveKind::Preference => (
-                "They told the cabin how to work with them next time.",
+                "They told the app how to work with them next time.",
                 "Keep this way",
                 "Keep working this way on the next turn without asking again.",
                 "A way of working to keep",

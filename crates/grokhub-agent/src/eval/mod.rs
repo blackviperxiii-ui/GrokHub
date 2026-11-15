@@ -477,7 +477,7 @@ reply and runs once when an intention is still open.\n\n",
 /// Sentence that names the credential files this harness does not open.
 pub fn credential_boundary() -> String {
     format!(
-        "The key is read only from GROKHUB_EVAL_API_KEY. This harness does not read {}, {}, {}, or a keychain, and it does not read the cabin's stored credentials.",
+        "The key is read only from GROKHUB_EVAL_API_KEY. This harness does not read {}, {}, {}, or a keychain, and it does not read the app's stored credentials.",
         concat!("~/.grok/", "auth", ".json"),
         concat!("config", ".toml"),
         concat!("secrets", ".json"),
