@@ -8,10 +8,9 @@ import {
   type UpdateChannel,
   type UpdateView,
 } from "./api";
-import { PRODUCT_NAME } from "./brand";
 
 export const CHANNEL_NOTE =
-  `Beta gets every new build first. The channel is shared with the ${PRODUCT_NAME} cabin, so both follow the same builds.`;
+  "Beta gets every new build first. Stable gets only full releases.";
 export const VERIFY_NOTE =
   "Updates come from GitHub and install only after their signature checks out.";
 export const UP_TO_DATE = "You're up to date.";

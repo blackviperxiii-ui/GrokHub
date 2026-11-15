@@ -489,7 +489,7 @@ export function History({
 
   const tree = projectTree(nodes);
   const sourceLabel = (r: ReadOnlyRow) =>
-    r.source === "cli" ? "Grok CLI" : "Cabin";
+    r.source === "cli" ? "Grok CLI" : "Older chat";
 
   return (
     <section className="history" aria-label="History">
@@ -580,7 +580,7 @@ export function History({
       )}
       {readOnly.length > 0 && (
         <section className="history-group" aria-label="Read only chats">
-          <h3>Grok CLI and cabin chats</h3>
+          <h3>Grok CLI and older chats</h3>
           <p className="empty">
             Read only: they open here to look at, and are never changed.
           </p>

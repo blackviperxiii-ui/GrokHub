@@ -21,7 +21,7 @@ export function priorityChip(p: string): string | null {
   return v === "normal" ? null : (PRIORITY_CHOICES.find(([k]) => k === v)?.[1] ?? null);
 }
 
-export const QUEUED_NOTE = "Queued. The cabin starts it once nothing else is running and no game is up.";
+export const QUEUED_NOTE = "Queued. It starts in a new chat once nothing else is running and no game is up.";
 export const STEPS_HELP = "One step a line. [x] done, [>] doing, [-] skipped. The agent works from your version.";
 
 type OnAct = (what: BoardAct, done?: string) => Promise<boolean>;

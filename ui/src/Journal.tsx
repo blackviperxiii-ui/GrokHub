@@ -87,7 +87,7 @@ export function Journal({ onMission }: { onMission: (mission: JournalMission) =>
           A decision you're weighing
           <input
             value={question}
-            placeholder="Should we ship the shell before the cabin?"
+            placeholder="Should we ship the beta this week?"
             onChange={(e) => setQuestion(e.target.value)}
           />
         </label>

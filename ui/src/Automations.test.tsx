@@ -292,7 +292,7 @@ describe("Automations edit and schedule", () => {
     const weekly = await screen.findByRole("listitem", { name: "weekly review" });
     expect(within(weekly).queryByRole("button", { name: "Edit" })).toBeNull();
     expect(screen.queryByText("Runs in the cabin")).toBeNull();
-    expect(screen.getByText(/While the Loadout cabin is open, the cabin runs them\./)).toBeInTheDocument();
+    expect(screen.getByText(/Loadout runs these on schedule while it is open or in the tray\./)).toBeInTheDocument();
   });
 
   it("a scheduled run shows its reply and reloads the row while the tab shows", async () => {

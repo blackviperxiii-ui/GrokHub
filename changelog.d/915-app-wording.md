@@ -1,0 +1,1 @@
+- Wording: the desktop app no longer says "cabin" or "Cabin" for itself. Greyed / commands now read "Not in this app", the skills group is "App skills", and older chats read "Grok CLI and older chats". Notes about automations now say that they run while the app is open or in the tray, and that quiet hours and the daily budget don't hold back a scheduled run yet.

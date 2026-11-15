@@ -100,7 +100,7 @@ export function Connectors({ remote = false }: { remote?: boolean }) {
         )}
       </div>
       <p className="note">
-        These are the MCP servers in mcp.json, the same ones the cabin and chat use.
+        These are the MCP servers in mcp.json. Chat uses the ones that are on.
         {remote ? ` ${REMOTE_NOTE}` : ""}
       </p>
       {adding && !remote && (

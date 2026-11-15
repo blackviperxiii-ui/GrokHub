@@ -436,9 +436,6 @@ export function Settings({
   }
 }
 
-export const ABOUT_NOTE =
-  `This is the cross-platform app. The ${PRODUCT_NAME} cabin keeps working next to it until this app has everything the cabin has.`;
-
 function About({ version }: { version: string }) {
   return (
     <div className="about">
@@ -448,7 +445,6 @@ function About({ version }: { version: string }) {
       </h2>
       <p className="note">{TAGLINE}</p>
       <p>Version {version}</p>
-      <p className="note">{ABOUT_NOTE}</p>
       {inShell() && <Updates />}
     </div>
   );

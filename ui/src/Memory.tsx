@@ -669,7 +669,7 @@ export function Memory() {
         )}
         {notes.amr && (
           <p className="note">
-            The cabin keeps memory in its AMR store, so chat recall does not read these files.
+            Memory is kept in the AMR store, so chat recall does not read these files.
           </p>
         )}
         <details open>

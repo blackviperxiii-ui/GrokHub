@@ -65,7 +65,7 @@ pub fn last_text(last_ms: Option<u64>, now_ms: u64) -> String {
 
 fn runner() -> String {
     format!(
-        "The {} cabin runs automations on their schedule while it's open. Here a job runs when you choose Run now.",
+        "{} runs automations on their schedule while it is open or in the tray.",
         grokhub_core::brand::product_name()
     )
 }
@@ -194,9 +194,13 @@ mod tests {
                 ("Old report", "Paused", "Last ran 30m ago"),
             ]
         );
-        assert!(got
-            .runner
-            .ends_with("Here a job runs when you choose Run now."));
+        assert_eq!(
+            got.runner,
+            format!(
+                "{} runs automations on their schedule while it is open or in the tray.",
+                grokhub_core::brand::product_name()
+            )
+        );
     }
 
     #[test]

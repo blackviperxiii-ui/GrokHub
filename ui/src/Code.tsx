@@ -92,7 +92,9 @@ export const CODE_STOPPED = "Tests stopped.";
 
 /** The label on a built-in row that a same-name skill currently shadows. */
 export function overrideLabel(over: CodeOverriddenBy): string {
-  return `overridden by ${over.scope} skill ${over.name}`;
+  // The app's own skills folder keeps its old source id.
+  const scope = over.scope === "cabin" ? "app" : over.scope;
+  return `overridden by ${scope} skill ${over.name}`;
 }
 
 interface Props {

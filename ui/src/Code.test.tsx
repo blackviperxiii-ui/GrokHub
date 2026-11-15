@@ -486,6 +486,11 @@ describe("Code tab", () => {
     expect(screen.getByText("overridden by project skill follow-through")).toBeInTheDocument();
   });
 
+  it("names the app's own skills folder as app, not by its old source id", () => {
+    expect(overrideLabel({ scope: "cabin", name: "deploy" })).toBe("overridden by app skill deploy");
+    expect(overrideLabel({ scope: "user", name: "deploy" })).toBe("overridden by user skill deploy");
+  });
+
   it("shows the exact command on the first-run confirm card", async () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     render(<Code shown onOpenSettings={() => {}} />);
