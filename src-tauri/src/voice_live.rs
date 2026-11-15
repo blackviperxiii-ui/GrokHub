@@ -85,6 +85,10 @@ pub struct Live {
     open: Option<Opener>,
     /// Samples heard while listening, for the length of a Smart Turn turn.
     heard: usize,
+    /// The mic heard someone start talking in this listen. Smart Turn's
+    /// words count only then: without it they are someone in the room
+    /// the mic took for background.
+    spoke: bool,
 }
 
 impl Live {
@@ -117,7 +121,10 @@ impl Live {
         let mut events: Vec<LiveEvent> = heard
             .into_iter()
             .map(|h| match h {
-                Heard::Started => LiveEvent::Started,
+                Heard::Started => {
+                    self.spoke = true;
+                    LiveEvent::Started
+                }
                 Heard::Turn(turn) => {
                     // Dropping the stream's audio asks it for the last words.
                     let news = self.stt.take().map(|link| link.news);
@@ -151,12 +158,17 @@ impl Live {
     }
 
     /// The stream's words when Smart Turn ended the turn. A stream that
-    /// failed or went away is dropped, so the turn falls back to the upload.
+    /// failed or went away is dropped, so the turn falls back to the upload;
+    /// so is one that ended a turn the mic never heard start.
     fn smart_turn(&mut self) -> Option<String> {
         let link = self.stt.as_ref()?;
         loop {
             match link.news.try_recv() {
-                Ok(SttNews::Ended(words)) if !words.is_empty() => return Some(words),
+                Ok(SttNews::Ended(words)) if !words.is_empty() && self.spoke => return Some(words),
+                Ok(SttNews::Ended(words)) if !words.is_empty() => {
+                    self.stt = None;
+                    return None;
+                }
                 Ok(SttNews::Ended(_) | SttNews::Caption(_)) => {}
                 Ok(SttNews::Failed(_)) | Err(TryRecvError::Disconnected) => {
                     self.stt = None;
@@ -174,6 +186,7 @@ impl Live {
         self.mic.set_playing(playing);
         self.mic.listen();
         self.heard = 0;
+        self.spoke = false;
         self.stt = None;
         if !playing {
             self.stt = self.open.as_mut().and_then(|open| open());
@@ -190,6 +203,7 @@ impl Live {
             self.stt = None;
         } else if self.mic.armed() && !self.mic.talking() && self.stt.is_none() {
             self.heard = 0;
+            self.spoke = false;
             self.stt = self.open.as_mut().and_then(|open| open());
         }
     }
@@ -431,15 +445,22 @@ fn models_dir(config_dir: &Path) -> std::path::PathBuf {
 
 /// Voice mode on: the mic is listening for the first turn, with a stream
 /// when xAI speech-to-text can take one.
+/// Off the main thread: the key comes from the OS keychain, and opening a
+/// stream runs the egress guard and starts its thread.
 #[tauri::command]
-pub(crate) fn voice_live_start(state: tauri::State<'_, crate::ShellState>) -> Result<(), String> {
+pub(crate) async fn voice_live_start(
+    state: tauri::State<'_, crate::ShellState>,
+) -> Result<(), String> {
     crate::capabilities::needs(crate::capabilities::current().voice, "Voice")?;
     let dir = state.config_dir.clone();
-    let to = crate::stt_stream::target();
-    let open: Opener =
-        Box::new(move || to.as_ref().and_then(|to| crate::stt_stream::open(&dir, to)));
-    *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(Live::new(Some(open)));
-    Ok(())
+    crate::off_main(move || {
+        let to = crate::stt_stream::target();
+        let open: Opener =
+            Box::new(move || to.as_ref().and_then(|to| crate::stt_stream::open(&dir, to)));
+        let live = Live::new(Some(open));
+        *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(live);
+    })
+    .await
 }
 
 /// Voice mode off: any turn under way is dropped.
@@ -461,14 +482,16 @@ pub(crate) fn voice_live_push(block: String) -> Result<Vec<LiveEvent>, String> {
     with(|live| live.push(&bytes))?
 }
 
+/// Off the main thread: a listen may open a stream.
 #[tauri::command]
-pub(crate) fn voice_live_listen(playing: bool) -> Result<(), String> {
-    with(|live| live.listen(playing))
+pub(crate) async fn voice_live_listen(playing: bool) -> Result<(), String> {
+    crate::off_main(move || with(|live| live.listen(playing))).await?
 }
 
+/// Off the main thread: the end of a reply may open a stream.
 #[tauri::command]
-pub(crate) fn voice_live_playing(playing: bool) -> Result<(), String> {
-    with(|live| live.set_playing(playing))
+pub(crate) async fn voice_live_playing(playing: bool) -> Result<(), String> {
+    crate::off_main(move || with(|live| live.set_playing(playing))).await?
 }
 
 #[tauri::command]

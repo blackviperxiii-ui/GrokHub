@@ -295,8 +295,12 @@ fn smart_turn_ends_the_turn_early_with_its_words() {
         matches!(&turn, Some(Pending::Words(w)) if w == "Remind me to call Sam."),
         "{turn:?}"
     );
-    // The mic stopped: more talk is no turn until the page listens again.
-    assert_eq!(send(&mut live, &tone(1500)), vec![]);
+    // The mic stopped: a whole spoken turn after it is no turn until the
+    // page listens again.
+    let mut more = hush(500);
+    more.extend(tone(1500));
+    more.extend(hush(2000));
+    assert_eq!(send(&mut live, &more), vec![]);
     assert_eq!(
         hear(turn, |_| panic!("no upload")),
         Ok("Remind me to call Sam.".to_string())
@@ -316,13 +320,14 @@ fn when_the_mic_ends_the_turn_the_streamed_words_are_used() {
     let s = streams.lock().unwrap();
     while s.audio[0].try_recv().is_ok() {}
     assert_eq!(s.audio[0].try_recv(), Err(TryRecvError::Disconnected));
-    let news = s.news[0].clone();
+    // Captions on the way are skipped for the words.
+    s.news[0]
+        .send(SttNews::Caption("buy".into()))
+        .expect("news");
+    s.news[0]
+        .send(SttNews::Ended("buy milk".into()))
+        .expect("news");
     drop(s);
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(30));
-        let _ = news.send(SttNews::Caption("buy".into()));
-        let _ = news.send(SttNews::Ended("buy milk".into()));
-    });
     assert_eq!(
         hear(live.take_turn(), |_| panic!("no upload")),
         Ok("buy milk".to_string())
@@ -481,4 +486,20 @@ fn talking_over_a_reply_keeps_the_upload_for_that_turn() {
     assert!(live.mic.talking(), "mid-turn");
     live.set_playing(false);
     assert_eq!(streams.lock().unwrap().audio.len(), 1, "no stream mid-turn");
+}
+
+#[test]
+fn smart_turn_words_without_a_start_the_mic_heard_are_not_a_turn() {
+    let (mut live, streams) = streaming();
+    // Only room noise reached the mic, yet the stream heard words.
+    let _ = send(&mut live, &hush(500));
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Ended("on the TV".into()))
+        .expect("news");
+    assert_eq!(send(&mut live, &hush(100)), vec![]);
+    assert!(live.take_turn().is_none(), "nothing to hear");
+    // The stream is dropped, so their real turn uploads.
+    let s = streams.lock().unwrap();
+    while s.audio[0].try_recv().is_ok() {}
+    assert_eq!(s.audio[0].try_recv(), Err(TryRecvError::Disconnected));
 }
