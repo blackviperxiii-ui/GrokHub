@@ -420,3 +420,65 @@ fn listening_over_a_reply_opens_no_stream() {
     live.listen(false);
     assert_eq!(streams.lock().unwrap().audio.len(), 2);
 }
+
+#[test]
+fn a_stream_that_already_ended_still_hands_over_its_words() {
+    let (mut live, streams) = streaming();
+    let _ = send(&mut live, &tone(1500));
+    {
+        // Smart Turn ended it and the stream's thread went away.
+        let mut s = streams.lock().unwrap();
+        s.news[0]
+            .send(SttNews::Ended("Buy milk.".into()))
+            .expect("news");
+        s.news.clear();
+        s.audio.clear();
+    }
+    assert_eq!(
+        send(&mut live, &tone(100)),
+        vec![LiveEvent::Turn { ms: 1600 }]
+    );
+    assert!(
+        matches!(live.take_turn(), Some(Pending::Words(w)) if w == "Buy milk."),
+        "the words came through"
+    );
+}
+
+#[test]
+fn the_turn_after_a_spoken_reply_gets_a_stream() {
+    let (mut live, streams) = streaming();
+    live.listen(true);
+    assert_eq!(streams.lock().unwrap().audio.len(), 1);
+    live.set_playing(false);
+    assert_eq!(streams.lock().unwrap().audio.len(), 2);
+    // Already open: a second stop opens no other.
+    live.set_playing(false);
+    assert_eq!(streams.lock().unwrap().audio.len(), 2);
+    let block = tone(100);
+    live.push(&bytes(&block)).expect("block");
+    assert_eq!(
+        streams.lock().unwrap().audio[1]
+            .try_recv()
+            .expect("audio")
+            .len(),
+        block.len()
+    );
+    // A reply playing again drops it.
+    live.set_playing(true);
+    assert_eq!(
+        streams.lock().unwrap().audio[1].try_recv(),
+        Err(TryRecvError::Disconnected)
+    );
+}
+
+#[test]
+fn talking_over_a_reply_keeps_the_upload_for_that_turn() {
+    let (mut live, streams) = streaming();
+    live.listen(true);
+    // A quiet reply, then they talk over it, so it stops mid-turn.
+    let _ = send(&mut live, &hush(700));
+    assert_eq!(send(&mut live, &tone(1500)), vec![LiveEvent::Started]);
+    assert!(live.mic.talking(), "mid-turn");
+    live.set_playing(false);
+    assert_eq!(streams.lock().unwrap().audio.len(), 1, "no stream mid-turn");
+}

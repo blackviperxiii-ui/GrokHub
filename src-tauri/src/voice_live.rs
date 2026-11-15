@@ -107,10 +107,10 @@ impl Live {
         let block = s16le(bytes);
         if self.mic.armed() {
             self.heard += block.len();
+            // A stream that already ended can't take audio; its news still
+            // waits in the channel, so the link stays until that is read.
             if let Some(link) = &self.stt {
-                if link.audio.send(block.clone()).is_err() {
-                    self.stt = None;
-                }
+                let _ = link.audio.send(block.clone());
             }
         }
         let heard = self.mic.push(&block);
@@ -180,9 +180,18 @@ impl Live {
         }
     }
 
-    /// The reply stopped or finished playing.
+    /// The reply started, stopped or finished playing. Once it is over and
+    /// nobody is mid-turn, the next turn gets a stream. A turn already under
+    /// way (talking over the reply) keeps the upload: a stream opened now
+    /// would miss its start.
     pub fn set_playing(&mut self, playing: bool) {
         self.mic.set_playing(playing);
+        if playing {
+            self.stt = None;
+        } else if self.mic.armed() && !self.mic.talking() && self.stt.is_none() {
+            self.heard = 0;
+            self.stt = self.open.as_mut().and_then(|open| open());
+        }
     }
 
     /// End the turn now (a tap while they talk).
