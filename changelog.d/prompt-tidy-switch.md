@@ -1,0 +1,2 @@
+- Settings → Local AI has the "Tidy typos on this computer" switch again, off by default. With an on-device model set up and loaded, it fixes typos before your message goes to the model; your chat keeps what you typed. Turning it on also undoes an older version's "Local AI off" setting, which the app had no switch for.
+- Settings files saved with a byte-order mark (as older Notepad does) no longer block settings changes.

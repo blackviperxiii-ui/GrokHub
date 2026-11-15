@@ -97,6 +97,7 @@ mod net_watch;
 mod night;
 mod nudges;
 pub mod nyx;
+mod prompt_tidy;
 pub use grokhub_agent::xai_keychain as oauth;
 mod composer_ghost;
 #[cfg(desktop)]
@@ -5706,6 +5707,21 @@ async fn set_local_dynamic(
     off_main(move || local_ai::set_dynamic(&dir, on)).await?
 }
 
+/// Settings → Local AI → Tidy typos on this computer.
+#[tauri::command]
+async fn set_prompt_tidy(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<local_ai::LocalAiView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        prompt_tidy::set(&dir, on)?;
+        Ok(local_ai::refreshed(&dir))
+    })
+    .await?
+}
+
 #[tauri::command]
 async fn set_local_keep_loaded(
     state: State<'_, ShellState>,
@@ -7697,6 +7713,7 @@ pub fn run() {
             run_local_speed_test,
             set_local_keep_loaded,
             set_local_dynamic,
+            set_prompt_tidy,
             unload_local_model,
             get_model_library,
             download_models,

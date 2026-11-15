@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
   runLocalSpeedTest: vi.fn<() => Promise<string>>(),
   setLocalKeepLoaded: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
   setLocalDynamic: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
+  setPromptTidy: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
   unloadLocalModel: vi.fn<() => Promise<LocalAiView>>(),
   startLocalEngineDownload: vi.fn(),
   cancelLocalEngineDownload: vi.fn(),
@@ -186,6 +187,7 @@ function view(
       dynamic: true,
       dynamicHint: "On: each task runs on the model on disk that's best at it.",
     },
+    tidy: { on: false, available: true, hint: "Off. Your messages go to the model exactly as you type them." },
     ...over,
   };
 }
@@ -397,6 +399,68 @@ describe("LocalAi", () => {
     expect(api.setLocalDynamic).toHaveBeenCalledWith(false);
     expect(await within(rows).findByRole("button", { name: "Turn on Dynamic" })).toBeInTheDocument();
     expect(rows).toHaveTextContent("Off: your pick answers every task.");
+  });
+
+  it("turns typo tidy on at once, without saving the page", async () => {
+    const v = PROFILES["16 GB GPU"];
+    api.getLocalAi.mockResolvedValue(v);
+    const on =
+      "On. While the on-device model is loaded, it fixes typos first (up to 0.3 s); Keep loaded tidies every message. Your chat keeps what you typed; numbers, names, paths and links are never changed.";
+    api.setPromptTidy.mockResolvedValue({ ...v, tidy: { on: true, available: true, hint: on } });
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Typo tidy" });
+    const sw = within(group).getByRole("switch", { name: "Tidy typos on this computer (can change wording)" });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(group).toHaveTextContent("Off. Your messages go to the model exactly as you type them.");
+    await userEvent.click(sw);
+    expect(api.setPromptTidy).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "true"));
+    expect(group).toHaveTextContent(on);
+    expect(await screen.findByText("Typo tidy is on: the on-device model fixes typos while it's loaded.")).toBeInTheDocument();
+    expect(api.saveLocalAi).not.toHaveBeenCalled();
+  });
+
+  it("keeps typo tidy off until a local model is set up", async () => {
+    api.getLocalAi.mockResolvedValue({
+      ...PROFILES["16 GB GPU"],
+      tidy: { on: false, available: false, hint: "Off. Set up a local engine and model first." },
+    });
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Typo tidy" });
+    const sw = within(group).getByRole("switch", { name: "Tidy typos on this computer (can change wording)" });
+    expect(sw).toBeDisabled();
+    await userEvent.click(sw);
+    expect(api.setPromptTidy).not.toHaveBeenCalled();
+    expect(group).toHaveTextContent("Off. Set up a local engine and model first.");
+  });
+
+  it("lets a paused typo tidy be turned off without a model", async () => {
+    const paused = { on: true, available: false, hint: "On, but paused. Set up a local engine and model first." };
+    const v = { ...PROFILES["16 GB GPU"], tidy: paused };
+    api.getLocalAi.mockResolvedValue(v);
+    api.setPromptTidy.mockResolvedValue({
+      ...v,
+      tidy: { on: false, available: false, hint: "Off. Set up a local engine and model first." },
+    });
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Typo tidy" });
+    const sw = within(group).getByRole("switch", { name: "Tidy typos on this computer (can change wording)" });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(group).toHaveTextContent("On, but paused. Set up a local engine and model first.");
+    await userEvent.click(sw);
+    expect(api.setPromptTidy).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "false"));
+    expect(sw).toBeDisabled();
+  });
+
+  it("says why typo tidy didn't change", async () => {
+    api.getLocalAi.mockResolvedValue(PROFILES["16 GB GPU"]);
+    api.setPromptTidy.mockRejectedValue("Set up a local engine and model first.");
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Typo tidy" });
+    await userEvent.click(within(group).getByRole("switch"));
+    expect(await screen.findByText("Set up a local engine and model first.")).toBeInTheDocument();
+    expect(within(group).getByRole("switch")).toHaveAttribute("aria-checked", "false");
   });
 
   it("shows the Auto status line and what detection couldn't see", async () => {
