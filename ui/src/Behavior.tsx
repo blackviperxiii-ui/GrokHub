@@ -18,7 +18,7 @@ const LANES: { value: Lane; label: string }[] = [
 ];
 const laneLabel = (lane: Lane) => LANES.find((l) => l.value === lane)?.label ?? "Coding";
 export const QUIET_NOTE = "Leave both empty for no quiet hours.";
-export const SCHEDULE_NOTE = `Automations run on their schedule while ${PRODUCT_NAME} is open or in the tray. Quiet hours hold back Pulse posts, suggestions and nudges, but not a scheduled automation, and the daily budget doesn't hold one back either yet.`;
+export const SCHEDULE_NOTE = `Automations run on their schedule while ${PRODUCT_NAME} is open or in the tray. Quiet hours hold back Pulse digests and suggestions. PC alerts, such as low disk, and scheduled automations still go ahead, and the daily budget doesn't hold an automation back yet.`;
 export const PAUSE_NOTE = "Saved for later: scheduled work doesn't wait on the budget yet. Chat always sends.";
 
 function quietLabel(b: Shape) {

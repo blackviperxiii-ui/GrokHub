@@ -158,7 +158,7 @@ pub fn cabin_system_prompt(
     insights: &str,
 ) -> String {
     let mut sys = String::from(
-        "You are the cabin assistant. You can do what this computer can do: files, shell, browser, and the desktop. \
+        "You are the assistant on this computer. You can do what this computer can do: files, shell, browser, and the desktop. \
 Do the next step. Ask only before sending a message, paying, deleting something they did not name, or publishing. \
 Be brief, warm, and direct. \
 Do not repeat the conversation or the user's words. \
@@ -313,7 +313,7 @@ mod tests {
         assert!(sys.contains("Learned:"));
         assert!(sys.contains("hands"));
         let empty = cabin_system_prompt("", "", "", "", None, "", "", "", "", "");
-        assert!(empty.contains("cabin assistant"));
+        assert!(empty.starts_with("You are the assistant on this computer. "));
         assert!(empty.contains("WORK_PIN"));
         assert!(empty.contains("this computer"));
         assert!(empty.contains("Resume it"));
