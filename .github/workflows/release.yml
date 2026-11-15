@@ -8,9 +8,8 @@ name: Release
 # push cancels a build still running; the nightly skips when that tag already
 # exists. Merges made with github.token start no push runs, so auto-merge needs
 # AUTO_MERGE_TOKEN (see auto-merge.yml) for its merges to publish.
-# Each release carries Linux and Windows builds, the Tauri shell's bundles
-# (Linux and Windows; macOS on tags, the nightly and manual runs, not on beta
-# pushes), `SHA256SUMS`, and
+# Each release carries the Tauri shell's bundles (Linux and Windows; macOS
+# on tags, the nightly and manual runs, not on beta pushes), `SHA256SUMS`, and
 # `SHA256SUMS.minisig` (minisign via `MINISIGN_SECRET_KEY`). The public key is
 # `packaging/minisign.pub`; the updater refuses unverified assets.
 

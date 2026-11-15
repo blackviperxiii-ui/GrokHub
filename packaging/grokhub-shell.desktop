@@ -13,3 +13,4 @@ Keywords=loadout;gaming;pc;ai;agent;grok;chat;tauri;
 StartupNotify=true
 StartupWMClass=grokhub-shell
 SingleMainWindow=true
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2

@@ -24,7 +24,9 @@ Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
   desktop runs the chats and keeps the key.
 - **Packaging (2026-10-25):** the shell ships as Tauri's own bundles
   (.deb, .AppImage, NSIS setup .exe, .dmg). AUR, Inno and the cabin tarball
-  stay as they are, for the cabin only, until the shell reaches parity.
+  stayed for the cabin only until the shell reached parity. With the cabin
+  retired, the Inno Setup and the tarball scripts are gone and both
+  PKGBUILDs build the shell and the hub.
 
 ## Phases
 

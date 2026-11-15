@@ -28,8 +28,9 @@ printf 'fn main() {}\n' >"$W/crates/grokhub-core/src/slash/mod.rs"
 printf '[workspace.package]\nversion = "1.0.0"\n\n[workspace.dependencies]\n' >"$W/Cargo.toml"
 printf 'name = "grokhub-core"\nversion = "1.0.0"\n' >"$W/Cargo.lock"
 printf '1.0.0\n' >"$W/VERSION"
-mkdir -p "$W/packaging/windows"
-printf '#define MyAppName "Old"\n#ifndef MyAppVersion\n  #define MyAppVersion "1.0.0"\n#endif\n' >"$W/packaging/windows/grokhub.iss"
+mkdir -p "$W/packaging/aur"
+printf 'pkgname=grokhub\npkgver=1.0.0\npkgdesc="Old"\n' >"$W/packaging/PKGBUILD"
+printf 'pkgname=grokhub\npkgver=1.0.0\npkgdesc="Old"\n' >"$W/packaging/aur/PKGBUILD"
 mkdir -p "$W/.github/workflows"
 SHA=0123456789abcdef0123456789abcdef01234567
 # Job `a` stays last: the pinned-action cases append steps to it.
@@ -135,20 +136,38 @@ commit_pr
 run_guard fail "unparseable Cargo.toml version fails"
 
 fresh_pr
-sed -i 's/"Old"/"New"/' "$W/packaging/windows/grokhub.iss"
+sed -i 's/"Old"/"New"/' "$W/packaging/PKGBUILD" "$W/packaging/aur/PKGBUILD"
 commit_pr
-run_guard pass "grokhub.iss name edit without a version change passes"
+run_guard pass "PKGBUILD recipe edit without a pkgver change passes"
 
 fresh_pr
-sed -i 's/"1.0.0"/"1.0.1"/' "$W/packaging/windows/grokhub.iss"
+sed -i 's/^pkgver=1.0.0$/pkgver=1.0.1/' "$W/packaging/PKGBUILD"
 commit_pr
-run_guard fail "grokhub.iss MyAppVersion bump without release fails"
-LABELS=release run_guard pass "grokhub.iss MyAppVersion bump with release passes"
+run_guard fail "PKGBUILD pkgver bump without release fails"
+LABELS=release run_guard pass "PKGBUILD pkgver bump with release passes"
 
 fresh_pr
-sed -i '/MyAppVersion "/d' "$W/packaging/windows/grokhub.iss"
+sed -i 's/^pkgver=1.0.0$/pkgver=1.0.1/' "$W/packaging/aur/PKGBUILD"
 commit_pr
-run_guard fail "grokhub.iss missing MyAppVersion define fails"
+run_guard fail "AUR PKGBUILD pkgver bump without release fails"
+
+fresh_pr
+printf '1.0.1\n' >"$W/VERSION"
+commit_pr
+run_guard fail "VERSION edit without release fails"
+LABELS=release run_guard pass "VERSION edit with release passes"
+
+fresh_pr
+printf '# Changelog\n\n- Edited by hand.\n' >"$W/CHANGELOG.md"
+commit_pr
+run_guard fail "CHANGELOG.md edit without release fails"
+LABELS=release run_guard pass "CHANGELOG.md edit with release passes"
+
+fresh_pr
+sed -i '/^pkgver=/d' "$W/packaging/aur/PKGBUILD"
+commit_pr
+run_guard fail "PKGBUILD missing its pkgver line fails"
+LABELS=release run_guard fail "PKGBUILD missing its pkgver line fails even with release"
 
 fresh_pr
 printf 'name = "other"\nversion = "1.0.0"\n' >"$W/Cargo.lock"

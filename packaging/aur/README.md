@@ -1,29 +1,30 @@
 # GrokHub — Arch Linux packaging
 
-Native Rust binaries. No Electron.
+The Tauri desktop app and the LAN hub, built from source. No Electron.
 
 ## From a clone
 
 ```bash
-sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 cmake meson ninja wayland wayland-protocols pixman libpng libx11 libxtst libxinerama glib2 libxmu
+sudo pacman -S --needed git rustup base-devel pkgconf nodejs npm webkit2gtk-4.1 libayatana-appindicator
 rustup default stable
-origin auth login
 git clone https://github.com/blackviperxiii-ui/GrokHub.git
 cd GrokHub
 ./scripts/install.sh --user
-grokhub
+grokhub-shell
 ```
 
-`install.sh --user` installs the cabin GUI and hub. First launch is Get Started, which signs in with SuperGrok OAuth.
+`install.sh --user` installs the desktop app and hub. First launch is Get Started, which signs in with SuperGrok OAuth.
 
 ## makepkg (system)
 
+`packaging/PKGBUILD` builds the clone it sits in:
+
 ```bash
-cd packaging/aur
+cd packaging
 makepkg -si
 ```
 
-`makepkg -si` / `yay -S grokhub` install the cabin GUI and hub. Desktop control is the cabin's own `grokhub-desktop` MCP, so there are no grim/ydotool sidecars.
+`packaging/aur/PKGBUILD` builds the release tag `v<pkgver>` from GitHub. Both run the same steps as `install.sh`: `cargo build -p grokhub-hub`, `npm ci --prefix ui`, then `tauri build --no-bundle`. `build()` needs the network for cargo and npm downloads.
 
 For on-device models, install optional `llama-cpp` from extra (`pacman -S llama-cpp`) so `llama-server` is on PATH, or use the in-app engine download in Settings.
 
@@ -31,7 +32,9 @@ For on-device models, install optional `llama-cpp` from extra (`pacman -S llama-
 
 | Path | Role |
 |------|------|
-| `/usr/bin/grokhub` | Cabin |
+| `/usr/bin/grokhub-shell` | Desktop app |
 | `/usr/bin/grokhub-hub` | Standalone LAN hub |
-| `/usr/share/applications/grokhub.desktop` | App menu |
+| `/usr/bin/grokhub` | Renamed-binary shim: forwards `--mcp-*`, `--doctor` and the other headless flags to `grokhub-hub` |
+| `/usr/share/applications/grokhub-shell.desktop` | App menu |
+| `/usr/lib/systemd/user/grokhub-hub.service` | Hub user unit: `systemctl --user enable --now grokhub-hub` |
 | `~/.config/GrokHub` | Config + memory (`app.json`, `projects.json`, `secrets.json`) |

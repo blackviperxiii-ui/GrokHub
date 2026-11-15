@@ -6,10 +6,8 @@ installer, Linux app menu, Tauri bundles). Swap the art in brand/ and run:
     python3 scripts/render-brand-icons.py
 
 Needs cairosvg and Pillow (`python3 -m pip install cairosvg pillow`). File
-names stay `grokhub.*` on purpose: the .desktop `Icon=`, the installer and
-the updater look them up by that name (brand/README.md, internal ids).
-Then run scripts/write-grokhub-ico.py so the Windows .ico frames match the
-hicolor PNGs byte for byte (tray.rs `windows_ico_matches_linux_hicolor`).
+names stay `grokhub.*` on purpose: the .desktop `Icon=` and the updater look
+them up by that name (brand/README.md, internal ids).
 """
 from __future__ import annotations
 
