@@ -1,4 +1,4 @@
-//! New local models for Pulse. Opt-in. Once a week the cabin scores the
+//! New local models for Pulse. Opt-in. Once a week the app scores the
 //! curated catalog (`local_picker`) against this PC and, when a bigger model
 //! than the one it runs now is Recommended here, posts a card that opens the
 //! model picker on it, where Download (size shown) is the approval. It also
@@ -89,7 +89,7 @@ pub fn repo_url(repo: &str) -> String {
     format!("https://huggingface.co/{repo}")
 }
 
-/// The card's action: opens Settings → Cabin defaults on that catalog model.
+/// The card's action: opens Settings → Local AI on that catalog model.
 pub fn picker_link(id: &str) -> String {
     format!("grokhub://local-model/{id}")
 }
@@ -197,7 +197,6 @@ pub fn upgrade(p: &Profile, installed_id: &str, bench: &BenchCache) -> Option<Su
 }
 
 /// New repos that fit with headroom and run bigger than the installed model.
-/// Returns the suggestions and every repo id read, for `seen`.
 pub fn releases(p: &Profile, installed_run_mb: u64, repos: &[String]) -> Vec<Suggestion> {
     let (mem, budget) = p.budget();
     let catalog_repos: BTreeSet<&str> = local_models().iter().map(|m| m.repo).collect();

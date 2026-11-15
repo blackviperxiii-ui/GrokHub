@@ -186,7 +186,7 @@ export function App() {
   const [sheet, setSheet] = useState(false);
   const paletteChips = useChipRow({ surface: "palette", active: palette === "all" });
   const [signedOut, setSignedOut] = useState(false);
-  const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
+  const [goTo, setGoTo] = useState<{ section: Section; n: number; model?: string }>();
   const [notices, setNotices] = useState<Notices>(NO_NOTICES);
   const [open, setOpen] = useState<{ id: string; n: number }>();
   /** The chat History deleted last, and every chat it has deleted: Delete all
@@ -566,6 +566,11 @@ export function App() {
       setView("settings");
     }
   }
+  /** A Pulse model card's Open in Settings: Local AI, on that model. */
+  function openModel(id: string) {
+    setGoTo((now) => ({ section: "localAi", n: (now?.n ?? 0) + 1, model: id }));
+    setView("settings");
+  }
   function noticeAction(picked: Notice) {
     const action = picked.action;
     if (!action) return;
@@ -792,6 +797,7 @@ export function App() {
               <Pulse
                 onRun={ask}
                 onOpenInterests={() => run({ kind: "settings", section: "pulse" })}
+                onOpenModel={caps.localAi ? openModel : undefined}
                 remote={Boolean(caps.remote)}
               />
             </Page>

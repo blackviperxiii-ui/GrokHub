@@ -35,7 +35,11 @@ vi.mock("./Profile", () => ({
   ),
 }));
 // Local AI has its own tests (LocalAi.test.tsx).
-vi.mock("./LocalAi", () => ({ LocalAi: () => <p>Local AI panel</p> }));
+vi.mock("./LocalAi", () => ({
+  LocalAi: ({ focus }: { focus?: { id: string; n: number } }) => (
+    <p>Local AI panel{focus && ` on ${focus.id} (${focus.n})`}</p>
+  ),
+}));
 // AI models has its own tests (AiModels.test.tsx).
 vi.mock("./AiModels", () => ({ AiModels: () => <p>AI models panel</p> }));
 vi.mock("./WebAccess", () => ({ WebAccess: () => <p>Web access panel</p> }));
@@ -161,6 +165,23 @@ describe("Settings", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
     expect(api.saveSettings).toHaveBeenCalledWith(false, "/work", "always", true);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
+  });
+
+  it("a Pulse model card opens Local AI on its model; the palette opens it plain", async () => {
+    const { rerender } = render(
+      <Settings caps={DESKTOP} goTo={{ section: "localAi", n: 1, model: "gemma-4-31b-it-abliterated-q4_k" }} />,
+    );
+    expect(await screen.findByText("Local AI panel on gemma-4-31b-it-abliterated-q4_k (1)")).toBeInTheDocument();
+    // Another section and back: the card's model isn't shown again.
+    await openSection("Pulse");
+    await openSection("Local AI");
+    expect(screen.getByText("Local AI panel")).toBeInTheDocument();
+    // A palette pick opens Local AI plain.
+    rerender(<Settings caps={DESKTOP} goTo={{ section: "localAi", n: 2 }} />);
+    expect(await screen.findByText("Local AI panel")).toBeInTheDocument();
+    // A second card opens on its model again.
+    rerender(<Settings caps={DESKTOP} goTo={{ section: "localAi", n: 3, model: "gemma-4-12b-it-abliterated-q4_k" }} />);
+    expect(await screen.findByText("Local AI panel on gemma-4-12b-it-abliterated-q4_k (3)")).toBeInTheDocument();
   });
 
   it("desktop control starts off, says what still asks, and saves", async () => {

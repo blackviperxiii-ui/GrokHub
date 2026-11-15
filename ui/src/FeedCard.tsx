@@ -252,6 +252,9 @@ export interface FeedCardProps {
   onDiscuss: () => void;
   /** Open the post's source page. */
   onOpen?: () => void;
+  /** A catalog upgrade card's Open in Settings: the model library, on that
+   * model. Its Download button is the approval. */
+  onOpenModel?: () => void;
   /** Not interested: off the page, and fewer posts like it. */
   onDislike: () => void;
   /** Off the page. Carries no weight. */
@@ -277,8 +280,9 @@ export interface FeedCardProps {
 
 /** One Feed post, always fully open: icon, title, where it is from and why,
  * verdict, cited snippet, the full report, media; then one row of buttons
- * (Like, the card's chips or Discuss, Read it, Snooze when it suits the card,
- * a self-review card's Apply change, Revert or Save idea, Not interested,
+ * (Like, the card's chips or Discuss, Read it or a model card's Open in
+ * Settings, Snooze when it suits the card, a self-review card's Apply
+ * change, Revert or Save idea, Not interested,
  * Dismiss). Dismiss asks first (Delete folded in). The ⋯ menu holds "Why I
  * created this", plus Copy as GitHub issue on a code idea; nothing collapses. */
 export function FeedCard({
@@ -287,6 +291,7 @@ export function FeedCard({
   onLove,
   onDiscuss,
   onOpen,
+  onOpenModel,
   onDislike,
   onDismiss,
   onWhy,
@@ -453,6 +458,11 @@ export function FeedCard({
         {post.link && onOpen && (
           <button type="button" className="quiet" disabled={busy} onClick={onOpen}>
             Read it
+          </button>
+        )}
+        {post.model && onOpenModel && (
+          <button type="button" className="quiet" disabled={busy} onClick={onOpenModel}>
+            Open in Settings
           </button>
         )}
         {post.save && onSave && (

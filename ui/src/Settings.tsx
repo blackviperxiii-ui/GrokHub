@@ -83,7 +83,7 @@ export function Settings({
   onProfile,
 }: {
   caps: Capabilities;
-  goTo?: { section: Section; n: number };
+  goTo?: { section: Section; n: number; model?: string };
   /** Leaves Settings for the screen that was open before it. */
   onClose?: () => void;
   /** The name of that screen, for the Back button ("Back to Chat"). */
@@ -109,9 +109,13 @@ export function Settings({
   // A new palette pick opens its section. Settings stays mounted between visits,
   // so showing it again keeps the section that was open.
   const [goToN, setGoToN] = useState(goTo?.n);
+  // A Pulse card's model, shown once: picking a section here drops it, so
+  // coming back to Local AI later doesn't jump to it again.
+  const [modelFocus, setModelFocus] = useState(goTo?.model);
   if (goTo && goTo.n !== goToN) {
     setGoToN(goTo.n);
     setSection(goTo.section);
+    setModelFocus(goTo.model);
     clear();
   }
 
@@ -230,6 +234,7 @@ export function Settings({
 
   function open(next: Section) {
     setSection(next);
+    setModelFocus(undefined);
     clear();
   }
 
@@ -306,7 +311,9 @@ export function Settings({
             {section === "pulse" && caps.pulse && <PulseSources />}
             {section === "pulse" && caps.pulse && <PulseAuto />}
             {section === "pulse" && caps.pulse && <PcHealth />}
-            {section === "localAi" && caps.localAi && <LocalAi />}
+            {section === "localAi" && caps.localAi && (
+              <LocalAi focus={modelFocus && goToN !== undefined ? { id: modelFocus, n: goToN } : undefined} />
+            )}
             {section === "aiModels" && caps.localAi && <AiModels />}
             {section === "webAccess" && caps.webAccess && <WebAccess />}
             {section === "labs" && caps.plugins && <Labs />}

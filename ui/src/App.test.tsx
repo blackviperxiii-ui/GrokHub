@@ -248,14 +248,26 @@ vi.mock("./Objectives", () => ({
     </button>
   ),
 }));
-vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
+vi.mock("./Pulse", () => ({
+  Pulse: ({ onOpenModel }: { onOpenModel?: (id: string) => void }) => (
+    <div>
+      <p>Pulse page</p>
+      {onOpenModel && (
+        <button type="button" onClick={() => onOpenModel("gemma-4-31b-it-abliterated-q4_k")}>
+          Open in Settings
+        </button>
+      )}
+    </div>
+  ),
+}));
 vi.mock("./Imagine", () => ({ Imagine: () => <p>Imagine page</p> }));
 vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
 vi.mock("./Settings", () => ({
-  Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string } }) => (
+  Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string; model?: string } }) => (
     <p>
       Settings for {caps.desktopControl ? "a desktop" : "a phone"}
       {goTo && ` at ${goTo.section}`}
+      {goTo?.model && ` on ${goTo.model}`}
     </p>
   ),
 }));
@@ -679,6 +691,24 @@ describe("App", () => {
     await userEvent.keyboard("local{Enter}");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(await screen.findByText("Settings for a desktop at localAi")).toBeVisible();
+  });
+
+  it("a Pulse model card's Open in Settings lands on Local AI at that model", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Open in Settings" }));
+    expect(
+      await screen.findByText("Settings for a desktop at localAi on gemma-4-31b-it-abliterated-q4_k"),
+    ).toBeVisible();
+  });
+
+  it("without local AI, Pulse gets no Open in Settings", async () => {
+    api.getCapabilities.mockResolvedValue({ ...DESKTOP, localAi: false });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
+    expect(await screen.findByText("Pulse page")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open in Settings" })).toBeNull();
   });
 
   it("Ctrl+K over the More list swaps it for the full palette, and again closes it", async () => {

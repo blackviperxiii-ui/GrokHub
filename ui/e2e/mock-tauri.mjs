@@ -81,6 +81,7 @@ const EMPTY_PULSE = {
       createdAt: Date.now() - 60_000,
       ago: "1m ago",
       link: "",
+      model: "",
       loved: false,
     },
     {
@@ -95,6 +96,7 @@ const EMPTY_PULSE = {
       createdAt: Date.now() - 3 * 3_600_000,
       ago: "3h ago",
       link: "",
+      model: "",
       loved: true,
     },
   ],

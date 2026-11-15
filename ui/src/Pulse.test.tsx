@@ -68,6 +68,7 @@ function post(over: Partial<PulsePost> = {}): PulsePost {
     createdAt: Date.UTC(2026, 9, 26, 15, 4),
     ago: "2h ago",
     link: "https://blog.rust-lang.org/1.99.html",
+    model: "",
     loved: false,
     verdict: null,
     more: "",
@@ -456,6 +457,38 @@ describe("Pulse", () => {
     const card = await screen.findByRole("listitem", { name: TITLE });
     expect(card.querySelector(".feed-source")).toHaveTextContent("Rust Blog");
     expect(within(card).queryByRole("button", { name: "Read it" })).not.toBeInTheDocument();
+  });
+
+  it("a model card's Open in Settings opens the model library on it, and nothing downloads", async () => {
+    const model = post({
+      source: "Local models",
+      title: "Gemma 4 31B fits this PC",
+      link: "",
+      model: "gemma-4-31b-it-abliterated-q4_k",
+    });
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [model] });
+    api.pulseAct.mockResolvedValue(PAGE);
+    const onOpenModel = vi.fn();
+    const { unmount } = render(<Pulse onRun={() => {}} onOpenModel={onOpenModel} />);
+    const card = await screen.findByRole("listitem", { name: "Gemma 4 31B fits this PC" });
+    expect(within(card).queryByRole("button", { name: "Read it" })).not.toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Open in Settings" }));
+    expect(onOpenModel).toHaveBeenCalledWith("gemma-4-31b-it-abliterated-q4_k");
+    expect(api.pulseAct).toHaveBeenCalledWith("post-1", "opened");
+    unmount();
+
+    // Where local models don't run, the card has no Open in Settings.
+    render(<Pulse onRun={() => {}} />);
+    const bare = await screen.findByRole("listitem", { name: "Gemma 4 31B fits this PC" });
+    expect(within(bare).queryByRole("button", { name: "Open in Settings" })).not.toBeInTheDocument();
+  });
+
+  it("a link post shows Read it and no Open in Settings", async () => {
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [post()] });
+    render(<Pulse onRun={() => {}} onOpenModel={vi.fn()} />);
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    expect(within(card).getByRole("button", { name: "Read it" })).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Open in Settings" })).not.toBeInTheDocument();
   });
 
   it("today's set ends with That's all for today, then the older posts", async () => {

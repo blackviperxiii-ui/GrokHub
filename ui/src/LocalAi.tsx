@@ -26,7 +26,7 @@ import {
   type LocalManual,
   type LocalModelRow,
 } from "./api";
-import { ModelLibrary } from "./ModelLibrary";
+import { ModelLibrary, type LibraryFocus } from "./ModelLibrary";
 import { Toggle } from "./Toggle";
 import { PRODUCT_NAME } from "./brand";
 
@@ -144,7 +144,7 @@ const READY_ENGINE: LocalEngineInfo = {
   error: null,
 };
 
-export function LocalAi() {
+export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
   const [view, setView] = useState<LocalAiView | null>(null);
   const [draft, setDraft] = useState<LocalAiConfig | null>(null);
   const [engine, setEngine] = useState<LocalEngineInfo>(READY_ENGINE);
@@ -698,7 +698,7 @@ export function LocalAi() {
           {note.text}
         </p>
       )}
-      <ModelLibrary />
+      <ModelLibrary focus={focus} />
     </section>
   );
 }

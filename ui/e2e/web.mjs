@@ -63,6 +63,7 @@ function pulsePage() {
         createdAt: Date.now() - 60000,
         ago: "1m ago",
         link: "https://example.com/web",
+        model: "",
         loved: STATE.loved,
       },
     ],

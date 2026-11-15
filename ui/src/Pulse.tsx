@@ -172,12 +172,16 @@ function useFeedDwell(listRef: { current: HTMLUListElement | null }, idsKey: str
 export function Pulse({
   onRun,
   onOpenInterests,
+  onOpenModel,
   remote = false,
 }: {
   /** `conversationId`: the card's own chat, opened (or reopened) first. */
   onRun: (text: string, conversationId?: string) => void;
   /** Settings → Pulse, where interests are added. */
   onOpenInterests?: () => void;
+  /** Settings → Local AI's model library, on a catalog model. Left out
+   * where local models don't run. */
+  onOpenModel?: (id: string) => void;
   /** A paired browser: Add skill stays on the computer. */
   remote?: boolean;
 }) {
@@ -440,6 +444,13 @@ export function Pulse({
                   // Read it counts as engagement for card taste; quietly.
                   void pulseAct(post.id, "opened").catch(() => {});
                 }}
+                onOpenModel={
+                  onOpenModel &&
+                  (() => {
+                    onOpenModel(post.model);
+                    void pulseAct(post.id, "opened").catch(() => {});
+                  })
+                }
                 onDislike={() => void act(post.id, "dislike", DISLIKE_NOTE)}
                 onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
                 onWhy={() => pulseWhy(post.id)}
