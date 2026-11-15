@@ -153,12 +153,13 @@ const LOCK_PACKAGES: [&str; 7] = [
 
 /// The Tauri shell (`src-tauri/`) is its own Cargo workspace, so its lockfile
 /// holds its own copies of the grokhub-* crates it builds on, plus the shell.
-const SHELL_LOCK_PACKAGES: [&str; 7] = [
+const SHELL_LOCK_PACKAGES: [&str; 8] = [
     "grokhub-agent",
     "grokhub-code",
     "grokhub-core",
     "grokhub-desktop",
     "grokhub-fps-probe",
+    "grokhub-hub",
     "grokhub-proto",
     "grokhub-shell",
 ];
@@ -676,6 +677,27 @@ mod tests {
         bump_check(&fx.0).unwrap();
     }
 
+    /// Every grokhub-* package in the real lockfiles is one the bump rewrites,
+    /// so a new path dependency can't keep the old version and break --locked.
+    #[test]
+    fn lock_lists_cover_every_grokhub_package_in_the_real_locks() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        for (rel, packages) in LOCKS {
+            let lock = fs::read_to_string(root.join(rel))
+                .unwrap()
+                .replace("\r\n", "\n");
+            let mut found: Vec<&str> = lock
+                .lines()
+                .filter_map(|l| l.strip_prefix("name = \""))
+                .filter_map(|l| l.strip_suffix('"'))
+                .filter(|name| name.starts_with("grokhub-"))
+                .collect();
+            found.sort_unstable();
+            found.dedup();
+            assert_eq!(found, packages.to_vec(), "{rel}");
+        }
+    }
+
     #[test]
     fn check_catches_a_stale_shell_lock() {
         let fx = Fixture::new();
@@ -716,6 +738,7 @@ mod tests {
              [[package]]\nname = \"grokhub-core\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-desktop\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-fps-probe\"\nversion = \"3.1.0\"\n\n\
+             [[package]]\nname = \"grokhub-hub\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-proto\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-shell\"\nversion = \"3.1.0\"\n\n"
         );

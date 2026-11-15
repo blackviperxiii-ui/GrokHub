@@ -20,6 +20,7 @@ pkgbase = grokhub
 	optdepends = alsa-utils: Hey Grok mic
 	optdepends = llama-cpp: local model engine (alternative to in-app download)
 	options = !debug
+	options = !lto
 	source = grokhub::git+https://github.com/blackviperxiii-ui/GrokHub.git#tag=v3.5.0
 	sha256sums = SKIP
 

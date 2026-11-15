@@ -16,7 +16,7 @@ optdepends=(
 )
 # npm builds the web UI and supplies the pinned tauri CLI (ui/package.json).
 makedepends=('cargo' 'rust' 'pkgconf' 'nodejs' 'npm' 'git')
-options=('!debug')
+options=('!debug' '!lto')
 install=grokhub.install
 source=("${pkgname}::git+https://github.com/blackviperxiii-ui/GrokHub.git#tag=v${pkgver}")
 sha256sums=('SKIP')
