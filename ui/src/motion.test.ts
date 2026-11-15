@@ -103,3 +103,86 @@ describe("glam motion and reduce motion", () => {
     for (const face of faces) expect(face).toContain("font-display: swap;");
   });
 });
+
+/** Every plain rule with its @media and body, comments dropped. */
+function rules(source: string): { media: string | null; selector: string; body: string }[] {
+  const text = source.replace(/\/\*[\s\S]*?\*\//g, "");
+  const stack: string[] = [];
+  const out: { media: string | null; selector: string; body: string }[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "{") {
+      stack.push(text.slice(start, i).split(/[;}]/).pop()!.trim());
+      start = i + 1;
+    } else if (text[i] === "}") {
+      const head = stack[stack.length - 1] ?? "";
+      if (head && !head.startsWith("@") && !/^(from|to|\d)/.test(head)) {
+        const media = stack.slice(0, -1).find((h) => h.startsWith("@media")) ?? null;
+        for (const selector of splitSelectors(head)) out.push({ media, selector, body: text.slice(start, i) });
+      }
+      stack.pop();
+      start = i + 1;
+    }
+  }
+  return out;
+}
+
+describe("the desktop companion's motion and reduce motion", () => {
+  const all = rules(css);
+  const DESK = ["nyx-desk-bob", "nyx-desk-breath", "nyx-desk-think", "nyx-desk-spin"];
+  const stopped = (selector: string, media: string | null, root: boolean) =>
+    all.some(
+      (r) =>
+        r.media === media &&
+        r.selector === (root ? `:root[data-reduce-motion="true"] ${selector}` : selector) &&
+        /animation:\s*none/.test(r.body),
+    );
+
+  it("breathes from her feet every 4 s and floats up 3 px every 5 s", () => {
+    const figure = all.find((r) => r.selector === ".nyx-desk-figure" && r.media === null && /animation:/.test(r.body));
+    expect(figure?.body).toMatch(/transform-origin:\s*50% 100%/);
+    expect(figure?.body).toMatch(/nyx-desk-bob 5s ease-in-out infinite,\s*nyx-desk-breath 4s ease-in-out infinite/);
+    expect(css).toMatch(/@keyframes nyx-desk-breath \{\s*0%,\s*100% \{\s*scale: 1;\s*\}\s*50% \{\s*scale: 1\.006 1\.012;\s*\}\s*\}/);
+    expect(css).toMatch(/@keyframes nyx-desk-bob \{\s*0%,\s*100% \{\s*translate: 0 0;\s*\}\s*50% \{\s*translate: 0 -3px;\s*\}\s*\}/);
+  });
+
+  it("hops her up by --nyx-hop, and not under either reduce-motion setting", () => {
+    const figure = all.find((r) => r.selector === ".nyx-desk-figure" && r.media === null && /animation:/.test(r.body));
+    expect(figure?.body).toMatch(/transform:\s*translateY\(calc\(-1 \* var\(--nyx-hop, 0px\)\)\);/);
+    const flat = (selector: string, media: string | null) =>
+      all.some((r) => r.media === media && r.selector === selector && /transform:\s*none/.test(r.body));
+    expect(flat(':root[data-reduce-motion="true"] .nyx-desk-figure', null)).toBe(true);
+    expect(flat(".nyx-desk-figure", "@media (prefers-reduced-motion: reduce)")).toBe(true);
+  });
+
+  it("glows her pedestal with the voice", () => {
+    const pedestal = (look: string) =>
+      all.find((r) => r.media === null && r.selector === `.nyx-desk[data-look="${look}"] .nyx-desk-pedestal`)?.body ?? "";
+    expect(pedestal("listening")).toMatch(/filter:\s*brightness\(1\.35\)/);
+    expect(pedestal("speaking")).toMatch(/filter:\s*brightness\(1\.2\)/);
+    expect(pedestal("thinking")).toMatch(/animation:\s*nyx-desk-think 0\.286s ease-in-out infinite alternate/);
+    expect(css).toMatch(/@keyframes nyx-desk-think \{\s*from \{\s*filter: brightness\(1\);\s*\}\s*to \{\s*filter: brightness\(1\.18\);\s*\}\s*\}/);
+  });
+
+  it("stops every desk animation under both reduce-motion settings", () => {
+    // One name at a time: a rule can run two of them.
+    const uses = DESK.flatMap((name) => animationUses(css, [name]));
+    expect([...new Set(uses.map((u) => u.name))].sort()).toEqual([...DESK].sort());
+    for (const use of uses) {
+      for (const sel of use.selectors) {
+        expect(stopped(sel, null, true), `${sel} under data-reduce-motion`).toBe(true);
+        expect(stopped(sel, "@media (prefers-reduced-motion: reduce)", false), `${sel} under the OS setting`).toBe(true);
+      }
+    }
+  });
+
+  it("keeps a steady glow while thinking under reduce motion", () => {
+    const steady = all.filter(
+      (r) =>
+        r.selector.endsWith('.nyx-desk[data-look="thinking"] .nyx-desk-pedestal') &&
+        /animation:\s*none/.test(r.body) &&
+        /filter:\s*brightness\(1\.1\)/.test(r.body),
+    );
+    expect(steady.map((r) => r.media)).toEqual([null, "@media (prefers-reduced-motion: reduce)"]);
+  });
+});

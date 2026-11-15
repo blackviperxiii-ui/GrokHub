@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DesktopNyxState } from "./desktopNyxApi";
+import type { DesktopNyxState, DesktopNyxTalk } from "./desktopNyxApi";
 
 const api = vi.hoisted(() => ({
   desktopNyxGet: vi.fn<() => Promise<DesktopNyxState>>(),
@@ -12,9 +12,11 @@ const api = vi.hoisted(() => ({
   desktopNyxSetHit: vi.fn<(boxes: object[]) => Promise<void>>(),
   desktopNyxDrag: vi.fn<() => Promise<void>>(),
   onDesktopNyx: vi.fn<(fn: (s: DesktopNyxState) => void) => Promise<() => void>>(),
+  onDesktopNyxTalk: vi.fn<(fn: (t: DesktopNyxTalk | null) => void) => Promise<() => void>>(),
 }));
 
 let heard: ((s: DesktopNyxState) => void) | null = null;
+let talked: ((t: DesktopNyxTalk | null) => void) | null = null;
 
 vi.mock("./desktopNyxApi", () => api);
 
@@ -37,6 +39,8 @@ function state(over: Partial<DesktopNyxState> = {}): DesktopNyxState {
     effects: { transparent: true, onTop: true },
     companion: "Nyx",
     hiddenForGame: false,
+    still: false,
+    look: "idle",
     ...over,
   };
 }
@@ -55,6 +59,11 @@ describe("NyxDesk", () => {
       heard = fn;
       return Promise.resolve(() => {});
     });
+    talked = null;
+    api.onDesktopNyxTalk.mockImplementation((fn) => {
+      talked = fn;
+      return Promise.resolve(() => {});
+    });
   });
 
   it("changes her outfit when the dock's wardrobe does", async () => {
@@ -64,6 +73,68 @@ describe("NyxDesk", () => {
     act(() => heard?.(state({ outfit: "working", outfitFile: "brand/nyx-working.jpg" })));
     expect(figure()).toContain("nyx-working");
     expect(figure()).not.toContain("nyx-hanging-out");
+  });
+
+  it("glows with the chat's voice and stills with reduce motion, live", async () => {
+    const { container } = render(<NyxDesk />);
+    const root = () => container.querySelector(".nyx-desk");
+    await waitFor(() => expect(root()).toHaveAttribute("data-look", "idle"));
+    expect(document.documentElement.dataset.reduceMotion).toBe("false");
+    act(() => heard?.(state({ look: "listening" })));
+    expect(root()).toHaveAttribute("data-look", "listening");
+    act(() => heard?.(state({ look: "thinking", still: true })));
+    expect(root()).toHaveAttribute("data-look", "thinking");
+    expect(document.documentElement.dataset.reduceMotion).toBe("true");
+    act(() => heard?.(state({ still: false })));
+    expect(document.documentElement.dataset.reduceMotion).toBe("false");
+    delete document.documentElement.dataset.reduceMotion;
+  });
+
+  it("hops with the chat's spoken voice, and stops when it ends or under reduce motion", async () => {
+    let now = 10_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((fn) => frames.push(fn));
+    const height = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(400);
+    const step = (ms: number) => {
+      now += ms;
+      frames.splice(0).forEach((fn) => fn(now));
+    };
+    try {
+      const { container } = render(<NyxDesk />);
+      await waitFor(() => expect(container.querySelector(".nyx-desk-figure")).not.toBeNull());
+      const stage = container.querySelector<HTMLElement>(".nyx-desk-stage");
+      const hop = () => stage?.style.getPropertyValue("--nyx-hop");
+      // Full voice for 200 ms, from now.
+      act(() => talked?.({ levels: new Array<number>(10).fill(1), startedAt: now }));
+      step(0);
+      // One frame in: 1 - e^-1 of 1.5% of 400 px.
+      expect(hop()).toBe(`${6 * (1 - Math.exp(-1))}px`);
+      step(100);
+      expect(Number.parseFloat(hop() ?? "")).toBeCloseTo(6, 1);
+      // The reply pauses: she settles at once, and no frame is left running.
+      act(() => talked?.(null));
+      step(20);
+      expect(hop()).toBe("0px");
+      expect(frames).toHaveLength(0);
+      // It plays on; well past its end she settles by herself.
+      act(() => talked?.({ levels: new Array<number>(10).fill(1), startedAt: now }));
+      step(20);
+      expect(Number.parseFloat(hop() ?? "")).toBeGreaterThan(5);
+      step(600);
+      expect(hop()).toBe("0px");
+      expect(frames).toHaveLength(0);
+      // Reduce motion: no hop.
+      act(() => heard?.(state({ still: true })));
+      act(() => talked?.({ levels: new Array<number>(10).fill(1), startedAt: now }));
+      step(40);
+      expect(hop()).toBe("0px");
+      delete document.documentElement.dataset.reduceMotion;
+    } finally {
+      clock.mockRestore();
+      raf.mockRestore();
+      height.mockRestore();
+    }
   });
 
   it("tells the app which parts take the mouse: her pedestal and figure, and the menu while it is open", async () => {
@@ -81,7 +152,9 @@ describe("NyxDesk", () => {
       return { left, top, width, height } as DOMRect;
     });
     const pedestal = { x: 26, y: 259, w: 268, h: 202 };
-    const figure = { x: 60, y: 40, w: 200, h: 300 };
+    // Grown by her float (3 px), breath (1.2% up, 0.6% wide) and talk hop
+    // (1.5%, measured anywhere in it).
+    const figure = { x: 59.4, y: 28.9, w: 201.2, h: 318.6 };
     try {
       render(<NyxDesk />);
       const root = await screen.findByLabelText("Nyx");
