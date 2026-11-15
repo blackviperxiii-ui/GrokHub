@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { chipOutcome, quickChips, type ChipSurface, type QuickChip, type SessionMode } from "./api";
+import { dialogOpen } from "./chatKeys";
 import { onGameSession } from "./gameSession";
 import { onArrowFocus, usePeek } from "./peek";
-import { inShell } from "./transport";
 
 /** At most this many chips in a row, as in the cabin. */
 export const CHIP_ROW_MAX = 3;
@@ -52,7 +52,8 @@ export function ChipRow({
     if (!keys || busy || shown.length === 0) return;
     const onKey = (event: KeyboardEvent) => {
       const slot = chipSlotOf(event);
-      if (slot === null || !shown[slot]) return;
+      // A window over the page, such as a game's note, keeps its own keys.
+      if (slot === null || !shown[slot] || dialogOpen()) return;
       event.preventDefault();
       onTap(shown[slot]);
     };
@@ -166,7 +167,5 @@ export function useChipRow({
     );
   }
 
-  // A paired browser can't open a game's note: that stays on the computer.
-  const shown = inShell() ? chips : chips.filter((c) => c.action !== "note");
-  return { chips: wanted ? shown : [], picked, hide };
+  return { chips: wanted ? chips : [], picked, hide };
 }

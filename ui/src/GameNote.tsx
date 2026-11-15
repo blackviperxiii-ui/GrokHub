@@ -5,12 +5,26 @@ import { useModalFocus } from "./ui";
 export const NOTE_HELP = "Shown on the card the next time you launch it.";
 export const NOTE_PLACEHOLDER = "remember I was farming X";
 export const NOTE_SAVED = "Saved. It shows on the card next time you launch it.";
+export const NOTE_REMOVED = "Removed. The next launch card has no note.";
+/** How long the status line a save leaves stays under the row. */
+export const NOTE_STATUS_MS = 6_000;
 /** The note's limit, as the companion keeps it (`grokhub_core::game_companion` NOTE_CHARS). */
 export const NOTE_CHARS = 500;
 
+/** The status line a note dialog leaves under the row; it goes on its own. */
+export function useNoteStatus(): [string | null, (status: string | null) => void] {
+  const [status, setStatus] = useState<string | null>(null);
+  useEffect(() => {
+    if (!status) return;
+    const timer = window.setTimeout(() => setStatus(null), NOTE_STATUS_MS);
+    return () => window.clearTimeout(timer);
+  }, [status]);
+  return [status, setStatus];
+}
+
 /** A game's note for next time, from a "Leave a note" chip. Save keeps it
- * for the launch card; Cancel and Esc save nothing. `onDone` gets the
- * status line after a save, or null. */
+ * for the launch card, and saving an empty box removes it; Cancel and Esc
+ * save nothing. `onDone` gets the status line after a save, or null. */
 export function GameNote({
   appId,
   onDone,
@@ -33,7 +47,6 @@ export function GameNote({
         if (!live) return;
         setGame(found.game);
         setText(found.note);
-        field.current?.focus();
       },
       (err) => {
         if (live) setError(String(err));
@@ -43,6 +56,11 @@ export function GameNote({
       live = false;
     };
   }, [appId]);
+
+  // The box turns on once the game is known; focus goes there then.
+  useEffect(() => {
+    if (game !== null) field.current?.focus();
+  }, [game]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -60,8 +78,8 @@ export function GameNote({
     if (busy) return;
     setBusy(true);
     try {
-      await companionSetNote(appId, text);
-      onDone(NOTE_SAVED);
+      const kept = await companionSetNote(appId, text);
+      onDone(kept ? NOTE_SAVED : NOTE_REMOVED);
     } catch (err) {
       setError(String(err));
       setBusy(false);
@@ -89,7 +107,7 @@ export function GameNote({
           maxLength={NOTE_CHARS}
           placeholder={NOTE_PLACEHOLDER}
           value={text}
-          disabled={game === null && !error}
+          disabled={game === null}
           onChange={(e) => setText(e.target.value)}
         />
         {error && (

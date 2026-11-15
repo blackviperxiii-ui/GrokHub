@@ -483,6 +483,64 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(&wired).unwrap()["noteFor"], 7);
     }
+    #[test]
+    fn a_game_sessions_note_offers_lead_home_and_the_composer_as_note_taps() {
+        let game = |app_id, name: &str| grokhub_core::steam::SteamGame {
+            app_id,
+            name: name.into(),
+            last_played: 0,
+            playtime_min: 0,
+        };
+        let session = crate::game_companion::Session {
+            playing: Some(game(8, "Celeste")),
+            ended: Some((game(7, "Hades"), 500)),
+        };
+        for surface in [HOME, COMPOSER] {
+            let extra = crate::game_companion::row_extra(&session, surface, false, 1_000);
+            let dir = temp_dir(&format!("game-notes-{surface}"));
+            let rows = Mutex::new(Rows::default());
+            let shown = row(
+                &dir,
+                &rows,
+                RowAsk {
+                    surface,
+                    chat: &[],
+                    draft: "",
+                    follow_ups: &[],
+                    mode: "chat",
+                    signed_in: true,
+                    first_run: false,
+                    hour: 10,
+                    weekday: 2,
+                    quiet_hours: false,
+                    now_ms: 1_000,
+                    extra: &extra,
+                    lane: Lane::default(),
+                },
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+            // Both offers make the three-chip row, in the session's order.
+            let lead: Vec<_> = shown
+                .iter()
+                .filter(|c| c.id.starts_with("game:"))
+                .map(|c| (c.id.as_str(), c.label.as_str(), c.action, c.note_for))
+                .collect();
+            assert_eq!(
+                lead,
+                [
+                    ("game:note:8", "Note for Celeste", Tap::Note, Some(8)),
+                    (
+                        "game:note:7",
+                        "Leave a note for Hades next time",
+                        Tap::Note,
+                        Some(7)
+                    ),
+                ],
+                "{surface}"
+            );
+        }
+    }
+
     use grokhub_core::ChipKind;
 
     fn chip(id: &str, value: &str, kind: ChipKind) -> QuickChip {

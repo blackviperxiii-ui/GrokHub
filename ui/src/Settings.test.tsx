@@ -412,6 +412,33 @@ describe("Settings", () => {
     expect(seen).toContain("Account");
   });
 
+  it("Behavior's game companion row knows whether notifications are on, and stays off a browser and a phone", async () => {
+    const { unmount } = render(<Settings caps={BASICS} />);
+    await screen.findByLabelText("Let Loadout control the desktop");
+    await openSection("Behavior");
+    expect(screen.getByText("Game companion row with notifications")).toBeInTheDocument();
+    unmount();
+
+    api.getSettings.mockResolvedValue(shape({ notifications: false }));
+    const off = render(<Settings caps={BASICS} />);
+    await screen.findByLabelText("Let Loadout control the desktop");
+    await openSection("Behavior");
+    expect(screen.getByText("Game companion row")).toBeInTheDocument();
+    off.unmount();
+
+    const noPulse = render(<Settings caps={{ ...BASICS, pulse: false }} />);
+    await screen.findByLabelText("Let Loadout control the desktop");
+    await openSection("Behavior");
+    expect(screen.getByRole("button", { name: "Behavior panel" })).toBeInTheDocument();
+    expect(screen.queryByText(/^Game companion row/)).toBeNull();
+    noPulse.unmount();
+
+    // A paired browser gets its own short page, with no Behavior at all.
+    render(<Settings caps={{ ...BASICS, remote: true }} />);
+    expect(await screen.findByText(REMOTE_NOTE)).toBeInTheDocument();
+    expect(screen.queryByText(/^Game companion row/)).toBeNull();
+  });
+
   it("opens every section from the nav, one at a time", async () => {
     render(<Settings caps={DESKTOP} />);
     expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
@@ -432,7 +459,8 @@ describe("Settings", () => {
     expect(screen.getByRole("button", { name: "Behavior panel" })).toBeInTheDocument();
     expect(screen.getByText("Screenshot explain row")).toBeInTheDocument();
     expect(screen.getByText("Game watcher row")).toBeInTheDocument();
-    expect(screen.getByText(/^Game companion row/)).toBeInTheDocument();
+    // DESKTOP has no notifications, so the ping says it stays quiet.
+    expect(screen.getByText("Game companion row")).toBeInTheDocument();
     expect(screen.getByText("Living wall row")).toBeInTheDocument();
     expect(screen.queryByLabelText("Work folder")).toBeNull();
 

@@ -2192,6 +2192,7 @@ fn chip_row(
     draft: &str,
     mode: agent::SessionMode,
     clock: automations::Clock,
+    remote: bool,
 ) -> Vec<chips::Chip> {
     let settings = current(state);
     if !settings.behavior.suggestions {
@@ -2229,12 +2230,12 @@ fn chip_row(
     };
     #[cfg(not(desktop))]
     let focus_extra: Vec<grokhub_core::QuickChip> = Vec::new();
-    // The game companion's note offers lead the open chat's row and Home's.
-    let game_extra = if surface == chips::PALETTE {
-        Vec::new()
-    } else {
-        game_companion::lock(&state.game_session).chips(local.now_ms)
-    };
+    let game_extra = game_companion::row_extra(
+        &game_companion::lock(&state.game_session),
+        surface,
+        remote,
+        local.now_ms,
+    );
     let extra: Vec<grokhub_core::QuickChip> = if surface == chips::COMPOSER {
         game_extra.into_iter().chain(focus_extra).collect()
     } else {
@@ -2283,6 +2284,7 @@ async fn quick_chips(
             &draft.unwrap_or_default(),
             mode.unwrap_or_default(),
             clock,
+            false,
         )
     })
     .await
@@ -7074,6 +7076,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 &arg::<Option<String>>(args, "draft")?.unwrap_or_default(),
                 arg::<Option<agent::SessionMode>>(args, "mode")?.unwrap_or_default(),
                 arg(args, "clock")?,
+                true,
             ))
         }
         "chip_outcome" => out(block_on(chip_outcome(

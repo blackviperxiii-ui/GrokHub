@@ -24,7 +24,7 @@ import {
 import { ChipRow, useChipRow } from "./Chips";
 import { FollowUpRow } from "./Goals";
 import { HomeEdit } from "./HomeEdit";
-import { GameNote } from "./GameNote";
+import { GameNote, useNoteStatus } from "./GameNote";
 import { PcSheet } from "./PcSheet";
 import { COMPANION_NAME } from "./brand";
 import { openExternal } from "./external";
@@ -490,7 +490,7 @@ export function Home({
   }
   // The game a "Leave a note" chip opened the note dialog for.
   const [noteFor, setNoteFor] = useState<number | null>(null);
-  const [noteSaved, setNoteSaved] = useState<string | null>(null);
+  const [noteSaved, setNoteSaved] = useNoteStatus();
 
   const [reads, setReads] = useState(0);
   const reload = () => setReads((n) => n + 1);

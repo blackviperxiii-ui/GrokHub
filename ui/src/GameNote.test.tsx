@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, renderHook, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompanionNote } from "./api";
@@ -10,7 +10,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("./api", () => api);
 
-import { GameNote } from "./GameNote";
+import { GameNote, NOTE_STATUS_MS, useNoteStatus } from "./GameNote";
 
 describe("GameNote", () => {
   beforeEach(() => {
@@ -24,6 +24,7 @@ describe("GameNote", () => {
     const done = vi.fn();
     render(<GameNote appId={7} onDone={done} />);
     const box = await screen.findByDisplayValue("try the spear");
+    expect(box).toHaveFocus();
     expect(screen.getByRole("dialog", { name: "Note for Hades" })).toBeVisible();
     expect(screen.getByText("Shown on the card the next time you launch it.")).toBeVisible();
     expect(box).toHaveAttribute("placeholder", "remember I was farming X");
@@ -43,7 +44,7 @@ describe("GameNote", () => {
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(done).toHaveBeenLastCalledWith(null);
     await userEvent.keyboard("{Escape}");
-    expect(done).toHaveBeenCalledTimes(2);
+    expect(done.mock.calls).toEqual([[null], [null]]);
     expect(api.companionSetNote).not.toHaveBeenCalled();
   });
 
@@ -55,5 +56,40 @@ describe("GameNote", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Library is off on this device.");
     expect(done).not.toHaveBeenCalled();
+  });
+
+  it("saving an empty box removes the note and says so", async () => {
+    api.companionSetNote.mockResolvedValue("");
+    const done = vi.fn();
+    render(<GameNote appId={7} onDone={done} />);
+    await userEvent.clear(await screen.findByDisplayValue("try the spear"));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.companionSetNote).toHaveBeenCalledWith(7, "");
+    expect(done).toHaveBeenCalledWith("Removed. The next launch card has no note.");
+  });
+
+  it("a note that can't be read leaves the box and Save off and says why", async () => {
+    api.companionNote.mockRejectedValue("game_notes.json: no access");
+    render(<GameNote appId={7} onDone={vi.fn()} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("game_notes.json: no access");
+    expect(screen.getByRole("textbox", { name: "Your note" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+});
+
+describe("useNoteStatus", () => {
+  it("clears the status line on its own", () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useNoteStatus());
+      act(() => result.current[1]("Saved. It shows on the card next time you launch it."));
+      expect(result.current[0]).toBe("Saved. It shows on the card next time you launch it.");
+      act(() => vi.advanceTimersByTime(NOTE_STATUS_MS - 1));
+      expect(result.current[0]).toBe("Saved. It shows on the card next time you launch it.");
+      act(() => vi.advanceTimersByTime(1));
+      expect(result.current[0]).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

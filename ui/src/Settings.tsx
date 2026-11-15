@@ -289,7 +289,7 @@ export function Settings({
               />
             )}
             {section === "behavior" && <ScreenshotExplain />}
-            {section === "behavior" && caps.pulse && !caps.remote && (
+            {section === "behavior" && caps.pulse && (
               <GameCompanionSetting
                 notifications={Boolean(loaded.notifications && caps.notifications)}
               />

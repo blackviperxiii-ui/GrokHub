@@ -199,7 +199,7 @@ pub fn chips(game: &SteamGame, ended: bool) -> Vec<QuickChip> {
     let note = chip(
         format!("{NOTE_PREFIX}{}", game.app_id),
         if ended {
-            "Leave a note for next time".into()
+            format!("Leave a note for {} next time", game.name)
         } else {
             format!("Note for {}", game.name)
         },
@@ -378,7 +378,10 @@ mod tests {
                 "Note for Deep Rock Galactic"
             ]
         );
-        assert_eq!(labels(true), vec!["Leave a note for next time"]);
+        assert_eq!(
+            labels(true),
+            vec!["Leave a note for Deep Rock Galactic next time"]
+        );
         assert_eq!(
             guides_url(548430),
             "https://steamcommunity.com/app/548430/guides/?browsefilter=toprated"

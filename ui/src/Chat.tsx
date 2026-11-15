@@ -54,7 +54,7 @@ import {
   type Transcript,
   type TurnRead,
 } from "./api";
-import { GameNote } from "./GameNote";
+import { GameNote, useNoteStatus } from "./GameNote";
 import { ChipRow, useChipRow } from "./Chips";
 import { ChatTabs, HangoutHeader } from "./ChatTabs";
 import { GoalAsk } from "./Goals";
@@ -1017,7 +1017,7 @@ export function Chat({
   const slashPick = Math.min(slashAt, slashRows.length - 1);
   // The game a "Leave a note" chip opened the note dialog for.
   const [noteFor, setNoteFor] = useState<number | null>(null);
-  const [noteSaved, setNoteSaved] = useState<string | null>(null);
+  const [noteSaved, setNoteSaved] = useNoteStatus();
   const row = useChipRow({
     surface: "composer",
     // The computer refuses a browser chips for a chat it has not sent in, so

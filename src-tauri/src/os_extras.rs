@@ -73,12 +73,12 @@ pub fn should_notify(focused: bool, enabled: bool) -> bool {
     enabled && !focused
 }
 
-/// The game companion's ping goes out only when it is switched on, the
+/// With the game companion's ping on, it goes out only when the
 /// notifications are on and allowed, the window is not the one in front, and
 /// it isn't quiet hours. "Only important" doesn't hold it back: the ping is
 /// its own opt-in.
-pub fn companion_ping_ok(ping: bool, enabled: bool, focused: bool, quiet: bool) -> bool {
-    ping && should_notify(focused, enabled) && !quiet
+pub fn companion_ping_ok(enabled: bool, focused: bool, quiet: bool) -> bool {
+    should_notify(focused, enabled) && !quiet
 }
 
 /// The page's event for the bell: a game companion ping went out.
@@ -444,7 +444,7 @@ pub fn game_launch(app: &AppHandle, card: &grokhub_core::UpdateCard) {
         .and_then(|window| window.is_focused().ok())
         .unwrap_or(false);
     let quiet = quiet_now(&state.config_dir, grokhub_core::now_ms());
-    if !companion_ping_ok(true, enabled, focused, quiet) {
+    if !companion_ping_ok(enabled, focused, quiet) {
         return;
     }
     let body = card.body.clone().unwrap_or_default();
@@ -566,18 +566,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_game_ping_needs_its_switch_notifications_a_background_window_and_no_quiet_hours() {
-        assert!(companion_ping_ok(true, true, false, false));
-        assert!(!companion_ping_ok(false, true, false, false), "ping off");
-        assert!(
-            !companion_ping_ok(true, false, false, false),
-            "notifications off"
-        );
-        assert!(
-            !companion_ping_ok(true, true, true, false),
-            "window in front"
-        );
-        assert!(!companion_ping_ok(true, true, false, true), "quiet hours");
+    fn the_game_ping_needs_notifications_a_background_window_and_no_quiet_hours() {
+        assert!(companion_ping_ok(true, false, false));
+        assert!(!companion_ping_ok(false, false, false), "notifications off");
+        assert!(!companion_ping_ok(true, true, false), "window in front");
+        assert!(!companion_ping_ok(true, false, true), "quiet hours");
     }
 
     #[test]

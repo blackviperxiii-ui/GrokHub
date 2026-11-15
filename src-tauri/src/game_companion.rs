@@ -160,11 +160,25 @@ impl Session {
             .filter(|c| c.id.starts_with(gc::NOTE_PREFIX))
             .enumerate()
             .map(|(i, mut c)| {
-                // Feature chips lead the row, in this order.
+                // Feature chips rank above the ranker's own, in this order.
                 c.score = 100.0 - i as f32 * 0.001;
                 c
             })
             .collect()
+    }
+
+    /// Drops a closed game's note offer once its half hour is up. True when
+    /// that changed the row, so a row left open stops offering it.
+    pub fn expire(&mut self, now: u64) -> bool {
+        if self
+            .ended
+            .as_ref()
+            .is_some_and(|(_, at)| now.saturating_sub(*at) >= NOTE_OFFER_MS)
+        {
+            self.ended = None;
+            return true;
+        }
+        false
     }
 
     /// The game a note chip names: the one running, else the one that closed.
@@ -190,6 +204,16 @@ impl Session {
     pub fn clear(&mut self) -> bool {
         std::mem::take(self) != Session::default()
     }
+}
+
+/// The game chips a row starts from: the note offers lead Home's row and the
+/// open chat's. The palette gets none, and neither does a paired browser,
+/// which can't open the note window.
+pub fn row_extra(session: &Session, surface: &str, remote: bool, now: u64) -> Vec<QuickChip> {
+    if remote || surface == crate::chips::PALETTE {
+        return Vec::new();
+    }
+    session.chips(now)
 }
 
 /// Posts a launch card, replacing that game's earlier one, so relaunching
@@ -259,6 +283,43 @@ pub fn launch_cards(
         .collect()
 }
 
+/// One sample's launch events: the session first, under its lock and only
+/// while the switch is on, then `changed` when that moved the chip rows, so
+/// they ask again before the news is read. Then each launch card goes up.
+/// The switch is read again before each card, so an Off that lands
+/// mid-sample posts nothing more. Returns the cards to ping for: ones that
+/// were really posted, while the ping is on.
+pub fn on_launch(
+    dir: &Path,
+    session: &std::sync::Mutex<Session>,
+    events: &[Launch],
+    library: &[SteamGame],
+    news: ReadNews<'_>,
+    now: u64,
+    changed: &mut dyn FnMut(),
+) -> Vec<grokhub_core::UpdateCard> {
+    // Turn off saves the switch before it clears the session under this
+    // lock, so reading the switch here can't refill a cleared session.
+    let moved = {
+        let mut session = lock(session);
+        is_on(dir) && session.note(events, library, now)
+    };
+    if moved {
+        changed();
+    }
+    let mut pings = Vec::new();
+    for card in launch_cards(events, library, dir, news, now) {
+        let switch = load(dir);
+        if !switch.on {
+            break;
+        }
+        if matches!(post_card(dir, card.clone()), Ok(true)) && switch.ping {
+            pings.push(card);
+        }
+    }
+    pings
+}
+
 /// Samples what Steam runs while the switch is on. Starts after the shell's
 /// state is managed: it keeps the session there for the chip rows.
 #[cfg(desktop)]
@@ -282,6 +343,9 @@ pub fn start(app: tauri::AppHandle) {
                 }
                 continue;
             }
+            if lock(&state.game_session).expire(grokhub_core::now_ms()) {
+                let _ = app.emit(EVENT, ());
+            }
             let events = watch.note(grokhub_desktop::game_guard::steam_app_now());
             if events.is_empty() {
                 continue;
@@ -289,17 +353,19 @@ pub fn start(app: tauri::AppHandle) {
             let library = grokhub_core::steam::detect_root()
                 .map(|r| grokhub_core::steam::read_library(&r))
                 .unwrap_or_default();
-            let now = grokhub_core::now_ms();
-            // The session changes under its lock; the news is read after.
-            let changed = lock(&state.game_session).note(&events, &library, now);
-            let ping = load(&dir).ping;
-            for card in launch_cards(&events, &library, &dir, &read_news, now) {
-                if post_card(&dir, card.clone()).is_ok() && ping {
-                    crate::os_extras::game_launch(&app, &card);
-                }
-            }
-            if changed {
-                let _ = app.emit(EVENT, ());
+            let pings = on_launch(
+                &dir,
+                &state.game_session,
+                &events,
+                &library,
+                &read_news,
+                grokhub_core::now_ms(),
+                &mut || {
+                    let _ = app.emit(EVENT, ());
+                },
+            );
+            for card in &pings {
+                crate::os_extras::game_launch(&app, card);
             }
         }
     });
@@ -549,7 +615,7 @@ mod tests {
         assert!(session.note(&watch.note(None), &library, 2_000));
         let offer = session.chips(2_000);
         assert_eq!(ids(&offer), ["game:note:7"]);
-        assert_eq!(offer[0].label, "Leave a note for next time");
+        assert_eq!(offer[0].label, "Leave a note for Hades next time");
         assert_eq!(offer[0].value, "note 7");
         assert_eq!(session.chips(2_000 + NOTE_OFFER_MS - 1).len(), 1);
         assert!(session.chips(2_000 + NOTE_OFFER_MS).is_empty());
@@ -589,7 +655,7 @@ mod tests {
         let row = session.chips(6_000);
         assert_eq!(ids(&row), ["game:note:7", "game:note:8"]);
         assert_eq!(row[0].label, "Note for Hades");
-        assert_eq!(row[1].label, "Leave a note for next time");
+        assert_eq!(row[1].label, "Leave a note for Celeste next time");
         assert_eq!(session.ended, Some((game(8, "Celeste"), 6_000)));
         assert!(session.clear());
         assert!(!session.clear());
@@ -606,30 +672,165 @@ mod tests {
     }
 
     #[test]
-    fn a_relaunch_replaces_the_games_card() {
+    fn a_relaunch_replaces_the_games_card_and_keeps_a_dismissed_one() {
         let dir = scratch("relaunch");
         let dota = game(570, "Dota 2");
-        let news = |_: &SteamGame| Some(Vec::new());
-        for at in [1_000, 2_000] {
+        let post = |at: u64, news: ReadNews<'_>| {
             let mut card = launch_cards(
                 &[Launch::Started(570)],
                 std::slice::from_ref(&dota),
                 &dir,
-                &news,
+                news,
                 at,
             )
             .remove(0);
             card.created_at = at;
-            post_card(&dir, card).unwrap();
-        }
-        let shown: Vec<_> = crate::pulse::cards(&dir)
-            .unwrap()
-            .into_iter()
-            .filter(|c| c.title == "Back to Dota 2")
-            .map(|c| c.body.unwrap_or_default())
-            .collect();
-        assert_eq!(shown, ["No news since you last played."]);
+            post_card(&dir, card).unwrap()
+        };
+        let quiet = |_: &SteamGame| Some(Vec::new());
+        let patched =
+            |_: &SteamGame| Some(vec![("Patch 7.38".into(), "https://example.com/p".into())]);
+        assert!(post(1_000, &quiet));
+        assert!(post(2_000, &patched));
+        let shown = |dir: &Path| -> Vec<(String, grokhub_core::UpdateStatus, u64)> {
+            let mut cards: Vec<_> = crate::pulse::cards(dir)
+                .unwrap()
+                .into_iter()
+                .filter(|c| c.title == "Back to Dota 2")
+                .map(|c| (c.body.unwrap_or_default(), c.status, c.created_at))
+                .collect();
+            cards.sort_by_key(|c| c.2);
+            cards
+        };
+        let open = grokhub_core::UpdateStatus::Unread;
+        assert_eq!(
+            shown(&dir),
+            [(
+                "What changed since you last played: Patch 7.38.".to_string(),
+                open,
+                2_000
+            )]
+        );
+        // A card the user put away stays put away; the next launch adds one.
+        crate::pulse::edit_cards(&dir, &mut |cards| {
+            for c in cards.iter_mut() {
+                c.status = grokhub_core::UpdateStatus::Dismissed;
+            }
+            1
+        })
+        .unwrap();
+        assert!(post(3_000, &quiet));
+        assert_eq!(
+            shown(&dir),
+            [
+                (
+                    "What changed since you last played: Patch 7.38.".to_string(),
+                    grokhub_core::UpdateStatus::Dismissed,
+                    2_000
+                ),
+                ("No news since you last played.".to_string(), open, 3_000),
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_launch_moves_the_session_first_then_pings_only_for_a_posted_card() {
+        let dir = scratch("on-launch");
+        let library = [game(7, "Hades")];
+        let news = |_: &SteamGame| Some(Vec::new());
+        let session = std::sync::Mutex::new(Session::default());
+        let mut heard = 0;
+        let started = [Launch::Started(7)];
+
+        // Off: nothing moves and nothing posts.
+        let pings = on_launch(
+            &dir,
+            &session,
+            &started,
+            &library,
+            &news,
+            1_000,
+            &mut || heard += 1,
+        );
+        assert!(pings.is_empty());
+        assert_eq!(heard, 0);
+        assert_eq!(*lock(&session), Session::default());
+        assert!(crate::pulse::cards(&dir).unwrap().is_empty());
+
+        // On, ping off: the card goes up with no ping.
+        set(&dir, true).unwrap();
+        let pings = on_launch(
+            &dir,
+            &session,
+            &started,
+            &library,
+            &news,
+            2_000,
+            &mut || heard += 1,
+        );
+        assert!(pings.is_empty());
+        assert_eq!(heard, 1);
+        assert_eq!(lock(&session).playing, Some(game(7, "Hades")));
+        assert_eq!(crate::pulse::cards(&dir).unwrap().len(), 1);
+
+        // Ping on: the posted card is the one to ping for.
+        set_ping(&dir, true).unwrap();
+        lock(&session).clear();
+        let pings = on_launch(
+            &dir,
+            &session,
+            &started,
+            &library,
+            &news,
+            3_000,
+            &mut || heard += 1,
+        );
+        assert_eq!(heard, 2);
+        assert_eq!(
+            pings.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(),
+            ["Back to Hades"]
+        );
+
+        // A card Pulse turns down (it reads like "this task") sends no ping.
+        set_note(&dir, 7, "finish this task").unwrap();
+        lock(&session).clear();
+        let pings = on_launch(
+            &dir,
+            &session,
+            &started,
+            &library,
+            &news,
+            4_000,
+            &mut || heard += 1,
+        );
+        assert!(pings.is_empty());
+        assert_eq!(heard, 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_closed_games_offer_expires_once_and_stays_off_the_palette_and_a_browser() {
+        let mut session = Session {
+            playing: Some(game(8, "Celeste")),
+            ended: Some((game(7, "Hades"), 1_000)),
+        };
+        assert_eq!(
+            ids(&row_extra(&session, crate::chips::HOME, false, 2_000)),
+            ["game:note:8", "game:note:7"]
+        );
+        assert_eq!(
+            ids(&row_extra(&session, crate::chips::COMPOSER, false, 2_000)),
+            ["game:note:8", "game:note:7"]
+        );
+        assert!(row_extra(&session, crate::chips::PALETTE, false, 2_000).is_empty());
+        assert!(row_extra(&session, crate::chips::HOME, true, 2_000).is_empty());
+
+        assert!(!session.expire(1_000 + NOTE_OFFER_MS - 1));
+        assert!(session.expire(1_000 + NOTE_OFFER_MS));
+        assert_eq!(session.ended, None);
+        assert!(!session.expire(1_000 + NOTE_OFFER_MS));
+        assert_eq!(session.playing, Some(game(8, "Celeste")));
     }
 
     #[test]

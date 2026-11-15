@@ -90,6 +90,21 @@ describe("ChipRow", () => {
     fireEvent.keyDown(window, { code: "Digit2", altKey: true });
     expect(onTap).toHaveBeenCalledWith(chips[1]);
   });
+
+  it("Alt+N leaves a window over the page alone, such as a game's note", () => {
+    const onTap = vi.fn();
+    const chips = [chip("a", "One"), chip("b", "Two")];
+    render(
+      <>
+        <ChipRow chips={chips} onTap={onTap} onHide={vi.fn()} />
+        <div role="dialog" aria-modal="true" aria-label="Note for Hades">
+          <textarea aria-label="Your note" />
+        </div>
+      </>,
+    );
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Your note" }), { code: "Digit2", altKey: true });
+    expect(onTap).not.toHaveBeenCalled();
+  });
 });
 
 function Harness({ draft = "", busy = false }: { draft?: string; busy?: boolean }) {
