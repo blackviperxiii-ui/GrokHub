@@ -1,0 +1,1 @@
+- Voice mode: what you say now streams to xAI speech-to-text while you talk, so a clearly finished sentence is sent without waiting for silence, and the words are ready the moment you stop. If the stream can't be used (no API key, Offline only, or the server refuses the key), the turn is uploaded once as before.

@@ -62,11 +62,16 @@ fn target() -> Result<Target, String> {
             bearer: crate::credential::LOOPBACK_TEST_BEARER.into(),
         });
     }
-    let bearer = crate::credential::load_key().map_err(|_| NO_KEY.to_string())?;
     Ok(Target {
         url: stt_url(),
-        bearer,
+        bearer: stt_bearer()?,
     })
+}
+
+/// The credential speech-to-text carries, upload and stream alike: the
+/// saved xAI API key.
+pub fn stt_bearer() -> Result<String, String> {
+    crate::credential::load_key().map_err(|_| NO_KEY.to_string())
 }
 
 /// Seconds of sound in a PCM WAV, from its header. `None` when it isn't one.

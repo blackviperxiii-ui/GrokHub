@@ -147,6 +147,7 @@ pub mod slash_ops;
 pub mod spend_cards;
 mod steam_checks;
 pub mod storage;
+mod stt_stream;
 pub mod suggested;
 mod task_feed;
 mod turns;

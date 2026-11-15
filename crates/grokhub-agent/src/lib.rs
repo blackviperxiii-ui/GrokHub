@@ -193,3 +193,5 @@ pub use work::{
     discard_work, how_ended, merge_work, resume_work, settled, why_held, work_for, By, Counts,
     Ended, Held, Landing, Resume, Work, WorkState,
 };
+/// The TLS config the agent's sockets use, for the shell's speech stream.
+pub use ws_mode::tls_config as ws_tls_config;

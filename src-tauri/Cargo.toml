@@ -49,6 +49,9 @@ tiny_http = "0.12"
 # HTTPS for Settings → Web access (remote_tls.rs); ring only, as reqwest uses.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+# Voice mode's streaming speech-to-text socket (stt_stream.rs), with the
+# same build and TLS config as the agent's sockets.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 tokio = { version = "1", features = ["rt", "net", "io-util", "time", "sync", "macros"] }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 base64 = "0.23"
