@@ -8,11 +8,10 @@ use super::*;
 use crate::brain::{classify, BriefInput};
 use crate::route::local::{ChatMessage, ForceOn, LocalRuntime};
 
-/// Answers every chat with `reply` after `sleep` (or, when held, once
-/// released), and counts the calls started and finished.
+/// Answers every chat with `reply` (when held, only once released), and
+/// counts the calls started and finished.
 struct Fake {
     reply: String,
-    sleep: Duration,
     held: AtomicBool,
     calls: AtomicUsize,
     finished: AtomicUsize,
@@ -20,10 +19,9 @@ struct Fake {
 }
 
 impl Fake {
-    fn new(reply: &str, sleep_ms: u64) -> Arc<Self> {
+    fn new(reply: &str) -> Arc<Self> {
         Arc::new(Self {
             reply: reply.into(),
-            sleep: Duration::from_millis(sleep_ms),
             held: AtomicBool::new(false),
             calls: AtomicUsize::new(0),
             finished: AtomicUsize::new(0),
@@ -31,9 +29,11 @@ impl Fake {
         })
     }
 
-    /// A model that doesn't answer until [`Fake::release`].
+    /// A model that doesn't answer until [`Fake::release`], or [`HOLD_CAP`]
+    /// after the call starts, so a turn with no cutoff fails instead of
+    /// hanging.
     fn held(reply: &str) -> Arc<Self> {
-        let fake = Self::new(reply, 0);
+        let fake = Self::new(reply);
         fake.held.store(true, Ordering::SeqCst);
         fake
     }
@@ -69,14 +69,18 @@ impl LocalRuntime for Fake {
     ) -> Result<String, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().unwrap().push(messages.to_vec());
-        std::thread::sleep(self.sleep);
-        while self.held.load(Ordering::SeqCst) {
+        let started = Instant::now();
+        while self.held.load(Ordering::SeqCst) && started.elapsed() < HOLD_CAP {
             std::thread::sleep(Duration::from_millis(5));
         }
         self.finished.fetch_add(1, Ordering::SeqCst);
         Ok(self.reply.clone())
     }
 }
+
+/// Longest a held fake waits for its release: well past the cutoff check's
+/// ten-times-the-limit bound.
+const HOLD_CAP: Duration = Duration::from_secs(10);
 
 const TYPO: &str = "plz fix teh wifi its brokn agian ugh";
 const FIXED: &str = "please fix the wifi, it's broken again";
@@ -124,7 +128,7 @@ fn turn<'a>(text: &'a str, brief: &'a Brief) -> TidyIn<'a> {
 
 #[test]
 fn a_typod_ask_comes_back_tidied() {
-    let fake = Fake::new(FIXED, 0);
+    let fake = Fake::new(FIXED);
     assert_eq!(run(&fake, TYPO, LIMIT).as_deref(), Some(FIXED));
     assert_eq!(fake.calls(), 1);
     let seen = fake.seen.lock().unwrap();
@@ -138,7 +142,7 @@ fn a_typod_ask_comes_back_tidied() {
 
 #[test]
 fn the_switch_off_sends_the_typed_text() {
-    let fake = Fake::new(FIXED, 0);
+    let fake = Fake::new(FIXED);
     let b = brief(TYPO);
     let rt: Arc<dyn LocalRuntime> = fake.clone();
     assert_eq!(
@@ -167,7 +171,7 @@ fn no_runtime_loaded_sends_the_typed_text() {
 
 #[test]
 fn short_long_slash_code_path_and_url_asks_are_never_sent() {
-    let fake = Fake::new(FIXED, 0);
+    let fake = Fake::new(FIXED);
     let long = "plz ".repeat(160);
     for text in [
         "hi",
@@ -186,7 +190,7 @@ fn short_long_slash_code_path_and_url_asks_are_never_sent() {
 
 #[test]
 fn background_and_instant_turns_are_never_sent() {
-    let fake = Fake::new(FIXED, 0);
+    let fake = Fake::new(FIXED);
     let b = brief(TYPO);
     for (background, instant) in [(true, false), (false, true)] {
         let rt: Arc<dyn LocalRuntime> = fake.clone();
@@ -202,7 +206,7 @@ fn background_and_instant_turns_are_never_sent() {
 
 /// One rejected answer per guard, each passing every other guard.
 fn rejected(typed: &str, wrong: &str) {
-    let fake = Fake::new(wrong, 0);
+    let fake = Fake::new(wrong);
     assert_eq!(run(&fake, typed, LIMIT), None, "{wrong:?}");
     assert_eq!(fake.calls(), 1);
 }
@@ -226,7 +230,7 @@ fn a_dropped_path_number_quote_or_mention_keeps_the_original() {
         "please ask sam about the raid tonite after dinner time",
     );
     // Every span kept goes through.
-    let fake = Fake::new("please set the fps cap to 144 in the game settings", 0);
+    let fake = Fake::new("please set the fps cap to 144 in the game settings");
     assert_eq!(
         run(&fake, fps, LIMIT).as_deref(),
         Some("please set the fps cap to 144 in the game settings")
@@ -266,7 +270,7 @@ fn a_changed_word_answer_or_new_intent_keeps_the_original() {
     assert_ne!(brief(crash).intent, brief(fixed).intent);
     rejected(crash, fixed);
     // Right spelling everywhere goes through, small words and all.
-    let fake = Fake::new("please install the new drivers for my gpu tonight", 0);
+    let fake = Fake::new("please install the new drivers for my gpu tonight");
     assert_eq!(
         run(&fake, drivers, LIMIT).as_deref(),
         Some("please install the new drivers for my gpu tonight")
@@ -275,7 +279,7 @@ fn a_changed_word_answer_or_new_intent_keeps_the_original() {
 
 #[test]
 fn quotes_a_small_model_adds_are_dropped() {
-    let fake = Fake::new(&format!("\"{FIXED}\""), 0);
+    let fake = Fake::new(&format!("\"{FIXED}\""));
     assert_eq!(run(&fake, TYPO, LIMIT).as_deref(), Some(FIXED));
 }
 
@@ -293,7 +297,7 @@ fn a_slow_model_is_cut_off_and_blocks_the_next_call() {
     assert!(waited >= LIMIT && waited < LIMIT * 10, "{waited:?}");
     assert_eq!(slow.finished(), 0, "the turn waited for the answer");
     // The timed-out call still runs: a new one is skipped, not queued.
-    let fast = Fake::new(FIXED, 0);
+    let fast = Fake::new(FIXED);
     assert_eq!(run_on(lane, &fast, TYPO, LIMIT), None);
     assert_eq!(fast.calls(), 0);
     // Once it ends, the lane is free again.
@@ -420,7 +424,7 @@ mod engine {
         std::fs::create_dir_all(dir.0.join("ws")).unwrap();
         let _cfg = crate::perm::ConfigGuard::set(dir.0.join("cfg"));
         use_key_store_for(&dir.0.join("cfg"), Arc::new(MemoryKeyStore::new()));
-        let fake = Fake::new(FIXED, 0);
+        let fake = Fake::new(FIXED);
         let _local = ForceOn::with(Some(
             fake.clone() as Arc<dyn crate::route::local::LocalRuntime>
         ));
