@@ -100,8 +100,83 @@ pub struct AiModelsView {
     pub table_built_at: u64,
     /// Why grants can't be read or changed right now (a locked ledger), else empty.
     pub locked: String,
+    /// Web search for OpenRouter and Local AI chats.
+    pub web_search: WebSearchView,
     /// What the last action did, in plain words.
     pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendChoice {
+    pub id: String,
+    pub label: String,
+}
+
+/// The `webSearch` settings in app.json. A Brave key's value is never here,
+/// only whether one is saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchView {
+    pub backend: String,
+    pub backends: Vec<BackendChoice>,
+    pub searxng_url: String,
+    /// Why searches can't use the saved SearXNG URL while SearXNG is picked,
+    /// else empty (a URL from an older version was never checked).
+    pub searxng_problem: String,
+    pub brave_key_set: bool,
+}
+
+fn web_search_view(config_dir: &Path) -> WebSearchView {
+    let s = grokhub_agent::WebSearchSettings::load(config_dir);
+    WebSearchView {
+        backend: s.backend.as_str().to_string(),
+        backends: grokhub_agent::WEB_SEARCH_BACKENDS
+            .iter()
+            .map(|(b, label)| BackendChoice {
+                id: b.as_str().to_string(),
+                label: (*label).to_string(),
+            })
+            .collect(),
+        searxng_problem: match s.backend {
+            grokhub_agent::WebSearchBackend::Searxng if !s.searxng_url.is_empty() => {
+                grokhub_agent::searxng_url_problem(&s.searxng_url)
+                    .unwrap_or("")
+                    .to_string()
+            }
+            _ => String::new(),
+        },
+        searxng_url: s.searxng_url,
+        brave_key_set: grokhub_agent::brave_key_present(config_dir),
+    }
+}
+
+/// Pick the search backend and SearXNG URL. The next search uses them.
+pub fn save_web_search(
+    config_dir: &Path,
+    backend: &str,
+    searxng_url: &str,
+) -> Result<AiModelsView, String> {
+    let backend = grokhub_agent::WebSearchBackend::from_id(backend)
+        .ok_or("Pick one of the search backends listed.")?;
+    grokhub_agent::WebSearchSettings {
+        backend,
+        searxng_url: searxng_url.trim().to_string(),
+    }
+    .save(config_dir)?;
+    Ok(view(config_dir, "Saved."))
+}
+
+/// Save a Brave Search API key to the keyring; empty removes it. The key is
+/// never returned or logged.
+pub fn save_brave_key(config_dir: &Path, key: &str) -> Result<AiModelsView, String> {
+    grokhub_agent::seal_brave_key(config_dir, key)?;
+    let status = if grokhub_agent::brave_key_present(config_dir) {
+        "Brave search key saved."
+    } else {
+        "Brave search key cleared."
+    };
+    Ok(view(config_dir, status))
 }
 
 /// A card waiting for Save/Allow or Deny. It never holds a key.
@@ -296,6 +371,7 @@ pub fn view(config_dir: &Path, status: &str) -> AiModelsView {
         table,
         table_built_at,
         locked,
+        web_search: web_search_view(config_dir),
         status: status.to_string(),
     }
 }
@@ -960,5 +1036,110 @@ mod tests {
         assert_eq!(raw["priceCeilingUsdPerM"], 30);
         assert_eq!(spend::spend_settings().weekly_cap_usd, 12.5);
         assert_eq!(spend::spend_settings().ceiling_usd_per_m, 30.0);
+    }
+
+    #[test]
+    fn a_fresh_profile_searches_with_duckduckgo() {
+        let config = dir("web-fresh");
+        let v = view(&config, "");
+        assert_eq!(
+            v.web_search,
+            WebSearchView {
+                backend: "duckduckgo".into(),
+                backends: vec![
+                    BackendChoice {
+                        id: "duckduckgo".into(),
+                        label: "DuckDuckGo Lite (free, no key)".into(),
+                    },
+                    BackendChoice {
+                        id: "searxng".into(),
+                        label: "SearXNG (self-hosted URL)".into(),
+                    },
+                    BackendChoice {
+                        id: "brave".into(),
+                        label: "Brave Search (your API key)".into(),
+                    },
+                ],
+                searxng_url: String::new(),
+                searxng_problem: String::new(),
+                brave_key_set: false,
+            }
+        );
+    }
+
+    #[test]
+    fn an_old_lan_searxng_url_can_be_picked_and_the_page_says_why_it_fails() {
+        let config = dir("web-old-url");
+        std::fs::write(
+            app_json_path(&config),
+            r#"{"webSearch":{"backend":"duckduckgo","searxngUrl":"http://192.168.1.5:8888"}}"#,
+        )
+        .unwrap();
+        assert_eq!(view(&config, "").web_search.searxng_problem, "");
+        let v = save_web_search(&config, "searxng", "http://192.168.1.5:8888").unwrap();
+        assert_eq!(v.web_search.backend, "searxng");
+        assert_eq!(
+            v.web_search.searxng_problem,
+            "Web search only reaches public addresses, so a SearXNG server on this computer or your own network can't be used."
+        );
+        assert_eq!(
+            save_web_search(&config, "searxng", "http://nas:8888").unwrap_err(),
+            "Web search only reaches public addresses, so a SearXNG server on this computer or your own network can't be used."
+        );
+    }
+
+    #[test]
+    fn saving_searxng_writes_app_json_and_keeps_spend_keys() {
+        let config = dir("web-searx");
+        save_spend(&config, 25, 15).unwrap();
+        let v = save_web_search(&config, "searxng", "  https://searx.example  ").unwrap();
+        assert_eq!(v.status, "Saved.");
+        assert_eq!(v.web_search.backend, "searxng");
+        assert_eq!(v.web_search.searxng_url, "https://searx.example");
+        let app = read_app_json(&config);
+        assert_eq!(
+            app["webSearch"],
+            json!({ "backend": "searxng", "searxngUrl": "https://searx.example" })
+        );
+        assert_eq!(app["weeklySpendCapUsd"], json!(25));
+    }
+
+    #[test]
+    fn an_unknown_backend_or_bad_url_is_refused_and_nothing_is_written() {
+        let config = dir("web-bad");
+        assert_eq!(
+            save_web_search(&config, "google", "").unwrap_err(),
+            "Pick one of the search backends listed."
+        );
+        assert_eq!(
+            save_web_search(&config, "searxng", "ftp://x").unwrap_err(),
+            "SearXNG URL must start with http:// or https://."
+        );
+        assert!(!app_json_path(&config).exists());
+    }
+
+    #[test]
+    fn a_brave_key_lands_in_the_vault_never_in_app_json_or_the_view() {
+        let config = dir("web-brave");
+        let fake = "sk-abcdefghijklmnopqrstuv";
+        let v = save_brave_key(&config, fake).unwrap();
+        assert_eq!(v.status, "Brave search key saved.");
+        assert!(v.web_search.brave_key_set);
+        assert!(!serde_json::to_string(&v).unwrap().contains(fake));
+        assert!(!std::fs::read_to_string(app_json_path(&config))
+            .unwrap_or_default()
+            .contains(fake));
+        let v = save_brave_key(&config, "").unwrap();
+        assert_eq!(v.status, "Brave search key cleared.");
+        assert!(!v.web_search.brave_key_set);
+    }
+
+    #[test]
+    fn a_brave_key_without_a_keyring_says_so() {
+        let config = dir_without_keyring("web-brave-off");
+        assert_eq!(
+            save_brave_key(&config, "sk-abcdefghijklmnopqrstuv").unwrap_err(),
+            "The keyring isn't available, so the key wasn't saved."
+        );
     }
 }
