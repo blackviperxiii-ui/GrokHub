@@ -221,7 +221,10 @@ export class VoiceSession {
           await this.stop(PAUSED_NOTE);
           break;
         case "caption":
-          this.caption(ev.text);
+          // One still on its way when a reply started belongs to the turn
+          // that reply took over: it would come back, stale, on the next
+          // listen.
+          if (this.state === "listening") this.caption(ev.text);
           break;
       }
     }
