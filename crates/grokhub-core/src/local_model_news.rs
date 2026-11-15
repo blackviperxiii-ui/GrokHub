@@ -59,6 +59,10 @@ pub struct Tracker {
     /// Catalog models already suggested.
     #[serde(default)]
     pub suggested: BTreeSet<String>,
+    /// Releases picked that couldn't be posted: offered first next check,
+    /// while Hugging Face still lists them.
+    #[serde(default)]
+    pub retry: BTreeSet<String>,
 }
 
 pub fn path(config_dir: &Path) -> PathBuf {
@@ -339,12 +343,18 @@ impl Tracker {
             }
         }
         if self.seeded {
-            out.extend(
-                releases
-                    .into_iter()
-                    .filter(|s| matches!(s, Suggestion::Release { repo, .. } if !self.seen.contains(repo)))
-                    .take(links),
+            let mut fresh: Vec<Suggestion> = releases
+                .into_iter()
+                .filter(
+                    |s| matches!(s, Suggestion::Release { repo, .. } if !self.seen.contains(repo)),
+                )
+                .collect();
+            // Stable: one that couldn't be posted last time goes first, so
+            // newer releases don't push it out under the cap.
+            fresh.sort_by_key(
+                |s| !matches!(s, Suggestion::Release { repo, .. } if self.retry.contains(repo)),
             );
+            out.extend(fresh.into_iter().take(links));
         }
         let picked: BTreeSet<&str> = out
             .iter()
@@ -359,6 +369,8 @@ impl Tracker {
                 .cloned(),
         );
         self.seeded |= !read.is_empty();
+        let seen = &self.seen;
+        self.retry.retain(|r| !seen.contains(r));
         out
     }
 
@@ -371,7 +383,16 @@ impl Tracker {
             }
             Suggestion::Release { repo, .. } => {
                 self.seen.insert(repo.clone());
+                self.retry.remove(repo);
             }
+        }
+    }
+
+    /// A pick from [`Tracker::check`] that couldn't be posted: a release goes
+    /// first next check. An upgrade comes back anyway, as it isn't recorded.
+    pub fn not_posted(&mut self, pick: &Suggestion) {
+        if let Suggestion::Release { repo, .. } = pick {
+            self.retry.insert(repo.clone());
         }
     }
 
@@ -515,6 +536,46 @@ mod tests {
             repos(&["ggml-org/Qwen3-14B-GGUF", "ggml-org/Qwen3-4B-GGUF"])
         );
         assert!(parse_releases("{\"error\":\"rate limited\"}").is_empty());
+    }
+
+    #[test]
+    fn a_release_that_could_not_be_posted_goes_ahead_of_newer_ones() {
+        let p = gpu(16_384);
+        let mut t = Tracker {
+            on: true,
+            seeded: true,
+            ..Default::default()
+        };
+        let a = "huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF";
+        let b = "huihui-ai/Huihui-Phi-5-12B-abliterated-GGUF";
+        let week2 = repos(&[b, a]);
+        let picks = t.check(None, releases(&p, 5_900, &week2), &week2, 2, 10);
+        assert_eq!(picks.len(), 2);
+        for pick in &picks {
+            t.not_posted(pick);
+        }
+        // Newer, fitting releases above them on the newest-first list.
+        let week3 = repos(&[
+            "huihui-ai/Huihui-Mistral-Nemo-12B-abliterated-GGUF",
+            "huihui-ai/Huihui-Qwen3-8B-abliterated-GGUF",
+            b,
+            a,
+        ]);
+        let picks = t.check(None, releases(&p, 5_900, &week3), &week3, 2, 20);
+        let names: Vec<String> = picks.iter().map(Suggestion::title).collect();
+        assert_eq!(
+            names,
+            vec![
+                "New on Hugging Face: Huihui-Phi-5-12B-abliterated-GGUF",
+                "New on Hugging Face: Huihui-Qwen3-14B-abliterated-GGUF",
+            ]
+        );
+        for pick in &picks {
+            t.offered(pick);
+        }
+        assert!(t.retry.is_empty());
+        // The two newer ones were seen while the retries went first.
+        assert_eq!(t.seen.len(), 4);
     }
 
     #[test]

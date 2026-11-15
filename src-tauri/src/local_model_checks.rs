@@ -160,6 +160,7 @@ pub(crate) fn finish(dir: &Path, run: NewsRun, now: u64, post: Post) -> String {
                 added += usize::from(new);
             }
             Err(why) => {
+                t.not_posted(pick);
                 failed.get_or_insert(why);
             }
         }
