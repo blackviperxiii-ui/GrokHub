@@ -32,8 +32,9 @@ pub struct WindowSpec {
     pub resizable: bool,
     pub skip_taskbar: bool,
     pub always_on_top: bool,
-    /// Kept out of screenshots, recordings and screen shares (Windows and
-    /// macOS; Linux has no such flag).
+    /// Kept out of screenshots, recordings and screen shares on Windows 10
+    /// 2004 and later. macOS only hides it from older capture APIs, and Linux
+    /// has no such flag.
     pub content_protected: bool,
 }
 
@@ -193,7 +194,7 @@ pub fn state_of(settings: &crate::settings::ShellSettings, wayland: bool) -> Sta
 #[cfg(desktop)]
 pub fn state_now(settings: &crate::settings::ShellSettings) -> State {
     State {
-        hidden_for_game: desk().hidden,
+        hidden_for_game: desk().game.hidden,
         ..state_of(settings, wayland_now())
     }
 }
@@ -355,7 +356,7 @@ pub fn show_window(
     if let Some(existing) = app.get_webview_window(LABEL) {
         let _ = existing.set_always_on_top(spec.always_on_top);
         // Hidden for a game: the desk watch shows her again after it.
-        if !desk().hidden {
+        if !desk().game.hidden {
             existing.show().map_err(|e| e.to_string())?;
         }
         return Ok(());
@@ -553,6 +554,48 @@ pub fn visible_now(
     now.duration_since(since) >= RETURN_AFTER
 }
 
+/// Where game hiding stands for one desk window.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GameHide {
+    /// The watch has had a frame for this window.
+    seen: bool,
+    clear_since: Option<std::time::Instant>,
+    /// Hidden with `hide()` (never closed, which would dock her) for a game.
+    pub hidden: bool,
+}
+
+impl GameHide {
+    /// What to do this frame: `Some(true)` hide, `Some(false)` show, `None`
+    /// leave her. `shown` is whether the window is visible, read on its first
+    /// frame only: a window opened hidden mid-game shows once the game is
+    /// over, and one opened with the screen clear shows at once.
+    pub fn frame(
+        &mut self,
+        gaming: bool,
+        shown: Option<bool>,
+        now: std::time::Instant,
+    ) -> Option<bool> {
+        if !self.seen {
+            self.seen = true;
+            self.hidden = !shown.unwrap_or(true);
+            self.clear_since = now.checked_sub(RETURN_AFTER);
+        }
+        let hide = !visible_now(true, gaming, &mut self.clear_since, now);
+        (hide != self.hidden).then_some(hide)
+    }
+
+    /// The window was hidden or shown as [`GameHide::frame`] asked. A call
+    /// that failed is asked for again next frame.
+    pub fn done(&mut self, hide: bool) {
+        self.hidden = hide;
+    }
+
+    /// Whether the watch still has to read the window's visibility.
+    pub fn new_window(&self) -> bool {
+        !self.seen
+    }
+}
+
 /// One desk watch frame's news for the rest of the app.
 #[cfg(desktop)]
 #[derive(Debug, Default)]
@@ -570,11 +613,7 @@ struct Desk {
     boxes: Vec<HitBox>,
     passthrough: Option<bool>,
     moves: Moves,
-    /// The watch has seen this window; a new one starts clear of games.
-    seen: bool,
-    clear_since: Option<std::time::Instant>,
-    /// Hidden with `hide()` (never closed, which would dock her) for a game.
-    hidden: bool,
+    game: GameHide,
 }
 
 #[cfg(desktop)]
@@ -587,9 +626,11 @@ static DESK: std::sync::Mutex<Desk> = std::sync::Mutex::new(Desk {
         settled_at: None,
         saved: None,
     },
-    seen: false,
-    clear_since: None,
-    hidden: false,
+    game: GameHide {
+        seen: false,
+        clear_since: None,
+        hidden: false,
+    },
 });
 
 #[cfg(desktop)]
@@ -667,33 +708,27 @@ pub fn tick(app: &tauri::AppHandle) -> Frame {
         &grokhub_desktop::game_guard::peek(),
         grokhub_desktop::signals::fullscreen_other_app(),
     );
+    // A window call, so read before the lock; only a new window needs it.
+    let shown = desk()
+        .game
+        .new_window()
+        .then(|| w.is_visible().unwrap_or(true));
     let (boxes, had, flip) = {
         let mut d = desk();
-        if !d.seen {
-            d.seen = true;
-            d.clear_since = now.checked_sub(RETURN_AFTER);
-        }
-        let mut since = d.clear_since;
-        let hide = !visible_now(true, gaming, &mut since, now);
-        d.clear_since = since;
-        (
-            d.boxes.clone(),
-            d.passthrough,
-            (hide != d.hidden).then_some(hide),
-        )
+        let flip = d.game.frame(gaming, shown, now);
+        (d.boxes.clone(), d.passthrough, flip)
     };
-    // A failed hide or show is tried again next frame.
     let flipped = match flip {
         Some(true) => w.hide().is_ok(),
-        Some(false) => w.show().is_ok(),
+        Some(false) => show_quietly(app, &w),
         None => false,
     };
     let hidden = {
         let mut d = desk();
-        if flipped {
-            d.hidden = flip == Some(true);
+        if let (true, Some(hide)) = (flipped, flip) {
+            d.game.done(hide);
         }
-        d.hidden
+        d.game.hidden
     };
     let applied = if hidden {
         None
@@ -709,6 +744,23 @@ pub fn tick(app: &tauri::AppHandle) -> Frame {
         landing: d.moves.settled(now),
         game_changed: flipped,
     }
+}
+
+/// Show her after a game without taking focus. Showing a window activates
+/// it, so focus goes back to this app's window that had it (another app keeps
+/// its focus: the system won't let a background app take it).
+#[cfg(desktop)]
+fn show_quietly(app: &tauri::AppHandle, w: &tauri::WebviewWindow) -> bool {
+    use tauri::Manager;
+    let had = app
+        .webview_windows()
+        .into_values()
+        .find(|o| o.label() != LABEL && o.is_focused().unwrap_or(false));
+    let shown = w.show().is_ok();
+    if let (true, Some(had)) = (shown, had) {
+        let _ = had.set_focus();
+    }
+    shown
 }
 
 /// The cursor and the scale it reads at. macOS reads it at the main screen's
@@ -1120,6 +1172,55 @@ mod tests {
     }
 
     #[test]
+    fn a_window_opened_hidden_mid_game_shows_once_the_screen_is_clear() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now() + Duration::from_secs(60);
+        let s = |ms: u64| t0 + Duration::from_millis(ms);
+        // Opened hidden on a stale reading; the first frame is clear.
+        let mut g = GameHide::default();
+        assert_eq!(g.frame(false, Some(false), t0), Some(false));
+        // The show failed: asked again.
+        assert_eq!(g.frame(false, None, s(100)), Some(false));
+        g.done(false);
+        assert!(!g.hidden);
+        assert_eq!(g.frame(false, None, s(200)), None);
+        // Opened hidden and the game is still on: she waits for it.
+        let mut g = GameHide::default();
+        assert_eq!(g.frame(true, Some(false), t0), None);
+        assert!(g.hidden);
+        assert_eq!(g.frame(false, None, s(1_000)), None);
+        assert_eq!(g.frame(false, None, s(4_900)), None);
+        assert_eq!(g.frame(false, None, s(5_000)), Some(false));
+    }
+
+    #[test]
+    fn a_shown_window_hides_at_once_for_a_game_and_returns_four_seconds_after() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now() + Duration::from_secs(60);
+        let s = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut g = GameHide::default();
+        assert!(g.new_window());
+        assert_eq!(g.frame(false, Some(true), t0), None);
+        assert!(!g.new_window());
+        assert_eq!(g.frame(true, None, s(100)), Some(true));
+        g.done(true);
+        assert_eq!(g.frame(true, None, s(200)), None);
+        assert_eq!(g.frame(false, None, s(300)), None);
+        assert_eq!(g.frame(false, None, s(4_200)), None);
+        assert_eq!(g.frame(false, None, s(4_300)), Some(false));
+        g.done(false);
+        assert_eq!(g.frame(false, None, s(4_400)), None);
+        // A game back within the 4 s keeps her hidden and restarts the wait.
+        assert_eq!(g.frame(true, None, s(5_000)), Some(true));
+        g.done(true);
+        assert_eq!(g.frame(false, None, s(6_000)), None);
+        assert_eq!(g.frame(true, None, s(7_000)), None);
+        assert_eq!(g.frame(false, None, s(8_000)), None);
+        assert_eq!(g.frame(false, None, s(11_900)), None);
+        assert_eq!(g.frame(false, None, s(12_000)), Some(false));
+    }
+
+    #[test]
     fn a_game_an_anticheat_or_a_fullscreen_app_counts_as_gaming() {
         use grokhub_core::game_guard::GameGuard;
         let clear = GameGuard::default();
@@ -1153,7 +1254,7 @@ mod tests {
             .and_then(|rest| rest.split("\n}\n").next())
             .expect("tick body");
         assert!(body.contains("Some(true) => w.hide().is_ok()"));
-        assert!(body.contains("Some(false) => w.show().is_ok()"));
+        assert!(body.contains("Some(false) => show_quietly(app, &w)"));
         assert!(!body.contains(concat!(".clo", "se()")));
         assert!(!body.contains(concat!("hide_", "window(")));
         // Every other writer shows her through show_window, which leaves a
@@ -1163,7 +1264,7 @@ mod tests {
             .nth(1)
             .and_then(|rest| rest.split("\n}\n").next())
             .expect("show_window body");
-        assert!(show.contains("if !desk().hidden {"));
+        assert!(show.contains("if !desk().game.hidden {"));
         assert!(show.contains(".visible(!gaming)"));
         assert!(show.contains(".content_protected(spec.content_protected)"));
     }
