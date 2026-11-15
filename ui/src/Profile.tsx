@@ -41,8 +41,9 @@ export function ProfileSettings({
   const { note, ok, fail, clear } = useNote();
 
   const loaded = useEffectEvent((p: Profile) => {
+    // A read again (after a Grok sign-in) keeps a name being typed.
+    if (!profile || draft === profile.name) setDraft(p.name);
     setProfile(p);
-    setDraft(p.name);
     onProfile?.(p);
   });
   useEffect(() => {

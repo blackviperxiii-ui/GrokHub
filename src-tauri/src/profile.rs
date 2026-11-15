@@ -26,6 +26,8 @@ const PICTURE_KEY: &str = "profilePicture";
 
 pub const TOO_BIG: &str = "Choose a smaller image";
 pub const NOT_AN_IMAGE: &str = "Choose an image";
+/// Locked, unreadable, or a cloud file that won't download.
+pub const CANT_READ: &str = "Couldn't read that picture. Choose another one";
 
 /// Install and Remove one at a time, so a late install can't bring back a
 /// picture that was just removed.
@@ -176,15 +178,18 @@ fn avatar(bytes: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Copy `src` in as the profile picture (PNG or JPEG, up to 8 MiB).
 pub fn install_picture(config_dir: &Path, src: &Path) -> Result<(), String> {
-    let file = std::fs::File::open(src).map_err(|_| TOO_BIG)?;
-    let len = file.metadata().map(|m| m.len()).unwrap_or(u64::MAX);
-    if len == 0 || len > grokhub_core::IMAGE_FILE_CAP {
+    let file = std::fs::File::open(src).map_err(|_| CANT_READ)?;
+    let len = file.metadata().map_err(|_| CANT_READ)?.len();
+    if len > grokhub_core::IMAGE_FILE_CAP {
         return Err(TOO_BIG.into());
+    }
+    if len == 0 {
+        return Err(NOT_AN_IMAGE.into());
     }
     let mut bytes = Vec::new();
     file.take(grokhub_core::IMAGE_FILE_CAP + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| TOO_BIG)?;
+        .map_err(|_| CANT_READ)?;
     if bytes.len() as u64 > grokhub_core::IMAGE_FILE_CAP {
         return Err(TOO_BIG.into());
     }

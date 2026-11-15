@@ -119,6 +119,17 @@ describe("ProfileSettings", () => {
     expect(api.getProfile).toHaveBeenCalledTimes(2);
   });
 
+  it("a sign-in that lands while a name is typed keeps the typed name", async () => {
+    const { rerender } = render(<ProfileSettings canPick signedIn="" />);
+    const field = await screen.findByLabelText("Name");
+    await userEvent.type(field, "Pat");
+    api.getProfile.mockResolvedValue({ ...NONE, shownName: "Robin", initial: "R" });
+    rerender(<ProfileSettings canPick signedIn="Robin Lee|" />);
+    await waitFor(() => expect(field).toHaveAttribute("placeholder", "Robin"));
+    expect(field).toHaveValue("Pat");
+    expect(field).toHaveFocus();
+  });
+
   it("a device with no file picker shows the initial but no Choose", async () => {
     render(<ProfileSettings canPick={false} />);
     expect(await screen.findByLabelText("Name")).toBeVisible();

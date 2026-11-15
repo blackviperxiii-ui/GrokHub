@@ -129,11 +129,14 @@ fn files_that_are_not_pictures_are_refused_and_nothing_is_written() {
     assert_eq!(install_picture(&d, &txt), Err(NOT_AN_IMAGE.to_string()));
     assert_eq!(
         install_picture(&d, &d.join("missing.png")),
-        Err(TOO_BIG.to_string())
+        Err(CANT_READ.to_string())
     );
     let empty = d.join("empty.png");
     std::fs::write(&empty, b"").unwrap();
-    assert_eq!(install_picture(&d, &empty), Err(TOO_BIG.to_string()));
+    assert_eq!(install_picture(&d, &empty), Err(NOT_AN_IMAGE.to_string()));
+    let big = d.join("big.png");
+    std::fs::write(&big, vec![0u8; grokhub_core::IMAGE_FILE_CAP as usize + 1]).unwrap();
+    assert_eq!(install_picture(&d, &big), Err(TOO_BIG.to_string()));
     // A tiny PNG whose header claims 50000 by 50000.
     let mut bomb = png(1, 1);
     bomb[16..20].copy_from_slice(&50_000u32.to_be_bytes());
