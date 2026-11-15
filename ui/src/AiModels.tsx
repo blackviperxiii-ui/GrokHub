@@ -256,19 +256,6 @@ export function AiModels() {
     };
   }, [fail]);
 
-  // A page that was reloaded mid sign-in picks it up again: the sign-in that
-  // still waits, or the key card it never got to show.
-  const pickUp = useEffectEvent((found: OpenRouterSignInStatus) => {
-    if (found.card) {
-      if (show(found.card)) ok(OPENROUTER_KEY_WAIT);
-    } else if (found.waiting) {
-      void follow(found.waiting);
-    }
-  });
-  useEffect(() => {
-    openRouterSignInStatus().then(pickUp, () => undefined);
-  }, []);
-
   /** True when the step went through. */
   async function run(step: () => Promise<AiModelsView>): Promise<boolean> {
     setBusy(true);
@@ -337,6 +324,19 @@ export function AiModels() {
   function stopSignIn() {
     stopOpenRouterSignIn().catch(fail);
   }
+
+  // A page that was reloaded mid sign-in picks it up again: the sign-in that
+  // still waits, or the key card it never got to show.
+  const pickUp = useEffectEvent((found: OpenRouterSignInStatus) => {
+    if (found.card) {
+      if (show(found.card)) ok(OPENROUTER_KEY_WAIT);
+    } else if (found.waiting) {
+      void follow(found.waiting);
+    }
+  });
+  useEffect(() => {
+    openRouterSignInStatus().then(pickUp, () => undefined);
+  }, []);
 
   async function copyLink(url: string) {
     try {
