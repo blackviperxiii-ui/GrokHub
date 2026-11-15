@@ -1,13 +1,13 @@
 # Loadout
 
-Native Rust cabin. No Electron. No Tauri in the egui cabin; the cross-platform Tauri shell is planned in [`docs/cross-platform/README.md`](cross-platform/README.md). One repo, one `main`, one version — two ship artifacts.
+The Tauri desktop app (`grokhub-shell`) and its LAN hub (`grokhub-hub`). No Electron. The cross-platform plan is in [`docs/cross-platform/README.md`](cross-platform/README.md). One repo, one `main`, one version.
 
 **v3.5.0** — The Loadout look: one brand file names the app and its companion, Nyx becomes the default personality for new installs, Ops Dark, OLED Black and Soft Charcoal themes arrive, the cabin's chat home gets a dock, Pulse reflows from side-by-side to one column and can follow your Steam library's game news, and the shell gets an Activity Dock for running chats, approvals and automation runs.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v3.5.0.tar.gz`, AUR | **v3.5.0** |
-| **Windows** (x86_64) | `GrokHub-Setup-3.5.0.exe`, `grokhub-windows-v3.5.0.zip` | **v3.5.0** |
+| **Linux** (x86_64) | `grokhub-shell-v*-linux-amd64.AppImage`, `.deb`, Arch recipe in [`packaging/aur/`](../packaging/aur/) | **v3.5.0** |
+| **Windows** (x86_64) | `GrokHub-Shell-Setup-*.exe` | **v3.5.0** |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
 
@@ -59,7 +59,7 @@ Imagine stills use dedicated **`grok-imagine-image-2.0`** (falls back to `grok-i
 
 Settings → **Account** is Super Grok device-code OAuth only — **Connect** / **Sign out** (or `grokhub --oauth`). Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600; Windows user-only DACL), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**. Settings → Behavior holds close-to-tray, the living wall, and one **quiet hours** dropdown (Off / common windows). Picking a window saves it. Settings → **Cabin defaults** pins the chat model, reasoning effort, Ask or Auto, and Chat / Plan / btw in `app.json`, plus **Always collapse**. Auto model saves an empty pin. Always is not written from that page. Close-to-tray still hides the cabin; the desktop tip is once, and only when quiet hours allow it. GitHub PAT is not a Settings page — the connector owns that.
 
-Windows Setup, the Linux tarball, and the AUR package install only the cabin. None of them installs, signs in, or updates the Grok Build CLI. The one place the cabin looks for the CLI is the Marketplace: when `grok` is already installed, Google's MCP connectors can point at it (`crates/grokhub-app/src/google_mcp_via_cli.rs`). The cabin never installs, runs, or updates it.
+The release bundles (AppImage, `.deb`, `GrokHub-Shell-Setup`), `scripts/install.sh` and the PKGBUILDs install only the desktop app and the hub. None of them installs, signs in, or updates the Grok Build CLI, and the app never runs it.
 
 Settings → **Update** is one **Update** control (always visible), progress, and **Restart** after a clean cabin overlay. It updates only the cabin. The cabin checks every 2 hours (and at launch) for a newer GitHub Latest cabin. The titlebar chip is the notice (in-app — not a web page) and says **Update cabin**. The Settings button stays up when the probe found nothing so you can still overlay. `grokhub --update` / `/update` use that same rule. When the cabin is newer it retargets a leftover Origin or `GrokHub-Windows` clone to GitHub (`https://github.com/blackviperxiii-ui/GrokHub.git`), then `git pull --ff-only origin main` (`origin beta` on a beta install; see Channels). Linux overlays with `./scripts/install.sh --user`. Windows Setup users do not need a clone: when the cabin is newer, Update downloads the latest `grokhub-windows-v*.zip` from GitHub into `%LOCALAPPDATA%\Programs\GrokHub`. A leftover Windows clone (wrong branch, detached HEAD) uses that same zip. A Windows source clone on `main` still overlays with `scripts/install-windows.ps1`. The clone path is not a Settings field — empty uses `GROKHUB_SRC` or the install receipt. After a clean overlay, **Restart** reloads hub, drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process.
 
@@ -69,8 +69,9 @@ Chat runs on the native engine on this desktop (full filesystem and shell; Grok 
 
 | Binary | Crate | Job |
 |--------|-------|-----|
-| `grokhub` | `crates/grokhub-app` | Cabin GUI and native chat engine |
-| `grokhub-hub` | `crates/grokhub-hub` | Standalone LAN `/v1` hub (port **18766**) |
+| `grokhub-shell` | `src-tauri` | The desktop app (Tauri) |
+| `grokhub-hub` | `crates/grokhub-hub` | Standalone LAN `/v1` hub (port **18766**) and the headless modes (`--mcp-*`, `--doctor`, `--oauth`, `--update`) |
+| `grokhub` | `crates/grokhub-hub` | Renamed-binary shim: forwards the headless modes to `grokhub-hub` for one more release |
 
 Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.json`, `suggestions.json`, `secrets.json` mode 0600 / Windows user-only DACL, `memory/SOUL.md`, `USER.md`, `MEMORY.md`). `/recall` reads those memory files when `app.json` omits `memory_backend` or sets `"legacy"`. A new install with no `app.json` uses `"memory_backend": "amr"` and still reads legacy `MEMORY.md` alongside `amr/nodes`. Set `"memory_backend": "legacy"` to stay on the old files only.
 
@@ -92,7 +93,7 @@ grokhub --version                              # GrokHub 3.5.0-beta.3 (beta @ ab
 
 The channel is saved to `~/.config/GrokHub/channel` (or `$GROKHUB_CONFIG/channel`), next to the `source` receipt. A plain `./scripts/install.sh --user` keeps the saved channel and builds whatever is checked out; it doesn't move git. Settings → **Update**, `/update`, and `grokhub --update` read the receipt: a beta install pulls `origin beta` and never `origin main`. If the clone isn't on the channel's branch, Update stops and says which command to run. `./scripts/install.sh --dry-run` prints the channel, branch, and receipt it would use, and exits.
 
-`--version` comes from `crates/grokhub-app/build.rs`, which reads the branch, short SHA, and beta N from git at build time. A beta build is labeled `X.Y.Z-beta.N`, where N is the commit count since the newest stable `vX.Y.Z` tag (`git rev-list --count <tag>..HEAD`). Shallow clones without tags fall back to `beta.0` until you `git fetch --tags`. The Cargo version itself never changes for a beta label. A build made without git shows just `GrokHub 3.5.0`.
+The beta label comes from `src-tauri/build.rs`, which reads the branch and beta N from git at build time. A beta build is labeled `X.Y.Z-beta.N`, where N is the commit count since the newest stable `vX.Y.Z` tag (`git rev-list --count <tag>..HEAD`). Shallow clones without tags fall back to `beta.0` until you `git fetch --tags`. The Cargo version itself never changes for a beta label. A build made without git shows just `GrokHub 3.5.0`.
 
 Limits: building beta from a clone is Linux-only (`scripts/install-windows.ps1` has no `-Channel`); Windows gets Beta from the signed pre-releases. Beta turns itself off when beta catches up to main only on a Linux clone, because that check reads the clone's branches; elsewhere, turn it off in Labs. The Update chip still only notices new stable releases, so on beta, use Settings → **Update** to take the newest beta build.
 
@@ -216,14 +217,12 @@ Pair code `ABC-234`. Devices paints a real LAN IPv4 (`http://192.168.x.x:18766`)
 
 | Path | Role |
 |------|------|
-| `~/.local/bin/grokhub` | User install (`./scripts/install.sh --user`) |
-| `/usr/bin/grokhub` | System / makepkg |
+| `~/.local/bin/grokhub-shell` | User install (`./scripts/install.sh --user`) |
+| `/usr/bin/grokhub-shell` | System install, `.deb` or makepkg |
 | `~/.config/GrokHub` | Linux user data (`app.json`, `projects.json`, `secrets.json`, memory) |
-| `%LOCALAPPDATA%\Programs\GrokHub` | Windows cabin (`grokhub.exe`) |
 | `%APPDATA%\GrokHub` | Windows user data |
 
-Linux tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.  
-Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A `vX.Y.Z` tag publishes both as a release; each push to `beta`, the nightly beta build and a `vX.Y.Z-beta.N` tag publish them as a pre-release named `v<version>-beta.<N>`, as described under the two channels above. On tags, when SignPath secrets are configured, the Setup and portable zip are Authenticode-signed (certificate by SignPath Foundation); see [CODE_SIGNING.md](CODE_SIGNING.md).
+Release builds come from `.github/workflows/release.yml`, which runs `tauri build` and names the bundles with `scripts/name-shell-bundles.sh`: the Linux AppImage and `.deb`, the Windows NSIS installer `GrokHub-Shell-Setup-<version>.exe`, and, on tags and nightly builds, the macOS `.dmg`. A `vX.Y.Z` tag publishes them as a release; each push to `beta`, the nightly beta build and a `vX.Y.Z-beta.N` tag publish them as a pre-release named `v<version>-beta.<N>`, as described under the two channels above.
 
 Every release and pre-release also carries `SHA256SUMS` (the SHA-256 of each file) and `SHA256SUMS.minisig`, a [minisign](https://jedisct1.github.io/minisign/) signature of it. The public key is [`packaging/minisign.pub`](../packaging/minisign.pub); the private key exists only as the `MINISIGN_SECRET_KEY` Actions secret. To check a download by hand:
 
@@ -239,12 +238,15 @@ Arch notes: [`packaging/README-ARCH.md`](../packaging/README-ARCH.md).
 ## Uninstall
 
 ```bash
-rm -f ~/.local/bin/grokhub ~/.local/bin/grokhub-hub
-rm -rf ~/.local/lib/grokhub
-rm -f ~/.local/share/applications/grokhub.desktop
+# From a clone (./scripts/install.sh --user)
+systemctl --user disable --now grokhub-hub.service
+rm -f ~/.config/systemd/user/grokhub-hub.service
+rm -f ~/.local/bin/grokhub-shell ~/.local/bin/grokhub-hub ~/.local/bin/grokhub
+rm -f ~/.local/share/applications/grokhub-shell.desktop
+rm -f ~/.config/autostart/Loadout.desktop   # only if Start at login was on
+# Arch package (makepkg -si)
+sudo pacman -R grokhub
 # optional: rm -rf ~/.config/GrokHub
-sudo rm -f /usr/bin/grokhub /usr/bin/grokhub-hub
-sudo rm -f /usr/share/applications/grokhub.desktop
 ```
 
 ## Development

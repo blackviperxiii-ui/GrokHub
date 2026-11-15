@@ -31,5 +31,5 @@ Rules:
 
 - One fragment per PR (or per logical change). Name it after the PR number or a short slug (`790-ci-guards.md`).
 - Prefer a single `- ` bullet. Extra bullets are fine; blank lines and `#` headings are ignored by `xtask bump`.
-- Do not bump `VERSION`, `Cargo.toml`, packaging, or `cabin_reports_version` in a feature PR. A promotion or hotfix owns those via `cargo xtask bump`.
+- Do not bump `VERSION`, `Cargo.toml`, or the packaging versions in a feature PR. A promotion or hotfix owns those via `cargo xtask bump`.
 - `cargo xtask bump --check` (also run from `scripts/ci-guards.sh`) fails when the version copies disagree.
