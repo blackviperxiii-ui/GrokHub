@@ -78,6 +78,8 @@ export interface VoiceDeps {
   send: (words: string) => void;
   onState: (state: VoiceState) => void;
   onNote: (note: string) => void;
+  /** Everything heard so far in this turn, or "" once the turn is over. */
+  onCaption?: (text: string) => void;
 }
 
 /** The one session voice mode is on in. The backend keeps one open mic, so
@@ -97,6 +99,8 @@ export class VoiceSession {
   private player: Playing | null = null;
   private spoke = false;
   private finished = false;
+  /** The caption the page shows now. */
+  private shown = "";
   /** A piece failed to speak: the rest of this reply stays quiet. */
   private noVoice = false;
   /** The failure was shown once this session. */
@@ -123,6 +127,9 @@ export class VoiceSession {
   private go(event: VoiceEvent) {
     const next = voiceStep(this.state, event);
     if (next === this.state) return;
+    // A caption shows only while it listens: one left behind would come
+    // back, stale, the next time it listens.
+    if (next !== "listening") this.caption("");
     this.state = next;
     this.deps.onState(next);
   }
@@ -158,6 +165,7 @@ export class VoiceSession {
     this.talking = false;
     this.pending = new Float32Array(0);
     this.down = null;
+    this.caption("");
     if (note) this.deps.onNote(note);
     if (wasOn) await api.voiceLiveStop().catch(() => {});
   }
@@ -198,10 +206,12 @@ export class VoiceSession {
           break;
         case "turn":
           this.talking = false;
+          this.caption("");
           await this.hear();
           break;
         case "nothing":
           this.talking = false;
+          this.caption("");
           await api.voiceLiveListen(this.state === "speaking");
           break;
         case "check_in":
@@ -209,6 +219,12 @@ export class VoiceSession {
           break;
         case "pause":
           await this.stop(PAUSED_NOTE);
+          break;
+        case "caption":
+          // One still on its way when a reply started belongs to the turn
+          // that reply took over: it would come back, stale, on the next
+          // listen.
+          if (this.state === "listening") this.caption(ev.text);
           break;
       }
     }
@@ -224,6 +240,12 @@ export class VoiceSession {
       return;
     }
     this.deps.send(words);
+  }
+
+  private caption(text: string) {
+    if (text === this.shown) return;
+    this.shown = text;
+    this.deps.onCaption?.(text);
   }
 
   /** Stop speaking and listen for them. */
@@ -406,6 +428,7 @@ const HINT: Record<VoiceState, string> = {
  * heard words and notes go with `session.handlers`. */
 export function useVoiceMode() {
   const [state, setState] = useState<VoiceState>("off");
+  const [caption, setCaption] = useState("");
   const [session] = useState(
     () =>
       new VoiceSession({
@@ -414,6 +437,7 @@ export function useVoiceMode() {
         send: () => {},
         onState: setState,
         onNote: () => {},
+        onCaption: setCaption,
       }),
   );
   useEffect(
@@ -422,7 +446,28 @@ export function useVoiceMode() {
     },
     [session],
   );
-  return { state, session };
+  return { state, session, caption };
+}
+
+/** How long a live caption may run: its end shows, the start is cut. */
+const CAPTION_CHARS = 80;
+
+/** A live caption as it shows: its last 80 characters, in quotes. */
+export function captionLine(text: string): string {
+  const chars = Array.from(text.trim());
+  const end = chars.length > CAPTION_CHARS ? `…${chars.slice(-CAPTION_CHARS).join("")}` : chars.join("");
+  return `“${end}”`;
+}
+
+/** What voice mode hears so far, while it listens. Not announced: the
+ * words arrive as the sent message. */
+export function VoiceCaption({ text, state }: { text: string; state: VoiceState }) {
+  if (state !== "listening" || !text.trim()) return null;
+  return (
+    <p className="voice-caption" aria-live="off">
+      {captionLine(text)}
+    </p>
+  );
 }
 
 export function VoiceButton({

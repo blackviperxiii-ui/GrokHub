@@ -468,7 +468,9 @@ export type LiveEvent =
   | { kind: "turn"; ms: number }
   | { kind: "nothing" }
   | { kind: "check_in" }
-  | { kind: "pause" };
+  | { kind: "pause" }
+  /** Everything heard so far in this turn, while they talk. */
+  | { kind: "caption"; text: string };
 
 /** One spoken piece: base64 audio and its type. */
 export interface Spoken {
