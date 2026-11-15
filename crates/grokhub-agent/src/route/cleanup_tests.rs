@@ -8,11 +8,14 @@ use super::*;
 use crate::brain::{classify, BriefInput};
 use crate::route::local::{ChatMessage, ForceOn, LocalRuntime};
 
-/// Answers every chat with `reply` after `sleep`, and counts the calls.
+/// Answers every chat with `reply` after `sleep` (or, when held, once
+/// released), and counts the calls started and finished.
 struct Fake {
     reply: String,
     sleep: Duration,
+    held: AtomicBool,
     calls: AtomicUsize,
+    finished: AtomicUsize,
     seen: Mutex<Vec<Vec<ChatMessage>>>,
 }
 
@@ -21,13 +24,30 @@ impl Fake {
         Arc::new(Self {
             reply: reply.into(),
             sleep: Duration::from_millis(sleep_ms),
+            held: AtomicBool::new(false),
             calls: AtomicUsize::new(0),
+            finished: AtomicUsize::new(0),
             seen: Mutex::new(Vec::new()),
         })
     }
 
+    /// A model that doesn't answer until [`Fake::release`].
+    fn held(reply: &str) -> Arc<Self> {
+        let fake = Self::new(reply, 0);
+        fake.held.store(true, Ordering::SeqCst);
+        fake
+    }
+
+    fn release(&self) {
+        self.held.store(false, Ordering::SeqCst);
+    }
+
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    fn finished(&self) -> usize {
+        self.finished.load(Ordering::SeqCst)
     }
 }
 
@@ -50,6 +70,10 @@ impl LocalRuntime for Fake {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().unwrap().push(messages.to_vec());
         std::thread::sleep(self.sleep);
+        while self.held.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        self.finished.fetch_add(1, Ordering::SeqCst);
         Ok(self.reply.clone())
     }
 }
@@ -257,26 +281,29 @@ fn quotes_a_small_model_adds_are_dropped() {
 
 #[test]
 fn a_slow_model_is_cut_off_and_blocks_the_next_call() {
-    let slow = Fake::new(FIXED, 500);
+    // The model can't answer until it's released below, so a return now is
+    // the cutoff, not the answer, however slow the machine is.
+    let slow = Fake::held(FIXED);
     let lane = lane();
     let started = Instant::now();
     assert_eq!(run_on(lane, &slow, TYPO, LIMIT), None);
-    assert!(
-        started.elapsed() < Duration::from_millis(400),
-        "{:?}",
-        started.elapsed()
-    );
+    // At the limit, not some other wait: the bound only has to beat a
+    // limit ten times too long, so a busy runner's slack can't fail it.
+    let waited = started.elapsed();
+    assert!(waited >= LIMIT && waited < LIMIT * 10, "{waited:?}");
+    assert_eq!(slow.finished(), 0, "the turn waited for the answer");
     // The timed-out call still runs: a new one is skipped, not queued.
     let fast = Fake::new(FIXED, 0);
     assert_eq!(run_on(lane, &fast, TYPO, LIMIT), None);
     assert_eq!(fast.calls(), 0);
     // Once it ends, the lane is free again.
+    slow.release();
     let deadline = Instant::now() + Duration::from_secs(5);
     while lane.load(Ordering::SeqCst) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(run_on(lane, &fast, TYPO, LIMIT).as_deref(), Some(FIXED));
-    assert_eq!((slow.calls(), fast.calls()), (1, 1));
+    assert_eq!((slow.calls(), slow.finished(), fast.calls()), (1, 1, 1));
 }
 
 #[test]
