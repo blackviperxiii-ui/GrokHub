@@ -381,6 +381,9 @@ mod tests {
                 format!("install -Dm755 \"$hub/grokhub-hub\" \"{pkgdir}/usr/bin/grokhub-hub\""),
                 format!("install -Dm755 \"$hub/grokhub\" \"{pkgdir}/usr/bin/grokhub\""),
                 "sed -e 's|^ExecStart=%h/.local/bin/grokhub-hub$|ExecStart=/usr/bin/grokhub-hub|' \\".to_string(),
+                format!(
+                    "find . -type f -exec install -Dm644 {{}} \"{pkgdir}/usr/share/icons/hicolor/{{}}\" \\;)"
+                ),
                 format!("packaging/systemd/grokhub-hub.service >\"{pkgdir}/usr/lib/systemd/user/grokhub-hub.service\""),
             ] {
                 assert!(
@@ -402,6 +405,10 @@ mod tests {
                     .unwrap_or_else(|| panic!("{name} has no makedepends"));
                 assert!(make.contains(dep), "{name} makedepends needs {dep}");
             }
+            assert!(
+                !pkg.contains("cp -a"),
+                "{name}: cp -a would record the build user as the owner"
+            );
             assert!(
                 !pkg.contains("grokhub-app"),
                 "{name} names the removed cabin crate"

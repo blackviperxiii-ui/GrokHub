@@ -51,7 +51,7 @@ package() {
   chmod 644 "$pkgdir/usr/share/applications/grokhub-shell.desktop"
   install -Dm644 packaging/grokhub.svg \
     "$pkgdir/usr/share/icons/hicolor/scalable/apps/grokhub.svg"
-  # install, not cp -a: the package must not carry the build user as owner.
+  # One install per icon, so the package never records the build user as owner.
   if [[ -d packaging/icons/hicolor ]]; then
     (cd packaging/icons/hicolor &&
       find . -type f -exec install -Dm644 {} "$pkgdir/usr/share/icons/hicolor/{}" \;)

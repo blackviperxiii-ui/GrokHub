@@ -49,18 +49,15 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 | Job | Beta | Tag | Nightly | Manual on `beta` |
 |---|---|---|---|---|
 | `plan` | yes | yes | yes | yes |
-| `linux-bundle` | yes, cached | yes | yes ⁷ | yes, cached |
-| `windows-installer` (pack-script tests after Package) | yes, cached | yes, signed ⁸ | yes ⁷ | yes, cached |
 | `shell bundles` | ubuntu, windows; cached | 3 OS | 3 OS ⁷ | 3 OS, cached |
 | `publish` | `vX.Y.Z-beta.N` pre-release | release (Latest only for `vX.Y.Z`) | pre-release ⁷ | pre-release |
 
 7. The nightly skips everything after `plan` when `vX.Y.Z-beta.N` already exists, which means nothing new landed on `beta`.
-8. SignPath signs tag builds when its secrets are configured. Beta builds stay unsigned.
 
 - Rust caches (`linux-release`, `windows-release`, `shell-<os>`) are used only on the `beta` ref. Tags and the nightly build cold.
 - A newer beta build cancels one still running. Tag runs never cancel.
 - A tag builds only when it is `v<VERSION>` or `v<VERSION>-beta.N` for the tagged commit. `plan` runs `scripts/release-tag-check.sh` before any build or signing, and the `guards` job fails when that call is missing or is not the first command for a tag (`scripts/ci-guards.sh`).
-- `publish` downloads only the `linux`, `windows` and `shell-*` artifacts, so the unsigned Windows files staged for SignPath never reach a release (`scripts/ci-guards.sh`).
+- `publish` downloads only the `shell-*` artifacts, so nothing staged for signing reaches a release unsigned (`scripts/ci-guards.sh`).
 - A manual run on any branch other than `beta` builds nothing.
 - Pull requests and pushes to `main` never run release.yml.
 
