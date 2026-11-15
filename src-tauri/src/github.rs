@@ -16,6 +16,8 @@ const API: &str = "https://api.github.com";
 const TIMEOUT: Duration = Duration::from_secs(20);
 /// GitHub's answers here are a few KB; anything this big is not one.
 const ANSWER_CAP: u64 = 2 * 1024 * 1024;
+/// List repos asks for one page of this many, so a full page is not a total.
+const LIST_PAGE: usize = 20;
 /// A server's error message is shown, cut to this many characters.
 const MESSAGE_CAP: usize = 160;
 
@@ -217,6 +219,7 @@ fn repos(list: &serde_json::Value) -> Ran {
     let summary = match repos.len() {
         0 => "No repositories on this account yet.".to_string(),
         1 => "1 repository.".to_string(),
+        LIST_PAGE => format!("The {LIST_PAGE} most recently updated repositories."),
         n => format!("{n} repositories, most recently updated first."),
     };
     Ran { summary, repos }

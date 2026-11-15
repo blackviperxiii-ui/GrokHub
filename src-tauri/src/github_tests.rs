@@ -317,3 +317,17 @@ fn no_ai_provider_can_share_the_tokens_keyring_entry() {
         Some(FAKE)
     );
 }
+
+/// A full page is the newest twenty, not how many the account has.
+#[test]
+fn a_full_page_of_repos_is_not_called_the_total() {
+    let dir = config("page");
+    save_token(&dir, FAKE).expect("save");
+    let rows: Vec<String> = (0..20)
+        .map(|i| format!(r#"{{"full_name":"octo/r{i}","private":false,"description":null}}"#))
+        .collect();
+    let (base, _got) = mock("200 OK", "", format!("[{}]", rows.join(",")));
+    let ran = run_at(&dir, &base, Tool::ListRepos, false).expect("run");
+    assert_eq!(ran.summary, "The 20 most recently updated repositories.");
+    assert_eq!(ran.repos.len(), 20);
+}
