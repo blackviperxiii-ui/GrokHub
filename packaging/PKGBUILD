@@ -23,6 +23,9 @@ prepare() { :; }
 
 build() {
   cd "$startdir/.."
+  # The tauri CLI runs cargo from src-tauri, so a relative target dir would
+  # land somewhere else for the shell; make it absolute first.
+  [[ -z "${CARGO_TARGET_DIR:-}" ]] || export CARGO_TARGET_DIR="$(realpath -m "$CARGO_TARGET_DIR")"
   # The same steps as scripts/install.sh. src-tauri is its own workspace, so
   # the shell lands in src-tauri/target unless CARGO_TARGET_DIR is set.
   cargo build --release --locked -p grokhub-hub
@@ -32,6 +35,7 @@ build() {
 
 package() {
   cd "$startdir/.."
+  [[ -z "${CARGO_TARGET_DIR:-}" ]] || export CARGO_TARGET_DIR="$(realpath -m "$CARGO_TARGET_DIR")"
   local hub="${CARGO_TARGET_DIR:-target}/release"
   local shell="${CARGO_TARGET_DIR:-src-tauri/target}/release"
   install -Dm755 "$shell/grokhub-shell" "$pkgdir/usr/bin/grokhub-shell"

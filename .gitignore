@@ -21,6 +21,9 @@ dist-release/
 packaging/aur/pkg/
 packaging/aur/src/
 packaging/aur/*.pkg.tar*
+packaging/pkg/
+packaging/src/
+packaging/*.pkg.tar*
 
 # Local
 .project_id

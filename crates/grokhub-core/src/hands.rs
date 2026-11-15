@@ -366,6 +366,7 @@ mod tests {
             assert_eq!(
                 steps,
                 [
+                    r#"[[ -z "${CARGO_TARGET_DIR:-}" ]] || export CARGO_TARGET_DIR="$(realpath -m "$CARGO_TARGET_DIR")""#,
                     "cargo build --release --locked -p grokhub-hub",
                     "npm ci --prefix ui",
                     "ui/node_modules/.bin/tauri build --no-bundle -- --locked",
