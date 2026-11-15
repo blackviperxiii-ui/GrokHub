@@ -2854,6 +2854,8 @@ export interface PluginEntry {
 export interface PluginMarket {
   entries: PluginEntry[];
   page: PluginPage;
+  /** The index was really read, so no entries means it is empty. */
+  read: boolean;
 }
 
 export interface DiagnosticsPage {

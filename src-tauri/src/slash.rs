@@ -1326,6 +1326,14 @@ mod tests {
     }
 
     #[test]
+    fn help_ends_by_saying_where_the_other_commands_went() {
+        assert_eq!(
+            help().lines().last(),
+            Some("Greyed commands in the / menu say why they don't run here.")
+        );
+    }
+
+    #[test]
     fn none_of_these_say_not_in_this_app() {
         for word in [
             "/rename",

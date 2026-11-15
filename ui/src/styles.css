@@ -3502,8 +3502,16 @@ textarea.code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.labs dl.plugin-parts dd.whole {
-  grid-column: 1 / -1;
+/* A bundle's description keeps its own line breaks; a summary in another
+   shape shows whole, in the parts' font. */
+.labs .plugin-desc,
+.labs .plugin-whole {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.labs .plugin-whole {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .labs dl.plugin-parts dd.warn {

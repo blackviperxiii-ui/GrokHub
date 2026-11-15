@@ -103,7 +103,7 @@ export function Labs({ onOpenConnectors }: { onOpenConnectors?: () => void } = {
     await run(async () => {
       const market = await fetchPluginMarket(marketUrl);
       setEntries(market.entries);
-      setFetched(market.page.marketUrl !== "");
+      setFetched(market.read);
       setMarketUrl(market.page.marketUrl);
       return market.page;
     });
@@ -163,23 +163,25 @@ export function Labs({ onOpenConnectors }: { onOpenConnectors?: () => void } = {
                 {row.name} {row.version}
               </div>
               {row.description && (
-                <p className="card-detail-line plain">{row.description}</p>
+                <p className="card-detail-line plain plugin-desc">{row.description}</p>
               )}
-              {row.parts.length > 0 && (
+              {row.parts
+                .filter((part) => !part.label)
+                .map((part, i) => (
+                  <p key={i} className="card-detail-line plain plugin-whole">
+                    {part.text}
+                  </p>
+                ))}
+              {row.parts.some((part) => part.label) && (
                 <dl className="plugin-parts">
-                  {row.parts.map((part, i) => (
-                    <Fragment key={i}>
-                      {part.label && <dt>{part.label}</dt>}
-                      <dd
-                        className={
-                          [part.warn && "warn", !part.label && "whole"].filter(Boolean).join(" ") ||
-                          undefined
-                        }
-                      >
-                        {part.text}
-                      </dd>
-                    </Fragment>
-                  ))}
+                  {row.parts
+                    .filter((part) => part.label)
+                    .map((part, i) => (
+                      <Fragment key={i}>
+                        <dt>{part.label}</dt>
+                        <dd className={part.warn ? "warn" : undefined}>{part.text}</dd>
+                      </Fragment>
+                    ))}
                 </dl>
               )}
               <div className="card-buttons">

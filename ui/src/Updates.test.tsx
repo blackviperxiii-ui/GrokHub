@@ -42,6 +42,15 @@ describe("Updates", () => {
     });
   });
 
+  it("says what each channel gets, without the old app's name", async () => {
+    api.getUpdateStatus.mockResolvedValue(STABLE);
+    render(<Updates />);
+    expect(
+      await screen.findByText("Beta gets every new build first. Stable gets only full releases."),
+    ).toBeVisible();
+    expect(screen.queryByText(/cabin/i)).toBeNull();
+  });
+
   it("switches to Beta through the shared channel", async () => {
     api.getUpdateStatus.mockResolvedValue(STABLE);
     api.setUpdateChannel.mockResolvedValue(BETA);

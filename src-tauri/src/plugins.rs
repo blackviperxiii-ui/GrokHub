@@ -61,6 +61,8 @@ pub struct Entry {
 pub struct Market {
     pub entries: Vec<Entry>,
     pub page: Page,
+    /// The index was really read, so no entries means it is empty.
+    pub read: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -119,8 +121,13 @@ fn parts(summary: &str, name: &str, version: &str, description: &str) -> Vec<Par
         });
         match (known, out.last_mut()) {
             (Some((label, text, warn)), _) => {
+                // Only each server's own key carries the prefix; a command,
+                // argument or URL that holds the same text shows as it runs.
                 let text = if label == "MCP servers" {
-                    text.replace(&mcp_key, "")
+                    text.split("; ")
+                        .map(|entry| entry.strip_prefix(&mcp_key).unwrap_or(entry))
+                        .collect::<Vec<_>>()
+                        .join("; ")
                 } else {
                     text.to_string()
                 };
@@ -208,20 +215,21 @@ pub fn install(config_dir: &Path, workspace: &Path, source: &str) -> Page {
 pub fn fetch_market(config_dir: &Path, workspace: &Path, url: &str) -> Market {
     let _config = ConfigGuard::set(config_dir);
     let url = url.trim();
-    let (entries, note) = match plugins::set_marketplace_url(url) {
-        Err(err) => (Vec::new(), err),
-        Ok(()) if url.is_empty() => (Vec::new(), "Marketplace URL cleared.".to_string()),
+    let (entries, note, read) = match plugins::set_marketplace_url(url) {
+        Err(err) => (Vec::new(), err, false),
+        Ok(()) if url.is_empty() => (Vec::new(), "Marketplace URL cleared.".to_string(), false),
         Ok(()) => match plugins::fetch_marketplace(url) {
             Ok(list) => {
                 let note = format!("{} entries. Nothing was installed.", list.len());
-                (list.into_iter().map(entry).collect(), note)
+                (list.into_iter().map(entry).collect(), note, true)
             }
-            Err(err) => (Vec::new(), err),
+            Err(err) => (Vec::new(), err, false),
         },
     };
     Market {
         entries,
         page: page(workspace, note),
+        read,
     }
 }
 
@@ -367,6 +375,23 @@ mod tests {
     }
 
     #[test]
+    fn only_each_mcp_servers_own_key_loses_its_prefix() {
+        assert_eq!(
+            parts(
+                "kit 2.0\nmcp: plugin__kit__files: npx files --peer=plugin__kit__notes; plugin__kit__web: https://h/plugin__kit__x",
+                "kit",
+                "2.0",
+                ""
+            ),
+            vec![part(
+                "MCP servers",
+                "files: npx files --peer=plugin__kit__notes; web: https://h/plugin__kit__x",
+                false
+            )]
+        );
+    }
+
+    #[test]
     fn a_summary_in_another_shape_comes_back_whole() {
         assert_eq!(
             parts("x 9\nfoo", "y", "9", ""),
@@ -454,6 +479,11 @@ mod tests {
         assert_eq!(market.page.note, "Marketplace URL cleared.");
         assert_eq!(market.entries, Vec::new());
         assert_eq!(market.page.market_url, "");
+        assert!(!market.read);
+        // A refused URL reads nothing, even with an older one still saved.
+        let refused = fetch_market(&cfg, &ws, "http://example.com/index.json");
+        assert!(!refused.read);
+        assert_eq!(refused.entries, Vec::new());
         let _ = std::fs::remove_dir_all(&root);
     }
 
