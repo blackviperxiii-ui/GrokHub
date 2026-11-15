@@ -18,7 +18,9 @@ use grokhub_core::mods::install::{
     self as engine, Installer, Layout, Manifest, ModInfo, Plan, Removal,
 };
 use grokhub_core::mods::rail::{installed_mods, ModGame};
-use grokhub_core::mods::{archive, managers, Download, Entry, ModFile, Request, Source};
+use grokhub_core::mods::{
+    archive, managers, Download, Entry, ModFile, ModSummary, Request, Source,
+};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -156,6 +158,9 @@ struct Work {
     next: u64,
     pickup: Option<Pickup>,
     recovered: bool,
+    /// The mod the chat asked to set up, waiting on the Mods page. One at a
+    /// time: a newer ask replaces it.
+    requested: Option<Requested>,
 }
 
 fn work() -> std::sync::MutexGuard<'static, Work> {
@@ -163,6 +168,40 @@ fn work() -> std::sync::MutexGuard<'static, Work> {
     WORK.get_or_init(Default::default)
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A mod the chat asked to set up. Nothing is fetched or written for it:
+/// the Mods page shows an Install card, and the user's click there starts
+/// the same plan and sheet as the drawer's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Requested {
+    pub game: ModGame,
+    pub source: Source,
+    pub m: ModSummary,
+    pub f: ModFile,
+}
+
+impl Requested {
+    pub fn key(&self) -> String {
+        mod_key(self.source, &self.m.id)
+    }
+}
+
+/// Put the chat's ask on the Mods page, in place of any earlier one.
+pub fn request(r: Requested) {
+    work().requested = Some(r);
+}
+
+pub fn requested() -> Option<Requested> {
+    work().requested.clone()
+}
+
+/// Dismiss: only the ask the page showed, never a newer one.
+pub fn drop_request(key: &str) {
+    let mut w = work();
+    if w.requested.as_ref().is_some_and(|r| r.key() == key) {
+        w.requested = None;
+    }
 }
 
 /// The mod's key in the records: `source:id`.
@@ -305,7 +344,7 @@ fn app_data() -> (Option<PathBuf>, Option<PathBuf>) {
 }
 
 /// The game's own folder on this PC.
-fn game_dir(game: &ModGame, steam_root: Option<&Path>) -> Option<PathBuf> {
+pub fn game_dir(game: &ModGame, steam_root: Option<&Path>) -> Option<PathBuf> {
     let entry = game.entry;
     match (entry.steam_app_id, steam_root) {
         (Some(id), Some(root)) => grokhub_core::steam::install_dir(root, id),
@@ -520,6 +559,66 @@ pub fn drawer_rows(
         .map(|f| f.deps.clone())
         .unwrap_or_default();
     (rows, needs)
+}
+
+/// The chat's ask as the Mods page's Install card shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestedView {
+    pub key: String,
+    pub game: String,
+    pub source: &'static str,
+    pub source_label: &'static str,
+    /// "Install Sodium for Minecraft?"
+    pub title: String,
+    /// "sodium-0.6.0.jar · 0.6.0 · 1.0 MB · from Modrinth · asked for in chat"
+    pub line: String,
+    /// The game's risk line, as the drawer's game header gives it.
+    pub risk: String,
+    /// Why the app won't install for this game.
+    pub blocked: Option<String>,
+    #[serde(rename = "mod")]
+    pub m: mods::ModRow,
+    pub file: FileRow,
+}
+
+/// The card for the chat's ask, given what is installed and why the game
+/// can't be written, if it can't.
+pub fn requested_view(
+    r: &Requested,
+    installed: &[Manifest],
+    blocked: Option<String>,
+    pickup: Option<&Pickup>,
+) -> RequestedView {
+    let key = r.key();
+    let (mut rows, _) = drawer_rows(
+        std::slice::from_ref(&r.f),
+        &key,
+        installed,
+        blocked.is_some(),
+        pickup,
+    );
+    let line = [r.f.file_name.clone(), file_line(&r.f)]
+        .into_iter()
+        .chain([
+            format!("from {}", r.source.label()),
+            "asked for in chat".to_string(),
+        ])
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    RequestedView {
+        game: r.game.entry.id.to_string(),
+        source: r.source.id(),
+        source_label: r.source.label(),
+        title: format!("Install {} for {}?", r.m.name, r.game.entry.name),
+        line,
+        risk: r.game.entry.risk.to_string(),
+        blocked,
+        m: mods::mod_row(&r.m),
+        file: rows.remove(0),
+        key,
+    }
 }
 
 // ------------------------------------------------------------ the plan
@@ -788,6 +887,24 @@ fn file_of(
         .ok_or_else(|| "That file isn't on the mod's list any more.".into())
 }
 
+/// Take the one-job flag for this mod's plan. Starting it answers the
+/// chat's ask for the same mod, so its card goes.
+pub fn begin_plan(key: &str) -> Result<(), String> {
+    let mut w = work();
+    if w.busy {
+        return Err("Another install is getting ready. Wait for it first.".into());
+    }
+    w.busy = true;
+    if w.requested.as_ref().is_some_and(|r| r.key() == key) {
+        w.requested = None;
+    }
+    Ok(())
+}
+
+pub fn end_plan() {
+    work().busy = false;
+}
+
 /// Plan an install with the busy flag held; frees staging on failure.
 fn plan_job(
     app: &AppHandle,
@@ -798,13 +915,7 @@ fn plan_job(
     f: &ModFile,
     from: Option<PathBuf>,
 ) -> Result<SheetView, String> {
-    {
-        let mut w = work();
-        if w.busy {
-            return Err("Another install is getting ready. Wait for it first.".into());
-        }
-        w.busy = true;
-    }
+    begin_plan(&mod_key(source, mod_ref.0))?;
     let say = |line: String| {
         let _ = app.emit(JOB_EVENT, line);
     };
@@ -844,7 +955,7 @@ fn plan_job(
         )
     };
     let out = run();
-    work().busy = false;
+    end_plan();
     match out {
         Ok(sheet) => Ok(park(sheet)),
         Err(e) => {
@@ -1044,6 +1155,39 @@ pub(crate) async fn mods_confirm(
 pub(crate) fn mods_cancel(token: u64) -> Result<(), String> {
     capabilities::needs(capabilities::current().mods, "Mods")?;
     cancel(token);
+    Ok(())
+}
+
+/// The Install card for the mod the chat asked to set up, if there is one.
+#[tauri::command]
+pub(crate) async fn mods_requested(
+    state: State<'_, ShellState>,
+) -> Result<Option<RequestedView>, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(r) = requested() else {
+            return Ok(None);
+        };
+        let blocked = target(&r.game).err();
+        let installed = engine::installed(&dir, Some(r.game.entry.id));
+        let pickup = work().pickup.clone();
+        Ok(Some(requested_view(
+            &r,
+            &installed,
+            blocked,
+            pickup.as_ref(),
+        )))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The Install card's Dismiss.
+#[tauri::command]
+pub(crate) fn mods_drop_request(key: String) -> Result<(), String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    drop_request(&key);
     Ok(())
 }
 

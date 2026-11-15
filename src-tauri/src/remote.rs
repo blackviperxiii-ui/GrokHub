@@ -1236,6 +1236,8 @@ mod tests {
             "mods_confirm",
             "mods_cancel",
             "mods_installed",
+            "mods_requested",
+            "mods_drop_request",
             "home_run_playbook",
             "home_turn_on",
             "home_setup",

@@ -13,16 +13,20 @@ import { openUrl, type ModGame, type ModRow } from "./api";
 import {
   modsCancel,
   modsConfirm,
+  modsDropRequest,
   modsFiles,
   modsInstalled,
   modsPickupDownload,
   modsPlanInstall,
   modsPlanUninstall,
+  modsRequested,
   modsWaitForBrowser,
   onModsJob,
+  onModsRequested,
   type ModDrawer,
   type ModFileRow,
   type ModInstalled,
+  type ModRequested,
   type ModSheet,
 } from "./modsInstallApi";
 import { PRODUCT_NAME } from "./brand";
@@ -263,6 +267,78 @@ function FileActions({
     case "blocked":
       return null;
   }
+}
+
+/** The mod the chat asked to set up: one card, the same one way to get the
+ * file as in the drawer, and Dismiss. Nothing has been fetched yet. It reads
+ * the ask again when the chat makes a new one and whenever the install job
+ * moves, since starting this mod's install answers it. */
+export function RequestedCard({
+  install,
+  offline,
+}: {
+  install: Install;
+  offline: boolean;
+}) {
+  const [got, setGot] = useState<ModRequested | null>(null);
+  const [ask, setAsk] = useState(0);
+  const moved = `${install.generation}|${install.step?.kind ?? ""}|${ask}`;
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let live = true;
+    void onModsRequested(() => setAsk((n) => n + 1)).then((f) => {
+      if (live) off = f;
+      else f();
+    });
+    return () => {
+      live = false;
+      off?.();
+    };
+  }, []);
+  useEffect(() => {
+    let live = true;
+    modsRequested().then(
+      (r) => live && setGot(r),
+      () => live && setGot(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [moved]);
+  if (!got) return null;
+  const r = got;
+  return (
+    <section className="card mods-requested" aria-label="Asked for in chat">
+      <h3>{r.title}</h3>
+      <p className="card-status">{r.line}</p>
+      <p className="note">{r.risk}</p>
+      {r.blocked && <p className="note">{r.blocked}</p>}
+      {offline && <p className="card-status">Offline only is on.</p>}
+      <div className="mods-row-actions">
+        {!offline && (
+          <FileActions
+            game={r.game}
+            source={r.source}
+            mod={r.mod}
+            file={r.file}
+            install={install}
+            sourceLabel={r.sourceLabel}
+            reload={() => setAsk((n) => n + 1)}
+          />
+        )}
+        <button
+          type="button"
+          className="quiet"
+          onClick={() => {
+            setGot(null);
+            void modsDropRequest(r.key).catch(() => {});
+          }}
+        >
+          Dismiss
+        </button>
+      </div>
+    </section>
+  );
 }
 
 /** The open mod's drawer: who made it, its page, its files with the one way

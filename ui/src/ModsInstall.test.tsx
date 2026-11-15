@@ -1,9 +1,9 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModGame, ModRow } from "./api";
-import type { ModSheet } from "./modsInstallApi";
+import type { ModRequested, ModSheet } from "./modsInstallApi";
 
 const api = vi.hoisted(() => ({ openUrl: vi.fn(() => Promise.resolve()) }));
 vi.mock("./api", () => api);
@@ -18,10 +18,17 @@ const inst = vi.hoisted(() => ({
   modsConfirm: vi.fn(),
   modsCancel: vi.fn(() => Promise.resolve()),
   onModsJob: vi.fn(() => Promise.resolve(() => {})),
+  modsRequested: vi.fn<() => Promise<ModRequested | null>>(() => Promise.resolve(null)),
+  modsDropRequest: vi.fn(() => Promise.resolve()),
+  onModsRequested: vi.fn((handler: () => void) => {
+    asked.handler = handler;
+    return Promise.resolve(() => {});
+  }),
 }));
+const asked = vi.hoisted(() => ({ handler: null as (() => void) | null }));
 vi.mock("./modsInstallApi", () => inst);
 
-import { InstalledTab, InstallSheet, ModDrawerPanel, StepLine, useInstall } from "./ModsInstall";
+import { InstalledTab, InstallSheet, ModDrawerPanel, RequestedCard, StepLine, useInstall } from "./ModsInstall";
 
 const GAME: ModGame = {
   id: "stardew",
@@ -86,8 +93,34 @@ function Installed() {
   );
 }
 
+function Asked({ offline = false }: { offline?: boolean }) {
+  const install = useInstall();
+  return (
+    <>
+      <RequestedCard install={install} offline={offline} />
+      <StepLine install={install} />
+      <InstallSheet install={install} />
+    </>
+  );
+}
+
+const ASKED: ModRequested = {
+  key: "nexus:2100",
+  game: "stardew",
+  source: "nexus",
+  sourceLabel: "Nexus Mods",
+  title: "Install Better Crops for Stardew Valley?",
+  line: "BetterCrops.zip · 1.0.0 · 880 KB · from Nexus Mods · asked for in chat",
+  risk: "Singleplayer mods only.",
+  blocked: null,
+  mod: MOD,
+  file: { id: "7", name: "Main file", line: "1.0.0 · 880 KB", offer: { kind: "install" }, waiting: false },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  asked.handler = null;
+  inst.modsRequested.mockResolvedValue(null);
   inst.modsFiles.mockResolvedValue({
     files: [
       { id: "7", name: "Main file", line: "1.0.0 · 880 KB", offer: { kind: "install" }, waiting: false },
@@ -162,6 +195,70 @@ describe("the install sheet", () => {
     await user.click(files.getByRole("button", { name: "Install" }));
     expect(await screen.findByText("Close Stardew Valley first.")).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("the chat's Install card", () => {
+  it("shows the ask, and its Install plans through the same sheet", async () => {
+    const user = userEvent.setup();
+    inst.modsRequested.mockResolvedValueOnce(ASKED);
+    render(<Asked />);
+    const card = within(await screen.findByRole("region", { name: "Asked for in chat" }));
+    expect(card.getByText("Install Better Crops for Stardew Valley?")).toBeInTheDocument();
+    expect(
+      card.getByText("BetterCrops.zip · 1.0.0 · 880 KB · from Nexus Mods · asked for in chat"),
+    ).toBeInTheDocument();
+    expect(card.getByText("Singleplayer mods only.")).toBeInTheDocument();
+    await user.click(card.getByRole("button", { name: "Install" }));
+    expect(inst.modsPlanInstall).toHaveBeenCalledWith("stardew", "nexus", "2100", "Better Crops", "7");
+    // The plan answered the ask: the card reads it again and goes.
+    await screen.findByRole("dialog", { name: "Install Better Crops 1.0.0?" });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Asked for in chat" })).not.toBeInTheDocument());
+    expect(inst.modsConfirm).not.toHaveBeenCalled();
+  });
+
+  it("Dismiss drops only the ask it shows", async () => {
+    const user = userEvent.setup();
+    inst.modsRequested.mockResolvedValueOnce(ASKED);
+    render(<Asked />);
+    const card = within(await screen.findByRole("region", { name: "Asked for in chat" }));
+    await user.click(card.getByRole("button", { name: "Dismiss" }));
+    expect(inst.modsDropRequest).toHaveBeenCalledWith("nexus:2100");
+    expect(screen.queryByRole("region", { name: "Asked for in chat" })).not.toBeInTheDocument();
+    expect(inst.modsPlanInstall).not.toHaveBeenCalled();
+  });
+
+  it("a new ask from the chat shows without reopening the page", async () => {
+    render(<Asked />);
+    await waitFor(() => expect(inst.modsRequested).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("region", { name: "Asked for in chat" })).not.toBeInTheDocument();
+    inst.modsRequested.mockResolvedValueOnce(ASKED);
+    await waitFor(() => expect(asked.handler).not.toBeNull());
+    act(() => asked.handler?.());
+    expect(await screen.findByText("Install Better Crops for Stardew Valley?")).toBeInTheDocument();
+  });
+
+  it("a game the app can't write says why and offers no Install", async () => {
+    inst.modsRequested.mockResolvedValueOnce({
+      ...ASKED,
+      blocked: "Vortex looks after Stardew Valley on this PC, so install its mods there.",
+      file: { ...ASKED.file, offer: { kind: "blocked" } },
+    });
+    render(<Asked />);
+    const card = within(await screen.findByRole("region", { name: "Asked for in chat" }));
+    expect(
+      card.getByText("Vortex looks after Stardew Valley on this PC, so install its mods there."),
+    ).toBeInTheDocument();
+    expect(card.queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
+    expect(card.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+  });
+
+  it("Offline only shows the ask with no way to fetch the file", async () => {
+    inst.modsRequested.mockResolvedValueOnce(ASKED);
+    render(<Asked offline />);
+    const card = within(await screen.findByRole("region", { name: "Asked for in chat" }));
+    expect(card.getByText("Offline only is on.")).toBeInTheDocument();
+    expect(card.queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
   });
 });
 
