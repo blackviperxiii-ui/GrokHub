@@ -138,12 +138,12 @@ describe("the desktop companion's motion and reduce motion", () => {
         /animation:\s*none/.test(r.body),
     );
 
-  it("breathes from her feet every 4 s and floats 3 px either way every 5 s", () => {
+  it("breathes from her feet every 4 s and floats up 3 px every 5 s", () => {
     const figure = all.find((r) => r.selector === ".nyx-desk-figure" && r.media === null && /animation:/.test(r.body));
     expect(figure?.body).toMatch(/transform-origin:\s*50% 100%/);
     expect(figure?.body).toMatch(/nyx-desk-bob 5s ease-in-out infinite,\s*nyx-desk-breath 4s ease-in-out infinite/);
     expect(css).toMatch(/@keyframes nyx-desk-breath \{\s*0%,\s*100% \{\s*scale: 1;\s*\}\s*50% \{\s*scale: 1\.006 1\.012;\s*\}\s*\}/);
-    expect(css).toMatch(/@keyframes nyx-desk-bob \{\s*0%,\s*100% \{\s*translate: 0 3px;\s*\}\s*50% \{\s*translate: 0 -3px;\s*\}\s*\}/);
+    expect(css).toMatch(/@keyframes nyx-desk-bob \{\s*0%,\s*100% \{\s*translate: 0 0;\s*\}\s*50% \{\s*translate: 0 -3px;\s*\}\s*\}/);
   });
 
   it("glows her pedestal with the voice", () => {

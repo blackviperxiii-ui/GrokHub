@@ -98,7 +98,8 @@ describe("NyxDesk", () => {
       return { left, top, width, height } as DOMRect;
     });
     const pedestal = { x: 26, y: 259, w: 268, h: 202 };
-    const figure = { x: 60, y: 40, w: 200, h: 300 };
+    // Grown by her float (3 px) and breath (1.2% up, 0.6% wide).
+    const figure = { x: 59.4, y: 33.4, w: 201.2, h: 309.6 };
     try {
       render(<NyxDesk />);
       const root = await screen.findByLabelText("Nyx");

@@ -1,6 +1,6 @@
 // Desktop companion window + wardrobe (src-tauri/src/desktop_nyx.rs).
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import type { Mood } from "./nyx";
+import { lookArgs } from "./nyx";
 import { call, subscribe } from "./transport";
 
 /** What the chat's voice is doing, as her pedestal shows it. */
@@ -90,7 +90,8 @@ export function desktopNyxDrag(): Promise<void> {
   return call<void>("desktop_nyx_drag");
 }
 
-/** What the chat on screen is doing; "Pick for me" wears the mood's outfit. */
-export function desktopNyxLook(look: DesktopNyxLook, mood: Mood | null): Promise<void> {
-  return call<void>("desktop_nyx_look", { look, mood });
+/** What the chat on screen is doing (`activityOf`); "Pick for me" wears
+ * the outfit for that activity. */
+export function desktopNyxLook(look: DesktopNyxLook, activity: string): Promise<void> {
+  return call<void>("desktop_nyx_look", { look, ...lookArgs(activity) });
 }

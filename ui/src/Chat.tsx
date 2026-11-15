@@ -100,7 +100,7 @@ import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
 import { desktopNyxLook } from "./desktopNyxApi";
 import { inShell } from "./transport";
-import { deskLook } from "./nyxLife";
+import { claimDesk, deskLook, deskSpeaker, releaseDesk } from "./nyxLife";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
 import { DeviceGlanceRow } from "./DeviceGlance";
@@ -1013,13 +1013,19 @@ export function Chat({
   const activity = activityOf(items, busy);
   const nyx = useNyx(activity, active);
   // Her desktop pedestal follows the voice, and "Pick for me" wears the
-  // chat's mood. Only the chat on screen speaks for her.
+  // chat's activity. The chat last on screen speaks for her, so a reply
+  // that ends while Settings is open still settles her.
   const look = deskLook(voice.state, busyHere);
-  const lookMood = nyx?.mood ?? null;
+  const deskVoice = useRef(Symbol("chat"));
   useEffect(() => {
-    if (!active || !inShell()) return;
-    desktopNyxLook(look, lookMood).catch(() => {});
-  }, [active, look, lookMood]);
+    if (!inShell()) return;
+    if (active) claimDesk(deskVoice.current);
+    if (deskSpeaker(deskVoice.current)) desktopNyxLook(look, activity).catch(() => {});
+  }, [active, look, activity]);
+  useEffect(() => {
+    const me = deskVoice.current;
+    return () => releaseDesk(me);
+  }, []);
   const sideWide = useMinWidth(SIDE_MIN_WIDTH);
   const leftWide = useMinWidth(DOCK_MIN_WIDTH);
 

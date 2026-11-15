@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "./api";
@@ -46,14 +46,42 @@ describe("Chat and her desktop pedestal", () => {
 
   it("says idle, then thinking while a reply runs here", async () => {
     render(<Chat onOpenSettings={() => {}} />);
-    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("idle", null));
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("idle", "hanging-out"));
     await userEvent.type(screen.getByLabelText("Message"), "hello{Enter}");
-    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("thinking", null));
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("thinking", "thinking"));
   });
 
-  it("says nothing while the chat is off screen", async () => {
+  it("says nothing from a chat that was never on screen", async () => {
     render(<Chat onOpenSettings={() => {}} active={false} />);
     await screen.findByLabelText("Message");
     expect(desk.desktopNyxLook).not.toHaveBeenCalled();
+  });
+
+  it("speaks from the chat last on screen, and keeps it while no chat is on screen", async () => {
+    const both = (a: boolean, b: boolean) => (
+      <>
+        <div data-testid="a">
+          <Chat onOpenSettings={() => {}} active={a} />
+        </div>
+        <div data-testid="b">
+          <Chat onOpenSettings={() => {}} active={b} />
+        </div>
+      </>
+    );
+    const { rerender } = render(both(true, false));
+    const a = within(screen.getByTestId("a"));
+    await userEvent.type(a.getByLabelText("Message"), "hello{Enter}");
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("thinking", "thinking"));
+    // The other chat comes on screen: it speaks now.
+    rerender(both(false, true));
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("idle", "hanging-out"));
+    // Neither on screen (Settings): the hidden chat still running a reply
+    // doesn't take her back; the last one on screen still speaks.
+    const calls = desk.desktopNyxLook.mock.calls.length;
+    rerender(both(false, false));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(desk.desktopNyxLook.mock.calls.slice(calls - 1)).toEqual(
+      desk.desktopNyxLook.mock.calls.slice(calls - 1).map(() => ["idle", "hanging-out"]),
+    );
   });
 });

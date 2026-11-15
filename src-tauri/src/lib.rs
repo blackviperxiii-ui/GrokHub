@@ -4118,8 +4118,9 @@ fn desktop_nyx_get(state: State<'_, ShellState>) -> desktop_nyx::State {
     desktop_nyx::state_now(&current(&state))
 }
 
-/// What the chat on screen is doing: her voice look and the mood "Pick for
-/// me" wears. Every page and her desk hear it when it changed.
+/// What the chat on screen is doing: her voice look, and the activity (a
+/// running tool's title, else `mood`) whose outfit "Pick for me" wears.
+/// Every page and her desk hear it when it changed.
 #[cfg(desktop)]
 #[tauri::command]
 fn desktop_nyx_look(
@@ -4127,7 +4128,9 @@ fn desktop_nyx_look(
     state: State<'_, ShellState>,
     look: desktop_nyx::VoiceLook,
     mood: Option<grokhub_core::companion::Mood>,
+    tool: Option<String>,
 ) {
+    let mood = Some(nyx::activity(mood, tool.as_deref()));
     if desktop_nyx::set_life(desktop_nyx::Life { look, mood }) {
         desktop_nyx::publish(&app, &current(&state));
     }
