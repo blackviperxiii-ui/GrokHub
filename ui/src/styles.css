@@ -1787,15 +1787,19 @@ button.pill:focus-visible {
   animation:
     nyx-desk-bob 5s ease-in-out infinite,
     nyx-desk-breath 4s ease-in-out infinite;
+  /* Her talk hop: her desk page sets --nyx-hop with the spoken voice. */
+  transform: translateY(calc(-1 * var(--nyx-hop, 0px)));
 }
 
 :root[data-reduce-motion="true"] .nyx-desk-figure {
   animation: none;
+  transform: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .nyx-desk-figure {
     animation: none;
+    transform: none;
   }
 }
 

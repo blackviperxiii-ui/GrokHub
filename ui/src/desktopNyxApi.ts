@@ -95,3 +95,22 @@ export function desktopNyxDrag(): Promise<void> {
 export function desktopNyxLook(look: DesktopNyxLook, activity: string): Promise<void> {
   return call<void>("desktop_nyx_look", { look, ...lookArgs(activity) });
 }
+
+/** A reply spoken now: its loudness per 20 ms (`lipsync.ts`) and when it
+ * began, in ms since the Unix epoch. Her desk hops with it. */
+export interface DesktopNyxTalk {
+  levels: number[];
+  startedAt: number;
+}
+
+/** Her desk alone hears the spoken reply, for her talk hop. */
+export const DESKTOP_NYX_TALK_EVENT = "desktop-nyx://talk";
+
+/** The chat's spoken reply started (or resumed), or `null` once it stops. */
+export function desktopNyxTalk(talk: DesktopNyxTalk | null): Promise<void> {
+  return call<void>("desktop_nyx_talk", { talk });
+}
+
+export function onDesktopNyxTalk(handler: (talk: DesktopNyxTalk | null) => void): Promise<UnlistenFn> {
+  return subscribe<DesktopNyxTalk | null>(DESKTOP_NYX_TALK_EVENT, handler);
+}

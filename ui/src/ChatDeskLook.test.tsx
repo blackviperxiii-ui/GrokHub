@@ -3,6 +3,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "./api";
+import type { DesktopNyxTalk } from "./desktopNyxApi";
 import type { VoiceState } from "./VoiceMode";
 
 // The chat tells her desktop pedestal what it is doing: idle, then thinking
@@ -29,14 +30,19 @@ vi.mock("./api", async () => {
 
 const desk = vi.hoisted(() => ({
   desktopNyxLook: vi.fn<(look: string, mood: string | null) => Promise<void>>(),
+  desktopNyxTalk: vi.fn<(talk: DesktopNyxTalk | null) => Promise<void>>(),
 }));
 vi.mock("./desktopNyxApi", async (load) => ({
   ...(await load<typeof import("./desktopNyxApi")>()),
   desktopNyxLook: desk.desktopNyxLook,
+  desktopNyxTalk: desk.desktopNyxTalk,
 }));
 // Each chat's voice mode, driven by the test: `voices.set[i]` is the i-th
 // chat's.
-const voices = vi.hoisted(() => ({ set: [] as ((state: VoiceState) => void)[] }));
+const voices = vi.hoisted(() => ({
+  set: [] as ((state: VoiceState) => void)[],
+  talk: [] as ((talk: DesktopNyxTalk | null) => void)[],
+}));
 vi.mock("./VoiceMode", async (load) => {
   const real = await load<typeof import("./VoiceMode")>();
   const { useEffect, useState } = await import("react");
@@ -57,6 +63,8 @@ vi.mock("./VoiceMode", async (load) => {
       useEffect(() => {
         voices.set.push(setState);
       }, []);
+      // Where the chat sends a spoken piece's loudness.
+      session.talkTo = (talk) => void voices.talk.push(talk);
       return { state, session };
     },
   };
@@ -71,6 +79,8 @@ import { Chat } from "./Chat";
 describe("Chat and her desktop pedestal", () => {
   beforeEach(() => {
     desk.desktopNyxLook.mockReset().mockResolvedValue();
+    desk.desktopNyxTalk.mockReset().mockResolvedValue();
+    voices.talk.length = 0;
     replies.ends.length = 0;
     voices.set.length = 0;
   });
@@ -160,5 +170,49 @@ describe("Chat and her desktop pedestal", () => {
     // The voice stops: the chat on screen sends its own look.
     act(() => voices.set[0]("off"));
     await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("thinking", "thinking"));
+  });
+
+  it("sends a spoken reply's loudness to her desk from the chat that speaks for her alone", async () => {
+    const both = (
+      <>
+        <Chat onOpenSettings={() => {}} active />
+        <Chat onOpenSettings={() => {}} active={false} />
+      </>
+    );
+    render(both);
+    await waitFor(() => expect(voices.talk).toHaveLength(2));
+    const talk = { levels: [0.5, 1], startedAt: 1_000 };
+    voices.talk[1](talk);
+    expect(desk.desktopNyxTalk).not.toHaveBeenCalled();
+    // A stop with nothing out sends nothing.
+    voices.talk[1](null);
+    voices.talk[0](talk);
+    voices.talk[0](null);
+    expect(desk.desktopNyxTalk.mock.calls).toEqual([[talk], [null]]);
+  });
+
+  it("lets a live voice off screen talk for her, and a piece always gets its stop", async () => {
+    const both = (
+      <>
+        <Chat onOpenSettings={() => {}} active />
+        <Chat onOpenSettings={() => {}} active={false} />
+      </>
+    );
+    render(both);
+    await waitFor(() => expect(voices.talk).toHaveLength(2));
+    // Voice mode is on in the chat off screen: it speaks for her.
+    act(() => voices.set[1]("speaking"));
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("speaking", "hanging-out"));
+    const talk = { levels: [1], startedAt: 2_000 };
+    voices.talk[0](talk);
+    expect(desk.desktopNyxTalk).not.toHaveBeenCalled();
+    voices.talk[1](talk);
+    expect(desk.desktopNyxTalk.mock.calls).toEqual([[talk]]);
+    // Its voice turns off mid-piece: the desk goes back to the chat on
+    // screen, and the piece's stop still reaches her.
+    act(() => voices.set[1]("off"));
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("idle", "hanging-out"));
+    voices.talk[1](null);
+    expect(desk.desktopNyxTalk.mock.calls).toEqual([[talk], [null]]);
   });
 });

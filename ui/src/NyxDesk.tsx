@@ -7,8 +7,11 @@ import {
   desktopNyxSetOutfit,
   desktopNyxDrag,
   desktopNyxSetHit,
+  onDesktopNyxTalk,
   type DesktopNyxHitBox,
+  type DesktopNyxTalk,
 } from "./desktopNyxApi";
+import { FRAME_MS, SMOOTH_FRAMES, smoothLevelAt, TALK_HOP, talkHop } from "./lipsync";
 import { useDesktopNyx } from "./useDesktopNyx";
 
 /** Every outfit picture, including gaming (the chat dock leaves that out). */
@@ -33,12 +36,14 @@ const BREATH_SWELL = 0.006;
 
 const tenth = (v: number) => Math.round(v * 10) / 10;
 
-/** Her figure's box grown by everywhere her float and breath can take it, so
- * a box measured mid-breath still covers her at the top of the next one. */
+/** Her figure's box grown by everywhere her float, breath and talk hop can
+ * take it, so a box measured mid-breath or mid-hop still covers her at the
+ * top of the next one. */
 export function figureReach(r: DesktopNyxHitBox): DesktopNyxHitBox {
-  const up = FLOAT_PX + BREATH_LIFT * r.h;
+  const hop = TALK_HOP * r.h;
+  const up = FLOAT_PX + BREATH_LIFT * r.h + hop;
   const side = (BREATH_SWELL * r.w) / 2;
-  return { x: tenth(r.x - side), y: tenth(r.y - up), w: tenth(r.w + 2 * side), h: tenth(r.h + up + FLOAT_PX) };
+  return { x: tenth(r.x - side), y: tenth(r.y - up), w: tenth(r.w + 2 * side), h: tenth(r.h + up + FLOAT_PX + hop) };
 }
 
 /** The desktop companion page: pedestal + figure, wardrobe, dock back. */
@@ -56,6 +61,38 @@ export function NyxDesk() {
   useEffect(() => {
     if (still !== undefined) document.documentElement.dataset.reduceMotion = still ? "true" : "false";
   }, [still]);
+
+  // While the chat speaks she hops up with its voice, one frame at a time,
+  // until the reply stops or its last level has faded out.
+  const stillNow = useRef(still);
+  useEffect(() => {
+    stillNow.current = still;
+  }, [still]);
+  useEffect(() => {
+    let talk: DesktopNyxTalk | null = null;
+    let frame = 0;
+    const hop = (px: number) => artRef.current?.style.setProperty("--nyx-hop", `${px}px`);
+    function tick() {
+      frame = 0;
+      const figure = artRef.current?.querySelector<HTMLElement>(".nyx-desk-figure");
+      const at = talk ? Date.now() - talk.startedAt : 0;
+      if (!talk || at > (talk.levels.length + SMOOTH_FRAMES) * FRAME_MS) {
+        talk = null;
+        hop(0);
+        return;
+      }
+      hop(talkHop(figure?.offsetHeight ?? 0, smoothLevelAt(talk.levels, at), stillNow.current === true));
+      frame = requestAnimationFrame(tick);
+    }
+    const off = onDesktopNyxTalk((next) => {
+      talk = next;
+      if (!frame) frame = requestAnimationFrame(tick);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      void off.then((stop) => stop());
+    };
+  }, []);
 
   // A click on the desktop beside her passes through, so the page hears no
   // click: leaving the window, or Escape, closes the menu too.

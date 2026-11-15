@@ -4136,6 +4136,15 @@ fn desktop_nyx_look(
     }
 }
 
+/// The chat's spoken reply, for her talk hop: her desk alone hears it.
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_talk(app: AppHandle, talk: Option<desktop_nyx::Talk>) {
+    use tauri::Emitter;
+    let talk = talk.and_then(desktop_nyx::Talk::checked);
+    let _ = app.emit_to(desktop_nyx::LABEL, desktop_nyx::TALK_EVENT, talk);
+}
+
 /// Every desktop-companion write: save, store, apply the window when asked
 /// (`show_window` hides it while docked), then the tray and every page hear
 /// it, even when the window couldn't be applied.
@@ -7738,6 +7747,8 @@ pub fn run() {
             desktop_nyx_drag,
             #[cfg(desktop)]
             desktop_nyx_look,
+            #[cfg(desktop)]
+            desktop_nyx_talk,
             get_queue,
             stop_task,
             ship_status,

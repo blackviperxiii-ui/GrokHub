@@ -16,6 +16,41 @@ pub const PAGE: &str = "nyx-desk.html";
 /// [`State`]: the dock, Labs and the desk page all follow it.
 pub const EVENT: &str = "desktop-nyx://changed";
 
+/// Sent to her desk alone while the chat speaks: a [`Talk`], or `null` once
+/// the reply stops. Her talk hop follows it.
+pub const TALK_EVENT: &str = "desktop-nyx://talk";
+
+/// The most frames a [`Talk`] keeps: 10 minutes of 20 ms frames.
+pub const TALK_FRAMES: usize = 30_000;
+
+/// A reply spoken now: its loudness per 20 ms (0 to 1) and when it began, in
+/// ms since the Unix epoch on the chat page's clock.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Talk {
+    pub levels: Vec<f32>,
+    pub started_at: f64,
+}
+
+impl Talk {
+    /// What her desk gets from a page: at most [`TALK_FRAMES`] levels, each
+    /// held to 0..=1 (not a number is 0). `None` without a start time.
+    pub fn checked(mut self) -> Option<Talk> {
+        if !self.started_at.is_finite() {
+            return None;
+        }
+        self.levels.truncate(TALK_FRAMES);
+        for level in &mut self.levels {
+            *level = if level.is_nan() {
+                0.0
+            } else {
+                level.clamp(0.0, 1.0)
+            };
+        }
+        Some(self)
+    }
+}
+
 /// The tray menu's "Nyx on desktop" item.
 pub const TRAY_ID: &str = "desktop-nyx";
 
@@ -1242,6 +1277,40 @@ mod tests {
         };
         assert!(state_of(&s, false, Life::default()).still);
         assert!(!state_of(&ShellSettings::default(), false, Life::default()).still);
+    }
+
+    #[test]
+    fn a_talk_from_a_page_is_held_to_the_desk_s_limits() {
+        let talk: Talk =
+            serde_json::from_str(r#"{"levels":[0.5,1.5,-0.25],"startedAt":1700000000000.5}"#)
+                .expect("talk");
+        assert_eq!(
+            talk.clone().checked(),
+            Some(Talk {
+                levels: vec![0.5, 1.0, 0.0],
+                started_at: 1_700_000_000_000.5,
+            })
+        );
+        let nan = Talk {
+            levels: vec![f32::NAN, f32::INFINITY],
+            started_at: 0.0,
+        };
+        assert_eq!(nan.checked().map(|t| t.levels), Some(vec![0.0, 1.0]));
+        let long = Talk {
+            levels: vec![0.5; TALK_FRAMES + 7],
+            started_at: 0.0,
+        };
+        assert_eq!(long.checked().map(|t| t.levels.len()), Some(TALK_FRAMES));
+        let never = Talk {
+            levels: vec![1.0],
+            started_at: f64::NAN,
+        };
+        assert_eq!(never.checked(), None);
+        assert_eq!(
+            serde_json::to_value(talk).expect("json"),
+            serde_json::json!({"levels": [0.5, 1.5, -0.25], "startedAt": 1_700_000_000_000.5})
+        );
+        assert_eq!(TALK_EVENT, "desktop-nyx://talk");
     }
 
     #[test]
