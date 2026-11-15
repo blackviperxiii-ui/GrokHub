@@ -181,6 +181,7 @@ fn an_apple_16_gb_mac_preselects_e4b_on_unified_memory() {
         &picker,
         &BenchCache::new(),
         true,
+        true,
         Level::Normal,
         "normal use",
     );
@@ -210,7 +211,15 @@ fn a_saved_pick_wins_and_status_says_when_nothing_is_set_up() {
     let p = m.profile();
     let picker = picker(&p, &BenchCache::new(), &[], &config);
     assert_eq!(picker.selected, "gemma-4-12b-it-abliterated-q4_k");
-    let s = status(&p, &picker, &BenchCache::new(), false, Level::Normal, "x");
+    let s = status(
+        &p,
+        &picker,
+        &BenchCache::new(),
+        true,
+        false,
+        Level::Normal,
+        "x",
+    );
     assert_eq!(
         (s.model.as_str(), s.state.as_str(), s.reason.as_str()),
         (
@@ -232,7 +241,15 @@ fn a_saved_pick_wins_and_status_says_when_nothing_is_set_up() {
             ..LocalAiConfig::default()
         },
     );
-    let s = status(&p, &stale, &BenchCache::new(), true, Level::Normal, "x");
+    let s = status(
+        &p,
+        &stale,
+        &BenchCache::new(),
+        true,
+        true,
+        Level::Normal,
+        "x",
+    );
     assert_eq!(
         (s.model.as_str(), s.tok_s.as_str()),
         ("gemma-4-12b-it-q4_k_m", "")
@@ -242,10 +259,27 @@ fn a_saved_pick_wins_and_status_says_when_nothing_is_set_up() {
         &picker,
         &BenchCache::new(),
         true,
+        true,
         Level::Unload,
         "a game is running",
     );
     assert_eq!(tray_label(&paused), "Local AI: Paused");
+    for set_up in [true, false] {
+        let off = status(
+            &p,
+            &picker,
+            &BenchCache::new(),
+            false,
+            set_up,
+            Level::Normal,
+            "normal use",
+        );
+        assert_eq!(
+            (off.state.as_str(), off.reason.as_str()),
+            ("Off", "Use Local AI on this computer is off.")
+        );
+        assert_eq!(tray_label(&off), "Local AI: Off");
+    }
 }
 
 #[test]

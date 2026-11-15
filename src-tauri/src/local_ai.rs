@@ -509,11 +509,13 @@ pub fn state_word(level: Level) -> &'static str {
     }
 }
 
-/// The Auto status line's parts. `set_up` is false until an engine and a model are on disk.
+/// The Auto status line's parts. `on` is the Use Local AI switch; `set_up`
+/// is false until an engine and a model are on disk.
 pub fn status(
     p: &Profile,
     picker: &Picker,
     bench: &BenchCache,
+    on: bool,
     set_up: bool,
     level: Level,
     reason: &str,
@@ -527,7 +529,12 @@ pub fn status(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "None (cloud only)".into()),
     };
-    let (state, reason) = if set_up {
+    let (state, reason) = if !on {
+        (
+            "Off".to_string(),
+            "Use Local AI on this computer is off.".to_string(),
+        )
+    } else if set_up {
         (state_word(level).to_string(), reason.to_string())
     } else {
         (
@@ -780,6 +787,7 @@ pub fn view(config_dir: &Path) -> LocalAiView {
         &p,
         &picker,
         &bench,
+        crate::local_use::is_on(config_dir),
         set_up,
         local_gov::level(),
         local_gov::reason(),

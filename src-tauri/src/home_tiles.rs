@@ -69,6 +69,7 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         "local_ai" => local_ai_view(
             &local_ai::load(src.config_dir),
             grokhub_agent::route::local::installed(),
+            crate::local_use::is_on(src.config_dir),
             grokhub_agent::route::local::available(),
         ),
         "now_playing" => library_or(src, |games| {
@@ -738,7 +739,14 @@ pub fn usage_from(week_usd: f64, cache_pct: Option<u8>, floor: u8) -> TileView {
         .on_tap(TileAction::settings("defaults"))
 }
 
-pub fn local_ai_view(cfg: &local_ai::LocalAiConfig, installed: bool, ready: bool) -> TileView {
+/// `on` is the Use Local AI switch; `ready` is the router's view (on, set up
+/// and not paused for a game or low power).
+pub fn local_ai_view(
+    cfg: &local_ai::LocalAiConfig,
+    installed: bool,
+    on: bool,
+    ready: bool,
+) -> TileView {
     if !installed {
         return TileView::empty(
             "Set up an on-device model to keep chats going offline",
@@ -754,13 +762,15 @@ pub fn local_ai_view(cfg: &local_ai::LocalAiConfig, installed: bool, ready: bool
             .file_name()
             .map_or_else(|| s.to_string(), |f| f.to_string_lossy().into_owned())
     };
-    let (big, tone) = if ready {
+    let (big, tone) = if !on {
+        ("Off", Tone::Quiet)
+    } else if ready {
         ("Ready", Tone::Normal)
     } else {
         ("Paused", Tone::Warn)
     };
     let mut text = TileText::new(big, model, tone);
-    if cfg.pause_for_games {
+    if on && cfg.pause_for_games {
         text = text.detail("Steps aside while you play");
     }
     TileView::ready(text)

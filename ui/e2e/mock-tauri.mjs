@@ -457,7 +457,7 @@ const EMPTY_LOCAL_AI = {
   },
   localUse: {
     on: true,
-    hint: "On. Background jobs such as sorting, summaries and hiding private details can run on this computer once a local engine and model are set up.",
+    hint: "On. Set up a local engine and model below and it starts helping.",
   },
   tidy: { on: false, available: false, hint: "Off. Set up a local engine and model first." },
 };
