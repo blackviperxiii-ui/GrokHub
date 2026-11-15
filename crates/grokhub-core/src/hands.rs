@@ -341,6 +341,34 @@ mod tests {
     /// at /usr/bin.
     #[test]
     fn pkgbuilds_build_and_install_the_shell_and_hub() {
+        // Each build step as the recipes write it, next to the same step in
+        // install.sh (which adds the channel and absolute paths). A change to
+        // either side fails here until the other follows.
+        let shared_steps = [
+            (
+                "cargo build --release --locked -p grokhub-hub",
+                r#"GROKHUB_CHANNEL="$CHANNEL" cargo build --release --locked -p grokhub-hub"#,
+            ),
+            ("npm ci --prefix ui", r#"npm ci --prefix "$ROOT/ui""#),
+            (
+                "ui/node_modules/.bin/tauri build --no-bundle -- --locked",
+                r#"GROKHUB_CHANNEL="$CHANNEL" "$ROOT/ui/node_modules/.bin/tauri" build --no-bundle -- --locked"#,
+            ),
+        ];
+        let install_sh = include_str!("../../../scripts/install.sh").replace("\r\n", "\n");
+        let install_steps: Vec<&str> = install_sh
+            .lines()
+            .map(str::trim)
+            .filter(|l| {
+                l.contains("cargo build") || l.contains("npm ci") || l.contains("build --no-bundle")
+            })
+            .filter(|l| !l.starts_with('#') && !l.starts_with("echo"))
+            .collect();
+        assert_eq!(
+            install_steps,
+            shared_steps.map(|(_, sh)| sh),
+            "scripts/install.sh build steps changed: update both PKGBUILDs to match"
+        );
         for (name, pkg, pkgdir, cd) in [
             (
                 "packaging/PKGBUILD",
@@ -373,9 +401,9 @@ mod tests {
                 [
                     cd,
                     r#"[[ -z "${CARGO_TARGET_DIR:-}" ]] || export CARGO_TARGET_DIR="$(realpath -m "$CARGO_TARGET_DIR")""#,
-                    "cargo build --release --locked -p grokhub-hub",
-                    "npm ci --prefix ui",
-                    "ui/node_modules/.bin/tauri build --no-bundle -- --locked",
+                    shared_steps[0].0,
+                    shared_steps[1].0,
+                    shared_steps[2].0,
                 ],
                 "{name} build() must match scripts/install.sh"
             );
