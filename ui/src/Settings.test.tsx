@@ -173,8 +173,16 @@ describe("Settings", () => {
       <Settings caps={DESKTOP} goTo={{ section: "localAi", n: 1, model: "gemma-4-31b-it-abliterated-q4_k" }} />,
     );
     expect(await screen.findByText("Local AI panel on gemma-4-31b-it-abliterated-q4_k (1)")).toBeInTheDocument();
+    // Another section and back: the card's model isn't shown again.
+    await openSection("Pulse");
+    await openSection("Local AI");
+    expect(screen.getByText("Local AI panel")).toBeInTheDocument();
+    // A palette pick opens Local AI plain.
     rerender(<Settings caps={DESKTOP} goTo={{ section: "localAi", n: 2 }} />);
     expect(await screen.findByText("Local AI panel")).toBeInTheDocument();
+    // A second card opens on its model again.
+    rerender(<Settings caps={DESKTOP} goTo={{ section: "localAi", n: 3, model: "gemma-4-12b-it-abliterated-q4_k" }} />);
+    expect(await screen.findByText("Local AI panel on gemma-4-12b-it-abliterated-q4_k (3)")).toBeInTheDocument();
   });
 
   it("Pulse offers the Local models source only where local models run", async () => {

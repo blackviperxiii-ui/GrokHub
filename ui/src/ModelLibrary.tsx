@@ -43,7 +43,10 @@ export function ModelLibrary({ focus }: { focus?: LibraryFocus } = {}) {
     const frame = requestAnimationFrame(() => {
       const row = focusedRow.current;
       row?.scrollIntoView?.({ block: "center" });
-      row?.querySelector("button")?.focus({ preventScroll: true });
+      // Download or Resume when the row offers it; never Remove, which one
+      // stray Enter would run. Otherwise the row itself.
+      const target = row?.querySelector<HTMLElement>("[data-fetch]") ?? row;
+      target?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
   }, [shown]);
@@ -94,7 +97,12 @@ export function ModelLibrary({ focus }: { focus?: LibraryFocus } = {}) {
       case "download":
       case "resume":
         return (
-          <button type="button" className="quiet" onClick={() => void run(() => downloadModels([row.id]))}>
+          <button
+            type="button"
+            className="quiet"
+            data-fetch
+            onClick={() => void run(() => downloadModels([row.id]))}
+          >
             {row.state === "resume" ? `Resume ${row.name}` : `Download ${row.name}`}
           </button>
         );
@@ -141,6 +149,7 @@ export function ModelLibrary({ focus }: { focus?: LibraryFocus } = {}) {
             <li
               key={row.id}
               ref={focused ? focusedRow : undefined}
+              tabIndex={focused ? -1 : undefined}
               aria-label={row.name}
               aria-current={focused ? "true" : undefined}
               className="local-library-row"
