@@ -340,16 +340,20 @@ mod tests {
     /// at /usr/bin.
     #[test]
     fn pkgbuilds_build_and_install_the_shell_and_hub() {
-        for (name, pkg, pkgdir) in [
+        for (name, pkg, pkgdir, cd) in [
             (
                 "packaging/PKGBUILD",
                 include_str!("../../../packaging/PKGBUILD"),
                 "$pkgdir",
+                // The local recipe builds the clone it sits in.
+                r#"cd "$startdir/..""#,
             ),
             (
                 "packaging/aur/PKGBUILD",
                 include_str!("../../../packaging/aur/PKGBUILD"),
                 "${pkgdir}",
+                // The AUR recipe builds the tag makepkg checked out.
+                r#"cd "${srcdir}/${pkgname}""#,
             ),
         ] {
             let pkg = pkg.replace("\r\n", "\n");
@@ -361,11 +365,12 @@ mod tests {
             let steps: Vec<&str> = build
                 .lines()
                 .map(str::trim)
-                .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("cd "))
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
                 .collect();
             assert_eq!(
                 steps,
                 [
+                    cd,
                     r#"[[ -z "${CARGO_TARGET_DIR:-}" ]] || export CARGO_TARGET_DIR="$(realpath -m "$CARGO_TARGET_DIR")""#,
                     "cargo build --release --locked -p grokhub-hub",
                     "npm ci --prefix ui",
@@ -391,6 +396,11 @@ mod tests {
                     "{name} must contain {line:?}"
                 );
             }
+            assert_eq!(
+                pkg.lines().filter(|l| l.trim() == cd).count(),
+                2,
+                "{name}: build() and package() both start with {cd:?}"
+            );
             for dep in ["'webkit2gtk-4.1'", "'libayatana-appindicator'"] {
                 let depends = pkg
                     .lines()
