@@ -28,6 +28,7 @@ export const PLUGINS_NOTE =
 export const PLUGINS_EMPTY =
   "No plugins yet. Install a bundle above. It stays off until you trust it and turn it on.";
 export const DESKTOP_NYX_TIP = `Puts a pop-out on ${COMPANION_NAME}'s dock. Popped out, she stands on a holo pedestal in a small see-through window over your desktop.`;
+export const DESKTOP_NYX_GAME = "On the desktop, hidden while you game.";
 export const DESKTOP_NYX_WAYLAND =
   "On this desktop, a see-through always-on-top window may not be honoured (common on Wayland). She still opens; the glass and float may not.";
 
@@ -252,9 +253,11 @@ function DesktopCompanion() {
             personalities on.
           </p>
           <p className="note">
-            {desk.undocked
-              ? "On the desktop. Use Bring her back on her dock or right-click menu."
-              : "Docked in the chat. Use Put her on the desktop on her dock."}
+            {!desk.undocked
+              ? "Docked in the chat. Use Put her on the desktop on her dock."
+              : desk.hiddenForGame
+                ? DESKTOP_NYX_GAME
+                : "On the desktop. Use Bring her back on her dock or right-click menu."}
           </p>
         </>
       )}

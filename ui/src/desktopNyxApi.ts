@@ -26,6 +26,8 @@ export interface DesktopNyxState {
   pos: [number, number] | null;
   effects: DesktopNyxEffects;
   companion: string;
+  /** Out on the desktop but hidden while a game or fullscreen app runs. */
+  hiddenForGame: boolean;
 }
 
 export interface DesktopNyxPatch {

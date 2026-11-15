@@ -4110,7 +4110,7 @@ fn nyx_tiles(state: State<'_, ShellState>, ids: Vec<String>) -> HashMap<String, 
 #[cfg(desktop)]
 #[tauri::command]
 fn desktop_nyx_get(state: State<'_, ShellState>) -> desktop_nyx::State {
-    desktop_nyx::state_of(&current(&state), desktop_nyx::wayland_now())
+    desktop_nyx::state_now(&current(&state))
 }
 
 /// Every desktop-companion write: save, store, apply the window when asked
@@ -4257,13 +4257,18 @@ fn desktop_nyx_watch(app: AppHandle) {
         .name("desktop-nyx".into())
         .spawn(move || loop {
             std::thread::sleep(desktop_nyx::CURSOR_FRAME);
-            let Some(drop) = desktop_nyx::tick(&app) else {
-                continue;
-            };
+            let frame = desktop_nyx::tick(&app);
             let state = app.state::<ShellState>();
-            let _ = tauri::async_runtime::block_on(desktop_nyx_write(&app, &state, false, |now| {
-                Ok(desktop_nyx::save_pos(now, drop.pos, drop.origin, drop.size))
-            }));
+            if let Some(drop) = frame.landing {
+                // The write publishes, and the state it sends carries the
+                // game hiding too.
+                let _ =
+                    tauri::async_runtime::block_on(desktop_nyx_write(&app, &state, false, |now| {
+                        Ok(desktop_nyx::save_pos(now, drop.pos, drop.origin, drop.size))
+                    }));
+            } else if frame.game_changed {
+                desktop_nyx::publish(&app, &current(&state));
+            }
         });
 }
 
