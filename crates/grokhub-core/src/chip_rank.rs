@@ -587,6 +587,14 @@ mod tests {
         ];
         let row = rank_quick_chips(&mut mem, pool, ctx(1));
         assert_eq!(ids(&row), ["a", "c"]);
+        // A game's name is no intent: its note chip and a real fix share
+        // the row.
+        let pool = vec![
+            chip("game:note:1", "Note for Crash Bandicoot", 9.0),
+            chip("b", "Why is it failing", 8.0),
+        ];
+        let row = rank_quick_chips(&mut mem, pool, ctx(1));
+        assert_eq!(ids(&row), ["game:note:1", "b"]);
     }
 
     #[test]

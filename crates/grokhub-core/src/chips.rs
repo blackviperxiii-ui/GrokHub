@@ -2164,7 +2164,8 @@ fn apply_home_signal_boost(chips: &mut [QuickChip], input: &ChipInput<'_>) {
     let slash = home_slash_cmd(input.last_slash).unwrap_or("");
     let surface = input.last_surface.trim().to_ascii_lowercase();
     let session = input.session_mode.trim().to_ascii_lowercase();
-    for c in chips.iter_mut() {
+    // A live-state chip's label names a game or an app ("Imagine Earth").
+    for c in chips.iter_mut().filter(|c| !live_state_id(&c.id)) {
         let id = c.id.to_ascii_lowercase();
         let label = c.label.to_ascii_lowercase();
         let val = c.value.to_ascii_lowercase();
@@ -2328,7 +2329,8 @@ fn apply_intent_boost(chips: &mut [QuickChip], intents: &BTreeMap<PredictedInten
     let mut top: Vec<_> = intents.iter().collect();
     top.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
     top.truncate(4);
-    for c in chips.iter_mut() {
+    // A live-state chip's label names a game or an app, not an intent.
+    for c in chips.iter_mut().filter(|c| !live_state_id(&c.id)) {
         let hay = format!("{} {} {} {}", c.id, c.label, c.value, c.hint).to_ascii_lowercase();
         let mut boost = 0.0;
         let mut matched = None;
@@ -2636,6 +2638,10 @@ fn is_desk_takeover_chip(c: &QuickChip) -> bool {
 /// Old empty-home chips (Take over / Scan the desk / Check the machine) plus
 /// HOST_CMD habits stored in chips.json. Grok Build already has computer-use.
 fn retired_host_copy(id: &str, label: &str, value: &str) -> bool {
+    // A live-state chip's label names a game or an app ("Desktop Dungeons").
+    if live_state_id(id) {
+        return false;
+    }
     let hay = format!("{id} {label} {value}").to_ascii_lowercase();
     hay.contains("take over")
         || hay.contains("this desktop")
@@ -5306,6 +5312,53 @@ mod tests {
         i.usage_messages = 25;
         i.max = CHIP_HARD_MAX;
         i
+    }
+
+    #[test]
+    fn a_game_name_never_reads_as_a_note_chips_meaning_in_the_row() {
+        // A habit and a chat that point at fixing, and Imagine as the last
+        // surface: each would lift or drop a chip whose words say so.
+        let mut memory = ChipMemory::default();
+        for at in [1_000, 2_000, 3_000] {
+            remember_intent(&mut memory, "Why is it failing", "", at, 21, 0);
+        }
+        let chat = vec![
+            msg("user", "the build has an error and a bug"),
+            msg("assistant", "Let's look."),
+        ];
+        for name in [
+            "Desktop Dungeons",
+            "Bugsnax",
+            "Crash Bandicoot",
+            "Imagine Earth",
+        ] {
+            let game = crate::steam::SteamGame {
+                app_id: 9,
+                name: name.into(),
+                last_played: 0,
+                playtime_min: 0,
+            };
+            let extra: Vec<QuickChip> = crate::game_companion::chips(&game, true)
+                .into_iter()
+                .map(|mut c| {
+                    c.score = 100.0;
+                    c
+                })
+                .collect();
+            let mut i = with_pace(&chat, &memory);
+            i.last_surface = "imagine";
+            i.extra = &extra;
+            let row = build_quick_chips(i);
+            let note = row
+                .iter()
+                .find(|c| c.id == "game:note:after:9")
+                .unwrap_or_else(|| panic!("{name}: {:?}", ids(&row)));
+            assert_eq!(note.score, 100.0, "{name}");
+            assert_eq!(
+                note.hint, "Shown on the card the next time you launch it",
+                "{name}"
+            );
+        }
     }
 
     #[test]

@@ -719,6 +719,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn a_tap_on_a_note_chip_records_no_habit_from_the_games_name() {
+        let session = crate::game_companion::Session {
+            playing: None,
+            ended: Some((
+                grokhub_core::steam::SteamGame {
+                    app_id: 3,
+                    name: "Crash Bandicoot".into(),
+                    last_played: 0,
+                    playtime_min: 0,
+                },
+                1_000,
+            )),
+        };
+        let dir = temp_dir("note-tap-habit");
+        let rows = Mutex::new(Rows::default());
+        let extra = crate::game_companion::row_extra(&session, HOME, false, 2_000);
+        let shown = row(
+            &dir,
+            &rows,
+            RowAsk {
+                surface: HOME,
+                chat: &[],
+                draft: "",
+                follow_ups: &[],
+                mode: "chat",
+                signed_in: true,
+                first_run: false,
+                hour: 10,
+                weekday: 2,
+                quiet_hours: false,
+                now_ms: 2_000,
+                extra: &extra,
+                lane: Lane::default(),
+                remote: false,
+            },
+        );
+        assert!(
+            shown.iter().any(|c| c.id == "game:note:after:3"),
+            "{shown:?}"
+        );
+        let tapped = outcome(
+            &dir,
+            &rows,
+            HOME,
+            "game:note:after:3",
+            true,
+            (10, 2, 3_000),
+            false,
+        );
+        assert_eq!(tapped.map(|c| c.id), Some("game:note:after:3".to_string()));
+        assert!(grokhub_core::load_chip_memory(&dir).intents.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use grokhub_core::ChipKind;
 
     fn chip(id: &str, value: &str, kind: ChipKind) -> QuickChip {
