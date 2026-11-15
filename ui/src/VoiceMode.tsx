@@ -244,7 +244,9 @@ export class VoiceSession {
   feed(delta: string) {
     if (this.state === "off") return;
     this.reply = this.reply
-      .then(() => api.voiceReplyFeed(delta))
+      // Off by now (voice mode moved to another chat): nothing reaches the
+      // backend's next session.
+      .then(() => (this.state === "off" ? [] : api.voiceReplyFeed(delta)))
       .then((pieces) => this.enqueue(pieces))
       .catch((e) => this.note(e));
   }
@@ -253,7 +255,7 @@ export class VoiceSession {
   replyDone(whole: string) {
     if (this.state === "off") return;
     this.reply = this.reply
-      .then(() => api.voiceReplyFinish(whole))
+      .then(() => (this.state === "off" ? [] : api.voiceReplyFinish(whole)))
       .then((pieces) => {
         this.enqueue(pieces);
         this.finished = true;
@@ -263,7 +265,7 @@ export class VoiceSession {
   }
 
   private enqueue(pieces: string[]) {
-    if (this.noVoice) return;
+    if (this.noVoice || this.state === "off") return;
     for (const piece of pieces) {
       this.queue.push(
         api.voiceSpeak(piece).catch((e) => {
