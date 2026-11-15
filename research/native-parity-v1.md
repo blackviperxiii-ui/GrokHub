@@ -6,7 +6,7 @@ Phase 16 runs one fixed suite against the native engine and the CLI engine. Dry-
 
 Wall time is measured for each item and printed on the example's stderr. This file records wall time as `dry-run`, and pool % and cost as `0`, so two dry-runs are byte-identical.
 
-`--live` is refused before any client is built unless `GROKHUB_EVAL_API_KEY` is set to a non-empty value and `--budget-usd` is set with `0 < amount <= 0.20`. The key is read only from GROKHUB_EVAL_API_KEY. This harness does not read ~/.grok/auth.json, config.toml, secrets.json, or a keychain, and it does not read the cabin's stored credentials. Live mode is not implemented in this build and was not run for this report.
+`--live` is refused before any client is built unless `GROKHUB_EVAL_API_KEY` is set to a non-empty value and `--budget-usd` is set with `0 < amount <= 0.20`. The key is read only from GROKHUB_EVAL_API_KEY. This harness does not read ~/.grok/auth.json, config.toml, secrets.json, or a keychain, and it does not read the app's stored credentials. Live mode is not implemented in this build and was not run for this report.
 
 Suite items: an Xvfb desktop probe, a temp repo bugfix with a test, an Ask-mode refusal, background plus Halt, an MCP tool call through a fake stdio server, compaction of a long transcript, and an Imagine call that only builds the request.
 

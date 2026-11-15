@@ -269,11 +269,10 @@ pub use ask_offers::{
 };
 pub use attach::{
     append_composer, attach_chip_label, attach_kind, attach_name, attach_prompt_line,
-    attach_send_line, bound_scan, cabin_eyes_request_text, cabin_frame_only, chat_attach_status,
-    clip_image_args, image_pixels_ok, imagine_ref_status, kick_consumes_attach, list_pick_names,
-    next_chat_image, parse_picker_stdout, picker_args, picker_save_args, plus_empty_status,
-    plus_menu_rows, png_ihdr_size, take_text_body, this_turn_cabin_frame, AttachKind, PlusAct,
-    PlusTarget, IMAGE_FILE_CAP, IMAGE_PIXEL_CAP, MEDIA_FILE_CAP, TEXT_FILE_CAP,
+    attach_send_line, bound_scan, chat_attach_status, clip_image_args, image_pixels_ok,
+    imagine_ref_status, kick_consumes_attach, list_pick_names, parse_picker_stdout, picker_args,
+    picker_save_args, plus_empty_status, plus_menu_rows, png_ihdr_size, take_text_body, AttachKind,
+    PlusAct, PlusTarget, IMAGE_FILE_CAP, IMAGE_PIXEL_CAP, MEDIA_FILE_CAP, TEXT_FILE_CAP,
 };
 pub use automation::{
     automation_alert, automation_blocked_by_policy, automation_health_line,
@@ -443,10 +442,10 @@ pub use governor::{
     ACTIVE_WINDOW_MS,
 };
 pub use greeting::{
-    classify_greeting, clean_project_title, greeting_fingerprint, greeting_name, greeting_prompt,
-    is_cabin_first_run, local_greeting, parse_llm_greeting, pick_greeting, pick_greeting_against,
-    project_title_from_hint, should_paint_greeting, should_refresh_greeting, GreetingInput,
-    GreetingKind, GREETING_LLM_DEBOUNCE_MS, GREETING_LLM_MODE, GREETING_MAX_CHARS,
+    classify_greeting, clean_project_title, greeting_fingerprint, greeting_name,
+    is_cabin_first_run, local_greeting, project_title_from_hint, should_paint_greeting,
+    should_refresh_greeting, GreetingInput, GreetingKind, GREETING_LLM_DEBOUNCE_MS,
+    GREETING_LLM_MODE, GREETING_MAX_CHARS,
 };
 pub use grok_loop::{
     due_loops, loop_interval_ms, loop_next_run, loop_slash, mark_loop_ran, new_loop,
@@ -458,8 +457,7 @@ pub use hands::{
     PYATSPI_MISSING,
 };
 pub use heartbeat::{
-    heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
-    HEARTBEAT_MS,
+    heartbeat_acts, heartbeat_due, next_heartbeat_wait_ms, HeartbeatAct, HEARTBEAT_MS,
 };
 pub use heartbeat_throttle::{
     ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate, PaceHold, ProactiveAct, PACE_NORMAL,
@@ -488,11 +486,9 @@ pub use hub_sync::{
 };
 pub use hygiene::{lockish, should_send_screenshot};
 pub use ideas::{
-    ask_patterns, idea_from_one_off, idea_has_reason, idea_prompt, idea_topic_text,
-    ideas_refresh_due, is_one_off_ask, is_template_idea_title, keep_reasoned_ideas, parse_ideas,
-    same_topic, topic_words, AskPattern, IdeaContext, IdeaGround, IdeaKind, IdeaSeed,
-    IDEAS_LIVE_ENOUGH, IDEAS_PER_RUN, IDEAS_REFRESH_MS, IDEA_SOURCE_GENERATED,
-    SHORT_CHARS as IDEA_SHORT_CHARS,
+    idea_from_one_off, idea_has_reason, idea_topic_text, ideas_refresh_due, is_one_off_ask,
+    is_template_idea_title, same_topic, topic_words, IdeaGround, IdeaKind, IdeaSeed,
+    IDEAS_LIVE_ENOUGH, IDEAS_REFRESH_MS, IDEA_SOURCE_GENERATED,
 };
 pub use imagine::{
     compose_imagine_prompt, curate_wall, dedicated_imagine_model, dedicated_video_model,
@@ -626,9 +622,9 @@ pub use recipe::{
     parse_computer_cmd_loose, parse_computer_op, parse_recipe, parse_screen, pick_hands_backend,
     pointer_op_blocked_on_lock, recipe_from_cmds, recipe_from_json, recipe_to_json,
     relative_move_steps, replay_ops, screen_from_extents, see_drive_attach,
-    should_attach_hands_frame, user_asks_cabin_eyes, user_asks_desktop_hands, user_asks_gui_help,
-    user_asks_guide_only, user_asks_takeover, ComputerDrive, ComputerOp, HandsBackend, Recipe,
-    RecipeDoc, ReplayOp, ScreenSize, TabAction,
+    should_attach_hands_frame, user_asks_desktop_hands, user_asks_gui_help, user_asks_guide_only,
+    user_asks_takeover, ComputerDrive, ComputerOp, HandsBackend, Recipe, RecipeDoc, ReplayOp,
+    ScreenSize, TabAction,
 };
 pub use redact::{
     forget_topic, is_plain_text, redact_for_share, redact_held_secrets, redact_secret_words,
@@ -648,9 +644,9 @@ pub use review::{
     CABIN_GITHUB_TOOLS, DIGEST_LINE_CAP, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use rewind::{
-    is_rewind_copy_cmd, is_rewind_copy_cmd_in, keep_last_rewinds, rewind_allowed,
-    rewind_blocked_reason, rewind_can_queue, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
-    rewind_sensitive, rewind_snapshot_ready, RewindRecord,
+    is_rewind_copy_cmd, keep_last_rewinds, rewind_allowed, rewind_blocked_reason, rewind_can_queue,
+    rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_sensitive, rewind_snapshot_ready,
+    RewindRecord,
 };
 pub use screenshot_offer::{
     dismiss as dismiss_screenshot_offer, is_image_name, newest_in_watch_dirs,
@@ -670,9 +666,9 @@ pub use skill::{
 };
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
-    mark_slash_result, parse_slash, shown_text, slash_effect, slash_help, slash_kind,
-    strip_slash_result, unknown_cabin_slash, Slash, SlashDef, SlashEffect, SlashHit, WorkflowVerb,
-    SLASH_COMMANDS, SLASH_RESULT_PREFIX, SLASH_SAMPLES,
+    mark_slash_result, parse_slash, shown_text, slash_effect, slash_kind, strip_slash_result,
+    unknown_cabin_slash, Slash, SlashDef, SlashEffect, SlashHit, WorkflowVerb, SLASH_COMMANDS,
+    SLASH_RESULT_PREFIX, SLASH_SAMPLES,
 };
 pub use ssrf::{
     guard_mcp_registry_url, host_name_blocked, ip_blocked, public_only_resolve, MCP_REGISTRY_HOST,
@@ -760,18 +756,17 @@ pub use verify::{
     verify_script_path, VerifyResult,
 };
 pub use voice::{
-    cabin_eyes_for_turn, dedicated_voice_model, encode_session_update, hey_grok_on_press,
-    hey_grok_route, hey_grok_starts_ptt, is_voice_error, live_pcm_argv, live_pcm_frame_bytes,
-    parse_realtime_event, parse_stt_text, parse_voice_event_text, pcm_from_capture,
-    ptt_after_speak, ptt_after_stt, realtime_can_connect, redact_cabin_from_memory,
-    reduce_voice_state, should_attach_cabin_frame, should_capture_before_chat, should_mute_speaker,
-    speech_can_connect, stt_multipart, stt_url, transcribe_route, tts_request_body, tts_url,
-    tts_voice, voice_can_connect, voice_log_role, voice_mode_active, voice_mode_label,
-    voice_session_url, voice_state_after_ptt_stt, voice_stream_token, voice_strip_visible,
-    voice_transcript_sends_chat, voice_tts_script, CabinEyesState, HeyGrokAction, HeyGrokRoute,
-    PttLine, TranscribeRoute, VoiceEvent, VoiceRole, VoiceState, DEFAULT_VOICE,
-    DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, TTS_VOICES, VOICE_PAUSED, VOICE_READY_HIDE_MS,
-    VOICE_TALK_STYLE,
+    cabin_eyes_for_turn, dedicated_voice_model, hey_grok_on_press, hey_grok_route,
+    hey_grok_starts_ptt, is_voice_error, live_pcm_argv, live_pcm_frame_bytes, parse_realtime_event,
+    parse_stt_text, parse_voice_event_text, pcm_from_capture, ptt_after_speak, ptt_after_stt,
+    realtime_can_connect, reduce_voice_state, should_attach_cabin_frame,
+    should_capture_before_chat, should_mute_speaker, speech_can_connect, stt_multipart, stt_url,
+    transcribe_route, tts_request_body, tts_url, tts_voice, voice_can_connect, voice_log_role,
+    voice_mode_active, voice_mode_label, voice_session_url, voice_state_after_ptt_stt,
+    voice_stream_token, voice_strip_visible, voice_transcript_sends_chat, voice_tts_script,
+    CabinEyesState, HeyGrokAction, HeyGrokRoute, PttLine, TranscribeRoute, VoiceEvent, VoiceRole,
+    VoiceState, DEFAULT_VOICE, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, TTS_VOICES,
+    VOICE_PAUSED, VOICE_READY_HIDE_MS, VOICE_TALK_STYLE,
 };
 pub use windshield::{
     build_windshield, control_at, filter_atspi_rows, is_interactive_role, keep_atspi_row,

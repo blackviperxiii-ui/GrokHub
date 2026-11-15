@@ -655,38 +655,6 @@ pub fn recipe_from_json(raw: &str) -> Result<(String, Recipe), String> {
     ))
 }
 
-pub fn user_asks_cabin_eyes(text: &str) -> bool {
-    let t = text.to_ascii_lowercase();
-    const NEEDLES: &[&str] = &[
-        "cabin eyes",
-        "look at my screen",
-        "look at the screen",
-        "look at this screen",
-        "look at my desktop",
-        "look at the desktop",
-        "what's on my screen",
-        "whats on my screen",
-        "what's on the screen",
-        "whats on the screen",
-        "what's on my desktop",
-        "whats on my desktop",
-        "what do you see",
-        "what can you see",
-        "see my screen",
-        "see the screen",
-        "see my desktop",
-        "take a screenshot",
-        "grab a screenshot",
-        "use your eyes",
-        "open your eyes",
-        "wake your eyes",
-        "look at this",
-        "what's wrong on",
-        "whats wrong on",
-    ];
-    NEEDLES.iter().any(|n| t.contains(n))
-}
-
 pub fn user_asks_takeover(text: &str) -> bool {
     let t = text.to_ascii_lowercase();
     const NEEDLES: &[&str] = &[
@@ -1250,11 +1218,6 @@ mod tests {
         let (id, loaded) = recipe_from_json(&json).unwrap();
         assert_eq!(id, "last");
         assert_eq!(loaded, rec);
-        assert!(user_asks_cabin_eyes("look at my screen"));
-        assert!(user_asks_cabin_eyes("what do you see?"));
-        assert!(user_asks_cabin_eyes("Cabin eyes — what's on the desktop"));
-        assert!(!user_asks_cabin_eyes("what is rust ownership?"));
-        assert!(!user_asks_cabin_eyes("tell me about chowder"));
         assert!(should_attach_hands_frame(false, true, true));
         assert!(!should_attach_hands_frame(false, false, true));
         assert!(should_attach_hands_frame(true, false, true));
@@ -1387,9 +1350,6 @@ mod tests {
         assert!(!should_attach_hands_frame(false, false, false));
         assert!(should_attach_hands_frame(true, false, true));
         assert!(should_attach_hands_frame(false, true, true));
-        assert!(!user_asks_cabin_eyes("what's in the bowl"));
-        assert!(!user_asks_cabin_eyes("tell me about rust"));
-        assert!(user_asks_cabin_eyes("look at my screen"));
     }
 
     #[test]

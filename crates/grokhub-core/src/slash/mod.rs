@@ -891,116 +891,6 @@ pub fn filter_slash_hits(draft: &str, extra: &[SlashHit]) -> Vec<SlashHit> {
     hits
 }
 
-pub fn slash_help() -> String {
-    [
-        "/help — this list",
-        "/new — new chat (reuse empty draft; new session)",
-        "/scratch — new scratch chat (no memory; /forget and Memory Save stay off)",
-        "/clear — clear this chat",
-        "/compact — compact the chat context (also trims the painted pane)",
-        "/undo — rewind the conversation (alias /rewind)",
-        "/retry — re-send last user prompt",
-        "/stop — halt the current turn",
-        "/sh <cmd> — run a local shell (you, not the agent)",
-        "/host — desktop host status",
-        "/plan — plan mode",
-        "/always-approve — skip tool permission prompts",
-        "/auto — auto-approve safe tools",
-        "/sessions — open History",
-        "/resume — same as /sessions (Grok /resume)",
-        "/inspect — this chat's session: tools, MCP servers",
-        "/loop [30m] <prompt> — interval scheduler",
-        "every weekday at 9, <task> — clock job on Automations; saving it posts a schedule card on the home update feed",
-        "/skills — skills catalog: {product} skills and project and user skills",
-        "/skills changes — what {product} changed in your skills on its own, each with Undo",
-        "/skills undo <name> — put back the version before the newest change (typed by you or clicked; a removed skill comes back)",
-        "/skills restore <name> — bring back a skill that was removed, from its kept copy",
-        "/connections changes — connections {product} added, changed, or turned off on its own, each with Undo",
-        "/automations changes — automations {product} made or changed on its own, each with Undo",
-        "/learned — what {product} learned from how you use it; /learned forget <id> or /learned wrong <id> to overrule a line",
-        "/plugins /marketplace /mcps — connectors",
-        "/hooks — open Connectors with the Hooks section in view",
-        "/imagine-video <prompt> — Imagine video",
-        "/goal <objective> — pin a goal",
-        "Skill slashes such as /create-skill run that skill in chat.",
-        "/project bind <path> — bound tree is the world (the engine's working folder)",
-        "/project new <name> — create a chat folder (stays on chat)",
-        "/project folder <name> — create a sidebar folder",
-        "/project rename <name> — rename the selected project",
-        "/project move <folder>|root — add the selected project to a folder",
-        "/project delete — remove the project; its chats return to History",
-        "/board — open Workboards",
-        "/journal — open the decision backlog / experiment journal",
-        "/skill <name> — run a skill",
-        "/memory note <fact> — write MEMORY.md",
-        "/memory dream — show the last overnight memory tidy (memory repo only)",
-        "/memory prune — retire unsure notes older than Memory retention now (memory repo only)",
-        "/learn — reflect this chat into MEMORY.md (alias /learn reflect)",
-        "/recall <q> — search memory, learned insights, and chats",
-        "/forget <topic> — drop memory lines that mention the topic (whole words)",
-        "/imagine <prompt>",
-        if cfg!(windows) {
-            "/update — the latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub when {product} is newer, or anyway when Settings → Update or /update runs and the probe found nothing. A leftover clone (not main) uses the zip. A source clone on main overlays with install-windows.ps1. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
-        } else {
-            "/update — overlay install when {product} is newer, or anyway when Settings → Update or /update runs and the probe found nothing. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
-        },
-        "/send <task> — task this box",
-        "/sync — merge chats and memory with paired computers (asks first unless Settings → Permissions allows it)",
-        "/privacy — your grants, learning scopes (all off), and what left this computer",
-        "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
-        "/record — record the screen (up to 2:00) and diagnose it; /record stop ends it. Add what's wrong after it. Needs Screen recording in Settings → Defaults",
-        "/audiocheck — list outputs and inputs, listen to the default input (or /audiocheck yeti) for 5 seconds, and name what's wrong: muted, silent, clipping, too quiet, dropouts or crackle. Changes nothing",
-        "/hub — devices / pair",
-        "/inhabit <peer> — hand this chat to another paired computer",
-        "/rewind — rewind the conversation; /rewind step lists agent file checkpoints and /rewind step <n> restores one; /rewind --files restores the last project snapshot",
-        "/btw — side ask. A live run keeps going; the answer shows beside it, read-only.",
-        "/bg <task> — run a task in the background beside this chat (up to 3 at once); its reply posts here when it ends. Bare /bg moves the live reply to the background and frees the composer. /bg stop stops every background run.",
-        "/queue <message> — hold a message until the live reply ends instead of steering it (Alt+Enter does the same).",
-        "Typing while a reply runs steers it: Enter stops the turn where it is, keeps what it said and did, and carries on with your message folded in. Alt+Enter queues instead. Sending in another chat moves a running reply to the background instead of stopping it.",
-        "/view-plan — show the plan from Plan mode (/show-plan and /plan-view too)",
-        "/worktree — next chat starts in a git worktree",
-        "/workflow — workflows were a grok CLI feature and are not in {product}",
-        "/room <name> — speak the room",
-        "/export — write this chat as markdown (/export html or /export json for those)",
-        "/rename <title> — name this chat (permanent)",
-        "/pin — pin or unpin this chat",
-        "/delete — delete this chat tab",
-        "/context — context use (server tokens + reasoning; visible turns as fallback)",
-        "/health — updates, failed services, last dream",
-        "/brief — weekly systems briefing from local records",
-        "/fix — halt + doctor",
-        "/remember <fact> — write MEMORY.md",
-        "/dream — Imagine last night",
-        "/tools — same as /host",
-        "/import — OpenClaw workspace",
-        "/consult <q> — one-shot consult",
-        "/usage — today's {product} buckets, tokens spent today, and the last turn",
-        "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
-        "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action.",
-        "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / /send inherit Always until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats. Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers a Last you point when that marker exists.",
-        "No mode to pick: {product} reads each message. A big job plans first, anything else is answered; while a reply runs, a side question is answered beside it, a correction steers it and a new job waits. When the AI wants to change things (Ask / Auto / Always) lives in Settings → Defaults and stays as you set it; Stop asking me on a permission card moves it on. {product} picks the model and how hard to think on each step. Say \"think hard\" or \"keep it quick\" to steer one task; ask in chat which model and effort answered. {product}'s own engine runs the agent.",
-        "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it. A Quiet until chip shows on the titlebar only while that window is active. Signed-in empty home shows an update feed in the gap under the composer when a card is undismissed, and hides that slot when the feed is empty. A finished /loop posts automation_done from poll_grok_loop. Saving a schedule posts schedule_created. Cards stay until opened or dismissed. A device glance appears only when hub share or a last frame is bound; click opens Devices.",
-        "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
-        "Appearance: Dark, Light, System. Ask permission shows Allow / Deny before each step that changes something. Auto and Always follow that setting, and `/compact` and `/rewind` honor it too. A side question asked while a run works gets its own read-only answer beside it (no desktop-do-the-work); the run keeps going. Night, inbox, and anticipate runs are unattended: they inherit the setting, and Ask fails closed. Halt cancels the turn.",
-        "Voice: Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process). Same on Linux and Windows. While live, Listening / Speaking / Ready sits above the composer with Stop. The strip stays up while Listening or Speaking and auto-hides about a second after Ready. Stop, the live mic, or Ctrl+G / Super+G leave. Failed STT shows Ready, not Listening. Desktop control runs through the cabin's own desktop tools; Halt cancels the turn.",
-        if cfg!(windows) {
-            "First run is Get Started: Super Grok OAuth signs {product} in, and that sign-in stays with {product}. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. Acting on it takes the GitHub zip when there is no clone or the leftover clone is not main. A click when the probe found nothing still overlays."
-        } else {
-            "First run is Get Started: Super Grok OAuth signs {product} in, and that sign-in stays with {product}. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. A click when the probe found nothing still overlays."
-        },
-        "× to tray; a pinned taskbar click or second grokhub raises {product}.",
-        "Pulse every 15s. Hidden idle waits for the pulse.",
-        "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
-        "Chat rail reuses one empty draft; after dialogue starts it opens a new chat. Old convos are sidebar History.",
-        "Tool calls, diffs, and desk frames sit in a collapsed Work tree — expand to view. User and assistant chats are bubbles; thinking is faded thought process, not a bubble. A thought starts expanded. Collapse leaves one short row that opens again. Collapsing any thought folds the rest of that session; expanding one opens only that thought. That fold survives the live-to-stored handoff. The reply stays. A long user bubble wraps inside the row and keeps its leading gap. Copy and Reply under a user bubble stay inside the window. Permission prompts Allow / Deny — Enter allows and Esc denies when the composer is empty. User bubbles sit on the right.",
-        "Shared buttons hover-scale to 1.035 and rise 1px over 120ms, shrink on press, and scale plus fill on keyboard focus. Chips, permission segments, and the rail share one highlight that glides. Card and wall hover stay inside the slot. Off-screen chat rows skip paint; height follows the pane width and each row keeps its id.",
-        "Account sets a display name and a local profile picture kept in your settings on this PC. The avatar menu, rail, and connected hint do not show the email.",
-        "Five chips sit centered over the composer. The attach control is a paperclip. Ask anything is a faint placeholder centered with the mic and send. The home update feed is newest-first event cards (automation_done, schedule_created). Idea and digest cards share updates.json and do not use that three-card cap. Accept on an idea files a workboard Todo. No weather, mail, or calendar stubs.",
-    ]
-    .join("\n")
-    .replace("{product}", crate::brand::product_name())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1035,7 +925,6 @@ mod tests {
         assert_eq!(parse_slash("/forget"), Some(Slash::Forget(None)));
         assert_eq!(parse_slash("/board"), Some(Slash::Board));
         assert_eq!(parse_slash("/journal"), Some(Slash::Journal));
-        assert!(slash_help().contains("/journal"));
         assert_eq!(
             parse_slash("/imagine a cabin"),
             Some(Slash::Imagine("a cabin".into()))
@@ -1099,7 +988,6 @@ mod tests {
         assert_eq!(parse_slash("/update"), Some(Slash::Update));
         assert_eq!(parse_slash("/brief"), Some(Slash::Brief));
         assert_eq!(slash_kind(&Slash::Brief), "brief");
-        assert!(slash_help().contains("/brief — weekly systems briefing"));
     }
 
     #[test]
@@ -1168,8 +1056,6 @@ mod tests {
             "skill_restore"
         );
         assert_eq!(slash_kind(&Slash::SkillChanges), "skill_changes");
-        assert!(slash_help()
-            .contains("/skills undo <name> — put back the version before the newest change"));
         assert_eq!(parse_slash("/mcps"), Some(Slash::GrokConnectors));
         assert_eq!(
             parse_slash("/imagine-video a cat").as_ref().map(slash_kind),
@@ -1236,7 +1122,6 @@ mod tests {
         assert_eq!(parse_slash("/host off"), Some(Slash::HostStatus));
         assert_eq!(parse_slash("/tools off"), Some(Slash::HostStatus));
         assert_eq!(parse_slash("/tools on"), Some(Slash::HostStatus));
-        assert!(!slash_help().contains("/approve"));
         assert_eq!(parse_slash("/import"), Some(Slash::Import));
         assert_eq!(
             parse_slash("/consult check the pi"),
@@ -1244,123 +1129,10 @@ mod tests {
         );
         assert_eq!(parse_slash("/usage"), Some(Slash::Usage));
         assert_eq!(parse_slash("/palette"), Some(Slash::Palette));
-        assert!(slash_help().contains("nested files"));
-        assert!(slash_help().contains("/import"));
-        assert!(slash_help().contains("/consult"));
-        assert!(slash_help().contains("/project new"));
-        assert!(slash_help().contains("/project folder"));
-        assert!(slash_help().contains("/project delete"));
-        assert!(slash_help().contains("/board"));
-        assert!(slash_help().contains("/skill"));
-        assert!(slash_help().contains("/plan — plan mode"));
-        assert!(slash_help().contains("/always-approve"));
-        assert!(slash_help().contains("Pulse every 15s"));
-        assert!(slash_help().contains("Voice: Ara"));
-        assert!(slash_help().contains("Listening / Speaking / Ready"));
-        assert!(slash_help().contains("auto-hides about a second after Ready"));
-        assert!(slash_help().contains("Failed STT shows Ready"));
-        assert!(
-            slash_help().contains("not the thought process"),
-            "{}",
-            slash_help()
-        );
-        assert!(slash_help().contains("Desktop control runs through the cabin's own desktop tools"));
-        assert!(slash_help().contains("they inherit the setting, and Ask fails closed"));
-        assert!(!slash_help().contains("grok -p") && !slash_help().contains("ACP"));
-        assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
-        assert!(slash_help().contains("No mode to pick"));
-        assert!(slash_help().contains("/view-plan"));
-        assert!(slash_help().contains("/btw — side ask"));
-        assert!(
-            slash_help().contains("Ask permission shows Allow / Deny")
-                && slash_help().contains("gets its own read-only answer beside it")
-                && slash_help().contains("Night, inbox, and anticipate runs are unattended")
-                && slash_help().contains("`/compact` and `/rewind` honor it too"),
-            "{}",
-            slash_help()
-        );
-        assert!(slash_help().contains(
-            "Loadout picks the model and how hard to think on each step. Say \"think hard\" or \"keep it quick\" to steer one task; ask in chat which model and effort answered."
-        ));
-        assert!(!slash_help().contains("Default model"));
-        assert!(!slash_help().contains("Auto chip"));
-        assert!(slash_help().contains("No mode to pick"));
-        assert!(!slash_help().contains("Mode pill"));
-        assert!(slash_help().contains("centered over the composer"));
-        assert!(slash_help().contains("Hidden idle waits for the pulse"));
-        assert!(slash_help().contains("Chat rail reuses one empty draft"));
-        assert!(slash_help().contains("Tool calls, diffs, and desk frames"));
-        assert!(slash_help().contains("collapsed Work tree"));
-        assert!(slash_help().contains("thought process"));
-        assert!(slash_help().contains("A thought starts expanded"));
-        assert!(slash_help().contains("Collapse leaves one short row"));
-        assert!(!slash_help().contains("Hide stops drawing that thought"));
-        assert!(slash_help().contains("The reply stays"));
-        assert!(slash_help().contains("That fold survives the live-to-stored handoff"));
-        assert!(slash_help().contains("A long user bubble wraps inside the row"));
-        assert!(slash_help().contains("Copy and Reply under a user bubble stay inside the window"));
-        assert!(slash_help().contains("keeps its leading gap"));
-        assert!(slash_help().contains("Card and wall hover stay inside the slot"));
-        assert!(slash_help().contains("Account sets a display name"));
-        assert!(slash_help().contains("local profile picture"));
-        assert!(slash_help().contains("do not show the email"));
-        assert!(slash_help().contains("User bubbles sit on the right"));
-        assert!(slash_help().contains("1.035"));
-        assert!(slash_help().contains("each row keeps its id"));
-        // 2.10.87: the Thinking dot is gone; the composer glow shows a live turn.
-        assert!(!slash_help().contains("green live dot plus Thinking / Running / Waiting"));
-        assert!(slash_help().contains("No live dot or Thinking label sits on the turn"));
-        assert!(slash_help().contains("Stop's hover names the current action"));
-        assert!(!slash_help().contains("above the composer when the pane is scrolled"));
-        assert!(slash_help().contains("Composer Stop is a disc with a small rounded mark"));
-        assert!(slash_help().contains("The transcript Running row has no Stop"));
-        assert!(slash_help().contains("The changing status text above the composer is gone"));
-        assert!(slash_help().contains("The context usage bar stays"));
-        assert!(slash_help().contains("The Ask card names the command, path, or site"));
-        assert!(slash_help().contains("skip every tool prompt this launch"));
-        assert!(slash_help().contains("reuse that confirm sheet"));
-        assert!(slash_help().contains("History offers a Last you point when that marker exists"));
-        assert!(slash_help().contains("Quiet until chip"));
-        assert!(slash_help().contains("update feed"));
-        assert!(slash_help().contains("poll_grok_loop"));
-        assert!(slash_help().contains("automation_done"));
-        assert!(slash_help().contains("schedule_created"));
-        assert!(!slash_help().contains("Coding / Life chip"));
-        assert!(!slash_help().contains("interest_update"));
-        assert!(slash_help().contains("device glance appears only when hub share"));
-        assert!(slash_help().contains("hides that slot when the feed is empty"));
-        assert!(slash_help().contains("leaves the rewind snapshot out"));
-        assert!(slash_help().contains("History is the cabin's own chats"));
-        assert!(slash_help().contains("Idle Stop and the idle mic sit still"));
-        assert!(slash_help().contains("compact the chat context"));
-        assert!(slash_help().contains("/forget and Memory Save stay off"));
-        assert!(slash_help().contains("/learn — reflect this chat into MEMORY.md"));
-        assert!(slash_help().contains("/skill <name> — run a skill"));
-        assert!(slash_help().contains("/sync — merge chats and memory"));
-        assert!(slash_help().contains("Expired pair codes hide and rotate"));
-        assert!(!slash_help().contains("x.ai/cli") && !slash_help().contains("GROK_CHANNEL"));
-        assert!(slash_help().contains("Get Started"), "{}", slash_help());
-        assert!(
-            !slash_help().contains("grok update")
-                && slash_help().contains("notifies in-app")
-                && slash_help().contains("Update cabin")
-                && slash_help().contains("every 2 hours")
-                && slash_help().contains("Settings → Update stays visible"),
-            "/update overlays the cabin only and notifies in-app: {}",
-            slash_help()
-        );
-        #[cfg(windows)]
-        assert!(slash_help().contains("LOCALAPPDATA"), "{}", slash_help());
-        assert!(slash_help().contains("pinned taskbar click"));
         assert_eq!(parse_slash("/plan"), Some(Slash::Plan));
         assert_eq!(parse_slash("/always-approve"), Some(Slash::AlwaysApprove));
         assert_eq!(parse_slash("/sessions"), Some(Slash::Sessions));
         assert_eq!(parse_slash("/inspect"), Some(Slash::Inspect));
-        assert!(slash_help().contains("/loop"));
-        assert!(slash_help().contains("/create-skill"));
-        assert!(slash_help().contains("quiet hours dropdown"));
-        assert!(slash_help().contains("History search drops stale hits"));
-        assert!(slash_help().contains("keeps unsaved typing"));
         assert!(filter_slash_commands("/re")
             .iter()
             .any(|s| s.cmd == "/rename"));
@@ -1368,13 +1140,14 @@ mod tests {
             .iter()
             .any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
-        let help = mark_slash_result(&slash_help());
+        let dump = "/help — this list\n/new — new chat";
+        let help = mark_slash_result(dump);
         assert!(is_cabin_slash_turn("assistant", &help));
         assert_eq!(
             strip_slash_result(&help).lines().next(),
             Some("/help — this list")
         );
-        assert!(is_cabin_slash_turn("assistant", &slash_help()));
+        assert!(is_cabin_slash_turn("assistant", dump));
         assert!(is_cabin_slash_turn(
             "assistant",
             "grok-3-mini-fast — Grok 3 Mini Fast (chat)\ngrok-4.7 — Grok 4.7 (chat)"
@@ -1447,9 +1220,7 @@ mod tests {
         assert!(filter_slash_commands("/workflow")
             .iter()
             .all(|s| !s.cmd.starts_with("/workflow")));
-        assert!(slash_help()
-            .contains("/workflow — workflows were a grok CLI feature and are not in Loadout"));
-        // Still parsed, so a typed /workflow gets that answer instead of going to the engine.
+        // Still parsed, so a typed /workflow is answered locally instead of going to the engine.
         assert!(!unknown_cabin_slash("/workflow pause review-changes-2"));
         assert!(!unknown_cabin_slash("/workflow pause"));
     }
@@ -1467,7 +1238,6 @@ mod tests {
         assert_eq!(parse_slash("/plugins"), Some(Slash::GrokConnectors));
         assert_eq!(parse_slash("/marketplace"), Some(Slash::GrokConnectors));
         assert_eq!(parse_slash("/connectors"), Some(Slash::GrokConnectors));
-        assert!(slash_help().contains("/hooks — open Connectors with the Hooks section in view"));
         assert!(!unknown_cabin_slash("/hooks"));
     }
 
@@ -1506,14 +1276,7 @@ mod tests {
                     .all(|d| !d.cmd.starts_with(&format!("{word} ")) && d.cmd != word),
                 "{word} autocompletes"
             );
-            assert!(
-                !slash_help()
-                    .lines()
-                    .any(|l| l.starts_with(&format!("{word} "))),
-                "{word} is in /help"
-            );
         }
-        assert!(!slash_help().contains("/why"));
         // A skill or another builtin still reaches the engine.
         assert!(!unknown_cabin_slash("/memo"));
         assert!(!unknown_cabin_slash("/create-skill"));
@@ -1527,9 +1290,6 @@ mod tests {
             parse_slash("/diagnose").as_ref().map(slash_kind),
             Some("diagnose")
         );
-        assert!(slash_help().contains(
-            "\n/diagnose — check disk, memory, services, logs, network and updates, read only"
-        ));
         assert!(SLASH_COMMANDS
             .iter()
             .any(|d| d.cmd == "/diagnose" && d.run_on_pick));
@@ -1549,9 +1309,6 @@ mod tests {
             parse_slash("/record stop").as_ref().map(slash_kind),
             Some("record_stop")
         );
-        assert!(slash_help().contains(
-            "\n/record — record the screen (up to 2:00) and diagnose it; /record stop ends it"
-        ));
         assert!(SLASH_COMMANDS
             .iter()
             .any(|d| d.cmd == "/record" && d.insert == "/record "));
@@ -1572,8 +1329,6 @@ mod tests {
             parse_slash("/audiocheck").as_ref().map(slash_kind),
             Some("audiocheck")
         );
-        assert!(slash_help()
-            .contains("\n/audiocheck — list outputs and inputs, listen to the default input"));
         assert!(SLASH_COMMANDS
             .iter()
             .any(|d| d.cmd == "/audiocheck" && d.run_on_pick));
@@ -1588,9 +1343,6 @@ mod tests {
             parse_slash("/privacy").as_ref().map(slash_kind),
             Some("privacy")
         );
-        assert!(slash_help().contains(
-            "/privacy — your grants, learning scopes (all off), and what left this computer"
-        ));
         assert!(!unknown_cabin_slash("/privacy"));
     }
 }

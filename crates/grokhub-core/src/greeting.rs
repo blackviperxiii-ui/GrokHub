@@ -2,7 +2,6 @@
 //! Local line is a situation pick — time, name, signed-in, first-run, last project.
 
 use crate::is_plain_text;
-use crate::strip_thinking;
 
 pub const GREETING_LLM_MODE: &str = "fast";
 pub const GREETING_MAX_CHARS: usize = 92;
@@ -138,11 +137,6 @@ fn is_machine_name(s: &str) -> bool {
         return true;
     }
     t.contains('-') && t.chars().any(|c| c.is_ascii_digit())
-}
-
-fn greeting_uses_machine_name(s: &str) -> bool {
-    s.split(|c: char| !c.is_alphanumeric() && c != '-')
-        .any(|w| !w.is_empty() && (is_machine_name(w) || w.eq_ignore_ascii_case("grokhub")))
 }
 
 fn clean_name(s: &str) -> String {
@@ -283,238 +277,6 @@ fn paused_line(hello: &str, name: &str, task: &str) -> Option<String> {
     })
 }
 
-pub fn greeting_prompt(input: &GreetingInput) -> String {
-    let name = greeting_name(input.user_md, input.display_name);
-    let mut lines = vec![
-        "Write one greeting line the way a calm assistant would say it when someone sits down.".into(),
-        format!(
-            "One sentence, at most {GREETING_MAX_CHARS} characters. No markdown, no emoji, no quotes, no secrets, no question mark."
-        ),
-        "Use their name if you know it. Sound like you already know them, not like a status screen.".into(),
-        "Do not say the cabin is ready. Do not say welcome. Do not quote USER.md or MEMORY.md.".into(),
-        "Do not repeat a sentence from USER.md, MEMORY.md, Insights, or Last night.".into(),
-        "If an insight says what they were doing, greet them as someone who already knows. Use your own words.".into(),
-        format!("Do not mention the machine, hostname, or {product}.", product = crate::brand::product_name()),
-        "If a last project is set, offer it once, lightly. First run is a start. Returning is picking up.".into(),
-        "Reply with only the line.".into(),
-        String::new(),
-        format!("Hour: {}", input.hour),
-        format!("First run: {}", if input.first_run { "yes" } else { "no" }),
-        format!("Signed in: {}", if input.signed_in { "yes" } else { "no" }),
-        format!(
-            "Name: {}",
-            if name.is_empty() {
-                "(unknown)".into()
-            } else {
-                name
-            }
-        ),
-    ];
-    let project = clean_project_title(input.last_project);
-    if !project.is_empty() {
-        lines.push(format!("Last project: {project}"));
-    }
-    if !input.last_night.trim().is_empty() && is_plain_text(input.last_night) {
-        lines.push(format!(
-            "Last night: {}",
-            input.last_night.chars().take(80).collect::<String>()
-        ));
-    }
-    if !input.user_md.trim().is_empty() && is_plain_text(input.user_md) {
-        lines.push("USER.md:".into());
-        lines.push(input.user_md.chars().take(400).collect());
-    }
-    if !input.memory_md.trim().is_empty() && is_plain_text(input.memory_md) {
-        lines.push("MEMORY.md:".into());
-        lines.push(input.memory_md.chars().take(400).collect());
-    }
-    if !input.insights.is_empty() {
-        lines.push("Insights:".into());
-        for i in input.insights.iter().take(6) {
-            if is_plain_text(i) {
-                lines.push(format!("- {i}"));
-            }
-        }
-    }
-    lines.join("\n")
-}
-
-pub fn parse_llm_greeting(raw: &str) -> Option<String> {
-    let stripped = strip_thinking(raw);
-    let mut t = if stripped.trim().is_empty() {
-        return None;
-    } else {
-        stripped.trim().to_string()
-    };
-    if let Some(rest) = t.strip_prefix("```") {
-        t = rest
-            .trim_start_matches("text")
-            .trim_start_matches("markdown")
-            .trim()
-            .trim_end_matches("```")
-            .trim()
-            .to_string();
-    }
-    let line = t.lines().map(str::trim).find(|l| {
-        !l.is_empty()
-            && !l.eq_ignore_ascii_case("thinking:")
-            && !l.starts_with("<think>")
-            && !is_model_planning(l)
-    })?;
-    let line = strip_answer_label(line);
-    let line = line.trim_matches('"').trim_matches('\'').trim();
-    if line.is_empty() || !is_plain_text(line) {
-        return None;
-    }
-    let out = clip_greeting(line);
-    if out.chars().count() < 8
-        || is_product_name(&out)
-        || is_product_greeting(&out)
-        || greeting_uses_machine_name(&out)
-    {
-        None
-    } else {
-        Some(out)
-    }
-}
-
-/// A line where the model talks about the task instead of doing it
-/// ("I'll use the user's name if known. The greeting should…"). A plain one-shot
-/// turn prints that reasoning into the reply, so it must never reach the screen.
-pub fn is_model_planning(line: &str) -> bool {
-    let t = line
-        .trim()
-        .trim_start_matches(['-', '*', '>', ' '])
-        .to_ascii_lowercase();
-    if t.is_empty() {
-        return false;
-    }
-    const STARTS: &[&str] = &[
-        "i'll ",
-        "i will ",
-        "i should ",
-        "i need ",
-        "i'm going",
-        "i am going",
-        "i must ",
-        "i want to ",
-        "i can ",
-        "i think ",
-        "let me ",
-        "let's ",
-        "okay",
-        "ok,",
-        "ok so",
-        "alright",
-        "so the ",
-        "now ",
-        "first,",
-        "next,",
-        "then,",
-        "the user",
-        "the greeting",
-        "the line",
-        "the reply",
-        "the answer",
-        "the output",
-        "they want",
-        "we need",
-        "we should",
-        "need to ",
-        "should ",
-        "must ",
-        "note:",
-        "thinking",
-        "hmm",
-        "plan:",
-        "draft:",
-        "here's ",
-        "here is ",
-        "sure",
-        "got it",
-        "understood",
-        "maybe ",
-        "perhaps ",
-        "keep it ",
-        "make it ",
-        "avoid ",
-        "don't ",
-        "do not ",
-    ];
-    if STARTS.iter().any(|p| t.starts_with(p)) {
-        return true;
-    }
-    const INSIDE: &[&str] = &[
-        "the user",
-        "user's name",
-        "the greeting",
-        "the prompt",
-        "the line should",
-        "one sentence",
-        " characters",
-        "no markdown",
-        "no emoji",
-        "if known",
-        "should sound",
-        "status screen",
-        "reply with only",
-        "user.md",
-        "memory.md",
-    ];
-    INSIDE.iter().any(|p| t.contains(p))
-}
-
-/// "Greeting: Evening, User." → "Evening, User."
-fn strip_answer_label(line: &str) -> &str {
-    for label in ["greeting:", "answer:", "line:", "final:", "output:"] {
-        // `get`: `label.len()` can sit inside a multibyte char ("line:" into 👋 / ß).
-        if let (Some(head), Some(rest)) = (line.get(..label.len()), line.get(label.len()..)) {
-            if !rest.is_empty() && head.eq_ignore_ascii_case(label) {
-                return rest.trim();
-            }
-        }
-    }
-    line
-}
-
-fn is_product_greeting(s: &str) -> bool {
-    let t = s.trim().to_ascii_lowercase();
-    t == "grokhub"
-        || t == "grokhub."
-        || t == "grok"
-        || t == "grok."
-        || t.starts_with("welcome to grokhub")
-        || t == "native grok build cabin"
-        || t.contains(", grok.")
-        || t.contains(", grok ")
-        || t.contains(", grokhub")
-        || t.contains("hello, grok")
-        || t.contains("hi, grok")
-        || t.contains("morning, grok")
-        || t.contains("afternoon, grok")
-        || t.contains("evening, grok")
-        || t.contains("night, grok")
-}
-
-pub fn pick_greeting(local: &str, llm: Option<&str>) -> String {
-    pick_greeting_against(local, llm, &[])
-}
-
-/// Keep the local line when the model greeting quotes memory, an insight, or a chat.
-pub fn pick_greeting_against(local: &str, llm: Option<&str>, sources: &[String]) -> String {
-    if let Some(raw) = llm {
-        if let Some(g) = parse_llm_greeting(raw) {
-            if !sources
-                .iter()
-                .any(|source| crate::situation::echoes_source(&g, source))
-            {
-                return g;
-            }
-        }
-    }
-    local.to_string()
-}
-
 pub fn greeting_fingerprint(input: &GreetingInput) -> String {
     let name = greeting_name(input.user_md, input.display_name);
     let project = clean_project_title(input.last_project);
@@ -624,9 +386,6 @@ mod tests {
         assert_eq!(greeting_name("", "cachyos-x8664"), "");
         assert_eq!(greeting_name("Name: CachyOS\n", "Tester"), "Tester");
         assert_eq!(greeting_name("", "CachyOS"), "");
-        assert!(parse_llm_greeting("Hello, CachyOS.").is_none());
-        assert!(parse_llm_greeting("Hello, Grok.").is_none());
-        assert!(parse_llm_greeting("Evening, Tester. The cabin is ready.").is_some());
     }
 
     #[test]
@@ -678,50 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn greeting_prompt_grounds_in_user_memory() {
-        let prompt = greeting_prompt(&input(
-            "Name: User\n",
-            "Paint the wall tonight.\n",
-            &["likes the cabin quiet".into()],
-            "User",
-            22,
-        ));
-        assert!(prompt.contains("Do not repeat"), "{prompt}");
-        assert!(prompt.contains("User"), "{prompt}");
-        assert!(prompt.contains("Paint the wall"), "{prompt}");
-        assert!(
-            prompt.contains("cabin quiet") || prompt.contains("USER.md"),
-            "{prompt}"
-        );
-        assert!(
-            prompt.to_ascii_lowercase().contains("one")
-                && (prompt.contains("90")
-                    || prompt.contains(&GREETING_MAX_CHARS.to_string())
-                    || prompt.contains("short")),
-            "Fast prompt should demand a short line: {prompt}"
-        );
-        assert_eq!(GREETING_LLM_MODE, "fast");
-        let insights = ["likes the cabin quiet".into()];
-        let mut with_night = input(
-            "Name: User\n",
-            "Paint the wall tonight.\n",
-            &insights,
-            "User",
-            22,
-        );
-        with_night.last_night = "host snapshot failed";
-        with_night.last_project = "Night cabin";
-        let night_prompt = greeting_prompt(&with_night);
-        assert!(
-            night_prompt.contains("Last night: host snapshot failed"),
-            "{night_prompt}"
-        );
-        assert!(
-            night_prompt.contains("Last project: Night cabin"),
-            "{night_prompt}"
-        );
-        assert!(night_prompt.contains("First run: no"), "{night_prompt}");
-        assert!(night_prompt.contains("Signed in: yes"), "{night_prompt}");
+    fn local_greeting_surfaces_the_last_project() {
         let mut continue_in = input("", "", &[], "", 8);
         continue_in.last_project = "Night cabin";
         let local = local_greeting(&continue_in);
@@ -732,63 +448,6 @@ mod tests {
         assert!(
             !local.to_ascii_lowercase().contains("continue night cabin"),
             "do not dump the raw continue hint: {local}"
-        );
-    }
-
-    #[test]
-    fn parse_llm_greeting_keeps_a_short_line() {
-        let g = parse_llm_greeting(
-            "\"Night, User. The wall still wants a second coat.\"\nAnother line.",
-        )
-        .expect("parse");
-        assert!(g.contains("User"), "{g}");
-        assert!(!g.contains('"'), "{g}");
-        assert!(g.chars().count() <= GREETING_MAX_CHARS, "{g}");
-    }
-
-    #[test]
-    fn parse_llm_greeting_drops_secrets() {
-        assert!(parse_llm_greeting("token sk-abcdefghijklmnopqrstuv in the cabin").is_none());
-        assert!(parse_llm_greeting("").is_none());
-    }
-
-    #[test]
-    fn parse_llm_greeting_strips_thinking() {
-        let g = parse_llm_greeting(
-            "THINKING:\nplan a quiet line\n\nAfternoon, User. The cabin is ready.",
-        )
-        .expect("body after thought");
-        assert!(g.to_ascii_lowercase().contains("afternoon"), "{g}");
-        assert!(!g.to_ascii_lowercase().contains("thinking"), "{g}");
-        assert!(
-            parse_llm_greeting("THINKING:").is_none(),
-            "a thought-only Fast reply must not paint THINKING:"
-        );
-        assert_eq!(
-            pick_greeting("Afternoon, User.", Some("THINKING:")),
-            "Afternoon, User."
-        );
-    }
-
-    #[test]
-    fn pick_greeting_prefers_fast_when_clean() {
-        let local = "Evening, User.";
-        let llm = "Evening, User. nvim is still on the desk.";
-        assert_eq!(pick_greeting(local, Some(llm)), llm);
-        assert_eq!(pick_greeting(local, None), local);
-        assert_eq!(
-            pick_greeting(local, Some("token sk-abcdefghijklmnopqrstuv")),
-            local
-        );
-        let quoted = "Evening, User. Paint the wall tonight before you stop.";
-        assert_eq!(
-            pick_greeting_against(
-                local,
-                Some(quoted),
-                &["Paint the wall tonight before you stop.".into()]
-            ),
-            local,
-            "a greeting that quotes memory stays on the local line"
         );
     }
 
@@ -863,44 +522,5 @@ mod tests {
         assert!(clean_project_title("CachyOS").is_empty());
         assert!(clean_project_title("GrokHub").is_empty());
         assert!(clean_project_title("Chat").is_empty());
-    }
-
-    #[test]
-    fn parse_llm_greeting_never_paints_the_model_planning() {
-        let leaked = "I'll use the user's name if known. The greeting should sound like a familiar person, not a status screen.";
-        assert!(is_model_planning(leaked));
-        assert!(
-            parse_llm_greeting(leaked).is_none(),
-            "planning alone must fall back to the local line"
-        );
-        let g = parse_llm_greeting(&format!(
-            "{leaked}\nLet me keep it short.\n\nEvening, User. Back to the wall?"
-        ))
-        .expect("the answer after the planning");
-        assert!(g.starts_with("Evening, User"), "{g}");
-        assert_eq!(
-            parse_llm_greeting("Greeting: Morning, Sam.").as_deref(),
-            Some("Morning, Sam.")
-        );
-        assert_eq!(
-            pick_greeting("Evening, User.", Some(leaked)),
-            "Evening, User."
-        );
-        for ok in [
-            "Evening, User.",
-            "Morning, Sam. The deploy notes are where you left them.",
-            "Back again, Ana.",
-        ] {
-            assert!(!is_model_planning(ok), "{ok}");
-        }
-    }
-
-    #[test]
-    fn parse_llm_greeting_does_not_panic_on_a_multibyte_boundary() {
-        // "line:" is 5 bytes. In these lines that index sits inside 👋 / ß.
-        for line in ["Hi, 👋 Sam.", "Grüße, Sam."] {
-            assert_eq!(strip_answer_label(line), line, "{line}");
-            assert_eq!(parse_llm_greeting(line).as_deref(), Some(line), "{line}");
-        }
     }
 }

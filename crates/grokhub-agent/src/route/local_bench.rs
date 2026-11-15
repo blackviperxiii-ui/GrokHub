@@ -181,7 +181,7 @@ pub fn run_eval(rt: &dyn LocalRuntime) -> EvalReport {
 
     // 2. Summarize
     match rt.summarize(
-        "GrokHub is a native cabin app. It runs on Linux and Windows.",
+        "GrokHub is a native desktop app. It runs on Linux and Windows.",
         20,
     ) {
         Ok(v) => {

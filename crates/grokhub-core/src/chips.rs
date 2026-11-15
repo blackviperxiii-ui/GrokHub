@@ -4812,7 +4812,7 @@ mod tests {
             chips.iter().find(|c| c.value == "/plan").map(|c| c.score)
                 > chips
                     .iter()
-                    .find(|c| c.label == "Cabin brief")
+                    .find(|c| c.label == "Quick brief")
                     .map(|c| c.score),
             "slash outranks generic empty-home: {shown:?}"
         );
