@@ -457,25 +457,24 @@ pub(crate) fn dry_imagine_body(args: &Value) -> Result<Value, String> {
 pub use media::{imagine_client, run_media_tool, ImagineApi};
 pub use show_panel::SHOW_PANEL;
 
-/// Install fetch and Imagine clients for this thread. An empty bearer installs
-/// adapters that refuse without dialing. The guard restores the previous ports.
+/// Install fetch and Imagine clients for this thread. `web_fetch` and
+/// `web_search` never send the bearer, so they work without one; each hop still
+/// passes the permission gate, the public-only resolver and the egress guard.
+/// An empty bearer leaves Imagine unset, so a picture falls back to the
+/// on-device model or asks to sign in. The guard restores the previous ports.
 /// `session` picks the media folder (`sessions/<id>/media`).
 pub(crate) fn install_network(bearer: &str, session: &str) -> ports::Guard {
     let bearer = bearer.trim();
-    let media_dir = crate::session::media_dir(session).ok();
-    if bearer.is_empty() {
-        ports::enter(ports::Ports {
-            fetch: Some(Arc::new(web_fetch::BlockedFetch)),
-            imagine: Some(Arc::new(media::BlockedImagine)),
-            media_dir,
-        })
+    let imagine: Option<Arc<dyn ImagineApi>> = if bearer.is_empty() {
+        None
     } else {
-        ports::enter(ports::Ports {
-            fetch: Some(Arc::new(web_fetch::UreqFetch::new())),
-            imagine: Some(Arc::new(media::UreqImagine::new(bearer.to_string()))),
-            media_dir,
-        })
-    }
+        Some(Arc::new(media::UreqImagine::new(bearer.to_string())))
+    };
+    ports::enter(ports::Ports {
+        fetch: Some(Arc::new(web_fetch::UreqFetch::new())),
+        imagine,
+        media_dir: crate::session::media_dir(session).ok(),
+    })
 }
 
 pub fn str_field(v: &Value, key: &str) -> String {
@@ -529,6 +528,46 @@ mod arg_roundtrip_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::IpAddr;
+    use web_fetch::PageFetch;
+
+    #[test]
+    fn web_fetch_works_without_a_bearer_and_imagine_waits_for_one() {
+        let tmp = std::env::temp_dir().join(format!(
+            "grokhub-install-network-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _cfg = crate::perm::ConfigGuard::set(&tmp);
+        let _offline = grokhub_core::offline::force_for_thread(false);
+        let one = Ok(vec![IpAddr::from([1, 1, 1, 1])]);
+        {
+            let _g = install_network("", "s");
+            let p = ports::current();
+            assert_eq!(p.fetch.expect("fetch").resolve("1.1.1.1", 443), one);
+            assert!(p.imagine.is_none(), "no Imagine without a sign-in");
+        }
+        let _g = install_network("sk-abcdefghijklmnopqrstuv", "s");
+        let p = ports::current();
+        assert_eq!(p.fetch.expect("fetch").resolve("1.1.1.1", 443), one);
+        assert!(p.imagine.is_some());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn offline_only_refuses_before_any_dns_lookup() {
+        let _offline = grokhub_core::offline::force_for_thread(true);
+        let fetch = web_fetch::UreqFetch::new();
+        assert_eq!(
+            fetch.resolve("example.com", 443),
+            Err(grokhub_core::offline::OFFLINE_MSG.to_string())
+        );
+        assert_eq!(
+            fetch.resolve("127.0.0.1", 443),
+            Ok(vec![IpAddr::from([127, 0, 0, 1])]),
+            "this computer still resolves"
+        );
+    }
 
     #[test]
     fn tool_path_arg_reads_each_path_tool() {

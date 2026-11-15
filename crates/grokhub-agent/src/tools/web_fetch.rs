@@ -36,18 +36,6 @@ pub trait PageFetch: Send + Sync {
     fn get(&self, url: &str) -> Result<FetchResp, String>;
 }
 
-pub(crate) struct BlockedFetch;
-
-impl PageFetch for BlockedFetch {
-    fn resolve(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, String> {
-        Err(grokhub_core::XAI_NEED_SIGNIN.to_string())
-    }
-
-    fn get(&self, _url: &str) -> Result<FetchResp, String> {
-        Err(grokhub_core::XAI_NEED_SIGNIN.to_string())
-    }
-}
-
 pub(crate) struct UreqFetch {
     agent: grokhub_core::http::Agent,
 }
@@ -73,6 +61,8 @@ impl UreqFetch {
 
 impl PageFetch for UreqFetch {
     fn resolve(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, String> {
+        // Offline only refuses before the DNS lookup leaves the computer.
+        grokhub_core::offline::check_host(host).map_err(|e| e.to_string())?;
         let mut ips = Vec::new();
         for sock in (host, port)
             .to_socket_addrs()
