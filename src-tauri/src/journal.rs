@@ -180,7 +180,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act) -> Result<Page, String> {
     let entry = entries
         .iter()
         .find(|e| e.id == id)
-        .ok_or("That question is gone. It may have been removed in the cabin.")?;
+        .ok_or("That question is gone. The page now shows what is left.")?;
     let active = entry.status.is_active();
     let changed = match act {
         Act::AddOption { label } => {
@@ -216,7 +216,7 @@ pub fn to_mission(config_dir: &Path, id: &str, new_conversation: &str) -> Result
     let entry = entries
         .iter()
         .find(|e| e.id == id)
-        .ok_or("That question is gone. It may have been removed in the cabin.")?;
+        .ok_or("That question is gone. The page now shows what is left.")?;
     let conversation = entry
         .mission_thread
         .clone()
@@ -351,7 +351,7 @@ mod tests {
         assert_eq!(page.history[0].status, "Abandoned");
         assert_eq!(
             act(&config, "nope", Act::Defer).unwrap_err(),
-            "That question is gone. It may have been removed in the cabin."
+            "That question is gone. The page now shows what is left."
         );
     }
 

@@ -18,8 +18,8 @@ const LANES: { value: Lane; label: string }[] = [
 ];
 const laneLabel = (lane: Lane) => LANES.find((l) => l.value === lane)?.label ?? "Coding";
 export const QUIET_NOTE = "Leave both empty for no quiet hours.";
-export const SCHEDULE_NOTE = `Quiet hours and the budget are saved for scheduled work in this app. Automations here run only when you choose Run now, so nothing waits on them yet. The ${PRODUCT_NAME} cabin keeps its own quiet hours and budget.`;
-export const PAUSE_NOTE = "Scheduled work waits until tomorrow once today is over budget. Chat still sends.";
+export const SCHEDULE_NOTE = `Automations run on their schedule while ${PRODUCT_NAME} is open or in the tray. Quiet hours hold back Pulse posts, suggestions and nudges, but not a scheduled automation, and the daily budget doesn't hold one back either yet.`;
+export const PAUSE_NOTE = "Saved for later: scheduled work doesn't wait on the budget yet. Chat always sends.";
 
 function quietLabel(b: Shape) {
   return b.quietStart ? `${b.quietStart}–${b.quietEnd}` : "None";

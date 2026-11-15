@@ -143,11 +143,11 @@ describe("Journal", () => {
     api.getJournal
       .mockResolvedValueOnce({ active: [question()], history: [] })
       .mockResolvedValue(EMPTY);
-    api.journalAct.mockRejectedValue("That question is gone. It may have been removed in the cabin.");
+    api.journalAct.mockRejectedValue("That question is gone. The page now shows what is left.");
     render(<Journal onMission={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: "Defer" }));
     expect(screen.getByRole("status")).toHaveTextContent(
-      "That question is gone. It may have been removed in the cabin.",
+      "That question is gone. The page now shows what is left.",
     );
     expect(await screen.findByText(JOURNAL_EMPTY)).toBeVisible();
   });

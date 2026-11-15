@@ -265,7 +265,7 @@ pub fn undo(config_dir: &Path, kind: ChangeKind, id: &str, click: bool) -> Resul
             }
             done
         }
-        _ => return Err("That kind of change is undone in the cabin.".into()),
+        _ => return Err("That kind of change can't be undone here.".into()),
     };
     Ok(revert_line(kind, id, &done))
 }

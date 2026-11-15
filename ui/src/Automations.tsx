@@ -165,8 +165,8 @@ export function Automations({
         </button>
       </form>
       <p className="note">
-        {PRODUCT_NAME} runs these on schedule, from the tray too. While the {PRODUCT_NAME} cabin is open,
-        the cabin runs them. A run can read, and anything that would need your OK is skipped.
+        {PRODUCT_NAME} runs these on schedule while it is open or in the tray. A run can read, and
+        anything that would need your OK is skipped.
       </p>
       {note && (
         <p className="error" role="alert">

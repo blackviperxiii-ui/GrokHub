@@ -11,7 +11,7 @@ vi.mock("./api", () => api);
 import { Background } from "./Background";
 
 const RUNNER =
-  "The Loadout cabin runs automations on their schedule while it's open. Here a job runs when you choose Run now.";
+  "Loadout runs automations on their schedule while it is open or in the tray.";
 
 describe("Background", () => {
   beforeEach(() => {

@@ -98,7 +98,7 @@ describe("Skills", () => {
     api.getSkills.mockResolvedValue({ rows: ROWS });
     render(<Skills onUse={() => {}} onOpenConnectors={() => {}} />);
 
-    const cabin = await screen.findByRole("list", { name: "Cabin skills" });
+    const cabin = await screen.findByRole("list", { name: "App skills" });
     expect(
       within(cabin).getByRole("listitem", { name: "deploy-site" }),
     ).toHaveTextContent("deploy the site");

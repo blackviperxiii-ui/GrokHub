@@ -44,7 +44,7 @@ const DETAIL_MAX: usize = 2000;
 pub const LOG_LINES: usize = 20;
 /// Most of a progress log the page reads: its tail, never the whole file.
 pub const LOG_READ_MAX: u64 = 32 * 1024;
-pub const GONE: &str = "That card is gone. It may have been removed in the cabin.";
+pub const GONE: &str = "That card is gone. The page now shows what is left.";
 
 pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join(FILE)

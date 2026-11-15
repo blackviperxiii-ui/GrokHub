@@ -16,7 +16,7 @@ const DROP_SOURCES = [
 ] as const;
 
 export const SOURCES_NOTE =
-  "What Pulse writes on its own: the morning brief, the Sunday recaps, the overnight daily drop, release news for games you own, hobby tips, and offers to automate things you ask for again and again. Same switches as the cabin.";
+  "What Pulse writes on its own: the morning brief, the Sunday recaps, the overnight daily drop, release news for games you own, hobby tips, and offers to automate things you ask for again and again.";
 
 /** Settings → Pulse: the digest and offer sources, cabin defaults. */
 export function PulseSources() {
