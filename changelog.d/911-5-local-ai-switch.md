@@ -1,0 +1,1 @@
+- Settings → Local AI has a "Use Local AI on this computer" switch. An older version of the app could leave Local AI switched off with no way to turn it back on; this switch turns it back on, and turns it off for anyone who wants nothing to run on the on-device model. Typo tidy waits while Local AI is off.

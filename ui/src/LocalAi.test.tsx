@@ -20,6 +20,7 @@ const api = vi.hoisted(() => ({
   setLocalKeepLoaded: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
   setLocalDynamic: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
   setPromptTidy: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
+  setLocalUse: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
   unloadLocalModel: vi.fn<() => Promise<LocalAiView>>(),
   startLocalEngineDownload: vi.fn(),
   cancelLocalEngineDownload: vi.fn(),
@@ -146,6 +147,11 @@ function missingEngine(): LocalAiView["engine"] {
   };
 }
 
+const LOCAL_ON =
+  "On. Background jobs such as sorting, summaries and hiding private details can run on this computer once a local engine and model are set up.";
+const LOCAL_OFF = "Off. Nothing runs on the on-device model, and typo tidy is paused.";
+const TIDY_LOCAL_OFF = "Off while Local AI is off. Turn on Use Local AI on this computer first.";
+
 const READY: LocalAiView["engine"] = {
   state: "ready",
   version: "b11602",
@@ -187,6 +193,7 @@ function view(
       dynamic: true,
       dynamicHint: "On: each task runs on the model on disk that's best at it.",
     },
+    localUse: { on: true, hint: LOCAL_ON },
     tidy: { on: false, available: true, hint: "Off. Your messages go to the model exactly as you type them." },
     ...over,
   };
@@ -399,6 +406,59 @@ describe("LocalAi", () => {
     expect(api.setLocalDynamic).toHaveBeenCalledWith(false);
     expect(await within(rows).findByRole("button", { name: "Turn on Dynamic" })).toBeInTheDocument();
     expect(rows).toHaveTextContent("Off: your pick answers every task.");
+  });
+
+  it("turns Local AI off at once and pauses the tidy, without saving the page", async () => {
+    const v = PROFILES["16 GB GPU"];
+    api.getLocalAi.mockResolvedValue(v);
+    api.setLocalUse.mockResolvedValue({
+      ...v,
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    });
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Use Local AI" });
+    const sw = within(group).getByRole("switch", { name: "Use Local AI on this computer" });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(group).toHaveTextContent(LOCAL_ON);
+    await userEvent.click(sw);
+    expect(api.setLocalUse).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "false"));
+    expect(group).toHaveTextContent(LOCAL_OFF);
+    expect(await screen.findByText("Local AI is off: nothing runs on the on-device model.")).toBeInTheDocument();
+    const tidy = screen.getByRole("group", { name: "Typo tidy" });
+    expect(within(tidy).getByRole("switch")).toBeDisabled();
+    expect(tidy).toHaveTextContent(TIDY_LOCAL_OFF);
+    expect(api.saveLocalAi).not.toHaveBeenCalled();
+  });
+
+  it("turns Local AI back on after an older version switched it off", async () => {
+    const off = {
+      ...PROFILES["16 GB GPU"],
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    };
+    api.getLocalAi.mockResolvedValue(off);
+    api.setLocalUse.mockResolvedValue(PROFILES["16 GB GPU"]);
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Use Local AI" });
+    const sw = within(group).getByRole("switch", { name: "Use Local AI on this computer" });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(sw);
+    expect(api.setLocalUse).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "true"));
+    expect(await screen.findByText("Local AI is on for this computer.")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Typo tidy" })).getByRole("switch")).toBeEnabled();
+  });
+
+  it("says why Local AI didn't change", async () => {
+    api.getLocalAi.mockResolvedValue(PROFILES["16 GB GPU"]);
+    api.setLocalUse.mockRejectedValue("app.json is not valid JSON");
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Use Local AI" });
+    await userEvent.click(within(group).getByRole("switch"));
+    expect(await screen.findByText("app.json is not valid JSON")).toBeInTheDocument();
+    expect(within(group).getByRole("switch")).toHaveAttribute("aria-checked", "true");
   });
 
   it("turns typo tidy on at once, without saving the page", async () => {

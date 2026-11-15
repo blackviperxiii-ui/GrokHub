@@ -4,8 +4,8 @@
 //!
 //! The switch is the cabin's `promptCleanup` in app.json, off until the
 //! person turns it on. The router reads it (`route::host::read`) only while
-//! Local AI is on (`localModel` is not `false`), and `route::host::sync` runs
-//! before every turn. Nothing goes to the keyring.
+//! Local AI is on (`localModel` is not `false`, the switch in `local_use`),
+//! and `route::host::sync` runs before every turn. Nothing goes to the keyring.
 
 use std::path::Path;
 
@@ -21,9 +21,10 @@ pub const NOT_SET_UP: &str = "Set up a local engine and model first.";
 const OFF: &str = "Off. Your messages go to the model exactly as you type them.";
 /// The tidy only uses a model that is already loaded; it never starts one.
 const ON: &str = "On. While the on-device model is loaded, it fixes typos first (up to 0.3 s); Keep loaded tidies every message. Your chat keeps what you typed; numbers, names, paths and links are never changed.";
-/// An older GrokHub saved `localModel: false`, which keeps Local AI off.
-const LOCAL_OFF: &str =
-    "Off. An older version of the app switched Local AI off; turning this on switches it back on.";
+/// Turning it on while Local AI is switched off (`local_use`).
+pub const NEEDS_LOCAL: &str = "Turn on Use Local AI on this computer first.";
+/// Local AI is switched off, so the router skips the tidy.
+const LOCAL_OFF: &str = "Off while Local AI is off. Turn on Use Local AI on this computer first.";
 const PAUSED: &str = "On, but paused. Set up a local engine and model first.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -39,10 +40,10 @@ pub struct TidyView {
 /// The line under the switch: On or Off first.
 fn hint(on: bool, set_up: bool, local_model: bool) -> &'static str {
     match (on, set_up) {
+        _ if !local_model => LOCAL_OFF,
         (true, true) => ON,
         (true, false) => PAUSED,
         (false, false) => "Off. Set up a local engine and model first.",
-        (false, true) if !local_model => LOCAL_OFF,
         (false, true) => OFF,
     }
 }
@@ -60,26 +61,25 @@ fn view_with(config_dir: &Path, set_up: bool) -> TidyView {
     let routing = grokhub_agent::route::host::read(config_dir);
     TidyView {
         on: routing.prompt_cleanup,
-        available: set_up,
+        available: set_up && routing.local_model,
         hint: hint(routing.prompt_cleanup, set_up, routing.local_model).into(),
     }
 }
 
-/// Turn it on or off; the router takes it at once. Turning it on also clears
-/// an older version's `localModel: false`, as the hint says.
+/// Turn it on or off; the router takes it at once. It turns on only while
+/// Local AI is on and set up.
 pub fn set(config_dir: &Path, on: bool) -> Result<TidyView, String> {
     set_with(config_dir, on, set_up(config_dir))
 }
 
 fn set_with(config_dir: &Path, on: bool, set_up: bool) -> Result<TidyView, String> {
+    if on && !grokhub_agent::route::host::read(config_dir).local_model {
+        return Err(NEEDS_LOCAL.into());
+    }
     if on && !set_up {
         return Err(NOT_SET_UP.into());
     }
-    let mut changes = vec![(KEY, json!(on))];
-    if on && !grokhub_agent::route::host::read(config_dir).local_model {
-        changes.push(("localModel", json!(true)));
-    }
-    grokhub_core::app_json::patch(config_dir, &changes)?;
+    grokhub_core::app_json::patch(config_dir, &[(KEY, json!(on))])?;
     grokhub_agent::route::host::sync(config_dir);
     Ok(view_with(config_dir, set_up))
 }

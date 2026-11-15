@@ -455,6 +455,10 @@ const EMPTY_LOCAL_AI = {
     dynamic: true,
     dynamicHint: "On: each task runs on the model on disk that's best at it.",
   },
+  localUse: {
+    on: true,
+    hint: "On. Background jobs such as sorting, summaries and hiding private details can run on this computer once a local engine and model are set up.",
+  },
   tidy: { on: false, available: false, hint: "Off. Set up a local engine and model first." },
 };
 
@@ -749,6 +753,7 @@ export function initScript(theme = "ops-dark") {
         case "reset_local_ai":
         case "set_local_keep_loaded":
         case "set_local_dynamic":
+        case "set_local_use":
         case "set_prompt_tidy":
         case "unload_local_model":
           return fix.localAi;

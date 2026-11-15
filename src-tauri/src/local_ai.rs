@@ -3,9 +3,9 @@
 //! detection could not see, and the tray's state chip.
 //!
 //! Choices live in `local_ai.json` in the GrokHub config folder, the pick
-//! under `localModel.selected`. The cabin's `app.json` keeps its own
-//! `localModel` on/off switch; only the typo tidy (`prompt_tidy`) writes it,
-//! to clear an older version's `false` when it is turned on. The game,
+//! under `localModel.selected`. The `app.json` `localModel` on/off switch is
+//! separate: `local_use` owns it, and the typo tidy (`prompt_tidy`) only
+//! reads it. The game,
 //! idle and battery switches and the app lists go to `local/governor.json`,
 //! which the cabin's governor reads.
 
@@ -563,6 +563,8 @@ pub struct LocalAiView {
     pub draft_progress: Option<DraftProgress>,
     /// What runs now: model, where, speed, draft model, unload.
     pub running: Running,
+    /// Use Local AI on this computer.
+    pub local_use: crate::local_use::LocalUseView,
     /// Tidy typos on this computer.
     pub tidy: crate::prompt_tidy::TidyView,
 }
@@ -795,6 +797,7 @@ pub fn view(config_dir: &Path) -> LocalAiView {
         draft_offers: local_engine::draft_offers(config_dir),
         draft_progress: local_engine::draft_progress(),
         running: running(config_dir),
+        local_use: crate::local_use::view(config_dir),
         tidy: crate::prompt_tidy::view(config_dir),
         config,
         status,

@@ -12,6 +12,7 @@ import {
   setLocalDynamic,
   setPromptTidy,
   setLocalKeepLoaded,
+  setLocalUse,
   startLocalDrafterDownload,
   startLocalEngineDownload,
   unloadLocalModel,
@@ -327,6 +328,15 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
     }
   }
 
+  async function switchLocal(on: boolean) {
+    try {
+      setView(await setLocalUse(on));
+      tell(on ? "Local AI is on for this computer." : "Local AI is off: nothing runs on the on-device model.");
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   async function tidy(on: boolean) {
     try {
       setView(await setPromptTidy(on));
@@ -431,6 +441,12 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
             Unload now
           </button>
         )}
+      </div>
+      <div className="local-use" role="group" aria-label="Use Local AI">
+        <Toggle checked={view.localUse.on} onChange={(on) => void switchLocal(on)}>
+          Use Local AI on this computer
+        </Toggle>
+        <p className="note">{view.localUse.hint}</p>
       </div>
       <div className="local-tidy" role="group" aria-label="Typo tidy">
         <Toggle checked={view.tidy.on} disabled={!view.tidy.available && !view.tidy.on} onChange={(on) => void tidy(on)}>

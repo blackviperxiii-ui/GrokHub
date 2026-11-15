@@ -85,6 +85,7 @@ pub mod local_engine;
 #[cfg(desktop)]
 mod local_governor;
 mod local_model_checks;
+mod local_use;
 #[cfg(test)]
 mod md_fixtures;
 pub mod memory;
@@ -6044,6 +6045,21 @@ async fn set_local_dynamic(
     off_main(move || local_ai::set_dynamic(&dir, on)).await?
 }
 
+/// Settings → Local AI → Use Local AI on this computer.
+#[tauri::command]
+async fn set_local_use(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<local_ai::LocalAiView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        local_use::set(&dir, on)?;
+        Ok(local_ai::refreshed(&dir))
+    })
+    .await?
+}
+
 /// Settings → Local AI → Tidy typos on this computer.
 #[tauri::command]
 async fn set_prompt_tidy(
@@ -8092,6 +8108,7 @@ pub fn run() {
             run_local_speed_test,
             set_local_keep_loaded,
             set_local_dynamic,
+            set_local_use,
             set_prompt_tidy,
             unload_local_model,
             get_model_library,
