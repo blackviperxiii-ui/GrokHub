@@ -5610,8 +5610,9 @@ async fn add_ai_provider(
     off_main(move || ai_models::start_add(&dir, &base_url, key)).await?
 }
 
-/// Opens OpenRouter's sign-in page in the browser. The key it hands back
-/// lands on a key card (`wait_openrouter_sign_in`); nothing is saved yet.
+/// Opens OpenRouter's sign-in page in the browser, or hands back the link of
+/// the one that waits. The key it brings back lands on a key card
+/// (`wait_openrouter_sign_in`); nothing is saved yet.
 #[tauri::command]
 async fn start_openrouter_sign_in(
     state: State<'_, ShellState>,
@@ -5626,6 +5627,12 @@ async fn start_openrouter_sign_in(
 async fn wait_openrouter_sign_in() -> Result<ai_models::Card, String> {
     capabilities::needs(capabilities::current().local_ai, "AI models")?;
     off_main(openrouter_sign_in::wait).await?
+}
+
+/// Stops a browser sign-in that waits: its port closes and no card is posted.
+#[tauri::command]
+async fn stop_openrouter_sign_in() -> Result<(), String> {
+    off_main(openrouter_sign_in::stop).await
 }
 
 #[tauri::command]
@@ -7741,6 +7748,7 @@ pub fn run() {
             add_ai_provider,
             start_openrouter_sign_in,
             wait_openrouter_sign_in,
+            stop_openrouter_sign_in,
             allow_ai_provider,
             answer_ai_models_card,
             remove_ai_provider,

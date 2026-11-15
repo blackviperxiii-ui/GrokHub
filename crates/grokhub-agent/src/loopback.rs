@@ -49,8 +49,22 @@ pub(crate) fn wait_code(
     who: &str,
     wait: Duration,
 ) -> Result<String, String> {
+    wait_code_until(listener, state, who, wait, &|| false)
+}
+
+/// [`wait_code`] that also ends, with "`who` stopped", once `stop` says so.
+pub(crate) fn wait_code_until(
+    listener: &TcpListener,
+    state: &str,
+    who: &str,
+    wait: Duration,
+    stop: &dyn Fn() -> bool,
+) -> Result<String, String> {
     let deadline = Instant::now() + wait;
     loop {
+        if stop() {
+            return Err(format!("{who} stopped"));
+        }
         if Instant::now() >= deadline {
             return Err(format!("{who} timed out"));
         }
@@ -103,5 +117,25 @@ mod tests {
             Ok("abc".to_string())
         );
         assert!(client.join().unwrap().starts_with("HTTP/1.1 200 OK"));
+    }
+
+    #[test]
+    fn a_stopped_wait_ends_before_its_deadline() {
+        let (listener, _) = bind().unwrap();
+        let asked = std::cell::Cell::new(0);
+        let started = Instant::now();
+        let ended = wait_code_until(
+            &listener,
+            "",
+            "Test sign-in",
+            Duration::from_secs(30),
+            &|| {
+                asked.set(asked.get() + 1);
+                asked.get() > 2
+            },
+        );
+        assert_eq!(ended, Err("Test sign-in stopped".to_string()));
+        assert_eq!(asked.get(), 3);
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

@@ -4874,7 +4874,7 @@ export interface OpenRouterSignIn {
   why: string;
 }
 
-/** Opens OpenRouter's sign-in page. Nothing is saved; the key comes back on a card. */
+/** Opens OpenRouter's sign-in page, or hands back the one that waits. Nothing is saved; the key comes back on a card. */
 export function startOpenRouterSignIn(): Promise<OpenRouterSignIn> {
   return invoke<OpenRouterSignIn>("start_openrouter_sign_in");
 }
@@ -4882,6 +4882,11 @@ export function startOpenRouterSignIn(): Promise<OpenRouterSignIn> {
 /** Waits for the browser sign-in to end: the key card, or why there is none. */
 export function waitOpenRouterSignIn(): Promise<AiModelsCard> {
   return invoke<AiModelsCard>("wait_openrouter_sign_in");
+}
+
+/** Stops a browser sign-in that waits; its wait ends with `OPENROUTER_STOPPED`. */
+export function stopOpenRouterSignIn(): Promise<void> {
+  return invoke<void>("stop_openrouter_sign_in");
 }
 
 export function allowAiProvider(id: string): Promise<AiModelsCard> {

@@ -1250,6 +1250,7 @@ mod tests {
             "add_ai_provider",
             "start_openrouter_sign_in",
             "wait_openrouter_sign_in",
+            "stop_openrouter_sign_in",
             "allow_ai_provider",
             "answer_ai_models_card",
             "remove_ai_provider",

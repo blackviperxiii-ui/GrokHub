@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   saveBraveKey: vi.fn<(key: string) => Promise<AiModelsView>>(),
   startOpenRouterSignIn: vi.fn<() => Promise<OpenRouterSignIn>>(),
   waitOpenRouterSignIn: vi.fn<() => Promise<AiModelsCard>>(),
+  stopOpenRouterSignIn: vi.fn<() => Promise<void>>(),
 }));
 vi.mock("./api", () => api);
 
@@ -25,6 +26,7 @@ import {
   LOCAL_NOTE,
   OPENROUTER_BY_HAND,
   OPENROUTER_KEY_WAIT,
+  OPENROUTER_STOPPED,
   OPENROUTER_WAIT,
   PREMIUM_NONE,
   SEARXNG_NOTE,
@@ -94,6 +96,7 @@ const KEY_CARD: AiModelsCard = {
 beforeEach(() => {
   vi.resetAllMocks();
   api.getAiModels.mockResolvedValue(EMPTY);
+  api.stopOpenRouterSignIn.mockResolvedValue(undefined);
 });
 
 describe("AiModels", () => {
@@ -303,11 +306,58 @@ describe("AiModels", () => {
     const { unmount } = render(<AiModels />);
     await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
     await screen.findByText(OPENROUTER_WAIT);
+    expect(api.stopOpenRouterSignIn).not.toHaveBeenCalled();
     unmount();
+    // Leaving stops the sign-in, so no new key is bought for a page nobody sees.
+    expect(api.stopOpenRouterSignIn).toHaveBeenCalledTimes(1);
     expect(api.answerAiModelsCard).not.toHaveBeenCalled();
     card.settle(KEY_CARD);
     await waitFor(() => expect(api.answerAiModelsCard).toHaveBeenCalledWith("ai-key-openrouter-1", false));
     expect(api.answerAiModelsCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a sign-in on Stop signing in and says nothing was saved", async () => {
+    const card = later<AiModelsCard>();
+    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: true, why: "" });
+    api.waitOpenRouterSignIn.mockReturnValue(card.promise);
+    api.stopOpenRouterSignIn.mockImplementation(() => {
+      card.refuse("OpenRouter sign-in stopped");
+      return Promise.resolve();
+    });
+    const { unmount } = render(<AiModels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    expect(screen.getByRole("button", { name: "Add provider" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Stop signing in" }));
+    expect(await screen.findByText(OPENROUTER_STOPPED)).toBeVisible();
+    expect(OPENROUTER_STOPPED).toBe("Sign-in stopped. Nothing was saved.");
+    expect(screen.queryByText(OPENROUTER_WAIT)).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign in with OpenRouter" })).toBeEnabled();
+    expect(api.stopOpenRouterSignIn).toHaveBeenCalledTimes(1);
+    // The sign-in is over, so leaving stops nothing more.
+    unmount();
+    expect(api.stopOpenRouterSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("picks up a sign-in that still waits after the page comes back", async () => {
+    const card = later<AiModelsCard>();
+    // The shell hands back the waiting sign-in's link; this page now waits for it.
+    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: false, why: "No browser opened" });
+    api.waitOpenRouterSignIn.mockReturnValue(card.promise);
+    render(<AiModels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    expect(await screen.findByLabelText("OpenRouter sign-in link")).toHaveValue(SIGN_IN_URL);
+    card.settle(KEY_CARD);
+    expect(await screen.findByRole("group", { name: "Save its API key (openrouter)" })).toBeVisible();
+  });
+
+  it("ends quietly when a newer page took the sign-in over", async () => {
+    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: true, why: "" });
+    api.waitOpenRouterSignIn.mockRejectedValue("This sign-in moved to a newer page.");
+    render(<AiModels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sign in with OpenRouter" })).toBeEnabled());
+    expect(screen.queryByText("This sign-in moved to a newer page.")).toBeNull();
+    expect(screen.queryByText(OPENROUTER_WAIT)).toBeNull();
   });
 
   it("denies a key card that is still open when the page is left", async () => {

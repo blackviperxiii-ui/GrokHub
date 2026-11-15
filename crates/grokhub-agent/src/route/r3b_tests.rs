@@ -1668,6 +1668,7 @@ fn openrouter_sign_in_buys_a_key_with_pkce_and_saves_nothing_itself() {
         &dir,
         &approving_browser("good-code", seen.clone()),
         std::time::Duration::from_secs(10),
+        &|| false,
     )
     .unwrap();
     assert_eq!(key.as_str(), KEY);
@@ -1718,6 +1719,7 @@ fn openrouter_sign_in_buys_a_key_with_pkce_and_saves_nothing_itself() {
         &dir,
         &approving_browser("bad-code", seen),
         std::time::Duration::from_secs(10),
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(err, "OpenRouter didn't hand over a key (HTTP 403)");
@@ -1738,6 +1740,7 @@ fn offline_only_opens_no_openrouter_page() {
             Ok(())
         },
         std::time::Duration::from_secs(1),
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(err, *grokhub_core::offline::OFFLINE_MSG);

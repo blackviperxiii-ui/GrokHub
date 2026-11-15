@@ -418,11 +418,12 @@ pub fn openrouter_auth_url(callback: &str, challenge: &str, state: &str) -> Stri
 /// new key. Nothing is saved here: the cabin asks you on a credentials card
 /// first. The callback must carry this sign-in's `state`, and the code only
 /// buys a key together with this verifier (PKCE). The exchange carries no
-/// user data.
+/// user data. The wait ends early, with nothing bought, once `stop` says so.
 pub fn openrouter_key(
     config_dir: &Path,
     open: &dyn Fn(&str) -> Result<(), String>,
     wait: Duration,
+    stop: &dyn Fn() -> bool,
 ) -> Result<Zeroizing<String>, String> {
     // Offline only: no browser page and no port, not a refusal after signing in.
     grokhub_core::offline::check_url(OPENROUTER_KEYS).map_err(String::from)?;
@@ -434,7 +435,8 @@ pub fn openrouter_key(
         &grokhub_core::pkce::pkce_challenge(&verifier),
         &state,
     ))?;
-    let code = crate::loopback::wait_code(&listener, &state, "OpenRouter sign-in", wait)?;
+    let code =
+        crate::loopback::wait_code_until(&listener, &state, "OpenRouter sign-in", wait, stop)?;
     crate::harness::guard_quiet(config_dir, &EgressReq::new(OPENROUTER_KEYS, &[]))?;
     let body = json!({"code": code, "code_verifier": verifier, "code_challenge_method": "S256"})
         .to_string();

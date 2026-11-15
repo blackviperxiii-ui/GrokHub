@@ -6,11 +6,14 @@
 //! waiter; it is never returned, shown or logged.
 //!
 //! A browser that doesn't open still finishes: the page shows the link to
-//! open by hand, and the callback completes the sign-in.
+//! open by hand, and the callback completes the sign-in. One sign-in runs at
+//! a time. A page that comes back while it waits picks it up again ([`start`]
+//! hands back the same link), and only the newest [`wait`] gets its card, so
+//! a page that was left or reloaded never takes it. [`stop`] ends it early.
 
 use std::path::Path;
-use std::sync::mpsc;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -19,12 +22,16 @@ use serde::Serialize;
 
 use crate::ai_models::{self, Card};
 
-/// What the page says while the browser is open.
-pub const OPENROUTER_WAIT: &str = "Waiting for OpenRouter. Finish signing in in your browser.";
 /// Wait for a sign-in with no answer from the browser.
 pub const SIGN_IN_WAIT: Duration = Duration::from_secs(300);
 /// Wait asked for with no sign-in started.
 pub const NO_SIGN_IN: &str = "Start signing in first.";
+/// A newer page is waiting for this sign-in, so this wait ends quietly.
+pub const WAITED_ELSEWHERE: &str = "This sign-in moved to a newer page.";
+/// What the sign-in ends with after [`stop`].
+pub const STOPPED: &str = "OpenRouter sign-in stopped";
+/// A start while a stopped sign-in is still ending.
+const STILL_STOPPING: &str = "The last sign-in is still stopping. Try again in a moment.";
 /// The flow tried to open a page that isn't OpenRouter's sign-in page.
 const NOT_THE_PAGE: &str = "That page isn't OpenRouter's sign-in page, so it wasn't opened.";
 /// How long the start waits for the flow to reach the browser.
@@ -40,8 +47,18 @@ pub struct SignInStarted {
     pub why: String,
 }
 
-/// The one sign-in at a time. It ends with the key card, or why there is none.
-static SIGN_IN: Mutex<Option<JoinHandle<Result<Card, String>>>> = Mutex::new(None);
+/// The one sign-in at a time.
+struct Running {
+    /// What [`start`] first said, for a page that picks the sign-in up again.
+    started: SignInStarted,
+    stop: Arc<AtomicBool>,
+    /// Ends with the key card, or why there is none.
+    flow: JoinHandle<Result<Card, String>>,
+}
+
+static SIGN_IN: Mutex<Option<Running>> = Mutex::new(None);
+/// The newest [`wait`]; an older one ends with [`WAITED_ELSEWHERE`].
+static NEWEST_WAIT: AtomicU64 = AtomicU64::new(0);
 
 /// Only OpenRouter's own sign-in page opens from this flow.
 pub fn sign_in_page_ok(url: &str) -> bool {
@@ -51,9 +68,9 @@ pub fn sign_in_page_ok(url: &str) -> bool {
             .is_some_and(|query| !query.is_empty())
 }
 
-/// Start signing in: OpenRouter's page opens with `open`. A second start
-/// while one waits is refused, as is one while Offline only is on (no page
-/// opens, no port is taken).
+/// Start signing in: OpenRouter's page opens with `open`. While a sign-in
+/// waits, a start opens nothing and hands back that sign-in's link. Offline
+/// only opens no page and takes no port.
 pub fn start(
     config_dir: &Path,
     open: impl Fn(&str) -> Result<(), String> + Send + 'static,
@@ -70,67 +87,116 @@ fn start_within(
     // Offline only: no page, no port and no thread.
     grokhub_core::offline::check_url(providers::OPENROUTER_BASE).map_err(String::from)?;
     let mut slot = SIGN_IN.lock().unwrap_or_else(|e| e.into_inner());
-    if slot.as_ref().is_some_and(|running| !running.is_finished()) {
-        return Err(OPENROUTER_WAIT.into());
+    if let Some(running) = slot.as_ref() {
+        if !running.flow.is_finished() {
+            return if running.stop.load(Ordering::SeqCst) {
+                Err(STILL_STOPPING.into())
+            } else {
+                Ok(running.started.clone())
+            };
+        }
+    }
+    // A sign-in that ended with nobody waiting: its card has no page left.
+    if let Some(ended) = slot.take() {
+        if let Ok(Ok(card)) = ended.flow.join() {
+            let _ = ai_models::answer(&card.id, false);
+        }
     }
     let (tell, told) = mpsc::channel::<(String, Result<(), String>)>();
+    let stop = Arc::new(AtomicBool::new(false));
     let config = config_dir.to_path_buf();
-    let flow = std::thread::spawn(move || {
-        let _pin = grokhub_agent::perm::ConfigGuard::set(config.clone());
-        let launch = |url: &str| {
-            let opened = if sign_in_page_ok(url) {
-                open(url)
-            } else {
-                Err(NOT_THE_PAGE.to_string())
+    let flow = std::thread::spawn({
+        let stop = stop.clone();
+        move || {
+            let _pin = grokhub_agent::perm::ConfigGuard::set(config.clone());
+            let launch = |url: &str| {
+                let opened = if sign_in_page_ok(url) {
+                    open(url)
+                } else {
+                    Err(NOT_THE_PAGE.to_string())
+                };
+                let _ = tell.send((url.to_string(), opened));
+                // A browser that didn't open still gets the link by hand, so
+                // the flow keeps waiting for the callback.
+                Ok(())
             };
-            let _ = tell.send((url.to_string(), opened));
-            // A browser that didn't open still gets the link by hand, so the
-            // flow keeps waiting for the callback.
-            Ok(())
-        };
-        let key = providers::openrouter_key(&config, &launch, wait)?;
-        ai_models::start_add(&config, providers::OPENROUTER_BASE, key.to_string())
+            let stopped = || stop.load(Ordering::SeqCst);
+            let key = providers::openrouter_key(&config, &launch, wait, &stopped)?;
+            // Stopped while the key was on its way: no card for a page that left.
+            if stopped() {
+                return Err(STOPPED.into());
+            }
+            ai_models::start_add(&config, providers::OPENROUTER_BASE, key.to_string())
+        }
     });
     match told.recv_timeout(START_WAIT) {
         Ok((url, opened)) => {
-            *slot = Some(flow);
-            Ok(SignInStarted {
+            let started = SignInStarted {
                 url,
                 opened: opened.is_ok(),
                 why: opened.err().unwrap_or_default(),
-            })
+            };
+            *slot = Some(Running {
+                started: started.clone(),
+                stop,
+                flow,
+            });
+            Ok(started)
         }
         // The flow ended before any page: no port, or Offline only.
         Err(mpsc::RecvTimeoutError::Disconnected) => match flow.join() {
             Ok(Err(why)) => Err(why),
             _ => Err("The sign-in couldn't start.".into()),
         },
+        // Nothing reached the page, so nothing may keep waiting.
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            *slot = Some(flow);
+            stop.store(true, Ordering::SeqCst);
+            *slot = Some(Running {
+                started: SignInStarted {
+                    url: String::new(),
+                    opened: false,
+                    why: String::new(),
+                },
+                stop,
+                flow,
+            });
             Err("The sign-in couldn't reach the browser. Try again.".into())
         }
     }
 }
 
 /// Wait for the sign-in to end: the credentials card for the new key (same
-/// as a pasted key; nothing is saved until Save), or why there is none.
+/// as a pasted key; nothing is saved until Save), or why there is none. A
+/// newer wait takes over, and this one ends with [`WAITED_ELSEWHERE`].
 pub fn wait() -> Result<Card, String> {
+    let me = NEWEST_WAIT.fetch_add(1, Ordering::SeqCst) + 1;
     loop {
         {
             let mut slot = SIGN_IN.lock().unwrap_or_else(|e| e.into_inner());
+            if NEWEST_WAIT.load(Ordering::SeqCst) != me {
+                return Err(WAITED_ELSEWHERE.into());
+            }
             match slot.as_ref() {
                 None => return Err(NO_SIGN_IN.into()),
-                Some(running) if running.is_finished() => {
-                    let flow = slot.take().ok_or(NO_SIGN_IN)?;
-                    return flow
+                Some(running) if running.flow.is_finished() => {
+                    let ended = slot.take().ok_or(NO_SIGN_IN)?;
+                    return ended
+                        .flow
                         .join()
                         .unwrap_or_else(|_| Err("The sign-in stopped.".into()));
                 }
-                // Still waiting: a second start stays refused meanwhile.
                 Some(_) => {}
             }
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Stop the sign-in that waits: its port closes and no card is posted. The
+/// page's [`wait`] ends with [`STOPPED`]. Nothing to stop is fine.
+pub fn stop() {
+    if let Some(running) = SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        running.stop.store(true, Ordering::SeqCst);
     }
 }
 

@@ -10,6 +10,7 @@ import {
   saveBraveKey,
   saveWebSearch,
   startOpenRouterSignIn,
+  stopOpenRouterSignIn,
   waitOpenRouterSignIn,
   type AiModelsCard,
   type AiModelsView,
@@ -35,6 +36,10 @@ export const OPENROUTER_NOTE = "No key to paste: sign in on OpenRouter's page an
 export const OPENROUTER_WAIT = "Waiting for OpenRouter. Finish signing in in your browser.";
 export const OPENROUTER_KEY_WAIT = "OpenRouter sent a key. Save it on the card below.";
 export const OPENROUTER_BY_HAND = "Your browser didn't open. Open this link to sign in:";
+export const OPENROUTER_STOPPED = "Sign-in stopped. Nothing was saved.";
+/** The shell's wait ends with these when the page stopped it, or a newer page took it over. */
+const STOPPED = "OpenRouter sign-in stopped";
+const WAITED_ELSEWHERE = "This sign-in moved to a newer page.";
 export const BRAVE_UNSET = "Paste a Brave Search API key. It stays in your keyring, never in app.json.";
 
 /** Settings → AI models → Web search: the backend, a SearXNG URL, a Brave key. */
@@ -193,9 +198,12 @@ export function AiModels() {
   const { note, ok, fail } = useNote();
   // The card on screen, for the moment the page is left.
   const openCard = useRef<string | null>(null);
+  // A browser sign-in this page waits for.
+  const signingIn = useRef(false);
   const gone = useRef(false);
 
-  // Settings unmounts this page when another section is picked. Leaving is a Deny.
+  // Settings unmounts this page when another section is picked. Leaving is a
+  // Deny, and stops a sign-in so its key never lands on a card nobody sees.
   useEffect(() => {
     gone.current = false;
     return () => {
@@ -203,6 +211,10 @@ export function AiModels() {
       const id = openCard.current;
       openCard.current = null;
       if (id) deny(id);
+      if (signingIn.current) {
+        signingIn.current = false;
+        stopOpenRouterSignIn().catch(() => undefined);
+      }
     };
   }, []);
 
@@ -280,15 +292,29 @@ export function AiModels() {
     } finally {
       setBusy(false);
     }
+    if (gone.current) {
+      stopOpenRouterSignIn().catch(() => undefined);
+      return;
+    }
+    signingIn.current = true;
     setSignIn(started);
-    ok(OPENROUTER_WAIT);
+    ok(null);
     try {
-      if (show(await waitOpenRouterSignIn())) ok(OPENROUTER_KEY_WAIT);
+      const next = await waitOpenRouterSignIn();
+      signingIn.current = false;
+      if (show(next)) ok(OPENROUTER_KEY_WAIT);
     } catch (err) {
-      if (!gone.current) fail(err);
+      signingIn.current = false;
+      if (gone.current || String(err) === WAITED_ELSEWHERE) return;
+      if (String(err) === STOPPED) ok(OPENROUTER_STOPPED);
+      else fail(err);
     } finally {
       if (!gone.current) setSignIn(null);
     }
+  }
+
+  function stopSignIn() {
+    stopOpenRouterSignIn().catch(fail);
   }
 
   async function copyLink(url: string) {
@@ -397,6 +423,14 @@ export function AiModels() {
         </button>
         <span className="note">{OPENROUTER_NOTE}</span>
       </div>
+      {signIn && (
+        <div className="card-buttons">
+          <span>{OPENROUTER_WAIT}</span>
+          <button type="button" className="quiet" onClick={stopSignIn}>
+            Stop signing in
+          </button>
+        </div>
+      )}
       {signIn && !signIn.opened && (
         <div className="card-buttons" role="group" aria-label="Open OpenRouter by hand">
           <span>
