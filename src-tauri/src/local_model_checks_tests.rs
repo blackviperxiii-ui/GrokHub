@@ -91,7 +91,7 @@ fn no_installed_model_reads_nothing_and_says_so() {
     let posted = RefCell::new(0);
     let post = |_| {
         *posted.borrow_mut() += 1;
-        true
+        Ok(true)
     };
     assert_eq!(
         check_if_due(&dir, NOW, &no_model, &mut get, &post).as_deref(),
@@ -107,7 +107,7 @@ fn the_upgrade_posts_once_and_releases_wait_for_the_second_check() {
     let posted = RefCell::new(Vec::new());
     let post = |card: grokhub_core::UpdateCard| {
         posted.borrow_mut().push(card);
-        true
+        Ok(true)
     };
     assert_eq!(
         check_if_due(&dir, NOW, &gaming_pc, &mut hugging_face, &post).as_deref(),
@@ -181,7 +181,7 @@ fn switching_off_mid_check_posts_nothing() {
     let dir = turned_on("off");
     let run = run_check(&gaming_pc(&dir), &mut hugging_face);
     set_on(&dir, false).expect("off");
-    let post = |_: grokhub_core::UpdateCard| -> bool { panic!("posted while off") };
+    let post = |_: grokhub_core::UpdateCard| -> Result<bool, String> { panic!("posted while off") };
     assert_eq!(finish(&dir, run, NOW, &post), "");
     assert_eq!(lm::load(&dir).suggested.len(), 0);
     let _ = std::fs::remove_dir_all(&dir);
@@ -198,7 +198,7 @@ fn off_by_default_and_check_now_needs_it_on() {
         }
     );
     let mut get = |url: &str| -> Result<String, String> { panic!("asked for {url}") };
-    let post = |_: grokhub_core::UpdateCard| -> bool { panic!("posted while off") };
+    let post = |_: grokhub_core::UpdateCard| -> Result<bool, String> { panic!("posted while off") };
     assert_eq!(check_if_due(&dir, NOW, &gaming_pc, &mut get, &post), None);
     assert_eq!(
         check_now(&dir),
@@ -232,7 +232,7 @@ fn an_unread_list_says_so_and_the_next_read_still_seeds() {
     let posted = RefCell::new(Vec::new());
     let post = |card: grokhub_core::UpdateCard| {
         posted.borrow_mut().push(card.title);
-        true
+        Ok(true)
     };
     let mut down = |_: &str| -> Result<String, String> { Err("offline".into()) };
     assert_eq!(
@@ -265,5 +265,57 @@ fn an_unread_list_says_so_and_the_next_read_still_seeds() {
         .as_deref(),
         Some("Couldn't read Hugging Face's model list. Trying again next week.")
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_suggestion_that_could_not_be_posted_comes_back_next_week() {
+    let dir = turned_on("postfail");
+    let broken = |_: grokhub_core::UpdateCard| -> Result<bool, String> {
+        Err("pulse-feed.json: disk full".into())
+    };
+    assert_eq!(
+        check_if_due(&dir, NOW, &gaming_pc, &mut hugging_face, &broken).as_deref(),
+        Some("Couldn't add a suggestion to Pulse (pulse-feed.json: disk full). Trying again next week.")
+    );
+    assert!(lm::load(&dir).suggested.is_empty());
+
+    let posted = RefCell::new(Vec::new());
+    let post = |card: grokhub_core::UpdateCard| {
+        posted.borrow_mut().push(card.title);
+        Ok(true)
+    };
+    let week = NOW + lm::CHECK_EVERY_MS;
+    assert_eq!(
+        check_if_due(&dir, week, &gaming_pc, &mut hugging_face, &post).as_deref(),
+        Some("Checked. 1 new for this PC.")
+    );
+    assert_eq!(
+        *posted.borrow(),
+        vec!["Gemma 4 31B fits this PC".to_string()]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn off_and_on_again_does_not_post_the_same_upgrade_twice() {
+    let dir = turned_on("offon");
+    let posted = RefCell::new(0);
+    let post = |_: grokhub_core::UpdateCard| {
+        *posted.borrow_mut() += 1;
+        Ok(true)
+    };
+    assert_eq!(
+        check_if_due(&dir, NOW, &gaming_pc, &mut hugging_face, &post).as_deref(),
+        Some("Checked. 1 new for this PC.")
+    );
+    set_on(&dir, false).expect("off");
+    set_on(&dir, true).expect("on");
+    // Due at once after turning on, and nothing is posted twice.
+    assert_eq!(
+        check_if_due(&dir, NOW + 1, &gaming_pc, &mut hugging_face, &post).as_deref(),
+        Some("Checked. Nothing new that fits this PC better.")
+    );
+    assert_eq!(*posted.borrow(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }

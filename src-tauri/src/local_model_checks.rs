@@ -23,6 +23,10 @@ pub const NO_MODEL: &str = "No local model yet. Set one up under Settings → Lo
 pub const NOTHING_NEW: &str = "Checked. Nothing new that fits this PC better.";
 pub const TURN_ON_FIRST: &str = "Turn local model suggestions on first.";
 pub const LIST_UNREAD: &str = "Couldn't read Hugging Face's model list. Trying again next week.";
+/// Some suggestion couldn't be added to Pulse: it is offered again next week.
+pub fn post_failed(why: &str) -> String {
+    format!("Couldn't add a suggestion to Pulse ({why}). Trying again next week.")
+}
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 /// Held across each load, change and save of the tracker file, so a switch
@@ -123,14 +127,13 @@ fn bias(dir: &Path) -> i32 {
         .unwrap_or(0)
 }
 
+/// Posts one card: `Ok(true)` added, `Ok(false)` refused on purpose (already
+/// there, or dismissed), `Err` when the feed couldn't be read or saved.
+pub(crate) type Post<'a> = &'a dyn Fn(grokhub_core::UpdateCard) -> Result<bool, String>;
+
 /// Fold a check in: post the new cards and say what happened. Returns the
 /// note, empty when the source was switched off while the check ran.
-pub(crate) fn finish(
-    dir: &Path,
-    run: NewsRun,
-    now: u64,
-    post: &dyn Fn(grokhub_core::UpdateCard) -> bool,
-) -> String {
+pub(crate) fn finish(dir: &Path, run: NewsRun, now: u64, post: Post) -> String {
     let _held = tracker_lock();
     // Read again: switched off while it ran, the user's choice wins.
     let mut t = lm::load(dir);
@@ -148,9 +151,24 @@ pub(crate) fn finish(
         lm::links_allowed(bias(dir)),
         now,
     );
-    let added = picks.iter().filter(|s| post(s.card(now))).count();
+    let mut added = 0;
+    let mut failed = None;
+    for pick in &picks {
+        match post(pick.card(now)) {
+            Ok(new) => {
+                t.offered(pick);
+                added += usize::from(new);
+            }
+            Err(why) => {
+                failed.get_or_insert(why);
+            }
+        }
+    }
     if let Err(why) = lm::save(dir, &t) {
         return why;
+    }
+    if let Some(why) = failed {
+        return post_failed(&why);
     }
     match (added, unread) {
         (0, true) => LIST_UNREAD.to_string(),
@@ -178,7 +196,7 @@ pub fn tick(dir: &Path, now: u64) {
     if !caps.pulse || !caps.local_ai || RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
-    let post = |card| crate::pulse::add_post(dir, card).unwrap_or(false);
+    let post = |card| crate::pulse::add_post(dir, card);
     if let Some(note) = check_if_due(dir, now, &this_machine, &mut get, &post) {
         set_note(&note);
     }
@@ -191,7 +209,7 @@ pub(crate) fn check_if_due(
     now: u64,
     machine: &dyn Fn(&Path) -> Machine,
     get: &mut dyn FnMut(&str) -> Result<String, String>,
-    post: &dyn Fn(grokhub_core::UpdateCard) -> bool,
+    post: Post,
 ) -> Option<String> {
     {
         let _held = tracker_lock();
@@ -226,8 +244,8 @@ pub fn status(dir: &Path) -> LocalModelNews {
     }
 }
 
-/// Turn suggestions on, or off (which forgets what was seen, so turning them
-/// on again starts fresh without a backlog).
+/// Turn suggestions on, or off (which forgets the releases seen, so turning
+/// them on again starts fresh without a backlog).
 pub fn set_on(dir: &Path, on: bool) -> Result<LocalModelNews, String> {
     {
         let _held = tracker_lock();

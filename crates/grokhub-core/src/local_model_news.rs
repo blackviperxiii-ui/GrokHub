@@ -318,9 +318,11 @@ impl Tracker {
     }
 
     /// Fold one check in and return what to post: the catalog upgrade (once
-    /// per model) then up to `links` new releases. Every repo read is
+    /// per model) then up to `links` new releases. Every other repo read is
     /// remembered; the first check that reads any posts no releases, so a
     /// check that couldn't read the list doesn't count as that first one.
+    /// A pick is remembered only once [`Tracker::offered`] says it posted,
+    /// so one that couldn't be posted comes back next check.
     pub fn check(
         &mut self,
         upgrade: Option<Suggestion>,
@@ -332,7 +334,7 @@ impl Tracker {
         self.last_check_ms = now_ms;
         let mut out = Vec::new();
         if let Some(up) = upgrade {
-            if self.suggested.insert(up.key()) {
+            if !self.suggested.contains(&up.key()) {
                 out.push(up);
             }
         }
@@ -344,13 +346,43 @@ impl Tracker {
                     .take(links),
             );
         }
-        self.seen.extend(read.iter().cloned());
+        let picked: BTreeSet<&str> = out
+            .iter()
+            .filter_map(|s| match s {
+                Suggestion::Release { repo, .. } => Some(repo.as_str()),
+                Suggestion::Upgrade { .. } => None,
+            })
+            .collect();
+        self.seen.extend(
+            read.iter()
+                .filter(|r| !picked.contains(r.as_str()))
+                .cloned(),
+        );
         self.seeded |= !read.is_empty();
         out
     }
 
+    /// Remember a pick from [`Tracker::check`] once it is in the feed (or
+    /// the feed refused it on purpose, such as one already dismissed).
+    pub fn offered(&mut self, pick: &Suggestion) {
+        match pick {
+            Suggestion::Upgrade { .. } => {
+                self.suggested.insert(pick.key());
+            }
+            Suggestion::Release { repo, .. } => {
+                self.seen.insert(repo.clone());
+            }
+        }
+    }
+
+    /// Off: forget the releases seen, so turning this on again starts fresh
+    /// without a backlog. Catalog models already offered stay offered: their
+    /// cards may still be in the feed, or dismissed, and mustn't come twice.
     pub fn turn_off(&mut self) {
-        *self = Tracker::default();
+        *self = Tracker {
+            suggested: std::mem::take(&mut self.suggested),
+            ..Tracker::default()
+        };
     }
 }
 
@@ -522,6 +554,13 @@ mod tests {
             names,
             vec!["New on Hugging Face: Huihui-Phi-5-12B-abliterated-GGUF"]
         );
+        // Not posted yet: the next check offers it again.
+        let again = t.check(None, releases(&p, 5_900, &newer), &newer, 2, 25);
+        assert_eq!(again.len(), 1);
+        t.offered(&again[0]);
+        assert!(t
+            .check(None, releases(&p, 5_900, &newer), &newer, 2, 26)
+            .is_empty());
         let up = || {
             upgrade(
                 &gpu(24_576),
@@ -529,10 +568,21 @@ mod tests {
                 &BenchCache::new(),
             )
         };
-        assert_eq!(t.check(up(), Vec::new(), &[], 2, 30).len(), 1);
+        let picks = t.check(up(), Vec::new(), &[], 2, 30);
+        assert_eq!(picks.len(), 1);
+        t.offered(&picks[0]);
         assert!(t.check(up(), Vec::new(), &[], 2, 40).is_empty());
         assert!(!t.due(40));
         assert!(t.due(40 + CHECK_EVERY_MS));
+        // Off and on again: the upgrade already offered isn't offered twice,
+        // and the releases start over from a fresh seed.
+        t.turn_off();
+        assert_eq!(
+            (t.on, t.seeded, t.seen.len(), t.last_check_ms),
+            (false, false, 0, 0)
+        );
+        t.on = true;
+        assert!(t.check(up(), Vec::new(), &[], 2, 50).is_empty());
     }
 
     #[test]
