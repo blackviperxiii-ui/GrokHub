@@ -1,0 +1,3 @@
+- Connectors now lists every hook the chat can run here: yours, your plugins' and this project's, each with when it runs, its command (URLs down to their host, passwords and keys hidden) and its file. A project's hooks are marked "Runs after you trust this folder" until you trust it, and a hook that never runs (an http hook, a SessionEnd hook, or a matcher that can't match) says why.
+- Trust this folder's hooks (after a question) or Stop trusting, right under the connectors. It takes effect from your next message, and the home folder and filesystem root are refused in plain words.
+- Settings → Permissions says when a project's .claude/settings.json allow rules are waiting for that trust.

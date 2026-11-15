@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConnectorRow, ConnectorsChanged } from "./api";
+import type { ConnectorRow, ConnectorsChanged, HooksPage } from "./api";
 
 const api = vi.hoisted(() => ({
   listConnectors: vi.fn<() => Promise<ConnectorRow[]>>(),
@@ -16,6 +16,8 @@ const api = vi.hoisted(() => ({
   addConnectorConfig: vi.fn(),
   saveConnectorKey: vi.fn(),
   answerConnectorKey: vi.fn(),
+  getHooks: vi.fn<() => Promise<HooksPage>>(),
+  setHooksTrust: vi.fn<(trusted: boolean) => Promise<HooksPage>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -40,6 +42,7 @@ function row(over: Partial<ConnectorRow>): ConnectorRow {
 describe("Connectors", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+    api.getHooks.mockResolvedValue({ folder: "/home/user/my-app", trusted: false, projectHooks: 0, rows: [], status: "" });
   });
 
   it("lists entries without starting them, then Check all connects them", async () => {
@@ -172,5 +175,16 @@ describe("Connectors", () => {
     expect(within(notion).queryByRole("switch")).not.toBeInTheDocument();
     expect(within(notion).queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
     expect(screen.getByText(/Add, sign in and switch connectors in Loadout on your computer/)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Hooks" })).not.toBeInTheDocument();
+    expect(api.getHooks).not.toHaveBeenCalled();
+  });
+
+  it("shows this folder's hooks under the connectors on the computer", async () => {
+    api.listConnectors.mockResolvedValue([]);
+    render(<Connectors />);
+    const hooks = await screen.findByRole("region", { name: "Hooks" });
+    expect(await within(hooks).findByText(/No hooks yet/)).toBeInTheDocument();
+    expect(within(hooks).getByRole("button", { name: "Trust this folder's hooks…" })).toBeEnabled();
+    expect(api.getHooks).toHaveBeenCalledTimes(1);
   });
 });

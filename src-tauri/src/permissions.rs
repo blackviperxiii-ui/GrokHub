@@ -44,6 +44,8 @@ pub struct Page {
     pub imported: Vec<RuleRow>,
     /// Commands remembered with Allow always for this project.
     pub grants: Vec<String>,
+    /// The imported allow rules apply only in a trusted folder.
+    pub folder_trusted: bool,
 }
 
 fn row(rule: &perm::Rule) -> RuleRow {
@@ -62,6 +64,7 @@ fn page(config_dir: &Path, workspace: &Path) -> Page {
             .map(row)
             .collect(),
         grants: perm::load_grants(config_dir, workspace),
+        folder_trusted: grokhub_agent::folder_trusted(workspace),
     }
 }
 
@@ -149,7 +152,8 @@ mod tests {
             Page {
                 rules: vec![],
                 imported: vec![],
-                grants: vec![]
+                grants: vec![],
+                folder_trusted: false
             }
         );
         add_rule(&cfg, &ws, " Bash(git *) ", Kind::Allow).unwrap();
@@ -222,6 +226,9 @@ mod tests {
             vec![("allow", "Bash(npm test)"), ("deny", "Read(.env)")]
         );
         assert_eq!(page.rules, vec![]);
+        assert!(!page.folder_trusted);
+        crate::project_hooks::set_trust(&cfg, &ws, None, true).unwrap();
+        assert!(load(&cfg, &ws).folder_trusted);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -12,6 +12,7 @@ import {
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
 import { ConnectorAdd } from "./ConnectorAdd";
+import { Hooks } from "./Hooks";
 import { ConfirmRow, StatusLine, useNote } from "./ui";
 
 export const DISCONNECT_DETAIL =
@@ -40,9 +41,9 @@ export function statusLine(row: ConnectorRow): string {
   }
 }
 
-/** The MCP servers in `mcp.json`, shared with the cabin and chat. The web
- * remote lists and checks them; adding, signing in and the switch stay on
- * the computer. */
+/** The MCP servers in `mcp.json`, shared with the cabin and chat, then the
+ * hooks. The web remote lists and checks connectors; adding, signing in, the
+ * switch and hooks stay on the computer. */
 export function Connectors({ remote = false }: { remote?: boolean }) {
   const [rows, setRows] = useState<ConnectorRow[] | null>(null);
   const { note, ok, fail, clear } = useNote();
@@ -190,6 +191,7 @@ export function Connectors({ remote = false }: { remote?: boolean }) {
           </li>
         ))}
       </ul>
+      {!remote && <Hooks />}
     </section>
   );
 }

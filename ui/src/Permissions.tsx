@@ -14,6 +14,8 @@ export const RULES_NOTE =
   "Deny wins over ask, and ask wins over allow. Dangerous commands still ask, including after Allow always.";
 export const RULE_HINT =
   "Bash(git *), Read(src/**), Edit(src/**), WebFetch(domain:example.com), MCPTool(server__*)";
+export const UNTRUSTED_RULES =
+  "Its allow rules apply only after you trust this folder under Connectors → Hooks.";
 export const GRANTS_NOTE = "Allow always for this project. Dangerous commands are not stored.";
 
 const KINDS: { value: RuleKind; label: string }[] = [
@@ -122,7 +124,9 @@ export function Permissions() {
       )}
       {page && page.imported.length > 0 && (
         <>
-          <p className="note">From .claude/settings.json. Read only.</p>
+          <p className="note">
+            From .claude/settings.json. Read only.{page.folderTrusted ? "" : ` ${UNTRUSTED_RULES}`}
+          </p>
           <ul className="rows" aria-label="Project rules">
             {page.imported.map((r, i) => (
               <li key={`${i}-${r.rule}`} className="card" aria-label={`${LABEL[r.action]} ${r.rule}`}>

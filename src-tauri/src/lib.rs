@@ -103,6 +103,7 @@ pub use grokhub_agent::xai_keychain as oauth;
 mod composer_ghost;
 #[cfg(desktop)]
 mod focus_help;
+pub mod hook_command;
 pub mod onboard;
 pub mod opener;
 pub mod openrouter_sign_in;
@@ -119,6 +120,7 @@ pub mod playbooks;
 pub mod plugins;
 pub mod privacy;
 pub mod proactive;
+pub mod project_hooks;
 pub mod projects;
 pub mod pulse;
 pub mod pulse_digests;
@@ -3977,6 +3979,30 @@ async fn set_workboard_tidy(
 }
 
 #[tauri::command]
+async fn get_hooks(state: State<'_, ShellState>) -> Result<project_hooks::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    off_main(move || project_hooks::load(&dir, &workspace, grokhub_core::user_home().as_deref()))
+        .await
+}
+
+#[tauri::command]
+async fn set_hooks_trust(
+    state: State<'_, ShellState>,
+    trusted: bool,
+) -> Result<project_hooks::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    off_main(move || {
+        project_hooks::set_trust(
+            &dir,
+            &workspace,
+            grokhub_core::user_home().as_deref(),
+            trusted,
+        )
+    })
+    .await?
+}
+
+#[tauri::command]
 async fn get_permissions(state: State<'_, ShellState>) -> Result<permissions::Page, String> {
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
     off_main(move || permissions::load(&dir, &workspace)).await
@@ -7755,6 +7781,8 @@ pub fn run() {
             journal_act,
             journal_to_mission,
             get_permissions,
+            get_hooks,
+            set_hooks_trust,
             scopes::get_scopes,
             scopes::allow_scope,
             scopes::revoke_scope,

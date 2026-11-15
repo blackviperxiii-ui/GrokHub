@@ -115,8 +115,8 @@ pub use harness::{
     AccessMode, ComputerUseBackend, GateOutcome, HardClass, APPROVAL_GATE_VIOLATION,
 };
 pub use hooks::{
-    discover_hooks, folder_trusted, on_subagent_start, on_subagent_stop, set_folder_trust,
-    HookInfo, HookOrigin,
+    discover_hooks, folder_trusted, hooks_by_trust, on_subagent_start, on_subagent_stop,
+    set_folder_trust, HookInfo, HookOrigin, HookRun,
 };
 pub use identity::{identity_blocks, SOUL_BYTE_CAP, USER_BYTE_CAP};
 pub use lead::{lead_on, set_lead_session, LeadPhase};
