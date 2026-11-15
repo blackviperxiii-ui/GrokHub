@@ -1,11 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "./api";
 
 // The chat tells her desktop pedestal what it is doing: idle, then thinking
 // while a reply runs here, and nothing while the chat is off screen.
+const replies = vi.hoisted(() => ({ ends: [] as ((stop: string) => void)[] }));
 vi.mock("./api", async () => {
   const { chatTabApiStubs } = await import("./chatTabApiStubs");
   return {
@@ -14,7 +15,7 @@ vi.mock("./api", async () => {
     chipOutcome: () => Promise.resolve(true),
     getStartChat: () => Promise.resolve(null),
     loadChat: vi.fn(),
-    sendChat: () => new Promise<string>(() => {}),
+    sendChat: () => new Promise<string>((resolve) => replies.ends.push(resolve)),
     getSettings: () => Promise.resolve({ hasApiKey: true, approvals: "ask" } as Settings),
     closeChat: () => Promise.resolve(),
     onChatEvent: () => Promise.resolve(() => {}),
@@ -42,6 +43,7 @@ import { Chat } from "./Chat";
 describe("Chat and her desktop pedestal", () => {
   beforeEach(() => {
     desk.desktopNyxLook.mockReset().mockResolvedValue();
+    replies.ends.length = 0;
   });
 
   it("says idle, then thinking while a reply runs here", async () => {
@@ -83,5 +85,25 @@ describe("Chat and her desktop pedestal", () => {
     expect(desk.desktopNyxLook.mock.calls.slice(calls - 1)).toEqual(
       desk.desktopNyxLook.mock.calls.slice(calls - 1).map(() => ["idle", "hanging-out"]),
     );
+  });
+
+  it("settles her from a chat that went off screen when its reply ends", async () => {
+    const one = (active: boolean) => <Chat onOpenSettings={() => {}} active={active} />;
+    const { rerender } = render(one(true));
+    await userEvent.type(screen.getByLabelText("Message"), "hello{Enter}");
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("thinking", "thinking"));
+    // Settings opens; the reply ends there.
+    rerender(one(false));
+    act(() => replies.ends[0]("end_turn"));
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("idle", "hanging-out"));
+  });
+
+  it("settles her when the chat speaking for her goes away mid-reply", async () => {
+    const { unmount } = render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "hello{Enter}");
+    await waitFor(() => expect(desk.desktopNyxLook).toHaveBeenLastCalledWith("thinking", "thinking"));
+    const calls = desk.desktopNyxLook.mock.calls.length;
+    unmount();
+    expect(desk.desktopNyxLook.mock.calls.slice(calls)).toEqual([["idle", "hanging-out"]]);
   });
 });

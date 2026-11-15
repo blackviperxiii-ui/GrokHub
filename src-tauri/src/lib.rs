@@ -7384,6 +7384,16 @@ pub fn run() {
                     desktop_nyx::note_moved(window, *at);
                 }
             }
+            // The chats go with the main window: her desk settles.
+            #[cfg(desktop)]
+            if let WindowEvent::Destroyed = event {
+                if window.label() == "main" && desktop_nyx::set_life(desktop_nyx::Life::default()) {
+                    desktop_nyx::publish(
+                        window.app_handle(),
+                        &current(&window.state::<ShellState>()),
+                    );
+                }
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 #[cfg(desktop)]
                 if window.label() == desktop_nyx::LABEL {
@@ -8011,6 +8021,17 @@ mod command_tests {
             .and_then(|s| s.split("return;").next())
             .expect("the desk's close arm");
         assert!(close.contains("desktop_nyx::publish(window.app_handle(), &next)"));
+        // The main window going settles her desk, since its chats are gone.
+        let gone = src
+            .split("if let WindowEvent::Destroyed = event {")
+            .nth(1)
+            .and_then(|s| s.split("if let WindowEvent::").next())
+            .map(squeeze)
+            .expect("the main window's destroyed arm");
+        assert!(gone.contains(&squeeze(
+            r#"window.label() == "main" && desktop_nyx::set_life(desktop_nyx::Life::default())"#
+        )));
+        assert!(gone.contains("desktop_nyx::publish("));
         assert_eq!(
             src.matches(concat!("desktop_nyx_", "undocked = ")).count(),
             1,
