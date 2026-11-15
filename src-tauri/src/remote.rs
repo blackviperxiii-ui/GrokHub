@@ -1130,6 +1130,10 @@ mod tests {
             "get_github",
             "save_github_token",
             "run_github",
+            // Local model suggestions read this PC's hardware and models.
+            "get_local_model_news",
+            "set_local_model_news",
+            "local_model_news_check_now",
             // Trusting a folder lets its hooks run commands here.
             "get_hooks",
             "set_hooks_trust",

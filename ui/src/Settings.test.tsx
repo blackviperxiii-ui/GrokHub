@@ -62,6 +62,7 @@ vi.mock("./ScreenshotExplain", () => ({ ScreenshotExplain: () => <p>Screenshot e
 vi.mock("./GameWatch", () => ({ GameWatch: () => <p>Game watcher row</p> }));
 vi.mock("./LivingWall", () => ({ LivingWall: () => <p>Living wall row</p> }));
 vi.mock("./SteamPulseSources", () => ({ SteamPulseSources: () => <p>Steam Pulse sources</p> }));
+vi.mock("./LocalModelsSource", () => ({ LocalModelsSource: () => <p>Local models source</p> }));
 vi.mock("./KnowMe", () => ({ KnowMe: () => <p>Know me panel</p> }));
 vi.mock("./Behavior", () => ({
   Behavior: ({ readOnly, onCloseToTray }: { readOnly?: boolean; onCloseToTray?: (on: boolean) => void }) =>
@@ -182,6 +183,12 @@ describe("Settings", () => {
     // A second card opens on its model again.
     rerender(<Settings caps={DESKTOP} goTo={{ section: "localAi", n: 3, model: "gemma-4-12b-it-abliterated-q4_k" }} />);
     expect(await screen.findByText("Local AI panel on gemma-4-12b-it-abliterated-q4_k (3)")).toBeInTheDocument();
+  });
+
+  it("Pulse offers the Local models source only where local models run", async () => {
+    render(<Settings caps={{ ...DESKTOP, localAi: false }} goTo={{ section: "pulse", n: 1 }} />);
+    expect(await screen.findByText("Steam Pulse sources")).toBeInTheDocument();
+    expect(screen.queryByText("Local models source")).toBeNull();
   });
 
   it("desktop control starts off, says what still asks, and saves", async () => {
@@ -459,6 +466,7 @@ describe("Settings", () => {
     await openSection("Pulse");
     expect(screen.getByText("Interests panel")).toBeInTheDocument();
     expect(screen.getByText("Steam Pulse sources")).toBeInTheDocument();
+    expect(screen.getByText("Local models source")).toBeInTheDocument();
     expect(screen.getByText("Know me panel")).toBeInTheDocument();
     expect(screen.getByText("Pulse fixes panel")).toBeInTheDocument();
     expect(screen.getByText("PC health panel")).toBeInTheDocument();
@@ -468,6 +476,7 @@ describe("Settings", () => {
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();
     expect(screen.queryByText("Interests panel")).toBeNull();
     expect(screen.queryByText("Steam Pulse sources")).toBeNull();
+    expect(screen.queryByText("Local models source")).toBeNull();
     expect(screen.queryByText("Know me panel")).toBeNull();
     expect(screen.queryByText("Pulse fixes panel")).toBeNull();
     expect(screen.queryByText("PC health panel")).toBeNull();
