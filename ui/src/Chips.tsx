@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { chipOutcome, quickChips, type ChipSurface, type QuickChip, type SessionMode } from "./api";
+import { onGameSession } from "./gameSession";
 import { onArrowFocus, usePeek } from "./peek";
+import { inShell } from "./transport";
 
 /** At most this many chips in a row, as in the cabin. */
 export const CHIP_ROW_MAX = 3;
@@ -131,6 +133,23 @@ export function useChipRow({
     };
   }, [wanted, surface, conversationId, draft, mode, turn, nonce]);
 
+  // A game starting or closing changes the note offers: ask again.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let live = true;
+    void onGameSession(() => setNonce((n) => n + 1)).then(
+      (off) => {
+        if (live) unlisten = off;
+        else off();
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, []);
+
   function picked(chip: QuickChip) {
     setChips([]);
     void chipOutcome(surface, chip.id, true).then(
@@ -147,5 +166,7 @@ export function useChipRow({
     );
   }
 
-  return { chips: wanted ? chips : [], picked, hide };
+  // A paired browser can't open a game's note: that stays on the computer.
+  const shown = inShell() ? chips : chips.filter((c) => c.action !== "note");
+  return { chips: wanted ? shown : [], picked, hide };
 }

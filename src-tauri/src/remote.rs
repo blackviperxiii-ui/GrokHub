@@ -1087,6 +1087,11 @@ mod tests {
             assert!(web_command(name), "{name}");
         }
         for name in [
+            // The game companion's switches and its note dialog: desktop only.
+            "companion_note",
+            "get_game_companion",
+            "set_game_companion",
+            "set_game_companion_ping",
             // Export saves on the computer and Wipe can't be undone: desktop only.
             "export_personal",
             "wipe_personal",

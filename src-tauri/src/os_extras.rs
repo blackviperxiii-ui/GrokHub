@@ -73,6 +73,17 @@ pub fn should_notify(focused: bool, enabled: bool) -> bool {
     enabled && !focused
 }
 
+/// The game companion's ping goes out only when it is switched on, the
+/// notifications are on and allowed, the window is not the one in front, and
+/// it isn't quiet hours. "Only important" doesn't hold it back: the ping is
+/// its own opt-in.
+pub fn companion_ping_ok(ping: bool, enabled: bool, focused: bool, quiet: bool) -> bool {
+    ping && should_notify(focused, enabled) && !quiet
+}
+
+/// The page's event for the bell: a game companion ping went out.
+pub const GAME_NOTICE_EVENT: &str = "game-companion-notice";
+
 /// The classic app's tray flags. Old systemd units and scripts pass them,
 /// so they start the shell the way a login start does.
 pub const TRAY_ALIASES: [&str; 2] = ["--agent", "--tray"];
@@ -414,6 +425,39 @@ pub fn auto_resume_stopped(app: &AppHandle, text: &str) {
     }
 }
 
+/// Whether it is quiet hours now (Settings → Behavior), in local time.
+fn quiet_now(config_dir: &std::path::Path, now: u64) -> bool {
+    let behavior = settings::load(config_dir).behavior;
+    crate::scheduler::utc_offset().is_some_and(|offset| {
+        let clock = crate::scheduler::local_clock(now, offset);
+        crate::proactive::is_quiet(&behavior, clock.hour, clock.minute)
+    })
+}
+
+/// A game launch card went up with the ping on: one quiet notification with
+/// the card's title and body, and the same line in the bell.
+pub fn game_launch(app: &AppHandle, card: &grokhub_core::UpdateCard) {
+    let state = app.state::<ShellState>();
+    let enabled = crate::current(&state).notifications && capabilities::current().notifications;
+    let focused = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_focused().ok())
+        .unwrap_or(false);
+    let quiet = quiet_now(&state.config_dir, grokhub_core::now_ms());
+    if !companion_ping_ok(true, enabled, focused, quiet) {
+        return;
+    }
+    let body = card.body.clone().unwrap_or_default();
+    let id = state.notified.fresh_id();
+    notify(app, id, &card.title, &short(&body, DETAIL_CHARS), false);
+    let line = if body.is_empty() {
+        card.title.clone()
+    } else {
+        format!("{} · {}", card.title, short(&body, DETAIL_CHARS))
+    };
+    let _ = app.emit(GAME_NOTICE_EVENT, line);
+}
+
 /// One day's reminder notices, shared by every reminder (the cabin's three a day).
 static REMINDERS: Mutex<grokhub_core::pulse::PingGate> =
     Mutex::new(grokhub_core::pulse::PingGate::new());
@@ -429,17 +473,8 @@ pub fn proactive_reminder(app: &AppHandle, title: &str) {
     }
     let now = grokhub_core::now_ms();
     let config_dir = app.state::<ShellState>().config_dir.clone();
-    let behavior = settings::load(&config_dir).behavior;
-    let (quiet, day) = match crate::scheduler::utc_offset() {
-        Some(offset) => {
-            let clock = crate::scheduler::local_clock(now, offset);
-            (
-                crate::proactive::is_quiet(&behavior, clock.hour, clock.minute),
-                crate::nudges::local_day(now, offset),
-            )
-        }
-        None => (false, crate::nudges::local_day(now, 0)),
-    };
+    let quiet = quiet_now(&config_dir, now);
+    let day = crate::nudges::local_day(now, crate::scheduler::utc_offset().unwrap_or(0));
     let ask = grokhub_core::pulse::PingAsk {
         time_sensitive: true,
         game_running: grokhub_desktop::game_guard::peek().gaming,
@@ -529,6 +564,21 @@ pub fn set_notifications(state: State<'_, ShellState>, on: bool) -> Result<Setti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_game_ping_needs_its_switch_notifications_a_background_window_and_no_quiet_hours() {
+        assert!(companion_ping_ok(true, true, false, false));
+        assert!(!companion_ping_ok(false, true, false, false), "ping off");
+        assert!(
+            !companion_ping_ok(true, false, false, false),
+            "notifications off"
+        );
+        assert!(
+            !companion_ping_ok(true, true, true, false),
+            "window in front"
+        );
+        assert!(!companion_ping_ok(true, true, false, true), "quiet hours");
+    }
 
     #[test]
     fn a_restart_restores_place_and_size_but_not_visibility_or_decorations() {

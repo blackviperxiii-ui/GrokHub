@@ -60,6 +60,11 @@ vi.mock("./MemoryRetention", () => ({ MemoryRetention: () => <p>Memory retention
 vi.mock("./ChatArchive", () => ({ ChatArchive: () => <p>Chat archive</p> }));
 vi.mock("./ScreenshotExplain", () => ({ ScreenshotExplain: () => <p>Screenshot explain row</p> }));
 vi.mock("./GameWatch", () => ({ GameWatch: () => <p>Game watcher row</p> }));
+vi.mock("./GameCompanionSetting", () => ({
+  GameCompanionSetting: ({ notifications }: { notifications: boolean }) => (
+    <p>Game companion row{notifications ? " with notifications" : ""}</p>
+  ),
+}));
 vi.mock("./LivingWall", () => ({ LivingWall: () => <p>Living wall row</p> }));
 vi.mock("./SteamPulseSources", () => ({ SteamPulseSources: () => <p>Steam Pulse sources</p> }));
 vi.mock("./LocalModelsSource", () => ({ LocalModelsSource: () => <p>Local models source</p> }));
@@ -427,6 +432,7 @@ describe("Settings", () => {
     expect(screen.getByRole("button", { name: "Behavior panel" })).toBeInTheDocument();
     expect(screen.getByText("Screenshot explain row")).toBeInTheDocument();
     expect(screen.getByText("Game watcher row")).toBeInTheDocument();
+    expect(screen.getByText(/^Game companion row/)).toBeInTheDocument();
     expect(screen.getByText("Living wall row")).toBeInTheDocument();
     expect(screen.queryByLabelText("Work folder")).toBeNull();
 
@@ -435,6 +441,7 @@ describe("Settings", () => {
     expect(screen.queryByRole("button", { name: "Behavior panel" })).toBeNull();
     expect(screen.queryByText("Screenshot explain row")).toBeNull();
     expect(screen.queryByText("Game watcher row")).toBeNull();
+    expect(screen.queryByText(/^Game companion row/)).toBeNull();
     expect(screen.queryByText("Living wall row")).toBeNull();
 
     await openSection("Personality");

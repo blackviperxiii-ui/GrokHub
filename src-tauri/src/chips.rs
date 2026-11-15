@@ -33,6 +33,8 @@ pub enum Tap {
     Ask,
     /// Opens `view`.
     Go,
+    /// Opens the note dialog for the game `note_for` names.
+    Note,
 }
 
 /// A chip as the page gets it.
@@ -53,6 +55,9 @@ pub struct Chip {
     /// `plan`), which the tap puts back.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub mode: String,
+    /// For a Note chip: the Steam app id of the game.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_for: Option<u32>,
 }
 
 /// The shell page for a cabin page a chip opens, if the shell has one.
@@ -72,8 +77,9 @@ pub fn shell_view(nav: &str) -> Option<&'static str> {
 }
 
 /// The chip as the page gets it, or `None` when the page can't do it: a
-/// retired model or effort chip, the cabin's Undo, a one-tap Do chip, a
-/// review chip (the shell has no `/sh`), or a page the shell doesn't have.
+/// retired model or effort chip, the old Undo, a one-tap Do chip, a review
+/// chip other than a game note (the shell has no `/sh`), or a page the shell
+/// doesn't have.
 pub fn wire(chip: &QuickChip, mode: &str) -> Option<Chip> {
     if grokhub_core::retired_mode_value(&chip.value) || chip.id == grokhub_core::UNDO_CHIP_ID {
         return None;
@@ -84,6 +90,7 @@ pub fn wire(chip: &QuickChip, mode: &str) -> Option<Chip> {
             Tap::Go,
             Some(grokhub_core::nav_from_chip_value(&chip.value).and_then(shell_view)?),
         ),
+        ChipAction::Review if note_for(chip).is_some() => (Tap::Note, None),
         ChipAction::Do | ChipAction::Review => return None,
     };
     let follow_up = chip
@@ -102,7 +109,21 @@ pub fn wire(chip: &QuickChip, mode: &str) -> Option<Chip> {
         } else {
             String::new()
         },
+        note_for: if action == Tap::Note {
+            note_for(chip)
+        } else {
+            None
+        },
     })
+}
+
+/// The game a game-note chip (`game:note:<app id>`) is for.
+fn note_for(chip: &QuickChip) -> Option<u32> {
+    chip.id
+        .strip_prefix(grokhub_core::game_companion::NOTE_PREFIX)?
+        .parse()
+        .ok()
+        .filter(|id| *id != 0)
 }
 
 /// The chips the page can show, in order.
@@ -439,6 +460,29 @@ pub fn wire_follow_ups(ups: &FollowUps) -> Vec<Chip> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_game_note_chip_opens_the_note_dialog_and_a_guides_chip_stays_out() {
+        let hades = grokhub_core::steam::SteamGame {
+            app_id: 7,
+            name: "Hades".into(),
+            last_played: 0,
+            playtime_min: 0,
+        };
+        let chips = grokhub_core::game_companion::chips(&hades, false);
+        let guides = chips.iter().find(|c| c.id == "game:guides:7").unwrap();
+        assert_eq!(wire(guides, "chat"), None);
+        let note = chips.iter().find(|c| c.id == "game:note:7").unwrap();
+        let wired = wire(note, "chat").expect("a note chip shows");
+        assert_eq!(wired.action, Tap::Note);
+        assert_eq!(wired.note_for, Some(7));
+        assert_eq!(wired.label, "Note for Hades");
+        assert_eq!(
+            serde_json::to_value(&wired).unwrap()["action"],
+            serde_json::json!("note")
+        );
+        assert_eq!(serde_json::to_value(&wired).unwrap()["noteFor"], 7);
+    }
     use grokhub_core::ChipKind;
 
     fn chip(id: &str, value: &str, kind: ChipKind) -> QuickChip {

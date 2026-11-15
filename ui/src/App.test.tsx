@@ -10,6 +10,7 @@ const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
 // The tray's Halt and Super+Shift+Esc reach the window through this.
 const haltHandlers = vi.hoisted(() => [] as ((stopped: string[]) => void)[]);
 const ranHandlers = vi.hoisted(() => [] as ((run: unknown) => void)[]);
+const gameNotices = vi.hoisted(() => [] as ((line: string) => void)[]);
 const updateHandlers = vi.hoisted(() => [] as ((update: unknown) => void)[]);
 const api = vi.hoisted(() => ({
   CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false },
@@ -61,6 +62,13 @@ const api = vi.hoisted(() => ({
   getProfile: vi.fn<() => Promise<Profile>>(() => Promise.reject(new Error("not mocked"))),
 }));
 
+vi.mock("./gameSession", () => ({
+  onGameSession: () => Promise.resolve(() => {}),
+  onGameCompanionNotice: (fn: (line: string) => void) => {
+    gameNotices.push(fn);
+    return Promise.resolve(() => {});
+  },
+}));
 vi.mock("./api", async () => {
   const { chatTabApiStubs } = await import("./chatTabApiStubs");
   return { ...chatTabApiStubs(), ...api };
@@ -1079,6 +1087,17 @@ describe("App", () => {
     expect(within(dock).getByRole("listitem", { name: "summarize my inbox" })).toHaveTextContent(
       "3 new mails.",
     );
+  });
+
+  it("puts a game companion ping in the bell", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    gameNotices.length = 0;
+    render(<App />);
+    await waitFor(() => expect(gameNotices.length).toBe(1));
+    act(() => gameNotices[0]("Back to Hades · What changed since you last played: Patch 1.1."));
+    await userEvent.click(screen.getByRole("button", { name: "Notifications, 1 new" }));
+    const menu = screen.getByRole("region", { name: "Notifications" });
+    expect(menu).toHaveTextContent("Back to Hades · What changed since you last played: Patch 1.1.");
   });
 
   it("puts a scheduled run's result in the bell, not the chat, with a follow-up", async () => {

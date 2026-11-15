@@ -19,6 +19,7 @@ import {
   type Capabilities,
   type Profile,
 } from "./api";
+import { onGameCompanionNotice } from "./gameSession";
 import {
   cardsByChat,
   chatActivity,
@@ -447,6 +448,22 @@ export function App() {
       if (dropped) unlisten();
       else stop = unlisten;
     });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, [notify]);
+  // A game launch companion ping went out: the bell keeps the same line.
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onGameCompanionNotice((line) => notify("info", line, undefined, "Pulse")).then(
+      (unlisten) => {
+        if (dropped) unlisten();
+        else stop = unlisten;
+      },
+      () => {},
+    );
     return () => {
       dropped = true;
       stop?.();

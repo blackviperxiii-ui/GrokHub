@@ -10,6 +10,15 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => api);
+const session = vi.hoisted(() => ({ heard: [] as (() => void)[] }));
+vi.mock("./gameSession", () => ({
+  onGameSession: (fn: () => void) => {
+    session.heard.push(fn);
+    return Promise.resolve(() => {
+      session.heard = session.heard.filter((f) => f !== fn);
+    });
+  },
+}));
 
 import { ChipRow, chipSlotOf, chipTip, DRAFT_SETTLE_MS, useChipRow } from "./Chips";
 
@@ -118,6 +127,16 @@ describe("useChipRow", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Two" }));
     expect(api.chipOutcome).toHaveBeenLastCalledWith("composer", "b", true);
     await vi.waitFor(() => expect(api.quickChips).toHaveBeenCalledTimes(3));
+  });
+
+  it("asks again when a game starts or closes", async () => {
+    render(<Harness />);
+    expect(await screen.findByRole("button", { name: "One" })).toBeVisible();
+    expect(api.quickChips).toHaveBeenCalledTimes(1);
+    api.quickChips.mockResolvedValue([chip("game:note:7", "Leave a note for next time", { action: "note", noteFor: 7 })]);
+    act(() => session.heard.forEach((fn) => fn()));
+    await vi.waitFor(() => expect(api.quickChips).toHaveBeenCalledTimes(2));
+    expect(session.heard).toHaveLength(1);
   });
 
   it("shows nothing and asks nothing while busy", async () => {
