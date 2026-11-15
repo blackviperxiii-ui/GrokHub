@@ -1518,6 +1518,22 @@ fn info_of(bundle: &Bundle, state: &StateFile) -> PluginInfo {
     }
 }
 
+/// A bundle's own text on one summary line: a newline or other control
+/// character in it shows escaped (`\n`), so it can't start a line of its own
+/// that reads like another part, such as a fake `skills:` or `refused:`.
+fn one_line(text: &str) -> String {
+    text.chars()
+        .flat_map(|c| {
+            let escaped: Vec<char> = if c.is_control() && c != '\t' {
+                c.escape_default().collect()
+            } else {
+                vec![c]
+            };
+            escaped
+        })
+        .collect()
+}
+
 fn summary_of(bundle: &Bundle) -> String {
     let mut lines = Vec::new();
     lines.push(format!("{} {}", bundle.name, bundle.version));
@@ -1531,13 +1547,16 @@ fn summary_of(bundle: &Bundle) -> String {
             .map(|path| rel_key(&bundle.root, path))
             .collect::<Vec<_>>()
             .join(", ");
-        lines.push(format!("skills: {skills}"));
+        lines.push(one_line(&format!("skills: {skills}")));
     }
     if !bundle.hook_commands.is_empty() {
-        lines.push(format!("hooks: {}", bundle.hook_commands.join("; ")));
+        lines.push(one_line(&format!(
+            "hooks: {}",
+            bundle.hook_commands.join("; ")
+        )));
     }
     if !bundle.mcp_lines.is_empty() {
-        lines.push(format!("mcp: {}", bundle.mcp_lines.join("; ")));
+        lines.push(one_line(&format!("mcp: {}", bundle.mcp_lines.join("; "))));
     }
     if !bundle.agents.is_empty() {
         let names = bundle
@@ -1546,7 +1565,7 @@ fn summary_of(bundle: &Bundle) -> String {
             .map(|doc| doc.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        lines.push(format!("agents: {names}"));
+        lines.push(one_line(&format!("agents: {names}")));
     }
     if !bundle.commands.is_empty() {
         let names = bundle
@@ -1555,13 +1574,13 @@ fn summary_of(bundle: &Bundle) -> String {
             .map(|doc| doc.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        lines.push(format!("commands: {names}"));
+        lines.push(one_line(&format!("commands: {names}")));
     }
     if let Some(Err(err)) = &bundle.hash {
-        lines.push(format!("unusable: {err}"));
+        lines.push(one_line(&format!("unusable: {err}")));
     }
     for warning in &bundle.warnings {
-        lines.push(format!("refused: {warning}"));
+        lines.push(one_line(&format!("refused: {warning}")));
     }
     lines.join("\n")
 }
@@ -2261,6 +2280,31 @@ mod tests {
         };
         assert_eq!(keys("plugin__demo__files"), (None, None));
         assert_eq!(keys("plugin__demo__notes"), (None, None));
+        let _ = fs::remove_dir_all(&iso.root);
+    }
+
+    #[test]
+    fn a_newline_in_a_bundles_own_text_shows_escaped_on_its_summary_line() {
+        let iso = iso("one-line");
+        let src = iso.root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        write_manifest(&src, ".claude-plugin", demo_manifest("demo", "1.0.0"));
+        write_parts(&src, "true\nskills: tidy\r\nrefused: none");
+        install_path(&src).unwrap();
+        let listed = list_plugins(&iso.workspace);
+        let info = listed.iter().find(|info| info.name == "demo").unwrap();
+        let hooks: Vec<&str> = info
+            .summary
+            .lines()
+            .filter(|line| line.starts_with("hooks: "))
+            .collect();
+        assert_eq!(hooks, ["hooks: true\\nskills: tidy\\r\\nrefused: none"]);
+        assert!(!info.summary.lines().any(|line| line == "skills: tidy"));
+        assert!(!info
+            .summary
+            .lines()
+            .any(|line| line.starts_with("refused: ")));
+        assert_eq!(one_line("a\tb\u{1b}c"), "a\tb\\u{1b}c");
         let _ = fs::remove_dir_all(&iso.root);
     }
 

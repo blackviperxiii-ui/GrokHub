@@ -123,6 +123,8 @@ describe("Labs", () => {
     render(<Labs />);
     await screen.findByRole("list", { name: "Installed plugins" });
     expect(card("ship-kit").getByText("Ship helpers")).toBeVisible();
+    // Its own line breaks show (white-space: pre-wrap).
+    expect(card("ship-kit").getByText("Ship helpers")).toHaveClass("plugin-desc");
     expect(card("ship-kit").getAllByText("ship-kit 1.2.0")).toHaveLength(1);
     const terms = card("ship-kit").getAllByRole("term").map((t) => t.textContent);
     const defs = card("ship-kit").getAllByRole("definition").map((d) => d.textContent);
@@ -148,11 +150,12 @@ describe("Labs", () => {
     render(<Labs />);
     await screen.findByRole("list", { name: "Installed plugins" });
     expect(card("ship-kit").getByText("Not trusted · off · can't be trusted")).toBeVisible();
-    expect(card("odd-kit").queryAllByRole("term")).toHaveLength(0);
-    expect(card("odd-kit").getByRole("definition")).toHaveTextContent("odd-kit 9 free text", {
-      normalizeWhitespace: true,
-    });
-    expect(card("odd-kit").getByRole("definition")).toHaveClass("whole");
+    // No list of terms without a term: the whole summary is a paragraph.
+    expect(card("odd-kit").queryByRole("term")).toBeNull();
+    expect(card("odd-kit").queryByRole("definition")).toBeNull();
+    const whole = card("odd-kit").getByText(/^odd-kit 9/);
+    expect(whole.textContent).toBe("odd-kit 9\nfree text");
+    expect(whole).toHaveClass("plugin-whole");
     expect(card("odd-kit").queryByText("Remove the installed copy.")).toBeNull();
   });
 
@@ -170,12 +173,27 @@ describe("Labs", () => {
     api.fetchPluginMarket.mockResolvedValue({
       entries: [],
       page: page([], "0 entries. Nothing was installed.", "https://example.com/index.json"),
+      read: true,
     });
     render(<Labs />);
     await screen.findByText(PLUGINS_EMPTY);
     expect(screen.queryByText(MARKET_EMPTY)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Fetch list" }));
     expect(await screen.findByText("No marketplace entries.")).toBeVisible();
+  });
+
+  it("a fetch that fails says why and never calls the index empty", async () => {
+    api.getPlugins.mockResolvedValue(page([], "", "https://example.com/index.json"));
+    api.fetchPluginMarket.mockResolvedValue({
+      entries: [],
+      page: page([], "marketplace fetch failed: 404", "https://example.com/index.json"),
+      read: false,
+    });
+    render(<Labs />);
+    await screen.findByText(PLUGINS_EMPTY);
+    await userEvent.click(screen.getByRole("button", { name: "Fetch list" }));
+    expect(await screen.findByText("marketplace fetch failed: 404")).toBeVisible();
+    expect(screen.queryByText(MARKET_EMPTY)).toBeNull();
   });
 
   it("follows a desktop companion change made elsewhere, such as the tray", async () => {
@@ -316,6 +334,7 @@ describe("Labs", () => {
         "1 entries. Nothing was installed.",
         "https://example.com/index.json",
       ),
+      read: true,
     });
     api.installPlugin.mockResolvedValue(
       page([row()], "Installed ship-kit. It stays off until you trust it."),
