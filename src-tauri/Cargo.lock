@@ -2151,6 +2151,7 @@ dependencies = [
  "tiny_http",
  "tokio",
  "tokio-rustls",
+ "tungstenite",
  "webkit2gtk",
  "zip",
 ]

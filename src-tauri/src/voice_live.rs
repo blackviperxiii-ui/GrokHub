@@ -1,8 +1,11 @@
 //! Voice mode: one open mic for the whole session and spoken replies.
 //!
 //! The page keeps the mic open and sends 16 kHz mono blocks here; the core's
-//! [`OpenMic`] finds each turn and the turn becomes words with xAI
-//! speech-to-text ([`crate::voice::transcribe`]). The reply's text streams
+//! [`OpenMic`] finds each turn. While they talk, each block also goes to
+//! xAI's streaming speech-to-text ([`crate::stt_stream`]): its Smart Turn
+//! can end a clearly finished turn before the mic's silence does, and when
+//! the mic ends it the words are usually already there. A turn the stream
+//! can't hear goes up once as a recording ([`crate::voice::transcribe`]). The reply's text streams
 //! back through [`ReplyVoice`], which cuts it into pieces; each piece is
 //! spoken with xAI speech in the chat's voice, or with Kokoro on this PC when
 //! there is no API key and the on-device voice is downloaded. The page plays
@@ -11,6 +14,7 @@
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -19,6 +23,8 @@ use grokhub_core::voice_engine as ve;
 use grokhub_core::voice_live::{Heard, OpenMic, ReplyVoice};
 use grokhub_core::voice_turn::{s16le, wav, RATE};
 use serde::Serialize;
+
+use crate::stt_stream::{SttLink, SttNews};
 
 /// Points speak at a local mock TTS server, for tests only (same loopback
 /// rule as speech-to-text).
@@ -52,20 +58,44 @@ pub enum LiveEvent {
     Pause,
 }
 
+/// A turn waiting to be turned into words.
+#[derive(Debug)]
+pub enum Pending {
+    /// Smart Turn ended it: its words, nothing to upload.
+    Words(String),
+    /// The mic ended it: the audio, and the stream's news when one ran.
+    Audio {
+        samples: Vec<i16>,
+        news: Option<Receiver<SttNews>>,
+    },
+}
+
+/// Opens a stream for one listen; `None` when it can't.
+pub type Opener = Box<dyn FnMut() -> Option<SttLink> + Send>;
+
 /// One voice session.
 #[derive(Default)]
 pub struct Live {
     mic: OpenMic,
     reply: Option<ReplyVoice>,
     /// The last turn heard, waiting to be turned into words.
-    turn: Option<Vec<i16>>,
+    turn: Option<Pending>,
+    /// This listen's stream, while it runs.
+    stt: Option<SttLink>,
+    open: Option<Opener>,
+    /// Samples heard while listening, for the length of a Smart Turn turn.
+    heard: usize,
 }
 
 impl Live {
-    /// A session listening for its first turn.
-    pub fn start() -> Self {
-        let mut live = Self::default();
-        live.mic.listen();
+    /// A session listening for its first turn. `open` gives each listen
+    /// not over a reply its stream; without it every turn is uploaded.
+    pub fn new(open: Option<Opener>) -> Self {
+        let mut live = Self {
+            open,
+            ..Self::default()
+        };
+        live.listen(false);
         live
     }
 
@@ -74,28 +104,80 @@ impl Live {
         if bytes.len() > BLOCK_MAX || !bytes.len().is_multiple_of(2) {
             return Err(BAD_BLOCK.into());
         }
-        let heard = self.mic.push(&s16le(bytes));
-        Ok(heard
+        let block = s16le(bytes);
+        if self.mic.armed() {
+            self.heard += block.len();
+            if let Some(link) = &self.stt {
+                if link.audio.send(block.clone()).is_err() {
+                    self.stt = None;
+                }
+            }
+        }
+        let heard = self.mic.push(&block);
+        let mut events: Vec<LiveEvent> = heard
             .into_iter()
             .map(|h| match h {
                 Heard::Started => LiveEvent::Started,
                 Heard::Turn(turn) => {
-                    let ms = (turn.len() as u64 * 1000 / u64::from(RATE)) as u32;
-                    self.turn = Some(turn);
+                    // Dropping the stream's audio asks it for the last words.
+                    let news = self.stt.take().map(|link| link.news);
+                    let ms = ms_of(turn.len());
+                    self.turn = Some(Pending::Audio {
+                        samples: turn,
+                        news,
+                    });
                     LiveEvent::Turn { ms }
                 }
-                Heard::Nothing => LiveEvent::Nothing,
+                Heard::Nothing => {
+                    self.stt = None;
+                    LiveEvent::Nothing
+                }
                 Heard::CheckIn => LiveEvent::CheckIn,
-                Heard::Pause => LiveEvent::Pause,
+                Heard::Pause => {
+                    self.stt = None;
+                    LiveEvent::Pause
+                }
             })
-            .collect())
+            .collect();
+        if let Some(words) = self.smart_turn() {
+            self.mic.stop();
+            self.stt = None;
+            self.turn = Some(Pending::Words(words));
+            events.push(LiveEvent::Turn {
+                ms: ms_of(self.heard),
+            });
+        }
+        Ok(events)
+    }
+
+    /// The stream's words when Smart Turn ended the turn. A stream that
+    /// failed or went away is dropped, so the turn falls back to the upload.
+    fn smart_turn(&mut self) -> Option<String> {
+        let link = self.stt.as_ref()?;
+        loop {
+            match link.news.try_recv() {
+                Ok(SttNews::Ended(words)) if !words.is_empty() => return Some(words),
+                Ok(SttNews::Ended(_) | SttNews::Caption(_)) => {}
+                Ok(SttNews::Failed(_)) | Err(TryRecvError::Disconnected) => {
+                    self.stt = None;
+                    return None;
+                }
+                Err(TryRecvError::Empty) => return None,
+            }
+        }
     }
 
     /// Listen for the next turn; `playing` while a reply still plays, so only
-    /// talking over it starts one.
+    /// talking over it starts one. A listen over a reply opens no stream: its
+    /// echo could end a turn nobody spoke.
     pub fn listen(&mut self, playing: bool) {
         self.mic.set_playing(playing);
         self.mic.listen();
+        self.heard = 0;
+        self.stt = None;
+        if !playing {
+            self.stt = self.open.as_mut().and_then(|open| open());
+        }
     }
 
     /// The reply stopped or finished playing.
@@ -108,9 +190,9 @@ impl Live {
         self.mic.finish();
     }
 
-    /// The last turn as a WAV, once.
-    pub fn take_turn(&mut self) -> Option<Vec<u8>> {
-        self.turn.take().map(|t| wav(&t, RATE))
+    /// The last turn, once.
+    pub fn take_turn(&mut self) -> Option<Pending> {
+        self.turn.take()
     }
 
     /// More of the reply; the pieces ready to speak. A new reply starts on
@@ -136,6 +218,10 @@ impl Live {
 }
 
 static SESSION: Mutex<Option<Live>> = Mutex::new(None);
+
+fn ms_of(samples: usize) -> u32 {
+    (samples as u64 * 1000 / u64::from(RATE)) as u32
+}
 
 /// Runs `f` on the session, or says voice mode is off.
 fn with<T>(f: impl FnOnce(&mut Live) -> T) -> Result<T, String> {
@@ -306,11 +392,23 @@ fn run_for(mut cmd: Command, limit: Duration) -> Result<(), String> {
 }
 
 /// Words for the last turn; empty when nothing worth sending was said.
-fn hear(config_dir: &Path, turn: Option<Vec<u8>>) -> Result<String, String> {
-    let Some(wav) = turn else {
-        return Ok(String::new());
+/// The stream's words when it has them within
+/// [`crate::stt_stream::HEAR_WAIT`], else one `upload` of the recording.
+pub fn hear(
+    turn: Option<Pending>,
+    upload: impl FnOnce(&[u8]) -> Result<String, String>,
+) -> Result<String, String> {
+    let (samples, news) = match turn {
+        None => return Ok(String::new()),
+        Some(Pending::Words(words)) => return Ok(words),
+        Some(Pending::Audio { samples, news }) => (samples, news),
     };
-    match crate::voice::transcribe(config_dir, &wav) {
+    let streamed =
+        news.and_then(|n| crate::stt_stream::final_words(&n, crate::stt_stream::HEAR_WAIT));
+    if let Some(words) = streamed {
+        return Ok(words);
+    }
+    match upload(&wav(&samples, RATE)) {
         Ok(words) => Ok(words),
         // A cough or a door: listen again.
         Err(e) if e == crate::voice::EMPTY => Ok(String::new()),
@@ -322,11 +420,16 @@ fn models_dir(config_dir: &Path) -> std::path::PathBuf {
     crate::local_ai::models_dir().unwrap_or_else(|| config_dir.join("models"))
 }
 
-/// Voice mode on: the mic is listening for the first turn.
+/// Voice mode on: the mic is listening for the first turn, with a stream
+/// when xAI speech-to-text can take one.
 #[tauri::command]
-pub(crate) fn voice_live_start() -> Result<(), String> {
+pub(crate) fn voice_live_start(state: tauri::State<'_, crate::ShellState>) -> Result<(), String> {
     crate::capabilities::needs(crate::capabilities::current().voice, "Voice")?;
-    *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(Live::start());
+    let dir = state.config_dir.clone();
+    let to = crate::stt_stream::target();
+    let open: Opener =
+        Box::new(move || to.as_ref().and_then(|to| crate::stt_stream::open(&dir, to)));
+    *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(Live::new(Some(open)));
     Ok(())
 }
 
@@ -371,7 +474,7 @@ pub(crate) async fn voice_live_hear(
 ) -> Result<String, String> {
     let turn = with(Live::take_turn)?;
     let dir = state.config_dir.clone();
-    crate::off_main(move || hear(&dir, turn)).await?
+    crate::off_main(move || hear(turn, |wav| crate::voice::transcribe(&dir, wav))).await?
 }
 
 #[tauri::command]
