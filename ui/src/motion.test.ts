@@ -146,6 +146,15 @@ describe("the desktop companion's motion and reduce motion", () => {
     expect(css).toMatch(/@keyframes nyx-desk-bob \{\s*0%,\s*100% \{\s*translate: 0 0;\s*\}\s*50% \{\s*translate: 0 -3px;\s*\}\s*\}/);
   });
 
+  it("hops her up by --nyx-hop, and not under either reduce-motion setting", () => {
+    const figure = all.find((r) => r.selector === ".nyx-desk-figure" && r.media === null && /animation:/.test(r.body));
+    expect(figure?.body).toMatch(/transform:\s*translateY\(calc\(-1 \* var\(--nyx-hop, 0px\)\)\);/);
+    const flat = (selector: string, media: string | null) =>
+      all.some((r) => r.media === media && r.selector === selector && /transform:\s*none/.test(r.body));
+    expect(flat(':root[data-reduce-motion="true"] .nyx-desk-figure', null)).toBe(true);
+    expect(flat(".nyx-desk-figure", "@media (prefers-reduced-motion: reduce)")).toBe(true);
+  });
+
   it("glows her pedestal with the voice", () => {
     const pedestal = (look: string) =>
       all.find((r) => r.media === null && r.selector === `.nyx-desk[data-look="${look}"] .nyx-desk-pedestal`)?.body ?? "";

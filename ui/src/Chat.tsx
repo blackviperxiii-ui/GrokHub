@@ -98,9 +98,9 @@ import { ScreenshotOffer } from "./ScreenshotOffer";
 import { openImport } from "./onboardApi";
 import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
-import { desktopNyxLook } from "./desktopNyxApi";
+import { desktopNyxLook, desktopNyxTalk } from "./desktopNyxApi";
 import { inShell } from "./transport";
-import { deskLook, leaveDesk, updateDesk } from "./nyxLife";
+import { deskLook, deskSpeaker, leaveDesk, updateDesk } from "./nyxLife";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
 import { DeviceGlanceRow } from "./DeviceGlance";
@@ -955,6 +955,7 @@ export function Chat({
    * the Activity menu. The next one sends when the reply ends. */
   const [queue, setQueue] = useState<string[]>([]);
   const queueRef = useRef<string[]>([]);
+  const deskChat = useRef(Symbol("chat"));
   const voice = useVoiceMode();
   const voiceSession = voice.session;
   /** The queued message whose turn came: it sends after this render. */
@@ -1016,7 +1017,6 @@ export function Chat({
   // chat's activity. A live voice speaks for her, else the chat last on
   // screen, so a reply that ends while Settings is open still settles her.
   const look = deskLook(voice.state, busyHere);
-  const deskChat = useRef(Symbol("chat"));
   const voiced = voice.state !== "off";
   useEffect(() => {
     if (!inShell()) return;
@@ -1029,6 +1029,12 @@ export function Chat({
       if (inShell()) leaveDesk(me);
     };
   }, []);
+  // A spoken reply makes her hop on the desk, from the chat that speaks for her.
+  useEffect(() => {
+    voice.session.talkTo((talk) => {
+      if (inShell() && deskSpeaker() === deskChat.current) desktopNyxTalk(talk).catch(() => {});
+    });
+  }, [voice.session]);
   const sideWide = useMinWidth(SIDE_MIN_WIDTH);
   const leftWide = useMinWidth(DOCK_MIN_WIDTH);
 
