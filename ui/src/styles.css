@@ -2105,6 +2105,14 @@ button.md-copy {
   white-space: nowrap;
 }
 
+/* What voice mode hears so far, quiet, over the composer. Its newest words
+   always show: the caption is cut at its start, and wraps rather than clip. */
+.voice-caption {
+  margin: 0 0 8px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .composer .voice-mode[aria-pressed="true"] {
   border-color: var(--red);
   background: var(--tab-open-bg);

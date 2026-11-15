@@ -3,6 +3,7 @@ import {
   memo,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -71,7 +72,7 @@ import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
 import { appendDraft, Mic } from "./Mic";
-import { useVoiceMode, VoiceButton } from "./VoiceMode";
+import { useVoiceMode, VoiceButton, VoiceCaption } from "./VoiceMode";
 import { ElicitCard, type ElicitItem } from "./Modes";
 import { SIDE_MARK, SideCards, withSide, type Side } from "./Side";
 import { DOCK_MIN_WIDTH, NyxDock, SIDE_MIN_WIDTH } from "./NyxDock";
@@ -835,6 +836,19 @@ function LogItem({
   }
 }
 
+/** Whether `row` showed in the log before the log lost `shrunk` pixels at
+ * its bottom. */
+function wasInView(row: Element, log: Element, shrunk: number): boolean {
+  const r = row.getBoundingClientRect();
+  const l = log.getBoundingClientRect();
+  return r.bottom >= l.top && r.top <= l.bottom + Math.max(shrunk, 0);
+}
+
+/** Whether the log is scrolled to (within a few pixels of) its end. */
+function atLogEnd(log: HTMLElement): boolean {
+  return log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+}
+
 /** `prefill`: text another page put in the box (Pulse's Run, Journal's To
  * mission). A new `n` replaces the draft; nothing is sent until the person
  * sends it. With `conversationId` the chat moves to that conversation first,
@@ -1456,16 +1470,39 @@ export function Chat({
   // the end, so the view stays on it; while find is open the log stays put,
   // and closing find leaves the view on the match.
   const scrolledFor = useRef<Item[]>([]);
+  // Whether the log was at its end when last looked at.
+  const logAtEnd = useRef(true);
   const followEnd = useEffectEvent((before: Item[]) => {
-    if (findOpen) return;
-    if (items.length > 0 && onlyFoldsChanged(before, items)) return;
-    endRef.current?.scrollIntoView?.({ block: "end" });
+    if (!findOpen && !(items.length > 0 && onlyFoldsChanged(before, items))) {
+      endRef.current?.scrollIntoView?.({ block: "end" });
+    }
+    // New rows below a view that stayed put leave it short of the end.
+    if (logRef.current) logAtEnd.current = atLogEnd(logRef.current);
   });
   useEffect(() => {
     const before = scrolledFor.current;
     scrolledFor.current = items;
     followEnd(before);
   }, [items]);
+  // Voice mode's caption above the composer grows as they talk and makes
+  // the log shorter: a log that was at its end stays there. With find open
+  // a match that was in view stays in view instead; one they scrolled away
+  // from stays where they left it.
+  const logHeight = useRef(0);
+  const keepAtEnd = useEffectEvent(() => {
+    const log = logRef.current;
+    const shrunk = log ? logHeight.current - log.clientHeight : 0;
+    if (log) logHeight.current = log.clientHeight;
+    if (findOpen) {
+      const row = log && findRow(log, current);
+      if (row && log && wasInView(row, log, shrunk)) row.scrollIntoView?.({ block: "nearest" });
+    } else if (logAtEnd.current) {
+      endRef.current?.scrollIntoView?.({ block: "end" });
+    }
+  });
+  // What shows: a caption appears and goes with listening, too.
+  const shownCaption = voice.state === "listening" ? voice.caption : "";
+  useLayoutEffect(() => keepAtEnd(), [shownCaption]);
 
   function startOver(scratch = false) {
     if (busy) return false;
@@ -2243,7 +2280,16 @@ export function Chat({
         </p>
       )}
       {/* Focusable so the keyboard can scroll a long conversation. */}
-      <div ref={logRef} className="log" role="log" aria-live="polite" tabIndex={0}>
+      <div
+        ref={logRef}
+        className="log"
+        role="log"
+        aria-live="polite"
+        tabIndex={0}
+        onScroll={(e) => {
+          logAtEnd.current = atLogEnd(e.currentTarget);
+        }}
+      >
         {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (
           <SignedOut remote={remote} grok={grokSignIn} onSignIn={onSignIn} />
         ) : (
@@ -2355,6 +2401,7 @@ export function Chat({
         }}
       />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
+      {!remote && <VoiceCaption text={voice.caption} state={voice.state} />}
       <form className={glow && busyHere ? "composer slash-wrap glowing" : "composer slash-wrap"} onSubmit={send}>
         {slashOpen && (
           <SlashMenu

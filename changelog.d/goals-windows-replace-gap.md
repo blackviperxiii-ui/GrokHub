@@ -1,0 +1,1 @@
+- Windows: goals no longer read as missing for a moment while a save swaps the new copy in on volumes that briefly show no file during the replace.

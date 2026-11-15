@@ -722,7 +722,7 @@ fn read_settled(path: &Path) -> std::io::Result<String> {
     let mut tries = 0;
     loop {
         match fs::read_to_string(path) {
-            Err(err) if swap_in_progress(&err) && tries < 20 => {
+            Err(err) if swap_in_progress(path, &err) && tries < 20 => {
                 tries += 1;
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
@@ -735,9 +735,12 @@ fn read_settled(path: &Path) -> std::io::Result<String> {
 /// denied (the old copy is being deleted), a sharing violation (raw error
 /// 32, another handle such as a virus scan still holds the new copy) or a
 /// pending delete (raw error 303). std reports the last two as
-/// `Uncategorized`, so they are matched by code. A rename is atomic
-/// elsewhere, and a missing file is really missing, so neither is retried.
-fn swap_in_progress(err: &std::io::Error) -> bool {
+/// `Uncategorized`, so they are matched by code. Some Windows volumes also
+/// show no file at all for a moment while the new copy replaces the old;
+/// that counts only while the new copy still waits beside it. A rename is
+/// atomic elsewhere, and a missing file is really missing, so neither is
+/// retried.
+fn swap_in_progress(path: &Path, err: &std::io::Error) -> bool {
     const ERROR_SHARING_VIOLATION: i32 = 32;
     const ERROR_DELETE_PENDING: i32 = 303;
     cfg!(windows)
@@ -745,7 +748,13 @@ fn swap_in_progress(err: &std::io::Error) -> bool {
             || matches!(
                 err.raw_os_error(),
                 Some(ERROR_SHARING_VIOLATION | ERROR_DELETE_PENDING)
-            ))
+            )
+            || (err.kind() == std::io::ErrorKind::NotFound && new_copy(path).exists()))
+}
+
+/// Where [`write_intentions`] writes the new copy before swapping it in.
+fn new_copy(path: &Path) -> PathBuf {
+    path.with_extension("json.tmp")
 }
 
 pub fn save_intentions(
@@ -864,7 +873,7 @@ fn write_intentions(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|err| err.to_string())?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let tmp = new_copy(path);
     {
         let mut opts = OpenOptions::new();
         opts.write(true).create(true).truncate(true);
@@ -933,15 +942,24 @@ mod tests {
 
     #[test]
     fn only_a_windows_file_swap_is_read_again() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-intentions-retry-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("intentions.json");
         // 5 access denied, 32 sharing violation, 303 delete pending, 2 not found.
-        let retried =
-            [5, 32, 303, 2].map(|code| swap_in_progress(&std::io::Error::from_raw_os_error(code)));
-        let expected = if cfg!(windows) {
-            [true, true, true, false]
-        } else {
-            [false, false, false, false]
+        let retried = || {
+            [5, 32, 303, 2]
+                .map(|code| swap_in_progress(&path, &std::io::Error::from_raw_os_error(code)))
         };
-        assert_eq!(retried, expected);
+        let on = cfg!(windows);
+        assert_eq!(retried(), [on, on, on, false], "a missing file is missing");
+        // The new copy waits beside it: the file is being swapped in.
+        fs::write(new_copy(&path), b"[]").unwrap();
+        assert_eq!(retried(), [on, on, on, on]);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

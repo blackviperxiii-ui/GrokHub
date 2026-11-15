@@ -56,6 +56,8 @@ pub enum LiveEvent {
     CheckIn,
     /// Quiet for a minute; voice mode pauses.
     Pause,
+    /// Everything heard so far in this turn, while they talk.
+    Caption { text: String },
 }
 
 /// A turn waiting to be turned into words.
@@ -85,6 +87,8 @@ pub struct Live {
     open: Option<Opener>,
     /// Samples heard while listening, for the length of a Smart Turn turn.
     heard: usize,
+    /// The page shows a caption from this listen's stream.
+    captioned: bool,
     /// The mic heard someone start talking in this listen. Audio goes to
     /// the stream only from then on, and Smart Turn's words count only
     /// then: without it they are someone in the room the mic took for
@@ -164,13 +168,44 @@ impl Live {
                 }
             })
             .collect();
-        if let Some(words) = self.smart_turn() {
+        // A start the mic took back (a hum that stayed steady is never a
+        // turn): nobody is talking after all. The stream heard the hum, so it
+        // goes, and the page listens again as after noise, with a new one.
+        let over = events.iter().any(|e| {
+            matches!(
+                e,
+                LiveEvent::Turn { .. } | LiveEvent::Nothing | LiveEvent::Pause
+            )
+        });
+        if self.spoke && !over && self.mic.armed() && !self.mic.talking() {
+            self.spoke = false;
+            self.stt = None;
+            self.captioned = false;
+            events.push(LiveEvent::Nothing);
+        }
+        let streaming = self.stt.is_some();
+        let (caption, words) = self.stream_news();
+        if let Some(words) = words {
             self.mic.stop();
             self.stt = None;
+            self.captioned = false;
             self.turn = Some(Pending::Words(words));
             events.push(LiveEvent::Turn {
                 ms: ms_of(self.heard),
             });
+        } else if streaming && self.stt.is_none() {
+            // The stream went away mid-listen: its caption would stand still
+            // while they talk on, so it goes.
+            if std::mem::take(&mut self.captioned) {
+                events.push(LiveEvent::Caption {
+                    text: String::new(),
+                });
+            }
+        } else if let Some(text) = caption.filter(|_| self.spoke) {
+            // Only once the mic heard a start: before that it is someone
+            // else in the room, or the TV.
+            self.captioned = true;
+            events.push(LiveEvent::Caption { text });
         }
         Ok(events)
     }
@@ -204,29 +239,36 @@ impl Live {
         }
     }
 
-    /// The stream's words when Smart Turn ended the turn. A stream that
-    /// failed or went away is dropped, so the turn falls back to the upload;
-    /// so is one that ended a turn the mic never heard start.
-    fn smart_turn(&mut self) -> Option<String> {
-        let link = self.stt.as_ref()?;
+    /// What the stream said since the last block: its newest caption, and
+    /// its words when Smart Turn ended the turn. A stream that failed or
+    /// went away is dropped, so the turn falls back to the upload; so is one
+    /// that ended a turn the mic never heard start.
+    fn stream_news(&mut self) -> (Option<String>, Option<String>) {
+        let mut caption = None;
+        let Some(link) = self.stt.as_ref() else {
+            return (None, None);
+        };
         loop {
             match link.news.try_recv() {
-                Ok(SttNews::Ended(words)) if !words.is_empty() && self.spoke => return Some(words),
+                Ok(SttNews::Caption(text)) => caption = Some(text),
+                Ok(SttNews::Ended(words)) if !words.is_empty() && self.spoke => {
+                    return (caption, Some(words))
+                }
                 Ok(SttNews::Ended(words)) if !words.is_empty() => {
                     self.stt = None;
-                    return None;
+                    return (caption, None);
                 }
-                Ok(SttNews::Ended(_) | SttNews::Caption(_)) => {}
+                Ok(SttNews::Ended(_)) => {}
                 Ok(SttNews::Idle) => {
                     self.stt = None;
                     self.reopen = true;
-                    return None;
+                    return (caption, None);
                 }
                 Ok(SttNews::Failed(_)) | Err(TryRecvError::Disconnected) => {
                     self.stt = None;
-                    return None;
+                    return (caption, None);
                 }
-                Err(TryRecvError::Empty) => return None,
+                Err(TryRecvError::Empty) => return (caption, None),
             }
         }
     }
@@ -245,6 +287,7 @@ impl Live {
         self.mic.set_playing(playing);
         self.mic.listen();
         self.heard = 0;
+        self.captioned = false;
         self.spoke = false;
         self.recent.clear();
         self.stt = None;
@@ -267,6 +310,7 @@ impl Live {
         } else if self.mic.armed() && !self.mic.talking() && self.stt.is_none() {
             self.heard = 0;
             self.spoke = false;
+            self.captioned = false;
             true
         } else {
             false

@@ -83,6 +83,10 @@ fn events_reach_the_page_as_tagged_objects() {
         serde_json::to_value(LiveEvent::CheckIn).unwrap(),
         serde_json::json!({"kind": "check_in"})
     );
+    assert_eq!(
+        serde_json::to_value(LiveEvent::Caption { text: "hi".into() }).unwrap(),
+        serde_json::json!({"kind": "caption", "text": "hi"})
+    );
 }
 
 #[test]
@@ -487,6 +491,48 @@ fn listening_over_a_reply_opens_no_stream() {
 }
 
 #[test]
+fn captions_reach_the_page_while_they_talk() {
+    let (mut live, streams) = streaming();
+    assert!(send(&mut live, &tone(1500)).contains(&LiveEvent::Started));
+    {
+        let s = streams.lock().unwrap();
+        s.news[0]
+            .send(SttNews::Caption("remind me".into()))
+            .expect("news");
+        s.news[0]
+            .send(SttNews::Caption("remind me to call".into()))
+            .expect("news");
+    }
+    // The newest caption only, once.
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: "remind me to call".into()
+        }]
+    );
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
+}
+
+#[test]
+fn a_caption_before_smart_turn_ends_it_gives_way_to_the_turn() {
+    let (mut live, streams) = streaming();
+    let _ = send(&mut live, &tone(1500));
+    {
+        let s = streams.lock().unwrap();
+        s.news[0]
+            .send(SttNews::Caption("buy".into()))
+            .expect("news");
+        s.news[0]
+            .send(SttNews::Ended("Buy milk.".into()))
+            .expect("news");
+    }
+    assert_eq!(
+        live.push(&bytes(&tone(100))).expect("block"),
+        vec![LiveEvent::Turn { ms: 1600 }]
+    );
+}
+
+#[test]
 fn a_stream_that_already_ended_still_hands_over_its_words() {
     let (mut live, streams) = streaming();
     let _ = send(&mut live, &tone(1500));
@@ -539,6 +585,38 @@ fn talking_over_a_reply_keeps_the_upload_for_that_turn() {
     assert!(live.mic.talking(), "mid-turn");
     playing(&mut live, false);
     assert_eq!(streams.lock().unwrap().audio.len(), 1, "no stream mid-turn");
+}
+
+#[test]
+fn a_caption_goes_when_its_stream_drops_mid_listen() {
+    let (mut live, streams) = streaming();
+    assert!(send(&mut live, &tone(1500)).contains(&LiveEvent::Started));
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Caption("remind me".into()))
+        .expect("news");
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: "remind me".into()
+        }]
+    );
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Failed("speech stream: closed".into()))
+        .expect("news");
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: String::new()
+        }]
+    );
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
+}
+
+#[test]
+fn a_stream_that_drops_before_any_caption_says_nothing() {
+    let (mut live, streams) = streaming();
+    streams.lock().unwrap().news.clear();
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
 }
 
 #[test]
@@ -688,4 +766,59 @@ fn a_stream_that_failed_is_not_opened_again_until_the_next_listen() {
     assert_eq!(send(&mut live, &hush(100)), vec![]);
     assert!(live.stt.is_none());
     assert!(!live.take_reopen());
+}
+
+#[test]
+fn no_caption_before_the_mic_hears_a_start() {
+    let (mut live, streams) = streaming();
+    // Someone else in the room, or the TV.
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Caption("and in other news".into()))
+        .expect("news");
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
+}
+
+/// A machine's hum: one level throughout, never a voice.
+fn hum(ms: u32) -> Vec<i16> {
+    let n = (RATE * ms / 1000) as usize;
+    (0..n)
+        .map(|i| {
+            (6000.0 * (2.0 * std::f32::consts::PI * 120.0 * i as f32 / RATE as f32).sin()) as i16
+        })
+        .collect()
+}
+
+#[test]
+fn a_start_the_mic_takes_back_ends_the_stream_and_its_caption() {
+    let (mut live, streams) = streaming();
+    let mut audio = hush(500);
+    audio.extend(hum(1500));
+    audio.extend(hush(2000));
+    let mut events = Vec::new();
+    for (i, block) in audio.chunks(1600).enumerate() {
+        if i == 12 {
+            // What the stream made of the hum.
+            streams.lock().unwrap().news[0]
+                .send(SttNews::Caption("mm".into()))
+                .expect("news");
+        }
+        events.extend(live.push(&bytes(block)).expect("block"));
+    }
+    assert_eq!(
+        events,
+        vec![
+            LiveEvent::Started,
+            LiveEvent::Caption { text: "mm".into() },
+            LiveEvent::Nothing
+        ]
+    );
+    assert!(live.stt.is_none(), "the stream that heard the hum goes");
+    assert!(!live.spoke);
+    // Room sound after it stays here.
+    let _ = streamed(&streams, 0);
+    assert_eq!(send(&mut live, &hush(300)), vec![]);
+    assert_eq!(
+        streams.lock().unwrap().audio[0].try_recv(),
+        Err(TryRecvError::Disconnected)
+    );
 }
