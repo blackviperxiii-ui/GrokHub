@@ -217,7 +217,8 @@ pub fn row_extra(session: &Session, surface: &str, remote: bool, now: u64) -> Ve
 }
 
 /// Posts a launch card, replacing that game's earlier one, so relaunching
-/// never stacks "Back to …" cards.
+/// never stacks "Back to …" cards. One the user put away or kept (loved,
+/// saved, pinned, edited or discussed) stays.
 pub fn post_card(dir: &Path, card: grokhub_core::UpdateCard) -> Result<bool, String> {
     let source = card.source_id.clone();
     let mut card = Some(card);
@@ -226,8 +227,11 @@ pub fn post_card(dir: &Path, card: grokhub_core::UpdateCard) -> Result<bool, Str
             return 0;
         };
         // A dismissed card stays, so the store still knows it was put away.
-        cards
-            .retain(|c| c.source_id != source || c.status == grokhub_core::UpdateStatus::Dismissed);
+        cards.retain(|c| {
+            c.source_id != source
+                || c.status == grokhub_core::UpdateStatus::Dismissed
+                || grokhub_core::pulse::card_kept(c)
+        });
         // The body quotes the user's note, so their words are not judged.
         usize::from(grokhub_core::post_user_worded(cards, card))
     })
@@ -736,6 +740,31 @@ mod tests {
                 ("No news since you last played.".to_string(), open, 3_000),
             ]
         );
+        // A card the user saved stays too, beside the next launch's.
+        crate::pulse::edit_cards(&dir, &mut |cards| {
+            for c in cards.iter_mut().filter(|c| c.created_at == 3_000) {
+                c.reaction = Some(grokhub_core::CardReaction::Up);
+            }
+            1
+        })
+        .unwrap();
+        assert!(post(4_000, &patched));
+        assert_eq!(
+            shown(&dir),
+            [
+                (
+                    "What changed since you last played: Patch 7.38.".to_string(),
+                    grokhub_core::UpdateStatus::Dismissed,
+                    2_000
+                ),
+                ("No news since you last played.".to_string(), open, 3_000),
+                (
+                    "What changed since you last played: Patch 7.38.".to_string(),
+                    open,
+                    4_000
+                ),
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -758,14 +787,15 @@ mod tests {
                 heard.set(heard.get() + 1)
             })
         };
-        let bodies = || -> Vec<String> {
+        let bodies = || -> Vec<(u64, String)> {
             let mut cards = crate::pulse::cards(&dir).unwrap();
             cards.sort_by_key(|c| c.created_at);
             cards
                 .into_iter()
-                .map(|c| c.body.unwrap_or_default())
+                .map(|c| (c.created_at, c.body.unwrap_or_default()))
                 .collect()
         };
+        let noted = "No news since you last played. Your note from last time: finish this task";
 
         // Off: nothing moves, nothing is read and nothing posts.
         assert!(launch(1_000, &news).is_empty());
@@ -780,7 +810,10 @@ mod tests {
         assert!(launch(2_000, &news).is_empty());
         assert_eq!(*reads.borrow(), [1]);
         assert_eq!(lock(&session).playing, Some(game(7, "Hades")));
-        assert_eq!(bodies(), ["No news since you last played."]);
+        assert_eq!(
+            bodies(),
+            [(2_000, "No news since you last played.".to_string())]
+        );
 
         // Ping on, and a note in the user's own words: the card still goes
         // up, and it is the one to ping for.
@@ -792,10 +825,7 @@ mod tests {
             pings.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(),
             ["Back to Hades"]
         );
-        assert_eq!(
-            bodies(),
-            ["No news since you last played. Your note from last time: finish this task"]
-        );
+        assert_eq!(bodies(), [(3_000, noted.to_string())]);
 
         // Off lands while the news is read: no card and no ping.
         lock(&session).clear();
@@ -804,10 +834,14 @@ mod tests {
             Some(Vec::new())
         };
         assert!(launch(4_000, &off_midway).is_empty());
-        assert_eq!(
-            bodies(),
-            ["No news since you last played. Your note from last time: finish this task"]
-        );
+        assert_eq!(bodies(), [(3_000, noted.to_string())]);
+
+        // A card that can't be stored gets no ping.
+        set(&dir, true).unwrap();
+        lock(&session).clear();
+        std::fs::write(dir.join("updates.json"), "{ not a feed").unwrap();
+        assert!(launch(5_000, &news).is_empty());
+        assert_eq!(lock(&session).playing, Some(game(7, "Hades")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
