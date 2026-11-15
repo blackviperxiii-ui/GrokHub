@@ -341,3 +341,18 @@ fn a_pick_is_saved_as_offered_before_it_is_posted() {
     assert_eq!(*seen_at_post.borrow(), vec![true]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_tick_that_arrives_mid_check_makes_the_running_one_look_again() {
+    let gate = RunGate::new();
+    assert!(gate.begin(), "the first tick runs");
+    // Check now while it runs: it doesn't run itself...
+    assert!(!gate.begin());
+    assert!(!gate.begin());
+    // ...the running one looks once more, then ends.
+    assert!(gate.end());
+    assert!(!gate.end());
+    // Free again.
+    assert!(gate.begin());
+    assert!(!gate.end());
+}

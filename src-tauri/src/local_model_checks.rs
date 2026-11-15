@@ -7,7 +7,6 @@
 //! Nothing about this PC is sent: the only request is the public repo list.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -28,7 +27,47 @@ pub fn post_failed(why: &str) -> String {
     format!("Couldn't add a suggestion to Pulse ({why}). Trying again next week.")
 }
 
-static RUNNING: AtomicBool = AtomicBool::new(false);
+/// One check at a time. A tick that arrives while one runs (Check now, say)
+/// asks the running one to look again when it ends, so its "Checking…" note
+/// always gets an answer.
+pub(crate) struct RunGate(Mutex<(bool, bool)>);
+
+impl RunGate {
+    pub(crate) const fn new() -> Self {
+        RunGate(Mutex::new((false, false)))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, (bool, bool)> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// `true` when this caller runs now; `false` when one is running, which
+    /// will run again for it.
+    pub(crate) fn begin(&self) -> bool {
+        let mut s = self.lock();
+        let (running, again) = &mut *s;
+        if *running {
+            *again = true;
+            return false;
+        }
+        *running = true;
+        *again = false;
+        true
+    }
+
+    /// `true` when a tick asked meanwhile: run once more before ending.
+    pub(crate) fn end(&self) -> bool {
+        let mut s = self.lock();
+        let (running, again) = &mut *s;
+        if std::mem::take(again) {
+            return true;
+        }
+        *running = false;
+        false
+    }
+}
+
+static RUNNING: RunGate = RunGate::new();
 /// Held across each load, change and save of the tracker file, so a switch
 /// in Settings and a check finishing on the timer thread can't undo each
 /// other. Never held across a request.
@@ -196,14 +235,20 @@ pub fn start(config_dir: PathBuf) {
 /// both run. One run at a time.
 pub fn tick(dir: &Path, now: u64) {
     let caps = crate::capabilities::current();
-    if !caps.pulse || !caps.local_ai || RUNNING.swap(true, Ordering::SeqCst) {
+    if !caps.pulse || !caps.local_ai || !RUNNING.begin() {
         return;
     }
     let post = |card| crate::pulse::add_post(dir, card);
-    if let Some(note) = check_if_due(dir, now, &this_machine, &mut get, &post) {
-        set_note(&note);
+    let mut now = now;
+    loop {
+        if let Some(note) = check_if_due(dir, now, &this_machine, &mut get, &post) {
+            set_note(&note);
+        }
+        if !RUNNING.end() {
+            break;
+        }
+        now = grokhub_core::now_ms();
     }
-    RUNNING.store(false, Ordering::SeqCst);
 }
 
 /// [`tick`] with the PC and the network passed in. `None` when nothing ran.
@@ -257,9 +302,12 @@ pub fn set_on(dir: &Path, on: bool) -> Result<LocalModelNews, String> {
             t.on = true;
         } else {
             t.turn_off();
-            set_note("");
         }
         lm::save(dir, &t)?;
+        if !on {
+            // Under the lock, so a Check now can't land its note after this.
+            set_note("");
+        }
     }
     Ok(status(dir))
 }
@@ -274,8 +322,8 @@ pub fn check_now(dir: &Path) -> Result<LocalModelNews, String> {
         }
         t.last_check_ms = 0;
         lm::save(dir, &t)?;
+        set_note(CHECKING);
     }
-    set_note(CHECKING);
     let dir_owned = dir.to_path_buf();
     std::thread::spawn(move || tick(&dir_owned, grokhub_core::now_ms()));
     Ok(status(dir))
