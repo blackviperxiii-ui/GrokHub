@@ -19,14 +19,16 @@ describe("the envelope of a spoken reply", () => {
 
   it("scales to the 95th-percentile frame, so a shout clips instead of muting the rest", () => {
     const rate = 1000; // 20 samples a frame
-    const frame = (amp: number) => new Array<number>(20).fill(amp);
-    // One shout four times as loud in 40 frames sits above the 95th
-    // percentile: the steady part stays at the top and the shout clips.
-    const one = envelopeFromPcm([...Array.from({ length: 39 }, () => frame(0.2)).flat(), ...frame(0.8)], rate);
-    expect(one.slice(0, 39)).toEqual(new Array<number>(39).fill(1));
-    expect(one[39]).toBe(1);
-    // A quiet frame is its share of the steady part.
-    expect(envelopeFromPcm([...Array.from({ length: 39 }, () => frame(0.2)).flat(), ...frame(0.1)], rate)[39]).toBe(0.5);
+    const frames = (n: number, amp: number) => Array.from({ length: n }, () => new Array<number>(20).fill(amp)).flat();
+    // 100 frames, quietest to loudest: the 95th is one of the six at 0.4.
+    // A median or 90th-percentile scale would read 0.2, the loudest 0.8.
+    const env = envelopeFromPcm([...frames(1, 0.1), ...frames(92, 0.2), ...frames(6, 0.4), ...frames(1, 0.8)], rate);
+    expect(env).toHaveLength(100);
+    expect(env[0]).toBeCloseTo(0.25, 6);
+    expect(env[50]).toBeCloseTo(0.5, 6);
+    expect(env[95]).toBe(1);
+    // The shout clips.
+    expect(env[99]).toBe(1);
   });
 
   it("is all zeros for silence and empty for nothing", () => {

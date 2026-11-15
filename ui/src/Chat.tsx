@@ -3,6 +3,7 @@ import {
   memo,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -1466,6 +1467,12 @@ export function Chat({
     scrolledFor.current = items;
     followEnd(before);
   }, [items]);
+  // Voice mode's caption above the composer grows as they talk and makes
+  // the log shorter: a log that was at its end stays there.
+  const logAtEnd = useRef(true);
+  useLayoutEffect(() => {
+    if (logAtEnd.current) endRef.current?.scrollIntoView?.({ block: "end" });
+  }, [voice.caption]);
 
   function startOver(scratch = false) {
     if (busy) return false;
@@ -2243,7 +2250,17 @@ export function Chat({
         </p>
       )}
       {/* Focusable so the keyboard can scroll a long conversation. */}
-      <div ref={logRef} className="log" role="log" aria-live="polite" tabIndex={0}>
+      <div
+        ref={logRef}
+        className="log"
+        role="log"
+        aria-live="polite"
+        tabIndex={0}
+        onScroll={(e) => {
+          const log = e.currentTarget;
+          logAtEnd.current = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+        }}
+      >
         {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (
           <SignedOut remote={remote} grok={grokSignIn} onSignIn={onSignIn} />
         ) : (

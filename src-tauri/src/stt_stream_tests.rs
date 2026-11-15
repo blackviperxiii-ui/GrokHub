@@ -270,14 +270,21 @@ fn noise_alone_mid_listen_keeps_the_stream_listening() {
             ws,
             r#"{"type":"transcript.partial","text":"","is_final":true,"speech_final":true}"#,
         );
+        // Frames are handled in order: this caption arriving proves the
+        // empty final before it ended nothing.
+        say(
+            ws,
+            r#"{"type":"transcript.partial","text":"buy","is_final":false,"speech_final":false}"#,
+        );
         assert!(matches!(next(ws, got), Some(Got::Bin(_))));
         assert!(matches!(next(ws, got), Some(Got::Text(_))));
         say(ws, r#"{"type":"transcript.done","text":"Buy milk."}"#);
     });
     let dir = temp_dir("noise");
     let link = open_at(&dir, &url, KEY, &G, online).expect("a stream");
-    assert!(
-        link.news.recv_timeout(Duration::from_millis(300)).is_err(),
+    assert_eq!(
+        news(&link.news),
+        SttNews::Caption("buy".into()),
         "noise ends no turn"
     );
     link.audio.send(vec![7]).expect("audio");
@@ -319,4 +326,22 @@ fn offline_only_mid_listen_stops_the_audio() {
     assert_eq!(news(&link.news), SttNews::Failed(OFFLINE.into()));
     let seen = seen.join().expect("fake");
     assert_eq!(seen.got, vec![Got::Bin(vec![1, 0])], "nothing after");
+}
+
+#[test]
+fn a_turn_over_before_the_server_is_ready_sends_nothing_and_ends() {
+    static G: Gate = Gate::new();
+    // The server never says it is ready.
+    let (url, seen) = fake(|_, _| {});
+    let dir = temp_dir("not-ready");
+    let link = open_at(&dir, &url, KEY, &G, online).expect("a stream");
+    link.audio.send(vec![1]).expect("audio");
+    drop(link.audio);
+    let from = Instant::now();
+    assert!(matches!(
+        link.news.recv_timeout(WAIT),
+        Err(RecvTimeoutError::Disconnected)
+    ));
+    assert!(from.elapsed() < FINAL_WAIT, "ends at once");
+    assert_eq!(seen.join().expect("fake").got, Vec::<Got>::new());
 }
