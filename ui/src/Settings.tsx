@@ -82,6 +82,7 @@ export function Settings({
   onClose,
   backTo,
   onProfile,
+  onOpenConnectors,
 }: {
   caps: Capabilities;
   goTo?: { section: Section; n: number; model?: string };
@@ -91,6 +92,8 @@ export function Settings({
   backTo?: string;
   /** The profile after a change in Account, so the rail shows it at once. */
   onProfile?: (p: Profile) => void;
+  /** Opens the Connectors page, from the Labs note about MCP servers. */
+  onOpenConnectors?: () => void;
 }) {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [desktopControl, setDesktopControl] = useState(false);
@@ -318,7 +321,7 @@ export function Settings({
             )}
             {section === "aiModels" && caps.localAi && <AiModels />}
             {section === "webAccess" && caps.webAccess && <WebAccess />}
-            {section === "labs" && caps.plugins && <Labs />}
+            {section === "labs" && caps.plugins && <Labs onOpenConnectors={onOpenConnectors} />}
             {section === "about" && <About version={loaded.version} />}
           </section>
         </div>

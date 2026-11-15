@@ -2811,11 +2811,24 @@ export function getDeviceGlance(): Promise<DeviceGlance | null> {
 }
 
 /** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */
+/** One labelled line of a bundle's summary (src-tauri/src/plugins.rs `Part`). */
+export interface PluginPart {
+  /** Empty when the line has no known label. */
+  label: string;
+  text: string;
+  /** A refused part, or a reason the bundle can't be trusted. */
+  warn: boolean;
+}
+
 export interface PluginRow {
   name: string;
   version: string;
   /** What the bundle brings: skills, hooks, MCP servers, agents. */
   summary: string;
+  /** The manifest's description, shown once under the title. */
+  description: string;
+  /** The summary split into labelled lines, without the title and description. */
+  parts: PluginPart[];
   trusted: boolean;
   enabled: boolean;
   /** Installed through GrokHub, so it can be removed here. */
@@ -2839,6 +2852,8 @@ export interface PluginEntry {
 export interface PluginMarket {
   entries: PluginEntry[];
   page: PluginPage;
+  /** The index was really read, so no entries means it is empty. */
+  read: boolean;
 }
 
 export interface DiagnosticsPage {
