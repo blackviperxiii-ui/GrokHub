@@ -12,10 +12,11 @@ trap 'rm -rf "$TMP"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export REAL_GIT
 
-# Stub cargo (xtask bump --check always ok) and a git shim that can fail one subcommand.
+# Stub cargo (xtask bump --check always ok) and a git shim that can fail one
+# subcommand (FAIL_GIT_SUBCMD) or one exact command line (FAIL_GIT_ARGS).
 mkdir -p "$TMP/shim"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$TMP/shim/cargo"
-printf '#!/usr/bin/env bash\nif [[ "${1:-}" == "${FAIL_GIT_SUBCMD:-}" ]]; then exit 2; fi\nexec "$REAL_GIT" "$@"\n' >"$TMP/shim/git"
+printf '#!/usr/bin/env bash\nif [[ "${1:-}" == "${FAIL_GIT_SUBCMD:-}" ]]; then exit 2; fi\nif [[ -n "${FAIL_GIT_ARGS:-}" && "$*" == "$FAIL_GIT_ARGS" ]]; then exit 2; fi\nexec "$REAL_GIT" "$@"\n' >"$TMP/shim/git"
 chmod +x "$TMP/shim/cargo" "$TMP/shim/git"
 
 "$REAL_GIT" init -q --bare -b beta "$TMP/origin.git"
@@ -94,7 +95,7 @@ failed=0
 # run_guard <expect: pass|fail> <name> [FAIL_GIT_SUBCMD]
 run_guard() {
   local expect="$1" name="$2" shim="${3:-}" rc=0
-  PATH="$TMP/shim:$PATH" FAIL_GIT_SUBCMD="$shim" GITHUB_EVENT_NAME=pull_request \
+  PATH="$TMP/shim:$PATH" FAIL_GIT_SUBCMD="$shim" FAIL_GIT_ARGS="${FAIL_GIT_ARGS:-}" GITHUB_EVENT_NAME=pull_request \
     GITHUB_BASE_REF=beta GITHUB_PR_LABELS="${LABELS:-none}" \
     bash "$W/scripts/ci-guards.sh" >"$TMP/out.log" 2>&1 || rc=$?
   if { [[ "$expect" == pass && $rc -eq 0 ]] || [[ "$expect" == fail && $rc -ne 0 ]]; }; then
@@ -124,11 +125,76 @@ run_guard pass "baseline harmless PR passes"
 
 run_guard fail "git grep error fails" grep
 run_guard fail "git diff error fails" diff
+# Only the case-clash guard runs exactly `git ls-files -z`.
+FAIL_GIT_ARGS="ls-files -z" run_guard fail "git ls-files -z error fails"
 
 fresh_pr
 printf '<<<<<<< HEAD\n' >>"$W/VERSION.txt"
 commit_pr
 run_guard fail "conflict marker fails"
+
+fresh_pr
+printf 'a\n' >"$W/Notes.md"
+printf 'b\n' >"$W/notes.md"
+commit_pr
+run_guard fail "two paths that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/docs/Guide" "$W/docs/guide"
+printf 'a\n' >"$W/docs/Guide/a.md"
+printf 'b\n' >"$W/docs/guide/b.md"
+commit_pr
+run_guard fail "two folders that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/ui/src"
+printf 'export {};\n' >"$W/ui/src/ChatFind.tsx"
+printf 'export {};\n' >"$W/ui/src/chatFind.ts"
+commit_pr
+run_guard fail "JS/TS modules that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/ui/src/games"
+printf 'export {};\n' >"$W/ui/src/Games.tsx"
+printf 'export {};\n' >"$W/ui/src/games/index.tsx"
+commit_pr
+run_guard fail "a module and a folder index that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/ui/src"
+printf 'export {};\n' >"$W/ui/src/Foo.mts"
+printf 'export {};\n' >"$W/ui/src/foo.d.mts"
+commit_pr
+run_guard fail "a .mts module and a .d.mts that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/docs/guide"
+printf 'a\n' >"$W/docs/Guide"
+printf 'b\n' >"$W/docs/guide/a.md"
+commit_pr
+run_guard fail "a file and a folder that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/docs"
+printf 'a\n' >"$W/docs/Été.md"
+printf 'b\n' >"$W/docs/été.md"
+commit_pr
+run_guard fail "non-ASCII names that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/docs"
+printf 'a\n' >"$W/docs/ς.md"
+printf 'b\n' >"$W/docs/σ.md"
+commit_pr
+run_guard fail "final sigma and sigma, one name on Windows, fail"
+
+fresh_pr
+mkdir -p "$W/ui/src/Panel" "$W/ui/src/games"
+for f in ChatFindBar.tsx chatFind.ts chatFind.test.ts types.d.ts types.ts Panel.tsx Panel/index.tsx Games.tsx games/Wow.tsx straße.ts strasse.ts; do
+  printf 'export {};\n' >"$W/ui/src/$f"
+done
+commit_pr
+run_guard pass "distinct module names, a .d.ts beside its module, a same-case folder index, a folder without one, and ß beside ss pass"
 
 fresh_pr
 printf '[workspace]\nversion = "1.0.1"\n' >"$W/Cargo.toml"
