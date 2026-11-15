@@ -7,10 +7,11 @@
 //! usually already there. Anything that goes wrong is reported once, and the
 //! turn falls back to the one-shot upload ([`crate::voice::transcribe`]).
 
+use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -30,6 +31,8 @@ const FINAL_WAIT: Duration = Duration::from_secs(2);
 /// Read timeout while streaming: how often new audio goes out.
 const POLL: Duration = Duration::from_millis(30);
 const CONNECT: Duration = Duration::from_secs(5);
+/// Offline only came on while the stream ran.
+const OFFLINE: &str = "speech stream stopped: Offline only is on";
 /// How long hearing a turn waits for the stream's words before it uploads.
 #[cfg(not(test))]
 pub const HEAR_WAIT: Duration = Duration::from_millis(2500);
@@ -54,18 +57,30 @@ pub struct SttLink {
     pub news: Receiver<SttNews>,
 }
 
-/// Set when the server refuses this sign-in for streaming (401 or 403): later
-/// listens go straight to the one-shot upload instead of trying again.
-pub struct Gate(AtomicBool);
+/// The key the server refused for streaming (401 or 403), as a hash: later
+/// listens with that key go straight to the one-shot upload instead of trying
+/// again. A new key gets its own try.
+pub struct Gate(AtomicU64);
 
 impl Gate {
     pub const fn new() -> Self {
-        Self(AtomicBool::new(false))
+        Self(AtomicU64::new(0))
     }
 
-    fn shut(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+    fn shut_for(&self, bearer: &str) -> bool {
+        self.0.load(Ordering::SeqCst) == key_hash(bearer)
     }
+
+    fn shut(&self, bearer: &str) {
+        self.0.store(key_hash(bearer), Ordering::SeqCst);
+    }
+}
+
+/// Never 0, the gate's "nothing refused".
+fn key_hash(bearer: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bearer.hash(&mut h);
+    h.finish().max(1)
 }
 
 static GATE: Gate = Gate::new();
@@ -78,17 +93,14 @@ pub struct StreamTarget {
 }
 
 /// The loopback fake in tests, else xAI with the speech-to-text key. `None`
-/// without a key, or when traffic goes through a proxy (the plain socket
-/// can't; the upload honors it).
+/// without a key. Like the upload, the socket dials direct, not through an
+/// env proxy.
 pub fn target() -> Option<StreamTarget> {
     if let Some(url) = ws_loopback_override(std::env::var(TEST_WS_ENV).ok().as_deref()) {
         return Some(StreamTarget {
             url,
             bearer: crate::credential::LOOPBACK_TEST_BEARER.into(),
         });
-    }
-    if behind_proxy() {
-        return None;
     }
     Some(StreamTarget {
         url: grokhub_core::stt_stream::stt_stream_url(&[
@@ -99,22 +111,31 @@ pub fn target() -> Option<StreamTarget> {
     })
 }
 
-/// A stream for one listen to `to`. `None` when it can't be used: refused
-/// earlier this run, or the egress guard says no.
+/// A stream for one listen to `to`. `None` when it can't be used: this key
+/// was refused earlier this run, or the egress guard says no.
 pub fn open(config_dir: &Path, to: &StreamTarget) -> Option<SttLink> {
-    open_at(config_dir, &to.url, &to.bearer, &GATE)
+    open_at(
+        config_dir,
+        &to.url,
+        &to.bearer,
+        &GATE,
+        grokhub_core::offline::enabled,
+    )
 }
 
 /// [`open`] against `url` with `bearer`, refused for the run by `gate`.
-/// The egress guard runs here, on the caller's thread, before any socket.
+/// The egress guard runs here, on the caller's thread, before any socket;
+/// `offline` is asked again before each block goes out, so turning Offline
+/// only on mid-listen stops the audio.
 pub(crate) fn open_at(
     config_dir: &Path,
     url: &str,
     bearer: &str,
     gate: &'static Gate,
+    offline: fn() -> bool,
 ) -> Option<SttLink> {
     let bearer = bearer.trim().to_string();
-    if bearer.is_empty() || gate.shut() {
+    if bearer.is_empty() || gate.shut_for(&bearer) {
         return None;
     }
     hx::guard_quiet(config_dir, &hx::EgressReq::new(url, &[hx::DataClass::Chat])).ok()?;
@@ -124,7 +145,7 @@ pub(crate) fn open_at(
     std::thread::Builder::new()
         .name("voice-stt".into())
         .spawn(move || {
-            if let Err(e) = stream(&url, &bearer, gate, &audio_rx, &news_tx) {
+            if let Err(e) = stream(&url, &bearer, gate, offline, &audio_rx, &news_tx) {
                 let _ = news_tx.send(SttNews::Failed(e));
             }
         })
@@ -168,13 +189,6 @@ pub fn final_words(news: &Receiver<SttNews>, wait: Duration) -> Option<String> {
     }
 }
 
-/// A proxy the plain socket can't go through; the upload path honors it.
-fn behind_proxy() -> bool {
-    ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
-        .iter()
-        .any(|k| std::env::var(k).is_ok_and(|v| !v.trim().is_empty()))
-}
-
 type Socket = tungstenite::WebSocket<MaybeTlsStream<TcpStream>>;
 
 /// TCP with a timeout to the URL's host and port, TLS (rustls, ring, webpki
@@ -216,7 +230,7 @@ fn connect(url: &str, bearer: &str, gate: &Gate) -> Result<Socket, String> {
         Err(tungstenite::HandshakeError::Failure(tungstenite::Error::Http(resp))) => {
             let code = resp.status().as_u16();
             if matches!(code, 401 | 403) {
-                gate.0.store(true, Ordering::SeqCst);
+                gate.shut(bearer);
             }
             Err(format!("speech stream refused ({code})"))
         }
@@ -236,6 +250,7 @@ fn stream(
     url: &str,
     bearer: &str,
     gate: &Gate,
+    offline: fn() -> bool,
     audio: &Receiver<Vec<i16>>,
     news: &Sender<SttNews>,
 ) -> Result<(), String> {
@@ -264,6 +279,11 @@ fn stream(
             }
         }
         if ready {
+            if !pending.is_empty() && offline() {
+                let _ = ws.close(None);
+                let _ = ws.flush();
+                return Err(OFFLINE.into());
+            }
             for block in pending.drain(..) {
                 ws.send(Message::binary(pcm_bytes(&block)))
                     .map_err(|e| e.to_string())?;

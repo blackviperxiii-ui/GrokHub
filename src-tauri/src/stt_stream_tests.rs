@@ -9,6 +9,11 @@ use std::thread::JoinHandle;
 use super::*;
 
 const KEY: &str = "sk-abcdefghijklmnopqrstuv";
+
+/// Offline only stays off.
+fn online() -> bool {
+    false
+}
 const WAIT: Duration = Duration::from_secs(5);
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -95,7 +100,7 @@ fn blocks_go_out_as_16_bit_little_endian() {
 fn no_key_means_no_stream() {
     static G: Gate = Gate::new();
     let dir = temp_dir("no-key");
-    assert!(open_at(&dir, "ws://127.0.0.1:9/v1/stt", "  ", &G).is_none());
+    assert!(open_at(&dir, "ws://127.0.0.1:9/v1/stt", "  ", &G, online).is_none());
 }
 
 #[test]
@@ -126,6 +131,15 @@ fn only_a_plain_ws_loopback_override_counts() {
 fn audio_waits_for_ready_then_goes_out_and_finalize_brings_the_words() {
     static G: Gate = Gate::new();
     let (url, seen) = fake(|ws, got| {
+        // The client holds its audio until the server is ready.
+        let tcp = ws.get_ref();
+        tcp.set_read_timeout(Some(Duration::from_millis(400)))
+            .expect("timeout");
+        assert!(
+            matches!(ws.read(), Err(tungstenite::Error::Io(_))),
+            "no audio before ready"
+        );
+        ws.get_ref().set_read_timeout(Some(WAIT)).expect("timeout");
         say(ws, r#"{"type":"transcript.created"}"#);
         assert!(matches!(next(ws, got), Some(Got::Bin(_))));
         say(
@@ -139,7 +153,7 @@ fn audio_waits_for_ready_then_goes_out_and_finalize_brings_the_words() {
         );
     });
     let dir = temp_dir("finalize");
-    let link = open_at(&dir, &url, KEY, &G).expect("a stream");
+    let link = open_at(&dir, &url, KEY, &G, online).expect("a stream");
     link.audio.send(vec![1, -2, 256]).expect("audio");
     assert_eq!(news(&link.news), SttNews::Caption("remind me".into()));
     drop(link.audio);
@@ -169,7 +183,7 @@ fn smart_turn_ends_the_turn_before_finalize() {
         );
     });
     let dir = temp_dir("smart");
-    let link = open_at(&dir, &url, KEY, &G).expect("a stream");
+    let link = open_at(&dir, &url, KEY, &G, online).expect("a stream");
     assert_eq!(news(&link.news), SttNews::Ended("Buy milk.".into()));
     // The audio side is still open, yet nothing asked for the words.
     let seen = seen.join().expect("fake");
@@ -185,7 +199,7 @@ fn a_server_error_is_reported_once() {
         say(ws, r#"{"type":"error","message":"bad audio"}"#);
     });
     let dir = temp_dir("error");
-    let link = open_at(&dir, &url, KEY, &G).expect("a stream");
+    let link = open_at(&dir, &url, KEY, &G, online).expect("a stream");
     assert_eq!(
         news(&link.news),
         SttNews::Failed("speech stream: bad audio".into())
@@ -210,16 +224,19 @@ fn a_refused_upgrade_turns_streaming_off_for_the_run() {
         .expect("answer");
     });
     let dir = temp_dir("refused");
-    let link = open_at(&dir, &url, KEY, &G).expect("a stream");
+    let link = open_at(&dir, &url, KEY, &G, online).expect("a stream");
     assert_eq!(
         news(&link.news),
         SttNews::Failed("speech stream refused (401)".into())
     );
     server.join().expect("server");
     assert!(
-        open_at(&dir, &url, KEY, &G).is_none(),
+        open_at(&dir, &url, KEY, &G, online).is_none(),
         "refused for the run"
     );
+    // A new key gets its own try.
+    let other = open_at(&dir, &url, "sk-zyxwvutsrqponmlkjihgf", &G, online);
+    assert!(other.is_some(), "a new key tries again");
 }
 
 #[test]
@@ -241,5 +258,65 @@ fn offline_only_opens_no_stream() {
     static G: Gate = Gate::new();
     let _off = grokhub_core::offline::force_for_thread(true);
     let dir = temp_dir("offline");
-    assert!(open_at(&dir, "wss://api.x.ai/v1/stt", KEY, &G).is_none());
+    assert!(open_at(&dir, "wss://api.x.ai/v1/stt", KEY, &G, online).is_none());
+}
+
+#[test]
+fn noise_alone_mid_listen_keeps_the_stream_listening() {
+    static G: Gate = Gate::new();
+    let (url, seen) = fake(|ws, got| {
+        say(ws, r#"{"type":"transcript.created"}"#);
+        say(
+            ws,
+            r#"{"type":"transcript.partial","text":"","is_final":true,"speech_final":true}"#,
+        );
+        assert!(matches!(next(ws, got), Some(Got::Bin(_))));
+        assert!(matches!(next(ws, got), Some(Got::Text(_))));
+        say(ws, r#"{"type":"transcript.done","text":"Buy milk."}"#);
+    });
+    let dir = temp_dir("noise");
+    let link = open_at(&dir, &url, KEY, &G, online).expect("a stream");
+    assert!(
+        link.news.recv_timeout(Duration::from_millis(300)).is_err(),
+        "noise ends no turn"
+    );
+    link.audio.send(vec![7]).expect("audio");
+    drop(link.audio);
+    assert_eq!(news(&link.news), SttNews::Ended("Buy milk.".into()));
+    let seen = seen.join().expect("fake");
+    assert_eq!(
+        seen.got,
+        vec![
+            Got::Bin(vec![7, 0]),
+            Got::Text(r#"{"type":"finalize"}"#.into()),
+        ]
+    );
+}
+
+static OFFLINE_NOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn offline_now() -> bool {
+    OFFLINE_NOW.load(Ordering::SeqCst)
+}
+
+#[test]
+fn offline_only_mid_listen_stops_the_audio() {
+    static G: Gate = Gate::new();
+    let (url, seen) = fake(|ws, got| {
+        say(ws, r#"{"type":"transcript.created"}"#);
+        assert!(matches!(next(ws, got), Some(Got::Bin(_))));
+        say(
+            ws,
+            r#"{"type":"transcript.partial","text":"remind me","is_final":false,"speech_final":false}"#,
+        );
+    });
+    let dir = temp_dir("offline-mid");
+    let link = open_at(&dir, &url, KEY, &G, offline_now).expect("a stream");
+    link.audio.send(vec![1]).expect("audio");
+    assert_eq!(news(&link.news), SttNews::Caption("remind me".into()));
+    OFFLINE_NOW.store(true, Ordering::SeqCst);
+    let _ = link.audio.send(vec![2]);
+    assert_eq!(news(&link.news), SttNews::Failed(OFFLINE.into()));
+    let seen = seen.join().expect("fake");
+    assert_eq!(seen.got, vec![Got::Bin(vec![1, 0])], "nothing after");
 }
