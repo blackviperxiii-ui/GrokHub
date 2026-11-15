@@ -4302,6 +4302,25 @@ export interface SteamPulse {
   wishPrivate: boolean;
 }
 
+/** Settings → Pulse: weekly suggestions of local models that fit this PC. */
+export interface LocalModelNews {
+  on: boolean;
+  /** What the last check said; empty while off or before one ran. */
+  note: string;
+}
+
+export function getLocalModelNews(): Promise<LocalModelNews> {
+  return invoke<LocalModelNews>("get_local_model_news");
+}
+
+export function setLocalModelNews(on: boolean): Promise<LocalModelNews> {
+  return invoke<LocalModelNews>("set_local_model_news", { on });
+}
+
+export function localModelNewsCheckNow(): Promise<LocalModelNews> {
+  return invoke<LocalModelNews>("local_model_news_check_now");
+}
+
 export function getSteamPulse(): Promise<SteamPulse> {
   return invoke<SteamPulse>("get_steam_pulse");
 }

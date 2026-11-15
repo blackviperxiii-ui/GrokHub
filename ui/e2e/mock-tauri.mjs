@@ -759,6 +759,12 @@ export function initScript(theme = "ops-dark") {
         case "forget_steam_id":
         case "steam_check_now":
           return fix.steamPulse;
+        case "get_local_model_news":
+          return { on: false, note: "" };
+        case "set_local_model_news":
+          return { on: Boolean(args?.on), note: "" };
+        case "local_model_news_check_now":
+          return { on: true, note: "Checking for new local models…" };
         case "get_know_me":
           return fix.knowMe;
         case "set_know_me_on":
