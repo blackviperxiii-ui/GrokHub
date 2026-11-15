@@ -79,13 +79,61 @@ fn a_failed_lookup_still_waits_a_day() {
 #[test]
 fn downloads_go_only_to_githubs_release_hosts() {
     let dir = temp_dir("hosts");
-    for url in [
-        "http://github.com/blackviperxiii-ui/GrokHub/releases/download/v1/local_catalog.toml",
-        "https://example.com/local_catalog.toml",
-        "https://127.0.0.1/local_catalog.toml",
+    for (url, why) in [
+        (
+            "http://github.com/blackviperxiii-ui/GrokHub/releases/download/v1/local_catalog.toml",
+            "model catalog download must use HTTPS",
+        ),
+        (
+            "https://example.com/local_catalog.toml",
+            "model catalog download host example.com is not on the allowlist",
+        ),
+        (
+            "https://127.0.0.1/local_catalog.toml",
+            "model catalog download host 127.0.0.1 is not on the allowlist",
+        ),
+        (
+            "https://localhost/local_catalog.toml",
+            "model catalog download host localhost is not allowed",
+        ),
     ] {
-        let got = download(&dir, url, cu::MAX_BYTES);
-        assert!(got.is_err(), "{url}");
+        assert_eq!(
+            download(&dir, url, cu::MAX_BYTES),
+            Err(why.to_string()),
+            "{url}"
+        );
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn offline_only_skips_the_look_without_counting_it() {
+    let dir = temp_dir("offline");
+    let _offline = grokhub_core::offline::force_for_thread(true);
+    let never = |_: &Path, _: Channel| -> Result<Release, String> {
+        panic!("no lookup while Offline only is on")
+    };
+    assert_eq!(run(&dir, 7_000, &never, &mut no_download), Ok(None));
+    assert!(
+        cu::due(&dir, 7_000),
+        "the look runs once Offline only is off"
+    );
+    drop(_offline);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_new_update_channel_drops_the_old_channels_catalog() {
+    let dir = temp_dir("switch");
+    crate::shell_update::set_channel(&dir, Channel::Beta).expect("beta");
+    std::fs::create_dir_all(cu::dir(&dir)).expect("catalog dir");
+    std::fs::write(cu::dir(&dir).join(cu::FILE), "version = 99").expect("saved");
+    cu::stamp(&dir, 9_000);
+    // The same channel again keeps it.
+    crate::shell_update::set_channel(&dir, Channel::Beta).expect("beta again");
+    assert!(cu::dir(&dir).join(cu::FILE).exists());
+    crate::shell_update::set_channel(&dir, Channel::Stable).expect("stable");
+    assert!(!cu::dir(&dir).join(cu::FILE).exists());
+    assert!(cu::due(&dir, 9_001), "the new channel is looked at at once");
     let _ = std::fs::remove_dir_all(&dir);
 }

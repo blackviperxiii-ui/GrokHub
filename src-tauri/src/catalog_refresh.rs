@@ -54,7 +54,8 @@ pub fn tick(dir: &Path, now: u64) {
 /// [`tick`] with the network passed in. `Ok(Some(v))` when catalog `v` was
 /// saved.
 pub(crate) fn run(dir: &Path, now: u64, find: Find, get: cu::Get) -> Result<Option<u32>, String> {
-    if !cu::due(dir, now) {
+    // Offline only: no look, and none counted, so it runs once that's off.
+    if !cu::due(dir, now) || grokhub_core::offline::refuse().is_err() {
         return Ok(None);
     }
     // Stamped before any request, so a failed look also waits a day.
@@ -78,7 +79,7 @@ fn download(dir: &Path, url: &str, cap: u64) -> Result<Vec<u8>, String> {
         ..Default::default()
     });
     let check = |hop: &str| {
-        grokhub_core::ssrf::runtime_download_url_ok(hop)?;
+        grokhub_core::ssrf::github_download_url_ok(hop, "model catalog download")?;
         hx::guard_quiet(dir, &hx::EgressReq::new(hop, &[]))
     };
     let resp = grokhub_core::http::get_following(
@@ -90,7 +91,8 @@ fn download(dir: &Path, url: &str, cap: u64) -> Result<Vec<u8>, String> {
         &check,
     )?;
     if resp.status() != 200 {
-        return Err(format!("GitHub answered HTTP {}", resp.status()));
+        let name = url.rsplit('/').next().unwrap_or(url);
+        return Err(format!("GitHub answered HTTP {} for {name}", resp.status()));
     }
     let mut body = Vec::new();
     resp.into_reader()
@@ -98,7 +100,8 @@ fn download(dir: &Path, url: &str, cap: u64) -> Result<Vec<u8>, String> {
         .read_to_end(&mut body)
         .map_err(|e| e.to_string())?;
     if body.len() as u64 > cap {
-        return Err("the file is larger than expected".into());
+        let name = url.rsplit('/').next().unwrap_or(url);
+        return Err(format!("{name} is larger than expected"));
     }
     Ok(body)
 }

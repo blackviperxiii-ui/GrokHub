@@ -94,6 +94,35 @@ fn a_look_waits_a_day() {
     stamp(&cfg, 1_000);
     assert!(!due(&cfg, 1_000 + CHECK_EVERY_MS - 1));
     assert!(due(&cfg, 1_000 + CHECK_EVERY_MS));
+    // Stamped while the clock ran ahead: due again once it is set back.
+    stamp(&cfg, 1_000 + 10 * CHECK_EVERY_MS);
+    assert!(due(&cfg, 1_000 + CHECK_EVERY_MS));
+    let _ = std::fs::remove_dir_all(&cfg);
+}
+
+#[test]
+fn forgetting_drops_the_saved_catalog_and_its_stamp() {
+    let cfg = temp("forget");
+    assert_eq!(adopt(&cfg, PUB, 2, TEXT, SUMS, SIG), Ok(Some(99)));
+    stamp(&cfg, 5_000);
+    forget(&cfg);
+    assert_eq!(saved_with(&cfg, PUB, 2), None);
+    assert!(due(&cfg, 5_001));
+    let _ = std::fs::remove_dir_all(&cfg);
+}
+
+#[test]
+fn a_save_that_cant_write_keeps_the_old_catalog_and_looks_again() {
+    let cfg = temp("full");
+    assert_eq!(adopt(&cfg, PUB, 2, TEXT, SUMS, SIG), Ok(Some(99)));
+    stamp(&cfg, 5_000);
+    // The signature's part file can't be written (a folder is in the way).
+    std::fs::create_dir_all(dir(&cfg).join(format!("{}.part", rv::SIG_NAME))).unwrap();
+    let got = adopt(&cfg, PUB, 2, TEXT, SUMS, SIG).unwrap_err();
+    assert!(got.starts_with("SHA256SUMS.minisig: "), "{got}");
+    // Nothing saved was replaced, so the saved catalog still verifies.
+    assert_eq!(saved_with(&cfg, PUB, 2).as_deref(), Some(TEXT));
+    assert!(due(&cfg, 5_001), "the next look runs at once");
     let _ = std::fs::remove_dir_all(&cfg);
 }
 
@@ -205,7 +234,7 @@ fn a_catalog_that_isnt_text_is_refused() {
     };
     assert_eq!(
         refresh(PUB, &rel, &cfg, &mut get),
-        Err("not text".to_string())
+        Err("local_catalog.toml isn't text".to_string())
     );
     assert!(!dir(&cfg).join(FILE).exists());
     let _ = std::fs::remove_dir_all(&cfg);

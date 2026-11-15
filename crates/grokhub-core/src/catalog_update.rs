@@ -91,13 +91,30 @@ pub fn adopt(
         return Ok(None);
     }
     let dir = dir(config_dir);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("catalog folder: {e}"))?;
-    for (name, body) in [(FILE, text), (rv::SUMS_NAME, sums), (rv::SIG_NAME, sig)] {
-        let tmp = dir.join(format!("{name}.part"));
-        std::fs::write(&tmp, body).map_err(|e| format!("{name}: {e}"))?;
-        std::fs::rename(&tmp, dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
-    }
+    save_all(
+        &dir,
+        [(FILE, text), (rv::SUMS_NAME, sums), (rv::SIG_NAME, sig)],
+    )
+    .inspect_err(|_| {
+        // A disk or file-lock failure, not a bad catalog: look again next time.
+        let _ = std::fs::remove_file(dir.join(STAMP));
+    })?;
     Ok(Some(v))
+}
+
+/// Write every file beside its final name, then rename them all, so a full
+/// disk stops the save before any saved file is replaced.
+fn save_all(dir: &Path, files: [(&str, &str); 3]) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("catalog folder: {e}"))?;
+    for (name, body) in files {
+        std::fs::write(dir.join(format!("{name}.part")), body)
+            .map_err(|e| format!("{name}: {e}"))?;
+    }
+    for (name, _) in files {
+        std::fs::rename(dir.join(format!("{name}.part")), dir.join(name))
+            .map_err(|e| format!("{name}: {e}"))?;
+    }
+    Ok(())
 }
 
 /// A capped GET, `(url, byte cap) -> body`, that refuses a body over the cap.
@@ -120,12 +137,12 @@ pub fn refresh(
     let Some([cat, sums, sig]) = assets(rel) else {
         return Ok(None);
     };
-    let mut text = |url: &str, cap: u64| -> Result<String, String> {
-        String::from_utf8(get(url, cap)?).map_err(|_| "not text".to_string())
+    let mut text = |asset: &ReleaseAsset, cap: u64| -> Result<String, String> {
+        String::from_utf8(get(&asset.url, cap)?).map_err(|_| format!("{} isn't text", asset.name))
     };
-    let sums = text(&sums.url, TEXT_CAP)?;
-    let sig = text(&sig.url, TEXT_CAP)?;
-    let cat = text(&cat.url, MAX_BYTES)?;
+    let sums = text(sums, TEXT_CAP)?;
+    let sig = text(sig, TEXT_CAP)?;
+    let cat = text(cat, MAX_BYTES)?;
     adopt(
         config_dir,
         pubkey,
@@ -145,12 +162,20 @@ pub fn current_version(config_dir: &Path) -> u32 {
         .map_or(bundled, |(v, _)| v.max(bundled))
 }
 
-/// Whether a day has passed since the last look (a missing stamp is due).
+/// Whether a day has passed since the last look. A missing stamp is due, and
+/// so is one later than now (the clock was set back).
 pub fn due(config_dir: &Path, now_ms: u64) -> bool {
     std::fs::read_to_string(dir(config_dir).join(STAMP))
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
-        .is_none_or(|last| now_ms.saturating_sub(last) >= CHECK_EVERY_MS)
+        .is_none_or(|last| last > now_ms || now_ms - last >= CHECK_EVERY_MS)
+}
+
+/// Drop the saved catalog and its stamp, so the built-in one is used from
+/// the next start and the next look runs at once. For a change of update
+/// channel: a catalog from the old channel's releases mustn't stay.
+pub fn forget(config_dir: &Path) {
+    let _ = std::fs::remove_dir_all(dir(config_dir));
 }
 
 /// Note a look, found or not, so a failure also waits a day.

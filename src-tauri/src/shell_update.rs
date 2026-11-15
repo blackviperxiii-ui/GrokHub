@@ -72,6 +72,10 @@ pub fn channel(config_dir: &Path) -> Channel {
 /// Write the shared channel receipt, the way the cabin's switch does: a
 /// switch drops the Beta auto-off baseline.
 pub fn set_channel(config_dir: &Path, channel: Channel) -> Result<(), String> {
+    // A model catalog saved from the old channel's releases mustn't outlive it.
+    if self::channel(config_dir) != channel {
+        grokhub_core::catalog_update::forget(config_dir);
+    }
     std::fs::create_dir_all(config_dir).map_err(|e| format!("channel receipt: {e}"))?;
     std::fs::write(config_dir.join(CHANNEL_RECEIPT), channel.receipt())
         .map_err(|e| format!("channel receipt: {e}"))?;
