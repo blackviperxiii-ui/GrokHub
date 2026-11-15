@@ -273,6 +273,12 @@ describe("Chat and her desktop pedestal", () => {
       rerender(<Chat onOpenSettings={() => {}} />);
       expect(scrolls.mock.calls).toEqual([[{ block: "nearest" }]]);
       expect(scrolls.mock.contexts[0]).toBe(match);
+      // They scroll away to read: the match stays where they left it.
+      vi.spyOn(match!, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 2000, 100, 40));
+      scrolls.mockClear();
+      voices.caption = "remind me to call";
+      rerender(<Chat onOpenSettings={() => {}} />);
+      expect(scrolls).not.toHaveBeenCalled();
     } finally {
       Element.prototype.scrollIntoView = was;
     }

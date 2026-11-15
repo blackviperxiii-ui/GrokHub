@@ -836,6 +836,14 @@ function LogItem({
   }
 }
 
+/** Whether `row` showed in the log before the log lost `shrunk` pixels at
+ * its bottom. */
+function wasInView(row: Element, log: Element, shrunk: number): boolean {
+  const r = row.getBoundingClientRect();
+  const l = log.getBoundingClientRect();
+  return r.bottom >= l.top && r.top <= l.bottom + Math.max(shrunk, 0);
+}
+
 /** Whether the log is scrolled to (within a few pixels of) its end. */
 function atLogEnd(log: HTMLElement): boolean {
   return log.scrollHeight - log.scrollTop - log.clientHeight < 24;
@@ -1478,11 +1486,16 @@ export function Chat({
   }, [items]);
   // Voice mode's caption above the composer grows as they talk and makes
   // the log shorter: a log that was at its end stays there. With find open
-  // the match stays in view instead.
+  // a match that was in view stays in view instead; one they scrolled away
+  // from stays where they left it.
+  const logHeight = useRef(0);
   const keepAtEnd = useEffectEvent(() => {
     const log = logRef.current;
+    const shrunk = log ? logHeight.current - log.clientHeight : 0;
+    if (log) logHeight.current = log.clientHeight;
     if (findOpen) {
-      if (log) findRow(log, current)?.scrollIntoView?.({ block: "nearest" });
+      const row = log && findRow(log, current);
+      if (row && log && wasInView(row, log, shrunk)) row.scrollIntoView?.({ block: "nearest" });
     } else if (logAtEnd.current) {
       endRef.current?.scrollIntoView?.({ block: "end" });
     }
