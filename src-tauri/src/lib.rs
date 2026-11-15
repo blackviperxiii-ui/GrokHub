@@ -330,7 +330,8 @@ async fn pick_profile_picture(app: AppHandle) -> Result<Option<profile::Profile>
                 .dialog()
                 .file()
                 .set_title("Choose a profile picture")
-                .add_filter("Images", &["png", "jpg", "jpeg"])
+                // Linux filters match case: a camera's .JPG must show too.
+                .add_filter("Images", &["png", "jpg", "jpeg", "PNG", "JPG", "JPEG"])
                 .blocking_pick_file()
                 .and_then(|p| p.into_path().ok())
             else {

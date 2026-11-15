@@ -140,10 +140,8 @@ fn files_that_are_not_pictures_are_refused_and_nothing_is_written() {
     bomb[20..24].copy_from_slice(&50_000u32.to_be_bytes());
     let bomb_path = d.join("bomb.png");
     std::fs::write(&bomb_path, bomb).unwrap();
-    assert_eq!(
-        install_picture(&d, &bomb_path),
-        Err(NOT_AN_IMAGE.to_string())
-    );
+    // The header check refuses it before any decode, which would say NOT_AN_IMAGE.
+    assert_eq!(install_picture(&d, &bomb_path), Err(TOO_BIG.to_string()));
     assert!(!d.join(PICTURE_FILE).exists());
     assert!(!d.join("app.json").exists());
 }
@@ -173,4 +171,58 @@ fn only_the_config_folders_picture_is_ever_read() {
     )
     .unwrap();
     assert_eq!(load(&d, None).picture, None);
+}
+
+/// A JPEG, left half red and right half blue, with an EXIF Orientation tag.
+fn jpeg_turned(orientation: u16) -> Vec<u8> {
+    let mut img = image::RgbImage::new(40, 20);
+    for (x, _, px) in img.enumerate_pixels_mut() {
+        *px = if x < 20 {
+            image::Rgb([255, 0, 0])
+        } else {
+            image::Rgb([0, 0, 255])
+        };
+    }
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(&mut out, image::ImageFormat::Jpeg)
+        .unwrap();
+    let jpeg = out.into_inner();
+    // APP1 "Exif": a big-endian TIFF header and one IFD entry, 0x0112 SHORT.
+    let mut payload = b"Exif\0\0MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01".to_vec();
+    payload.extend_from_slice(&orientation.to_be_bytes());
+    payload.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+    let mut with = jpeg[..2].to_vec();
+    with.extend_from_slice(&[0xFF, 0xE1]);
+    with.extend_from_slice(&(payload.len() as u16 + 2).to_be_bytes());
+    with.extend_from_slice(&payload);
+    with.extend_from_slice(&jpeg[2..]);
+    with
+}
+
+fn is_red(px: &image::Rgba<u8>) -> bool {
+    px[0] > 200 && px[2] < 60
+}
+
+fn is_blue(px: &image::Rgba<u8>) -> bool {
+    px[2] > 200 && px[0] < 60
+}
+
+#[test]
+fn a_phone_photo_is_turned_upright_before_the_crop() {
+    let d = dir("exif");
+    let src = d.join("portrait.jpg");
+    // 6: turn 90 degrees clockwise to show, so the red left half is on top.
+    std::fs::write(&src, jpeg_turned(6)).unwrap();
+    install_picture(&d, &src).unwrap();
+    let img = image::open(d.join(PICTURE_FILE)).unwrap().to_rgba8();
+    assert_eq!(img.dimensions(), (20, 20));
+    assert!(is_red(img.get_pixel(16, 3)), "{:?}", img.get_pixel(16, 3));
+    assert!(is_blue(img.get_pixel(3, 16)), "{:?}", img.get_pixel(3, 16));
+    // 1: as stored, so red stays on the left.
+    std::fs::write(&src, jpeg_turned(1)).unwrap();
+    install_picture(&d, &src).unwrap();
+    let img = image::open(d.join(PICTURE_FILE)).unwrap().to_rgba8();
+    assert!(is_blue(img.get_pixel(16, 3)), "{:?}", img.get_pixel(16, 3));
+    assert!(is_red(img.get_pixel(3, 16)), "{:?}", img.get_pixel(3, 16));
 }

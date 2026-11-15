@@ -30,7 +30,7 @@ describe("ProfileSettings", () => {
 
   it("shows the name field with the shown name as a hint and the initial", async () => {
     api.getProfile.mockResolvedValue({ ...NONE, shownName: "Grok Name", initial: "G" });
-    render(<ProfileSettings />);
+    render(<ProfileSettings canPick />);
     const field = await screen.findByLabelText("Name");
     expect(field).toHaveValue("");
     expect(field).toHaveAttribute("placeholder", "Grok Name");
@@ -46,7 +46,7 @@ describe("ProfileSettings", () => {
     const saved = { name: "Pat", shownName: "Pat", initial: "P", picture: null };
     api.setProfileName.mockResolvedValue(saved);
     const onProfile = vi.fn();
-    render(<ProfileSettings onProfile={onProfile} />);
+    render(<ProfileSettings canPick onProfile={onProfile} />);
     await userEvent.type(await screen.findByLabelText("Name"), "  Pat ");
     await userEvent.tab();
     expect(api.setProfileName).toHaveBeenCalledWith("Pat");
@@ -62,7 +62,7 @@ describe("ProfileSettings", () => {
   it("Choose shows the picture and offers Remove", async () => {
     const pick = deferred<Profile | null>();
     api.pickProfilePicture.mockReturnValue(pick.promise);
-    render(<ProfileSettings />);
+    render(<ProfileSettings canPick />);
     await userEvent.click(await screen.findByRole("button", { name: "Choose" }));
     expect(screen.getByText("Choose a picture…")).toBeVisible();
     expect(screen.getByRole("button", { name: "Choose" })).toBeDisabled();
@@ -77,17 +77,59 @@ describe("ProfileSettings", () => {
   it("a closed picker changes nothing and clears the note", async () => {
     api.pickProfilePicture.mockResolvedValue(null);
     const onProfile = vi.fn();
-    render(<ProfileSettings onProfile={onProfile} />);
+    render(<ProfileSettings canPick onProfile={onProfile} />);
     await userEvent.click(await screen.findByRole("button", { name: "Choose" }));
     await waitFor(() => expect(screen.queryByText("Choose a picture…")).toBeNull());
     expect(screen.getByRole("button", { name: "Choose" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
-    expect(onProfile).not.toHaveBeenCalled();
+    // Only the first read; the closed picker hands nothing on.
+    expect(onProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it("a name save in flight never blocks Choose, and typing waits for it", async () => {
+    const save = deferred<Profile>();
+    api.setProfileName.mockReturnValue(save.promise);
+    api.pickProfilePicture.mockResolvedValue(null);
+    render(<ProfileSettings canPick />);
+    const field = await screen.findByLabelText("Name");
+    await userEvent.type(field, "Pat");
+    // Leaving the field for Choose: the blur starts the save, the click still lands.
+    await userEvent.click(screen.getByRole("button", { name: "Choose" }));
+    expect(api.setProfileName).toHaveBeenCalledWith("Pat");
+    expect(api.pickProfilePicture).toHaveBeenCalledTimes(1);
+    expect(field).toHaveAttribute("readonly");
+    await userEvent.type(field, "x");
+    expect(field).toHaveValue("Pat");
+    save.resolve({ name: "Pat", shownName: "Pat", initial: "P", picture: null });
+    await waitFor(() => expect(field).not.toHaveAttribute("readonly"));
+    await userEvent.type(field, "s");
+    expect(field).toHaveValue("Pats");
+  });
+
+  it("reads the profile again after a Grok sign-in and passes it on", async () => {
+    const onProfile = vi.fn();
+    const { rerender } = render(<ProfileSettings canPick onProfile={onProfile} signedIn="" />);
+    expect(await screen.findByLabelText("Name")).toHaveAttribute("placeholder", "You");
+    expect(onProfile).toHaveBeenLastCalledWith(NONE);
+    const grok = { ...NONE, shownName: "Robin", initial: "R" };
+    api.getProfile.mockResolvedValue(grok);
+    rerender(<ProfileSettings canPick onProfile={onProfile} signedIn="Robin Lee|" />);
+    await waitFor(() => expect(screen.getByLabelText("Name")).toHaveAttribute("placeholder", "Robin"));
+    expect(onProfile).toHaveBeenLastCalledWith(grok);
+    expect(api.getProfile).toHaveBeenCalledTimes(2);
+  });
+
+  it("a device with no file picker shows the initial but no Choose", async () => {
+    render(<ProfileSettings canPick={false} />);
+    expect(await screen.findByLabelText("Name")).toBeVisible();
+    expect(screen.getByText("Y")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Choose" })).toBeNull();
+    expect(screen.queryByText(PICTURE_UNSET)).toBeNull();
   });
 
   it("a refused image shows why", async () => {
     api.pickProfilePicture.mockRejectedValue("Choose a smaller image");
-    render(<ProfileSettings />);
+    render(<ProfileSettings canPick />);
     await userEvent.click(await screen.findByRole("button", { name: "Choose" }));
     expect(await screen.findByText("Choose a smaller image")).toHaveClass("status--error");
   });
@@ -95,7 +137,7 @@ describe("ProfileSettings", () => {
   it("Remove goes back to the initial", async () => {
     api.getProfile.mockResolvedValue({ ...NONE, picture: PIC });
     api.clearProfilePicture.mockResolvedValue(NONE);
-    render(<ProfileSettings />);
+    render(<ProfileSettings canPick />);
     await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
     expect(api.clearProfilePicture).toHaveBeenCalledTimes(1);
     expect(await screen.findByText(PICTURE_UNSET)).toBeVisible();

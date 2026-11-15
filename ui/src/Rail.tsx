@@ -13,7 +13,10 @@ const STEP: Record<string, 1 | -1> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1,
 /** Arrow keys move between the rail's buttons, wrapping; Home and End jump to
  * either end. Tab still walks them in order too. */
 function onArrows(event: KeyboardEvent<HTMLElement>) {
-  const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button")];
+  // A button the layout hides (the avatar in the phone tab bar) is skipped.
+  const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button")].filter(
+    (b) => getComputedStyle(b).display !== "none",
+  );
   const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
   if (at < 0) return;
   let next: number;
@@ -42,7 +45,7 @@ export function Rail({
   onMore: () => void;
   /** Chat's right-click menu (Clear chat), at the pointer; desktops only. */
   onChatMenu: (at: { x: number; y: number }) => void;
-  /** Your name and picture, at the foot; it opens Settings → Account. */
+  /** Your name and picture, at the foot; with `onProfile` it opens Settings → Account. */
   profile?: Profile | null;
   onProfile?: () => void;
 }) {
@@ -90,17 +93,22 @@ export function Rail({
           <span className="rail-label">More</span>
         </button>
         {rail.includes("settings") && item("settings")}
-        {profile && onProfile && (
-          <button
-            type="button"
-            className="rail-avatar"
-            title={profile.shownName}
-            aria-label={`${profile.shownName}, Account settings`}
-            onClick={onProfile}
-          >
-            <Avatar profile={profile} className="rail-avatar-face" />
-          </button>
-        )}
+        {profile &&
+          (onProfile ? (
+            <button
+              type="button"
+              className="rail-avatar"
+              title={profile.shownName}
+              aria-label={`${profile.shownName}, Account settings`}
+              onClick={onProfile}
+            >
+              <Avatar profile={profile} className="rail-avatar-face" />
+            </button>
+          ) : (
+            <span className="rail-avatar" role="img" title={profile.shownName} aria-label={profile.shownName}>
+              <Avatar profile={profile} className="rail-avatar-face" />
+            </span>
+          ))}
       </div>
     </nav>
   );

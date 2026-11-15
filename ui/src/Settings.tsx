@@ -395,7 +395,12 @@ export function Settings({
   function account() {
     return (
       <>
-        <ProfileSettings onProfile={onProfile} />
+        <ProfileSettings
+          onProfile={onProfile}
+          signedIn={loaded.signedIn ? `${loaded.signedIn.name ?? ""}|${loaded.signedIn.email ?? ""}` : ""}
+          // Every desktop has a tray; phones have no file picker.
+          canPick={caps.tray}
+        />
         {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} planNote={loaded.planNote} onChange={show} />}
         <div className="key">
           <h2>{caps.grokSignIn ? "Or use an xAI API key" : "xAI API key"}</h2>

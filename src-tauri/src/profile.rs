@@ -136,14 +136,25 @@ pub fn set_name(config_dir: &Path, name: &str) -> Result<(), String> {
     })
 }
 
-/// A square crop from the middle, then at most [`SIDE`] pixels across.
+/// Upright (a phone photo's EXIF turn applied), a square crop from the
+/// middle, then at most [`SIDE`] pixels across.
 fn avatar(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    use image::ImageDecoder;
     let (w, h) = crate::attach::image_size(bytes).ok_or(NOT_AN_IMAGE)?;
     // The header is checked before any decode: a small file can claim 50k by 50k.
     if !grokhub_core::image_pixels_ok(w, h) {
-        return Err(NOT_AN_IMAGE.into());
+        return Err(TOO_BIG.into());
     }
-    let img = image::load_from_memory(bytes).map_err(|_| NOT_AN_IMAGE)?;
+    let mut decoder = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| NOT_AN_IMAGE)?
+        .into_decoder()
+        .map_err(|_| NOT_AN_IMAGE)?;
+    let turn = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = image::DynamicImage::from_decoder(decoder).map_err(|_| NOT_AN_IMAGE)?;
+    img.apply_orientation(turn);
     let side = img.width().min(img.height());
     let square = img.crop_imm(
         (img.width() - side) / 2,

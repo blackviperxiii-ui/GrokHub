@@ -313,11 +313,12 @@ export function App() {
       () => {},
     );
   }, [canHalt, view]);
-  // A Grok sign-in or sign-out changes the name the rail shows; read it again
-  // with each view, as above.
-  useEffect(() => {
+  // Read the name and picture again with each view, as above; Settings and
+  // Get to know you also hand over a change the moment it lands.
+  const readProfile = useCallback(() => {
     getProfile().then(setProfile, () => setProfile(null));
-  }, [view]);
+  }, []);
+  useEffect(readProfile, [readProfile, view]);
   // The tray's Halt and Super+Shift+Esc land here too.
   useEffect(() => {
     if (!canHalt) return;
@@ -659,12 +660,13 @@ export function App() {
           onMore={() => setPalette((open) => (open === "more" ? false : "more"))}
           onChatMenu={setTabMenu}
           profile={profile}
-          onProfile={() => run({ kind: "settings", section: "account" })}
+          // The web app's Settings has no Account page: the avatar only shows there.
+          onProfile={caps.remote ? undefined : () => run({ kind: "settings", section: "account" })}
         />
         <main className="views">
           {haltNote && <HaltNote text={haltNote} onDismiss={() => setHaltNote(undefined)} />}
           {caps.autoSetup && auto.reply?.firstRun && <FirstRun reply={auto.reply} act={auto.act} />}
-          {caps.autoSetup && <OnboardStage after={auto.reply !== null && !auto.reply.firstRun} />}
+          {caps.autoSetup && <OnboardStage after={auto.reply !== null && !auto.reply.firstRun} onSaved={readProfile} />}
           {caps.autoSetup && auto.note && !auto.reply?.firstRun && (
             <AutoNote note={auto.note} act={auto.act} onClose={auto.closeNote} />
           )}

@@ -936,6 +936,15 @@ button.pill:focus-visible {
   white-space: nowrap;
 }
 
+/* The web app's avatar is a picture, not a button: the same box. */
+span.rail-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+}
+
 /* Your picture, or your initial in a circle (Settings → Account). */
 .rail-avatar-face,
 .profile-avatar {

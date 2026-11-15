@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { clearProfilePicture, getProfile, pickProfilePicture, setProfileName, type Profile } from "./api";
 import { StatusLine, useNote } from "./ui";
 
@@ -21,28 +21,61 @@ export function Avatar({ profile, className }: { profile: Profile; className: st
 }
 
 /** Settings → Account → Profile: your name and picture, shown on the rail.
- * `onProfile` gets the profile after each change. */
-export function ProfileSettings({ onProfile }: { onProfile?: (p: Profile) => void }) {
+ * `onProfile` gets the profile after each change and each read. A new
+ * `signedIn` reads it again, since the Grok name is the fallback name.
+ * `canPick`: this device has a file picker (phones don't). */
+export function ProfileSettings({
+  onProfile,
+  signedIn,
+  canPick,
+}: {
+  onProfile?: (p: Profile) => void;
+  signedIn?: string;
+  canPick: boolean;
+}) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  // The name and the picture save on their own, so one never blocks the other.
+  const [savingName, setSavingName] = useState(false);
+  const [savingPicture, setSavingPicture] = useState(false);
   const { note, ok, fail, clear } = useNote();
 
-  useEffect(() => {
-    getProfile().then((p) => {
-      setProfile(p);
-      setDraft(p.name);
-    }, fail);
-  }, [fail]);
-
-  function show(p: Profile) {
+  const loaded = useEffectEvent((p: Profile) => {
     setProfile(p);
     setDraft(p.name);
     onProfile?.(p);
+  });
+  useEffect(() => {
+    getProfile().then(loaded, fail);
+  }, [fail, signedIn]);
+
+  function show(p: Profile) {
+    setProfile(p);
+    onProfile?.(p);
   }
 
-  async function step(change: () => Promise<Profile | null>, waiting?: string) {
-    setBusy(true);
+  async function saveName() {
+    if (!profile || savingName) return;
+    const sent = draft.trim();
+    if (sent === profile.name) {
+      setDraft(sent);
+      return;
+    }
+    setSavingName(true);
+    try {
+      const p = await setProfileName(sent);
+      show(p);
+      setDraft(p.name);
+      ok("Saved");
+    } catch (err) {
+      fail(err);
+    } finally {
+      setSavingName(false);
+    }
+  }
+
+  async function picture(change: () => Promise<Profile | null>, waiting?: string) {
+    setSavingPicture(true);
     if (waiting) ok(waiting);
     try {
       const p = await change();
@@ -55,18 +88,8 @@ export function ProfileSettings({ onProfile }: { onProfile?: (p: Profile) => voi
     } catch (err) {
       fail(err);
     } finally {
-      setBusy(false);
+      setSavingPicture(false);
     }
-  }
-
-  function saveName() {
-    if (!profile || busy) return;
-    const next = draft.trim();
-    if (next === profile.name) {
-      setDraft(next);
-      return;
-    }
-    void step(() => setProfileName(next));
   }
 
   if (!profile) {
@@ -85,7 +108,7 @@ export function ProfileSettings({ onProfile }: { onProfile?: (p: Profile) => voi
         className="profile-name"
         onSubmit={(e) => {
           e.preventDefault();
-          saveName();
+          void saveName();
         }}
       >
         <label>
@@ -95,21 +118,31 @@ export function ProfileSettings({ onProfile }: { onProfile?: (p: Profile) => voi
             maxLength={NAME_MAX}
             value={draft}
             placeholder={profile.shownName}
+            // Typing waits for a save in flight, so nothing typed meanwhile is lost.
+            readOnly={savingName}
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={saveName}
+            onBlur={() => void saveName()}
           />
         </label>
       </form>
       <p className="note">{NAME_HINT}</p>
       <div className="profile-picture">
         <Avatar profile={profile} className="profile-avatar" />
-        <div>
-          <p>Profile picture</p>
-          <p className="note">{profile.picture ? PICTURE_SET : PICTURE_UNSET}</p>
-        </div>
-        <button type="button" disabled={busy} onClick={() => void step(pickProfilePicture, "Choose a picture…")}>
-          Choose
-        </button>
+        {canPick && (
+          <>
+            <div>
+              <p>Profile picture</p>
+              <p className="note">{profile.picture ? PICTURE_SET : PICTURE_UNSET}</p>
+            </div>
+            <button
+              type="button"
+              disabled={savingPicture}
+              onClick={() => void picture(pickProfilePicture, "Choose a picture…")}
+            >
+              Choose
+            </button>
+          </>
+        )}
       </div>
       {profile.picture && (
         <div className="profile-picture">
@@ -117,7 +150,12 @@ export function ProfileSettings({ onProfile }: { onProfile?: (p: Profile) => voi
             <p>Remove picture</p>
             <p className="note">{REMOVE_HINT}</p>
           </div>
-          <button type="button" className="quiet" disabled={busy} onClick={() => void step(clearProfilePicture)}>
+          <button
+            type="button"
+            className="quiet"
+            disabled={savingPicture}
+            onClick={() => void picture(clearProfilePicture)}
+          >
             Remove
           </button>
         </div>

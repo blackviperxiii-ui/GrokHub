@@ -389,6 +389,23 @@ describe("App", () => {
     expect(await screen.findByText("Home page for the last chat")).toBeVisible();
   });
 
+  it("the arrow keys reach the avatar, and skip it where the layout hides it", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getProfile.mockResolvedValue({ name: "Pat", shownName: "Pat", initial: "P", picture: null });
+    render(<App />);
+    const avatar = await screen.findByRole("button", { name: "Pat, Account settings" });
+    view("Home").focus();
+    await userEvent.keyboard("{End}");
+    expect(avatar).toHaveFocus();
+    // The phone tab bar hides it (styles.css); the wrap goes Settings → Home.
+    avatar.style.display = "none";
+    view("Home").focus();
+    await userEvent.keyboard("{End}");
+    expect(view("Settings")).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(view("Home")).toHaveFocus();
+  });
+
   it("the top bar's pills open Personality and Privacy & data, and the web app has no personality pill", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     api.getPrivacy.mockResolvedValue({ offlineOnly: false, sent: "0 calls sent off-device this week", sentCalls: 0 } as never);
@@ -719,6 +736,14 @@ describe("App", () => {
     expect(avatar.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,iVBORw0KGgo=");
     await userEvent.click(avatar);
     expect(await screen.findByText("Settings for a desktop at account")).toBeVisible();
+  });
+
+  it("the web app shows the avatar as a picture only: its Settings has no Account page", async () => {
+    api.getCapabilities.mockResolvedValue(api.WEB);
+    api.getProfile.mockResolvedValue({ name: "Pat", shownName: "Pat", initial: "P", picture: null });
+    render(<App />);
+    expect(await screen.findByRole("img", { name: "Pat" })).toHaveTextContent("P");
+    expect(screen.queryByRole("button", { name: /Account settings$/ })).toBeNull();
   });
 
   it("shows your initial when there is no picture, and nothing when the profile can't be read", async () => {
