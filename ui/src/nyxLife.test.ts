@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({ desktopNyxLook: vi.fn<(look: string, activity: string) => Promise<void>>() }));
 vi.mock("./desktopNyxApi", () => api);
@@ -18,8 +18,10 @@ describe("deskLook", () => {
 
 describe("the chat that speaks for her desk", () => {
   const sent: string[] = [];
+  const made: symbol[] = [];
   const chat = (name: string) => {
     const me = Symbol(name);
+    made.push(me);
     return {
       me,
       update: (onScreen: boolean, voiced = false) => updateDesk(me, () => sent.push(name), { onScreen, voiced }),
@@ -29,6 +31,11 @@ describe("the chat that speaks for her desk", () => {
   beforeEach(() => {
     sent.length = 0;
     api.desktopNyxLook.mockReset().mockResolvedValue();
+    expect(deskSpeaker()).toBe(null);
+  });
+  // A failed test still leaves no chat behind for the next one.
+  afterEach(() => {
+    for (const me of made.splice(0)) leaveDesk(me);
   });
 
   it("is the chat last on screen, which keeps it while no chat is on screen", () => {

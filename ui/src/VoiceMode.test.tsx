@@ -298,6 +298,28 @@ describe("VoiceSession", () => {
   });
 });
 
+describe("voice mode in two chats", () => {
+  it("turns off in one chat before it starts in another, since the backend has one mic", async () => {
+    const order: string[] = [];
+    api.voiceLiveStart.mockImplementation(async () => void order.push("start"));
+    api.voiceLiveStop.mockImplementation(async () => void order.push("stop"));
+    const main = rig();
+    const code = rig();
+    await main.session.start();
+    await code.session.start();
+    expect(main.session.state).toBe("off");
+    expect(main.states.at(-1)).toBe("off");
+    expect(main.closed).toBe(1);
+    expect(code.session.state).toBe("listening");
+    expect(order).toEqual(["start", "stop", "start"]);
+    // Off in the chat it moved to: nothing else is stopped.
+    await code.session.stop();
+    await main.session.start();
+    expect(order).toEqual(["start", "stop", "start", "stop", "start"]);
+    await main.session.stop();
+  });
+});
+
 describe("VoiceButton", () => {
   it("shows each state", () => {
     const r = rig();
