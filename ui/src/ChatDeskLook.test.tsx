@@ -253,4 +253,25 @@ describe("Chat and her desktop pedestal", () => {
       Element.prototype.scrollIntoView = was;
     }
   });
+
+  it("leaves the log on a find match while the caption grows", async () => {
+    const scrolls = vi.fn();
+    const was = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrolls;
+    try {
+      const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+      await waitFor(() => expect(voices.set).toHaveLength(1));
+      await userEvent.type(screen.getByLabelText("Message"), "hello{Enter}");
+      act(() => replies.ends[0]("end_turn"));
+      act(() => voices.set[0]("listening"));
+      await userEvent.keyboard("{Control>}f{/Control}");
+      expect(screen.getByRole("textbox", { name: "Find in this chat" })).toHaveFocus();
+      scrolls.mockClear();
+      voices.caption = "remind me";
+      rerender(<Chat onOpenSettings={() => {}} />);
+      expect(scrolls).not.toHaveBeenCalled();
+    } finally {
+      Element.prototype.scrollIntoView = was;
+    }
+  });
 });

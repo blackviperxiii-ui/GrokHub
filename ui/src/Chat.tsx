@@ -836,6 +836,11 @@ function LogItem({
   }
 }
 
+/** Whether the log is scrolled to (within a few pixels of) its end. */
+function atLogEnd(log: HTMLElement): boolean {
+  return log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+}
+
 /** `prefill`: text another page put in the box (Pulse's Run, Journal's To
  * mission). A new `n` replaces the draft; nothing is sent until the person
  * sends it. With `conversationId` the chat moves to that conversation first,
@@ -1457,10 +1462,14 @@ export function Chat({
   // the end, so the view stays on it; while find is open the log stays put,
   // and closing find leaves the view on the match.
   const scrolledFor = useRef<Item[]>([]);
+  // Whether the log was at its end when last looked at.
+  const logAtEnd = useRef(true);
   const followEnd = useEffectEvent((before: Item[]) => {
-    if (findOpen) return;
-    if (items.length > 0 && onlyFoldsChanged(before, items)) return;
-    endRef.current?.scrollIntoView?.({ block: "end" });
+    if (!findOpen && !(items.length > 0 && onlyFoldsChanged(before, items))) {
+      endRef.current?.scrollIntoView?.({ block: "end" });
+    }
+    // New rows below a view that stayed put leave it short of the end.
+    if (logRef.current) logAtEnd.current = atLogEnd(logRef.current);
   });
   useEffect(() => {
     const before = scrolledFor.current;
@@ -1468,11 +1477,12 @@ export function Chat({
     followEnd(before);
   }, [items]);
   // Voice mode's caption above the composer grows as they talk and makes
-  // the log shorter: a log that was at its end stays there.
-  const logAtEnd = useRef(true);
-  useLayoutEffect(() => {
-    if (logAtEnd.current) endRef.current?.scrollIntoView?.({ block: "end" });
-  }, [voice.caption]);
+  // the log shorter: a log that was at its end stays there. With find open
+  // the log stays on the match.
+  const keepAtEnd = useEffectEvent(() => {
+    if (logAtEnd.current && !findOpen) endRef.current?.scrollIntoView?.({ block: "end" });
+  });
+  useLayoutEffect(() => keepAtEnd(), [voice.caption]);
 
   function startOver(scratch = false) {
     if (busy) return false;
@@ -2257,8 +2267,7 @@ export function Chat({
         aria-live="polite"
         tabIndex={0}
         onScroll={(e) => {
-          const log = e.currentTarget;
-          logAtEnd.current = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+          logAtEnd.current = atLogEnd(e.currentTarget);
         }}
       >
         {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (

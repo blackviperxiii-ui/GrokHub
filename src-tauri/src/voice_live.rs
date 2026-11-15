@@ -98,6 +98,13 @@ pub struct Live {
     /// hears a start they go to the stream first, so it gets the turn's
     /// lead-in the mic keeps too, even from before the stream opened.
     recent: std::collections::VecDeque<Vec<i16>>,
+    /// Which listen this is, unique across sessions.
+    listen_id: u64,
+}
+
+fn next_listen_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
 }
 
 /// How much audio before a start the stream gets: the detector's pre-roll
@@ -137,7 +144,13 @@ impl Live {
                 Heard::Started => LiveEvent::Started,
                 Heard::Turn(turn) => {
                     // Dropping the stream's audio asks it for the last words.
-                    let news = self.stt.take().map(|link| link.news);
+                    // A stream the server never got ready for has none: the
+                    // turn uploads at once.
+                    let news = self
+                        .stt
+                        .take()
+                        .filter(SttLink::is_ready)
+                        .map(|link| link.news);
                     let ms = ms_of(turn.len());
                     self.turn = Some(Pending::Audio {
                         samples: turn,
@@ -245,6 +258,13 @@ impl Live {
     /// talking over it starts one. A listen over a reply opens no stream: its
     /// echo could end a turn nobody spoke.
     pub fn listen(&mut self, playing: bool) {
+        if self.restart(playing) {
+            self.open_now();
+        }
+    }
+
+    /// [`Live::listen`] without the stream: whether this listen wants one.
+    fn restart(&mut self, playing: bool) -> bool {
         self.mic.set_playing(playing);
         self.mic.listen();
         self.heard = 0;
@@ -252,24 +272,54 @@ impl Live {
         self.spoke = false;
         self.recent.clear();
         self.stt = None;
-        if !playing {
-            self.stt = self.open.as_mut().and_then(|open| open());
-        }
+        self.listen_id = next_listen_id();
+        !playing
     }
 
-    /// The reply started, stopped or finished playing. Once it is over and
-    /// nobody is mid-turn, the next turn gets a stream. A turn already under
-    /// way (talking over the reply) keeps the upload: a stream opened now
-    /// would miss its start.
-    pub fn set_playing(&mut self, playing: bool) {
+    /// The reply started, stopped or finished playing: whether a stream is
+    /// wanted now. Once it is over and nobody is mid-turn, the next turn gets
+    /// one. A turn already under way (talking over the reply) keeps the
+    /// upload: a stream opened now would miss its start.
+    fn playing_changed(&mut self, playing: bool) -> bool {
         self.mic.set_playing(playing);
         if playing {
             self.stt = None;
+            false
         } else if self.mic.armed() && !self.mic.talking() && self.stt.is_none() {
             self.heard = 0;
             self.spoke = false;
             self.captioned = false;
-            self.stt = self.open.as_mut().and_then(|open| open());
+            self.listen_id = next_listen_id();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn open_now(&mut self) {
+        self.stt = self.open.as_mut().and_then(|open| open());
+    }
+
+    /// The opener, lent out so a stream opens without the session locked
+    /// (the key comes from the OS keychain), with this listen's id.
+    fn lend_opener(&mut self) -> Option<(Opener, u64)> {
+        self.open.take().map(|open| (open, self.listen_id))
+    }
+
+    /// The opener back, and its stream if it is still wanted: the same
+    /// listen, nothing open, and nobody started talking meanwhile (a stream
+    /// that missed the start would hear clipped words).
+    fn take_back(&mut self, open: Opener, listen_id: u64, link: Option<SttLink>) {
+        if self.open.is_none() {
+            self.open = Some(open);
+        }
+        if listen_id == self.listen_id
+            && self.stt.is_none()
+            && self.mic.armed()
+            && !self.mic.talking()
+            && !self.spoke
+        {
+            self.stt = link;
         }
     }
 
@@ -313,7 +363,11 @@ fn ms_of(samples: usize) -> u32 {
 
 /// Runs `f` on the session, or says voice mode is off.
 fn with<T>(f: impl FnOnce(&mut Live) -> T) -> Result<T, String> {
-    let mut guard = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    with_in(&SESSION, f)
+}
+
+fn with_in<T>(cell: &Mutex<Option<Live>>, f: impl FnOnce(&mut Live) -> T) -> Result<T, String> {
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     guard.as_mut().map(f).ok_or_else(|| NOT_ON.to_string())
 }
 
@@ -553,16 +607,38 @@ pub(crate) fn voice_live_push(block: String) -> Result<Vec<LiveEvent>, String> {
     with(|live| live.push(&bytes))?
 }
 
+/// `change` under the session lock, then the stream it wants opened with
+/// the lock let go: the opener reads the OS keychain, and the page's mic
+/// blocks (on the main thread) must not wait for that.
+fn then_open(
+    cell: &Mutex<Option<Live>>,
+    change: impl FnOnce(&mut Live) -> bool,
+) -> Result<(), String> {
+    let lent = with_in(cell, |live| {
+        if change(live) {
+            live.lend_opener()
+        } else {
+            None
+        }
+    })?;
+    if let Some((mut open, listen_id)) = lent {
+        let link = open();
+        // Voice mode turned off meanwhile: the stream just goes.
+        let _ = with_in(cell, |live| live.take_back(open, listen_id, link));
+    }
+    Ok(())
+}
+
 /// Off the main thread: a listen may open a stream.
 #[tauri::command]
 pub(crate) async fn voice_live_listen(playing: bool) -> Result<(), String> {
-    crate::off_main(move || with(|live| live.listen(playing))).await?
+    crate::off_main(move || then_open(&SESSION, |live| live.restart(playing))).await?
 }
 
 /// Off the main thread: the end of a reply may open a stream.
 #[tauri::command]
 pub(crate) async fn voice_live_playing(playing: bool) -> Result<(), String> {
-    crate::off_main(move || with(|live| live.set_playing(playing))).await?
+    crate::off_main(move || then_open(&SESSION, |live| live.playing_changed(playing))).await?
 }
 
 #[tauri::command]

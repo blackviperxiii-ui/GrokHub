@@ -11,8 +11,9 @@ use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use grokhub_agent::harness as hx;
@@ -24,8 +25,18 @@ use tungstenite::Message;
 /// Points the stream at a local fake socket, for tests only: `ws://` on
 /// loopback, any port and path. Anything else is ignored.
 pub const TEST_WS_ENV: &str = "GROKHUB_SHELL_STT_WS_URL";
-/// How long one listen's socket may stay open.
+/// How long a turn's audio may stream, from its first block: the longest
+/// turn (60 s) and the wait for its words.
+#[cfg(not(test))]
 const MAX_STREAM: Duration = Duration::from_secs(75);
+#[cfg(test)]
+const MAX_STREAM: Duration = Duration::from_millis(2500);
+/// How long a socket may wait for someone to start talking: a quiet listen
+/// pauses after 60 s.
+#[cfg(not(test))]
+const MAX_IDLE: Duration = Duration::from_secs(90);
+#[cfg(test)]
+const MAX_IDLE: Duration = Duration::from_millis(4500);
 /// How long the socket waits for the words once the turn is over.
 const FINAL_WAIT: Duration = Duration::from_secs(2);
 /// Read timeout while streaming: how often new audio goes out.
@@ -55,6 +66,16 @@ pub enum SttNews {
 pub struct SttLink {
     pub audio: Sender<Vec<i16>>,
     pub news: Receiver<SttNews>,
+    /// The server said it is ready for audio.
+    pub ready: Arc<AtomicBool>,
+}
+
+impl SttLink {
+    /// Whether this stream can have words for a turn: a stream the server
+    /// never got ready for sends no audio, so a turn doesn't wait on it.
+    pub fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::SeqCst)
+    }
 }
 
 /// The key the server refused for streaming (401 or 403), as a hash: later
@@ -141,11 +162,17 @@ pub(crate) fn open_at(
     hx::guard_quiet(config_dir, &hx::EgressReq::new(url, &[hx::DataClass::Chat])).ok()?;
     let (audio_tx, audio_rx) = mpsc::channel();
     let (news_tx, news_rx) = mpsc::channel();
+    let ready = Arc::new(AtomicBool::new(false));
+    let said_ready = ready.clone();
     let url = url.to_string();
     std::thread::Builder::new()
         .name("voice-stt".into())
         .spawn(move || {
-            if let Err(e) = stream(&url, &bearer, gate, offline, &audio_rx, &news_tx) {
+            let to = Ends {
+                news: &news_tx,
+                ready: &said_ready,
+            };
+            if let Err(e) = stream(&url, &bearer, gate, offline, &audio_rx, &to) {
                 let _ = news_tx.send(SttNews::Failed(e));
             }
         })
@@ -153,6 +180,7 @@ pub(crate) fn open_at(
     Some(SttLink {
         audio: audio_tx,
         news: news_rx,
+        ready,
     })
 }
 
@@ -246,26 +274,41 @@ fn tcp_of(ws: &Socket) -> Option<&TcpStream> {
     }
 }
 
+/// Where one stream reports: its news, and the flag that says the server is
+/// ready for audio.
+struct Ends<'a> {
+    news: &'a Sender<SttNews>,
+    ready: &'a AtomicBool,
+}
+
 fn stream(
     url: &str,
     bearer: &str,
     gate: &Gate,
     offline: fn() -> bool,
     audio: &Receiver<Vec<i16>>,
-    news: &Sender<SttNews>,
+    to: &Ends,
 ) -> Result<(), String> {
+    let news = to.news;
     let mut ws = connect(url, bearer, gate)?;
     tcp_of(&ws)
         .ok_or("speech stream: unknown socket")?
         .set_read_timeout(Some(POLL))
         .map_err(|e| e.to_string())?;
     let opened = Instant::now();
+    // The turn's clock starts with its first block sent, not at connect: a
+    // listen may sit quiet for a while before anyone talks.
+    let mut first_sent: Option<Instant> = None;
     let mut turn = SttTurn::new();
     let mut pending: Vec<Vec<i16>> = Vec::new();
     let (mut ready, mut over, mut finalized) = (false, false, false);
     let mut final_by = None;
     loop {
-        if opened.elapsed() > MAX_STREAM {
+        let too_long = match first_sent {
+            Some(t) => t.elapsed() > MAX_STREAM,
+            None => opened.elapsed() > MAX_IDLE,
+        };
+        if too_long {
             return Err("speech stream ran too long".into());
         }
         loop {
@@ -294,6 +337,7 @@ fn stream(
             for block in pending.drain(..) {
                 ws.send(Message::binary(pcm_bytes(&block)))
                     .map_err(|e| e.to_string())?;
+                first_sent.get_or_insert_with(Instant::now);
             }
             if over && !finalized {
                 ws.send(Message::text(FINALIZE))
@@ -323,6 +367,7 @@ fn stream(
         let step = match &ev {
             SttEvent::Ready => {
                 ready = true;
+                to.ready.store(true, Ordering::SeqCst);
                 continue;
             }
             SttEvent::Error(m) => return Err(format!("speech stream: {m}")),
