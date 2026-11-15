@@ -96,3 +96,117 @@ fn a_look_waits_a_day() {
     assert!(due(&cfg, 1_000 + CHECK_EVERY_MS));
     let _ = std::fs::remove_dir_all(&cfg);
 }
+
+fn release_with_catalog() -> Release {
+    let base = "https://github.com/blackviperxiii-ui/GrokHub/releases/download/v9.9.9";
+    Release {
+        tag: "v9.9.9".into(),
+        prerelease: false,
+        draft: false,
+        created: String::new(),
+        assets: [FILE, rv::SUMS_NAME, rv::SIG_NAME]
+            .iter()
+            .map(|n| ReleaseAsset {
+                name: (*n).into(),
+                url: format!("{base}/{n}"),
+            })
+            .collect(),
+    }
+}
+
+/// A `get` that serves the release's three files from `files` and records
+/// each URL and cap it was asked for.
+fn serve<'a>(
+    files: [&'a str; 3],
+    asked: &'a mut Vec<(String, u64)>,
+) -> impl FnMut(&str, u64) -> Result<Vec<u8>, String> + 'a {
+    move |url: &str, cap: u64| {
+        asked.push((url.rsplit('/').next().unwrap_or("").to_string(), cap));
+        let body = match url.rsplit('/').next() {
+            Some(FILE) => files[0],
+            Some(rv::SUMS_NAME) => files[1],
+            Some(rv::SIG_NAME) => files[2],
+            other => panic!("unexpected download {other:?}"),
+        };
+        Ok(body.as_bytes().to_vec())
+    }
+}
+
+#[test]
+fn a_newer_signed_catalog_from_the_release_is_saved_and_a_tampered_one_is_not() {
+    let cfg = temp("refresh");
+    let rel = release_with_catalog();
+    let try_with = |files: [&str; 3]| {
+        let mut asked = Vec::new();
+        let got = refresh(PUB, &rel, &cfg, &mut serve(files, &mut asked));
+        (got, asked)
+    };
+
+    let edited = TEXT.replace("Test Chat", "Test Chat 2");
+    let (got, _) = try_with([&edited, SUMS, SIG]);
+    assert_eq!(got, Err("the download's checksum didn't match".to_string()));
+    assert!(
+        !dir(&cfg).join(FILE).exists(),
+        "a changed catalog is never written"
+    );
+
+    let sums = SUMS.replacen('0', "1", 1);
+    let (got, _) = try_with([TEXT, &sums, SIG]);
+    assert_eq!(got, Err("signature didn't verify".to_string()));
+    assert!(
+        !dir(&cfg).join(FILE).exists(),
+        "changed sums fail the signature"
+    );
+
+    let (got, asked) = try_with([TEXT, SUMS, SIG]);
+    assert_eq!(got, Ok(Some(99)));
+    // The sums and signature come first, each capped small; the catalog last.
+    assert_eq!(
+        asked,
+        vec![
+            (rv::SUMS_NAME.to_string(), TEXT_CAP),
+            (rv::SIG_NAME.to_string(), TEXT_CAP),
+            (FILE.to_string(), MAX_BYTES),
+        ]
+    );
+    assert_eq!(saved_with(&cfg, PUB, 2).as_deref(), Some(TEXT));
+    let _ = std::fs::remove_dir_all(&cfg);
+}
+
+#[test]
+fn an_unsigned_or_foreign_release_is_never_fetched() {
+    let cfg = temp("unsigned");
+    let mut nothing = |url: &str, _cap: u64| -> Result<Vec<u8>, String> {
+        panic!("nothing may be downloaded, asked for {url}")
+    };
+    let mut rel = release_with_catalog();
+    rel.assets.retain(|a| a.name != rv::SIG_NAME);
+    assert_eq!(refresh(PUB, &rel, &cfg, &mut nothing), Ok(None));
+
+    let mut rel = release_with_catalog();
+    rel.assets[2].url = format!("https://example.com/{}", rv::SIG_NAME);
+    assert_eq!(refresh(PUB, &rel, &cfg, &mut nothing), Ok(None));
+    assert!(!dir(&cfg).exists());
+    let _ = std::fs::remove_dir_all(&cfg);
+}
+
+#[test]
+fn a_catalog_that_isnt_text_is_refused() {
+    let cfg = temp("binary");
+    let rel = release_with_catalog();
+    let mut get = |url: &str, _cap: u64| -> Result<Vec<u8>, String> {
+        Ok(if url.ends_with(FILE) {
+            vec![0xff, 0xfe]
+        } else if url.ends_with(rv::SIG_NAME) {
+            SIG.as_bytes().to_vec()
+        } else {
+            SUMS.as_bytes().to_vec()
+        })
+    };
+    assert_eq!(
+        refresh(PUB, &rel, &cfg, &mut get),
+        Err("not text".to_string())
+    );
+    assert!(!dir(&cfg).join(FILE).exists());
+    let _ = std::fs::remove_dir_all(&cfg);
+}

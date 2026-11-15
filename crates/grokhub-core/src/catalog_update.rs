@@ -100,6 +100,42 @@ pub fn adopt(
     Ok(Some(v))
 }
 
+/// A capped GET, `(url, byte cap) -> body`, that refuses a body over the cap.
+pub type Get<'a> = &'a mut dyn FnMut(&str, u64) -> Result<Vec<u8>, String>;
+
+/// `SHA256SUMS` and its signature are a few KB.
+pub const TEXT_CAP: u64 = 64 * 1024;
+
+/// Fetch `rel`'s catalog with its signed sums and save it when it verifies
+/// and is newer than what this app uses now. `Ok(None)` when the release has
+/// no catalog at its own download addresses (nothing is fetched then), or
+/// its catalog isn't newer.
+pub fn refresh(
+    pubkey: &str,
+    rel: &Release,
+    config_dir: &Path,
+    get: Get,
+) -> Result<Option<u32>, String> {
+    // Releases made before the catalog shipped have none: nothing to do.
+    let Some([cat, sums, sig]) = assets(rel) else {
+        return Ok(None);
+    };
+    let mut text = |url: &str, cap: u64| -> Result<String, String> {
+        String::from_utf8(get(url, cap)?).map_err(|_| "not text".to_string())
+    };
+    let sums = text(&sums.url, TEXT_CAP)?;
+    let sig = text(&sig.url, TEXT_CAP)?;
+    let cat = text(&cat.url, MAX_BYTES)?;
+    adopt(
+        config_dir,
+        pubkey,
+        current_version(config_dir),
+        &cat,
+        &sums,
+        &sig,
+    )
+}
+
 /// The catalog version this app runs with now: the saved one when it
 /// applies, else the built-in one.
 pub fn current_version(config_dir: &Path) -> u32 {
