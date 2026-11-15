@@ -56,6 +56,8 @@ pub enum LiveEvent {
     CheckIn,
     /// Quiet for a minute; voice mode pauses.
     Pause,
+    /// Everything heard so far in this turn, while they talk.
+    Caption { text: String },
 }
 
 /// A turn waiting to be turned into words.
@@ -139,30 +141,39 @@ impl Live {
                 }
             })
             .collect();
-        if let Some(words) = self.smart_turn() {
-            self.mic.stop();
-            self.stt = None;
-            self.turn = Some(Pending::Words(words));
-            events.push(LiveEvent::Turn {
-                ms: ms_of(self.heard),
-            });
+        match self.stream_news() {
+            (_, Some(words)) => {
+                self.mic.stop();
+                self.stt = None;
+                self.turn = Some(Pending::Words(words));
+                events.push(LiveEvent::Turn {
+                    ms: ms_of(self.heard),
+                });
+            }
+            (Some(text), None) => events.push(LiveEvent::Caption { text }),
+            (None, None) => {}
         }
         Ok(events)
     }
 
-    /// The stream's words when Smart Turn ended the turn. A stream that
-    /// failed or went away is dropped, so the turn falls back to the upload.
-    fn smart_turn(&mut self) -> Option<String> {
-        let link = self.stt.as_ref()?;
+    /// What the stream said since the last block: its newest caption, and
+    /// its words when Smart Turn ended the turn. A stream that failed or
+    /// went away is dropped, so the turn falls back to the upload.
+    fn stream_news(&mut self) -> (Option<String>, Option<String>) {
+        let mut caption = None;
+        let Some(link) = self.stt.as_ref() else {
+            return (None, None);
+        };
         loop {
             match link.news.try_recv() {
-                Ok(SttNews::Ended(words)) if !words.is_empty() => return Some(words),
-                Ok(SttNews::Ended(_) | SttNews::Caption(_)) => {}
+                Ok(SttNews::Caption(text)) => caption = Some(text),
+                Ok(SttNews::Ended(words)) if !words.is_empty() => return (caption, Some(words)),
+                Ok(SttNews::Ended(_)) => {}
                 Ok(SttNews::Failed(_)) | Err(TryRecvError::Disconnected) => {
                     self.stt = None;
-                    return None;
+                    return (caption, None);
                 }
-                Err(TryRecvError::Empty) => return None,
+                Err(TryRecvError::Empty) => return (caption, None),
             }
         }
     }

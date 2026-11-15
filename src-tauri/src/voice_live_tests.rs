@@ -83,6 +83,10 @@ fn events_reach_the_page_as_tagged_objects() {
         serde_json::to_value(LiveEvent::CheckIn).unwrap(),
         serde_json::json!({"kind": "check_in"})
     );
+    assert_eq!(
+        serde_json::to_value(LiveEvent::Caption { text: "hi".into() }).unwrap(),
+        serde_json::json!({"kind": "caption", "text": "hi"})
+    );
 }
 
 #[test]
@@ -419,4 +423,45 @@ fn listening_over_a_reply_opens_no_stream() {
     );
     live.listen(false);
     assert_eq!(streams.lock().unwrap().audio.len(), 2);
+}
+
+#[test]
+fn captions_reach_the_page_while_they_talk() {
+    let (mut live, streams) = streaming();
+    {
+        let s = streams.lock().unwrap();
+        s.news[0]
+            .send(SttNews::Caption("remind me".into()))
+            .expect("news");
+        s.news[0]
+            .send(SttNews::Caption("remind me to call".into()))
+            .expect("news");
+    }
+    // The newest caption only, once.
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: "remind me to call".into()
+        }]
+    );
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
+}
+
+#[test]
+fn a_caption_before_smart_turn_ends_it_gives_way_to_the_turn() {
+    let (mut live, streams) = streaming();
+    let _ = send(&mut live, &tone(1500));
+    {
+        let s = streams.lock().unwrap();
+        s.news[0]
+            .send(SttNews::Caption("buy".into()))
+            .expect("news");
+        s.news[0]
+            .send(SttNews::Ended("Buy milk.".into()))
+            .expect("news");
+    }
+    assert_eq!(
+        live.push(&bytes(&tone(100))).expect("block"),
+        vec![LiveEvent::Turn { ms: 1600 }]
+    );
 }
