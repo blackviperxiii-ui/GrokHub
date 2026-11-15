@@ -372,6 +372,11 @@ fn auto_setup(
     if settings.text_size != before.text_size {
         zoom(&window, settings.text_size);
     }
+    // Her desk window stops breathing and floating with reduce motion.
+    #[cfg(desktop)]
+    if settings.reduce_motion != before.reduce_motion {
+        desktop_nyx::publish(window.app_handle(), &settings);
+    }
     Ok(reply)
 }
 
@@ -4113,6 +4118,21 @@ fn desktop_nyx_get(state: State<'_, ShellState>) -> desktop_nyx::State {
     desktop_nyx::state_now(&current(&state))
 }
 
+/// What the chat on screen is doing: her voice look and the mood "Pick for
+/// me" wears. Every page and her desk hear it when it changed.
+#[cfg(desktop)]
+#[tauri::command]
+fn desktop_nyx_look(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    look: desktop_nyx::VoiceLook,
+    mood: Option<grokhub_core::companion::Mood>,
+) {
+    if desktop_nyx::set_life(desktop_nyx::Life { look, mood }) {
+        desktop_nyx::publish(&app, &current(&state));
+    }
+}
+
 /// Every desktop-companion write: save, store, apply the window when asked
 /// (`show_window` hides it while docked), then the tray and every page hear
 /// it, even when the window couldn't be applied.
@@ -7703,6 +7723,8 @@ pub fn run() {
             desktop_nyx_set_hit,
             #[cfg(desktop)]
             desktop_nyx_drag,
+            #[cfg(desktop)]
+            desktop_nyx_look,
             get_queue,
             stop_task,
             ship_status,

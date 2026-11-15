@@ -98,6 +98,9 @@ import { ScreenshotOffer } from "./ScreenshotOffer";
 import { openImport } from "./onboardApi";
 import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
+import { desktopNyxLook } from "./desktopNyxApi";
+import { inShell } from "./transport";
+import { deskLook } from "./nyxLife";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
 import { DeviceGlanceRow } from "./DeviceGlance";
@@ -1009,6 +1012,14 @@ export function Chat({
   // Nyx's pose follows what the chat does, not each chunk of text.
   const activity = activityOf(items, busy);
   const nyx = useNyx(activity, active);
+  // Her desktop pedestal follows the voice, and "Pick for me" wears the
+  // chat's mood. Only the chat on screen speaks for her.
+  const look = deskLook(voice.state, busyHere);
+  const lookMood = nyx?.mood ?? null;
+  useEffect(() => {
+    if (!active || !inShell()) return;
+    desktopNyxLook(look, lookMood).catch(() => {});
+  }, [active, look, lookMood]);
   const sideWide = useMinWidth(SIDE_MIN_WIDTH);
   const leftWide = useMinWidth(DOCK_MIN_WIDTH);
 

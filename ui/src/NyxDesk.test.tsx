@@ -37,6 +37,8 @@ function state(over: Partial<DesktopNyxState> = {}): DesktopNyxState {
     effects: { transparent: true, onTop: true },
     companion: "Nyx",
     hiddenForGame: false,
+    still: false,
+    look: "idle",
     ...over,
   };
 }
@@ -64,6 +66,21 @@ describe("NyxDesk", () => {
     act(() => heard?.(state({ outfit: "working", outfitFile: "brand/nyx-working.jpg" })));
     expect(figure()).toContain("nyx-working");
     expect(figure()).not.toContain("nyx-hanging-out");
+  });
+
+  it("glows with the chat's voice and stills with reduce motion, live", async () => {
+    const { container } = render(<NyxDesk />);
+    const root = () => container.querySelector(".nyx-desk");
+    await waitFor(() => expect(root()).toHaveAttribute("data-look", "idle"));
+    expect(document.documentElement.dataset.reduceMotion).toBe("false");
+    act(() => heard?.(state({ look: "listening" })));
+    expect(root()).toHaveAttribute("data-look", "listening");
+    act(() => heard?.(state({ look: "thinking", still: true })));
+    expect(root()).toHaveAttribute("data-look", "thinking");
+    expect(document.documentElement.dataset.reduceMotion).toBe("true");
+    act(() => heard?.(state({ still: false })));
+    expect(document.documentElement.dataset.reduceMotion).toBe("false");
+    delete document.documentElement.dataset.reduceMotion;
   });
 
   it("tells the app which parts take the mouse: her pedestal and figure, and the menu while it is open", async () => {

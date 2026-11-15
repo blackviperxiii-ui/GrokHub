@@ -34,6 +34,13 @@ export function NyxDesk() {
   const menuRef = useRef<HTMLUListElement>(null);
   const press = useRef<{ x: number; y: number } | null>(null);
 
+  // Reduce motion stills her breath, float and flicker, and her figure
+  // shows its picture instead of the clip.
+  const still = state?.still;
+  useEffect(() => {
+    if (still !== undefined) document.documentElement.dataset.reduceMotion = still ? "true" : "false";
+  }, [still]);
+
   // A click on the desktop beside her passes through, so the page hears no
   // click: leaving the window, or Escape, closes the menu too.
   useEffect(() => {
@@ -125,6 +132,7 @@ export function NyxDesk() {
     <div
       className="nyx-desk"
       aria-label={name}
+      data-look={state.look}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenu({ x: event.clientX, y: event.clientY });
