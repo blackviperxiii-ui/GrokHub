@@ -281,7 +281,8 @@ mod tests {
             PYATSPI_MISSING.contains("python-atspi") && PYATSPI_MISSING.contains("wmctrl"),
             "leftover hands copy still mentions pyatspi"
         );
-        let aur_install = include_str!("../../../packaging/aur/grokhub.install");
+        let aur_install =
+            include_str!("../../../packaging/aur/grokhub.install").replace("\r\n", "\n");
         assert!(
             aur_install.contains("update-desktop-database")
                 && aur_install.contains("Run:    grokhub-shell\n"),
@@ -386,8 +387,9 @@ mod tests {
                 format!("install -Dm755 \"$hub/grokhub-hub\" \"{pkgdir}/usr/bin/grokhub-hub\""),
                 format!("install -Dm755 \"$hub/grokhub\" \"{pkgdir}/usr/bin/grokhub\""),
                 "sed -e 's|^ExecStart=%h/.local/bin/grokhub-hub$|ExecStart=/usr/bin/grokhub-hub|' \\".to_string(),
+                "for icon in packaging/icons/hicolor/*/apps/*; do".to_string(),
                 format!(
-                    "find . -type f -exec install -Dm644 {{}} \"{pkgdir}/usr/share/icons/hicolor/{{}}\" \\;)"
+                    "install -Dm644 \"$icon\" \"{pkgdir}/usr/share/icons/hicolor/${{icon#packaging/icons/hicolor/}}\""
                 ),
                 format!("packaging/systemd/grokhub-hub.service >\"{pkgdir}/usr/lib/systemd/user/grokhub-hub.service\""),
             ] {
