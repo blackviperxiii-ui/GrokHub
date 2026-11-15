@@ -117,13 +117,9 @@ pub fn wire(chip: &QuickChip, mode: &str) -> Option<Chip> {
     })
 }
 
-/// The game a game-note chip (`game:note:<app id>`) is for.
+/// The game a game-note chip is for.
 fn note_for(chip: &QuickChip) -> Option<u32> {
-    chip.id
-        .strip_prefix(grokhub_core::game_companion::NOTE_PREFIX)?
-        .parse()
-        .ok()
-        .filter(|id| *id != 0)
+    grokhub_core::game_companion::note_app_id(&chip.id)
 }
 
 /// The chips the page can show, in order.
@@ -549,7 +545,7 @@ mod tests {
                 [
                     ("game:note:8", "Note for Celeste", Tap::Note, Some(8)),
                     (
-                        "game:note:7",
+                        "game:note:after:7",
                         "Leave a note for Hades next time",
                         Tap::Note,
                         Some(7)
@@ -559,6 +555,77 @@ mod tests {
                 chat.len()
             );
         }
+    }
+
+    #[test]
+    fn a_tired_in_play_note_chip_leaves_the_after_game_offer_its_own_shows() {
+        let hades = grokhub_core::steam::SteamGame {
+            app_id: 7,
+            name: "Hades".into(),
+            last_played: 0,
+            playtime_min: 0,
+        };
+        let dir = temp_dir("game-note-fatigue");
+        let rows = Mutex::new(Rows::default());
+        let talked = [
+            ("user".to_string(), "what's new".to_string()),
+            ("assistant".to_string(), "Not much.".to_string()),
+        ];
+        let ask_row = |session: &crate::game_companion::Session, surface: &str, now_ms: u64| {
+            let extra = crate::game_companion::row_extra(session, surface, false, now_ms);
+            let chat: &[(String, String)] = if surface == COMPOSER { &talked } else { &[] };
+            row(
+                &dir,
+                &rows,
+                RowAsk {
+                    surface,
+                    chat,
+                    draft: "",
+                    follow_ups: &[],
+                    mode: "chat",
+                    signed_in: true,
+                    first_run: false,
+                    hour: 10,
+                    weekday: 2,
+                    quiet_hours: false,
+                    now_ms,
+                    extra: &extra,
+                    lane: Lane::default(),
+                },
+            )
+            .into_iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>()
+        };
+        let playing = crate::game_companion::Session {
+            playing: Some(hades.clone()),
+            ended: None,
+        };
+        // Shown again and again in play without a tap, the in-play chip
+        // tires and leaves the row.
+        let mut seen = Vec::new();
+        for i in 0..10u64 {
+            let surface = if i % 2 == 0 { HOME } else { COMPOSER };
+            seen.push(
+                ask_row(&playing, surface, 1_000 + i * 1_000).contains(&"game:note:7".to_string()),
+            );
+        }
+        assert_eq!(seen.first(), Some(&true));
+        assert_eq!(seen.last(), Some(&false), "{seen:?}");
+        // The game closes: its offer is new to the row, so it shows.
+        let ended = crate::game_companion::Session {
+            playing: None,
+            ended: Some((hades, 20_000)),
+        };
+        for (surface, at) in [(HOME, 21_000), (COMPOSER, 22_000)] {
+            let shown = ask_row(&ended, surface, at);
+            assert_eq!(
+                shown.first().map(String::as_str),
+                Some("game:note:after:7"),
+                "{surface} {shown:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     use grokhub_core::ChipKind;

@@ -623,7 +623,7 @@ mod tests {
 
         assert!(session.note(&watch.note(None), &library, 2_000));
         let offer = session.chips(2_000);
-        assert_eq!(ids(&offer), ["game:note:7"]);
+        assert_eq!(ids(&offer), ["game:note:after:7"]);
         assert_eq!(offer[0].label, "Leave a note for Hades next time");
         assert_eq!(offer[0].value, "note 7");
         assert_eq!(session.chips(2_000 + NOTE_OFFER_MS - 1).len(), 1);
@@ -653,7 +653,7 @@ mod tests {
         session.note(&watch.note(Some(7)), &library, 4_000);
         session.note(&watch.note(Some(8)), &library, 5_000);
         let row = session.chips(5_000);
-        assert_eq!(ids(&row), ["game:note:8", "game:note:7"]);
+        assert_eq!(ids(&row), ["game:note:8", "game:note:after:7"]);
         assert_eq!(row[1].score, 100.0 - 0.001);
         // A note for the game running now leaves the closed one's offer.
         assert!(!session.noted(8));
@@ -662,7 +662,7 @@ mod tests {
         // it gets one.
         session.note(&watch.note(Some(7)), &library, 6_000);
         let row = session.chips(6_000);
-        assert_eq!(ids(&row), ["game:note:7", "game:note:8"]);
+        assert_eq!(ids(&row), ["game:note:7", "game:note:after:8"]);
         assert_eq!(row[0].label, "Note for Hades");
         assert_eq!(row[1].label, "Leave a note for Celeste next time");
         assert_eq!(session.ended, Some((game(8, "Celeste"), 6_000)));
@@ -853,11 +853,11 @@ mod tests {
         };
         assert_eq!(
             ids(&row_extra(&session, crate::chips::HOME, false, 2_000)),
-            ["game:note:8", "game:note:7"]
+            ["game:note:8", "game:note:after:7"]
         );
         assert_eq!(
             ids(&row_extra(&session, crate::chips::COMPOSER, false, 2_000)),
-            ["game:note:8", "game:note:7"]
+            ["game:note:8", "game:note:after:7"]
         );
         assert!(row_extra(&session, crate::chips::PALETTE, false, 2_000).is_empty());
         assert!(row_extra(&session, crate::chips::HOME, true, 2_000).is_empty());
