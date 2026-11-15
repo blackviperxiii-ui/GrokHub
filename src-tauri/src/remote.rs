@@ -1257,6 +1257,7 @@ mod tests {
             "start_openrouter_sign_in",
             "wait_openrouter_sign_in",
             "stop_openrouter_sign_in",
+            "openrouter_sign_in_status",
             "allow_ai_provider",
             "answer_ai_models_card",
             "remove_ai_provider",

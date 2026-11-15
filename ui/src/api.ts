@@ -4917,6 +4917,16 @@ export function waitOpenRouterSignIn(): Promise<AiModelsCard> {
   return invoke<AiModelsCard>("wait_openrouter_sign_in");
 }
 
+/** What a page that just loaded picks up: a sign-in that waits, or its unanswered card. */
+export interface OpenRouterSignInStatus {
+  waiting: OpenRouterSignIn | null;
+  card: AiModelsCard | null;
+}
+
+export function openRouterSignInStatus(): Promise<OpenRouterSignInStatus> {
+  return invoke<OpenRouterSignInStatus>("openrouter_sign_in_status");
+}
+
 /** Stops a browser sign-in that waits; its wait ends with `OPENROUTER_STOPPED`. */
 export function stopOpenRouterSignIn(): Promise<void> {
   return invoke<void>("stop_openrouter_sign_in");

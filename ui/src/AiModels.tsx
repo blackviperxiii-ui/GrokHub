@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   addAiProvider,
   allowAiProvider,
   answerAiModelsCard,
   getAiModels,
+  openRouterSignInStatus,
   removeAiProvider,
   revokeAiPremium,
   saveAiSpend,
@@ -16,6 +17,7 @@ import {
   type AiModelsView,
   type AiWebSearch,
   type OpenRouterSignIn,
+  type OpenRouterSignInStatus,
 } from "./api";
 import { ConfirmRow, StatusLine, useNote } from "./ui";
 
@@ -36,6 +38,7 @@ export const OPENROUTER_NOTE = "No key to paste: sign in on OpenRouter's page an
 export const OPENROUTER_WAIT = "Waiting for OpenRouter. Finish signing in in your browser.";
 export const OPENROUTER_KEY_WAIT = "OpenRouter sent a key. Save it on the card below.";
 export const OPENROUTER_BY_HAND = "Your browser didn't open. Open this link to sign in:";
+export const OPENROUTER_REOPEN = "No OpenRouter tab, or closed it? Open this link:";
 export const OPENROUTER_STOPPED = "Sign-in stopped. Nothing was saved.";
 /** The shell's wait ends with these when the page stopped it, or a newer page took it over. */
 const STOPPED = "OpenRouter sign-in stopped";
@@ -253,6 +256,19 @@ export function AiModels() {
     };
   }, [fail]);
 
+  // A page that was reloaded mid sign-in picks it up again: the sign-in that
+  // still waits, or the key card it never got to show.
+  const pickUp = useEffectEvent((found: OpenRouterSignInStatus) => {
+    if (found.card) {
+      if (show(found.card)) ok(OPENROUTER_KEY_WAIT);
+    } else if (found.waiting) {
+      void follow(found.waiting);
+    }
+  });
+  useEffect(() => {
+    openRouterSignInStatus().then(pickUp, () => undefined);
+  }, []);
+
   /** True when the step went through. */
   async function run(step: () => Promise<AiModelsView>): Promise<boolean> {
     setBusy(true);
@@ -292,6 +308,11 @@ export function AiModels() {
     } finally {
       setBusy(false);
     }
+    await follow(started);
+  }
+
+  /** Wait for a sign-in that reached the browser, then show its key card. */
+  async function follow(started: OpenRouterSignIn) {
     if (gone.current) {
       stopOpenRouterSignIn().catch(() => undefined);
       return;
@@ -431,11 +452,11 @@ export function AiModels() {
           </button>
         </div>
       )}
-      {signIn && !signIn.opened && (
+      {signIn && signIn.url && (
         <div className="card-buttons" role="group" aria-label="Open OpenRouter by hand">
           <span>
-            {OPENROUTER_BY_HAND}
-            {signIn.why ? ` (${signIn.why})` : ""}
+            {signIn.opened ? OPENROUTER_REOPEN : OPENROUTER_BY_HAND}
+            {!signIn.opened && signIn.why ? ` (${signIn.why})` : ""}
           </span>
           <input readOnly aria-label="OpenRouter sign-in link" value={signIn.url} onFocus={(e) => e.target.select()} />
           <button type="button" className="quiet" onClick={() => void copyLink(signIn.url)}>

@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AiModelsCard, AiModelsView, OpenRouterSignIn } from "./api";
+import type { AiModelsCard, AiModelsView, OpenRouterSignIn, OpenRouterSignInStatus } from "./api";
 
 const api = vi.hoisted(() => ({
   getAiModels: vi.fn<() => Promise<AiModelsView>>(),
@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
   startOpenRouterSignIn: vi.fn<() => Promise<OpenRouterSignIn>>(),
   waitOpenRouterSignIn: vi.fn<() => Promise<AiModelsCard>>(),
   stopOpenRouterSignIn: vi.fn<() => Promise<void>>(),
+  openRouterSignInStatus: vi.fn<() => Promise<OpenRouterSignInStatus>>(),
 }));
 vi.mock("./api", () => api);
 
@@ -26,6 +27,7 @@ import {
   LOCAL_NOTE,
   OPENROUTER_BY_HAND,
   OPENROUTER_KEY_WAIT,
+  OPENROUTER_REOPEN,
   OPENROUTER_STOPPED,
   OPENROUTER_WAIT,
   PREMIUM_NONE,
@@ -97,6 +99,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   api.getAiModels.mockResolvedValue(EMPTY);
   api.stopOpenRouterSignIn.mockResolvedValue(undefined);
+  api.openRouterSignInStatus.mockResolvedValue({ waiting: null, card: null });
 });
 
 describe("AiModels", () => {
@@ -245,8 +248,11 @@ describe("AiModels", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
     expect(await screen.findByText(OPENROUTER_WAIT)).toBeVisible();
     expect(OPENROUTER_WAIT).toBe("Waiting for OpenRouter. Finish signing in in your browser.");
-    // The browser opened, so no link by hand; nothing else starts meanwhile.
-    expect(screen.queryByRole("group", { name: "Open OpenRouter by hand" })).toBeNull();
+    // The browser opened; the link stays at hand for a tab that was closed.
+    const byHand = screen.getByRole("group", { name: "Open OpenRouter by hand" });
+    expect(byHand).toHaveTextContent(OPENROUTER_REOPEN);
+    expect(within(byHand).getByLabelText("OpenRouter sign-in link")).toHaveValue(SIGN_IN_URL);
+    // Nothing else starts meanwhile.
     expect(screen.getByRole("button", { name: "Sign in with OpenRouter" })).toBeDisabled();
 
     card.settle(KEY_CARD);
@@ -338,16 +344,29 @@ describe("AiModels", () => {
     expect(api.stopOpenRouterSignIn).toHaveBeenCalledTimes(1);
   });
 
-  it("picks up a sign-in that still waits after the page comes back", async () => {
+  it("picks up a sign-in that still waits when the page loads after a reload", async () => {
     const card = later<AiModelsCard>();
-    // The shell hands back the waiting sign-in's link; this page now waits for it.
-    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: false, why: "No browser opened" });
+    api.openRouterSignInStatus.mockResolvedValue({ waiting: { url: SIGN_IN_URL, opened: true, why: "" }, card: null });
     api.waitOpenRouterSignIn.mockReturnValue(card.promise);
     render(<AiModels />);
-    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
-    expect(await screen.findByLabelText("OpenRouter sign-in link")).toHaveValue(SIGN_IN_URL);
+    expect(await screen.findByText(OPENROUTER_WAIT)).toBeVisible();
+    expect(screen.getByLabelText("OpenRouter sign-in link")).toHaveValue(SIGN_IN_URL);
+    // Nothing new was started: this page waits for the one that runs.
+    expect(api.startOpenRouterSignIn).not.toHaveBeenCalled();
+    expect(api.waitOpenRouterSignIn).toHaveBeenCalledTimes(1);
     card.settle(KEY_CARD);
     expect(await screen.findByRole("group", { name: "Save its API key (openrouter)" })).toBeVisible();
+    expect(screen.getByText(OPENROUTER_KEY_WAIT)).toBeVisible();
+  });
+
+  it("shows the key card a reloaded page never got to show", async () => {
+    api.openRouterSignInStatus.mockResolvedValue({ waiting: null, card: KEY_CARD });
+    api.answerAiModelsCard.mockResolvedValue({ ...EMPTY, status: "Nothing saved. The key was denied." });
+    render(<AiModels />);
+    const group = await screen.findByRole("group", { name: "Save its API key (openrouter)" });
+    expect(api.waitOpenRouterSignIn).not.toHaveBeenCalled();
+    await userEvent.click(within(group).getByRole("button", { name: "Deny" }));
+    expect(api.answerAiModelsCard).toHaveBeenCalledWith("ai-key-openrouter-1", false);
   });
 
   it("ends quietly when a newer page took the sign-in over", async () => {

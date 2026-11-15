@@ -5700,6 +5700,14 @@ async fn wait_openrouter_sign_in() -> Result<ai_models::Card, String> {
     off_main(openrouter_sign_in::wait).await?
 }
 
+/// A browser sign-in a page that just loaded picks up: one that waits, or its
+/// unanswered key card.
+#[tauri::command]
+async fn openrouter_sign_in_status() -> Result<openrouter_sign_in::SignInStatus, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    off_main(openrouter_sign_in::status).await
+}
+
 /// Stops a browser sign-in that waits: its port closes and no card is posted.
 #[tauri::command]
 async fn stop_openrouter_sign_in() -> Result<(), String> {
@@ -7825,6 +7833,7 @@ pub fn run() {
             start_openrouter_sign_in,
             wait_openrouter_sign_in,
             stop_openrouter_sign_in,
+            openrouter_sign_in_status,
             allow_ai_provider,
             answer_ai_models_card,
             remove_ai_provider,

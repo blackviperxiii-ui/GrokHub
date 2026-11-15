@@ -7,9 +7,11 @@
 //!
 //! A browser that doesn't open still finishes: the page shows the link to
 //! open by hand, and the callback completes the sign-in. One sign-in runs at
-//! a time. A page that comes back while it waits picks it up again ([`start`]
-//! hands back the same link), and only the newest [`wait`] gets its card, so
-//! a page that was left or reloaded never takes it. [`stop`] ends it early.
+//! a time. A page that comes back while it waits picks it up again
+//! ([`status`] on load, and [`start`] hands back the same link), and only the
+//! newest [`wait`] gets its card, so a page that was left never takes it. A
+//! card a reloaded page never saw is still in [`status`]. [`stop`] ends it
+//! early.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -59,6 +61,17 @@ struct Running {
 static SIGN_IN: Mutex<Option<Running>> = Mutex::new(None);
 /// The newest [`wait`]; an older one ends with [`WAITED_ELSEWHERE`].
 static NEWEST_WAIT: AtomicU64 = AtomicU64::new(0);
+/// The last card a [`wait`] handed out, for a page reloaded before it showed.
+static LAST_CARD: Mutex<Option<Card>> = Mutex::new(None);
+
+/// What a page that just loaded picks up: a sign-in that waits, or the card
+/// of one that ended and is still unanswered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignInStatus {
+    pub waiting: Option<SignInStarted>,
+    pub card: Option<Card>,
+}
 
 /// Only OpenRouter's own sign-in page opens from this flow.
 pub fn sign_in_page_ok(url: &str) -> bool {
@@ -180,10 +193,14 @@ pub fn wait() -> Result<Card, String> {
                 None => return Err(NO_SIGN_IN.into()),
                 Some(running) if running.flow.is_finished() => {
                     let ended = slot.take().ok_or(NO_SIGN_IN)?;
-                    return ended
+                    let card = ended
                         .flow
                         .join()
                         .unwrap_or_else(|_| Err("The sign-in stopped.".into()));
+                    if let Ok(card) = &card {
+                        *LAST_CARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(card.clone());
+                    }
+                    return card;
                 }
                 Some(_) => {}
             }
@@ -192,12 +209,39 @@ pub fn wait() -> Result<Card, String> {
     }
 }
 
+/// A sign-in to pick up on load: one that waits (or ended with nobody
+/// waiting; [`wait`] hands it over), or a card still unanswered.
+pub fn status() -> SignInStatus {
+    let waiting = SIGN_IN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .filter(|running| !running.stop.load(Ordering::SeqCst))
+        .map(|running| running.started.clone());
+    let card = LAST_CARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .filter(|card| ai_models::card_open(&card.id));
+    SignInStatus { waiting, card }
+}
+
 /// Stop the sign-in that waits: its port closes and no card is posted. The
 /// page's [`wait`] ends with [`STOPPED`]. Nothing to stop is fine.
 pub fn stop() {
     if let Some(running) = SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         running.stop.store(true, Ordering::SeqCst);
     }
+}
+
+/// The sign-in's flow has ended (tests wait on it instead of sleeping).
+#[cfg(test)]
+fn flow_ended() -> bool {
+    SIGN_IN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|running| running.flow.is_finished())
 }
 
 #[cfg(test)]

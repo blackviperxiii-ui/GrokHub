@@ -192,6 +192,15 @@ fn a_browser_that_does_not_open_still_signs_in_by_hand() {
     assert!(!providers::has_key(&config, "openrouter"));
 }
 
+/// Wait for `done`, or fail after 20 s.
+fn until(done: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !done() {
+        assert!(std::time::Instant::now() < deadline, "timed out waiting");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// A browser that opens and records the link, and never calls back.
 fn silent(opened: Arc<Mutex<Vec<String>>>) -> impl Fn(&str) -> Result<(), String> + Send + 'static {
     move |link: &str| {
@@ -206,7 +215,7 @@ fn a_second_start_picks_up_the_waiting_sign_in_and_an_unanswered_one_times_out()
     let (config, wire) = dir("busy");
     let opened = Arc::new(Mutex::new(Vec::new()));
     let first =
-        start_within(&config, silent(opened.clone()), Duration::from_millis(600)).expect("started");
+        start_within(&config, silent(opened.clone()), Duration::from_secs(3)).expect("started");
     // A page that comes back gets the same link, and nothing new opens.
     let again = start(&config, approving("good-code", opened.clone())).expect("picked up");
     assert_eq!(again, first);
@@ -225,8 +234,9 @@ fn only_the_newest_wait_gets_the_card() {
     let opened = Arc::new(Mutex::new(Vec::new()));
     let started = start(&config, silent(opened)).expect("started");
     // The page that was left (or reloaded) is still waiting.
+    let before = NEWEST_WAIT.load(Ordering::SeqCst);
     let left = std::thread::spawn(wait);
-    std::thread::sleep(Duration::from_millis(250));
+    until(|| NEWEST_WAIT.load(Ordering::SeqCst) == before + 1);
     // The page that came back picks the sign-in up and waits for it.
     let back = std::thread::spawn(wait);
     assert_eq!(left.join().unwrap().unwrap_err(), WAITED_ELSEWHERE);
@@ -247,8 +257,9 @@ fn a_stopped_sign_in_closes_its_port_and_posts_no_card() {
     let (config, wire) = dir("stop");
     let opened = Arc::new(Mutex::new(Vec::new()));
     let started = start(&config, silent(opened.clone())).expect("started");
+    let before = NEWEST_WAIT.load(Ordering::SeqCst);
     let waiting = std::thread::spawn(wait);
-    std::thread::sleep(Duration::from_millis(150));
+    until(|| NEWEST_WAIT.load(Ordering::SeqCst) == before + 1);
     stop();
     assert_eq!(waiting.join().unwrap().unwrap_err(), STOPPED);
     // The port is closed: a late callback finds nobody listening.
@@ -282,8 +293,8 @@ fn a_card_nobody_waited_for_is_denied_by_the_next_start() {
     }
     let orphan = hx::pending_parks(&config);
     assert_eq!(orphan.len(), 1);
-    // Let the flow thread finish after posting the card.
-    std::thread::sleep(Duration::from_millis(200));
+    // The flow thread ends just after it posts the card.
+    until(flow_ended);
     start(&config, silent(opened.clone())).expect("started again");
     assert_eq!(opened.lock().unwrap().len(), 2);
     let left: Vec<String> = hx::pending_parks(&config)
@@ -327,4 +338,49 @@ fn offline_only_opens_no_page() {
 fn a_wait_with_no_sign_in_says_to_start_first() {
     let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
     assert_eq!(wait().unwrap_err(), "Start signing in first.");
+}
+
+#[test]
+fn a_page_that_loads_picks_up_a_waiting_sign_in_and_its_unanswered_card() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let (config, _wire) = dir("status");
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let started = start(&config, silent(opened)).expect("started");
+    assert_eq!(
+        status(),
+        SignInStatus {
+            waiting: Some(started.clone()),
+            card: None
+        }
+    );
+    approve_in_browser(&started.url, "good-code");
+    // The page that waited was reloaded before it showed the card.
+    let card = wait().expect("card");
+    assert_eq!(
+        status(),
+        SignInStatus {
+            waiting: None,
+            card: Some(card.clone())
+        }
+    );
+    // Once answered, the card is gone from what a page picks up.
+    ai_models::answer(&card.id, false).expect("denied");
+    assert_eq!(
+        status(),
+        SignInStatus {
+            waiting: None,
+            card: None
+        }
+    );
+}
+
+#[test]
+fn a_stopped_sign_in_is_not_picked_up() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let (config, _wire) = dir("status-stop");
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    start(&config, silent(opened)).expect("started");
+    stop();
+    assert_eq!(status().waiting, None);
+    assert_eq!(wait().unwrap_err(), STOPPED);
 }
