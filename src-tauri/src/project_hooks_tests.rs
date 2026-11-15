@@ -206,7 +206,10 @@ fn an_http_hook_shows_its_host_on_the_page() {
     let page = load(&cfg, &ws, Some(&home));
     assert_eq!(page.rows.len(), 1);
     assert_eq!(page.rows[0].kind, "http");
-    assert_eq!(page.rows[0].command, "https://hooks.chat.example/[redacted]");
+    assert_eq!(
+        page.rows[0].command,
+        "https://hooks.chat.example/[redacted]"
+    );
     // The runners only run command hooks.
     assert!(!page.rows[0].runs);
     assert_eq!(page.rows[0].note, HTTP_NOT_RUN);
