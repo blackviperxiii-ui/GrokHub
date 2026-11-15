@@ -12,6 +12,7 @@ import {
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
 import { ConnectorAdd } from "./ConnectorAdd";
+import { Github } from "./Github";
 import { Hooks } from "./Hooks";
 import { ConfirmRow, StatusLine, useNote } from "./ui";
 
@@ -191,6 +192,7 @@ export function Connectors({ remote = false }: { remote?: boolean }) {
           </li>
         ))}
       </ul>
+      {!remote && <Github />}
       {!remote && <Hooks />}
     </section>
   );

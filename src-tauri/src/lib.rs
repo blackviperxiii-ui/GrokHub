@@ -103,6 +103,7 @@ pub use grokhub_agent::xai_keychain as oauth;
 mod composer_ghost;
 #[cfg(desktop)]
 mod focus_help;
+pub mod github;
 pub mod hook_command;
 pub mod onboard;
 pub mod opener;
@@ -3978,6 +3979,33 @@ async fn set_workboard_tidy(
     off_main(move || workboard::set_auto_delete(&dir, auto_delete_days)).await?
 }
 
+/// Connectors → GitHub: whether a token is saved (never the token).
+#[tauri::command]
+async fn get_github(state: State<'_, ShellState>) -> Result<github::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || github::view(&dir)).await
+}
+
+/// Save the GitHub token to the keyring; empty removes it.
+#[tauri::command]
+async fn save_github_token(
+    state: State<'_, ShellState>,
+    token: String,
+) -> Result<github::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || github::save_token(&dir, &token)).await?
+}
+
+/// Who am I or List repos: one read-only call to api.github.com.
+#[tauri::command]
+async fn run_github(
+    state: State<'_, ShellState>,
+    tool: github::Tool,
+) -> Result<github::Ran, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || github::run(&dir, tool)).await?
+}
+
 #[tauri::command]
 async fn get_hooks(state: State<'_, ShellState>) -> Result<project_hooks::Page, String> {
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
@@ -7781,6 +7809,9 @@ pub fn run() {
             journal_act,
             journal_to_mission,
             get_permissions,
+            get_github,
+            save_github_token,
+            run_github,
             get_hooks,
             set_hooks_trust,
             scopes::get_scopes,

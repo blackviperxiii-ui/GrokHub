@@ -3244,6 +3244,40 @@ export function forgetGrant(command: string): Promise<PermissionPage> {
   return invoke<PermissionPage>("forget_grant", { command });
 }
 
+/** Connectors → GitHub (src-tauri/src/github.rs). Never holds the token. */
+export interface GithubView {
+  tokenSet: boolean;
+  status: string;
+}
+
+export type GithubTool = "user" | "listRepos";
+
+export interface GithubRepo {
+  /** `owner/name`. */
+  name: string;
+  private: boolean;
+  description: string;
+}
+
+export interface GithubRan {
+  summary: string;
+  repos: GithubRepo[];
+}
+
+export function getGithub(): Promise<GithubView> {
+  return invoke<GithubView>("get_github");
+}
+
+/** An empty token removes the saved one. */
+export function saveGithubToken(token: string): Promise<GithubView> {
+  return invoke<GithubView>("save_github_token", { token });
+}
+
+/** One read-only call to api.github.com. */
+export function runGithub(tool: GithubTool): Promise<GithubRan> {
+  return invoke<GithubRan>("run_github", { tool });
+}
+
 /** Connectors → Hooks (src-tauri/src/project_hooks.rs). */
 export type HookOrigin = "user" | "project" | "plugin";
 

@@ -329,6 +329,8 @@ const EMPTY_PERSONALITY = {
 
 const EMPTY_PLAYBOOKS = { rows: [], problems: [] };
 const EMPTY_PERMISSIONS = { rules: [], imported: [], grants: [], folderTrusted: false };
+// Connectors → GitHub: no token saved yet.
+const GITHUB = { tokenSet: false, status: "" };
 // Connectors → Hooks: one of yours, and one of this project's waiting for trust.
 const HOOKS = {
   folder: "/home/user/my-app",
@@ -564,6 +566,7 @@ export function initScript(theme = "ops-dark") {
     playbooks: EMPTY_PLAYBOOKS,
     permissions: EMPTY_PERMISSIONS,
     hooks: HOOKS,
+    github: GITHUB,
     interests: EMPTY_INTERESTS,
     plugins: EMPTY_PLUGINS,
     web: EMPTY_WEB,
@@ -672,6 +675,24 @@ export function initScript(theme = "ops-dark") {
         case "remember_grant":
         case "forget_grant":
           return fix.permissions;
+        case "get_github":
+          return fix.github;
+        case "save_github_token": {
+          const tokenSet = Boolean(args && String(args.token || "").trim());
+          fix.github = { tokenSet, status: tokenSet ? "GitHub token saved." : "GitHub token removed." };
+          return fix.github;
+        }
+        case "run_github":
+          if (args && args.tool === "listRepos") {
+            return {
+              summary: "2 repositories, most recently updated first.",
+              repos: [
+                { name: "octo/my-app", private: false, description: "An app" },
+                { name: "octo/notes", private: true, description: "" },
+              ],
+            };
+          }
+          return { summary: "Signed in as octo (Robin Lee) · 3 public repos", repos: [] };
         case "get_hooks":
           return fix.hooks;
         case "set_hooks_trust": {

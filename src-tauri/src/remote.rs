@@ -1126,6 +1126,10 @@ mod tests {
             "journal_act",
             "journal_to_mission",
             "get_permissions",
+            // The GitHub token is sent with these.
+            "get_github",
+            "save_github_token",
+            "run_github",
             // Trusting a folder lets its hooks run commands here.
             "get_hooks",
             "set_hooks_trust",
