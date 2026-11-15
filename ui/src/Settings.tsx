@@ -37,6 +37,7 @@ import { LivingWall } from "./LivingWall";
 import { PcHelpers } from "./PcHelpers";
 import { ScreenshotExplain } from "./ScreenshotExplain";
 import { SteamPulseSources } from "./SteamPulseSources";
+import { LocalModelsSource } from "./LocalModelsSource";
 import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
 import { Learned } from "./Learned";
@@ -307,6 +308,7 @@ export function Settings({
             {section === "code" && caps.code && <CodeSettings />}
             {section === "pulse" && caps.pulse && <Interests />}
             {section === "pulse" && caps.pulse && <SteamPulseSources />}
+            {section === "pulse" && caps.pulse && caps.localAi && <LocalModelsSource />}
             {section === "pulse" && caps.pulse && <KnowMe />}
             {section === "pulse" && caps.pulse && <PulseSources />}
             {section === "pulse" && caps.pulse && <PulseAuto />}

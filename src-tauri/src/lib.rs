@@ -84,6 +84,7 @@ pub mod local_ai;
 pub mod local_engine;
 #[cfg(desktop)]
 mod local_governor;
+mod local_model_checks;
 #[cfg(test)]
 mod md_fixtures;
 pub mod memory;
@@ -4818,6 +4819,40 @@ async fn steam_check_now(
 }
 
 #[tauri::command]
+async fn get_local_model_news(
+    state: State<'_, ShellState>,
+) -> Result<local_model_checks::LocalModelNews, String> {
+    let caps = capabilities::current();
+    capabilities::needs(caps.pulse, "Pulse")?;
+    capabilities::needs(caps.local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || local_model_checks::status(&dir)).await
+}
+
+#[tauri::command]
+async fn set_local_model_news(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<local_model_checks::LocalModelNews, String> {
+    let caps = capabilities::current();
+    capabilities::needs(caps.pulse, "Pulse")?;
+    capabilities::needs(caps.local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || local_model_checks::set_on(&dir, on)).await?
+}
+
+#[tauri::command]
+async fn local_model_news_check_now(
+    state: State<'_, ShellState>,
+) -> Result<local_model_checks::LocalModelNews, String> {
+    let caps = capabilities::current();
+    capabilities::needs(caps.pulse, "Pulse")?;
+    capabilities::needs(caps.local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || local_model_checks::check_now(&dir)).await?
+}
+
+#[tauri::command]
 async fn game_wow(state: State<'_, ShellState>) -> Result<games::WowView, String> {
     capabilities::needs(capabilities::current().library, "Library")?;
     let dir = state.config_dir.clone();
@@ -7417,6 +7452,7 @@ pub fn run() {
             });
             steam_checks::start(config_dir.clone());
             catalog_refresh::start(config_dir.clone());
+            local_model_checks::start(config_dir.clone());
             game_companion::start(config_dir.clone());
             pc_health::start(config_dir.clone());
             // The learning engine: chips, cards and runs record to it from
@@ -8083,6 +8119,9 @@ pub fn run() {
             save_steam_id,
             forget_steam_id,
             steam_check_now,
+            get_local_model_news,
+            set_local_model_news,
+            local_model_news_check_now,
             game_wow,
             game_wow_addon,
             game_gw2,
