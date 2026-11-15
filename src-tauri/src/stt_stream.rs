@@ -278,6 +278,13 @@ fn stream(
                 }
             }
         }
+        if over && !ready {
+            // The turn is over before the server was ready: nobody waits for
+            // these words any more (the turn uploads), so its audio stays here.
+            let _ = ws.close(None);
+            let _ = ws.flush();
+            return Ok(());
+        }
         if ready {
             if !pending.is_empty() && offline() {
                 let _ = ws.close(None);

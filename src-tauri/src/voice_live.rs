@@ -85,11 +85,21 @@ pub struct Live {
     open: Option<Opener>,
     /// Samples heard while listening, for the length of a Smart Turn turn.
     heard: usize,
-    /// The mic heard someone start talking in this listen. Smart Turn's
-    /// words count only then: without it they are someone in the room
-    /// the mic took for background.
+    /// The mic heard someone start talking in this listen. Audio goes to
+    /// the stream only from then on, and Smart Turn's words count only
+    /// then: without it they are someone in the room the mic took for
+    /// background.
     spoke: bool,
+    /// The last [`RECENT_MS`] of blocks heard while listening. When the mic
+    /// hears a start they go to the stream first, so it gets the turn's
+    /// lead-in the mic keeps too, even from before the stream opened.
+    recent: std::collections::VecDeque<Vec<i16>>,
 }
+
+/// How much audio before a start the stream gets: the detector's pre-roll
+/// plus its longest onset window (talking over the end of a reply).
+const RECENT_MS: u32 =
+    grokhub_core::voice_turn::PRE_ROLL_MS + grokhub_core::voice_turn::BARGE_IN_WINDOW_MS;
 
 impl Live {
     /// A session listening for its first turn. `open` gives each listen
@@ -109,22 +119,18 @@ impl Live {
             return Err(BAD_BLOCK.into());
         }
         let block = s16le(bytes);
-        if self.mic.armed() {
-            self.heard += block.len();
-            // A stream that already ended can't take audio; its news still
-            // waits in the channel, so the link stays until that is read.
-            if let Some(link) = &self.stt {
-                let _ = link.audio.send(block.clone());
-            }
-        }
+        let armed = self.mic.armed();
         let heard = self.mic.push(&block);
+        if armed {
+            self.heard += block.len();
+            self.hold_recent(block);
+            let started = heard.iter().any(|h| matches!(h, Heard::Started));
+            self.stream_block(started);
+        }
         let mut events: Vec<LiveEvent> = heard
             .into_iter()
             .map(|h| match h {
-                Heard::Started => {
-                    self.spoke = true;
-                    LiveEvent::Started
-                }
+                Heard::Started => LiveEvent::Started,
                 Heard::Turn(turn) => {
                     // Dropping the stream's audio asks it for the last words.
                     let news = self.stt.take().map(|link| link.news);
@@ -157,6 +163,35 @@ impl Live {
         Ok(events)
     }
 
+    fn hold_recent(&mut self, block: Vec<i16>) {
+        let keep = (RATE * RECENT_MS / 1000) as usize;
+        self.recent.push_back(block);
+        let mut total: usize = self.recent.iter().map(Vec::len).sum();
+        while self.recent.len() > 1 && total - self.recent[0].len() >= keep {
+            total -= self.recent[0].len();
+            self.recent.pop_front();
+        }
+    }
+
+    /// Audio to the stream once someone started talking: everything held at
+    /// the start, then each block. Before that, room sound stays here. A
+    /// stream that already ended can't take audio; its news still waits in
+    /// the channel, so the link stays until that is read.
+    fn stream_block(&mut self, started: bool) {
+        let first = started && !self.spoke;
+        self.spoke |= started;
+        let Some(link) = &self.stt else { return };
+        if first {
+            for block in &self.recent {
+                let _ = link.audio.send(block.clone());
+            }
+        } else if self.spoke {
+            if let Some(block) = self.recent.back() {
+                let _ = link.audio.send(block.clone());
+            }
+        }
+    }
+
     /// The stream's words when Smart Turn ended the turn. A stream that
     /// failed or went away is dropped, so the turn falls back to the upload;
     /// so is one that ended a turn the mic never heard start.
@@ -187,6 +222,7 @@ impl Live {
         self.mic.listen();
         self.heard = 0;
         self.spoke = false;
+        self.recent.clear();
         self.stt = None;
         if !playing {
             self.stt = self.open.as_mut().and_then(|open| open());
@@ -445,6 +481,15 @@ fn models_dir(config_dir: &Path) -> std::path::PathBuf {
 
 /// Voice mode on: the mic is listening for the first turn, with a stream
 /// when xAI speech-to-text can take one.
+/// Each listen's stream, with the key as it is then: a key cleared or
+/// replaced while voice mode is on is never used again.
+fn opener(
+    dir: std::path::PathBuf,
+    target: fn() -> Option<crate::stt_stream::StreamTarget>,
+) -> Opener {
+    Box::new(move || target().and_then(|to| crate::stt_stream::open(&dir, &to)))
+}
+
 /// Off the main thread: the key comes from the OS keychain, and opening a
 /// stream runs the egress guard and starts its thread.
 #[tauri::command]
@@ -454,10 +499,7 @@ pub(crate) async fn voice_live_start(
     crate::capabilities::needs(crate::capabilities::current().voice, "Voice")?;
     let dir = state.config_dir.clone();
     crate::off_main(move || {
-        let to = crate::stt_stream::target();
-        let open: Opener =
-            Box::new(move || to.as_ref().and_then(|to| crate::stt_stream::open(&dir, to)));
-        let live = Live::new(Some(open));
+        let live = Live::new(Some(opener(dir, crate::stt_stream::target)));
         *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(live);
     })
     .await
