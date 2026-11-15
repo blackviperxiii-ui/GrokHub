@@ -21,7 +21,7 @@ fn saved(d: &Path) -> serde_json::Value {
 fn the_hint_leads_with_on_or_off_and_says_what_runs_here() {
     assert_eq!(
         view_of(true, true).hint,
-        "On. While the model is loaded, background jobs and short chats run on this computer, and any chat does while you're offline or the cloud can't answer."
+        "On. While the model is loaded, small background jobs run on this computer, and chats use it when you're offline or the cloud can't answer."
     );
     assert_eq!(
         view_of(true, false).hint,

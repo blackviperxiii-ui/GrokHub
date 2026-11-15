@@ -18,7 +18,7 @@ use serde_json::json;
 pub const KEY: &str = "localModel";
 
 /// On, with an engine and model on disk.
-const ON: &str = "On. While the model is loaded, background jobs and short chats run on this computer, and any chat does while you're offline or the cloud can't answer.";
+const ON: &str = "On. While the model is loaded, small background jobs run on this computer, and chats use it when you're offline or the cloud can't answer.";
 /// On, with nothing installed yet.
 const ON_NOT_SET_UP: &str = "On. Set up a local engine and model below and it starts helping.";
 const OFF: &str = "Off. Nothing runs on the on-device model.";
