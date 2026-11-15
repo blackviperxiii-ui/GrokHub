@@ -8,10 +8,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Ask again at most this often.
-pub const IDEAS_REFRESH_MS: u64 = 6 * 60 * 60 * 1000;
-/// With this many live generated ideas on the board, do not ask for more.
-pub const IDEAS_LIVE_ENOUGH: usize = 4;
 /// Source id on cards the model wrote.
 pub const IDEA_SOURCE_GENERATED: &str = "gen";
 
@@ -238,12 +234,6 @@ pub fn is_template_idea_title(title: &str) -> bool {
     EXACT.contains(&t.as_str()) || STARTS.iter().any(|p| t.starts_with(p))
 }
 
-/// Ask for ideas when the board is thin and the last ask is old enough.
-pub fn ideas_refresh_due(last_ms: u64, now_ms: u64, live_generated: usize) -> bool {
-    live_generated < IDEAS_LIVE_ENOUGH
-        && (last_ms == 0 || now_ms.saturating_sub(last_ms) >= IDEAS_REFRESH_MS)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,6 +249,71 @@ mod tests {
         }
         assert!(!is_one_off_ask("summarize my open GitHub issues"));
         assert!(is_one_off_ask("can you set up the printer"));
+    }
+
+    #[test]
+    fn an_idea_needs_repeated_work_or_lasting_context() {
+        let digest = "Issue digest: summarize open github issues";
+        let one = vec!["summarize my open github issues".to_string()];
+        let two = vec![
+            "summarize my open github issues".to_string(),
+            "what github issues are still open".to_string(),
+        ];
+        let ground = |asks, lasting| IdeaGround { asks, lasting };
+        assert!(!idea_has_reason(
+            IdeaKind::Automation,
+            digest,
+            &ground(&[], &[])
+        ));
+        assert!(
+            !idea_has_reason(IdeaKind::Automation, digest, &ground(&one, &[])),
+            "one ask is not a pattern"
+        );
+        assert!(idea_has_reason(
+            IdeaKind::Automation,
+            digest,
+            &ground(&two, &[])
+        ));
+        assert!(idea_has_reason(IdeaKind::Skill, digest, &ground(&two, &[])));
+        assert!(
+            idea_has_reason(IdeaKind::Try, digest, &ground(&one, &[])),
+            "a Try needs only one ask"
+        );
+        let lasting = vec!["I triage github issues every morning".to_string()];
+        assert!(
+            idea_has_reason(IdeaKind::Reminder, digest, &ground(&[], &lasting)),
+            "lasting context is a reason on its own"
+        );
+        let blank = vec!["   ".to_string()];
+        assert!(!idea_has_reason(
+            IdeaKind::Try,
+            digest,
+            &ground(&[], &blank)
+        ));
+    }
+
+    #[test]
+    fn one_time_jobs_never_count_as_a_reason() {
+        let driver = "Driver check: install the nvidia driver";
+        let installs = vec![
+            "install the nvidia 550 driver for my 4070".to_string(),
+            "the nvidia driver install failed, try installing it again".to_string(),
+        ];
+        let ground = IdeaGround {
+            asks: &installs,
+            lasting: &[],
+        };
+        assert!(!idea_has_reason(IdeaKind::Automation, driver, &ground));
+        assert!(!idea_has_reason(IdeaKind::Try, driver, &ground));
+        let lasting = vec!["install the nvidia driver".to_string()];
+        let ground = IdeaGround {
+            asks: &[],
+            lasting: &lasting,
+        };
+        assert!(
+            !idea_has_reason(IdeaKind::Try, driver, &ground),
+            "a one-time job in memory is not lasting context"
+        );
     }
 
     #[test]
@@ -299,14 +354,6 @@ mod tests {
             assert!(is_template_idea_title(t), "{t}");
         }
         assert!(!is_template_idea_title("Morning test run"));
-    }
-
-    #[test]
-    fn refresh_waits_for_a_thin_board_and_the_interval() {
-        assert!(ideas_refresh_due(0, 10, 0));
-        assert!(!ideas_refresh_due(0, 10, IDEAS_LIVE_ENOUGH));
-        assert!(!ideas_refresh_due(1_000, 1_000 + IDEAS_REFRESH_MS - 1, 0));
-        assert!(ideas_refresh_due(1_000, 1_000 + IDEAS_REFRESH_MS, 0));
     }
 
     #[test]

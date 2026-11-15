@@ -907,12 +907,6 @@ pub fn hands_step_label(receipt: &str) -> Option<String> {
     None
 }
 
-/// Attach a room frame only when this turn asked for eyes or hands.
-/// The Cabin eyes setting being on is not a trigger.
-pub fn should_attach_hands_frame(eyes_turn: bool, hands_turn: bool, has_frame: bool) -> bool {
-    has_frame && (eyes_turn || hands_turn)
-}
-
 pub fn lock_blocks_hands(titles: &[&str]) -> bool {
     titles.iter().copied().any(crate::hygiene::lockish)
 }
@@ -1218,9 +1212,6 @@ mod tests {
         let (id, loaded) = recipe_from_json(&json).unwrap();
         assert_eq!(id, "last");
         assert_eq!(loaded, rec);
-        assert!(should_attach_hands_frame(false, true, true));
-        assert!(!should_attach_hands_frame(false, false, true));
-        assert!(should_attach_hands_frame(true, false, true));
         assert!(lock_blocks_hands(&["Lock screen", "nvim"]));
         assert!(!lock_blocks_hands(&["GrokHub", "Terminal"]));
         assert_eq!(
@@ -1342,14 +1333,6 @@ mod tests {
         );
         assert!(screen_from_extents(0, 1080).is_none());
         assert!(screen_from_extents(1920, 0).is_none());
-    }
-
-    #[test]
-    fn cabin_eyes_stay_dormant_until_called() {
-        assert!(!should_attach_hands_frame(false, false, true));
-        assert!(!should_attach_hands_frame(false, false, false));
-        assert!(should_attach_hands_frame(true, false, true));
-        assert!(should_attach_hands_frame(false, true, true));
     }
 
     #[test]

@@ -441,12 +441,7 @@ pub use governor::{
     JobHold, JobKind, JobSpec, JobStatus, QuietRule, TickCtx, TickPlan, ACTIVE_GOAL, ACTIVE_REASON,
     ACTIVE_WINDOW_MS,
 };
-pub use greeting::{
-    classify_greeting, clean_project_title, greeting_fingerprint, greeting_name,
-    is_cabin_first_run, local_greeting, project_title_from_hint, should_paint_greeting,
-    should_refresh_greeting, GreetingInput, GreetingKind, GREETING_LLM_DEBOUNCE_MS,
-    GREETING_LLM_MODE, GREETING_MAX_CHARS,
-};
+pub use greeting::greeting_name;
 pub use grok_loop::{
     due_loops, loop_interval_ms, loop_next_run, loop_slash, mark_loop_ran, new_loop,
     parse_loop_line, GrokLoop, LOOP_MAX, LOOP_MIN_MS,
@@ -486,9 +481,8 @@ pub use hub_sync::{
 };
 pub use hygiene::{lockish, should_send_screenshot};
 pub use ideas::{
-    idea_from_one_off, idea_has_reason, idea_topic_text, ideas_refresh_due, is_one_off_ask,
-    is_template_idea_title, same_topic, topic_words, IdeaGround, IdeaKind, IdeaSeed,
-    IDEAS_LIVE_ENOUGH, IDEAS_REFRESH_MS, IDEA_SOURCE_GENERATED,
+    idea_from_one_off, idea_has_reason, idea_topic_text, is_one_off_ask, is_template_idea_title,
+    same_topic, topic_words, IdeaGround, IdeaKind, IdeaSeed, IDEA_SOURCE_GENERATED,
 };
 pub use imagine::{
     compose_imagine_prompt, curate_wall, dedicated_imagine_model, dedicated_video_model,
@@ -622,9 +616,8 @@ pub use recipe::{
     parse_computer_cmd_loose, parse_computer_op, parse_recipe, parse_screen, pick_hands_backend,
     pointer_op_blocked_on_lock, recipe_from_cmds, recipe_from_json, recipe_to_json,
     relative_move_steps, replay_ops, screen_from_extents, see_drive_attach,
-    should_attach_hands_frame, user_asks_desktop_hands, user_asks_gui_help, user_asks_guide_only,
-    user_asks_takeover, ComputerDrive, ComputerOp, HandsBackend, Recipe, RecipeDoc, ReplayOp,
-    ScreenSize, TabAction,
+    user_asks_desktop_hands, user_asks_gui_help, user_asks_guide_only, user_asks_takeover,
+    ComputerDrive, ComputerOp, HandsBackend, Recipe, RecipeDoc, ReplayOp, ScreenSize, TabAction,
 };
 pub use redact::{
     forget_topic, is_plain_text, redact_for_share, redact_held_secrets, redact_secret_words,
