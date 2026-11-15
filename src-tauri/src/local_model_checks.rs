@@ -174,6 +174,14 @@ pub(crate) type Post<'a> = &'a dyn Fn(grokhub_core::UpdateCard) -> Result<bool, 
 /// note, empty when the source was switched off while the check ran.
 pub(crate) fn finish(dir: &Path, run: NewsRun, now: u64, post: Post) -> String {
     let _held = tracker_lock();
+    let note = finish_held(dir, run, now, post);
+    // Under the lock, so it can't land after turning off cleared it.
+    set_note(&note);
+    note
+}
+
+/// [`finish`] with the tracker lock held.
+fn finish_held(dir: &Path, run: NewsRun, now: u64, post: Post) -> String {
     // Read again: switched off while it ran, the user's choice wins.
     let mut t = lm::load(dir);
     if !t.on {
@@ -241,9 +249,8 @@ pub fn tick(dir: &Path, now: u64) {
     let post = |card| crate::pulse::add_post(dir, card);
     let mut now = now;
     loop {
-        if let Some(note) = check_if_due(dir, now, &this_machine, &mut get, &post) {
-            set_note(&note);
-        }
+        // Each step sets Settings' note itself, under the tracker lock.
+        check_if_due(dir, now, &this_machine, &mut get, &post);
         if !RUNNING.end() {
             break;
         }
@@ -251,7 +258,8 @@ pub fn tick(dir: &Path, now: u64) {
     }
 }
 
-/// [`tick`] with the PC and the network passed in. `None` when nothing ran.
+/// [`tick`] with the PC and the network passed in: runs the check when due
+/// and returns the note it set for Settings, `None` when nothing ran.
 pub(crate) fn check_if_due(
     dir: &Path,
     now: u64,
@@ -268,10 +276,11 @@ pub(crate) fn check_if_due(
         // Counted before any request, so a failure also waits a week.
         t.last_check_ms = now;
         if let Err(why) = lm::save(dir, &t) {
+            set_note(&why);
             return Some(why);
         }
+        set_note(CHECKING);
     }
-    set_note(CHECKING);
     let run = run_check(&machine(dir), get);
     Some(finish(dir, run, now, post))
 }

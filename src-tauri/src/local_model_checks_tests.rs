@@ -356,3 +356,17 @@ fn a_tick_that_arrives_mid_check_makes_the_running_one_look_again() {
     assert!(gate.begin());
     assert!(!gate.end());
 }
+
+#[test]
+fn a_finished_check_sets_the_settings_note_itself() {
+    let dir = turned_on("note");
+    let post = |_: grokhub_core::UpdateCard| Ok(true);
+    assert_eq!(
+        check_if_due(&dir, NOW, &gaming_pc, &mut hugging_face, &post).as_deref(),
+        Some("Checked. 1 new for this PC.")
+    );
+    assert_eq!(status(&dir).note, "Checked. 1 new for this PC.");
+    set_on(&dir, false).expect("off");
+    assert_eq!(note(), "");
+    let _ = std::fs::remove_dir_all(&dir);
+}
