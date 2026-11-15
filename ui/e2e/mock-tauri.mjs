@@ -528,6 +528,8 @@ export function initScript(theme = "ops-dark") {
     web: EMPTY_WEB,
     learned: EMPTY_LEARNED,
     aiModels: EMPTY_AI_MODELS,
+    // A fresh install: no name or picture saved, no Grok sign-in.
+    profile: { name: "", shownName: "You", initial: "Y", picture: null },
     localAi: EMPTY_LOCAL_AI,
     pulseSources: EMPTY_PULSE_SOURCES,
     pulseAuto: EMPTY_PULSE_AUTO,
@@ -557,6 +559,19 @@ export function initScript(theme = "ops-dark") {
           return null;
         case "get_settings":
           return { ...fix.settings, theme: fix.theme };
+        case "get_profile":
+          return fix.profile;
+        case "set_profile_name": {
+          const name = String((args && args.name) || "").trim().slice(0, 64);
+          const shownName = name || "You";
+          fix.profile = { ...fix.profile, name, shownName, initial: shownName[0].toUpperCase() };
+          return fix.profile;
+        }
+        case "pick_profile_picture":
+          return null;
+        case "clear_profile_picture":
+          fix.profile = { ...fix.profile, picture: null };
+          return fix.profile;
         case "set_theme": {
           fix.theme = (args && args.theme) || fix.theme;
           return { ...fix.settings, theme: fix.theme };

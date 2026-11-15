@@ -2,6 +2,7 @@ import { Activity, Component, lazy, Suspense, useCallback, useEffect, useRef, us
 import {
   CORE_ONLY,
   getCapabilities,
+  getProfile,
   getSettings,
   getWorkboard,
   haltDesktop,
@@ -16,6 +17,7 @@ import {
   workboardSweepUndo,
   type BoardSwept,
   type Capabilities,
+  type Profile,
 } from "./api";
 import {
   cardsByChat,
@@ -209,6 +211,8 @@ export function App() {
   const [cardChats, setCardChats] = useState<Record<string, string>>({});
   const [openCard, setOpenCard] = useState<{ id: string; n: number }>();
   const [desktopOn, setDesktopOn] = useState(false);
+  /** The rail's avatar; null until read, or when it can't be. */
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [haltNote, setHaltNote] = useState<string>();
   const auto = useAutoSetup();
   // Halt is the computer's own: phones and the web app have no desktop control.
@@ -309,6 +313,11 @@ export function App() {
       () => {},
     );
   }, [canHalt, view]);
+  // A Grok sign-in or sign-out changes the name the rail shows; read it again
+  // with each view, as above.
+  useEffect(() => {
+    getProfile().then(setProfile, () => setProfile(null));
+  }, [view]);
   // The tray's Halt and Super+Shift+Esc land here too.
   useEffect(() => {
     if (!canHalt) return;
@@ -649,6 +658,8 @@ export function App() {
           onOpen={setView}
           onMore={() => setPalette((open) => (open === "more" ? false : "more"))}
           onChatMenu={setTabMenu}
+          profile={profile}
+          onProfile={() => run({ kind: "settings", section: "account" })}
         />
         <main className="views">
           {haltNote && <HaltNote text={haltNote} onDismiss={() => setHaltNote(undefined)} />}
@@ -882,6 +893,7 @@ export function App() {
                 goTo={goTo}
                 onClose={() => setView(before)}
                 backTo={VIEW_LABELS[before]}
+                onProfile={setProfile}
               />
             </Page>
           )}

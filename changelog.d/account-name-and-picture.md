@@ -1,0 +1,1 @@
+- Settings → Account sets your name and a profile picture, and the rail shows them at its foot (your initial when there is no picture). A name and picture set in the cabin show up with no import.
