@@ -1,5 +1,7 @@
 use super::*;
-use grokhub_agent::route::providers::{use_vault_for, MemoryVault, KEYRING_OFF};
+use grokhub_agent::route::providers::{
+    add_provider, load_providers, remove_provider, use_vault_for, MemoryVault, KEYRING_OFF,
+};
 use std::io::Write;
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -215,7 +217,19 @@ fn saving_checks_the_token_and_never_shows_it() {
             status: String::new()
         }
     );
-    assert_eq!(save_token(&dir, "sk-abc def"), Err(NO_SPACES.to_string()));
+    for bad in [
+        "sk-abc def",
+        "sk-abc\u{1b}def",
+        "sk-abc\u{0}",
+        "sk-abc\u{7f}",
+        "sk-\u{e9}t\u{e9}",
+    ] {
+        assert_eq!(
+            save_token(&dir, bad),
+            Err(NOT_A_TOKEN.to_string()),
+            "{bad:?}"
+        );
+    }
     assert!(!token_present(&dir));
 
     let saved = save_token(&dir, &format!("  {FAKE}\n")).expect("save");
@@ -227,7 +241,7 @@ fn saving_checks_the_token_and_never_shows_it() {
         }
     );
     assert_eq!(
-        named_key(&dir, TOKEN_ACCOUNT)
+        named_key(&dir, TOKEN)
             .expect("read")
             .as_deref()
             .map(String::as_str),
@@ -265,4 +279,41 @@ fn tools_arrive_from_the_page_by_their_camel_case_names() {
         Some(Tool::ListRepos)
     );
     assert!(serde_json::from_str::<Tool>(r#""deleteRepo""#).is_err());
+}
+
+/// Provider keys are saved under the provider's id in the same keyring, so
+/// no provider address may land on the token's entry.
+#[test]
+fn no_ai_provider_can_share_the_tokens_keyring_entry() {
+    let dir = config("provider");
+    save_token(&dir, FAKE).expect("save");
+    // A host label can't hold a dot, so this provider gets its own entry.
+    let added = add_provider(
+        &dir,
+        "https://api.github-pat.dev/v1",
+        "sk-zyxwvutsrqponmlkjihg",
+        1,
+    )
+    .expect("add");
+    assert_eq!(added.id, "github-pat");
+    // The Brave key's older name has no dot, so it is refused as a provider.
+    assert_eq!(
+        add_provider(
+            &dir,
+            "https://cabin-web-search-brave.example.com/v1",
+            "sk-zyxwvutsrqponmlkjihg",
+            1
+        )
+        .map(|p| p.id),
+        Err("That provider name is reserved.".to_string())
+    );
+    assert_eq!(load_providers(&dir).len(), 1);
+    remove_provider(&dir, "github-pat").expect("remove");
+    assert_eq!(
+        named_key(&dir, TOKEN)
+            .expect("read")
+            .as_deref()
+            .map(String::as_str),
+        Some(FAKE)
+    );
 }

@@ -7,11 +7,11 @@ use std::path::Path;
 use std::time::Duration;
 
 use grokhub_agent::harness as hx;
-use grokhub_agent::route::providers::{named_key, set_named_key};
+use grokhub_agent::route::providers::{named_key, set_named_key, NamedKey};
 use serde::{Deserialize, Serialize};
 
-/// The keyring account the token is saved under.
-pub const TOKEN_ACCOUNT: &str = "github-pat";
+/// The token's keyring entry, which no AI provider can share.
+const TOKEN: NamedKey = NamedKey::GithubToken;
 const API: &str = "https://api.github.com";
 const TIMEOUT: Duration = Duration::from_secs(20);
 /// GitHub's answers here are a few KB; anything this big is not one.
@@ -19,7 +19,8 @@ const ANSWER_CAP: u64 = 2 * 1024 * 1024;
 /// A server's error message is shown, cut to this many characters.
 const MESSAGE_CAP: usize = 160;
 
-pub const NO_SPACES: &str = "A GitHub token has no spaces in it. Paste it again.";
+pub const NOT_A_TOKEN: &str =
+    "A GitHub token is letters, digits and underscores, with no spaces. Paste it again.";
 pub const SAVE_FIRST: &str = "Save a GitHub token first.";
 const SAVED: &str = "GitHub token saved.";
 const REMOVED: &str = "GitHub token removed.";
@@ -68,10 +69,7 @@ pub struct Ran {
 
 /// Whether a token is saved. A keyring that can't be read counts as none.
 pub fn token_present(config_dir: &Path) -> bool {
-    named_key(config_dir, TOKEN_ACCOUNT)
-        .ok()
-        .flatten()
-        .is_some()
+    named_key(config_dir, TOKEN).ok().flatten().is_some()
 }
 
 pub fn view(config_dir: &Path) -> View {
@@ -84,10 +82,12 @@ pub fn view(config_dir: &Path) -> View {
 /// Save the token; an empty one removes the saved token.
 pub fn save_token(config_dir: &Path, token: &str) -> Result<View, String> {
     let token = token.trim();
-    if token.chars().any(char::is_whitespace) {
-        return Err(NO_SPACES.into());
+    // Every GitHub token is visible ASCII; anything else could never be
+    // sent as a header, and would read later as "Couldn't reach GitHub."
+    if !token.chars().all(|c| c.is_ascii_graphic()) {
+        return Err(NOT_A_TOKEN.into());
     }
-    set_named_key(config_dir, TOKEN_ACCOUNT, token)?;
+    set_named_key(config_dir, TOKEN, token)?;
     Ok(View {
         token_set: token_present(config_dir),
         status: if token.is_empty() { REMOVED } else { SAVED }.into(),
@@ -107,7 +107,7 @@ pub(crate) fn run_at(
     tool: Tool,
     public_only: bool,
 ) -> Result<Ran, String> {
-    let token = named_key(config_dir, TOKEN_ACCOUNT)?.ok_or(SAVE_FIRST)?;
+    let token = named_key(config_dir, TOKEN)?.ok_or(SAVE_FIRST)?;
     let url = format!("{base}{}", tool.path());
     // The request carries the token and nothing from a chat.
     hx::guard_quiet(config_dir, &hx::EgressReq::new(&url, &[]))?;
