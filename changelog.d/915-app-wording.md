@@ -1,3 +1,3 @@
-- Wording: the desktop app no longer calls itself "cabin", and the chat's assistant is no longer told it is "the cabin assistant". Greyed / commands read "Not in this app", the skills group is "App skills", and older chats read "Grok CLI and older chats".
+- Wording: the desktop app's own pages no longer call it "cabin", and the chat's assistant is no longer told it is "the cabin assistant" or that "the cabin safety rules" win. Greyed / commands read "Not in this app", the skills group is "App skills", and older chats read "Grok CLI and older chats".
 - Notes about automations now say what really happens: runs go ahead while the app is open or in the tray, follow your Approvals setting, and aren't held back by quiet hours or the daily budget yet. A queued workboard card reuses its own chat when it has one.
 - Workboard: Resume on a card that is gone now takes it off the page.

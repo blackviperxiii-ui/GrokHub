@@ -547,7 +547,7 @@ pub fn set_enabled(name: &str, on: bool) -> Result<String, String> {
     let path = config::config_file();
     let target = crate::harness::McpFile { path: &path, name };
     let cur = crate::harness::ChangeTarget::read(&target)?
-        .ok_or_else(|| format!("{name} isn't one of this cabin's connections"))?;
+        .ok_or_else(|| format!("{name} isn't one of this app's connections"))?;
     let mut entry: serde_json::Map<String, Value> =
         serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
     let was_on = entry
@@ -1632,7 +1632,7 @@ mod tests {
         );
         assert_eq!(
             super::set_enabled("nope", false),
-            Err("nope isn't one of this cabin's connections".into())
+            Err("nope isn't one of this app's connections".into())
         );
         super::shutdown_all();
         super::invalidate();

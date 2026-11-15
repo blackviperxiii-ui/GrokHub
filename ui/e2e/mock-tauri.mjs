@@ -279,7 +279,7 @@ const EMPTY_PRIVACY = {
 };
 
 const EMPTY_BACKGROUND = {
-  runner: "GrokHub runs automations on their schedule while it is open or in the tray.",
+  runner: "Loadout runs automations on their schedule while it is open or in the tray.",
   nextDue: null,
   quiet: "No quiet hours",
   budget: "Daily token budget: Off",
