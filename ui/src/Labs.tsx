@@ -100,17 +100,19 @@ export function Labs({ onOpenConnectors }: { onOpenConnectors?: () => void } = {
   async function fetchList(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
-    // A fetch that fails reads nothing, so it never keeps an earlier
-    // "empty" or that list's entries.
-    setFetched(false);
-    setEntries([]);
-    await run(async () => {
+    const done = await run(async () => {
       const market = await fetchPluginMarket(marketUrl);
       setEntries(market.entries);
       setFetched(market.read);
       setMarketUrl(market.page.marketUrl);
       return market.page;
     });
+    // A fetch that fails reads nothing, so it never keeps an earlier
+    // "empty" or that list's entries. The list stays up while one runs.
+    if (done === null) {
+      setFetched(false);
+      setEntries([]);
+    }
   }
 
   return (

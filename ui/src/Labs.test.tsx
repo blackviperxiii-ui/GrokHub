@@ -214,6 +214,37 @@ describe("Labs", () => {
     expect(screen.queryByText(MARKET_EMPTY)).toBeNull();
   });
 
+  it("keeps the list up while a refetch runs and drops it when that fetch fails", async () => {
+    api.getPlugins.mockResolvedValue(page([], "", "https://example.com/index.json"));
+    let refuse: (err: Error) => void = () => {};
+    api.fetchPluginMarket
+      .mockResolvedValueOnce({
+        entries: [
+          {
+            name: "ship-kit",
+            version: "1.2.0",
+            description: "Ship helpers",
+            source: "https://example.com/ship-kit.git",
+          },
+        ],
+        page: page([], "1 entries. Nothing was installed.", "https://example.com/index.json"),
+        read: true,
+      })
+      .mockReturnValueOnce(new Promise((_, reject) => (refuse = reject)));
+    render(<Labs />);
+    await screen.findByText(PLUGINS_EMPTY);
+    const fetchList = screen.getByRole("button", { name: "Fetch list" });
+    await userEvent.click(fetchList);
+    expect(await screen.findByText("Ship helpers")).toBeVisible();
+    await userEvent.click(fetchList);
+    expect(api.fetchPluginMarket).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("list", { name: "Marketplace" })).toBeVisible();
+    await act(async () => refuse(new Error("Can't reach your computer.")));
+    expect(await screen.findByText(/Can't reach your computer\./)).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Marketplace" })).toBeNull();
+    expect(screen.queryByText(MARKET_EMPTY)).toBeNull();
+  });
+
   it("follows a desktop companion change made elsewhere, such as the tray", async () => {
     transport.shell = true;
     try {
