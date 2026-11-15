@@ -33,7 +33,8 @@ pub use registry::Settings as DeferredToolsSettings;
 pub use set::{schemas_for_job, tool_set_for_kind, tool_set_refusal, ToolSet, TOOL_SET_OUTSIDE};
 pub use web_fetch::public_only_resolve;
 pub use web_search::{
-    brave_key_present, seal_brave_key, Backend as WebSearchBackend, Settings as WebSearchSettings,
+    brave_key_present, seal_brave_key, searxng_url_problem, Backend as WebSearchBackend,
+    Settings as WebSearchSettings, BACKENDS as WEB_SEARCH_BACKENDS,
 };
 
 /// Whether `{config_dir}/deferred_tools.toml` has `enabled = true`.

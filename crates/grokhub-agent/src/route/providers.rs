@@ -590,6 +590,26 @@ fn vault_for(config_dir: &Path) -> Option<Arc<dyn KeyVault>> {
     })
 }
 
+/// A key under its own keyring account (not a provider's), such as the Brave
+/// Search key. A blank stored value reads as none.
+pub fn named_key(config_dir: &Path, account: &str) -> Result<Option<Zeroizing<String>>, String> {
+    let vault = vault_for(config_dir).ok_or_else(|| KEYRING_OFF.to_string())?;
+    Ok(vault.get(account)?.filter(|k| !k.trim().is_empty()))
+}
+
+/// Save a key under its own keyring account; empty (after trimming) deletes it.
+pub fn set_named_key(config_dir: &Path, account: &str, value: &str) -> Result<(), String> {
+    let vault = vault_for(config_dir).ok_or_else(|| KEYRING_OFF.to_string())?;
+    let value = value.trim();
+    let done = if value.is_empty() {
+        vault.delete(account)
+    } else {
+        vault.set(account, value)
+    };
+    forget_key_cache(config_dir, account);
+    done.map_err(|_| KEYRING_OFF.to_string())
+}
+
 fn forget_key_cache(config_dir: &Path, id: &str) {
     HAS_KEY
         .lock()

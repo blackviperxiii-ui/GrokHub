@@ -358,6 +358,17 @@ const EMPTY_AI_MODELS = {
   table: [],
   tableBuiltAt: 0,
   locked: "",
+  webSearch: {
+    backend: "duckduckgo",
+    backends: [
+      { id: "duckduckgo", label: "DuckDuckGo Lite (free, no key)" },
+      { id: "searxng", label: "SearXNG (self-hosted URL)" },
+      { id: "brave", label: "Brave Search (your API key)" },
+    ],
+    searxngUrl: "",
+    searxngProblem: "",
+    braveKeySet: false,
+  },
   status: "",
 };
 const EMPTY_LOCAL_AI = {
@@ -632,6 +643,8 @@ export function initScript(theme = "ops-dark") {
         case "answer_ai_models_card":
         case "remove_ai_provider":
         case "save_ai_spend":
+        case "save_web_search":
+        case "save_brave_key":
         case "revoke_ai_premium":
           return fix.aiModels;
         case "get_local_ai":
