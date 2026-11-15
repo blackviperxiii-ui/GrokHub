@@ -780,7 +780,7 @@ mod tests {
         assert!(lines.contains(&"scheduler_list — List scheduled automations"));
         assert!(lines.contains(&"screenshot — Capture the desktop screen"));
         assert!(lines.contains(
-            &"connection_add — Add a connection (MCP server) to the cabin's own MCP config"
+            &"connection_add — Add a connection (MCP server) to the app's own MCP config"
         ));
         assert!(lines
             .iter()

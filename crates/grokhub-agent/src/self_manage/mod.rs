@@ -201,7 +201,7 @@ pub fn scope_guard(name: &str, args: &Value) -> Option<crate::harness::Finding> 
                 .iter()
                 .find(|w| slug.split('-').any(|p| p == **w));
             if let Some(w) = part.or_else(|| GUARDED_NAMES.iter().find(|w| slug == **w)) {
-                hit = Some((key.to_string(), (*w).to_string(), "a cabin policy name"));
+                hit = Some((key.to_string(), (*w).to_string(), "an app policy name"));
             }
         }
     });
@@ -278,8 +278,8 @@ pub fn mcp_tools() -> Vec<Value> {
         tool("skill_disable", grokhub_core::brand::filled("Turn a {product} skill off. Logged with Undo."), obj(named(json!({})), &["name", "reason"])),
         tool("skill_enable", grokhub_core::brand::filled("Turn a disabled {product} skill back on. Logged with Undo."), obj(named(json!({})), &["name", "reason"])),
         tool("skill_delete", grokhub_core::brand::filled("Delete a {product} skill. Needs the user's click."), obj(named(json!({})), &["name", "reason"])),
-        tool("connection_list", "List connections (MCP servers) in the cabin's own MCP config.", obj(json!({}), &[])),
-        tool("connection_add", "Add a connection (MCP server) to the cabin's own MCP config. Logged with Undo. needs_token takes the user's click and their typed token.", obj(named(conn_body.clone()), &["name", "reason"])),
+        tool("connection_list", "List connections (MCP servers) in the app's own MCP config.", obj(json!({}), &[])),
+        tool("connection_add", "Add a connection (MCP server) to the app's own MCP config. Logged with Undo. needs_token takes the user's click and their typed token.", obj(named(conn_body.clone()), &["name", "reason"])),
         tool("connection_modify", "Change a connection; fields left out stay. Logged with Undo. needs_token takes the user's click and their typed token.", obj(named(conn_body), &["name", "reason"])),
         tool("connection_disable", "Turn a connection off. Logged with Undo.", obj(named(json!({})), &["name", "reason"])),
         tool("connection_remove", "Remove a connection. Needs the user's click.", obj(named(json!({})), &["name", "reason"])),
