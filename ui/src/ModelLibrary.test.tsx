@@ -168,4 +168,42 @@ describe("ModelLibrary", () => {
     // The other row says nothing.
     expect(within(screen.getByRole("listitem", { name: "Gemma 4 E2B" })).queryByRole("alert")).toBeNull();
   });
+
+  it("opens on a Pulse card's model, and only its Download button downloads", async () => {
+    api.getModelLibrary.mockResolvedValue(library());
+    const { rerender } = render(<ModelLibrary focus={{ id: "e2b-mtp", n: 1 }} />);
+    const row = await screen.findByRole("listitem", { name: "Gemma 4 E2B draft model" });
+    expect(screen.getByRole("tab", { name: "Drafts (1)" })).toHaveAttribute("aria-selected", "true");
+    expect(row).toHaveAttribute("aria-current", "true");
+    await vi.waitFor(() =>
+      expect(within(row).getByRole("button", { name: "Remove Gemma 4 E2B draft model" })).toHaveFocus(),
+    );
+
+    // A second card, on a Chat model: the Chat tab opens on its row.
+    rerender(<ModelLibrary focus={{ id: "g12", n: 2 }} />);
+    const g12 = await screen.findByRole("listitem", { name: "Gemma 4 12B" });
+    expect(screen.getByRole("tab", { name: "Chat (2)" })).toHaveAttribute("aria-selected", "true");
+    expect(g12).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("listitem", { name: "Gemma 4 E2B" })).not.toHaveAttribute("aria-current");
+    expect(api.downloadModels).toHaveBeenCalledTimes(0);
+
+    // The same card again, after looking elsewhere, comes back to its row.
+    await userEvent.click(screen.getByRole("tab", { name: "Image (0)" }));
+    rerender(<ModelLibrary focus={{ id: "g12", n: 3 }} />);
+    expect(await screen.findByRole("listitem", { name: "Gemma 4 12B" })).toHaveAttribute("aria-current", "true");
+
+    api.downloadModels.mockResolvedValue(library());
+    await userEvent.click(screen.getByRole("button", { name: "Download Gemma 4 12B" }));
+    expect(api.downloadModels).toHaveBeenCalledTimes(1);
+    expect(api.downloadModels).toHaveBeenCalledWith(["g12"]);
+  });
+
+  it("says so when the card's model isn't in this app's list", async () => {
+    api.getModelLibrary.mockResolvedValue(library());
+    render(<ModelLibrary focus={{ id: "gemma-9-400b", n: 1 }} />);
+    expect(await screen.findByText("That model isn't in this app's model list.")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Chat (2)" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("listitem", { current: true })).toBeNull();
+    expect(api.downloadModels).toHaveBeenCalledTimes(0);
+  });
 });

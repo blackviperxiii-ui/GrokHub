@@ -114,6 +114,9 @@ pub struct Post {
     pub ago: String,
     /// The first source link the research step returned.
     pub link: String,
+    /// A catalog upgrade card's model id, for Open in Settings. Empty on
+    /// other posts.
+    pub model: String,
     pub loved: bool,
     /// One line on what the card's numbers mean, when it has one.
     pub verdict: Option<Verdict>,
@@ -539,6 +542,7 @@ fn post(
             .find(|url| grokhub_core::public_http_url(url))
             .cloned()
             .unwrap_or_default(),
+        model: upgrade_model(card).unwrap_or_default().to_string(),
         loved: card.reaction == Some(CardReaction::Up),
         verdict: verdict(card),
         more: report_more(card)
@@ -569,6 +573,18 @@ fn post(
         done: card.done_for_you.as_ref().map(|d| DoneView {
             answered: d.answered,
         }),
+    }
+}
+
+/// The catalog model a Local models upgrade card offers. Only an id this
+/// app's catalog knows, so the page never focuses a made-up row.
+fn upgrade_model(card: &UpdateCard) -> Option<&str> {
+    use grokhub_core::local_model_news as lm;
+    match &card.action {
+        Some(grokhub_core::UpdateAction::DeepLink { href }) if lm::is_upgrade_card(card) => {
+            lm::picker_link_id(href)
+        }
+        _ => None,
     }
 }
 
@@ -2309,5 +2325,59 @@ mod tests {
         let taste = card_taste::load(&d.config);
         assert_eq!(taste.events.len(), 1);
         assert_eq!(taste.events[0].reaction, Reaction::Like);
+    }
+
+    #[test]
+    fn an_upgrade_card_names_its_model_and_a_release_card_only_links_out() {
+        use grokhub_core::local_model_news::{self as lm, Suggestion};
+        use grokhub_core::local_picker::{BenchCache, CpuSimd, Memory, Profile};
+        let d = dirs("local-model-post", &[]);
+        let gpu24 = Profile {
+            gpus_vram_mb: vec![24_576],
+            unified: false,
+            ram_mb: 32_768,
+            free_disk_mb: 200_000,
+            simd: CpuSimd::Avx2,
+            llama_build: Some(99_999),
+        };
+        let up = lm::upgrade(
+            &gpu24,
+            "gemma-4-12b-it-abliterated-q4_k",
+            &BenchCache::new(),
+        )
+        .expect("the 31B fits")
+        .card(5);
+        let p = post(&d.config, &up, &[], &[], NOW);
+        assert_eq!(p.model, "gemma-4-31b-it-abliterated-q4_k");
+        assert_eq!(p.link, "");
+        assert_eq!(p.title, "Gemma 4 31B fits this PC");
+        assert_eq!(p.source, "Local models");
+
+        let release = Suggestion::Release {
+            repo: "huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF".into(),
+            run_mb: 10_020,
+            budget_mb: 16_384,
+            mem: Memory::Gpu,
+            like: None,
+        }
+        .card(5);
+        let p = post(&d.config, &release, &[], &[], NOW);
+        assert_eq!(
+            p.link,
+            "https://huggingface.co/huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF"
+        );
+        assert_eq!(p.model, "");
+
+        // A hand-edited card naming a model this app doesn't ship.
+        let mut edited = up.clone();
+        edited.action = Some(grokhub_core::UpdateAction::DeepLink {
+            href: "grokhub://local-model/not-a-model".into(),
+        });
+        assert_eq!(post(&d.config, &edited, &[], &[], NOW).model, "");
+        // The link alone isn't enough: only a Local models upgrade card offers it.
+        let mut other = edited.clone();
+        other.source_id = "release-radar:gemma".into();
+        other.action = up.action.clone();
+        assert_eq!(post(&d.config, &other, &[], &[], NOW).model, "");
     }
 }

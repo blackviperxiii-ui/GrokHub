@@ -1475,6 +1475,9 @@ export interface PulsePost {
   ago: string;
   /** The first source link, empty when there is none. */
   link: string;
+  /** A catalog upgrade card's model id, for Open in Settings. Empty on
+   * other posts. */
+  model: string;
   loved: boolean;
   /** What the card's numbers mean, when it has a read of them. */
   verdict: PulseVerdict | null;

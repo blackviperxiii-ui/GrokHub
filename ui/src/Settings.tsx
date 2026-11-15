@@ -83,7 +83,7 @@ export function Settings({
   onProfile,
 }: {
   caps: Capabilities;
-  goTo?: { section: Section; n: number };
+  goTo?: { section: Section; n: number; model?: string };
   /** Leaves Settings for the screen that was open before it. */
   onClose?: () => void;
   /** The name of that screen, for the Back button ("Back to Chat"). */
@@ -306,7 +306,9 @@ export function Settings({
             {section === "pulse" && caps.pulse && <PulseSources />}
             {section === "pulse" && caps.pulse && <PulseAuto />}
             {section === "pulse" && caps.pulse && <PcHealth />}
-            {section === "localAi" && caps.localAi && <LocalAi />}
+            {section === "localAi" && caps.localAi && (
+              <LocalAi focus={goTo?.model ? { id: goTo.model, n: goTo.n } : undefined} />
+            )}
             {section === "aiModels" && caps.localAi && <AiModels />}
             {section === "webAccess" && caps.webAccess && <WebAccess />}
             {section === "labs" && caps.plugins && <Labs />}

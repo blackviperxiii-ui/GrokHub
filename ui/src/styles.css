@@ -6755,6 +6755,12 @@ button.primary:not(.quick-chip) {
   border-radius: var(--radius-sm);
 }
 
+/* The model a Pulse card's Open in Settings landed on. */
+.local-library-row[aria-current="true"] {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
 /* Why the last download stopped, right under that row's button. */
 .local-library-row-error {
   display: flex;
