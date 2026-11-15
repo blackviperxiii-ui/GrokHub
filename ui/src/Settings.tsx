@@ -10,6 +10,7 @@ import {
   setNotifications,
   setSummonHotkey,
   type Capabilities,
+  type Profile,
   type Settings as Shape,
 } from "./api";
 import { inShell } from "./transport";
@@ -25,6 +26,7 @@ import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
 import { KnowMe } from "./KnowMe";
 import { PcHealth } from "./PcHealth";
+import { ProfileSettings } from "./Profile";
 import { PulseAuto } from "./PulseAuto";
 import { PulseSources } from "./PulseSources";
 import { AiModels } from "./AiModels";
@@ -78,6 +80,7 @@ export function Settings({
   goTo,
   onClose,
   backTo,
+  onProfile,
 }: {
   caps: Capabilities;
   goTo?: { section: Section; n: number };
@@ -85,6 +88,8 @@ export function Settings({
   onClose?: () => void;
   /** The name of that screen, for the Back button ("Back to Chat"). */
   backTo?: string;
+  /** The profile after a change in Account, so the rail shows it at once. */
+  onProfile?: (p: Profile) => void;
 }) {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [desktopControl, setDesktopControl] = useState(false);
@@ -390,6 +395,12 @@ export function Settings({
   function account() {
     return (
       <>
+        <ProfileSettings
+          onProfile={onProfile}
+          signedIn={loaded.signedIn ? `${loaded.signedIn.name ?? ""}|${loaded.signedIn.email ?? ""}` : ""}
+          // Every desktop has a tray; phones have no file picker.
+          canPick={caps.tray}
+        />
         {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} planNote={loaded.planNote} onChange={show} />}
         <div className="key">
           <h2>{caps.grokSignIn ? "Or use an xAI API key" : "xAI API key"}</h2>

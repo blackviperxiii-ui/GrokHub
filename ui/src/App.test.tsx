@@ -3,7 +3,7 @@ import { Profiler } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Capabilities, RecordStatus } from "./api";
+import type { Capabilities, Profile, RecordStatus } from "./api";
 
 // The App's own chat listener (the Activity Dock); tests push events through it.
 const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
@@ -57,6 +57,8 @@ const api = vi.hoisted(() => ({
   recordStop: vi.fn(() => Promise.resolve(false)),
   getPrivacy: vi.fn(() => Promise.reject(new Error("not mocked"))),
   getPersonalities: vi.fn(() => Promise.reject(new Error("not mocked"))),
+  // No avatar on the rail unless a test gives a profile.
+  getProfile: vi.fn<() => Promise<Profile>>(() => Promise.reject(new Error("not mocked"))),
 }));
 
 vi.mock("./api", async () => {
@@ -300,7 +302,11 @@ async function openPage(name: string) {
 }
 
 describe("App", () => {
-  beforeEach(() => { api.getCapabilities.mockReset(); });
+  beforeEach(() => {
+    api.getCapabilities.mockReset();
+    api.getProfile.mockReset();
+    api.getProfile.mockRejectedValue(new Error("not mocked"));
+  });
 
   it("puts the main pages on the rail and the rest under More on a desktop, and hands Settings the report", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
@@ -381,6 +387,23 @@ describe("App", () => {
     expect(view("Home")).toHaveFocus();
     await userEvent.keyboard("{Enter}");
     expect(await screen.findByText("Home page for the last chat")).toBeVisible();
+  });
+
+  it("the arrow keys reach the avatar, and skip it where the layout hides it", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getProfile.mockResolvedValue({ name: "Pat", shownName: "Pat", initial: "P", picture: null });
+    render(<App />);
+    const avatar = await screen.findByRole("button", { name: "Pat, Account settings" });
+    view("Home").focus();
+    await userEvent.keyboard("{End}");
+    expect(avatar).toHaveFocus();
+    // The phone tab bar hides it (styles.css); the wrap goes Settings → Home.
+    avatar.style.display = "none";
+    view("Home").focus();
+    await userEvent.keyboard("{End}");
+    expect(view("Settings")).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(view("Home")).toHaveFocus();
   });
 
   it("the top bar's pills open Personality and Privacy & data, and the web app has no personality pill", async () => {
@@ -697,6 +720,44 @@ describe("App", () => {
     await screen.findByRole("button", { name: "Pulse" });
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByText("Settings for a desktop at account")).toBeVisible();
+  });
+
+  it("shows your name and picture at the rail's foot, which opens Settings at Account", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getProfile.mockResolvedValue({
+      name: "Pat",
+      shownName: "Pat",
+      initial: "P",
+      picture: "data:image/png;base64,iVBORw0KGgo=",
+    });
+    render(<App />);
+    const avatar = await screen.findByRole("button", { name: "Pat, Account settings" });
+    expect(avatar).toHaveAttribute("title", "Pat");
+    expect(avatar.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,iVBORw0KGgo=");
+    await userEvent.click(avatar);
+    expect(await screen.findByText("Settings for a desktop at account")).toBeVisible();
+  });
+
+  it("the web app shows the avatar as a picture only: its Settings has no Account page", async () => {
+    api.getCapabilities.mockResolvedValue(api.WEB);
+    api.getProfile.mockResolvedValue({ name: "Pat", shownName: "Pat", initial: "P", picture: null });
+    render(<App />);
+    expect(await screen.findByRole("img", { name: "Pat" })).toHaveTextContent("P");
+    expect(screen.queryByRole("button", { name: /Account settings$/ })).toBeNull();
+  });
+
+  it("shows your initial when there is no picture, and nothing when the profile can't be read", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getProfile.mockResolvedValueOnce({ name: "", shownName: "You", initial: "Y", picture: null });
+    const { unmount } = render(<App />);
+    const avatar = await screen.findByRole("button", { name: "You, Account settings" });
+    expect(avatar).toHaveTextContent("Y");
+    expect(avatar.querySelector("img")).toBeNull();
+    unmount();
+    api.getProfile.mockRejectedValue(new Error("not mocked"));
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    expect(screen.queryByRole("button", { name: /Account settings$/ })).toBeNull();
   });
 
   it("Ctrl+N starts a new chat from any page", async () => {

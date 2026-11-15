@@ -936,10 +936,68 @@ button.pill:focus-visible {
   white-space: nowrap;
 }
 
+/* The web app's avatar is a picture, not a button: the same box. */
+span.rail-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+}
+
+/* Your picture, or your initial in a circle (Settings → Account). */
+.rail-avatar-face,
+.profile-avatar {
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+span.rail-avatar-face,
+span.profile-avatar {
+  display: inline-grid;
+  place-items: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: var(--font-caption);
+  line-height: 1;
+}
+
+.profile-avatar {
+  width: 48px;
+  height: 48px;
+}
+
+span.profile-avatar {
+  font-size: var(--font-section);
+}
+
+.settings .profile-name {
+  width: 100%;
+}
+
+.settings .profile-picture {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings .profile-picture p {
+  margin: 0;
+}
+
 @media (max-height: 560px) {
   .rail button {
     width: 32px;
     height: 32px;
+  }
+
+  .rail-avatar-face {
+    width: 24px;
+    height: 24px;
   }
 
   .rail,
@@ -1000,6 +1058,11 @@ button.pill:focus-visible {
   .rail-end {
     flex-direction: row;
     margin-top: 0;
+  }
+
+  /* The tab bar keeps its count; the profile stays in Settings → Account. */
+  .rail .rail-avatar {
+    display: none;
   }
 
   .bar-away .rail {

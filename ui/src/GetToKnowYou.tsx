@@ -40,7 +40,8 @@ const ORDER: Step[] = ["welcome", "about", "soul", "life", "review", "done"];
 
 /** The stage. `after` is true once Auto Setup's first-run window is closed:
  * it never shows over that window. */
-export function OnboardStage({ after }: { after: boolean }) {
+/** `onSaved`: after a Save, which may name the profile. */
+export function OnboardStage({ after, onSaved }: { after: boolean; onSaved?: () => void }) {
   const [reply, setReply] = useState<OnboardReply | null>(null);
   const [step, setStep] = useState<Step>("welcome");
   const [answers, setAnswers] = useState<Answers>(EMPTY_ANSWERS);
@@ -274,7 +275,10 @@ export function OnboardStage({ after }: { after: boolean }) {
               onClick={async () => {
                 setSaving(true);
                 try {
-                  if (await run({ act: "save", drafts })) setStep("done");
+                  if (await run({ act: "save", drafts })) {
+                    setStep("done");
+                    onSaved?.();
+                  }
                 } finally {
                   setSaving(false);
                 }
