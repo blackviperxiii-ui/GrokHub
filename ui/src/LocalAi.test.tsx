@@ -148,7 +148,7 @@ function missingEngine(): LocalAiView["engine"] {
 }
 
 const LOCAL_ON =
-  "On. Background jobs run on this computer, and so do some chats: short ones while the model is loaded, and any while you're offline or signed out of Grok.";
+  "On. Background jobs run on this computer, and so do some chats: short ones while the model is loaded, and any while you're offline or the cloud can't answer.";
 const LOCAL_OFF = "Off. Nothing runs on the on-device model.";
 const TIDY_LOCAL_OFF = "Off while Local AI is off. Turn on Use Local AI on this computer first.";
 
@@ -665,6 +665,17 @@ describe("LocalAi", () => {
         },
       }),
     );
+  });
+
+  it("keeps the speed test off while Local AI is off", async () => {
+    api.getLocalAi.mockResolvedValue({
+      ...PROFILES["8 GB GPU"],
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    });
+    render(<LocalAi />);
+    await openManual();
+    expect(screen.getByRole("button", { name: "Re-run speed test" })).toBeDisabled();
   });
 
   it("re-runs the speed test and resets to Auto", async () => {

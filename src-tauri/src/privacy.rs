@@ -120,7 +120,7 @@ pub fn page(config_dir: &Path, lock: Option<Option<Locked>>, now_ms: u64) -> Pag
     let (encrypted, encrypted_note) = sealed(lock);
     Page {
         offline_only: offline::enabled(),
-        local_ready: grokhub_agent::route::local::installed(),
+        local_ready: grokhub_agent::route::local::ready_for_offline(),
         sent: sent_line(calls),
         sent_calls: calls,
         hosts,

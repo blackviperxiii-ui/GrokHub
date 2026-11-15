@@ -1,7 +1,7 @@
 //! Router R3a: plumbing for an on-device model (§13). The switch starts off
-//! in-process until [`set_enabled`] reads `localModel` from `app.json`, which
-//! is on unless saved `false` (Settings → Local AI → Use Local AI on this
-//! computer). The route goes live only while that switch is on **and** a
+//! in-process until [`super::host::sync`] reads `localModel` from `app.json`
+//! and passes it to [`set_enabled`]; it is on unless saved `false` (Settings →
+//! Local AI → Use Local AI on this computer). The route goes live only while that switch is on **and** a
 //! runtime is [`installed`]
 //! (llama-server binary + GGUF, or a test fake). While the route is off the
 //! registry has no `local:*` rows ([`LocalSource`] lists nothing) and

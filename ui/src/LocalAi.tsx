@@ -675,7 +675,7 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
             Always pause for these apps (one per line)
             <textarea rows={2} value={deny} onChange={(e) => setDeny(e.target.value)} />
           </label>
-          <button type="button" className="quiet" onClick={speedTest} disabled={testing}>
+          <button type="button" className="quiet" onClick={speedTest} disabled={testing || !view.localUse.on}>
             {testing ? "Testing…" : "Re-run speed test"}
           </button>
         </div>

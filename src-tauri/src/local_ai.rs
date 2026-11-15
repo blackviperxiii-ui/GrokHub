@@ -832,11 +832,20 @@ pub fn model_file(path: &str, seen: &[String]) -> Result<FileRow, String> {
 
 /// The speed test: the model with and without its draft model.
 pub fn speed_test(config_dir: &Path) -> Result<String, String> {
+    // The bench switches the router's local route on; while the switch is
+    // off it would load the model the user turned off.
+    if !crate::local_use::is_on(config_dir) {
+        return Err(SPEED_TEST_LOCAL_OFF.into());
+    }
     if local_sidecar::resolve_paths(config_dir).is_none() {
         return Err("Set up a local engine and model first, then run the speed test.".into());
     }
     grokhub_agent::route::local_bench::run_for_ui()
 }
+
+/// Why the speed test won't run while Use Local AI on this computer is off.
+pub const SPEED_TEST_LOCAL_OFF: &str =
+    "Turn on Use Local AI on this computer first, then run the speed test.";
 
 /// Saves the page's choices, clamped, and reads the page again.
 pub fn save_view(config_dir: &Path, config: LocalAiConfig) -> Result<LocalAiView, String> {

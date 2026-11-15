@@ -18,7 +18,7 @@ use serde_json::json;
 pub const KEY: &str = "localModel";
 
 /// On, with an engine and model on disk.
-const ON: &str = "On. Background jobs run on this computer, and so do some chats: short ones while the model is loaded, and any while you're offline or signed out of Grok.";
+const ON: &str = "On. Background jobs run on this computer, and so do some chats: short ones while the model is loaded, and any while you're offline or the cloud can't answer.";
 /// On, with nothing installed yet.
 const ON_NOT_SET_UP: &str = "On. Set up a local engine and model below and it starts helping.";
 const OFF: &str = "Off. Nothing runs on the on-device model.";

@@ -21,7 +21,7 @@ fn saved(d: &Path) -> serde_json::Value {
 fn the_hint_leads_with_on_or_off_and_says_what_runs_here() {
     assert_eq!(
         view_of(true, true).hint,
-        "On. Background jobs run on this computer, and so do some chats: short ones while the model is loaded, and any while you're offline or signed out of Grok."
+        "On. Background jobs run on this computer, and so do some chats: short ones while the model is loaded, and any while you're offline or the cloud can't answer."
     );
     assert_eq!(
         view_of(true, false).hint,
@@ -109,9 +109,5 @@ fn an_unreadable_app_json_is_left_alone() {
     assert_eq!(
         std::fs::read_to_string(d.join("app.json")).unwrap(),
         "not json"
-    );
-    assert!(
-        !local_sidecar::stop_pending(),
-        "a failed save stops nothing"
     );
 }

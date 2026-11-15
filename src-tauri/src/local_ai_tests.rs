@@ -592,3 +592,28 @@ fn optional_makers_follow_the_defaults_and_are_never_preselected() {
         }
     }
 }
+
+#[test]
+fn the_speed_test_waits_while_local_ai_is_switched_off() {
+    let d = std::env::temp_dir().join(format!(
+        "grokhub-shell-speed-off-{}-{}",
+        std::process::id(),
+        grokhub_core::now_ms()
+    ));
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("app.json"), r#"{"localModel":false}"#).unwrap();
+    grokhub_agent::route::host::sync(&d);
+    assert_eq!(
+        speed_test(&d),
+        Err("Turn on Use Local AI on this computer first, then run the speed test.".to_string())
+    );
+    assert!(
+        !grokhub_agent::route::local::switched_on(),
+        "the router's local route stays off"
+    );
+    std::fs::write(d.join("app.json"), "{}").unwrap();
+    assert_eq!(
+        speed_test(&d),
+        Err("Set up a local engine and model first, then run the speed test.".to_string())
+    );
+}
