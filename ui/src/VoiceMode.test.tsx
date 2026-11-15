@@ -42,6 +42,8 @@ interface Rig {
   notes: string[];
   sent: string[];
   played: string[];
+  /** What each piece's loudness went to. */
+  talks: unknown[];
   ends: (() => void)[];
   stops: number;
   closed: number;
@@ -50,15 +52,16 @@ interface Rig {
 }
 
 function rig(): Rig {
-  const r = { states: [], notes: [], sent: [], played: [], ends: [], stops: 0, closed: 0 } as unknown as Rig;
+  const r = { states: [], notes: [], sent: [], played: [], talks: [], ends: [], stops: 0, closed: 0 } as unknown as Rig;
   let take: ((s: Float32Array, rate: number) => void) | null = null;
   r.session = new VoiceSession({
     openMic: async (t) => {
       take = t;
       return () => r.closed++;
     },
-    play: (spoken): Playing => {
+    play: (spoken, talk): Playing => {
       r.played.push(spoken.audio);
+      r.talks.push(talk);
       let end = () => {};
       const done = new Promise<void>((res) => (end = res));
       r.ends.push(end);
@@ -177,6 +180,24 @@ describe("VoiceSession", () => {
     await flush();
     expect(r.states.at(-1)).toBe("listening");
     expect(api.voiceLivePlaying).toHaveBeenLastCalledWith(false);
+  });
+
+  it("hands each piece to where its loudness goes, once the chat says where", async () => {
+    const r = rig();
+    await r.session.start();
+    await r.hear({ kind: "turn", ms: 1500 });
+    api.voiceReplyFeed.mockResolvedValueOnce(["One."]);
+    r.session.feed("One. ");
+    await flush();
+    const talk = () => {};
+    r.session.talkTo(talk);
+    api.voiceReplyFinish.mockResolvedValueOnce(["Two."]);
+    r.session.replyDone("");
+    await flush();
+    r.ends[0]();
+    await flush();
+    expect(r.played).toEqual(["One.", "Two."]);
+    expect(r.talks).toEqual([undefined, talk]);
   });
 
   it("talking over the reply stops it and hushes the rest", async () => {
