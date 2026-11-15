@@ -667,7 +667,7 @@ describe("LocalAi", () => {
     );
   });
 
-  it("keeps the speed test off while Local AI is off", async () => {
+  it("keeps the speed test and Keep loaded off while Local AI is off", async () => {
     api.getLocalAi.mockResolvedValue({
       ...PROFILES["8 GB GPU"],
       localUse: { on: false, hint: LOCAL_OFF },
@@ -676,6 +676,7 @@ describe("LocalAi", () => {
     render(<LocalAi />);
     await openManual();
     expect(screen.getByRole("button", { name: "Re-run speed test" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Keep loaded" })).toBeDisabled();
   });
 
   it("re-runs the speed test and resets to Auto", async () => {

@@ -357,7 +357,7 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
   async function unloadNow() {
     try {
       setView(await unloadLocalModel());
-      tell("Unloaded the model. It loads again with the next reply.");
+      tell(view?.localUse.on === false ? "Unloaded the model." : "Unloaded the model. It loads again with the next reply.");
     } catch (err) {
       fail(err);
     }
@@ -429,7 +429,12 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
             {line}
           </p>
         ))}
-        <button type="button" className="quiet" onClick={() => void keepLoaded(!view.running.keptLoaded)}>
+        <button
+          type="button"
+          className="quiet"
+          onClick={() => void keepLoaded(!view.running.keptLoaded)}
+          disabled={!view.localUse.on}
+        >
           {view.running.keptLoaded ? "Let it unload" : "Keep loaded"}
         </button>
         <p className="note">{view.running.dynamicHint}</p>

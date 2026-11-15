@@ -588,10 +588,22 @@ pub struct Running {
     pub dynamic_hint: String,
 }
 
-pub fn running(config_dir: &Path) -> Running {
+/// The Running now line while Use Local AI on this computer is off and no
+/// model is loaded: nothing loads with the next reply.
+pub const RUNNING_OFF: &str = "Running now: nothing. Local AI is off, so no model loads.";
+
+/// `on` is Use Local AI on this computer. While it is off nothing loads, so
+/// the "loads with the next reply" line would be wrong; a model still
+/// finishing an answer shows as usual until it stops.
+pub fn running(config_dir: &Path, on: bool) -> Running {
     let live = local_live::snapshot(config_dir);
+    let lines = if !on && live.model.is_none() {
+        vec![RUNNING_OFF.to_string()]
+    } else {
+        local_live::lines(&live)
+    };
     Running {
-        lines: local_live::lines(&live),
+        lines,
         loaded: live.model.is_some(),
         kept_loaded: live.kept_loaded,
         dynamic: local_task::dynamic(config_dir),
@@ -804,7 +816,7 @@ pub fn view(config_dir: &Path) -> LocalAiView {
         draft_offer: local_engine::draft_offer(config_dir, selected),
         draft_offers: local_engine::draft_offers(config_dir),
         draft_progress: local_engine::draft_progress(),
-        running: running(config_dir),
+        running: running(config_dir, crate::local_use::is_on(config_dir)),
         local_use: crate::local_use::view(config_dir),
         tidy: crate::prompt_tidy::view(config_dir),
         config,

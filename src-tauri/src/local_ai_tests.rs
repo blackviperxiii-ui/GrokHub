@@ -563,9 +563,19 @@ fn a_settings_file_from_before_the_draft_choice_went_away_still_loads() {
 #[test]
 fn the_running_rows_offer_keep_loaded_and_say_when_nothing_runs() {
     let dir = std::env::temp_dir().join(format!("gh-shell-running-{}", std::process::id()));
-    let r = running(&dir);
+    let r = running(&dir, true);
     assert!(r.lines[0].starts_with("Running now: "), "{:?}", r.lines);
     assert_eq!(r.kept_loaded, local_sidecar::keep_loaded());
+}
+
+#[test]
+fn the_running_rows_say_nothing_loads_while_local_ai_is_off() {
+    let dir = std::env::temp_dir().join(format!("gh-shell-running-off-{}", std::process::id()));
+    assert_eq!(
+        running(&dir, false).lines,
+        vec!["Running now: nothing. Local AI is off, so no model loads.".to_string()]
+    );
+    assert_ne!(running(&dir, true).lines, running(&dir, false).lines);
 }
 
 #[test]
