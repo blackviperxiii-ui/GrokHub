@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -331,13 +332,20 @@ describe("AiModels", () => {
       return Promise.resolve();
     });
     const { unmount } = render(<AiModels />);
-    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    await screen.findByText("No other providers yet.");
+    await userEvent.type(screen.getByLabelText("Provider address"), "https://openrouter.ai/api/v1");
+    await userEvent.type(screen.getByLabelText("Provider API key"), "test-key-aaaaaaaa");
+    expect(screen.getByRole("button", { name: "Add provider" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with OpenRouter" }));
+    // A pasted key waits while the browser sign-in does, so two cards never race.
+    expect(await screen.findByText(OPENROUTER_WAIT)).toBeVisible();
     expect(screen.getByRole("button", { name: "Add provider" })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Stop signing in" }));
     expect(await screen.findByText(OPENROUTER_STOPPED)).toBeVisible();
     expect(OPENROUTER_STOPPED).toBe("Sign-in stopped. Nothing was saved.");
     expect(screen.queryByText(OPENROUTER_WAIT)).toBeNull();
     expect(screen.getByRole("button", { name: "Sign in with OpenRouter" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add provider" })).toBeEnabled();
     expect(api.stopOpenRouterSignIn).toHaveBeenCalledTimes(1);
     // The sign-in is over, so leaving stops nothing more.
     unmount();
@@ -367,6 +375,42 @@ describe("AiModels", () => {
     expect(api.waitOpenRouterSignIn).not.toHaveBeenCalled();
     await userEvent.click(within(group).getByRole("button", { name: "Deny" }));
     expect(api.answerAiModelsCard).toHaveBeenCalledWith("ai-key-openrouter-1", false);
+  });
+
+  it("keeps waiting when a click and the load-time pick-up both follow one sign-in", async () => {
+    const status = later<OpenRouterSignInStatus>();
+    const waits: Array<ReturnType<typeof later<AiModelsCard>>> = [];
+    api.openRouterSignInStatus.mockReturnValue(status.promise);
+    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: true, why: "" });
+    // As in the shell: a newer wait ends the older one with WAITED_ELSEWHERE.
+    api.waitOpenRouterSignIn.mockImplementation(() => {
+      waits.at(-1)?.refuse("This sign-in moved to a newer page.");
+      const next = later<AiModelsCard>();
+      waits.push(next);
+      return next.promise;
+    });
+    const { unmount } = render(<AiModels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    status.settle({ waiting: { url: SIGN_IN_URL, opened: true, why: "" }, card: null });
+    await waitFor(() => expect(waits).toHaveLength(2));
+    // The older wait's end leaves the newer one's waiting line and Stop.
+    expect(await screen.findByText(OPENROUTER_WAIT)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Stop signing in" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sign in with OpenRouter" })).toBeDisabled();
+    unmount();
+    expect(api.stopOpenRouterSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("picks a waiting sign-in up once under StrictMode", async () => {
+    api.openRouterSignInStatus.mockResolvedValue({ waiting: { url: SIGN_IN_URL, opened: true, why: "" }, card: null });
+    api.waitOpenRouterSignIn.mockReturnValue(new Promise<AiModelsCard>(() => undefined));
+    render(
+      <StrictMode>
+        <AiModels />
+      </StrictMode>,
+    );
+    expect(await screen.findByText(OPENROUTER_WAIT)).toBeVisible();
+    expect(api.waitOpenRouterSignIn).toHaveBeenCalledTimes(1);
   });
 
   it("ends quietly when a newer page took the sign-in over", async () => {

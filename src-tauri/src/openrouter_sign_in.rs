@@ -180,7 +180,9 @@ fn start_within(
 
 /// Wait for the sign-in to end: the credentials card for the new key (same
 /// as a pasted key; nothing is saved until Save), or why there is none. A
-/// newer wait takes over, and this one ends with [`WAITED_ELSEWHERE`].
+/// newer wait takes over, and this one ends with [`WAITED_ELSEWHERE`]. With
+/// no sign-in left, a card an older wait took and nobody answered is handed
+/// over again.
 pub fn wait() -> Result<Card, String> {
     let me = NEWEST_WAIT.fetch_add(1, Ordering::SeqCst) + 1;
     loop {
@@ -190,7 +192,8 @@ pub fn wait() -> Result<Card, String> {
                 return Err(WAITED_ELSEWHERE.into());
             }
             match slot.as_ref() {
-                None => return Err(NO_SIGN_IN.into()),
+                // An older wait took the card first, for a page that is gone.
+                None => return open_card().ok_or_else(|| NO_SIGN_IN.into()),
                 Some(running) if running.flow.is_finished() => {
                     let ended = slot.take().ok_or(NO_SIGN_IN)?;
                     let card = ended
@@ -218,12 +221,19 @@ pub fn status() -> SignInStatus {
         .as_ref()
         .filter(|running| !running.stop.load(Ordering::SeqCst))
         .map(|running| running.started.clone());
-    let card = LAST_CARD
+    SignInStatus {
+        waiting,
+        card: open_card(),
+    }
+}
+
+/// The last card a wait handed out, while it is still unanswered.
+fn open_card() -> Option<Card> {
+    LAST_CARD
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
-        .filter(|card| ai_models::card_open(&card.id));
-    SignInStatus { waiting, card }
+        .filter(|card| ai_models::card_open(&card.id))
 }
 
 /// Stop the sign-in that waits: its port closes and no card is posted. The

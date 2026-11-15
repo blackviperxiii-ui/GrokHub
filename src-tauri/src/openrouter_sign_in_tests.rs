@@ -384,3 +384,17 @@ fn a_stopped_sign_in_is_not_picked_up() {
     assert_eq!(status().waiting, None);
     assert_eq!(wait().unwrap_err(), STOPPED);
 }
+
+#[test]
+fn a_card_an_older_wait_took_is_handed_to_the_next_wait() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let (config, _wire) = dir("handed-again");
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    start(&config, approving("good-code", opened)).expect("started");
+    // The reloaded page's old wait took the card for a page that is gone.
+    let taken = wait().expect("card");
+    // The new page saw the sign-in waiting a moment before, and waits now.
+    assert_eq!(wait().expect("handed over again"), taken);
+    ai_models::answer(&taken.id, false).expect("denied");
+    assert_eq!(wait().unwrap_err(), NO_SIGN_IN);
+}

@@ -203,6 +203,8 @@ export function AiModels() {
   const openCard = useRef<string | null>(null);
   // A browser sign-in this page waits for.
   const signingIn = useRef(false);
+  // The newest follow(): only it may end the waiting state on this page.
+  const followed = useRef(0);
   const gone = useRef(false);
 
   // Settings unmounts this page when another section is picked. Leaving is a
@@ -304,21 +306,28 @@ export function AiModels() {
       stopOpenRouterSignIn().catch(() => undefined);
       return;
     }
+    const me = ++followed.current;
     signingIn.current = true;
     setSignIn(started);
     ok(null);
+    let next: AiModelsCard;
     try {
-      const next = await waitOpenRouterSignIn();
-      signingIn.current = false;
-      if (show(next)) ok(OPENROUTER_KEY_WAIT);
+      next = await waitOpenRouterSignIn();
     } catch (err) {
+      // A newer wait on this page has the sign-in now, and keeps its state.
+      if (me !== followed.current) return;
       signingIn.current = false;
-      if (gone.current || String(err) === WAITED_ELSEWHERE) return;
+      if (gone.current) return;
+      setSignIn(null);
+      // Another page has it now: nothing to say here.
+      if (String(err) === WAITED_ELSEWHERE) return;
       if (String(err) === STOPPED) ok(OPENROUTER_STOPPED);
       else fail(err);
-    } finally {
-      if (!gone.current) setSignIn(null);
+      return;
     }
+    signingIn.current = false;
+    if (!gone.current) setSignIn(null);
+    if (show(next)) ok(OPENROUTER_KEY_WAIT);
   }
 
   function stopSignIn() {
@@ -335,7 +344,16 @@ export function AiModels() {
     }
   });
   useEffect(() => {
-    openRouterSignInStatus().then(pickUp, () => undefined);
+    let live = true;
+    openRouterSignInStatus().then(
+      (found) => {
+        if (live) pickUp(found);
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
   }, []);
 
   async function copyLink(url: string) {
