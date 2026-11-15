@@ -27,26 +27,30 @@ pub fn runtime_download_host_ok(host: &str) -> bool {
 
 /// Refuse non-HTTPS runtime downloads and hosts outside [`RUNTIME_DOWNLOAD_HOSTS`].
 pub fn runtime_download_url_ok(url: &str) -> Result<(), String> {
+    github_download_url_ok(url, "engine download")
+}
+
+/// [`runtime_download_url_ok`] for another GitHub release download, with
+/// `what` ("model catalog download") leading each refusal.
+pub fn github_download_url_ok(url: &str, what: &str) -> Result<(), String> {
     crate::offline::refuse()?;
     let url = url.trim();
     if !url.starts_with("https://") {
-        return Err("engine download must use HTTPS".into());
+        return Err(format!("{what} must use HTTPS"));
     }
     let rest = url
         .strip_prefix("https://")
-        .ok_or_else(|| "engine download URL is invalid".to_string())?;
+        .ok_or_else(|| format!("{what} URL is invalid"))?;
     let host = rest
         .split(['/', '?', '#'])
         .next()
         .filter(|h| !h.is_empty())
-        .ok_or_else(|| "engine download URL is missing a host".to_string())?;
+        .ok_or_else(|| format!("{what} URL is missing a host"))?;
     if host_name_blocked(host) {
-        return Err(format!("engine download host {host} is not allowed"));
+        return Err(format!("{what} host {host} is not allowed"));
     }
     if !runtime_download_host_ok(host) {
-        return Err(format!(
-            "engine download host {host} is not on the allowlist"
-        ));
+        return Err(format!("{what} host {host} is not on the allowlist"));
     }
     Ok(())
 }
