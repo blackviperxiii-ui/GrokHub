@@ -2496,8 +2496,9 @@ mod tests {
             text_message("assistant", "On it."),
             text_message("user", "and the bar"),
         ];
+        let paths = ["src/dock.rs".to_string()];
         let rebuilt =
-            build_compacted_history_for("chat-1", &items, "<summary>Dock.</summary>", &[]);
+            build_compacted_history_for("chat-1", &items, "<summary>Dock.</summary>", &paths);
         let made: Vec<(String, bool)> = rebuilt
             .iter()
             .map(|item| (message_text(item), is_compaction_message(item)))
@@ -2508,6 +2509,7 @@ mod tests {
             made,
             [
                 (format!("{SUMMARY_OPEN} The summary below covers the earlier portion of the conversation."), true),
+                ("<harness_ledger>".to_string(), true),
                 ("<standing_rules>".to_string(), true),
                 ("and the bar".to_string(), false),
             ]

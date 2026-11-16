@@ -981,10 +981,11 @@ fn replay(records: &[Record]) -> Replay {
                     if let Some(at) = before_keys[..left].iter().rposition(|p| *p == key) {
                         visible[k].at = prior[before[at]].at;
                         left = at;
-                        matched += 1;
+                        matched += usize::from(is_counted(&prior[before[at]].item));
                     }
                 }
-                hidden += before.len() - matched;
+                let counted = before.iter().filter(|&&p| is_counted(&prior[p].item));
+                hidden += counted.count() - matched;
             }
         }
     }
@@ -1058,12 +1059,10 @@ pub fn user_lines(info: &SessionInfo) -> Vec<UserLine> {
         .iter()
         .enumerate()
         .filter(|(_, seen)| is_shown_ask(&seen.item))
-        .map(|(k, seen)| {
-            let after_tool =
-                k > 0 && matches!(visible[k - 1].item, InputItem::FunctionCallOutput { .. });
+        .map(|(_, seen)| {
             let kind = if crate::compact::is_compaction_message(&seen.item) {
                 UserKind::Compaction
-            } else if after_tool && is_tool_image(&seen.item) {
+            } else if is_tool_image(&seen.item) {
                 UserKind::ToolImage
             } else {
                 UserKind::Ask
@@ -1074,14 +1073,22 @@ pub fn user_lines(info: &SessionInfo) -> Vec<UserLine> {
 }
 
 /// The message the run adds after a tool result that carried an image:
-/// "image from {tool}" and the image, or the note that replaced it.
+/// "image from {tool}" and the image, or the note that replaced it. Known by
+/// its shape alone, since a compaction can keep it without the result
+/// before it.
 fn is_tool_image(item: &InputItem) -> bool {
-    let InputItem::Message { content, .. } = item else {
+    let InputItem::Message { role, content } = item else {
         return false;
     };
+    let tool_name = |name: &str| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+    };
     match content.as_slice() {
-        [ContentPart::InputText(label), image] => {
-            label.starts_with("image from ")
+        [ContentPart::InputText(label), image] if role == "user" => {
+            label.strip_prefix("image from ").is_some_and(tool_name)
                 && match image {
                     ContentPart::InputImage(_) => true,
                     ContentPart::InputText(text) => {
@@ -1093,8 +1100,14 @@ fn is_tool_image(item: &InputItem) -> bool {
     }
 }
 
-/// How many messages compactions took out of the transcript, less the ones
-/// they kept word for word.
+/// A message the transcript counts: an ask or a reply, not a tool's image
+/// or a compaction's own text.
+fn is_counted(item: &InputItem) -> bool {
+    is_shown_message(item) && !is_tool_image(item) && !crate::compact::is_compaction_message(item)
+}
+
+/// How many asks and replies compactions took out of the transcript, less
+/// the ones they kept.
 pub fn compacted_messages(info: &SessionInfo) -> usize {
     replay(&info.records).hidden
 }
@@ -2071,6 +2084,86 @@ mod tests {
             _ => None,
         });
         assert_eq!(own, Some(1), "only the reply is still the turn's own");
+    }
+
+    #[test]
+    fn a_tool_image_kept_without_its_result_is_still_a_tool_image() {
+        let (_dir, _guard) = isolated("image-head");
+        let id = "native-image-head";
+        let image = InputItem::Message {
+            role: "user".into(),
+            content: vec![
+                ContentPart::InputText("image from screenshot".into()),
+                ContentPart::InputImage("data:image/png;base64,QQ==".into()),
+            ],
+        };
+        let first = [user("check the login page"), assistant("Looking.")];
+        write_timed(id, &[(&first, 1_000)]);
+        // The tail starts at the newest user message: the tool's image.
+        let kept = [
+            summary_of("Checked the login page."),
+            user("<standing_rules>\nKeep it short.\n</standing_rules>"),
+            image,
+            assistant("The button is hidden."),
+        ];
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
+        let info = load_session(id).unwrap();
+        assert_eq!(
+            user_kinds(&info),
+            [
+                UserKind::Compaction,
+                UserKind::Compaction,
+                UserKind::ToolImage
+            ]
+        );
+        // A typed message that only starts the same way is an ask.
+        let typed = InputItem::Message {
+            role: "user".into(),
+            content: vec![
+                ContentPart::InputText("image from my phone".into()),
+                ContentPart::InputImage("data:image/png;base64,QQ==".into()),
+            ],
+        };
+        assert!(!is_tool_image(&typed));
+    }
+
+    #[test]
+    fn the_compacted_count_leaves_out_tool_images_and_compaction_text() {
+        let (_dir, _guard) = isolated("count-kinds");
+        let id = "native-count-kinds";
+        let image = InputItem::Message {
+            role: "user".into(),
+            content: vec![
+                ContentPart::InputText("image from screenshot".into()),
+                ContentPart::InputImage("data:image/png;base64,QQ==".into()),
+            ],
+        };
+        let call = InputItem::FunctionCall {
+            call_id: "c1".into(),
+            name: "screenshot".into(),
+            arguments: "{}".into(),
+        };
+        let output = InputItem::FunctionCallOutput {
+            call_id: "c1".into(),
+            output: "ok".into(),
+        };
+        let first = [user("look"), call, output, image, assistant("A dock.")];
+        write_timed(id, &[(&first, 1_000)]);
+        let kept = [
+            summary_of("Saw a dock."),
+            user("<standing_rules>\n</standing_rules>"),
+        ];
+        record_compaction(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        let info = load_session(id).unwrap();
+        assert_eq!(compacted_messages(&info), 2, "the ask and the reply");
+        let kept = [summary_of("Saw a dock, twice.")];
+        record_compaction(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        let info = load_session(id).unwrap();
+        assert_eq!(
+            compacted_messages(&info),
+            2,
+            "the first summary and rules aren't messages"
+        );
     }
 
     #[test]

@@ -93,9 +93,10 @@ clickable, because the chat view can't show those messages either.
   turn that differs.
 - Deleting a chat deletes its zoom file, and a zoom that finishes after the
   delete removes the file it wrote.
-- A compacted chat's "Earlier, compacted" count is every message a
-  compaction took out of view: what each one replaced, less the messages it
-  kept. A kept message deleted later still counts, since its saved copy is
+- A compacted chat's "Earlier, compacted" count is every ask and reply a
+  compaction took out of view: what each one replaced, less the ones it
+  kept. Tool images and earlier compactions' own text aren't counted, as in
+  the groups. A kept message deleted later still counts, since its saved copy is
   under the compaction.
 
 ## Cost per 100 messages

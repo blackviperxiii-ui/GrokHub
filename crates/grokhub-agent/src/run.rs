@@ -444,7 +444,7 @@ fn run_compact_pass(
             emit_usage(on_event, usage, history, input.context_length);
             CompactPass::Ok {
                 background: from_background,
-                turn_from: own_start(&turn, history),
+                turn_from: settle(&turn, history),
             }
         }
         Err(crate::compact::CompactError::Cancelled) => {
@@ -466,6 +466,14 @@ fn run_compact_pass(
             CompactPass::Failed
         }
     }
+}
+
+/// Pairs the calls a compaction kept without their outputs, then finds
+/// where the turn's own items start ([`own_start`]). Pairing first keeps that
+/// index right to the end of the turn: no output is added before it later.
+fn settle(turn: &[InputItem], history: &mut Vec<InputItem>) -> usize {
+    crate::client::pair_orphan_calls(history);
+    own_start(turn, history)
 }
 
 /// Where a turn's own items (`turn`, as they were before a compaction) start
@@ -2777,6 +2785,29 @@ mod tests {
         ];
         history.extend(turn.clone());
         assert_eq!(own_start(&turn, &history), 4);
+    }
+
+    #[test]
+    fn calls_kept_without_outputs_are_paired_before_the_turn_is_found() {
+        // A kept tail can hold a parallel batch's calls without their outputs.
+        let [a, _] = step("a");
+        let [b, _] = step("b");
+        let turn = vec![
+            msg("user", "now run the tests"),
+            msg("assistant", "Running."),
+        ];
+        let mut history = vec![
+            msg("user", "<summary>Fixes.</summary>"),
+            msg("user", "fix it"),
+            a,
+            b,
+            msg("assistant", "Here is the fix."),
+        ];
+        history.extend(turn.clone());
+        let from = settle(&turn, &mut history);
+        assert_eq!((from, history.len()), (7, 9), "two outputs went in first");
+        assert_eq!(crate::client::pair_orphan_calls(&mut history), 0);
+        assert_eq!(history[from..], turn[..]);
     }
 
     #[test]
