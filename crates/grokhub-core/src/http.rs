@@ -227,6 +227,15 @@ pub fn with_saved_host<R>(url: &str, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// `url`'s host as a call made from it dials it: parsed the WHATWG way, as
+/// [`Request`] sends a URL, so `attacker。example`, `attacker%2Eexample` and
+/// `[FD00:0::5]` read as `attacker.example` and `fd00::5`. No brackets, no
+/// trailing dot, lower case; `None` when the URL has no host.
+pub fn dialed_host(url: &str) -> Option<String> {
+    let url = url::Url::parse(url.trim()).ok()?;
+    url.host_str().map(plain_host)
+}
+
 /// A host as the saved server is matched: no brackets, no trailing dot,
 /// lower case.
 fn plain_host(host: &str) -> String {
@@ -243,9 +252,11 @@ fn saved_host_resolve(netloc: &str) -> io::Result<Vec<SocketAddr>> {
 }
 
 /// [`saved_host_resolve`] with the saved server and the lookup passed in. Any
-/// other host or port is refused before a lookup goes out, and one address
-/// it may not use refuses the whole answer. The addresses checked are the
-/// ones dialed, so a name can't change its answer in between.
+/// other host or port is refused before a lookup goes out. An address the
+/// server may not use is dropped (an mDNS answer carries the host's `fe80::`
+/// next to its LAN address), and with none left the call is refused. Only
+/// the addresses kept are dialed, so a name can't change its answer between
+/// the check and the dial.
 fn saved_addrs(
     saved: Option<&(String, u16)>,
     netloc: &str,
@@ -272,10 +283,10 @@ fn saved_addrs(
             format!("dns failed for {host}: no addresses"),
         ));
     }
-    if let Some(bad) = all
-        .iter()
-        .find(|a| crate::ssrf::saved_host_ip_refused(&host, a.ip()))
-    {
+    let (dropped, all): (Vec<SocketAddr>, Vec<SocketAddr>) = all
+        .into_iter()
+        .partition(|a| crate::ssrf::saved_host_ip_refused(&host, a.ip()));
+    if let (Some(bad), true) = (dropped.first(), all.is_empty()) {
         return Err(refused(&format!("{host} → {}", bad.ip())));
     }
     // Offline only: a local name that leads off the network stays home.
@@ -1307,9 +1318,10 @@ mod tests {
     }
 
     #[test]
-    fn the_saved_server_resolves_to_its_own_network_only() {
+    fn the_saved_server_dials_its_own_host_and_port_and_no_reserved_address() {
         let saved = ("searx.example".to_string(), 80);
         let asked = std::cell::Cell::new(0);
+        let addr = |a: &str| a.parse::<SocketAddr>().unwrap();
         assert_eq!(
             saved_addrs(
                 Some(&saved),
@@ -1317,26 +1329,40 @@ mod tests {
                 answers(&["192.168.1.5:80"], &asked)
             )
             .unwrap(),
-            ["192.168.1.5:80".parse::<SocketAddr>().unwrap()]
+            [addr("192.168.1.5:80")]
         );
+        // An address it may not use is dropped; the rest are dialed.
+        assert_eq!(
+            saved_addrs(
+                Some(&saved),
+                "searx.example:80",
+                answers(&["93.184.216.34:80", "127.0.0.1:80"], &asked),
+            )
+            .unwrap(),
+            [addr("93.184.216.34:80")]
+        );
+        assert_eq!(
+            saved_addrs(
+                Some(&saved),
+                "searx.example:80",
+                answers(&["[fe80::1%2]:80", "192.168.1.5:80"], &asked),
+            )
+            .unwrap(),
+            [addr("192.168.1.5:80")]
+        );
+        // With none left, the call is refused and says which address it was.
         let err = saved_addrs(
             Some(&saved),
             "searx.example:80",
-            answers(&["93.184.216.34:80", "127.0.0.1:80"], &asked),
+            answers(&["169.254.169.254:80", "127.0.0.1:80"], &asked),
         )
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(
             err.to_string(),
-            format!("searx.example → 127.0.0.1: {SAVED_HOST_REFUSED}")
+            format!("searx.example → 169.254.169.254: {SAVED_HOST_REFUSED}")
         );
-        assert!(saved_addrs(
-            Some(&saved),
-            "searx.example:80",
-            answers(&["169.254.169.254:80"], &asked)
-        )
-        .is_err());
-        assert_eq!(asked.get(), 3);
+        assert_eq!(asked.get(), 4);
         // Another host or port, or no saved server: refused before any lookup.
         for (saved, netloc) in [
             (Some(&saved), "other.example:80"),
@@ -1347,7 +1373,7 @@ mod tests {
             assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{netloc}");
             assert!(err.to_string().ends_with(SAVED_HOST_REFUSED), "{err}");
         }
-        assert_eq!(asked.get(), 3);
+        assert_eq!(asked.get(), 4);
         let local = ("localhost".to_string(), 8888);
         assert_eq!(
             saved_addrs(
@@ -1366,6 +1392,24 @@ mod tests {
             answers(&["[fd00::5]:8888"], &asked)
         )
         .is_ok());
+    }
+
+    #[test]
+    fn the_dialed_host_is_read_as_a_request_sends_it() {
+        assert_eq!(
+            dialed_host("http://Searx\u{3002}Home\u{ff0e}Example./x").as_deref(),
+            Some("searx.home.example")
+        );
+        assert_eq!(
+            dialed_host("http://searx%2Ehome%2Eexample").as_deref(),
+            Some("searx.home.example")
+        );
+        assert_eq!(
+            dialed_host("http://[FD00:0:0::0005]:8888").as_deref(),
+            Some("fd00::5")
+        );
+        assert_eq!(dialed_host("http://127.1").as_deref(), Some("127.0.0.1"));
+        assert_eq!(dialed_host("searx.example"), None);
     }
 
     #[test]

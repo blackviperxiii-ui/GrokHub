@@ -146,17 +146,22 @@ pub fn searxng_url_problem(url: &str) -> Option<&'static str> {
     {
         return Some(BAD_SEARXNG_URL);
     }
-    let host = searxng_host(url);
-    let ip = host.parse::<std::net::IpAddr>().ok();
     // A last label of digits (or 0x hex) makes the whole host an IPv4 address
     // in a URL, so `127.1` and `2130706433` are loopback; only plain dotted
     // forms are read here, the rest are refused.
-    let last = host.rsplit('.').next().unwrap_or("");
+    let typed = grokhub_core::offline::url_host(url).unwrap_or_default();
+    let typed = typed
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.');
+    let last = typed.rsplit('.').next().unwrap_or("");
     let numeric = !last.is_empty()
         && (last.bytes().all(|b| b.is_ascii_digit())
             || last.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("0x")));
+    let host = searxng_host(url);
+    let ip = host.parse::<std::net::IpAddr>().ok();
     let bad = host.is_empty()
-        || (ip.is_none() && numeric)
+        || (typed.parse::<std::net::IpAddr>().is_err() && numeric)
         || ip.is_some_and(|ip| grokhub_core::ssrf::saved_host_ip_refused(&host, ip));
     bad.then_some(SEARXNG_BAD_HOST)
 }
@@ -175,13 +180,10 @@ fn on_your_network(host: &str) -> bool {
         || (ip.is_none() && (!host.contains('.') || host.ends_with(".ts.net")))
 }
 
-/// The URL's host, lower case, without brackets or a trailing dot.
+/// The URL's host as a search dials it ([`grokhub_core::http::dialed_host`]),
+/// so the path a search takes is picked from the host it reaches.
 fn searxng_host(url: &str) -> String {
-    let host = grokhub_core::offline::url_host(url).unwrap_or_default();
-    host.trim_start_matches('[')
-        .trim_end_matches(']')
-        .trim_end_matches('.')
-        .to_ascii_lowercase()
+    grokhub_core::http::dialed_host(url).unwrap_or_default()
 }
 
 /// [`searxng_url_problem`], then for a public-looking name a best-effort
@@ -1084,6 +1086,20 @@ mod tests {
             Err(SEARXNG_NAME_PRIVATE.to_string())
         );
         assert_eq!(*asked.borrow(), ["searx.home.example:443"]);
+        // Other dots and escapes are read the way a search dials the name.
+        for url in [
+            "http://searx\u{3002}home\u{ff0e}example",
+            "http://searx%2Ehome%2Eexample",
+        ] {
+            asked.borrow_mut().clear();
+            assert_eq!(searxng_url_problem(url), None, "{url}");
+            assert_eq!(
+                searx(url).save_with(&dir, &private),
+                Err(SEARXNG_NAME_PRIVATE.to_string()),
+                "{url}"
+            );
+            assert_eq!(*asked.borrow(), ["searx.home.example:443"], "{url}");
+        }
         assert!(!dir.join("app.json").exists());
         let no_dns = |_: &str| -> std::io::Result<Vec<std::net::SocketAddr>> {
             Err(std::io::Error::other(
