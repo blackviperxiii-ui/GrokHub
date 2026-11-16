@@ -130,6 +130,7 @@ pub use memory::{
     queue_memory_status, remember, remember_note_text, search as search_memory, set_memory_writes,
     take_memory_status, workspace_memory_path, Hit as MemoryHit, INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
 };
+pub use memory_embed::embedder as text_embedder;
 pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,
     GROK_47_CONTEXT_LENGTH, XAI_MODELS_URL,
@@ -158,13 +159,13 @@ pub use run::{
     LoopOut, SteerQueue, StopReason, BUSY_GAVE_UP, REPEAT_REPLAN, TRUNCATED_TOOL,
 };
 pub use session::{
-    attach_run, cancel_session, delete_forks_of, delete_session, export_markdown, forget_message,
-    compacted_messages, fork_session, format_cost_ticks, history_generation, list_sessions,
-    load_session, local_title, merge_history, message_pairs, record_compaction, record_turn,
-    rename_session, resume_input, session_file, session_intact, transcript_pairs, usage_label,
-    user_turn_times, Forget, Forgotten, HistoryRow, RunGuard, SessionInfo, FORGET_BUSY,
+    attach_run, cancel_session, compacted_messages, delete_forks_of, delete_session,
+    export_markdown, forget_message, fork_session, format_cost_ticks, history_generation,
+    list_sessions, load_session, local_title, merge_history, message_pairs, record_compaction,
+    record_turn, rename_session, resume_input, session_file, session_intact, transcript_pairs,
+    usage_label, user_turn_times, Forget, Forgotten, HistoryRow, RunGuard, SessionInfo,
+    FORGET_BUSY,
 };
-pub use memory_embed::embedder as text_embedder;
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{
     builtin_names, builtin_text, discover as discover_skills, discover_all as discover_all_skills,

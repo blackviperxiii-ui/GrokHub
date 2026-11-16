@@ -34,10 +34,14 @@ it. Groups are runs of turns, cut at a boundary.
 
 1. **Time gap.** A new group starts when 30 minutes or more pass between two
    turns. Session files have no per-message times today, so each turn's
-   closing `usage` line gains an `at` field (Unix ms). Readers already
-   ignore unknown fields, and the session rewrite keeps it. Older turns have
-   no time; their groups show the session's start and last-saved times as the
-   range instead.
+   closing `usage` line gains an `at` field (Unix ms): the time the turn was
+   saved, at its end, so one run of 30 minutes or more also starts a group.
+   Readers already ignore unknown fields, and the session rewrite keeps it.
+   A compaction's own usage line carries one too: an ask it keeps word for
+   word keeps the time it was first saved with, and the rest of what it
+   writes (its summary, or the ask of a turn that compacted as it ran) takes
+   the compaction's time. Older turns have no time; their groups show the
+   session's start and last-saved times as the range instead.
 2. **Topic shift.** Each turn's user text is embedded with the local static
    model the app already ships for memory recall (`potion-base-8M`, 256
    dimensions, CPU only, no network once downloaded). A new group starts when
@@ -45,7 +49,9 @@ it. Groups are runs of turns, cut at a boundary.
    below a threshold (starting at 0.35, tuned on real chats), once the group
    has at least 3 turns. A group also closes at 40 turns. When the model
    isn't downloaded (or memory embeddings are off), the same rule runs on a
-   hashed bag of stemmed words (1,024 buckets), with its own threshold.
+   hashed bag of stemmed words (1,024 buckets), with its own threshold (0.08).
+   Scripts written without spaces (Thai, Lao, Myanmar, Khmer, kana and CJK
+   ideographs) count each pair of characters as a word.
 3. **Labels.** The title comes from the group's own words, with the existing
    unused topic helpers (`topics_from_turns`, `short_auto_title`). The one-line
    summary is the group's first user line, clipped to about 90 characters. No
@@ -58,22 +64,28 @@ clickable, because the chat view can't show those messages either.
 
 ## Cache
 
-- `{config}/zoom/<chat-id>.json` holds, per turn, a hash of its role and text,
-  its `at` time and its vector (int8, base64, about 260 bytes), plus the
-  groups. Scratch chats are grouped in memory only and never written.
+- `{config}/zoom/<chat-id>.json` holds, per turn, a hash of its role and text
+  and its vector (int8, base64, about 344 characters for 256 dimensions).
+  Times and groups come from the session file on each open; grouping the
+  vectors is quick. Fresh vectors are rounded to int8 too, so a reopen groups
+  exactly as the first open did. Scratch chats are grouped in memory only
+  and never written.
 - On open, the cache is checked against the session: the longest prefix of
   matching turn hashes is kept, and only the turns after it are embedded
   again. A new message reopens at most the last group. Delete message,
   compaction and Main's Clear change the hashes and rebuild from the first
   turn that differs.
-- Deleting a chat deletes its zoom file.
+- Deleting a chat deletes its zoom file, and a zoom that finishes after the
+  delete removes the file it wrote.
+- A compacted chat's "Earlier, compacted" count is the messages saved before
+  the last compaction, less the ones it kept word for word.
 
 ## Cost per 100 messages
 
 | Part | Cost |
 | --- | --- |
 | Embedding (local static model) | $0 in tokens; one-time 30.5 MB model download the app already does for memory recall |
-| Storage | about 26 KB for 100 turn vectors as int8 |
+| Storage | about 38 KB for 100 turns (int8 vectors in base64 JSON) |
 | Labels (local words) | $0 |
 | Optional later: model-written titles | about $0.015–0.02 on grok-4.3-class pricing, $0 on Local AI; labeled once when a group closes, under the background budget share |
 

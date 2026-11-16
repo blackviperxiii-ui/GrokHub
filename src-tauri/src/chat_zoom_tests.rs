@@ -215,6 +215,13 @@ fn a_saved_chat_folds_by_gap_and_its_groups_survive_a_reopen() {
             ("rust build is green now", "Good.", None),
         ],
     );
+    let file = std::fs::File::options()
+        .write(true)
+        .open(dir.join("sessions").join(format!("{id}.jsonl")))
+        .unwrap();
+    file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_millis(300 * MIN))
+        .unwrap();
+    drop(file);
     let zoom = zoom_with(&dir, id, None).unwrap();
     let shape: Vec<_> = zoom
         .groups
@@ -251,7 +258,11 @@ fn a_saved_chat_folds_by_gap_and_its_groups_survive_a_reopen() {
             ),
         ]
     );
-    assert_eq!((zoom.lines, zoom.compacted, zoom.created), (8, 0, 1_000));
+    assert_eq!(
+        (zoom.lines, zoom.compacted, zoom.created, zoom.updated),
+        (8, 0, 1_000, 300 * MIN),
+        "updated is the chat file's own change time"
+    );
     let cache: Cache =
         serde_json::from_str(&std::fs::read_to_string(cache_path(&dir, id)).unwrap()).unwrap();
     assert_eq!(
@@ -347,4 +358,75 @@ fn turns_saved_by_the_engine_carry_their_time_into_the_groups() {
         "{first}..{last} not in {before}..{after}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_turns_hash_is_the_same_in_every_run() {
+    let lines = vec![
+        line(Role::User, "lisbon trip"),
+        line(Role::Assistant, "Sure."),
+    ];
+    // FNV-1a over "u\0lisbon trip\0a\0Sure.\0", worked out outside the app.
+    assert_eq!(turns(&lines, &[])[0].hash, "8cd215dc746ddf90");
+}
+
+#[test]
+fn a_reopen_groups_by_the_cached_vectors_not_fresh_ones() {
+    let lines: Vec<Line> = (0..6)
+        .flat_map(|i| {
+            [
+                line(Role::User, &format!("ask {i}")),
+                line(Role::Assistant, "ok"),
+            ]
+        })
+        .collect();
+    // Fresh vectors would all point one way, so nothing would split.
+    let embed = |_: &str| axis(0);
+    let (fresh, _) = fold(&lines, &[], Kind::Model, &[], &embed);
+    assert_eq!(fresh.len(), 1);
+    // The cache says the topic turned at the fourth ask.
+    let cached: Vec<CachedTurn> = turns(&lines, &[])
+        .into_iter()
+        .enumerate()
+        .map(|(i, turn)| CachedTurn {
+            hash: turn.hash,
+            vec: axis(usize::from(i >= 3)).map(|v| pack(&v)),
+        })
+        .collect();
+    let (groups, _) = fold(&lines, &[], Kind::Model, &cached, &embed);
+    let ranges: Vec<(usize, usize)> = groups.iter().map(|g| (g.first_line, g.last_line)).collect();
+    assert_eq!(ranges, vec![(0, 5), (6, 11)]);
+}
+
+#[test]
+fn a_words_chat_splits_where_its_topic_changes() {
+    let lines: Vec<Line> = [
+        "lisbon trip",
+        "lisbon hotels",
+        "lisbon trains",
+        "fix the rust build",
+        "rust build error",
+        "rust build is green",
+    ]
+    .iter()
+    .flat_map(|ask| [line(Role::User, ask), line(Role::Assistant, "ok")])
+    .collect();
+    let (groups, _) = fold(&lines, &[], Kind::Words, &[], &word_vector);
+    let shape: Vec<_> = groups
+        .iter()
+        .map(|g| (g.first_line, g.last_line, g.summary.as_str()))
+        .collect();
+    assert_eq!(
+        shape,
+        vec![(0, 5, "lisbon trip"), (6, 11, "fix the rust build")]
+    );
+}
+
+#[test]
+fn unspaced_scripts_match_on_shared_character_pairs() {
+    let a = word_vector("東京の天気を教えて").unwrap();
+    let b = word_vector("明日の東京の天気は").unwrap();
+    let c = word_vector("ラストのビルドが失敗した").unwrap();
+    assert!(cosine(&a, &b) > WORDS_FLOOR, "{}", cosine(&a, &b));
+    assert!(cosine(&a, &c) < WORDS_FLOOR, "{}", cosine(&a, &c));
 }

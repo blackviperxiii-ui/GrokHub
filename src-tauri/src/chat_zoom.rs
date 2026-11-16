@@ -188,24 +188,45 @@ fn stem(word: &str) -> &str {
     word
 }
 
+/// Scripts written without spaces between words (Thai, Lao, Myanmar, Khmer,
+/// kana and CJK ideographs): their runs are split into character pairs.
+fn unspaced(c: char) -> bool {
+    matches!(u32::from(c),
+        0x0E00..=0x0EFF | 0x1000..=0x109F | 0x1780..=0x17FF | 0x3040..=0x30FF
+            | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF)
+}
+
+fn bucket(word: &str) -> usize {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in word.bytes() {
+        h ^= u32::from(b);
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h as usize % BUCKETS
+}
+
 /// A unit vector of stemmed content words hashed into [`BUCKETS`] buckets.
+/// A run of an unspaced script counts each pair of characters as a word.
 fn word_vector(text: &str) -> Option<Vec<f32>> {
     let mut v = vec![0f32; BUCKETS];
     let mut any = false;
-    for raw in text
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().count() >= 3)
-    {
-        if grokhub_core::is_title_stopword(raw) {
+    for raw in text.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
+        if raw.chars().any(unspaced) {
+            let chars: Vec<char> = raw.chars().collect();
+            let pairs: Vec<String> = match chars.len() {
+                1 => vec![raw.to_string()],
+                _ => chars.windows(2).map(|w| w.iter().collect()).collect(),
+            };
+            for pair in pairs {
+                v[bucket(&pair)] += 1.0;
+                any = true;
+            }
             continue;
         }
-        let mut h: u32 = 0x811c_9dc5;
-        for b in stem(raw).bytes() {
-            h ^= u32::from(b);
-            h = h.wrapping_mul(0x0100_0193);
+        if raw.chars().count() < 3 || grokhub_core::is_title_stopword(raw) {
+            continue;
         }
-        v[h as usize % BUCKETS] += 1.0;
+        v[bucket(stem(raw))] += 1.0;
         any = true;
     }
     any.then(|| unit(v)).flatten()
@@ -347,7 +368,9 @@ fn fold(
         .enumerate()
         .map(|(i, turn)| match reuse.get(i) {
             Some(cached) if i < kept => cached.vec.as_deref().and_then(unpack),
-            _ => embed(turn_text(lines, turn)),
+            // Stored as int8: a fresh vector is rounded the same way, so a
+            // reopen groups exactly as the first open did.
+            _ => embed(turn_text(lines, turn)).and_then(|v| unpack(&pack(&v))),
         })
         .collect();
     let groups = segment(&turns, &vecs, kind.floor())
@@ -423,8 +446,14 @@ pub fn zoom_with(config_dir: &Path, id: &str, model: Option<&StaticModel>) -> Re
         None => word_vector(text),
     };
     let (groups, turns) = fold(&lines, &times, kind, &reuse, &embed);
+    let _config = ConfigGuard::set(config_dir);
     if !scratch {
         write_cache(config_dir, &info.id, kind, turns);
+        // A delete that ran while this one was embedding has already
+        // forgotten the cache; don't leave a new one behind it.
+        if !grokhub_agent::session_file(&info.id).is_ok_and(|file| file.exists()) {
+            forget(config_dir, &info.id);
+        }
     }
     Ok(Zoom {
         id: info.id.clone(),
