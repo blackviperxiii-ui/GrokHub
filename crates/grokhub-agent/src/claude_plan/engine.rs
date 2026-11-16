@@ -17,41 +17,50 @@ use serde_json::{json, Value};
 use super::stream::{Outcome, Stream};
 use crate::client::CancelToken;
 use crate::events::Engine;
+use crate::run::SteerQueue;
 
-/// The tools a chat on the plan may use until live approvals land: reading
-/// only. Anything else Claude asks for is denied and shows as a failed row.
+/// The only tools a chat on the plan has until live approvals land. Claude
+/// Code's own rules still decide each call: reading inside the chat's folder
+/// needs no approval, and reading outside it would, so it's refused.
 pub const READ_ONLY_TOOLS: [&str; 3] = ["Read", "Grep", "Glob"];
 
-/// How much of Claude Code's stderr is kept for an error line.
-const STDERR_CAP: usize = 4_096;
+/// How much of the end of Claude Code's stderr is kept for an error line.
+const STDERR_TAIL: usize = 4_096;
 /// How often a running turn looks at Stop.
 const STOP_POLL: Duration = Duration::from_millis(100);
 
 pub struct ClaudePlanEngine {
     cli: PathBuf,
     workspace: PathBuf,
-    allowed: Vec<String>,
     /// This chat's Claude Code session: named on the first turn, resumed after.
     session: String,
     /// A turn has started the session, so the next one resumes it.
     started: bool,
     cancel: CancelToken,
+    /// Words sent while a turn runs. Claude Code can't take them mid-turn, so
+    /// they go back to the chat at the turn's end, each its own message.
+    steer: SteerQueue,
 }
 
 impl ClaudePlanEngine {
     /// `cli` comes from `claude_plan::find`; `cancel` is the chat's Stop.
-    pub fn new(cli: PathBuf, workspace: PathBuf, cancel: CancelToken) -> Self {
+    pub fn new(cli: PathBuf, workspace: PathBuf, cancel: CancelToken, steer: SteerQueue) -> Self {
         Self {
             cli,
             workspace,
-            allowed: READ_ONLY_TOOLS.iter().map(|t| t.to_string()).collect(),
             session: new_session_id(),
             started: false,
             cancel,
+            steer,
         }
     }
 
+    /// Claude Code keeps a session under its folder, so a new folder starts
+    /// a new session.
     pub fn set_workspace(&mut self, workspace: PathBuf) {
+        if workspace != self.workspace {
+            self.new_session();
+        }
         self.workspace = workspace;
     }
 
@@ -60,10 +69,17 @@ impl ClaudePlanEngine {
         self.cli = cli;
     }
 
-    /// The command line for one turn. Permission prompts go nowhere, so a
-    /// tool outside `allowed` is denied rather than waiting on a question
-    /// nobody sees; the permission mode is named so a `bypassPermissions`
-    /// default in the user's own Claude Code settings doesn't apply here.
+    fn new_session(&mut self) {
+        self.session = new_session_id();
+        self.started = false;
+    }
+
+    /// The command line for one turn. Only the read-only tools exist, and no
+    /// MCP server from the user's own config is loaded. Permission prompts go
+    /// nowhere, so a call that would ask is refused rather than waiting on a
+    /// question nobody sees; the permission mode is named so a
+    /// `bypassPermissions` default in the user's Claude Code settings doesn't
+    /// apply here.
     fn args(&self) -> Vec<String> {
         let mut args: Vec<String> = [
             "-p",
@@ -77,6 +93,7 @@ impl ClaudePlanEngine {
             "default",
             "--permission-prompts",
             "none",
+            "--strict-mcp-config",
         ]
         .iter()
         .map(|a| a.to_string())
@@ -91,8 +108,8 @@ impl ClaudePlanEngine {
         );
         args.push(self.session.clone());
         // Last: the flag takes every value after it.
-        args.push("--allowedTools".into());
-        args.extend(self.allowed.iter().cloned());
+        args.push("--tools".into());
+        args.extend(READ_ONLY_TOOLS.iter().map(|t| t.to_string()));
         args
     }
 
@@ -138,16 +155,14 @@ impl ClaudePlanEngine {
                 }
             })
         };
-        let errors = thread::spawn(move || {
-            let mut kept = Vec::new();
-            let _ = stderr.take(STDERR_CAP as u64).read_to_end(&mut kept);
-            String::from_utf8_lossy(&kept).into_owned()
-        });
+        let errors = thread::spawn(move || tail_of(stderr, STDERR_TAIL));
 
         let mut stream = Stream::new();
+        let mut said_error = false;
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
             for event in stream.line(&line) {
+                said_error |= matches!(event, AcpEvent::Err(_));
                 emit(event);
             }
         }
@@ -158,8 +173,13 @@ impl ClaudePlanEngine {
         }
         let errors = errors.join().unwrap_or_default();
 
+        let resumed = self.started;
         if stream.session_id() == Some(self.session.as_str()) {
             self.started = true;
+        } else if resumed && *stream.outcome() != Outcome::Done {
+            // The session couldn't be resumed (moved or removed): the next
+            // message starts a new one rather than failing the same way.
+            self.new_session();
         }
         let ended = *stream.outcome() == Outcome::Done;
         if stopped.load(Ordering::SeqCst) {
@@ -172,6 +192,12 @@ impl ClaudePlanEngine {
         }
         let no_result = *stream.outcome() == Outcome::Running;
         if let Err(why) = stream.finish() {
+            if said_error {
+                // The stream already said why in plain words.
+                return emit(AcpEvent::Done {
+                    stop_reason: "error".into(),
+                });
+            }
             let why = match last_line(&errors) {
                 Some(said) if no_result => format!("{why} It said: {said}"),
                 _ => why,
@@ -182,19 +208,41 @@ impl ClaudePlanEngine {
 }
 
 impl Engine for ClaudePlanEngine {
+    /// A Stop that came before the turn started (while the chat checked
+    /// Claude Code's sign-in) ends it before anything is sent. The chat
+    /// worker clears Stop when it takes the message.
     fn prompt(
         &mut self,
         text: &str,
         image: Option<&str>,
         emit: &mut dyn FnMut(AcpEvent),
     ) -> Result<(), String> {
-        self.cancel.reset();
-        self.run(text, image, emit);
+        let steer = self.steer.clone();
+        hand_back(&steer, emit);
+        if self.cancel.is_cancelled() {
+            emit(AcpEvent::Done {
+                stop_reason: "cancelled".into(),
+            });
+            return Ok(());
+        }
+        self.run(text, image, &mut |event| {
+            if matches!(event, AcpEvent::Done { .. }) {
+                hand_back(&steer, emit);
+            }
+            emit(event);
+        });
         Ok(())
     }
 
     fn cancel(&self) {
         self.cancel.cancel();
+    }
+}
+
+fn hand_back(steer: &SteerQueue, emit: &mut dyn FnMut(AcpEvent)) {
+    let left = steer.drain();
+    if !left.is_empty() {
+        emit(AcpEvent::Unsteered(left));
     }
 }
 
@@ -206,9 +254,27 @@ fn fail(emit: &mut dyn FnMut(AcpEvent), why: String) {
     });
 }
 
+/// Reads `from` to its end, so Claude Code never writes into a closed pipe,
+/// and keeps the last `cap` bytes.
+fn tail_of(mut from: impl Read, cap: usize) -> String {
+    let mut kept: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 8_192];
+    while let Ok(n) = from.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        kept.extend_from_slice(&buf[..n]);
+        if kept.len() > cap {
+            kept.drain(..kept.len() - cap);
+        }
+    }
+    String::from_utf8_lossy(&kept).into_owned()
+}
+
 /// Stop: SIGINT, so Claude Code ends the turn and records it. Windows has no
-/// SIGINT for a console-less child, so the process is ended and that turn's
-/// result is lost.
+/// SIGINT for a console-less child, so the whole process tree is ended (an
+/// npm install's `claude.cmd` runs the real CLI as its own child, which holds
+/// the pipes) and that turn's result is lost.
 fn interrupt(child: &mut Child) {
     #[cfg(unix)]
     if let Ok(pid) = libc::pid_t::try_from(child.id()) {
@@ -217,8 +283,17 @@ fn interrupt(child: &mut Child) {
             libc::kill(pid, libc::SIGINT);
         }
     }
-    #[cfg(not(unix))]
-    let _ = child.kill();
+    #[cfg(windows)]
+    {
+        let mut tree = Command::new("taskkill");
+        tree.args(["/F", "/T", "/PID", &child.id().to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        grokhub_core::proc_util::hide_windows_console(&mut tree);
+        let _ = tree.status();
+        let _ = child.kill();
+    }
 }
 
 /// The one stdin line for `--input-format stream-json`. A picture comes as a
@@ -299,11 +374,12 @@ mod tests {
             cli.to_path_buf(),
             workspace.to_path_buf(),
             CancelToken::new(),
+            SteerQueue::new(),
         )
     }
 
     #[test]
-    fn a_turn_reads_only_and_never_waits_on_a_prompt() {
+    fn a_turn_has_only_the_read_tools_and_never_waits_on_a_prompt() {
         let mut e = engine(Path::new("claude"), Path::new("."));
         e.session = "3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c".into();
         let joined = e.args().join(" ");
@@ -311,13 +387,41 @@ mod tests {
             joined,
             "-p --input-format stream-json --output-format stream-json --verbose \
              --include-partial-messages --permission-mode default --permission-prompts none \
-             --session-id 3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c --allowedTools Read Grep Glob"
+             --strict-mcp-config --session-id 3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c \
+             --tools Read Grep Glob"
+        );
+        assert!(
+            !joined.contains("--allowedTools"),
+            "an allow rule would reach outside the folder"
         );
         e.started = true;
         assert_eq!(
             session_flag(&e.args()),
             ("--resume", "3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c")
         );
+    }
+
+    #[test]
+    fn another_folder_starts_another_session() {
+        let mut e = engine(Path::new("claude"), Path::new("/home/user/my-app"));
+        e.started = true;
+        let first = e.session.clone();
+        e.set_workspace(PathBuf::from("/home/user/my-app"));
+        assert_eq!(session_flag(&e.args()), ("--resume", first.as_str()));
+        e.set_workspace(PathBuf::from("/home/user/other-app"));
+        let args = e.args();
+        let (flag, id) = session_flag(&args);
+        assert_eq!(flag, "--session-id");
+        assert_ne!(id, first);
+    }
+
+    #[test]
+    fn stderr_is_read_to_its_end_and_only_its_tail_kept() {
+        let long = format!("{}\nInvalid API key\n", "x".repeat(20_000));
+        let kept = tail_of(long.as_bytes(), 64);
+        assert_eq!(kept.len(), 64);
+        assert!(kept.ends_with("xxx\nInvalid API key\n"), "{kept:?}");
+        assert_eq!(tail_of("short".as_bytes(), 64), "short");
     }
 
     #[test]
@@ -515,7 +619,7 @@ mod tests {
             );
             let cli = fake_cli(&dir, &body);
             let cancel = CancelToken::new();
-            let mut e = ClaudePlanEngine::new(cli, dir.clone(), cancel.clone());
+            let mut e = ClaudePlanEngine::new(cli, dir.clone(), cancel.clone(), SteerQueue::new());
             e.session = SID.into();
             let stopper = {
                 let cancel = cancel.clone();
@@ -550,6 +654,131 @@ mod tests {
             );
             // The interrupted turn still started the session.
             assert_eq!(session_flag(&e.args()).0, "--resume");
+        }
+        #[test]
+        fn a_stop_before_the_turn_starts_sends_nothing() {
+            let dir = scratch("early-stop");
+            let cli = fake_cli(&dir, &lines_of(&[&init(SID), OK]));
+            let cancel = CancelToken::new();
+            cancel.cancel();
+            let mut e = ClaudePlanEngine::new(cli, dir.clone(), cancel, SteerQueue::new());
+            assert_eq!(
+                run(&mut e, "hi"),
+                vec![AcpEvent::Done {
+                    stop_reason: "cancelled".into()
+                }]
+            );
+            assert!(!dir.join("stdin").exists(), "Claude Code never ran");
+        }
+
+        #[test]
+        fn words_sent_during_a_turn_come_back_before_it_ends() {
+            let dir = scratch("steer");
+            let body = format!("{}sleep 1\n{}", lines_of(&[&init(SID)]), lines_of(&[OK]));
+            let cli = fake_cli(&dir, &body);
+            let steer = SteerQueue::new();
+            let mut e = ClaudePlanEngine::new(cli, dir.clone(), CancelToken::new(), steer.clone());
+            steer.push("left from before");
+            let late = {
+                let steer = steer.clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(300));
+                    steer.push("also check b.txt");
+                })
+            };
+            let seen = run(&mut e, "hi");
+            late.join().unwrap();
+            let shown: Vec<AcpEvent> = seen
+                .into_iter()
+                .filter(|ev| !matches!(ev, AcpEvent::Usage(_)))
+                .collect();
+            assert_eq!(
+                shown,
+                vec![
+                    AcpEvent::Unsteered(vec!["left from before".into()]),
+                    AcpEvent::Ready {
+                        session_id: SID.into()
+                    },
+                    AcpEvent::Unsteered(vec!["also check b.txt".into()]),
+                    AcpEvent::Done {
+                        stop_reason: "end_turn".into()
+                    },
+                ]
+            );
+        }
+
+        #[test]
+        fn a_signed_out_turn_says_so_once_in_plain_words() {
+            let dir = scratch("signed-out");
+            let cli = fake_cli(
+                &dir,
+                &lines_of(&[
+                    &init(SID),
+                    r#"{"type":"assistant","parent_tool_use_id":null,"error":"authentication_failed","message":{"content":[{"type":"text","text":"Invalid API key · Please run /login"}]}}"#,
+                    r#"{"type":"result","subtype":"success","is_error":true,"result":"Invalid API key · Please run /login","usage":{}}"#,
+                ]),
+            );
+            let mut e = engine(&cli, &dir);
+            e.session = SID.into();
+            let errors: Vec<AcpEvent> = run(&mut e, "hi")
+                .into_iter()
+                .filter(|ev| matches!(ev, AcpEvent::Err(_) | AcpEvent::Done { .. }))
+                .collect();
+            assert_eq!(
+                errors,
+                vec![
+                    AcpEvent::Err(
+                        "Claude Code isn't signed in. In a terminal, run claude auth login, then try again."
+                            .into()
+                    ),
+                    AcpEvent::Done {
+                        stop_reason: "error".into()
+                    },
+                ]
+            );
+        }
+
+        #[test]
+        fn a_session_that_cant_be_resumed_starts_a_new_one_next_time() {
+            let dir = scratch("lost-session");
+            let cli = fake_cli(
+                &dir,
+                "echo 'No conversation found with session ID' >&2\nexit 1",
+            );
+            let mut e = engine(&cli, &dir);
+            e.session = SID.into();
+            e.started = true;
+            let seen = run(&mut e, "hi");
+            assert_eq!(
+                seen.last(),
+                Some(&AcpEvent::Done {
+                    stop_reason: "error".into()
+                })
+            );
+            let args = std::fs::read_to_string(dir.join("args")).unwrap();
+            assert!(args.contains(&format!("--resume {SID} ")), "{args}");
+            let next = e.args();
+            let (flag, id) = session_flag(&next);
+            assert_eq!(flag, "--session-id");
+            assert_ne!(id, SID);
+        }
+
+        #[test]
+        fn a_chatty_stderr_never_stops_the_turn() {
+            let dir = scratch("chatty");
+            let body = format!(
+                "head -c 200000 /dev/zero | tr '\\0' x >&2\n{}",
+                lines_of(&[&init(SID), OK])
+            );
+            let cli = fake_cli(&dir, &body);
+            let mut e = engine(&cli, &dir);
+            e.session = SID.into();
+            assert_eq!(
+                run(&mut e, "hi").last(),
+                Some(&AcpEvent::Done {
+                    stop_reason: "end_turn".into()
+                })
+            );
         }
     }
 }

@@ -139,6 +139,11 @@ pub async fn side_chat(
     if question.trim().is_empty() {
         return Err("Type a message first.".into());
     }
+    // A side answer would run on the app's own models, not the plan the
+    // person picked for this chat.
+    if crate::claude_chat::is_on(&state.config_dir, &conversation_id) {
+        return Err(crate::claude_chat::NO_SIDE.into());
+    }
     // Retired before it runs: the engine saves nothing under this id.
     let _ = grokhub_agent::delete_session(&side_id);
     let session = {

@@ -1228,14 +1228,20 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 continue;
             }
         };
-        let plan_cli = match crate::claude_chat::turn_cli(&config_dir, &conversation_id) {
-            Some(Err(why)) => {
-                let _ = done.send(Err(why));
-                continue;
-            }
-            Some(Ok(cli)) => Some(cli),
-            None => None,
-        };
+        // A Stop from an earlier turn doesn't carry over; one pressed while
+        // Claude Code's sign-in is checked ends this turn before it starts.
+        if crate::claude_chat::is_on(&config_dir, &conversation_id) {
+            cancel.reset();
+        }
+        let plan_cli =
+            match crate::claude_chat::turn_cli(&config_dir, &conversation_id, &route.workspace) {
+                Some(Err(why)) => {
+                    let _ = done.send(Err(why));
+                    continue;
+                }
+                Some(Ok(cli)) => Some(cli),
+                None => None,
+            };
         // The chips block stays in the rules on btw turns too, so the cached
         // prompt doesn't change with the mode; a btw reply's chips are dropped.
         let chips_on =
@@ -1277,7 +1283,12 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         let reload = turn_starts(&conversation_id);
         let engine: &mut dyn Engine = if let Some(cli) = plan_cli {
             let plan = plan.get_or_insert_with(|| {
-                ClaudePlanEngine::new(cli.clone(), route.workspace.clone(), cancel.clone())
+                ClaudePlanEngine::new(
+                    cli.clone(),
+                    route.workspace.clone(),
+                    cancel.clone(),
+                    steer.clone(),
+                )
             });
             plan.set_cli(cli);
             plan.set_workspace(route.workspace);

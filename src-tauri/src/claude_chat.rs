@@ -15,6 +15,8 @@ pub const NOT_ALLOWED: &str =
     "Allow chats on your Claude plan in Settings → AI models → Claude (your plan) first.";
 pub const NO_CLI: &str = "This chat runs on your Claude plan, but Claude Code didn't answer on this computer, so nothing was sent. Settings → AI models → Claude (your plan) shows what's wrong.";
 pub const SIGNED_OUT: &str = "This chat runs on your Claude plan, but Claude Code isn't signed in, so nothing was sent. In a terminal, run claude auth login, then send again.";
+pub const NO_SIDE: &str =
+    "Side answers don't run on Claude (your plan) yet. Ask it in the chat instead.";
 pub const NOT_PLAN: &str = "This chat runs on your Claude plan, but Claude Code is signed in another way now, so nothing was sent. Sign in with your plan (claude auth login), or switch this chat back in its tab menu.";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,16 +79,24 @@ pub fn set_chat(dir: &Path, id: &str, on: bool) -> Result<ClaudeChats, String> {
     })
 }
 
+/// This chat was switched to the plan, and Settings still allows it.
+pub fn is_on(dir: &Path, id: &str) -> bool {
+    let chats = read(dir);
+    chats.allowed && chats.chats.iter().any(|c| c == id)
+}
+
 /// How this chat's next turn runs: `None` on the app's own models, the CLI
 /// when it's switched to the plan and Claude Code is signed in with one,
-/// and why not otherwise. Checked every turn, so a sign-out or a switch to
-/// an API key sends nothing rather than billing somewhere else.
-pub fn turn_cli(dir: &Path, id: &str) -> Option<Result<PathBuf, String>> {
-    let chats = read(dir);
-    if !chats.allowed || !chats.chats.iter().any(|c| c == id) {
+/// and why not otherwise. Checked every turn from the chat's folder, so a
+/// sign-out or a switch to an API key (the user's or the project's Claude
+/// Code settings) sends nothing rather than billing somewhere else.
+pub fn turn_cli(dir: &Path, id: &str, workspace: &Path) -> Option<Result<PathBuf, String>> {
+    if !is_on(dir, id) {
         return None;
     }
-    Some(plan_cli(claude_plan::find(), claude_plan::detect_at))
+    Some(plan_cli(claude_plan::find(), |cli| {
+        claude_plan::detect_in(cli, workspace)
+    }))
 }
 
 fn plan_cli(cli: Option<PathBuf>, detect: impl Fn(&Path) -> ClaudePlan) -> Result<PathBuf, String> {
@@ -115,7 +125,7 @@ mod tests {
         let dir = scratch("allow");
         assert_eq!(read(&dir), ClaudeChats::default());
         assert_eq!(set_chat(&dir, "chat-a", true), Err(NOT_ALLOWED.to_string()));
-        assert_eq!(turn_cli(&dir, "chat-a"), None);
+        assert_eq!(turn_cli(&dir, "chat-a", &dir), None);
 
         set_allowed(&dir, true).unwrap();
         set_chat(&dir, "chat-a", true).unwrap();
@@ -133,8 +143,9 @@ mod tests {
             set_chat(&dir, "chat-a", false).unwrap().chats,
             vec!["chat-b".to_string()]
         );
+        assert!(is_on(&dir, "chat-b"));
         // Another chat never runs on the plan.
-        assert_eq!(turn_cli(&dir, "chat-a"), None);
+        assert_eq!(turn_cli(&dir, "chat-a", &dir), None);
     }
 
     #[test]
@@ -143,8 +154,9 @@ mod tests {
         set_allowed(&dir, true).unwrap();
         set_chat(&dir, "chat-a", true).unwrap();
         assert_eq!(set_allowed(&dir, false).unwrap(), ClaudeChats::default());
+        assert!(!is_on(&dir, "chat-a"));
         assert_eq!(set_allowed(&dir, true).unwrap().chats, Vec::<String>::new());
-        assert_eq!(turn_cli(&dir, "chat-a"), None);
+        assert_eq!(turn_cli(&dir, "chat-a", &dir), None);
     }
 
     #[test]
