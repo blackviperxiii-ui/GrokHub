@@ -103,21 +103,21 @@ pub fn file_name_as(
 }
 
 /// The chat as Markdown: its name, then each message under its role, and
-/// each run of tool steps as one line naming them.
+/// each run of tool steps as one line naming them. Thoughts stay out of an
+/// export.
 pub fn markdown(t: &Transcript) -> String {
-    let tools: Vec<String> = t
-        .lines
-        .iter()
+    let said = || t.lines.iter().filter(|l| l.role != Role::Thought);
+    let tools: Vec<String> = said()
         .map(|l| match l.role {
             Role::Tools => format!("Used {}", l.text),
             _ => l.text.clone(),
         })
         .collect();
-    let pairs = t.lines.iter().zip(&tools).map(|(l, text)| {
+    let pairs = said().zip(&tools).map(|(l, text)| {
         let role = match l.role {
             Role::User => "user",
             Role::Assistant => "assistant",
-            Role::Tools => "tools",
+            Role::Tools | Role::Thought => "tools",
         };
         (role, text.as_str())
     });
@@ -130,10 +130,11 @@ pub fn render(t: &Transcript, format: grokhub_core::ChatExport, now_ms: u64) -> 
     let rows: Vec<(&str, String)> = t
         .lines
         .iter()
-        .map(|l| match l.role {
-            Role::User => ("user", l.text.clone()),
-            Role::Assistant => ("assistant", l.text.clone()),
-            Role::Tools => ("tools", format!("Used {}", l.text)),
+        .filter_map(|l| match l.role {
+            Role::User => Some(("user", l.text.clone())),
+            Role::Assistant => Some(("assistant", l.text.clone())),
+            Role::Tools => Some(("tools", format!("Used {}", l.text))),
+            Role::Thought => None,
         })
         .collect();
     let pairs = rows.iter().map(|(role, text)| (*role, text.as_str()));

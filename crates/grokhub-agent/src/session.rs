@@ -62,7 +62,26 @@ enum Record {
         /// no line holds either.
         folded: usize,
     },
+    /// The model's thinking, shown above the reply: saved for the chat view
+    /// only, never sent back to the model. It sits where it was shown,
+    /// before the item after it. The thoughts of a turn that compacted as it
+    /// ran sit just before that compaction and show before the turn's own
+    /// items.
+    Thought(String),
 }
+
+/// One thought of a turn as it streamed, with how many of the turn's tool
+/// calls and runs of reply text had started before it: it is saved before
+/// the next call or reply text after those.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnThought {
+    pub calls: usize,
+    pub texts: usize,
+    pub text: String,
+}
+
+/// Session line type of a saved thought ([`Record::Thought`]).
+const THOUGHT_RECORD: &str = "thought";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionInfo {
@@ -425,6 +444,23 @@ pub fn record_turn(
     meter: &str,
     user_text: &str,
 ) -> Result<(), String> {
+    record_turn_with(id, cwd, model, items, &[], usage, meter, user_text)
+}
+
+/// [`record_turn`] with the turn's thoughts, each saved before the tool call
+/// it came before (or before the reply's text), and the values held for the
+/// chat ([`crate::held`]) redacted from the thoughts and the reply's text.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_turn_with(
+    id: &str,
+    cwd: &str,
+    model: &str,
+    items: &[InputItem],
+    thoughts: &[TurnThought],
+    usage: &Usage,
+    meter: &str,
+    user_text: &str,
+) -> Result<(), String> {
     let id = safe_id(id)?.to_string();
     if tombstoned(&id) {
         return Ok(());
@@ -433,11 +469,10 @@ pub fn record_turn(
     // The turn's lines go out in one write and one sync: a sync per item cost
     // a 10-tool turn about two dozen fsyncs before Done.
     let mut lines = Vec::new();
-    for value in
-        items
-            .iter()
-            .map(item_json)
-            .chain([usage_json(usage, meter, Some(grokhub_core::now_ms()))])
+    for value in with_thoughts(&id, items, thoughts)
+        .iter()
+        .map(record_json)
+        .chain([usage_json(usage, meter, Some(grokhub_core::now_ms()))])
     {
         serde_json::to_writer(&mut lines, &value).map_err(|err| err.to_string())?;
         lines.push(b'\n');
@@ -458,6 +493,56 @@ pub fn record_turn(
     Ok(())
 }
 
+/// A turn's items as saved: each thought goes before the first tool call or
+/// reply text that came after it, or at the end. The reply's text and the
+/// thoughts lose the values held for chat `id`.
+fn with_thoughts(id: &str, items: &[InputItem], thoughts: &[TurnThought]) -> Vec<Record> {
+    let mut out = Vec::with_capacity(items.len() + thoughts.len());
+    let mut thoughts = thoughts.iter().peekable();
+    let (mut calls, mut texts) = (0, 0);
+    for item in items {
+        let call = matches!(item, InputItem::FunctionCall { .. });
+        let text = matches!(item, InputItem::Message { role, .. } if role == "assistant");
+        if call || text {
+            while let Some(thought) = thoughts.next_if(|t| t.calls <= calls && t.texts <= texts) {
+                out.extend(thought_record(id, &thought.text));
+            }
+        }
+        calls += usize::from(call);
+        texts += usize::from(text);
+        out.push(Record::Item(redact_reply(id, item)));
+    }
+    for thought in thoughts {
+        out.extend(thought_record(id, &thought.text));
+    }
+    out
+}
+
+fn thought_record(id: &str, text: &str) -> Option<Record> {
+    let text = crate::held::redact(id, text);
+    (!text.trim().is_empty()).then_some(Record::Thought(text))
+}
+
+/// An assistant message with the values held for chat `id` redacted; any
+/// other item as it is.
+fn redact_reply(id: &str, item: &InputItem) -> InputItem {
+    match item {
+        InputItem::Message { role, content } if role == "assistant" => InputItem::Message {
+            role: role.clone(),
+            content: content
+                .iter()
+                .map(|part| match part {
+                    ContentPart::InputText(text) => {
+                        ContentPart::InputText(crate::held::redact(id, text))
+                    }
+                    other => other.clone(),
+                })
+                .collect(),
+        },
+        other => other.clone(),
+    }
+}
+
 /// Append a compaction marker and its usage. Resume rebuilds `input` from the marker,
 /// then appends any items recorded after it. A deleted session is not written back.
 pub fn record_compaction(
@@ -468,39 +553,61 @@ pub fn record_compaction(
     usage: &Usage,
     meter: &str,
 ) -> Result<(), String> {
-    write_compaction(id, cwd, model, items, usage, meter, (0, 0))
+    write_compaction(id, cwd, model, items, &[], usage, meter, (0, 0))
 }
 
 /// [`record_compaction`] for a turn that compacted as it ran. `turn` is how
 /// many of `items`, at the end, are the turn's own (saved only through the
 /// compaction, so they take its time), and how many of its asks and replies
 /// the compaction folded away.
+///
+/// The turn's thoughts are saved just before the compaction, with the
+/// values held for the chat redacted, and show before the turn's own items.
+#[allow(clippy::too_many_arguments)]
 pub fn record_compacted_turn(
     id: &str,
     cwd: &str,
     model: &str,
     items: &[InputItem],
     turn: (usize, usize),
+    thoughts: &[TurnThought],
     usage: &Usage,
     meter: &str,
 ) -> Result<(), String> {
     let (own, folded) = turn;
+    let own = own.min(items.len());
+    let start = items.len() - own;
+    let mut items = items.to_vec();
+    for item in &mut items[start..] {
+        *item = redact_reply(id, item);
+    }
+    let thoughts: Vec<Record> = if own == 0 {
+        Vec::new()
+    } else {
+        thoughts
+            .iter()
+            .filter_map(|t| thought_record(id, &t.text))
+            .collect()
+    };
     write_compaction(
         id,
         cwd,
         model,
-        items,
+        &items,
+        &thoughts,
         usage,
         meter,
-        (own.min(items.len()), folded),
+        (own, folded),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_compaction(
     id: &str,
     cwd: &str,
     model: &str,
     items: &[InputItem],
+    before: &[Record],
     usage: &Usage,
     meter: &str,
     turn: (usize, usize),
@@ -516,7 +623,11 @@ fn write_compaction(
     }
     let mut lines = Vec::new();
     let at = Some(grokhub_core::now_ms());
-    for value in [compaction_json(items, turn), usage_json(usage, meter, at)] {
+    let values = before
+        .iter()
+        .map(record_json)
+        .chain([compaction_json(items, turn), usage_json(usage, meter, at)]);
+    for value in values {
         serde_json::to_writer(&mut lines, &value).map_err(|err| err.to_string())?;
         lines.push(b'\n');
     }
@@ -753,12 +864,18 @@ pub fn forget_message(id: &str, what: Forget<'_>) -> Result<Forgotten, String> {
                 None => Some(0),
             };
             match start {
-                Some(start) => visible[start..]
-                    .iter()
-                    .take_while(|(_, item)| user_text(item).is_none())
-                    .filter(|(_, item)| is_reply_item(item))
-                    .map(|(slot, _)| *slot)
-                    .collect(),
+                Some(start) => {
+                    let mut reply: Vec<Slot> = visible[start..]
+                        .iter()
+                        .take_while(|(_, item)| user_text(item).is_none())
+                        .filter(|(_, item)| is_reply_item(item))
+                        .map(|(slot, _)| *slot)
+                        .collect();
+                    let ask = start.checked_sub(1).map(|i| visible[i].0);
+                    let thoughts = reply_thoughts(&info.records, ask, &reply);
+                    reply.extend(thoughts);
+                    reply
+                }
                 None => Vec::new(),
             }
         }
@@ -792,10 +909,38 @@ fn visible_slots(records: &[Record]) -> Vec<(Slot, InputItem)> {
                 }
             }
             Record::Item(item) => out.push((Slot::Top(i), item.clone())),
-            Record::Usage { .. } => {}
+            Record::Usage { .. } | Record::Thought(_) => {}
         }
     }
     out
+}
+
+/// The saved thoughts of the reply whose items are `reply`, after `ask`: the
+/// ones from the ask to the line that closes the turn, or, for a reply a
+/// compaction kept, the ones saved just before that compaction.
+fn reply_thoughts(records: &[Record], ask: Option<Slot>, reply: &[Slot]) -> Vec<Slot> {
+    let at = |slot: Slot| match slot {
+        Slot::Top(i) | Slot::Kept(i, _) => i,
+    };
+    let Some(last) = reply.iter().copied().map(at).max() else {
+        return Vec::new();
+    };
+    let usage = |r: &Record| matches!(r, Record::Usage { .. });
+    let range = if matches!(records.get(last), Some(Record::Compaction { .. })) {
+        let from = records[..last].iter().rposition(usage).map_or(0, |u| u + 1);
+        from..last
+    } else {
+        let from = ask.map_or(0, |slot| at(slot) + 1);
+        let end = records[last..]
+            .iter()
+            .position(usage)
+            .map_or(records.len(), |u| last + u);
+        from..end
+    };
+    range
+        .filter(|&i| matches!(records[i], Record::Thought(_)))
+        .map(Slot::Top)
+        .collect()
 }
 
 fn drop_slots(records: &mut Vec<Record>, doomed: &[Slot]) {
@@ -905,20 +1050,26 @@ pub fn export_markdown(id: &str) -> Result<String, String> {
                     out.push_str(&format!("\n## Usage\n\n{line}\n"));
                 }
             }
-            Record::Compaction { .. } => {}
+            Record::Compaction { .. } | Record::Thought(_) => {}
         }
     }
     Ok(out)
 }
 
 pub fn transcript_pairs(info: &SessionInfo) -> Vec<(String, String)> {
-    pairs_of(info, true)
+    pairs_of(info, true, false)
+}
+
+/// [`transcript_pairs`] with the saved thoughts where they were shown, as
+/// `("thought", text)`: what the chat view replays.
+pub fn shown_pairs(info: &SessionInfo) -> Vec<(String, String)> {
+    pairs_of(info, true, true)
 }
 
 /// [`transcript_pairs`] without the tool calls and their results: only
 /// what was said.
 pub fn message_pairs(info: &SessionInfo) -> Vec<(String, String)> {
-    pairs_of(info, false)
+    pairs_of(info, false, false)
 }
 
 /// A message [`transcript_pairs`] shows as the user's.
@@ -966,6 +1117,7 @@ fn replay(records: &[Record]) -> Replay {
                 });
             }
             Record::Usage { at, .. } => open.drain(..).for_each(|j| visible[j].at = *at),
+            Record::Thought(_) => {}
             Record::Compaction { items, own, folded } => {
                 let at = match records.get(i + 1) {
                     Some(Record::Usage { at, .. }) => *at,
@@ -1137,7 +1289,7 @@ pub fn compacted_messages(info: &SessionInfo) -> usize {
     replay(&info.records).hidden
 }
 
-fn pairs_of(info: &SessionInfo, tools: bool) -> Vec<(String, String)> {
+fn pairs_of(info: &SessionInfo, tools: bool, thoughts: bool) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
     for record in &visible_records(&info.records) {
         match record {
@@ -1161,6 +1313,7 @@ fn pairs_of(info: &SessionInfo, tools: bool) -> Vec<(String, String)> {
             Record::Item(InputItem::FunctionCallOutput { output, .. }) if tools => {
                 pairs.push(("assistant".into(), format!("Tool result\n{output}")));
             }
+            Record::Thought(text) if thoughts => pairs.push(("thought".into(), text.clone())),
             _ => {}
         }
     }
@@ -1297,12 +1450,7 @@ fn write_session(info: &SessionInfo) -> Result<(), String> {
         }),
     )?;
     for record in &info.records {
-        let value = match record {
-            Record::Item(item) => item_json(item),
-            Record::Usage { usage, meter, at } => usage_json(usage, meter, *at),
-            Record::Compaction { items, own, folded } => compaction_json(items, (*own, *folded)),
-        };
-        push_line(&mut bytes, &value)?;
+        push_line(&mut bytes, &record_json(record))?;
     }
     replace_file(&path, &bytes)
 }
@@ -1518,6 +1666,7 @@ fn parse_record(value: &Value) -> Option<Record> {
             let folded = count("folded");
             Some(Record::Compaction { items, own, folded })
         }
+        THOUGHT_RECORD => Some(Record::Thought(string_field(value, "text"))),
         _ => None,
     }
 }
@@ -1527,7 +1676,7 @@ fn replay_items(records: &[Record]) -> Vec<InputItem> {
     for record in records {
         match record {
             Record::Item(item) => items.push(item.clone()),
-            Record::Usage { .. } => {}
+            Record::Usage { .. } | Record::Thought(_) => {}
             Record::Compaction { items: rebuilt, .. } => items = rebuilt.clone(),
         }
     }
@@ -1539,9 +1688,27 @@ fn visible_records(records: &[Record]) -> Vec<Record> {
     let mut out = Vec::new();
     for record in records {
         match record {
-            Record::Compaction { items, .. } => {
+            Record::Compaction { items, own, .. } => {
+                // The compacting turn's thoughts, saved just before it.
+                let since = out
+                    .iter()
+                    .rposition(|entry| matches!(entry, Record::Usage { .. }))
+                    .map_or(0, |at| at + 1);
+                let thoughts: Vec<Record> = if *own == 0 {
+                    Vec::new()
+                } else {
+                    out[since..]
+                        .iter()
+                        .filter(|entry| matches!(entry, Record::Thought(_)))
+                        .cloned()
+                        .collect()
+                };
                 out.retain(|entry| matches!(entry, Record::Usage { .. }));
-                for item in items {
+                let first_own = items.len() - own;
+                for (j, item) in items.iter().enumerate() {
+                    if j == first_own {
+                        out.extend(thoughts.iter().cloned());
+                    }
                     out.push(Record::Item(item.clone()));
                 }
             }
@@ -1565,6 +1732,15 @@ fn header_json(header: &Header) -> Value {
         value["forkedFrom"] = json!(header.forked_from);
     }
     value
+}
+
+fn record_json(record: &Record) -> Value {
+    match record {
+        Record::Item(item) => item_json(item),
+        Record::Usage { usage, meter, at } => usage_json(usage, meter, *at),
+        Record::Compaction { items, own, folded } => compaction_json(items, (*own, *folded)),
+        Record::Thought(text) => json!({"type": THOUGHT_RECORD, "text": text}),
+    }
 }
 
 fn item_json(item: &InputItem) -> Value {
@@ -1945,7 +2121,7 @@ mod tests {
         let third = [user("now the roof"), assistant("Roof done.")];
         let summary = summary_of("Dock and bar.");
         let kept = [summary, third[0].clone(), third[1].clone()];
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, (2, 0), &usage, "").unwrap();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, (2, 0), &[], &usage, "").unwrap();
         let after_third = grokhub_core::now_ms();
         let info = load_session(id).unwrap();
         let times = user_turn_times(&info);
@@ -2054,6 +2230,7 @@ mod tests {
             "grok-4.7",
             &kept,
             (2, 0),
+            &[],
             &Usage::default(),
             "",
         )
@@ -2076,6 +2253,222 @@ mod tests {
         assert_eq!(forget_message(id, what).unwrap(), Forgotten::Removed);
         let after = user_turn_times(&load_session(id).unwrap());
         assert_eq!(after, times, "{after:?}");
+    }
+
+    fn thought(calls: usize, texts: usize, text: &str) -> TurnThought {
+        TurnThought {
+            calls,
+            texts,
+            text: text.into(),
+        }
+    }
+
+    fn read_call(id: &str) -> [InputItem; 2] {
+        [
+            InputItem::FunctionCall {
+                call_id: id.into(),
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+            InputItem::FunctionCallOutput {
+                call_id: id.into(),
+                output: "fn main() {}".into(),
+            },
+        ]
+    }
+
+    fn shown(id: &str) -> Vec<(String, String)> {
+        shown_pairs(&load_session(id).unwrap())
+            .into_iter()
+            .map(|(role, text)| (role, text.lines().next().unwrap_or("").to_string()))
+            .collect()
+    }
+
+    fn pairs(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+        rows.iter()
+            .map(|(role, text)| (role.to_string(), text.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_turns_thoughts_are_saved_where_they_were_shown_and_never_go_to_the_model() {
+        let (_dir, _guard) = isolated("thoughts-saved");
+        let id = "native-thoughts-saved";
+        let [call, output] = read_call("c1");
+        let items = [
+            user("fix the dock"),
+            assistant("Checking."),
+            call,
+            output,
+            assistant("Fixed."),
+        ];
+        let thoughts = [
+            thought(0, 0, "Read main.rs first."),
+            thought(1, 1, "It builds."),
+        ];
+        record_turn_with(
+            id,
+            "/work",
+            "grok-4.7",
+            &items,
+            &thoughts,
+            &Usage::default(),
+            "",
+            "fix the dock",
+        )
+        .unwrap();
+        let info = load_session(id).unwrap();
+        assert_eq!(info.input(), items.to_vec(), "thoughts are not model input");
+        assert_eq!(
+            shown(id),
+            pairs(&[
+                ("user", "fix the dock"),
+                ("thought", "Read main.rs first."),
+                ("assistant", "Checking."),
+                ("assistant", "Tool read_file"),
+                ("assistant", "Tool result"),
+                ("thought", "It builds."),
+                ("assistant", "Fixed."),
+            ])
+        );
+        assert_eq!(
+            transcript_pairs(&info).len(),
+            5,
+            "no thoughts in the plain transcript"
+        );
+        assert!(!export_markdown(id).unwrap().contains("Read main.rs"));
+    }
+
+    #[test]
+    fn a_held_value_is_redacted_from_the_saved_reply_and_thoughts() {
+        let (_dir, _guard) = isolated("thoughts-held");
+        let id = "native-thoughts-held";
+        let token = "sk-abcdefghijklmnopqrstuv";
+        crate::held::hold_secret(id, token);
+        let items = [
+            user("connect github"),
+            assistant(&format!("Saved {token}.")),
+        ];
+        let thoughts = [
+            thought(0, 0, &format!("They gave {token}.")),
+            thought(3, 1, "  "),
+        ];
+        record_turn_with(
+            id,
+            "/work",
+            "grok-4.7",
+            &items,
+            &thoughts,
+            &Usage::default(),
+            "",
+            "connect github",
+        )
+        .unwrap();
+        assert_eq!(
+            shown(id),
+            pairs(&[
+                ("user", "connect github"),
+                ("thought", "They gave [redacted]."),
+                ("assistant", "Saved [redacted]."),
+            ])
+        );
+        let file = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        assert!(!file.contains(token), "{file}");
+    }
+
+    #[test]
+    fn deleting_a_reply_deletes_its_thoughts_and_keeps_the_next_turns() {
+        let (_dir, _guard) = isolated("thoughts-forget");
+        let id = "native-thoughts-forget";
+        let [call, output] = read_call("c1");
+        for (items, thoughts) in [
+            (
+                vec![user("fix the dock"), call, output, assistant("Fixed.")],
+                vec![thought(0, 0, "Read it."), thought(1, 0, "Done reading.")],
+            ),
+            (
+                vec![user("and the bar"), assistant("Bar done.")],
+                vec![thought(0, 0, "The bar is next.")],
+            ),
+        ] {
+            record_turn_with(
+                id,
+                "/work",
+                "grok-4.7",
+                &items,
+                &thoughts,
+                &Usage::default(),
+                "",
+                "",
+            )
+            .unwrap();
+        }
+        let what = Forget::Reply {
+            ask: Some(("fix the dock", 0)),
+        };
+        assert_eq!(forget_message(id, what).unwrap(), Forgotten::Removed);
+        assert_eq!(
+            shown(id),
+            pairs(&[
+                ("user", "fix the dock"),
+                ("user", "and the bar"),
+                ("thought", "The bar is next."),
+                ("assistant", "Bar done."),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_compacting_turns_thoughts_show_before_its_own_items() {
+        let (_dir, _guard) = isolated("thoughts-compacted");
+        let id = "native-thoughts-compacted";
+        let first = [user("fix the dock"), assistant("On it.")];
+        record_turn_with(
+            id,
+            "/work",
+            "grok-4.7",
+            &first,
+            &[thought(0, 0, "An old thought.")],
+            &Usage::default(),
+            "",
+            "",
+        )
+        .unwrap();
+        let kept = [
+            summary_of("Dock."),
+            user("now the roof"),
+            assistant("Roof done."),
+        ];
+        let thoughts = [thought(0, 0, "Roof first."), thought(2, 1, "Roof checked.")];
+        record_compacted_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &kept,
+            (2, 0),
+            &thoughts,
+            &Usage::default(),
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            shown(id),
+            pairs(&[
+                ("user", "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation."),
+                ("thought", "Roof first."),
+                ("thought", "Roof checked."),
+                ("user", "now the roof"),
+                ("assistant", "Roof done."),
+            ])
+        );
+        assert_eq!(load_session(id).unwrap().input(), kept.to_vec());
+        let what = Forget::Reply {
+            ask: Some(("now the roof", 0)),
+        };
+        assert_eq!(forget_message(id, what).unwrap(), Forgotten::Removed);
+        let after = shown(id);
+        assert_eq!(after.len(), 2, "{after:?}");
+        assert_eq!(after[1], ("user".to_string(), "now the roof".to_string()));
     }
 
     #[test]
@@ -2109,6 +2502,7 @@ mod tests {
             "grok-4.7",
             &kept,
             (2, 0),
+            &[],
             &Usage::default(),
             "",
         )
@@ -2169,6 +2563,7 @@ mod tests {
             "grok-4.7",
             &kept,
             (2, 1),
+            &[],
             &Usage::default(),
             "",
         )
@@ -2258,6 +2653,7 @@ mod tests {
             "grok-4.7",
             &kept,
             (3, 0),
+            &[],
             &Usage::default(),
             "",
         )
@@ -2291,6 +2687,7 @@ mod tests {
             "grok-4.7",
             &kept,
             (2, 0),
+            &[],
             &Usage::default(),
             "",
         )
@@ -2351,6 +2748,7 @@ mod tests {
             "grok-4.7",
             &kept,
             (2, 0),
+            &[],
             &Usage::default(),
             "",
         )
@@ -2405,6 +2803,7 @@ mod tests {
             "grok-4.7",
             &kept,
             (2, 0),
+            &[],
             &Usage::default(),
             "",
         )

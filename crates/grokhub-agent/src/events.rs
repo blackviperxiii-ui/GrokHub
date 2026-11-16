@@ -561,10 +561,12 @@ impl NativeEngine {
         let _origin = crate::harness::OriginScope::enter(self.origin);
         let mut meter_used = crate::compact::estimate_input_tokens(&self.history);
         let mut meter_limit = self.context_length;
+        let mut shown = crate::held::Shown::new(&session);
         let out = run_loop(&input, &mut self.history, text, image, &mut |ev| match ev {
             LoopEvent::Meter { used, limit } => {
                 meter_used = used;
                 meter_limit = limit;
+                shown.end_step();
             }
             LoopEvent::Compact {
                 started,
@@ -592,11 +594,18 @@ impl NativeEngine {
                 ));
             }
             other => {
-                if let Some(acp) = to_acp(other, kind, &session, meter_used, meter_limit) {
-                    emit(acp);
+                for ev in shown.pass(other) {
+                    if let Some(acp) = to_acp(ev, kind, &session, meter_used, meter_limit) {
+                        emit(acp);
+                    }
                 }
             }
         });
+        for ev in shown.finish() {
+            if let Some(acp) = to_acp(ev, kind, &session, meter_used, meter_limit) {
+                emit(acp);
+            }
+        }
         self.usage = out.usage.clone();
         let delta = self.usage.saturating_delta(&before_usage);
         if out.compacted {
@@ -610,6 +619,7 @@ impl NativeEngine {
                 &model,
                 &self.history,
                 (own, kept.folded),
+                &shown.thoughts,
                 &delta,
                 meter,
             );
@@ -618,8 +628,16 @@ impl NativeEngine {
             if let Some(sent) = &tidied {
                 crate::route::cleanup::restore_typed(&mut fresh, sent, typed);
             }
-            let _ =
-                crate::session::record_turn(&session, &cwd, &model, &fresh, &delta, meter, typed);
+            let _ = crate::session::record_turn_with(
+                &session,
+                &cwd,
+                &model,
+                &fresh,
+                &shown.thoughts,
+                &delta,
+                meter,
+                typed,
+            );
         }
         let stop = match out.stop {
             StopReason::EndTurn => "end_turn".to_string(),
@@ -1444,6 +1462,17 @@ mod tests {
         assert!(events
             .iter()
             .any(|ev| matches!(ev, AcpEvent::Text(t) if t == "hello")));
+        let saved = crate::session::shown_pairs(&crate::session::load_session("c").unwrap());
+        let said = |role: &str, text: &str| (role.to_string(), text.to_string());
+        assert_eq!(
+            saved,
+            vec![
+                said("user", "hi"),
+                said("thought", "think"),
+                said("assistant", "hello")
+            ],
+            "the thought is saved above the reply"
+        );
         assert!(events.iter().any(|ev| matches!(
             ev,
             AcpEvent::Usage(u) if u.meter == "SuperGrok pool" && u.input_tokens == 3 && u.cost_in_usd_ticks == 9

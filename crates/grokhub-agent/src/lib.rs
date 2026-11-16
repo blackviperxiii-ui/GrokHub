@@ -24,6 +24,7 @@ mod events;
 mod file_checkpoint;
 mod gate;
 pub mod harness;
+mod held;
 mod hooks;
 pub mod identity;
 mod image_budget;
@@ -113,6 +114,7 @@ pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNot
 pub use harness::{
     AccessMode, ComputerUseBackend, GateOutcome, HardClass, APPROVAL_GATE_VIOLATION,
 };
+pub use held::{held_secrets, hold_secret};
 pub use hooks::{
     discover_hooks, folder_trusted, hooks_by_trust, on_subagent_start, on_subagent_stop,
     set_folder_trust, HookInfo, HookOrigin, HookRun,
@@ -162,9 +164,9 @@ pub use session::{
     attach_run, cancel_session, compacted_messages, delete_forks_of, delete_session,
     export_markdown, forget_message, fork_session, format_cost_ticks, history_generation,
     list_sessions, load_session, local_title, merge_history, message_pairs, record_compaction,
-    record_turn, rename_session, resume_input, session_file, session_intact, transcript_pairs,
-    usage_label, user_lines, Forget, Forgotten, HistoryRow, RunGuard, SessionInfo, UserKind,
-    UserLine, FORGET_BUSY,
+    record_turn, rename_session, resume_input, session_file, session_intact, shown_pairs,
+    transcript_pairs, usage_label, user_lines, Forget, Forgotten, HistoryRow, RunGuard,
+    SessionInfo, TurnThought, UserKind, UserLine, FORGET_BUSY,
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{

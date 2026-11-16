@@ -468,7 +468,7 @@ mod tests {
         let mut wait = |_id: &str| {
             crate::mcp::ElicitAnswer::Accept(serde_json::json!({ "token": FAKE_TOKEN }))
         };
-        let out = crate::mcp::with_elicit(true, &mut emit, &mut wait, || {
+        let out = crate::mcp::with_elicit(true, "conn-token", &mut emit, &mut wait, || {
             ctx_run(&root, "connection_add", args)
         });
         assert!(!out.failed, "{}", out.text);

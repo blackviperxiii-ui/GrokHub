@@ -166,7 +166,7 @@ fn parts(lines: &[Line], users: &[UserLine]) -> Vec<Part> {
                 None => Part::Ask(None),
             },
             Role::Assistant => Part::Reply,
-            Role::Tools => Part::Tools,
+            Role::Tools | Role::Thought => Part::Tools,
         })
         .collect()
 }
@@ -228,6 +228,7 @@ fn turn_hash(lines: &[Line]) -> String {
             Role::User => "u",
             Role::Assistant => "a",
             Role::Tools => "t",
+            Role::Thought => "h",
         };
         for b in role.bytes().chain([0]).chain(line.text.bytes()).chain([0]) {
             h ^= u64::from(b);

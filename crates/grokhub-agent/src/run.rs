@@ -2622,9 +2622,10 @@ fn dispatch_tool_call(
     };
     let mut wait_card = |eid: &str| crate::mcp::wait_elicit(&session, eid, &cancel, &halted);
     let job_set = bound_job_tool_set(input.conversation_id);
-    let output = crate::mcp::with_elicit(attended, &mut emit_card, &mut wait_card, || {
-        tools::dispatch_for_job(&ctx, &call.name, &call.arguments, job_set.as_ref())
-    });
+    let output =
+        crate::mcp::with_elicit(attended, &session, &mut emit_card, &mut wait_card, || {
+            tools::dispatch_for_job(&ctx, &call.name, &call.arguments, job_set.as_ref())
+        });
     (output, Usage::default())
 }
 

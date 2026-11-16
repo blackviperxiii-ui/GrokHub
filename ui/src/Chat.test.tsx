@@ -2114,6 +2114,26 @@ describe("Chat history", () => {
     ]);
   });
 
+  it("turns a saved thought into a thought above the reply, open or folded as the chat starts", async () => {
+    const thought: Transcript = {
+      ...SAVED,
+      lines: [SAVED.lines[0], SAVED.lines[1], { role: "thought", text: "Blue suits a small room." }, SAVED.lines[2]],
+    };
+    expect(itemsFrom(thought)).toEqual([
+      { kind: "user", text: "pick a paint colour" },
+      { kind: "tools", text: "read_file, web_search" },
+      { kind: "thought", text: "Blue suits a small room." },
+      { kind: "assistant", text: "Try **blue**.", streaming: false },
+    ]);
+    api.getStartChat.mockResolvedValue(thought);
+    render(<Chat onOpenSettings={() => {}} />);
+    const card = (await screen.findByText("Blue suits a small room.")).closest('[data-role="thought"]');
+    const reply = screen.getByText("blue").closest('[data-role="assistant"]');
+    expect(card && reply && card.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Collapse" }));
+    expect(screen.queryByText("Blue suits a small room.")).toBeNull();
+  });
+
   it("reopens the last chat on mount, and the next message carries it on", async () => {
     api.getStartChat.mockResolvedValue(SAVED);
     api.sendChat.mockResolvedValue("end_turn");

@@ -231,7 +231,7 @@ fn snapshot(config_dir: &Path, hub: &HubPeers) -> Result<grokhub_core::HubSnapsh
                     let role = match line.role {
                         crate::history::Role::User => "user",
                         crate::history::Role::Assistant => "assistant",
-                        crate::history::Role::Tools => return None,
+                        crate::history::Role::Tools | crate::history::Role::Thought => return None,
                     };
                     Some(json!({ "role": role, "content": line.text }))
                 })
