@@ -109,7 +109,7 @@ fi
 cd "$ROOT"
 if [[ "$SWITCH" -eq 0 ]]; then
   # The remembered channel must match the checkout, or the build is labeled
-  # for one channel while it holds the other and Update then refuses the clone.
+  # for one channel while it holds the other.
   # Run this before the shell dep check so a wrong-channel clone still gets the
   # channel refusal (not a webkit/npm missing-deps message).
   CUR="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"

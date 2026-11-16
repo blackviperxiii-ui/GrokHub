@@ -1,9 +1,10 @@
 //! Signed release updates: pick the channel's GitHub release and check a
 //! download before anything is installed. `SHA256SUMS`
 //! lists every asset's SHA-256 and `SHA256SUMS.minisig` signs that list
-//! (see `.github/workflows/release.yml`). With a public key shipped, an
-//! asset installs only when the signature verifies with that key and its
-//! hash matches; anything else is refused with a named reason. No HTTP here.
+//! (see `.github/workflows/release.yml`). With a public key shipped, a
+//! download (the model catalog today) is used only when the signature
+//! verifies with that key and its hash matches; anything else is refused with
+//! a named reason. No HTTP here.
 
 use sha2::{Digest, Sha256};
 
@@ -170,37 +171,24 @@ pub fn download_url_ok(url: &str, name: &str) -> bool {
     from_repo && url.ends_with(&format!("/{name}")) && !name.contains('/') && !name.contains("..")
 }
 
-/// Why an update was not installed.
+/// Why a signed download was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
-    NoRelease,
-    NoAsset,
-    BadUrl,
-    NoSums,
     NoSignature,
     BadSignature,
     WrongKey,
     NotListed,
     HashMismatch,
-    Download(String),
 }
 
 impl Refusal {
     pub fn reason(&self) -> String {
         match self {
-            Self::NoRelease => "no release on this channel yet".into(),
-            Self::NoAsset => "the release has no build for this computer".into(),
-            Self::BadUrl => format!(
-                "the download link isn't from {product}'s GitHub releases",
-                product = crate::brand::product_name()
-            ),
-            Self::NoSums => "the release has no SHA256SUMS".into(),
             Self::NoSignature => "the release isn't signed".into(),
             Self::BadSignature => "signature didn't verify".into(),
             Self::WrongKey => "it was signed with a different key".into(),
             Self::NotListed => "the download isn't listed in SHA256SUMS".into(),
             Self::HashMismatch => "the download's checksum didn't match".into(),
-            Self::Download(e) => format!("download failed ({e})"),
         }
     }
 }

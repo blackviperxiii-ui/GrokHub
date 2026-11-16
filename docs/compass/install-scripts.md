@@ -19,6 +19,7 @@
 - A remembered channel that does not match the checkout: `install.sh` refuses so a build is not labeled for the wrong channel.
 ## What depends on it
 - The README install docs and `grokhub-hub --update`, which tells a source install to run `git pull` then `scripts/install.sh --user`.
+- The desktop app's Updates page: it shares the `channel` receipt, and its note for a build that can't update itself reads the clone path from the `source` receipt (keep both files' names and one-line format).
 ## Non-obvious
 - The `--dry-run` line (`channel=… branch=… switch=… prefix=… receipt=…`) is asserted literally by `install_sh_parses_channel_flags_and_follows_the_receipt`, which runs the real script on unix.
 - No `--channel`: the receipt wins, missing means stable (`main`). `--channel` refuses a dirty tree (except a lone Cargo.lock), fetches `origin/$BRANCH` by refspec, `checkout -B --track` when the local branch is missing, and otherwise fast-forwards only (refuses when local is ahead).
