@@ -12,7 +12,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { Fleet, machineLine, NO_CLAUDE, NO_GROK, NO_OTHERS, resetsIn, ROLLING_NOTE, seenLine, tokens, tokensLine, usedOf } from "./Fleet";
+import { Fleet, machineLine, NO_CLAUDE, NO_GROK, NO_OTHERS, PCT_ONLY, pctValue, resetsIn, ROLLING_NOTE, seenLine, tokens, tokensLine, usedOf } from "./Fleet";
 
 const MINUTE = 60_000;
 const NOW = Date.now();
@@ -65,6 +65,8 @@ describe("Fleet lines", () => {
   it("shortens token counts", () => {
     expect(tokens(950)).toBe("950");
     expect(tokens(340_000)).toBe("340k");
+    expect(tokens(999_499)).toBe("999k");
+    expect(tokens(999_600)).toBe("1.0M");
     expect(tokens(2_101_200)).toBe("2.1M");
     expect(tokensLine(TOKENS)).toBe("2.1M in · 340k out");
   });
@@ -84,6 +86,15 @@ describe("Fleet lines", () => {
     expect(seenLine(DESK, NOW)).toBe("This computer");
     expect(seenLine(LAPTOP, NOW)).toBe("Asleep · last seen 20 min ago");
     expect(seenLine({ ...LAPTOP, online: true, atMs: NOW - MINUTE }, NOW)).toBe("Online · 1 min ago");
+  });
+
+  it("reads a percent field: empty clears, over 100 caps, anything else is refused", () => {
+    expect(pctValue("")).toBeNull();
+    expect(pctValue(" 40% ")).toBe(40);
+    expect(pctValue("140")).toBe(100);
+    expect(pctValue("forty")).toBeUndefined();
+    expect(pctValue("4o")).toBeUndefined();
+    expect(pctValue("-5")).toBeUndefined();
   });
 
   it("works out the part of a limit used", () => {
@@ -156,6 +167,29 @@ describe("Fleet page", () => {
     expect(await within(cursor).findByText("You filled this in just now.")).toBeInTheDocument();
     expect(within(cursor).getByRole("progressbar", { name: "Cursor period used" })).toHaveAttribute("aria-valuenow", "100");
     expect(within(cursor).getByRole("button", { name: "Update" })).toBeInTheDocument();
+  });
+
+  it("keeps the form and what was typed when a save fails or a percent isn't a number", async () => {
+    const saved: FleetRow = { ...EMPTY_ROWS[0], windowPct: 40, updatedAt: NOW - 5 * MINUTE };
+    api.getFleetRows.mockResolvedValue([saved, EMPTY_ROWS[1]]);
+    api.setFleetRow.mockRejectedValue("No space left on device");
+    render(<Fleet />);
+    const cursor = await screen.findByLabelText("Cursor");
+    await userEvent.click(within(cursor).getByRole("button", { name: "Update" }));
+    const field = within(cursor).getByLabelText("Short window % used");
+    await userEvent.clear(field);
+    await userEvent.type(field, "forty");
+    await userEvent.click(within(cursor).getByRole("button", { name: "Save" }));
+    expect(within(cursor).getByText(PCT_ONLY)).toBeInTheDocument();
+    expect(api.setFleetRow).not.toHaveBeenCalled();
+
+    await userEvent.clear(field);
+    await userEvent.type(field, "77");
+    await userEvent.click(within(cursor).getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("No space left on device");
+    expect(api.setFleetRow).toHaveBeenCalledTimes(1);
+    expect(within(cursor).getByLabelText("Short window % used")).toHaveValue("77");
+    expect(within(cursor).queryByText(PCT_ONLY)).not.toBeInTheDocument();
   });
 
   it("refreshes on Refresh and shows a failure without dropping what it had", async () => {

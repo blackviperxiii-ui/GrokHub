@@ -186,6 +186,8 @@ pub fn manual_rows(config_dir: &std::path::Path) -> Vec<ManualRow> {
         .collect()
 }
 
+static ROWS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Save `row` at `now`; percents over 100 are kept as 100.
 pub fn set_manual_row(
     config_dir: &std::path::Path,
@@ -195,6 +197,8 @@ pub fn set_manual_row(
     if !MANUAL_ROWS.contains(&row.id.as_str()) {
         return Err(format!("There's no {} row to fill in.", row.id));
     }
+    // One save at a time, so two cards saved together can't drop each other's row.
+    let _one = ROWS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let row = ManualRow {
         window_pct: row.window_pct.map(|p| p.min(100)),
         period_pct: row.period_pct.map(|p| p.min(100)),
@@ -207,7 +211,13 @@ pub fn set_manual_row(
         .collect();
     let text = serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
-    std::fs::write(config_dir.join(ROWS_FILE), text).map_err(|e| e.to_string())?;
+    // Write beside the file and rename over it, so a read never sees half a file.
+    let tmp = config_dir.join(format!("{ROWS_FILE}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, config_dir.join(ROWS_FILE)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })?;
     Ok(rows)
 }
 

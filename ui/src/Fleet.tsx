@@ -32,8 +32,9 @@ const ROW_FROM: Record<FleetRow["id"], string> = {
 
 /** "1.2M", "340k", "950". */
 export function tokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+  const k = Math.round(n / 1_000);
+  if (k >= 1_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${k}k`;
   return String(n);
 }
 
@@ -176,33 +177,43 @@ function dayMs(value: string): number | null {
   return new Date(y, m - 1, d).getTime();
 }
 
-function pctValue(text: string): number | null {
-  const n = Number.parseInt(text, 10);
-  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
+/** A percent field: empty clears it, whole numbers over 100 are kept as 100,
+ * and anything else is refused (undefined) so a typo never erases a saved value. */
+export function pctValue(text: string): number | null | undefined {
+  const t = text.trim().replace(/%$/, "").trim();
+  if (!t) return null;
+  if (!/^\d+$/.test(t)) return undefined;
+  return Math.min(100, Number(t));
 }
 
-function ManualCard({ row, now, onSave }: { row: FleetRow; now: number; onSave: (row: FleetRow) => Promise<void> }) {
+export const PCT_ONLY = "Percent used is a whole number from 0 to 100, or empty.";
+
+function ManualCard({ row, now, onSave }: { row: FleetRow; now: number; onSave: (row: FleetRow) => Promise<boolean> }) {
   const name = ROW_NAMES[row.id];
   const [editing, setEditing] = useState(false);
   const [windowPct, setWindowPct] = useState("");
   const [periodPct, setPeriodPct] = useState("");
   const [periodDay, setPeriodDay] = useState("");
+  const [bad, setBad] = useState(false);
 
   function edit() {
     setWindowPct(row.windowPct === null ? "" : String(row.windowPct));
     setPeriodPct(row.periodPct === null ? "" : String(row.periodPct));
     setPeriodDay(dayValue(row.periodResetsAtMs));
+    setBad(false);
     setEditing(true);
   }
 
   async function save() {
-    await onSave({
-      ...row,
-      windowPct: pctValue(windowPct),
-      periodPct: pctValue(periodPct),
-      periodResetsAtMs: dayMs(periodDay),
-    });
-    setEditing(false);
+    const shortPct = pctValue(windowPct);
+    const longPct = pctValue(periodPct);
+    if (shortPct === undefined || longPct === undefined) {
+      setBad(true);
+      return;
+    }
+    setBad(false);
+    // Stay open on a failed save, so what was typed is still there to try again.
+    if (await onSave({ ...row, windowPct: shortPct, periodPct: longPct, periodResetsAtMs: dayMs(periodDay) })) setEditing(false);
   }
 
   const filled = row.updatedAt > 0;
@@ -237,6 +248,7 @@ function ManualCard({ row, now, onSave }: { row: FleetRow; now: number; onSave: 
             Period resets on
             <input type="date" value={periodDay} onChange={(e) => setPeriodDay(e.target.value)} />
           </label>
+          {bad && <p className="status status--error">{PCT_ONLY}</p>}
         </>
       )}
       <div className="card-detail-line">{ROW_FROM[row.id]}</div>
@@ -309,13 +321,15 @@ export function Fleet({ shown = true }: { shown?: boolean }) {
     }
   }
 
-  async function save(row: FleetRow) {
+  async function save(row: FleetRow): Promise<boolean> {
     try {
       setRows(await setFleetRow(row));
       setNow(Date.now());
       clear();
+      return true;
     } catch (err) {
       fail(err);
+      return false;
     }
   }
 
