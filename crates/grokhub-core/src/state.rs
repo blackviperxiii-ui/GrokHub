@@ -230,7 +230,9 @@ impl HubState {
         n
     }
 
-    /// `/send` queues work for this computer. `drain_inbox` claims it when chat is free.
+    /// Queues a task on this computer's inbox. Kept for tests and local-hub
+    /// helpers; desktop `/send` does not call this — it starts a read-only
+    /// background run (`src-tauri/src/bg_runs.rs`).
     pub fn enqueue_local(&mut self, title: &str, prompt: &str) -> Result<HubTask, String> {
         let prompt = prompt.trim();
         if prompt.is_empty() {
