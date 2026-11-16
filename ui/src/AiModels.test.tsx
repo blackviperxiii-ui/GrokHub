@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
   stopOpenRouterSignIn: vi.fn<() => Promise<void>>(),
   openRouterSignInStatus: vi.fn<() => Promise<OpenRouterSignInStatus>>(),
   claudePlanStatus: vi.fn<() => Promise<ClaudePlan>>(),
+  claudePlanChats: vi.fn<() => Promise<{ allowed: boolean; chats: string[] }>>(),
 }));
 vi.mock("./api", () => api);
 
@@ -102,6 +103,7 @@ beforeEach(() => {
   api.getAiModels.mockResolvedValue(EMPTY);
   api.stopOpenRouterSignIn.mockResolvedValue(undefined);
   api.claudePlanStatus.mockResolvedValue({ state: "missing" });
+  api.claudePlanChats.mockResolvedValue({ allowed: false, chats: [] });
   api.openRouterSignInStatus.mockResolvedValue({ waiting: null, card: null });
 });
 

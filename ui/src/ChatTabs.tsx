@@ -2,7 +2,7 @@
 // (soft), Clear (asks first), and restore menus for Archived / Recently deleted.
 // Main sits first and only offers Clear: it can't be archived, deleted,
 // renamed or unpinned.
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import {
   chatTabArchive,
   chatTabPin,
@@ -11,10 +11,13 @@ import {
   chatTabSoftDelete,
   chatTabSwitch,
   chatTabUnarchive,
+  claudePlanChats,
   listArchivedChats,
   listChatTabs,
   listDeletedChats,
+  setClaudePlanChat,
   type ChatTab,
+  type ClaudeChats,
 } from "./api";
 import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { ClearChatDialog } from "./ClearChat";
@@ -23,6 +26,7 @@ import { useDismiss } from "./ui";
 export const CHAT_TABS_LABEL = "Chat tabs";
 export const NEW_CHAT_TAB = "New chat";
 export const MAIN_TAB_HINT = "Main: always here. Clear empties it.";
+export const ON_CLAUDE_PLAN = "Run on Claude (your plan)";
 
 function shortTitle(title: string): string {
   const words = title.trim().split(/\s+/).filter(Boolean).slice(0, 4);
@@ -289,7 +293,9 @@ export function ChatTabs({
             isMain(menu.id) ||
             (menu.id === activeId && shown.length <= 1 && draftEmpty)
           }
-        />
+        >
+          <PlanSwitch id={menu.id} onClose={() => setMenu(null)} onError={onError} />
+        </TabContextMenu>
       )}
 
       {menu?.kind === "tools" && (
@@ -353,7 +359,9 @@ function TabContextMenu({
   onDelete,
   onClear,
   clearOnly,
+  children,
 }: {
+  children?: ReactNode;
   at: { x: number; y: number };
   onClose: () => void;
   onPin: () => void;
@@ -432,7 +440,34 @@ function TabContextMenu({
           </button>
         </>
       )}
+      {children}
     </div>
+  );
+}
+
+/** A chat's switch to the user's Claude plan; shown once Settings allowed it. */
+function PlanSwitch({ id, onClose, onError }: { id: string; onClose: () => void; onError: (note: string) => void }) {
+  const [chats, setChats] = useState<ClaudeChats | null>(null);
+
+  useEffect(() => {
+    // Where the command isn't there (the web page, a phone), the switch stays hidden.
+    claudePlanChats().then(setChats, () => setChats(null));
+  }, []);
+
+  if (!chats?.allowed) return null;
+  const on = chats.chats.includes(id);
+  return (
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={on}
+      onClick={() => {
+        onClose();
+        setClaudePlanChat(id, !on).catch((err: unknown) => onError(String(err)));
+      }}
+    >
+      {ON_CLAUDE_PLAN}
+    </button>
   );
 }
 

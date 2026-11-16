@@ -55,6 +55,11 @@ impl ClaudePlanEngine {
         self.workspace = workspace;
     }
 
+    /// Where `claude` is now, found again for each turn.
+    pub fn set_cli(&mut self, cli: PathBuf) {
+        self.cli = cli;
+    }
+
     /// The command line for one turn. Permission prompts go nowhere, so a
     /// tool outside `allowed` is denied rather than waiting on a question
     /// nobody sees; the permission mode is named so a `bypassPermissions`

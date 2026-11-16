@@ -92,10 +92,17 @@ so it isn't used.
 ## Choosing it
 
 There's no per-chat model picker today. Settings → AI models gets a
-**Claude (your plan)** row showing installed, signed in and the billing kind,
-with Allow for chats (the same consent card the other providers use). Once
-allowed, a chat can be switched to it from the chat's menu, and the choice is
-kept per chat. Auto routing never picks it on its own.
+**Claude (your plan)** row showing installed, signed in and the billing kind.
+While Claude Code is signed in with a plan, **Allow for chats** asks first
+(what runs, where, and that it counts against the plan). Once allowed, a
+chat's tab menu has **Run on Claude (your plan)**, and the choice is kept per
+chat in `{config}/claude-plan-chats.json`. **Stop using for chats** switches
+every chat back. Auto routing never picks it on its own.
+
+Each turn checks `claude auth status` again (about a quarter of a second). A
+chat on the plan sends nothing while Claude Code is signed out or signed in
+another way, such as an API key, so it never bills somewhere the user didn't
+allow.
 
 ## Usage
 
@@ -127,9 +134,10 @@ Each step is its own PR into `beta`.
    above.
 4. **Engine.** `ClaudePlanEngine` behind an engine choice in the chat worker,
    read-only tools, the consent card and the per-chat switch. Proof: a real
-   turn and a read-only tool task on Linux.
-5. **Resume and history.** `--session-id` and `--resume`, and turns saved to
-   the chat's history like native turns.
+   turn and a read-only tool task on Linux. The session flags from step 5
+   ship here too, since a second message would otherwise start over.
+5. **History.** Turns saved to the chat's history like native turns, so a
+   chat on the plan survives a restart and shows in History.
 6. **Usage.** The per-turn usage line and the plan headroom.
 7. **Live approvals.** The MCP approval server.
 
