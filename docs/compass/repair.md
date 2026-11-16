@@ -6,7 +6,7 @@
 - Probes are ids (`ProbeId`), never commands. `probe_spec_with` maps each id to one program and argv per `Os`, run by `run_spec` with no shell, a 10 s `PROBE_TIMEOUT`, and `OUTPUT_CAP` per stream.
 ## Quick commands
 - `cargo test -p grokhub-agent repair::` (classifier, fixtures, gate, redaction, timeout)
-- `cargo test -p grokhub-app diagnose`, `cargo test -p grokhub-app wifi_intent` and `cargo test -p grokhub-app repair_ui` (cabin answers and fix cards; isolate `GROKHUB_CONFIG`)
+- `cargo test --manifest-path src-tauri/Cargo.toml diagnose`, `cargo test --manifest-path src-tauri/Cargo.toml wifi` and `cargo test --manifest-path src-tauri/Cargo.toml auto_fixes` (shell answers and fix cards; isolate `GROKHUB_CONFIG`)
 ## Key files
 - `crates/grokhub-agent/src/repair/mod.rs`: `diagnose`, `DiagnoseCtx`, `report_text`, `probes_for_intent`, `SCOPE_ASK`, `NEEDS_ADMIN`.
 - `crates/grokhub-agent/src/repair/probes.rs`: `ProbeId`, `ProbeSpec`, `probe_spec_with`, `PackageManager`, `read_only_violation`.

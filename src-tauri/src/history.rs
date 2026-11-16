@@ -284,7 +284,7 @@ pub fn rename(config_dir: &Path, id: &str, title: &str) -> Result<(), String> {
 }
 
 /// Deletes the chat's file and its files; a turn still running is not
-/// written back. `/bg` and scheduled forks of it go with it.
+/// written back. Any sessions forked from it go with it.
 pub fn delete(config_dir: &Path, id: &str) -> Result<(), String> {
     let id = shell_id(id)?;
     crate::chat_tabs::refuse_main(config_dir, id)?;
@@ -552,8 +552,8 @@ enum Source {
 ///
 /// Cabin chats list read-only while both apps ship: a session file has one
 /// writer, so the shell never resumes, renames or deletes them. Once the cabin
-/// is retired this is where they become the shell's own. Forks (`/bg` and
-/// scheduled runs) and the shell's own chats stay off this list.
+/// is retired this is where they become the shell's own. Forked sessions and
+/// the shell's own chats stay off this list.
 pub fn read_only(config_dir: &Path, cli_home: Option<&Path>, query: &str) -> Vec<ReadOnlyRow> {
     read_only_sources(config_dir, cli_home, query)
         .into_iter()
@@ -1248,7 +1248,7 @@ mod tests {
         assert!(!file.exists());
         assert!(
             !fork_file.exists(),
-            "a /bg fork holds a copy of the chat, so it goes too"
+            "a forked session holds a copy of the chat, so it goes too"
         );
         assert_eq!(list(&config), Vec::<ChatRow>::new());
         assert!(load(&config, id, LOAD_CAP).is_err());

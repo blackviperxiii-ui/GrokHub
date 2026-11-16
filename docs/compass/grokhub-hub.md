@@ -2,7 +2,7 @@
 
 ## Owns
 - The tiny_http server for paired computers: `/v1/health` and `/health` (no auth), `/v1/pair`, then bearer-token routes `/v1/status`, `/v1/snapshot` (`/sync`), `/v1/inhabit`, `/v1/frame`. The phone routes (task, inbox, results, frame.jpg, voice client-secret) were removed 2026-10-07.
-- Two entry points with one bootstrap (`run`): the standalone `grokhub-hub` binary and `grokhub --hub`; the cabin embeds it with `serve_lan`.
+- Two entry points with one bootstrap (`run`): the standalone `grokhub-hub` binary and `grokhub --hub`; the shell embeds it with `serve_lan`.
 ## Quick commands
 - `GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub` (the `.cursor/environment.json` terminal)
 - `cargo test -p grokhub-hub -- --test-threads=1` (loopback binds via `serve_background`)
@@ -19,12 +19,12 @@
 - Persisting the live frame (`disk_omits_frame`), or an old `hub-state.json` failing to load and getting quarantined (`old_hub_state_with_phone_rows_still_loads`).
 - Binding before `--version` / `--help` return (`standalone_hub_version_and_help_must_not_bind` slices `crates/grokhub-hub/src/main.rs` at `grokhub_hub::run(`) or printing the pair code (`standalone_hub_rotates_expired_and_does_not_print_the_code` slices `lib.rs` at `pub fn run(`).
 ## What depends on it
-- Computer-to-computer pairing and `/sync`, the cabin Devices page, `packaging/systemd/grokhub-hub.service`, and `scripts/install.sh` (enables that unit).
+- Computer-to-computer pairing and `/sync`, the Devices page, `packaging/systemd/grokhub-hub.service`, and `scripts/install.sh` (enables that unit).
 ## Non-obvious
 - `serve` binds `0.0.0.0`, so the hub is LAN-visible by design; pairing (15 min codes, burned after 10 wrong guesses) is the gate.
-- Standalone `main.rs` finds state via `GROKHUB_CONFIG`, then `HOME/.config/GrokHub`, then the cwd; it does not use `%APPDATA%` like `config_dir()` in grokhub-app.
+- Standalone `main.rs` finds state via `GROKHUB_CONFIG`, then `HOME/.config/GrokHub`, then the cwd; it does not use `%APPDATA%` like `config_dir()` in `crates/grokhub-core/src/paths.rs`.
 - `HUB_KIND` (`grokhub-hub-v1`) is what `--doctor` and paired computers probe; changing it is a protocol break.
-- The cabin only fills `HubState.snapshot` when a peer is paired and after the `hub` destination grant or a one-time hard Send approve (`privacy_ui.rs`); revoking clears it. The `/v1/snapshot` route itself is unchanged.
-- Tasks queue on this computer only (`enqueue_local`); no route lets a peer add or read tasks (`phone_routes_are_gone`). `/send` itself starts a read-only background run, not a queued task.
+- The shell only fills `HubState.snapshot` when a peer is paired and after the `hub` destination grant or a one-time hard Send approve; revoking clears it. The `/v1/snapshot` route itself is unchanged.
+- Local inbox helpers (`enqueue_local`) queue on this computer only; no route lets a peer add or read tasks (`phone_routes_are_gone`). Desktop `/send` starts a read-only background run, not a queued task; `enqueue_local` stays for tests.
 ## See also
 - [grokhub-core](grokhub-core.md), [install-scripts](install-scripts.md)

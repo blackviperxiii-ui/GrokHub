@@ -42,7 +42,7 @@ manager: sudo apt upgrade for the .deb, or your AUR helper on Arch."
 https://github.com/blackviperxiii-ui/GrokHub/releases/latest and replace the app."
             .to_string(),
         InstallKind::Source => "This copy was built from source. In your GrokHub clone run \
-git pull, then scripts/install.sh --user."
+scripts/install.sh --channel <channel>."
             .to_string(),
     }
 }
@@ -91,7 +91,7 @@ mod tests {
         );
         assert_eq!(
             advice(InstallKind::Source),
-            "This copy was built from source. In your GrokHub clone run git pull, then scripts/install.sh --user."
+            "This copy was built from source. In your GrokHub clone run scripts/install.sh --channel <channel>."
         );
         assert_eq!(
             advice(InstallKind::Package),

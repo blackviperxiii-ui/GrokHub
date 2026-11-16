@@ -31,4 +31,4 @@
 - An update can move the exe, so sync_native_cua re-reads the current exe path whenever the desktop switch or the engine starts.
 - Unattended Ask denies desktop tools (`Gate` `attended: false`); Plan and btw deny them even on Auto or Always.
 ## See also
-- [harness](harness.md), [grokhub-agent](grokhub-agent.md), grokhub-app
+- [harness](harness.md), [grokhub-agent](grokhub-agent.md), grokhub-shell

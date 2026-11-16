@@ -27,7 +27,9 @@ struct Header {
     cwd: String,
     model: String,
     renamed: bool,
-    /// The session this one was forked from (`/bg`, scheduled runs). Empty otherwise.
+    /// Parent session id when this chat was forked. Empty otherwise.
+    /// Desktop `/bg` and `/send` start a fresh session; this field remains for
+    /// older forked files and for `delete_forks_of` / tests.
     forked_from: String,
 }
 
@@ -192,13 +194,13 @@ fn attach_run_with_hook(
 }
 
 fn stop_run(id: &str) {
-    // Tasks and linked `/bg` engines first, then this run's cancel hook.
+    // Tasks and any linked child engines first, then this run's cancel hook.
     // The hook still runs before `delete_session` removes the file.
     crate::tasks::halt_tree(id);
     cancel_token(id);
 }
 
-/// Cancel the run registered for `id`. Does not walk `/bg` children.
+/// Cancel the run registered for `id`. Does not walk linked child engines.
 pub(crate) fn cancel_token(id: &str) {
     let live = runs()
         .lock()
@@ -217,7 +219,7 @@ pub(crate) fn cancel_token(id: &str) {
     }
 }
 
-/// Stop one native session's stream and its background tasks. Not its `/bg` children.
+/// Stop one native session's stream and its background tasks. Not linked children.
 pub fn cancel_session(id: &str) {
     let Ok(id) = safe_id(id) else {
         return;
@@ -554,6 +556,9 @@ pub fn record_usage(
     Ok(())
 }
 
+/// Copy a session into a new id with `forked_from` set. No production caller:
+/// desktop `/bg`/`/send` use a fresh session. Kept so tests can exercise
+/// `delete_forks_of` (still used when deleting a chat).
 pub fn fork_session(id: &str) -> Result<SessionInfo, String> {
     let mut info = load_session(id)?;
     let new_id = format!("native-{}", grokhub_core::uid("n"));

@@ -16,10 +16,10 @@
 - `crates/grokhub-core/src/paths.rs`: `user_home`. `diagnostics.rs`: About clipboard + Labs Desktop zip (`DiagnosticsExport`, `write_diagnostics_zip`).
 - `crates/grokhub-core/src/wire.rs`: chat wire types (`AcpEvent`, `ToolCard`, `PermissionAsk`, `ElicitAsk`, `SessionMode`, `PermissionMode`, `GrokUsage`). `crates/grokhub-core/src/proc_util.rs`: `hide_windows_console`, `output_within`, `is_sigterm_status`, `run_night_check_command`.
 ## Change recipe
-- New helper: write it in its module with a literal-value test, then add it to that module's `pub use` block in `lib.rs`; grokhub-app imports flat names (`use grokhub_core::{...}`).
+- New helper: write it in its module with a literal-value test, then add it to that module's `pub use` block in `lib.rs`; grokhub-shell and the other crates import flat names (`use grokhub_core::{...}`).
 - New module: `pub mod x;` in `lib.rs` plus its re-exports. Keep it free of egui; an HTTP call goes through `http.rs`, and any network exit is listed in `offline_guard.rs`.
 ## What breaks it
-- Renaming a re-exported item: it breaks grokhub-app, grokhub-hub, and grokhub-agent in one go. Grep the workspace first.
+- Renaming a re-exported item: it breaks grokhub-shell, grokhub-hub, and grokhub-agent in one go. Grep the workspace first.
 - Editing scripts or packaging: `hands.rs`, `desktop_entry.rs`, and `channel.rs` tests read `scripts/` and `packaging/` and assert on their text.
 ## What depends on it
 - Every other crate in the workspace `Cargo.toml`. The hub serves `HubState`.
