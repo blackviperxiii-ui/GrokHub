@@ -79,6 +79,63 @@ pub fn machines(local: MachineCard, held: Vec<MachineCard>, now: u64) -> Vec<Mac
     std::iter::once(mine).chain(others).collect()
 }
 
+/// The subscription rows the app can read on this computer.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Usage {
+    /// From Claude Code's local transcripts; `None` when it isn't installed.
+    pub claude: Option<grokhub_core::claude_usage::ClaudeUsage>,
+    /// From the rate-limit headers on the last signed-in Grok reply; `None`
+    /// before one this run.
+    pub grok: Option<GrokRoom>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrokRoom {
+    pub requests_left: Option<u64>,
+    pub requests_limit: Option<u64>,
+    pub tokens_left: Option<u64>,
+    pub tokens_limit: Option<u64>,
+    pub resets_at_ms: Option<u64>,
+    pub seen_ms: u64,
+}
+
+impl From<grokhub_agent::plan_room::PlanRoom> for GrokRoom {
+    fn from(room: grokhub_agent::plan_room::PlanRoom) -> Self {
+        Self {
+            requests_left: room.requests_left,
+            requests_limit: room.requests_limit,
+            tokens_left: room.tokens_left,
+            tokens_limit: room.tokens_limit,
+            resets_at_ms: room
+                .reset_secs
+                .map(|secs| room.seen_ms.saturating_add(secs.saturating_mul(1000))),
+            seen_ms: room.seen_ms,
+        }
+    }
+}
+
+/// Claude Code's folder on this computer: `CLAUDE_CONFIG_DIR`, or `.claude`
+/// in the home folder.
+pub fn claude_dir() -> Option<std::path::PathBuf> {
+    let env = std::env::var("CLAUDE_CONFIG_DIR").ok();
+    grokhub_core::paths::user_home()
+        .map(|home| grokhub_core::claude_usage::claude_dir(env.as_deref(), &home))
+}
+
+/// The rows at `now`, with Claude Code's folder at `claude_dir`.
+pub fn usage(claude_dir: Option<&std::path::Path>, now: u64) -> Usage {
+    use grokhub_core::claude_usage;
+    let claude = claude_dir
+        .filter(|dir| dir.join("projects").is_dir())
+        .map(|dir| claude_usage::usage(claude_usage::read_turns(dir, now), now));
+    Usage {
+        claude,
+        grok: grokhub_agent::plan_room::latest().map(GrokRoom::from),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +205,53 @@ mod tests {
             let second = local_card("d-me", "Desk", 8);
             assert!(second.cpu_pct.is_some_and(|p| p <= 100), "{second:?}");
         }
+    }
+
+    #[test]
+    fn grok_room_says_when_the_window_resets() {
+        let room = grokhub_agent::plan_room::PlanRoom {
+            requests_left: Some(40),
+            requests_limit: Some(50),
+            tokens_left: None,
+            tokens_limit: None,
+            reset_secs: Some(90),
+            seen_ms: 10_000,
+        };
+        assert_eq!(
+            GrokRoom::from(room),
+            GrokRoom {
+                requests_left: Some(40),
+                requests_limit: Some(50),
+                tokens_left: None,
+                tokens_limit: None,
+                resets_at_ms: Some(100_000),
+                seen_ms: 10_000,
+            }
+        );
+    }
+
+    #[test]
+    fn claude_shows_only_when_its_projects_folder_is_there() {
+        let home = std::env::temp_dir().join(format!("fleet-usage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let dir = home.join(".claude");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(usage(Some(&dir), 5).claude, None);
+        assert_eq!(usage(None, 5).claude, None);
+        let project = home.join(".claude/projects/my-app");
+        std::fs::create_dir_all(&project).unwrap();
+        let now = grokhub_core::now_ms();
+        let at = grokhub_core::oauth::unix_ms_to_rfc3339(now - 60_000);
+        std::fs::write(
+            project.join("s.jsonl"),
+            format!(
+                r#"{{"type":"assistant","timestamp":"{at}","requestId":"r1","message":{{"id":"m1","usage":{{"input_tokens":2,"output_tokens":30}}}}}}"#
+            ),
+        )
+        .unwrap();
+        let claude = usage(Some(&dir), now).claude.expect("claude row");
+        assert_eq!((claude.window.output, claude.week.output), (30, 30));
+        assert!(claude.window_resets_at_ms.is_some_and(|end| end > now));
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
