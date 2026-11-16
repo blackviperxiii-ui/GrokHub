@@ -336,6 +336,64 @@ mod tests {
         assert!(lines.contains(&"TryExec=grokhub-shell"));
     }
 
+    /// KWin's ScreenShot2 check reads the caller's binary from procfs and
+    /// grants the call when an entry's `Exec` canonicalizes to that path. This
+    /// runs install.sh's own `install_desktop_entry` into a temp prefix and
+    /// checks the entry it writes matches the installed binary that way.
+    #[cfg(unix)]
+    #[test]
+    fn install_sh_desktop_entry_matches_the_binary_the_way_kwin_does() {
+        let script = include_str!("../../../scripts/install.sh").replace("\r\n", "\n");
+        let start = script
+            .find("install_desktop_entry() {\n")
+            .expect("install.sh defines install_desktop_entry");
+        let end = start + script[start..].find("\n}\n").expect("function end") + 3;
+        let function = &script[start..end];
+        let prefix =
+            std::env::temp_dir().join(format!("grokhub-kwin-entry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&prefix);
+        let bin = prefix.join("bin/grokhub-shell");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, "").unwrap();
+        let entry = prefix.join("share/applications/grokhub-shell.desktop");
+        let src = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/grokhub-shell.desktop"
+        );
+        let status = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(format!(
+                "set -euo pipefail\n{function}install_desktop_entry \"$1\" \"$2\" \"$3\""
+            ))
+            .arg("bash")
+            .arg(src)
+            .arg(&entry)
+            .arg(&bin)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let text = std::fs::read_to_string(&entry).unwrap();
+        let exec = text
+            .lines()
+            .find_map(|line| line.strip_prefix("Exec="))
+            .expect("Exec line");
+        assert_eq!(exec, bin.display().to_string());
+        assert_eq!(
+            Path::new(exec.split_whitespace().next().unwrap())
+                .canonicalize()
+                .unwrap(),
+            bin.canonicalize().unwrap()
+        );
+        assert!(text
+            .lines()
+            .any(|line| line == "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
+        assert_eq!(
+            text.lines().find_map(|line| line.strip_prefix("TryExec=")),
+            Some(bin.display().to_string().as_str())
+        );
+        let _ = std::fs::remove_dir_all(&prefix);
+    }
+
     /// Both recipes build the Tauri shell and the hub the way install.sh
     /// does, never the removed cabin crate, and point the packaged hub unit
     /// at /usr/bin.

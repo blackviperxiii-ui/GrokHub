@@ -34,17 +34,26 @@ fn kwin_refusal(err: &str) -> bool {
     err.contains("NoAuthorized")
 }
 
-/// The `.desktop` KWin reads for `exe`: `<prefix>/share/applications` for a
-/// `<prefix>/bin` install, else the user's applications dir.
+/// The `.desktop` KWin reads for `exe`. KWin grants ScreenShot2 to the entry
+/// whose absolute `Exec` is the calling binary, so the entry is named after
+/// it: `grokhub-shell.desktop` for the desktop app (what `scripts/install.sh`
+/// and the PKGBUILDs write), `grokhub-hub.desktop` for a hub run as an MCP
+/// server. It lives in `<prefix>/share/applications` for a `<prefix>/bin`
+/// install, else the user's applications dir.
 fn desktop_entry_for(exe: &Path, home: Option<&Path>) -> PathBuf {
+    let name = exe
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("grokhub-shell");
+    let file = format!("{name}.desktop");
     let prefix = exe
         .parent()
         .filter(|dir| dir.file_name().is_some_and(|name| name == "bin"))
         .and_then(Path::parent);
     match (prefix, home) {
-        (Some(prefix), _) => prefix.join("share/applications/grokhub.desktop"),
-        (None, Some(home)) => home.join(".local/share/applications/grokhub.desktop"),
-        (None, None) => PathBuf::from("~/.local/share/applications/grokhub.desktop"),
+        (Some(prefix), _) => prefix.join("share/applications").join(file),
+        (None, Some(home)) => home.join(".local/share/applications").join(file),
+        (None, None) => PathBuf::from("~/.local/share/applications").join(file),
     }
 }
 
@@ -75,7 +84,7 @@ impl ShotChain {
         );
         let exe = std::env::current_exe()
             .and_then(|path| path.canonicalize())
-            .unwrap_or_else(|_| PathBuf::from("/usr/bin/grokhub"));
+            .unwrap_or_else(|_| PathBuf::from("/usr/bin/grokhub-shell"));
         Self {
             routes,
             active: None,
@@ -98,7 +107,7 @@ impl ShotChain {
             routes,
             active: None,
             kwin_refused: false,
-            exe: PathBuf::from("grokhub"),
+            exe: PathBuf::from("grokhub-shell"),
         }
     }
 
@@ -108,7 +117,7 @@ impl ShotChain {
             routes,
             active: None,
             kwin_refused: false,
-            exe: PathBuf::from("/usr/bin/grokhub"),
+            exe: PathBuf::from("/usr/bin/grokhub-shell"),
         }
     }
 
@@ -558,9 +567,9 @@ mod tests {
         let first = chain.capture("all", &[]).unwrap_err();
         let want = "Can't capture the screen: KDE refused the screenshot (KWin ScreenShot2: NoAuthorized), and Spectacle and the \
                     Screenshot portal did not work either. Loadout will not ask KWin again this session. \
-                    To fix it, make /usr/share/applications/grokhub.desktop contain the line \
+                    To fix it, make /usr/share/applications/grokhub-shell.desktop contain the line \
                     X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2 and an absolute \
-                    Exec=/usr/bin/grokhub, run kbuildsycoca6, then restart Loadout. Do not take \
+                    Exec=/usr/bin/grokhub-shell, run kbuildsycoca6, then restart Loadout. Do not take \
                     another screenshot until then.";
         assert_eq!(first, want);
         let seen = log.lock().unwrap_or_else(|err| err.into_inner()).clone();
@@ -714,23 +723,27 @@ mod tests {
     fn desktop_entry_follows_the_install_prefix() {
         let home = Path::new("/home/user");
         assert_eq!(
-            desktop_entry_for(Path::new("/usr/bin/grokhub"), Some(home)),
-            PathBuf::from("/usr/share/applications/grokhub.desktop")
+            desktop_entry_for(Path::new("/usr/bin/grokhub-shell"), Some(home)),
+            PathBuf::from("/usr/share/applications/grokhub-shell.desktop")
         );
         assert_eq!(
-            desktop_entry_for(Path::new("/home/user/.local/bin/grokhub"), Some(home)),
-            PathBuf::from("/home/user/.local/share/applications/grokhub.desktop")
+            desktop_entry_for(Path::new("/home/user/.local/bin/grokhub-shell"), Some(home)),
+            PathBuf::from("/home/user/.local/share/applications/grokhub-shell.desktop")
         );
         assert_eq!(
             desktop_entry_for(
-                Path::new("/home/user/GrokHub/target/release/grokhub"),
+                Path::new("/home/user/GrokHub/src-tauri/target/release/grokhub-shell"),
                 Some(home)
             ),
-            PathBuf::from("/home/user/.local/share/applications/grokhub.desktop")
+            PathBuf::from("/home/user/.local/share/applications/grokhub-shell.desktop")
         );
         assert_eq!(
-            desktop_entry_for(Path::new("/opt/x/grokhub"), None),
-            PathBuf::from("~/.local/share/applications/grokhub.desktop")
+            desktop_entry_for(Path::new("/opt/x/grokhub-shell"), None),
+            PathBuf::from("~/.local/share/applications/grokhub-shell.desktop")
+        );
+        assert_eq!(
+            desktop_entry_for(Path::new("/home/user/.local/bin/grokhub-hub"), Some(home)),
+            PathBuf::from("/home/user/.local/share/applications/grokhub-hub.desktop")
         );
     }
 }

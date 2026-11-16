@@ -1,0 +1,1 @@
+- KDE: when KWin refuses a screenshot, the fix now names the desktop app's own entry (`grokhub-shell.desktop`, or one named after whichever binary asked) instead of the retired cabin's `grokhub.desktop`. A new test runs install.sh's entry step and checks its absolute `Exec` matches the installed binary the way KWin does.
