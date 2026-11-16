@@ -160,7 +160,7 @@ fn a_turn_whose_ask_was_folded_takes_its_images_time_and_its_replys_words() {
     ];
     let users = [
         UserLine {
-            at: Some(600 * MIN),
+            at: None,
             kind: UserKind::Compaction,
         },
         UserLine {
@@ -193,6 +193,51 @@ fn a_turn_whose_ask_was_folded_takes_its_images_time_and_its_replys_words() {
     assert_eq!(
         (group.summary.as_str(), group.first_at, group.messages),
         ("The login button is hidden.", Some(600 * MIN), 1)
+    );
+}
+
+#[test]
+fn a_folded_turn_with_no_image_takes_the_compactions_time_and_notes_join_turns() {
+    let lines = vec![
+        line(Role::User, "<standing_rules>"),
+        line(Role::Tools, "read_file"),
+        line(
+            Role::User,
+            "<cabin-note>\nCheck the build first.\n</cabin-note>",
+        ),
+        line(Role::Assistant, "Build is green."),
+        line(Role::User, "ship it"),
+        line(Role::Assistant, "Shipped."),
+    ];
+    let users = [
+        UserLine {
+            at: Some(600 * MIN),
+            kind: UserKind::Compaction,
+        },
+        UserLine {
+            at: Some(600 * MIN),
+            kind: UserKind::Note,
+        },
+        UserLine {
+            at: Some(840 * MIN),
+            kind: UserKind::Ask,
+        },
+    ];
+    let parts = parts(&lines, &users);
+    let turns = turns(&lines, &parts);
+    let got: Vec<_> = turns
+        .iter()
+        .map(|t| (t.first, t.last, t.lead, t.at))
+        .collect();
+    assert_eq!(
+        got,
+        vec![(1, 3, 3, Some(600 * MIN)), (4, 5, 4, Some(840 * MIN))]
+    );
+    let group = group_of(&lines, &parts, &turns[..1]);
+    assert_eq!(
+        (group.summary.as_str(), group.messages),
+        ("Build is green.", 1),
+        "the note is neither an ask nor a message"
     );
 }
 

@@ -2864,7 +2864,11 @@ mod tests {
             "only the notice was kept"
         );
         let history = vec![msg("user", "<summary>All of it.</summary>")];
-        assert_eq!(own_start(&turn, &history), (1, 2), "nothing was kept");
+        assert_eq!(
+            own_start(&turn, &history),
+            (1, 1),
+            "nothing was kept; the notice isn't an ask"
+        );
     }
 
     #[test]

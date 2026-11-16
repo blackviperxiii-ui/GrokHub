@@ -1061,6 +1061,8 @@ pub enum UserKind {
     Ask,
     /// The image a tool returned, sent as a user message after its result.
     ToolImage,
+    /// A note the app added for the model (a cabin note, a helper's notice).
+    Note,
     /// A compaction's summary, ledger or rules.
     Compaction,
 }
@@ -1077,6 +1079,8 @@ pub fn user_lines(info: &SessionInfo) -> Vec<UserLine> {
                 UserKind::Compaction
             } else if is_tool_image(&seen.item) {
                 UserKind::ToolImage
+            } else if crate::compact::is_app_note(&seen.item) {
+                UserKind::Note
             } else {
                 UserKind::Ask
             };
@@ -1113,10 +1117,13 @@ fn is_tool_image(item: &InputItem) -> bool {
     }
 }
 
-/// A message the transcript counts: an ask or a reply, not a tool's image
-/// or a compaction's own text.
+/// A message the transcript counts: an ask or a reply, not a tool's image,
+/// a note the app added, or a compaction's own text.
 pub(crate) fn is_counted(item: &InputItem) -> bool {
-    is_shown_message(item) && !is_tool_image(item) && !crate::compact::is_compaction_message(item)
+    is_shown_message(item)
+        && !is_tool_image(item)
+        && !crate::compact::is_app_note(item)
+        && !crate::compact::is_compaction_message(item)
 }
 
 /// How many asks and replies compactions took out of the transcript, less
@@ -2255,6 +2262,10 @@ mod tests {
         assert_eq!(times.len(), 3, "{times:?}");
         assert!(times.iter().all(|at| at.unwrap() >= before), "{times:?}");
         assert_eq!(compacted_messages(&info), 2);
+        assert_eq!(
+            user_kinds(&info),
+            [UserKind::Compaction, UserKind::Ask, UserKind::Note]
+        );
     }
 
     #[test]

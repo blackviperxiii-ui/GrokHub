@@ -130,10 +130,11 @@ struct Cache {
 enum Part {
     /// An ask, with the time of its turn.
     Ask(Option<u64>),
-    /// A tool's image, sent as a user message, with the time of its turn.
-    Image(Option<u64>),
-    /// A compaction's summary, ledger or rules.
-    Made,
+    /// A tool's image or a note the app added, sent as a user message, with
+    /// the time of its turn.
+    Aside(Option<u64>),
+    /// A compaction's summary, ledger or rules, with the compaction's time.
+    Made(Option<u64>),
     Reply,
     Tools,
 }
@@ -154,13 +155,13 @@ fn parts(lines: &[Line], users: &[UserLine]) -> Vec<Part> {
         .map(|line| match line.role {
             Role::User => match users.next() {
                 Some(UserLine {
-                    kind: UserKind::ToolImage,
+                    kind: UserKind::ToolImage | UserKind::Note,
                     at,
-                }) => Part::Image(*at),
+                }) => Part::Aside(*at),
                 Some(UserLine {
                     kind: UserKind::Compaction,
-                    ..
-                }) => Part::Made,
+                    at,
+                }) => Part::Made(*at),
                 Some(UserLine { at, .. }) => Part::Ask(*at),
                 None => Part::Ask(None),
             },
@@ -171,13 +172,17 @@ fn parts(lines: &[Line], users: &[UserLine]) -> Vec<Part> {
 }
 
 /// Splits the chat's lines into turns, from each line's [`Part`]. A turn
-/// with no ask of its own (its ask was folded by a compaction) takes the time
-/// of its first timed image.
+/// with no ask of its own (a compaction folded it) takes the compaction's
+/// time, or else that of its first timed image or note.
 fn turns(lines: &[Line], parts: &[Part]) -> Vec<Turn> {
     let mut out: Vec<Turn> = Vec::new();
+    let mut made_at = None;
     for (i, part) in parts.iter().enumerate() {
         match part {
-            Part::Made => continue,
+            Part::Made(at) => {
+                made_at = made_at.or(*at);
+                continue;
+            }
             Part::Ask(at) => {
                 out.push(Turn {
                     first: i,
@@ -192,7 +197,7 @@ fn turns(lines: &[Line], parts: &[Part]) -> Vec<Turn> {
                 first: i,
                 last: i,
                 lead: i,
-                at: None,
+                at: made_at,
                 hash: String::new(),
             }),
             _ => {}
@@ -205,7 +210,7 @@ fn turns(lines: &[Line], parts: &[Part]) -> Vec<Turn> {
         if *part == Part::Reply && parts[turn.lead] != Part::Reply {
             turn.lead = i;
         }
-        if let (None, Part::Image(at)) = (turn.at, part) {
+        if let (None, Part::Aside(at)) = (turn.at, part) {
             turn.at = *at;
         }
     }

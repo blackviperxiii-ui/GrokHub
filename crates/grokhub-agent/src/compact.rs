@@ -2076,6 +2076,20 @@ pub(crate) fn is_compaction_message(item: &InputItem) -> bool {
             || text.starts_with(STANDING_OPEN))
 }
 
+/// A note the app adds to the chat for the model as a user message: a cabin
+/// note ([`cabin_note_text`]) or a background helper's notice.
+pub(crate) fn is_app_note(item: &InputItem) -> bool {
+    let InputItem::Message { role, .. } = item else {
+        return false;
+    };
+    let text = message_text(item);
+    let text = text.trim_start();
+    role == "user" && (text.starts_with(CABIN_NOTE_OPEN) || text.starts_with(NOTICE_OPEN))
+}
+
+/// How a background helper's notice to the model opens.
+const NOTICE_OPEN: &str = "<background-notice>";
+
 /// How a summary (or the digest that stands in for one) opens.
 const SUMMARY_OPEN: &str =
     "This session is being continued from a previous conversation that ran out of context.";
@@ -2518,6 +2532,25 @@ mod tests {
         assert!(is_compaction_message(&text_message("user", &digest)));
         assert!(!is_compaction_message(&text_message("assistant", &digest)));
         assert!(!is_compaction_message(&text_message("user", "continue")));
+    }
+
+    #[test]
+    fn notes_the_app_adds_are_known_by_their_opening() {
+        let note = text_message("user", &cabin_note_text("Check the build first."));
+        let notice = text_message(
+            "user",
+            "<background-notice>\nSubagent s1 finished.\n</background-notice>",
+        );
+        assert!(is_app_note(&note));
+        assert!(is_app_note(&notice));
+        assert!(!is_app_note(&text_message(
+            "assistant",
+            &cabin_note_text("x")
+        )));
+        assert!(!is_app_note(&text_message(
+            "user",
+            "what is a <cabin-note>?"
+        )));
     }
 
     #[test]
