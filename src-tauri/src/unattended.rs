@@ -122,7 +122,6 @@ pub fn run(job: Job) -> UnattendedDone {
         cancel: job.cancel,
         halt: Box::new(crate::agent::NeverHalted),
         desktop_ops,
-        imagine_bearer: String::new(),
         resume: job.resume,
     })
 }

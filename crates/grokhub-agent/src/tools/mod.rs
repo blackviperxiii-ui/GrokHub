@@ -12,7 +12,7 @@ mod html_md;
 mod list_dir;
 pub(crate) mod local_ai;
 mod lock;
-mod media;
+pub(crate) mod media;
 mod models_check;
 pub(crate) mod mods;
 pub(crate) mod ports;
@@ -455,22 +455,26 @@ pub(crate) fn dry_imagine_body(args: &Value) -> Result<Value, String> {
     Ok(media::build_media_call("image_generate", args)?.body)
 }
 
-pub use media::{imagine_client, run_media_tool, ImagineApi};
+pub use media::{imagine_client, run_media_tool, ImagineApi, ImagineSource};
 pub use show_panel::SHOW_PANEL;
 
 /// Install fetch and Imagine clients for this thread. `web_fetch` and
 /// `web_search` never send the bearer, so they work without one; each hop still
 /// passes the permission gate, the public-only resolver and the egress guard.
-/// An empty bearer leaves Imagine unset, so a picture falls back to the
-/// on-device model or asks to sign in. The guard restores the previous ports.
-/// `session` picks the media folder (`sessions/<id>/media`).
-pub(crate) fn install_network(bearer: &str, session: &str) -> ports::Guard {
-    let bearer = bearer.trim();
-    let imagine: Option<Arc<dyn ImagineApi>> = if bearer.is_empty() {
-        None
-    } else {
-        Some(Arc::new(media::UreqImagine::new(bearer.to_string())))
-    };
+/// `None` leaves Imagine unset, so a picture falls back to the on-device model
+/// or asks to sign in. A source gets a fresh lazy client for this prompt: its
+/// bearer is read on the first media call, never before. The guard restores
+/// the previous ports. `session` picks the media folder (`sessions/<id>/media`).
+pub(crate) fn install_network(
+    imagine: Option<&Arc<dyn ImagineSource>>,
+    session: &str,
+) -> ports::Guard {
+    let imagine = imagine.map(|source| {
+        Arc::new(media::LazyImagine::new(
+            Arc::clone(source),
+            Box::new(media::dial_xai),
+        )) as Arc<dyn ImagineApi>
+    });
     ports::enter(ports::Ports {
         fetch: Some(Arc::new(web_fetch::UreqFetch::new())),
         imagine,
@@ -543,15 +547,18 @@ mod tests {
         let _offline = grokhub_core::offline::force_for_thread(false);
         let one = Ok(vec![IpAddr::from([1, 1, 1, 1])]);
         {
-            let _g = install_network("", "s");
+            let _g = install_network(None, "s");
             let p = ports::current();
             assert_eq!(p.fetch.expect("fetch").resolve("1.1.1.1", 443), one);
             assert!(p.imagine.is_none(), "no Imagine without a sign-in");
         }
-        let _g = install_network("sk-abcdefghijklmnopqrstuv", "s");
+        let src = Arc::new(media::tests::FakeSource::signed_in());
+        let source: Arc<dyn ImagineSource> = src.clone();
+        let _g = install_network(Some(&source), "s");
         let p = ports::current();
         assert_eq!(p.fetch.expect("fetch").resolve("1.1.1.1", 443), one);
         assert!(p.imagine.is_some());
+        assert!(src.calls().is_empty(), "installing reads no sign-in");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
