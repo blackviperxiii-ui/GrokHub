@@ -5,7 +5,7 @@
 - Quiet dismissible due nudges, promote into a Workboard Todo, and promote into a mission: a chat linked by `mission_thread`.
 ## Quick commands
 - `cargo test -p grokhub-core journal::`
-- `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app journal_ -- --test-threads=1`
+- `GROKHUB_CONFIG=$(mktemp -d) cargo test --manifest-path src-tauri/Cargo.toml journal -- --test-threads=1`
 ## Key files
 - `crates/grokhub-core/src/journal.rs`: model plus pure create / edit / search / defer / decide / abandon / evidence / promote / nudge helpers. `promote_to_mission` links a chat and returns a `MissionStart` (title, drafted first message); `mission_entry` finds the decision for a chat; `open_questions` feeds the systems brief.
 - `crates/grokhub-core/src/slash/mod.rs`: the `/journal` command.

@@ -21,7 +21,7 @@
 - Loosening a deny: perm rules are deny > ask > allow; hooks can deny or ask but never turn a gate deny or ask into allow; a hook timeout is no decision.
 - Reading the Grok CLI's credentials (`~/.grok/auth.json`): the engine uses GrokHub's own sign-in (`XAI_NEED_SIGNIN` in `crates/grokhub-core/src/xai_signin.rs`).
 ## What depends on it
-- grokhub-app: the retired cabin's native_engine.rs, the retired cabin's native_sessions.rs, the retired cabin's native_unattended.rs, the retired cabin's native_mcp.rs, the retired cabin's native_plugins.rs, plus the harness and `ToolOutput` in the desktop MCP.
+- The Tauri shell (`src-tauri/`): chat, sessions, unattended runs, MCP and plugins host the engine; harness and `ToolOutput` also feed the desktop MCP.
 ## Non-obvious
 - Gate v0 still treats Auto like Ask; Plan and btw stay read-only (`READ_ONLY_PHASE`).
 - Unattended runs (`run_unattended`): Ask denies every non-read-only tool; Auto uses the Phase 5 judge and fails closed.
