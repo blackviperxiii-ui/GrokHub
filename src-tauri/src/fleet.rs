@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 
 use grokhub_core::fleet::MachineCard;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A card and how the page shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -142,6 +142,85 @@ pub fn usage(claude_dir: Option<&std::path::Path>, now: u64) -> Usage {
     }
 }
 
+/// Subscriptions with no usage the app can read: the user types what their
+/// own dashboard shows, and the page keeps it here.
+pub const MANUAL_ROWS: [&str; 2] = ["cursor", "antigravity"];
+const ROWS_FILE: &str = "fleet-rows.json";
+
+/// A row the user fills in: the short window and the longer period (a week or
+/// a month), each as a percent used and when it resets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualRow {
+    pub id: String,
+    pub window_pct: Option<u8>,
+    pub window_resets_at_ms: Option<u64>,
+    pub period_pct: Option<u8>,
+    pub period_resets_at_ms: Option<u64>,
+    /// When the user last changed it, so the page can say how old it is.
+    pub updated_at: u64,
+}
+
+/// One row per [`MANUAL_ROWS`] id, in that order, empty until filled in.
+pub fn manual_rows(config_dir: &std::path::Path) -> Vec<ManualRow> {
+    let saved: Vec<ManualRow> = std::fs::read_to_string(config_dir.join(ROWS_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    MANUAL_ROWS
+        .iter()
+        .map(|id| {
+            saved
+                .iter()
+                .find(|row| row.id == *id)
+                .cloned()
+                .unwrap_or(ManualRow {
+                    id: id.to_string(),
+                    window_pct: None,
+                    window_resets_at_ms: None,
+                    period_pct: None,
+                    period_resets_at_ms: None,
+                    updated_at: 0,
+                })
+        })
+        .collect()
+}
+
+static ROWS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Save `row` at `now`; percents over 100 are kept as 100.
+pub fn set_manual_row(
+    config_dir: &std::path::Path,
+    row: ManualRow,
+    now: u64,
+) -> Result<Vec<ManualRow>, String> {
+    if !MANUAL_ROWS.contains(&row.id.as_str()) {
+        return Err(format!("There's no {} row to fill in.", row.id));
+    }
+    // One save at a time, so two cards saved together can't drop each other's row.
+    let _one = ROWS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let row = ManualRow {
+        window_pct: row.window_pct.map(|p| p.min(100)),
+        period_pct: row.period_pct.map(|p| p.min(100)),
+        updated_at: now,
+        ..row
+    };
+    let rows: Vec<ManualRow> = manual_rows(config_dir)
+        .into_iter()
+        .map(|old| if old.id == row.id { row.clone() } else { old })
+        .collect();
+    let text = serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+    // Write beside the file and rename over it, so a read never sees half a file.
+    let tmp = config_dir.join(format!("{ROWS_FILE}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, config_dir.join(ROWS_FILE)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +338,56 @@ mod tests {
         assert_eq!((claude.window.output, claude.week.output), (30, 30));
         assert!(claude.window_resets_at_ms.is_some_and(|end| end > now));
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn rows_to_fill_in_start_empty_and_keep_what_was_saved() {
+        let dir = std::env::temp_dir().join(format!("fleet-rows-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rows = manual_rows(&dir);
+        let ids: Vec<(&str, Option<u8>, u64)> = rows
+            .iter()
+            .map(|r| (r.id.as_str(), r.window_pct, r.updated_at))
+            .collect();
+        assert_eq!(ids, vec![("cursor", None, 0), ("antigravity", None, 0)]);
+
+        let saved = set_manual_row(
+            &dir,
+            ManualRow {
+                id: "cursor".into(),
+                window_pct: None,
+                window_resets_at_ms: None,
+                period_pct: Some(140),
+                period_resets_at_ms: Some(1_800_000_000_000),
+                updated_at: 1,
+            },
+            99,
+        )
+        .unwrap();
+        assert_eq!(
+            saved[0],
+            ManualRow {
+                id: "cursor".into(),
+                window_pct: None,
+                window_resets_at_ms: None,
+                period_pct: Some(100),
+                period_resets_at_ms: Some(1_800_000_000_000),
+                updated_at: 99,
+            }
+        );
+        assert_eq!(manual_rows(&dir), saved);
+        assert_eq!(saved[1].updated_at, 0);
+        assert_eq!(
+            set_manual_row(
+                &dir,
+                ManualRow {
+                    id: "other".into(),
+                    ..saved[0].clone()
+                },
+                5
+            ),
+            Err("There's no other row to fill in.".into())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

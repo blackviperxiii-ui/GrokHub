@@ -6511,6 +6511,24 @@ async fn fleet_usage() -> Result<fleet::Usage, String> {
     off_main(|| fleet::usage(fleet::claude_dir().as_deref(), grokhub_core::now_ms())).await
 }
 
+/// The Fleet page's rows the user fills in (Cursor, Antigravity). Desktop only.
+#[cfg(desktop)]
+#[tauri::command]
+async fn get_fleet_rows(state: State<'_, ShellState>) -> Result<Vec<fleet::ManualRow>, String> {
+    let config_dir = state.config_dir.clone();
+    off_main(move || fleet::manual_rows(&config_dir)).await
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn set_fleet_row(
+    state: State<'_, ShellState>,
+    row: fleet::ManualRow,
+) -> Result<Vec<fleet::ManualRow>, String> {
+    let config_dir = state.config_dir.clone();
+    off_main(move || fleet::set_manual_row(&config_dir, row, grokhub_core::now_ms())).await?
+}
+
 /// Devices → Join another computer: the hub this computer sends its machine
 /// card to, if any. Desktop only; the browser never reaches these.
 #[cfg(desktop)]
@@ -8225,6 +8243,10 @@ pub fn run() {
             leave_hub,
             #[cfg(desktop)]
             fleet_usage,
+            #[cfg(desktop)]
+            get_fleet_rows,
+            #[cfg(desktop)]
+            set_fleet_row,
             #[cfg(desktop)]
             hub_send_approve,
             get_update_status,

@@ -40,6 +40,7 @@ export type View =
   | "mods"
   | "workboard"
   | "devices"
+  | "fleet"
   | "updates";
 
 /** What a palette row does. */
@@ -114,6 +115,7 @@ export const VIEW_LABELS: Record<View, string> = {
   settings: "Settings",
   workboard: "Workboard",
   devices: "Devices",
+  fleet: "Fleet",
   library: "Library",
   mods: "Mods",
   updates: "Updates & Drivers",
@@ -122,7 +124,8 @@ export const VIEW_LABELS: Record<View, string> = {
 /** The pages this platform shows, in tab order. Code, History and the journal
  * are this computer's files, so the web app leaves them on the desktop (a
  * browser sees only the chats it started); Devices is about this computer's
- * Web access, so only a desktop that has it shows it. */
+ * Web access, so only a desktop that has it shows it, and Fleet (the computers
+ * that joined this one) sits beside it. */
 export function views(caps: Capabilities): View[] {
   return [
     "home",
@@ -138,7 +141,7 @@ export function views(caps: Capabilities): View[] {
     "skills",
     "connectors",
     "workboard",
-    ...(caps.webAccess && !caps.remote ? (["devices"] as const) : []),
+    ...(caps.webAccess && !caps.remote ? (["devices", "fleet"] as const) : []),
     ...(caps.library ? (["library"] as const) : []),
     ...(caps.mods && !caps.remote ? (["mods"] as const) : []),
     "settings",

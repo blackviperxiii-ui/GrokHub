@@ -2813,6 +2813,81 @@ export function newShareCode(): Promise<Share> {
   return invoke<Share>("new_share_code");
 }
 
+/** A computer on the Fleet page (src-tauri/src/fleet.rs); desktop only. */
+export interface FleetMachine {
+  id: string;
+  name: string;
+  /** CPU use since the last reading, 0-100; null before a second reading or off Linux. */
+  cpuPct: number | null;
+  ramMb: number | null;
+  freeRamMb: number | null;
+  appVersion: string;
+  /** Unix ms when the card was made. */
+  atMs: number;
+  /** The card is under three minutes old. */
+  online: boolean;
+  thisComputer: boolean;
+}
+
+export interface UsageTokens {
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead: number;
+}
+
+/** Claude Code's usage from its local transcripts. */
+export interface ClaudeUsage {
+  window: UsageTokens;
+  windowResetsAtMs: number | null;
+  /** No 5-hour pause in view: `window` is the last 5 hours. */
+  windowRolling: boolean;
+  week: UsageTokens;
+  lastAtMs: number | null;
+}
+
+/** The SuperGrok pool as the last signed-in reply's headers said. */
+export interface GrokRoom {
+  requestsLeft: number | null;
+  requestsLimit: number | null;
+  tokensLeft: number | null;
+  tokensLimit: number | null;
+  resetsAtMs: number | null;
+  seenMs: number;
+}
+
+export interface FleetUsage {
+  claude: ClaudeUsage | null;
+  grok: GrokRoom | null;
+}
+
+/** A subscription row the user fills in from its own dashboard. */
+export interface FleetRow {
+  id: "cursor" | "antigravity";
+  windowPct: number | null;
+  windowResetsAtMs: number | null;
+  periodPct: number | null;
+  periodResetsAtMs: number | null;
+  /** Unix ms of the last change; 0 until filled in. */
+  updatedAt: number;
+}
+
+export function fleetMachines(): Promise<FleetMachine[]> {
+  return invoke<FleetMachine[]>("fleet_machines");
+}
+
+export function fleetUsage(): Promise<FleetUsage> {
+  return invoke<FleetUsage>("fleet_usage");
+}
+
+export function getFleetRows(): Promise<FleetRow[]> {
+  return invoke<FleetRow[]>("get_fleet_rows");
+}
+
+export function setFleetRow(row: FleetRow): Promise<FleetRow[]> {
+  return invoke<FleetRow[]>("set_fleet_row", { row });
+}
+
 /** The hub this computer joined (src-tauri/src/hub_join.rs); desktop only. */
 export interface JoinedHub {
   /** `host:port` on this network. */

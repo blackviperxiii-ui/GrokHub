@@ -81,7 +81,7 @@ Each step is its own PR into `beta`.
 4. **Usage parsers.** The Claude Code transcript window, the Grok plan room as
    a row, and the rows the person fills in for Cursor and Antigravity, with
    tests on fixture files.
-5. **Fleet page.** On the rail next to Devices: machines on top, then
+5. **Fleet page.** Next to Devices (under More on the rail): machines on top, then
    subscription rows, dimmed rows for machines that are asleep.
 6. **Antigravity live row**, if step 4's check finds a readable local file.
 

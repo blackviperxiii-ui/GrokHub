@@ -51,6 +51,7 @@ describe("paletteRows", () => {
       "Connectors",
       "Workboard",
       "Devices",
+      "Fleet",
       "Library",
       "Updates & Drivers",
       "Settings",
@@ -227,6 +228,9 @@ describe("hasPage", () => {
     expect(hasPage(DESKTOP, "devices")).toBe(true);
     expect(hasPage(PHONE, "devices")).toBe(false);
     expect(hasPage({ ...DESKTOP, remote: true }, "devices")).toBe(false);
+    expect(hasPage(DESKTOP, "fleet")).toBe(true);
+    expect(hasPage(PHONE, "fleet")).toBe(false);
+    expect(hasPage({ ...DESKTOP, remote: true }, "fleet")).toBe(false);
     expect(hasPage(DESKTOP, "updates")).toBe(true);
     expect(hasPage(WEB, "updates")).toBe(false);
     expect(hasPage(WEB, "workboard")).toBe(true);
@@ -251,6 +255,7 @@ describe("the rail and its More list", () => {
       "connectors",
       "workboard",
       "devices",
+      "fleet",
       "updates",
     ]);
     expect(moreViews(WEB)).toEqual(["objectives", "imagine", "automations", "agents", "memory", "skills", "connectors", "workboard"]);
@@ -270,6 +275,7 @@ describe("the rail and its More list", () => {
       "Connectors",
       "Workboard",
       "Devices",
+      "Fleet",
       "Updates & Drivers",
     ]);
     expect(withExtras(DESKTOP, "jour", extras)).toEqual(["Journal"]);
