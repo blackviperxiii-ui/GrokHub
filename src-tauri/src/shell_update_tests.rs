@@ -64,10 +64,78 @@ fn only_the_appimage_and_the_windows_installer_update_themselves() {
     assert!(updatable("windows", None));
     assert!(!updatable("macos", None));
     assert!(!updatable("android", None));
+}
+
+#[test]
+fn a_build_that_cant_update_itself_says_how_to_update_it() {
+    let dir = std::env::temp_dir().join(format!("shell-update-note-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let clone = dir.join("my-clone");
+    std::fs::create_dir_all(&clone).expect("dir");
+    let note = |os: &str, channel: Channel, exe: &str| {
+        not_updatable_note(os, &dir, channel, Path::new(exe))
+    };
+    let outside = "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --channel beta again in the clone you built it from.";
+    let not_yet = "This build doesn't update itself yet.";
+    // No receipt: nothing says where this copy came from.
     assert_eq!(
-        not_updatable_note("linux"),
-        "Installed from the .deb: update it with your package manager."
+        note(
+            "linux",
+            Channel::Beta,
+            "/home/user/.local/bin/grokhub-shell"
+        ),
+        outside
     );
+    assert_eq!(
+        note("linux", Channel::Beta, "/usr/bin/grokhub-shell"),
+        outside
+    );
+    std::fs::write(dir.join("source"), format!("{}\n", clone.display())).expect("receipt");
+    let shown = clone.display();
+    for exe in [
+        "/home/user/.local/bin/grokhub-shell",
+        "/opt/loadout/bin/grokhub-shell",
+    ] {
+        assert_eq!(
+            note("linux", Channel::Stable, exe),
+            format!(
+                "Built from the clone in {shown}: to update it, run scripts/install.sh --channel stable there with the options you installed it with."
+            ),
+            "{exe}"
+        );
+    }
+    // A user receipt doesn't describe a copy under /usr (a package, or a sudo
+    // install whose receipt went to root) or a dev build in a target folder.
+    for exe in [
+        "/usr/bin/grokhub-shell",
+        "/usr/local/bin/grokhub-shell",
+        "/home/user/GrokHub/src-tauri/target/debug/grokhub-shell",
+    ] {
+        assert_eq!(note("linux", Channel::Beta, exe), outside, "{exe}");
+    }
+    // A receipt whose clone is gone no longer describes this install.
+    std::fs::remove_dir_all(&clone).expect("rm clone");
+    assert_eq!(
+        note(
+            "linux",
+            Channel::Beta,
+            "/home/user/.local/bin/grokhub-shell"
+        ),
+        outside
+    );
+    assert_eq!(
+        note("android", Channel::Stable, "/data/app/grokhub-shell"),
+        not_yet
+    );
+    assert_eq!(
+        note(
+            "macos",
+            Channel::Stable,
+            "/Applications/Loadout.app/Contents/MacOS/grokhub-shell"
+        ),
+        not_yet
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

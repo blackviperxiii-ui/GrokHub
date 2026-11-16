@@ -655,7 +655,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/update",
-        hint: "Update the CLI and the app when newer",
+        hint: "Open Updates",
         insert: "/update",
         run_on_pick: true,
     },

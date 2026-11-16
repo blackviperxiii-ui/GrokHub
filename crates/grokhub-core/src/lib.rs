@@ -220,7 +220,6 @@ pub mod tool_tags;
 pub mod trajectory;
 pub mod tui_gaps;
 pub mod turn_timeline;
-pub mod update;
 pub mod update_feed;
 pub mod usage;
 pub mod user_files;
@@ -315,12 +314,7 @@ pub use card_prefs::{
 pub use card_signals::{
     append_signal, signal_for, signal_group, CardEvent, CardSignal, SIGNAL_CAP,
 };
-pub use channel::{
-    auto_off_step, beta_caught_up_to_main, channel_status_line, channel_switch_fail_hint,
-    channel_switch_preflight, channel_switch_shell, parse_version_line, strip_product_prefix,
-    update_fail_hint, version_line, AutoOffStep, BuildVersion, Channel, ChannelTips,
-    CHANNEL_AUTO_OFF_NOTE, CHANNEL_BETA_SINCE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE,
-};
+pub use channel::{Channel, CHANNEL_BETA_SINCE, CHANNEL_RECEIPT};
 pub use chat::{
     accepts_effort_none, accepts_reasoning_effort, agent_reasoning_effort_for_mode,
     chat_request_body, chat_request_body_for_mode, chat_request_body_images,
@@ -693,22 +687,6 @@ pub use turn_timeline::{
     strip_turn_labels, thought_text, tool_detail_is_status, tool_display_title, tool_group_label,
     tool_status_failed, tool_status_running, turn_needs_timeline, turn_says, views_up_to_last_user,
     LiveBlock, LiveKind, ToolRow, TurnPart,
-};
-pub use update::{
-    beta_auto_off_for_versions, cabin_overlay_step, cabin_update_notice, cabin_version_newer,
-    clone_needs_recover, clone_recover_step, discover_source, fetch_channel_tips,
-    is_grokhub_source, origin_needs_retarget, overlay_clone_usable, overlay_clone_usable_in,
-    overlay_stop_targets, overlay_update_begin, overlay_update_can_restart, overlay_update_finish,
-    overlay_update_progress, parse_cabin_semver, parse_clone_recover_step, parse_github_latest_tag,
-    parse_ls_remote_tips, pending_for_manual_update, pending_from_versions, pending_on_channel,
-    recover_clone_if_needed, release_update_cmds, remote_tracking_tips, restart_acts, restart_argv,
-    restart_bin, settings_update_hint, settings_update_label, settings_update_note,
-    should_notify_cabin_update, switch_clone_to_main, systemd_user_restart_args,
-    systemd_user_stop_args, update_check_due, update_chip_label, update_cmds, update_cmds_for,
-    update_cmds_for_host, update_cmds_for_host_in, update_cmds_in, update_hint, update_plan_steps,
-    update_progress_pct, update_step_label, update_wipes_config, walk_up_source, CabinSemver,
-    OverlayUpdateView, RestartAct, UpdatePending, CLONE_RECOVER_STEP_PREFIX, GITHUB_LATEST_API,
-    GITHUB_REMOTE_URL, ORIGIN_REMOTE_URL, UPDATE_CHECK_EVERY,
 };
 pub use update_feed::{
     archive_digest, archived_digests, audio_check_card, automate_offer_card, automation_done_card,
