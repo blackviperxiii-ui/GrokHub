@@ -129,6 +129,12 @@ const TITLE_STOP: &[&str] = &[
     "trying",
 ];
 
+/// True for a word [`topics_from_turns`] never takes as a topic ("the",
+/// "please", "using"…). Lowercase input.
+pub fn is_title_stopword(word: &str) -> bool {
+    TITLE_STOP.contains(&word)
+}
+
 /// Local topic words from recent user turns — no model, no `GOAL:` parse.
 /// Prefers content words (len ≥ 3, not stopwords); keeps at most four short topics.
 pub fn topics_from_turns(messages: &[(String, String)]) -> Vec<String> {
