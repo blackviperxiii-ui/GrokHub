@@ -3681,7 +3681,7 @@ fn provider_fallible_covers_limits_credit_and_outages_only() {
         // the app's own offline mode blocks every cloud route alike.
         ClientError::Protocol("HTTP 400: maximum context length exceeded".into()),
         ClientError::Transport(
-            "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this."
+            "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this."
                 .into(),
         ),
     ];
