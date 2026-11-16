@@ -1,0 +1,1 @@
+- Devices: **Join another computer** pairs this computer with another one's share (the address and code under Sharing) and sends this computer's CPU, memory and app version to it once a minute, for its Fleet page. Only an address on your network is dialed, the pairing stays in the OS keychain, and Leave stops it.

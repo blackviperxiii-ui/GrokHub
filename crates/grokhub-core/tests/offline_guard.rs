@@ -112,6 +112,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-hub/src/doctor.rs", 1, "--doctor reads its own hub's /v1/health on 127.0.0.1 only"),
     ("src-tauri/src/remote.rs", 2, "UDP connect to TEST-NET-1 to read the LAN address (sends nothing), and an empty TCP connect to its own web access server to wake its worker pool"),
     ("src-tauri/src/remote_tls.rs", 1, "Web access TLS front proxies to its own loopback server"),
+    ("src-tauri/src/hub_join.rs", 1, "Join another computer: pairs with and sends the machine card to a hub on this network or this computer only (number address checked before every call), no redirects"),
     // Game companions: loopback game clients only (game-data paths are not changed).
     ("crates/grokhub-core/src/game_watch_league.rs", 1, "League live client API on 127.0.0.1 (facade agent, loopback-only resolver)"),
     ("crates/grokhub-core/src/game_watch_rl.rs", 1, "Rocket League Stats API on 127.0.0.1, read only"),

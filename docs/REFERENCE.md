@@ -98,7 +98,7 @@ Limits: building a channel from a clone is Linux-only; Windows gets Beta from th
 
 1. Launch `grokhub`. **Get Started** asks to connect Super Grok (device-code OAuth). The tokens go to Loadout's own `secrets.json`; Loadout never touches `~/.grok/auth.json`.
 2. Settings → **Account** connects or signs out later (or `grokhub --oauth`).
-3. Optional: Devices → **Start share** to pair another computer. Halt stops the turn. Ask shows Allow / Deny cards from the native gate.
+3. Optional: Devices → **Start share** to pair another computer. On the other computer, Devices → **Join another computer** takes that address and code; it then sends its CPU, memory and app version once a minute, on your network only, for the Fleet page. The pairing token stays in the OS keychain. Halt stops the turn. Ask shows Allow / Deny cards from the native gate.
 
 Tokens stay in `secrets.json`. Never in markdown.
 

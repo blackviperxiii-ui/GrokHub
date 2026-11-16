@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Devices as Shape, Share } from "./api";
+import type { Devices as Shape, HubJoin, Share } from "./api";
 
 const api = vi.hoisted(() => ({
   getDevices: vi.fn<() => Promise<Shape>>(),
@@ -10,6 +10,9 @@ const api = vi.hoisted(() => ({
   startShare: vi.fn<() => Promise<Share>>(),
   stopShare: vi.fn<() => Promise<Share>>(),
   newShareCode: vi.fn<() => Promise<Share>>(),
+  getHubJoin: vi.fn<() => Promise<HubJoin>>(),
+  joinHub: vi.fn<(address: string, code: string) => Promise<HubJoin>>(),
+  leaveHub: vi.fn<() => Promise<HubJoin>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -18,6 +21,8 @@ import {
   ago,
   browserLine,
   Devices,
+  JOIN_OFF,
+  joinLine,
   NONE_PAIRED,
   OFF_NOTE,
   PAIR_STEP,
@@ -51,6 +56,24 @@ const SHARE_ON_VIEW: Share = {
 const SIGNED_OUT_VIEW: Shape = { ...ON, browsers: [] };
 const OFF: Shape = { computer: "desk-1", on: false, lan: "", browsers: [] };
 
+const NOT_JOINED: HubJoin = { joined: null, lastSentAt: null, lastError: null };
+const JOINED: HubJoin = {
+  joined: { address: "192.168.1.20:18766", hubId: "d-desk", hubName: "Desk", joinedAt: NOW },
+  lastSentAt: NOW - 2 * MINUTE,
+  lastError: null,
+};
+
+describe("joinLine", () => {
+  it("names the computer, its address and how the last send went", () => {
+    expect(joinLine(NOT_JOINED, NOW)).toBe(JOIN_OFF);
+    expect(joinLine(JOINED, NOW)).toBe("Sending to Desk (192.168.1.20:18766). Last sent 2 min ago.");
+    expect(joinLine({ ...JOINED, lastSentAt: null }, NOW)).toBe("Sending to Desk (192.168.1.20:18766).");
+    expect(joinLine({ ...JOINED, lastError: "Desk isn't sharing right now." }, NOW)).toBe(
+      "Sending to Desk (192.168.1.20:18766). Desk isn't sharing right now.",
+    );
+  });
+});
+
 describe("ago", () => {
   it("says how long ago in minutes, hours or days", () => {
     expect(ago(NOW, NOW)).toBe("just now");
@@ -76,6 +99,51 @@ describe("Devices", () => {
     api.stopShare.mockReset();
     api.newShareCode.mockReset();
     api.getShare.mockResolvedValue(SHARE_OFF_VIEW);
+    api.getHubJoin.mockReset();
+    api.joinHub.mockReset();
+    api.leaveHub.mockReset();
+    api.getHubJoin.mockResolvedValue(NOT_JOINED);
+  });
+
+  it("joins another computer with its address and code, then leaves it", async () => {
+    api.getDevices.mockResolvedValue(OFF);
+    api.joinHub.mockResolvedValue(JOINED);
+    api.leaveHub.mockResolvedValue(NOT_JOINED);
+    render(<Devices onOpenWebAccess={() => {}} />);
+    const card = await screen.findByLabelText("Join");
+    expect(await within(card).findByText(JOIN_OFF)).toBeInTheDocument();
+    const join = within(card).getByRole("button", { name: "Join" });
+    expect(join).toBeDisabled();
+
+    await userEvent.type(within(card).getByLabelText("Other computer's address"), "http://192.168.1.20:18766");
+    await userEvent.type(within(card).getByLabelText("Other computer's code"), "K7M2QX");
+    await userEvent.click(join);
+    expect(api.joinHub).toHaveBeenCalledWith("http://192.168.1.20:18766", "K7M2QX");
+    expect(await within(card).findByText(/^Sending to Desk \(192\.168\.1\.20:18766\)\. Last sent/)).toBeInTheDocument();
+    expect(within(card).queryByLabelText("Other computer's code")).toBeNull();
+
+    await userEvent.click(within(card).getByRole("button", { name: "Leave" }));
+    expect(api.leaveHub).toHaveBeenCalledTimes(1);
+    expect(await within(card).findByText(JOIN_OFF)).toBeInTheDocument();
+  });
+
+  it("shows why joining failed and keeps what was typed", async () => {
+    api.getDevices.mockResolvedValue(OFF);
+    api.joinHub.mockRejectedValue("Pairing code does not match.");
+    render(<Devices onOpenWebAccess={() => {}} />);
+    const card = await screen.findByLabelText("Join");
+    await userEvent.type(await within(card).findByLabelText("Other computer's address"), "192.168.1.20");
+    await userEvent.type(within(card).getByLabelText("Other computer's code"), "WRONG1");
+    await userEvent.click(within(card).getByRole("button", { name: "Join" }));
+    expect(await within(card).findByText("Pairing code does not match.")).toBeInTheDocument();
+    expect(within(card).getByLabelText("Other computer's address")).toHaveValue("192.168.1.20");
+
+    api.joinHub.mockResolvedValue(JOINED);
+    await userEvent.clear(within(card).getByLabelText("Other computer's code"));
+    await userEvent.type(within(card).getByLabelText("Other computer's code"), "K7M2QX");
+    await userEvent.click(within(card).getByRole("button", { name: "Join" }));
+    expect(await within(card).findByText(/^Sending to Desk/)).toBeInTheDocument();
+    expect(within(card).queryByText("Pairing code does not match.")).toBeNull();
   });
 
   it("shows this computer, web access and the paired browsers", async () => {

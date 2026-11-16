@@ -68,6 +68,8 @@ mod home_fps;
 pub mod home_tiles;
 mod home_updates;
 #[cfg(desktop)]
+pub mod hub_join;
+#[cfg(desktop)]
 pub mod hub_send;
 #[cfg(desktop)]
 pub mod hub_share;
@@ -6509,6 +6511,49 @@ async fn fleet_usage() -> Result<fleet::Usage, String> {
     off_main(|| fleet::usage(fleet::claude_dir().as_deref(), grokhub_core::now_ms())).await
 }
 
+/// Devices → Join another computer: the hub this computer sends its machine
+/// card to, if any. Desktop only; the browser never reaches these.
+#[cfg(desktop)]
+#[tauri::command]
+async fn get_hub_join(state: State<'_, ShellState>) -> Result<hub_join::JoinView, String> {
+    let config_dir = state.config_dir.clone();
+    off_main(move || hub_join::view(&config_dir)).await
+}
+
+/// Pair with another computer's hub and send this computer's card right
+/// away. Dials the LAN, so off the main thread.
+#[cfg(desktop)]
+#[tauri::command]
+async fn join_hub(
+    state: State<'_, ShellState>,
+    share: State<'_, Arc<hub_share::HubShare>>,
+    address: String,
+    code: String,
+) -> Result<hub_join::JoinView, String> {
+    let config_dir = state.config_dir.clone();
+    let share = Arc::clone(&share);
+    off_main(move || {
+        let (id, name, _) = share.fleet();
+        hub_join::join(
+            &config_dir,
+            &address,
+            &code,
+            (&id, &name),
+            grokhub_core::now_ms(),
+        )?;
+        hub_join::send_now(&config_dir, &share);
+        Ok(hub_join::view(&config_dir))
+    })
+    .await?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn leave_hub(state: State<'_, ShellState>) -> Result<hub_join::JoinView, String> {
+    let config_dir = state.config_dir.clone();
+    off_main(move || hub_join::leave(&config_dir)).await?
+}
+
 /// Send on a `/sync` or `/inhabit` card. Its own command, not a slash line,
 /// so typing can't stand in for the click; the browser never reaches it.
 /// Reads chats and memory and writes the send log, so off the main thread.
@@ -7668,6 +7713,11 @@ pub fn run() {
             app.manage(Arc::new(hub_share::HubShare::open(
                 &app.state::<ShellState>().config_dir,
             )));
+            #[cfg(desktop)]
+            hub_join::start(
+                app.state::<ShellState>().config_dir.clone(),
+                Arc::clone(&app.state::<Arc<hub_share::HubShare>>()),
+            );
             let web = Arc::new(remote::WebAccess::default());
             app.manage(Arc::clone(&web));
             // Chat events reach paired browsers too; each page keeps its own
@@ -8167,6 +8217,12 @@ pub fn run() {
             new_share_code,
             #[cfg(desktop)]
             fleet_machines,
+            #[cfg(desktop)]
+            get_hub_join,
+            #[cfg(desktop)]
+            join_hub,
+            #[cfg(desktop)]
+            leave_hub,
             #[cfg(desktop)]
             fleet_usage,
             #[cfg(desktop)]
