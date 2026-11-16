@@ -86,7 +86,7 @@ There are two channels. **Stable** is `main`, where releases are cut. **Beta** i
 grokhub-shell --version                        # grokhub-shell X.Y.Z
 ```
 
-`--channel` fetches `origin`, checks out the branch (creating a local tracking branch the first time, and fast-forwarding it after that), then builds and installs. Stable follows `main`, not the latest release tag, because the in-app Update already pulls `main`. The switch refuses to run over uncommitted changes, and it stops instead of resetting when your local branch has commits that aren't on `origin`.
+`--channel` fetches `origin`, checks out the branch (creating a local tracking branch the first time, and fast-forwarding it after that), then builds and installs. Stable follows `main`, not the latest release tag, so a clone build can carry fixes that aren't tagged yet; the app's own Updates page installs tagged releases instead. The switch refuses to run over uncommitted changes, and it stops instead of resetting when your local branch has commits that aren't on `origin`.
 
 The channel is saved to `~/.config/GrokHub/channel` (or `$GROKHUB_CONFIG/channel`), next to the `source` receipt; the app's Updates switch and `install.sh --channel` write the same file. A plain `./scripts/install.sh --user` keeps the saved channel and builds whatever is checked out; it doesn't move git. `./scripts/install.sh --dry-run` prints the channel, branch, and receipt it would use, and exits.
 

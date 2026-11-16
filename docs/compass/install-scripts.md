@@ -11,7 +11,7 @@
 - `crates/grokhub-core/src/hands.rs`: `missing_uinput_daemon_receipts_are_distinct` asserts on the text of the install scripts, `packaging/PKGBUILD` and the AUR files; `pkgbuilds_build_and_install_the_shell_and_hub` pins both PKGBUILDs' `build()` to the same steps as `install.sh`.
 - `crates/grokhub-core/src/desktop_entry.rs` and `crates/grokhub-core/src/channel.rs`: more checks on `install.sh` and `sync-user-integration.sh` (`include_str!` text checks, and runs of its channel switch and package block).
 ## Change recipe
-- Edit the script, then run the core tests above: they pin strings like `update-desktop-database`, `enable --now grokhub-hub.service`, `alsa-utils`, `Overlay-Locked`, and the absence of `build-hands.sh`, `ydotoold`, and `pgrep grokhub`.
+- Edit the script, then run the core tests above: they pin strings like `update-desktop-database`, `enable --now grokhub-hub.service`, `alsa-utils`, and the absence of `build-hands.sh`, `ydotoold`, and `pgrep grokhub`.
 - Keep `install.sh` and both PKGBUILDs in step; the tests check all three. Edit them in a normal PR; CI green, then squash-merge into `beta` (`CLAUDE.md`). A PKGBUILD's `pkgver=` line moves only with `cargo xtask bump`.
 ## What breaks it
 - A new step that can fail the overlay under `set -euo pipefail`: package installs and the systemd steps deliberately continue on failure.

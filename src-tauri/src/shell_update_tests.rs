@@ -65,8 +65,19 @@ fn only_the_appimage_and_the_windows_installer_update_themselves() {
     assert!(!updatable("macos", None));
     assert!(!updatable("android", None));
     assert_eq!(
-        not_updatable_note("linux"),
-        "Installed from the .deb: update it with your package manager."
+        not_updatable_note("linux", Path::new("/usr/bin/grokhub-shell")),
+        "Installed from a package (.deb or AUR): update it with your package manager."
+    );
+    assert_eq!(
+        not_updatable_note("linux", Path::new("/home/user/.local/bin/grokhub-shell")),
+        "Built from a source clone: run git pull there, then scripts/install.sh --user."
+    );
+    assert_eq!(
+        not_updatable_note(
+            "macos",
+            Path::new("/Applications/Loadout.app/Contents/MacOS/grokhub-shell")
+        ),
+        "This build doesn't update itself yet."
     );
 }
 

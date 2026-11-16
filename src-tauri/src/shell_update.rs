@@ -1,12 +1,12 @@
 //! The shell updates itself (LU-06). Each release carries a `latest.json`
 //! that points at the Linux AppImage and the Windows NSIS installer, each
-//! minisign-signed with the same release key the cabin's updater trusts
-//! (`packaging/minisign.pub`). This finds the channel's newest release on
-//! GitHub, hands its `latest.json` to `tauri-plugin-updater`, and installs
-//! only when the user clicks. The `.deb` and macOS builds don't self-update.
+//! minisign-signed with the release key in `packaging/minisign.pub`. This
+//! finds the channel's newest release on GitHub, hands its `latest.json` to
+//! `tauri-plugin-updater`, and installs only when the user clicks. Package,
+//! source-clone and macOS builds don't self-update.
 //!
-//! The channel is the cabin's: the `channel` receipt in the config folder,
-//! so the shell's Stable/Beta switch and the cabin's are one setting.
+//! The channel is the `channel` receipt in the config folder, which
+//! `scripts/install.sh --channel` writes too, so the two are one setting.
 
 use std::io::Read;
 use std::path::Path;
@@ -69,8 +69,8 @@ pub fn channel(config_dir: &Path) -> Channel {
         .unwrap_or_else(build_channel)
 }
 
-/// Write the shared channel receipt, the way the cabin's switch does: a
-/// switch drops the Beta auto-off baseline.
+/// Write the shared channel receipt. A switch drops the old Beta auto-off
+/// baseline.
 pub fn set_channel(config_dir: &Path, channel: Channel) -> Result<(), String> {
     // A model catalog saved from the old channel's releases mustn't outlive it.
     if self::channel(config_dir) != channel {
@@ -93,11 +93,19 @@ pub fn updatable(os: &str, appimage: Option<&str>) -> bool {
     }
 }
 
-/// Why this install doesn't update itself, for the Updates panel.
-pub fn not_updatable_note(os: &str) -> &'static str {
-    match os {
-        "linux" => "Installed from the .deb: update it with your package manager.",
-        _ => "This build doesn't update itself yet.",
+/// Why this install doesn't update itself, for the Updates panel. `exe` is
+/// where this binary runs from: a package lives under `/usr`, a clone build
+/// anywhere else (the same rule as `grokhub-hub --update`).
+pub fn not_updatable_note(os: &str, exe: &Path) -> &'static str {
+    use grokhub_hub::update::{install_kind, InstallKind};
+    match install_kind(os, exe, None) {
+        InstallKind::Package => {
+            "Installed from a package (.deb or AUR): update it with your package manager."
+        }
+        InstallKind::Source => {
+            "Built from a source clone: run git pull there, then scripts/install.sh --user."
+        }
+        InstallKind::AppUpdater | InstallKind::Dmg => "This build doesn't update itself yet.",
     }
 }
 
@@ -184,7 +192,10 @@ impl UpdateView {
             version: version(),
             channel: channel(config_dir).as_str(),
             updatable,
-            note: (!updatable).then(|| not_updatable_note(os).to_string()),
+            note: (!updatable).then(|| {
+                let exe = std::env::current_exe().unwrap_or_default();
+                not_updatable_note(os, &exe).to_string()
+            }),
             available: None,
         }
     }

@@ -1,7 +1,7 @@
 //! Install channels. `stable` builds `main`; `beta` builds the `beta` branch.
 //! `scripts/install.sh --channel beta|stable` writes the choice to the
-//! `channel` receipt in the config folder, and the in-app Update reads it so a
-//! beta install never pulls `main`.
+//! `channel` receipt in the config folder, and the app's Updates page reads it
+//! to pick which releases to offer.
 
 /// The receipt file name inside the config folder (next to `source`).
 pub const CHANNEL_RECEIPT: &str = "channel";

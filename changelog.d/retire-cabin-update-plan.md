@@ -1,1 +1,2 @@
-- Removed the retired cabin's built-in update steps and the Windows clone install script. Settings → About → Updates is the one way the app updates itself, and the docs now say how it works.
+- Removed the retired cabin's built-in update steps and the Windows clone install script. The docs now describe the Updates page in Settings → About and the install paths that update outside the app.
+- Updates: a build that can't update itself now says how to update it: the package manager for a .deb or AUR install, or git pull and `scripts/install.sh --user` for a source clone.

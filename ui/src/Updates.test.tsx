@@ -91,15 +91,15 @@ describe("Updates", () => {
     expect(api.installShellUpdate).not.toHaveBeenCalled();
   });
 
-  it("a .deb install points at the package manager and offers no button", async () => {
+  it("a package install points at the package manager and offers no button", async () => {
     api.getUpdateStatus.mockResolvedValue({
       ...STABLE,
       updatable: false,
-      note: "Installed from the .deb: update it with your package manager.",
+      note: "Installed from a package (.deb or AUR): update it with your package manager.",
     });
     render(<Updates />);
     expect(
-      await screen.findByText("Installed from the .deb: update it with your package manager."),
+      await screen.findByText("Installed from a package (.deb or AUR): update it with your package manager."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });
