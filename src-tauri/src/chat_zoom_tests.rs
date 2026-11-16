@@ -575,6 +575,8 @@ fn elided_words_keep_the_word_after_the_apostrophe() {
     let a = word_vector("corrige l'erreur dans l'application").unwrap();
     let b = word_vector("erreur application").unwrap();
     assert!(cosine(&a, &b) > 0.6, "{}", cosine(&a, &b));
+    let c = word_vector("redémarre le serveur").unwrap();
+    assert!(cosine(&a, &c) < WORDS_FLOOR, "{}", cosine(&a, &c));
 }
 
 #[test]

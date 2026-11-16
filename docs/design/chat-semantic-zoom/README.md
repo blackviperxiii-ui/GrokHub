@@ -38,15 +38,16 @@ it. Groups are runs of turns, cut at a boundary.
    saved, at its end, so one run of 30 minutes or more also starts a group.
    Readers already ignore unknown fields, and the session rewrite keeps it.
    A compaction's own usage line carries one too. A compaction keeps some
-   of the messages it replaced word for word (the last ask, maybe its reply):
-   each one is matched, newest first and in order, to an equal message it
-   replaced and keeps that one's time; the rest (its summary and rules) take
-   the compaction's time. A turn that compacted as it ran marks its line
-   (`"turn": true`): what it kept after the newest message it shares with
-   what it replaced is that turn's own, never saved on its own, so it takes
-   the compaction's time and an identical older ask such as "continue" never
-   lends it one. Older turns have no time; their groups show the session's
-   start and last-saved times as the range instead.
+   of the messages it replaced (the last ask, maybe its reply): each one is
+   matched, newest first and in order, to a replaced message that shows the
+   same (an image the model's copy lost to the image budget still counts as
+   that image) and keeps that one's time; the rest (its summary and rules)
+   take the compaction's time. A turn that compacted as it ran marks its line
+   (`"turn": true`): from that turn's ask (the last user message that isn't a
+   tool's image) on, what it kept is its own, never saved on its own, so it
+   takes the compaction's time and an identical older ask such as "continue"
+   never lends it one. Older turns have no time; their groups show the
+   session's start and last-saved times as the range instead.
 2. **Topic shift.** Each turn's user text is embedded with the local static
    model the app already ships for memory recall (`potion-base-8M`, 256
    dimensions, CPU only, no network once downloaded). A new group starts when
@@ -90,7 +91,8 @@ clickable, because the chat view can't show those messages either.
   delete removes the file it wrote.
 - A compacted chat's "Earlier, compacted" count is every message a
   compaction took out of view: what each one replaced, less the messages it
-  kept word for word.
+  kept. A kept message deleted later still counts, since its saved copy is
+  under the compaction.
 
 ## Cost per 100 messages
 

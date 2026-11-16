@@ -919,13 +919,13 @@ struct Replay {
 }
 
 /// Replays the records. A message gets the time of the usage line that closes
-/// its turn. A compaction keeps some messages it replaced word for word (the
-/// last ask, maybe its reply): each kept message is matched, newest first and
-/// in order, to an equal message it replaced, and keeps that one's time. The
-/// rest (its summary and rules) take the compaction's own time. A turn that
-/// compacted as it ran also kept that turn's own messages, which were never
-/// saved on their own: everything after the newest message it shares with
-/// what it replaced is that turn's, and takes the compaction's time too.
+/// its turn. A compaction keeps some messages it replaced (the last ask, maybe
+/// its reply): each kept message is matched, newest first and in order, to a
+/// replaced message that shows the same ([`message_key`]), and keeps that
+/// one's time. The rest (its summary and rules) take the compaction's own
+/// time. A turn that compacted as it ran also kept that turn's own messages,
+/// which were never saved on their own: from its ask on, they take the
+/// compaction's time too, even when an older ask reads the same.
 fn replay(records: &[Record]) -> Replay {
     let mut visible: Vec<(InputItem, Option<u64>)> = Vec::new();
     let mut open: Vec<usize> = Vec::new();
@@ -947,24 +947,28 @@ fn replay(records: &[Record]) -> Replay {
                 open.clear();
                 let before = shown(&prior);
                 let after = shown(&visible);
+                let before_keys: Vec<_> =
+                    before.iter().map(|&p| message_key(&prior[p].0)).collect();
                 // How many of the kept messages, from the first, came from
-                // before: all of them, unless a turn added its own.
+                // before: all of them, unless a turn added its own, which
+                // start at its ask (the last user message that isn't a tool's
+                // image).
                 let old = match turn {
                     false => after.len(),
-                    true => before
-                        .last()
-                        .and_then(|&last| {
-                            after.iter().rposition(|&k| visible[k].0 == prior[last].0)
+                    true => after
+                        .iter()
+                        .rposition(|&k| {
+                            let tool_image = k > 0
+                                && matches!(visible[k - 1].0, InputItem::FunctionCallOutput { .. });
+                            is_shown_ask(&visible[k].0) && !tool_image
                         })
-                        .map_or(0, |at| at + 1),
+                        .unwrap_or(0),
                 };
                 let mut left = before.len();
                 let mut matched = 0;
                 for &k in after[..old].iter().rev() {
-                    let found = before[..left]
-                        .iter()
-                        .rposition(|&p| prior[p].0 == visible[k].0);
-                    if let Some(at) = found {
+                    let key = message_key(&visible[k].0);
+                    if let Some(at) = before_keys[..left].iter().rposition(|p| *p == key) {
                         visible[k].1 = prior[before[at]].1;
                         left = at;
                         matched += 1;
@@ -975,6 +979,26 @@ fn replay(records: &[Record]) -> Replay {
         }
     }
     Replay { visible, hidden }
+}
+
+/// A message as the transcript shows it: its role and visible text, with an
+/// image that was later swapped for the removed-image note still an image.
+/// Two copies of a message match on this, whatever images the model's copy
+/// has lost since it was saved.
+fn message_key(item: &InputItem) -> Option<(String, String)> {
+    let InputItem::Message { role, content } = item else {
+        return None;
+    };
+    let content: Vec<ContentPart> = content
+        .iter()
+        .map(|part| match part {
+            ContentPart::InputText(text) if text == crate::image_budget::OLD_IMAGE_PLACEHOLDER => {
+                ContentPart::InputImage(String::new())
+            }
+            other => other.clone(),
+        })
+        .collect();
+    Some((role.clone(), visible_text(role, &content)))
 }
 
 /// Where the messages [`transcript_pairs`] shows sit in `items`.
@@ -1829,19 +1853,40 @@ mod tests {
         );
         assert_ne!(times[0], Some(2_000));
         assert_eq!(compacted_messages(&info), 3, "the ask is still in view");
-        // Deleting a kept reply doesn't move the times either.
-        let kept = [
-            user("<summary>Bar.</summary>"),
-            second[0].clone(),
-            second[1].clone(),
-        ];
+    }
+
+    #[test]
+    fn deleting_the_reply_a_compaction_kept_keeps_the_asks_time() {
+        let (_dir, _guard) = isolated("server-shape");
+        let id = "native-server-shape";
+        let first = [user("fix the dock"), assistant("On it.")];
+        let second = [user("and the bar"), assistant("Done.")];
+        write_timed(id, &[(&first, 1_000), (&second, 2_000)]);
+        // The server path keeps the last ask and its reply.
+        let summary = user("<summary>Dock.</summary>");
+        let kept = [summary, second[0].clone(), second[1].clone()];
         record_compaction(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        assert_eq!(compacted_messages(&load_session(id).unwrap()), 2);
         let what = Forget::Reply {
             ask: Some(("and the bar", 0)),
         };
-        forget_message(id, what).unwrap();
+        assert_eq!(forget_message(id, what).unwrap(), Forgotten::Removed);
         let info = load_session(id).unwrap();
-        assert_eq!(user_turn_times(&info)[1], Some(2_000));
+        assert_eq!(
+            message_pairs(&info)
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>(),
+            ["<summary>Dock.</summary>\n[image]", "and the bar\n[image]"],
+            "the reply is gone"
+        );
+        let times = user_turn_times(&info);
+        assert_eq!(times.len(), 2, "{times:?}");
+        assert_eq!(times[1], Some(2_000));
+        assert_ne!(times[0], Some(2_000));
+        // The deleted reply's saved copy is still under the compaction, so it
+        // counts with what the compaction hid.
+        assert_eq!(compacted_messages(&info), 3);
     }
 
     #[test]
@@ -1875,6 +1920,91 @@ mod tests {
             "summary and the new ask share the compaction's time"
         );
         assert_eq!(compacted_messages(&info), 2, "only the dock turn went");
+        // Deleting the bar reply the compaction kept moves no time.
+        let what = Forget::Reply {
+            ask: Some(("and the bar", 0)),
+        };
+        assert_eq!(forget_message(id, what).unwrap(), Forgotten::Removed);
+        let after = user_turn_times(&load_session(id).unwrap());
+        assert_eq!(after, times, "{after:?}");
+    }
+
+    #[test]
+    fn a_cancelled_ask_sent_again_in_a_compacting_turn_takes_that_turns_time() {
+        let (_dir, _guard) = isolated("resent");
+        let id = "native-resent";
+        let first = [user("check the logs"), assistant("Clean.")];
+        // Cancelled before any reply.
+        let cancelled = [user("continue")];
+        write_timed(id, &[(&first, 1_000), (&cancelled, 2_000)]);
+        let summary = user("<summary>Logs.</summary>");
+        let again = [user("continue"), assistant("Step one done.")];
+        let kept = [summary, again[0].clone(), again[1].clone()];
+        let before = grokhub_core::now_ms();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        let times = user_turn_times(&load_session(id).unwrap());
+        assert_eq!(times.len(), 2, "{times:?}");
+        let at = times[1].unwrap();
+        assert!(
+            at >= before,
+            "{at} < {before}: borrowed the cancelled copy's time"
+        );
+        assert_eq!(times[0], times[1]);
+    }
+
+    #[test]
+    fn a_kept_tool_image_matches_its_saved_copy_after_the_image_was_dropped() {
+        let (_dir, _guard) = isolated("masked");
+        let id = "native-masked";
+        let image = |part: ContentPart| InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText("image from screenshot".into()), part],
+        };
+        let call = InputItem::FunctionCall {
+            call_id: "c1".into(),
+            name: "screenshot".into(),
+            arguments: "{}".into(),
+        };
+        let output = InputItem::FunctionCallOutput {
+            call_id: "c1".into(),
+            output: "ok".into(),
+        };
+        let saved = [
+            user("look at the screen"),
+            call.clone(),
+            output.clone(),
+            image(ContentPart::InputImage("data:image/png;base64,QQ==".into())),
+            assistant("I see a dock."),
+        ];
+        write_timed(id, &[(&saved, 2_000)]);
+        // The next turn took a compaction made while the image was masked.
+        let masked = image(ContentPart::InputText(
+            crate::image_budget::OLD_IMAGE_PLACEHOLDER.into(),
+        ));
+        let kept = [
+            user("<summary>Nothing yet.</summary>"),
+            saved[0].clone(),
+            call,
+            output,
+            masked,
+            saved[4].clone(),
+            user("now the bar"),
+            assistant("Bar done."),
+        ];
+        let before = grokhub_core::now_ms();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        let info = load_session(id).unwrap();
+        let times = user_turn_times(&info);
+        assert_eq!(times.len(), 4, "{times:?}");
+        assert_eq!(
+            (times[1], times[2]),
+            (Some(2_000), Some(2_000)),
+            "the ask and its tool image keep the saved time"
+        );
+        let own = times[3].unwrap();
+        assert!(own >= before, "{own} < {before}");
+        assert_eq!(times[0], times[3]);
+        assert_eq!(compacted_messages(&info), 0, "nothing went out of view");
     }
 
     #[test]
