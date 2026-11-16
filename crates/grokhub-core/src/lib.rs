@@ -314,10 +314,7 @@ pub use card_prefs::{
 pub use card_signals::{
     append_signal, signal_for, signal_group, CardEvent, CardSignal, SIGNAL_CAP,
 };
-pub use channel::{
-    parse_version_line, strip_product_prefix, version_line, BuildVersion, Channel,
-    CHANNEL_BETA_SINCE, CHANNEL_RECEIPT,
-};
+pub use channel::{Channel, CHANNEL_BETA_SINCE, CHANNEL_RECEIPT};
 pub use chat::{
     accepts_effort_none, accepts_reasoning_effort, agent_reasoning_effort_for_mode,
     chat_request_body, chat_request_body_for_mode, chat_request_body_images,

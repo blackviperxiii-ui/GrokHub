@@ -9,7 +9,7 @@
 - `cargo test -p grokhub-core channel` · `cargo test -p xtask`
 ## Key files
 - `src-tauri/build.rs`: sets the shell's base version, channel and beta N (GROKHUB_SHELL_BASE, GROKHUB_SHELL_CHANNEL, GROKHUB_SHELL_BETA_N) from `VERSION`, git and `GROKHUB_CHANNEL`; the version function in `src-tauri/src/shell_update.rs` builds the label from them.
-- `crates/grokhub-core/src/channel.rs`: `Channel`, `CHANNEL_RECEIPT`, `version_line`, `parse_version_line`.
+- `crates/grokhub-core/src/channel.rs`: `Channel`, `CHANNEL_RECEIPT`, `CHANNEL_BETA_SINCE`.
 - `src-tauri/src/shell_update.rs`: the app's Stable/Beta switch (`set_channel` writes the receipt) and its self-update.
 - `xtask/src/main.rs` + `changelog.d/README.md`: release ownership; feature PRs add fragments, bump folds them.
 - `CHANGELOG.md`: dated sections; leftover `## Unreleased` is folded by `xtask bump`.
@@ -23,7 +23,7 @@
 ## What depends on it
 - Settings → About → Updates (reads and writes the receipt) and `scripts/install.sh` (writes the receipt).
 ## Non-obvious
-- Beta N is `git rev-list --count <newest-vX.Y.Z>..HEAD`; missing tags (shallow clone) → `beta.0` until `git fetch --tags`. build.rs reruns on `HEAD`, `packed-refs`, `logs/HEAD`, and the branch ref.
+- Beta N is `git rev-list --count <newest-vX.Y.Z>..HEAD`; missing tags (shallow clone) → `beta.0` until `git fetch --tags`. The shell's build.rs reruns on `VERSION`, `GROKHUB_CHANNEL`, and git's `HEAD`, `packed-refs` and `logs/HEAD`.
 - In the app, a missing or empty receipt falls back to the channel the build itself is on; an unknown one reads as stable. Beta never turns itself off; switching back is the Updates page's Stable choice.
 - The app updates both channels from signed GitHub releases: stable from `releases/latest`, beta from the newest `vX.Y.Z-beta.N` or legacy `beta-v*` pre-release by `created_at` (`pick_release` in `crates/grokhub-core/src/release_verify.rs`). `.github/workflows/release.yml` publishes those tags as prerelease, never Latest.
 - `.github/`, `clippy.toml`, and release scripts ship in PRs like other changes (squash-merge into `beta` on green).

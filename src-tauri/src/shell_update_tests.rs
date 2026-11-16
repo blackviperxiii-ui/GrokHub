@@ -64,21 +64,57 @@ fn only_the_appimage_and_the_windows_installer_update_themselves() {
     assert!(updatable("windows", None));
     assert!(!updatable("macos", None));
     assert!(!updatable("android", None));
+}
+
+#[test]
+fn a_build_that_cant_update_itself_says_how_to_update_it() {
+    let dir = std::env::temp_dir().join(format!("shell-update-note-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let clone = dir.join("my-clone");
+    std::fs::create_dir_all(&clone).expect("dir");
+    let user_exe = Path::new("/home/user/.local/bin/grokhub-shell");
+    let system_exe = Path::new("/usr/bin/grokhub-shell");
+    let package = "Installed from a package (.deb or AUR): update it with your package manager.";
+    // No receipt: a .deb or AUR install, wherever it runs from.
     assert_eq!(
-        not_updatable_note("linux", Path::new("/usr/bin/grokhub-shell")),
-        "Installed from a package (.deb or AUR): update it with your package manager."
+        not_updatable_note("linux", &dir, Channel::Stable, system_exe),
+        package
+    );
+    std::fs::write(dir.join("source"), format!("{}\n", clone.display())).expect("receipt");
+    assert_eq!(
+        not_updatable_note("linux", &dir, Channel::Beta, user_exe),
+        format!(
+            "Built from the clone in {}: run scripts/install.sh --channel beta there to update it.",
+            clone.display()
+        )
     );
     assert_eq!(
-        not_updatable_note("linux", Path::new("/home/user/.local/bin/grokhub-shell")),
-        "Built from a source clone: run git pull there, then scripts/install.sh --user."
+        not_updatable_note("linux", &dir, Channel::Stable, system_exe),
+        format!(
+            "Built from the clone in {}: run scripts/install.sh --system --channel stable there to update it.",
+            clone.display()
+        )
+    );
+    // A receipt whose clone is gone no longer describes this install.
+    std::fs::remove_dir_all(&clone).expect("rm clone");
+    assert_eq!(
+        not_updatable_note("linux", &dir, Channel::Beta, user_exe),
+        package
+    );
+    assert_eq!(
+        not_updatable_note("android", &dir, Channel::Stable, user_exe),
+        "This build doesn't update itself yet."
     );
     assert_eq!(
         not_updatable_note(
             "macos",
+            &dir,
+            Channel::Stable,
             Path::new("/Applications/Loadout.app/Contents/MacOS/grokhub-shell")
         ),
         "This build doesn't update itself yet."
     );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

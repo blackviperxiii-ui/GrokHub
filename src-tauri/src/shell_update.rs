@@ -93,19 +93,35 @@ pub fn updatable(os: &str, appimage: Option<&str>) -> bool {
     }
 }
 
-/// Why this install doesn't update itself, for the Updates panel. `exe` is
-/// where this binary runs from: a package lives under `/usr`, a clone build
-/// anywhere else (the same rule as `grokhub-hub --update`).
-pub fn not_updatable_note(os: &str, exe: &Path) -> &'static str {
-    use grokhub_hub::update::{install_kind, InstallKind};
-    match install_kind(os, exe, None) {
-        InstallKind::Package => {
-            "Installed from a package (.deb or AUR): update it with your package manager."
+/// Why this install doesn't update itself, for the Updates panel.
+/// `scripts/install.sh` leaves its clone's path in the `source` receipt, so a
+/// receipt naming a folder that still exists means a clone build; any other
+/// Linux build without an AppImage came from a package. `--channel` fetches,
+/// moves the clone to the channel's branch and rebuilds, so the hint names the
+/// saved channel; `exe` under `/usr` means the clone was installed with
+/// `--system`.
+pub fn not_updatable_note(os: &str, config_dir: &Path, channel: Channel, exe: &Path) -> String {
+    if os != "linux" {
+        return "This build doesn't update itself yet.".to_string();
+    }
+    let clone = std::fs::read_to_string(config_dir.join("source"))
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty() && Path::new(t).is_dir());
+    match clone {
+        Some(clone) => {
+            let system = if exe.starts_with("/usr") {
+                " --system"
+            } else {
+                ""
+            };
+            format!(
+                "Built from the clone in {clone}: run scripts/install.sh{system} --channel {} there to update it.",
+                channel.as_str()
+            )
         }
-        InstallKind::Source => {
-            "Built from a source clone: run git pull there, then scripts/install.sh --user."
-        }
-        InstallKind::AppUpdater | InstallKind::Dmg => "This build doesn't update itself yet.",
+        None => "Installed from a package (.deb or AUR): update it with your package manager."
+            .to_string(),
     }
 }
 
@@ -188,13 +204,14 @@ impl UpdateView {
         let os = std::env::consts::OS;
         let appimage = std::env::var("APPIMAGE").ok();
         let updatable = updatable(os, appimage.as_deref());
+        let channel = channel(config_dir);
         Self {
             version: version(),
-            channel: channel(config_dir).as_str(),
+            channel: channel.as_str(),
             updatable,
             note: (!updatable).then(|| {
                 let exe = std::env::current_exe().unwrap_or_default();
-                not_updatable_note(os, &exe).to_string()
+                not_updatable_note(os, config_dir, channel, &exe)
             }),
             available: None,
         }
