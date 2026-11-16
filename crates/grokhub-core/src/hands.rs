@@ -340,7 +340,8 @@ mod tests {
     /// grants the call when an entry's `Exec` canonicalizes to that path. This
     /// runs install.sh's own `install_desktop_entry` into a temp prefix and
     /// checks the entry it writes matches the installed binary that way.
-    #[cfg(unix)]
+    /// Linux only: install.sh is, and it uses GNU `install -D`.
+    #[cfg(target_os = "linux")]
     #[test]
     fn install_sh_desktop_entry_matches_the_binary_the_way_kwin_does() {
         let script = include_str!("../../../scripts/install.sh").replace("\r\n", "\n");
