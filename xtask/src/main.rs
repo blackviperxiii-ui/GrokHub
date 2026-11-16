@@ -120,8 +120,7 @@ fn check_reference(root: &Path, version: &str) -> Result<(), String> {
     check_reference_text(&text, version)
 }
 
-/// Headline + both Latest cells use `**vX.Y.Z**`; `--version` examples use
-/// `GrokHub X.Y.Z-beta…` and `GrokHub X.Y.Z (main…)`.
+/// The headline and both Latest cells use `**vX.Y.Z**`.
 fn check_reference_text(text: &str, version: &str) -> Result<(), String> {
     let bold = format!("**v{version}**");
     let bold_n = text.matches(&bold).count();
@@ -129,14 +128,6 @@ fn check_reference_text(text: &str, version: &str) -> Result<(), String> {
         return Err(format!(
             "docs/REFERENCE.md: expected >=3 {bold:?} (headline + Latest rows), found {bold_n}"
         ));
-    }
-    for (needle, label) in [
-        (format!("GrokHub {version}-beta."), "--version beta example"),
-        (format!("GrokHub {version} (main"), "--version main example"),
-    ] {
-        if !text.contains(&needle) {
-            return Err(format!("docs/REFERENCE.md missing {label}: {needle:?}"));
-        }
     }
     Ok(())
 }
@@ -336,24 +327,7 @@ fn workspace_version_text(text: &str, old: &str, new: &str) -> Result<String, St
 fn reference_text(text: &str, old: &str, new: &str) -> Result<String, String> {
     // Refuse a partial bump: every lockstep token must already be present.
     check_reference_text(text, old)?;
-    let mut next = text.to_string();
-    // Longer / more specific tokens first so `GrokHub X.Y.Z-beta.` is not
-    // rewritten only as a prefix of a looser pattern.
-    for (from, to) in [
-        (format!("**v{old}**"), format!("**v{new}**")),
-        (
-            format!("GrokHub {old}-beta."),
-            format!("GrokHub {new}-beta."),
-        ),
-        (
-            format!("GrokHub {old} (main"),
-            format!("GrokHub {new} (main"),
-        ),
-        // Remaining plain `GrokHub X.Y.Z` (no-git build line, etc.).
-        (format!("GrokHub {old}"), format!("GrokHub {new}")),
-    ] {
-        next = next.replace(&from, &to);
-    }
+    let next = text.replace(&format!("**v{old}**"), &format!("**v{new}**"));
     check_reference_text(&next, new)?;
     Ok(next)
 }
@@ -535,13 +509,12 @@ mod tests {
             "**v{version}** — notes\n\
              | Linux | `grokhub-shell-v*-linux-amd64.AppImage` | **v{version}** |\n\
              | Windows | `GrokHub-Shell-Setup-*.exe` | **v{version}** |\n\
-             grokhub --version # GrokHub {version}-beta.3 (beta @ abc) or GrokHub {version} (main @ def)\n\
-             A build without git shows just `GrokHub {version}`.\n"
+             grokhub-shell --version # grokhub-shell X.Y.Z\n"
         )
     }
 
     #[test]
-    fn check_reference_requires_bold_count_and_version_examples() {
+    fn check_reference_requires_the_bold_count() {
         let ok = sample_reference("3.0.2");
         assert!(check_reference_text(&ok, "3.0.2").is_ok());
 
@@ -553,21 +526,9 @@ mod tests {
             "expected bold-count error, got {err}"
         );
 
-        // Stale --version beta example.
-        let stale_beta = ok.replace("GrokHub 3.0.2-beta.", "GrokHub 9.9.9-beta.");
-        let err = check_reference_text(&stale_beta, "3.0.2").unwrap_err();
-        assert!(
-            err.contains("--version beta example"),
-            "expected beta example error, got {err}"
-        );
-
-        // Stale --version main example.
-        let stale_main = ok.replace("GrokHub 3.0.2 (main", "GrokHub 9.9.9 (main");
-        let err = check_reference_text(&stale_main, "3.0.2").unwrap_err();
-        assert!(
-            err.contains("--version main example"),
-            "expected main example error, got {err}"
-        );
+        let bumped = reference_text(&ok, "3.0.2", "3.1.0").expect("bump");
+        assert_eq!(bumped, sample_reference("3.1.0"));
+        assert!(reference_text(&two_bold, "3.0.2", "3.1.0").is_err());
     }
 
     // ---- temp-dir fixtures for bump_apply / dry-run ----

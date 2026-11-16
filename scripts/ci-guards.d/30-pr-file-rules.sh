@@ -102,9 +102,6 @@ text = open(sys.argv[1], encoding="utf-8").read()
 v = sys.argv[2]
 needles = [
     f"**v{v}**",
-    f"GrokHub {v}-beta.",
-    f"GrokHub {v} (main",
-    f"GrokHub {v}",
 ]
 print("|".join(f"{n}:{text.count(n)}" for n in needles))
 PY

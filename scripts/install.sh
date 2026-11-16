@@ -109,7 +109,7 @@ fi
 cd "$ROOT"
 if [[ "$SWITCH" -eq 0 ]]; then
   # The remembered channel must match the checkout, or the build is labeled
-  # for one channel while it holds the other and Update then refuses the clone.
+  # for one channel while it holds the other.
   # Run this before the shell dep check so a wrong-channel clone still gets the
   # channel refusal (not a webkit/npm missing-deps message).
   CUR="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"
@@ -328,8 +328,8 @@ mkdir -p "$CONFIG_DIR"
 printf '%s\n' "$ROOT" > "$CONFIG_DIR/source"
 printf '%s\n' "$CHANNEL" > "$RECEIPT"
 if [[ "$SWITCH" -eq 1 ]]; then
-  # A switch drops the Beta auto-off baseline: turning Beta on starts a fresh
-  # one on the next check, and stable has none.
+  # A switch drops the old cabin's Beta auto-off baseline, which nothing
+  # writes any more.
   rm -f "$CONFIG_DIR/channel.beta-since"
 fi
 
