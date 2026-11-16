@@ -177,15 +177,53 @@ fn turn_text<'a>(lines: &'a [Line], turn: &Turn) -> &'a str {
     }
 }
 
+/// A rough English stem: "files", "filed" and "file" all give "fil"; a
+/// double "s" stays ("pass", "class").
 fn stem(word: &str) -> &str {
-    for suffix in ["ing", "ed", "es", "s"] {
-        if let Some(root) = word.strip_suffix(suffix) {
-            if root.len() >= 3 {
-                return root;
+    let root = ["ing", "ed", "es", "s"]
+        .iter()
+        .find_map(|suffix| {
+            let root = word.strip_suffix(suffix)?;
+            (root.len() >= 3 && !(*suffix == "s" && root.ends_with('s'))).then_some(root)
+        })
+        .unwrap_or(word);
+    match root.strip_suffix('e') {
+        Some(base) if base.len() >= 3 => base,
+        _ => root,
+    }
+}
+
+/// Part of a word: letters and digits, plus the combining signs of Indic and
+/// Southeast Asian scripts (viramas, vowel signs, tone marks), which aren't
+/// alphanumeric but sit inside words. The Devanagari full stops aren't.
+fn word_char(c: char) -> bool {
+    c.is_alphanumeric()
+        || (matches!(u32::from(c),
+            0x0300..=0x036F | 0x0900..=0x0DFF | 0x0E00..=0x0FFF | 0x1000..=0x109F
+                | 0x1780..=0x17FF)
+            && !matches!(c, '\u{0964}' | '\u{0965}'))
+}
+
+/// The text's words, lowercased, each run of an unspaced script apart from
+/// the letters around it ("用rust写" gives "用", "rust" and "写").
+fn words(text: &str) -> Vec<(bool, String)> {
+    let mut out: Vec<(bool, String)> = Vec::new();
+    for c in text.to_lowercase().chars() {
+        if !word_char(c) {
+            out.push((false, String::new()));
+            continue;
+        }
+        let kind = unspaced(c);
+        match out.last_mut() {
+            Some((last, word)) if *last == kind || word.is_empty() => {
+                *last = kind;
+                word.push(c);
             }
+            _ => out.push((kind, c.to_string())),
         }
     }
-    word
+    out.retain(|(_, word)| !word.is_empty());
+    out
 }
 
 /// Scripts written without spaces between words (Thai, Lao, Myanmar, Khmer,
@@ -210,8 +248,9 @@ fn bucket(word: &str) -> usize {
 fn word_vector(text: &str) -> Option<Vec<f32>> {
     let mut v = vec![0f32; BUCKETS];
     let mut any = false;
-    for raw in text.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
-        if raw.chars().any(unspaced) {
+    for (pairs_only, raw) in words(text) {
+        let raw = raw.as_str();
+        if pairs_only {
             let chars: Vec<char> = raw.chars().collect();
             let pairs: Vec<String> = match chars.len() {
                 1 => vec![raw.to_string()],
@@ -363,15 +402,20 @@ fn fold(
         .zip(&turns)
         .take_while(|(cached, turn)| cached.hash == turn.hash)
         .count();
-    let vecs: Vec<Option<Vec<f32>>> = turns
+    // Vectors are kept as their int8 form: a reused one is stored again as
+    // it was read, and a fresh one is grouped from its stored form, so a
+    // reopen groups exactly as the first open did.
+    let packed: Vec<Option<String>> = turns
         .iter()
         .enumerate()
         .map(|(i, turn)| match reuse.get(i) {
-            Some(cached) if i < kept => cached.vec.as_deref().and_then(unpack),
-            // Stored as int8: a fresh vector is rounded the same way, so a
-            // reopen groups exactly as the first open did.
-            _ => embed(turn_text(lines, turn)).and_then(|v| unpack(&pack(&v))),
+            Some(cached) if i < kept => cached.vec.clone(),
+            _ => embed(turn_text(lines, turn)).map(|v| pack(&v)),
         })
+        .collect();
+    let vecs: Vec<Option<Vec<f32>>> = packed
+        .iter()
+        .map(|vec| vec.as_deref().and_then(unpack))
         .collect();
     let groups = segment(&turns, &vecs, kind.floor())
         .into_iter()
@@ -379,10 +423,10 @@ fn fold(
         .collect();
     let cache = turns
         .iter()
-        .zip(&vecs)
+        .zip(packed)
         .map(|(turn, vec)| CachedTurn {
             hash: turn.hash.clone(),
-            vec: vec.as_deref().map(pack),
+            vec,
         })
         .collect();
     (groups, cache)
@@ -420,6 +464,16 @@ fn write_cache(config_dir: &Path, id: &str, kind: Kind, turns: Vec<CachedTurn>) 
     }
 }
 
+/// Writes the cache, unless the chat is gone: a delete that ran while this
+/// zoom was embedding has already forgotten it, so none is left behind.
+fn keep_cache(config_dir: &Path, id: &str, kind: Kind, turns: Vec<CachedTurn>) {
+    write_cache(config_dir, id, kind, turns);
+    let _config = ConfigGuard::set(config_dir);
+    if !grokhub_agent::session_file(id).is_ok_and(|file| file.exists()) {
+        forget(config_dir, id);
+    }
+}
+
 /// Removes a chat's zoom cache; deleting the chat calls it.
 pub fn forget(config_dir: &Path, id: &str) {
     let _ = std::fs::remove_file(cache_path(config_dir, id));
@@ -446,15 +500,10 @@ pub fn zoom_with(config_dir: &Path, id: &str, model: Option<&StaticModel>) -> Re
         None => word_vector(text),
     };
     let (groups, turns) = fold(&lines, &times, kind, &reuse, &embed);
-    let _config = ConfigGuard::set(config_dir);
     if !scratch {
-        write_cache(config_dir, &info.id, kind, turns);
-        // A delete that ran while this one was embedding has already
-        // forgotten the cache; don't leave a new one behind it.
-        if !grokhub_agent::session_file(&info.id).is_ok_and(|file| file.exists()) {
-            forget(config_dir, &info.id);
-        }
+        keep_cache(config_dir, &info.id, kind, turns);
     }
+    let _config = ConfigGuard::set(config_dir);
     Ok(Zoom {
         id: info.id.clone(),
         lines: lines.len(),

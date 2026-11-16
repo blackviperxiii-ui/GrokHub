@@ -600,7 +600,7 @@ impl NativeEngine {
         self.usage = out.usage.clone();
         let delta = self.usage.saturating_delta(&before_usage);
         if out.compacted {
-            let _ = crate::session::record_compaction(
+            let _ = crate::session::record_compacted_turn(
                 &session,
                 &cwd,
                 &model,

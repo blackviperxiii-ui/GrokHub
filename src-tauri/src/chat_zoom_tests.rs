@@ -430,3 +430,91 @@ fn unspaced_scripts_match_on_shared_character_pairs() {
     assert!(cosine(&a, &b) > WORDS_FLOOR, "{}", cosine(&a, &b));
     assert!(cosine(&a, &c) < WORDS_FLOOR, "{}", cosine(&a, &c));
 }
+
+#[test]
+fn plural_and_past_forms_share_a_stem() {
+    let stems: Vec<&str> = [
+        "file", "files", "filed", "change", "changes", "updated", "update",
+    ]
+    .into_iter()
+    .map(stem)
+    .collect();
+    assert_eq!(
+        stems,
+        ["fil", "fil", "fil", "chang", "chang", "updat", "updat"]
+    );
+    let doubled: Vec<&str> = ["pass", "passing", "class", "classes"]
+        .into_iter()
+        .map(stem)
+        .collect();
+    assert_eq!(doubled, ["pass", "pass", "class", "class"]);
+}
+
+#[test]
+fn indic_words_keep_their_combining_signs() {
+    let got: Vec<String> = words("प्रश्न का उत्तर।").into_iter().map(|(_, w)| w).collect();
+    assert_eq!(got, ["प्रश्न", "का", "उत्तर"]);
+    let a = word_vector("प्रश्न का उत्तर दीजिए").unwrap();
+    let b = word_vector("इस प्रश्न का उत्तर").unwrap();
+    assert!(cosine(&a, &b) > 0.5, "{}", cosine(&a, &b));
+}
+
+#[test]
+fn a_latin_word_inside_unspaced_text_is_a_word_of_its_own() {
+    let got: Vec<(bool, String)> = words("用Rust写服务器");
+    assert_eq!(
+        got,
+        [
+            (true, "用".to_string()),
+            (false, "rust".to_string()),
+            (true, "写服务器".to_string()),
+        ]
+    );
+    let a = word_vector("用Rust写服务器").unwrap();
+    let b = word_vector("rust build").unwrap();
+    assert!(cosine(&a, &b) > WORDS_FLOOR, "{}", cosine(&a, &b));
+}
+
+#[test]
+fn a_reopen_stores_and_groups_the_very_same_vectors() {
+    let lines: Vec<Line> = ["lisbon trip", "lisbon hotels near the river", "rust build"]
+        .iter()
+        .flat_map(|ask| [line(Role::User, ask), line(Role::Assistant, "ok")])
+        .collect();
+    // A vector whose int8 form, made unit again and rounded again, would come
+    // out as [8, 8, 126]: storing what was read is what keeps it [8, 8, 127].
+    let embed = |_: &str| unit(vec![1.0, 1.0, 16.0]);
+    let (groups, first) = fold(&lines, &[], Kind::Model, &[], &embed);
+    assert_eq!(first[0].vec.as_deref(), Some("CAh/"), "bytes 8, 8, 127");
+    let (again, second) = fold(&lines, &[], Kind::Model, &first, &embed);
+    let stored = |cache: &[CachedTurn]| -> Vec<Option<String>> {
+        cache.iter().map(|t| t.vec.clone()).collect()
+    };
+    assert_eq!(stored(&second), stored(&first), "stored again as read");
+    assert_eq!(again, groups);
+    // The first open grouped from the stored form too.
+    let calls = Cell::new(0);
+    let none = |_: &str| {
+        calls.set(calls.get() + 1);
+        None
+    };
+    let (cached, _) = fold(&lines, &[], Kind::Model, &first, &none);
+    assert_eq!((calls.get(), cached), (0, groups));
+}
+
+#[test]
+fn no_cache_is_kept_for_a_chat_that_was_deleted_meanwhile() {
+    let dir = temp_dir("gone");
+    let turn = || {
+        vec![CachedTurn {
+            hash: "x".into(),
+            vec: None,
+        }]
+    };
+    keep_cache(&dir, "shell-zoom-gone", Kind::Words, turn());
+    assert!(!cache_path(&dir, "shell-zoom-gone").exists());
+    write_chat(&dir, "shell-zoom-here", &[("lisbon", "Sure.", None)]);
+    keep_cache(&dir, "shell-zoom-here", Kind::Words, turn());
+    assert!(cache_path(&dir, "shell-zoom-here").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

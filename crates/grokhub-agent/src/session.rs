@@ -53,6 +53,9 @@ enum Record {
     /// Replaces every earlier item. Later items append after this prefix.
     Compaction {
         items: Vec<InputItem>,
+        /// Saved by a turn that compacted as it ran, so its last ask is that
+        /// turn's and was never saved on its own line.
+        turn: bool,
     },
 }
 
@@ -460,6 +463,31 @@ pub fn record_compaction(
     usage: &Usage,
     meter: &str,
 ) -> Result<(), String> {
+    write_compaction(id, cwd, model, items, usage, meter, false)
+}
+
+/// [`record_compaction`] for a turn that compacted as it ran: the turn is
+/// saved only through the compaction, so its ask takes the compaction's time.
+pub fn record_compacted_turn(
+    id: &str,
+    cwd: &str,
+    model: &str,
+    items: &[InputItem],
+    usage: &Usage,
+    meter: &str,
+) -> Result<(), String> {
+    write_compaction(id, cwd, model, items, usage, meter, true)
+}
+
+fn write_compaction(
+    id: &str,
+    cwd: &str,
+    model: &str,
+    items: &[InputItem],
+    usage: &Usage,
+    meter: &str,
+    turn: bool,
+) -> Result<(), String> {
     let id = safe_id(id)?.to_string();
     if tombstoned(&id) {
         return Ok(());
@@ -471,7 +499,7 @@ pub fn record_compaction(
     }
     let mut lines = Vec::new();
     let at = Some(grokhub_core::now_ms());
-    for value in [compaction_json(items), usage_json(usage, meter, at)] {
+    for value in [compaction_json(items, turn), usage_json(usage, meter, at)] {
         serde_json::to_writer(&mut lines, &value).map_err(|err| err.to_string())?;
         lines.push(b'\n');
     }
@@ -737,7 +765,7 @@ fn visible_slots(records: &[Record]) -> Vec<(Slot, InputItem)> {
     let mut out = Vec::new();
     for (i, record) in records.iter().enumerate() {
         match record {
-            Record::Compaction { items } => {
+            Record::Compaction { items, .. } => {
                 out.clear();
                 for (j, item) in items.iter().enumerate() {
                     out.push((Slot::Kept(i, j), item.clone()));
@@ -761,7 +789,7 @@ fn drop_slots(records: &mut Vec<Record>, doomed: &[Slot]) {
         }
     }
     for (i, js) in kept {
-        if let Some(Record::Compaction { items }) = records.get_mut(i) {
+        if let Some(Record::Compaction { items, .. }) = records.get_mut(i) {
             let mut j = 0;
             items.retain(|_| {
                 let keep = !js.contains(&j);
@@ -887,8 +915,9 @@ fn is_shown_message(item: &InputItem) -> bool {
 /// user pair, in order, from the time on the usage line that closed its turn.
 /// An ask a compaction kept word for word keeps the time it was first saved
 /// with; anything else the compaction wrote (its summary, or the ask of a
-/// turn that compacted) takes the compaction's time. `None` for turns saved
-/// before usage lines carried a time.
+/// turn that compacted as it ran) takes the compaction's time. `None` for
+/// turns saved before usage lines carried a time. A turn whose usage line
+/// was lost to a torn write takes the next turn's time.
 pub fn user_turn_times(info: &SessionInfo) -> Vec<Option<u64>> {
     let records = &info.records;
     // Each top-level ask gets the time of the usage line that closes it.
@@ -901,33 +930,54 @@ pub fn user_turn_times(info: &SessionInfo) -> Vec<Option<u64>> {
             _ => {}
         }
     }
+    // Then each compaction's items, oldest compaction first, so a later one
+    // can take a time an earlier one kept.
+    let mut kept: Vec<Vec<Option<u64>>> = vec![Vec::new(); records.len()];
+    for (i, record) in records.iter().enumerate() {
+        let Record::Compaction { items, turn } = record else {
+            continue;
+        };
+        let own = match records.get(i + 1) {
+            Some(Record::Usage { at, .. }) => *at,
+            _ => None,
+        };
+        let turn_ask = turn.then(|| items.iter().rposition(is_shown_ask)).flatten();
+        kept[i] = items
+            .iter()
+            .enumerate()
+            .map(|(j, item)| match turn_ask == Some(j) {
+                true => own,
+                false => earlier_time(records, &top, &kept, i, item).unwrap_or(own),
+            })
+            .collect();
+    }
     visible_slots(records)
         .into_iter()
         .filter(|(_, item)| is_shown_ask(item))
-        .map(|(slot, item)| match slot {
+        .map(|(slot, _)| match slot {
             Slot::Top(i) => top[i],
-            Slot::Kept(i, _) => kept_time(records, &top, i, &item),
+            Slot::Kept(i, j) => kept[i][j],
         })
         .collect()
 }
 
-/// The time of `item`, kept by the compaction at `i`: the time of the same
-/// ask saved before it (top level, or kept by an earlier compaction), else
-/// the time of the compaction's own usage line.
-fn kept_time(records: &[Record], top: &[Option<u64>], i: usize, item: &InputItem) -> Option<u64> {
-    for k in (0..i).rev() {
-        match &records[k] {
-            Record::Item(earlier) if earlier == item => return top[k],
-            Record::Compaction { items } if items.contains(item) => {
-                return kept_time(records, top, k, item)
-            }
-            _ => {}
-        }
-    }
-    match records.get(i + 1) {
-        Some(Record::Usage { at, .. }) => *at,
+/// The time of the newest copy of `item` saved before the record at `i`, on
+/// its own line or kept by an earlier compaction. `None` when there is none.
+fn earlier_time(
+    records: &[Record],
+    top: &[Option<u64>],
+    kept: &[Vec<Option<u64>>],
+    i: usize,
+    item: &InputItem,
+) -> Option<Option<u64>> {
+    (0..i).rev().find_map(|k| match &records[k] {
+        Record::Item(earlier) if earlier == item => Some(top[k]),
+        Record::Compaction { items, .. } => items
+            .iter()
+            .rposition(|earlier| earlier == item)
+            .map(|j| kept[k][j]),
         _ => None,
-    }
+    })
 }
 
 /// How many messages the last compaction took out of the transcript: the
@@ -940,7 +990,7 @@ pub fn compacted_messages(info: &SessionInfo) -> usize {
     else {
         return 0;
     };
-    let Record::Compaction { items: kept } = &info.records[cut] else {
+    let Record::Compaction { items: kept, .. } = &info.records[cut] else {
         return 0;
     };
     let mut kept: Vec<&InputItem> = kept.iter().filter(|item| is_shown_message(item)).collect();
@@ -1124,7 +1174,7 @@ fn write_session(info: &SessionInfo) -> Result<(), String> {
         let value = match record {
             Record::Item(item) => item_json(item),
             Record::Usage { usage, meter, at } => usage_json(usage, meter, *at),
-            Record::Compaction { items } => compaction_json(items),
+            Record::Compaction { items, turn } => compaction_json(items, *turn),
         };
         push_line(&mut bytes, &value)?;
     }
@@ -1334,7 +1384,10 @@ fn parse_record(value: &Value) -> Option<Record> {
                     }
                 }
             }
-            Some(Record::Compaction { items })
+            Some(Record::Compaction {
+                items,
+                turn: value.get("turn").and_then(Value::as_bool).unwrap_or(false),
+            })
         }
         _ => None,
     }
@@ -1346,7 +1399,7 @@ fn replay_items(records: &[Record]) -> Vec<InputItem> {
         match record {
             Record::Item(item) => items.push(item.clone()),
             Record::Usage { .. } => {}
-            Record::Compaction { items: rebuilt } => items = rebuilt.clone(),
+            Record::Compaction { items: rebuilt, .. } => items = rebuilt.clone(),
         }
     }
     items
@@ -1357,7 +1410,7 @@ fn visible_records(records: &[Record]) -> Vec<Record> {
     let mut out = Vec::new();
     for record in records {
         match record {
-            Record::Compaction { items } => {
+            Record::Compaction { items, .. } => {
                 out.retain(|entry| matches!(entry, Record::Usage { .. }));
                 for item in items {
                     out.push(Record::Item(item.clone()));
@@ -1435,11 +1488,15 @@ fn item_json(item: &InputItem) -> Value {
     }
 }
 
-fn compaction_json(items: &[InputItem]) -> Value {
-    json!({
+fn compaction_json(items: &[InputItem], turn: bool) -> Value {
+    let mut value = json!({
         "type": "compaction",
         "items": items.iter().map(item_json).collect::<Vec<_>>(),
-    })
+    });
+    if turn {
+        value["turn"] = json!(true);
+    }
+    value
 }
 
 fn usage_json(usage: &Usage, meter: &str, at: Option<u64>) -> Value {
@@ -1686,20 +1743,38 @@ mod tests {
         assert_eq!(user_turn_times(&info), Vec::<Option<u64>>::new());
     }
 
+    /// Writes a chat by hand: per turn its items and a usage line at `at`.
+    fn write_timed(id: &str, turns: &[(&[InputItem], u64)]) {
+        let file = session_file(id).unwrap();
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let mut lines = vec![
+            json!({"id": id, "title": "Chat", "created": 5, "cwd": "/work",
+            "model": "grok-4.7", "engine": "native", "renamed": false}),
+        ];
+        for (items, at) in turns {
+            lines.extend(items.iter().map(item_json));
+            lines.push(usage_json(&Usage::default(), "", Some(*at)));
+        }
+        let raw: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        fs::write(&file, raw).unwrap();
+    }
+
     #[test]
     fn a_compaction_keeps_the_times_of_the_asks_it_kept_and_stamps_its_own() {
         let (_dir, _guard) = isolated("kept-times");
         let id = "native-kept-times";
         let usage = Usage::default();
-        record_turn(id, "/work", "grok-4.7", &sample_items(), &usage, "", "fix").unwrap();
+        let first = [user("fix the dock"), assistant("On it.")];
         let second = [user("and the bar"), assistant("Done.")];
-        record_turn(id, "/work", "grok-4.7", &second, &usage, "", "bar").unwrap();
-        let saved = user_turn_times(&load_session(id).unwrap());
-        let bar = saved[1].expect("the second ask has a time");
+        write_timed(id, &[(&first, 1_000), (&second, 2_000)]);
+        assert_eq!(
+            user_turn_times(&load_session(id).unwrap()),
+            vec![Some(1_000), Some(2_000)]
+        );
         // A manual compact: a summary, then the last turn word for word.
         let summary = user("<summary>Fixed the dock.</summary>");
-        let before = grokhub_core::now_ms();
         let kept = [summary.clone(), second[0].clone(), second[1].clone()];
+        let before = grokhub_core::now_ms();
         record_compaction(id, "/work", "grok-4.7", &kept, &usage, "").unwrap();
         let after = grokhub_core::now_ms();
         let info = load_session(id).unwrap();
@@ -1715,21 +1790,59 @@ mod tests {
             (before..=after).contains(&compacted_at),
             "{compacted_at} not in {before}..={after}"
         );
-        assert_eq!(times[1], Some(bar), "the kept ask keeps its own time");
+        assert_eq!(times[1], Some(2_000), "the kept ask keeps its own time");
         // A turn that compacts as it runs is saved only by the compaction:
         // its ask takes that time, and the earlier kept ask still keeps its.
         let third = [user("now the roof"), assistant("Roof done.")];
         let kept: Vec<InputItem> = kept.iter().chain(third.iter()).cloned().collect();
-        record_compaction(id, "/work", "grok-4.7", &kept, &usage, "").unwrap();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, &usage, "").unwrap();
         let after_third = grokhub_core::now_ms();
         let times = user_turn_times(&load_session(id).unwrap());
         assert_eq!(times.len(), 3, "{times:?}");
-        assert_eq!((times[0], times[1]), (Some(compacted_at), Some(bar)));
+        assert_eq!((times[0], times[1]), (Some(compacted_at), Some(2_000)));
         let roof = times[2].expect("the compacting turn has a time");
         assert!(
             (after..=after_third).contains(&roof),
             "{roof} not in {after}..={after_third}"
         );
+    }
+
+    #[test]
+    fn a_compacting_turn_that_repeats_an_old_ask_takes_its_own_time() {
+        let (_dir, _guard) = isolated("repeat-ask");
+        let id = "native-repeat-ask";
+        let first = [user("continue"), assistant("Step one done.")];
+        let second = [user("check the logs"), assistant("Clean.")];
+        write_timed(id, &[(&first, 1_000), (&second, 2_000)]);
+        let summary = user("<summary>Steps and logs.</summary>");
+        let again = [user("continue"), assistant("Step two done.")];
+        let kept = [summary, again[0].clone(), again[1].clone()];
+        let before = grokhub_core::now_ms();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        let after = grokhub_core::now_ms();
+        let raw = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        let marker: Value = serde_json::from_str(raw.lines().nth(7).unwrap()).unwrap();
+        assert_eq!(
+            (&marker["type"], &marker["turn"]),
+            (&json!("compaction"), &json!(true))
+        );
+        let times = user_turn_times(&load_session(id).unwrap());
+        assert_eq!(times.len(), 2, "{times:?}");
+        assert_eq!(
+            times[0], times[1],
+            "summary and ask share the compaction's time"
+        );
+        let at = times[1].unwrap();
+        assert!(
+            (before..=after).contains(&at),
+            "{at} not in {before}..={after}"
+        );
+        // The same marker saved by a manual compact would take the old time.
+        let mut info = load_session(id).unwrap();
+        if let Some(Record::Compaction { turn, .. }) = info.records.get_mut(6) {
+            *turn = false;
+        }
+        assert_eq!(user_turn_times(&info)[1], Some(1_000));
     }
 
     #[test]

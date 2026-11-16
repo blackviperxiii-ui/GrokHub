@@ -40,7 +40,9 @@ it. Groups are runs of turns, cut at a boundary.
    A compaction's own usage line carries one too: an ask it keeps word for
    word keeps the time it was first saved with, and the rest of what it
    writes (its summary, or the ask of a turn that compacted as it ran) takes
-   the compaction's time. Older turns have no time; their groups show the
+   the compaction's time. A turn that compacted as it ran marks its
+   compaction line (`"turn": true`), so its ask isn't matched to an older,
+   identical ask such as "continue". Older turns have no time; their groups show the
    session's start and last-saved times as the range instead.
 2. **Topic shift.** Each turn's user text is embedded with the local static
    model the app already ships for memory recall (`potion-base-8M`, 256
@@ -50,8 +52,11 @@ it. Groups are runs of turns, cut at a boundary.
    has at least 3 turns. A group also closes at 40 turns. When the model
    isn't downloaded (or memory embeddings are off), the same rule runs on a
    hashed bag of stemmed words (1,024 buckets), with its own threshold (0.08).
-   Scripts written without spaces (Thai, Lao, Myanmar, Khmer, kana and CJK
-   ideographs) count each pair of characters as a word.
+   Words are stemmed roughly ("files", "filed" and "file" match). Indic and
+   Southeast Asian combining signs stay inside their words. Scripts written
+   without spaces (Thai, Lao, Myanmar, Khmer, kana and CJK ideographs) count
+   each pair of characters as a word, and a Latin word inside them stays a
+   word of its own.
 3. **Labels.** The title comes from the group's own words, with the existing
    unused topic helpers (`topics_from_turns`, `short_auto_title`). The one-line
    summary is the group's first user line, clipped to about 90 characters. No
@@ -67,8 +72,9 @@ clickable, because the chat view can't show those messages either.
 - `{config}/zoom/<chat-id>.json` holds, per turn, a hash of its role and text
   and its vector (int8, base64, about 344 characters for 256 dimensions).
   Times and groups come from the session file on each open; grouping the
-  vectors is quick. Fresh vectors are rounded to int8 too, so a reopen groups
-  exactly as the first open did. Scratch chats are grouped in memory only
+  vectors is quick. A fresh vector is grouped from its stored int8 form, and
+  a reused one is stored again as it was read, so a reopen groups exactly as
+  the first open did. Scratch chats are grouped in memory only
   and never written.
 - On open, the cache is checked against the session: the longest prefix of
   matching turn hashes is kept, and only the turns after it are embedded
