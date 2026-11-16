@@ -177,10 +177,11 @@ fn turn_text<'a>(lines: &'a [Line], turn: &Turn) -> &'a str {
     }
 }
 
-/// A rough English stem: "files", "filed" and "file" all give "fil"; a
-/// double "s" stays ("pass", "class").
+/// A rough English stem: "files", "filed" and "file" all give "fil", and
+/// "settings" and "setting" give "sett"; a double "s" stays ("pass",
+/// "class").
 fn stem(word: &str) -> &str {
-    let root = ["ing", "ed", "es", "s"]
+    let root = ["ings", "ing", "ed", "es", "s"]
         .iter()
         .find_map(|suffix| {
             let root = word.strip_suffix(suffix)?;
@@ -195,20 +196,41 @@ fn stem(word: &str) -> &str {
 
 /// Part of a word: letters and digits, plus the combining signs of Indic and
 /// Southeast Asian scripts (viramas, vowel signs, tone marks), which aren't
-/// alphanumeric but sit inside words. The Devanagari full stops aren't.
+/// alphanumeric but sit inside words. Those scripts' punctuation and symbols
+/// (dandas, the Thai and Myanmar full stops, the Tibetan tsheg) aren't.
 fn word_char(c: char) -> bool {
-    c.is_alphanumeric()
-        || (matches!(u32::from(c),
-            0x0300..=0x036F | 0x0900..=0x0DFF | 0x0E00..=0x0FFF | 0x1000..=0x109F
-                | 0x1780..=0x17FF)
-            && !matches!(c, '\u{0964}' | '\u{0965}'))
+    if c.is_alphanumeric() {
+        return true;
+    }
+    let mark_blocks = matches!(u32::from(c),
+        0x0300..=0x036F | 0x0900..=0x0DFF | 0x0E00..=0x0FFF | 0x1000..=0x109F
+            | 0x1780..=0x17FF);
+    let punctuation = matches!(u32::from(c),
+        0x0964..=0x0965 | 0x0970 | 0x09F2..=0x09F3 | 0x09FA..=0x09FB | 0x09FD | 0x0A76
+            | 0x0AF0..=0x0AF1 | 0x0B70 | 0x0BF3..=0x0BFA | 0x0C77 | 0x0C7F | 0x0C84
+            | 0x0D4F | 0x0D79 | 0x0DF4 | 0x0E3F | 0x0E4F | 0x0E5A..=0x0E5B
+            | 0x0F01..=0x0F17 | 0x0F1A..=0x0F1F | 0x0F34 | 0x0F36 | 0x0F38
+            | 0x0F3A..=0x0F3D | 0x0F85 | 0x0FBE..=0x0FC5 | 0x0FC7..=0x0FCC
+            | 0x0FCE..=0x0FDA | 0x104A..=0x104F | 0x109E..=0x109F | 0x17D4..=0x17D6
+            | 0x17D8..=0x17DB);
+    mark_blocks && !punctuation
 }
 
 /// The text's words, lowercased, each run of an unspaced script apart from
-/// the letters around it ("用rust写" gives "用", "rust" and "写").
+/// the letters around it ("用rust写" gives "用", "rust" and "写"). An
+/// apostrophe stays inside a spaced word.
 fn words(text: &str) -> Vec<(bool, String)> {
     let mut out: Vec<(bool, String)> = Vec::new();
     for c in text.to_lowercase().chars() {
+        let apostrophe = matches!(c, '\'' | '\u{2019}');
+        if apostrophe {
+            // Inside a spaced word ("don't", "user's") it joins.
+            match out.last_mut() {
+                Some((false, word)) if !word.is_empty() => word.push('\''),
+                _ => out.push((false, String::new())),
+            }
+            continue;
+        }
         if !word_char(c) {
             out.push((false, String::new()));
             continue;
@@ -227,11 +249,13 @@ fn words(text: &str) -> Vec<(bool, String)> {
 }
 
 /// Scripts written without spaces between words (Thai, Lao, Myanmar, Khmer,
-/// kana and CJK ideographs): their runs are split into character pairs.
+/// kana and CJK ideographs, with the iteration mark 々): their runs are split
+/// into character pairs.
 fn unspaced(c: char) -> bool {
     matches!(u32::from(c),
-        0x0E00..=0x0EFF | 0x1000..=0x109F | 0x1780..=0x17FF | 0x3040..=0x30FF
-            | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF)
+        0x0E00..=0x0EFF | 0x1000..=0x109F | 0x1780..=0x17FF | 0x3005..=0x3007
+            | 0x3040..=0x30FF | 0x31F0..=0x31FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF | 0xFF66..=0xFF9F | 0x20000..=0x3134F)
 }
 
 fn bucket(word: &str) -> usize {
@@ -262,6 +286,12 @@ fn word_vector(text: &str) -> Option<Vec<f32>> {
             }
             continue;
         }
+        // "don't" and "isn't" are function words; "user's" is "user".
+        let raw = match raw.split_once('\'') {
+            Some((_, "t")) => continue,
+            Some((base, _)) => base,
+            None => raw,
+        };
         if raw.chars().count() < 3 || grokhub_core::is_title_stopword(raw) {
             continue;
         }

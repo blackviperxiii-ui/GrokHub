@@ -37,13 +37,15 @@ it. Groups are runs of turns, cut at a boundary.
    closing `usage` line gains an `at` field (Unix ms): the time the turn was
    saved, at its end, so one run of 30 minutes or more also starts a group.
    Readers already ignore unknown fields, and the session rewrite keeps it.
-   A compaction's own usage line carries one too: an ask it keeps word for
-   word keeps the time it was first saved with, and the rest of what it
-   writes (its summary, or the ask of a turn that compacted as it ran) takes
-   the compaction's time. A turn that compacted as it ran marks its
-   compaction line (`"turn": true`), so its ask isn't matched to an older,
-   identical ask such as "continue". Older turns have no time; their groups show the
-   session's start and last-saved times as the range instead.
+   A compaction's own usage line carries one too. A manual compaction keeps
+   the end of the chat word for word: the kept messages that line up, from
+   the end, with the messages it replaced keep their times, and the rest (its
+   summary and rules) take the compaction's time. A turn that compacted as
+   it ran was never saved on its own, so it marks its compaction line
+   (`"turn": true`) and everything it kept takes the compaction's time; an
+   identical older ask such as "continue" never lends it a time. Older turns
+   have no time; their groups show the session's start and last-saved times
+   as the range instead.
 2. **Topic shift.** Each turn's user text is embedded with the local static
    model the app already ships for memory recall (`potion-base-8M`, 256
    dimensions, CPU only, no network once downloaded). A new group starts when
@@ -52,8 +54,10 @@ it. Groups are runs of turns, cut at a boundary.
    has at least 3 turns. A group also closes at 40 turns. When the model
    isn't downloaded (or memory embeddings are off), the same rule runs on a
    hashed bag of stemmed words (1,024 buckets), with its own threshold (0.08).
-   Words are stemmed roughly ("files", "filed" and "file" match). Indic and
-   Southeast Asian combining signs stay inside their words. Scripts written
+   Words are stemmed roughly ("files", "filed" and "file" match), and
+   negative contractions ("don't") are skipped. Indic and Southeast Asian
+   combining signs stay inside their words; those scripts' punctuation ends
+   one. Scripts written
    without spaces (Thai, Lao, Myanmar, Khmer, kana and CJK ideographs) count
    each pair of characters as a word, and a Latin word inside them stays a
    word of its own.
@@ -83,8 +87,9 @@ clickable, because the chat view can't show those messages either.
   turn that differs.
 - Deleting a chat deletes its zoom file, and a zoom that finishes after the
   delete removes the file it wrote.
-- A compacted chat's "Earlier, compacted" count is the messages saved before
-  the last compaction, less the ones it kept word for word.
+- A compacted chat's "Earlier, compacted" count is every message a
+  compaction took out of view: what each one replaced, less the messages it
+  kept word for word.
 
 ## Cost per 100 messages
 

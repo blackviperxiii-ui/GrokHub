@@ -476,7 +476,7 @@ fn a_latin_word_inside_unspaced_text_is_a_word_of_its_own() {
 }
 
 #[test]
-fn a_reopen_stores_and_groups_the_very_same_vectors() {
+fn a_reopen_stores_the_very_same_vectors() {
     let lines: Vec<Line> = ["lisbon trip", "lisbon hotels near the river", "rust build"]
         .iter()
         .flat_map(|ask| [line(Role::User, ask), line(Role::Assistant, "ok")])
@@ -484,22 +484,40 @@ fn a_reopen_stores_and_groups_the_very_same_vectors() {
     // A vector whose int8 form, made unit again and rounded again, would come
     // out as [8, 8, 126]: storing what was read is what keeps it [8, 8, 127].
     let embed = |_: &str| unit(vec![1.0, 1.0, 16.0]);
-    let (groups, first) = fold(&lines, &[], Kind::Model, &[], &embed);
+    let (_, first) = fold(&lines, &[], Kind::Model, &[], &embed);
     assert_eq!(first[0].vec.as_deref(), Some("CAh/"), "bytes 8, 8, 127");
-    let (again, second) = fold(&lines, &[], Kind::Model, &first, &embed);
+    let (_, second) = fold(&lines, &[], Kind::Model, &first, &embed);
     let stored = |cache: &[CachedTurn]| -> Vec<Option<String>> {
         cache.iter().map(|t| t.vec.clone()).collect()
     };
     assert_eq!(stored(&second), stored(&first), "stored again as read");
-    assert_eq!(again, groups);
-    // The first open grouped from the stored form too.
+}
+
+#[test]
+fn the_first_open_groups_from_the_stored_vectors() {
+    let lines: Vec<Line> = ["a one", "a two", "a three", "b four"]
+        .iter()
+        .flat_map(|ask| [line(Role::User, ask), line(Role::Assistant, "ok")])
+        .collect();
+    // At full precision the fourth turn sits just above the topic floor
+    // (0.353); in its stored int8 form it sits just below (0.345), so only
+    // grouping from the stored form splits it off, as every reopen will.
+    let embed = |text: &str| match text.starts_with('a') {
+        true => unit(vec![0.91, 0.1, 0.85]),
+        false => unit(vec![-0.3, 0.37, 0.73]),
+    };
+    let (first, cache) = fold(&lines, &[], Kind::Model, &[], &embed);
+    let ranges = |groups: &[Group]| -> Vec<(usize, usize)> {
+        groups.iter().map(|g| (g.first_line, g.last_line)).collect()
+    };
+    assert_eq!(ranges(&first), vec![(0, 5), (6, 7)]);
     let calls = Cell::new(0);
     let none = |_: &str| {
         calls.set(calls.get() + 1);
         None
     };
-    let (cached, _) = fold(&lines, &[], Kind::Model, &first, &none);
-    assert_eq!((calls.get(), cached), (0, groups));
+    let (reopened, _) = fold(&lines, &[], Kind::Model, &cache, &none);
+    assert_eq!((calls.get(), ranges(&reopened)), (0, vec![(0, 5), (6, 7)]));
 }
 
 #[test]
@@ -517,4 +535,30 @@ fn no_cache_is_kept_for_a_chat_that_was_deleted_meanwhile() {
     keep_cache(&dir, "shell-zoom-here", Kind::Words, turn());
     assert!(cache_path(&dir, "shell-zoom-here").exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn script_punctuation_ends_a_word_and_rarer_ideographs_stay_in_their_run() {
+    let tibetan: Vec<String> = words("བཀྲ་ཤིས།").into_iter().map(|(_, w)| w).collect();
+    assert_eq!(tibetan, ["བཀྲ", "ཤིས"]);
+    let thai: Vec<(bool, String)> = words("สวัสดี๚ครับ");
+    assert_eq!(
+        thai,
+        [(true, "สวัสดี".to_string()), (true, "ครับ".to_string())]
+    );
+    let japanese: Vec<(bool, String)> = words("時々𠮷野家");
+    assert_eq!(japanese, [(true, "時々𠮷野家".to_string())]);
+}
+
+#[test]
+fn contractions_are_not_topic_words() {
+    let got: Vec<String> = words("Don't touch the user's files")
+        .into_iter()
+        .map(|(_, w)| w)
+        .collect();
+    assert_eq!(got, ["don't", "touch", "the", "user's", "files"]);
+    assert_eq!(word_vector("don't isn't can't"), None);
+    let a = word_vector("the user's files").unwrap();
+    let b = word_vector("user files").unwrap();
+    assert!(cosine(&a, &b) > 0.99, "{}", cosine(&a, &b));
 }

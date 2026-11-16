@@ -911,104 +911,84 @@ fn is_shown_message(item: &InputItem) -> bool {
         if role != "system" && !visible_text(role, content).trim().is_empty())
 }
 
-/// When each user message in [`transcript_pairs`] was answered: one entry per
-/// user pair, in order, from the time on the usage line that closed its turn.
-/// An ask a compaction kept word for word keeps the time it was first saved
-/// with; anything else the compaction wrote (its summary, or the ask of a
-/// turn that compacted as it ran) takes the compaction's time. `None` for
-/// turns saved before usage lines carried a time. A turn whose usage line
-/// was lost to a torn write takes the next turn's time.
-pub fn user_turn_times(info: &SessionInfo) -> Vec<Option<u64>> {
-    let records = &info.records;
-    // Each top-level ask gets the time of the usage line that closes it.
-    let mut top: Vec<Option<u64>> = vec![None; records.len()];
+/// The transcript replayed record by record: what is in view, with each
+/// message's time, and how many messages compactions took out of view.
+struct Replay {
+    visible: Vec<(InputItem, Option<u64>)>,
+    hidden: usize,
+}
+
+/// Replays the records. A message gets the time of the usage line that closes
+/// its turn. A manual compaction keeps the end of the transcript word for
+/// word: the kept messages that line up with the messages it replaced, from
+/// the end, keep their times; the rest (its summary and rules) take the
+/// compaction's time. A turn that compacted as it ran was never saved on its
+/// own, so everything it kept takes the compaction's time.
+fn replay(records: &[Record]) -> Replay {
+    let mut visible: Vec<(InputItem, Option<u64>)> = Vec::new();
     let mut open: Vec<usize> = Vec::new();
+    let mut hidden = 0;
     for (i, record) in records.iter().enumerate() {
         match record {
-            Record::Item(item) if is_shown_ask(item) => open.push(i),
-            Record::Usage { at, .. } => open.drain(..).for_each(|j| top[j] = *at),
-            _ => {}
+            Record::Item(item) => {
+                open.push(visible.len());
+                visible.push((item.clone(), None));
+            }
+            Record::Usage { at, .. } => open.drain(..).for_each(|j| visible[j].1 = *at),
+            Record::Compaction { items, turn } => {
+                let own = match records.get(i + 1) {
+                    Some(Record::Usage { at, .. }) => *at,
+                    _ => None,
+                };
+                let prior = std::mem::take(&mut visible);
+                visible = items.iter().map(|item| (item.clone(), own)).collect();
+                open.clear();
+                let before: Vec<usize> = shown(&prior);
+                let after: Vec<usize> = shown(&visible);
+                let mut matched = 0;
+                if !turn {
+                    for (&k, &p) in after.iter().rev().zip(before.iter().rev()) {
+                        if visible[k].0 != prior[p].0 {
+                            break;
+                        }
+                        visible[k].1 = prior[p].1;
+                        matched += 1;
+                    }
+                }
+                hidden += before.len() - matched;
+            }
         }
     }
-    // Then each compaction's items, oldest compaction first, so a later one
-    // can take a time an earlier one kept.
-    let mut kept: Vec<Vec<Option<u64>>> = vec![Vec::new(); records.len()];
-    for (i, record) in records.iter().enumerate() {
-        let Record::Compaction { items, turn } = record else {
-            continue;
-        };
-        let own = match records.get(i + 1) {
-            Some(Record::Usage { at, .. }) => *at,
-            _ => None,
-        };
-        let turn_ask = turn.then(|| items.iter().rposition(is_shown_ask)).flatten();
-        kept[i] = items
-            .iter()
-            .enumerate()
-            .map(|(j, item)| match turn_ask == Some(j) {
-                true => own,
-                false => earlier_time(records, &top, &kept, i, item).unwrap_or(own),
-            })
-            .collect();
-    }
-    visible_slots(records)
-        .into_iter()
-        .filter(|(_, item)| is_shown_ask(item))
-        .map(|(slot, _)| match slot {
-            Slot::Top(i) => top[i],
-            Slot::Kept(i, j) => kept[i][j],
-        })
+    Replay { visible, hidden }
+}
+
+/// Where the messages [`transcript_pairs`] shows sit in `items`.
+fn shown(items: &[(InputItem, Option<u64>)]) -> Vec<usize> {
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, (item, _))| is_shown_message(item))
+        .map(|(i, _)| i)
         .collect()
 }
 
-/// The time of the newest copy of `item` saved before the record at `i`, on
-/// its own line or kept by an earlier compaction. `None` when there is none.
-fn earlier_time(
-    records: &[Record],
-    top: &[Option<u64>],
-    kept: &[Vec<Option<u64>>],
-    i: usize,
-    item: &InputItem,
-) -> Option<Option<u64>> {
-    (0..i).rev().find_map(|k| match &records[k] {
-        Record::Item(earlier) if earlier == item => Some(top[k]),
-        Record::Compaction { items, .. } => items
-            .iter()
-            .rposition(|earlier| earlier == item)
-            .map(|j| kept[k][j]),
-        _ => None,
-    })
+/// When each user message in [`transcript_pairs`] was answered: one entry per
+/// user pair, in order (see [`replay`]). `None` for turns saved before usage
+/// lines carried a time. A turn whose usage line was lost to a torn write
+/// takes the next turn's time.
+pub fn user_turn_times(info: &SessionInfo) -> Vec<Option<u64>> {
+    replay(&info.records)
+        .visible
+        .into_iter()
+        .filter(|(item, _)| is_shown_ask(item))
+        .map(|(_, at)| at)
+        .collect()
 }
 
-/// How many messages the last compaction took out of the transcript: the
-/// messages saved before it, less the ones it kept word for word.
+/// How many messages compactions took out of the transcript, less the ones
+/// they kept word for word.
 pub fn compacted_messages(info: &SessionInfo) -> usize {
-    let Some(cut) = info
-        .records
-        .iter()
-        .rposition(|record| matches!(record, Record::Compaction { .. }))
-    else {
-        return 0;
-    };
-    let Record::Compaction { items: kept, .. } = &info.records[cut] else {
-        return 0;
-    };
-    let mut kept: Vec<&InputItem> = kept.iter().filter(|item| is_shown_message(item)).collect();
-    info.records[..cut]
-        .iter()
-        .filter(|record| match record {
-            Record::Item(item) if is_shown_message(item) => {
-                match kept.iter().position(|still| *still == item) {
-                    Some(at) => {
-                        kept.remove(at);
-                        false
-                    }
-                    None => true,
-                }
-            }
-            _ => false,
-        })
-        .count()
+    replay(&info.records).hidden
 }
 
 fn pairs_of(info: &SessionInfo, tools: bool) -> Vec<(String, String)> {
@@ -1791,58 +1771,67 @@ mod tests {
             "{compacted_at} not in {before}..={after}"
         );
         assert_eq!(times[1], Some(2_000), "the kept ask keeps its own time");
-        // A turn that compacts as it runs is saved only by the compaction:
-        // its ask takes that time, and the earlier kept ask still keeps its.
+        // A turn that compacts as it runs is saved only by the compaction, so
+        // its summary and its ask take that time.
         let third = [user("now the roof"), assistant("Roof done.")];
-        let kept: Vec<InputItem> = kept.iter().chain(third.iter()).cloned().collect();
+        let summary = user("<summary>Dock and bar.</summary>");
+        let kept = [summary, third[0].clone(), third[1].clone()];
         record_compacted_turn(id, "/work", "grok-4.7", &kept, &usage, "").unwrap();
         let after_third = grokhub_core::now_ms();
-        let times = user_turn_times(&load_session(id).unwrap());
-        assert_eq!(times.len(), 3, "{times:?}");
-        assert_eq!((times[0], times[1]), (Some(compacted_at), Some(2_000)));
-        let roof = times[2].expect("the compacting turn has a time");
+        let info = load_session(id).unwrap();
+        let times = user_turn_times(&info);
+        assert_eq!(times.len(), 2, "{times:?}");
+        assert_eq!(times[0], times[1], "{times:?}");
+        let roof = times[1].expect("the compacting turn has a time");
         assert!(
             (after..=after_third).contains(&roof),
             "{roof} not in {after}..={after_third}"
         );
+        // The first compaction hid two messages, the second the three it
+        // replaced (the first summary, the bar ask and its reply).
+        assert_eq!(compacted_messages(&info), 5);
     }
 
     #[test]
-    fn a_compacting_turn_that_repeats_an_old_ask_takes_its_own_time() {
+    fn a_repeated_ask_takes_the_time_of_the_copy_it_stands_for() {
         let (_dir, _guard) = isolated("repeat-ask");
         let id = "native-repeat-ask";
         let first = [user("continue"), assistant("Step one done.")];
         let second = [user("check the logs"), assistant("Clean.")];
-        write_timed(id, &[(&first, 1_000), (&second, 2_000)]);
+        let third = [user("continue"), assistant("Step two done.")];
+        write_timed(id, &[(&first, 1_000), (&second, 2_000), (&third, 3_000)]);
+        // A manual compact keeps the last turn: its "continue" is the 3,000
+        // one, not the older copy.
         let summary = user("<summary>Steps and logs.</summary>");
-        let again = [user("continue"), assistant("Step two done.")];
+        let kept = [summary, third[0].clone(), third[1].clone()];
+        record_compaction(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        let times = user_turn_times(&load_session(id).unwrap());
+        assert_eq!(times.len(), 2, "{times:?}");
+        assert_eq!(times[1], Some(3_000));
+        // A turn that says "continue" again and compacts as it runs.
+        let summary = user("<summary>Steps, logs, step two.</summary>");
+        let again = [user("continue"), assistant("Step three done.")];
         let kept = [summary, again[0].clone(), again[1].clone()];
         let before = grokhub_core::now_ms();
         record_compacted_turn(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
         let after = grokhub_core::now_ms();
         let raw = fs::read_to_string(session_file(id).unwrap()).unwrap();
-        let marker: Value = serde_json::from_str(raw.lines().nth(7).unwrap()).unwrap();
+        let marker: Value = serde_json::from_str(raw.lines().nth(12).unwrap()).unwrap();
         assert_eq!(
             (&marker["type"], &marker["turn"]),
             (&json!("compaction"), &json!(true))
         );
         let times = user_turn_times(&load_session(id).unwrap());
         assert_eq!(times.len(), 2, "{times:?}");
-        assert_eq!(
-            times[0], times[1],
-            "summary and ask share the compaction's time"
-        );
         let at = times[1].unwrap();
         assert!(
             (before..=after).contains(&at),
             "{at} not in {before}..={after}"
         );
-        // The same marker saved by a manual compact would take the old time.
-        let mut info = load_session(id).unwrap();
-        if let Some(Record::Compaction { turn, .. }) = info.records.get_mut(6) {
-            *turn = false;
-        }
-        assert_eq!(user_turn_times(&info)[1], Some(1_000));
+        assert_eq!(
+            times[0], times[1],
+            "summary and ask share the compaction's time"
+        );
     }
 
     #[test]
