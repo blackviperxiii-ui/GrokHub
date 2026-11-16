@@ -44,8 +44,9 @@ pub struct NativeEngine {
     context_length: u64,
     /// The main engine clears a previous Halt. A `/bg` engine does not.
     reopen_tasks: bool,
-    /// Imagine's bearer. Empty leaves Imagine unset; web_fetch never uses it.
-    imagine_bearer: String,
+    /// Where Imagine's bearer comes from. `None` leaves Imagine unset;
+    /// web_fetch never uses it.
+    imagine: Option<Arc<dyn crate::ImagineSource>>,
     /// Who started the next prompt (Spike-4c): egress lines carry it.
     origin: crate::harness::Origin,
     /// Spike-3b: the cabin's open desktop episode for the next prompt.
@@ -117,7 +118,7 @@ impl NativeEngine {
             usage: Usage::default(),
             context_length,
             reopen_tasks: true,
-            imagine_bearer: String::new(),
+            imagine: None,
             origin: crate::harness::current_origin(),
             episode_seed: None,
             episode: None,
@@ -167,10 +168,11 @@ impl NativeEngine {
         self.origin = origin;
     }
 
-    /// Credential for Imagine. Empty leaves Imagine unset, so a picture falls back to
-    /// the on-device model or asks to sign in. `web_fetch` works either way.
-    pub fn set_imagine_bearer(&mut self, bearer: &str) {
-        self.imagine_bearer = bearer.trim().to_string();
+    /// Where Imagine's bearer comes from. `None` leaves Imagine unset, so a
+    /// picture falls back to the on-device model or asks to sign in. The
+    /// bearer is read on a turn's first media call, never before.
+    pub fn set_imagine(&mut self, source: Option<Arc<dyn crate::ImagineSource>>) {
+        self.imagine = source;
     }
 
     pub fn set_route(
@@ -555,7 +557,7 @@ impl NativeEngine {
         let before_usage = self.usage.clone();
         // Breaks after this mark belong to this prompt: a cache drop names one.
         let break_mark = crate::prefix_guard::break_mark();
-        let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
+        let _network = crate::tools::install_network(self.imagine.as_ref(), &self.conversation_id);
         let _origin = crate::harness::OriginScope::enter(self.origin);
         let mut meter_used = crate::compact::estimate_input_tokens(&self.history);
         let mut meter_limit = self.context_length;
@@ -690,7 +692,7 @@ impl NativeEngine {
         // ports and the turn's origin, and its gate the workspace policy.
         let policy = crate::perm::Policy::load(&self.workspace);
         crate::mcp::set_workspace(&self.workspace);
-        let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
+        let _network = crate::tools::install_network(self.imagine.as_ref(), &self.conversation_id);
         let _origin = crate::harness::OriginScope::enter(self.origin);
         let parks = FileParks(&seed.config_dir);
         let clock = grokhub_core::now_ms;
@@ -1693,6 +1695,23 @@ mod tests {
                 ..Default::default()
             })
         }
+    }
+
+    #[test]
+    fn a_turn_that_draws_nothing_reads_no_imagine_sign_in() {
+        let dir = crate::harness::test_dir("eng-imagine-lazy");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let client = Arc::new(Recorder::default());
+        let mut eng = engine(&dir, "imagine-lazy-1", client.clone());
+        let src = Arc::new(crate::tools::media::tests::FakeSource::signed_in());
+        eng.set_imagine(Some(src.clone()));
+        eng.prompt("hello there", None, &mut |_| {}).unwrap();
+        assert_eq!(client.0.lock().unwrap().len(), 1);
+        assert!(
+            src.calls().is_empty(),
+            "no sign-in is read or refreshed for a turn with no picture: {:?}",
+            src.calls()
+        );
     }
 
     #[test]

@@ -163,11 +163,32 @@ pub fn retry_refused(
     make: impl FnOnce(&str) -> Result<Made, String>,
 ) -> Result<Made, String> {
     match first {
-        Err(err) if own && err == NEED_SIGNIN => match shared() {
-            Ok(bearer) => make(&bearer),
-            Err(_) => Err(OWN_REFUSED.into()),
-        },
+        Err(err) if own && err == NEED_SIGNIN => lend(shared).and_then(|bearer| make(&bearer)),
         done => done,
+    }
+}
+
+/// Chat's bearer once xAI refused Imagine's own; with none to lend, says why.
+fn lend(shared: impl FnOnce() -> Result<String, String>) -> Result<String, String> {
+    shared().map_err(|_| OWN_REFUSED.to_string())
+}
+
+/// Chat's image_generate and video_generate sign the way a Make here does:
+/// Imagine's own sign-in, then chat's. Nothing is read until one runs, and
+/// one refused by xAI is sent once more with chat's bearer.
+pub struct ChatImagine;
+
+impl grokhub_agent::ImagineSource for ChatImagine {
+    fn ready(&self) -> bool {
+        ready()
+    }
+
+    fn bearer(&self) -> Result<(String, bool), String> {
+        bearer()
+    }
+
+    fn shared(&self) -> Result<String, String> {
+        lend(shared_bearer)
     }
 }
 

@@ -1306,6 +1306,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     permits: Arc::new(inbox),
                 }));
                 engine.set_pause(Arc::clone(&pause));
+                engine.set_imagine(Some(Arc::new(crate::imagine::ChatImagine)));
                 // A chat saved earlier (opened from History, or the last chat
                 // after a restart) goes on from its saved turns, as the cabin's does.
                 if let Ok(info) = grokhub_agent::load_session(&resume) {

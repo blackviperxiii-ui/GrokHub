@@ -990,7 +990,6 @@ fn run_native_cancel(
         cancel,
         halt: Box::new(NoHalt),
         desktop_ops: None,
-        imagine_bearer: String::new(),
         resume: false,
     });
     NativeDone {

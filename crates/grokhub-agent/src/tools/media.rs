@@ -1,6 +1,7 @@
 //! Imagine tools for the native engine. Request bodies come from
 //! `grokhub_core`'s Imagine module. A missing bearer does not dial.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -14,6 +15,119 @@ pub trait ImagineApi: Send + Sync {
     fn download(&self, url: &str) -> Result<Vec<u8>, String> {
         let _ = url;
         Err("download not available".into())
+    }
+    /// Something to sign with. A client made with a bearer always is.
+    fn ready(&self) -> bool {
+        true
+    }
+}
+
+/// Where chat's Imagine bearer comes from. Nothing is read until a media tool
+/// runs, so a turn that draws nothing never waits on a sign-in refresh.
+pub trait ImagineSource: Send + Sync {
+    /// Something to sign with. A keychain read only; no refresh goes out.
+    fn ready(&self) -> bool;
+    /// The first bearer, and `true` when it is Imagine's own sign-in. May refresh.
+    fn bearer(&self) -> Result<(String, bool), String>;
+    /// Chat's bearer, asked for once after xAI refused Imagine's own. Its
+    /// error is shown as is.
+    fn shared(&self) -> Result<String, String>;
+}
+
+/// Makes the client for a bearer: xAI in the app, a fake in tests.
+pub(crate) type Dial = Box<dyn Fn(String) -> Arc<dyn ImagineApi> + Send + Sync>;
+
+pub(crate) fn dial_xai(bearer: String) -> Arc<dyn ImagineApi> {
+    Arc::new(UreqImagine::new(bearer))
+}
+
+enum Signed {
+    Own(Arc<dyn ImagineApi>),
+    Shared(Arc<dyn ImagineApi>),
+    Failed(String),
+}
+
+/// One turn's Imagine client. The bearer is resolved on the first media call,
+/// at most once, and swapped once for chat's when xAI refuses Imagine's own.
+/// Later calls in the turn (video polls, downloads) use whichever won.
+pub(crate) struct LazyImagine {
+    source: Arc<dyn ImagineSource>,
+    dial: Dial,
+    signed: Mutex<Option<Signed>>,
+}
+
+impl LazyImagine {
+    pub(crate) fn new(source: Arc<dyn ImagineSource>, dial: Dial) -> Self {
+        Self {
+            source,
+            dial,
+            signed: Mutex::new(None),
+        }
+    }
+
+    /// The client and whether it signs with Imagine's own sign-in. The lock is
+    /// held while the bearer resolves, so subagents in the turn wait for one.
+    fn client(&self) -> Result<(Arc<dyn ImagineApi>, bool), String> {
+        let mut signed = self.signed.lock().unwrap_or_else(|err| err.into_inner());
+        let signed = signed.get_or_insert_with(|| match self.source.bearer() {
+            Ok((bearer, true)) => Signed::Own((self.dial)(bearer)),
+            Ok((bearer, false)) => Signed::Shared((self.dial)(bearer)),
+            Err(err) => Signed::Failed(err),
+        });
+        match signed {
+            Signed::Own(api) => Ok((Arc::clone(api), true)),
+            Signed::Shared(api) => Ok((Arc::clone(api), false)),
+            Signed::Failed(err) => Err(err.clone()),
+        }
+    }
+
+    /// xAI refused Imagine's own sign-in: switch to chat's for the rest of the
+    /// turn, or remember why there is none.
+    fn lend(&self) -> Result<Arc<dyn ImagineApi>, String> {
+        let mut signed = self.signed.lock().unwrap_or_else(|err| err.into_inner());
+        let next = match signed.take() {
+            Some(Signed::Own(_)) | None => match self.source.shared() {
+                Ok(bearer) => Signed::Shared((self.dial)(bearer)),
+                Err(err) => Signed::Failed(err),
+            },
+            Some(kept) => kept,
+        };
+        let out = match &next {
+            Signed::Own(api) | Signed::Shared(api) => Ok(Arc::clone(api)),
+            Signed::Failed(err) => Err(err.clone()),
+        };
+        *signed = Some(next);
+        out
+    }
+}
+
+/// xAI turned the bearer away (the same test as the Imagine page).
+fn refused(err: &str) -> bool {
+    err.starts_with("HTTP 401") || err.starts_with("HTTP 403")
+}
+
+impl ImagineApi for LazyImagine {
+    fn ready(&self) -> bool {
+        self.source.ready()
+    }
+
+    /// Only a post is sent again: it starts the job, so a poll or download
+    /// never switches accounts halfway. The retry re-sends the same path and
+    /// body that already passed the EgressGuard.
+    fn post_json(&self, path: &str, body: &Value) -> Result<Value, String> {
+        let (api, own) = self.client()?;
+        match api.post_json(path, body) {
+            Err(err) if own && refused(&err) => self.lend()?.post_json(path, body),
+            done => done,
+        }
+    }
+
+    fn get_json(&self, path: &str) -> Result<Value, String> {
+        self.client()?.0.get_json(path)
+    }
+
+    fn download(&self, url: &str) -> Result<Vec<u8>, String> {
+        self.client()?.0.download(url)
     }
 }
 
@@ -288,17 +402,18 @@ fn video_extend_schema() -> Value {
 
 pub(crate) fn run_with_ports(name: &str, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     let ports = super::ports::current();
+    let imagine = ports.imagine.filter(|api| api.ready());
     if let Some(out) = on_device(
         name,
         args,
-        ports.imagine.is_some(),
+        imagine.is_some(),
         &crate::route::local_image::kit_here,
         stop,
         ports.media_dir.as_deref(),
     ) {
         return out;
     }
-    match ports.imagine {
+    match imagine {
         Some(api) => execute_with(name, args, api.as_ref(), stop, ports.media_dir.as_deref()),
         None => ToolOutput::err(grokhub_core::XAI_NEED_SIGNIN),
     }
@@ -1709,5 +1824,238 @@ pub(crate) mod tests {
             start.elapsed()
         );
         let _ = std::fs::remove_dir_all(cfg_dir);
+    }
+
+    /// A sign-in source that logs what was asked of it.
+    pub(crate) struct FakeSource {
+        ready: bool,
+        first: Result<(&'static str, bool), &'static str>,
+        shared: Result<&'static str, &'static str>,
+        calls: Mutex<Vec<&'static str>>,
+    }
+
+    impl FakeSource {
+        /// Imagine's own sign-in, with chat's to lend.
+        pub(crate) fn signed_in() -> Self {
+            Self {
+                ready: true,
+                first: Ok(("imagine-own-fake", true)),
+                shared: Ok("chat-shared-fake"),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        pub(crate) fn calls(&self) -> Vec<&'static str> {
+            self.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+
+        fn log(&self, what: &'static str) {
+            self.calls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(what);
+        }
+    }
+
+    impl ImagineSource for FakeSource {
+        fn ready(&self) -> bool {
+            self.log("ready");
+            self.ready
+        }
+        fn bearer(&self) -> Result<(String, bool), String> {
+            self.log("bearer");
+            self.first
+                .map(|(b, own)| (b.to_string(), own))
+                .map_err(str::to_string)
+        }
+        fn shared(&self) -> Result<String, String> {
+            self.log("shared");
+            self.shared.map(str::to_string).map_err(str::to_string)
+        }
+    }
+
+    const REFUSED: &str = "HTTP 403 {\"error\":\"scope\"}";
+
+    /// xAI as seen through one bearer: refuses the ones in `refuse`, else
+    /// answers like [`FakeImagine`]. Every post logs its bearer.
+    struct Keyed {
+        bearer: String,
+        refuse: &'static [&'static str],
+        posts: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ImagineApi for Keyed {
+        fn post_json(&self, path: &str, _body: &Value) -> Result<Value, String> {
+            self.posts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(self.bearer.clone());
+            if self.refuse.contains(&self.bearer.as_str()) {
+                Err(REFUSED.to_string())
+            } else if path.starts_with("videos/") {
+                Ok(json!({"request_id": "req-1"}))
+            } else {
+                Ok(json!({"data": [
+                    {"url": "https://cdn.example/cabin.png"},
+                    {"url": "https://cdn.example/cabin-2.png"}
+                ]}))
+            }
+        }
+
+        fn get_json(&self, _path: &str) -> Result<Value, String> {
+            Ok(json!({
+                "status": "done",
+                "video": {"url": "https://cdn.example/cabin.mp4"}
+            }))
+        }
+    }
+
+    /// One chat turn's ports with a lazy Imagine on `src`.
+    fn turn(
+        src: &Arc<FakeSource>,
+        refuse: &'static [&'static str],
+    ) -> (super::super::ports::Guard, Arc<Mutex<Vec<String>>>) {
+        let posts = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&posts);
+        let dial: Dial = Box::new(move |bearer| {
+            Arc::new(Keyed {
+                bearer,
+                refuse,
+                posts: Arc::clone(&log),
+            }) as Arc<dyn ImagineApi>
+        });
+        let source: Arc<dyn ImagineSource> = src.clone();
+        let guard = super::super::ports::enter(super::super::ports::Ports {
+            imagine: Some(Arc::new(LazyImagine::new(source, dial))),
+            ..Default::default()
+        });
+        (guard, posts)
+    }
+
+    fn picture() -> Value {
+        json!({
+            "prompt": "a cabin",
+            "n": 2,
+            "resolution": "2k",
+            "quality": "low",
+            "model": "grok-imagine-image-2.0"
+        })
+    }
+
+    fn film() -> Value {
+        json!({
+            "prompt": "waves",
+            "resolution": "1080p",
+            "model": "grok-imagine-video-1.5"
+        })
+    }
+
+    fn posted(posts: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        posts.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    #[test]
+    fn a_chat_picture_signs_with_chat_when_xai_refuses_imagines_own() {
+        let (dir, _cfg) = scratch_config();
+        let src = Arc::new(FakeSource::signed_in());
+        let (_ports, posts) = turn(&src, &["imagine-own-fake"]);
+        let out = run_with_ports("image_generate", &picture(), &|| false);
+        assert!(!out.failed, "{}", out.text);
+        assert_eq!(
+            out.text,
+            "IMAGINE: https://cdn.example/cabin.png\nIMAGINE: https://cdn.example/cabin-2.png"
+        );
+        assert_eq!(posted(&posts), ["imagine-own-fake", "chat-shared-fake"]);
+        assert_eq!(src.calls(), ["ready", "bearer", "shared"]);
+        // Later in the same turn: chat's bearer straight away, read once.
+        let video = run_with_ports("video_generate", &film(), &|| false);
+        assert_eq!(video.text, "IMAGINE: https://cdn.example/cabin.mp4");
+        assert_eq!(
+            posted(&posts),
+            ["imagine-own-fake", "chat-shared-fake", "chat-shared-fake"]
+        );
+        assert_eq!(src.calls(), ["ready", "bearer", "shared", "ready"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_refused_own_sign_in_with_no_chat_sign_in_says_why_once() {
+        let (dir, _cfg) = scratch_config();
+        let why = "xAI didn't let this Grok sign-in use Imagine. Add an xAI API key in Settings → Account.";
+        let src = Arc::new(FakeSource {
+            shared: Err(why),
+            ..FakeSource::signed_in()
+        });
+        let (_ports, posts) = turn(&src, &["imagine-own-fake"]);
+        let out = run_with_ports("image_generate", &picture(), &|| false);
+        assert!(out.failed);
+        assert_eq!(out.text, why);
+        let again = run_with_ports("image_generate", &picture(), &|| false);
+        assert_eq!(again.text, why);
+        assert_eq!(posted(&posts), ["imagine-own-fake"], "nothing dials twice");
+        assert_eq!(src.calls(), ["ready", "bearer", "shared", "ready"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_refused_chat_sign_in_is_not_retried() {
+        let (dir, _cfg) = scratch_config();
+        let src = Arc::new(FakeSource {
+            first: Ok(("chat-shared-fake", false)),
+            ..FakeSource::signed_in()
+        });
+        let (_ports, posts) = turn(&src, &["chat-shared-fake"]);
+        let out = run_with_ports("image_generate", &picture(), &|| false);
+        assert!(out.failed);
+        assert_eq!(out.text, REFUSED);
+        assert_eq!(posted(&posts), ["chat-shared-fake"]);
+        assert_eq!(src.calls(), ["ready", "bearer"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn chat_refused_too_is_tried_once_not_looped() {
+        let (dir, _cfg) = scratch_config();
+        let src = Arc::new(FakeSource::signed_in());
+        let (_ports, posts) = turn(&src, &["imagine-own-fake", "chat-shared-fake"]);
+        let out = run_with_ports("image_generate", &picture(), &|| false);
+        assert!(out.failed);
+        assert_eq!(out.text, REFUSED);
+        assert_eq!(posted(&posts), ["imagine-own-fake", "chat-shared-fake"]);
+        assert_eq!(src.calls(), ["ready", "bearer", "shared"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn signed_out_chat_reads_no_bearer_and_asks_to_sign_in() {
+        let (dir, _cfg) = scratch_config();
+        let src = Arc::new(FakeSource {
+            ready: false,
+            ..FakeSource::signed_in()
+        });
+        let (_ports, posts) = turn(&src, &[]);
+        let out = run_with_ports("video_generate", &film(), &|| false);
+        assert!(out.failed);
+        assert_eq!(out.text, "Sign in with Grok or add an API key.");
+        assert!(posted(&posts).is_empty());
+        assert_eq!(src.calls(), ["ready"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_ended_imagine_sign_in_is_said_as_is() {
+        let (dir, _cfg) = scratch_config();
+        let ended = "Your Imagine sign-in ended. Sign out, then sign in again.";
+        let src = Arc::new(FakeSource {
+            first: Err(ended),
+            ..FakeSource::signed_in()
+        });
+        let (_ports, posts) = turn(&src, &[]);
+        let out = run_with_ports("image_generate", &picture(), &|| false);
+        assert!(out.failed);
+        assert_eq!(out.text, ended);
+        assert!(posted(&posts).is_empty());
+        assert_eq!(src.calls(), ["ready", "bearer"]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

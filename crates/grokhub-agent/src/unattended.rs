@@ -27,7 +27,6 @@ pub struct UnattendedRun {
     pub cancel: CancelToken,
     pub halt: Box<dyn HaltCheck + Send>,
     pub desktop_ops: Option<Box<dyn DesktopOps>>,
-    pub imagine_bearer: String,
     /// Resume a native session file when one already exists for `session_id`.
     pub resume: bool,
 }
@@ -91,7 +90,6 @@ pub fn run_unattended(spec: UnattendedRun) -> UnattendedDone {
         desktop: spec.desktop_ops,
         permits: Arc::new(ClosedPermits),
     });
-    engine.set_imagine_bearer(&spec.imagine_bearer);
     engine.set_reopen_tasks(false);
     if spec.resume {
         if let Ok(info) = crate::session::load_session(&session) {
@@ -352,7 +350,6 @@ mod tests {
             cancel: CancelToken::new(),
             halt: Box::new(NoHalt),
             desktop_ops: Some(Box::new(SpyDesk { calls: desk_calls })),
-            imagine_bearer: String::new(),
             resume: false,
         })
     }
@@ -610,7 +607,6 @@ mod tests {
             cancel: CancelToken::new(),
             halt: Box::new(YesHalt),
             desktop_ops: None,
-            imagine_bearer: String::new(),
             resume: false,
         });
         assert_eq!(calls.n.load(Ordering::SeqCst), 0);
@@ -650,7 +646,6 @@ mod tests {
             cancel: CancelToken::new(),
             halt: Box::new(NoHalt),
             desktop_ops: None,
-            imagine_bearer: String::new(),
             resume: false,
         });
         assert!(started.load(Ordering::SeqCst));
@@ -692,7 +687,6 @@ mod tests {
             cancel: CancelToken::new(),
             halt: Box::new(NoHalt),
             desktop_ops: None,
-            imagine_bearer: String::new(),
             resume: false,
         });
         assert_eq!(done.usage.input_tokens, 11);

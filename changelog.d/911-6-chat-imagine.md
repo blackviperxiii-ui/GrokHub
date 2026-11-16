@@ -1,0 +1,1 @@
+- Pictures and videos asked for in chat now go to Grok Imagine when you're signed in. They sign the way the Imagine page does: Imagine's own sign-in first, then your Grok sign-in or API key. Nothing is read until a picture or video is asked for, and when xAI refuses Imagine's own sign-in the request is sent once more with your Grok sign-in.
