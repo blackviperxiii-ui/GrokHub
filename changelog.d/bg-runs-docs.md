@@ -1,1 +1,1 @@
-- Docs: the background tasks section now says what `/bg` and `/send` do in the desktop app. A run starts in its own read-only session, the results are listed by a bare `/bg`, and Grok can't start one from its reply.
+- Docs: the background tasks section now says what `/bg` and `/send` do in the desktop app. A run starts in its own read-only session, a bare `/bg` lists the results, and Grok can't start one from its reply.
