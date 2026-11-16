@@ -2813,6 +2813,37 @@ export function newShareCode(): Promise<Share> {
   return invoke<Share>("new_share_code");
 }
 
+/** The hub this computer joined (src-tauri/src/hub_join.rs); desktop only. */
+export interface JoinedHub {
+  /** `host:port` on this network. */
+  address: string;
+  hubId: string;
+  hubName: string;
+  joinedAt: number;
+}
+
+/** Devices → Join another computer. The pairing token stays in the keychain. */
+export interface HubJoin {
+  joined: JoinedHub | null;
+  /** Unix ms when this computer's card last reached the hub, this run. */
+  lastSentAt: number | null;
+  /** Why the last send failed; null after one that worked. */
+  lastError: string | null;
+}
+
+export function getHubJoin(): Promise<HubJoin> {
+  return invoke<HubJoin>("get_hub_join");
+}
+
+/** Pair with another computer's Start share address and code, then send this computer's card. */
+export function joinHub(address: string, code: string): Promise<HubJoin> {
+  return invoke<HubJoin>("join_hub", { address, code });
+}
+
+export function leaveHub(): Promise<HubJoin> {
+  return invoke<HubJoin>("leave_hub");
+}
+
 /** The chat's device glance (src-tauri/src/hub_share.rs); desktop only. */
 export interface DeviceGlance {
   /** This computer's hub is on (Devices → Start share). */

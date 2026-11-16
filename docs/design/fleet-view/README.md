@@ -34,10 +34,10 @@ machines push it to the hub they're paired with:
 - The hub keeps the last card per peer while it runs (`HubState.fleet`), so
   a computer that went to sleep still shows its last values, dimmed. A
   restart of the hub clears them until each computer reports again.
-- The app can share its hub (Devices → Start share) but can't yet pair with
-  another computer's hub as a client, so a second computer needs a join
-  step (address and code, the token kept in the OS keychain) before it can
-  push its card.
+- A second computer joins with Devices → Join another computer: the address
+  and code Start share shows. Only a number address on this network (or this
+  computer) is dialed, with no redirects, and the token stays in the OS
+  keychain.
 - Another app's version (any agent tool the person runs) is a configured
   command whose first line of output is the version. Nothing is guessed.
 
@@ -75,8 +75,9 @@ Each step is its own PR into `beta`.
 2. **Machine cards.** The card type and its staleness (`grokhub-core`
    `fleet`), `POST` and `GET /v1/fleet` on the hub, and this computer's card
    (CPU on Linux, memory, version) through the `fleet_machines` command.
-3. **Join a hub.** Pair this computer with another computer's hub as a
-   client and push its card every 60 seconds.
+3. **Join a hub.** Devices → Join another computer pairs this computer
+   with another computer's hub as a client (`src-tauri/src/hub_join.rs`)
+   and sends its card every 60 seconds.
 4. **Usage parsers.** The Claude Code transcript window, the Grok plan room as
    a row, and the rows the person fills in for Cursor and Antigravity, with
    tests on fixture files.
