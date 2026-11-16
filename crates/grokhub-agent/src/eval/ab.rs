@@ -470,7 +470,6 @@ fn run_one_task(
             cancel: CancelToken::new(),
             halt: Box::new(NoHalt),
             desktop_ops: None,
-            imagine_bearer: String::new(),
             resume: turn > 0,
         });
         // A resumed turn reports the session's running total; keep the last one.

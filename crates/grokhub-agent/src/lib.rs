@@ -183,9 +183,9 @@ pub use tools::{
     brave_key_present, deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute,
     generative_ui_enabled, imagine_client, is_readonly, public_only_resolve, run_media_tool,
     schemas_for, schemas_for_job, seal_brave_key, searxng_url_problem, tool_schemas,
-    tool_set_for_kind, tool_set_refusal, DeferredToolsSettings, DesktopOps, ImagineApi, ToolOutput,
-    ToolSet, WebSearchBackend, WebSearchSettings, READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
-    WEB_SEARCH_BACKENDS,
+    tool_set_for_kind, tool_set_refusal, DeferredToolsSettings, DesktopOps, ImagineApi,
+    ImagineSource, ToolOutput, ToolSet, WebSearchBackend, WebSearchSettings, READ_ONLY_PHASE,
+    TOOL_SET_OUTSIDE, WEB_SEARCH_BACKENDS,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};
 pub use work::{
