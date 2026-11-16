@@ -5,7 +5,7 @@
 - One class table, `SELF_TOOLS` (read / soft / delete; a connection with `needs_token` is credentials), the scope guard (`scope_guard`), and the skill-create cap (`SKILL_CREATE_DAY_CAP`).
 ## Quick commands
 - `cargo test -p grokhub-agent self_manage` (table, classes on every path, guard, caps, ledger writes)
-- `cargo test -p grokhub-app self_mcp` (server, parks, tokens), then `cargo test -p grokhub-app changes_from_the_self_server_process_show_as_work_rows`
+- `cargo test --manifest-path src-tauri/Cargo.toml change_rows` (shell change rows / Undo; isolate `GROKHUB_CONFIG`)
 ## Key files
 - `crates/grokhub-agent/src/self_manage/mod.rs`: `SELF_TOOLS`, `self_class`, `needs_token`, `scope_guard`, `mcp_tools`, `native_schemas`, `run_native`.
 - `crates/grokhub-agent/src/self_manage/ops.rs`: what each tool does after the gate (`run`, `SelfCtx`). Skills write through `record_skill_change`; connections and automations reuse the Spike-5b writers in `crates/grokhub-agent/src/tools/connections.rs` and `crates/grokhub-agent/src/tools/control.rs`.

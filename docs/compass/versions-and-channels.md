@@ -28,4 +28,4 @@
 - The app updates both channels from signed GitHub releases: stable from `releases/latest`, beta from the newest `vX.Y.Z-beta.N` or legacy `beta-v*` pre-release by `created_at` (`pick_release` in `crates/grokhub-core/src/release_verify.rs`). `.github/workflows/release.yml` publishes those tags as prerelease, never Latest.
 - `.github/`, `clippy.toml`, and release scripts ship in PRs like other changes (squash-merge into `beta` on green).
 ## See also
-- [install-scripts](install-scripts.md), grokhub-app
+- [install-scripts](install-scripts.md), grokhub-shell

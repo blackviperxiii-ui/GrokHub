@@ -5,7 +5,7 @@
 - The weekly self-review: `self_review_due` (Sunday at or after `dreamHour`, default `REVIEW_NIGHT_HOUR` 21; `night_passes` runs systems briefing, then this, then AMR dream), at most `SELF_REVIEW_CAP` (5) Pulse Suggestion cards, skill drafts, revert offers, and the replay gate. Separate: weekly systems briefing (`systems_brief`, Digest card, `/brief`) — read-only, no skill patches. Daily Start my day brief (`day_brief`, Digest card) aggregates existing resume / watcher / game / next-step signals once per day — see [heartbeat](heartbeat.md). Separate again: fun `week_recap` Digest at the usual active hour (`week_recap.rs` / `week_recap_ui.rs`), not Sunday night.
 ## Quick commands
 - `cargo test -p grokhub-core outcome::` / `self_review::` / `systems_brief::` (pure rules, fake clock)
-- `cargo test -p grokhub-agent self_improve`, then `cargo test -p grokhub-app self_review_tests -- --test-threads=1` (isolate `GROKHUB_CONFIG`)
+- `cargo test -p grokhub-agent self_improve`, then `cargo test --manifest-path src-tauri/Cargo.toml self_review -- --test-threads=1` (isolate `GROKHUB_CONFIG`)
 ## Key files
 - `crates/grokhub-core/src/outcome.rs`: `TaskOutcome`, `classify`, `append_outcome`, `undo_supersedes`, `is_correction`.
 - `crates/grokhub-core/src/self_review.rs` / `systems_brief.rs`: weekly ranking vs state-of-systems aggregation (`build_brief`).

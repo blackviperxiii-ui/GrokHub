@@ -139,7 +139,7 @@ fn a_build_that_cant_update_itself_says_how_to_update_it() {
 }
 
 #[test]
-fn the_receipt_is_shared_with_the_cabin_and_a_switch_drops_the_baseline() {
+fn the_receipt_is_shared_and_a_switch_drops_the_baseline() {
     let dir = std::env::temp_dir().join(format!("shell-update-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(channel(&dir), build_channel());

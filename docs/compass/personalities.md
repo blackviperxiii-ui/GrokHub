@@ -6,7 +6,7 @@
 
 ## Quick commands
 - `cargo test --locked -p grokhub-core --lib personality` (also `voice_flow`, `quips`); agent: `voice_session`
-- `cargo test --locked -p grokhub-app --bins personality wardrobe`
+- `cargo test --locked --manifest-path src-tauri/Cargo.toml personality` (shell home / companion)
 
 ## Key files
 - `crates/grokhub-core/src/personality.rs`: `Heat`, `prompt_block_for`, `ADULT_HUMOR`, `RETIRED`, `find`.

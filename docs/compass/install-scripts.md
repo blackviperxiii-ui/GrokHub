@@ -18,7 +18,7 @@
 - Adding a Grok Build CLI install or update step: `crates/grokhub-core/tests/no_grok_cli.rs` fails when packaging or an install script installs or bundles the CLI, or a deleted CLI installer comes back.
 - A remembered channel that does not match the checkout: `install.sh` refuses so a build is not labeled for the wrong channel.
 ## What depends on it
-- The README install docs and `grokhub-hub --update`, which tells a source install to run `git pull` then `scripts/install.sh --user`.
+- The README install docs and `grokhub-hub --update`, which tells a source install to run `scripts/install.sh --channel <channel>`.
 - The desktop app's Updates page: it shares the `channel` receipt, and its note for a build that can't update itself reads the clone path from the `source` receipt (keep both files' names and one-line format).
 ## Non-obvious
 - The `--dry-run` line (`channel=… branch=… switch=… prefix=… receipt=…`) is asserted literally by `install_sh_parses_channel_flags_and_follows_the_receipt`, which runs the real script on unix.
@@ -27,4 +27,4 @@
 - The desktop entry's `Exec=grokhub-shell` is rewritten to the absolute prefix path, so launch works without `~/.local/bin` on PATH.
 - `.cursor/install.sh` is the Cloud Agent bootstrap, not an installer: apt build deps plus `cargo build --workspace --locked`.
 ## See also
-- [versions-and-channels](versions-and-channels.md), [grokhub-hub](grokhub-hub.md), grokhub-app
+- [versions-and-channels](versions-and-channels.md), [grokhub-hub](grokhub-hub.md), grokhub-shell

@@ -1,12 +1,12 @@
-# Compass: voice mode (Hey Grok in the cabin)
+# Compass: voice mode (Hey Grok in Loadout)
 
 ## Owns
 - One open mic per voice session, end of turn, streaming speech-to-text with Smart Turn, spoken replies sentence by sentence, and barge-in.
-- Pure parts in core (`voice_turn.rs`, `stt_stream.rs`, `voice.rs`); sockets, threads and playback in the app (`voice_mic.rs`, `stt_stream.rs`, `spoken.rs`, `app/voice.rs`).
+- Pure parts in core (`voice_turn.rs`, `stt_stream.rs`, `voice.rs`); push-to-talk sockets and playback in the shell (`src-tauri/src/voice.rs`, `src-tauri/src/stt_stream.rs`).
 
 ## Quick commands
 - `cargo test --locked -p grokhub-core voice_turn stt_stream`
-- `cargo test --locked -p grokhub-app voice_mic stream_tests spoken`
+- `cargo test --locked --manifest-path src-tauri/Cargo.toml voice`
 
 ## Key files
 - `crates/grokhub-core/src/voice_turn.rs`: `TurnDetector` (noise floor, pre-roll, echo-aware `set_playing`) and `SpeechChunker` (sentences, hides thinking and commands).

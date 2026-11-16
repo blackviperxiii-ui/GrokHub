@@ -382,7 +382,7 @@ mod tests {
     }
 
     /// A real code edit next to Cargo.lock still refuses, lists both files
-    /// (into update.log via the host output), and touches neither.
+    /// on stderr, and touches neither.
     #[cfg(unix)]
     #[test]
     fn install_sh_refuses_a_real_edit_plus_cargo_lock_and_lists_both() {
