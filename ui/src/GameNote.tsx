@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { companionNote, companionSetNote } from "./api";
 import { useModalFocus } from "./ui";
 
@@ -60,8 +60,10 @@ export function GameNote({
     };
   }, [appId]);
 
-  // The box turns on once the game is known; focus goes there then.
-  useEffect(() => {
+  // The box turns on once the game is known; focus goes there in the same
+  // commit that shows the note, so nothing (a keypress, a test) sees the note
+  // without the focus.
+  useLayoutEffect(() => {
     if (game !== null) field.current?.focus();
   }, [game]);
 
