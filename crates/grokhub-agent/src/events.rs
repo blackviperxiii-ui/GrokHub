@@ -1697,16 +1697,32 @@ mod tests {
         }
     }
 
+    /// Says hello and notes whether the turn has an Imagine port.
+    struct SeesImagine(Mutex<Vec<bool>>);
+    impl ModelClient for SeesImagine {
+        fn stream(
+            &self,
+            req: &crate::ResponsesRequest,
+            cancel: &CancelToken,
+            sink: &mut dyn FnMut(crate::StreamEvent),
+        ) -> Result<crate::TurnOutput, crate::ClientError> {
+            let has = crate::tools::ports::current().imagine.is_some();
+            self.0.lock().unwrap().push(has);
+            Speak.stream(req, cancel, sink)
+        }
+    }
+
     #[test]
-    fn a_turn_that_draws_nothing_reads_no_imagine_sign_in() {
+    fn a_turn_gets_the_imagine_source_but_reads_no_sign_in_until_it_draws() {
         let dir = crate::harness::test_dir("eng-imagine-lazy");
         let _guard = crate::perm::ConfigGuard::set(&dir);
-        let client = Arc::new(Recorder::default());
+        let client = Arc::new(SeesImagine(Mutex::new(Vec::new())));
         let mut eng = engine(&dir, "imagine-lazy-1", client.clone());
+        eng.prompt("hello there", None, &mut |_| {}).unwrap();
         let src = Arc::new(crate::tools::media::tests::FakeSource::signed_in());
         eng.set_imagine(Some(src.clone()));
-        eng.prompt("hello there", None, &mut |_| {}).unwrap();
-        assert_eq!(client.0.lock().unwrap().len(), 1);
+        eng.prompt("hello again", None, &mut |_| {}).unwrap();
+        assert_eq!(*client.0.lock().unwrap(), [false, true]);
         assert!(
             src.calls().is_empty(),
             "no sign-in is read or refreshed for a turn with no picture: {:?}",

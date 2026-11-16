@@ -446,13 +446,23 @@ fn imagine_takes_it(imagine: Option<&Arc<dyn ImagineApi>>) -> bool {
 }
 
 pub(crate) fn run_with_ports(name: &str, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
+    run_with_kit(name, args, &crate::route::local_image::kit_here, stop)
+}
+
+/// [`run_with_ports`] with the picture model lookup passed in.
+fn run_with_kit(
+    name: &str,
+    args: &Value,
+    kit: &dyn Fn() -> Option<crate::route::local_image::Kit>,
+    stop: &dyn Fn() -> bool,
+) -> ToolOutput {
     let ports = super::ports::current();
     let imagine = ports.imagine.filter(|api| api.ready());
     if let Some(out) = on_device(
         name,
         args,
         &|| imagine_takes_it(imagine.as_ref()),
-        &crate::route::local_image::kit_here,
+        kit,
         stop,
         ports.media_dir.as_deref(),
     ) {
@@ -2220,5 +2230,39 @@ pub(crate) mod tests {
         assert_eq!(asked.get(), 0, "no sign-in is read for these");
         assert!(go("image_generate", "a cabin in the snow").is_none());
         assert_eq!(asked.get(), 1);
+    }
+
+    #[test]
+    fn a_clean_chat_picture_asks_the_picture_model_when_imagine_cannot_take_it() {
+        let (dir, _cfg) = scratch_config();
+        let asked = std::cell::Cell::new(0);
+        let kit = || {
+            asked.set(asked.get() + 1);
+            None
+        };
+        let ok = Arc::new(FakeSource::signed_in());
+        {
+            let (_ports, _posts) = turn(&ok, &[]);
+            let out = run_with_kit("image_generate", &picture(), &kit, &|| false);
+            assert!(!out.failed, "{}", out.text);
+            assert_eq!(asked.get(), 0, "Imagine takes it");
+        }
+        let ended = Arc::new(FakeSource {
+            first: Err("Your Grok sign-in ended. Sign in again in Settings → Account."),
+            ..FakeSource::signed_in()
+        });
+        {
+            let (_ports, _posts) = turn(&ended, &[]);
+            run_with_kit("image_generate", &picture(), &kit, &|| false);
+            assert_eq!(asked.get(), 1, "an ended sign-in asks the picture model");
+        }
+        {
+            let _offline = grokhub_core::offline::force_for_thread(true);
+            let (_ports, posts) = turn(&ok, &[]);
+            run_with_kit("image_generate", &picture(), &kit, &|| false);
+            assert_eq!(asked.get(), 2, "Offline only asks the picture model");
+            assert!(posted(&posts).is_empty());
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
