@@ -37,15 +37,16 @@ it. Groups are runs of turns, cut at a boundary.
    closing `usage` line gains an `at` field (Unix ms): the time the turn was
    saved, at its end, so one run of 30 minutes or more also starts a group.
    Readers already ignore unknown fields, and the session rewrite keeps it.
-   A compaction's own usage line carries one too. A manual compaction keeps
-   the end of the chat word for word: the kept messages that line up, from
-   the end, with the messages it replaced keep their times, and the rest (its
-   summary and rules) take the compaction's time. A turn that compacted as
-   it ran was never saved on its own, so it marks its compaction line
-   (`"turn": true`) and everything it kept takes the compaction's time; an
-   identical older ask such as "continue" never lends it a time. Older turns
-   have no time; their groups show the session's start and last-saved times
-   as the range instead.
+   A compaction's own usage line carries one too. A compaction keeps some
+   of the messages it replaced word for word (the last ask, maybe its reply):
+   each one is matched, newest first and in order, to an equal message it
+   replaced and keeps that one's time; the rest (its summary and rules) take
+   the compaction's time. A turn that compacted as it ran marks its line
+   (`"turn": true`): what it kept after the newest message it shares with
+   what it replaced is that turn's own, never saved on its own, so it takes
+   the compaction's time and an identical older ask such as "continue" never
+   lends it one. Older turns have no time; their groups show the session's
+   start and last-saved times as the range instead.
 2. **Topic shift.** Each turn's user text is embedded with the local static
    model the app already ships for memory recall (`potion-base-8M`, 256
    dimensions, CPU only, no network once downloaded). A new group starts when
@@ -57,10 +58,10 @@ it. Groups are runs of turns, cut at a boundary.
    Words are stemmed roughly ("files", "filed" and "file" match), and
    negative contractions ("don't") are skipped. Indic and Southeast Asian
    combining signs stay inside their words; those scripts' punctuation ends
-   one. Scripts written
-   without spaces (Thai, Lao, Myanmar, Khmer, kana and CJK ideographs) count
-   each pair of characters as a word, and a Latin word inside them stays a
-   word of its own.
+   one. Scripts written without spaces (Thai, Lao, Myanmar, Khmer, kana and
+   CJK ideographs), and Hangul, whose words carry their particles, count
+   each pair of characters as a word; a Latin word inside them stays a word
+   of its own.
 3. **Labels.** The title comes from the group's own words, with the existing
    unused topic helpers (`topics_from_turns`, `short_auto_title`). The one-line
    summary is the group's first user line, clipped to about 90 characters. No

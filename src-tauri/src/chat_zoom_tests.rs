@@ -448,6 +448,11 @@ fn plural_and_past_forms_share_a_stem() {
         .map(stem)
         .collect();
     assert_eq!(doubled, ["pass", "pass", "class", "class"]);
+    let ings: Vec<&str> = ["setting", "settings", "building", "buildings"]
+        .into_iter()
+        .map(stem)
+        .collect();
+    assert_eq!(ings, ["sett", "sett", "build", "build"]);
 }
 
 #[test]
@@ -548,6 +553,8 @@ fn script_punctuation_ends_a_word_and_rarer_ideographs_stay_in_their_run() {
     );
     let japanese: Vec<(bool, String)> = words("時々𠮷野家");
     assert_eq!(japanese, [(true, "時々𠮷野家".to_string())]);
+    let halfwidth: Vec<(bool, String)> = words("ｶﾀｶﾅㇰ");
+    assert_eq!(halfwidth, [(true, "ｶﾀｶﾅㇰ".to_string())]);
 }
 
 #[test]
@@ -561,4 +568,25 @@ fn contractions_are_not_topic_words() {
     let a = word_vector("the user's files").unwrap();
     let b = word_vector("user files").unwrap();
     assert!(cosine(&a, &b) > 0.99, "{}", cosine(&a, &b));
+}
+
+#[test]
+fn elided_words_keep_the_word_after_the_apostrophe() {
+    let a = word_vector("corrige l'erreur dans l'application").unwrap();
+    let b = word_vector("erreur application").unwrap();
+    assert!(cosine(&a, &b) > 0.6, "{}", cosine(&a, &b));
+}
+
+#[test]
+fn korean_words_match_through_their_particles() {
+    let got: Vec<(bool, String)> = words("설정 파일을");
+    assert_eq!(
+        got,
+        [(true, "설정".to_string()), (true, "파일을".to_string())]
+    );
+    let a = word_vector("설정 파일을 수정").unwrap();
+    let b = word_vector("파일이 오류").unwrap();
+    let c = word_vector("코드 리뷰").unwrap();
+    assert!(cosine(&a, &b) > WORDS_FLOOR, "{}", cosine(&a, &b));
+    assert!(cosine(&a, &c) < WORDS_FLOOR, "{}", cosine(&a, &c));
 }

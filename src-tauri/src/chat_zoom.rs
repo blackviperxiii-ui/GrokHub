@@ -89,7 +89,7 @@ pub struct Zoom {
     /// How many lines the chat has in all (the view loads the newest ones).
     pub lines: usize,
     pub groups: Vec<Group>,
-    /// Messages the last compaction took out of view; they aren't grouped.
+    /// Messages compactions took out of view; they aren't grouped.
     pub compacted: usize,
     /// When the chat started and when its file last changed (Unix ms), the
     /// range for groups whose turns have no time.
@@ -248,12 +248,14 @@ fn words(text: &str) -> Vec<(bool, String)> {
     out
 }
 
-/// Scripts written without spaces between words (Thai, Lao, Myanmar, Khmer,
-/// kana and CJK ideographs, with the iteration mark 々): their runs are split
-/// into character pairs.
+/// Scripts whose runs are split into character pairs: those written without
+/// spaces between words (Thai, Lao, Myanmar, Khmer, kana and CJK ideographs,
+/// with the iteration mark 々), and Hangul, whose short words carry their
+/// particles ("파일을" and "파일이" share "파일").
 fn unspaced(c: char) -> bool {
     matches!(u32::from(c),
-        0x0E00..=0x0EFF | 0x1000..=0x109F | 0x1780..=0x17FF | 0x3005..=0x3007
+        0x0E00..=0x0EFF | 0x1000..=0x109F | 0x1100..=0x11FF | 0x1780..=0x17FF
+            | 0x3005..=0x3007 | 0x3130..=0x318F | 0xAC00..=0xD7AF
             | 0x3040..=0x30FF | 0x31F0..=0x31FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF
             | 0xF900..=0xFAFF | 0xFF66..=0xFF9F | 0x20000..=0x3134F)
 }
@@ -286,17 +288,18 @@ fn word_vector(text: &str) -> Option<Vec<f32>> {
             }
             continue;
         }
-        // "don't" and "isn't" are function words; "user's" is "user".
-        let raw = match raw.split_once('\'') {
-            Some((_, "t")) => continue,
-            Some((base, _)) => base,
-            None => raw,
-        };
-        if raw.chars().count() < 3 || grokhub_core::is_title_stopword(raw) {
+        // "don't" and "isn't" are function words; otherwise each side of an
+        // apostrophe is a word ("user's" gives "user", "l'erreur" "erreur").
+        if raw.ends_with("n't") {
             continue;
         }
-        v[bucket(stem(raw))] += 1.0;
-        any = true;
+        for part in raw.split('\'') {
+            if part.chars().count() < 3 || grokhub_core::is_title_stopword(part) {
+                continue;
+            }
+            v[bucket(stem(part))] += 1.0;
+            any = true;
+        }
     }
     any.then(|| unit(v)).flatten()
 }

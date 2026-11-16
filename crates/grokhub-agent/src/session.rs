@@ -919,11 +919,13 @@ struct Replay {
 }
 
 /// Replays the records. A message gets the time of the usage line that closes
-/// its turn. A manual compaction keeps the end of the transcript word for
-/// word: the kept messages that line up with the messages it replaced, from
-/// the end, keep their times; the rest (its summary and rules) take the
-/// compaction's time. A turn that compacted as it ran was never saved on its
-/// own, so everything it kept takes the compaction's time.
+/// its turn. A compaction keeps some messages it replaced word for word (the
+/// last ask, maybe its reply): each kept message is matched, newest first and
+/// in order, to an equal message it replaced, and keeps that one's time. The
+/// rest (its summary and rules) take the compaction's own time. A turn that
+/// compacted as it ran also kept that turn's own messages, which were never
+/// saved on their own: everything after the newest message it shares with
+/// what it replaced is that turn's, and takes the compaction's time too.
 fn replay(records: &[Record]) -> Replay {
     let mut visible: Vec<(InputItem, Option<u64>)> = Vec::new();
     let mut open: Vec<usize> = Vec::new();
@@ -943,15 +945,28 @@ fn replay(records: &[Record]) -> Replay {
                 let prior = std::mem::take(&mut visible);
                 visible = items.iter().map(|item| (item.clone(), own)).collect();
                 open.clear();
-                let before: Vec<usize> = shown(&prior);
-                let after: Vec<usize> = shown(&visible);
+                let before = shown(&prior);
+                let after = shown(&visible);
+                // How many of the kept messages, from the first, came from
+                // before: all of them, unless a turn added its own.
+                let old = match turn {
+                    false => after.len(),
+                    true => before
+                        .last()
+                        .and_then(|&last| {
+                            after.iter().rposition(|&k| visible[k].0 == prior[last].0)
+                        })
+                        .map_or(0, |at| at + 1),
+                };
+                let mut left = before.len();
                 let mut matched = 0;
-                if !turn {
-                    for (&k, &p) in after.iter().rev().zip(before.iter().rev()) {
-                        if visible[k].0 != prior[p].0 {
-                            break;
-                        }
-                        visible[k].1 = prior[p].1;
+                for &k in after[..old].iter().rev() {
+                    let found = before[..left]
+                        .iter()
+                        .rposition(|&p| prior[p].0 == visible[k].0);
+                    if let Some(at) = found {
+                        visible[k].1 = prior[before[at]].1;
+                        left = at;
                         matched += 1;
                     }
                 }
@@ -1706,7 +1721,7 @@ mod tests {
     }
 
     #[test]
-    fn compacted_messages_counts_what_the_last_compaction_hid() {
+    fn compacted_messages_counts_what_compaction_hid() {
         let (_dir, _guard) = isolated("compacted");
         let id = "native-compacted";
         let usage = Usage::default();
@@ -1790,6 +1805,76 @@ mod tests {
         // The first compaction hid two messages, the second the three it
         // replaced (the first summary, the bar ask and its reply).
         assert_eq!(compacted_messages(&info), 5);
+    }
+
+    #[test]
+    fn a_summary_compaction_that_kept_only_the_ask_keeps_its_time() {
+        let (_dir, _guard) = isolated("summary-shape");
+        let id = "native-summary-shape";
+        let first = [user("fix the dock"), assistant("On it.")];
+        let second = [user("and the bar"), assistant("Done.")];
+        write_timed(id, &[(&first, 1_000), (&second, 2_000)]);
+        // The summary path keeps the last ask but not its reply.
+        let summary = user("<summary>Dock and bar.</summary>");
+        let rules = user("<standing-rules>Keep it short.</standing-rules>");
+        let kept = [summary, rules, second[0].clone()];
+        record_compaction(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        let info = load_session(id).unwrap();
+        let times = user_turn_times(&info);
+        assert_eq!(times.len(), 3, "{times:?}");
+        assert_eq!(times[2], Some(2_000), "the kept ask keeps its own time");
+        assert_eq!(
+            times[0], times[1],
+            "summary and rules share the compaction's time"
+        );
+        assert_ne!(times[0], Some(2_000));
+        assert_eq!(compacted_messages(&info), 3, "the ask is still in view");
+        // Deleting a kept reply doesn't move the times either.
+        let kept = [
+            user("<summary>Bar.</summary>"),
+            second[0].clone(),
+            second[1].clone(),
+        ];
+        record_compaction(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        let what = Forget::Reply {
+            ask: Some(("and the bar", 0)),
+        };
+        forget_message(id, what).unwrap();
+        let info = load_session(id).unwrap();
+        assert_eq!(user_turn_times(&info)[1], Some(2_000));
+    }
+
+    #[test]
+    fn a_turn_that_took_a_ready_compaction_keeps_the_last_turns_times() {
+        let (_dir, _guard) = isolated("bg-compact");
+        let id = "native-bg-compact";
+        let first = [user("fix the dock"), assistant("On it.")];
+        let second = [user("and the bar"), assistant("Done.")];
+        write_timed(id, &[(&first, 1_000), (&second, 2_000)]);
+        // A compaction made during the bar turn, used by the next one: it
+        // holds the bar turn and the new roof turn.
+        let summary = user("<summary>Dock.</summary>");
+        let roof = [user("now the roof"), assistant("Roof done.")];
+        let kept = [
+            summary,
+            second[0].clone(),
+            second[1].clone(),
+            roof[0].clone(),
+            roof[1].clone(),
+        ];
+        let before = grokhub_core::now_ms();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        let info = load_session(id).unwrap();
+        let times = user_turn_times(&info);
+        assert_eq!(times.len(), 3, "{times:?}");
+        assert_eq!(times[1], Some(2_000), "the bar ask was saved on its own");
+        let roof_at = times[2].unwrap();
+        assert!(roof_at >= before, "{roof_at} < {before}");
+        assert_eq!(
+            times[0], times[2],
+            "summary and the new ask share the compaction's time"
+        );
+        assert_eq!(compacted_messages(&info), 2, "only the dock turn went");
     }
 
     #[test]
