@@ -14,6 +14,21 @@ fn temp_dir(name: &str) -> PathBuf {
 
 const MIN: u64 = 60 * 1000;
 
+/// One ask per time, in order.
+fn asks(times: &[Option<u64>]) -> Vec<UserLine> {
+    times
+        .iter()
+        .map(|&at| UserLine {
+            at,
+            kind: UserKind::Ask,
+        })
+        .collect()
+}
+
+fn turns_of(lines: &[Line], times: &[Option<u64>]) -> Vec<Turn> {
+    turns(lines, &parts(lines, &asks(times)))
+}
+
 /// Writes a saved chat the way the engine does: a header, then per turn the
 /// ask, the reply and a usage line (with `at` when the turn has a time).
 fn write_chat(dir: &Path, id: &str, turns: &[(&str, &str, Option<u64>)]) {
@@ -77,12 +92,124 @@ fn each_ask_starts_a_turn_and_lines_before_the_first_ask_are_one_turn() {
         line(Role::User, "book it"),
         line(Role::Assistant, "Booked."),
     ];
-    let got = turns(&lines, &[Some(5), None]);
+    let got = turns_of(&lines, &[Some(5), None]);
     let ranges: Vec<(usize, usize, Option<u64>)> =
         got.iter().map(|t| (t.first, t.last, t.at)).collect();
     assert_eq!(ranges, vec![(0, 0, None), (1, 3, Some(5)), (4, 5, None)]);
     assert_eq!(got[1].hash.len(), 16);
     assert_ne!(got[1].hash, got[2].hash);
+}
+
+#[test]
+fn a_tools_image_stays_in_its_turn_and_a_compactions_text_is_in_none() {
+    let lines = vec![
+        line(
+            Role::User,
+            "This session is being continued from a previous conversation",
+        ),
+        line(
+            Role::User,
+            "<standing-rules>Keep it short.</standing-rules>",
+        ),
+        line(Role::User, "read the lisbon map"),
+        line(Role::Tools, "read_file"),
+        line(Role::User, "image from read_file\n[image]"),
+        line(Role::Assistant, "The map shows the river."),
+        line(Role::User, "and the trains?"),
+        line(Role::Assistant, "Every 20 minutes."),
+    ];
+    let kind = |kind| UserLine {
+        at: Some(7 * MIN),
+        kind,
+    };
+    let users = [
+        kind(UserKind::Compaction),
+        kind(UserKind::Compaction),
+        kind(UserKind::Ask),
+        kind(UserKind::ToolImage),
+        kind(UserKind::Ask),
+    ];
+    let parts = parts(&lines, &users);
+    let got: Vec<(usize, usize)> = turns(&lines, &parts)
+        .iter()
+        .map(|t| (t.first, t.last))
+        .collect();
+    assert_eq!(got, vec![(2, 5), (6, 7)]);
+    let turns = turns(&lines, &parts);
+    let group = group_of(&lines, &parts, &turns);
+    assert_eq!(
+        (group.first_line, group.summary.as_str(), group.messages),
+        (2, "read the lisbon map", 4),
+        "the image isn't an ask or a message of its own"
+    );
+}
+
+#[test]
+fn a_compacted_chat_groups_from_its_kept_ask_not_the_summary() {
+    let dir = temp_dir("compacted");
+    let id = "shell-zoom-compacted";
+    let msg = |role: &str, text: &str| {
+        serde_json::json!({"type": "message", "role": role,
+            "content": [{"type": "input_text", "text": text}]})
+    };
+    let usage = |at: u64| {
+        serde_json::json!({"type": "usage", "input_tokens": 1, "output_tokens": 1,
+            "reasoning_tokens": 0, "cost_in_usd_ticks": 0, "cached_tokens": 0,
+            "meter": "pool", "at": at})
+    };
+    let summary = "This session is being continued from a previous conversation that ran out \
+        of context. The summary below covers the earlier portion of the conversation.\n\n\
+        <conversation_summary>\nPlanned Lisbon.\n</conversation_summary>";
+    let records = [
+        serde_json::json!({"id": id, "title": "Chat", "created": 1_000, "cwd": "/work",
+            "model": "grok-4.3", "engine": "native", "renamed": false}),
+        msg("user", "plan the lisbon trip"),
+        msg("assistant", "Here's a plan."),
+        usage(100 * MIN),
+        msg("user", "lisbon hotels near the river"),
+        msg("assistant", "Two hotels."),
+        usage(102 * MIN),
+        serde_json::json!({"type": "compaction", "items": [
+            msg("user", summary),
+            msg("user", "<standing_rules>\nKeep it short.\n</standing_rules>"),
+            msg("user", "lisbon hotels near the river"),
+            msg("assistant", "Two hotels."),
+        ]}),
+        usage(103 * MIN),
+        msg("user", "lisbon trains to the coast"),
+        msg("assistant", "Every 20 minutes."),
+        usage(104 * MIN),
+    ];
+    let raw: String = records.iter().map(|r| format!("{r}\n")).collect();
+    std::fs::write(dir.join("sessions").join(format!("{id}.jsonl")), raw).unwrap();
+    let zoom = zoom_with(&dir, id, None).unwrap();
+    let shape: Vec<_> = zoom
+        .groups
+        .iter()
+        .map(|g| {
+            (
+                g.first_line,
+                g.last_line,
+                g.summary.as_str(),
+                g.first_at,
+                g.last_at,
+                g.messages,
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        vec![(
+            2,
+            5,
+            "lisbon hotels near the river",
+            Some(102 * MIN),
+            Some(104 * MIN),
+            4
+        )]
+    );
+    assert_eq!((zoom.lines, zoom.compacted), (6, 2));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -141,8 +268,9 @@ fn a_group_card_names_its_topic_from_its_own_words() {
         line(Role::User, "Which Lisbon hotels are near the river?"),
         line(Role::Assistant, "Two near the river."),
     ];
-    let turns = turns(&lines, &[Some(10 * MIN), Some(12 * MIN)]);
-    let group = group_of(&lines, &turns);
+    let parts = parts(&lines, &asks(&[Some(10 * MIN), Some(12 * MIN)]));
+    let turns = turns(&lines, &parts);
+    let group = group_of(&lines, &parts, &turns);
     assert_eq!(
         group,
         Group {
@@ -367,7 +495,7 @@ fn a_turns_hash_is_the_same_in_every_run() {
         line(Role::Assistant, "Sure."),
     ];
     // FNV-1a over "u\0lisbon trip\0a\0Sure.\0", worked out outside the app.
-    assert_eq!(turns(&lines, &[])[0].hash, "8cd215dc746ddf90");
+    assert_eq!(turns_of(&lines, &[])[0].hash, "8cd215dc746ddf90");
 }
 
 #[test]
@@ -385,7 +513,7 @@ fn a_reopen_groups_by_the_cached_vectors_not_fresh_ones() {
     let (fresh, _) = fold(&lines, &[], Kind::Model, &[], &embed);
     assert_eq!(fresh.len(), 1);
     // The cache says the topic turned at the fourth ask.
-    let cached: Vec<CachedTurn> = turns(&lines, &[])
+    let cached: Vec<CachedTurn> = turns_of(&lines, &[])
         .into_iter()
         .enumerate()
         .map(|(i, turn)| CachedTurn {

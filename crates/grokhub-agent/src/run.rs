@@ -292,13 +292,16 @@ pub struct LoopOut {
     pub usage: Usage,
     /// A summary replaced older history. The caller records a compaction marker.
     pub compacted: bool,
+    /// After a compaction, where this turn's own items start in the history:
+    /// the ones it kept or added, which no earlier saved turn holds.
+    pub turn_from: Option<usize>,
 }
 
 fn finish(
     input: &LoopIn<'_>,
     stop: StopReason,
     usage: Usage,
-    compacted: bool,
+    compacted: Option<usize>,
     fire: bool,
 ) -> LoopOut {
     if fire {
@@ -312,7 +315,8 @@ fn finish(
     LoopOut {
         stop,
         usage,
-        compacted,
+        compacted: compacted.is_some(),
+        turn_from: compacted,
     }
 }
 
@@ -350,8 +354,10 @@ fn hosted_for_step(
 
 enum CompactPass {
     /// `background`: the result came from a background compaction.
+    /// `turn_from`: where the turn's own items start in the new history.
     Ok {
         background: bool,
+        turn_from: usize,
     },
     Cancelled,
     Failed,
@@ -362,6 +368,7 @@ enum CompactPass {
 fn run_compact_pass(
     input: &LoopIn<'_>,
     history: &mut Vec<InputItem>,
+    turn_from: usize,
     modified_paths: &[String],
     last_tools: &[serde_json::Value],
     usage: &mut Usage,
@@ -387,6 +394,7 @@ fn run_compact_pass(
         None
     };
     let from_background = background.is_some();
+    let turn = history.get(turn_from..).unwrap_or(&[]).to_vec();
     // Only the chat writes its session log to memory: a subagent's history
     // is one task, and a fork's starts with the chat's own.
     let compact_result = if let Some((rebuilt, done)) = background {
@@ -436,6 +444,7 @@ fn run_compact_pass(
             emit_usage(on_event, usage, history, input.context_length);
             CompactPass::Ok {
                 background: from_background,
+                turn_from: own_start(&turn, history),
             }
         }
         Err(crate::compact::CompactError::Cancelled) => {
@@ -457,6 +466,28 @@ fn run_compact_pass(
             CompactPass::Failed
         }
     }
+}
+
+/// Where a turn's own items (`turn`, as they were before a compaction) start
+/// in the history the compaction left. Each kept item is matched, newest first
+/// and in order, to a turn item that shows the same; the first match starts
+/// them. With none kept, what the turn adds next starts them.
+fn own_start(turn: &[InputItem], history: &[InputItem]) -> usize {
+    let mut left = turn.len();
+    let mut start = history.len();
+    for (at, item) in history.iter().enumerate().rev() {
+        if left == 0 {
+            break;
+        }
+        if let Some(found) = turn[..left]
+            .iter()
+            .rposition(|t| crate::session::shows_same(t, item))
+        {
+            left = found;
+            start = at;
+        }
+    }
+    start
 }
 
 pub fn run_loop(
@@ -603,7 +634,10 @@ fn run_turn(
     if plan_at_start {
         gate.readonly_session = true;
     }
-    let mut compacted_once = false;
+    // Where this turn's own items start: its ask, until a compaction moves
+    // them, and then where they went (also the sign that it compacted).
+    let ask_at = history.len().saturating_sub(1);
+    let mut compacted_once: Option<usize> = None;
     // The tool list the last request sent, for a compaction that keeps its prefix.
     let mut last_tools: Vec<serde_json::Value> = Vec::new();
     let mut turns_since_compact = 0u32;
@@ -751,7 +785,7 @@ fn run_turn(
         let step = crate::compact::crosses_price_step(input.model, input.context_length, projected);
         let over =
             crate::compact::needs_auto_compact_at(trigger, input.context_length) || long || step;
-        let rearmed = !compacted_once || turns_since_compact >= 1;
+        let rearmed = compacted_once.is_none() || turns_since_compact >= 1;
         let may_compact = over && rearmed;
         if may_compact {
             // A background result can be older than the run's last steps: if
@@ -762,13 +796,17 @@ fn run_turn(
                 match run_compact_pass(
                     input,
                     history,
+                    compacted_once.unwrap_or(ask_at),
                     &modified_paths,
                     &last_tools,
                     &mut usage,
                     on_event,
                 ) {
-                    CompactPass::Ok { background } => {
-                        compacted_once = true;
+                    CompactPass::Ok {
+                        background,
+                        turn_from,
+                    } => {
+                        compacted_once = Some(turn_from);
                         turns_since_compact = 0;
                         prompt_mark = None;
                         let now = crate::compact::trigger_tokens(history, None);
@@ -930,13 +968,14 @@ fn run_turn(
                 match run_compact_pass(
                     input,
                     history,
+                    compacted_once.unwrap_or(ask_at),
                     &modified_paths,
                     &last_tools,
                     &mut usage,
                     on_event,
                 ) {
-                    CompactPass::Ok { .. } => {
-                        compacted_once = true;
+                    CompactPass::Ok { turn_from, .. } => {
+                        compacted_once = Some(turn_from);
                         turns_since_compact = 0;
                         overflow_compacted = true;
                         continue;
@@ -1003,7 +1042,7 @@ fn run_turn(
                         crate::route::handoff::PacketFacts {
                             partial_kept: !shown.trim().is_empty(),
                             tool_results,
-                            compacted: compacted_once,
+                            compacted: compacted_once.is_some(),
                             open_items,
                             last_ask,
                             attempts,
@@ -2702,6 +2741,90 @@ mod tests {
     use super::*;
     use crate::gate::{self, Gate, PermAnswer, PermitWait, Waited};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn msg(role: &str, text: &str) -> InputItem {
+        InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        }
+    }
+
+    fn step(id: &str) -> [InputItem; 2] {
+        [
+            InputItem::FunctionCall {
+                call_id: id.into(),
+                name: "run".into(),
+                arguments: "{}".into(),
+            },
+            InputItem::FunctionCallOutput {
+                call_id: id.into(),
+                output: "ok".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_turns_own_items_start_after_the_last_turns_tool_step() {
+        // A background job kept the last turn, which stopped after a tool;
+        // this turn's ask came straight after that tool's output.
+        let [call, out] = step("c1");
+        let turn = vec![msg("user", "try again"), msg("assistant", "Trying.")];
+        let mut history = vec![
+            msg("user", "<summary>Builds.</summary>"),
+            msg("user", "fix the build"),
+            call,
+            out,
+        ];
+        history.extend(turn.clone());
+        assert_eq!(own_start(&turn, &history), 4);
+    }
+
+    #[test]
+    fn a_resent_ask_starts_the_turn_not_its_older_copy() {
+        let [call, out] = step("c2");
+        let turn = vec![msg("user", "continue"), call, out];
+        let mut history = vec![
+            msg("user", "<summary>Steps.</summary>"),
+            msg("user", "continue"),
+        ];
+        history.extend(turn.clone());
+        assert_eq!(own_start(&turn, &history), 2);
+    }
+
+    #[test]
+    fn a_folded_ask_leaves_the_turn_its_later_items() {
+        let notice = msg("user", "<background-notice>done</background-notice>");
+        let turn = vec![msg("user", "continue"), notice.clone()];
+        let history = vec![msg("user", "<summary>All of it.</summary>"), notice];
+        assert_eq!(own_start(&turn, &history), 1, "only the notice was kept");
+        let history = vec![msg("user", "<summary>All of it.</summary>")];
+        assert_eq!(own_start(&turn, &history), 1, "nothing was kept");
+    }
+
+    #[test]
+    fn a_kept_copy_matches_without_its_notes_or_image() {
+        let wrapped = format!(
+            "{}mood{}\n\nlook at this",
+            crate::prefix_cache::WRAPPER_START,
+            crate::prefix_cache::WRAPPER_END
+        );
+        let image = |part: ContentPart| InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText("image from screenshot".into()), part],
+        };
+        let turn = vec![
+            msg("user", &wrapped),
+            image(ContentPart::InputImage("data:image/png;base64,QQ==".into())),
+        ];
+        let history = vec![
+            msg("user", "<summary>Before.</summary>"),
+            msg("user", "look at this"),
+            image(ContentPart::InputText(
+                crate::image_budget::OLD_IMAGE_PLACEHOLDER.into(),
+            )),
+        ];
+        assert_eq!(own_start(&turn, &history), 1);
+    }
 
     struct Script {
         turns: Mutex<Vec<ScriptTurn>>,

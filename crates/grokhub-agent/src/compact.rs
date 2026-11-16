@@ -2062,6 +2062,24 @@ pub fn format_compact_summary_content(raw_summary: &str) -> String {
     wrap_summary(&format_compact_summary(raw_summary))
 }
 
+/// A message a compaction wrote: its summary (or digest), ledger or
+/// standing rules.
+pub(crate) fn is_compaction_message(item: &InputItem) -> bool {
+    let InputItem::Message { role, .. } = item else {
+        return false;
+    };
+    let text = message_text(item);
+    let text = text.trim_start();
+    role == "user"
+        && (text.starts_with(SUMMARY_OPEN)
+            || text.starts_with(ledger::LEDGER_OPEN)
+            || text.starts_with(STANDING_OPEN))
+}
+
+/// How a summary (or the digest that stands in for one) opens.
+const SUMMARY_OPEN: &str =
+    "This session is being continued from a previous conversation that ran out of context.";
+
 fn wrap_summary(cleaned: &str) -> String {
     format!(
         "This session is being continued from a previous conversation that ran out of context. \
@@ -2472,6 +2490,35 @@ mod tests {
     }
 
     #[test]
+    fn the_messages_a_compaction_writes_are_known_by_their_opening() {
+        let items = vec![
+            text_message("user", "fix the dock"),
+            text_message("assistant", "On it."),
+            text_message("user", "and the bar"),
+        ];
+        let rebuilt =
+            build_compacted_history_for("chat-1", &items, "<summary>Dock.</summary>", &[]);
+        let made: Vec<(String, bool)> = rebuilt
+            .iter()
+            .map(|item| (message_text(item), is_compaction_message(item)))
+            .filter(|(text, _)| !text.is_empty())
+            .map(|(text, made)| (text.lines().next().unwrap_or("").to_string(), made))
+            .collect();
+        assert_eq!(
+            made,
+            [
+                (format!("{SUMMARY_OPEN} The summary below covers the earlier portion of the conversation."), true),
+                ("<standing_rules>".to_string(), true),
+                ("and the bar".to_string(), false),
+            ]
+        );
+        let digest = fallback_digest_message("dock, bar").unwrap();
+        assert!(is_compaction_message(&text_message("user", &digest)));
+        assert!(!is_compaction_message(&text_message("assistant", &digest)));
+        assert!(!is_compaction_message(&text_message("user", "continue")));
+    }
+
+    #[test]
     fn auto_compact_runs_at_the_threshold_and_counts_summary_usage() {
         let old = text_message("user", &format!("OLD_TOPIC {}", text_for_total_tokens(900)));
         let script = Script {
@@ -2497,6 +2544,11 @@ mod tests {
         let out = drive(&script, &mut history, 1_000);
         assert_eq!(out.stop, crate::run::StopReason::EndTurn);
         assert!(out.compacted);
+        let from = out
+            .turn_from
+            .expect("a compacting turn says where it starts");
+        let own: Vec<String> = history[from..].iter().map(message_text).collect();
+        assert_eq!(own, ["go", "done"], "the turn's ask and reply are its own");
         assert_eq!(out.usage.input_tokens, 14);
         assert_eq!(out.usage.output_tokens, 5);
         assert_eq!(out.usage.cost_in_usd_ticks, 7);

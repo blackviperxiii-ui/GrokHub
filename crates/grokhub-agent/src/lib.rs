@@ -163,8 +163,8 @@ pub use session::{
     export_markdown, forget_message, fork_session, format_cost_ticks, history_generation,
     list_sessions, load_session, local_title, merge_history, message_pairs, record_compaction,
     record_turn, rename_session, resume_input, session_file, session_intact, transcript_pairs,
-    usage_label, user_turn_times, Forget, Forgotten, HistoryRow, RunGuard, SessionInfo,
-    FORGET_BUSY,
+    usage_label, user_lines, Forget, Forgotten, HistoryRow, RunGuard, SessionInfo, UserKind,
+    UserLine, FORGET_BUSY,
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{

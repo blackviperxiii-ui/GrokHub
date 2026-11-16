@@ -53,9 +53,9 @@ enum Record {
     /// Replaces every earlier item. Later items append after this prefix.
     Compaction {
         items: Vec<InputItem>,
-        /// Saved by a turn that compacted as it ran, so its last ask is that
-        /// turn's and was never saved on its own line.
-        turn: bool,
+        /// How many of the last items are the own items of a turn that
+        /// compacted as it ran: they were never saved on their own lines.
+        own: usize,
     },
 }
 
@@ -463,20 +463,22 @@ pub fn record_compaction(
     usage: &Usage,
     meter: &str,
 ) -> Result<(), String> {
-    write_compaction(id, cwd, model, items, usage, meter, false)
+    write_compaction(id, cwd, model, items, usage, meter, 0)
 }
 
-/// [`record_compaction`] for a turn that compacted as it ran: the turn is
-/// saved only through the compaction, so its ask takes the compaction's time.
+/// [`record_compaction`] for a turn that compacted as it ran: its own items,
+/// the last `own` of `items`, are saved only through the compaction, so they
+/// take its time.
 pub fn record_compacted_turn(
     id: &str,
     cwd: &str,
     model: &str,
     items: &[InputItem],
+    own: usize,
     usage: &Usage,
     meter: &str,
 ) -> Result<(), String> {
-    write_compaction(id, cwd, model, items, usage, meter, true)
+    write_compaction(id, cwd, model, items, usage, meter, own.min(items.len()))
 }
 
 fn write_compaction(
@@ -486,7 +488,7 @@ fn write_compaction(
     items: &[InputItem],
     usage: &Usage,
     meter: &str,
-    turn: bool,
+    own: usize,
 ) -> Result<(), String> {
     let id = safe_id(id)?.to_string();
     if tombstoned(&id) {
@@ -499,7 +501,7 @@ fn write_compaction(
     }
     let mut lines = Vec::new();
     let at = Some(grokhub_core::now_ms());
-    for value in [compaction_json(items, turn), usage_json(usage, meter, at)] {
+    for value in [compaction_json(items, own), usage_json(usage, meter, at)] {
         serde_json::to_writer(&mut lines, &value).map_err(|err| err.to_string())?;
         lines.push(b'\n');
     }
@@ -789,7 +791,9 @@ fn drop_slots(records: &mut Vec<Record>, doomed: &[Slot]) {
         }
     }
     for (i, js) in kept {
-        if let Some(Record::Compaction { items, .. }) = records.get_mut(i) {
+        if let Some(Record::Compaction { items, own }) = records.get_mut(i) {
+            let first_own = items.len() - *own;
+            *own -= js.iter().filter(|&&j| j >= first_own).count();
             let mut j = 0;
             items.retain(|_| {
                 let keep = !js.contains(&j);
@@ -914,8 +918,13 @@ fn is_shown_message(item: &InputItem) -> bool {
 /// The transcript replayed record by record: what is in view, with each
 /// message's time, and how many messages compactions took out of view.
 struct Replay {
-    visible: Vec<(InputItem, Option<u64>)>,
+    visible: Vec<Seen>,
     hidden: usize,
+}
+
+struct Seen {
+    item: InputItem,
+    at: Option<u64>,
 }
 
 /// Replays the records. A message gets the time of the usage line that closes
@@ -923,53 +932,54 @@ struct Replay {
 /// its reply): each kept message is matched, newest first and in order, to a
 /// replaced message that shows the same ([`message_key`]), and keeps that
 /// one's time. The rest (its summary and rules) take the compaction's own
-/// time. A turn that compacted as it ran also kept that turn's own messages,
-/// which were never saved on their own: from its ask on, they take the
-/// compaction's time too, even when an older ask reads the same.
+/// time. So do the own items of a turn that compacted as it ran, which were
+/// never saved on their own, even when an older ask reads the same.
 fn replay(records: &[Record]) -> Replay {
-    let mut visible: Vec<(InputItem, Option<u64>)> = Vec::new();
+    let mut visible: Vec<Seen> = Vec::new();
     let mut open: Vec<usize> = Vec::new();
     let mut hidden = 0;
     for (i, record) in records.iter().enumerate() {
         match record {
             Record::Item(item) => {
                 open.push(visible.len());
-                visible.push((item.clone(), None));
+                visible.push(Seen {
+                    item: item.clone(),
+                    at: None,
+                });
             }
-            Record::Usage { at, .. } => open.drain(..).for_each(|j| visible[j].1 = *at),
-            Record::Compaction { items, turn } => {
-                let own = match records.get(i + 1) {
+            Record::Usage { at, .. } => open.drain(..).for_each(|j| visible[j].at = *at),
+            Record::Compaction { items, own } => {
+                let at = match records.get(i + 1) {
                     Some(Record::Usage { at, .. }) => *at,
                     _ => None,
                 };
                 let prior = std::mem::take(&mut visible);
-                visible = items.iter().map(|item| (item.clone(), own)).collect();
+                visible = items
+                    .iter()
+                    .map(|item| Seen {
+                        item: item.clone(),
+                        at,
+                    })
+                    .collect();
                 open.clear();
                 let before = shown(&prior);
-                let after = shown(&visible);
-                let before_keys: Vec<_> =
-                    before.iter().map(|&p| message_key(&prior[p].0)).collect();
-                // How many of the kept messages, from the first, came from
-                // before: all of them, unless a turn added its own, which
-                // start at its ask (the last user message that isn't a tool's
-                // image).
-                let old = match turn {
-                    false => after.len(),
-                    true => after
-                        .iter()
-                        .rposition(|&k| {
-                            let tool_image = k > 0
-                                && matches!(visible[k - 1].0, InputItem::FunctionCallOutput { .. });
-                            is_shown_ask(&visible[k].0) && !tool_image
-                        })
-                        .unwrap_or(0),
-                };
+                let before_keys: Vec<_> = before
+                    .iter()
+                    .map(|&p| message_key(&prior[p].item))
+                    .collect();
+                // The kept messages that came from before: all but the
+                // turn's own ones at the end.
+                let first_own = items.len() - own.min(&items.len());
+                let after: Vec<usize> = shown(&visible)
+                    .into_iter()
+                    .filter(|&k| k < first_own)
+                    .collect();
                 let mut left = before.len();
                 let mut matched = 0;
-                for &k in after[..old].iter().rev() {
-                    let key = message_key(&visible[k].0);
+                for &k in after.iter().rev() {
+                    let key = message_key(&visible[k].item);
                     if let Some(at) = before_keys[..left].iter().rposition(|p| *p == key) {
-                        visible[k].1 = prior[before[at]].1;
+                        visible[k].at = prior[before[at]].at;
                         left = at;
                         matched += 1;
                     }
@@ -1001,27 +1011,86 @@ fn message_key(item: &InputItem) -> Option<(String, String)> {
     Some((role.clone(), visible_text(role, &content)))
 }
 
+/// Whether two items are copies of one: equal, or messages that show the same
+/// ([`message_key`]).
+pub(crate) fn shows_same(a: &InputItem, b: &InputItem) -> bool {
+    match (message_key(a), message_key(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 /// Where the messages [`transcript_pairs`] shows sit in `items`.
-fn shown(items: &[(InputItem, Option<u64>)]) -> Vec<usize> {
+fn shown(items: &[Seen]) -> Vec<usize> {
     items
         .iter()
         .enumerate()
-        .filter(|(_, (item, _))| is_shown_message(item))
+        .filter(|(_, seen)| is_shown_message(&seen.item))
         .map(|(i, _)| i)
         .collect()
 }
 
-/// When each user message in [`transcript_pairs`] was answered: one entry per
-/// user pair, in order (see [`replay`]). `None` for turns saved before usage
-/// lines carried a time. A turn whose usage line was lost to a torn write
-/// takes the next turn's time.
-pub fn user_turn_times(info: &SessionInfo) -> Vec<Option<u64>> {
-    replay(&info.records)
-        .visible
-        .into_iter()
-        .filter(|(item, _)| is_shown_ask(item))
-        .map(|(_, at)| at)
+/// A user message in [`transcript_pairs`]: when it was answered, and what
+/// it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserLine {
+    /// The time of the turn it was saved with (see [`replay`]). `None` for
+    /// turns saved before usage lines carried a time. A turn whose usage line
+    /// was lost to a torn write takes the next turn's time.
+    pub at: Option<u64>,
+    pub kind: UserKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserKind {
+    /// Something the person (or the app on their behalf) sent.
+    Ask,
+    /// The image a tool returned, sent as a user message after its result.
+    ToolImage,
+    /// A compaction's summary, ledger or rules.
+    Compaction,
+}
+
+/// Every user message in [`transcript_pairs`], in order.
+pub fn user_lines(info: &SessionInfo) -> Vec<UserLine> {
+    let visible = replay(&info.records).visible;
+    visible
+        .iter()
+        .enumerate()
+        .filter(|(_, seen)| is_shown_ask(&seen.item))
+        .map(|(k, seen)| {
+            let after_tool =
+                k > 0 && matches!(visible[k - 1].item, InputItem::FunctionCallOutput { .. });
+            let kind = if crate::compact::is_compaction_message(&seen.item) {
+                UserKind::Compaction
+            } else if after_tool && is_tool_image(&seen.item) {
+                UserKind::ToolImage
+            } else {
+                UserKind::Ask
+            };
+            UserLine { at: seen.at, kind }
+        })
         .collect()
+}
+
+/// The message the run adds after a tool result that carried an image:
+/// "image from {tool}" and the image, or the note that replaced it.
+fn is_tool_image(item: &InputItem) -> bool {
+    let InputItem::Message { content, .. } = item else {
+        return false;
+    };
+    match content.as_slice() {
+        [ContentPart::InputText(label), image] => {
+            label.starts_with("image from ")
+                && match image {
+                    ContentPart::InputImage(_) => true,
+                    ContentPart::InputText(text) => {
+                        text == crate::image_budget::OLD_IMAGE_PLACEHOLDER
+                    }
+                }
+        }
+        _ => false,
+    }
 }
 
 /// How many messages compactions took out of the transcript, less the ones
@@ -1193,7 +1262,7 @@ fn write_session(info: &SessionInfo) -> Result<(), String> {
         let value = match record {
             Record::Item(item) => item_json(item),
             Record::Usage { usage, meter, at } => usage_json(usage, meter, *at),
-            Record::Compaction { items, turn } => compaction_json(items, *turn),
+            Record::Compaction { items, own } => compaction_json(items, *own),
         };
         push_line(&mut bytes, &value)?;
     }
@@ -1403,10 +1472,9 @@ fn parse_record(value: &Value) -> Option<Record> {
                     }
                 }
             }
-            Some(Record::Compaction {
-                items,
-                turn: value.get("turn").and_then(Value::as_bool).unwrap_or(false),
-            })
+            let own = value.get("own").and_then(Value::as_u64).unwrap_or(0);
+            let own = usize::try_from(own).unwrap_or(usize::MAX).min(items.len());
+            Some(Record::Compaction { items, own })
         }
         _ => None,
     }
@@ -1507,13 +1575,13 @@ fn item_json(item: &InputItem) -> Value {
     }
 }
 
-fn compaction_json(items: &[InputItem], turn: bool) -> Value {
+fn compaction_json(items: &[InputItem], own: usize) -> Value {
     let mut value = json!({
         "type": "compaction",
         "items": items.iter().map(item_json).collect::<Vec<_>>(),
     });
-    if turn {
-        value["turn"] = json!(true);
+    if own > 0 {
+        value["own"] = json!(own);
     }
     value
 }
@@ -1579,6 +1647,15 @@ mod tests {
                 ContentPart::InputImage("data:image/png;base64,QQ==".into()),
             ],
         }
+    }
+
+    /// A summary as the compaction writes it.
+    fn summary_of(text: &str) -> InputItem {
+        user(&format!(
+            "This session is being continued from a previous conversation that ran out of \
+             context. The summary below covers the earlier portion of the conversation.\n\n\
+             <conversation_summary>\n{text}\n</conversation_summary>"
+        ))
     }
 
     fn assistant(text: &str) -> InputItem {
@@ -1762,6 +1839,14 @@ mod tests {
         assert_eq!(user_turn_times(&info), Vec::<Option<u64>>::new());
     }
 
+    fn user_turn_times(info: &SessionInfo) -> Vec<Option<u64>> {
+        user_lines(info).iter().map(|line| line.at).collect()
+    }
+
+    fn user_kinds(info: &SessionInfo) -> Vec<UserKind> {
+        user_lines(info).iter().map(|line| line.kind).collect()
+    }
+
     /// Writes a chat by hand: per turn its items and a usage line at `at`.
     fn write_timed(id: &str, turns: &[(&[InputItem], u64)]) {
         let file = session_file(id).unwrap();
@@ -1815,7 +1900,7 @@ mod tests {
         let third = [user("now the roof"), assistant("Roof done.")];
         let summary = user("<summary>Dock and bar.</summary>");
         let kept = [summary, third[0].clone(), third[1].clone()];
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, &usage, "").unwrap();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &usage, "").unwrap();
         let after_third = grokhub_core::now_ms();
         let info = load_session(id).unwrap();
         let times = user_turn_times(&info);
@@ -1839,8 +1924,8 @@ mod tests {
         let second = [user("and the bar"), assistant("Done.")];
         write_timed(id, &[(&first, 1_000), (&second, 2_000)]);
         // The summary path keeps the last ask but not its reply.
-        let summary = user("<summary>Dock and bar.</summary>");
-        let rules = user("<standing-rules>Keep it short.</standing-rules>");
+        let summary = summary_of("Dock and bar.");
+        let rules = user("<standing_rules>\nKeep it short.\n</standing_rules>");
         let kept = [summary, rules, second[0].clone()];
         record_compaction(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
         let info = load_session(id).unwrap();
@@ -1853,6 +1938,10 @@ mod tests {
         );
         assert_ne!(times[0], Some(2_000));
         assert_eq!(compacted_messages(&info), 3, "the ask is still in view");
+        assert_eq!(
+            user_kinds(&info),
+            [UserKind::Compaction, UserKind::Compaction, UserKind::Ask]
+        );
     }
 
     #[test]
@@ -1908,7 +1997,7 @@ mod tests {
             roof[1].clone(),
         ];
         let before = grokhub_core::now_ms();
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
         let info = load_session(id).unwrap();
         let times = user_turn_times(&info);
         assert_eq!(times.len(), 3, "{times:?}");
@@ -1930,6 +2019,83 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_after_a_stopped_tool_step_keeps_the_last_turns_time() {
+        let (_dir, _guard) = isolated("after-tool");
+        let id = "native-after-tool";
+        let call = InputItem::FunctionCall {
+            call_id: "c1".into(),
+            name: "run".into(),
+            arguments: "{}".into(),
+        };
+        let output = InputItem::FunctionCallOutput {
+            call_id: "c1".into(),
+            output: "stopped".into(),
+        };
+        // Stopped during its tool: the turn ends on the tool's output.
+        let stopped = [user("fix the build"), call.clone(), output.clone()];
+        write_timed(id, &[(&stopped, 1_000)]);
+        let ask = user("try again");
+        let kept = [
+            summary_of("Nothing yet."),
+            stopped[0].clone(),
+            call,
+            output,
+            ask,
+            assistant("Fixed."),
+        ];
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
+        let info = load_session(id).unwrap();
+        let times = user_turn_times(&info);
+        assert_eq!(times.len(), 3, "{times:?}");
+        assert_eq!(times[1], Some(1_000), "the stopped ask keeps its time");
+        assert_ne!(times[2], Some(1_000));
+        assert_eq!(times[0], times[2]);
+        assert_eq!(compacted_messages(&info), 0, "nothing went out of view");
+        assert_eq!(
+            user_kinds(&info),
+            [UserKind::Compaction, UserKind::Ask, UserKind::Ask],
+            "an ask after a tool's output is still an ask"
+        );
+        // Deleting this turn's ask leaves the stopped one its time.
+        let what = Forget::Ask {
+            text: "try again",
+            later: 0,
+        };
+        assert_eq!(forget_message(id, what).unwrap(), Forgotten::Removed);
+        let info = load_session(id).unwrap();
+        let after = user_turn_times(&info);
+        assert_eq!(after, [times[0], Some(1_000)], "{after:?}");
+        assert_eq!(compacted_messages(&info), 0);
+        let own = info.records.iter().find_map(|record| match record {
+            Record::Compaction { own, .. } => Some(*own),
+            _ => None,
+        });
+        assert_eq!(own, Some(1), "only the reply is still the turn's own");
+    }
+
+    #[test]
+    fn a_note_after_the_ask_doesnt_lend_the_ask_an_older_time() {
+        let (_dir, _guard) = isolated("note-after");
+        let id = "native-note-after";
+        let first = [user("continue"), assistant("Step one done.")];
+        write_timed(id, &[(&first, 1_000)]);
+        let notice = user("<background-notice>helper done</background-notice>");
+        let kept = [
+            user("<summary>Step one.</summary>"),
+            user("continue"),
+            notice,
+            assistant("Step two done."),
+        ];
+        let before = grokhub_core::now_ms();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, 3, &Usage::default(), "").unwrap();
+        let info = load_session(id).unwrap();
+        let times = user_turn_times(&info);
+        assert_eq!(times.len(), 3, "{times:?}");
+        assert!(times.iter().all(|at| at.unwrap() >= before), "{times:?}");
+        assert_eq!(compacted_messages(&info), 2);
+    }
+
+    #[test]
     fn a_cancelled_ask_sent_again_in_a_compacting_turn_takes_that_turns_time() {
         let (_dir, _guard) = isolated("resent");
         let id = "native-resent";
@@ -1941,7 +2107,7 @@ mod tests {
         let again = [user("continue"), assistant("Step one done.")];
         let kept = [summary, again[0].clone(), again[1].clone()];
         let before = grokhub_core::now_ms();
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
         let times = user_turn_times(&load_session(id).unwrap());
         assert_eq!(times.len(), 2, "{times:?}");
         let at = times[1].unwrap();
@@ -1982,7 +2148,7 @@ mod tests {
             crate::image_budget::OLD_IMAGE_PLACEHOLDER.into(),
         ));
         let kept = [
-            user("<summary>Nothing yet.</summary>"),
+            summary_of("Nothing yet."),
             saved[0].clone(),
             call,
             output,
@@ -1992,7 +2158,7 @@ mod tests {
             assistant("Bar done."),
         ];
         let before = grokhub_core::now_ms();
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
         let info = load_session(id).unwrap();
         let times = user_turn_times(&info);
         assert_eq!(times.len(), 4, "{times:?}");
@@ -2005,6 +2171,15 @@ mod tests {
         assert!(own >= before, "{own} < {before}");
         assert_eq!(times[0], times[3]);
         assert_eq!(compacted_messages(&info), 0, "nothing went out of view");
+        assert_eq!(
+            user_kinds(&info),
+            [
+                UserKind::Compaction,
+                UserKind::Ask,
+                UserKind::ToolImage,
+                UserKind::Ask
+            ]
+        );
     }
 
     #[test]
@@ -2028,13 +2203,13 @@ mod tests {
         let again = [user("continue"), assistant("Step three done.")];
         let kept = [summary, again[0].clone(), again[1].clone()];
         let before = grokhub_core::now_ms();
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
         let after = grokhub_core::now_ms();
         let raw = fs::read_to_string(session_file(id).unwrap()).unwrap();
         let marker: Value = serde_json::from_str(raw.lines().nth(12).unwrap()).unwrap();
         assert_eq!(
-            (&marker["type"], &marker["turn"]),
-            (&json!("compaction"), &json!(true))
+            (&marker["type"], &marker["own"]),
+            (&json!("compaction"), &json!(2))
         );
         let times = user_turn_times(&load_session(id).unwrap());
         assert_eq!(times.len(), 2, "{times:?}");

@@ -30,7 +30,10 @@ Controls:
 ## Grouping
 
 The unit is a **turn**: one user message and the replies and tool rows after
-it. Groups are runs of turns, cut at a boundary.
+it. The image a tool returns comes back as a user message; it stays in its
+turn and isn't counted as an ask or a message. A compaction's summary, ledger
+and standing rules are in no turn. Groups are runs of turns, cut at a
+boundary.
 
 1. **Time gap.** A new group starts when 30 minutes or more pass between two
    turns. Session files have no per-message times today, so each turn's
@@ -42,11 +45,12 @@ it. Groups are runs of turns, cut at a boundary.
    matched, newest first and in order, to a replaced message that shows the
    same (an image the model's copy lost to the image budget still counts as
    that image) and keeps that one's time; the rest (its summary and rules)
-   take the compaction's time. A turn that compacted as it ran marks its line
-   (`"turn": true`): from that turn's ask (the last user message that isn't a
-   tool's image) on, what it kept is its own, never saved on its own, so it
-   takes the compaction's time and an identical older ask such as "continue"
-   never lends it one. Older turns have no time; their groups show the
+   take the compaction's time. A turn that compacted as it ran says on its
+   line how many of the kept items at the end are its own (`"own": 3`): the
+   run tracks where its items went through each compaction, by matching them
+   newest first. Those were never saved on their own lines, so they take the
+   compaction's time and an identical older ask such as "continue" never lends
+   it one. Deleting one of them lowers the count. Older turns have no time; their groups show the
    session's start and last-saved times as the range instead.
 2. **Topic shift.** Each turn's user text is embedded with the local static
    model the app already ships for memory recall (`potion-base-8M`, 256

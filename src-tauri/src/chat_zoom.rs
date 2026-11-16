@@ -3,8 +3,9 @@
 //! (docs/design/chat-semantic-zoom).
 //!
 //! A turn is one user message and the lines after it, up to the next user
-//! message (lines before the first one are a turn of their own). A group is a
-//! run of turns. A new group starts after a quiet gap, when a turn's words
+//! message (lines before the first one are a turn of their own). A tool's
+//! image, sent as a user message, stays in its turn, and a compaction's
+//! summary and rules are in none. A group is a run of turns. A new group starts after a quiet gap, when a turn's words
 //! drift away from the open group's, or when the group is full. Turn vectors
 //! come from the local static model memory recall uses, or from a hashed bag
 //! of words when that model isn't on disk. Titles and summaries are the
@@ -19,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use grokhub_agent::perm::ConfigGuard;
+use grokhub_agent::{UserKind, UserLine};
 use grokhub_core::static_embed::{cosine, StaticModel};
 use serde::{Deserialize, Serialize};
 
@@ -120,29 +122,72 @@ struct Cache {
     turns: Vec<CachedTurn>,
 }
 
-/// Splits the chat's lines into turns. `times` holds one entry per user
-/// line, in order ([`grokhub_agent::user_turn_times`]).
-fn turns(lines: &[Line], times: &[Option<u64>]) -> Vec<Turn> {
+/// What a chat line is to the zoom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Part {
+    /// An ask, with the time of its turn.
+    Ask(Option<u64>),
+    /// A tool's image, sent as a user message.
+    Image,
+    /// A compaction's summary, ledger or rules.
+    Made,
+    Reply,
+    Tools,
+}
+
+impl Part {
+    /// A message the group's count includes.
+    fn counted(self) -> bool {
+        matches!(self, Part::Ask(_) | Part::Reply)
+    }
+}
+
+/// Each line's part. `users` holds one entry per user line, in order
+/// ([`grokhub_agent::user_lines`]); a user line past its end is an ask.
+fn parts(lines: &[Line], users: &[UserLine]) -> Vec<Part> {
+    let mut users = users.iter();
+    lines
+        .iter()
+        .map(|line| match line.role {
+            Role::User => match users.next() {
+                Some(UserLine {
+                    kind: UserKind::ToolImage,
+                    ..
+                }) => Part::Image,
+                Some(UserLine {
+                    kind: UserKind::Compaction,
+                    ..
+                }) => Part::Made,
+                Some(UserLine { at, .. }) => Part::Ask(*at),
+                None => Part::Ask(None),
+            },
+            Role::Assistant => Part::Reply,
+            Role::Tools => Part::Tools,
+        })
+        .collect()
+}
+
+/// Splits the chat's lines into turns, from each line's [`Part`].
+fn turns(lines: &[Line], parts: &[Part]) -> Vec<Turn> {
     let mut out: Vec<Turn> = Vec::new();
-    let mut users = 0;
-    for (i, line) in lines.iter().enumerate() {
-        let starts = line.role == Role::User || out.is_empty();
-        if starts {
-            let at = if line.role == Role::User {
-                users += 1;
-                times.get(users - 1).copied().flatten()
-            } else {
-                None
-            };
-            out.push(Turn {
-                first: i,
-                last: i,
-                at,
-                hash: String::new(),
-            });
-        } else if let Some(turn) = out.last_mut() {
-            turn.last = i;
-        }
+    for (i, part) in parts.iter().enumerate() {
+        let at = match part {
+            Part::Made => continue,
+            Part::Ask(at) => *at,
+            _ if out.is_empty() => None,
+            _ => {
+                if let Some(turn) = out.last_mut() {
+                    turn.last = i;
+                }
+                continue;
+            }
+        };
+        out.push(Turn {
+            first: i,
+            last: i,
+            at,
+            hash: String::new(),
+        });
     }
     for turn in &mut out {
         turn.hash = turn_hash(&lines[turn.first..=turn.last]);
@@ -390,13 +435,15 @@ fn capitalized(text: &str) -> String {
 }
 
 /// A group's card from its lines.
-fn group_of(lines: &[Line], turns: &[Turn]) -> Group {
+fn group_of(lines: &[Line], parts: &[Part], turns: &[Turn]) -> Group {
     let (first, last) = (turns[0].first, turns[turns.len() - 1].last);
     let span = &lines[first..=last];
+    let kinds = &parts[first..=last];
     let asks: Vec<(String, String)> = span
         .iter()
-        .filter(|l| l.role == Role::User)
-        .map(|l| ("user".to_string(), l.text.clone()))
+        .zip(kinds)
+        .filter(|(_, part)| matches!(part, Part::Ask(_)))
+        .map(|(l, _)| ("user".to_string(), l.text.clone()))
         .collect();
     let first_ask = asks
         .first()
@@ -415,7 +462,7 @@ fn group_of(lines: &[Line], turns: &[Turn]) -> Group {
         summary: clip(&first_ask, SUMMARY_MAX),
         first_at: times.iter().min().copied(),
         last_at: times.iter().max().copied(),
-        messages: span.iter().filter(|l| l.role != Role::Tools).count(),
+        messages: kinds.iter().filter(|part| part.counted()).count(),
     }
 }
 
@@ -424,12 +471,13 @@ fn group_of(lines: &[Line], turns: &[Turn]) -> Group {
 /// Returns the groups and every turn's vector, for the cache.
 fn fold(
     lines: &[Line],
-    times: &[Option<u64>],
+    users: &[UserLine],
     kind: Kind,
     reuse: &[CachedTurn],
     embed: &dyn Fn(&str) -> Option<Vec<f32>>,
 ) -> (Vec<Group>, Vec<CachedTurn>) {
-    let turns = turns(lines, times);
+    let parts = parts(lines, users);
+    let turns = turns(lines, &parts);
     let kept = reuse
         .iter()
         .zip(&turns)
@@ -452,7 +500,7 @@ fn fold(
         .collect();
     let groups = segment(&turns, &vecs, kind.floor())
         .into_iter()
-        .map(|range| group_of(lines, &turns[range]))
+        .map(|range| group_of(lines, &parts, &turns[range]))
         .collect();
     let cache = turns
         .iter()
@@ -516,7 +564,7 @@ pub fn forget(config_dir: &Path, id: &str) {
 pub fn zoom_with(config_dir: &Path, id: &str, model: Option<&StaticModel>) -> Result<Zoom, String> {
     let info = history::saved(config_dir, id)?;
     let lines = history::lines(&info);
-    let times = grokhub_agent::user_turn_times(&info);
+    let users = grokhub_agent::user_lines(&info);
     let kind = if model.is_some() {
         Kind::Model
     } else {
@@ -532,7 +580,7 @@ pub fn zoom_with(config_dir: &Path, id: &str, model: Option<&StaticModel>) -> Re
         Some(model) => model.encode(text),
         None => word_vector(text),
     };
-    let (groups, turns) = fold(&lines, &times, kind, &reuse, &embed);
+    let (groups, turns) = fold(&lines, &users, kind, &reuse, &embed);
     if !scratch {
         keep_cache(config_dir, &info.id, kind, turns);
     }
