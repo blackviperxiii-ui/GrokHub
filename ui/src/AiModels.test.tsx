@@ -540,21 +540,21 @@ describe("AiModels", () => {
       expect(screen.getByLabelText("SearXNG URL")).toHaveValue("searx.example");
     });
 
-    it("lets you pick SearXNG with an old LAN URL and shows why it won't work", async () => {
-      api.getAiModels.mockResolvedValue(searching({ searxngUrl: "http://192.168.1.5:8888" }));
+    it("lets you pick SearXNG with an old unusable URL and shows why it won't work", async () => {
+      api.getAiModels.mockResolvedValue(searching({ searxngUrl: "http://169.254.169.254" }));
       api.saveWebSearch.mockResolvedValue({
         ...searching({
           backend: "searxng",
-          searxngUrl: "http://192.168.1.5:8888",
-          searxngProblem: "Web search only reaches public addresses, so a SearXNG server on this computer or your own network can't be used.",
+          searxngUrl: "http://169.254.169.254",
+          searxngProblem: "That address can't be a SearXNG server. Use its name or a plain IP address, like http://192.168.1.5:8888.",
         }),
         status: "Saved.",
       });
       render(<AiModels />);
       await userEvent.selectOptions(await screen.findByLabelText("Search backend"), "searxng");
-      expect(api.saveWebSearch).toHaveBeenCalledWith("searxng", "http://192.168.1.5:8888");
-      expect(await screen.findByText("Web search only reaches public addresses, so a SearXNG server on this computer or your own network can't be used.")).toHaveClass("warn");
-      expect(screen.getByLabelText("SearXNG URL")).toHaveValue("http://192.168.1.5:8888");
+      expect(api.saveWebSearch).toHaveBeenCalledWith("searxng", "http://169.254.169.254");
+      expect(await screen.findByText("That address can't be a SearXNG server. Use its name or a plain IP address, like http://192.168.1.5:8888.")).toHaveClass("warn");
+      expect(screen.getByLabelText("SearXNG URL")).toHaveValue("http://169.254.169.254");
       expect(screen.getByLabelText("SearXNG URL")).toBeEnabled();
     });
 

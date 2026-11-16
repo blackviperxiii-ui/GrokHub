@@ -1073,23 +1073,29 @@ mod tests {
     }
 
     #[test]
-    fn an_old_lan_searxng_url_can_be_picked_and_the_page_says_why_it_fails() {
+    fn a_lan_searxng_url_saves_and_an_old_unusable_one_says_why() {
         let config = dir("web-old-url");
+        let v = save_web_search(&config, "searxng", "http://192.168.1.5:8888").unwrap();
+        assert_eq!(v.web_search.backend, "searxng");
+        assert_eq!(v.web_search.searxng_url, "http://192.168.1.5:8888");
+        assert_eq!(v.web_search.searxng_problem, "");
+        let v = save_web_search(&config, "searxng", "http://nas:8888").unwrap();
+        assert_eq!(v.web_search.searxng_url, "http://nas:8888");
         std::fs::write(
             app_json_path(&config),
-            r#"{"webSearch":{"backend":"duckduckgo","searxngUrl":"http://192.168.1.5:8888"}}"#,
+            r#"{"webSearch":{"backend":"duckduckgo","searxngUrl":"http://169.254.169.254"}}"#,
         )
         .unwrap();
         assert_eq!(view(&config, "").web_search.searxng_problem, "");
-        let v = save_web_search(&config, "searxng", "http://192.168.1.5:8888").unwrap();
+        let v = save_web_search(&config, "searxng", "http://169.254.169.254").unwrap();
         assert_eq!(v.web_search.backend, "searxng");
         assert_eq!(
             v.web_search.searxng_problem,
-            "Web search only reaches public addresses, so a SearXNG server on this computer or your own network can't be used."
+            "That address can't be a SearXNG server. Use its name or a plain IP address, like http://192.168.1.5:8888."
         );
         assert_eq!(
-            save_web_search(&config, "searxng", "http://nas:8888").unwrap_err(),
-            "Web search only reaches public addresses, so a SearXNG server on this computer or your own network can't be used."
+            save_web_search(&config, "searxng", "http://0.0.0.0:8888").unwrap_err(),
+            "That address can't be a SearXNG server. Use its name or a plain IP address, like http://192.168.1.5:8888."
         );
     }
 

@@ -73,7 +73,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-agent/src/tools/media.rs", 1, "run_call / poll_video / save_results: guard_or_park"),
     ("grokhub-agent/src/memory_embed.rs", 1, "HuggingFace::get: guard_quiet, then public_only on every hop"),
     ("grokhub-agent/src/tools/web_fetch.rs", 1, "fetch_markdown: guard_or_park on every hop"),
-    ("grokhub-agent/src/tools/web_search.rs", 1, "search_brave: guard_or_park before its http::agent; DDG/SearXNG go through PageFetch"),
+    ("grokhub-agent/src/tools/web_search.rs", 2, "search_brave and saved_server_get (search_searxng's guard_hop first): guard_or_park before each http::agent; DDG/public SearXNG go through PageFetch"),
     ("grokhub-hub/src/doctor.rs", 1, "hub_health: guard_quiet (loopback) before its /v1/health read on 127.0.0.1"),
     ("grokhub-agent/src/mods_net.rs", 1, "ModsNet::once (both shells): guard_quiet (chat when a search carries text) to the mod source's own hosts, redirects checked by hand, public IPs only"),
     ("grokhub-agent/src/xai_keychain.rs", 1, "Sign in with Grok get_json / post_form (desktop app and grokhub-hub --oauth): guard_quiet (codes and tokens only) before every call; the test override is loopback only"),

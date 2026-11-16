@@ -78,7 +78,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-core/src/net_log.rs", 1, "net log resolver connect probe (shared by the app and the shell): offline::refuse first; its speed test goes through connectivity's facade agent above"),
     // Web tools, Pulse, GitHub, plugins.
     ("crates/grokhub-agent/src/tools/web_fetch.rs", 1, "every hop: egress guard + public_only_resolve (refuses all while on)"),
-    ("crates/grokhub-agent/src/tools/web_search.rs", 1, "Brave: egress guard; DDG / SearXNG go through web_fetch"),
+    ("crates/grokhub-agent/src/tools/web_search.rs", 2, "Brave: egress guard; a SearXNG server on your network: egress guard + the saved-server resolver (offline::check_host, local addresses only while on); DDG / public SearXNG go through web_fetch"),
     ("crates/grokhub-agent/src/tools/media.rs", 1, "Imagine media: egress guard"),
     ("crates/grokhub-agent/src/memory_embed.rs", 1, "memory recall's embedding model from Hugging Face (HX-12): offline::refuse, then egress guard + public_only on every hop; a pinned hash check before a file is kept"),
     ("crates/grokhub-agent/src/sandbox/proxy.rs", 2, "sandboxed shell's egress proxy (HX-11): egress guard on every CONNECT and request before it dials the host or the app's own upstream proxy; the Unix-socket bridge only dials that same proxy on loopback"),

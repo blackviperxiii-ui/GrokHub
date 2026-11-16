@@ -1,8 +1,8 @@
 //! Cabin-executed `web_search` for OpenRouter and the local model.
 //!
 //! Default backend is DuckDuckGo Lite (free, no key) — same index Pulse uses.
-//! Optional SearXNG (self-hosted URL) and Brave Search (bring-your-own key in
-//! the OS keyring). xAI keeps hosted `web_search` / `x_search`; this function
+//! Optional SearXNG (your own server, on the internet, this computer or your
+//! network) and Brave Search (bring-your-own key in the OS keyring). xAI keeps hosted `web_search` / `x_search`; this function
 //! tool is stripped from the xAI Responses body when hosted search is on.
 //! Offline or network failure returns a clear unavailable line instead of
 //! failing the turn.
@@ -28,8 +28,16 @@ const OFFLINE_MSG: &str =
 const SETTINGS_PATH: &str = "Settings → AI models → Web search";
 /// A non-http SearXNG URL is refused when saved.
 pub const BAD_SEARXNG_URL: &str = "SearXNG URL must start with http:// or https://.";
-/// Searches dial public addresses only (the same resolver as web_fetch).
-pub const SEARXNG_NOT_PUBLIC: &str = "Web search only reaches public addresses, so a SearXNG server on this computer or your own network can't be used.";
+/// A SearXNG URL whose host or port can't be read, such as port `88888`.
+pub const SEARXNG_UNREADABLE: &str = "That SearXNG URL can't be read. Check its port (a number up to 65535) and spelling, like http://192.168.1.5:8888.";
+/// A host that can't be a server: a reserved, link-local or multicast IP, or
+/// an IPv4 address written in a form only some parsers read.
+pub const SEARXNG_BAD_HOST: &str = "That address can't be a SearXNG server. Use its name or a plain IP address, like http://192.168.1.5:8888.";
+/// A public-looking name that leads to this computer or the user's network:
+/// only a local name or IP reaches the saved-server resolver.
+pub const SEARXNG_NAME_PRIVATE: &str = "That name leads to this computer or your own network. Save the server's local name or IP address instead, like http://searx.lan:8888 or http://192.168.1.5:8888.";
+/// A local name that leads to an address the saved server may not use.
+pub const SEARXNG_BAD_ADDRESS: &str = "The SearXNG server's name leads to an address web search won't dial. For a server on this computer, use http://localhost and its port.";
 const SEARXNG_URL_CAP: usize = 512;
 
 /// The backends in the settings list, with their labels.
@@ -132,8 +140,7 @@ impl Settings {
 type Resolve<'a> = &'a dyn Fn(&str) -> std::io::Result<Vec<std::net::SocketAddr>>;
 
 /// Why searches can't use this SearXNG URL, from its text alone: http(s), no
-/// spaces, at most 512 characters, and a host that can be public. Searches go
-/// through the public-only resolver, which refuses anything else.
+/// spaces, at most 512 characters, and a host that can be a server.
 pub fn searxng_url_problem(url: &str) -> Option<&'static str> {
     if !(url.starts_with("http://") || url.starts_with("https://"))
         || url.contains(char::is_whitespace)
@@ -141,46 +148,61 @@ pub fn searxng_url_problem(url: &str) -> Option<&'static str> {
     {
         return Some(BAD_SEARXNG_URL);
     }
-    let host = searxng_host(url);
-    let ip = host.parse::<std::net::IpAddr>().ok();
     // A last label of digits (or 0x hex) makes the whole host an IPv4 address
     // in a URL, so `127.1` and `2130706433` are loopback; only plain dotted
     // forms are read here, the rest are refused.
-    let last = host.rsplit('.').next().unwrap_or("");
+    let typed = grokhub_core::offline::url_host(url).unwrap_or_default();
+    let typed = typed
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.');
+    let last = typed.rsplit('.').next().unwrap_or("");
     let numeric = !last.is_empty()
         && (last.bytes().all(|b| b.is_ascii_digit())
             || last.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("0x")));
-    let private = host.is_empty()
-        || grokhub_core::ssrf::host_name_blocked(&host)
-        || grokhub_core::offline::host_is_local(&host)
+    let host = searxng_host(url);
+    if host.is_empty() && !typed.is_empty() {
+        return Some(SEARXNG_UNREADABLE);
+    }
+    let ip = host.parse::<std::net::IpAddr>().ok();
+    let bad = host.is_empty()
+        || (typed.parse::<std::net::IpAddr>().is_err() && numeric)
+        || ip.is_some_and(|ip| grokhub_core::ssrf::saved_host_ip_refused(&host, ip));
+    bad.then_some(SEARXNG_BAD_HOST)
+}
+
+/// A host only reached on this computer or the user's own network: a
+/// localhost or local-domain name (`.local`, `.lan`, `.home.arpa`,
+/// `.internal`), a Tailscale `.ts.net` name, one label (`nas`, a Docker
+/// service), or a loopback, private, carrier-grade NAT or unique-local IP.
+/// Searches to it dial only that saved server; any other host stays on the
+/// public-only fetch.
+fn on_your_network(host: &str) -> bool {
+    let ip = host.parse::<std::net::IpAddr>().ok();
+    grokhub_core::ssrf::host_name_blocked(host)
+        || grokhub_core::offline::host_is_local(host)
         || ip.is_some_and(grokhub_core::ssrf::ip_blocked)
-        // One label (`nas`, a Docker service name) only resolves on your own network.
-        || (ip.is_none() && !host.contains('.'))
-        || (ip.is_none() && numeric);
-    private.then_some(SEARXNG_NOT_PUBLIC)
+        || (ip.is_none() && (!host.contains('.') || host.ends_with(".ts.net")))
 }
 
-/// The URL's host, lower case, without brackets or a trailing dot.
+/// The URL's host as a search dials it ([`grokhub_core::http::dialed_host`]),
+/// so the path a search takes is picked from the host it reaches.
 fn searxng_host(url: &str) -> String {
-    let host = grokhub_core::offline::url_host(url).unwrap_or_default();
-    host.trim_start_matches('[')
-        .trim_end_matches(']')
-        .trim_end_matches('.')
-        .to_ascii_lowercase()
+    grokhub_core::http::dialed_host(url).unwrap_or_default()
 }
 
-/// [`searxng_url_problem`], then a best-effort lookup: a name that resolves
-/// to a private address is refused; a failed lookup (offline, no DNS) passes,
-/// so saving never needs a working connection.
+/// [`searxng_url_problem`], then for a public-looking name a best-effort
+/// lookup: one that resolves to a private address is refused; a failed
+/// lookup (offline, no DNS) passes, so saving never needs a connection.
 fn check_searxng_url(url: &str, resolve: Resolve) -> Result<(), String> {
     if let Some(problem) = searxng_url_problem(url) {
         return Err(problem.into());
     }
     let host = searxng_host(url);
-    if host.parse::<std::net::IpAddr>().is_err() {
+    if host.parse::<std::net::IpAddr>().is_err() && !on_your_network(&host) {
         if let Err(e) = resolve(&format!("{host}:443")) {
             if is_refused_private(&e.to_string()) {
-                return Err(SEARXNG_NOT_PUBLIC.into());
+                return Err(SEARXNG_NAME_PRIVATE.into());
             }
         }
     }
@@ -264,8 +286,8 @@ pub(crate) fn run(args: &Value, fetch: &dyn PageFetch, stop: &dyn Fn() -> bool) 
             cache_put(&cache_key, &text);
             ToolOutput::ok(super::fence::fence("web_search", &text))
         }
-        // "…your own network…" must not read as offline.
-        Err(err) if err.starts_with(SEARXNG_NOT_PUBLIC) => ToolOutput::err(err),
+        // A setting to fix ("…your own network…") must not read as offline.
+        Err(err) if err.ends_with(&fix_in_settings("")) => ToolOutput::err(err),
         Err(err) if is_offline(&err) => {
             ToolOutput::ok(super::fence::fence("web_search", OFFLINE_MSG))
         }
@@ -341,11 +363,55 @@ fn guard_hop(url: &str, stop: &dyn Fn() -> bool) -> Result<(), String> {
 
 fn get_text(url: &str, fetch: &dyn PageFetch, stop: &dyn Fn() -> bool) -> Result<String, String> {
     guard_hop(url, stop)?;
-    let resp = fetch.get(url)?;
+    ok_text(fetch.get(url)?)
+}
+
+/// A 2xx answer's body as text; a redirect is never followed.
+fn ok_text(resp: super::web_fetch::FetchResp) -> Result<String, String> {
     if !(200..300).contains(&resp.status) {
         return Err(format!("HTTP {}", resp.status));
     }
     String::from_utf8(resp.body).map_err(|_| "search reply was not utf-8".to_string())
+}
+
+/// `problem`, and where to change the setting behind it.
+fn fix_in_settings(problem: &str) -> String {
+    format!("{problem} Change it in {SETTINGS_PATH}.")
+}
+
+/// The saved server's resolver refused the address its name led to: say what
+/// to change. Any other error stays as it is.
+fn saved_server_refusal(err: String) -> String {
+    if err.contains(grokhub_core::http::SAVED_HOST_REFUSED) {
+        fix_in_settings(SEARXNG_BAD_ADDRESS)
+    } else {
+        err
+    }
+}
+
+/// One search on the saved SearXNG server on this computer or the user's
+/// network: a fresh agent that may dial only `base`'s host and port
+/// ([`grokhub_core::http::Opts::saved_host`]) and follows no redirect.
+fn saved_server_get(base: &str, url: &str) -> Result<super::web_fetch::FetchResp, String> {
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(10),
+        overall: Some(Duration::from_secs(30)),
+        redirects: 0,
+        saved_host: true,
+        ..Default::default()
+    });
+    let resp = grokhub_core::http::with_saved_host(base, || {
+        agent
+            .get(url)
+            .header("User-Agent", crate::USER_AGENT)
+            .header("Accept", "application/json")
+            .any_status()
+            .call()
+    });
+    match resp {
+        Ok(resp) => super::web_fetch::owned_response(resp.status(), resp),
+        Err(err) => Err(format!("fetch failed: {err}")),
+    }
 }
 
 fn search_duckduckgo(
@@ -380,19 +446,26 @@ fn search_searxng(
         return Err(format!("SearXNG needs a URL in {SETTINGS_PATH}."));
     }
     if let Some(problem) = searxng_url_problem(base) {
-        return Err(format!("{problem} Change it in {SETTINGS_PATH}."));
+        return Err(fix_in_settings(problem));
     }
     let url = format!(
         "{base}/search?q={}&format=json",
         grokhub_core::pulse_sources::query_value(query)
     );
-    let body = get_text(&url, fetch, stop).map_err(|e| {
-        if is_refused_private(&e) {
-            format!("{SEARXNG_NOT_PUBLIC} Change it in {SETTINGS_PATH}.")
-        } else {
-            e
-        }
-    })?;
+    let body = if on_your_network(&searxng_host(base)) {
+        guard_hop(&url, stop)?;
+        saved_server_get(base, &url)
+            .and_then(ok_text)
+            .map_err(saved_server_refusal)?
+    } else {
+        get_text(&url, fetch, stop).map_err(|e| {
+            if is_refused_private(&e) {
+                fix_in_settings(SEARXNG_NAME_PRIVATE)
+            } else {
+                e
+            }
+        })?
+    };
     parse_searxng_json(&body)
 }
 
@@ -941,19 +1014,16 @@ mod tests {
             );
         }
         for url in [
-            "http://localhost:8888",
-            "http://127.0.0.1:8888",
-            "http://192.168.1.5:8888",
-            "http://100.101.102.103",
-            "http://[::1]:8888",
-            "http://searx.local",
-            "http://searxng:8080",
-            "http://NAS:8888/",
             "http://127.1",
             "http://2130706433",
             "http://0x7f.1",
-            "http://100.64.0.1.",
-            "http://localhost.:8888",
+            "http://169.254.169.254",
+            "http://[fe80::1]:8888",
+            "http://0.0.0.0:8888",
+            "http://224.0.0.1",
+            "http://240.0.0.1",
+            "http://[::ffff:169.254.169.254]",
+            "http://[::7f00:1]",
         ] {
             let s = Settings {
                 backend: Backend::Searxng,
@@ -961,11 +1031,63 @@ mod tests {
             };
             assert_eq!(
                 s.save_with(&dir, &public),
-                Err(SEARXNG_NOT_PUBLIC.to_string()),
+                Err(SEARXNG_BAD_HOST.to_string()),
                 "{url}"
             );
         }
+        for url in [
+            "http://192.168.1.5:88888",
+            "https://searx.example:99999",
+            "http://nas:88a",
+            "http://nas:-1",
+        ] {
+            let s = Settings {
+                backend: Backend::Searxng,
+                searxng_url: url.into(),
+            };
+            assert_eq!(
+                s.save_with(&dir, &public),
+                Err(SEARXNG_UNREADABLE.to_string()),
+                "{url}"
+            );
+        }
+        assert_eq!(searxng_url_problem("http://"), Some(SEARXNG_BAD_HOST));
         assert!(!dir.join("app.json").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn searxng_urls_on_this_computer_or_your_network_save_without_a_lookup() {
+        let dir = crate::harness::test_dir("web-search-lan-url");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let refuse = |netloc: &str| -> std::io::Result<Vec<std::net::SocketAddr>> {
+            asked.borrow_mut().push(netloc.to_string());
+            grokhub_core::ssrf::public_only_resolve("localhost:443")
+        };
+        for url in [
+            "http://localhost:8888",
+            "http://127.0.0.1:8888",
+            "http://192.168.1.5:8888",
+            "http://100.101.102.103",
+            "http://[::1]:8888",
+            "http://[fd00::5]:8888",
+            "http://searx.local",
+            "http://searx.lan:8888",
+            "http://searxng:8080",
+            "http://NAS:8888/",
+            "http://100.64.0.1.",
+            "http://localhost.:8888",
+            "https://Box.tailnet.ts.net./",
+        ] {
+            let s = Settings {
+                backend: Backend::Searxng,
+                searxng_url: url.into(),
+            };
+            assert_eq!(s.save_with(&dir, &refuse), Ok(()), "{url}");
+            assert_eq!(Settings::load(&dir).searxng_url, url);
+            assert_eq!(searxng_url_problem(url), None, "{url}");
+        }
+        assert!(asked.borrow().is_empty(), "{:?}", asked.borrow());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -982,10 +1104,24 @@ mod tests {
             grokhub_core::ssrf::public_only_resolve("localhost:443")
         };
         assert_eq!(
-            searx("https://Box.tailnet.ts.net./").save_with(&dir, &private),
-            Err(SEARXNG_NOT_PUBLIC.to_string())
+            searx("https://Searx.Home.Example./").save_with(&dir, &private),
+            Err(SEARXNG_NAME_PRIVATE.to_string())
         );
-        assert_eq!(*asked.borrow(), ["box.tailnet.ts.net:443"]);
+        assert_eq!(*asked.borrow(), ["searx.home.example:443"]);
+        // Other dots and escapes are read the way a search dials the name.
+        for url in [
+            "http://searx\u{3002}home\u{ff0e}example",
+            "http://searx%2Ehome%2Eexample",
+        ] {
+            asked.borrow_mut().clear();
+            assert_eq!(searxng_url_problem(url), None, "{url}");
+            assert_eq!(
+                searx(url).save_with(&dir, &private),
+                Err(SEARXNG_NAME_PRIVATE.to_string()),
+                "{url}"
+            );
+            assert_eq!(*asked.borrow(), ["searx.home.example:443"], "{url}");
+        }
         assert!(!dir.join("app.json").exists());
         let no_dns = |_: &str| -> std::io::Result<Vec<std::net::SocketAddr>> {
             Err(std::io::Error::other(
@@ -1004,7 +1140,7 @@ mod tests {
         let dir = crate::harness::test_dir("web-search-old-url");
         std::fs::write(
             dir.join("app.json"),
-            r#"{"webSearch":{"backend":"duckduckgo","searxngUrl":"http://192.168.1.5:8888"}}"#,
+            r#"{"webSearch":{"backend":"duckduckgo","searxngUrl":"http://169.254.169.254"}}"#,
         )
         .unwrap();
         let old = Settings::load(&dir);
@@ -1018,7 +1154,7 @@ mod tests {
         assert_eq!(picked, pick(Backend::Searxng));
         assert_eq!(
             searxng_url_problem(&picked.searxng_url),
-            Some(SEARXNG_NOT_PUBLIC)
+            Some(SEARXNG_BAD_HOST)
         );
         let calls = Arc::new(AtomicUsize::new(0));
         let fetch = FakeFetch {
@@ -1028,7 +1164,7 @@ mod tests {
         assert_eq!(
             search("rust", &picked, &dir, &fetch, &|| false),
             Err(format!(
-                "{SEARXNG_NOT_PUBLIC} Change it in Settings → AI models → Web search."
+                "{SEARXNG_BAD_HOST} Change it in Settings → AI models → Web search."
             ))
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing was dialed");
@@ -1036,10 +1172,10 @@ mod tests {
         assert_eq!(
             Settings {
                 backend: Backend::Searxng,
-                searxng_url: "http://10.0.0.2".into(),
+                searxng_url: "http://0.0.0.0:8888".into(),
             }
             .save_with(&dir, &public),
-            Err(SEARXNG_NOT_PUBLIC.to_string())
+            Err(SEARXNG_BAD_HOST.to_string())
         );
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1071,9 +1207,151 @@ mod tests {
         assert!(out.failed, "{}", out.text);
         assert_eq!(
             out.text,
-            format!("{SEARXNG_NOT_PUBLIC} Change it in Settings → AI models → Web search.")
+            format!("{SEARXNG_NAME_PRIVATE} Change it in Settings → AI models → Web search.")
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A one-request HTTP server on 127.0.0.1: answers `reply` and hands back
+    /// the request's first line.
+    fn serve_once(reply: String) -> (u16, std::thread::JoinHandle<String>) {
+        serve_once_at("127.0.0.1", reply)
+    }
+
+    fn serve_once_at(ip: &str, reply: String) -> (u16, std::thread::JoinHandle<String>) {
+        use std::io::{BufRead, Write};
+        let listener = std::net::TcpListener::bind((ip, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            let mut first = String::new();
+            reader.read_line(&mut first).unwrap();
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 2 {
+                line.clear();
+            }
+            reader.get_mut().write_all(reply.as_bytes()).unwrap();
+            first.trim_end().to_string()
+        });
+        (port, seen)
+    }
+
+    fn save_searxng(dir: &std::path::Path, url: &str) {
+        std::fs::write(
+            dir.join("app.json"),
+            json!({"webSearch": {"backend": "searxng", "searxngUrl": url}}).to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_searxng_server_on_this_computer_answers_searches() {
+        let dir = crate::harness::test_dir("web-search-lan");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        crate::tools::fence::reset_run_nonce_for_tests();
+        let body = r#"{"results":[{"title":"One","url":"https://a.example/","content":"snip"}]}"#;
+        let (port, seen) = serve_once(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ));
+        save_searxng(&dir, &format!("http://127.0.0.1:{port}"));
+        // The shared public-only fetch would fail: the saved server is dialed on its own.
+        let out = run(&json!({"query": "lan box"}), &FailFetch, &|| false);
+        assert!(!out.failed, "{}", out.text);
+        assert!(out.text.contains("One"), "{}", out.text);
+        assert!(out.text.contains("https://a.example/"), "{}", out.text);
+        assert!(out.text.contains("snip"), "{}", out.text);
+        assert_eq!(
+            seen.join().unwrap(),
+            "GET /search?q=lan%20box&format=json HTTP/1.1"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_search_sent_to_the_saved_server_is_logged_in_privacy() {
+        let dir = crate::harness::test_dir("web-search-lan-egress");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let body = r#"{"results":[]}"#;
+        // 127.0.0.2 takes the saved-server path but isn't a local test
+        // destination, so the egress guard logs it as it would a LAN box.
+        let (port, seen) = serve_once_at(
+            "127.0.0.2",
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        let settings = Settings {
+            backend: Backend::Searxng,
+            searxng_url: format!("http://127.0.0.2:{port}"),
+        };
+        assert_eq!(searxng_url_problem(&settings.searxng_url), None);
+        let fetch = FailFetch;
+        assert_eq!(
+            search("rust", &settings, &dir, &fetch, &|| false),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            seen.join().unwrap(),
+            "GET /search?q=rust&format=json HTTP/1.1"
+        );
+        let logged: Vec<(String, String)> = crate::harness::read_egress(&dir)
+            .into_iter()
+            .map(|l| (l.dest, l.basis))
+            .collect();
+        assert_eq!(logged, [("127.0.0.2".to_string(), "chat".to_string())]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_redirect_from_the_saved_searxng_server_is_not_followed() {
+        let dir = crate::harness::test_dir("web-search-lan-redirect");
+        let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        other.set_nonblocking(true).unwrap();
+        let elsewhere = other.local_addr().unwrap().port();
+        let (port, seen) = serve_once(format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{elsewhere}/search\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ));
+        let settings = Settings {
+            backend: Backend::Searxng,
+            searxng_url: format!("http://127.0.0.1:{port}"),
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetch = FakeFetch {
+            body: "{}".into(),
+            calls: calls.clone(),
+        };
+        assert_eq!(
+            search("rust", &settings, &dir, &fetch, &|| false),
+            Err("HTTP 302".to_string())
+        );
+        assert_eq!(
+            seen.join().unwrap(),
+            "GET /search?q=rust&format=json HTTP/1.1"
+        );
+        assert!(other.accept().is_err(), "the redirect was not followed");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_local_name_that_leads_somewhere_refused_says_what_to_fix_not_offline() {
+        let refused = format!(
+            "fetch failed: resolve dns name 'nas:8888': nas → 127.0.0.1: {}",
+            grokhub_core::http::SAVED_HOST_REFUSED
+        );
+        let said = saved_server_refusal(refused);
+        assert_eq!(
+            said,
+            format!("{SEARXNG_BAD_ADDRESS} Change it in Settings → AI models → Web search.")
+        );
+        assert!(said.ends_with(&fix_in_settings("")));
+        assert_eq!(
+            saved_server_refusal("fetch failed: connection refused".into()),
+            "fetch failed: connection refused"
+        );
     }
 
     #[test]
