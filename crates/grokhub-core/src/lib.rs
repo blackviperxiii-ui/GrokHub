@@ -363,8 +363,8 @@ pub use chip_health::{
 pub use chip_rank::{rank_quick_chips, ChipRanker, RankCtx, CHIP_ROW_MAX};
 pub use chip_store::{
     chip_log_key, chip_store_path, load_chip_memory, log_chip_outcome, log_chips_shown,
-    migrate_chip_memory, save_chip_memory, ChipEvent, ChipOutcome, ShownChip, CHIP_LOG_MAX,
-    CHIP_STORE_FILE,
+    migrate_chip_memory, save_chip_memory, ChipClient, ChipEvent, ChipOutcome, ShownChip,
+    CHIP_LOG_MAX, CHIP_STORE_FILE,
 };
 pub use chip_trailer::{
     chip_trailer_on, parse_chip_trailer, review_chip_trailer, split_chip_trailer,

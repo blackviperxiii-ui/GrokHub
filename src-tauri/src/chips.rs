@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
-use grokhub_core::{ChipAction, ChipInput, ChipMemory, ChipSignals, QuickChip, RankCtx};
+use grokhub_core::{
+    ChipAction, ChipClient, ChipInput, ChipMemory, ChipSignals, QuickChip, RankCtx,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::settings::Lane;
@@ -259,6 +261,15 @@ fn shown_key(surface: &str, remote: bool) -> String {
     format!("{}:{surface}", if remote { "web" } else { "app" })
 }
 
+/// Who the chip log notes a row or a tap for: each client's rows are its own.
+fn client(remote: bool) -> ChipClient {
+    if remote {
+        ChipClient::Web
+    } else {
+        ChipClient::App
+    }
+}
+
 /// The ranked row for one surface, logged as shown. Chip memory is read
 /// fresh each time, so the cabin's own picks count here too.
 pub fn row(dir: &Path, rows: &Mutex<Rows>, ask: RowAsk<'_>) -> Vec<Chip> {
@@ -281,6 +292,7 @@ pub fn row(dir: &Path, rows: &Mutex<Rows>, ask: RowAsk<'_>) -> Vec<Chip> {
         pool,
         RankCtx {
             surface: ask.surface,
+            client: client(ask.remote),
             hour: ask.hour,
             now_ms: ask.now_ms,
             seed,
@@ -292,7 +304,13 @@ pub fn row(dir: &Path, rows: &Mutex<Rows>, ask: RowAsk<'_>) -> Vec<Chip> {
         .into_iter()
         .filter(|c| wire(c, ask.mode).is_some())
         .collect();
-    grokhub_core::log_chips_shown(&mut mem, ask.surface, &shown, ask.now_ms);
+    grokhub_core::log_chips_shown(
+        &mut mem,
+        ask.surface,
+        client(ask.remote),
+        &shown,
+        ask.now_ms,
+    );
     held.ranked = std::mem::take(&mut mem.ranker.last);
     let out = wired(&shown, ask.mode);
     held.shown.insert(shown_key(ask.surface, ask.remote), shown);
@@ -391,9 +409,9 @@ fn leans_coding(c: &QuickChip) -> bool {
             .any(|w| blob.contains(w))
 }
 
-/// The person sent a message while `surface` was up: the row there notes
-/// how long it stood (`chip_health`). Rows-locked like a tap, so the two
-/// never write over each other.
+/// The person sent a message from the desktop while `surface` was up: the
+/// desktop's row there notes how long it stood (`chip_health`). Rows-locked
+/// like a tap, so the two never write over each other.
 pub fn next_step(dir: &Path, rows: &Mutex<Rows>, surface: &str, now: u64) {
     let held = rows.lock().unwrap_or_else(|e| e.into_inner());
     let mut mem = grokhub_core::load_chip_memory(dir);
@@ -401,7 +419,7 @@ pub fn next_step(dir: &Path, rows: &Mutex<Rows>, surface: &str, now: u64) {
         return;
     }
     mem.ranker.last = held.ranked.clone();
-    grokhub_core::log_chip_next_action(&mut mem, surface, now);
+    grokhub_core::log_chip_next_action(&mut mem, surface, ChipClient::App, now);
     // Saved under the lock: a tap and a row never write over each other.
     let _ = grokhub_core::save_chip_memory(dir, &mem);
     drop(held);
@@ -429,7 +447,7 @@ pub fn outcome(
         .cloned()?;
     let mut mem = grokhub_core::load_chip_memory(dir);
     mem.ranker.last = held.ranked.clone();
-    grokhub_core::log_chip_outcome(&mut mem, surface, &chip, picked, now);
+    grokhub_core::log_chip_outcome(&mut mem, surface, client(remote), &chip, picked, now);
     if picked {
         grokhub_core::remember_chip_click(&mut mem, &chip, None, now, hour);
         // A live-state chip's label names a game or an app, not a habit.
@@ -716,6 +734,16 @@ mod tests {
             .map(|c| c.id),
             Some("game:note:after:7".to_string())
         );
+        // The log keeps each client's row: the browser's showing left the
+        // desktop's open, and the hide closed the desktop's, not the browser's.
+        let events = grokhub_core::load_chip_memory(&dir).events;
+        let clients: Vec<_> = events.iter().map(|e| e.client).collect();
+        assert_eq!(clients, [ChipClient::App, ChipClient::Web]);
+        assert!(matches!(
+            events[0].outcome,
+            Some(grokhub_core::ChipOutcome::Dismissed { at: 3_000, .. })
+        ));
+        assert_eq!(events[1].outcome, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

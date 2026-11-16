@@ -1,0 +1,1 @@
+- Helper work: when a Discard is refused, focus goes back to Discard instead of jumping to Merge.

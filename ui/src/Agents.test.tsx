@@ -1013,6 +1013,23 @@ describe("Agents", () => {
     expect(within(row).getByRole("button", { name: "Discard" })).toHaveFocus();
   });
 
+  it("a slow refused Discard still gives focus back to Discard, not Merge", async () => {
+    api.getQueue.mockResolvedValue(workQueue(work({ counts: { added: 1, changed: 0, deleted: 0 }, files: ["a.rs"] })));
+    let refuse: (why: string) => void = () => {};
+    api.discardTaskWork.mockImplementation(() => new Promise((_, reject) => (refuse = reject)));
+    render(<Agents conversationId="shell-c1" />);
+
+    const row = await workRow("task-1: Add the parser");
+    await userEvent.click(within(row).getByRole("button", { name: "Discard" }));
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Discard" }));
+    expect(within(row).getByRole("button", { name: "Deleting…" })).toBeDisabled();
+    // While the call is out the browser takes focus off the disabled button.
+    await waitFor(() => expect(document.activeElement).toBe(document.body));
+    await act(async () => refuse("that helper is still running"));
+    expect(within(row).getByRole("alert")).toHaveTextContent("that helper is still running");
+    expect(within(row).getByRole("button", { name: "Discard" })).toHaveFocus();
+  });
+
   it("Delete worktree asks about the ignored paths in it", async () => {
     api.getQueue.mockResolvedValue(workQueue(KEPT));
     api.discardTaskWork.mockResolvedValue(workQueue());

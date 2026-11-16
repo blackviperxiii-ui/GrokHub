@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::chip_store::{ChipEvent, ChipOutcome, CHIP_LOG_MAX};
+use crate::chip_store::{ChipClient, ChipEvent, ChipOutcome, CHIP_LOG_MAX};
 use crate::chips::{ChipMemory, QuickChip};
 
 /// Share of boundaries that show no chips, in percent.
@@ -33,14 +33,14 @@ pub(crate) fn holdout_allowed(pool: &[QuickChip]) -> bool {
     !pool.iter().any(|c| c.id.starts_with("guide-"))
 }
 
-/// Note a held-back row on `surface`. A repeat for the same open holdout
-/// (a keystroke on the same boundary) adds nothing.
-pub(crate) fn log_holdout(mem: &mut ChipMemory, surface: &str, now: u64) {
+/// Note a held-back row on `surface` for `client`. A repeat for the same open
+/// holdout (a keystroke on the same boundary) adds nothing.
+pub(crate) fn log_holdout(mem: &mut ChipMemory, surface: &str, client: ChipClient, now: u64) {
     let open = mem
         .events
         .iter()
         .rev()
-        .find(|e| e.surface == surface)
+        .find(|e| e.is_on(surface, client))
         .filter(|e| e.outcome.is_none() && e.next_at.is_none());
     if open.is_some_and(|e| e.holdout) {
         return;
@@ -53,6 +53,7 @@ pub(crate) fn log_holdout(mem: &mut ChipMemory, surface: &str, now: u64) {
     mem.events.push(ChipEvent {
         at: now,
         surface: surface.to_string(),
+        client,
         holdout: true,
         ..ChipEvent::default()
     });
@@ -62,11 +63,15 @@ pub(crate) fn log_holdout(mem: &mut ChipMemory, surface: &str, now: u64) {
     }
 }
 
-/// The person took a step (sent a message) while `surface` was up: the
-/// newest row there, shown or held back, notes when. Only the first step
-/// after a row counts.
-pub fn log_chip_next_action(mem: &mut ChipMemory, surface: &str, now: u64) {
-    if let Some(e) = mem.events.iter_mut().rev().find(|e| e.surface == surface)
+/// The person took a step (sent a message) in `client` while `surface` was
+/// up: that client's newest row there, shown or held back, notes when. Only
+/// the first step after a row counts.
+pub fn log_chip_next_action(mem: &mut ChipMemory, surface: &str, client: ChipClient, now: u64) {
+    if let Some(e) = mem
+        .events
+        .iter_mut()
+        .rev()
+        .find(|e| e.is_on(surface, client))
         && e.next_at.is_none()
         && e.at <= now
     {
@@ -243,7 +248,7 @@ pub fn chip_health_lines(h: &ChipHealth) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chip_store::{log_chip_outcome, log_chips_shown};
+    use crate::chip_store::{log_chip_outcome, log_chips_shown, ChipClient};
     use crate::chips::ChipKind;
 
     fn chip(id: &str) -> QuickChip {
@@ -272,14 +277,20 @@ mod tests {
     #[test]
     fn a_held_back_row_is_logged_once_and_teaches_the_row_before() {
         let mut mem = ChipMemory::default();
-        log_chips_shown(&mut mem, "composer", &[chip("pred-a")], 1_000);
-        log_holdout(&mut mem, "composer", 2_000);
-        log_holdout(&mut mem, "composer", 2_500);
+        log_chips_shown(
+            &mut mem,
+            "composer",
+            ChipClient::App,
+            &[chip("pred-a")],
+            1_000,
+        );
+        log_holdout(&mut mem, "composer", ChipClient::App, 2_000);
+        log_holdout(&mut mem, "composer", ChipClient::App, 2_500);
         assert_eq!(mem.events.len(), 2);
         assert!(mem.events[1].holdout && mem.events[1].shown.is_empty());
         // A step closes it; the next held-back boundary is a new row.
-        log_chip_next_action(&mut mem, "composer", 3_000);
-        log_holdout(&mut mem, "composer", 4_000);
+        log_chip_next_action(&mut mem, "composer", ChipClient::App, 3_000);
+        log_holdout(&mut mem, "composer", ChipClient::App, 4_000);
         assert_eq!(mem.events.len(), 3);
     }
 
@@ -287,19 +298,45 @@ mod tests {
     fn health_counts_picks_hides_and_the_time_to_the_next_step() {
         let mut mem = ChipMemory::default();
         // Picked after 2 s.
-        log_chips_shown(&mut mem, "composer", &[chip("pred-a"), chip("reply-1")], 0);
-        log_chip_outcome(&mut mem, "composer", &chip("reply-1"), true, 2_000);
+        log_chips_shown(
+            &mut mem,
+            "composer",
+            ChipClient::App,
+            &[chip("pred-a"), chip("reply-1")],
+            0,
+        );
+        log_chip_outcome(
+            &mut mem,
+            "composer",
+            ChipClient::App,
+            &chip("reply-1"),
+            true,
+            2_000,
+        );
         // Hidden, then a typed message 4 s after the row.
-        log_chips_shown(&mut mem, "home", &[chip("pred-b")], 10_000);
-        log_chip_outcome(&mut mem, "home", &chip("pred-b"), false, 11_000);
-        log_chip_next_action(&mut mem, "home", 14_000);
+        log_chips_shown(&mut mem, "home", ChipClient::App, &[chip("pred-b")], 10_000);
+        log_chip_outcome(
+            &mut mem,
+            "home",
+            ChipClient::App,
+            &chip("pred-b"),
+            false,
+            11_000,
+        );
+        log_chip_next_action(&mut mem, "home", ChipClient::App, 14_000);
         // Held back; the person typed after 9 s. A second step doesn't count.
-        log_holdout(&mut mem, "composer", 20_000);
-        log_chip_next_action(&mut mem, "composer", 29_000);
-        log_chip_next_action(&mut mem, "composer", 40_000);
+        log_holdout(&mut mem, "composer", ChipClient::App, 20_000);
+        log_chip_next_action(&mut mem, "composer", ChipClient::App, 29_000);
+        log_chip_next_action(&mut mem, "composer", ChipClient::App, 40_000);
         // A step an hour later is not an answer to the row.
-        log_chips_shown(&mut mem, "home", &[chip("pred-c")], 100_000);
-        log_chip_next_action(&mut mem, "home", 100_000 + 60 * 60 * 1000);
+        log_chips_shown(
+            &mut mem,
+            "home",
+            ChipClient::App,
+            &[chip("pred-c")],
+            100_000,
+        );
+        log_chip_next_action(&mut mem, "home", ChipClient::App, 100_000 + 60 * 60 * 1000);
 
         let h = chip_health(&mem);
         assert_eq!((h.rows, h.picked, h.hidden, h.held_back), (3, 1, 1, 1));

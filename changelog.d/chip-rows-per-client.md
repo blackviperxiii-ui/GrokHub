@@ -1,0 +1,1 @@
+- Quick chips: the desktop app and a paired browser each keep their own chip row in the learning log, so a tap in one no longer closes or teaches from the other's row.

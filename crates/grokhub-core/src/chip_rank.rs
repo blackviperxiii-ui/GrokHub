@@ -30,7 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::chip_store::{chip_log_key, ChipOutcome};
+use crate::chip_store::{chip_log_key, ChipClient, ChipOutcome};
 use crate::chips::{chip_memory_key, quick_chip_intent, ChipKind, ChipMemory, QuickChip};
 use crate::learn::{Beliefs, Standing, Subject};
 
@@ -89,6 +89,7 @@ pub struct ChipRanker {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RankedChip {
     pub surface: String,
+    pub client: ChipClient,
     pub key: String,
     pub p: f32,
     pub x: Vec<f32>,
@@ -160,6 +161,8 @@ impl ChipRanker {
 #[derive(Debug, Clone, Copy)]
 pub struct RankCtx<'a> {
     pub surface: &'a str,
+    /// Who asked: each client's notes and log rows are its own.
+    pub client: ChipClient,
     pub hour: u8,
     pub now_ms: u64,
     /// Same boundary, same seed: the row holds still while the person types.
@@ -234,7 +237,9 @@ fn rank(
     ctx: RankCtx<'_>,
 ) -> Vec<QuickChip> {
     mem.ranker.fit();
-    mem.ranker.last.retain(|r| r.surface != ctx.surface);
+    mem.ranker
+        .last
+        .retain(|r| !(r.surface == ctx.surface && r.client == ctx.client));
     let max = ctx.max.clamp(1, CHIP_ROW_MAX);
     let (pool, known): (Vec<QuickChip>, Vec<Heard>) = pool
         .into_iter()
@@ -256,7 +261,7 @@ fn rank(
         return Vec::new();
     }
     if crate::chip_health::in_holdout(ctx.seed) && crate::chip_health::holdout_allowed(&pool) {
-        crate::chip_health::log_holdout(mem, ctx.surface, ctx.now_ms);
+        crate::chip_health::log_holdout(mem, ctx.surface, ctx.client, ctx.now_ms);
         return Vec::new();
     }
     // Propensity: share of draws that put the same chip in the same slot.
@@ -281,6 +286,7 @@ fn rank(
         };
         mem.ranker.last.push(RankedChip {
             surface: ctx.surface.to_string(),
+            client: ctx.client,
             key: chip_log_key(&pool[i]),
             p,
             x: xs[i].iter().map(|v| (v * 100.0).round() / 100.0).collect(),
@@ -445,12 +451,18 @@ fn features(
     ]
 }
 
-/// What the ranker noted for `key` on `surface` when it built the row.
-pub(crate) fn ranked_note(mem: &ChipMemory, surface: &str, key: &str) -> Option<RankedChip> {
+/// What the ranker noted for `key` on `client`'s `surface` row when it built
+/// the row.
+pub(crate) fn ranked_note(
+    mem: &ChipMemory,
+    surface: &str,
+    client: ChipClient,
+    key: &str,
+) -> Option<RankedChip> {
     mem.ranker
         .last
         .iter()
-        .find(|r| r.surface == surface && r.key == key)
+        .find(|r| r.surface == surface && r.client == client && r.key == key)
         .cloned()
 }
 
@@ -537,6 +549,7 @@ mod tests {
     fn ctx(seed: u64) -> RankCtx<'static> {
         RankCtx {
             surface: "composer",
+            client: ChipClient::App,
             hour: 10,
             now_ms: 1_000_000,
             seed,
@@ -606,15 +619,22 @@ mod tests {
             log_chips_shown(
                 &mut mem,
                 "composer",
+                ChipClient::App,
                 std::slice::from_ref(&stale),
                 999_000 + i,
             );
-            log_chips_shown(&mut mem, "home", std::slice::from_ref(&stale), 999_000 + i);
+            log_chips_shown(
+                &mut mem,
+                "home",
+                ChipClient::App,
+                std::slice::from_ref(&stale),
+                999_000 + i,
+            );
         }
         let row = rank_quick_chips(&mut mem, vec![stale.clone(), other], ctx(1));
         assert_eq!(ids(&row), ["b"]);
         // Picked once in the window: it is wanted, it stays.
-        log_chip_outcome(&mut mem, "home", &stale, true, 999_900);
+        log_chip_outcome(&mut mem, "home", ChipClient::App, &stale, true, 999_900);
         let row = rank_quick_chips(&mut mem, vec![stale, chip("b", "Plan", 5.0)], ctx(1));
         assert_eq!(ids(&row)[0], "a");
     }
@@ -644,8 +664,8 @@ mod tests {
                 continue;
             }
             shown += 1;
-            log_chips_shown(&mut mem, "composer", &row, t);
-            log_chip_outcome(&mut mem, "composer", &habit, true, t);
+            log_chips_shown(&mut mem, "composer", ChipClient::App, &row, t);
+            log_chip_outcome(&mut mem, "composer", ChipClient::App, &habit, true, t);
         }
         assert!(mem.ranker.learned >= 40);
         let row = rank_quick_chips(&mut mem, vec![engine, habit], ctx(12345));
@@ -724,8 +744,15 @@ mod tests {
                 continue;
             }
             shown += 1;
-            let mut told = shown_signals(&mut mem, "composer", &row, t);
-            told.extend(outcome_signals(&mut mem, "composer", &taken, true, t));
+            let mut told = shown_signals(&mut mem, "composer", ChipClient::App, &row, t);
+            told.extend(outcome_signals(
+                &mut mem,
+                "composer",
+                ChipClient::App,
+                &taken,
+                true,
+                t,
+            ));
             for s in &told {
                 beliefs.apply(s);
             }
@@ -754,7 +781,7 @@ mod tests {
             chip("c", "Show my photos", 5.0),
         ];
         let row = rank_quick_chips(&mut mem, pool, ctx(3));
-        log_chips_shown(&mut mem, "composer", &row, 1);
+        log_chips_shown(&mut mem, "composer", ChipClient::App, &row, 1);
         let shown = &mem.events[0].shown;
         assert_eq!(shown.len(), row.len());
         for s in shown {
