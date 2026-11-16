@@ -67,11 +67,12 @@ pub struct Opts {
     pub public_only: bool,
     /// Dial through the proxy named in `ALL_PROXY`, `HTTPS_PROXY` or
     /// `HTTP_PROXY` (either case, first set wins), read when the agent is
-    /// built. Ignored when `public_only` is set: see [`Opts::reads_env_proxy`].
+    /// built. Ignored when `public_only`, `loopback_self_signed` or
+    /// `saved_host` is set: see [`Opts::reads_env_proxy`].
     pub proxy_from_env: bool,
     /// Dial through this resolver instead of the system's. Ignored when
-    /// `public_only` or `loopback_self_signed` is set, which dial through
-    /// their own.
+    /// `public_only`, `saved_host` or `loopback_self_signed` is set, which
+    /// dial through their own.
     pub resolve: Option<Resolve>,
     /// For a game client's API on this machine whose certificate is
     /// self-signed: accept any certificate, but dial loopback addresses only
@@ -87,9 +88,10 @@ pub struct Opts {
 }
 
 impl Opts {
-    /// Whether [`agent`] reads the env proxy: only when asked and not
-    /// `public_only`. A proxy is dialed instead of the target, so the target's
-    /// address would never reach the public-only resolver; `public_only` wins.
+    /// Whether [`agent`] reads the env proxy: only when asked and none of
+    /// `public_only`, `loopback_self_signed` or `saved_host` is set. A proxy is
+    /// dialed instead of the target, so the target's address would never reach
+    /// the resolver that checks it.
     pub const fn reads_env_proxy(&self) -> bool {
         self.proxy_from_env && !self.public_only && !self.loopback_self_signed && !self.saved_host
     }
@@ -289,13 +291,24 @@ fn saved_addrs(
     if let (Some(bad), true) = (dropped.first(), all.is_empty()) {
         return Err(refused(&format!("{host} → {}", bad.ip())));
     }
-    // Offline only: a local name that leads off the network stays home.
-    if crate::offline::enabled() && all.iter().any(|a| !crate::offline::ip_is_local(a.ip())) {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            *crate::offline::OFFLINE_MSG,
-        ));
-    }
+    // Offline only: a local name that leads off the network stays home. A
+    // dual-stack host may answer with a global IPv6 beside its LAN address,
+    // so only the addresses off this network are dropped.
+    let all = if crate::offline::enabled() {
+        let local: Vec<SocketAddr> = all
+            .into_iter()
+            .filter(|a| crate::offline::ip_is_local(a.ip()))
+            .collect();
+        if local.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                *crate::offline::OFFLINE_MSG,
+            ));
+        }
+        local
+    } else {
+        all
+    };
     Ok(all)
 }
 
@@ -1439,6 +1452,19 @@ mod tests {
             answers(&["192.168.1.5:8888"], &asked)
         )
         .is_ok());
+        let dual = saved_addrs(
+            Some(&lan),
+            "nas.lan:8888",
+            answers(
+                &["[2001:db8::5]:8888", "192.168.1.5:8888", "[fd00::5]:8888"],
+                &asked,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            dual,
+            ["192.168.1.5:8888", "[fd00::5]:8888"].map(|a| a.parse::<SocketAddr>().unwrap())
+        );
     }
 
     #[test]

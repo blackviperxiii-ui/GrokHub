@@ -30,6 +30,8 @@ const SETTINGS_PATH: &str = "Settings → AI models → Web search";
 pub const BAD_SEARXNG_URL: &str = "SearXNG URL must start with http:// or https://.";
 /// A host that can't be a server: a reserved, link-local or multicast IP, or
 /// an IPv4 address written in a form only some parsers read.
+/// A SearXNG URL whose host or port can't be read, such as port `88888`.
+pub const SEARXNG_UNREADABLE: &str = "That SearXNG URL can't be read. Check its port (a number up to 65535) and spelling, like http://192.168.1.5:8888.";
 pub const SEARXNG_BAD_HOST: &str = "That address can't be a SearXNG server. Use its name or a plain IP address, like http://192.168.1.5:8888.";
 /// A public-looking name that leads to this computer or the user's network:
 /// only a local name or IP reaches the saved-server resolver.
@@ -159,6 +161,9 @@ pub fn searxng_url_problem(url: &str) -> Option<&'static str> {
         && (last.bytes().all(|b| b.is_ascii_digit())
             || last.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("0x")));
     let host = searxng_host(url);
+    if host.is_empty() && !typed.is_empty() {
+        return Some(SEARXNG_UNREADABLE);
+    }
     let ip = host.parse::<std::net::IpAddr>().ok();
     let bad = host.is_empty()
         || (typed.parse::<std::net::IpAddr>().is_err() && numeric)
@@ -1030,6 +1035,23 @@ mod tests {
                 "{url}"
             );
         }
+        for url in [
+            "http://192.168.1.5:88888",
+            "https://searx.example:99999",
+            "http://nas:88a",
+            "http://nas:-1",
+        ] {
+            let s = Settings {
+                backend: Backend::Searxng,
+                searxng_url: url.into(),
+            };
+            assert_eq!(
+                s.save_with(&dir, &public),
+                Err(SEARXNG_UNREADABLE.to_string()),
+                "{url}"
+            );
+        }
+        assert_eq!(searxng_url_problem("http://"), Some(SEARXNG_BAD_HOST));
         assert!(!dir.join("app.json").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1193,8 +1215,12 @@ mod tests {
     /// A one-request HTTP server on 127.0.0.1: answers `reply` and hands back
     /// the request's first line.
     fn serve_once(reply: String) -> (u16, std::thread::JoinHandle<String>) {
+        serve_once_at("127.0.0.1", reply)
+    }
+
+    fn serve_once_at(ip: &str, reply: String) -> (u16, std::thread::JoinHandle<String>) {
         use std::io::{BufRead, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = std::net::TcpListener::bind((ip, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let seen = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
@@ -1240,6 +1266,42 @@ mod tests {
             seen.join().unwrap(),
             "GET /search?q=lan%20box&format=json HTTP/1.1"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_search_sent_to_the_saved_server_is_logged_in_privacy() {
+        let dir = crate::harness::test_dir("web-search-lan-egress");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let body = r#"{"results":[]}"#;
+        // 127.0.0.2 takes the saved-server path but isn't a local test
+        // destination, so the egress guard logs it as it would a LAN box.
+        let (port, seen) = serve_once_at(
+            "127.0.0.2",
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        let settings = Settings {
+            backend: Backend::Searxng,
+            searxng_url: format!("http://127.0.0.2:{port}"),
+        };
+        assert_eq!(searxng_url_problem(&settings.searxng_url), None);
+        let fetch = FailFetch;
+        assert_eq!(
+            search("rust", &settings, &dir, &fetch, &|| false),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            seen.join().unwrap(),
+            "GET /search?q=rust&format=json HTTP/1.1"
+        );
+        let logged: Vec<(String, String)> = crate::harness::read_egress(&dir)
+            .into_iter()
+            .map(|l| (l.dest, l.basis))
+            .collect();
+        assert_eq!(logged, [("127.0.0.2".to_string(), "chat".to_string())]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
