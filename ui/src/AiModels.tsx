@@ -20,6 +20,7 @@ import {
   type OpenRouterSignInStatus,
 } from "./api";
 import { ConfirmRow, StatusLine, useNote } from "./ui";
+import { ClaudePlanCard } from "./ClaudePlan";
 
 export const KEY_NOTE = "The key is saved to your keyring after you approve the card. It is never shown again.";
 export const ALLOW_NOTE =
@@ -400,6 +401,9 @@ export function AiModels() {
     <section className="ai-models" aria-label="AI models">
       <StatusLine note={note} />
       {view.locked && <p className="status status--error">{view.locked}</p>}
+
+      <h3>Claude (your plan)</h3>
+      <ClaudePlanCard />
 
       <h3>Other AI providers</h3>
       <p className="note">

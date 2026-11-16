@@ -5890,6 +5890,16 @@ async fn get_ai_models(state: State<'_, ShellState>) -> Result<ai_models::AiMode
     off_main(move || ai_models::view(&dir, "")).await
 }
 
+/// Settings → AI models → Claude (your plan): whether Claude Code is on this
+/// computer and how it's signed in. Only the sign-in kind is read, never a
+/// credential. Desktop only; the browser never reaches it.
+#[cfg(desktop)]
+#[tauri::command]
+async fn claude_plan_status() -> Result<grokhub_agent::claude_plan::ClaudePlan, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    off_main(grokhub_agent::claude_plan::detect).await
+}
+
 /// Posts the key's approval card; nothing is saved until `answer_ai_models_card`.
 #[tauri::command]
 async fn add_ai_provider(
@@ -8189,6 +8199,8 @@ pub fn run() {
             imagine_sign_in_poll,
             imagine_sign_out,
             get_ai_models,
+            #[cfg(desktop)]
+            claude_plan_status,
             add_ai_provider,
             start_openrouter_sign_in,
             wait_openrouter_sign_in,

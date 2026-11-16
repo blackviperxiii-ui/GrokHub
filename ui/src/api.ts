@@ -5157,6 +5157,19 @@ export function getAiModels(): Promise<AiModelsView> {
   return invoke<AiModelsView>("get_ai_models");
 }
 
+/** Claude Code on this computer (src/claude_plan.rs in grokhub-agent); desktop only.
+ * Only the sign-in kind is read, never a credential. */
+export type ClaudePlan =
+  | { state: "missing" }
+  | { state: "noAnswer" }
+  | { state: "signedOut"; version: string }
+  | { state: "plan"; version: string }
+  | { state: "otherBilling"; version: string; method: string };
+
+export function claudePlanStatus(): Promise<ClaudePlan> {
+  return invoke<ClaudePlan>("claude_plan_status");
+}
+
 /** Posts the key's approval card; nothing is saved until `answerAiModelsCard`. */
 export function addAiProvider(
   baseUrl: string,
