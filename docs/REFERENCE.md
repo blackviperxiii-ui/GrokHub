@@ -209,6 +209,7 @@ Pair code `ABC-234`. Devices paints a real LAN IPv4 (`http://192.168.x.x:18766`)
 | `GET` / `PUT` | `/v1/snapshot` | Bearer (`/sync`) |
 | `GET` / `POST` | `/v1/inhabit` | Bearer |
 | `GET` / `POST` | `/v1/frame` | Bearer |
+| `GET` / `POST` | `/v1/fleet` | Bearer |
 
 ## Packaging
 

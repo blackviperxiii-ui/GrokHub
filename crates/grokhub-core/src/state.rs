@@ -54,6 +54,10 @@ pub struct HubState {
     pub inhabit: Option<InhabitBundle>,
     #[serde(skip)]
     pub last_frame: Option<Arc<PresenceFrame>>,
+    /// The last machine card from each paired computer, for the Fleet page.
+    /// Kept while the hub runs; a computer re-sends its card each minute.
+    #[serde(skip)]
+    pub fleet: Vec<crate::fleet::MachineCard>,
 }
 
 impl HubState {
@@ -70,6 +74,7 @@ impl HubState {
             last_incoming_at: 0,
             inhabit: None,
             last_frame: None,
+            fleet: vec![],
         }
     }
 
@@ -362,6 +367,7 @@ pub fn state_for_disk(st: &HubState) -> HubState {
         last_incoming_at: st.last_incoming_at,
         inhabit: st.inhabit.clone(),
         last_frame: None,
+        fleet: vec![],
     }
 }
 

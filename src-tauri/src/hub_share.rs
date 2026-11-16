@@ -310,6 +310,17 @@ impl HubShare {
         }
     }
 
+    /// This hub's id and name, and the last machine card from each paired
+    /// computer. Memory only.
+    pub fn fleet(&self) -> (String, String, Vec<grokhub_core::fleet::MachineCard>) {
+        let st = lock(&self.hub);
+        (
+            st.device_id.clone(),
+            st.device_name.clone(),
+            st.fleet.clone(),
+        )
+    }
+
     /// `/sync`: the share paired computers fetch, merged record by record
     /// with what is already there (a paired computer's own upload keeps its
     /// newer rows). Memory only; the merge is slow, so call it off the main
