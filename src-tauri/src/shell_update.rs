@@ -2,8 +2,9 @@
 //! that points at the Linux AppImage and the Windows NSIS installer, each
 //! minisign-signed with the release key in `packaging/minisign.pub`. This
 //! finds the channel's newest release on GitHub, hands its `latest.json` to
-//! `tauri-plugin-updater`, and installs only when the user clicks. Package,
-//! source-clone and macOS builds don't self-update.
+//! `tauri-plugin-updater`, and installs only when the user clicks. Every
+//! Windows build and a Linux AppImage update this way; Linux package and
+//! clone installs and macOS builds don't.
 //!
 //! The channel is the `channel` receipt in the config folder, which
 //! `scripts/install.sh --channel` writes too, so the two are one setting.

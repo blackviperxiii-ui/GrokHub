@@ -20,7 +20,7 @@ These rules apply to every contributor and every bot (Cursor, Claude, GrokHub). 
 
 - PRs into `beta` don't bump the version. They add a fragment under `changelog.d/<slug>.md` (see `changelog.d/README.md`) and do not edit `CHANGELOG.md` or the version files; the `guards` check fails a PR without the `release` label that touches them.
 - Semver: PATCH (`x.y.Z`) for a fix or polish rollout, MINOR (`x.Y.0`) for a promotion with at least one new user-facing feature, MAJOR (`X.0.0`) only with the maintainer's approval. No cap on any part.
-- Beta builds carry `-beta.N` (e.g. `2.11.0-beta.3`): `GrokHub 2.11.0-beta.3 (beta @ abc1234)`. `src-tauri/build.rs` sets N from commits since the newest stable `vX.Y.Z` tag; never edit the Cargo version for them.
+- Beta builds carry `-beta.N` (e.g. `2.11.0-beta.3`), shown in Settings → About; `grokhub-shell --version` prints the plain `X.Y.Z`. `src-tauri/build.rs` sets N from commits since the newest stable `vX.Y.Z` tag; never edit the Cargo version for them.
 - Each `beta` → `main` promotion carries exactly one bump (PATCH or MINOR) and one release.
 - A hotfix to `main` carries its own PATCH bump and is merged back into `beta`.
 - A bump changes the files listed in `CLAUDE.md` (Commits, PRs, versions).
