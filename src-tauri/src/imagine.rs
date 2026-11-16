@@ -173,7 +173,7 @@ fn lend(shared: impl FnOnce() -> Result<String, String>) -> Result<String, Strin
     shared().map_err(|_| OWN_REFUSED.to_string())
 }
 
-/// Chat's image_generate and video_generate sign the way a Make here does:
+/// Chat's picture and video tools sign the way a Make here does:
 /// Imagine's own sign-in, then chat's. Nothing is read until one runs, and
 /// one refused by xAI is sent once more with chat's bearer.
 pub struct ChatImagine;

@@ -16,9 +16,26 @@ pub trait ImagineApi: Send + Sync {
         let _ = url;
         Err("download not available".into())
     }
-    /// Something to sign with. A client made with a bearer always is.
+    /// Something to sign with, from a keychain read only. A client made with
+    /// a bearer always has it.
     fn ready(&self) -> bool {
         true
+    }
+    /// A bearer is in hand: a lazy client resolves it here (it may refresh).
+    fn signs(&self) -> bool {
+        true
+    }
+    /// A post that may go once more, signed another way, when xAI refuses the
+    /// first bearer. `resend` passes the EgressGuard again first; `Ok(false)`
+    /// means stopped, so the first answer stands. A fixed client sends once.
+    fn post_json_or_resend(
+        &self,
+        path: &str,
+        body: &Value,
+        resend: &dyn Fn() -> Result<bool, String>,
+    ) -> Result<Value, String> {
+        let _ = resend;
+        self.post_json(path, body)
     }
 }
 
@@ -101,7 +118,7 @@ impl LazyImagine {
     }
 }
 
-/// xAI turned the bearer away (the same test as the Imagine page).
+/// xAI turned the bearer away (the Imagine page's test for a refused bearer).
 fn refused(err: &str) -> bool {
     err.starts_with("HTTP 401") || err.starts_with("HTTP 403")
 }
@@ -111,13 +128,32 @@ impl ImagineApi for LazyImagine {
         self.source.ready()
     }
 
-    /// Only a post is sent again: it starts the job, so a poll or download
-    /// never switches accounts halfway. The retry re-sends the same path and
-    /// body that already passed the EgressGuard.
+    fn signs(&self) -> bool {
+        self.client().is_ok()
+    }
+
     fn post_json(&self, path: &str, body: &Value) -> Result<Value, String> {
+        self.client()?.0.post_json(path, body)
+    }
+
+    /// Only a post goes again: it starts the job, so a poll or download never
+    /// switches accounts halfway. Chat's bearer is asked for before the guard
+    /// runs again, so with none to lend nothing is parked or logged twice.
+    fn post_json_or_resend(
+        &self,
+        path: &str,
+        body: &Value,
+        resend: &dyn Fn() -> Result<bool, String>,
+    ) -> Result<Value, String> {
         let (api, own) = self.client()?;
         match api.post_json(path, body) {
-            Err(err) if own && refused(&err) => self.lend()?.post_json(path, body),
+            Err(err) if own && refused(&err) => {
+                let shared = self.lend()?;
+                if !resend()? {
+                    return Err(err);
+                }
+                shared.post_json(path, body)
+            }
             done => done,
         }
     }
@@ -400,13 +436,22 @@ fn video_extend_schema() -> Value {
     })
 }
 
+/// Grok Imagine takes a clean picture: Offline only lets it be reached and a
+/// bearer is in hand. Otherwise the picture model here draws it, as when
+/// signed out.
+fn imagine_takes_it(imagine: Option<&Arc<dyn ImagineApi>>) -> bool {
+    imagine.is_some_and(|api| {
+        grokhub_core::offline::check_url(&endpoint("images/generations")).is_ok() && api.signs()
+    })
+}
+
 pub(crate) fn run_with_ports(name: &str, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     let ports = super::ports::current();
     let imagine = ports.imagine.filter(|api| api.ready());
     if let Some(out) = on_device(
         name,
         args,
-        imagine.is_some(),
+        &|| imagine_takes_it(imagine.as_ref()),
         &crate::route::local_image::kit_here,
         stop,
         ports.media_dir.as_deref(),
@@ -420,13 +465,14 @@ pub(crate) fn run_with_ports(name: &str, args: &Value, stop: &dyn Fn() -> bool) 
 }
 
 /// A picture is drawn on this computer when it must or can: an 18+ prompt
-/// only ever is (never online), and a clean one is when Grok isn't signed in
-/// and the picture model is on disk. `None` leaves the call to Grok Imagine.
+/// only ever is (never online), and a clean one is when Grok Imagine can't
+/// be reached or signed (`signed_in`, asked only for a clean picture) and the
+/// picture model is on disk. `None` leaves the call to Grok Imagine.
 /// A banned prompt is refused here before anything runs.
 pub(crate) fn on_device(
     name: &str,
     args: &Value,
-    signed_in: bool,
+    signed_in: &dyn Fn() -> bool,
     kit: &dyn Fn() -> Option<crate::route::local_image::Kit>,
     stop: &dyn Fn() -> bool,
     media_dir: Option<&std::path::Path>,
@@ -445,7 +491,7 @@ pub(crate) fn on_device(
         Risk::Explicit => true,
         Risk::Clean => false,
     };
-    if !explicit && signed_in {
+    if !explicit && signed_in() {
         return None;
     }
     let Some(kit) = kit() else {
@@ -777,7 +823,18 @@ fn run_call(
         crate::harness::model_text_classes(&call.body.to_string()),
         stop,
     )?;
-    match api.post_json(call.path, &call.body) {
+    let resend = || {
+        if stop() {
+            return Ok(false);
+        }
+        guard(
+            &url,
+            crate::harness::model_text_classes(&call.body.to_string()),
+            stop,
+        )
+        .map(|()| true)
+    };
+    match api.post_json_or_resend(call.path, &call.body, &resend) {
         Ok(body) => finish(call, api, body, false, stop),
         Err(err) => {
             if let Some(fallback) = call.mask_fallback.as_ref() {
@@ -1309,7 +1366,7 @@ pub(crate) mod tests {
             on_device(
                 "image_generate",
                 &json!({ "prompt": prompt }),
-                signed_in,
+                &|| signed_in,
                 &none,
                 &|| false,
                 None,
@@ -1337,7 +1394,7 @@ pub(crate) mod tests {
         assert!(on_device(
             "video_generate",
             &json!({ "prompt": "an erotic dance" }),
-            true,
+            &|| true,
             &none,
             &|| false,
             None
@@ -1370,7 +1427,7 @@ pub(crate) mod tests {
                 let out = on_device(
                     "image_generate",
                     &json!({ "prompt": prompt }),
-                    signed_in,
+                    &|| signed_in,
                     &kit,
                     &|| false,
                     None,
@@ -1418,7 +1475,7 @@ pub(crate) mod tests {
         let out = on_device(
             "image_generate",
             &json!({ "prompt": "a cabin in the snow", "aspect_ratio": "16:9" }),
-            false,
+            &|| false,
             &kit,
             &|| false,
             Some(&out_dir),
@@ -1876,11 +1933,12 @@ pub(crate) mod tests {
 
     const REFUSED: &str = "HTTP 403 {\"error\":\"scope\"}";
 
-    /// xAI as seen through one bearer: refuses the ones in `refuse`, else
+    /// xAI as seen through one bearer: answers `error` to the ones in `refuse`, else
     /// answers like [`FakeImagine`]. Every post logs its bearer.
     struct Keyed {
         bearer: String,
         refuse: &'static [&'static str],
+        error: &'static str,
         posts: Arc<Mutex<Vec<String>>>,
     }
 
@@ -1891,7 +1949,7 @@ pub(crate) mod tests {
                 .unwrap_or_else(|e| e.into_inner())
                 .push(self.bearer.clone());
             if self.refuse.contains(&self.bearer.as_str()) {
-                Err(REFUSED.to_string())
+                Err(self.error.to_string())
             } else if path.starts_with("videos/") {
                 Ok(json!({"request_id": "req-1"}))
             } else {
@@ -1910,10 +1968,20 @@ pub(crate) mod tests {
         }
     }
 
-    /// One chat turn's ports with a lazy Imagine on `src`.
+    /// One chat turn's ports with a lazy Imagine on `src`; xAI refuses the
+    /// bearers in `refuse`.
     fn turn(
         src: &Arc<FakeSource>,
         refuse: &'static [&'static str],
+    ) -> (super::super::ports::Guard, Arc<Mutex<Vec<String>>>) {
+        turn_failing(src, refuse, REFUSED)
+    }
+
+    /// [`turn`], with xAI answering `error` to the bearers in `refuse`.
+    fn turn_failing(
+        src: &Arc<FakeSource>,
+        refuse: &'static [&'static str],
+        error: &'static str,
     ) -> (super::super::ports::Guard, Arc<Mutex<Vec<String>>>) {
         let posts = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&posts);
@@ -1921,6 +1989,7 @@ pub(crate) mod tests {
             Arc::new(Keyed {
                 bearer,
                 refuse,
+                error,
                 posts: Arc::clone(&log),
             }) as Arc<dyn ImagineApi>
         });
@@ -1967,6 +2036,11 @@ pub(crate) mod tests {
         );
         assert_eq!(posted(&posts), ["imagine-own-fake", "chat-shared-fake"]);
         assert_eq!(src.calls(), ["ready", "bearer", "shared"]);
+        let sent: Vec<String> = crate::harness::read_egress(&dir)
+            .into_iter()
+            .map(|line| line.dest)
+            .collect();
+        assert_eq!(sent, ["api.x.ai", "api.x.ai"], "each send passes the guard");
         // Later in the same turn: chat's bearer straight away, read once.
         let video = run_with_ports("video_generate", &film(), &|| false);
         assert_eq!(video.text, "IMAGINE: https://cdn.example/cabin.mp4");
@@ -1990,7 +2064,7 @@ pub(crate) mod tests {
         let out = run_with_ports("image_generate", &picture(), &|| false);
         assert!(out.failed);
         assert_eq!(out.text, why);
-        let again = run_with_ports("image_generate", &picture(), &|| false);
+        let again = run_with_ports("video_generate", &film(), &|| false);
         assert_eq!(again.text, why);
         assert_eq!(posted(&posts), ["imagine-own-fake"], "nothing dials twice");
         assert_eq!(src.calls(), ["ready", "bearer", "shared", "ready"]);
@@ -2051,11 +2125,100 @@ pub(crate) mod tests {
             ..FakeSource::signed_in()
         });
         let (_ports, posts) = turn(&src, &[]);
-        let out = run_with_ports("image_generate", &picture(), &|| false);
+        let out = run_with_ports("video_generate", &film(), &|| false);
         assert!(out.failed);
         assert_eq!(out.text, ended);
         assert!(posted(&posts).is_empty());
         assert_eq!(src.calls(), ["ready", "bearer"]);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_imagine_error_that_is_not_a_refusal_is_not_sent_again() {
+        let (dir, _cfg) = scratch_config();
+        let busy = "HTTP 500 {\"error\":\"busy\"}";
+        let src = Arc::new(FakeSource::signed_in());
+        let (_ports, posts) = turn_failing(&src, &["imagine-own-fake"], busy);
+        let out = run_with_ports("image_generate", &picture(), &|| false);
+        assert!(out.failed);
+        assert_eq!(out.text, busy);
+        assert_eq!(posted(&posts), ["imagine-own-fake"]);
+        assert_eq!(src.calls(), ["ready", "bearer"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_stop_after_a_refused_post_sends_nothing_more() {
+        let (dir, _cfg) = scratch_config();
+        let src = Arc::new(FakeSource::signed_in());
+        let (_ports, posts) = turn(&src, &["imagine-own-fake"]);
+        // Stop is pressed while the first post is out.
+        let stop = || !posted(&posts).is_empty();
+        let out = run_with_ports("image_generate", &picture(), &stop);
+        assert!(out.failed);
+        assert_eq!(out.text, REFUSED);
+        assert_eq!(posted(&posts), ["imagine-own-fake"]);
+        assert_eq!(crate::harness::read_egress(&dir).len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn lazy(src: &Arc<FakeSource>) -> Arc<dyn ImagineApi> {
+        let source: Arc<dyn ImagineSource> = src.clone();
+        let dial: Dial = Box::new(|bearer| {
+            Arc::new(Keyed {
+                bearer,
+                refuse: &[],
+                error: REFUSED,
+                posts: Arc::new(Mutex::new(Vec::new())),
+            }) as Arc<dyn ImagineApi>
+        });
+        Arc::new(LazyImagine::new(source, dial))
+    }
+
+    #[test]
+    fn offline_only_or_an_ended_sign_in_leaves_a_clean_picture_to_this_computer() {
+        let (dir, _cfg) = scratch_config();
+        assert!(!imagine_takes_it(None));
+        let ok = Arc::new(FakeSource::signed_in());
+        assert!(imagine_takes_it(Some(&lazy(&ok))));
+        assert_eq!(ok.calls(), ["bearer"]);
+        {
+            let _offline = grokhub_core::offline::force_for_thread(true);
+            let idle = Arc::new(FakeSource::signed_in());
+            assert!(!imagine_takes_it(Some(&lazy(&idle))));
+            assert!(idle.calls().is_empty(), "offline reads no sign-in");
+        }
+        let ended = Arc::new(FakeSource {
+            first: Err("Your Grok sign-in ended. Sign in again in Settings → Account."),
+            ..FakeSource::signed_in()
+        });
+        assert!(!imagine_takes_it(Some(&lazy(&ended))));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_a_clean_picture_asks_whether_imagine_can_take_it() {
+        let asked = std::cell::Cell::new(0);
+        let signed_in = || {
+            asked.set(asked.get() + 1);
+            true
+        };
+        let none = || None;
+        let go = |name: &str, prompt: &str| {
+            on_device(
+                name,
+                &json!({ "prompt": prompt }),
+                &signed_in,
+                &none,
+                &|| false,
+                None,
+            )
+        };
+        assert!(go("image_generate", "a nude teen on a beach").is_some());
+        assert!(go("image_generate", "an erotic nude portrait").is_some());
+        assert!(go("video_generate", "a cabin in the snow").is_none());
+        assert_eq!(asked.get(), 0, "no sign-in is read for these");
+        assert!(go("image_generate", "a cabin in the snow").is_none());
+        assert_eq!(asked.get(), 1);
     }
 }
