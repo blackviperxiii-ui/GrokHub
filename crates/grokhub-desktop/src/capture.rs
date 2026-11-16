@@ -39,21 +39,25 @@ fn kwin_refusal(err: &str) -> bool {
 /// it: `grokhub-shell.desktop` for the desktop app (what `scripts/install.sh`
 /// and the PKGBUILDs write), `grokhub-hub.desktop` for a hub run as an MCP
 /// server. It lives in `<prefix>/share/applications` for a `<prefix>/bin`
-/// install, else the user's applications dir.
+/// install. A binary run from anywhere else (a build folder) gets its own
+/// `<name>-dev.desktop` in the user's applications dir, so the fix never
+/// rewrites the entry `install.sh` wrote for the installed copy.
 fn desktop_entry_for(exe: &Path, home: Option<&Path>) -> PathBuf {
     let name = exe
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("grokhub-shell");
-    let file = format!("{name}.desktop");
     let prefix = exe
         .parent()
         .filter(|dir| dir.file_name().is_some_and(|name| name == "bin"))
         .and_then(Path::parent);
+    let dev = format!("{name}-dev.desktop");
     match (prefix, home) {
-        (Some(prefix), _) => prefix.join("share/applications").join(file),
-        (None, Some(home)) => home.join(".local/share/applications").join(file),
-        (None, None) => PathBuf::from("~/.local/share/applications").join(file),
+        (Some(prefix), _) => prefix
+            .join("share/applications")
+            .join(format!("{name}.desktop")),
+        (None, Some(home)) => home.join(".local/share/applications").join(dev),
+        (None, None) => PathBuf::from("~/.local/share/applications").join(dev),
     }
 }
 
@@ -735,11 +739,11 @@ mod tests {
                 Path::new("/home/user/GrokHub/src-tauri/target/release/grokhub-shell"),
                 Some(home)
             ),
-            PathBuf::from("/home/user/.local/share/applications/grokhub-shell.desktop")
+            PathBuf::from("/home/user/.local/share/applications/grokhub-shell-dev.desktop")
         );
         assert_eq!(
             desktop_entry_for(Path::new("/opt/x/grokhub-shell"), None),
-            PathBuf::from("~/.local/share/applications/grokhub-shell.desktop")
+            PathBuf::from("~/.local/share/applications/grokhub-shell-dev.desktop")
         );
         assert_eq!(
             desktop_entry_for(Path::new("/home/user/.local/bin/grokhub-hub"), Some(home)),
