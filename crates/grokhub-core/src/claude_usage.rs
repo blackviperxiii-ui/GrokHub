@@ -7,15 +7,14 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 
 pub const WINDOW_MS: u64 = 5 * 60 * 60 * 1000;
 pub const WEEK_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 const HOUR_MS: u64 = 60 * 60 * 1000;
-/// How deep under `projects/` transcripts are looked for (a project's
-/// subagent transcripts sit two folders below it).
-const MAX_DEPTH: usize = 4;
+/// How deep under `projects/` transcripts are looked for: a workflow's
+/// agent transcripts sit at `<project>/<session>/subagents/workflows/<run>/`.
+const MAX_DEPTH: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,10 +49,40 @@ pub struct Turn {
 pub struct ClaudeUsage {
     /// Tokens in the 5-hour window that is open now; zero when none is.
     pub window: Tokens,
-    /// When the open window ends; `None` when no window is open.
+    /// When the open window ends; `None` when no window is open, or when its
+    /// start can't be known (see `window_rolling`).
     pub window_resets_at_ms: Option<u64>,
+    /// No 5-hour pause is in the history read, so the window's start can't be
+    /// placed: `window` is then the last 5 hours instead.
+    pub window_rolling: bool,
     pub week: Tokens,
     pub last_at_ms: Option<u64>,
+}
+
+/// The fields of a transcript line that are read; serde skips the rest
+/// (the reply's text and tool output) without building it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Line {
+    #[serde(rename = "type")]
+    kind: String,
+    timestamp: Option<String>,
+    request_id: Option<String>,
+    message: Option<Message>,
+}
+
+#[derive(Deserialize)]
+struct Message {
+    id: Option<String>,
+    usage: Option<Usage>,
+}
+
+#[derive(Deserialize)]
+struct Usage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
 }
 
 /// The reply on one transcript line, or `None` for any other line.
@@ -61,36 +90,46 @@ pub fn parse_line(line: &str) -> Option<Turn> {
     if !line.contains("\"usage\"") {
         return None;
     }
-    let v: Value = serde_json::from_str(line).ok()?;
-    if v.get("type")?.as_str()? != "assistant" {
+    let line: Line = serde_json::from_str(line).ok()?;
+    if line.kind != "assistant" {
         return None;
     }
-    let at_ms = crate::pulse_sources::parse_date_ms(v.get("timestamp")?.as_str()?)?;
-    let message = v.get("message")?;
-    let usage = message.get("usage")?;
-    let n = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
-    let id = |v: Option<&Value>| v.and_then(Value::as_str).unwrap_or("").to_string();
+    let at_ms = crate::pulse_sources::parse_date_ms(line.timestamp.as_deref()?)?;
+    let message = line.message?;
+    let usage = message.usage?;
     Some(Turn {
         at_ms,
-        key: format!("{}:{}", id(message.get("id")), id(v.get("requestId"))),
+        key: format!(
+            "{}:{}",
+            message.id.unwrap_or_default(),
+            line.request_id.unwrap_or_default()
+        ),
         tokens: Tokens {
-            input: n("input_tokens"),
-            output: n("output_tokens"),
-            cache_write: n("cache_creation_input_tokens"),
-            cache_read: n("cache_read_input_tokens"),
+            input: usage.input_tokens.unwrap_or(0),
+            output: usage.output_tokens.unwrap_or(0),
+            cache_write: usage.cache_creation_input_tokens.unwrap_or(0),
+            cache_read: usage.cache_read_input_tokens.unwrap_or(0),
         },
     })
 }
 
+/// Replies before this may be missing from what [`read_turns`] returns at
+/// `now`: older transcripts aren't opened.
+pub fn read_from(now: u64) -> u64 {
+    now.saturating_sub(WEEK_MS + WINDOW_MS)
+}
+
 /// The 5-hour window and the 7 days up to `now`. A window opens on the hour
 /// of the first reply after the last one ended, as Claude's plan limits
-/// count them.
-pub fn usage(turns: impl IntoIterator<Item = Turn>, now: u64) -> ClaudeUsage {
-    let from = now.saturating_sub(WEEK_MS + WINDOW_MS);
+/// count them. Replies before `missing_before` may be absent, so a window
+/// is only placed from a reply known to open one: the first after a pause
+/// of 5 hours or more. With no such pause, `window` is the last 5 hours and
+/// `window_rolling` says so.
+pub fn usage(turns: impl IntoIterator<Item = Turn>, now: u64, missing_before: u64) -> ClaudeUsage {
     let mut seen = HashSet::new();
     let mut turns: Vec<Turn> = turns
         .into_iter()
-        .filter(|t| t.at_ms >= from && t.at_ms <= now)
+        .filter(|t| t.at_ms <= now)
         .filter(|t| t.key == ":" || seen.insert(t.key.clone()))
         .collect();
     turns.sort_by_key(|t| t.at_ms);
@@ -98,20 +137,39 @@ pub fn usage(turns: impl IntoIterator<Item = Turn>, now: u64) -> ClaudeUsage {
         last_at_ms: turns.last().map(|t| t.at_ms),
         ..Default::default()
     };
-    let mut start: Option<u64> = None;
-    for turn in &turns {
-        if start.is_none_or(|s| turn.at_ms >= s + WINDOW_MS) {
-            start = Some(turn.at_ms - turn.at_ms % HOUR_MS);
+    let week_from = now.saturating_sub(WEEK_MS);
+    for turn in turns.iter().filter(|t| t.at_ms >= week_from) {
+        out.week.add(turn.tokens);
+    }
+    let opens = |i: usize| {
+        let before = if i == 0 {
+            missing_before
+        } else {
+            turns[i - 1].at_ms
+        };
+        turns[i].at_ms.saturating_sub(before) >= WINDOW_MS
+    };
+    let Some(anchor) = (0..turns.len()).rev().find(|&i| opens(i)) else {
+        out.window_rolling = !turns.is_empty();
+        let rolling_from = now.saturating_sub(WINDOW_MS);
+        for turn in turns.iter().filter(|t| t.at_ms > rolling_from) {
+            out.window.add(turn.tokens);
+        }
+        return out;
+    };
+    let mut start = 0;
+    for (i, turn) in turns.iter().enumerate().skip(anchor) {
+        if i == anchor || turn.at_ms >= start + WINDOW_MS {
+            start = turn.at_ms - turn.at_ms % HOUR_MS;
             out.window = Tokens::default();
         }
         out.window.add(turn.tokens);
-        if turn.at_ms >= now.saturating_sub(WEEK_MS) {
-            out.week.add(turn.tokens);
-        }
     }
-    match start.map(|s| s + WINDOW_MS).filter(|end| now < *end) {
-        Some(end) => out.window_resets_at_ms = Some(end),
-        None => out.window = Tokens::default(),
+    let end = start + WINDOW_MS;
+    if now < end {
+        out.window_resets_at_ms = Some(end);
+    } else {
+        out.window = Tokens::default();
     }
     out
 }
@@ -127,15 +185,27 @@ pub fn claude_dir(env_dir: Option<&str>, home: &Path) -> PathBuf {
 
 /// Every reply in the transcripts under `claude_dir/projects` written to in
 /// the last 7 days and 5 hours. Older files aren't opened.
+/// Each file is read a line at a time, and a line that isn't whole UTF-8 (one
+/// Claude Code is still writing) is skipped, not the file.
 pub fn read_turns(claude_dir: &Path, now: u64) -> Vec<Turn> {
-    let since = now.saturating_sub(WEEK_MS + WINDOW_MS);
+    use std::io::BufRead;
     let mut files = Vec::new();
-    collect(&claude_dir.join("projects"), 0, since, &mut files);
-    files
-        .iter()
-        .filter_map(|path| std::fs::read_to_string(path).ok())
-        .flat_map(|text| text.lines().filter_map(parse_line).collect::<Vec<_>>())
-        .collect()
+    collect(&claude_dir.join("projects"), 0, read_from(now), &mut files);
+    let mut turns = Vec::new();
+    for path in files {
+        let Ok(file) = std::fs::File::open(&path) else {
+            continue;
+        };
+        for line in std::io::BufReader::new(file).split(b'\n') {
+            let Ok(line) = line else {
+                break;
+            };
+            if let Some(turn) = std::str::from_utf8(&line).ok().and_then(parse_line) {
+                turns.push(turn);
+            }
+        }
+    }
+    turns
 }
 
 fn collect(dir: &Path, depth: usize, since: u64, out: &mut Vec<PathBuf>) {
@@ -218,7 +288,7 @@ mod tests {
             turn(at(0, 20), "a", 100),
             turn(at(2, 0), "b", 50),
         ];
-        let got = usage(turns, at(3, 0));
+        let got = usage(turns, at(3, 0), 0);
         assert_eq!(got.window.output, 150);
         assert_eq!(got.window_resets_at_ms, Some(NOON + 5 * HOUR_MS));
         assert_eq!(got.week.output, 150);
@@ -229,13 +299,13 @@ mod tests {
     fn a_reply_after_the_window_ends_opens_a_new_one_and_a_closed_one_reads_zero() {
         let at = |h: u64, m: u64| NOON + h * HOUR_MS + m * 60_000;
         let turns = vec![turn(at(0, 10), "a", 100), turn(at(5, 30), "b", 7)];
-        let open = usage(turns.clone(), at(6, 0));
+        let open = usage(turns.clone(), at(6, 0), 0);
         assert_eq!(
             (open.window.output, open.window_resets_at_ms),
             (7, Some(at(10, 0)))
         );
         assert_eq!(open.week.output, 107);
-        let closed = usage(turns, at(10, 0));
+        let closed = usage(turns, at(10, 0), 0);
         assert_eq!(
             (closed.window, closed.window_resets_at_ms),
             (Tokens::default(), None)
@@ -250,16 +320,75 @@ mod tests {
             turn(NOON - WEEK_MS + 1, "edge", 5),
             turn(NOON + 1, "ahead", 9_999),
         ];
-        let got = usage(turns, NOON);
+        let got = usage(turns, NOON, 0);
         assert_eq!(got.week.output, 5);
         assert_eq!(got.last_at_ms, Some(NOON - WEEK_MS + 1));
+    }
+
+    /// One reply every 2 hours from `NOON` for `hours`.
+    fn steady(hours: u64) -> Vec<Turn> {
+        (0..=hours / 2)
+            .map(|n| turn(NOON + n * 2 * HOUR_MS, &n.to_string(), 1))
+            .collect()
+    }
+
+    #[test]
+    fn steady_use_places_the_window_from_the_first_reply_and_never_guesses_a_phase() {
+        let at = |h: u64| NOON + h * HOUR_MS;
+        // Windows open at 0h, 6h, 12h...: each reply 6h after a window's
+        // start opens the next. At 194h the open one began at 192h.
+        let exact = usage(steady(194), at(194), 0);
+        assert_eq!(
+            (
+                exact.window.output,
+                exact.window_resets_at_ms,
+                exact.window_rolling
+            ),
+            (2, Some(at(197)), false)
+        );
+        // The same replies with the first days unread: no 5-hour pause is
+        // left to place a window from, so the last 5 hours stand in.
+        let partial = usage(
+            steady(194).into_iter().filter(|t| t.at_ms >= at(20)),
+            at(194),
+            at(20),
+        );
+        assert_eq!(
+            (
+                partial.window.output,
+                partial.window_resets_at_ms,
+                partial.window_rolling
+            ),
+            (3, None, true)
+        );
+        assert_eq!(partial.week.output, exact.week.output);
+    }
+
+    #[test]
+    fn a_five_hour_pause_places_the_window_even_with_older_days_unread() {
+        let at = |h: u64| NOON + h * HOUR_MS;
+        let mut turns: Vec<Turn> = steady(100)
+            .into_iter()
+            .filter(|t| t.at_ms >= at(20))
+            .collect();
+        turns.push(turn(at(107) + 30 * 60_000, "after-pause", 10));
+        turns.push(turn(at(110), "same-window", 5));
+        let got = usage(turns, at(111), at(20));
+        assert_eq!(
+            (
+                got.window.output,
+                got.window_resets_at_ms,
+                got.window_rolling
+            ),
+            (15, Some(at(112)), false)
+        );
     }
 
     #[test]
     fn transcripts_are_read_from_projects_only_and_old_files_are_skipped() {
         let dir = std::env::temp_dir().join(format!("claude-usage-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let deep = dir.join("projects/my-app/session-1/subagents");
+        let deep = dir.join("projects/my-app/session-1/subagents/workflows/run-1");
         std::fs::create_dir_all(&deep).unwrap();
         std::fs::write(
             dir.join("projects/my-app/session-1.jsonl"),

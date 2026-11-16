@@ -129,7 +129,13 @@ pub fn usage(claude_dir: Option<&std::path::Path>, now: u64) -> Usage {
     use grokhub_core::claude_usage;
     let claude = claude_dir
         .filter(|dir| dir.join("projects").is_dir())
-        .map(|dir| claude_usage::usage(claude_usage::read_turns(dir, now), now));
+        .map(|dir| {
+            claude_usage::usage(
+                claude_usage::read_turns(dir, now),
+                now,
+                claude_usage::read_from(now),
+            )
+        });
     Usage {
         claude,
         grok: grokhub_agent::plan_room::latest().map(GrokRoom::from),
