@@ -57,7 +57,7 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 - Rust caches (`shell-<os>`) are used only on the `beta` ref. Tags and the nightly build cold.
 - A newer beta build cancels one still running. Tag runs never cancel.
 - A tag builds only when it is `v<VERSION>` or `v<VERSION>-beta.N` for the tagged commit. `plan` runs `scripts/release-tag-check.sh` before any build or signing, and the `guards` job fails when that call is missing or is not the first command for a tag (`scripts/ci-guards.sh`).
-- `publish` downloads only the `shell-*` artifacts, so nothing staged for signing reaches a release unsigned (`scripts/ci-guards.sh`).
+- `publish` downloads only the `shell-*` artifacts.
 - Windows and macOS ignore letter case in file names, and Linux CI doesn't. The `guards` job fails when two tracked names in one folder (files, folders or links) or two JS/TS import names differ only by case, because a Windows checkout keeps only one of them and the Windows `ui` build would load the wrong file (`scripts/ci-guards.sh`). An import name counts `games/index.tsx` as `games` too.
 - A manual run on any branch other than `beta` builds nothing.
 - Pull requests and pushes to `main` never run release.yml.
