@@ -588,10 +588,24 @@ mod tests {
         let mut mem = ChipMemory::default();
         let desk = [chip("pred-a", "a"), chip("learn-b", "b")];
         let web = [chip("learn-b", "b"), chip("radar-c", "c")];
+        // The ranker noted the shared chip differently for each row.
+        let note = |client, p| crate::chip_rank::RankedChip {
+            surface: "home".into(),
+            client,
+            key: chip_log_key(&desk[1]),
+            p,
+            x: vec![p],
+        };
+        mem.ranker.last = vec![note(ChipClient::App, 0.25), note(ChipClient::Web, 0.75)];
         log_chips_shown(&mut mem, "home", ChipClient::App, &desk, 1);
         let told = shown_signals(&mut mem, "home", ChipClient::Web, &web, 2);
         assert_eq!(mem.events.len(), 2);
         assert_eq!(mem.events[1].client, ChipClient::Web);
+        assert_eq!(
+            (mem.events[0].shown[1].p, mem.events[1].shown[0].p),
+            (0.25, 0.75)
+        );
+        assert_eq!(mem.events[1].shown[0].x, vec![0.75]);
         assert_eq!(mem.ranker.rows, 0, "the desktop's row was not passed over");
         assert!(!told.iter().any(|s| s.kind == crate::learn::Kind::Ignored));
         log_chips_shown(&mut mem, "home", ChipClient::App, &desk, 3);
