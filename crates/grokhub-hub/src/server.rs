@@ -267,6 +267,25 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         return send_json(req, 200, json!({ "ok": true, "bundle": bundle }));
     }
 
+    if method == Method::Post && path == "/v1/fleet" {
+        drop(st);
+        let body = match read_json(&mut req) {
+            Ok(body) => body,
+            Err(e) => return reject_body(req, e),
+        };
+        let card = match grokhub_core::fleet::card_from_peer(&body, &peer, grokhub_core::now_ms()) {
+            Ok(card) => card,
+            Err(e) => return send_json(req, 400, json!({ "ok": false, "error": e })),
+        };
+        grokhub_core::fleet::keep_card(&mut lock(state).fleet, card);
+        return send_json(req, 200, json!({ "ok": true }));
+    }
+    if method == Method::Get && path == "/v1/fleet" {
+        let machines = st.fleet.clone();
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "machines": machines }));
+    }
+
     if method == Method::Post && path == "/v1/frame" {
         drop(st);
         let body = match read_json(&mut req) {
@@ -1201,5 +1220,59 @@ mod tests {
         );
         drop(b);
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    fn fleet_call(port: u16, method: &str, token: &str, body: &str) -> (u16, Value) {
+        let (status, _, out) = http(
+            port,
+            &format!(
+                "{method} /v1/fleet HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        (status, serde_json::from_slice(&out).unwrap_or(Value::Null))
+    }
+
+    #[test]
+    fn a_paired_computers_card_is_kept_under_its_own_name_and_strangers_are_refused() {
+        let (state, port) = hub();
+        let (_, desk) = pair_as(&state, port, "d-desk", "Desk");
+        let desk = desk.expect("paired");
+        let card =
+            r#"{"name":"Not me","cpuPct":41,"ramMb":16000,"freeRamMb":6000,"appVersion":"3.6.0"}"#;
+        assert_eq!(
+            fleet_call(port, "POST", "t-stranger", card).0,
+            401,
+            "no pairing, no card"
+        );
+        assert_eq!(
+            fleet_call(port, "POST", &desk, card),
+            (200, json!({ "ok": true }))
+        );
+        assert_eq!(
+            fleet_call(port, "POST", &desk, r#"{"cpuPct":3}"#),
+            (
+                400,
+                json!({ "ok": false, "error": "appVersion is missing" })
+            )
+        );
+        let (status, got) = fleet_call(port, "GET", &desk, "");
+        assert_eq!(status, 200);
+        let mut machines = got["machines"].clone();
+        let at = machines[0]["atMs"].take();
+        assert!(at.as_u64().unwrap_or(0) > 0, "{at}");
+        assert_eq!(
+            machines,
+            json!([{
+                "id": "d-desk", "name": "Desk", "cpuPct": 41, "ramMb": 16000,
+                "freeRamMb": 6000, "appVersion": "3.6.0", "atMs": null
+            }])
+        );
+        lock(&state).sharing = false;
+        assert_eq!(
+            fleet_call(port, "GET", &desk, "").0,
+            403,
+            "sharing off hands out no cards"
+        );
     }
 }

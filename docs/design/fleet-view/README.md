@@ -23,17 +23,21 @@ machines push it to the hub they're paired with:
 | --- | --- |
 | Name | The hub's device name (`HubState.device_name`) |
 | Online | Last report under 3 minutes old; older ones show dimmed, never hidden |
-| CPU % | A one-second `/proc/stat` delta on Linux, `GetSystemTimes` on Windows |
+| CPU % | The `/proc/stat` change since the last reading on Linux; Windows and macOS show a dash for now |
 | Memory | `ram_mb` and `free_ram_mb` |
 | App version | `shell_update::version()`, flagged when `check_shell_update` has a newer one |
-| Skills version | The synced skill pack's version file, when there is one |
 | Last seen | The report's time |
 
 - A new authed `POST /v1/fleet` takes a machine's card every 60 seconds, and
   `GET /v1/fleet` lists the cards the hub holds. Both use the existing peer
   token, so nothing new is shared and nothing goes off the LAN.
-- The hub keeps the last card per peer in memory and in `fleet.json`, so the
-  page shows the last values offline.
+- The hub keeps the last card per peer while it runs (`HubState.fleet`), so
+  a computer that went to sleep still shows its last values, dimmed. A
+  restart of the hub clears them until each computer reports again.
+- The app can share its hub (Devices → Start share) but can't yet pair with
+  another computer's hub as a client, so a second computer needs a join
+  step (address and code, the token kept in the OS keychain) before it can
+  push its card.
 - Another app's version (any agent tool the person runs) is a configured
   command whose first line of output is the version. Nothing is guessed.
 
@@ -68,15 +72,17 @@ tokens, with no gray fills.
 Each step is its own PR into `beta`.
 
 1. **This note.**
-2. **Machine cards.** The card collector (CPU, memory, version), `POST` and
-   `GET /v1/fleet` on the hub, and the push from a paired machine, with tests
-   for the card, its staleness and the endpoint's auth.
-3. **Usage parsers.** The Claude Code transcript window, the Grok plan room as
+2. **Machine cards.** The card type and its staleness (`grokhub-core`
+   `fleet`), `POST` and `GET /v1/fleet` on the hub, and this computer's card
+   (CPU on Linux, memory, version) through the `fleet_machines` command.
+3. **Join a hub.** Pair this computer with another computer's hub as a
+   client and push its card every 60 seconds.
+4. **Usage parsers.** The Claude Code transcript window, the Grok plan room as
    a row, and the rows the person fills in for Cursor and Antigravity, with
    tests on fixture files.
-4. **Fleet page.** On the rail next to Devices: machines on top, then
+5. **Fleet page.** On the rail next to Devices: machines on top, then
    subscription rows, dimmed rows for machines that are asleep.
-5. **Antigravity live row**, if step 3's check finds a readable local file.
+6. **Antigravity live row**, if step 4's check finds a readable local file.
 
 ## Skipped in this note
 

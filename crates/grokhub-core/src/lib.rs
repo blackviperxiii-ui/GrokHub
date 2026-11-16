@@ -70,6 +70,7 @@ pub mod factorio_state;
 pub mod feel;
 pub mod file_watch;
 pub mod findings;
+pub mod fleet;
 pub mod fix_plan;
 pub mod focus_app;
 pub mod frame;

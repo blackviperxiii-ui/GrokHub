@@ -1,0 +1,1 @@
+- Hub: a paired computer can send its machine card (CPU, memory and app version) with `POST /v1/fleet`, and `GET /v1/fleet` lists the last card from each one, for the coming Fleet page. The card's name is always the pairing's, and a card older than three minutes reads as asleep.

@@ -1,7 +1,7 @@
 # Compass: grokhub-hub (LAN `/v1` hub)
 
 ## Owns
-- The tiny_http server for paired computers: `/v1/health` and `/health` (no auth), `/v1/pair`, then bearer-token routes `/v1/status`, `/v1/snapshot` (`/sync`), `/v1/inhabit`, `/v1/frame`. The phone routes (task, inbox, results, frame.jpg, voice client-secret) were removed 2026-10-07.
+- The tiny_http server for paired computers: `/v1/health` and `/health` (no auth), `/v1/pair`, then bearer-token routes `/v1/status`, `/v1/snapshot` (`/sync`), `/v1/inhabit`, `/v1/frame`, `/v1/fleet` (machine cards, `grokhub-core` `fleet`). The phone routes (task, inbox, results, frame.jpg, voice client-secret) were removed 2026-10-07.
 - Two entry points with one bootstrap (`run`): the standalone `grokhub-hub` binary and `grokhub --hub`; the shell embeds it with `serve_lan`.
 ## Quick commands
 - `GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub` (the `.cursor/environment.json` terminal)

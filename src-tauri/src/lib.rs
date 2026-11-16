@@ -53,6 +53,7 @@ pub mod diagnostics;
 pub mod done_for_you;
 pub mod episode;
 pub mod export;
+pub mod fleet;
 pub mod game_companion;
 pub mod game_watch;
 pub mod games;
@@ -6482,6 +6483,23 @@ async fn stop_share(
     off_main(move || share.stop()).await
 }
 
+/// The Fleet page's machines: this computer, read now, then the last card
+/// each paired computer sent to this computer's hub. Reads `/proc`, so off
+/// the main thread. Desktop only.
+#[cfg(desktop)]
+#[tauri::command]
+async fn fleet_machines(
+    share: State<'_, Arc<hub_share::HubShare>>,
+) -> Result<Vec<fleet::Machine>, String> {
+    let share = Arc::clone(&share);
+    off_main(move || {
+        let now = grokhub_core::now_ms();
+        let (id, name, held) = share.fleet();
+        fleet::machines(fleet::local_card(&id, &name, now), held, now)
+    })
+    .await
+}
+
 /// Send on a `/sync` or `/inhabit` card. Its own command, not a slash line,
 /// so typing can't stand in for the click; the browser never reaches it.
 /// Reads chats and memory and writes the send log, so off the main thread.
@@ -8138,6 +8156,8 @@ pub fn run() {
             stop_share,
             #[cfg(desktop)]
             new_share_code,
+            #[cfg(desktop)]
+            fleet_machines,
             #[cfg(desktop)]
             hub_send_approve,
             get_update_status,
