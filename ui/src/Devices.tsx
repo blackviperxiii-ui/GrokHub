@@ -52,19 +52,20 @@ export function JoinCard() {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const { note, fail } = useNote();
+  const { note, fail, clear } = useNote();
 
   useEffect(() => {
     function read() {
       getHubJoin().then((next) => {
         setJoin(next);
         setNow(Date.now());
+        clear();
       }, fail);
     }
     read();
     const timer = window.setInterval(read, REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [fail]);
+  }, [fail, clear]);
 
   async function step(run: () => Promise<HubJoin>) {
     setBusy(true);
@@ -72,6 +73,7 @@ export function JoinCard() {
       setJoin(await run());
       setNow(Date.now());
       setCode("");
+      clear();
     } catch (err) {
       fail(err);
     } finally {

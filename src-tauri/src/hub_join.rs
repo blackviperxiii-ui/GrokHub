@@ -63,6 +63,22 @@ fn sends() -> std::sync::MutexGuard<'static, Sends> {
     SENDS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Held by join, leave and each send from start to end, so a send that
+/// began before Leave or a new join can't post after it or report into it.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Most of a hub's reply that is read: its answers are a few lines.
+const MAX_REPLY: u64 = 64 * 1024;
+
+fn reply_json(resp: http::Response) -> Value {
+    use std::io::Read;
+    serde_json::from_reader(resp.into_reader().take(MAX_REPLY)).unwrap_or(Value::Null)
+}
+
 /// `host:port` for what the user typed: the address Start share shows
 /// (`http://192.168.1.20:18766`), with or without `http://` or the port.
 pub fn lan_address(raw: &str) -> Result<String, String> {
@@ -142,6 +158,7 @@ pub fn join(
     now: u64,
 ) -> Result<JoinView, String> {
     let address = lan_address(raw_address)?;
+    let _one = one_at_a_time();
     let code = code.trim();
     if code.is_empty() {
         return Err("Type the code the other computer shows under Sharing.".into());
@@ -152,7 +169,7 @@ pub fn join(
         .send_json(json!({ "code": code, "deviceId": me.0, "deviceName": me.1 }))
         .map_err(|_| format!("Couldn't reach {address}. Is it sharing, on this network?"))?;
     let status = resp.status();
-    let body: Value = resp.into_json().unwrap_or(Value::Null);
+    let body = reply_json(resp);
     if status != 200 {
         return Err(refusal(status, &body));
     }
@@ -176,29 +193,36 @@ pub fn join(
             .unwrap_or_else(|| "Other computer".into()),
         joined_at: now,
     };
-    store_token(Some(token))?;
     let file = serde_json::to_string_pretty(&joined).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     std::fs::write(path(config_dir), file).map_err(|e| e.to_string())?;
+    if let Err(why) = store_token(Some(token)) {
+        let _ = std::fs::remove_file(path(config_dir));
+        return Err(why);
+    }
     *sends() = Sends::default();
     Ok(view(config_dir))
 }
 
 /// Stop sending and forget the pairing here. The other computer still lists
 /// this one until it's removed there.
+/// The file goes first, so sending stops even when the keychain can't be
+/// reached; a token left there is replaced by the next join.
 pub fn leave(config_dir: &Path) -> Result<JoinView, String> {
-    store_token(None)?;
+    let _one = one_at_a_time();
     match std::fs::remove_file(path(config_dir)) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.to_string()),
     }
     *sends() = Sends::default();
+    store_token(None)?;
     Ok(view(config_dir))
 }
 
 /// Send `card` to the joined hub, if any, and keep how it went for the page.
 pub fn send(config_dir: &Path, card: &MachineCard, now: u64) {
+    let _one = one_at_a_time();
     let Some(joined) = load(config_dir) else {
         return;
     };
@@ -230,7 +254,7 @@ fn send_to(joined: &Joined, card: &MachineCard) -> Result<(), String> {
     if status == 200 {
         return Ok(());
     }
-    let body: Value = resp.into_json().unwrap_or(Value::Null);
+    let body = reply_json(resp);
     Err(match status {
         401 => format!(
             "{} doesn't know this computer any more. Join again.",
@@ -421,6 +445,52 @@ mod tests {
             before,
             "nothing goes out after leaving"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn leave_waits_for_a_send_in_flight_and_nothing_it_found_survives() {
+        use std::io::{Read, Write};
+        let dir = temp("in-flight");
+        std::fs::create_dir_all(&dir).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = conn.read(&mut buf);
+            std::thread::sleep(Duration::from_millis(400));
+            let body = r#"{"ok":true}"#;
+            let _ = write!(
+                conn,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+        });
+        std::fs::write(
+            dir.join(FILE),
+            format!(
+                r#"{{"address":"127.0.0.1:{port}","hubId":"h","hubName":"Desk","joinedAt":1}}"#
+            ),
+        )
+        .unwrap();
+        store_token(Some("t-slow")).unwrap();
+        let sending = {
+            let dir = dir.clone();
+            std::thread::spawn(move || send(&dir, &card(), 50))
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        let started = std::time::Instant::now();
+        assert_eq!(leave(&dir), Ok(JoinView::default()));
+        assert!(
+            started.elapsed() >= Duration::from_millis(200),
+            "Leave returned while the send was still out: {:?}",
+            started.elapsed()
+        );
+        sending.join().unwrap();
+        server.join().unwrap();
+        assert_eq!(view(&dir), JoinView::default());
+        assert_eq!(*TEST_TOKEN.lock().unwrap(), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

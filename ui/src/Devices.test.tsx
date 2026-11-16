@@ -137,6 +137,13 @@ describe("Devices", () => {
     await userEvent.click(within(card).getByRole("button", { name: "Join" }));
     expect(await within(card).findByText("Pairing code does not match.")).toBeInTheDocument();
     expect(within(card).getByLabelText("Other computer's address")).toHaveValue("192.168.1.20");
+
+    api.joinHub.mockResolvedValue(JOINED);
+    await userEvent.clear(within(card).getByLabelText("Other computer's code"));
+    await userEvent.type(within(card).getByLabelText("Other computer's code"), "K7M2QX");
+    await userEvent.click(within(card).getByRole("button", { name: "Join" }));
+    expect(await within(card).findByText(/^Sending to Desk/)).toBeInTheDocument();
+    expect(within(card).queryByText("Pairing code does not match.")).toBeNull();
   });
 
   it("shows this computer, web access and the paired browsers", async () => {
