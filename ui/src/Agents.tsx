@@ -475,7 +475,7 @@ export function Agents({
   /** What the last click on helper work did. */
   const [said, setSaid] = useState<string | null>(null);
   /** The helper work whose click just ended: focus goes back to its row. */
-  const [ended, setEnded] = useState<{ key: string } | null>(null);
+  const [ended, setEnded] = useState<{ key: string; action: WorkAction } | null>(null);
   /** The queue a Review click was made on: its buttons wait for the next
    * read, and then for the turn the click started to end. */
   const [askedOn, setAskedOn] = useState<Queue | null>(null);
@@ -538,8 +538,9 @@ export function Agents({
   }, [conversationId]);
 
   // A click disables its button, and its row may be gone when the call
-  // ends. Focus that was left on nothing goes to the row's first button, or
-  // to the line that says what happened.
+  // ends. A browser moves focus off a button while it is disabled, so focus
+  // that was left on nothing goes back to the button that was used, else to
+  // the row's first button, or to the line that says what happened.
   useEffect(() => {
     if (!ended) return;
     const at = document.activeElement;
@@ -547,7 +548,11 @@ export function Agents({
     const row = [...(section.current?.querySelectorAll<HTMLElement>("[data-work]") ?? [])].find(
       (el) => el.dataset.work === ended.key,
     );
-    (row?.querySelector<HTMLElement>("button:not(:disabled)") ?? saidLine.current)?.focus();
+    (
+      row?.querySelector<HTMLElement>(`button[data-action="${ended.action}"]:not(:disabled)`) ??
+      row?.querySelector<HTMLElement>("button:not(:disabled)") ??
+      saidLine.current
+    )?.focus();
   }, [ended]);
 
   useEffect(() => {
@@ -803,7 +808,7 @@ export function Agents({
       if (onScreen.current === id) setRefused({ key: work.key, text: String(err) });
     } finally {
       setBusy(null);
-      if (onScreen.current === id) setEnded({ key: work.key });
+      if (onScreen.current === id) setEnded({ key: work.key, action });
     }
   }
 
@@ -1034,12 +1039,18 @@ export function Agents({
                       <div className="card-buttons">
                         {row.landing && (
                           <>
-                            <button type="button" disabled={busy !== null} onClick={() => void act(row, "finish")}>
+                            <button
+                              type="button"
+                              data-action="finish"
+                              disabled={busy !== null}
+                              onClick={() => void act(row, "finish")}
+                            >
                               {working("finish", row.key, "Finish merge")}
                             </button>
                             <button
                               type="button"
                               className="quiet"
+                              data-action="putBack"
                               disabled={busy !== null}
                               onClick={() => void act(row, "putBack")}
                             >
@@ -1050,6 +1061,7 @@ export function Agents({
                         {merge && (
                           <button
                             type="button"
+                            data-action="merge"
                             disabled={busy !== null}
                             onClick={() => (merge.asks ? setAsk({ key: row.key, step: "merge" }) : void act(row, "merge"))}
                           >
@@ -1060,6 +1072,7 @@ export function Agents({
                           <button
                             type="button"
                             className="quiet danger"
+                            data-action="discard"
                             disabled={busy !== null}
                             onClick={() => setAsk({ key: row.key, step: "discard" })}
                           >
