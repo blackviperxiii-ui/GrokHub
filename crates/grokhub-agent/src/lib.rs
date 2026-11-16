@@ -159,11 +159,12 @@ pub use run::{
 };
 pub use session::{
     attach_run, cancel_session, delete_forks_of, delete_session, export_markdown, forget_message,
-    fork_session, format_cost_ticks, history_generation, list_sessions, load_session, local_title,
-    merge_history, message_pairs, record_compaction, record_turn, rename_session, resume_input,
-    session_file, session_intact, transcript_pairs, usage_label, Forget, Forgotten, HistoryRow,
-    RunGuard, SessionInfo, FORGET_BUSY,
+    compacted_messages, fork_session, format_cost_ticks, history_generation, list_sessions,
+    load_session, local_title, merge_history, message_pairs, record_compaction, record_turn,
+    rename_session, resume_input, session_file, session_intact, transcript_pairs, usage_label,
+    user_turn_times, Forget, Forgotten, HistoryRow, RunGuard, SessionInfo, FORGET_BUSY,
 };
+pub use memory_embed::embedder as text_embedder;
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{
     builtin_names, builtin_text, discover as discover_skills, discover_all as discover_all_skills,

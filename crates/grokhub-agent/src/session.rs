@@ -46,6 +46,9 @@ enum Record {
     Usage {
         usage: Usage,
         meter: String,
+        /// Unix ms the turn this line closes was saved. Lines written before
+        /// turns carried a time, and side-call usage, have none.
+        at: Option<u64>,
     },
     /// Replaces every earlier item. Later items append after this prefix.
     Compaction {
@@ -422,10 +425,11 @@ pub fn record_turn(
     // The turn's lines go out in one write and one sync: a sync per item cost
     // a 10-tool turn about two dozen fsyncs before Done.
     let mut lines = Vec::new();
-    for value in items
-        .iter()
-        .map(item_json)
-        .chain([usage_json(usage, meter)])
+    for value in
+        items
+            .iter()
+            .map(item_json)
+            .chain([usage_json(usage, meter, Some(grokhub_core::now_ms()))])
     {
         serde_json::to_writer(&mut lines, &value).map_err(|err| err.to_string())?;
         lines.push(b'\n');
@@ -466,7 +470,7 @@ pub fn record_compaction(
         return Ok(());
     }
     let mut lines = Vec::new();
-    for value in [compaction_json(items), usage_json(usage, meter)] {
+    for value in [compaction_json(items), usage_json(usage, meter, None)] {
         serde_json::to_writer(&mut lines, &value).map_err(|err| err.to_string())?;
         lines.push(b'\n');
     }
@@ -497,7 +501,7 @@ pub fn record_usage(
         let _ = fs::remove_file(session_file(&id)?);
         return Ok(());
     }
-    append_json(&id, &usage_json(usage, meter))?;
+    append_json(&id, &usage_json(usage, meter, None))?;
     if tombstoned(&id) {
         let _ = fs::remove_file(session_file(&id)?);
         return Ok(());
@@ -838,7 +842,7 @@ pub fn export_markdown(id: &str) -> Result<String, String> {
                 out.push_str(&format!("\n_{COMPACTED_NOTE}_\n"));
             }
             Record::Item(InputItem::Reasoning { .. }) => {}
-            Record::Usage { usage, meter } => {
+            Record::Usage { usage, meter, .. } => {
                 let line = usage_label(
                     usage.input_tokens,
                     usage.output_tokens,
@@ -864,6 +868,49 @@ pub fn transcript_pairs(info: &SessionInfo) -> Vec<(String, String)> {
 /// what was said.
 pub fn message_pairs(info: &SessionInfo) -> Vec<(String, String)> {
     pairs_of(info, false)
+}
+
+/// When each user message in [`transcript_pairs`] was answered: one entry per
+/// user pair, in order, from the time on the usage line that closed its turn.
+/// `None` for turns saved before usage lines carried a time.
+pub fn user_turn_times(info: &SessionInfo) -> Vec<Option<u64>> {
+    let mut times: Vec<Option<u64>> = Vec::new();
+    for record in &visible_records(&info.records) {
+        match record {
+            Record::Item(InputItem::Message { role, content })
+                if role != "system" && role != "assistant" =>
+            {
+                if !visible_text(role, content).trim().is_empty() {
+                    times.push(None);
+                }
+            }
+            Record::Usage { at: Some(at), .. } => {
+                if let Some(last @ None) = times.last_mut() {
+                    *last = Some(*at);
+                }
+            }
+            _ => {}
+        }
+    }
+    times
+}
+
+/// How many messages the last compaction took out of the transcript.
+pub fn compacted_messages(info: &SessionInfo) -> usize {
+    let Some(cut) = info
+        .records
+        .iter()
+        .rposition(|record| matches!(record, Record::Compaction { .. }))
+    else {
+        return 0;
+    };
+    info.records[..cut]
+        .iter()
+        .filter(|record| {
+            matches!(record, Record::Item(InputItem::Message { role, content })
+                if role != "system" && !visible_text(role, content).trim().is_empty())
+        })
+        .count()
 }
 
 fn pairs_of(info: &SessionInfo, tools: bool) -> Vec<(String, String)> {
@@ -1028,7 +1075,7 @@ fn write_session(info: &SessionInfo) -> Result<(), String> {
     for record in &info.records {
         let value = match record {
             Record::Item(item) => item_json(item),
-            Record::Usage { usage, meter } => usage_json(usage, meter),
+            Record::Usage { usage, meter, at } => usage_json(usage, meter, *at),
             Record::Compaction { items } => compaction_json(items),
         };
         push_line(&mut bytes, &value)?;
@@ -1104,6 +1151,7 @@ fn assemble(header: Header, records: Vec<Record>) -> SessionInfo {
         if let Record::Usage {
             usage: turn,
             meter: turn_meter,
+            ..
         } = record
         {
             usage.add(turn);
@@ -1227,6 +1275,7 @@ fn parse_record(value: &Value) -> Option<Record> {
                 cached_tokens: u64_field(value, "cached_tokens"),
             },
             meter: string_field(value, "meter"),
+            at: value.get("at").and_then(Value::as_u64),
         }),
         "compaction" => {
             let mut items = Vec::new();
@@ -1345,8 +1394,8 @@ fn compaction_json(items: &[InputItem]) -> Value {
     })
 }
 
-fn usage_json(usage: &Usage, meter: &str) -> Value {
-    json!({
+fn usage_json(usage: &Usage, meter: &str, at: Option<u64>) -> Value {
+    let mut value = json!({
         "type": "usage",
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
@@ -1354,7 +1403,11 @@ fn usage_json(usage: &Usage, meter: &str) -> Value {
         "cost_in_usd_ticks": usage.cost_in_usd_ticks,
         "cached_tokens": usage.cached_tokens,
         "meter": meter,
-    })
+    });
+    if let Some(at) = at {
+        value["at"] = json!(at);
+    }
+    value
 }
 
 fn string_field(value: &Value, key: &str) -> String {
@@ -1473,6 +1526,7 @@ mod tests {
             input_tokens: 3,
             ..Usage::default()
         };
+        let before = grokhub_core::now_ms();
         record_turn(
             id,
             "/work",
@@ -1485,19 +1539,103 @@ mod tests {
         .unwrap();
         let first = fs::read_to_string(session_file(id).unwrap()).unwrap();
         record_turn(id, "/work", "grok-4.7", &items, &usage, "pool", "again").unwrap();
+        let after = grokhub_core::now_ms();
         let raw = fs::read_to_string(session_file(id).unwrap()).unwrap();
-        let expected: Vec<String> = items
+        let expected: Vec<Value> = items
             .iter()
             .map(item_json)
-            .chain([usage_json(&usage, "pool")])
-            .map(|v| serde_json::to_string(&v).unwrap())
+            .chain([usage_json(&usage, "pool", None)])
             .collect();
-        let turn = |text: &str| -> Vec<String> {
-            text.lines().skip(1).map(str::to_string).collect::<Vec<_>>()
+        // Each usage line carries the time its turn was saved; the rest of
+        // the line is the same as before turns had a time.
+        let turn = |text: &str| -> Vec<Value> {
+            text.lines()
+                .skip(1)
+                .map(|line| {
+                    let mut value: Value = serde_json::from_str(line).unwrap();
+                    if value["type"] == "usage" {
+                        let at = value.as_object_mut().unwrap().remove("at");
+                        let at = at.and_then(|at| at.as_u64()).expect("usage has a time");
+                        assert!(
+                            (before..=after).contains(&at),
+                            "{at} not in {before}..={after}"
+                        );
+                    }
+                    value
+                })
+                .collect()
         };
         assert_eq!(turn(&first), expected, "one line per item, then usage");
-        let both: Vec<String> = expected.iter().chain(expected.iter()).cloned().collect();
+        let both: Vec<Value> = expected.iter().chain(expected.iter()).cloned().collect();
         assert_eq!(turn(&raw), both, "the second turn follows the first");
+    }
+
+    #[test]
+    fn each_ask_keeps_the_time_its_turn_was_saved_through_a_rename() {
+        let (_dir, _guard) = isolated("times");
+        let id = "native-times";
+        let usage = Usage::default();
+        let before = grokhub_core::now_ms();
+        record_turn(id, "/work", "grok-4.7", &sample_items(), &usage, "", "fix").unwrap();
+        let between = grokhub_core::now_ms();
+        let second = [user("and the bar"), assistant("Done.")];
+        record_turn(id, "/work", "grok-4.7", &second, &usage, "", "bar").unwrap();
+        let after = grokhub_core::now_ms();
+        let times = user_turn_times(&load_session(id).unwrap());
+        assert_eq!(times.len(), 2, "{times:?}");
+        let (first, last) = (times[0].unwrap(), times[1].unwrap());
+        assert!(
+            (before..=between).contains(&first),
+            "{first} not in {before}..={between}"
+        );
+        assert!(
+            (first..=after).contains(&last),
+            "{last} not in {first}..={after}"
+        );
+        rename_session(id, "Dock and bar").unwrap();
+        let renamed = load_session(id).unwrap();
+        assert_eq!(renamed.title, "Dock and bar");
+        assert_eq!(
+            user_turn_times(&renamed),
+            times,
+            "a rewrite keeps the times"
+        );
+    }
+
+    #[test]
+    fn an_ask_saved_before_turns_had_a_time_has_none() {
+        let (_dir, _guard) = isolated("untimed");
+        let id = "native-untimed";
+        let file = session_file(id).unwrap();
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let lines = [
+            json!({"id": id, "title": "Old", "created": 5, "cwd": "/work",
+                "model": "grok-4.7", "engine": "native", "renamed": false}),
+            item_json(&user("old ask")),
+            item_json(&assistant("Old reply.")),
+            usage_json(&Usage::default(), "", None),
+        ];
+        let raw: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        fs::write(&file, raw).unwrap();
+        assert_eq!(user_turn_times(&load_session(id).unwrap()), vec![None]);
+    }
+
+    #[test]
+    fn compacted_messages_counts_what_the_last_compaction_hid() {
+        let (_dir, _guard) = isolated("compacted");
+        let id = "native-compacted";
+        let usage = Usage::default();
+        record_turn(id, "/work", "grok-4.7", &sample_items(), &usage, "", "fix").unwrap();
+        assert_eq!(compacted_messages(&load_session(id).unwrap()), 0);
+        let second = [user("and the bar"), assistant("Done.")];
+        record_turn(id, "/work", "grok-4.7", &second, &usage, "", "bar").unwrap();
+        let summary = [assistant("Summary: fixed the dock and the bar.")];
+        record_compaction(id, "/work", "grok-4.7", &summary, &usage, "").unwrap();
+        let info = load_session(id).unwrap();
+        // Two asks and two replies went under the summary; tool steps aren't
+        // messages.
+        assert_eq!(compacted_messages(&info), 4);
+        assert_eq!(user_turn_times(&info), Vec::<Option<u64>>::new());
     }
 
     #[test]

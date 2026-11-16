@@ -1,0 +1,1 @@
+- Chat: saved turns now record when they were saved, and the app can fold a chat into topic groups (by quiet gaps and topic shifts, labelled from the chat's own words, all on the device) for the coming zoom-out view.

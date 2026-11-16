@@ -25,6 +25,7 @@ pub mod changes;
 pub mod chat_review;
 pub mod chat_tabs;
 pub mod chat_trials;
+pub mod chat_zoom;
 pub mod chips;
 mod code_agent;
 mod code_keep;
@@ -1736,6 +1737,13 @@ async fn load_chat(
         off_main(move || history::load(&dir, &id, limit.unwrap_or(history::LOAD_CAP))).await??;
     set_last_chat(&state, &shown.id);
     Ok(shown)
+}
+
+/// A saved chat folded into topic groups for the zoomed-out view.
+#[tauri::command]
+async fn chat_zoom(state: State<'_, ShellState>, id: String) -> Result<chat_zoom::Zoom, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || chat_zoom::zoom(&dir, &id)).await?
 }
 
 /// The chat the Chat tab opens at launch: Main, made first if there is none.
@@ -7884,6 +7892,7 @@ pub fn run() {
             list_chats,
             search_chats,
             load_chat,
+            chat_zoom,
             get_start_chat,
             rename_chat,
             delete_all_chats,

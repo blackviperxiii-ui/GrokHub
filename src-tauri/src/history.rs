@@ -85,7 +85,7 @@ fn shell_id(id: &str) -> Result<&str, String> {
 /// When the chat's file last changed, or its start time if that can't be read.
 /// Never before the start: the file system's coarse clock can stamp a file
 /// written in the same millisecond a few ms behind `now_ms`.
-fn updated_ms(info: &SessionInfo) -> u64 {
+pub(crate) fn updated_ms(info: &SessionInfo) -> u64 {
     grokhub_agent::session_file(&info.id)
         .ok()
         .and_then(|path| std::fs::metadata(path).ok())
@@ -325,6 +325,9 @@ fn delete_chats(config_dir: &Path, ids: &[String]) -> Deleted {
         }
     }
     grokhub_agent::delete_forks_of(&gone);
+    for id in &gone {
+        crate::chat_zoom::forget(config_dir, id);
+    }
     let pins = pinned_ids(config_dir);
     let kept: Vec<&String> = pins.iter().filter(|p| !gone.contains(p)).collect();
     if kept.len() != pins.len() {

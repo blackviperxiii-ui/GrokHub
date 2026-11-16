@@ -419,7 +419,8 @@ pub use frame::{encode_b64, frame_bytes, jpeg_data_url, store_frame, PresenceFra
 pub use goal::{
     apply_status_updates, blend_thread_goal, compact_keep_pin, compact_keep_start_from,
     flush_visible_goal, goal_continue_pin, goal_pin_for_job, goal_step_after_outcome,
-    hub_dispatch_ok, intentions_block, intentions_path, is_auto_continue_prompt, load_intentions,
+    hub_dispatch_ok, intentions_block, intentions_path, is_auto_continue_prompt, is_title_stopword,
+    load_intentions,
     looks_incomplete, next_goal_prompt, parse_fast_topics, parse_goal_outcome,
     reply_needs_followup, save_intentions, set_intention_status, should_auto_continue_goal,
     should_name_thread, thread_goal_prompt, topics_from_turns, visible_goal_step_on_continue,
