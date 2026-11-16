@@ -2258,6 +2258,98 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_mask_fallback_keeps_the_sign_in_its_post_went_out_on() {
+        type Hook = Arc<dyn Fn() + Send + Sync>;
+        /// xAI that rejects a mask, logs every post and download by bearer,
+        /// and runs `switch` after a post goes through.
+        struct Masked {
+            bearer: String,
+            log: Arc<Mutex<Vec<String>>>,
+            switch: Hook,
+        }
+        impl Masked {
+            fn note(&self, what: &str) {
+                self.log
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(format!("{what} {}", self.bearer));
+            }
+        }
+        impl ImagineApi for Masked {
+            fn post_json(&self, _path: &str, body: &Value) -> Result<Value, String> {
+                self.note("post");
+                if body.get("mask").is_some() {
+                    return Err("HTTP 400 mask is unsupported".into());
+                }
+                (self.switch)();
+                Ok(json!({"data": [{"url": "https://cdn.example/door.png"}]}))
+            }
+            fn get_json(&self, _path: &str) -> Result<Value, String> {
+                Err("no polls for a picture".into())
+            }
+            fn download(&self, _url: &str) -> Result<Vec<u8>, String> {
+                self.note("download");
+                Ok(vec![7; 64])
+            }
+        }
+
+        let (dir, _cfg) = scratch_config();
+        let media = dir.join("media");
+        let src = Arc::new(FakeSource::signed_in());
+        let log = Arc::new(Mutex::new(Vec::new()));
+        // Another call in the turn (a subagent) is refused and switches the
+        // turn to chat's sign-in right after the fallback post goes out.
+        let slot: Arc<Mutex<Option<Arc<LazyImagine>>>> = Arc::default();
+        let switch: Hook = {
+            let slot = Arc::clone(&slot);
+            Arc::new(move || {
+                let lazy = slot.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                if let Some(lazy) = lazy {
+                    let _ = lazy.lend();
+                }
+            })
+        };
+        let (posts, hook) = (Arc::clone(&log), Arc::clone(&switch));
+        let dial: Dial = Box::new(move |bearer| {
+            Arc::new(Masked {
+                bearer,
+                log: Arc::clone(&posts),
+                switch: Arc::clone(&hook),
+            }) as Arc<dyn ImagineApi>
+        });
+        let source: Arc<dyn ImagineSource> = src.clone();
+        let lazy = Arc::new(LazyImagine::new(source, dial));
+        *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&lazy));
+        let args = json!({
+            "prompt": "paint the door",
+            "image": "https://cdn.example/a.png",
+            "mask": "https://cdn.example/m.png",
+            "n": 1
+        });
+        let out = execute_with("image_edit", &args, lazy.as_ref(), &|| false, Some(&media));
+        slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+        assert!(!out.failed, "{}", out.text);
+        let lines: Vec<&str> = out.text.lines().collect();
+        assert_eq!(lines.len(), 2, "{}", out.text);
+        assert!(
+            lines[0].starts_with(&format!("IMAGINE: {}", media.display())),
+            "{}",
+            out.text
+        );
+        assert_eq!(lines[1], "Mask was rejected; sent it as a reference image.");
+        assert_eq!(src.calls(), ["bearer", "shared"], "the turn did switch");
+        assert_eq!(
+            log.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            [
+                "post imagine-own-fake",
+                "post imagine-own-fake",
+                "download imagine-own-fake"
+            ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn an_imagine_error_that_is_not_a_refusal_is_not_sent_again() {
         let (dir, _cfg) = scratch_config();
         let busy = "HTTP 500 {\"error\":\"busy\"}";
