@@ -32,7 +32,7 @@ export const WEB_SEARCH_NOTE =
   "For OpenRouter and the local model. Free DuckDuckGo Lite by default, no account. Grok still uses xAI's own search.";
 export const BACKEND_HINT = "Default stays free. SearXNG needs your instance URL. Brave needs a key in your keyring.";
 export const SEARXNG_NOTE =
-  "Your SearXNG server must be on the public internet and allow JSON results (?format=json).";
+  "Your SearXNG server can be on the internet, this computer (http://localhost:8888) or your own network (http://192.168.1.5:8888). It must allow JSON results (?format=json).";
 export const BRAVE_SET = "A Brave Search key is in your keyring. Paste a new one to replace it, or remove it.";
 export const OPENROUTER_NOTE = "No key to paste: sign in on OpenRouter's page and it hands over a new key.";
 export const OPENROUTER_WAIT = "Waiting for OpenRouter. Finish signing in in your browser.";

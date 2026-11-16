@@ -98,7 +98,10 @@ impl PageFetch for UreqFetch {
     }
 }
 
-fn owned_response(status: u16, resp: grokhub_core::http::Response) -> Result<FetchResp, String> {
+pub(super) fn owned_response(
+    status: u16,
+    resp: grokhub_core::http::Response,
+) -> Result<FetchResp, String> {
     let location = resp.header("location").map(str::to_string);
     let content_type = resp.header("content-type").unwrap_or("").to_string();
     if is_redirect(status) {
