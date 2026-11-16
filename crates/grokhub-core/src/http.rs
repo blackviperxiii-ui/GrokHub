@@ -18,6 +18,8 @@
 //! (`offline_guard.rs`, `egress_coverage.rs`) count each `agent` call at the
 //! call site. `public_only` dials through [`crate::ssrf::public_only_resolve`],
 //! which refuses private addresses and every host while Offline only is on.
+//! `saved_host` dials only the one server [`with_saved_host`] names, which
+//! may be on this computer or the user's own network.
 
 use std::cell::RefCell;
 use std::fmt;
@@ -76,6 +78,12 @@ pub struct Opts {
     /// and `https` only, so the relaxed check can't reach another host.
     /// `public_only` wins (it refuses loopback, so nothing is dialed).
     pub loopback_self_signed: bool,
+    /// Dial only the server [`with_saved_host`] names around the call: one the
+    /// user saved by hand (a SearXNG URL), which may be on this computer or
+    /// their own network. Addresses [`crate::ssrf::saved_host_ip_refused`]
+    /// names stay refused, and with Offline only on every address must be
+    /// local. No env proxy and no relaxed certificate check; `public_only` wins.
+    pub saved_host: bool,
 }
 
 impl Opts {
@@ -83,7 +91,7 @@ impl Opts {
     /// `public_only`. A proxy is dialed instead of the target, so the target's
     /// address would never reach the public-only resolver; `public_only` wins.
     pub const fn reads_env_proxy(&self) -> bool {
-        self.proxy_from_env && !self.public_only && !self.loopback_self_signed
+        self.proxy_from_env && !self.public_only && !self.loopback_self_signed && !self.saved_host
     }
 }
 
@@ -101,6 +109,7 @@ impl Default for Opts {
             proxy_from_env: false,
             resolve: None,
             loopback_self_signed: false,
+            saved_host: false,
         }
     }
 }
@@ -135,6 +144,8 @@ pub fn agent(opts: Opts) -> Agent {
         .timeout_global(opts.overall);
     let resolve: Resolve = if opts.public_only {
         crate::ssrf::public_only_resolve
+    } else if opts.saved_host {
+        saved_host_resolve
     } else if opts.loopback_self_signed {
         config = config.https_only(true).tls_config(
             ureq::tls::TlsConfig::builder()
@@ -189,8 +200,96 @@ fn loopback_only_resolve(netloc: &str) -> io::Result<Vec<SocketAddr>> {
     Ok(all)
 }
 
+/// The refusal a [`Opts::saved_host`] call ends with when it is pointed at
+/// anything but the saved server, or the server's name leads to an address it
+/// may not use.
+pub const SAVED_HOST_REFUSED: &str = "not an address the saved server may use";
+
+thread_local! {
+    static SAVED_HOST: RefCell<Option<(String, u16)>> = const { RefCell::new(None) };
+}
+
+/// Run `f` with `url`'s host and port as the one server that
+/// [`Opts::saved_host`] calls on this thread may dial. A URL that doesn't
+/// parse names none, so those calls are refused.
+pub fn with_saved_host<R>(url: &str, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<(String, u16)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let before = self.0.take();
+            SAVED_HOST.with(|s| *s.borrow_mut() = before);
+        }
+    }
+    let saved = url::Url::parse(url.trim())
+        .ok()
+        .and_then(|u| Some((plain_host(u.host_str()?), u.port_or_known_default()?)));
+    let _restore = Restore(SAVED_HOST.with(|s| s.replace(saved)));
+    f()
+}
+
+/// A host as the saved server is matched: no brackets, no trailing dot,
+/// lower case.
+fn plain_host(host: &str) -> String {
+    host.trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
+}
+
+/// The saved server's addresses, and nothing else: see [`Opts::saved_host`].
+fn saved_host_resolve(netloc: &str) -> io::Result<Vec<SocketAddr>> {
+    let saved = SAVED_HOST.with(|s| s.borrow().clone());
+    saved_addrs(saved.as_ref(), netloc, system_resolve)
+}
+
+/// [`saved_host_resolve`] with the saved server and the lookup passed in. Any
+/// other host or port is refused before a lookup goes out, and one address
+/// it may not use refuses the whole answer. The addresses checked are the
+/// ones dialed, so a name can't change its answer in between.
+fn saved_addrs(
+    saved: Option<&(String, u16)>,
+    netloc: &str,
+    lookup: impl Fn(&str) -> io::Result<Vec<SocketAddr>>,
+) -> io::Result<Vec<SocketAddr>> {
+    let refused = |what: &str| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{what}: {SAVED_HOST_REFUSED}"),
+        )
+    };
+    let (host, port) = netloc.rsplit_once(':').unwrap_or((netloc, ""));
+    let host = plain_host(host);
+    let port = port.parse::<u16>().ok();
+    if saved.is_none_or(|(h, p)| *h != host || Some(*p) != port) {
+        return Err(refused(&host));
+    }
+    crate::offline::check_host(&host)
+        .map_err(|e| io::Error::new(io::ErrorKind::PermissionDenied, e.to_string()))?;
+    let all = lookup(netloc)?;
+    if all.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("dns failed for {host}: no addresses"),
+        ));
+    }
+    if let Some(bad) = all
+        .iter()
+        .find(|a| crate::ssrf::saved_host_ip_refused(&host, a.ip()))
+    {
+        return Err(refused(&format!("{host} → {}", bad.ip())));
+    }
+    // Offline only: a local name that leads off the network stays home.
+    if crate::offline::enabled() && all.iter().any(|a| !crate::offline::ip_is_local(a.ip())) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            *crate::offline::OFFLINE_MSG,
+        ));
+    }
+    Ok(all)
+}
+
 /// A [`Resolve`] on ureq 3's resolver trait: `public_only_resolve` (the
-/// public-only resolver), the loopback-only one, a caller's own, or the
+/// public-only resolver), the saved-server one, the loopback-only one, a caller's own, or the
 /// system's. It is asked for every name ureq dials, a proxy's included. A
 /// failure carries ureq 2's `resolve dns name '…'` text and counts as
 /// [`TransportKind::Dns`].
@@ -1194,6 +1293,175 @@ mod tests {
         assert_eq!(resp.into_string().unwrap(), "there");
         let heads = server.join().unwrap();
         assert!(heads[1].starts_with("GET /next "), "{heads:?}");
+    }
+
+    /// A lookup that answers `addrs` and counts how often it was asked.
+    fn answers<'a>(
+        addrs: &'static [&'static str],
+        asked: &'a std::cell::Cell<usize>,
+    ) -> impl Fn(&str) -> io::Result<Vec<SocketAddr>> + 'a {
+        move |_| {
+            asked.set(asked.get() + 1);
+            Ok(addrs.iter().map(|a| a.parse().unwrap()).collect())
+        }
+    }
+
+    #[test]
+    fn the_saved_server_resolves_to_its_own_network_only() {
+        let saved = ("searx.example".to_string(), 80);
+        let asked = std::cell::Cell::new(0);
+        assert_eq!(
+            saved_addrs(
+                Some(&saved),
+                "Searx.Example.:80",
+                answers(&["192.168.1.5:80"], &asked)
+            )
+            .unwrap(),
+            ["192.168.1.5:80".parse::<SocketAddr>().unwrap()]
+        );
+        let err = saved_addrs(
+            Some(&saved),
+            "searx.example:80",
+            answers(&["93.184.216.34:80", "127.0.0.1:80"], &asked),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            err.to_string(),
+            format!("searx.example → 127.0.0.1: {SAVED_HOST_REFUSED}")
+        );
+        assert!(saved_addrs(
+            Some(&saved),
+            "searx.example:80",
+            answers(&["169.254.169.254:80"], &asked)
+        )
+        .is_err());
+        assert_eq!(asked.get(), 3);
+        // Another host or port, or no saved server: refused before any lookup.
+        for (saved, netloc) in [
+            (Some(&saved), "other.example:80"),
+            (Some(&saved), "searx.example:81"),
+            (None, "searx.example:80"),
+        ] {
+            let err = saved_addrs(saved, netloc, answers(&["192.168.1.5:80"], &asked)).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{netloc}");
+            assert!(err.to_string().ends_with(SAVED_HOST_REFUSED), "{err}");
+        }
+        assert_eq!(asked.get(), 3);
+        let local = ("localhost".to_string(), 8888);
+        assert_eq!(
+            saved_addrs(
+                Some(&local),
+                "localhost:8888",
+                answers(&["127.0.0.1:8888", "[::1]:8888"], &asked)
+            )
+            .unwrap()
+            .len(),
+            2
+        );
+        let v6 = ("fd00::5".to_string(), 8888);
+        assert!(saved_addrs(
+            Some(&v6),
+            "[fd00::5]:8888",
+            answers(&["[fd00::5]:8888"], &asked)
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn offline_only_keeps_the_saved_server_on_this_network() {
+        let _offline = crate::offline::force_for_thread(true);
+        let asked = std::cell::Cell::new(0);
+        let public = ("searx.example".to_string(), 443);
+        let err = saved_addrs(
+            Some(&public),
+            "searx.example:443",
+            answers(&["192.168.1.5:443"], &asked),
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), *crate::offline::OFFLINE_MSG);
+        assert_eq!(asked.get(), 0, "no lookup leaves the computer");
+        let lan = ("nas.lan".to_string(), 8888);
+        let err = saved_addrs(
+            Some(&lan),
+            "nas.lan:8888",
+            answers(&["93.184.216.34:8888"], &asked),
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), *crate::offline::OFFLINE_MSG);
+        assert!(saved_addrs(
+            Some(&lan),
+            "nas.lan:8888",
+            answers(&["192.168.1.5:8888"], &asked)
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn a_saved_host_agent_dials_the_saved_server_only() {
+        let (port, server) = serve(vec![reply("200 OK", "", "found")]);
+        let url = format!("http://127.0.0.1:{port}/search");
+        let saved = agent(Opts {
+            saved_host: true,
+            redirects: 0,
+            overall: Some(Duration::from_secs(5)),
+            ..Opts::default()
+        });
+        let body = with_saved_host(&format!("http://127.0.0.1:{port}"), || {
+            saved.get(&url).call().unwrap().into_string().unwrap()
+        });
+        assert_eq!(body, "found");
+        assert_eq!(server.join().unwrap().len(), 1);
+        // Outside `with_saved_host`, or named for another port, nothing is dialed.
+        let other = TcpListener::bind("127.0.0.1:0").unwrap();
+        other.set_nonblocking(true).unwrap();
+        let other_url = format!("http://127.0.0.1:{}/", other.local_addr().unwrap().port());
+        for err in [
+            saved.get(&other_url).call().err().unwrap(),
+            with_saved_host(&url, || saved.get(&other_url).call().err().unwrap()),
+        ] {
+            assert!(
+                matches!(
+                    &err,
+                    Error::Transport {
+                        kind: TransportKind::Dns,
+                        ..
+                    }
+                ),
+                "{err:?}"
+            );
+            assert!(err.to_string().contains(SAVED_HOST_REFUSED), "{err}");
+        }
+        assert!(other.accept().is_err(), "nothing may connect");
+    }
+
+    #[test]
+    fn public_only_wins_over_the_saved_host_and_neither_reads_the_env_proxy() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!(
+            "http://127.0.0.1:{}/",
+            listener.local_addr().unwrap().port()
+        );
+        let opts = Opts {
+            public_only: true,
+            saved_host: true,
+            overall: Some(Duration::from_secs(1)),
+            ..Opts::default()
+        };
+        let err = with_saved_host(&url, || agent(opts).get(&url).call().err().unwrap());
+        assert!(
+            err.to_string()
+                .contains("refused non-public address 127.0.0.1"),
+            "{err}"
+        );
+        assert!(listener.accept().is_err(), "nothing may connect");
+        let saved_only = Opts {
+            saved_host: true,
+            proxy_from_env: true,
+            ..Opts::default()
+        };
+        assert!(!saved_only.reads_env_proxy());
     }
 
     #[test]
