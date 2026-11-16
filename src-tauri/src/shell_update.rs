@@ -93,44 +93,31 @@ pub fn updatable(os: &str, appimage: Option<&str>) -> bool {
     }
 }
 
-/// Why this install doesn't update itself, for the Updates panel. A binary
-/// under `/usr` came from a .deb, the AUR or `sudo scripts/install.sh
-/// --system`; the shell can't tell them apart (root's receipts aren't the
-/// user's), so the note names both ways. Elsewhere, `scripts/install.sh`'s
-/// `source` receipt names the clone, and `--channel` fetches, moves the clone
-/// to the saved channel's branch and rebuilds. `exe` sits in `PREFIX/bin`, so
-/// the hint keeps a non-default prefix (`home` gives the default
-/// `~/.local`).
-pub fn not_updatable_note(
-    os: &str,
-    config_dir: &Path,
-    channel: Channel,
-    exe: &Path,
-    home: Option<&Path>,
-) -> String {
+/// Why this install doesn't update itself, for the Updates panel. The note
+/// names the clone only when `scripts/install.sh`'s `source` receipt points
+/// at one and this binary sits in a user's `bin` folder outside `/usr`: a copy
+/// under `/usr` may be a package (root's receipts aren't the user's), and one
+/// run from a build folder isn't installed at all. The note never guesses the
+/// install's options, since sudo and `--prefix` aren't recorded.
+pub fn not_updatable_note(os: &str, config_dir: &Path, channel: Channel, exe: &Path) -> String {
     let ch = channel.as_str();
     if os != "linux" {
         return "This build doesn't update itself yet.".to_string();
     }
-    if exe.starts_with("/usr/bin") {
-        return format!(
-            "Installed under /usr: update it with your package manager, or with sudo scripts/install.sh --system --channel {ch} in the clone you built it from."
-        );
-    }
+    let in_bin = exe.parent().and_then(Path::file_name) == Some("bin".as_ref());
     let clone = std::fs::read_to_string(config_dir.join("source"))
         .ok()
         .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty() && Path::new(t).is_dir());
-    let Some(clone) = clone else {
-        return "This build doesn't update itself yet.".to_string();
-    };
-    let prefix = exe.parent().and_then(Path::parent);
-    let default = home.map(|h| h.join(".local"));
-    let flag = match prefix {
-        Some(p) if Some(p) != default.as_deref() => format!(" --prefix={}", p.display()),
-        _ => String::new(),
-    };
-    format!("Built from the clone in {clone}: run scripts/install.sh{flag} --channel {ch} there to update it.")
+        .filter(|t| !t.is_empty() && Path::new(t).is_dir())
+        .filter(|_| in_bin && !exe.starts_with("/usr"));
+    match clone {
+        Some(clone) => format!(
+            "Built from the clone in {clone}: to update it, run scripts/install.sh --channel {ch} there with the options you installed it with."
+        ),
+        None => format!(
+            "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --channel {ch} again in the clone you built it from."
+        ),
+    }
 }
 
 /// Why a link from outside this repo's release downloads was refused.
@@ -219,8 +206,7 @@ impl UpdateView {
             updatable,
             note: (!updatable).then(|| {
                 let exe = std::env::current_exe().unwrap_or_default();
-                let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-                not_updatable_note(os, config_dir, channel, &exe, home.as_deref())
+                not_updatable_note(os, config_dir, channel, &exe)
             }),
             available: None,
         }

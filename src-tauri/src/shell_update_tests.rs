@@ -72,45 +72,47 @@ fn a_build_that_cant_update_itself_says_how_to_update_it() {
     let _ = std::fs::remove_dir_all(&dir);
     let clone = dir.join("my-clone");
     std::fs::create_dir_all(&clone).expect("dir");
-    let home = Path::new("/home/user");
-    let user_exe = Path::new("/home/user/.local/bin/grokhub-shell");
     let note = |os: &str, channel: Channel, exe: &str| {
-        not_updatable_note(os, &dir, channel, Path::new(exe), Some(home))
+        not_updatable_note(os, &dir, channel, Path::new(exe))
     };
+    let outside = "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --channel beta again in the clone you built it from.";
     let not_yet = "This build doesn't update itself yet.";
-    let under_usr = "Installed under /usr: update it with your package manager, or with sudo scripts/install.sh --system --channel beta in the clone you built it from.";
-    // No receipt: nothing says where this build came from.
+    // No receipt: nothing says where this copy came from.
     assert_eq!(
         note(
             "linux",
             Channel::Beta,
             "/home/user/.local/bin/grokhub-shell"
         ),
-        not_yet
+        outside
     );
     assert_eq!(
         note("linux", Channel::Beta, "/usr/bin/grokhub-shell"),
-        under_usr
+        outside
     );
     std::fs::write(dir.join("source"), format!("{}\n", clone.display())).expect("receipt");
     let shown = clone.display();
-    assert_eq!(
-        not_updatable_note("linux", &dir, Channel::Beta, user_exe, Some(home)),
-        format!("Built from the clone in {shown}: run scripts/install.sh --channel beta there to update it.")
-    );
-    assert_eq!(
-        note("linux", Channel::Stable, "/opt/loadout/bin/grokhub-shell"),
-        format!("Built from the clone in {shown}: run scripts/install.sh --prefix=/opt/loadout --channel stable there to update it.")
-    );
-    assert_eq!(
-        note("linux", Channel::Stable, "/usr/local/bin/grokhub-shell"),
-        format!("Built from the clone in {shown}: run scripts/install.sh --prefix=/usr/local --channel stable there to update it.")
-    );
-    // A stale receipt from an old clone install doesn't relabel a package.
-    assert_eq!(
-        note("linux", Channel::Beta, "/usr/bin/grokhub-shell"),
-        under_usr
-    );
+    for exe in [
+        "/home/user/.local/bin/grokhub-shell",
+        "/opt/loadout/bin/grokhub-shell",
+    ] {
+        assert_eq!(
+            note("linux", Channel::Stable, exe),
+            format!(
+                "Built from the clone in {shown}: to update it, run scripts/install.sh --channel stable there with the options you installed it with."
+            ),
+            "{exe}"
+        );
+    }
+    // A user receipt doesn't describe a copy under /usr (a package, or a sudo
+    // install whose receipt went to root) or a dev build in a target folder.
+    for exe in [
+        "/usr/bin/grokhub-shell",
+        "/usr/local/bin/grokhub-shell",
+        "/home/user/GrokHub/src-tauri/target/debug/grokhub-shell",
+    ] {
+        assert_eq!(note("linux", Channel::Beta, exe), outside, "{exe}");
+    }
     // A receipt whose clone is gone no longer describes this install.
     std::fs::remove_dir_all(&clone).expect("rm clone");
     assert_eq!(
@@ -119,7 +121,7 @@ fn a_build_that_cant_update_itself_says_how_to_update_it() {
             Channel::Beta,
             "/home/user/.local/bin/grokhub-shell"
         ),
-        not_yet
+        outside
     );
     assert_eq!(
         note("android", Channel::Stable, "/data/app/grokhub-shell"),

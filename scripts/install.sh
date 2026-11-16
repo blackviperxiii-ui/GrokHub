@@ -328,8 +328,8 @@ mkdir -p "$CONFIG_DIR"
 printf '%s\n' "$ROOT" > "$CONFIG_DIR/source"
 printf '%s\n' "$CHANNEL" > "$RECEIPT"
 if [[ "$SWITCH" -eq 1 ]]; then
-  # A switch drops the Beta auto-off baseline: turning Beta on starts a fresh
-  # one on the next check, and stable has none.
+  # A switch drops the old cabin's Beta auto-off baseline, which nothing
+  # writes any more.
   rm -f "$CONFIG_DIR/channel.beta-since"
 fi
 
