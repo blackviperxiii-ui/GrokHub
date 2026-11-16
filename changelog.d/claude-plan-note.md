@@ -1,1 +1,0 @@
-- Docs: a design note for running chats on your own Claude plan through the official Claude Code CLI on this computer (`docs/design/claude-plan/README.md`). No code yet.

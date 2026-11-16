@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AiModelsCard, AiModelsView, OpenRouterSignIn, OpenRouterSignInStatus } from "./api";
+import type { AiModelsCard, AiModelsView, ClaudePlan, OpenRouterSignIn, OpenRouterSignInStatus } from "./api";
 
 const api = vi.hoisted(() => ({
   getAiModels: vi.fn<() => Promise<AiModelsView>>(),
@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   waitOpenRouterSignIn: vi.fn<() => Promise<AiModelsCard>>(),
   stopOpenRouterSignIn: vi.fn<() => Promise<void>>(),
   openRouterSignInStatus: vi.fn<() => Promise<OpenRouterSignInStatus>>(),
+  claudePlanStatus: vi.fn<() => Promise<ClaudePlan>>(),
 }));
 vi.mock("./api", () => api);
 
@@ -100,6 +101,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   api.getAiModels.mockResolvedValue(EMPTY);
   api.stopOpenRouterSignIn.mockResolvedValue(undefined);
+  api.claudePlanStatus.mockResolvedValue({ state: "missing" });
   api.openRouterSignInStatus.mockResolvedValue({ waiting: null, card: null });
 });
 

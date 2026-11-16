@@ -6,6 +6,7 @@ pub mod brain;
 mod builtin_skills;
 pub mod cache_watch;
 mod checkpoint;
+pub mod claude_plan;
 mod client;
 mod close_check;
 pub mod code_guard;

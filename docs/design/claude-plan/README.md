@@ -32,7 +32,7 @@ Sources: `code.claude.com/docs/en/cli-reference`, `/headless`,
 | Need | CLI |
 | --- | --- |
 | Installed | `claude --version` exits 0 |
-| Signed in | `claude auth status` prints JSON and exits 0 when signed in, 1 when not. Only `authMethod` is read: `claude.ai` means the plan; `api_key` and the rest mean API billing, and the page says so. Nothing else from the output is kept or logged |
+| Signed in | `claude auth status` prints JSON and exits 0 when signed in, 1 when not. Only `authMethod` is read: `claude.ai` and `oauth_token` (a `claude setup-token` token, which needs a plan) mean the plan; `api_key` and the rest mean other billing, and the page says so. Nothing else from the output is kept or logged |
 | One turn | `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages`, the prompt as one JSON line on stdin |
 | Model | `--model` with an alias (`opus`, `sonnet`, `haiku`) |
 | Same conversation | `--session-id <uuid>` on the first turn, `--resume <uuid>` after. `--continue` skips `-p` sessions, so it isn't used |
@@ -110,7 +110,7 @@ week, so it needs no change.
 Each step is its own PR into `beta`.
 
 1. **This note.**
-2. **Detection.** `claude_plan::detect` (installed, version, signed in,
+2. **Detection** (ships with this note). `claude_plan::detect` (installed, version, signed in,
    billing kind) and the Settings row, with a fake `claude` script in tests.
 3. **Stream parser.** Lines to chat events, with fixtures for every kind
    above.

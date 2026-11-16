@@ -1,0 +1,262 @@
+//! Claude (your plan): chats run by the official Claude Code CLI on this
+//! computer, signed in through Claude Code's own `claude auth login`. This
+//! file finds the CLI and asks it whether it's signed in. It never reads,
+//! copies or keeps a Claude credential: from `claude auth status` only the
+//! `authMethod` field is read, and the rest of the reply is dropped.
+//! Design: `docs/design/claude-plan/README.md`.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
+
+use serde::Serialize;
+
+/// `claude --version` and `claude auth status` answer at once; a CLI that
+/// hangs longer than this is treated as not answering.
+const ASK_WITHIN: Duration = Duration::from_secs(10);
+/// Both replies are a line or a small JSON object.
+const REPLY_CAP: u64 = 16 * 1024;
+
+/// What this computer's Claude Code can do for chats.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum ClaudePlan {
+    /// No `claude` on this computer.
+    Missing,
+    /// Installed, but signed out (or it didn't answer).
+    SignedOut { version: String },
+    /// Signed in with a Claude plan: chats count against the plan.
+    Plan { version: String },
+    /// Signed in another way (an API key, a token, a cloud provider): chats
+    /// are billed there, not to a plan.
+    OtherBilling { version: String, method: String },
+}
+
+/// The `claude` file names to look for, in order.
+fn names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["claude.exe", "claude.cmd"]
+    } else {
+        &["claude"]
+    }
+}
+
+/// Where the installers put `claude` when the app (started from the desktop)
+/// doesn't see the shell's `PATH`.
+fn usual_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        home.join(".local").join("bin"),
+        home.join(".claude").join("local"),
+    ];
+    if cfg!(target_os = "macos") {
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+    }
+    dirs
+}
+
+/// The first `claude` in `path_dirs`, then in the usual install folders
+/// under `home`. Relative `PATH` entries are skipped: they'd mean whatever
+/// folder the app was started from.
+pub fn find_in(
+    path_dirs: impl IntoIterator<Item = PathBuf>,
+    home: Option<&Path>,
+) -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = path_dirs.into_iter().filter(|d| d.is_absolute()).collect();
+    if let Some(home) = home {
+        dirs.extend(usual_dirs(home));
+    }
+    dirs.iter()
+        .flat_map(|dir| names().iter().map(move |name| dir.join(name)))
+        .find(|candidate| candidate.is_file())
+}
+
+/// `claude` on this computer, if any.
+pub fn find() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    find_in(std::env::split_paths(&path), home_dir().as_deref())
+}
+
+fn home_dir() -> Option<PathBuf> {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+}
+
+/// The version from `claude --version` ("2.1.300 (Claude Code)" gives
+/// "2.1.300"); `None` when the first word doesn't start with a digit.
+pub fn parse_version(stdout: &str) -> Option<String> {
+    let word = stdout.lines().next()?.split_whitespace().next()?;
+    (word.starts_with(|c: char| c.is_ascii_digit()) && word.len() <= 32).then(|| word.to_string())
+}
+
+/// The sign-in kind from `claude auth status`'s JSON. Only `authMethod` is
+/// read. `claude.ai` (signed in through `claude auth login`) and
+/// `oauth_token` (a `claude setup-token` token, which needs a plan) are a
+/// plan; `none` or a missing or unreadable field is signed out; anything else
+/// (an API key, a key helper, a cloud provider) is billed elsewhere.
+pub fn parse_auth(stdout: &str, version: String) -> ClaudePlan {
+    #[derive(serde::Deserialize)]
+    struct Status {
+        #[serde(rename = "authMethod")]
+        auth_method: Option<String>,
+    }
+    let method = serde_json::from_str::<Status>(stdout.trim())
+        .ok()
+        .and_then(|s| s.auth_method)
+        .filter(|m| !m.is_empty() && m.len() <= 32);
+    match method.as_deref() {
+        Some("claude.ai" | "oauth_token") => ClaudePlan::Plan { version },
+        None | Some("none") => ClaudePlan::SignedOut { version },
+        Some(other) => ClaudePlan::OtherBilling {
+            version,
+            method: other.to_string(),
+        },
+    }
+}
+
+fn ask(cli: &Path, args: &[&str]) -> Option<String> {
+    let mut cmd = Command::new(cli);
+    cmd.args(args);
+    grokhub_core::proc_util::output_within(&mut cmd, ASK_WITHIN, REPLY_CAP)
+}
+
+/// Ask `cli` for its version and sign-in. `claude auth status` exits 1 when
+/// signed out, which reads as no reply, so both are signed out.
+pub fn detect_at(cli: &Path) -> ClaudePlan {
+    let Some(version) = ask(cli, &["--version"]).as_deref().and_then(parse_version) else {
+        return ClaudePlan::Missing;
+    };
+    match ask(cli, &["auth", "status"]) {
+        Some(json) => parse_auth(&json, version),
+        None => ClaudePlan::SignedOut { version },
+    }
+}
+
+/// This computer's Claude Code, found and asked.
+pub fn detect() -> ClaudePlan {
+    find().map_or(ClaudePlan::Missing, |cli| detect_at(&cli))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh folder for one test, removed first so a rerun starts empty.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gh-claude-plan-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_version_is_the_first_word_when_it_is_a_number() {
+        assert_eq!(
+            parse_version("2.1.300 (Claude Code)\n").as_deref(),
+            Some("2.1.300")
+        );
+        assert_eq!(parse_version("2.1.300\n").as_deref(), Some("2.1.300"));
+        assert_eq!(parse_version("command not found"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn only_the_auth_method_decides_the_billing() {
+        let v = || "2.1.300".to_string();
+        assert_eq!(
+            parse_auth(
+                r#"{"loggedIn":true,"authMethod":"claude.ai","email":"user@example.com"}"#,
+                v()
+            ),
+            ClaudePlan::Plan { version: v() }
+        );
+        assert_eq!(
+            parse_auth(r#"{"authMethod":"oauth_token"}"#, v()),
+            ClaudePlan::Plan { version: v() }
+        );
+        assert_eq!(
+            parse_auth(r#"{"authMethod":"api_key"}"#, v()),
+            ClaudePlan::OtherBilling {
+                version: v(),
+                method: "api_key".into()
+            }
+        );
+        assert_eq!(
+            parse_auth(r#"{"authMethod":"none"}"#, v()),
+            ClaudePlan::SignedOut { version: v() }
+        );
+        assert_eq!(
+            parse_auth("Not logged in", v()),
+            ClaudePlan::SignedOut { version: v() }
+        );
+        assert_eq!(
+            parse_auth("{}", v()),
+            ClaudePlan::SignedOut { version: v() }
+        );
+    }
+
+    #[test]
+    fn what_reaches_the_page_never_carries_the_rest_of_the_status() {
+        let plan = parse_auth(
+            r#"{"authMethod":"claude.ai","email":"user@example.com","orgName":"my-org"}"#,
+            "2.1.300".into(),
+        );
+        assert_eq!(
+            serde_json::to_string(&plan).unwrap(),
+            r#"{"state":"plan","version":"2.1.300"}"#
+        );
+    }
+
+    #[test]
+    fn finds_claude_on_path_first_then_in_the_usual_folders() {
+        let root = scratch("find");
+        let on_path = root.join("bin");
+        let home = root.join("home");
+        let local = home.join(".local").join("bin");
+        std::fs::create_dir_all(&on_path).unwrap();
+        std::fs::create_dir_all(&local).unwrap();
+        let name = names()[0];
+        assert_eq!(find_in([on_path.clone()], Some(&home)), None);
+        std::fs::write(local.join(name), "").unwrap();
+        assert_eq!(
+            find_in([on_path.clone()], Some(&home)),
+            Some(local.join(name))
+        );
+        std::fs::write(on_path.join(name), "").unwrap();
+        assert_eq!(
+            find_in([on_path.clone()], Some(&home)),
+            Some(on_path.join(name))
+        );
+        assert_eq!(find_in([PathBuf::from("bin")], None), None);
+    }
+
+    #[cfg(unix)]
+    fn fake_cli(dir: &Path, auth: &str, auth_exit: i32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let cli = dir.join("claude");
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '2.1.300 (Claude Code)'; exit 0; fi\nif [ \"$1 $2\" = \"auth status\" ]; then echo '{auth}'; exit {auth_exit}; fi\nexit 2\n"
+        );
+        std::fs::write(&cli, script).unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        cli
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn asks_a_real_cli_for_its_version_and_sign_in() {
+        let dir = scratch("in");
+        let v = || "2.1.300".to_string();
+        let signed_in = fake_cli(&dir, r#"{"authMethod":"claude.ai"}"#, 0);
+        assert_eq!(detect_at(&signed_in), ClaudePlan::Plan { version: v() });
+        let other = scratch("out");
+        let signed_out = fake_cli(&other, r#"{"authMethod":"none","loggedIn":false}"#, 1);
+        assert_eq!(
+            detect_at(&signed_out),
+            ClaudePlan::SignedOut { version: v() }
+        );
+        assert_eq!(detect_at(&dir.join("nothing-here")), ClaudePlan::Missing);
+    }
+}
