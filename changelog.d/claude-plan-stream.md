@@ -1,1 +1,1 @@
-- Claude plan: the app can read Claude Code's streamed output (text, tool rows, refusals, usage and errors) into chat events, ready for chats on your Claude plan. Nothing uses it yet.
+- Claude plan: the app can run a chat turn through Claude Code on this computer and show its streamed output (text, tool rows, refusals, usage and errors) as chat events. Turns read files only, resume the same Claude Code session, and Stop ends the turn. Nothing in the app starts it yet.
