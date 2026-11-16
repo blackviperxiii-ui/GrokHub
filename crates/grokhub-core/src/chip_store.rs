@@ -31,6 +31,22 @@ pub const CHIP_LOG_MAX: usize = 400;
 /// Hex characters of a chip's log key.
 const LOG_KEY_HEX: usize = 12;
 
+/// Who was shown a row: the desktop window or a paired browser. Their rows
+/// differ, so each keeps its own open row per surface.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChipClient {
+    #[default]
+    App,
+    Web,
+}
+
+impl ChipClient {
+    pub fn is_app(&self) -> bool {
+        *self == ChipClient::App
+    }
+}
+
 /// One time the chip row was shown, and what the person did with it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +55,9 @@ pub struct ChipEvent {
     pub at: u64,
     /// Which row: `composer`, `home`, …
     pub surface: String,
+    /// Who it was shown to. Rows logged before this field are the desktop's.
+    #[serde(default, skip_serializing_if = "ChipClient::is_app")]
+    pub client: ChipClient,
     /// The chips in the order shown.
     pub shown: Vec<ShownChip>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -49,6 +68,13 @@ pub struct ChipEvent {
     /// Unix ms of the person's first step (a message) after the row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_at: Option<u64>,
+}
+
+impl ChipEvent {
+    /// A row `client` was shown on `surface`.
+    pub(crate) fn is_on(&self, surface: &str, client: ChipClient) -> bool {
+        self.surface == surface && self.client == client
+    }
 }
 
 /// One chip in a shown row. No text: the key is a hash.
@@ -202,11 +228,17 @@ fn chip_source(chip: &QuickChip) -> String {
         .to_ascii_lowercase()
 }
 
-/// Note that `surface` showed `chips`. A row identical to the last one still
-/// waiting for an outcome is the same showing, not a new one, so a repaint or
-/// a keystroke that changes nothing adds no row.
-pub fn log_chips_shown(mem: &mut ChipMemory, surface: &str, chips: &[QuickChip], now: u64) {
-    crate::learn::hub::note_all(shown_signals(mem, surface, chips, now));
+/// Note that `surface` showed `chips` to `client`. A row identical to the
+/// last one still waiting for an outcome is the same showing, not a new one,
+/// so a repaint or a keystroke that changes nothing adds no row.
+pub fn log_chips_shown(
+    mem: &mut ChipMemory,
+    surface: &str,
+    client: ChipClient,
+    chips: &[QuickChip],
+    now: u64,
+) {
+    crate::learn::hub::note_all(shown_signals(mem, surface, client, chips, now));
 }
 
 /// [`log_chips_shown`] without the engine: logs the row and returns what the
@@ -214,6 +246,7 @@ pub fn log_chips_shown(mem: &mut ChipMemory, surface: &str, chips: &[QuickChip],
 pub(crate) fn shown_signals(
     mem: &mut ChipMemory,
     surface: &str,
+    client: ChipClient,
     chips: &[QuickChip],
     now: u64,
 ) -> Vec<crate::learn::Signal> {
@@ -226,7 +259,7 @@ pub(crate) fn shown_signals(
         .enumerate()
         .map(|(slot, c)| {
             let key = chip_log_key(c);
-            let note = crate::chip_rank::ranked_note(mem, surface, &key);
+            let note = crate::chip_rank::ranked_note(mem, surface, client, &key);
             ShownChip {
                 source: chip_source(c),
                 slot: u8::try_from(slot).unwrap_or(u8::MAX),
@@ -238,19 +271,27 @@ pub(crate) fn shown_signals(
         .collect();
     let same = |e: &ChipEvent| {
         e.surface == surface
+            && e.client == client
             && e.outcome.is_none()
             && e.shown.len() == shown.len()
             && e.shown.iter().zip(&shown).all(|(a, b)| a.key == b.key)
     };
-    if mem.events.last().is_some_and(same) {
+    // This client's last row, whatever the other one logged since.
+    if mem
+        .events
+        .iter()
+        .rev()
+        .find(|e| e.client == client)
+        .is_some_and(same)
+    {
         return told;
     }
-    // The last open row on this surface was passed over for this one.
+    // The last open row this client had here was passed over for this one.
     if let Some(prev) = mem
         .events
         .iter()
         .rev()
-        .find(|e| e.surface == surface)
+        .find(|e| e.is_on(surface, client))
         .filter(|e| e.outcome.is_none())
     {
         let shown = prev.shown.clone();
@@ -263,6 +304,7 @@ pub(crate) fn shown_signals(
     mem.events.push(ChipEvent {
         at: now,
         surface: surface.to_string(),
+        client,
         shown,
         ..ChipEvent::default()
     });
@@ -273,16 +315,18 @@ pub(crate) fn shown_signals(
     told
 }
 
-/// Note what the person did with `chip` on `surface`: the newest open showing
-/// that held it gets the outcome. A chip no logged row showed adds nothing.
+/// Note what the person did with `chip` on `surface` in `client`: that
+/// client's newest open showing that held it gets the outcome. A chip no
+/// logged row showed adds nothing.
 pub fn log_chip_outcome(
     mem: &mut ChipMemory,
     surface: &str,
+    client: ChipClient,
     chip: &QuickChip,
     picked: bool,
     now: u64,
 ) {
-    crate::learn::hub::note_all(outcome_signals(mem, surface, chip, picked, now));
+    crate::learn::hub::note_all(outcome_signals(mem, surface, client, chip, picked, now));
 }
 
 /// [`log_chip_outcome`] without the engine: logs the outcome and returns
@@ -290,13 +334,14 @@ pub fn log_chip_outcome(
 pub(crate) fn outcome_signals(
     mem: &mut ChipMemory,
     surface: &str,
+    client: ChipClient,
     chip: &QuickChip,
     picked: bool,
     now: u64,
 ) -> Vec<crate::learn::Signal> {
     let key = chip_log_key(chip);
     let Some(event) = mem.events.iter_mut().rev().find(|e| {
-        e.surface == surface && e.outcome.is_none() && e.shown.iter().any(|s| s.key == key)
+        e.is_on(surface, client) && e.outcome.is_none() && e.shown.iter().any(|s| s.key == key)
     }) else {
         return Vec::new();
     };
@@ -388,7 +433,13 @@ mod tests {
             "Give me a brief.",
             ChipKind::Nav,
         ));
-        log_chips_shown(&mut mem, "composer", &[chip("pred-brief", "x")], 5);
+        log_chips_shown(
+            &mut mem,
+            "composer",
+            ChipClient::App,
+            &[chip("pred-brief", "x")],
+            5,
+        );
         save_chip_memory(&dir, &mem).expect("save");
         let back = load_chip_memory(&dir);
         assert_eq!(back, mem);
@@ -472,13 +523,19 @@ mod tests {
     fn the_log_holds_no_chip_text() {
         let mut mem = ChipMemory::default();
         let secret = chip("resume:continue:Secret Project", "Pick up Secret Project");
-        log_chips_shown(&mut mem, "composer", std::slice::from_ref(&secret), 10);
+        log_chips_shown(
+            &mut mem,
+            "composer",
+            ChipClient::App,
+            std::slice::from_ref(&secret),
+            10,
+        );
         let json = serde_json::to_string(&mem.events).expect("json");
         assert!(!json.to_ascii_lowercase().contains("secret"), "{json}");
         assert_eq!(mem.events[0].shown[0].source, "resume");
         assert_eq!(mem.events[0].shown[0].key.len(), LOG_KEY_HEX);
         let llm = chip("llm-0-Fix the blender", "Fix the blender");
-        log_chips_shown(&mut mem, "composer", &[llm], 11);
+        log_chips_shown(&mut mem, "composer", ChipClient::App, &[llm], 11);
         let json = serde_json::to_string(&mem.events).expect("json");
         assert!(!json.contains("blender"), "{json}");
     }
@@ -487,13 +544,13 @@ mod tests {
     fn a_repaint_is_one_showing_and_an_outcome_closes_it() {
         let mut mem = ChipMemory::default();
         let row = [chip("pred-a", "a"), chip("learn-b", "b")];
-        log_chips_shown(&mut mem, "composer", &row, 1);
-        log_chips_shown(&mut mem, "composer", &row, 2);
+        log_chips_shown(&mut mem, "composer", ChipClient::App, &row, 1);
+        log_chips_shown(&mut mem, "composer", ChipClient::App, &row, 2);
         assert_eq!(mem.events.len(), 1, "same row again is the same showing");
-        log_chips_shown(&mut mem, "home", &row, 3);
+        log_chips_shown(&mut mem, "home", ChipClient::App, &row, 3);
         assert_eq!(mem.events.len(), 2, "another surface is another showing");
 
-        log_chip_outcome(&mut mem, "composer", &row[1], true, 4);
+        log_chip_outcome(&mut mem, "composer", ChipClient::App, &row[1], true, 4);
         assert_eq!(
             mem.events[0].outcome,
             Some(ChipOutcome::Picked {
@@ -503,20 +560,77 @@ mod tests {
             })
         );
         assert_eq!(mem.events[1].outcome, None);
-        log_chips_shown(&mut mem, "composer", &row, 5);
+        log_chips_shown(&mut mem, "composer", ChipClient::App, &row, 5);
         assert_eq!(
             mem.events.len(),
             3,
             "after an outcome the next showing is new"
         );
 
-        log_chip_outcome(&mut mem, "home", &row[0], false, 6);
+        log_chip_outcome(&mut mem, "home", ChipClient::App, &row[0], false, 6);
         assert!(matches!(
             mem.events[1].outcome,
             Some(ChipOutcome::Dismissed { slot: 0, .. })
         ));
-        log_chip_outcome(&mut mem, "composer", &chip("never-shown", "z"), true, 7);
+        log_chip_outcome(
+            &mut mem,
+            "composer",
+            ChipClient::App,
+            &chip("never-shown", "z"),
+            true,
+            7,
+        );
         assert_eq!(mem.events[2].outcome, None);
+    }
+
+    #[test]
+    fn the_desktop_and_a_paired_browser_keep_their_own_rows() {
+        let mut mem = ChipMemory::default();
+        let desk = [chip("pred-a", "a"), chip("learn-b", "b")];
+        let web = [chip("learn-b", "b"), chip("radar-c", "c")];
+        log_chips_shown(&mut mem, "home", ChipClient::App, &desk, 1);
+        let told = shown_signals(&mut mem, "home", ChipClient::Web, &web, 2);
+        assert_eq!(mem.events.len(), 2);
+        assert_eq!(mem.events[1].client, ChipClient::Web);
+        assert_eq!(mem.ranker.rows, 0, "the desktop's row was not passed over");
+        assert!(!told.iter().any(|s| s.kind == crate::learn::Kind::Ignored));
+        log_chips_shown(&mut mem, "home", ChipClient::App, &desk, 3);
+        assert_eq!(mem.events.len(), 2, "the desktop's row is still the same");
+
+        log_chip_outcome(&mut mem, "home", ChipClient::App, &desk[1], true, 4);
+        assert_eq!(
+            mem.events[0].outcome,
+            Some(ChipOutcome::Picked {
+                key: chip_log_key(&desk[1]),
+                slot: 1,
+                at: 4
+            }),
+            "the tap lands on the desktop's row, in the desktop's slot"
+        );
+        assert_eq!(mem.events[1].outcome, None);
+        log_chip_outcome(&mut mem, "home", ChipClient::Web, &web[0], false, 5);
+        assert!(matches!(
+            mem.events[1].outcome,
+            Some(ChipOutcome::Dismissed { slot: 0, at: 5, .. })
+        ));
+
+        log_chips_shown(&mut mem, "home", ChipClient::Web, &web, 6);
+        crate::chip_health::log_chip_next_action(&mut mem, "home", ChipClient::App, 7);
+        assert_eq!(
+            mem.events[2].next_at, None,
+            "a desktop send is not the browser's step"
+        );
+
+        let json = serde_json::to_string(&mem.events).expect("json");
+        assert_eq!(json.matches(r#""client":"web""#).count(), 2, "{json}");
+        assert_eq!(
+            json.matches(r#""client""#).count(),
+            2,
+            "desktop rows say nothing"
+        );
+        let old: ChipEvent =
+            serde_json::from_str(r#"{"at":1,"surface":"home","shown":[]}"#).expect("old row");
+        assert_eq!(old.client, ChipClient::App);
     }
 
     #[test]
@@ -524,7 +638,7 @@ mod tests {
         let mut mem = ChipMemory::default();
         for i in 0..(CHIP_LOG_MAX + 25) {
             let c = chip(&format!("pred-{i}"), "x");
-            log_chips_shown(&mut mem, "composer", &[c], i as u64);
+            log_chips_shown(&mut mem, "composer", ChipClient::App, &[c], i as u64);
         }
         assert_eq!(mem.events.len(), CHIP_LOG_MAX);
         assert_eq!(mem.events[0].at, 25);

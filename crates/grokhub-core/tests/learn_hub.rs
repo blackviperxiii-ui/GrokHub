@@ -10,7 +10,7 @@ use grokhub_core::learn::{hub, store, Kind, Shape, Standing, Subject};
 use grokhub_core::outcome::OutcomeResult;
 use grokhub_core::run_metrics::{append_run, RunMetrics};
 use grokhub_core::update_feed::automation_done_card;
-use grokhub_core::{chip_log_key, log_chip_outcome, log_chips_shown, ChipMemory};
+use grokhub_core::{chip_log_key, log_chip_outcome, log_chips_shown, ChipClient, ChipMemory};
 
 fn chip(id: &str) -> QuickChip {
     QuickChip {
@@ -35,7 +35,13 @@ fn the_shared_logs_feed_one_engine() {
     // is recorded anywhere.
     let mut mem = ChipMemory::default();
     let (brief, patch) = (chip("brief"), chip("patch-notes"));
-    log_chips_shown(&mut mem, "composer", &[brief.clone(), patch.clone()], t0);
+    log_chips_shown(
+        &mut mem,
+        "composer",
+        ChipClient::App,
+        &[brief.clone(), patch.clone()],
+        t0,
+    );
     assert!(!hub::started());
     assert!(!store::dir(&dir).exists());
 
@@ -93,18 +99,37 @@ fn the_shared_logs_feed_one_engine() {
 
     // Chips: a row passed over, a second row with a pick, a hide on Home.
     let mut mem = ChipMemory::default();
-    log_chips_shown(&mut mem, "composer", &[brief.clone(), patch.clone()], t0);
+    log_chips_shown(
+        &mut mem,
+        "composer",
+        ChipClient::App,
+        &[brief.clone(), patch.clone()],
+        t0,
+    );
     // The same row again is the same showing: nothing new.
     log_chips_shown(
         &mut mem,
         "composer",
+        ChipClient::App,
         &[brief.clone(), patch.clone()],
         t0 + 1,
     );
-    log_chips_shown(&mut mem, "composer", std::slice::from_ref(&patch), t0 + 2);
-    log_chip_outcome(&mut mem, "composer", &patch, true, t0 + 3);
-    log_chips_shown(&mut mem, "home", std::slice::from_ref(&brief), t0 + 4);
-    log_chip_outcome(&mut mem, "home", &brief, false, t0 + 5);
+    log_chips_shown(
+        &mut mem,
+        "composer",
+        ChipClient::App,
+        std::slice::from_ref(&patch),
+        t0 + 2,
+    );
+    log_chip_outcome(&mut mem, "composer", ChipClient::App, &patch, true, t0 + 3);
+    log_chips_shown(
+        &mut mem,
+        "home",
+        ChipClient::App,
+        std::slice::from_ref(&brief),
+        t0 + 4,
+    );
+    log_chip_outcome(&mut mem, "home", ChipClient::App, &brief, false, t0 + 5);
 
     // Cards and a run.
     let card = automation_done_card("nightly", "Name", "body", 1);
@@ -330,10 +355,17 @@ fn the_shared_logs_feed_one_engine() {
     let state = || grokhub_core::learn::decide::load(&dir);
     let mut habit_mem = ChipMemory::default();
     for i in 0..3u64 {
-        log_chips_shown(&mut habit_mem, "composer", &chips, live + 10 * i);
+        log_chips_shown(
+            &mut habit_mem,
+            "composer",
+            ChipClient::App,
+            &chips,
+            live + 10 * i,
+        );
         log_chip_outcome(
             &mut habit_mem,
             "composer",
+            ChipClient::App,
             &chips[0],
             true,
             live + 10 * i + 1,
@@ -344,8 +376,21 @@ fn the_shared_logs_feed_one_engine() {
         hub::habit_chips(&skills, Now::default(), 99.0, live + 40).len(),
         1
     );
-    log_chips_shown(&mut habit_mem, "composer", &chips, live + 50);
-    log_chip_outcome(&mut habit_mem, "composer", &chips[0], false, live + 51);
+    log_chips_shown(
+        &mut habit_mem,
+        "composer",
+        ChipClient::App,
+        &chips,
+        live + 50,
+    );
+    log_chip_outcome(
+        &mut habit_mem,
+        "composer",
+        ChipClient::App,
+        &chips[0],
+        false,
+        live + 51,
+    );
     assert!(!state().graduated(&rule));
     assert_eq!(
         hub::habit_chips(&skills, Now::default(), 99.0, live + 60),
@@ -680,8 +725,21 @@ fn the_shared_logs_feed_one_engine() {
             "It wasn't sure, so it showed this once to see if you want it."
         )]
     );
-    log_chips_shown(&mut habit_mem, "composer", &tried, live + 70);
-    log_chip_outcome(&mut habit_mem, "composer", &tried[0], false, live + 71);
+    log_chips_shown(
+        &mut habit_mem,
+        "composer",
+        ChipClient::App,
+        &tried,
+        live + 70,
+    );
+    log_chip_outcome(
+        &mut habit_mem,
+        "composer",
+        ChipClient::App,
+        &tried[0],
+        false,
+        live + 71,
+    );
     assert_eq!(
         hub::habit_chips(&both, Now::default(), 99.0, live + 80),
         Vec::new()
@@ -852,13 +910,14 @@ fn the_shared_logs_feed_one_engine() {
             pool.clone(),
             grokhub_core::RankCtx {
                 surface: "composer",
+                client: ChipClient::App,
                 hour: 8,
                 now_ms,
                 seed,
                 max: grokhub_core::CHIP_ROW_MAX,
             },
         );
-        log_chips_shown(mem, "composer", &row, now_ms);
+        log_chips_shown(mem, "composer", ChipClient::App, &row, now_ms);
         let ids: Vec<String> = row.iter().map(|c| c.id.clone()).collect();
         // What the ranker read for each chip: (picked before, turned down).
         let x: Vec<(f32, f32)> = mem.ranker.last.iter().map(|r| (r.x[2], r.x[4])).collect();
@@ -870,6 +929,7 @@ fn the_shared_logs_feed_one_engine() {
     log_chip_outcome(
         &mut row_mem,
         "composer",
+        ChipClient::App,
         &second,
         true,
         grokhub_core::now_ms(),
