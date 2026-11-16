@@ -1,5 +1,5 @@
-//! Signed release updates: pick the channel's GitHub release, find this
-//! host's asset, and check it before anything is installed. `SHA256SUMS`
+//! Signed release updates: pick the channel's GitHub release and check a
+//! download before anything is installed. `SHA256SUMS`
 //! lists every asset's SHA-256 and `SHA256SUMS.minisig` signs that list
 //! (see `.github/workflows/release.yml`). With a public key shipped, an
 //! asset installs only when the signature verifies with that key and its
@@ -8,6 +8,10 @@
 use sha2::{Digest, Sha256};
 
 use crate::Channel;
+
+/// The newest full release (never a pre-release).
+pub const GITHUB_LATEST_API: &str =
+    "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest";
 
 /// Newest first, drafts hidden for anonymous reads.
 pub const GITHUB_RELEASES_API: &str =
@@ -18,7 +22,7 @@ pub const GITHUB_RELEASES_API: &str =
 /// newest stable off the first page of the list.
 pub fn releases_api(channel: Channel) -> &'static str {
     match channel {
-        Channel::Stable => crate::update::GITHUB_LATEST_API,
+        Channel::Stable => GITHUB_LATEST_API,
         Channel::Beta => GITHUB_RELEASES_API,
     }
 }
@@ -28,30 +32,6 @@ pub const SIG_NAME: &str = "SHA256SUMS.minisig";
 /// The release signing public key (`packaging/minisign.pub`).
 /// `the_shipped_key_matches_packaging` fails when the file and this differ.
 pub const RELEASE_PUBKEY: Option<&str> = Some(include_str!("../../../packaging/minisign.pub"));
-
-/// The update plan step the cabin runs itself (download, verify, install)
-/// instead of handing it to a shell.
-pub const RELEASE_INSTALL_STEP: &str = "grokhub: install the verified release";
-
-const RELEASE_SWITCH_HEAD: &str = "grokhub: switch to the ";
-const RELEASE_SWITCH_TAIL: &str = " release";
-
-/// The Labs channel-switch step without a source clone: install `target`'s
-/// verified release, then write its channel receipt.
-pub fn release_switch_step(target: Channel) -> String {
-    format!(
-        "{RELEASE_SWITCH_HEAD}{}{RELEASE_SWITCH_TAIL}",
-        target.as_str()
-    )
-}
-
-/// The target channel of a [`release_switch_step`].
-pub fn parse_release_switch_step(cmd: &str) -> Option<Channel> {
-    Channel::parse(
-        cmd.strip_prefix(RELEASE_SWITCH_HEAD)?
-            .strip_suffix(RELEASE_SWITCH_TAIL)?,
-    )
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseAsset {
@@ -105,11 +85,15 @@ fn is_stable_release_tag(tag: &str) -> bool {
     )
 }
 
-/// Semver beta tag: `vX.Y.Z-beta.N`.
+/// Semver beta tag: `vX.Y.Z-beta.N` (or a bare `vX.Y.Z-beta`).
 fn is_beta_semver_tag(tag: &str) -> bool {
-    crate::parse_cabin_semver(tag).is_some_and(|v| v.beta.is_some())
-        && tag.starts_with('v')
-        && !tag.starts_with("beta-v")
+    let Some((num, n)) = tag.rsplit_once("-beta") else {
+        return false;
+    };
+    let n_ok = n.is_empty()
+        || n.strip_prefix('.')
+            .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()));
+    n_ok && is_stable_release_tag(num)
 }
 
 /// `GET …/releases` (a list) or one release object.
@@ -179,31 +163,6 @@ pub fn pick_release(releases: &[Release], channel: Channel) -> Option<&Release> 
         })
 }
 
-fn semver_name(name: &str, prefix: &str, suffix: &str) -> bool {
-    name.strip_prefix(prefix)
-        .and_then(|r| r.strip_suffix(suffix))
-        .is_some_and(|ver| {
-            let parts: Vec<&str> = ver.split('.').collect();
-            parts.len() == 3
-                && parts
-                    .iter()
-                    .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
-        })
-}
-
-/// The download this host installs: the Linux tarball or the Windows zip.
-pub fn host_asset(release: &Release, windows: bool) -> Option<&ReleaseAsset> {
-    let (prefix, suffix) = if windows {
-        ("grokhub-windows-v", ".zip")
-    } else {
-        ("grokhub-linux-v", ".tar.gz")
-    };
-    release
-        .assets
-        .iter()
-        .find(|a| semver_name(&a.name, prefix, suffix))
-}
-
 /// Only this repo's release downloads, and the URL must end in the asset's name.
 pub fn download_url_ok(url: &str, name: &str) -> bool {
     let from_repo =
@@ -244,22 +203,6 @@ impl Refusal {
             Self::Download(e) => format!("download failed ({e})"),
         }
     }
-}
-
-/// "Update 2.10.98 not installed: signature didn't verify"
-pub fn refusal_note(version: &str, why: &Refusal) -> String {
-    if version.is_empty() {
-        return format!("Update not installed: {}", why.reason());
-    }
-    format!("Update {version} not installed: {}", why.reason())
-}
-
-/// The [`refusal_note`] line in an update's output, if the release step refused.
-pub fn refusal_line(output: &str) -> Option<&str> {
-    output
-        .lines()
-        .map(str::trim)
-        .find(|l| l.starts_with("Update ") && l.contains(" not installed: "))
 }
 
 /// `sha256sum` lines: `<64 hex>  <name>` (or `*<name>` for binary mode).
@@ -385,14 +328,6 @@ mod tests {
             verify_asset(None, SUMS, None, LINUX_NAME, b"other"),
             Err(Refusal::HashMismatch)
         );
-        assert_eq!(
-            refusal_note("2.10.98", &Refusal::BadSignature),
-            "Update 2.10.98 not installed: signature didn't verify"
-        );
-        assert_eq!(
-            refusal_note("", &Refusal::NoRelease),
-            "Update not installed: no release on this channel yet"
-        );
     }
 
     fn release(tag: &str, prerelease: bool) -> String {
@@ -410,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn each_channel_picks_its_newest_release_and_this_hosts_asset() {
+    fn each_channel_picks_its_newest_release() {
         let body = format!(
             "[{},{},{},{}]",
             release("beta-v2.13.1-abc1234", true),
@@ -430,14 +365,6 @@ mod tests {
             (beta.tag.as_str(), beta.version()),
             ("beta-v2.13.1-abc1234", "2.13.1-beta (abc1234)".to_string())
         );
-        assert_eq!(
-            host_asset(stable, false).unwrap().name,
-            "grokhub-linux-v2.13.1.tar.gz"
-        );
-        assert_eq!(
-            host_asset(stable, true).unwrap().name,
-            "grokhub-windows-v2.13.1.zip"
-        );
         assert_eq!(stable.asset(SUMS_NAME).unwrap().name, "SHA256SUMS");
         assert_eq!(stable.asset(SIG_NAME), None);
         assert!(pick_release(
@@ -447,7 +374,7 @@ mod tests {
         .is_none());
         assert_eq!(parse_releases(&release("v2.13.1", false)).len(), 1);
         assert!(parse_releases("not json").is_empty());
-        let a = host_asset(stable, false).unwrap();
+        let a = stable.asset("grokhub-linux-v2.13.1.tar.gz").unwrap();
         assert!(download_url_ok(&a.url, &a.name));
         assert!(!download_url_ok(
             "https://evil.example/grokhub-linux-v2.13.1.tar.gz",
@@ -480,7 +407,12 @@ mod tests {
             parse_releases(&release_at("v2.13.1-beta.3", false, "2026-10-12T00:00:00Z"));
         assert!(pick_release(&misflagged, Channel::Stable).is_none());
         assert!(is_beta_semver_tag("v2.13.1-beta.3"));
+        assert!(is_beta_semver_tag("v2.13.1-beta"));
         assert!(!is_beta_semver_tag("v2.13.1"));
+        assert!(!is_beta_semver_tag("v2.13.1-beta."));
+        assert!(!is_beta_semver_tag("v2.13.1-beta.x"));
+        assert!(!is_beta_semver_tag("beta-v2.13.1-abc1234"));
+        assert!(!is_beta_semver_tag("2.13.1-beta.3"));
         assert!(is_stable_release_tag("v2.13.1"));
         assert!(!is_stable_release_tag("v2.13.1-beta.3"));
     }
@@ -528,32 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn the_switch_step_names_its_channel_and_parses_back() {
-        assert_eq!(
-            release_switch_step(Channel::Beta),
-            "grokhub: switch to the beta release"
-        );
-        assert_eq!(
-            release_switch_step(Channel::Stable),
-            "grokhub: switch to the stable release"
-        );
-        assert_eq!(
-            parse_release_switch_step("grokhub: switch to the beta release"),
-            Some(Channel::Beta)
-        );
-        assert_eq!(
-            parse_release_switch_step("grokhub: switch to the stable release"),
-            Some(Channel::Stable)
-        );
-        assert_eq!(parse_release_switch_step(RELEASE_INSTALL_STEP), None);
-        assert_eq!(
-            parse_release_switch_step("grokhub: switch to the nightly release"),
-            None
-        );
-    }
-
-    #[test]
-    fn stable_asks_for_the_latest_release_and_refusals_are_found_in_the_output() {
+    fn stable_asks_for_the_latest_release() {
         assert_eq!(
             releases_api(Channel::Stable),
             "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest"
@@ -561,22 +468,6 @@ mod tests {
         assert_eq!(
             releases_api(Channel::Beta),
             "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases?per_page=30"
-        );
-        let out = format!(
-            "$ {RELEASE_INSTALL_STEP}\nexit 1\n{}",
-            refusal_note("2.13.2", &Refusal::NoSums)
-        );
-        assert_eq!(
-            refusal_line(&out),
-            Some("Update 2.13.2 not installed: the release has no SHA256SUMS")
-        );
-        assert_eq!(
-            refusal_line("$ git pull\nexit 1\nfatal: unable to access"),
-            None
-        );
-        assert!(
-            crate::update::cabin_overlay_step(RELEASE_INSTALL_STEP),
-            "the release step marks the cabin updated"
         );
     }
 

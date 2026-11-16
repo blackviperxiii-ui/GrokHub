@@ -1,0 +1,1 @@
+- Removed the retired cabin's built-in update steps and the Windows clone install script. Settings → About → Updates is the one way the app updates itself, and the docs now say how it works.

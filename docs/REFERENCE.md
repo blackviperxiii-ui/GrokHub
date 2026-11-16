@@ -61,7 +61,7 @@ Settings → **Account** is Super Grok device-code OAuth only — **Connect** / 
 
 The release bundles (AppImage, `.deb`, `GrokHub-Shell-Setup`), `scripts/install.sh` and the PKGBUILDs install only the desktop app and the hub. None of them installs, signs in, or updates the Grok Build CLI, and the app never runs it.
 
-Settings → **Update** is one **Update** control (always visible), progress, and **Restart** after a clean cabin overlay. It updates only the cabin. The cabin checks every 2 hours (and at launch) for a newer GitHub Latest cabin. The titlebar chip is the notice (in-app — not a web page) and says **Update cabin**. The Settings button stays up when the probe found nothing so you can still overlay. `grokhub --update` / `/update` use that same rule. When the cabin is newer it retargets a leftover Origin or `GrokHub-Windows` clone to GitHub (`https://github.com/blackviperxiii-ui/GrokHub.git`), then `git pull --ff-only origin main` (`origin beta` on a beta install; see Channels). Linux overlays with `./scripts/install.sh --user`. Windows Setup users do not need a clone: when the cabin is newer, Update downloads the latest `grokhub-windows-v*.zip` from GitHub into `%LOCALAPPDATA%\Programs\GrokHub`. A leftover Windows clone (wrong branch, detached HEAD) uses that same zip. A Windows source clone on `main` still overlays with `scripts/install-windows.ps1`. The clone path is not a Settings field — empty uses `GROKHUB_SRC` or the install receipt. After a clean overlay, **Restart** reloads hub, drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process.
+Settings → About → **Updates** holds the channel (**Stable** or **Beta**), **Check now**, and **Install <version> and restart** when that channel has a newer build. The app also looks every 2 hours while it runs. Only the AppImage and the Windows installer update themselves: each release's `latest.json` points at them, signed with the release key (`packaging/minisign.pub`), and nothing installs until you click. A `.deb`, AUR or source install says to update with your package manager or the clone instead. `grokhub-hub --update` prints how to update the copy it is running from.
 
 Settings → **About** is the app name, version, doctor, and a redacted diagnostics copy. It does not list today's usage buckets (`/usage` still does).
 
@@ -79,7 +79,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.js
 
 There are two channels. **Stable** is `main`, where releases are cut. **Beta** is the `beta` branch, where new features and fixes land first. Every merge into `beta` publishes a pre-release named `v<version>-beta.<N>` with the same Linux and Windows files and `SHA256SUMS` as a release, so the beta updater can take it right away; a nightly build (about 3 AM Central, skipped when nothing new landed) backs it up.
 
-**Without a source clone** (every Windows Setup install, and a Linux install from the release tarball), turn Settings → Labs → **Beta channel** on or off. Loadout downloads the newest beta pre-release (or the latest stable release), checks it against its `SHA256SUMS`, swaps `grokhub` and `grokhub-hub` in (keeping the old ones as `.old`), and only then saves the new channel. A download that doesn't check out leaves you on the channel you had. Update on a channel works the same way: Beta takes the newest pre-release by build time.
+**In the app**, pick **Stable** or **Beta** in Settings → About → **Updates**. The choice is saved at once. **Check now** then finds that channel's newest build (Beta takes the newest pre-release by build time, Stable the latest release), and on a channel switch it offers that build even when its version is lower than the one running.
 
 **From a source clone** (the developer path), switch on Linux with one command; it builds from source:
 
@@ -91,11 +91,11 @@ grokhub --version                              # GrokHub 3.5.0-beta.3 (beta @ ab
 
 `--channel` fetches `origin`, checks out the branch (creating a local tracking branch the first time, and fast-forwarding it after that), then builds and installs. Stable follows `main`, not the latest release tag, because the in-app Update already pulls `main`. The switch refuses to run over uncommitted changes, and it stops instead of resetting when your local branch has commits that aren't on `origin`.
 
-The channel is saved to `~/.config/GrokHub/channel` (or `$GROKHUB_CONFIG/channel`), next to the `source` receipt. A plain `./scripts/install.sh --user` keeps the saved channel and builds whatever is checked out; it doesn't move git. Settings → **Update**, `/update`, and `grokhub --update` read the receipt: a beta install pulls `origin beta` and never `origin main`. If the clone isn't on the channel's branch, Update stops and says which command to run. `./scripts/install.sh --dry-run` prints the channel, branch, and receipt it would use, and exits.
+The channel is saved to `~/.config/GrokHub/channel` (or `$GROKHUB_CONFIG/channel`), next to the `source` receipt; the app's Updates switch and `install.sh --channel` write the same file. A plain `./scripts/install.sh --user` keeps the saved channel and builds whatever is checked out; it doesn't move git. `./scripts/install.sh --dry-run` prints the channel, branch, and receipt it would use, and exits.
 
 The beta label comes from `src-tauri/build.rs`, which reads the branch and beta N from git at build time. A beta build is labeled `X.Y.Z-beta.N`, where N is the commit count since the newest stable `vX.Y.Z` tag (`git rev-list --count <tag>..HEAD`). Shallow clones without tags fall back to `beta.0` until you `git fetch --tags`. The Cargo version itself never changes for a beta label. A build made without git shows just `GrokHub 3.5.0`.
 
-Limits: building beta from a clone is Linux-only (`scripts/install-windows.ps1` has no `-Channel`); Windows gets Beta from the signed pre-releases. Beta turns itself off when beta catches up to main only on a Linux clone, because that check reads the clone's branches; elsewhere, turn it off in Labs. The Update chip still only notices new stable releases, so on beta, use Settings → **Update** to take the newest beta build.
+Limits: building a channel from a clone is Linux-only; Windows gets Beta from the signed pre-releases. Beta stays on until you switch back to Stable.
 
 ## First run
 
