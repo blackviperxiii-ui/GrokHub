@@ -30,13 +30,16 @@ fn the_hint_leads_with_on_or_off() {
         "On, but paused. Set up a local engine and model first."
     );
     assert_eq!(
-        hint(false, false, false),
+        hint(false, false, true),
         "Off. Set up a local engine and model first."
     );
-    assert_eq!(
-        hint(false, true, false),
-        "Off. An older version of the app switched Local AI off; turning this on switches it back on."
-    );
+    for (on, set_up) in [(false, true), (true, true), (false, false), (true, false)] {
+        assert_eq!(
+            hint(on, set_up, false),
+            "Off while Local AI is off. Turn on Use Local AI on this computer first.",
+            "on={on} set_up={set_up}"
+        );
+    }
 }
 
 #[test]
@@ -55,29 +58,30 @@ fn off_and_unavailable_until_a_local_model_is_set_up() {
 }
 
 #[test]
-fn an_older_local_model_off_is_switched_back_on_with_the_tidy() {
+fn the_tidy_waits_while_local_ai_is_switched_off() {
     let d = dir("local-off");
-    std::fs::write(
-        d.join("app.json"),
-        r#"{"localModel":false,"promptCleanup":true,"focusHelp":true}"#,
-    )
-    .unwrap();
+    let before = r#"{"localModel":false,"promptCleanup":true,"focusHelp":true}"#;
+    std::fs::write(d.join("app.json"), before).unwrap();
     assert_eq!(
         view_with(&d, true),
         TidyView {
             on: false,
-            available: true,
-            hint: "Off. An older version of the app switched Local AI off; turning this on switches it back on.".into(),
+            available: false,
+            hint: "Off while Local AI is off. Turn on Use Local AI on this computer first.".into(),
         }
     );
-    assert_eq!(set_with(&d, true, true).map(|v| v.on), Ok(true));
+    assert_eq!(set_with(&d, true, true), Err(NEEDS_LOCAL.to_string()));
+    assert_eq!(
+        app_json(&d),
+        before,
+        "Local AI stays off; nothing is written"
+    );
+    assert_eq!(set_with(&d, false, true).map(|v| v.on), Ok(false));
     let saved: serde_json::Value = serde_json::from_str(&app_json(&d)).unwrap();
     assert_eq!(
         saved,
-        json!({ "localModel": true, "promptCleanup": true, "focusHelp": true })
+        json!({ "localModel": false, "promptCleanup": false, "focusHelp": true })
     );
-    let routing = grokhub_agent::route::host::read(&d);
-    assert!(routing.local_model && routing.prompt_cleanup);
 }
 
 #[test]

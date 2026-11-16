@@ -3,9 +3,9 @@
 //! detection could not see, and the tray's state chip.
 //!
 //! Choices live in `local_ai.json` in the GrokHub config folder, the pick
-//! under `localModel.selected`. The cabin's `app.json` keeps its own
-//! `localModel` on/off switch; only the typo tidy (`prompt_tidy`) writes it,
-//! to clear an older version's `false` when it is turned on. The game,
+//! under `localModel.selected`. The `app.json` `localModel` on/off switch is
+//! separate: `local_use` owns it, and the typo tidy (`prompt_tidy`) only
+//! reads it. The game,
 //! idle and battery switches and the app lists go to `local/governor.json`,
 //! which the cabin's governor reads.
 
@@ -509,11 +509,13 @@ pub fn state_word(level: Level) -> &'static str {
     }
 }
 
-/// The Auto status line's parts. `set_up` is false until an engine and a model are on disk.
+/// The Auto status line's parts. `on` is the Use Local AI switch; `set_up`
+/// is false until an engine and a model are on disk.
 pub fn status(
     p: &Profile,
     picker: &Picker,
     bench: &BenchCache,
+    on: bool,
     set_up: bool,
     level: Level,
     reason: &str,
@@ -527,7 +529,12 @@ pub fn status(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "None (cloud only)".into()),
     };
-    let (state, reason) = if set_up {
+    let (state, reason) = if !on {
+        (
+            "Off".to_string(),
+            "Use Local AI on this computer is off.".to_string(),
+        )
+    } else if set_up {
         (state_word(level).to_string(), reason.to_string())
     } else {
         (
@@ -563,6 +570,8 @@ pub struct LocalAiView {
     pub draft_progress: Option<DraftProgress>,
     /// What runs now: model, where, speed, draft model, unload.
     pub running: Running,
+    /// Use Local AI on this computer.
+    pub local_use: crate::local_use::LocalUseView,
     /// Tidy typos on this computer.
     pub tidy: crate::prompt_tidy::TidyView,
 }
@@ -579,10 +588,22 @@ pub struct Running {
     pub dynamic_hint: String,
 }
 
-pub fn running(config_dir: &Path) -> Running {
+/// The Running now line while Use Local AI on this computer is off and no
+/// model is loaded: nothing loads with the next reply.
+pub const RUNNING_OFF: &str = "Running now: nothing. Local AI is off, so no model loads.";
+
+/// `on` is Use Local AI on this computer. While it is off nothing loads, so
+/// the "loads with the next reply" line would be wrong; a model still
+/// finishing an answer shows as usual until it stops.
+pub fn running(config_dir: &Path, on: bool) -> Running {
     let live = local_live::snapshot(config_dir);
+    let lines = if !on && live.model.is_none() {
+        vec![RUNNING_OFF.to_string()]
+    } else {
+        local_live::lines(&live)
+    };
     Running {
-        lines: local_live::lines(&live),
+        lines,
         loaded: live.model.is_some(),
         kept_loaded: live.kept_loaded,
         dynamic: local_task::dynamic(config_dir),
@@ -778,6 +799,7 @@ pub fn view(config_dir: &Path) -> LocalAiView {
         &p,
         &picker,
         &bench,
+        crate::local_use::is_on(config_dir),
         set_up,
         local_gov::level(),
         local_gov::reason(),
@@ -794,7 +816,8 @@ pub fn view(config_dir: &Path) -> LocalAiView {
         draft_offer: local_engine::draft_offer(config_dir, selected),
         draft_offers: local_engine::draft_offers(config_dir),
         draft_progress: local_engine::draft_progress(),
-        running: running(config_dir),
+        running: running(config_dir, crate::local_use::is_on(config_dir)),
+        local_use: crate::local_use::view(config_dir),
         tidy: crate::prompt_tidy::view(config_dir),
         config,
         status,
@@ -821,11 +844,20 @@ pub fn model_file(path: &str, seen: &[String]) -> Result<FileRow, String> {
 
 /// The speed test: the model with and without its draft model.
 pub fn speed_test(config_dir: &Path) -> Result<String, String> {
+    // The bench switches the router's local route on; while the switch is
+    // off it would load the model the user turned off.
+    if !crate::local_use::is_on(config_dir) {
+        return Err(SPEED_TEST_LOCAL_OFF.into());
+    }
     if local_sidecar::resolve_paths(config_dir).is_none() {
         return Err("Set up a local engine and model first, then run the speed test.".into());
     }
     grokhub_agent::route::local_bench::run_for_ui()
 }
+
+/// Why the speed test won't run while Use Local AI on this computer is off.
+pub const SPEED_TEST_LOCAL_OFF: &str =
+    "Turn on Use Local AI on this computer first, then run the speed test.";
 
 /// Saves the page's choices, clamped, and reads the page again.
 pub fn save_view(config_dir: &Path, config: LocalAiConfig) -> Result<LocalAiView, String> {

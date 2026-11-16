@@ -20,6 +20,7 @@ const api = vi.hoisted(() => ({
   setLocalKeepLoaded: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
   setLocalDynamic: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
   setPromptTidy: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
+  setLocalUse: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
   unloadLocalModel: vi.fn<() => Promise<LocalAiView>>(),
   startLocalEngineDownload: vi.fn(),
   cancelLocalEngineDownload: vi.fn(),
@@ -146,6 +147,11 @@ function missingEngine(): LocalAiView["engine"] {
   };
 }
 
+const LOCAL_ON =
+  "On. While the model is loaded, small background jobs run on this computer, and chats use it when you're offline or the cloud can't answer.";
+const LOCAL_OFF = "Off. Nothing runs on the on-device model.";
+const TIDY_LOCAL_OFF = "Off while Local AI is off. Turn on Use Local AI on this computer first.";
+
 const READY: LocalAiView["engine"] = {
   state: "ready",
   version: "b11602",
@@ -187,6 +193,7 @@ function view(
       dynamic: true,
       dynamicHint: "On: each task runs on the model on disk that's best at it.",
     },
+    localUse: { on: true, hint: LOCAL_ON },
     tidy: { on: false, available: true, hint: "Off. Your messages go to the model exactly as you type them." },
     ...over,
   };
@@ -374,8 +381,33 @@ describe("LocalAi", () => {
     expect(await within(rows).findByRole("button", { name: "Let it unload" })).toBeInTheDocument();
     await userEvent.click(within(rows).getByRole("button", { name: "Unload now" }));
     expect(api.unloadLocalModel).toHaveBeenCalled();
-    expect(await screen.findByText(/Unloaded the model/)).toBeInTheDocument();
+    expect(await screen.findByText("Unloaded the model. It loads again with the next reply.")).toBeInTheDocument();
     expect(within(rows).queryByRole("button", { name: "Unload now" })).toBeNull();
+  });
+
+  it("unloads without promising a reload while Local AI is off", async () => {
+    const off = {
+      ...PROFILES["16 GB GPU"],
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    };
+    api.getLocalAi.mockResolvedValue({
+      ...off,
+      running: {
+        lines: ["Running now: Gemma 4 12B (Q4_K), loaded on the GPU, 6.9 GB."],
+        loaded: true,
+        keptLoaded: false,
+        dynamic: false,
+        dynamicHint: "Off: your pick answers every task.",
+      },
+    });
+    api.unloadLocalModel.mockResolvedValue(off);
+    render(<LocalAi />);
+    const rows = await screen.findByLabelText("Running now");
+    await userEvent.click(within(rows).getByRole("button", { name: "Unload now" }));
+    expect(api.unloadLocalModel).toHaveBeenCalled();
+    expect(await screen.findByText("Unloaded the model.")).toBeInTheDocument();
+    expect(screen.queryByText("Unloaded the model. It loads again with the next reply.")).toBeNull();
   });
 
   it("turns Dynamic off and on from the running rows", async () => {
@@ -399,6 +431,59 @@ describe("LocalAi", () => {
     expect(api.setLocalDynamic).toHaveBeenCalledWith(false);
     expect(await within(rows).findByRole("button", { name: "Turn on Dynamic" })).toBeInTheDocument();
     expect(rows).toHaveTextContent("Off: your pick answers every task.");
+  });
+
+  it("turns Local AI off at once and pauses the tidy, without saving the page", async () => {
+    const v = PROFILES["16 GB GPU"];
+    api.getLocalAi.mockResolvedValue(v);
+    api.setLocalUse.mockResolvedValue({
+      ...v,
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    });
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Use Local AI" });
+    const sw = within(group).getByRole("switch", { name: "Use Local AI on this computer" });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(group).toHaveTextContent(LOCAL_ON);
+    await userEvent.click(sw);
+    expect(api.setLocalUse).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "false"));
+    expect(group).toHaveTextContent(LOCAL_OFF);
+    expect(await screen.findByText("Local AI is off: nothing runs on the on-device model.")).toBeInTheDocument();
+    const tidy = screen.getByRole("group", { name: "Typo tidy" });
+    expect(within(tidy).getByRole("switch")).toBeDisabled();
+    expect(tidy).toHaveTextContent(TIDY_LOCAL_OFF);
+    expect(api.saveLocalAi).not.toHaveBeenCalled();
+  });
+
+  it("turns Local AI back on after an older version switched it off", async () => {
+    const off = {
+      ...PROFILES["16 GB GPU"],
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    };
+    api.getLocalAi.mockResolvedValue(off);
+    api.setLocalUse.mockResolvedValue(PROFILES["16 GB GPU"]);
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Use Local AI" });
+    const sw = within(group).getByRole("switch", { name: "Use Local AI on this computer" });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(sw);
+    expect(api.setLocalUse).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "true"));
+    expect(await screen.findByText("Local AI is on for this computer.")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Typo tidy" })).getByRole("switch")).toBeEnabled();
+  });
+
+  it("says why Local AI didn't change", async () => {
+    api.getLocalAi.mockResolvedValue(PROFILES["16 GB GPU"]);
+    api.setLocalUse.mockRejectedValue("app.json is not valid JSON");
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Use Local AI" });
+    await userEvent.click(within(group).getByRole("switch"));
+    expect(await screen.findByText("app.json is not valid JSON")).toBeInTheDocument();
+    expect(within(group).getByRole("switch")).toHaveAttribute("aria-checked", "true");
   });
 
   it("turns typo tidy on at once, without saving the page", async () => {
@@ -605,6 +690,18 @@ describe("LocalAi", () => {
         },
       }),
     );
+  });
+
+  it("keeps the speed test and Keep loaded off while Local AI is off", async () => {
+    api.getLocalAi.mockResolvedValue({
+      ...PROFILES["8 GB GPU"],
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    });
+    render(<LocalAi />);
+    await openManual();
+    expect(screen.getByRole("button", { name: "Re-run speed test" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Keep loaded" })).toBeDisabled();
   });
 
   it("re-runs the speed test and resets to Auto", async () => {

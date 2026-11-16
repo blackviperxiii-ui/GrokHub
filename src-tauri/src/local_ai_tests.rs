@@ -181,6 +181,7 @@ fn an_apple_16_gb_mac_preselects_e4b_on_unified_memory() {
         &picker,
         &BenchCache::new(),
         true,
+        true,
         Level::Normal,
         "normal use",
     );
@@ -210,7 +211,15 @@ fn a_saved_pick_wins_and_status_says_when_nothing_is_set_up() {
     let p = m.profile();
     let picker = picker(&p, &BenchCache::new(), &[], &config);
     assert_eq!(picker.selected, "gemma-4-12b-it-abliterated-q4_k");
-    let s = status(&p, &picker, &BenchCache::new(), false, Level::Normal, "x");
+    let s = status(
+        &p,
+        &picker,
+        &BenchCache::new(),
+        true,
+        false,
+        Level::Normal,
+        "x",
+    );
     assert_eq!(
         (s.model.as_str(), s.state.as_str(), s.reason.as_str()),
         (
@@ -232,7 +241,15 @@ fn a_saved_pick_wins_and_status_says_when_nothing_is_set_up() {
             ..LocalAiConfig::default()
         },
     );
-    let s = status(&p, &stale, &BenchCache::new(), true, Level::Normal, "x");
+    let s = status(
+        &p,
+        &stale,
+        &BenchCache::new(),
+        true,
+        true,
+        Level::Normal,
+        "x",
+    );
     assert_eq!(
         (s.model.as_str(), s.tok_s.as_str()),
         ("gemma-4-12b-it-q4_k_m", "")
@@ -242,10 +259,27 @@ fn a_saved_pick_wins_and_status_says_when_nothing_is_set_up() {
         &picker,
         &BenchCache::new(),
         true,
+        true,
         Level::Unload,
         "a game is running",
     );
     assert_eq!(tray_label(&paused), "Local AI: Paused");
+    for set_up in [true, false] {
+        let off = status(
+            &p,
+            &picker,
+            &BenchCache::new(),
+            false,
+            set_up,
+            Level::Normal,
+            "normal use",
+        );
+        assert_eq!(
+            (off.state.as_str(), off.reason.as_str()),
+            ("Off", "Use Local AI on this computer is off.")
+        );
+        assert_eq!(tray_label(&off), "Local AI: Off");
+    }
 }
 
 #[test]
@@ -529,9 +563,19 @@ fn a_settings_file_from_before_the_draft_choice_went_away_still_loads() {
 #[test]
 fn the_running_rows_offer_keep_loaded_and_say_when_nothing_runs() {
     let dir = std::env::temp_dir().join(format!("gh-shell-running-{}", std::process::id()));
-    let r = running(&dir);
+    let r = running(&dir, true);
     assert!(r.lines[0].starts_with("Running now: "), "{:?}", r.lines);
     assert_eq!(r.kept_loaded, local_sidecar::keep_loaded());
+}
+
+#[test]
+fn the_running_rows_say_nothing_loads_while_local_ai_is_off() {
+    let dir = std::env::temp_dir().join(format!("gh-shell-running-off-{}", std::process::id()));
+    assert_eq!(
+        running(&dir, false).lines,
+        vec!["Running now: nothing. Local AI is off, so no model loads.".to_string()]
+    );
+    assert_ne!(running(&dir, true).lines, running(&dir, false).lines);
 }
 
 #[test]
@@ -557,4 +601,29 @@ fn optional_makers_follow_the_defaults_and_are_never_preselected() {
             }
         }
     }
+}
+
+#[test]
+fn the_speed_test_waits_while_local_ai_is_switched_off() {
+    let d = std::env::temp_dir().join(format!(
+        "grokhub-shell-speed-off-{}-{}",
+        std::process::id(),
+        grokhub_core::now_ms()
+    ));
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("app.json"), r#"{"localModel":false}"#).unwrap();
+    grokhub_agent::route::host::sync(&d);
+    assert_eq!(
+        speed_test(&d),
+        Err("Turn on Use Local AI on this computer first, then run the speed test.".to_string())
+    );
+    assert!(
+        !grokhub_agent::route::local::switched_on(),
+        "the router's local route stays off"
+    );
+    std::fs::write(d.join("app.json"), "{}").unwrap();
+    assert_eq!(
+        speed_test(&d),
+        Err("Set up a local engine and model first, then run the speed test.".to_string())
+    );
 }

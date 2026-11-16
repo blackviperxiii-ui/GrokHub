@@ -471,3 +471,30 @@ fn todays_pick_sends_a_skill_idea_to_pulse_instead_of_a_chat() {
     );
     assert_eq!(plain.buttons[1].label, "Open Pulse");
 }
+
+#[test]
+fn the_local_ai_tile_says_off_when_the_switch_is_off() {
+    let cfg = local_ai::LocalAiConfig::default();
+    let tile = |on, ready| {
+        let v = local_ai_view(&cfg, true, on, ready);
+        (v.text.big, v.text.tone, v.text.detail)
+    };
+    let steps_aside = Some("Steps aside while you play".to_string());
+    assert_eq!(tile(false, false), ("Off".to_string(), Tone::Quiet, None));
+    assert_eq!(
+        tile(true, true),
+        ("Ready".to_string(), Tone::Normal, steps_aside.clone())
+    );
+    assert_eq!(
+        tile(true, false),
+        ("Paused".to_string(), Tone::Warn, steps_aside)
+    );
+    for on in [true, false] {
+        let empty = local_ai_view(&cfg, false, on, false);
+        assert_eq!(
+            (empty.state, empty.text.big.as_str()),
+            (TileState::Empty, "—"),
+            "with nothing installed the tile offers Set up either way"
+        );
+    }
+}

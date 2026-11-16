@@ -12,6 +12,7 @@ import {
   setLocalDynamic,
   setPromptTidy,
   setLocalKeepLoaded,
+  setLocalUse,
   startLocalDrafterDownload,
   startLocalEngineDownload,
   unloadLocalModel,
@@ -327,6 +328,15 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
     }
   }
 
+  async function switchLocal(on: boolean) {
+    try {
+      setView(await setLocalUse(on));
+      tell(on ? "Local AI is on for this computer." : "Local AI is off: nothing runs on the on-device model.");
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   async function tidy(on: boolean) {
     try {
       setView(await setPromptTidy(on));
@@ -347,7 +357,7 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
   async function unloadNow() {
     try {
       setView(await unloadLocalModel());
-      tell("Unloaded the model. It loads again with the next reply.");
+      tell(view?.localUse.on === false ? "Unloaded the model." : "Unloaded the model. It loads again with the next reply.");
     } catch (err) {
       fail(err);
     }
@@ -419,7 +429,12 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
             {line}
           </p>
         ))}
-        <button type="button" className="quiet" onClick={() => void keepLoaded(!view.running.keptLoaded)}>
+        <button
+          type="button"
+          className="quiet"
+          onClick={() => void keepLoaded(!view.running.keptLoaded)}
+          disabled={!view.localUse.on}
+        >
           {view.running.keptLoaded ? "Let it unload" : "Keep loaded"}
         </button>
         <p className="note">{view.running.dynamicHint}</p>
@@ -431,6 +446,12 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
             Unload now
           </button>
         )}
+      </div>
+      <div className="local-use" role="group" aria-label="Use Local AI">
+        <Toggle checked={view.localUse.on} onChange={(on) => void switchLocal(on)}>
+          Use Local AI on this computer
+        </Toggle>
+        <p className="note">{view.localUse.hint}</p>
       </div>
       <div className="local-tidy" role="group" aria-label="Typo tidy">
         <Toggle checked={view.tidy.on} disabled={!view.tidy.available && !view.tidy.on} onChange={(on) => void tidy(on)}>
@@ -659,7 +680,7 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
             Always pause for these apps (one per line)
             <textarea rows={2} value={deny} onChange={(e) => setDeny(e.target.value)} />
           </label>
-          <button type="button" className="quiet" onClick={speedTest} disabled={testing}>
+          <button type="button" className="quiet" onClick={speedTest} disabled={testing || !view.localUse.on}>
             {testing ? "Testing…" : "Re-run speed test"}
           </button>
         </div>

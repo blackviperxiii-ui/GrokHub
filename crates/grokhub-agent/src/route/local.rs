@@ -1,7 +1,8 @@
-//! Router R3a: plumbing for an on-device model (§13). It is **off** by
-//! default. `localModel` in `app.json` is `false` until you turn on Settings →
-//! Cabin defaults → "On-device model for background tasks". The route goes
-//! live only while that toggle is on **and** a runtime is [`installed`]
+//! Router R3a: plumbing for an on-device model (§13). The switch starts off
+//! in-process until [`super::host::sync`] reads `localModel` from `app.json`
+//! and passes it to [`set_enabled`]; it is on unless saved `false` (Settings →
+//! Local AI → Use Local AI on this computer). The route goes live only while that switch is on **and** a
+//! runtime is [`installed`]
 //! (llama-server binary + GGUF, or a test fake). While the route is off the
 //! registry has no `local:*` rows ([`LocalSource`] lists nothing) and
 //! [`super::Router::choose`] drops any `local:*` id, so no route can pick one.
@@ -82,8 +83,9 @@ pub const NO_RUNTIME_MSG: &str = "The on-device model isn't installed.";
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static TIER: AtomicUsize = AtomicUsize::new(0);
 
-/// The cabin sets this from `app.json` `localModel` (default `false`) every
-/// tick, so the Settings toggle takes effect without a restart.
+/// `host::sync` sets this from `app.json` `localModel` (on unless saved
+/// `false`) before every turn and when the switch changes, so it takes effect
+/// without a restart.
 pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::SeqCst);
     if !on {
