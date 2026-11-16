@@ -25,6 +25,6 @@
 - Standalone `main.rs` finds state via `GROKHUB_CONFIG`, then `HOME/.config/GrokHub`, then the cwd; it does not use `%APPDATA%` like `config_dir()` in grokhub-app.
 - `HUB_KIND` (`grokhub-hub-v1`) is what `--doctor` and paired computers probe; changing it is a protocol break.
 - The cabin only fills `HubState.snapshot` when a peer is paired and after the `hub` destination grant or a one-time hard Send approve (`privacy_ui.rs`); revoking clears it. The `/v1/snapshot` route itself is unchanged.
-- Tasks queue on this computer only (`enqueue_local`); no route lets a peer add or read tasks (`phone_routes_are_gone`). `/send` itself starts a read-only background run, not a queued task.
+- Local inbox helpers (`enqueue_local`) queue on this computer only; no route lets a peer add or read tasks (`phone_routes_are_gone`). Desktop `/send` starts a read-only background run, not a queued task; `enqueue_local` stays for tests.
 ## See also
 - [grokhub-core](grokhub-core.md), [install-scripts](install-scripts.md)
