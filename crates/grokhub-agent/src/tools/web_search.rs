@@ -28,10 +28,10 @@ const OFFLINE_MSG: &str =
 const SETTINGS_PATH: &str = "Settings → AI models → Web search";
 /// A non-http SearXNG URL is refused when saved.
 pub const BAD_SEARXNG_URL: &str = "SearXNG URL must start with http:// or https://.";
-/// A host that can't be a server: a reserved, link-local or multicast IP, or
-/// an IPv4 address written in a form only some parsers read.
 /// A SearXNG URL whose host or port can't be read, such as port `88888`.
 pub const SEARXNG_UNREADABLE: &str = "That SearXNG URL can't be read. Check its port (a number up to 65535) and spelling, like http://192.168.1.5:8888.";
+/// A host that can't be a server: a reserved, link-local or multicast IP, or
+/// an IPv4 address written in a form only some parsers read.
 pub const SEARXNG_BAD_HOST: &str = "That address can't be a SearXNG server. Use its name or a plain IP address, like http://192.168.1.5:8888.";
 /// A public-looking name that leads to this computer or the user's network:
 /// only a local name or IP reaches the saved-server resolver.
