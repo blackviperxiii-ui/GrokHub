@@ -19,7 +19,7 @@
 - New pace knob: a `#[serde(default = ...)]` field on `HeartbeatPace`, set in `PACE_NORMAL`, with a fake-clock test in `heartbeat_throttle.rs`.
 ## What breaks it
 - Calling heartbeat_may before an act's own checks: it spends a slot for nothing and traces a misleading hold.
-- Budgeting the Night slot: automations and loops have their own clock and daily_auto_cap, and run as `BgOrigin::Scheduled` runs that never take the composer (heartbeat_halt_skips_every_organ_that_starts_work).
+- Budgeting the Night slot: automations and loops have their own clock and daily_auto_cap, and run as scheduled runs that never take the composer (heartbeat_halt_skips_every_organ_that_starts_work).
 - Tests that slice tick_heartbeat up to `fn tick_anticipate` (the_night_slot_runs_loops_and_clock_time_automations, periodic_persist_leaves_the_ui_thread): keep that span free of `self.persist()`. An auto-act that skips `AutoAct::admit` or `harness::decide`, runs through anything but the native dispatch, or acts on a step with no ledger target. `AutoAct` has private fields so a hard candidate can't become one (reply_to_sam_is_a_prepared_draft_on_a_hard_card_even_under_always_and_full, `a_hundred_soft_approvals_never_let_a_hard_send_auto_act`).
 ## What depends on it
 - Pulse ideas (maybe_suggest_ideas), the nightly review, anticipate, and pulse_dismiss / pulse_not_this, which feed backoff.

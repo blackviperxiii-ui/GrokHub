@@ -150,8 +150,8 @@ pub enum Slash {
     Btw,
     /// Open the stored plan (`/view-plan`, `/show-plan`, `/plan-view`).
     ViewPlan,
-    /// `/bg <task>` runs a task beside this chat. Bare `/bg` moves the live reply
-    /// to the background; `/bg stop` stops every background run.
+    /// `/bg <task>` runs a task beside this chat. Bare `/bg` lists the
+    /// background runs; `/bg stop` stops every one.
     Background(String),
     /// `/queue <message>` holds the message until the live reply ends instead of steering it.
     Queue(String),

@@ -24,7 +24,7 @@
 ## Non-obvious
 - `/learn` belongs to the cabin: a Grok extra with the same verb must not become an insert-only chip.
 - `/workflow pause|resume|stop` with no target is `WorkflowUsage` and is not forwarded; any other first word is a launch name.
-- `/btw` keeps persist id `ask`; `/bg` with no task moves the live reply to the background, except under Ask, where it shows BG_ASK_OFF.
+- `/btw` keeps persist id `ask`; `/bg` with no task lists the background runs and what they found.
 - Slash results are stored with `SLASH_RESULT_PREFIX` so they stay on the pane. `message_origin` reads that tag (never the text) and makes them `ChatKind::Result`, which keeps one bubble as it ages and never folds into a thought (GL-05).
 - `/skills changes|undo|restore` parse in `parse_skills_arg` (`crates/grokhub-core/src/slash/cmds/changes.rs`); any other `/skills` word stays `GrokSkills`. Undo and restore run only from the user's typing (typed_send) or a row click in the retired cabin's skill_undo.rs; from a night job, automation, Pulse run, or idea they only show the rows.
 - `/privacy` is a cabin view (run_privacy) and shadows the Grok CLI pager builtin. Slash text never writes a grant; only a Settings click in ui_privacy_rows or ui_scope_rows does. Its ghost Revoke rows (paint_privacy_revokes) answer a pointer click only.
