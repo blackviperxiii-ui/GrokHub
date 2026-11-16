@@ -56,6 +56,9 @@ enum Record {
         /// How many of the last items are the own items of a turn that
         /// compacted as it ran: they were never saved on their own lines.
         own: usize,
+        /// Asks and replies of that turn the compaction folded away, which
+        /// no line holds either.
+        folded: usize,
     },
 }
 
@@ -463,22 +466,32 @@ pub fn record_compaction(
     usage: &Usage,
     meter: &str,
 ) -> Result<(), String> {
-    write_compaction(id, cwd, model, items, usage, meter, 0)
+    write_compaction(id, cwd, model, items, usage, meter, (0, 0))
 }
 
-/// [`record_compaction`] for a turn that compacted as it ran: its own items,
-/// the last `own` of `items`, are saved only through the compaction, so they
-/// take its time.
+/// [`record_compaction`] for a turn that compacted as it ran. `turn` is how
+/// many of `items`, at the end, are the turn's own (saved only through the
+/// compaction, so they take its time), and how many of its asks and replies
+/// the compaction folded away.
 pub fn record_compacted_turn(
     id: &str,
     cwd: &str,
     model: &str,
     items: &[InputItem],
-    own: usize,
+    turn: (usize, usize),
     usage: &Usage,
     meter: &str,
 ) -> Result<(), String> {
-    write_compaction(id, cwd, model, items, usage, meter, own.min(items.len()))
+    let (own, folded) = turn;
+    write_compaction(
+        id,
+        cwd,
+        model,
+        items,
+        usage,
+        meter,
+        (own.min(items.len()), folded),
+    )
 }
 
 fn write_compaction(
@@ -488,7 +501,7 @@ fn write_compaction(
     items: &[InputItem],
     usage: &Usage,
     meter: &str,
-    own: usize,
+    turn: (usize, usize),
 ) -> Result<(), String> {
     let id = safe_id(id)?.to_string();
     if tombstoned(&id) {
@@ -501,7 +514,7 @@ fn write_compaction(
     }
     let mut lines = Vec::new();
     let at = Some(grokhub_core::now_ms());
-    for value in [compaction_json(items, own), usage_json(usage, meter, at)] {
+    for value in [compaction_json(items, turn), usage_json(usage, meter, at)] {
         serde_json::to_writer(&mut lines, &value).map_err(|err| err.to_string())?;
         lines.push(b'\n');
     }
@@ -791,7 +804,7 @@ fn drop_slots(records: &mut Vec<Record>, doomed: &[Slot]) {
         }
     }
     for (i, js) in kept {
-        if let Some(Record::Compaction { items, own }) = records.get_mut(i) {
+        if let Some(Record::Compaction { items, own, .. }) = records.get_mut(i) {
             let first_own = items.len() - *own;
             *own -= js.iter().filter(|&&j| j >= first_own).count();
             let mut j = 0;
@@ -948,7 +961,7 @@ fn replay(records: &[Record]) -> Replay {
                 });
             }
             Record::Usage { at, .. } => open.drain(..).for_each(|j| visible[j].at = *at),
-            Record::Compaction { items, own } => {
+            Record::Compaction { items, own, folded } => {
                 let at = match records.get(i + 1) {
                     Some(Record::Usage { at, .. }) => *at,
                     _ => None,
@@ -985,7 +998,7 @@ fn replay(records: &[Record]) -> Replay {
                     }
                 }
                 let counted = before.iter().filter(|&&p| is_counted(&prior[p].item));
-                hidden += counted.count() - matched;
+                hidden += counted.count() - matched + folded;
             }
         }
     }
@@ -1102,7 +1115,7 @@ fn is_tool_image(item: &InputItem) -> bool {
 
 /// A message the transcript counts: an ask or a reply, not a tool's image
 /// or a compaction's own text.
-fn is_counted(item: &InputItem) -> bool {
+pub(crate) fn is_counted(item: &InputItem) -> bool {
     is_shown_message(item) && !is_tool_image(item) && !crate::compact::is_compaction_message(item)
 }
 
@@ -1275,7 +1288,7 @@ fn write_session(info: &SessionInfo) -> Result<(), String> {
         let value = match record {
             Record::Item(item) => item_json(item),
             Record::Usage { usage, meter, at } => usage_json(usage, meter, *at),
-            Record::Compaction { items, own } => compaction_json(items, *own),
+            Record::Compaction { items, own, folded } => compaction_json(items, (*own, *folded)),
         };
         push_line(&mut bytes, &value)?;
     }
@@ -1485,9 +1498,13 @@ fn parse_record(value: &Value) -> Option<Record> {
                     }
                 }
             }
-            let own = value.get("own").and_then(Value::as_u64).unwrap_or(0);
-            let own = usize::try_from(own).unwrap_or(usize::MAX).min(items.len());
-            Some(Record::Compaction { items, own })
+            let count = |key: &str| {
+                let n = value.get(key).and_then(Value::as_u64).unwrap_or(0);
+                usize::try_from(n).unwrap_or(usize::MAX)
+            };
+            let own = count("own").min(items.len());
+            let folded = count("folded");
+            Some(Record::Compaction { items, own, folded })
         }
         _ => None,
     }
@@ -1588,13 +1605,16 @@ fn item_json(item: &InputItem) -> Value {
     }
 }
 
-fn compaction_json(items: &[InputItem], own: usize) -> Value {
+fn compaction_json(items: &[InputItem], (own, folded): (usize, usize)) -> Value {
     let mut value = json!({
         "type": "compaction",
         "items": items.iter().map(item_json).collect::<Vec<_>>(),
     });
     if own > 0 {
         value["own"] = json!(own);
+    }
+    if folded > 0 {
+        value["folded"] = json!(folded);
     }
     value
 }
@@ -1889,7 +1909,7 @@ mod tests {
             vec![Some(1_000), Some(2_000)]
         );
         // A manual compact: a summary, then the last turn word for word.
-        let summary = user("<summary>Fixed the dock.</summary>");
+        let summary = summary_of("Fixed the dock.");
         let kept = [summary.clone(), second[0].clone(), second[1].clone()];
         let before = grokhub_core::now_ms();
         record_compaction(id, "/work", "grok-4.7", &kept, &usage, "").unwrap();
@@ -1911,9 +1931,9 @@ mod tests {
         // A turn that compacts as it runs is saved only by the compaction, so
         // its summary and its ask take that time.
         let third = [user("now the roof"), assistant("Roof done.")];
-        let summary = user("<summary>Dock and bar.</summary>");
+        let summary = summary_of("Dock and bar.");
         let kept = [summary, third[0].clone(), third[1].clone()];
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &usage, "").unwrap();
+        record_compacted_turn(id, "/work", "grok-4.7", &kept, (2, 0), &usage, "").unwrap();
         let after_third = grokhub_core::now_ms();
         let info = load_session(id).unwrap();
         let times = user_turn_times(&info);
@@ -1924,9 +1944,9 @@ mod tests {
             (after..=after_third).contains(&roof),
             "{roof} not in {after}..={after_third}"
         );
-        // The first compaction hid two messages, the second the three it
-        // replaced (the first summary, the bar ask and its reply).
-        assert_eq!(compacted_messages(&info), 5);
+        // The first compaction hid two messages, the second the bar ask and
+        // its reply (the first summary isn't a message).
+        assert_eq!(compacted_messages(&info), 4);
     }
 
     #[test]
@@ -1965,7 +1985,7 @@ mod tests {
         let second = [user("and the bar"), assistant("Done.")];
         write_timed(id, &[(&first, 1_000), (&second, 2_000)]);
         // The server path keeps the last ask and its reply.
-        let summary = user("<summary>Dock.</summary>");
+        let summary = summary_of("Dock.");
         let kept = [summary, second[0].clone(), second[1].clone()];
         record_compaction(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
         assert_eq!(compacted_messages(&load_session(id).unwrap()), 2);
@@ -1979,7 +1999,13 @@ mod tests {
                 .into_iter()
                 .map(|(_, text)| text)
                 .collect::<Vec<_>>(),
-            ["<summary>Dock.</summary>\n[image]", "and the bar\n[image]"],
+            [
+                format!(
+                    "{}\n[image]",
+                    crate::compact::message_text(&summary_of("Dock."))
+                ),
+                "and the bar\n[image]".to_string()
+            ],
             "the reply is gone"
         );
         let times = user_turn_times(&info);
@@ -2000,7 +2026,7 @@ mod tests {
         write_timed(id, &[(&first, 1_000), (&second, 2_000)]);
         // A compaction made during the bar turn, used by the next one: it
         // holds the bar turn and the new roof turn.
-        let summary = user("<summary>Dock.</summary>");
+        let summary = summary_of("Dock.");
         let roof = [user("now the roof"), assistant("Roof done.")];
         let kept = [
             summary,
@@ -2010,7 +2036,16 @@ mod tests {
             roof[1].clone(),
         ];
         let before = grokhub_core::now_ms();
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
+        record_compacted_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &kept,
+            (2, 0),
+            &Usage::default(),
+            "",
+        )
+        .unwrap();
         let info = load_session(id).unwrap();
         let times = user_turn_times(&info);
         assert_eq!(times.len(), 3, "{times:?}");
@@ -2056,7 +2091,16 @@ mod tests {
             ask,
             assistant("Fixed."),
         ];
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
+        record_compacted_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &kept,
+            (2, 0),
+            &Usage::default(),
+            "",
+        )
+        .unwrap();
         let info = load_session(id).unwrap();
         let times = user_turn_times(&info);
         assert_eq!(times.len(), 3, "{times:?}");
@@ -2099,15 +2143,31 @@ mod tests {
         };
         let first = [user("check the login page"), assistant("Looking.")];
         write_timed(id, &[(&first, 1_000)]);
-        // The tail starts at the newest user message: the tool's image.
+        // The tail starts at the newest user message: the tool's image. The
+        // turn's ask went into the summary.
         let kept = [
             summary_of("Checked the login page."),
             user("<standing_rules>\nKeep it short.\n</standing_rules>"),
             image,
             assistant("The button is hidden."),
         ];
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
+        record_compacted_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &kept,
+            (2, 1),
+            &Usage::default(),
+            "",
+        )
+        .unwrap();
+        rename_session(id, "Login").unwrap();
         let info = load_session(id).unwrap();
+        assert_eq!(
+            compacted_messages(&info),
+            3,
+            "the first turn's two and the folded ask, through a rewrite"
+        );
         assert_eq!(
             user_kinds(&info),
             [
@@ -2174,13 +2234,22 @@ mod tests {
         write_timed(id, &[(&first, 1_000)]);
         let notice = user("<background-notice>helper done</background-notice>");
         let kept = [
-            user("<summary>Step one.</summary>"),
+            summary_of("Step one."),
             user("continue"),
             notice,
             assistant("Step two done."),
         ];
         let before = grokhub_core::now_ms();
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, 3, &Usage::default(), "").unwrap();
+        record_compacted_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &kept,
+            (3, 0),
+            &Usage::default(),
+            "",
+        )
+        .unwrap();
         let info = load_session(id).unwrap();
         let times = user_turn_times(&info);
         assert_eq!(times.len(), 3, "{times:?}");
@@ -2196,11 +2265,20 @@ mod tests {
         // Cancelled before any reply.
         let cancelled = [user("continue")];
         write_timed(id, &[(&first, 1_000), (&cancelled, 2_000)]);
-        let summary = user("<summary>Logs.</summary>");
+        let summary = summary_of("Logs.");
         let again = [user("continue"), assistant("Step one done.")];
         let kept = [summary, again[0].clone(), again[1].clone()];
         let before = grokhub_core::now_ms();
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
+        record_compacted_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &kept,
+            (2, 0),
+            &Usage::default(),
+            "",
+        )
+        .unwrap();
         let times = user_turn_times(&load_session(id).unwrap());
         assert_eq!(times.len(), 2, "{times:?}");
         let at = times[1].unwrap();
@@ -2251,7 +2329,16 @@ mod tests {
             assistant("Bar done."),
         ];
         let before = grokhub_core::now_ms();
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
+        record_compacted_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &kept,
+            (2, 0),
+            &Usage::default(),
+            "",
+        )
+        .unwrap();
         let info = load_session(id).unwrap();
         let times = user_turn_times(&info);
         assert_eq!(times.len(), 4, "{times:?}");
@@ -2285,18 +2372,27 @@ mod tests {
         write_timed(id, &[(&first, 1_000), (&second, 2_000), (&third, 3_000)]);
         // A manual compact keeps the last turn: its "continue" is the 3,000
         // one, not the older copy.
-        let summary = user("<summary>Steps and logs.</summary>");
+        let summary = summary_of("Steps and logs.");
         let kept = [summary, third[0].clone(), third[1].clone()];
         record_compaction(id, "/work", "grok-4.7", &kept, &Usage::default(), "").unwrap();
         let times = user_turn_times(&load_session(id).unwrap());
         assert_eq!(times.len(), 2, "{times:?}");
         assert_eq!(times[1], Some(3_000));
         // A turn that says "continue" again and compacts as it runs.
-        let summary = user("<summary>Steps, logs, step two.</summary>");
+        let summary = summary_of("Steps, logs, step two.");
         let again = [user("continue"), assistant("Step three done.")];
         let kept = [summary, again[0].clone(), again[1].clone()];
         let before = grokhub_core::now_ms();
-        record_compacted_turn(id, "/work", "grok-4.7", &kept, 2, &Usage::default(), "").unwrap();
+        record_compacted_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &kept,
+            (2, 0),
+            &Usage::default(),
+            "",
+        )
+        .unwrap();
         let after = grokhub_core::now_ms();
         let raw = fs::read_to_string(session_file(id).unwrap()).unwrap();
         let marker: Value = serde_json::from_str(raw.lines().nth(12).unwrap()).unwrap();

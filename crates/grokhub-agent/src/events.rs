@@ -600,15 +600,16 @@ impl NativeEngine {
         self.usage = out.usage.clone();
         let delta = self.usage.saturating_delta(&before_usage);
         if out.compacted {
-            let own = out
-                .turn_from
-                .map_or(0, |from| self.history.len().saturating_sub(from));
+            let kept = out
+                .turn
+                .unwrap_or(crate::run::TurnKept { from: 0, folded: 0 });
+            let own = self.history.len().saturating_sub(kept.from);
             let _ = crate::session::record_compacted_turn(
                 &session,
                 &cwd,
                 &model,
                 &self.history,
-                own,
+                (own, kept.folded),
                 &delta,
                 meter,
             );

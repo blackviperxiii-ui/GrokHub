@@ -292,16 +292,25 @@ pub struct LoopOut {
     pub usage: Usage,
     /// A summary replaced older history. The caller records a compaction marker.
     pub compacted: bool,
-    /// After a compaction, where this turn's own items start in the history:
-    /// the ones it kept or added, which no earlier saved turn holds.
-    pub turn_from: Option<usize>,
+    /// After a compaction, what became of this turn's own items.
+    pub turn: Option<TurnKept>,
+}
+
+/// What compactions did to a turn's own items, which no earlier saved turn
+/// holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TurnKept {
+    /// Where the ones still in the history start.
+    pub from: usize,
+    /// Asks and replies of the turn that compactions folded away.
+    pub folded: usize,
 }
 
 fn finish(
     input: &LoopIn<'_>,
     stop: StopReason,
     usage: Usage,
-    compacted: Option<usize>,
+    compacted: Option<TurnKept>,
     fire: bool,
 ) -> LoopOut {
     if fire {
@@ -316,7 +325,7 @@ fn finish(
         stop,
         usage,
         compacted: compacted.is_some(),
-        turn_from: compacted,
+        turn: compacted,
     }
 }
 
@@ -354,10 +363,12 @@ fn hosted_for_step(
 
 enum CompactPass {
     /// `background`: the result came from a background compaction.
-    /// `turn_from`: where the turn's own items start in the new history.
+    /// `turn_from`: where the turn's own items start in the new history;
+    /// `folded`: how many of its asks and replies the compaction folded.
     Ok {
         background: bool,
         turn_from: usize,
+        folded: usize,
     },
     Cancelled,
     Failed,
@@ -442,9 +453,11 @@ fn run_compact_pass(
                 server: done.server,
             });
             emit_usage(on_event, usage, history, input.context_length);
+            let (turn_from, folded) = settle(&turn, history);
             CompactPass::Ok {
                 background: from_background,
-                turn_from: settle(&turn, history),
+                turn_from,
+                folded,
             }
         }
         Err(crate::compact::CompactError::Cancelled) => {
@@ -471,18 +484,20 @@ fn run_compact_pass(
 /// Pairs the calls a compaction kept without their outputs, then finds
 /// where the turn's own items start ([`own_start`]). Pairing first keeps that
 /// index right to the end of the turn: no output is added before it later.
-fn settle(turn: &[InputItem], history: &mut Vec<InputItem>) -> usize {
+fn settle(turn: &[InputItem], history: &mut Vec<InputItem>) -> (usize, usize) {
     crate::client::pair_orphan_calls(history);
     own_start(turn, history)
 }
 
 /// Where a turn's own items (`turn`, as they were before a compaction) start
-/// in the history the compaction left. Each kept item is matched, newest first
-/// and in order, to a turn item that shows the same; the first match starts
-/// them. With none kept, what the turn adds next starts them.
-fn own_start(turn: &[InputItem], history: &[InputItem]) -> usize {
+/// in the history the compaction left, and how many of its asks and replies
+/// it folded. Each kept item is matched, newest first and in order, to a turn
+/// item that shows the same; the first match starts them. With none kept,
+/// what the turn adds next starts them.
+fn own_start(turn: &[InputItem], history: &[InputItem]) -> (usize, usize) {
     let mut left = turn.len();
     let mut start = history.len();
+    let mut kept = vec![false; turn.len()];
     for (at, item) in history.iter().enumerate().rev() {
         if left == 0 {
             break;
@@ -491,11 +506,17 @@ fn own_start(turn: &[InputItem], history: &[InputItem]) -> usize {
             .iter()
             .rposition(|t| crate::session::shows_same(t, item))
         {
+            kept[found] = true;
             left = found;
             start = at;
         }
     }
-    start
+    let folded = turn
+        .iter()
+        .zip(&kept)
+        .filter(|(item, kept)| !**kept && crate::session::is_counted(item))
+        .count();
+    (start, folded)
 }
 
 pub fn run_loop(
@@ -645,7 +666,7 @@ fn run_turn(
     // Where this turn's own items start: its ask, until a compaction moves
     // them, and then where they went (also the sign that it compacted).
     let ask_at = history.len().saturating_sub(1);
-    let mut compacted_once: Option<usize> = None;
+    let mut compacted_once: Option<TurnKept> = None;
     // The tool list the last request sent, for a compaction that keeps its prefix.
     let mut last_tools: Vec<serde_json::Value> = Vec::new();
     let mut turns_since_compact = 0u32;
@@ -804,7 +825,7 @@ fn run_turn(
                 match run_compact_pass(
                     input,
                     history,
-                    compacted_once.unwrap_or(ask_at),
+                    compacted_once.map_or(ask_at, |kept| kept.from),
                     &modified_paths,
                     &last_tools,
                     &mut usage,
@@ -813,8 +834,12 @@ fn run_turn(
                     CompactPass::Ok {
                         background,
                         turn_from,
+                        folded,
                     } => {
-                        compacted_once = Some(turn_from);
+                        compacted_once = Some(TurnKept {
+                            from: turn_from,
+                            folded: compacted_once.map_or(0, |kept| kept.folded) + folded,
+                        });
                         turns_since_compact = 0;
                         prompt_mark = None;
                         let now = crate::compact::trigger_tokens(history, None);
@@ -976,14 +1001,19 @@ fn run_turn(
                 match run_compact_pass(
                     input,
                     history,
-                    compacted_once.unwrap_or(ask_at),
+                    compacted_once.map_or(ask_at, |kept| kept.from),
                     &modified_paths,
                     &last_tools,
                     &mut usage,
                     on_event,
                 ) {
-                    CompactPass::Ok { turn_from, .. } => {
-                        compacted_once = Some(turn_from);
+                    CompactPass::Ok {
+                        turn_from, folded, ..
+                    } => {
+                        compacted_once = Some(TurnKept {
+                            from: turn_from,
+                            folded: compacted_once.map_or(0, |kept| kept.folded) + folded,
+                        });
                         turns_since_compact = 0;
                         overflow_compacted = true;
                         continue;
@@ -2784,7 +2814,7 @@ mod tests {
             out,
         ];
         history.extend(turn.clone());
-        assert_eq!(own_start(&turn, &history), 4);
+        assert_eq!(own_start(&turn, &history), (4, 0));
     }
 
     #[test]
@@ -2804,7 +2834,8 @@ mod tests {
             msg("assistant", "Here is the fix."),
         ];
         history.extend(turn.clone());
-        let from = settle(&turn, &mut history);
+        let (from, folded) = settle(&turn, &mut history);
+        assert_eq!(folded, 0);
         assert_eq!((from, history.len()), (7, 9), "two outputs went in first");
         assert_eq!(crate::client::pair_orphan_calls(&mut history), 0);
         assert_eq!(history[from..], turn[..]);
@@ -2819,7 +2850,7 @@ mod tests {
             msg("user", "continue"),
         ];
         history.extend(turn.clone());
-        assert_eq!(own_start(&turn, &history), 2);
+        assert_eq!(own_start(&turn, &history), (2, 0));
     }
 
     #[test]
@@ -2827,9 +2858,13 @@ mod tests {
         let notice = msg("user", "<background-notice>done</background-notice>");
         let turn = vec![msg("user", "continue"), notice.clone()];
         let history = vec![msg("user", "<summary>All of it.</summary>"), notice];
-        assert_eq!(own_start(&turn, &history), 1, "only the notice was kept");
+        assert_eq!(
+            own_start(&turn, &history),
+            (1, 1),
+            "only the notice was kept"
+        );
         let history = vec![msg("user", "<summary>All of it.</summary>")];
-        assert_eq!(own_start(&turn, &history), 1, "nothing was kept");
+        assert_eq!(own_start(&turn, &history), (1, 2), "nothing was kept");
     }
 
     #[test]
@@ -2854,7 +2889,7 @@ mod tests {
                 crate::image_budget::OLD_IMAGE_PLACEHOLDER.into(),
             )),
         ];
-        assert_eq!(own_start(&turn, &history), 1);
+        assert_eq!(own_start(&turn, &history), (1, 0));
     }
 
     struct Script {

@@ -2546,9 +2546,9 @@ mod tests {
         let out = drive(&script, &mut history, 1_000);
         assert_eq!(out.stop, crate::run::StopReason::EndTurn);
         assert!(out.compacted);
-        let from = out
-            .turn_from
-            .expect("a compacting turn says where it starts");
+        let kept = out.turn.expect("a compacting turn says where it starts");
+        assert_eq!(kept.folded, 0, "the ask was kept");
+        let from = kept.from;
         let own: Vec<String> = history[from..].iter().map(message_text).collect();
         assert_eq!(own, ["go", "done"], "the turn's ask and reply are its own");
         assert_eq!(out.usage.input_tokens, 14);

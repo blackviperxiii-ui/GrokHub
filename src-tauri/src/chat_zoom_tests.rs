@@ -70,6 +70,7 @@ fn turn(at: Option<u64>) -> Turn {
     Turn {
         first: 0,
         last: 0,
+        lead: 0,
         at,
         hash: String::new(),
     }
@@ -141,6 +142,57 @@ fn a_tools_image_stays_in_its_turn_and_a_compactions_text_is_in_none() {
         (group.first_line, group.summary.as_str(), group.messages),
         (2, "read the lisbon map", 4),
         "the image isn't an ask or a message of its own"
+    );
+}
+
+#[test]
+fn a_turn_whose_ask_was_folded_takes_its_images_time_and_its_replys_words() {
+    let lines = vec![
+        line(
+            Role::User,
+            "This session is being continued from a previous conversation",
+        ),
+        line(Role::User, "image from screenshot\n[image]"),
+        line(Role::Tools, "click"),
+        line(Role::Assistant, "The login button is hidden."),
+        line(Role::User, "now fix the footer"),
+        line(Role::Assistant, "Fixed."),
+    ];
+    let users = [
+        UserLine {
+            at: Some(600 * MIN),
+            kind: UserKind::Compaction,
+        },
+        UserLine {
+            at: Some(600 * MIN),
+            kind: UserKind::ToolImage,
+        },
+        UserLine {
+            at: Some(840 * MIN),
+            kind: UserKind::Ask,
+        },
+    ];
+    let parts = parts(&lines, &users);
+    let turns = turns(&lines, &parts);
+    let got: Vec<_> = turns
+        .iter()
+        .map(|t| (t.first, t.last, t.lead, t.at))
+        .collect();
+    assert_eq!(
+        got,
+        vec![(1, 3, 3, Some(600 * MIN)), (4, 5, 4, Some(840 * MIN))]
+    );
+    assert_eq!(turn_text(&lines, &turns[0]), "The login button is hidden.");
+    let vecs = vec![axis(0); 2];
+    assert_eq!(
+        segment(&turns, &vecs, MODEL_FLOOR),
+        vec![0..1, 1..2],
+        "four hours apart"
+    );
+    let group = group_of(&lines, &parts, &turns[..1]);
+    assert_eq!(
+        (group.summary.as_str(), group.first_at, group.messages),
+        ("The login button is hidden.", Some(600 * MIN), 1)
     );
 }
 

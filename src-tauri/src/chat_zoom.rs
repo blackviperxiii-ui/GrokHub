@@ -104,6 +104,9 @@ pub struct Zoom {
 struct Turn {
     first: usize,
     last: usize,
+    /// The line it is named and embedded by: its ask, or for a turn with
+    /// none (a compaction folded it), its first reply, else its first line.
+    lead: usize,
     at: Option<u64>,
     hash: String,
 }
@@ -127,8 +130,8 @@ struct Cache {
 enum Part {
     /// An ask, with the time of its turn.
     Ask(Option<u64>),
-    /// A tool's image, sent as a user message.
-    Image,
+    /// A tool's image, sent as a user message, with the time of its turn.
+    Image(Option<u64>),
     /// A compaction's summary, ledger or rules.
     Made,
     Reply,
@@ -152,8 +155,8 @@ fn parts(lines: &[Line], users: &[UserLine]) -> Vec<Part> {
             Role::User => match users.next() {
                 Some(UserLine {
                     kind: UserKind::ToolImage,
-                    ..
-                }) => Part::Image,
+                    at,
+                }) => Part::Image(*at),
                 Some(UserLine {
                     kind: UserKind::Compaction,
                     ..
@@ -167,27 +170,44 @@ fn parts(lines: &[Line], users: &[UserLine]) -> Vec<Part> {
         .collect()
 }
 
-/// Splits the chat's lines into turns, from each line's [`Part`].
+/// Splits the chat's lines into turns, from each line's [`Part`]. A turn
+/// with no ask of its own (its ask was folded by a compaction) takes the time
+/// of its first timed image.
 fn turns(lines: &[Line], parts: &[Part]) -> Vec<Turn> {
     let mut out: Vec<Turn> = Vec::new();
     for (i, part) in parts.iter().enumerate() {
-        let at = match part {
+        match part {
             Part::Made => continue,
-            Part::Ask(at) => *at,
-            _ if out.is_empty() => None,
-            _ => {
-                if let Some(turn) = out.last_mut() {
-                    turn.last = i;
-                }
+            Part::Ask(at) => {
+                out.push(Turn {
+                    first: i,
+                    last: i,
+                    lead: i,
+                    at: *at,
+                    hash: String::new(),
+                });
                 continue;
             }
-        };
-        out.push(Turn {
-            first: i,
-            last: i,
-            at,
-            hash: String::new(),
-        });
+            _ if out.is_empty() => out.push(Turn {
+                first: i,
+                last: i,
+                lead: i,
+                at: None,
+                hash: String::new(),
+            }),
+            _ => {}
+        }
+        let Some(turn) = out.last_mut() else { continue };
+        turn.last = i;
+        if matches!(parts[turn.lead], Part::Ask(_)) {
+            continue;
+        }
+        if *part == Part::Reply && parts[turn.lead] != Part::Reply {
+            turn.lead = i;
+        }
+        if let (None, Part::Image(at)) = (turn.at, part) {
+            turn.at = *at;
+        }
     }
     for turn in &mut out {
         turn.hash = turn_hash(&lines[turn.first..=turn.last]);
@@ -212,10 +232,9 @@ fn turn_hash(lines: &[Line]) -> String {
     format!("{h:016x}")
 }
 
-/// What a turn is embedded from: its user message, or for a turn with none
-/// (lines before the first ask), its first line.
+/// What a turn is embedded from: its lead line ([`Turn::lead`]).
 fn turn_text<'a>(lines: &'a [Line], turn: &Turn) -> &'a str {
-    let text = lines[turn.first].text.as_str();
+    let text = lines[turn.lead].text.as_str();
     match text.char_indices().nth(EMBED_CHARS) {
         Some((cut, _)) => &text[..cut],
         None => text,
@@ -448,7 +467,7 @@ fn group_of(lines: &[Line], parts: &[Part], turns: &[Turn]) -> Group {
     let first_ask = asks
         .first()
         .map(|(_, text)| first_line_of(text))
-        .unwrap_or_else(|| first_line_of(&span[0].text));
+        .unwrap_or_else(|| first_line_of(&lines[turns[0].lead].text));
     let words = grokhub_core::topics_from_turns(&asks).join(" ");
     let title = grokhub_core::short_auto_title(&words)
         .or_else(|| (!first_ask.is_empty()).then(|| clip(&first_ask, grokhub_core::AUTO_TITLE_MAX)))

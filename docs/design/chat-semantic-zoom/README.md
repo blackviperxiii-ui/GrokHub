@@ -32,8 +32,9 @@ Controls:
 The unit is a **turn**: one user message and the replies and tool rows after
 it. The image a tool returns comes back as a user message; it stays in its
 turn and isn't counted as an ask or a message. A compaction's summary, ledger
-and standing rules are in no turn. Groups are runs of turns, cut at a
-boundary.
+and standing rules are in no turn. A turn whose ask a compaction folded
+away is named by its first reply and takes the time of its kept image.
+Groups are runs of turns, cut at a boundary.
 
 1. **Time gap.** A new group starts when 30 minutes or more pass between two
    turns. Session files have no per-message times today, so each turn's
@@ -95,8 +96,9 @@ clickable, because the chat view can't show those messages either.
   delete removes the file it wrote.
 - A compacted chat's "Earlier, compacted" count is every ask and reply a
   compaction took out of view: what each one replaced, less the ones it
-  kept. Tool images and earlier compactions' own text aren't counted, as in
-  the groups. A kept message deleted later still counts, since its saved copy is
+  kept, plus the asks and replies of a compacting turn it folded (the line
+  says how many, `"folded": 1`). Tool images and earlier compactions' own
+  text aren't counted, as in the groups. A kept message deleted later still counts, since its saved copy is
   under the compaction.
 
 ## Cost per 100 messages
