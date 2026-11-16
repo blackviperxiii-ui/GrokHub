@@ -1,0 +1,1 @@
+- Claude plan: the app can read Claude Code's streamed output (text, tool rows, refusals, usage and errors) into chat events, ready for chats on your Claude plan. Nothing uses it yet.

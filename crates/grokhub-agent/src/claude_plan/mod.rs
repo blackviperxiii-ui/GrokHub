@@ -5,6 +5,8 @@
 //! `authMethod` field is read, and the rest of the reply is dropped.
 //! Design: `docs/design/claude-plan/README.md`.
 
+pub mod stream;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
