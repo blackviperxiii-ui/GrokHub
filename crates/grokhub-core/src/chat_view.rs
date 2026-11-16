@@ -1208,6 +1208,11 @@ mod tests {
             "Done. I kept the code and logs off this chat."
         );
         assert!(!assistant_prose("USER_FACT: prefers short answers").contains("USER_FACT"));
+        // Older replies may still carry a BACKGROUND_TASK line; it stays hidden.
+        assert_eq!(
+            assistant_prose("Started it.\nBACKGROUND_TASK: rebuild the docs"),
+            "Started it."
+        );
     }
 
     #[test]
