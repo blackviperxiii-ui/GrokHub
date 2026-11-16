@@ -44,6 +44,7 @@ mod chip_replay_tests;
 pub mod chip_store;
 pub mod chip_trailer;
 pub mod chips;
+pub mod claude_usage;
 pub mod cli_history;
 pub mod clips;
 pub mod code_resume;

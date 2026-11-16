@@ -6500,6 +6500,15 @@ async fn fleet_machines(
     .await
 }
 
+/// The Fleet page's subscription rows this computer can read: Claude Code's
+/// local transcripts and the last Grok plan room. Reads files, so off the
+/// main thread. Desktop only.
+#[cfg(desktop)]
+#[tauri::command]
+async fn fleet_usage() -> Result<fleet::Usage, String> {
+    off_main(|| fleet::usage(fleet::claude_dir().as_deref(), grokhub_core::now_ms())).await
+}
+
 /// Send on a `/sync` or `/inhabit` card. Its own command, not a slash line,
 /// so typing can't stand in for the click; the browser never reaches it.
 /// Reads chats and memory and writes the send log, so off the main thread.
@@ -8158,6 +8167,8 @@ pub fn run() {
             new_share_code,
             #[cfg(desktop)]
             fleet_machines,
+            #[cfg(desktop)]
+            fleet_usage,
             #[cfg(desktop)]
             hub_send_approve,
             get_update_status,
