@@ -4871,6 +4871,40 @@ label.toggle-row {
   align-items: stretch;
 }
 
+/* Fleet: red outlines, bars in the text colour until 90 % (then red), and
+ * amber only on Refresh. A computer that went to sleep stays, dimmed. */
+.fleet .card.device {
+  border-color: var(--red);
+}
+.fleet-machine--asleep {
+  opacity: 0.55;
+}
+.fleet-bar {
+  display: block;
+  margin-top: 4px;
+  max-width: 320px;
+  box-shadow: inset 0 0 0 1px var(--red);
+}
+.fleet-bar .xp-fill {
+  display: block;
+  background: var(--text);
+  box-shadow: none;
+}
+.fleet-bar--hot .xp-fill {
+  background: var(--red);
+}
+.fleet .fleet-refresh {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: #000;
+}
+.fleet label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+
 /* A page's one-line result (Pulse, Connectors, Journal, Settings, Memory,
  * Labs): an error reads in the error colour with a left rule, a success in
  * the normal muted text. */

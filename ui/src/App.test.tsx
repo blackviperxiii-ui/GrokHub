@@ -346,6 +346,7 @@ describe("App", () => {
       "Connectors",
       "Workboard",
       "Devices",
+      "Fleet",
       "Updates & Drivers",
     ]);
     // Escape closed More and gave the focus back to it.

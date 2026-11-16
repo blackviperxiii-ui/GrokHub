@@ -77,6 +77,7 @@ const loaders = {
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
   imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
+  fleet: () => import("./Fleet").then((m) => ({ default: m.Fleet })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
   workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
   history: () => import("./History").then((m) => ({ default: m.History })),
@@ -94,6 +95,7 @@ const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
 const Imagine = lazy(loaders.imagine);
 const Devices = lazy(loaders.devices);
+const Fleet = lazy(loaders.fleet);
 const History = lazy(loaders.history);
 const Home = lazy(loaders.home);
 const Journal = lazy(loaders.journal);
@@ -926,6 +928,11 @@ export function App() {
           {opened.has("devices") && caps.webAccess && !caps.remote && (
             <Page shown={view === "devices"}>
               <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} onRun={askNow} />
+            </Page>
+          )}
+          {opened.has("fleet") && caps.webAccess && !caps.remote && (
+            <Page shown={view === "fleet"}>
+              <Fleet shown={view === "fleet"} />
             </Page>
           )}
           {opened.has("imagine") && (

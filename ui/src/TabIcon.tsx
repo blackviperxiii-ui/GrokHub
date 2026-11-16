@@ -21,6 +21,7 @@ const PATHS: Record<IconName, string> = {
   skills: "M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6l-5.4 2.9 1.2-6-4.5-4.2 6.1-.7z",
   connectors: "M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0zM12 16v5",
   devices: "M3 5h13v9H3zM7 18h5M9.5 14v4M18 9h3v10h-3z",
+  fleet: "M3 4h8v6H3zM13 4h8v6h-8zM3 14h8v6H3zM13 14h8v6h-8z",
   settings: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",
   workboard: "M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z",
   updates: "M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14",
