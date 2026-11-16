@@ -1,14 +1,14 @@
 # Compass: versions, channels, and the build label
 
 ## Owns
-- The one lockstep version (`VERSION`, `[workspace.package] version` in `Cargo.toml`) and what `grokhub --version` prints: `GrokHub 2.13.1-beta.3 (beta @ abc1234)` on beta, `GrokHub 2.13.1 (main @ abc1234)` on stable.
+- The one lockstep version (`VERSION`, `[workspace.package] version` in `Cargo.toml`) and the build label Settings → About shows: `2.13.1-beta.3` on beta, `2.13.1` on stable (`grokhub-shell --version` prints the plain version).
 - Install channels: `stable` builds `main`, `beta` builds `beta`; the choice lives in the `channel` receipt in the config dir.
 ## Quick commands
-- `cargo run -p grokhub-app -- --version`
+- `grokhub-shell --version`
 - `cargo xtask bump --check` / `cargo xtask bump <X.Y.Z>`
 - `cargo test -p grokhub-core channel` · `cargo test -p xtask`
 ## Key files
-- the retired cabin's build.rs: sets GROKHUB_BUILD_CHANNEL, GROKHUB_BUILD_BRANCH, GROKHUB_BUILD_SHA, GROKHUB_BUILD_BETA_N from git and `GROKHUB_CHANNEL`.
+- `src-tauri/build.rs`: sets the shell's base version, channel and beta N (GROKHUB_SHELL_BASE, GROKHUB_SHELL_CHANNEL, GROKHUB_SHELL_BETA_N) from `VERSION`, git and `GROKHUB_CHANNEL`; the version function in `src-tauri/src/shell_update.rs` builds the label from them.
 - `crates/grokhub-core/src/channel.rs`: `Channel`, `CHANNEL_RECEIPT`, `version_line`, `parse_version_line`.
 - `src-tauri/src/shell_update.rs`: the app's Stable/Beta switch (`set_channel` writes the receipt) and its self-update.
 - `xtask/src/main.rs` + `changelog.d/README.md`: release ownership; feature PRs add fragments, bump folds them.
@@ -21,7 +21,7 @@
 - Bumping things that must not move: Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, and `Version=` in `packaging/grokhub.desktop`.
 - A partial bump: `ci-guards` runs `cargo xtask bump --check` and blocks non-`release` version edits; `--locked` CI fails if `Cargo.lock` lags.
 ## What depends on it
-- Settings → About → Updates (reads and writes the receipt), `scripts/install.sh` (writes the receipt), and `grokhub --version`.
+- Settings → About → Updates (reads and writes the receipt) and `scripts/install.sh` (writes the receipt).
 ## Non-obvious
 - Beta N is `git rev-list --count <newest-vX.Y.Z>..HEAD`; missing tags (shallow clone) → `beta.0` until `git fetch --tags`. build.rs reruns on `HEAD`, `packed-refs`, `logs/HEAD`, and the branch ref.
 - A missing, empty, or unknown receipt reads as stable. Beta never turns itself off; switching back is the Updates page's Stable choice.

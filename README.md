@@ -94,11 +94,10 @@ Launch `grokhub-shell` (or open **Loadout** from your system launcher) and conne
 
 ```bash
 grokhub-shell                                     # launch the Tauri desktop app
-./scripts/install.sh --user --app cabin           # build and install the legacy egui cabin
-cargo run -p grokhub-app                          # run the legacy egui cabin from source
-cargo run -p grokhub-app -- --agent               # start the cabin hidden in the system tray
-cargo run -p grokhub-app -- --oauth               # SuperGrok device-code sign-in
-cargo run -p grokhub-app -- --doctor              # check sandbox, tools, and config health
+grokhub-shell --autostart                         # start in the tray when Close to tray is on (also --agent, --tray)
+grokhub-hub --oauth                               # SuperGrok device-code sign-in
+grokhub-hub --doctor                              # check sandbox, tools, and config health
+ui/node_modules/.bin/tauri dev                    # run the desktop app from source (after npm ci --prefix ui)
 GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub   # run the standalone LAN sync hub
 ```
 
@@ -143,7 +142,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 | [`crates/grokhub-hub/`](crates/grokhub-hub) | Standalone LAN `/v1` sync and pairing hub (`grokhub-hub`) |
 | [`crates/grokhub-proto/`](crates/grokhub-proto) | Portable wire types (`wasm32`-compatible, no I/O) |
 | [`crates/grokhub-fps-probe/`](crates/grokhub-fps-probe) | Lightweight frame-rate probe binary (`loadout-fps-probe`) |
-| [`crates/grokhub-app/`](crates/grokhub-app) | Legacy native `eframe`/`egui` cabin (`grokhub`) |
 | [`xtask/`](xtask) | Release version lockstep and changelog tooling (`cargo xtask bump --check`) |
 
 ## Documentation
