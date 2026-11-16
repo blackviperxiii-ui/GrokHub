@@ -152,7 +152,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 - [docs/cross-platform/README.md](docs/cross-platform/README.md) — Tauri 2 + React + TypeScript shell architecture and smoke tests
 - [docs/compass/README.md](docs/compass/README.md) — Short module maps for each crate and subsystem
 - [PRIVACY.md](PRIVACY.md) — Privacy policy and on-device model routing rules
-- [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md) — Windows SignPath Authenticode code signing policy
 - [CHANGELOG.md](CHANGELOG.md) — Release notes history
 
 ## Contributing
