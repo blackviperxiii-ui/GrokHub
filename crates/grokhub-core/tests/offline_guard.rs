@@ -98,7 +98,6 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/mcp/http.rs", 1, "connect / ping / call and OAuth sign-in (mcp/oauth.rs): egress guard; loopback servers still go"),
     ("crates/grokhub-core/src/mcp_catalog.rs", 1, "registry refresh: guard_mcp_registry_url refuses while on"),
     // Sign-in, updates, downloads.
-    ("crates/grokhub-core/src/update.rs", 2, "git fetch of the channel tips: offline::refuse"),
     ("src-tauri/src/catalog_refresh.rs", 1, "daily signed model catalog: runtime_download_url_ok + guard_quiet on every hop, public_only"),
     ("src-tauri/src/shell_update.rs", 1, "shell self-update release list: guard_quiet + public_only; the plugin's check and download refuse first (offline::refuse)"),
     ("src-tauri/src/local_engine.rs", 2, "engine and HF downloads: runtime_download_url_ok, download_engine and model_download::download refuse while on"),
