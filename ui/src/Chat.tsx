@@ -131,7 +131,8 @@ export type Item =
   | { kind: "user"; text: string; sent?: string }
   | { kind: "assistant"; text: string; streaming: boolean }
   /** The model's thinking before or between replies. `fold` is set once the
-   * person collapses or expands it (thoughts.ts). Never saved with the chat. */
+   * person collapses or expands it (thoughts.ts). The chat saves its text,
+   * never its fold. */
   | { kind: "thought"; text: string; fold?: Fold }
   | { kind: "tool"; id: string; title: string; status: string; detail: string }
   | {
@@ -272,6 +273,7 @@ export function itemsFrom(transcript: Transcript): Item[] {
   return transcript.lines.map((line): Item => {
     if (line.role === "user") return { kind: "user", text: line.text };
     if (line.role === "tools") return { kind: "tools", text: line.text };
+    if (line.role === "thought") return { kind: "thought", text: line.text };
     return { kind: "assistant", text: line.text, streaming: false };
   });
 }

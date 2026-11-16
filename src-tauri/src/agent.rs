@@ -138,7 +138,8 @@ pub enum UiEvent {
         text: String,
     },
     /// The model's thinking as it streams: shown above the reply, open or
-    /// folded, and never part of the reply or the saved chat.
+    /// folded, and never part of the reply. The chat saves it for the chat
+    /// view only (`history::Role::Thought`).
     Thought {
         text: String,
     },
@@ -733,7 +734,7 @@ impl Session {
             turn: open.turn,
             resume,
             config_dir: self.config_dir.clone(),
-            held: Vec::new(),
+            held: grokhub_agent::held_secrets(&self.id),
             access: grokhub_agent::harness::AccessMode::Supervised,
         }
     }

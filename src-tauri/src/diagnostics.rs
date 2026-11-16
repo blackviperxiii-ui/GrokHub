@@ -173,6 +173,8 @@ fn group_turns(lines: &[history::Line]) -> Vec<Group> {
                     last.tools.push(line.text.clone());
                 }
             }
+            // Thinking stays out of a diagnostics export.
+            Role::Thought => {}
         }
     }
     out

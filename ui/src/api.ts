@@ -684,8 +684,9 @@ export interface DeleteAllResult {
   count: number;
 }
 
-/** "tools": a run of tool steps, named on one muted line (not replayed as cards). */
-export type LineRole = "user" | "assistant" | "tools";
+/** "tools": a run of tool steps, named on one muted line (not replayed as cards).
+ * "thought": the model's thinking, saved where it was shown. */
+export type LineRole = "user" | "assistant" | "tools" | "thought";
 
 export interface TranscriptLine {
   role: LineRole;

@@ -1,0 +1,2 @@
+- Chat: the model's thoughts are saved with the chat, so a reopened chat and Show earlier show them above the reply. They never go back to the model, deleting a reply deletes its thoughts, and exports leave them out.
+- Chat: a value typed into a secret field on a form card (a connector token, a password) is held for that chat while the app runs and shows as `[redacted]` in later reply text, thoughts and tool cards, live and in the saved chat.

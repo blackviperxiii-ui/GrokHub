@@ -53,6 +53,8 @@ pub enum Role {
     Assistant,
     /// Tool steps are not replayed as cards; one muted line names them.
     Tools,
+    /// The model's thinking, saved where it was shown above the reply.
+    Thought,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -199,8 +201,9 @@ pub fn search(config_dir: &Path, query: &str) -> Vec<ChatRow> {
         .collect()
 }
 
-/// The transcript's lines: user and assistant messages as they were shown,
-/// and each run of tool steps folded into one `Tools` line naming them.
+/// The transcript's lines: user and assistant messages and the model's
+/// thoughts as they were shown, and each run of tool steps folded into one
+/// `Tools` line naming them.
 pub fn lines(info: &SessionInfo) -> Vec<Line> {
     // `transcript_pairs` writes a tool call as "Tool {name}\n{arguments}" and
     // its output as "Tool result\n{output}"; the names come from the input.
@@ -213,7 +216,14 @@ pub fn lines(info: &SessionInfo) -> Vec<Line> {
         })
         .collect();
     let mut out: Vec<Line> = Vec::new();
-    for (role, text) in grokhub_agent::transcript_pairs(info) {
+    for (role, text) in grokhub_agent::shown_pairs(info) {
+        if role == "thought" {
+            out.push(Line {
+                role: Role::Thought,
+                text,
+            });
+            continue;
+        }
         let assistant = role == "assistant";
         let call = tools
             .iter()
@@ -820,6 +830,8 @@ mod tests {
     struct Model {
         reply: &'static str,
         tool: bool,
+        /// Thinking streamed before the reply's text.
+        thought: Option<&'static str>,
         requests: Mutex<Vec<ResponsesRequest>>,
     }
 
@@ -828,6 +840,16 @@ mod tests {
             Arc::new(Self {
                 reply,
                 tool,
+                thought: None,
+                requests: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn thinking(reply: &'static str, thought: &'static str) -> Arc<Self> {
+            Arc::new(Self {
+                reply,
+                tool: true,
+                thought: Some(thought),
                 requests: Mutex::new(Vec::new()),
             })
         }
@@ -879,6 +901,9 @@ mod tests {
                     ..TurnOutput::default()
                 });
             }
+            if let Some(thought) = self.thought {
+                sink(StreamEvent::ReasoningDelta(thought.into()));
+            }
             sink(StreamEvent::TextDelta(self.reply.into()));
             Ok(TurnOutput {
                 text: self.reply.into(),
@@ -913,6 +938,52 @@ mod tests {
             role,
             text: text.into(),
         }
+    }
+
+    #[test]
+    fn a_reopened_chat_shows_its_thought_above_the_reply_and_exports_leave_it_out() {
+        let (config, workspace) = (temp_dir("thought-cfg"), temp_dir("thought-ws"));
+        std::fs::write(workspace.join("a.txt"), "a typo here").expect("a.txt");
+        let id = "shell-history-thought";
+        let model = Model::thinking("It says: a typo here.", "The text is on line 1.");
+        turn(
+            id,
+            &config,
+            &workspace,
+            Arc::clone(&model),
+            "what does a.txt say?",
+        );
+        let shown = load(&config, id, LOAD_CAP).expect("load");
+        assert_eq!(
+            shown.lines,
+            vec![
+                line(Role::User, "what does a.txt say?"),
+                line(Role::Tools, "read_file"),
+                line(Role::Thought, "The text is on line 1."),
+                line(Role::Assistant, "It says: a typo here."),
+            ]
+        );
+        let tail = load(&config, id, 2).expect("Show earlier counts the thought");
+        assert_eq!(tail.earlier, 2);
+        let md = crate::export::markdown(&shown);
+        assert!(md.contains("It says: a typo here."), "{md}");
+        assert!(!md.contains("line 1"), "{md}");
+        let saved = saved(&config, id).expect("saved");
+        let sent: Vec<String> = saved
+            .input()
+            .into_iter()
+            .filter_map(|item| match item {
+                InputItem::Message { content, .. } => content.into_iter().find_map(|p| match p {
+                    ContentPart::InputText(t) => Some(t),
+                    ContentPart::InputImage(_) => None,
+                }),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            sent.iter().all(|t| !t.contains("line 1")),
+            "the thought never goes back to the model: {sent:?}"
+        );
     }
 
     #[test]
