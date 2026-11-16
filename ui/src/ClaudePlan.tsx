@@ -4,7 +4,8 @@ import { claudePlanStatus, type ClaudePlan } from "./api";
 export const CLAUDE_PLAN_NOTE =
   "Runs Claude Code on this computer, signed in with your own Claude account. This app never sees or keeps your Claude sign-in.";
 export const CLAUDE_MISSING = "Claude Code isn't on this computer. Install it from code.claude.com, then check again.";
-export const CLAUDE_SIGNED_OUT = "Claude Code is installed but not signed in. In a terminal, run claude auth login, then check again.";
+export const CLAUDE_NO_ANSWER =
+  "Claude Code is on this computer but didn't answer claude --version. In a terminal, run claude doctor, then check again.";
 export const CLAUDE_SOON = "Chats on Claude come in a later update.";
 
 const BILLED_BY: Record<string, string> = {
@@ -18,6 +19,8 @@ export function claudePlanLine(plan: ClaudePlan): string {
   switch (plan.state) {
     case "missing":
       return CLAUDE_MISSING;
+    case "noAnswer":
+      return CLAUDE_NO_ANSWER;
     case "signedOut":
       return `Claude Code ${plan.version}, not signed in. In a terminal, run claude auth login, then check again.`;
     case "plan":
@@ -31,7 +34,8 @@ export function claudePlanLine(plan: ClaudePlan): string {
 export function ClaudePlanCard() {
   const [plan, setPlan] = useState<ClaudePlan | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Busy from the start: the first check runs on open, and Check again waits for it.
+  const [busy, setBusy] = useState(true);
 
   const read = useCallback(
     () =>
@@ -46,7 +50,7 @@ export function ClaudePlanCard() {
   );
 
   useEffect(() => {
-    void read();
+    void read().then(() => setBusy(false));
   }, [read]);
 
   async function check() {

@@ -7,22 +7,33 @@ stores or passes on a Claude credential or token, never shows its own Claude
 sign-in screen, and never changes the `claude` binary. Requests count against
 the user's plan, the same as when they run Claude Code themselves.
 
-This note ships before any code. It lists what the CLI offers, how it plugs
-into the app, the build order, and what stays open.
+This note ships with the first step, detection. It lists what the CLI
+offers, how it plugs into the app, the build order, and what stays open.
 
 ## Why the CLI, and not the plan's token
 
-Anthropic's terms (code.claude.com/docs/en/legal-and-compliance) allow "an
-end user signing in to the unmodified Claude Code binary with their own
-Claude subscription". They don't allow an app to collect, store or relay
-claude.ai credentials, or to send requests through plan credentials itself.
-So the app starts `claude` and reads its output. It never sends a request to
-Anthropic itself, and it never impersonates Claude Code.
+Source: `code.claude.com/docs/en/legal-and-compliance`.
 
-Naming follows the same page: the provider is **Claude (your plan)**, with
-the line "runs Claude Code on this computer". "Claude Code" is never used as
-the provider's or the app's name. The existing API-key provider stays
-**Claude (Anthropic)**.
+- **What the page doesn't allow.** Third-party developers may not "offer
+  Claude.ai login into their own applications, or ... route requests through
+  Free, Pro, Max, or Ultra plan credentials on behalf of their users", and
+  may not "collect, store, or intermediate Claude.ai credentials or session
+  tokens".
+- **What it does allow.** It doesn't "prevent an end user from signing in to
+  the unmodified Claude Code binary with their own Claude subscription".
+- **The conditions for running Claude Code inside a product.** The binary
+  is run as published, with none of its sign-in methods removed. Nobody pays
+  for, resells or intermediates the user's Claude usage. Each user signs in
+  with their own credentials.
+
+So the app starts the user's own `claude` and reads its output. It never
+sends a request to Anthropic itself, never sees a token, and never stands
+between the user and their plan.
+
+Naming follows the same page: Claude Code's and Anthropic's names aren't
+used in the app's or a feature's name. The provider is **Claude (your
+plan)**, and its plain-text line says it "runs Claude Code on this computer".
+The existing API-key provider stays **Claude (Anthropic)**.
 
 ## What the CLI offers
 
@@ -35,7 +46,7 @@ Sources: `code.claude.com/docs/en/cli-reference`, `/headless`,
 | Signed in | `claude auth status` prints JSON and exits 0 when signed in, 1 when not. Only `authMethod` is read: `claude.ai` and `oauth_token` (a `claude setup-token` token, which needs a plan) mean the plan; `api_key` and the rest mean other billing, and the page says so. Nothing else from the output is kept or logged |
 | One turn | `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages`, the prompt as one JSON line on stdin |
 | Model | `--model` with an alias (`opus`, `sonnet`, `haiku`) |
-| Same conversation | `--session-id <uuid>` on the first turn, `--resume <uuid>` after. `--continue` skips `-p` sessions, so it isn't used |
+| Same conversation | `--session-id <uuid>` on the first turn, `--resume <uuid>` after. `--continue` takes the newest conversation in the folder, which may belong to another chat or to the user's own terminal, so it isn't used |
 | Tools | `--allowedTools` and `--disallowedTools` rules, `--permission-mode default` (never `bypassPermissions`) |
 | Approvals | `--permission-prompt-tool mcp__<server>__<tool>` with `--mcp-config`: Claude Code asks that MCP tool before a tool it would otherwise ask about |
 | Usage | Each `result` line has `modelUsage` and `total_cost_usd` (an estimate). `rate_limit_event` lines carry `status`, `utilization` and `resetsAt` |
@@ -124,10 +135,15 @@ Each step is its own PR into `beta`.
 
 ## Open
 
-- **Terms.** "Ordinary use" isn't defined further, and showing plan limits
-  may read as offering rate limits. The design stays on the side of the
-  wording that allows it: the user's own sign-in, the unmodified binary,
-  nothing intermediated.
+- **Terms.** The page says running Claude Code "in your products or
+  services (e.g. in hosted sandboxes or other agent infrastructure)" needs
+  Anthropic's Commercial Terms. Whether that covers an open-source desktop
+  app the user installs and runs themselves, against their own sign-in, isn't
+  spelled out; the page points such questions to Anthropic. The design meets
+  every listed condition either way. Showing plan limits may also read as
+  "offering rate limits", which the Agent SDK page doesn't allow without
+  approval, so step 6 shows tokens and the reset only, never as the plan's
+  limit.
 - **Subagents.** Tool calls inside a Claude subagent carry
   `parent_tool_use_id`. Whether the permission tool is asked for those isn't
   documented; it's checked in step 7.

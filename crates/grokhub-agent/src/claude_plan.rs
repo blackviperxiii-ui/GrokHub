@@ -23,7 +23,10 @@ const REPLY_CAP: u64 = 16 * 1024;
 pub enum ClaudePlan {
     /// No `claude` on this computer.
     Missing,
-    /// Installed, but signed out (or it didn't answer).
+    /// A `claude` file is there, but `claude --version` didn't answer (it
+    /// failed, hung, or isn't a program this computer can run).
+    NoAnswer,
+    /// Installed, but signed out, or `claude auth status` didn't answer.
     SignedOut { version: String },
     /// Signed in with a Claude plan: chats count against the plan.
     Plan { version: String },
@@ -126,7 +129,11 @@ fn ask(cli: &Path, args: &[&str]) -> Option<String> {
 /// signed out, which reads as no reply, so both are signed out.
 pub fn detect_at(cli: &Path) -> ClaudePlan {
     let Some(version) = ask(cli, &["--version"]).as_deref().and_then(parse_version) else {
-        return ClaudePlan::Missing;
+        return if cli.is_file() {
+            ClaudePlan::NoAnswer
+        } else {
+            ClaudePlan::Missing
+        };
     };
     match ask(cli, &["auth", "status"]) {
         Some(json) => parse_auth(&json, version),
@@ -258,5 +265,9 @@ mod tests {
             ClaudePlan::SignedOut { version: v() }
         );
         assert_eq!(detect_at(&dir.join("nothing-here")), ClaudePlan::Missing);
+        let broken = scratch("broken");
+        let cli = fake_cli(&broken, "", 0);
+        std::fs::write(&cli, "#!/bin/sh\nexit 3\n").unwrap();
+        assert_eq!(detect_at(&cli), ClaudePlan::NoAnswer);
     }
 }

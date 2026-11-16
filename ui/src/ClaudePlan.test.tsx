@@ -8,7 +8,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("./api", () => api);
 
-import { CLAUDE_MISSING, CLAUDE_SOON, ClaudePlanCard, claudePlanLine } from "./ClaudePlan";
+import { CLAUDE_MISSING, CLAUDE_NO_ANSWER, CLAUDE_SOON, ClaudePlanCard, claudePlanLine } from "./ClaudePlan";
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -17,6 +17,7 @@ beforeEach(() => {
 describe("Claude (your plan)", () => {
   it("says what this computer's Claude Code can do", () => {
     expect(claudePlanLine({ state: "missing" })).toBe(CLAUDE_MISSING);
+    expect(claudePlanLine({ state: "noAnswer" })).toBe(CLAUDE_NO_ANSWER);
     expect(claudePlanLine({ state: "signedOut", version: "2.1.300" })).toBe(
       "Claude Code 2.1.300, not signed in. In a terminal, run claude auth login, then check again.",
     );
@@ -34,7 +35,9 @@ describe("Claude (your plan)", () => {
   it("checks on open and again on Check again, after the user signs in", async () => {
     api.claudePlanStatus.mockResolvedValueOnce({ state: "signedOut", version: "2.1.300" });
     render(<ClaudePlanCard />);
+    expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
     expect(await screen.findByText(/not signed in/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
     expect(screen.queryByText(CLAUDE_SOON)).not.toBeInTheDocument();
     api.claudePlanStatus.mockResolvedValueOnce({ state: "plan", version: "2.1.300" });
     await userEvent.click(screen.getByRole("button", { name: "Check again" }));

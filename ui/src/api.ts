@@ -5161,6 +5161,7 @@ export function getAiModels(): Promise<AiModelsView> {
  * Only the sign-in kind is read, never a credential. */
 export type ClaudePlan =
   | { state: "missing" }
+  | { state: "noAnswer" }
   | { state: "signedOut"; version: string }
   | { state: "plan"; version: string }
   | { state: "otherBilling"; version: string; method: string };
