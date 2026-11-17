@@ -1,0 +1,1 @@
+- Pulse cards: drop the Dismiss button and confirm step; Not interested removes a card immediately. Cards are wider with larger tap targets, leaving room for related images and more text.
