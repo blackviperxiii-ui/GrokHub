@@ -1,1 +1,1 @@
-- Chat: a picture the chat makes now shows in its tool card in the same chat, whether it was drawn on this computer or by Grok Imagine. The app reads it only from its own media folders.
+- Chat: a picture the chat makes now shows in its tool card in the same chat, whether it was drawn on this computer or by Grok Imagine, in the app window and in a browser with Web access. The app reads it only from its own media folders, and a browser sees only the pictures of the chats it started.

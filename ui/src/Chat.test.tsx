@@ -784,7 +784,7 @@ describe("Chat", () => {
   });
 
   it("a finished picture shows in its tool card, and a card with none asks for nothing", async () => {
-    const made = "/home/user/.config/GrokHub/sessions/c1/media/image-1-local.png";
+    const made = "/home/user/.config/my-app/sessions/c1/media/image-1-local.png";
     api.chatPicture.mockResolvedValue("data:image/png;base64,iVBORw0KGgo=");
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

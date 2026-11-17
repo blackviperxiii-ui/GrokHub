@@ -2509,9 +2509,9 @@ mod tests {
     #[test]
     fn a_finished_picture_reaches_the_card_and_nothing_else_does() {
         #[cfg(unix)]
-        let made = "/home/user/.config/GrokHub/sessions/c1/media/image-1-local.png";
+        let made = "/home/user/.config/my-app/sessions/c1/media/image-1-local.png";
         #[cfg(windows)]
-        let made = r"C:\Users\user\AppData\Roaming\GrokHub\sessions\c1\media\image-1-local.png";
+        let made = r"C:\Users\user\AppData\Roaming\my-app\sessions\c1\media\image-1-local.png";
         let card = |kind: &str, status: &str, detail: String| {
             AcpEvent::Tool(grokhub_core::wire::ToolCard {
                 id: "call-1".into(),

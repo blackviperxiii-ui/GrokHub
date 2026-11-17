@@ -141,6 +141,7 @@ pub const WEB_COMMANDS: &[&str] = &[
     "imagine_generate",
     "imagine_cancel",
     "imagine_image",
+    "chat_picture",
     "get_skills",
     "nyx_look",
     "get_queue",
@@ -1073,6 +1074,7 @@ mod tests {
             "imagine_generate",
             "imagine_cancel",
             "imagine_image",
+            "chat_picture",
             "get_skills",
             "nyx_look",
             "get_queue",
@@ -1333,7 +1335,7 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-        const REVIEWED: [&str; 91] = [
+        const REVIEWED: [&str; 92] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
@@ -1344,6 +1346,7 @@ mod tests {
             "apply_memory_raw_tidy",
             "approve_memory_row",
             "cancel_chat",
+            "chat_picture",
             "check_connectors",
             "chip_outcome",
             "close_chat",

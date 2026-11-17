@@ -606,22 +606,27 @@ pub fn picture_mime(name: &str) -> Option<&'static str> {
 /// A picture a chat's tool made, as a data URL. Only a picture file inside
 /// `{config}/media/` or a chat's `{config}/sessions/<id>/media/` is read,
 /// after links are followed, so a tool result can't point the chat at
-/// another file on this computer.
-pub fn chat_picture(config_dir: &Path, path: &str) -> Result<String, String> {
+/// another file on this computer. `may_read` gets the chat id of a
+/// `sessions/<id>/media/` file, or `None` for `media/`, and can refuse it.
+pub fn chat_picture(
+    config_dir: &Path,
+    path: &str,
+    may_read: &dyn Fn(Option<&str>) -> bool,
+) -> Result<String, String> {
     const NOT_OURS: &str = "Not a picture this app made.";
     let mime = picture_mime(path).ok_or(NOT_OURS)?;
     let file = std::fs::canonicalize(path).map_err(|_| "That picture is gone.".to_string())?;
     let root = std::fs::canonicalize(config_dir).map_err(|_| NOT_OURS.to_string())?;
     let rel = file.strip_prefix(&root).map_err(|_| NOT_OURS.to_string())?;
-    let parts: Vec<_> = rel.components().collect();
-    let ours = match parts.as_slice() {
-        [media, _] => media.as_os_str() == "media",
-        [sessions, _, media, _] => {
-            sessions.as_os_str() == "sessions" && media.as_os_str() == "media"
+    let parts: Vec<_> = rel.components().map(|c| c.as_os_str()).collect();
+    let chat = match parts.as_slice() {
+        [media, _] if *media == "media" => None,
+        [sessions, id, media, _] if *sessions == "sessions" && *media == "media" => {
+            Some(id.to_str().ok_or(NOT_OURS)?)
         }
-        _ => false,
+        _ => return Err(NOT_OURS.into()),
     };
-    if !ours || !file.is_file() {
+    if !may_read(chat) || !file.is_file() {
         return Err(NOT_OURS.into());
     }
     data_url(&file, mime)
@@ -1258,6 +1263,10 @@ mod tests {
         );
     }
 
+    fn chat_picture_any(config: &Path, path: &str) -> Result<String, String> {
+        chat_picture(config, path, &|_| true)
+    }
+
     #[test]
     fn a_chat_picture_is_read_only_from_the_media_folders() {
         let d = dirs("chat-picture");
@@ -1277,10 +1286,10 @@ mod tests {
         .unwrap();
         std::fs::write(chat_media.join("clip.mp4"), b"mp4").unwrap();
 
-        let url = chat_picture(&d.config, &made.display().to_string()).unwrap();
+        let url = chat_picture_any(&d.config, &made.display().to_string()).unwrap();
         assert_eq!(url, "data:image/png;base64,iVBORw0KGgoHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==");
         let jpg = local_media.join("image-2-local.jpg");
-        assert!(chat_picture(&d.config, &jpg.display().to_string())
+        assert!(chat_picture_any(&d.config, &jpg.display().to_string())
             .unwrap()
             .starts_with("data:image/jpeg;base64,"));
 
@@ -1296,19 +1305,55 @@ mod tests {
             chat_media.join("clip.mp4"),
         ] {
             assert_eq!(
-                chat_picture(&d.config, &path.display().to_string()).unwrap_err(),
+                chat_picture_any(&d.config, &path.display().to_string()).unwrap_err(),
                 "Not a picture this app made.",
                 "{}",
                 path.display()
             );
         }
         assert_eq!(
-            chat_picture(
+            chat_picture_any(
                 &d.config,
                 &chat_media.join("gone.png").display().to_string()
             )
             .unwrap_err(),
             "That picture is gone."
+        );
+    }
+
+    #[test]
+    fn a_browser_reads_only_the_pictures_of_its_own_chats() {
+        let d = dirs("chat-picture-own");
+        for id in ["mine", "theirs"] {
+            let media = d.config.join("sessions").join(id).join("media");
+            std::fs::create_dir_all(&media).unwrap();
+            std::fs::write(media.join("a.png"), png()).unwrap();
+        }
+        std::fs::create_dir_all(d.config.join("media")).unwrap();
+        std::fs::write(d.config.join("media").join("b.png"), png()).unwrap();
+        let asked = std::sync::Mutex::new(Vec::new());
+        let browser = |chat: Option<&str>| {
+            asked.lock().unwrap().push(chat.map(str::to_string));
+            chat == Some("mine")
+        };
+        let read = |rel: &[&str]| {
+            let path = rel.iter().fold(d.config.clone(), |p, part| p.join(part));
+            chat_picture(&d.config, &path.display().to_string(), &browser)
+        };
+        assert!(read(&["sessions", "mine", "media", "a.png"])
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+        assert_eq!(
+            read(&["sessions", "theirs", "media", "a.png"]).unwrap_err(),
+            "Not a picture this app made."
+        );
+        assert_eq!(
+            read(&["media", "b.png"]).unwrap_err(),
+            "Not a picture this app made."
+        );
+        assert_eq!(
+            *asked.lock().unwrap(),
+            vec![Some("mine".to_string()), Some("theirs".to_string()), None]
         );
     }
 
@@ -1327,7 +1372,7 @@ mod tests {
         let link = media.join("image-3-local.png");
         std::os::unix::fs::symlink(&outside, &link).unwrap();
         assert_eq!(
-            chat_picture(&d.config, &link.display().to_string()).unwrap_err(),
+            chat_picture_any(&d.config, &link.display().to_string()).unwrap_err(),
             "Not a picture this app made."
         );
         let _ = std::fs::remove_file(&outside);

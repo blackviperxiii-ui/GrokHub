@@ -5893,7 +5893,7 @@ async fn imagine_image(state: State<'_, ShellState>, name: String) -> Result<Str
 #[tauri::command]
 async fn chat_picture(state: State<'_, ShellState>, path: String) -> Result<String, String> {
     let dir = state.config_dir.clone();
-    off_main(move || imagine::chat_picture(&dir, &path)).await?
+    off_main(move || imagine::chat_picture(&dir, &path, &|_| true)).await?
 }
 
 #[tauri::command]
@@ -7193,6 +7193,13 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         ))?),
         "imagine_cancel" => out(imagine_cancel()),
         "imagine_image" => out(block_on(imagine_image(state, arg(args, "name")?))?),
+        // A browser sees only the pictures of the chats it started.
+        "chat_picture" => {
+            let path: String = arg(args, "path")?;
+            out(imagine::chat_picture(&state.config_dir, &path, &|chat| {
+                chat.is_some_and(|id| web.owns(id))
+            })?)
+        }
         "get_skills" => out(block_on(get_skills(state))?),
         "nyx_look" => out(nyx_look(
             state,
