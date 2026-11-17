@@ -2576,6 +2576,16 @@ button.md-copy {
   margin: 0;
 }
 
+/* A picture a tool made, on its own row above the detail. */
+.card-picture {
+  flex-basis: 100%;
+  display: block;
+  max-width: min(100%, 512px);
+  max-height: 512px;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+}
+
 .card.permission {
   border-color: var(--accent);
   flex-direction: column;

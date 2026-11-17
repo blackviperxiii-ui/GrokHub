@@ -123,7 +123,15 @@ export type ChatEvent =
   | { kind: "text"; text: string }
   /** The model's thinking as it streams; never part of the reply. */
   | { kind: "thought"; text: string }
-  | { kind: "tool"; id: string; title: string; status: string; detail: string }
+  | {
+      kind: "tool";
+      id: string;
+      title: string;
+      status: string;
+      detail: string;
+      /** The picture file a finished image_generate made; read it with `chatPicture`. */
+      picture?: string;
+    }
   | {
       kind: "permission";
       id: string;
@@ -1809,6 +1817,11 @@ export function imagineCancel(): Promise<boolean> {
 /** A gallery file as a data URL, by its bare name. */
 export function imagineImage(name: string): Promise<string> {
   return invoke<string>("imagine_image", { name });
+}
+
+/** A picture a chat's tool made, as a data URL. Only the app's media folders are read. */
+export function chatPicture(path: string): Promise<string> {
+  return invoke<string>("chat_picture", { path });
 }
 
 /** Imagine's own Sign in with Grok (the cabin's "Use a code"), step one. */

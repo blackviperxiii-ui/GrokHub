@@ -5888,6 +5888,14 @@ async fn imagine_image(state: State<'_, ShellState>, name: String) -> Result<Str
     off_main(move || imagine::image(&dir, &name)).await?
 }
 
+/// A picture a chat's tool made, as a data URL for its tool card. Only the
+/// app's media folders are read (`imagine::chat_picture`).
+#[tauri::command]
+async fn chat_picture(state: State<'_, ShellState>, path: String) -> Result<String, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || imagine::chat_picture(&dir, &path, &|_| true)).await?
+}
+
 #[tauri::command]
 async fn get_ai_models(state: State<'_, ShellState>) -> Result<ai_models::AiModelsView, String> {
     capabilities::needs(capabilities::current().local_ai, "AI models")?;
@@ -7185,6 +7193,13 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         ))?),
         "imagine_cancel" => out(imagine_cancel()),
         "imagine_image" => out(block_on(imagine_image(state, arg(args, "name")?))?),
+        // A browser sees only the pictures of the chats it started.
+        "chat_picture" => {
+            let path: String = arg(args, "path")?;
+            out(imagine::chat_picture(&state.config_dir, &path, &|chat| {
+                chat.is_some_and(|id| web.owns(id))
+            })?)
+        }
         "get_skills" => out(block_on(get_skills(state))?),
         "nyx_look" => out(nyx_look(
             state,
@@ -8236,6 +8251,7 @@ pub fn run() {
             imagine_generate,
             imagine_cancel,
             imagine_image,
+            chat_picture,
             imagine_sign_in_start,
             imagine_sign_in_poll,
             imagine_sign_out,

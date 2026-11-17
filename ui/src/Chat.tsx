@@ -16,6 +16,7 @@ import {
   codeSessionPlan,
   answerPermission,
   cancelChat,
+  chatPicture,
   closeChat,
   clearChat,
   exportChat,
@@ -134,7 +135,7 @@ export type Item =
    * person collapses or expands it (thoughts.ts). The chat saves its text,
    * never its fold. */
   | { kind: "thought"; text: string; fold?: Fold }
-  | { kind: "tool"; id: string; title: string; status: string; detail: string }
+  | { kind: "tool"; id: string; title: string; status: string; detail: string; picture?: string }
   | {
       kind: "permission";
       id: string;
@@ -588,15 +589,34 @@ const ToolCard = memo(function ToolCard({
   title,
   status,
   detail,
+  picture,
 }: {
   title: string;
   status: string;
   detail?: string;
+  /** The made picture's file; shown above the detail once it loads. */
+  picture?: string;
 }) {
+  const [shown, setShown] = useState<{ path: string; url: string } | null>(null);
+  useEffect(() => {
+    if (!picture) return;
+    let live = true;
+    chatPicture(picture).then(
+      (url) => {
+        if (live) setShown({ path: picture, url });
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [picture]);
+  const url = shown && shown.path === picture ? shown.url : null;
   return (
     <div className="card tool" data-status={status}>
       <span className="card-title">{title}</span>
       <span className="card-status">{status}</span>
+      {url && <img className="card-picture" src={url} alt="The picture this made" />}
       {detail && <pre className="card-detail">{detail}</pre>}
     </div>
   );
@@ -727,7 +747,7 @@ function LogItem({
     case "thought":
       return <ThoughtCard text={item.text} fold={foldOf(item.fold, thoughtsFolded)} onFold={onFold} />;
     case "tool":
-      return <ToolCard title={item.title} status={item.status} detail={item.detail} />;
+      return <ToolCard title={item.title} status={item.status} detail={item.detail} picture={item.picture} />;
     case "permission":
       return (
         <PermissionCard

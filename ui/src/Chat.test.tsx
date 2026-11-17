@@ -52,6 +52,7 @@ const api = vi.hoisted(() => ({
     >(),
   answerPermission: vi.fn<(id: string, callId: string, answer: Answer) => Promise<void>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
+  chatPicture: vi.fn<(path: string) => Promise<string>>(),
   steerChat: vi.fn<(id: string, text: string) => Promise<boolean>>(),
   readTurn: vi.fn((text: string) => Promise.resolve({ route: "queue", text, ack: "Queued for after this reply" })),
   sideChat:
@@ -127,6 +128,7 @@ vi.mock("./api", () => ({
   saveSettings: api.saveSettings,
   answerPermission: api.answerPermission,
   cancelChat: api.cancelChat,
+  chatPicture: api.chatPicture,
   steerChat: api.steerChat,
   readTurn: api.readTurn,
   sideChat: api.sideChat,
@@ -295,6 +297,7 @@ describe("Chat", () => {
       api.answerElicit,
       api.saveSettings,
       api.loadChat,
+      api.chatPicture,
     ]) {
       fn.mockReset();
     }
@@ -778,6 +781,48 @@ describe("Chat", () => {
     } finally {
       delete (Element.prototype as Partial<Element>).scrollIntoView;
     }
+  });
+
+  it("a finished picture shows in its tool card, and a card with none asks for nothing", async () => {
+    const made = "/home/user/.config/my-app/sessions/c1/media/image-1-local.png";
+    api.chatPicture.mockResolvedValue("data:image/png;base64,iVBORw0KGgo=");
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("draw a fox");
+    emit(id, { kind: "tool", id: "t0", title: "read_file", status: "completed", detail: "a.txt" });
+    emit(id, {
+      kind: "tool",
+      id: "t1",
+      title: "image_generate",
+      status: "completed",
+      detail: `IMAGINE: ${made}`,
+      picture: made,
+    });
+    const picture = await screen.findByRole("img", { name: "The picture this made" });
+    expect(picture).toHaveAttribute("src", "data:image/png;base64,iVBORw0KGgo=");
+    expect(api.chatPicture.mock.calls).toEqual([[made]]);
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+  });
+
+  it("a picture the app won't read leaves the card as text", async () => {
+    api.chatPicture.mockRejectedValue("Not a picture this app made.");
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("draw a fox");
+    emit(id, {
+      kind: "tool",
+      id: "t1",
+      title: "image_generate",
+      status: "completed",
+      detail: "IMAGINE: /etc/a.png",
+      picture: "/etc/a.png",
+    });
+    await waitFor(() => expect(api.chatPicture).toHaveBeenCalledWith("/etc/a.png"));
+    expect(screen.queryByRole("img", { name: "The picture this made" })).toBeNull();
+    expect(screen.getByText("IMAGINE: /etc/a.png")).toBeInTheDocument();
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
   });
 
   it("find searches thoughts, and folding them keeps the match the person is on", async () => {
