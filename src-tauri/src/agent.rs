@@ -445,6 +445,20 @@ pub fn suggestions_for(ups: &crate::chips::FollowUps) -> Option<UiEvent> {
     (!items.is_empty()).then_some(UiEvent::Suggestions { items })
 }
 
+/// A turn's engine event for the page. On the Claude plan, Claude Code asks
+/// on every step that isn't allowed yet (the approvals setting doesn't reach
+/// it), so its cards say they ask every time.
+fn turn_event(event: AcpEvent, on_plan: bool) -> Option<UiEvent> {
+    let mut ui = ui_event(event)?;
+    if let UiEvent::Permission {
+        asks_every_time, ..
+    } = &mut ui
+    {
+        *asks_every_time = on_plan;
+    }
+    Some(ui)
+}
+
 pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
     Some(match event {
         AcpEvent::Text(text) => UiEvent::Text { text },
@@ -1398,17 +1412,9 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         // recap card's details fold reads them at Done.
         let mut tool_rows: Vec<(String, grokhub_core::turn_timeline::ToolRow)> = Vec::new();
         let ran = engine.prompt(&message.text, message.image.as_deref(), &mut |event| {
-            let Some(mut ui) = ui_event(event) else {
+            let Some(mut ui) = turn_event(event, on_plan) else {
                 return;
             };
-            // Claude Code asks on every step that isn't allowed yet; the
-            // approvals setting doesn't reach it.
-            if let UiEvent::Permission {
-                asks_every_time, ..
-            } = &mut ui
-            {
-                *asks_every_time = on_plan;
-            }
             if let UiEvent::Elicit {
                 server,
                 message,
@@ -2511,7 +2517,31 @@ mod tests {
             json,
             serde_json::json!({"kind": "permission", "id": "c", "title": "write", "action": "note.txt", "reason": ""})
         );
-        // A Claude plan chat's card says so; the page then hides "Stop asking me".
+        // A Claude plan turn's card says so; the page then hides "Stop asking me".
+        let ask = || {
+            AcpEvent::Permission(grokhub_core::wire::PermissionAsk {
+                rpc_id: serde_json::json!(7),
+                session_id: "s".into(),
+                title: "Bash".into(),
+                tool_call_id: "c".into(),
+                action: "touch a.txt".into(),
+                reason: String::new(),
+                reject_option: None,
+            })
+        };
+        let card = |asks_every_time| UiEvent::Permission {
+            id: "c".into(),
+            title: "Bash".into(),
+            action: "touch a.txt".into(),
+            reason: String::new(),
+            asks_every_time,
+        };
+        assert_eq!(turn_event(ask(), true), Some(card(true)));
+        assert_eq!(turn_event(ask(), false), Some(card(false)));
+        assert_eq!(
+            turn_event(AcpEvent::Text("hi".into()), true),
+            Some(UiEvent::Text { text: "hi".into() })
+        );
         let plan_ask = serde_json::to_value(UiEvent::Permission {
             id: "c".into(),
             title: "Bash".into(),
