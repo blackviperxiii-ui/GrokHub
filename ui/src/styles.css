@@ -3982,7 +3982,8 @@ label.toggle-row {
 
 .pulse .rows.feed {
   width: 100%;
-  max-width: 640px;
+  /* Wide enough for body text plus a related image beside it later. */
+  max-width: 880px;
   margin: 0 auto;
 }
 
@@ -3991,8 +3992,9 @@ label.toggle-row {
   max-width: none;
   flex-direction: column;
   align-items: stretch;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: 12px;
+  padding: 16px 24px;
+  min-height: 96px;
   border-color: var(--red-dim);
   transition: border-color var(--t-fast) var(--ease-out);
 }
@@ -4180,7 +4182,7 @@ label.toggle-row {
 }
 
 .feed-instructions {
-  max-width: 640px;
+  max-width: 880px;
   width: 100%;
   margin: 0 auto;
   flex-direction: column;
@@ -4238,7 +4240,7 @@ label.toggle-row {
 /* Pulse Ideas: Muse-style rows, not cards. */
 .pulse .idea-group {
   width: 100%;
-  max-width: 640px;
+  max-width: 880px;
   margin: 0 auto;
 }
 
@@ -4274,7 +4276,8 @@ label.toggle-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 12px;
+  padding: 12px 16px;
+  min-height: 64px;
   border: none;
   background: none;
   color: inherit;
@@ -7112,33 +7115,33 @@ fieldset.channel label {
   gap: 8px;
 }
 
-/* Every card's buttons: one neat row. Like first, Dismiss last at the far
-   right, the card's own buttons and Not interested between them. Same size and
-   spacing everywhere; a narrow card scrolls the row instead of wrapping. */
+/* Every card's buttons: one neat row. Like first, Not interested last at the
+   far right, the card's own buttons between them. Same size and spacing
+   everywhere; a narrow card scrolls the row instead of wrapping. */
 .card-buttons.card-row {
   flex-wrap: nowrap;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   overflow-x: auto;
   scrollbar-width: none;
 }
 
 .card-row > button {
   flex: 0 0 auto;
-  min-height: 32px;
-  padding: 0 12px;
+  min-height: 40px;
+  padding: 0 16px;
   font-size: var(--font-body);
   white-space: nowrap;
 }
 
-/* Dismiss is the quiet way out: plain muted text until hovered. */
-.card-row > .card-dismiss {
+/* Not interested is the quiet way out: far right, muted until hovered. */
+.card-row > .card-not-interested {
   margin-left: auto;
   border-color: transparent;
   color: var(--muted);
 }
 
-.card-row > .card-dismiss:hover:not(:disabled) {
+.card-row > .card-not-interested:hover:not(:disabled) {
   background: transparent;
   box-shadow: none;
   color: var(--text);

@@ -261,7 +261,7 @@ describe("Pulse", () => {
     expect(within(card).queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("Snooze sits before Not interested; Delete is gone; Dismiss asks first", async () => {
+  it("Snooze sits before Not interested; Delete and Dismiss are gone", async () => {
     const both = { ...PAGE, feed: [post({ snooze: true, delete: true })] };
     api.getPulse.mockResolvedValue(both);
     api.pulseAct.mockResolvedValue(both);
@@ -272,19 +272,15 @@ describe("Pulse", () => {
     const labels = within(row)
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
-    expect(labels).toEqual(["Like", "Discuss", "Read it", "Snooze", "Not interested", "Dismiss"]);
+    expect(labels).toEqual(["Like", "Discuss", "Read it", "Snooze", "Not interested"]);
     expect(labels).not.toContain("Delete");
+    expect(labels).not.toContain("Dismiss");
+    expect(within(card).queryByRole("group", { name: "Dismiss this post?" })).not.toBeInTheDocument();
     await userEvent.click(within(row).getByRole("button", { name: "Snooze" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "snooze");
-    // Dismiss asks first (Delete folded in).
-    await userEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
-    expect(api.pulseAct).not.toHaveBeenLastCalledWith("post-1", "dismiss");
-    const confirm = within(card).getByRole("group", { name: "Dismiss this post?" });
-    await userEvent.click(within(confirm).getByRole("button", { name: "Dismiss" }));
-    expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "dismiss");
   });
 
-  it("every card has one row: Like first, its own buttons, Not interested, Dismiss last", async () => {
+  it("every card has one row: Like first, its own buttons, Not interested last with no confirm", async () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
@@ -296,21 +292,16 @@ describe("Pulse", () => {
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
     expect(labels[0]).toBe("Like");
-    expect(labels[labels.length - 2]).toBe("Not interested");
-    // One dislike button only.
+    // One dislike button only, last in the row; no Dismiss.
     expect(labels.filter((l) => l === "Not interested" || l === "I don't like")).toHaveLength(1);
-    expect(labels[labels.length - 1]).toBe("Dismiss");
+    expect(labels[labels.length - 1]).toBe("Not interested");
+    expect(labels).not.toContain("Dismiss");
     expect(labels).toContain("Discuss");
 
     await userEvent.click(within(row).getByRole("button", { name: "Not interested" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "dislike");
+    expect(within(card).queryByRole("group", { name: "Dismiss this post?" })).not.toBeInTheDocument();
     expect(await screen.findByRole("status")).toHaveTextContent("Got it. A few less like that.");
-
-    await userEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
-    const confirm = within(card).getByRole("group", { name: "Dismiss this post?" });
-    await userEvent.click(within(confirm).getByRole("button", { name: "Dismiss" }));
-    expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "dismiss");
-    expect(await screen.findByRole("status")).toHaveTextContent("Dismissed.");
   });
 
   it("an error reads as an error, not as a result", async () => {
@@ -319,9 +310,8 @@ describe("Pulse", () => {
     render(<Pulse onRun={() => {}} />);
 
     const card = await screen.findByRole("listitem", { name: TITLE });
-    await userEvent.click(within(card).getByRole("button", { name: "Dismiss" }));
-    const confirm = within(card).getByRole("group", { name: "Dismiss this post?" });
-    await userEvent.click(within(confirm).getByRole("button", { name: "Dismiss" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Not interested" }));
+    expect(within(card).queryByRole("group", { name: "Dismiss this post?" })).not.toBeInTheDocument();
     const status = await screen.findByRole("status");
     expect(status).toHaveTextContent("That card is gone.");
     expect(status).toHaveClass("status--error");
@@ -707,7 +697,7 @@ describe("Pulse", () => {
     expect(within(row).getByRole("button", { name: "Let's do it" })).toBeInTheDocument();
   });
 
-  it("an idea shows the same row as every card: Like, Let's do it, Not interested, Dismiss", async () => {
+  it("an idea shows the same row as every card: Like, Let's do it, Not interested", async () => {
     const written = { ...IDEA, id: "idea-2", title: "Rust 1.99 upgrade plan", icon: "🦀" };
     const page: PulsePage = {
       ...PAGE,
@@ -736,7 +726,8 @@ describe("Pulse", () => {
     const buttons = within(within(row).getByRole("group", { name: "Card actions" }))
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
-    expect(buttons).toEqual(["Like", "Let's do it", "Not interested", "Dismiss"]);
+    expect(buttons).toEqual(["Like", "Let's do it", "Not interested"]);
+    expect(within(row).queryByRole("button", { name: "Dismiss" })).toBeNull();
     expect(within(row).queryByRole("button", { name: "More" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Snooze" })).toBeNull();
     const main = within(row).getByRole("button", { name: "Let's do it" });
@@ -766,13 +757,8 @@ describe("Pulse", () => {
 
     await userEvent.click(within(row).getByRole("button", { name: "Not interested" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "notInterested");
+    expect(within(row).queryByRole("group", { name: "Dismiss this post?" })).not.toBeInTheDocument();
     expect(await screen.findByRole("status")).toHaveTextContent(NOT_INTERESTED_NOTE);
-
-    await userEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
-    expect(api.pulseAct).not.toHaveBeenLastCalledWith("idea-2", "dismiss");
-    const dismissAsk = within(row).getByRole("group", { name: "Dismiss this post?" });
-    await userEvent.click(within(dismissAsk).getByRole("button", { name: "Dismiss" }));
-    expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "dismiss");
 
     await userEvent.click(main);
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "accept");
@@ -1078,9 +1064,10 @@ describe("Pulse", () => {
     const rowNames = within(row)
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
-    // Like far left, Save among the card's own actions, Dismiss far right.
+    // Like far left, Save among the card's own actions, Not interested far right.
     expect(rowNames[0]).toBe("Like");
-    expect(rowNames.at(-1)).toBe("Dismiss");
+    expect(rowNames.at(-1)).toBe("Not interested");
+    expect(rowNames).not.toContain("Dismiss");
     expect(rowNames.indexOf("Save")).toBeLessThan(rowNames.indexOf("Not interested"));
     await userEvent.click(within(row).getByRole("button", { name: "Save" }));
     expect(api.pulseAct).toHaveBeenCalledWith("post-1", "save");

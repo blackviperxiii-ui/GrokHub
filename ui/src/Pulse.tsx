@@ -452,7 +452,6 @@ export function Pulse({
                   })
                 }
                 onDislike={() => void act(post.id, "dislike", DISLIKE_NOTE)}
-                onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
                 onWhy={() => pulseWhy(post.id)}
                 onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
                 onSave={() => void act(post.id, "save", "Saved. It's on the Saved page.")}
@@ -512,7 +511,6 @@ export function Pulse({
                       )
                     }
                     onNotInterested={() => void act(idea.id, "notInterested", NOT_INTERESTED_NOTE)}
-                    onDismiss={() => void act(idea.id, "dismiss", "Dismissed.")}
                     onChip={(c) => void chip(idea.id, c)}
                     onDiscuss={() => void discuss(idea.id)}
                   />
