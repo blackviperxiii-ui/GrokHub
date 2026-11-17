@@ -866,6 +866,32 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_step_must_call_a_tool_and_other_steps_choose() {
+        let (base, server) = capture_server(2);
+        let rt = HttpLocalRuntime::new(&base, "t");
+        let req = ResponsesRequest {
+            model: "local".into(),
+            effort: None,
+            input: Vec::new(),
+            conversation_id: "c".into(),
+            tools: vec![
+                json!({"name": "image_generate", "description": "Generate images.", "parameters": {"type": "object"}}),
+            ],
+            hosted_search: false,
+            call_timeout: None,
+            text_format: None,
+        };
+        {
+            let _force = super::super::local_image::ForceGuard::set();
+            let _ = rt.chat_tools(&req, &CancelToken::new());
+        }
+        let _ = rt.chat_tools(&req, &CancelToken::new());
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies[0]["tool_choice"], json!("required"));
+        assert_eq!(bodies[1].get("tool_choice"), None);
+    }
+
+    #[test]
     fn background_calls_never_take_the_chats_slot_and_one_slot_pins_nothing() {
         let (base, server) = capture_server(5);
         let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));

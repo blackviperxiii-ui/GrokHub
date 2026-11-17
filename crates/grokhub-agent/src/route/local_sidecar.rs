@@ -1540,6 +1540,7 @@ pub fn tick_prewarm(config_dir: &Path) {
     if !super::local::switched_on()
         || super::local_prewarm::busy()
         || local_gov::paused()
+        || drawing()
         || STARTING.load(Ordering::SeqCst)
         || now.saturating_sub(LAST_PREWARM_LOOK.load(Ordering::SeqCst)) < PREWARM_LOOK_SECS
     {
@@ -1887,7 +1888,7 @@ pub fn tick_keep_warm(config_dir: &Path, needed: bool) {
         return;
     }
     LAST_NEEDED_SECS.store(unix_secs(), Ordering::SeqCst);
-    if local_gov::paused() || STARTING.load(Ordering::SeqCst) {
+    if local_gov::paused() || drawing() || STARTING.load(Ordering::SeqCst) {
         return;
     }
     let loaded = global_slot()
@@ -1970,6 +1971,48 @@ fn stop_pending_locked(slot: &mut Option<Sidecar>) -> bool {
     if let Some(side) = slot.take() {
         retire(side);
         health::log("stop", Some("local AI turned off"));
+    }
+    true
+}
+
+/// Pictures drawing on this computer now ([`DrawHold`]).
+static DRAWING: AtomicUsize = AtomicUsize::new(0);
+
+/// Held while a picture draws on this computer: keep-warm and prewarm leave
+/// the chat model unloaded, so it doesn't take back the memory the picture
+/// needs. A chat request still loads it.
+pub struct DrawHold(());
+
+impl DrawHold {
+    pub fn take() -> Self {
+        DRAWING.fetch_add(1, Ordering::SeqCst);
+        Self(())
+    }
+}
+
+impl Drop for DrawHold {
+    fn drop(&mut self) {
+        DRAWING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A [`DrawHold`] is held.
+pub fn drawing() -> bool {
+    DRAWING.load(Ordering::SeqCst) > 0
+}
+
+/// Unload the chat model to make room for a picture, keeping its cache as a
+/// quiet unload does. Checked under the slot lock: with any request in
+/// flight it stays and this returns false.
+pub fn unload_for_picture() -> bool {
+    let mut slot = global_slot().lock().expect("sidecar global");
+    if in_flight() > 0 {
+        return false;
+    }
+    if let Some(side) = slot.take() {
+        save_kv(&side);
+        retire(side);
+        health::log("stop", Some("made room for a picture"));
     }
     true
 }

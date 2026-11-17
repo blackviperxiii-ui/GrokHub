@@ -529,9 +529,7 @@ pub(crate) fn on_device(
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| crate::perm::config_dir().join("media"));
     Some(
-        match li::make_room(&kit)
-            .and_then(|()| li::make(&kit, &prompt, &aspect, explicit, &dir, stop))
-        {
+        match li::make(&kit, &prompt, &aspect, explicit, &dir, stop) {
             Ok(path) => ToolOutput::ok(format!(
                 "IMAGINE: {}\n(Made on this computer with {}; nothing was sent.)",
                 path.display(),

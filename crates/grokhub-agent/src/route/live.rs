@@ -2214,7 +2214,11 @@ pub fn stream_routed(
     if grok_took_turn {
         call.model = &sent.model;
     }
-    STEP_ON_DEVICE.with(|s| s.set(on_device));
+    // The app's own calls (the permission judge, a summary) don't run the
+    // step's tools, so they leave the chat step's mark alone.
+    if !class.trim().starts_with("background:") {
+        STEP_ON_DEVICE.with(|s| s.set(on_device));
+    }
     if on_device {
         call.provider = super::local::PROVIDER_LOCAL;
     } else if let Some(m) = &stood_in {
