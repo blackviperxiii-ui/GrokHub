@@ -1204,6 +1204,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     let mut engine: Option<NativeEngine> = None;
     // A chat switched to the user's Claude plan runs its turns here instead.
     let mut plan: Option<ClaudePlanEngine> = None;
+    // A plan turn ran since the native engine last read the chat's file.
+    let mut plan_ran = false;
     let mut inbox = Some(inbox);
     while let Ok(job) = jobs.recv() {
         let Job {
@@ -1281,24 +1283,35 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             crate::task_feed::touch(&conversation_id);
         }
         let reload = turn_starts(&conversation_id);
+        let on_plan = plan_cli.is_some();
         let engine: &mut dyn Engine = if let Some(cli) = plan_cli {
             let plan = plan.get_or_insert_with(|| {
-                ClaudePlanEngine::new(
+                let mut fresh = ClaudePlanEngine::new(
                     cli.clone(),
                     route.workspace.clone(),
                     cancel.clone(),
                     steer.clone(),
                 )
+                .for_chat(&conversation_id);
+                // After a restart the chat goes on with its Claude Code session.
+                let saved =
+                    crate::claude_chat::session_of(&config_dir, &conversation_id, &route.workspace);
+                if let Some(saved) = saved {
+                    fresh.resume_session(&saved);
+                }
+                fresh
             });
             plan.set_cli(cli);
-            plan.set_workspace(route.workspace);
+            plan.set_workspace(route.workspace.clone());
+            plan_ran = true;
             plan
         } else {
             let engine = match (&mut engine, inbox.take()) {
                 (Some(engine), _) => {
-                    // A report was saved into this chat between turns: read the
-                    // chat back from its file, so the model sees it too.
-                    if reload {
+                    // A report was saved into this chat between turns, or turns
+                    // ran on the Claude plan: read the chat back from its file,
+                    // so the model sees them too.
+                    if reload || std::mem::take(&mut plan_ran) {
                         if let Ok(info) = grokhub_agent::load_session(&conversation_id) {
                             engine.resume(info.input(), info.usage);
                         }
@@ -1531,6 +1544,17 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             (Ok(()), Some(message)) if stop == "error" => Err(message),
             (Ok(()), _) => Ok(stop),
         };
+        // Kept so the chat goes on with the same session after a restart.
+        if let Some(plan) = plan.as_ref().filter(|_| on_plan) {
+            if let Some(session) = plan.session() {
+                let _ = crate::claude_chat::remember_session(
+                    &config_dir,
+                    &conversation_id,
+                    session,
+                    plan.workspace(),
+                );
+            }
+        }
         let _ = done.send(result);
     }
 }
