@@ -175,22 +175,21 @@ export function fullDate(ms: number): string {
 }
 
 /** The same row of buttons on every card, in one line: Like first (far
- * left), the card's own buttons and Not interested in the middle, Dismiss last
- * (far right). A like turns into a filled heart that stays; a second tap takes
- * it back. The heart pops once on the like tap, unless reduced motion is on. */
+ * left), the card's own buttons in the middle, Not interested last (far
+ * right). A like turns into a filled heart that stays; a second tap takes
+ * it back. The heart pops once on the like tap, unless reduced motion is on.
+ * Not interested drops the card immediately — no confirm. */
 export function CardButtons({
   liked,
   busy,
   onLike,
   onDislike,
-  onDismiss,
   children,
 }: {
   liked: boolean;
   busy: boolean;
   onLike: () => void;
   onDislike: () => void;
-  onDismiss: () => void;
   children?: ReactNode;
 }) {
   const [popping, setPopping] = useState(false);
@@ -234,11 +233,13 @@ export function CardButtons({
         )}
       </button>
       {children}
-      <button type="button" className="quiet" disabled={busy} onClick={onDislike}>
+      <button
+        type="button"
+        className="quiet card-not-interested"
+        disabled={busy}
+        onClick={onDislike}
+      >
         Not interested
-      </button>
-      <button type="button" className="quiet card-dismiss" disabled={busy} onClick={onDismiss}>
-        Dismiss
       </button>
     </div>
   );
@@ -255,10 +256,8 @@ export interface FeedCardProps {
   /** A catalog upgrade card's Open in Settings: the model library, on that
    * model. Its Download button is the approval. */
   onOpenModel?: () => void;
-  /** Not interested: off the page, and fewer posts like it. */
+  /** Not interested: off the page immediately, and fewer posts like it. */
   onDislike: () => void;
-  /** Off the page. Carries no weight. */
-  onDismiss: () => void;
   /** The ⋯ menu's only item: why this card was made. */
   onWhy?: () => Promise<string>;
   /** Hidden until the next 9 AM. Shown when the card says it suits. */
@@ -282,9 +281,9 @@ export interface FeedCardProps {
  * verdict, cited snippet, the full report, media; then one row of buttons
  * (Like, the card's chips or Discuss, Read it or a model card's Open in
  * Settings, Snooze when it suits the card, a self-review card's Apply
- * change, Revert or Save idea, Not interested,
- * Dismiss). Dismiss asks first (Delete folded in). The ⋯ menu holds "Why I
- * created this", plus Copy as GitHub issue on a code idea; nothing collapses. */
+ * change, Revert or Save idea, Not interested). Not interested drops the
+ * card immediately. The ⋯ menu holds "Why I created this", plus Copy as
+ * GitHub issue on a code idea; nothing collapses. */
 export function FeedCard({
   post,
   busy,
@@ -293,7 +292,6 @@ export function FeedCard({
   onOpen,
   onOpenModel,
   onDislike,
-  onDismiss,
   onWhy,
   onSnooze,
   onSave,
@@ -306,7 +304,6 @@ export function FeedCard({
   const chips = post.chips ?? [];
   const [menu, setMenu] = useState(false);
   const [why, setWhy] = useState<string | null>(null);
-  const [asking, setAsking] = useState(false);
   const [undoing, setUndoing] = useState(false);
   const openDone = post.done != null && !post.done.answered;
   const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
@@ -383,19 +380,6 @@ export function FeedCard({
           {why}
         </p>
       )}
-      {asking && (
-        <ConfirmRow
-          question="Dismiss this post?"
-          detail="It won't come back."
-          action="Dismiss"
-          busy={busy}
-          onConfirm={() => {
-            setAsking(false);
-            onDismiss();
-          }}
-          onCancel={() => setAsking(false)}
-        />
-      )}
       {undoing && openDone && (
         <ConfirmRow
           question="Turn it back on?"
@@ -408,13 +392,7 @@ export function FeedCard({
           onCancel={() => setUndoing(false)}
         />
       )}
-      <CardButtons
-        liked={post.loved}
-        busy={busy}
-        onLike={onLove}
-        onDislike={onDislike}
-        onDismiss={() => setAsking(true)}
-      >
+      <CardButtons liked={post.loved} busy={busy} onLike={onLove} onDislike={onDislike}>
         {chips.length === 0 ? (
           <button type="button" className="quiet" disabled={busy} onClick={onDiscuss}>
             Discuss
@@ -496,10 +474,8 @@ export interface IdeaRowProps {
   onFix?: () => void;
   /** Like, or take it back when the idea is already liked. */
   onMoreLike: () => void;
-  /** Not interested: the idea goes, with some of its topics' weight. */
+  /** Not interested: the idea goes immediately, with some of its topics' weight. */
   onNotInterested: () => void;
-  /** Off the page, after a confirm. */
-  onDismiss: () => void;
   /** A chip on a card that found something; Discuss goes to `onDiscuss`. */
   onChip?: (chip: PulseChip) => void;
   onDiscuss?: () => void;
@@ -509,7 +485,7 @@ export interface IdeaRowProps {
  * grey "I can …" line and any full report, then the same row of buttons as
  * every card: Like, its own buttons (Let's do it, or Fix it / Options and
  * Ask about it on a PC health card, or the chips of a card that found
- * something), Not interested, Dismiss. A click on the row is the main button. */
+ * something), Not interested. A click on the row is the main button. */
 export function IdeaRow({
   idea,
   busy,
@@ -518,7 +494,6 @@ export function IdeaRow({
   onFix,
   onMoreLike,
   onNotInterested,
-  onDismiss,
   onChip,
   onDiscuss,
 }: IdeaRowProps) {
@@ -526,7 +501,6 @@ export function IdeaRow({
   const fix = idea.fix && onFix ? onFix : null;
   const addSkill = idea.skill && onAddSkill ? onAddSkill : null;
   const main = fix ?? addSkill ?? onDo;
-  const [asking, setAsking] = useState(false);
   return (
     <li className="idea-row" aria-label={idea.title}>
       <button type="button" className="idea-main" disabled={busy} onClick={main}>
@@ -547,26 +521,7 @@ export function IdeaRow({
           <Markdown text={idea.more} />
         </div>
       )}
-      {asking && (
-        <ConfirmRow
-          question="Dismiss this post?"
-          detail="It won't come back."
-          action="Dismiss"
-          busy={busy}
-          onConfirm={() => {
-            setAsking(false);
-            onDismiss();
-          }}
-          onCancel={() => setAsking(false)}
-        />
-      )}
-      <CardButtons
-        liked={idea.loved}
-        busy={busy}
-        onLike={onMoreLike}
-        onDislike={onNotInterested}
-        onDismiss={() => setAsking(true)}
-      >
+      <CardButtons liked={idea.loved} busy={busy} onLike={onMoreLike} onDislike={onNotInterested}>
         {chips.length === 0 ? (
           <>
             <button type="button" className="quiet" disabled={busy} onClick={main}>

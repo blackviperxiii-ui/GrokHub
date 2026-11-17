@@ -17,7 +17,7 @@ function reduced(matches: boolean) {
 
 function row(liked: boolean, onLike = vi.fn()) {
   return render(
-    <CardButtons liked={liked} busy={false} onLike={onLike} onDislike={vi.fn()} onDismiss={vi.fn()}>
+    <CardButtons liked={liked} busy={false} onLike={onLike} onDislike={vi.fn()}>
       <button type="button">Discuss</button>
     </CardButtons>,
   );
@@ -54,7 +54,7 @@ describe("CardButtons like → heart", () => {
     expect(like.textContent).toBe("♥");
 
     rerender(
-      <CardButtons liked={true} busy={false} onLike={onLike} onDislike={vi.fn()} onDismiss={vi.fn()}>
+      <CardButtons liked={true} busy={false} onLike={onLike} onDislike={vi.fn()}>
         <button type="button">Discuss</button>
       </CardButtons>,
     );
@@ -76,7 +76,7 @@ describe("CardButtons like → heart", () => {
     expect(onLike).toHaveBeenCalledTimes(1);
     expect(like).not.toHaveClass("card-like-pop");
     rerender(
-      <CardButtons liked={true} busy={false} onLike={onLike} onDislike={vi.fn()} onDismiss={vi.fn()}>
+      <CardButtons liked={true} busy={false} onLike={onLike} onDislike={vi.fn()}>
         <button type="button">Discuss</button>
       </CardButtons>,
     );
