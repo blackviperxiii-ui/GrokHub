@@ -284,12 +284,13 @@ pub fn make(
         let _ = std::fs::remove_file(&out);
         return Err(e);
     }
-    drop(drawing);
     if !out.is_file() {
         return Err("The picture engine finished without a picture.".into());
     }
+    // The picture hands its place to the guard: sd-cli's memory counts as
+    // free again, and keep-warm can't load the chat model in between.
     if let Some(g) = kit.guard {
-        let Ok(_checking) = resident::reserve(
+        let Ok(_checking) = drawing.then(
             resident::Kind::PictureGuard,
             resident::Mem::ram(g.run_mb),
             true,
