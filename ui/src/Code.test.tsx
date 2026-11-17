@@ -171,7 +171,7 @@ function Tab({ shown }: { shown: boolean }) {
 const settle = () => act(() => new Promise<void>((done) => setTimeout(done, 0)));
 
 
-async function openSideTab(name: "Editor" | "Tests" | "Skills") {
+async function openSideTab(name: "Editor" | "Tests" | "Skills" | "Helpers") {
   await userEvent.click(await screen.findByRole("tab", { name }));
 }
 
@@ -829,7 +829,7 @@ describe("Code tab", () => {
   });
 
   
-  it("puts the agent on the left, with Editor/Tests/Skills tabs on the right", async () => {
+  it("puts the agent on the left, with Editor/Tests/Skills/Helpers tabs on the right", async () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeBuiltins.mockResolvedValue(BUILTINS);
     render(<Code shown onOpenSettings={() => {}} />);
@@ -842,12 +842,18 @@ describe("Code tab", () => {
     expect(screen.getByRole("tab", { name: "Editor" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Tests" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tab", { name: "Skills" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "Helpers" })).toHaveAttribute("aria-selected", "false");
     expect(screen.queryByRole("heading", { name: CODE_TESTS })).toBeNull();
+    // Helpers stay mounted (hidden) so live updates continue off-tab.
+    expect(screen.getByTestId("agent-tasks").closest("[hidden]")).not.toBeNull();
     await openSideTab("Tests");
     expect(await screen.findByRole("heading", { name: CODE_TESTS })).toBeInTheDocument();
     expect(screen.queryByText(CODE_CLEAN)).toBeNull();
     await openSideTab("Skills");
     expect(await screen.findByRole("heading", { name: CODE_BUILTINS })).toBeInTheDocument();
+    await openSideTab("Helpers");
+    expect(screen.getByTestId("agent-tasks").closest("[hidden]")).toBeNull();
+    expect(screen.getByRole("complementary", { name: "Agent window" }).querySelector("[data-testid=agent-tasks]")).toBeNull();
     await openSideTab("Editor");
     expect(await screen.findByText(CODE_CLEAN)).toBeInTheDocument();
   });
@@ -873,10 +879,13 @@ describe("Code tab", () => {
     expect(api.codeSessionBind).toHaveBeenCalledWith("shell-first");
     expect(await within(pane).findByText("Works in demo")).toHaveAttribute("title", "/work/demo");
     expect(leftOffLine({ goal: "Ship the note", next: "", blocker: "disk full" })).toBe("Blocked: disk full");
-    // The Tasks panel follows the same session and has no link out of the tab.
-    const tasks = within(pane).getByTestId("agent-tasks");
+    // Helpers live in the Editor Helpers tab, not under the agent chat.
+    expect(within(pane).queryByTestId("agent-tasks")).toBeNull();
+    const tasks = screen.getByTestId("agent-tasks");
     expect(tasks).toHaveTextContent("tasks of shell-first");
     expect(tasks).toHaveAttribute("data-links", "false");
+    await openSideTab("Helpers");
+    expect(tasks.closest("[hidden]")).toBeNull();
   });
 
   it("Resume sends the saved checkpoint in the open session", async () => {
@@ -959,6 +968,7 @@ describe("Code tab", () => {
     const tasks = screen.getByTestId("agent-tasks");
     expect(tasks).toHaveAttribute("data-asks", "false");
     await waitFor(() => expect(tasks).toHaveAttribute("data-asks", "true"));
+    await openSideTab("Helpers");
     await userEvent.click(screen.getByRole("button", { name: "stub review" }));
     // Sent, not left in the box, and the session is the one that was open.
     expect(chat).toHaveTextContent("sent [review the change]");
@@ -974,7 +984,9 @@ describe("Code tab", () => {
     render(<Tab shown />);
     expect(await screen.findByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
     api.codeRepo.mockResolvedValue(repo({ ahead: 2, files: [] }));
+    await openSideTab("Helpers");
     await userEvent.click(screen.getByRole("button", { name: "stub committed" }));
+    await openSideTab("Editor");
     expect(await screen.findByText(/On beta → origin\/beta · 2 ahead, 0 behind/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /notes\.md/ })).not.toBeInTheDocument();
   });

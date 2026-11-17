@@ -41,7 +41,7 @@ export const AGENTS_NO_CHAT =
 
 export const AGENTS_EMPTY = "No jobs yet. Queued work from this chat shows up here.";
 
-/** The Code tab's Tasks panel, beside the agent window. */
+/** The Code tab's Helpers panel, in the Editor window's Helpers tab. */
 export const TASKS_NOTE = "The lead's tasks and helpers for this session.";
 export const TASKS_EMPTY = "No tasks yet. The lead's tasks and helpers show up here.";
 
@@ -444,8 +444,8 @@ export function Agents({
 }: {
   /** The chat the window last heard from; none before the first message. */
   conversationId?: string;
-  /** Opens the chat. Without it this is the Code tab's Tasks panel, which
-   * sits beside its own conversation and has nowhere to go. */
+  /** Opens the chat. Without it this is the Code tab's Helpers panel, which
+   * lives in the Editor window's Helpers tab and has nowhere to go. */
   onOpenChat?: () => void;
   /** False while the panel's tab is not the one on screen: nothing is read. */
   active?: boolean;
@@ -872,8 +872,8 @@ export function Agents({
   return (
     <section
       ref={section}
-      className={onOpenChat ? "agents" : "agents embedded"}
-      aria-label={onOpenChat ? "Agents" : "Agent tasks"}
+      className={onOpenChat ? "agents" : "agents helpers-panel"}
+      aria-label={onOpenChat ? "Agents" : "Helpers"}
     >
       <div className="card-buttons">
         {onOpenChat && (
@@ -949,7 +949,12 @@ export function Agents({
               const progress = progressOf(task.id);
               const made = workOf(task.id);
               return (
-                <li key={task.id} className={`card agent ${task.status}`} aria-label={task.title}>
+                <li
+                  key={task.id}
+                  className={`card agent ${task.status}`}
+                  aria-label={task.title}
+                  data-model={task.model || progress?.model || undefined}
+                >
                   {onOpenChat ? (
                     <button type="button" className="card-title link" onClick={onOpenChat}>
                       {task.title}

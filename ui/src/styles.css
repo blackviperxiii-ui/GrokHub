@@ -7687,17 +7687,23 @@ fieldset.channel label {
 
 /* The tasks take what they need, up to about a quarter of the column; the
    conversation keeps the rest. */
-.agents.embedded {
-  flex: 0 1 auto;
-  max-height: 28%;
+/* Helpers tab: lead tasks, helpers, helper work, review — not under chat. */
+.agents.helpers-panel {
+  flex: 1 1 auto;
+  min-height: 0;
   max-width: none;
   margin-inline: 0;
-  padding-top: var(--space-8);
-  border-top: 1px solid var(--border);
+  overflow: auto;
 }
 
-.agents.embedded .empty {
+.agents.helpers-panel .empty {
   margin: 0;
+}
+
+/* Chat fills the agent column once helpers left for the Helpers tab. */
+.code-agent > .chat {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* A narrow window stacks them: agent on top, side column under. */

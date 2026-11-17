@@ -3574,6 +3574,8 @@ export interface QueueProgress {
   lastStep: string;
   tokens: number;
   seconds: number;
+  /** The model this helper ran on; absent when unknown. */
+  model?: string;
 }
 
 /** A background command, subagent or monitor of the open chat. */
@@ -3583,6 +3585,8 @@ export interface QueueTask {
   status: TaskStatus;
   /** Still going, so Stop has something to stop. */
   live: boolean;
+  /** The model a helper ran on; absent for commands and monitors. */
+  model?: string;
   /** Only on a helper of a session whose Tasks panel is live. */
   progress?: QueueProgress;
 }

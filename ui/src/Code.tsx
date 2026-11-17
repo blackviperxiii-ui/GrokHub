@@ -38,13 +38,16 @@ import { inShell } from "./transport";
 import { useCardFocus } from "./ui";
 
 /** Right-column panes (former under-stack panels). */
-export type CodeSideTab = "editor" | "tests" | "skills";
+export type CodeSideTab = "editor" | "tests" | "skills" | "helpers";
 
 export const CODE_SIDE_TABS: { id: CodeSideTab; label: string }[] = [
   { id: "editor", label: "Editor" },
   { id: "tests", label: "Tests" },
   { id: "skills", label: "Skills" },
+  { id: "helpers", label: "Helpers" },
 ];
+
+export const CODE_HELPERS = "Helpers";
 
 /** Remembered agent column width (% of the Code tab). Default ~62%. */
 export const CODE_AGENT_WIDTH_KEY = "code.agentWidthPct";
@@ -335,13 +338,6 @@ export function Code({
           onOpenPalette={onOpenPalette}
           grokSignIn={grokSignIn}
         />
-        <Agents
-          conversationId={session}
-          active={shown}
-          live={lead}
-          onAsk={lead ? askLead : undefined}
-          onShipped={() => setShipped((n) => n + 1)}
-        />
       </aside>
       <div
         className="code-split-handle"
@@ -404,7 +400,20 @@ export function Code({
             id={`code-side-panel-${sideTab}`}
             aria-labelledby={`code-side-tab-${sideTab}`}
           >
-            <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} shipped={shipped} tab={sideTab} />
+            {/* Keep Helpers mounted while the Code tab shows so live task
+                updates still land when another side tab is open. */}
+            <div className="code-helpers-host" hidden={sideTab !== "helpers"}>
+              <Agents
+                conversationId={session}
+                active={shown}
+                live={lead}
+                onAsk={lead ? askLead : undefined}
+                onShipped={() => setShipped((n) => n + 1)}
+              />
+            </div>
+            {sideTab !== "helpers" && (
+              <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} shipped={shipped} tab={sideTab} />
+            )}
           </div>
         </section>
       </Activity>
