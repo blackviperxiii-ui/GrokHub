@@ -707,10 +707,11 @@ async function connectors(s, config) {
 // For You. Like on the post writes the ledger line to memory/pulse-ledger.md.
 // Saving the feed instructions makes the writer post at once: it reads the
 // mocked sources, asks the mocked model, and caches the story's image, which
-// opens in the lightbox. Dismiss takes the first post away. After the post
-// the idea writer adds one idea; its one row reads Like, Let's do it, I don't
-// like, Dismiss, with no menu, and Like is kept for the next run. A click on
-// the seeded idea's row puts its action in the chat box, unsent.
+// opens in the lightbox. Not interested takes the first post away at once.
+// After the post the idea writer adds one idea; its one row reads Like,
+// Let's do it, Not interested, with no menu, and Like is kept for the next
+// run. A click on the seeded idea's row puts its action in the chat box,
+// unsent.
 async function pulse(s, config) {
   const now = Date.now();
   const cards = [
@@ -793,24 +794,17 @@ async function pulse(s, config) {
   });
   await wd("POST", `${s}/element/${close[ELEMENT]}/click`, {});
 
-  // No menu: Dismiss, last in the row, asks first then takes the post away.
-  const dismiss = await wd("POST", `${s}/element`, {
+  // No menu: Not interested, last in the row, drops the post immediately.
+  const notInterested = await wd("POST", `${s}/element`, {
     using: "xpath",
-    value: `${post}//div[contains(@class,'card-row')]/button[last()][normalize-space()='Dismiss']`,
+    value: `${post}//div[contains(@class,'card-row')]/button[last()][normalize-space()='Not interested']`,
   });
-  await wd("POST", `${s}/element/${dismiss[ELEMENT]}/click`, {});
-  const dismissConfirm = await waitFor("dismiss confirm", () =>
-    wd("POST", `${s}/element`, {
-      using: "xpath",
-      value: `${post}//div[@role='group' and @aria-label='Dismiss this post?']//button[normalize-space()='Dismiss']`,
-    }).catch(() => null),
-  );
-  await wd("POST", `${s}/element/${dismissConfirm[ELEMENT]}/click`, {});
-  await waitFor("the dismissed post", async () => {
+  await wd("POST", `${s}/element/${notInterested[ELEMENT]}/click`, {});
+  await waitFor("the dropped post", async () => {
     const left = await wd("POST", `${s}/elements`, { using: "xpath", value: post });
     return left.length === 0;
   });
-  console.log("dismiss took the post away");
+  console.log("not interested took the post away");
 
   const ideas = await wd("POST", `${s}/element`, {
     using: "xpath",
@@ -842,7 +836,7 @@ async function pulse(s, config) {
     const t = await wd("GET", `${s}/element/${b[ELEMENT]}/text`);
     labels.push(t.replace(/[\u2661\u2665]/g, "").trim());
   }
-  if (labels.join("|") !== "Like|Let's do it|Not interested|Dismiss") {
+  if (labels.join("|") !== "Like|Let's do it|Not interested") {
     throw new Error(`the idea buttons say ${JSON.stringify(labels)}`);
   }
   await shot(s, "pulse-ideas");
