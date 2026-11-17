@@ -133,6 +133,97 @@ pub struct ShellSettings {
     /// in place of the companion dock. Off by default. Same camelCase key as
     /// the cabin (`chatObjectives`).
     pub chat_objectives: bool,
+    /// Settings → Behavior → Dockable panels. Off until the person turns it
+    /// on; off, the pages keep today's fixed single-page layout.
+    #[serde(default)]
+    pub dock_panels: bool,
+    /// The dock's pane layout, kept across restarts in this file. Read
+    /// leniently: a value this build cannot read resets the layout alone.
+    #[serde(default, deserialize_with = "lenient_dock_layout")]
+    pub dock_layout: DockLayout,
+}
+
+/// One pane of the dock: its page tabs, the tab showing, and its share of
+/// the row. A page id is the shell's page name (`chat`, `pulse`, …).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DockPane {
+    /// The pane's stable name: it survives tab moves, so the page mounted in
+    /// the pane is not remounted when its tabs change.
+    pub id: String,
+    pub tabs: Vec<String>,
+    /// The showing tab: an index into `tabs`.
+    pub active: usize,
+    /// This pane's share of the row, per-mille. 0 reads as an equal share.
+    pub share: u32,
+}
+
+/// Settings → Behavior → Dockable panels: the main pages as rearrangeable
+/// tabs in side-by-side panes (the cabin's dock, kept in `shell.json` here).
+/// A page sits in exactly one pane; the focused pane's active tab is the
+/// page the window is on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DockLayout {
+    pub panes: Vec<DockPane>,
+    /// The pane nav and focus follow: an index into `panes`.
+    pub focused: usize,
+}
+
+impl Default for DockLayout {
+    fn default() -> Self {
+        Self {
+            panes: vec![DockPane {
+                id: "pane-1".to_string(),
+                tabs: vec!["chat".to_string()],
+                active: 0,
+                share: 1000,
+            }],
+            focused: 0,
+        }
+    }
+}
+
+impl DockLayout {
+    /// The same layout with the dock's rules enforced: a page keeps only its
+    /// first pane, no pane is left empty, indexes point at real tabs, and a
+    /// zero share reads as a full share. Nothing usable left is the default.
+    pub fn cleaned(self) -> Self {
+        let mut seen = std::collections::HashSet::new();
+        let mut panes: Vec<DockPane> = Vec::new();
+        for pane in self.panes {
+            let tabs: Vec<String> = pane
+                .tabs
+                .into_iter()
+                .filter(|tab| !tab.is_empty() && seen.insert(tab.clone()))
+                .collect();
+            if tabs.is_empty() {
+                continue;
+            }
+            panes.push(DockPane {
+                id: pane.id,
+                active: pane.active.min(tabs.len() - 1),
+                share: if pane.share == 0 { 1000 } else { pane.share },
+                tabs,
+            });
+        }
+        if panes.is_empty() {
+            return Self::default();
+        }
+        Self {
+            focused: self.focused.min(panes.len() - 1),
+            panes,
+        }
+    }
+}
+
+/// A layout this build cannot read (a hand edit, a newer build's shape)
+/// resets to the default; the rest of the file still loads.
+fn lenient_dock_layout<'de, D: Deserializer<'de>>(d: D) -> Result<DockLayout, D::Error> {
+    let raw = Value::deserialize(d)?;
+    Ok(serde_json::from_value::<DockLayout>(raw)
+        .map(|layout| layout.cleaned())
+        .unwrap_or_default())
 }
 
 /// A size this build doesn't offer reads as the step at or below it.
@@ -304,6 +395,8 @@ impl Default for ShellSettings {
             desktop_nyx_adult: false,
             desktop_nyx_outfit: None,
             chat_objectives: false,
+            dock_panels: false,
+            dock_layout: DockLayout::default(),
         }
     }
 }
@@ -471,6 +564,8 @@ mod tests {
                 desktop_nyx_adult: false,
                 desktop_nyx_outfit: None,
                 chat_objectives: false,
+                dock_panels: false,
+                dock_layout: DockLayout::default(),
             }
         );
     }
@@ -545,6 +640,24 @@ mod tests {
             desktop_nyx_adult: false,
             desktop_nyx_outfit: Some("gaming".into()),
             chat_objectives: true,
+            dock_panels: true,
+            dock_layout: DockLayout {
+                panes: vec![
+                    DockPane {
+                        id: "left".into(),
+                        tabs: vec!["chat".into(), "pulse".into()],
+                        active: 1,
+                        share: 600,
+                    },
+                    DockPane {
+                        id: "right".into(),
+                        tabs: vec!["skills".into()],
+                        active: 0,
+                        share: 400,
+                    },
+                ],
+                focused: 1,
+            },
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -575,6 +688,9 @@ mod tests {
         assert!(raw.contains("\"desktopNyxUndocked\": true"), "{raw}");
         assert!(raw.contains("\"desktopNyxOutfit\": \"gaming\""), "{raw}");
         assert!(raw.contains("\"chatObjectives\": true"), "{raw}");
+        assert!(raw.contains("\"dockPanels\": true"), "{raw}");
+        assert!(raw.contains("\"dockLayout\""), "{raw}");
+        assert!(raw.contains("\"tabs\": [\n          \"chat\","), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -627,6 +743,8 @@ mod tests {
                 desktop_nyx_adult: false,
                 desktop_nyx_outfit: None,
                 chat_objectives: false,
+                dock_panels: false,
+                dock_layout: DockLayout::default(),
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -672,6 +790,8 @@ mod tests {
                 desktop_nyx_adult: false,
                 desktop_nyx_outfit: None,
                 chat_objectives: false,
+                dock_panels: false,
+                dock_layout: DockLayout::default(),
             }
         );
         save(&dir, &loaded).expect("save");
@@ -906,6 +1026,122 @@ mod tests {
         assert!(!load(&dir).chat_objectives);
         std::fs::write(path(&dir), r#"{"chatObjectives":true}"#).expect("write");
         assert!(load(&dir).chat_objectives);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_dock_layout_round_trips_through_the_file() {
+        let dir = temp_dir("dock-roundtrip");
+        let wanted = ShellSettings {
+            dock_panels: true,
+            dock_layout: DockLayout {
+                panes: vec![
+                    DockPane {
+                        id: "main".into(),
+                        tabs: vec!["chat".into(), "imagine".into()],
+                        active: 0,
+                        share: 700,
+                    },
+                    DockPane {
+                        id: "side".into(),
+                        tabs: vec!["workboard".into()],
+                        active: 0,
+                        share: 300,
+                    },
+                ],
+                focused: 0,
+            },
+            ..ShellSettings::default()
+        };
+        save(&dir, &wanted).expect("save");
+        assert_eq!(load(&dir), wanted);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_dock_layout_keeps_a_page_in_one_pane_only() {
+        let messy = DockLayout {
+            panes: vec![
+                DockPane {
+                    id: "a".into(),
+                    tabs: vec!["chat".into(), "pulse".into()],
+                    active: 9,
+                    share: 0,
+                },
+                DockPane {
+                    id: "b".into(),
+                    tabs: vec!["pulse".into(), "skills".into()],
+                    active: 0,
+                    share: 250,
+                },
+                DockPane {
+                    id: "c".into(),
+                    tabs: vec![],
+                    active: 0,
+                    share: 250,
+                },
+            ],
+            focused: 7,
+        };
+        assert_eq!(
+            messy.cleaned(),
+            DockLayout {
+                panes: vec![
+                    DockPane {
+                        id: "a".into(),
+                        tabs: vec!["chat".into(), "pulse".into()],
+                        active: 1,
+                        share: 1000,
+                    },
+                    DockPane {
+                        id: "b".into(),
+                        tabs: vec!["skills".into()],
+                        active: 0,
+                        share: 250,
+                    },
+                ],
+                focused: 1,
+            }
+        );
+        // Nothing usable left is the default layout.
+        let empty = DockLayout {
+            panes: vec![DockPane::default()],
+            focused: 0,
+        };
+        assert_eq!(empty.cleaned(), DockLayout::default());
+    }
+
+    #[test]
+    fn an_unreadable_dock_layout_resets_alone() {
+        let dir = temp_dir("dock-junk");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(
+            path(&dir),
+            r#"{"closeToTray":false,"dockPanels":true,"dockLayout":{"panes":"wide"}}"#,
+        )
+        .expect("write");
+        let loaded = load(&dir);
+        assert!(!loaded.close_to_tray);
+        assert!(loaded.dock_panels);
+        assert_eq!(loaded.dock_layout, DockLayout::default());
+        // A layout saved by hand with a page in two panes loads cleaned.
+        std::fs::write(
+            path(&dir),
+            r#"{"dockLayout":{"panes":[{"tabs":["chat","pulse"],"active":0,"share":500},{"tabs":["pulse"],"active":0,"share":500}],"focused":1}}"#,
+        )
+        .expect("write");
+        assert_eq!(
+            load(&dir).dock_layout,
+            DockLayout {
+                panes: vec![DockPane {
+                    id: String::new(),
+                    tabs: vec!["chat".into(), "pulse".into()],
+                    active: 0,
+                    share: 500,
+                }],
+                focused: 0,
+            }
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

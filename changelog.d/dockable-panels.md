@@ -1,0 +1,1 @@
+- Settings → Behavior → Dockable panels: the main pages (Chat, Imagine, Automations, Skills, Workboard, Pulse) become rearrangeable tabs in side-by-side panes — drag a tab to move it, drop it on a pane's edge to split, drag the divider to resize, F6 moves between panes. Off by default, desktop only; the layout is kept in shell.json.

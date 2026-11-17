@@ -7,6 +7,7 @@ import {
   saveSettings,
   setApiKey,
   setAutostart,
+  setDockPanels,
   setNotifications,
   setSummonHotkey,
   type Capabilities,
@@ -286,6 +287,11 @@ export function Settings({
               <Behavior
                 tray={caps.tray}
                 onCloseToTray={(closeToTray) => setSettings({ ...loaded, closeToTray })}
+                dock={
+                  inShell()
+                    ? { on: loaded.dockPanels, onToggle: (on) => void flip(() => setDockPanels(on)) }
+                    : null
+                }
               />
             )}
             {section === "behavior" && <ScreenshotExplain />}

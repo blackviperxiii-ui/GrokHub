@@ -749,6 +749,91 @@ select:focus-visible {
   display: flex;
 }
 
+/* Dockable panels: the main pages as tabs in side-by-side panes. The
+ * focused pane carries the border; a drop target shows where the tab lands. */
+.dock {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dock-pane {
+  display: flex;
+  flex-direction: column;
+  flex-basis: 0;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.dock-pane[data-focused] {
+  border-color: var(--border);
+}
+
+.dock-pane[data-drop="in"] {
+  box-shadow: var(--ring);
+}
+
+.dock-pane[data-drop="before"] {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.dock-pane[data-drop="after"] {
+  box-shadow: inset -3px 0 0 var(--accent);
+}
+
+.dock-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+}
+
+.dock-tab {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: grab;
+}
+
+.dock-tab:hover {
+  background: var(--hover);
+}
+
+.dock-tab[data-active] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.dock-page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.dock-page > div {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.dock-divider {
+  flex: none;
+  width: 8px;
+  border-radius: 4px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.dock-divider:hover {
+  background: var(--border);
+}
+
 /* One row that never wraps or widens the page: the fill between the brand
    and the controls gives way first. */
 .topbar {

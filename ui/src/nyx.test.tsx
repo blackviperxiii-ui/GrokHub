@@ -86,6 +86,8 @@ const SETTINGS: Settings = {
   version: "3.1.0",
   summonHotkey: false,
   notifications: false,
+  dockPanels: false,
+  dockLayout: { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
 };
 
 /** The desktop's nyx_look for Nyx herself: one set per mood, as the shell

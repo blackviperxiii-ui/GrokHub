@@ -42,6 +42,8 @@ vi.mock("./api", async () => {
   WEB: { ...api.CORE_ONLY, pulse: true, remote: true },
   getCapabilities: api.getCapabilities,
   getSettings: api.getSettings,
+  saveDockLayout: () => Promise.resolve(settings()),
+  setDockPanels: () => Promise.resolve(settings()),
   getMemory: api.getMemory,
   getMemoryFiles: () =>
     Promise.resolve({
@@ -95,6 +97,8 @@ function settings(over: Partial<Settings> = {}): Settings {
     version: "3.1.0",
     summonHotkey: false,
     notifications: true,
+    dockPanels: false,
+    dockLayout: { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
     ...over,
   };
 }
@@ -108,6 +112,48 @@ async function openPage(name: string) {
   await userEvent.click(tab("More"));
   await userEvent.click(await within(screen.getByRole("dialog", { name: "More pages" })).findByRole("option", { name }));
 }
+
+describe("App pages with dockable panels", () => {
+  beforeEach(() => {
+    api.chatHandlers.length = 0;
+    api.sentTo.length = 0;
+    api.getCapabilities.mockReset().mockResolvedValue(api.CORE_ONLY);
+    api.getSettings.mockReset().mockResolvedValue(settings());
+    api.getMemory.mockReset();
+    api.getStartChat.mockReset().mockResolvedValue(null);
+    api.shell = false;
+  });
+
+  it("off: pages render as they always have, with no dock", async () => {
+    api.shell = true;
+    const { container } = render(<App />);
+    expect(await screen.findByRole("navigation", { name: "Views" })).toBeInTheDocument();
+    expect(container.querySelector(".dock")).toBeNull();
+  });
+
+  it("on: a saved two-pane layout shows both pages side by side", async () => {
+    api.shell = true;
+    api.getSettings.mockResolvedValue(
+      settings({
+        dockPanels: true,
+        dockLayout: {
+          panes: [
+            { id: "left", tabs: ["chat"], active: 0, share: 500 },
+            { id: "right", tabs: ["automations"], active: 0, share: 500 },
+          ],
+          focused: 0,
+        },
+      }),
+    );
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".dock-pane")).toHaveLength(2));
+    // Chat's tab in one pane, Automations' in the other; the pages this
+    // window has but the layout had not placed fold into the focused pane.
+    expect(screen.getByRole("tab", { name: "Chat" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Automations" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Skills" })).toBeInTheDocument());
+  });
+});
 
 describe("App pages", () => {
   beforeEach(() => {
