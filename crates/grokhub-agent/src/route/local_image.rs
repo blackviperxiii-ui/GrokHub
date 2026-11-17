@@ -149,6 +149,127 @@ pub fn ready_on_device(
     &[TOOL]
 }
 
+/// The newest message is a picture ask this computer can draw, and nothing
+/// has answered it yet: this step offers only the picture tool and must call
+/// it ([`ForceGuard`]), so the picture never hangs on the chat model choosing
+/// to. The model still writes the prompt. Run after [`ready_on_device`].
+pub fn picture_step(req: &crate::client::ResponsesRequest, can_draw: bool, ask: bool) -> bool {
+    use crate::client::InputItem;
+    can_draw
+        && ask
+        && matches!(req.input.last(), Some(InputItem::Message { role, .. }) if role == "user")
+        && req.tools.iter().any(|t| t["name"].as_str() == Some(TOOL))
+}
+
+/// `req` with only the picture tool offered.
+pub fn only_picture_tool(req: &crate::client::ResponsesRequest) -> crate::client::ResponsesRequest {
+    let mut req = req.clone();
+    req.tools.retain(|t| t["name"].as_str() == Some(TOOL));
+    req
+}
+
+thread_local! {
+    static FORCED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While held, this thread's on-device call must call a tool
+/// (`tool_choice: "required"`): a [`picture_step`].
+pub struct ForceGuard {
+    prev: bool,
+}
+
+impl ForceGuard {
+    pub fn set() -> Self {
+        Self {
+            prev: FORCED.with(|f| f.replace(true)),
+        }
+    }
+}
+
+impl Drop for ForceGuard {
+    fn drop(&mut self) {
+        FORCED.with(|f| f.set(self.prev));
+    }
+}
+
+/// A [`ForceGuard`] is held on this thread.
+pub fn forced() -> bool {
+    FORCED.with(std::cell::Cell::get)
+}
+
+/// Memory kept free above the picture model while it draws.
+pub const DRAW_HEADROOM_MB: u64 = 512;
+
+/// Whether a picture fits in memory now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawRoom {
+    /// It fits beside what is loaded, or there is no reading to go by.
+    Fits,
+    /// It fits once the chat model is unloaded; the next message loads it again.
+    UnloadChat,
+    /// It doesn't fit even then; `need_mb` is what it needs free.
+    NoRoom { need_mb: u64 },
+}
+
+/// Room for a picture model of `image_mb` with `chat_mb` of chat model
+/// loaded (0 when none is, or Keep loaded holds it). With no reading, it
+/// draws as it always has.
+pub fn draw_room(image_mb: u64, room: Option<&super::local_scale::Room>, chat_mb: u64) -> DrawRoom {
+    use super::local_scale::usable_mb;
+    let Some(room) = room else {
+        return DrawRoom::Fits;
+    };
+    let need_mb = image_mb + DRAW_HEADROOM_MB;
+    if need_mb <= usable_mb(room, 0) {
+        DrawRoom::Fits
+    } else if chat_mb > 0 && need_mb <= usable_mb(room, chat_mb) {
+        DrawRoom::UnloadChat
+    } else {
+        DrawRoom::NoRoom { need_mb }
+    }
+}
+
+/// Said when a picture can't fit in memory now.
+pub fn no_room_line(need_mb: u64) -> String {
+    let gb = need_mb.div_ceil(1024);
+    format!("Not made, and nothing was sent: drawing needs about {gb} GB of free memory and this computer doesn't have it right now. Close some apps, then ask again.")
+}
+
+/// Memory the loaded chat model holds: the catalog size, or the file's,
+/// plus its draft's file.
+fn chat_mb(loaded: &sidecar::Loaded) -> u64 {
+    let file_mb = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len() / (1024 * 1024));
+    let main = super::local_swap::catalog_for(&loaded.model)
+        .map_or_else(|| file_mb(&loaded.model), |m| m.run_mb);
+    let draft = loaded
+        .launch
+        .as_ref()
+        .and_then(|l| l.draft.as_ref())
+        .and_then(|d| d.model.as_deref())
+        .map_or(0, file_mb);
+    main + draft
+}
+
+/// Make room for `kit`'s picture model: nothing to do, unload the chat
+/// model (it and its draft load again on the next message), or decline.
+/// Keep loaded holds the chat model, so it declines then instead.
+pub fn make_room(kit: &Kit) -> Result<(), String> {
+    let loaded = sidecar::loaded();
+    let chat = match &loaded {
+        Some(l) if !sidecar::keep_loaded() => chat_mb(l),
+        _ => 0,
+    };
+    let room = super::local_scale::room(grokhub_core::now_ms());
+    match draw_room(kit.model.run_mb, room.as_ref(), chat) {
+        DrawRoom::Fits => Ok(()),
+        DrawRoom::UnloadChat => {
+            sidecar::stop_global();
+            Ok(())
+        }
+        DrawRoom::NoRoom { need_mb } => Err(no_room_line(need_mb)),
+    }
+}
+
 /// Append `line` as its own paragraph to the first system message.
 fn add_to_system(input: &mut Vec<crate::client::InputItem>, line: &str) {
     use crate::client::{ContentPart, InputItem};
@@ -417,5 +538,98 @@ mod tests {
                 Err("cancelled".into())
             );
         }
+    }
+
+    fn room(free_vram_mb: Option<u64>, free_ram_mb: u64) -> super::super::local_scale::Room {
+        super::super::local_scale::Room {
+            free_vram_mb,
+            free_ram_mb,
+            cpu_busy_pct: None,
+            on_battery: false,
+            unified: false,
+        }
+    }
+
+    #[test]
+    fn a_picture_draws_beside_the_chat_model_unloads_it_or_declines() {
+        // 7 GB picture model plus 512 MB to spare: 7,680 MB.
+        // 4 GB VRAM + 80% of 5 GB RAM = 8,192 MB free: it fits beside the chat.
+        assert_eq!(
+            draw_room(7_168, Some(&room(Some(4_096), 5_120)), 5_000),
+            DrawRoom::Fits
+        );
+        // 2 GB VRAM + 80% of 5 GB = 6,144 MB: only once the 5 GB chat model goes.
+        assert_eq!(
+            draw_room(7_168, Some(&room(Some(2_048), 5_120)), 5_000),
+            DrawRoom::UnloadChat
+        );
+        // Not even then, or no chat model to unload (or Keep loaded holds it).
+        assert_eq!(
+            draw_room(7_168, Some(&room(None, 2_048)), 3_000),
+            DrawRoom::NoRoom { need_mb: 7_680 }
+        );
+        assert_eq!(
+            draw_room(7_168, Some(&room(Some(2_048), 5_120)), 0),
+            DrawRoom::NoRoom { need_mb: 7_680 }
+        );
+        // No reading: it draws as it always has.
+        assert_eq!(draw_room(7_168, None, 5_000), DrawRoom::Fits);
+        assert_eq!(
+            no_room_line(7_680),
+            "Not made, and nothing was sent: drawing needs about 8 GB of free memory and this computer doesn't have it right now. Close some apps, then ask again."
+        );
+    }
+
+    #[test]
+    fn only_an_unanswered_picture_ask_this_computer_can_draw_forces_the_step() {
+        use crate::client::{ContentPart, InputItem, ResponsesRequest};
+        let msg = |role: &str, t: &str| InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(t.into())],
+        };
+        let req = ResponsesRequest {
+            model: "local:small".into(),
+            effort: None,
+            input: vec![msg("system", "s"), msg("user", "draw me a fox")],
+            conversation_id: "c".into(),
+            tools: vec![
+                json!({"name": TOOL, "description": "Generate images."}),
+                json!({"name": "web_search", "description": "Search."}),
+            ],
+            hosted_search: false,
+            call_timeout: None,
+            text_format: None,
+        };
+        assert!(picture_step(&req, true, true));
+        assert!(!picture_step(&req, false, true), "nothing here can draw");
+        assert!(!picture_step(&req, true, false), "not a picture ask");
+        let narrow = only_picture_tool(&req);
+        assert_eq!(
+            narrow.tools,
+            vec![json!({"name": TOOL, "description": "Generate images."})]
+        );
+        assert_eq!(narrow.input, req.input);
+        // The picture came back: the next step answers in words.
+        let mut answered = req.clone();
+        answered.input.push(InputItem::FunctionCall {
+            call_id: "p1".into(),
+            name: TOOL.into(),
+            arguments: "{}".into(),
+        });
+        answered.input.push(InputItem::FunctionCallOutput {
+            call_id: "p1".into(),
+            output: "IMAGINE: /tmp/a.png".into(),
+        });
+        assert!(!picture_step(&answered, true, true));
+        // The gate didn't offer the tool.
+        let mut bare = req.clone();
+        bare.tools.retain(|t| t["name"] != TOOL);
+        assert!(!picture_step(&bare, true, true));
+        assert!(!forced());
+        {
+            let _f = ForceGuard::set();
+            assert!(forced());
+        }
+        assert!(!forced());
     }
 }

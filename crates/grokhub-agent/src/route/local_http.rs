@@ -405,6 +405,10 @@ impl LocalRuntime for HttpLocalRuntime {
         // tokens: dropping the stream closes the socket and the server stops
         // generating. The deltas are put back together into one reply.
         let mut body = openai_body(&self.model, None, req);
+        // A picture step must call the picture tool, its only one.
+        if super::local_image::forced() {
+            body["tool_choice"] = json!("required");
+        }
         body["stream"] = json!(true);
         body["stream_options"] = json!({ "include_usage": true });
         self.effort(req.effort.as_deref()).apply(&mut body);

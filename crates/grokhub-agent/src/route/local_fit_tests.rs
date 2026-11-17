@@ -260,6 +260,11 @@ struct SmallWindow {
     sent: std::sync::Mutex<Vec<ResponsesRequest>>,
 }
 
+thread_local! {
+    /// Whether each call [`SmallWindow`] took had to call a tool.
+    static FORCED_CALLS: std::cell::RefCell<Vec<bool>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl crate::route::local::LocalRuntime for SmallWindow {
     fn classify(&self, _: &str, _: &[&str]) -> Result<serde_json::Value, String> {
         Err("unused".into())
@@ -279,6 +284,7 @@ impl crate::route::local::LocalRuntime for SmallWindow {
         _: &crate::client::CancelToken,
     ) -> Result<crate::client::TurnOutput, String> {
         self.sent.lock().unwrap().push(req.clone());
+        FORCED_CALLS.with(|f| f.borrow_mut().push(crate::route::local_image::forced()));
         Ok(crate::client::TurnOutput {
             text: "ok".into(),
             ..Default::default()
@@ -497,10 +503,22 @@ fn sent_on_4k(ask: &str, can_draw: bool) -> ResponsesRequest {
 fn a_small_window_keeps_the_picture_tool_when_this_computer_can_draw() {
     use crate::route::local_image as li;
     for ask in ["hey", "draw me a fox in the snow"] {
+        FORCED_CALLS.with(|f| f.borrow_mut().clear());
         let sent = sent_on_4k(ask, true);
         let names = tool_names(&sent);
-        assert!(names.contains(&"image_generate"), "{ask}: {names:?}");
-        assert!(names.contains(&"load_tool_schema"), "{ask}: {names:?}");
+        let picture = ask != "hey";
+        // A picture ask is a step that must call the picture tool, its only one.
+        assert_eq!(
+            FORCED_CALLS.with(|f| f.borrow().clone()),
+            vec![picture],
+            "{ask}"
+        );
+        if picture {
+            assert_eq!(names, vec!["image_generate"], "{ask}");
+        } else {
+            assert!(names.contains(&"image_generate"), "{ask}: {names:?}");
+            assert!(names.contains(&"load_tool_schema"), "{ask}: {names:?}");
+        }
         let image = sent
             .tools
             .iter()
@@ -524,7 +542,13 @@ fn with_nothing_to_draw_with_only_a_picture_ask_says_what_to_download() {
     let plain = sent_on_4k("hey", false);
     assert!(!tool_names(&plain).contains(&"image_generate"));
     assert!(!first_text(&plain.input[0]).contains("[Pictures]"));
+    FORCED_CALLS.with(|f| f.borrow_mut().clear());
     let ask = sent_on_4k("make a picture of a castle at night", false);
+    assert_eq!(
+        FORCED_CALLS.with(|f| f.borrow().clone()),
+        vec![false],
+        "nothing here can draw"
+    );
     // Kept, so an 18+ prompt gets the tool's own notice and a clean one can
     // still reach Grok Imagine when signed in.
     assert!(tool_names(&ask).contains(&"image_generate"));
