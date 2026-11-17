@@ -8,7 +8,7 @@
 
 The Electron cabin signed in with xAI device-code OAuth (same public client as Grok CLI). SuperGrok / X Premium+ get an API access token without pasting a console key. The Rust cabin only had a key field. That is not enough.
 
-The Electron sit-down also had threads, slash coverage, bound project, connectors, automations, host rails, and a desktop shell. Those come back as Rust modules — not Electron, not Tauri.
+The Electron sit-down also had threads, slash coverage, bound project, connectors, automations, host rails, and a desktop shell. Those came back as Rust modules — not Electron. **Today:** Loadout is built with Tauri; Electron still stays out.
 
 ## OAuth (non-negotiable)
 

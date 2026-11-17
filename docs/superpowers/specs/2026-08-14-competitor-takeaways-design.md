@@ -79,7 +79,7 @@ Not Rust or 5 MB RAM. Every subsystem is a trait; default autonomy is supervised
 
 Skip: 30 channels, WASM plugins, hardware peripherals, provider zoo.
 
-**Override (2026-08-14):** the shipping cabin is native Rust (`grokhub`). No Electron. No Tauri. See `docs/superpowers/specs/2026-08-14-rust-parity-design.md`.
+**Override (2026-08-14, historical):** the shipping cabin was native Rust (`grokhub`). No Electron. No Tauri. See `docs/superpowers/specs/2026-08-14-rust-parity-design.md`. **Today:** Loadout is built with Tauri; Electron still stays out.
 
 ### 4. Nanobot — readable persistence, one loop
 
@@ -330,7 +330,7 @@ Voice input exists. If a turn is running, a voice transcript is a redirect, not 
 |---|---|
 | Telegram / Discord / Slack / WhatsApp | Their product is a gateway. Ours is the Linux desktop + LAN devices |
 | Provider-agnostic rewrite | Grok-native is the wedge |
-| Rust / Go rewrite | **Superseded** — product is native Rust. No Electron, no Tauri |
+| Rust / Go rewrite | **Superseded** — Loadout is built with Tauri. No Electron |
 | WASM plugin host | Complexity with no demo |
 | Managed OpenClaw hosts / IronClaw suite | Different customer |
 | Research trajectory / GEPA / Honcho | Hermes-the-lab, not GrokHub |
