@@ -1,0 +1,1 @@
+- CI: pull_request shell skips release `tauri build` bundles; debug smoke build and smoke test still run. Bundles stay on merge_group, main, tags, nightly and manual.

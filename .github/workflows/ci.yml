@@ -404,8 +404,10 @@ jobs:
 
   # The Tauri desktop shell (src-tauri/ + ui/, cross-platform Phase 2). It is
   # its own Cargo workspace, so only this job needs the webview libraries.
-  # Bundles build on all three OSes; the tauri-driver smoke test (a chat to a
-  # mock model) runs where tauri-driver has a backend: Linux and Windows.
+  # PRs run lint/test, a debug smoke build and tauri-driver smoke (Linux /
+  # Windows). Release bundles (`tauri build`) run on merge_group, push to
+  # main, tags, nightly and manual — not on every PR revision (CI audit
+  # 916.7/900.73: bundles were ~15 min / ~62% of PR shell wall-clock).
   # The web app smoke test (Phase 5) runs on Linux.
   shell:
     needs: changes
@@ -466,7 +468,11 @@ jobs:
           node ui/e2e/web.mjs
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      # Release installer/AppImage/dmg. Skipped on pull_request: the debug
+      # smoke build below already compiles the shell the smoke test drives.
+      # release.yml still publishes tagged/beta channel bundles.
       - name: Bundles
+        if: github.event_name != 'pull_request'
         shell: bash
         run: ui/node_modules/.bin/tauri build -- --locked
       - name: Smoke-test build
