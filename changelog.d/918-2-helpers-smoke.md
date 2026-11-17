@@ -1,0 +1,1 @@
+- Smoke: Code to-dos and ship review look in the Helpers tab after helpers left the agent chat.

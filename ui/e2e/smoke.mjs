@@ -47,7 +47,7 @@ const AGENT_REPLY = "The session note is written";
 const AGENT_PROMPT_2 = "smoke agent window: write the follow-up note";
 const AGENT_NOTE_2 = "agent-session-follow-up.txt";
 const AGENT_REPLY_2 = "The follow-up note is written";
-// The Tasks panel's review, waive and commit: a session in a git project of
+// The Helpers tab's review, waive and commit: a session in a git project of
 // its own writes a note, its review helper reports one blocker, and the
 // person waives it, allows a planted key-shaped line and commits.
 const SHIP_PROMPT = "smoke ship: write the ship note and review it";
@@ -432,6 +432,22 @@ async function onView(s, label) {
       value: `${RAIL}//button[normalize-space()='${label}'][@aria-current='page']`,
     }),
   );
+}
+
+/** Opens a Code window side tab (Editor / Tests / Skills / Helpers). */
+async function codeSideTab(s, label) {
+  const button =
+    "//div[contains(@class,'code-side-tabs')][@role='tablist']//button[@role='tab'][normalize-space()='" +
+    label +
+    "']";
+  const one = async () => (await wd("POST", `${s}/elements`, { using: "xpath", value: button }))[0];
+  await waitFor(`the Code ${label} tab`, async () => {
+    const el = await one();
+    if (!el) return null;
+    if ((await wd("GET", `${s}/element/${el[ELEMENT]}/attribute/aria-selected`)) === "true") return true;
+    if (await settled(s, el[ELEMENT])) await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+    return null;
+  });
 }
 
 /** Scrolls the element into view and is true once it sits still there for
@@ -1443,7 +1459,7 @@ async function codeProjects(s, config, workspace) {
 // The Code tab's agent window: a message sent there runs on the Code tab, in
 // the folder of the project its session started in. While its reply runs the
 // app is moved to the second project from Chat (`/project bind`); the note
-// must still land in the first project. Its to-do shows in the Tasks panel,
+// must still land in the first project. Its to-do shows in the Helpers tab,
 // and the session is listed under the first project.
 async function codeAgent(s, config, workspace) {
   const xp = (value) => wd("POST", `${s}/elements`, { using: "xpath", value });
@@ -1545,8 +1561,9 @@ async function codeAgent(s, config, workspace) {
   await typeInto(s, again, AGENT_PROMPT_2);
   await click(s, `${pane} form.composer button[type='submit']`);
   await wrote(AGENT_NOTE_2, AGENT_REPLY_2);
-  await waitFor("the to-do in the Tasks panel", () =>
-    find(s, `${pane} section[aria-label='Agent tasks'] li[aria-label='${AGENT_TODO}']`),
+  await codeSideTab(s, "Helpers");
+  await waitFor("the to-do in the Helpers tab", () =>
+    find(s, "section[aria-label='Helpers'] li[aria-label='" + AGENT_TODO + "']"),
   );
   await onView(s, "Code");
   await shot(s, "code-agent-window");
@@ -1569,7 +1586,7 @@ async function codeAgent(s, config, workspace) {
   await waitFor("a new session in the agent window", async () =>
     (await wd("POST", `${s}/elements`, { using: "css selector", value: `${pane} .bubble` })).length === 0,
   );
-  console.log("code tab: the agent window ran a session in its own project while the app moved, and listed its to-do");
+  console.log("code tab: the agent window ran a session in its own project while the app moved, and listed its to-do in Helpers");
 }
 
 /** Plain git in `dir`. `env` adds to the environment. */
@@ -1589,7 +1606,7 @@ function treeOf(dir, scratch) {
   return gitIn(dir, ["write-tree"], env);
 }
 
-// The Tasks panel takes a session's change from review to commit and push. A
+// The Helpers tab takes a session's change from review to commit and push. A
 // git project of its own, with its author in its own config (the app's git
 // calls read no GIT_* variable), on a work branch; its `origin` is a bare
 // repository in the config folder, and `origin/HEAD` names `main` as the
@@ -1608,7 +1625,7 @@ async function codeShip(s, config, workspace) {
   const first = async (value) => (await xp(value))[0] ?? null;
   const bound = () => JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).workspace;
   const pane = "aside.code-agent";
-  const tasks = "//aside[contains(@class,'code-agent')]//section[@aria-label='Agent tasks']";
+  const tasks = "//section[@aria-label='Helpers']";
   const project = join(config, "ship-project");
   mkdirSync(project);
   gitIn(project, ["init", "-q", "-b", "main"]);
@@ -1628,7 +1645,7 @@ async function codeShip(s, config, workspace) {
   writeFileSync(join(project, SHIP_KEY_FILE), `${SHIP_KEY_LINE}\n`);
   const before = gitIn(project, ["rev-parse", "HEAD"]);
 
-  // Shots of the Tasks panel need room for the Commit section beside the chat.
+  // Shots of the Helpers tab need room for the Commit section beside the chat.
   if (process.env.SMOKE_SHOTS) await setWindowSize(s, 1280, 900);
 
   // The app moves to the project, and the agent window starts a session there.
@@ -1677,8 +1694,9 @@ async function codeShip(s, config, workspace) {
   );
 
   // The review and the checks: the blocker and the planted line are in the way.
-  await waitFor("the review's line in the Tasks panel", async () =>
-    (await textOf(s, `${pane} section[aria-label='Agent tasks'] p.review-line`)) === "Reviewed: 1 blocker",
+  await codeSideTab(s, "Helpers");
+  await waitFor("the review's line in the Helpers tab", async () =>
+    (await textOf(s, "section[aria-label='Helpers'] p.review-line")) === "Reviewed: 1 blocker",
   );
   const inTheWay = async () =>
     Promise.all(
@@ -1715,7 +1733,7 @@ async function codeShip(s, config, workspace) {
   const yes = await waitFor("the confirm's Waive", () => first(`${waiveAsk}//button[normalize-space()='Waive']`));
   await clickStill(s, yes[ELEMENT], "the confirm's Waive");
   await waitFor("the waived blocker", async () =>
-    (await textOf(s, `${pane} section[aria-label='Agent tasks'] p.review-line`)) === "Reviewed: 1 blocker · 1 waived",
+    (await textOf(s, "section[aria-label='Helpers'] p.review-line")) === "Reviewed: 1 blocker · 1 waived",
   );
 
   // Allow the planted line, then every check passes.
@@ -1772,7 +1790,7 @@ async function codeShip(s, config, workspace) {
   await shot(s, "code-ship-committed");
   console.log(`code tab: waived the review's blocker, allowed the flagged line and committed ${head.slice(0, 8)} with the reviewed tree`);
 
-  // Push: the Tasks panel's card asks with the exact command, which names
+  // Push: the Helpers tab's card asks with the exact command, which names
   // the commit made there, and only the yes sends it.
   const onOrigin = () => {
     try {
@@ -1782,7 +1800,7 @@ async function codeShip(s, config, workspace) {
     }
   };
   const card = `${tasks}//div[@role='group'][@aria-label='Push and PR']`;
-  const pushButton = await waitFor("Push in the Tasks panel", () =>
+  const pushButton = await waitFor("Push in the Helpers tab", () =>
     first(`${card}/div[contains(@class,'code-ship-buttons')]/button[normalize-space()='Push work/smoke'][not(@disabled)]`),
   );
   await clickStill(s, pushButton[ELEMENT], "Push");
@@ -1809,7 +1827,7 @@ async function codeShip(s, config, workspace) {
   // Open PR: on a GitHub address it asks with the gh command. Cancel, so gh
   // never runs `pr create`.
   gitIn(project, ["remote", "set-url", "origin", "https://github.com/user/my-app.git"]);
-  const prButton = await waitFor("Open PR in the Tasks panel", () =>
+  const prButton = await waitFor("Open PR in the Helpers tab", () =>
     first(`${card}/div[contains(@class,'code-ship-buttons')]/button[normalize-space()='Open PR into beta'][not(@disabled)]`),
   );
   await clickStill(s, prButton[ELEMENT], "Open PR");
