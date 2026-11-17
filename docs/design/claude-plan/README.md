@@ -47,7 +47,7 @@ Sources: `code.claude.com/docs/en/cli-reference`, `/headless`,
 | One turn | `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages`, the prompt as one JSON line on stdin |
 | Model | `--model` with an alias (`opus`, `sonnet`, `haiku`) |
 | Same conversation | `--session-id <uuid>` on the first turn, `--resume <uuid>` after. `--continue` takes the newest conversation in the folder, which may belong to another chat or to the user's own terminal, so it isn't used |
-| Tools | `--allowedTools` and `--disallowedTools` rules, `--permission-mode default` (never `bypassPermissions`) |
+| Tools | `--tools` (which tools exist), `--allowedTools` and `--disallowedTools` rules, `--permission-mode default` (never `bypassPermissions`) |
 | Approvals | `--permission-prompt-tool mcp__<server>__<tool>` with `--mcp-config`: Claude Code asks that MCP tool before a tool it would otherwise ask about |
 | Usage | Each `result` line has `modelUsage` and `total_cost_usd` (an estimate). `rate_limit_event` lines carry `status`, `utilization` and `resetsAt` |
 | Stop | SIGINT ends the turn and records its result; SIGTERM records nothing |
@@ -78,10 +78,15 @@ so it isn't used.
 
 ## Tools and approvals
 
-- **First:** read-only tools only (`--allowedTools Read Grep Glob`,
-  `--permission-prompts none`). A tool Claude wanted but wasn't allowed shows
-  as a failed row and, after the turn, a card: "Claude wanted to run X. Allow
-  it for this chat?" Allowing it adds the rule for the next turns.
+- **First:** read-only tools only. A turn passes `--tools Read Grep Glob`
+  (no other tool exists in it), `--strict-mcp-config` (no MCP server from the
+  user's own config), `--permission-mode default` and
+  `--permission-prompts none`. No `--allowedTools` rule is added, since an
+  allow rule would also let Read reach outside the folder: Claude Code's own
+  rules let a read inside the chat's folder go ahead and refuse one outside
+  it, which shows as a failed row. Still to come: after the turn, a card
+  "Claude wanted to run X. Allow it for this chat?" that adds the tool for
+  the next turns.
 - **Next:** live approvals. A small stdio MCP server inside the app's binary
   answers `--permission-prompt-tool`. It runs the app's own allow, ask and
   deny rules and, on ask, shows the chat's normal approval card. The answer
@@ -92,10 +97,17 @@ so it isn't used.
 ## Choosing it
 
 There's no per-chat model picker today. Settings → AI models gets a
-**Claude (your plan)** row showing installed, signed in and the billing kind,
-with Allow for chats (the same consent card the other providers use). Once
-allowed, a chat can be switched to it from the chat's menu, and the choice is
-kept per chat. Auto routing never picks it on its own.
+**Claude (your plan)** row showing installed, signed in and the billing kind.
+While Claude Code is signed in with a plan, **Allow for chats** asks first
+(what runs, where, and that it counts against the plan). Once allowed, a
+chat's tab menu has **Run on Claude (your plan)**, and the choice is kept per
+chat in `{config}/claude-plan-chats.json`. **Stop using for chats** switches
+every chat back. Auto routing never picks it on its own.
+
+Each turn checks `claude auth status` again (about a quarter of a second). A
+chat on the plan sends nothing while Claude Code is signed out or signed in
+another way, such as an API key, so it never bills somewhere the user didn't
+allow.
 
 ## Usage
 
@@ -113,8 +125,13 @@ week, so it needs no change.
   `claude.exe` first, then `claude.cmd`.
 - **Spawning:** no console window on Windows, stdin carries the prompt, and
   the working folder is the chat's workspace.
-- **Stopping:** SIGINT on Linux and macOS. On Windows the process is ended,
-  and that turn's result is lost; the chat says so.
+- **Stopping:** SIGINT on Linux and macOS. On Windows the process tree is
+  ended (`taskkill /T`, since an npm install's `claude.cmd` runs the real CLI
+  as its own child), and that turn's result is lost.
+- **While a turn runs:** words typed into it can't reach Claude Code, so they
+  come back to the chat when the turn ends, as they do for native turns. A
+  side answer on a chat on the plan is refused for now, since it would run on
+  the app's own models.
 
 ## Build order
 
@@ -127,9 +144,10 @@ Each step is its own PR into `beta`.
    above.
 4. **Engine.** `ClaudePlanEngine` behind an engine choice in the chat worker,
    read-only tools, the consent card and the per-chat switch. Proof: a real
-   turn and a read-only tool task on Linux.
-5. **Resume and history.** `--session-id` and `--resume`, and turns saved to
-   the chat's history like native turns.
+   turn and a read-only tool task on Linux. The session flags from step 5
+   ship here too, since a second message would otherwise start over.
+5. **History.** Turns saved to the chat's history like native turns, so a
+   chat on the plan survives a restart and shows in History.
 6. **Usage.** The per-turn usage line and the plan headroom.
 7. **Live approvals.** The MCP approval server.
 

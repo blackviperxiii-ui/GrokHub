@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
+use grokhub_agent::claude_plan::engine::ClaudePlanEngine;
 use grokhub_agent::{
     AuthKind, CancelToken, DesktopOps, ElicitInbox, ElicitNote, Engine, EngineParts, Gate,
     HaltCheck, ModelClient, NativeEngine, PermAnswer, PermMode, PermitInbox, PermitNote,
@@ -1201,6 +1202,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     } = worker;
     let _config = grokhub_agent::perm::ConfigGuard::set(&config_dir);
     let mut engine: Option<NativeEngine> = None;
+    // A chat switched to the user's Claude plan runs its turns here instead.
+    let mut plan: Option<ClaudePlanEngine> = None;
     let mut inbox = Some(inbox);
     while let Ok(job) = jobs.recv() {
         let Job {
@@ -1225,6 +1228,20 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 continue;
             }
         };
+        // A Stop from an earlier turn doesn't carry over; one pressed while
+        // Claude Code's sign-in is checked ends this turn before it starts.
+        if crate::claude_chat::is_on(&config_dir, &conversation_id) {
+            cancel.reset();
+        }
+        let plan_cli =
+            match crate::claude_chat::turn_cli(&config_dir, &conversation_id, &route.workspace) {
+                Some(Err(why)) => {
+                    let _ = done.send(Err(why));
+                    continue;
+                }
+                Some(Ok(cli)) => Some(cli),
+                None => None,
+            };
         // The chips block stays in the rules on btw turns too, so the cached
         // prompt doesn't change with the mode; a btw reply's chips are dropped.
         let chips_on =
@@ -1264,68 +1281,83 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             crate::task_feed::touch(&conversation_id);
         }
         let reload = turn_starts(&conversation_id);
-        let engine = match (&mut engine, inbox.take()) {
-            (Some(engine), _) => {
-                // A report was saved into this chat between turns: read the
-                // chat back from its file, so the model sees it too.
-                if reload {
-                    if let Ok(info) = grokhub_agent::load_session(&conversation_id) {
+        let engine: &mut dyn Engine = if let Some(cli) = plan_cli {
+            let plan = plan.get_or_insert_with(|| {
+                ClaudePlanEngine::new(
+                    cli.clone(),
+                    route.workspace.clone(),
+                    cancel.clone(),
+                    steer.clone(),
+                )
+            });
+            plan.set_cli(cli);
+            plan.set_workspace(route.workspace);
+            plan
+        } else {
+            let engine = match (&mut engine, inbox.take()) {
+                (Some(engine), _) => {
+                    // A report was saved into this chat between turns: read the
+                    // chat back from its file, so the model sees it too.
+                    if reload {
+                        if let Ok(info) = grokhub_agent::load_session(&conversation_id) {
+                            engine.resume(info.input(), info.usage);
+                        }
+                    }
+                    engine.set_workspace(route.workspace);
+                    engine.set_gate(gate);
+                    engine.set_route(route.client, model, effort, system, route.auth_kind);
+                    engine
+                }
+                (none, inbox) => {
+                    let Some(inbox) = inbox else {
+                        turn_ends(&conversation_id);
+                        let _ = done.send(Err("The chat worker stopped.".into()));
+                        return;
+                    };
+                    let engine = none.insert(NativeEngine::new(EngineParts {
+                        client: route.client,
+                        workspace: route.workspace,
+                        model,
+                        effort,
+                        system,
+                        conversation_id: conversation_id.clone(),
+                        auth_kind: route.auth_kind,
+                        max_turns: 0,
+                        cancel: cancel.clone(),
+                        steer: steer.clone(),
+                        halt: Box::new(NeverHalted),
+                        gate,
+                        desktop: Some(Box::new(crate::episode::FrameTap {
+                            inner: Box::new(crate::episode::Switched {
+                                inner: desktop(),
+                                on: Arc::clone(&desk_on),
+                            }),
+                            slot: frames.clone(),
+                        })),
+                        permits: Arc::new(inbox),
+                    }));
+                    engine.set_pause(Arc::clone(&pause));
+                    engine.set_imagine(Some(Arc::new(crate::imagine::ChatImagine)));
+                    // A chat saved earlier (opened from History, or the last chat
+                    // after a restart) goes on from its saved turns, as the cabin's does.
+                    if let Ok(info) = grokhub_agent::load_session(&resume) {
                         engine.resume(info.input(), info.usage);
                     }
+                    engine
                 }
-                engine.set_workspace(route.workspace);
-                engine.set_gate(gate);
-                engine.set_route(route.client, model, effort, system, route.auth_kind);
-                engine
-            }
-            (none, inbox) => {
-                let Some(inbox) = inbox else {
-                    turn_ends(&conversation_id);
-                    let _ = done.send(Err("The chat worker stopped.".into()));
-                    return;
-                };
-                let engine = none.insert(NativeEngine::new(EngineParts {
-                    client: route.client,
-                    workspace: route.workspace,
-                    model,
-                    effort,
-                    system,
-                    conversation_id: conversation_id.clone(),
-                    auth_kind: route.auth_kind,
-                    max_turns: 0,
-                    cancel: cancel.clone(),
-                    steer: steer.clone(),
-                    halt: Box::new(NeverHalted),
-                    gate,
-                    desktop: Some(Box::new(crate::episode::FrameTap {
-                        inner: Box::new(crate::episode::Switched {
-                            inner: desktop(),
-                            on: Arc::clone(&desk_on),
-                        }),
-                        slot: frames.clone(),
-                    })),
-                    permits: Arc::new(inbox),
-                }));
-                engine.set_pause(Arc::clone(&pause));
-                engine.set_imagine(Some(Arc::new(crate::imagine::ChatImagine)));
-                // A chat saved earlier (opened from History, or the last chat
-                // after a restart) goes on from its saved turns, as the cabin's does.
-                if let Ok(info) = grokhub_agent::load_session(&resume) {
-                    engine.resume(info.input(), info.usage);
-                }
-                engine
-            }
+            };
+            // A message with desktop control on belongs to the chat's episode.
+            engine.set_episode(episode.filter(|_| route.desktop));
+            // The desktop Halt (the cabin's hotkey or a halt stamp) stops this prompt too.
+            #[cfg(desktop)]
+            engine.set_halt(Box::new(grokhub_agent::StampHalt {
+                started_ms: asked_ms,
+                read: grokhub_desktop::read_halt_stamp,
+            }));
+            #[cfg(mobile)]
+            let _ = asked_ms;
+            engine
         };
-        // A message with desktop control on belongs to the chat's episode.
-        engine.set_episode(episode.filter(|_| route.desktop));
-        // The desktop Halt (the cabin's hotkey or a halt stamp) stops this prompt too.
-        #[cfg(desktop)]
-        engine.set_halt(Box::new(grokhub_agent::StampHalt {
-            started_ms: asked_ms,
-            read: grokhub_desktop::read_halt_stamp,
-        }));
-        #[cfg(mobile)]
-        let _ = asked_ms;
         let mut stop = String::new();
         let mut error = None;
         let mut reply = String::new();

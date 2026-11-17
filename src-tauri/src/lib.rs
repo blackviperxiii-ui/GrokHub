@@ -27,6 +27,7 @@ pub mod chat_tabs;
 pub mod chat_trials;
 pub mod chat_zoom;
 pub mod chips;
+pub mod claude_chat;
 mod code_agent;
 mod code_keep;
 mod code_rollback;
@@ -5900,6 +5901,42 @@ async fn claude_plan_status() -> Result<grokhub_agent::claude_plan::ClaudePlan, 
     off_main(grokhub_agent::claude_plan::detect).await
 }
 
+/// Settings' Allow for chats on the Claude plan, and which chats use it.
+#[cfg(desktop)]
+#[tauri::command]
+async fn claude_plan_chats(
+    state: State<'_, ShellState>,
+) -> Result<claude_chat::ClaudeChats, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || claude_chat::read(&dir)).await
+}
+
+/// Settings' Allow (or revoke) for chats on the Claude plan.
+#[cfg(desktop)]
+#[tauri::command]
+async fn set_claude_plan_allowed(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<claude_chat::ClaudeChats, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || claude_chat::set_allowed(&dir, on)).await?
+}
+
+/// A chat tab's switch to the Claude plan, from its next message on.
+#[cfg(desktop)]
+#[tauri::command]
+async fn set_claude_plan_chat(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    on: bool,
+) -> Result<claude_chat::ClaudeChats, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || claude_chat::set_chat(&dir, &conversation_id, on)).await?
+}
+
 /// Posts the key's approval card; nothing is saved until `answer_ai_models_card`.
 #[tauri::command]
 async fn add_ai_provider(
@@ -8201,6 +8238,12 @@ pub fn run() {
             get_ai_models,
             #[cfg(desktop)]
             claude_plan_status,
+            #[cfg(desktop)]
+            claude_plan_chats,
+            #[cfg(desktop)]
+            set_claude_plan_allowed,
+            #[cfg(desktop)]
+            set_claude_plan_chat,
             add_ai_provider,
             start_openrouter_sign_in,
             wait_openrouter_sign_in,

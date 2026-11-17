@@ -5170,6 +5170,26 @@ export function claudePlanStatus(): Promise<ClaudePlan> {
   return invoke<ClaudePlan>("claude_plan_status");
 }
 
+/** Settings' Allow for chats on the Claude plan, and the chats switched to it. */
+export interface ClaudeChats {
+  allowed: boolean;
+  chats: string[];
+}
+
+export function claudePlanChats(): Promise<ClaudeChats> {
+  return invoke<ClaudeChats>("claude_plan_chats");
+}
+
+/** Allow or revoke; revoking moves every chat back to the app's own models. */
+export function setClaudePlanAllowed(on: boolean): Promise<ClaudeChats> {
+  return invoke<ClaudeChats>("set_claude_plan_allowed", { on });
+}
+
+/** A chat's switch to the Claude plan, from its next message on. */
+export function setClaudePlanChat(conversationId: string, on: boolean): Promise<ClaudeChats> {
+  return invoke<ClaudeChats>("set_claude_plan_chat", { conversationId, on });
+}
+
 /** Posts the key's approval card; nothing is saved until `answerAiModelsCard`. */
 export function addAiProvider(
   baseUrl: string,

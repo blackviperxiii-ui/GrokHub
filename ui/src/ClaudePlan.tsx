@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { claudePlanStatus, type ClaudePlan } from "./api";
+import { claudePlanChats, claudePlanStatus, setClaudePlanAllowed, type ClaudeChats, type ClaudePlan } from "./api";
 
 export const CLAUDE_PLAN_NOTE =
   "Runs Claude Code on this computer, signed in with your own Claude account. This app never sees or keeps your Claude sign-in.";
 export const CLAUDE_MISSING = "Claude Code isn't on this computer. Install it from code.claude.com, then check again.";
 export const CLAUDE_NO_ANSWER =
   "Claude Code is on this computer but didn't answer claude --version. In a terminal, run claude doctor, then check again.";
-export const CLAUDE_SOON = "Chats on Claude come in a later update.";
+export const CLAUDE_ALLOW =
+  "A chat you switch to it (in its tab menu) runs Claude Code in the chat's folder. For now it can only read files there, and each message counts against your plan's usage.";
+export const CLAUDE_ALLOWED = "Allowed. Switch a chat to it from the chat's tab menu.";
 
 const BILLED_BY: Record<string, string> = {
   api_key: "an Anthropic API key",
@@ -33,15 +35,19 @@ export function claudePlanLine(plan: ClaudePlan): string {
 /** Settings → AI models → Claude (your plan). */
 export function ClaudePlanCard() {
   const [plan, setPlan] = useState<ClaudePlan | null>(null);
+  const [chats, setChats] = useState<ClaudeChats | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Busy from the start: the first check runs on open, and Check again waits for it.
   const [busy, setBusy] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [asking, setAsking] = useState(false);
 
   const read = useCallback(
     () =>
-      claudePlanStatus().then(
-        (next) => {
+      Promise.all([claudePlanStatus(), claudePlanChats()]).then(
+        ([next, allowed]) => {
           setPlan(next);
+          setChats(allowed);
           setError(null);
         },
         (err) => setError(String(err)),
@@ -59,6 +65,20 @@ export function ClaudePlanCard() {
     setBusy(false);
   }
 
+  async function allow(on: boolean) {
+    setAsking(false);
+    setSaving(true);
+    try {
+      setChats(await setClaudePlanAllowed(on));
+      setError(null);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const allowed = chats?.allowed ?? false;
   return (
     <div className="card" aria-label="Claude (your plan)">
       <div className="card-title">Claude (your plan)</div>
@@ -69,9 +89,30 @@ export function ClaudePlanCard() {
           {error}
         </p>
       )}
-      {plan?.state === "plan" && <div className="card-detail-line">{CLAUDE_SOON}</div>}
+      {allowed && <div className="card-detail-line">{CLAUDE_ALLOWED}</div>}
+      {asking && (
+        <div className="card-buttons confirm-row" role="group" aria-label="Allow chats on your Claude plan">
+          <span>Allow chats on your Claude plan? {CLAUDE_ALLOW}</span>
+          <button type="button" disabled={busy || saving} onClick={() => void allow(true)}>
+            Allow
+          </button>
+          <button type="button" className="quiet" onClick={() => setAsking(false)}>
+            Not now
+          </button>
+        </div>
+      )}
       <div className="card-buttons">
-        <button type="button" className="quiet" disabled={busy} onClick={() => void check()}>
+        {plan?.state === "plan" && !allowed && !asking && (
+          <button type="button" disabled={busy || saving} onClick={() => setAsking(true)}>
+            Allow for chats
+          </button>
+        )}
+        {allowed && (
+          <button type="button" className="quiet" disabled={busy || saving} onClick={() => void allow(false)}>
+            Stop using for chats
+          </button>
+        )}
+        <button type="button" className="quiet" disabled={busy || saving} onClick={() => void check()}>
           {busy ? "Checking…" : "Check again"}
         </button>
       </div>

@@ -5,6 +5,9 @@
 //! `authMethod` field is read, and the rest of the reply is dropped.
 //! Design: `docs/design/claude-plan/README.md`.
 
+pub mod engine;
+pub mod stream;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -119,23 +122,40 @@ pub fn parse_auth(stdout: &str, version: String) -> ClaudePlan {
     }
 }
 
-fn ask(cli: &Path, args: &[&str]) -> Option<String> {
+fn ask(cli: &Path, args: &[&str], cwd: Option<&Path>) -> Option<String> {
     let mut cmd = Command::new(cli);
     cmd.args(args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
     grokhub_core::proc_util::output_within(&mut cmd, ASK_WITHIN, REPLY_CAP)
 }
 
 /// Ask `cli` for its version and sign-in. `claude auth status` exits 1 when
 /// signed out, which reads as no reply, so both are signed out.
 pub fn detect_at(cli: &Path) -> ClaudePlan {
-    let Some(version) = ask(cli, &["--version"]).as_deref().and_then(parse_version) else {
+    detect_with(cli, None)
+}
+
+/// [`detect_at`] from `cwd`, a chat's folder: a project's own Claude Code
+/// settings there can sign it in another way (an API key in their `env`),
+/// so a chat's turn asks from the folder the turn runs in.
+pub fn detect_in(cli: &Path, cwd: &Path) -> ClaudePlan {
+    detect_with(cli, Some(cwd))
+}
+
+fn detect_with(cli: &Path, cwd: Option<&Path>) -> ClaudePlan {
+    let Some(version) = ask(cli, &["--version"], cwd)
+        .as_deref()
+        .and_then(parse_version)
+    else {
         return if cli.is_file() {
             ClaudePlan::NoAnswer
         } else {
             ClaudePlan::Missing
         };
     };
-    match ask(cli, &["auth", "status"]) {
+    match ask(cli, &["auth", "status"], cwd) {
         Some(json) => parse_auth(&json, version),
         None => ClaudePlan::SignedOut { version },
     }
@@ -269,5 +289,30 @@ mod tests {
         let cli = fake_cli(&broken, "", 0);
         std::fs::write(&cli, "#!/bin/sh\nexit 3\n").unwrap();
         assert_eq!(detect_at(&cli), ClaudePlan::NoAnswer);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_asks_from_its_own_folder_where_project_settings_can_change_the_billing() {
+        let dir = scratch("cwd");
+        // Like a project whose Claude Code settings set an API key.
+        let cli = fake_cli(&dir, r#"{"authMethod":"claude.ai"}"#, 0);
+        let script = std::fs::read_to_string(&cli).unwrap().replace(
+            "echo '{\"authMethod\":\"claude.ai\"}'",
+            "if [ -f ./api-key-project ]; then echo '{\"authMethod\":\"api_key\"}'; else echo '{\"authMethod\":\"claude.ai\"}'; fi",
+        );
+        std::fs::write(&cli, script).unwrap();
+        let project = dir.join("my-app");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("api-key-project"), "").unwrap();
+        let v = || "2.1.300".to_string();
+        assert_eq!(detect_in(&cli, &dir), ClaudePlan::Plan { version: v() });
+        assert_eq!(
+            detect_in(&cli, &project),
+            ClaudePlan::OtherBilling {
+                version: v(),
+                method: "api_key".into()
+            }
+        );
     }
 }

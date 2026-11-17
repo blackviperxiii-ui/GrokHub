@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CLEAR_CHAT_QUESTION } from "./ClearChat";
-import type { ChatTab } from "./api";
+import type { ChatTab, ClaudeChats } from "./api";
 
 const api = vi.hoisted(() => ({
   listChatTabs: vi.fn<() => Promise<ChatTab[]>>(),
@@ -15,11 +15,13 @@ const api = vi.hoisted(() => ({
   chatTabUnarchive: vi.fn<(id: string) => Promise<ChatTab>>(),
   chatTabSoftDelete: vi.fn<(id: string) => Promise<ChatTab>>(),
   chatTabRestoreDeleted: vi.fn<(id: string) => Promise<ChatTab>>(),
+  claudePlanChats: vi.fn<() => Promise<ClaudeChats>>(),
+  setClaudePlanChat: vi.fn<(id: string, on: boolean) => Promise<ClaudeChats>>(),
 }));
 
 vi.mock("./api", () => api);
 
-import { CHAT_TABS_LABEL, ChatTabs, HangoutHeader, MAIN_TAB_HINT, NEW_CHAT_TAB } from "./ChatTabs";
+import { CHAT_TABS_LABEL, ChatTabs, HangoutHeader, MAIN_TAB_HINT, NEW_CHAT_TAB, ON_CLAUDE_PLAN } from "./ChatTabs";
 
 function tab(id: string, title: string, pinned = false, main = false): ChatTab {
   return { id, title, pinned, updated: 1, main };
@@ -37,6 +39,62 @@ describe("ChatTabs", () => {
     api.chatTabUnarchive.mockReset().mockResolvedValue(tab("shell-a", "Alpha chat"));
     api.chatTabRestoreDeleted.mockReset().mockResolvedValue(tab("shell-a", "Alpha chat"));
     api.chatTabRename.mockReset().mockResolvedValue();
+    api.claudePlanChats.mockReset().mockResolvedValue({ allowed: false, chats: [] });
+    api.setClaudePlanChat.mockReset();
+  });
+
+  async function openMenu(name: RegExp | string) {
+    const target = await screen.findByRole("tab", { name });
+    await userEvent.pointer({ keys: "[MouseRight>]", target });
+    return screen.findByRole("menu", { name: "Chat tab" });
+  }
+
+  function strip(onError: (note: string) => void = () => {}) {
+    return (
+      <ChatTabs activeId="shell-a" draftEmpty={false} onSwitch={() => {}} onNew={() => {}} onClear={async () => {}} onError={onError} />
+    );
+  }
+
+  it("switches a chat to the Claude plan once Settings allowed it", async () => {
+    api.claudePlanChats.mockResolvedValue({ allowed: true, chats: ["shell-b"] });
+    api.setClaudePlanChat.mockResolvedValue({ allowed: true, chats: ["shell-b", "shell-a"] });
+    render(strip());
+    let menu = await openMenu(/Alpha chat/i);
+    const off = await within(menu).findByRole("menuitemcheckbox", { name: ON_CLAUDE_PLAN });
+    expect(off).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(off);
+    expect(api.setClaudePlanChat).toHaveBeenCalledWith("shell-a", true);
+    expect(screen.queryByRole("menu", { name: "Chat tab" })).toBeNull();
+
+    menu = await openMenu(/Beta chat/i);
+    const on = await within(menu).findByRole("menuitemcheckbox", { name: ON_CLAUDE_PLAN });
+    expect(on).toHaveAttribute("aria-checked", "true");
+    api.setClaudePlanChat.mockResolvedValue({ allowed: true, chats: ["shell-a"] });
+    await userEvent.click(on);
+    expect(api.setClaudePlanChat).toHaveBeenLastCalledWith("shell-b", false);
+  });
+
+  it("hides the Claude plan switch until it's allowed, and where it isn't there", async () => {
+    render(strip());
+    let menu = await openMenu(/Alpha chat/i);
+    await waitFor(() => expect(api.claudePlanChats).toHaveBeenCalledTimes(1));
+    expect(within(menu).queryByRole("menuitemcheckbox")).toBeNull();
+    await userEvent.keyboard("{Escape}");
+
+    api.claudePlanChats.mockRejectedValue("AI models is only on the desktop app.");
+    menu = await openMenu(/Beta chat/i);
+    await waitFor(() => expect(api.claudePlanChats).toHaveBeenCalledTimes(2));
+    expect(within(menu).queryByRole("menuitemcheckbox")).toBeNull();
+  });
+
+  it("a switch that fails says why", async () => {
+    api.claudePlanChats.mockResolvedValue({ allowed: true, chats: [] });
+    api.setClaudePlanChat.mockRejectedValue("Couldn't save: disk full");
+    const onError = vi.fn();
+    render(strip(onError));
+    const menu = await openMenu(/Alpha chat/i);
+    await userEvent.click(await within(menu).findByRole("menuitemcheckbox", { name: ON_CLAUDE_PLAN }));
+    await waitFor(() => expect(onError).toHaveBeenCalledWith("Couldn't save: disk full"));
   });
 
   it("renders the strip and switches tabs", async () => {
