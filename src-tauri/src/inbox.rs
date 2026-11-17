@@ -243,6 +243,7 @@ mod tests {
             title: "run_command".into(),
             action: "cargo test".into(),
             reason: "check the fix".into(),
+            asks_every_time: false,
         }
     }
 
