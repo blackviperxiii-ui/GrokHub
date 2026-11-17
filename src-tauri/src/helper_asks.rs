@@ -239,6 +239,7 @@ fn ask_event(event: SideEvent) -> Option<UiEvent> {
             title: ask.title,
             action: ask.action,
             reason: ask.reason,
+            asks_every_time: false,
         }),
         SideEvent::Elicit(ask) => Some(UiEvent::Elicit {
             id: ask.tool_call_id,
@@ -295,6 +296,7 @@ mod tests {
                 title: "run_command".into(),
                 action: "cargo test".into(),
                 reason: "check the fix".into(),
+                asks_every_time: false,
             }
         );
         assert_eq!(pending.waiting("chat-a").len(), 1);
@@ -315,6 +317,7 @@ mod tests {
             title: "write".into(),
             action: "note.txt".into(),
             reason: String::new(),
+            asks_every_time: false,
         };
         assert!(!needs_you(chat));
         assert!(!in_turn(chat));

@@ -155,6 +155,10 @@ pub enum UiEvent {
         title: String,
         action: String,
         reason: String,
+        /// It asks on every such step whatever the approvals setting says (a
+        /// chat on the Claude plan), so the card offers no "Stop asking me".
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        asks_every_time: bool,
     },
     /// A permission card answered away from the page, such as Deny on its
     /// notification. `answer` is a word `parse_answer` reads.
@@ -456,6 +460,7 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
             title: ask.title,
             action: ask.action,
             reason: ask.reason,
+            asks_every_time: false,
         },
         AcpEvent::Err(message) => UiEvent::Error { message },
         AcpEvent::Done { stop_reason } => UiEvent::Done { stop: stop_reason },
@@ -1396,6 +1401,14 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             let Some(mut ui) = ui_event(event) else {
                 return;
             };
+            // Claude Code asks on every step that isn't allowed yet; the
+            // approvals setting doesn't reach it.
+            if let UiEvent::Permission {
+                asks_every_time, ..
+            } = &mut ui
+            {
+                *asks_every_time = on_plan;
+            }
             if let UiEvent::Elicit {
                 server,
                 message,
@@ -2491,11 +2504,25 @@ mod tests {
             title: "write".into(),
             action: "note.txt".into(),
             reason: String::new(),
+            asks_every_time: false,
         })
         .expect("json");
         assert_eq!(
             json,
             serde_json::json!({"kind": "permission", "id": "c", "title": "write", "action": "note.txt", "reason": ""})
+        );
+        // A Claude plan chat's card says so; the page then hides "Stop asking me".
+        let plan_ask = serde_json::to_value(UiEvent::Permission {
+            id: "c".into(),
+            title: "Bash".into(),
+            action: "touch a.txt".into(),
+            reason: String::new(),
+            asks_every_time: true,
+        })
+        .expect("json");
+        assert_eq!(
+            plan_ask,
+            serde_json::json!({"kind": "permission", "id": "c", "title": "Bash", "action": "touch a.txt", "reason": "", "asksEveryTime": true})
         );
         assert_eq!(
             ui_event(AcpEvent::Plan("1. Read".into())),

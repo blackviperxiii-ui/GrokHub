@@ -1923,6 +1923,19 @@ describe("applyEvent", () => {
     expect(screen.queryByRole("button", { name: "Stop asking me" })).toBeNull();
   });
 
+  it("a card from a chat on the Claude plan has no Stop asking me, and Always allow stays", async () => {
+    holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    const id = await startTurn("make a file");
+    emit(id, { kind: "permission", id: "call-1", title: "Bash", action: "touch a.txt", reason: "", asksEveryTime: true });
+    expect(screen.getByRole("button", { name: "Always allow" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Stop asking me" })).toBeNull();
+    // The same chat's next card from the app's own models offers it again.
+    emit(id, { kind: "permission", id: "call-2", title: "write", action: "note.txt", reason: "" });
+    expect(screen.getAllByRole("button", { name: "Stop asking me" })).toHaveLength(1);
+  });
+
   it("a plan card approves, and the next message is read afresh", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

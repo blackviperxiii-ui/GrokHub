@@ -146,6 +146,8 @@ export type Item =
       answer: Answer | Ended | null;
       /** A helper asked; it waits past the end of the reply. */
       helper?: boolean;
+      /** It asks every time whatever Settings says (the Claude plan). */
+      asksEveryTime?: boolean;
     }
   /** A saved chat's tool steps, named on one muted line instead of cards. */
   | { kind: "tools"; text: string }
@@ -731,7 +733,7 @@ function LogItem({
         <PermissionCard
           item={item}
           onAnswer={(a) => onAnswer(item.id, a)}
-          onStopAsking={onStopAsking && (() => onStopAsking(item.id))}
+          onStopAsking={onStopAsking && !item.asksEveryTime ? () => onStopAsking(item.id) : undefined}
         />
       );
     case "elicit":

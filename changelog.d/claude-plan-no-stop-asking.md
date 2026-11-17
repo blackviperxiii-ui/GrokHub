@@ -1,0 +1,1 @@
+- Claude plan: approval cards in a chat on your Claude plan no longer show "Stop asking me", which did nothing there because Claude Code asks on every step that isn't allowed yet. Always allow still works for the rest of that chat.

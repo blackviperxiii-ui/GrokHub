@@ -130,6 +130,9 @@ export type ChatEvent =
       title: string;
       action: string;
       reason: string;
+      /** It asks on every such step whatever Settings says (a chat on the
+       * Claude plan), so the card has no Stop asking me. */
+      asksEveryTime?: boolean;
     }
   /** A permission card answered away from the page, such as Deny on its notification. */
   | { kind: "answered"; id: string; answer: Answer }
