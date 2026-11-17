@@ -1,11 +1,13 @@
 name: CI
 
 on:
-  # Push to beta runs only the light gate (changes, fmt, guards, linux,
-  # windows; pii-guard lives in pii-guard.yml). Push to main adds shell
-  # (ubuntu + windows) and deny; macOS jobs run on v* tags, the nightly
-  # schedule (which checks out beta) and manual runs; windows-release runs
-  # only on the nightly and manual runs (release.yml builds tags).
+  # Push to beta runs the light gate only (changes, fmt, guards, linux;
+  # pii-guard lives in pii-guard.yml). Windows and ui-shots skip on beta
+  # push — PRs already ran them; nightly covers beta. Push to main adds
+  # windows, shell (ubuntu + windows) and deny; macOS jobs run on v* tags,
+  # the nightly schedule (which checks out beta) and manual runs;
+  # windows-release runs only on the nightly and manual runs
+  # (release.yml builds tags).
   push:
     branches: [main, beta]
     tags: ["v*"]
@@ -48,14 +50,15 @@ env:
 # PRs run the fast gate: fmt, guards, changes, linux (clippy + tests in one
 # build) and windows (same, skipped when a PR only touches ui/ or workflows
 # other than this one), plus path-filtered shell (ubuntu only) and
-# phone-android. Push to main adds deny, shell on ubuntu + windows and
-# path-filtered phone-android. The macOS jobs (cross-check, macOS shell,
-# phone-ios) run on v* tags, nightly (on beta) and manual runs;
-# windows-release only on nightly and manual runs. Push to beta runs only the
-# gate. Every gate is a job-level `if:`, never a workflow-level path filter,
-# so a skipped job still reports and required checks never hang.
-# Each job restores its own build cache; caches save only from pushes to beta
-# and main, so PRs start warm from their base branch.
+# phone-android. Push to beta keeps changes/fmt/guards/linux (linux seeds
+# the rust cache) and skips windows/ui-shots. Push to main adds windows,
+# deny, shell on ubuntu + windows and path-filtered phone-android. The
+# macOS jobs (cross-check, macOS shell, phone-ios) run on v* tags, nightly
+# (on beta) and manual runs; windows-release only on nightly and manual.
+# Every gate is a job-level `if:`, never a workflow-level path filter, so a
+# skipped job still reports and required checks never hang. Each job
+# restores its own build cache; caches save from pushes (linux on beta,
+# full on main) and schedule, so PRs start warm from their base branch.
 jobs:
   # Decides whether the build jobs run. A PR that only touches docs, Markdown,
   # screenshots or research skips them; a skipped job counts as passed for
@@ -86,9 +89,11 @@ jobs:
       # windows-release: nightly and manual only. release.yml's shell-bundles
       # builds the Windows installer for every tag and beta push.
       release: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-      # windows on PRs: skipped (still reports, so the required check passes)
-      # when the PR only touches ui/, docs, or workflows other than this one.
-      windows: ${{ github.event_name != 'pull_request' || steps.filter.outputs.windows == 'true' || steps.paths.outputs.ci_workflow == 'true' || steps.paths.outputs.embedded == 'true' }}
+      # windows: skipped on push to beta (PR already ran it; nightly covers
+      # beta). On PRs, skipped when the PR only touches ui/, docs, or
+      # workflows other than this one (still reports, so the required check
+      # passes).
+      windows: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/beta') && (github.event_name != 'pull_request' || steps.filter.outputs.windows == 'true' || steps.paths.outputs.ci_workflow == 'true' || steps.paths.outputs.embedded == 'true') }}
       shell_os: ${{ steps.shell.outputs.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -520,7 +525,8 @@ jobs:
   # today's amber-accent UI fails the share thresholds until LO-UI-2 lands.
   ui-shots:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    # Skip on push to beta: not a required check; nightly and PRs cover it.
+    if: needs.changes.outputs.code == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/beta')
     name: ui-shots
     runs-on: ubuntu-latest
     timeout-minutes: 20
