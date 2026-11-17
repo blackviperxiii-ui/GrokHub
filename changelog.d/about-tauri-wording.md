@@ -1,0 +1,1 @@
+- About, README, release notes and store copy now say Loadout is built with Tauri (the old "No Tauri" lines are gone).

@@ -84,7 +84,15 @@ vi.mock("./Privacy", () => ({
 }));
 vi.mock("./Background", () => ({ Background: () => <p>Background panel</p> }));
 
-import { DESKTOP_NOTE, GENERAL_EMPTY, HALT_KEYS_LOCAL, HALT_KEYS_NOTE, REMOTE_NOTE, Settings } from "./Settings";
+import {
+  ABOUT_STACK,
+  DESKTOP_NOTE,
+  GENERAL_EMPTY,
+  HALT_KEYS_LOCAL,
+  HALT_KEYS_NOTE,
+  REMOTE_NOTE,
+  Settings,
+} from "./Settings";
 import { CATEGORY_LABELS, SECTION_LABELS, categoryOf, type Section } from "./sections";
 
 /** Opens a page the way a person does: its category up top, then the page in
@@ -530,6 +538,7 @@ describe("Settings", () => {
 
     await openSection("About");
     expect(screen.getByText("Version 3.1.0")).toBeInTheDocument();
+    expect(screen.getByText(ABOUT_STACK)).toBeInTheDocument();
     // The retired cabin isn't mentioned any more.
     expect(screen.queryByText(/cabin/i)).toBeNull();
     expect(screen.queryByText("Labs panel")).toBeNull();

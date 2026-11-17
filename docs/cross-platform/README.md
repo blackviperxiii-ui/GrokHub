@@ -2,16 +2,15 @@
 
 Goal: GrokHub on Windows, macOS, Linux, iOS, Android and the web. The Rust
 crates (`grokhub-core`, `grokhub-agent`, `grokhub-hub`) stay and sit behind
-Tauri commands. Only the egui UI in `grokhub-app` is rewritten in React. The
-egui cabin keeps shipping until the new shell reaches parity, and user decides
-when it is dropped.
+Tauri commands. Loadout is built with Tauri; the egui cabin is retired.
 
 Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
 
 ## Decisions
 
-- **Tauri is approved** for the new cross-platform shell. "No Electron. No
-  Tauri." now describes only the egui cabin. Electron stays out.
+- **Tauri is the shipping shell.** Loadout is built with Tauri. Electron stays
+  out. Older "No Electron. No Tauri." notes applied only to the retired egui
+  cabin.
 - **Repo rules win** over any planning notes where they differ. Since #832
   (2026-10-24; confirmed 2026-10-25) those rules are:
   - Every PR targets `beta`. The agent squash-merges it once CI is green,

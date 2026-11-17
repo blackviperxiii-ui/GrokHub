@@ -270,6 +270,8 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           body: |
+            Loadout is built with Tauri.
+
             ## Install
             **Linux:** `grokhub-shell-v*-linux-amd64.AppImage` or `.deb`, or
             `./scripts/install.sh --user` from a clone.

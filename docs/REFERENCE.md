@@ -1,6 +1,6 @@
 # Loadout
 
-The Tauri desktop app (`grokhub-shell`) and its LAN hub (`grokhub-hub`). No Electron. The cross-platform plan is in [`docs/cross-platform/README.md`](cross-platform/README.md). One repo, one `main`, one version.
+Loadout is built with Tauri (`grokhub-shell`) and ships with its LAN hub (`grokhub-hub`). No Electron. The cross-platform plan is in [`docs/cross-platform/README.md`](cross-platform/README.md). One repo, one `main`, one version.
 
 **v3.5.0** — The Loadout look: one brand file names the app and its companion, Nyx becomes the default personality for new installs, Ops Dark, OLED Black and Soft Charcoal themes arrive, Loadout's chat home gets a dock, Pulse reflows from side-by-side to one column and can follow your Steam library's game news, and the shell gets an Activity Dock for running chats, approvals and automation runs.
 

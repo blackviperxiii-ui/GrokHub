@@ -1,6 +1,6 @@
 # GrokHub — Arch Linux packaging
 
-The Tauri desktop app and the LAN hub, built from source. No Electron.
+Loadout is built with Tauri. The desktop app and the LAN hub, built from source. No Electron.
 
 ## From a clone
 

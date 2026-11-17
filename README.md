@@ -6,7 +6,7 @@
 
 Local-first Grok desktop assistant for Windows and Linux with permission-gated tools and on-device memory.
 
-Loadout (formerly GrokHub) runs natively on your computer from the system tray so Grok can help with coding, research, files, terminal commands, and desktop apps without giving up local control or privacy. Chats, memory, and credentials stay on your machine, and high-impact actions always wait at an approval gate for your confirmation.
+Loadout (formerly GrokHub) is built with Tauri. It runs on your computer from the system tray so Grok can help with coding, research, files, terminal commands, and desktop apps without giving up local control or privacy. Chats, memory, and credentials stay on your machine, and high-impact actions always wait at an approval gate for your confirmation.
 
 ## Table of Contents
 

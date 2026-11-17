@@ -445,6 +445,9 @@ export function Settings({
   }
 }
 
+/** Settings → About: stack line under the tagline. */
+export const ABOUT_STACK = `${PRODUCT_NAME} is built with Tauri.`;
+
 function About({ version }: { version: string }) {
   return (
     <div className="about">
@@ -453,6 +456,7 @@ function About({ version }: { version: string }) {
         {PRODUCT_NAME}
       </h2>
       <p className="note">{TAGLINE}</p>
+      <p className="note">{ABOUT_STACK}</p>
       <p>Version {version}</p>
       {inShell() && <Updates />}
     </div>
