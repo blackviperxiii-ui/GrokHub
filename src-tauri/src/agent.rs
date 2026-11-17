@@ -149,6 +149,11 @@ pub enum UiEvent {
         title: String,
         status: String,
         detail: String,
+        /// The picture a finished `image_generate` made, as a file path. The
+        /// card shows it through `chat_picture`, which reads only the app's
+        /// media folders.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        picture: Option<String>,
     },
     Permission {
         id: String,
@@ -459,11 +464,26 @@ fn turn_event(event: AcpEvent, on_plan: bool) -> Option<UiEvent> {
     Some(ui)
 }
 
+/// The picture file a finished `image_generate` names on its `IMAGINE:`
+/// line. A web address, a relative path or a video gives `None`.
+fn made_picture(tool: &str, status: &str, detail: &str) -> Option<String> {
+    if tool != "image_generate" || status != "completed" {
+        return None;
+    }
+    detail.lines().find_map(|line| {
+        let path = line.strip_prefix("IMAGINE: ")?.trim();
+        let picture = std::path::Path::new(path).is_absolute()
+            && crate::imagine::picture_mime(path).is_some();
+        picture.then(|| path.to_string())
+    })
+}
+
 pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
     Some(match event {
         AcpEvent::Text(text) => UiEvent::Text { text },
         AcpEvent::Thought(text) => UiEvent::Thought { text },
         AcpEvent::Tool(card) => UiEvent::Tool {
+            picture: made_picture(&card.kind, &card.status, &card.detail),
             id: card.id,
             title: card.title,
             status: card.status,
@@ -1475,6 +1495,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     title,
                     status,
                     detail,
+                    ..
                 } => {
                     let row = grokhub_core::turn_timeline::ToolRow {
                         status: status.clone(),
@@ -2483,6 +2504,64 @@ mod tests {
             spec,
         });
         assert!(matches!(event, Some(UiEvent::Panel { ref id, .. }) if id == "call-1"));
+    }
+
+    #[test]
+    fn a_finished_picture_reaches_the_card_and_nothing_else_does() {
+        #[cfg(unix)]
+        let made = "/home/user/.config/GrokHub/sessions/c1/media/image-1-local.png";
+        #[cfg(windows)]
+        let made = r"C:\Users\user\AppData\Roaming\GrokHub\sessions\c1\media\image-1-local.png";
+        let card = |kind: &str, status: &str, detail: String| {
+            AcpEvent::Tool(grokhub_core::wire::ToolCard {
+                id: "call-1".into(),
+                title: kind.into(),
+                kind: kind.into(),
+                status: status.into(),
+                detail,
+                diff: String::new(),
+                image_data_url: None,
+                raw_input: String::new(),
+            })
+        };
+        let picture = |event| match ui_event(event) {
+            Some(UiEvent::Tool { picture, .. }) => picture,
+            other => panic!("a tool row, got {other:?}"),
+        };
+        let done = format!("IMAGINE: {made}\n(Made on this computer with Tiny; nothing was sent.)");
+        assert_eq!(
+            picture(card("image_generate", "completed", done.clone())),
+            Some(made.to_string())
+        );
+        assert_eq!(
+            picture(card("image_generate", "in_progress", done.clone())),
+            None
+        );
+        assert_eq!(picture(card("read_file", "completed", done)), None);
+        for detail in [
+            "IMAGINE: https://imgen.x.ai/a.png",
+            "IMAGINE: media/a.png",
+            "IMAGINE: /home/user/clip.mp4",
+            "Not made, and nothing was sent.",
+        ] {
+            assert_eq!(
+                picture(card("image_generate", "completed", detail.into())),
+                None,
+                "{detail}"
+            );
+        }
+        let json = serde_json::to_value(UiEvent::Tool {
+            id: "call-1".into(),
+            title: "read_file".into(),
+            status: "completed".into(),
+            detail: "ok".into(),
+            picture: None,
+        })
+        .expect("json");
+        assert_eq!(
+            json,
+            serde_json::json!({"kind": "tool", "id": "call-1", "title": "read_file", "status": "completed", "detail": "ok"})
+        );
     }
 
     #[test]

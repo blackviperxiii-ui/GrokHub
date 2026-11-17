@@ -581,16 +581,50 @@ pub fn image(config_dir: &Path, name: &str) -> Result<String, String> {
         .map(|dir| dir.join(name))
         .find(|p| p.is_file())
         .ok_or_else(|| "That file is gone.".to_string())?;
-    let len = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    data_url(&path, mime)
+}
+
+/// `path` as a data URL, up to the media file cap.
+fn data_url(path: &Path, mime: &str) -> Result<String, String> {
+    let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
     if len > grokhub_core::MEDIA_FILE_CAP {
         return Err("That file is too big to show.".into());
     }
-    let bytes = std::fs::read(&path).map_err(|_| "That file is gone.".to_string())?;
+    let bytes = std::fs::read(path).map_err(|_| "That file is gone.".to_string())?;
     use base64::Engine as _;
     Ok(format!(
         "data:{mime};base64,{}",
         base64::engine::general_purpose::STANDARD.encode(bytes)
     ))
+}
+
+/// The image type of a file name, or `None` for a video or anything else.
+pub fn picture_mime(name: &str) -> Option<&'static str> {
+    mime(name).filter(|m| m.starts_with("image/"))
+}
+
+/// A picture a chat's tool made, as a data URL. Only a picture file inside
+/// `{config}/media/` or a chat's `{config}/sessions/<id>/media/` is read,
+/// after links are followed, so a tool result can't point the chat at
+/// another file on this computer.
+pub fn chat_picture(config_dir: &Path, path: &str) -> Result<String, String> {
+    const NOT_OURS: &str = "Not a picture this app made.";
+    let mime = picture_mime(path).ok_or(NOT_OURS)?;
+    let file = std::fs::canonicalize(path).map_err(|_| "That picture is gone.".to_string())?;
+    let root = std::fs::canonicalize(config_dir).map_err(|_| NOT_OURS.to_string())?;
+    let rel = file.strip_prefix(&root).map_err(|_| NOT_OURS.to_string())?;
+    let parts: Vec<_> = rel.components().collect();
+    let ours = match parts.as_slice() {
+        [media, _] => media.as_os_str() == "media",
+        [sessions, _, media, _] => {
+            sessions.as_os_str() == "sessions" && media.as_os_str() == "media"
+        }
+        _ => false,
+    };
+    if !ours || !file.is_file() {
+        return Err(NOT_OURS.into());
+    }
+    data_url(&file, mime)
 }
 
 /// The run in flight, so Stop reaches it. One at a time.
@@ -1222,5 +1256,80 @@ mod tests {
             image(&d.config, "gone.png").unwrap_err(),
             "That file is gone."
         );
+    }
+
+    #[test]
+    fn a_chat_picture_is_read_only_from_the_media_folders() {
+        let d = dirs("chat-picture");
+        let chat_media = d.config.join("sessions").join("chat-1").join("media");
+        let local_media = d.config.join("media");
+        std::fs::create_dir_all(&chat_media).unwrap();
+        std::fs::create_dir_all(&local_media).unwrap();
+        std::fs::create_dir_all(d.config.join("sessions").join("chat-1")).unwrap();
+        let made = chat_media.join("image-1-local.png");
+        std::fs::write(&made, png()).unwrap();
+        std::fs::write(local_media.join("image-2-local.jpg"), png()).unwrap();
+        std::fs::write(d.config.join("secret.png"), png()).unwrap();
+        std::fs::write(
+            d.config.join("sessions").join("chat-1").join("chat.png"),
+            png(),
+        )
+        .unwrap();
+        std::fs::write(chat_media.join("clip.mp4"), b"mp4").unwrap();
+
+        let url = chat_picture(&d.config, &made.display().to_string()).unwrap();
+        assert_eq!(url, "data:image/png;base64,iVBORw0KGgoHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==");
+        let jpg = local_media.join("image-2-local.jpg");
+        assert!(chat_picture(&d.config, &jpg.display().to_string())
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,"));
+
+        let sneaky = chat_media
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("secret.png");
+        for path in [
+            d.config.join("secret.png"),
+            sneaky,
+            d.config.join("sessions").join("chat-1").join("chat.png"),
+            chat_media.join("clip.mp4"),
+        ] {
+            assert_eq!(
+                chat_picture(&d.config, &path.display().to_string()).unwrap_err(),
+                "Not a picture this app made.",
+                "{}",
+                path.display()
+            );
+        }
+        assert_eq!(
+            chat_picture(
+                &d.config,
+                &chat_media.join("gone.png").display().to_string()
+            )
+            .unwrap_err(),
+            "That picture is gone."
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_the_media_folder_to_another_file_is_refused() {
+        let d = dirs("chat-picture-link");
+        let media = d.config.join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        let outside = std::env::temp_dir().join(format!(
+            "grokhub-shell-outside-{}-{}.png",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        std::fs::write(&outside, png()).unwrap();
+        let link = media.join("image-3-local.png");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert_eq!(
+            chat_picture(&d.config, &link.display().to_string()).unwrap_err(),
+            "Not a picture this app made."
+        );
+        let _ = std::fs::remove_file(&outside);
     }
 }
