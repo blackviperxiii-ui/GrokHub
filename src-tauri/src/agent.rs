@@ -1286,22 +1286,25 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         let on_plan = plan_cli.is_some();
         let engine: &mut dyn Engine = if let Some(cli) = plan_cli {
             let plan = plan.get_or_insert_with(|| {
-                let mut fresh = ClaudePlanEngine::new(
+                ClaudePlanEngine::new(
                     cli.clone(),
                     route.workspace.clone(),
                     cancel.clone(),
                     steer.clone(),
                 )
-                .for_chat(&conversation_id);
-                // After a restart the chat goes on with its Claude Code session.
-                let saved =
-                    crate::claude_chat::session_of(&config_dir, &conversation_id, &route.workspace);
-                if let Some(saved) = saved {
-                    fresh.resume_session(&saved);
-                }
-                fresh
+                .for_chat(&conversation_id)
             });
             plan.set_cli(cli);
+            // The store decides which session goes on: the one kept for this
+            // folder (also after a restart), or a new one when the chat was
+            // switched off and on, a message was deleted, or Settings revoked it.
+            let kept =
+                crate::claude_chat::session_of(&config_dir, &conversation_id, &route.workspace);
+            match kept {
+                Some(kept) => plan.resume_session(&kept),
+                None if plan.session().is_some() => plan.start_new_session(),
+                None => {}
+            }
             plan.set_workspace(route.workspace.clone());
             plan_ran = true;
             plan
@@ -1327,6 +1330,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                         let _ = done.send(Err("The chat worker stopped.".into()));
                         return;
                     };
+                    // This engine reads the chat's file below, plan turns included.
+                    plan_ran = false;
                     let engine = none.insert(NativeEngine::new(EngineParts {
                         client: route.client,
                         workspace: route.workspace,

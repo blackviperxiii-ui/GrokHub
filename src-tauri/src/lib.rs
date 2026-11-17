@@ -2000,6 +2000,10 @@ async fn forget_message(
     let key = id.clone();
     let removed =
         off_main(move || history::forget(&dir, &key, reply, text.as_deref(), later)).await??;
+    // A chat on the Claude plan: Claude Code's own session still has it.
+    if removed {
+        claude_chat::forget_session(&state.config_dir, &id)?;
+    }
     drop_worker(&state, &id);
     Ok(removed)
 }

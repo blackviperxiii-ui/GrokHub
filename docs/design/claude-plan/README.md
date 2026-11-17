@@ -153,7 +153,9 @@ Each step is its own PR into `beta`.
    `{config}/claude-plan-chats.json`, so after a restart the next message
    resumes it. Switching the chat back reads those turns into the app's own
    engine; switching it off and on again starts a new Claude Code session,
-   since that session never saw the turns in between. Tool rows aren't saved
+   since that session never saw the turns in between. Deleting a message
+   also starts a new session, since Claude Code's session would still hold
+   it, and deleting a chat drops it from the file. Tool rows aren't saved
    yet.
 6. **Usage.** The per-turn usage line and the plan headroom.
 7. **Live approvals.** The MCP approval server.

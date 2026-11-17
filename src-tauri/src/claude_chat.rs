@@ -129,6 +129,35 @@ pub fn remember_session(dir: &Path, id: &str, session: &str, cwd: &Path) -> Resu
     .map(|_| ())
 }
 
+/// A message was deleted from this chat: Claude Code's session still holds
+/// it, so the next turn starts a new session rather than bring it back.
+pub fn forget_session(dir: &Path, id: &str) -> Result<(), String> {
+    if !read(dir).sessions.contains_key(id) {
+        return Ok(());
+    }
+    change(dir, |chats| {
+        chats.sessions.remove(id);
+        Ok(())
+    })
+    .map(|_| ())
+}
+
+/// These chats were deleted: they're no longer switched or kept.
+pub fn forget_chats(dir: &Path, ids: &[String]) {
+    let held = read(dir);
+    if !ids
+        .iter()
+        .any(|id| held.chats.contains(id) || held.sessions.contains_key(id))
+    {
+        return;
+    }
+    let _ = change(dir, |chats| {
+        chats.chats.retain(|c| !ids.contains(c));
+        chats.sessions.retain(|c, _| !ids.contains(c));
+        Ok(())
+    });
+}
+
 /// This chat was switched to the plan, and Settings still allows it.
 pub fn is_on(dir: &Path, id: &str) -> bool {
     let chats = read(dir);
@@ -225,6 +254,28 @@ mod tests {
         remember_session(&dir, "chat-a", "sid-2", app).unwrap();
         set_allowed(&dir, false).unwrap();
         assert_eq!(read(&dir).sessions, BTreeMap::new());
+    }
+
+    #[test]
+    fn a_deleted_message_or_chat_lets_go_of_its_session() {
+        let dir = scratch("forget");
+        let app = Path::new("/home/user/my-app");
+        set_allowed(&dir, true).unwrap();
+        for id in ["chat-a", "chat-b", "chat-c"] {
+            set_chat(&dir, id, true).unwrap();
+            remember_session(&dir, id, &format!("sid-{id}"), app).unwrap();
+        }
+        forget_session(&dir, "chat-a").unwrap();
+        assert_eq!(session_of(&dir, "chat-a", app), None);
+        assert!(is_on(&dir, "chat-a"), "the chat stays on the plan");
+
+        forget_chats(&dir, &["chat-b".to_string()]);
+        assert!(!is_on(&dir, "chat-b"));
+        assert_eq!(session_of(&dir, "chat-b", app), None);
+        // A deleted chat's late turn doesn't bring it back.
+        remember_session(&dir, "chat-b", "sid-late", app).unwrap();
+        assert_eq!(session_of(&dir, "chat-b", app), None);
+        assert_eq!(session_of(&dir, "chat-c", app), Some("sid-chat-c".into()));
     }
 
     #[test]
