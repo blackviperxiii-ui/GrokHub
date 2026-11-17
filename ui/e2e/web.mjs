@@ -326,7 +326,7 @@ async function main() {
       t.replace(/[\u2661\u2665]/g, "").trim(),
     );
     check(
-      buttons.join("|") === "Like|Let's do it|Not interested|Dismiss",
+      buttons.join("|") === "Like|Let's do it|Not interested",
       `the idea buttons say ${JSON.stringify(buttons)}`,
     );
     await idea.getByRole("button", { name: new RegExp(IDEA_TITLE) }).click();
