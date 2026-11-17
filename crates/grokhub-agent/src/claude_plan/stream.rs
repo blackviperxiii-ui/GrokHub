@@ -322,7 +322,7 @@ fn usage(msg: &Value) -> GrokUsage {
             .unwrap_or(0)
             .min(u64::from(u32::MAX)) as u32,
         stop_reason: str_at(msg, "stop_reason").to_string(),
-        meter: "Claude plan".into(),
+        meter: super::engine::METER.into(),
         ..GrokUsage::default()
     };
     match msg["modelUsage"].as_object().filter(|m| !m.is_empty()) {

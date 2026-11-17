@@ -3,6 +3,7 @@
 //! `{config}/claude-plan-chats.json`. No credential is ever kept here;
 //! Claude Code signs itself in.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -26,6 +27,16 @@ pub struct ClaudeChats {
     pub allowed: bool,
     /// The chats switched to it, by conversation id.
     pub chats: Vec<String>,
+    /// Each chat's Claude Code session and the folder it lives under, so
+    /// the chat goes on with it after the app restarts.
+    #[serde(default)]
+    pub sessions: BTreeMap<String, SavedSession>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedSession {
+    pub id: String,
+    pub cwd: PathBuf,
 }
 
 /// One writer at a time, so two quick switches don't drop one.
@@ -60,6 +71,7 @@ pub fn set_allowed(dir: &Path, on: bool) -> Result<ClaudeChats, String> {
         chats.allowed = on;
         if !on {
             chats.chats.clear();
+            chats.sessions.clear();
         }
         Ok(())
     })
@@ -74,9 +86,76 @@ pub fn set_chat(dir: &Path, id: &str, on: bool) -> Result<ClaudeChats, String> {
         chats.chats.retain(|c| c != id);
         if on {
             chats.chats.push(id.to_string());
+        } else {
+            // Turns on the app's own models come next, which that Claude Code
+            // session never saw: switching back on starts a new one.
+            chats.sessions.remove(id);
         }
         Ok(())
     })
+}
+
+/// The Claude Code session this chat goes on with in `cwd`, if it has one.
+pub fn session_of(dir: &Path, id: &str, cwd: &Path) -> Option<String> {
+    read(dir)
+        .sessions
+        .get(id)
+        .filter(|saved| saved.cwd == cwd)
+        .map(|saved| saved.id.clone())
+}
+
+/// Keeps the session a turn started or went on with. A chat no longer on
+/// the plan keeps none.
+pub fn remember_session(dir: &Path, id: &str, session: &str, cwd: &Path) -> Result<(), String> {
+    if read(dir)
+        .sessions
+        .get(id)
+        .is_some_and(|s| s.id == session && s.cwd == cwd)
+    {
+        return Ok(());
+    }
+    change(dir, |chats| {
+        if chats.chats.iter().any(|c| c == id) {
+            chats.sessions.insert(
+                id.to_string(),
+                SavedSession {
+                    id: session.to_string(),
+                    cwd: cwd.to_path_buf(),
+                },
+            );
+        }
+        Ok(())
+    })
+    .map(|_| ())
+}
+
+/// A message was deleted from this chat: Claude Code's session still holds
+/// it, so the next turn starts a new session rather than bring it back.
+pub fn forget_session(dir: &Path, id: &str) -> Result<(), String> {
+    if !read(dir).sessions.contains_key(id) {
+        return Ok(());
+    }
+    change(dir, |chats| {
+        chats.sessions.remove(id);
+        Ok(())
+    })
+    .map(|_| ())
+}
+
+/// These chats were deleted: they're no longer switched or kept.
+pub fn forget_chats(dir: &Path, ids: &[String]) {
+    let held = read(dir);
+    if !ids
+        .iter()
+        .any(|id| held.chats.contains(id) || held.sessions.contains_key(id))
+    {
+        return;
+    }
+    let _ = change(dir, |chats| {
+        chats.chats.retain(|c| !ids.contains(c));
+        chats.sessions.retain(|c, _| !ids.contains(c));
+        Ok(())
+    });
 }
 
 /// This chat was switched to the plan, and Settings still allows it.
@@ -136,6 +215,7 @@ mod tests {
             ClaudeChats {
                 allowed: true,
                 chats: vec!["chat-a".into(), "chat-b".into()],
+                sessions: BTreeMap::new(),
             }
         );
         assert_eq!(read(&dir), both);
@@ -146,6 +226,64 @@ mod tests {
         assert!(is_on(&dir, "chat-b"));
         // Another chat never runs on the plan.
         assert_eq!(turn_cli(&dir, "chat-a", &dir), None);
+    }
+
+    #[test]
+    fn a_chat_goes_on_with_its_session_in_the_same_folder_only() {
+        let dir = scratch("sessions");
+        let (app, other) = (
+            Path::new("/home/user/my-app"),
+            Path::new("/home/user/other"),
+        );
+        set_allowed(&dir, true).unwrap();
+        // Not on the plan: nothing kept.
+        remember_session(&dir, "chat-a", "sid-1", app).unwrap();
+        assert_eq!(session_of(&dir, "chat-a", app), None);
+
+        set_chat(&dir, "chat-a", true).unwrap();
+        remember_session(&dir, "chat-a", "sid-1", app).unwrap();
+        assert_eq!(session_of(&dir, "chat-a", app), Some("sid-1".into()));
+        assert_eq!(session_of(&dir, "chat-a", other), None);
+        assert_eq!(session_of(&dir, "chat-b", app), None);
+
+        // Switched off and on again: a new session.
+        set_chat(&dir, "chat-a", false).unwrap();
+        set_chat(&dir, "chat-a", true).unwrap();
+        assert_eq!(session_of(&dir, "chat-a", app), None);
+
+        remember_session(&dir, "chat-a", "sid-2", app).unwrap();
+        set_allowed(&dir, false).unwrap();
+        assert_eq!(read(&dir).sessions, BTreeMap::new());
+    }
+
+    #[test]
+    fn a_deleted_message_or_chat_lets_go_of_its_session() {
+        let dir = scratch("forget");
+        let app = Path::new("/home/user/my-app");
+        set_allowed(&dir, true).unwrap();
+        for id in ["chat-a", "chat-b", "chat-c"] {
+            set_chat(&dir, id, true).unwrap();
+            remember_session(&dir, id, &format!("sid-{id}"), app).unwrap();
+        }
+        forget_session(&dir, "chat-a").unwrap();
+        assert_eq!(session_of(&dir, "chat-a", app), None);
+        assert!(is_on(&dir, "chat-a"), "the chat stays on the plan");
+
+        forget_chats(&dir, &["chat-b".to_string()]);
+        assert!(!is_on(&dir, "chat-b"));
+        assert_eq!(session_of(&dir, "chat-b", app), None);
+        // A deleted chat's late turn doesn't bring it back.
+        remember_session(&dir, "chat-b", "sid-late", app).unwrap();
+        assert_eq!(session_of(&dir, "chat-b", app), None);
+        assert_eq!(session_of(&dir, "chat-c", app), Some("sid-chat-c".into()));
+    }
+
+    #[test]
+    fn a_store_from_before_sessions_still_reads() {
+        let dir = scratch("old-store");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"allowed":true,"chats":["chat-a"]}"#).unwrap();
+        assert!(is_on(&dir, "chat-a"));
     }
 
     #[test]

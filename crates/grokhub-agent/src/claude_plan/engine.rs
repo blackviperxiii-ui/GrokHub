@@ -11,11 +11,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use grokhub_core::wire::AcpEvent;
+use grokhub_core::wire::{AcpEvent, GrokUsage};
 use serde_json::{json, Value};
 
 use super::stream::{Outcome, Stream};
-use crate::client::CancelToken;
+use crate::client::{CancelToken, ContentPart, InputItem, Usage};
 use crate::events::Engine;
 use crate::run::SteerQueue;
 
@@ -40,7 +40,14 @@ pub struct ClaudePlanEngine {
     /// Words sent while a turn runs. Claude Code can't take them mid-turn, so
     /// they go back to the chat at the turn's end, each its own message.
     steer: SteerQueue,
+    /// The chat whose history file each turn is saved to, as native turns
+    /// are; `None` saves nothing.
+    chat: Option<String>,
 }
+
+/// How a saved turn names its model and meter in History.
+pub const MODEL: &str = "claude-plan";
+pub const METER: &str = "Claude plan";
 
 impl ClaudePlanEngine {
     /// `cli` comes from `claude_plan::find`; `cancel` is the chat's Stop.
@@ -52,7 +59,32 @@ impl ClaudePlanEngine {
             started: false,
             cancel,
             steer,
+            chat: None,
         }
+    }
+
+    /// Saves each turn to `chat`'s history, so it shows in History and the
+    /// app's own models can read it if the chat is switched back.
+    pub fn for_chat(mut self, chat: &str) -> Self {
+        self.chat = Some(chat.to_string());
+        self
+    }
+
+    /// Goes on with a Claude Code session an earlier run of the app started
+    /// for this chat.
+    pub fn resume_session(&mut self, session: &str) {
+        self.session = session.to_string();
+        self.started = true;
+    }
+
+    /// The session the next turn resumes, once a turn started one.
+    pub fn session(&self) -> Option<&str> {
+        self.started.then_some(self.session.as_str())
+    }
+
+    /// The folder turns run in, which the session lives under.
+    pub fn workspace(&self) -> &std::path::Path {
+        &self.workspace
     }
 
     /// Claude Code keeps a session under its folder, so a new folder starts
@@ -67,6 +99,11 @@ impl ClaudePlanEngine {
     /// Where `claude` is now, found again for each turn.
     pub fn set_cli(&mut self, cli: PathBuf) {
         self.cli = cli;
+    }
+
+    /// Starts a new Claude Code session on the next turn.
+    pub fn start_new_session(&mut self) {
+        self.new_session();
     }
 
     fn new_session(&mut self) {
@@ -159,10 +196,26 @@ impl ClaudePlanEngine {
 
         let mut stream = Stream::new();
         let mut said_error = false;
+        let mut reply = String::new();
+        let mut usage = None;
+        let mut after_tool = false;
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
             for event in stream.line(&line) {
                 said_error |= matches!(event, AcpEvent::Err(_));
+                match &event {
+                    AcpEvent::Text(text) => {
+                        // Text after a tool call is the next message: kept apart.
+                        if after_tool && !reply.is_empty() {
+                            reply.push_str("\n\n");
+                        }
+                        after_tool = false;
+                        reply.push_str(text);
+                    }
+                    AcpEvent::Tool(_) => after_tool = true,
+                    AcpEvent::Usage(used) => usage = Some(used.clone()),
+                    _ => {}
+                }
                 emit(event);
             }
         }
@@ -173,6 +226,7 @@ impl ClaudePlanEngine {
         }
         let errors = errors.join().unwrap_or_default();
 
+        self.save_turn(text, &reply, usage.as_ref());
         let resumed = self.started;
         if stream.session_id() == Some(self.session.as_str()) {
             self.started = true;
@@ -204,6 +258,47 @@ impl ClaudePlanEngine {
             };
             fail(emit, why);
         }
+    }
+}
+
+impl ClaudePlanEngine {
+    /// The turn's message and reply go to the chat's history file with its
+    /// usage; a turn that wrote no reply (stopped early, or failed) isn't kept.
+    fn save_turn(&self, text: &str, reply: &str, used: Option<&GrokUsage>) {
+        let Some(chat) = &self.chat else { return };
+        if reply.trim().is_empty() {
+            return;
+        }
+        let message = |role: &str, said: &str| InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(said.to_string())],
+        };
+        let usage = used.map(plan_usage).unwrap_or_default();
+        let _ = crate::session::record_turn(
+            chat,
+            &self.workspace.display().to_string(),
+            MODEL,
+            &[message("user", text), message("assistant", reply)],
+            &usage,
+            METER,
+            text,
+        );
+    }
+}
+
+/// A plan turn's tokens as the history counts them: Claude's input count
+/// leaves out cached tokens, which the app's count includes. A plan costs no
+/// money per turn, so no cost is kept.
+fn plan_usage(used: &GrokUsage) -> Usage {
+    Usage {
+        input_tokens: used
+            .input_tokens
+            .saturating_add(used.cache_read_input_tokens)
+            .saturating_add(used.cache_creation_input_tokens),
+        output_tokens: used.output_tokens,
+        reasoning_tokens: used.reasoning_tokens,
+        cost_in_usd_ticks: 0,
+        cached_tokens: used.cache_read_input_tokens,
     }
 }
 
@@ -778,6 +873,93 @@ mod tests {
                 Some(&AcpEvent::Done {
                     stop_reason: "end_turn".into()
                 })
+            );
+        }
+        #[test]
+        fn each_turn_is_saved_to_the_chat_history_and_a_failed_one_is_not() {
+            let dir = scratch("history");
+            let _config = crate::perm::ConfigGuard::set(&dir);
+            let delta = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"pong"}}}"#;
+            let ok = r#"{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":3,"output_tokens":2,"cache_read_input_tokens":40}}"#;
+            let cli = fake_cli(&dir, &lines_of(&[&init(SID), delta, ok]));
+            let chat = "shell-plan-history";
+            let mut e = engine(&cli, &dir).for_chat(chat);
+            e.session = SID.into();
+            assert_eq!(e.session(), None);
+            run(&mut e, "ping");
+            assert_eq!(e.session(), Some(SID));
+
+            let info = crate::session::load_session(chat).unwrap();
+            assert_eq!(
+                crate::session::message_pairs(&info),
+                vec![
+                    ("user".to_string(), "ping".to_string()),
+                    ("assistant".to_string(), "pong".to_string()),
+                ]
+            );
+            assert_eq!(info.model, MODEL);
+            assert_eq!(info.meter, METER);
+            // Claude's input count leaves out the cached 40; the app's includes them.
+            assert_eq!(
+                (
+                    info.usage.input_tokens,
+                    info.usage.output_tokens,
+                    info.usage.cached_tokens
+                ),
+                (43, 2, 40)
+            );
+
+            // A turn with no reply leaves the file as it was.
+            std::fs::write(&cli, "#!/bin/sh\ncat >/dev/null\nexit 1\n").unwrap();
+            run(&mut e, "again");
+            let info = crate::session::load_session(chat).unwrap();
+            assert_eq!(crate::session::message_pairs(&info).len(), 2);
+        }
+
+        #[test]
+        fn a_session_from_an_earlier_run_is_resumed() {
+            let dir = scratch("resume-saved");
+            let cli = fake_cli(&dir, &lines_of(&[&init(SID), OK]));
+            let mut e = engine(&cli, &dir);
+            e.resume_session(SID);
+            run(&mut e, "hi");
+            let args = std::fs::read_to_string(dir.join("args")).unwrap();
+            assert!(args.contains(&format!("--resume {SID} ")), "{args}");
+        }
+        #[test]
+        fn a_reply_around_a_tool_call_is_saved_as_separate_paragraphs() {
+            let dir = scratch("paragraphs");
+            let _config = crate::perm::ConfigGuard::set(&dir);
+            let say = |t: &str| {
+                format!(
+                    r#"{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"{t}"}}}}}}"#
+                )
+            };
+            let call = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Glob","input":{"pattern":"*.txt"}}]}}"#;
+            let done = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"a.txt"}]}}"#;
+            let cli = fake_cli(
+                &dir,
+                &lines_of(&[
+                    &init(SID),
+                    &say("Let me "),
+                    &say("look."),
+                    call,
+                    done,
+                    &say("One file."),
+                    OK,
+                ]),
+            );
+            let chat = "shell-plan-paragraphs";
+            let mut e = engine(&cli, &dir).for_chat(chat);
+            e.session = SID.into();
+            run(&mut e, "how many?");
+            let info = crate::session::load_session(chat).unwrap();
+            assert_eq!(
+                crate::session::message_pairs(&info)[1],
+                (
+                    "assistant".to_string(),
+                    "Let me look.\n\nOne file.".to_string()
+                )
             );
         }
     }

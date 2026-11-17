@@ -338,6 +338,7 @@ fn delete_chats(config_dir: &Path, ids: &[String]) -> Deleted {
     for id in &gone {
         crate::chat_zoom::forget(config_dir, id);
     }
+    crate::claude_chat::forget_chats(config_dir, &gone);
     let pins = pinned_ids(config_dir);
     let kept: Vec<&String> = pins.iter().filter(|p| !gone.contains(p)).collect();
     if kept.len() != pins.len() {

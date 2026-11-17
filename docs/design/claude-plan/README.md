@@ -146,8 +146,17 @@ Each step is its own PR into `beta`.
    read-only tools, the consent card and the per-chat switch. Proof: a real
    turn and a read-only tool task on Linux. The session flags from step 5
    ship here too, since a second message would otherwise start over.
-5. **History.** Turns saved to the chat's history like native turns, so a
-   chat on the plan survives a restart and shows in History.
+5. **History.** Turns saved to the chat's history like native turns (the
+   message and the reply, model `claude-plan`, meter "Claude plan"), so a
+   chat on the plan survives a restart and shows in History. The chat's
+   Claude Code session and its folder are kept in
+   `{config}/claude-plan-chats.json`, so after a restart the next message
+   resumes it. Switching the chat back reads those turns into the app's own
+   engine; switching it off and on again starts a new Claude Code session,
+   since that session never saw the turns in between. Deleting a message
+   also starts a new session, since Claude Code's session would still hold
+   it, and deleting a chat drops it from the file. Tool rows aren't saved
+   yet.
 6. **Usage.** The per-turn usage line and the plan headroom.
 7. **Live approvals.** The MCP approval server.
 
