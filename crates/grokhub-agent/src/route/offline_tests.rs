@@ -524,6 +524,7 @@ fn a_local_answer_streams_to_the_chat_like_any_other() {
         hosted_search: false,
         call_timeout: None,
     };
+    let _mark = super::live::StepOnDeviceForTests::set(false);
     let mut shown = String::new();
     let out = super::live::stream_routed(
         &Never,
@@ -541,5 +542,22 @@ fn a_local_answer_streams_to_the_chat_like_any_other() {
     // The run loop shows only streamed text: a local answer that is returned
     // but never streamed is saved to the session and never seen in the chat.
     assert_eq!(shown, "hello offline");
+    // The step ran here, so the tools it calls (a picture) run here too.
+    assert!(super::live::step_on_device());
+    // The app's own call on the device leaves the chat step's mark alone.
+    let _cloud_step = super::live::StepOnDeviceForTests::set(false);
+    let summary = ResponsesRequest {
+        conversation_id: "local-stream-2".into(),
+        ..req.clone()
+    };
+    super::live::stream_routed(
+        &Never,
+        &summary,
+        &crate::client::CancelToken::new(),
+        &mut |_| {},
+        "background:summarize",
+    )
+    .expect("the device sums it up");
+    assert!(!super::live::step_on_device());
     let _ = std::fs::remove_dir_all(dir);
 }

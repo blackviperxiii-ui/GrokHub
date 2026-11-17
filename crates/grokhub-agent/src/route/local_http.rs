@@ -405,6 +405,10 @@ impl LocalRuntime for HttpLocalRuntime {
         // tokens: dropping the stream closes the socket and the server stops
         // generating. The deltas are put back together into one reply.
         let mut body = openai_body(&self.model, None, req);
+        // A picture step must call the picture tool, its only one.
+        if super::local_image::forced() {
+            body["tool_choice"] = json!("required");
+        }
         body["stream"] = json!(true);
         body["stream_options"] = json!({ "include_usage": true });
         self.effort(req.effort.as_deref()).apply(&mut body);
@@ -859,6 +863,32 @@ mod tests {
             bodies
         });
         (base, h)
+    }
+
+    #[test]
+    fn a_picture_step_must_call_a_tool_and_other_steps_choose() {
+        let (base, server) = capture_server(2);
+        let rt = HttpLocalRuntime::new(&base, "t");
+        let req = ResponsesRequest {
+            model: "local".into(),
+            effort: None,
+            input: Vec::new(),
+            conversation_id: "c".into(),
+            tools: vec![
+                json!({"name": "image_generate", "description": "Generate images.", "parameters": {"type": "object"}}),
+            ],
+            hosted_search: false,
+            call_timeout: None,
+            text_format: None,
+        };
+        {
+            let _force = super::super::local_image::ForceGuard::set();
+            let _ = rt.chat_tools(&req, &CancelToken::new());
+        }
+        let _ = rt.chat_tools(&req, &CancelToken::new());
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies[0]["tool_choice"], json!("required"));
+        assert_eq!(bodies[1].get("tool_choice"), None);
     }
 
     #[test]

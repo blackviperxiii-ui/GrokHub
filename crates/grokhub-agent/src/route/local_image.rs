@@ -149,6 +149,157 @@ pub fn ready_on_device(
     &[TOOL]
 }
 
+/// The newest message is a picture ask this computer can draw, and nothing
+/// has answered it yet: this step offers only the picture tool and must call
+/// it ([`ForceGuard`]), so the picture never hangs on the chat model choosing
+/// to. The model still writes the prompt. Run after [`ready_on_device`].
+pub fn picture_step(req: &crate::client::ResponsesRequest, can_draw: bool, ask: bool) -> bool {
+    use crate::client::InputItem;
+    can_draw
+        && ask
+        && matches!(req.input.last(), Some(InputItem::Message { role, .. }) if role == "user")
+        && req.tools.iter().any(|t| t["name"].as_str() == Some(TOOL))
+}
+
+/// `req` with only the picture tool offered.
+pub fn only_picture_tool(req: &crate::client::ResponsesRequest) -> crate::client::ResponsesRequest {
+    let mut req = req.clone();
+    req.tools.retain(|t| t["name"].as_str() == Some(TOOL));
+    req
+}
+
+thread_local! {
+    static FORCED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While held, this thread's on-device call must call a tool
+/// (`tool_choice: "required"`): a [`picture_step`].
+pub struct ForceGuard {
+    prev: bool,
+}
+
+impl ForceGuard {
+    pub fn set() -> Self {
+        Self {
+            prev: FORCED.with(|f| f.replace(true)),
+        }
+    }
+}
+
+impl Drop for ForceGuard {
+    fn drop(&mut self) {
+        FORCED.with(|f| f.set(self.prev));
+    }
+}
+
+/// A [`ForceGuard`] is held on this thread.
+pub fn forced() -> bool {
+    FORCED.with(std::cell::Cell::get)
+}
+
+/// Memory kept free above the picture model while it draws.
+pub const DRAW_HEADROOM_MB: u64 = 512;
+
+/// Whether a picture fits in memory now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawRoom {
+    /// It fits beside what is loaded, or there is no reading to go by.
+    Fits,
+    /// It fits once the chat model is unloaded; the next message loads it again.
+    UnloadChat,
+    /// It doesn't fit even then; `need_mb` is what it needs free.
+    NoRoom { need_mb: u64 },
+}
+
+/// Room for a picture model of `image_mb` with `chat_ram_mb` of the chat
+/// model in RAM that could be unloaded (0 when none is, or it can't go).
+/// `sd-cli` keeps the picture model's weights in RAM (`--offload-to-cpu`),
+/// so free VRAM doesn't count. With no reading, it draws as it always has.
+pub fn draw_room(
+    image_mb: u64,
+    room: Option<&super::local_scale::Room>,
+    chat_ram_mb: u64,
+) -> DrawRoom {
+    let Some(room) = room else {
+        return DrawRoom::Fits;
+    };
+    let need_mb = image_mb + DRAW_HEADROOM_MB;
+    let free = room.free_ram_mb * super::local_scale::RAM_SHARE_PCT / 100;
+    if need_mb <= free {
+        DrawRoom::Fits
+    } else if chat_ram_mb > 0 && need_mb <= free + chat_ram_mb {
+        DrawRoom::UnloadChat
+    } else {
+        DrawRoom::NoRoom { need_mb }
+    }
+}
+
+/// Said when a picture can't fit in memory now.
+pub fn no_room_line(need_mb: u64) -> String {
+    let gb = need_mb.div_ceil(1024);
+    format!("Not made, and nothing was sent: drawing needs about {gb} GB of free memory and this computer doesn't have it right now. Close some apps, then ask again.")
+}
+
+/// The part of a loaded chat model's `mb` that sits in RAM: all of it on the
+/// CPU or with shared memory, the layers left off the GPU otherwise, and
+/// none when the launch isn't known and used the GPU.
+pub fn ram_share(
+    mb: u64,
+    launch: Option<&super::local_autoconfig::LaunchArgs>,
+    bare_cpu: bool,
+    unified: bool,
+) -> u64 {
+    if unified {
+        return mb;
+    }
+    match launch {
+        Some(a) if a.cpu_only || a.ngl == 0 => mb,
+        Some(a) => {
+            let all = u64::from(a.all_layers.max(1));
+            mb * all.saturating_sub(u64::from(a.ngl)) / all
+        }
+        None if bare_cpu => mb,
+        None => 0,
+    }
+}
+
+/// Memory the loaded chat model holds: the catalog size, or the file's,
+/// plus its draft's file.
+fn chat_mb(loaded: &sidecar::Loaded) -> u64 {
+    let file_mb = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len() / (1024 * 1024));
+    let main = super::local_swap::catalog_for(&loaded.model)
+        .map_or_else(|| file_mb(&loaded.model), |m| m.run_mb);
+    let draft = loaded
+        .launch
+        .as_ref()
+        .and_then(|l| l.draft.as_ref())
+        .and_then(|d| d.model.as_deref())
+        .map_or(0, file_mb);
+    main + draft
+}
+
+/// Make room for `kit`'s picture model: nothing to do, unload the chat
+/// model (it and its draft load again on the next message), or decline.
+/// The chat model stays when Keep loaded holds it or a request is in flight.
+fn make_room(kit: &Kit) -> Result<(), String> {
+    let room = super::local_scale::room(grokhub_core::now_ms());
+    let chat_ram = match sidecar::loaded() {
+        Some(l) if !sidecar::keep_loaded() && sidecar::in_flight() == 0 => ram_share(
+            chat_mb(&l),
+            l.launch.as_ref(),
+            l.bare_cpu,
+            room.as_ref().is_some_and(|r| r.unified),
+        ),
+        _ => 0,
+    };
+    match draw_room(kit.model.run_mb, room.as_ref(), chat_ram) {
+        DrawRoom::Fits => Ok(()),
+        DrawRoom::UnloadChat if sidecar::unload_for_picture() => Ok(()),
+        DrawRoom::UnloadChat => Err(no_room_line(kit.model.run_mb + DRAW_HEADROOM_MB)),
+        DrawRoom::NoRoom { need_mb } => Err(no_room_line(need_mb)),
+    }
+}
+
 /// Append `line` as its own paragraph to the first system message.
 fn add_to_system(input: &mut Vec<crate::client::InputItem>, line: &str) {
     use crate::client::{ContentPart, InputItem};
@@ -193,6 +344,10 @@ pub fn make(
     if explicit && kit.guard.is_none() {
         return Err(NEEDS_GUARD.into());
     }
+    // Held from the memory check to the end, so keep-warm doesn't load the
+    // chat model back into the room the picture needs.
+    let _drawing = sidecar::DrawHold::take();
+    make_room(kit)?;
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("Couldn't make the picture folder: {e}"))?;
     let out = out_dir.join(format!("image-{}-local.png", grokhub_core::now_ms()));
@@ -417,5 +572,137 @@ mod tests {
                 Err("cancelled".into())
             );
         }
+    }
+
+    fn room(free_vram_mb: Option<u64>, free_ram_mb: u64) -> super::super::local_scale::Room {
+        super::super::local_scale::Room {
+            free_vram_mb,
+            free_ram_mb,
+            cpu_busy_pct: None,
+            on_battery: false,
+            unified: false,
+        }
+    }
+
+    #[test]
+    fn a_picture_draws_beside_the_chat_model_unloads_it_or_declines() {
+        // 7 GB picture model plus 512 MB to spare: 7,680 MB, all of it RAM.
+        // 80% of 10 GB free RAM is 8,192 MB: it fits beside the chat model.
+        assert_eq!(
+            draw_room(7_168, Some(&room(None, 10_240)), 5_000),
+            DrawRoom::Fits
+        );
+        // 80% of 5 GB is 4,096 MB: only once 5 GB of chat model leaves RAM.
+        assert_eq!(
+            draw_room(7_168, Some(&room(Some(2_048), 5_120)), 5_000),
+            DrawRoom::UnloadChat
+        );
+        // Not even then, or nothing in RAM to unload.
+        assert_eq!(
+            draw_room(7_168, Some(&room(None, 2_048)), 3_000),
+            DrawRoom::NoRoom { need_mb: 7_680 }
+        );
+        assert_eq!(
+            draw_room(7_168, Some(&room(Some(2_048), 5_120)), 0),
+            DrawRoom::NoRoom { need_mb: 7_680 }
+        );
+        // Free VRAM doesn't hold the picture model's weights.
+        assert_eq!(
+            draw_room(7_168, Some(&room(Some(24_576), 2_048)), 0),
+            DrawRoom::NoRoom { need_mb: 7_680 }
+        );
+        // No reading: it draws as it always has.
+        assert_eq!(draw_room(7_168, None, 5_000), DrawRoom::Fits);
+        assert_eq!(
+            no_room_line(7_680),
+            "Not made, and nothing was sent: drawing needs about 8 GB of free memory and this computer doesn't have it right now. Close some apps, then ask again."
+        );
+    }
+
+    #[test]
+    fn only_the_chat_model_layers_in_ram_count_as_room_it_can_free() {
+        use super::super::local_autoconfig::{on_cpu, KvType, LaunchArgs};
+        let gpu = LaunchArgs {
+            backend: grokhub_core::local_profile::Backend::Vulkan,
+            ngl: 30,
+            all_layers: 40,
+            n_cpu_moe: None,
+            ctx: 8192,
+            kv: KvType::Q8,
+            threads: 4,
+            threads_batch: None,
+            flash_attn: true,
+            mlock: false,
+            tensor_split: None,
+            draft: None,
+            cpu_only: false,
+            run: Default::default(),
+        };
+        // 10 of 40 layers stay off the GPU: a quarter of 8 GB.
+        assert_eq!(ram_share(8_000, Some(&gpu), false, false), 2_000);
+        let all_gpu = LaunchArgs {
+            ngl: 40,
+            ..gpu.clone()
+        };
+        assert_eq!(ram_share(8_000, Some(&all_gpu), false, false), 0);
+        assert_eq!(ram_share(8_000, Some(&on_cpu(&gpu)), false, false), 8_000);
+        // Shared memory: the GPU's share is RAM too.
+        assert_eq!(ram_share(8_000, Some(&all_gpu), false, true), 8_000);
+        // One-shot defaults: on the CPU all of it, on the GPU none counted.
+        assert_eq!(ram_share(8_000, None, true, false), 8_000);
+        assert_eq!(ram_share(8_000, None, false, false), 0);
+    }
+
+    #[test]
+    fn only_an_unanswered_picture_ask_this_computer_can_draw_forces_the_step() {
+        use crate::client::{ContentPart, InputItem, ResponsesRequest};
+        let msg = |role: &str, t: &str| InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(t.into())],
+        };
+        let req = ResponsesRequest {
+            model: "local:small".into(),
+            effort: None,
+            input: vec![msg("system", "s"), msg("user", "draw me a fox")],
+            conversation_id: "c".into(),
+            tools: vec![
+                json!({"name": TOOL, "description": "Generate images."}),
+                json!({"name": "web_search", "description": "Search."}),
+            ],
+            hosted_search: false,
+            call_timeout: None,
+            text_format: None,
+        };
+        assert!(picture_step(&req, true, true));
+        assert!(!picture_step(&req, false, true), "nothing here can draw");
+        assert!(!picture_step(&req, true, false), "not a picture ask");
+        let narrow = only_picture_tool(&req);
+        assert_eq!(
+            narrow.tools,
+            vec![json!({"name": TOOL, "description": "Generate images."})]
+        );
+        assert_eq!(narrow.input, req.input);
+        // The picture came back: the next step answers in words.
+        let mut answered = req.clone();
+        answered.input.push(InputItem::FunctionCall {
+            call_id: "p1".into(),
+            name: TOOL.into(),
+            arguments: "{}".into(),
+        });
+        answered.input.push(InputItem::FunctionCallOutput {
+            call_id: "p1".into(),
+            output: "IMAGINE: /tmp/a.png".into(),
+        });
+        assert!(!picture_step(&answered, true, true));
+        // The gate didn't offer the tool.
+        let mut bare = req.clone();
+        bare.tools.retain(|t| t["name"] != TOOL);
+        assert!(!picture_step(&bare, true, true));
+        assert!(!forced());
+        {
+            let _f = ForceGuard::set();
+            assert!(forced());
+        }
+        assert!(!forced());
     }
 }

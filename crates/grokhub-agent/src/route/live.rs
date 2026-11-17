@@ -1673,6 +1673,34 @@ pub fn current_class() -> &'static str {
 }
 
 thread_local! {
+    static STEP_ON_DEVICE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The newest model step on this thread ran on this computer's model, so
+/// the tools it called (a picture, say) run here too.
+pub fn step_on_device() -> bool {
+    STEP_ON_DEVICE.with(std::cell::Cell::get)
+}
+
+/// Pins [`step_on_device`] on this thread until dropped.
+#[cfg(test)]
+pub(crate) struct StepOnDeviceForTests(bool);
+
+#[cfg(test)]
+impl StepOnDeviceForTests {
+    pub(crate) fn set(on: bool) -> Self {
+        Self(STEP_ON_DEVICE.with(|s| s.replace(on)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for StepOnDeviceForTests {
+    fn drop(&mut self) {
+        STEP_ON_DEVICE.with(|s| s.set(self.0));
+    }
+}
+
+thread_local! {
     static HELPER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -2185,6 +2213,11 @@ pub fn stream_routed(
     }
     if grok_took_turn {
         call.model = &sent.model;
+    }
+    // The app's own calls (the permission judge, a summary) don't run the
+    // step's tools, so they leave the chat step's mark alone.
+    if !class.trim().starts_with("background:") {
+        STEP_ON_DEVICE.with(|s| s.set(on_device));
     }
     if on_device {
         call.provider = super::local::PROVIDER_LOCAL;

@@ -900,13 +900,25 @@ pub fn serve_request(
         .unwrap_or_else(|| super::local_perf::current_defaults().ctx);
     // A picture ask, or a computer that can draw, keeps the picture tool
     // even on a small window, and the device is told it can draw.
-    let keep = super::local_image::ready_on_device(
-        &mut req,
-        super::local_image::can_draw_here(),
-        crate::brain::is_picture_ask(&text),
-    );
-    let (fitted, _) = super::local_fit::fit_keeping(&req, n_ctx, keep);
-    let out = rt.chat_tools(&fitted, cancel);
+    let can_draw = super::local_image::can_draw_here();
+    let ask = crate::brain::is_picture_ask(&text);
+    let keep = super::local_image::ready_on_device(&mut req, can_draw, ask);
+    // A picture ask this computer can draw: the step must call the picture
+    // tool. An engine that refuses a required tool call answers as usual.
+    let forced = super::local_image::picture_step(&req, can_draw, ask).then(|| {
+        let narrow = super::local_image::only_picture_tool(&req);
+        let (fitted, _) = super::local_fit::fit_keeping(&narrow, n_ctx, keep);
+        let _force = super::local_image::ForceGuard::set();
+        rt.chat_tools(&fitted, cancel)
+    });
+    let out = match forced {
+        Some(Ok(out)) => Ok(out),
+        Some(Err(e)) if cancel.is_cancelled() => Err(e),
+        _ => {
+            let (fitted, _) = super::local_fit::fit_keeping(&req, n_ctx, keep);
+            rt.chat_tools(&fitted, cancel)
+        }
+    };
     note_task_reply(kind, &out, cancel);
     out.map_err(ClientError::Protocol)
 }

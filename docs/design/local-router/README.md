@@ -1,0 +1,109 @@
+# Local model router: design note
+
+The desktop app picks and loads the right local model for each request:
+chat, pictures, speech-to-text, text-to-speech, vision, and the speed,
+balance and performance tiers. Scripts do the loading, unloading and
+memory checks. The model only decides at decision points, such as writing
+a picture's prompt.
+
+This note ships with the first step. It records why a local chat looks
+stuck on its model today, the target, and the build order.
+
+## What happens today
+
+- **Chat models swap by task, within limits.** Each on-device request is
+  classified (`route/local_task.rs` `kind`), and `local_swap::plan` may
+  choose another downloaded chat model. Some settings turn swapping off:
+  Keep loaded, `GROKHUB_LOCAL_MODEL`, and Dynamic off. A switch to a bigger
+  model also waits until the chat has been quiet for 20 seconds
+  (`PENDING_STEP_UP`).
+- **The pool holds chat models only.** `local_swap::on_disk` lists models
+  where `is_chat()` is true, and `TaskKind` has no picture, voice or
+  vision kind. One llama-server runs at a time (`local_sidecar` holds one
+  `Option<Sidecar>`), so there is no least-recently-used list.
+- **A picture depends on the chat model.** On a picture ask,
+  `local_image::ready_on_device` only adds the `image_generate` schema and a
+  system line. The small chat model must choose to call the tool. If it
+  answers in text instead, nothing switches. This is the reported bug.
+- **A signed-in Grok Imagine wins.** `tools/media.rs` `on_device` sends a
+  clean prompt to Grok Imagine whenever it is reachable and signed in, even
+  when the chat runs on this computer.
+- **Drawing ignores memory.** `local_image::make` starts `sd-cli` with no
+  RAM or VRAM check while the chat model stays loaded.
+- **The chat never shows the picture.** `UiEvent::Tool` drops the result's
+  picture, so the chat shows only a path.
+- **Drafts can fall away.** The swap fit check (`local_scale::fits`)
+  counts the parent only. A parent can then load without its paired draft
+  (`local_draft.rs` decisions, and the autoconfig arm that drops it).
+- **Voice is chosen by key.** Speech-to-text always goes to xAI, and
+  on-device transcription has no caller. Text-to-speech uses xAI whenever a
+  key is saved, and Kokoro otherwise.
+- **The pick shows only in Settings.** The active model and its reason
+  appear under Settings → Local AI → Running now. The chat shows neither,
+  and the only pins are global (the Settings pick, Keep loaded, and
+  Dynamic off).
+
+## Target
+
+1. **Needs.** A request has one need: chat (with a tier), picture,
+   speech-to-text, text-to-speech, or vision. Scripts find the need from
+   the request: a picture ask, an attached image, a voice turn, a "quick"
+   or "take your time" ask, or the chat's pin. The model doesn't guess it.
+2. **Deterministic dispatch.** A picture ask in a chat that runs on this
+   computer always draws, whether or not the chat model would have called
+   the tool. The chat model gets one constrained step,
+   `tool_choice: "required"` with only `image_generate` offered, so it
+   still writes the prompt. The hard-ban check and the picture guard read
+   that prompt.
+3. **On this computer stays on this computer.** A picture asked for in a
+   chat that runs on device is drawn on device when a picture model is
+   installed. Grok Imagine keeps cloud chats, the Imagine page, and
+   computers without a picture model.
+4. **Residency.** A ledger lists what is loaded: the chat server with its
+   draft, the picture engine and the voice engines. It records each one's
+   memory and when it was last used. Before anything loads, the router
+   checks free RAM and VRAM (`local_scale::room`). If there isn't room, it
+   unloads the least recently used entry. If there still isn't room, it
+   declines with a plain line instead of overloading the computer.
+5. **Drafts are part of their parent.** A paired parent and draft count
+   as one entry, and their memory is added together. They always load and
+   unload together. If the pair doesn't fit, the router picks a smaller
+   tier's pair instead of dropping the draft. A model with no draft
+   paired loads on its own, as it does today.
+6. **Show and pin.** The chat shows which model answered and why, in one
+   short line. A chat can pin a model or a tier, and the pin wins over
+   swapping for that chat only.
+
+## Build order
+
+Each step is its own PR into `beta`, green on Linux and Windows.
+
+1. **Pictures on device.** Force the picture step on a local chat. Draw on
+   device when the step ran here. Check room before drawing: unload the
+   chat server if that makes room, or decline. This note ships in the same
+   PR.
+2. **The picture in the chat.** `UiEvent::Tool` carries the made file.
+   The tool card shows the picture through a command that reads only the
+   app's media folders. This works for Grok Imagine results too.
+3. **Residency ledger.** One ledger for the chat server, picture engine
+   and voice engines, with memory sizes and LRU unloading. The picture
+   path and Kokoro go through it.
+4. **Strict draft pairing.** Count the draft in every fit check. If the
+   pair doesn't fit, step down a tier.
+5. **Tiers, pin and the active-model line.** Speed, balance and
+   performance come from the ask or the chat's pin. The active model
+   and its reason show in the chat.
+6. **Voice on device.** On-device speech-to-text, then text-to-speech
+   chosen by need (an on-device chat or Offline only) instead of by
+   whether a key is saved.
+7. **Vision.** Load the vision projector (`--mmproj`) with a model that
+   has one when a picture is attached to an on-device chat.
+
+## Done when
+
+On Linux, one chat that runs on this computer asks for a picture. It
+switches to the picture model, shows the picture in the same chat, then
+answers the next message on the chat model. A voice request uses the voice
+model. A speed or performance ask loads that tier with its draft. When
+memory is low, the router unloads or declines instead of overloading the
+computer.

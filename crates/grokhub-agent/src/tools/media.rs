@@ -473,10 +473,12 @@ fn run_with_kit(
 ) -> ToolOutput {
     let ports = super::ports::current();
     let imagine = ports.imagine.filter(|api| api.ready());
+    // A chat running on this computer draws here when it can; Grok Imagine
+    // takes the cloud chats.
     if let Some(out) = on_device(
         name,
         args,
-        &|| imagine_takes_it(imagine.as_ref()),
+        &|| !crate::route::live::step_on_device() && imagine_takes_it(imagine.as_ref()),
         kit,
         stop,
         ports.media_dir.as_deref(),
@@ -2469,6 +2471,23 @@ pub(crate) mod tests {
             run_with_kit("image_generate", &picture(), &kit, &|| false);
             assert_eq!(asked.get(), 2, "Offline only asks the picture model");
             assert!(posted(&posts).is_empty());
+        }
+        {
+            // Signed in, but the step ran on this computer: the picture model
+            // is asked first. With none on disk, Grok Imagine still takes it.
+            let _here = crate::route::live::StepOnDeviceForTests::set(true);
+            let (_ports, posts) = turn(&ok, &[]);
+            let out = run_with_kit("image_generate", &picture(), &kit, &|| false);
+            assert_eq!(
+                asked.get(),
+                3,
+                "a step on this computer asks the picture model"
+            );
+            assert!(!out.failed, "{}", out.text);
+            assert!(
+                !posted(&posts).is_empty(),
+                "no picture model here: Imagine draws"
+            );
         }
         let _ = std::fs::remove_dir_all(dir);
     }
