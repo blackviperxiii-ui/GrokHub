@@ -52,6 +52,8 @@ pub struct Stream {
     thought_streamed: bool,
     outcome: Outcome,
     headroom: Option<Headroom>,
+    /// A reading came since the host last took one.
+    headroom_fresh: bool,
 }
 
 impl Default for Stream {
@@ -69,6 +71,7 @@ impl Stream {
             thought_streamed: false,
             outcome: Outcome::Running,
             headroom: None,
+            headroom_fresh: false,
         }
     }
 
@@ -86,6 +89,14 @@ impl Stream {
         self.headroom.as_ref()
     }
 
+    /// The reading the last line brought, once, so the host can stamp it
+    /// with the time it came.
+    pub fn take_fresh_headroom(&mut self) -> Option<Headroom> {
+        std::mem::take(&mut self.headroom_fresh)
+            .then(|| self.headroom.clone())
+            .flatten()
+    }
+
     /// The chat events for one stdout line. A line that isn't JSON, or a kind
     /// this doesn't show, gives none.
     pub fn line(&mut self, line: &str) -> Vec<AcpEvent> {
@@ -101,6 +112,7 @@ impl Stream {
             "rate_limit_event" => {
                 if let Some(h) = headroom(&msg["rate_limit_info"]) {
                     self.headroom = Some(h);
+                    self.headroom_fresh = true;
                 }
                 Vec::new()
             }
@@ -631,6 +643,9 @@ mod tests {
             r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1795341600,"rateLimitType":"seven_day","overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.12,"resetsAt":1794900000,"status":"allowed"},"seven_day":{"utilization":0.43,"resetsAt":1795341600,"status":"allowed"}}}}"#,
         ]);
         assert!(events.is_empty(), "{events:?}");
+        let mut s = s;
+        assert_eq!(s.take_fresh_headroom().map(|h| h.used_pct), Some(Some(43)));
+        assert_eq!(s.take_fresh_headroom(), None, "handed over once");
         assert_eq!(
             s.headroom(),
             Some(&Headroom {

@@ -144,13 +144,13 @@ pub fn remember_session(dir: &Path, id: &str, session: &str, cwd: &Path) -> Resu
 }
 
 /// Keeps a turn's limit reading for Settings, while chats are allowed.
-pub fn remember_headroom(dir: &Path, reading: Headroom, now: u64) -> Result<(), String> {
+/// `seen_at` is when Claude Code sent it: chats run side by side, so one
+/// that ends later with an older reading leaves the newer one in place.
+pub fn remember_headroom(dir: &Path, reading: Headroom, seen_at: u64) -> Result<(), String> {
     change(dir, |chats| {
-        if chats.allowed {
-            chats.headroom = Some(SeenHeadroom {
-                reading,
-                seen_at: now,
-            });
+        let newer = chats.headroom.as_ref().is_none_or(|h| h.seen_at <= seen_at);
+        if chats.allowed && newer {
+            chats.headroom = Some(SeenHeadroom { reading, seen_at });
         }
         Ok(())
     })
@@ -333,6 +333,8 @@ mod tests {
         set_allowed(&dir, true).unwrap();
         remember_headroom(&dir, week(43), 2_000).unwrap();
         remember_headroom(&dir, week(44), 3_000).unwrap();
+        // A chat that ends later with a reading from before.
+        remember_headroom(&dir, week(40), 2_500).unwrap();
         assert_eq!(
             read(&dir).headroom,
             Some(SeenHeadroom {

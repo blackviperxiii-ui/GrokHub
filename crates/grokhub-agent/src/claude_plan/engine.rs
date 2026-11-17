@@ -43,8 +43,15 @@ pub struct ClaudePlanEngine {
     /// The chat whose history file each turn is saved to, as native turns
     /// are; `None` saves nothing.
     chat: Option<String>,
-    /// The plan's newest limit reading, until the host takes it.
-    headroom: Option<Headroom>,
+    /// The plan's newest limit reading and when it came (Unix seconds),
+    /// until the host takes it.
+    headroom: Option<(Headroom, u64)>,
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// How a saved turn names its model and meter in History.
@@ -105,7 +112,7 @@ impl ClaudePlanEngine {
     }
 
     /// The plan's limit reading from the last turn that sent one, once.
-    pub fn take_headroom(&mut self) -> Option<Headroom> {
+    pub fn take_headroom(&mut self) -> Option<(Headroom, u64)> {
         self.headroom.take()
     }
 
@@ -209,7 +216,13 @@ impl ClaudePlanEngine {
         let mut after_tool = false;
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            for event in stream.line(&line) {
+            let events = stream.line(&line);
+            if let Some(h) = stream.take_fresh_headroom() {
+                // Stamped as it comes, so a chat that ends later with an
+                // older reading doesn't replace a newer one from another.
+                self.headroom = Some((h, unix_now()));
+            }
+            for event in events {
                 said_error |= matches!(event, AcpEvent::Err(_));
                 match &event {
                     AcpEvent::Text(text) => {
@@ -235,9 +248,6 @@ impl ClaudePlanEngine {
         let errors = errors.join().unwrap_or_default();
 
         self.save_turn(text, &reply, usage.as_ref());
-        if let Some(h) = stream.headroom() {
-            self.headroom = Some(h.clone());
-        }
         let resumed = self.started;
         if stream.session_id() == Some(self.session.as_str()) {
             self.started = true;
@@ -679,16 +689,19 @@ mod tests {
             let cli = fake_cli(&dir, &lines_of(&[&init(SID), limit, OK]));
             let mut e = engine(&cli, &dir);
             e.session = SID.into();
+            let before = unix_now();
             run(&mut e, "hi");
+            let (reading, seen_at) = e.take_headroom().expect("a reading");
             assert_eq!(
-                e.take_headroom(),
-                Some(Headroom {
+                reading,
+                Headroom {
                     window: "seven_day".into(),
                     used_pct: Some(43),
                     resets_at: Some(1_795_341_600),
                     limited: false,
-                })
+                }
             );
+            assert!((before..=unix_now()).contains(&seen_at), "{seen_at}");
             assert_eq!(e.take_headroom(), None);
 
             let quiet = fake_cli(&dir, &lines_of(&[&init(SID), OK]));

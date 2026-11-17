@@ -1560,11 +1560,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 );
             }
             // How much of the plan's limit is used, for Settings.
-            if let Some(reading) = plan.take_headroom() {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs());
-                let _ = crate::claude_chat::remember_headroom(&config_dir, reading, now);
+            if let Some((reading, seen_at)) = plan.take_headroom() {
+                let _ = crate::claude_chat::remember_headroom(&config_dir, reading, seen_at);
             }
         }
         let _ = done.send(result);

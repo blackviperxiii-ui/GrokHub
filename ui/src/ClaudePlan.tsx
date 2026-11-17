@@ -46,34 +46,45 @@ const WINDOWS: Record<string, string> = {
   seven_day_sonnet: "weekly Sonnet limit",
 };
 
-/** When a window resets, in the user's own clock. */
-function resetTime(secs: number, timeZone?: string): string {
-  return new Date(secs * 1000).toLocaleString(undefined, {
+/** How the line names times: the user's own clock unless a test fixes them. */
+export interface Clock {
+  timeZone?: string;
+  locale?: string;
+}
+
+/** A reading with no reset time is dropped after the shortest window. */
+const UNTIMED_SECS = 5 * 60 * 60;
+
+/** A time in the user's own clock. */
+function at(secs: number, clock: Clock): string {
+  return new Date(secs * 1000).toLocaleString(clock.locale, {
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-    timeZone,
+    timeZone: clock.timeZone,
   });
 }
 
 /**
- * The plan's limit as the last chat turn saw it. `null` once that window has
- * reset, since the reading no longer says anything.
+ * The plan's limit as the last chat turn on it saw it, said as of then, since
+ * use elsewhere (Claude Code itself, claude.ai) counts too. `null` once that
+ * window has reset, since the reading no longer says anything.
  */
-export function headroomLine(h: PlanHeadroom, nowSecs: number, timeZone?: string): string | null {
-  if (h.resetsAt !== null && h.resetsAt <= nowSecs) return null;
+export function headroomLine(h: PlanHeadroom, nowSecs: number, clock: Clock = {}): string | null {
+  const over = h.resetsAt ?? h.seenAt + UNTIMED_SECS;
+  if (over <= nowSecs) return null;
   const window = WINDOWS[h.window] ?? "usage limit";
-  const when = h.resetsAt === null ? null : resetTime(h.resetsAt, timeZone);
-  const resets = when === null ? "" : ` It resets ${when}.`;
+  const seen = `Your last chat on it (${at(h.seenAt, clock)})`;
+  const when = h.resetsAt === null ? null : at(h.resetsAt, clock);
   if (h.limited) {
-    return when === null
-      ? `Your plan's ${window} is reached.`
-      : `Your plan's ${window} is reached. Chats on it can run again ${when}.`;
+    const again = when === null ? "" : ` Chats on it can run again ${when}.`;
+    return `${seen} found your plan's ${window} reached.${again}`;
   }
   if (h.usedPct === null) return when === null ? null : `Your plan's ${window} resets ${when}.`;
-  return `${h.usedPct}% of your plan's ${window} used.${resets}`;
+  const resets = when === null ? "" : ` It resets ${when}.`;
+  return `${seen} saw ${h.usedPct}% of your plan's ${window} used.${resets}`;
 }
 
 /** Settings → AI models → Claude (your plan). */
@@ -85,12 +96,11 @@ export function ClaudePlanCard() {
   const [busy, setBusy] = useState(true);
   const [saving, setSaving] = useState(false);
   const [asking, setAsking] = useState(false);
-  // Worked out when the store is read, against the clock at that moment.
-  const [headroom, setHeadroom] = useState<string | null>(null);
-
-  const take = useCallback((next: ClaudeChats) => {
-    setChats(next);
-    setHeadroom(next.headroom ? headroomLine(next.headroom, Date.now() / 1000) : null);
+  // Ticks each minute, so an open card drops a reading once its window resets.
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const tick = window.setInterval(() => setNow(Date.now() / 1000), 60_000);
+    return () => window.clearInterval(tick);
   }, []);
 
   const read = useCallback(
@@ -98,12 +108,12 @@ export function ClaudePlanCard() {
       Promise.all([claudePlanStatus(), claudePlanChats()]).then(
         ([next, allowed]) => {
           setPlan(next);
-          take(allowed);
+          setChats(allowed);
           setError(null);
         },
         (err) => setError(String(err)),
       ),
-    [take],
+    [],
   );
 
   useEffect(() => {
@@ -120,7 +130,7 @@ export function ClaudePlanCard() {
     setAsking(false);
     setSaving(true);
     try {
-      take(await setClaudePlanAllowed(on));
+      setChats(await setClaudePlanAllowed(on));
       setError(null);
     } catch (err) {
       setError(String(err));
@@ -130,6 +140,7 @@ export function ClaudePlanCard() {
   }
 
   const allowed = chats?.allowed ?? false;
+  const headroom = chats?.headroom ? headroomLine(chats.headroom, now) : null;
   return (
     <div className="card" aria-label="Claude (your plan)">
       <div className="card-title">Claude (your plan)</div>

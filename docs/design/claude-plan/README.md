@@ -117,10 +117,14 @@ isn't billed per token. Plan headroom comes from `rate_limit_event`. Its
 `rate_limit_info.unifiedWindows` lists each window the plan has (such as
 `five_hour` and `seven_day`), each with `utilization` (0 to 1), `resetsAt`
 (Unix seconds) and `status` (`rejected` once the limit is reached). The
-window nearest its limit is kept in `{config}/claude-plan-chats.json`, and
-Settings → AI models → Claude (your plan) shows it, for example "43% of your
-plan's weekly limit used. It resets Sun, Nov 22, 4:00 AM." The line goes
-away once that window resets, and shows in red when the limit is reached.
+window nearest its limit is kept in `{config}/claude-plan-chats.json`, with
+the time it came. Chats run side by side, so a turn that ends later with an
+older reading doesn't replace a newer one. Settings → AI models → Claude
+(your plan) shows it as of that time, since use outside the app counts too:
+"Your last chat on it (Mon, Nov 16, 7:00 PM) saw 43% of your plan's weekly
+limit used. It resets Sun, Nov 22, 4:00 AM." The line shows in red when the
+limit is reached, and goes away once that window resets (or five hours after
+a reading with no reset time), even while the card stays open.
 The Fleet page already reads Claude Code's local transcripts for the 5-hour
 window and the week, so it needs no change.
 
