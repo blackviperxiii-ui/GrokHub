@@ -14,7 +14,7 @@ export const CLAUDE_MISSING = "Claude Code isn't on this computer. Install it fr
 export const CLAUDE_NO_ANSWER =
   "Claude Code is on this computer but didn't answer claude --version. In a terminal, run claude doctor, then check again.";
 export const CLAUDE_ALLOW =
-  "A chat you switch to it (in its tab menu) runs Claude Code in the chat's folder. For now it can only read files there, and each message counts against your plan's usage.";
+  "A chat you switch to it (in its tab menu) runs Claude Code in the chat's folder. It reads files there by itself, and asks you in the chat before it runs a command, changes a file or reads outside the folder. Each message counts against your plan's usage.";
 export const CLAUDE_ALLOWED = "Allowed. Switch a chat to it from the chat's tab menu.";
 
 const BILLED_BY: Record<string, string> = {

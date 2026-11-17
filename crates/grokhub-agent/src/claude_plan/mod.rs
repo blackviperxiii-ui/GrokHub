@@ -5,6 +5,7 @@
 //! `authMethod` field is read, and the rest of the reply is dropped.
 //! Design: `docs/design/claude-plan/README.md`.
 
+pub mod ask;
 pub mod engine;
 pub mod stream;
 

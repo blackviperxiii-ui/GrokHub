@@ -210,7 +210,12 @@ impl Stream {
                         continue;
                     }
                     self.tools.insert(id.clone(), name.clone());
-                    out.push(tool(&id, &name, "in_progress", summary(&block["input"])));
+                    out.push(tool(
+                        &id,
+                        &name,
+                        "in_progress",
+                        input_summary(&block["input"]),
+                    ));
                 }
                 _ => {}
             }
@@ -304,7 +309,7 @@ fn tool(id: &str, name: &str, status: &str, detail: String) -> AcpEvent {
 
 /// The part of a tool's input a person reads first: the command, the file,
 /// the pattern or the link, else the input itself, short.
-fn summary(input: &Value) -> String {
+pub(super) fn input_summary(input: &Value) -> String {
     for key in [
         "command",
         "file_path",
