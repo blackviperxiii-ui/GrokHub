@@ -265,8 +265,12 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             kill_hub.kill_owner(&id);
         }
     });
-    let id = match tasks.register_agent(call.agent_id.map(str::to_string), &spec.description, kill)
-    {
+    let id = match tasks.register_agent(
+        call.agent_id.map(str::to_string),
+        &spec.description,
+        kill,
+        call.model,
+    ) {
         Ok(id) => id,
         Err(err) => return (ToolOutput::err(err), Usage::default()),
     };

@@ -104,7 +104,13 @@ const QUEUE: Queue = {
 const PROGRESS_QUEUE: Queue = {
   ...QUEUE,
   tasks: QUEUE.tasks.map((task) =>
-    task.id === "s2" ? { ...task, progress: { steps: 3, lastStep: "read_file", tokens: 1234, seconds: 125 } } : task,
+    task.id === "s2"
+      ? {
+          ...task,
+          model: "grok-4.7",
+          progress: { steps: 3, lastStep: "read_file", tokens: 1234, seconds: 125, model: "grok-4.7" },
+        }
+      : task,
   ),
 };
 
@@ -413,7 +419,7 @@ describe("Agents", () => {
     api.stopTask.mockResolvedValue({ ...QUEUE, tasks: QUEUE.tasks.map((t) => ({ ...t, live: false })) });
     render(<Agents conversationId="shell-c1" />);
 
-    const panel = screen.getByRole("region", { name: "Agent tasks" });
+    const panel = screen.getByRole("region", { name: "Helpers" });
     expect(within(panel).getByText(TASKS_NOTE)).toBeInTheDocument();
     expect(TASKS_NOTE).toBe("The lead's tasks and helpers for this session.");
     expect(await within(panel).findByText("Write the page")).toBeInTheDocument();
@@ -2034,6 +2040,10 @@ describe("Agents", () => {
       "npm run buildFailed · t3",
       "Monitor: build logDone · m4",
     ]);
+    expect(within(hub).getByRole("listitem", { name: "failed to fetch the docs" })).toHaveAttribute(
+      "data-model",
+      "grok-4.7",
+    );
     expect(screen.getAllByRole("button", { name: /details$/ }).map((b) => b.getAttribute("aria-label"))).toEqual([
       "Helper s2 details",
     ]);
