@@ -1540,7 +1540,7 @@ pub fn tick_prewarm(config_dir: &Path) {
     if !super::local::switched_on()
         || super::local_prewarm::busy()
         || local_gov::paused()
-        || drawing()
+        || super::local_resident::held()
         || STARTING.load(Ordering::SeqCst)
         || now.saturating_sub(LAST_PREWARM_LOOK.load(Ordering::SeqCst)) < PREWARM_LOOK_SECS
     {
@@ -1888,7 +1888,7 @@ pub fn tick_keep_warm(config_dir: &Path, needed: bool) {
         return;
     }
     LAST_NEEDED_SECS.store(unix_secs(), Ordering::SeqCst);
-    if local_gov::paused() || drawing() || STARTING.load(Ordering::SeqCst) {
+    if local_gov::paused() || super::local_resident::held() || STARTING.load(Ordering::SeqCst) {
         return;
     }
     let loaded = global_slot()
@@ -1975,44 +1975,61 @@ fn stop_pending_locked(slot: &mut Option<Sidecar>) -> bool {
     true
 }
 
-/// Pictures drawing on this computer now ([`DrawHold`]).
-static DRAWING: AtomicUsize = AtomicUsize::new(0);
+/// The loaded chat server, for the residency ledger.
+#[derive(Debug, Clone)]
+pub struct ChatResident {
+    pub model: PathBuf,
+    pub launch: Option<LaunchArgs>,
+    pub bare_cpu: bool,
+    /// Unix seconds it was last asked, answered or needed as the fallback.
+    pub last_used_secs: u64,
+    /// A request is in flight or Keep loaded holds it.
+    pub pinned: bool,
+}
 
-/// Held while a picture draws on this computer: keep-warm and prewarm leave
-/// the chat model unloaded, so it doesn't take back the memory the picture
-/// needs. A chat request still loads it.
-pub struct DrawHold(());
+/// The chat server's place in memory, read under one slot lock.
+#[derive(Debug, Clone, Default)]
+pub struct Resident {
+    pub chat: Option<ChatResident>,
+    /// A server is starting: its memory isn't known yet.
+    pub starting: bool,
+}
 
-impl DrawHold {
-    pub fn take() -> Self {
-        DRAWING.fetch_add(1, Ordering::SeqCst);
-        Self(())
+/// What the chat server holds now.
+pub fn resident() -> Resident {
+    let slot = global_slot().lock().unwrap_or_else(|e| e.into_inner());
+    let chat = slot.as_ref().map(|side| ChatResident {
+        model: side.model.clone(),
+        launch: side.launch.clone(),
+        bare_cpu: side.bare_cpu,
+        last_used_secs: side
+            .last_used_secs
+            .load(Ordering::SeqCst)
+            .max(LAST_DONE_SECS.load(Ordering::SeqCst))
+            .max(LAST_NEEDED_SECS.load(Ordering::SeqCst)),
+        pinned: in_flight() > 0 || keep_loaded(),
+    });
+    Resident {
+        chat,
+        starting: STARTING.load(Ordering::SeqCst),
     }
 }
 
-impl Drop for DrawHold {
-    fn drop(&mut self) {
-        DRAWING.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-/// A [`DrawHold`] is held.
-pub fn drawing() -> bool {
-    DRAWING.load(Ordering::SeqCst) > 0
-}
-
-/// Unload the chat model to make room for a picture, keeping its cache as a
-/// quiet unload does. Checked under the slot lock: with any request in
-/// flight it stays and this returns false.
-pub fn unload_for_picture() -> bool {
+/// Unload the chat server serving `model` to make room for another job,
+/// keeping its cache as a quiet unload does. Checked under the slot lock:
+/// with a request in flight, Keep loaded on, or another model loaded since
+/// it was priced, it stays and this returns false. Nothing loaded is true.
+pub fn unload_for(reason: &str, model: &Path) -> bool {
     let mut slot = global_slot().lock().expect("sidecar global");
-    if in_flight() > 0 {
-        return false;
+    match slot.as_ref() {
+        None => return true,
+        Some(side) if side.model != model || in_flight() > 0 || keep_loaded() => return false,
+        Some(_) => {}
     }
     if let Some(side) = slot.take() {
         save_kv(&side);
         retire(side);
-        health::log("stop", Some("made room for a picture"));
+        health::log("stop", Some(reason));
     }
     true
 }

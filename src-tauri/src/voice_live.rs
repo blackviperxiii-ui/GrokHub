@@ -441,6 +441,7 @@ pub fn speak(
     models_dir: &Path,
     voice: &str,
     text: &str,
+    asked: u64,
 ) -> Result<Spoken, String> {
     let text = text.trim();
     if text.is_empty() {
@@ -449,7 +450,7 @@ pub fn speak(
     if let Some(to) = tts_target() {
         return speak_xai(config_dir, &to, voice, text);
     }
-    match speak_on_device(config_dir, models_dir, voice, text) {
+    match speak_on_device(config_dir, models_dir, voice, text, asked) {
         Some(done) => done,
         None => Err(NO_VOICE.into()),
     }
@@ -503,6 +504,27 @@ fn speak_xai(config_dir: &Path, to: &TtsTarget, voice: &str, text: &str) -> Resu
     })
 }
 
+/// On-device pieces run one at a time.
+static SPEAK_ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Bumped when the person talks over a reply: pieces of it still waiting
+/// for [`SPEAK_ONE`] are dropped instead of spoken.
+static HUSHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// What a piece of a hushed reply answers; the page has already let it go.
+const HUSHED: &str = "That reply was stopped.";
+
+/// Hushes so far; a piece notes this when the page asks for it.
+fn hushes() -> u64 {
+    HUSHES.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Said when the on-device voice, needing `mb`, doesn't fit in free memory now.
+fn no_room_to_speak(mb: u64) -> String {
+    format!(
+        "The on-device voice needs about {} GB of free memory, and this computer doesn't have it right now.",
+        mb.div_ceil(1024)
+    )
+}
+
 /// Kokoro in the on-device speech engine. None when the engine or a voice
 /// isn't downloaded.
 fn speak_on_device(
@@ -510,13 +532,29 @@ fn speak_on_device(
     models_dir: &Path,
     voice: &str,
     text: &str,
+    asked: u64,
 ) -> Option<Result<Spoken, String>> {
     use base64::Engine as _;
     if !ve::tts_installed(config_dir) {
         return None;
     }
     let model = ve::voice_model(models_dir)?;
-    // Pieces are spoken side by side: each one writes its own new file.
+    // One piece at a time on this computer: the page asks for every piece of
+    // a reply at once, and each run loads the whole voice model.
+    let _one = SPEAK_ONE.lock().unwrap_or_else(|e| e.into_inner());
+    if hushes() != asked {
+        return Some(Err(HUSHED.into()));
+    }
+    // The voice doesn't unload the chat model: that would reload it on every
+    // turn. Without room beside it, the piece isn't spoken.
+    let Ok(_speaking) = grokhub_agent::route::local_resident::reserve(
+        grokhub_agent::route::local_resident::Kind::Speech,
+        grokhub_agent::route::local_resident::Mem::ram(model.run_mb),
+        false,
+    ) else {
+        return Some(Err(no_room_to_speak(model.run_mb)));
+    };
+    // Each piece writes its own new file.
     let out = match ve::claim_speak_file(&std::env::temp_dir()) {
         Ok(out) => out,
         Err(_) => return Some(Err("The on-device voice had nowhere to write.".into())),
@@ -706,6 +744,7 @@ pub(crate) fn voice_reply_finish(whole: String) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub(crate) fn voice_reply_hush() -> Result<(), String> {
+    HUSHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     with(Live::reply_hush)
 }
 
@@ -718,7 +757,9 @@ pub(crate) async fn voice_speak(
     crate::capabilities::needs(crate::capabilities::current().voice, "Voice")?;
     let dir = state.config_dir.clone();
     let voice = crate::personality::speech_voice(&dir, &crate::current(&state));
-    crate::off_main(move || speak(&dir, &models_dir(&dir), voice, &text)).await?
+    // Taken as the page asks, so a hush that comes later drops this piece.
+    let asked = hushes();
+    crate::off_main(move || speak(&dir, &models_dir(&dir), voice, &text, asked)).await?
 }
 
 #[cfg(test)]

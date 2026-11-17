@@ -239,7 +239,7 @@ const CTX_STEPS: [u32; 6] = [131_072, 65_536, 32_768, 16_384, 8_192, 4_096];
 /// The smallest context worth keeping q8 KV for; below it q4 buys room.
 const Q8_FLOOR_CTX: u32 = 8_192;
 /// Share of MoE weights that are experts (and may stay in RAM).
-const EXPERT_SHARE_PCT: u64 = 80;
+pub(crate) const EXPERT_SHARE_PCT: u64 = 80;
 /// RAM left to the OS when nothing better is known.
 const RAM_RESERVE_MB: u64 = 4_096;
 

@@ -87,7 +87,19 @@ Each step is its own PR into `beta`, green on Linux and Windows.
    app's media folders. This works for Grok Imagine results too.
 3. **Residency ledger.** One ledger for the chat server, picture engine
    and voice engines, with memory sizes and LRU unloading. The picture
-   path and Kokoro go through it.
+   path and Kokoro go through it. Shipped as `route/local_resident.rs`:
+   - The chat server is read from the sidecar slot each time, so every
+     way it unloads stays right. Short jobs (a picture, the picture guard,
+     one spoken piece) hold a `Hold` while they run.
+   - The sampler's reading can be up to 30 seconds old. A job that started
+     after it is taken off the room, and a job it counted that has since
+     finished is given back.
+   - The picture hands its `Hold` to the guard, so keep-warm can't load
+     the chat model in between.
+   - A picture or the guard may unload the chat server. The voice never
+     does, because that would reload the chat model on every turn. It
+     speaks one piece at a time, and pieces of a reply the person talked
+     over are dropped.
 4. **Strict draft pairing.** Count the draft in every fit check. If the
    pair doesn't fit, step down a tier.
 5. **Tiers, pin and the active-model line.** Speed, balance and

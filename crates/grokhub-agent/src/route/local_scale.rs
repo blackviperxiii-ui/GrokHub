@@ -210,9 +210,13 @@ pub fn set_room(room: Room, now_ms: u64) {
 
 /// The latest reading, unless it is older than [`ROOM_STALE_MS`].
 pub fn room(now_ms: u64) -> Option<Room> {
+    room_at(now_ms).map(|(room, _)| room)
+}
+
+/// [`room`] with the time it was read.
+pub fn room_at(now_ms: u64) -> Option<(Room, u64)> {
     let r = ROOM.lock().ok()?;
     r.filter(|(_, at)| now_ms.saturating_sub(*at) <= ROOM_STALE_MS)
-        .map(|(room, _)| room)
 }
 
 #[cfg(test)]
