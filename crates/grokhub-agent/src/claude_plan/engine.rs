@@ -14,7 +14,7 @@ use std::time::Duration;
 use grokhub_core::wire::{AcpEvent, GrokUsage};
 use serde_json::{json, Value};
 
-use super::stream::{Outcome, Stream};
+use super::stream::{Headroom, Outcome, Stream};
 use crate::client::{CancelToken, ContentPart, InputItem, Usage};
 use crate::events::Engine;
 use crate::run::SteerQueue;
@@ -43,6 +43,8 @@ pub struct ClaudePlanEngine {
     /// The chat whose history file each turn is saved to, as native turns
     /// are; `None` saves nothing.
     chat: Option<String>,
+    /// The plan's newest limit reading, until the host takes it.
+    headroom: Option<Headroom>,
 }
 
 /// How a saved turn names its model and meter in History.
@@ -60,6 +62,7 @@ impl ClaudePlanEngine {
             cancel,
             steer,
             chat: None,
+            headroom: None,
         }
     }
 
@@ -99,6 +102,11 @@ impl ClaudePlanEngine {
     /// Where `claude` is now, found again for each turn.
     pub fn set_cli(&mut self, cli: PathBuf) {
         self.cli = cli;
+    }
+
+    /// The plan's limit reading from the last turn that sent one, once.
+    pub fn take_headroom(&mut self) -> Option<Headroom> {
+        self.headroom.take()
     }
 
     /// Starts a new Claude Code session on the next turn.
@@ -227,6 +235,9 @@ impl ClaudePlanEngine {
         let errors = errors.join().unwrap_or_default();
 
         self.save_turn(text, &reply, usage.as_ref());
+        if let Some(h) = stream.headroom() {
+            self.headroom = Some(h.clone());
+        }
         let resumed = self.started;
         if stream.session_id() == Some(self.session.as_str()) {
             self.started = true;
@@ -658,6 +669,35 @@ mod tests {
                 read("args").contains(&format!("--resume {SID} ")),
                 "{}",
                 read("args")
+            );
+        }
+
+        #[test]
+        fn a_turn_hands_its_plan_limit_reading_to_the_host_once() {
+            let dir = scratch("headroom");
+            let limit = r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":0.43,"resetsAt":1795341600,"status":"allowed"}}}}"#;
+            let cli = fake_cli(&dir, &lines_of(&[&init(SID), limit, OK]));
+            let mut e = engine(&cli, &dir);
+            e.session = SID.into();
+            run(&mut e, "hi");
+            assert_eq!(
+                e.take_headroom(),
+                Some(Headroom {
+                    window: "seven_day".into(),
+                    used_pct: Some(43),
+                    resets_at: Some(1_795_341_600),
+                    limited: false,
+                })
+            );
+            assert_eq!(e.take_headroom(), None);
+
+            let quiet = fake_cli(&dir, &lines_of(&[&init(SID), OK]));
+            e.set_cli(quiet);
+            run(&mut e, "again");
+            assert_eq!(
+                e.take_headroom(),
+                None,
+                "no reading this turn, none handed over"
             );
         }
 

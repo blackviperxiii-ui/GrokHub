@@ -10,7 +10,15 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("./api", () => api);
 
-import { CLAUDE_ALLOW, CLAUDE_ALLOWED, CLAUDE_MISSING, CLAUDE_NO_ANSWER, ClaudePlanCard, claudePlanLine } from "./ClaudePlan";
+import {
+  CLAUDE_ALLOW,
+  CLAUDE_ALLOWED,
+  CLAUDE_MISSING,
+  CLAUDE_NO_ANSWER,
+  ClaudePlanCard,
+  claudePlanLine,
+  headroomLine,
+} from "./ClaudePlan";
 
 const ALLOW_FOR_CHATS = { name: "Allow for chats" };
 
@@ -80,6 +88,32 @@ describe("Claude (your plan)", () => {
     await userEvent.click(screen.getByRole("button", { name: "Not now" }));
     expect(api.setClaudePlanAllowed).not.toHaveBeenCalled();
     expect(screen.getByRole("button", ALLOW_FOR_CHATS)).toBeInTheDocument();
+  });
+
+  it("says how much of the plan's limit the last chat saw used, until it resets", () => {
+    // Sun, Nov 22, 2026, 4:00 AM in Chicago (10:00 UTC).
+    const week = { window: "seven_day", usedPct: 43, resetsAt: 1_795_341_600, limited: false, seenAt: 1_795_000_000 };
+    const now = 1_795_000_100;
+    const tz = "America/Chicago";
+    expect(headroomLine(week, now, tz)).toBe("43% of your plan's weekly limit used. It resets Sun, Nov 22, 4:00 AM.");
+    expect(headroomLine({ ...week, window: "five_hour", limited: true, usedPct: 100 }, now, tz)).toBe(
+      "Your plan's 5-hour limit is reached. Chats on it can run again Sun, Nov 22, 4:00 AM.",
+    );
+    expect(headroomLine({ ...week, usedPct: null }, now, tz)).toBe("Your plan's weekly limit resets Sun, Nov 22, 4:00 AM.");
+    expect(headroomLine({ ...week, window: "new_kind", resetsAt: null }, now, tz)).toBe(
+      "43% of your plan's usage limit used.",
+    );
+    expect(headroomLine({ ...week, usedPct: null, resetsAt: null }, now, tz)).toBeNull();
+    expect(headroomLine(week, 1_795_341_600, tz)).toBeNull();
+  });
+
+  it("shows the reading under Allowed, in red once the limit is reached", async () => {
+    api.claudePlanStatus.mockResolvedValue({ state: "plan", version: "2.1.300" });
+    const reached = { window: "five_hour", usedPct: 100, resetsAt: Date.now() / 1000 + 3600, limited: true, seenAt: 1 };
+    api.claudePlanChats.mockResolvedValue({ allowed: true, chats: [], headroom: reached });
+    render(<ClaudePlanCard />);
+    const line = await screen.findByText(/Your plan's 5-hour limit is reached/);
+    expect(line).toHaveClass("status--error");
   });
 
   it("shows a failed check instead of a blank", async () => {

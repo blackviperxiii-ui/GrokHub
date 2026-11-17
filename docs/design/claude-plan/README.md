@@ -111,11 +111,18 @@ allow.
 
 ## Usage
 
-The per-turn tokens and estimated cost come from `result.modelUsage`. Plan
-headroom comes from `rate_limit_event` (`utilization`, `resetsAt`), and
-`credits_required` means the plan's included usage is used up. The Fleet page
-already reads Claude Code's local transcripts for the 5-hour window and the
-week, so it needs no change.
+The per-turn tokens come from `result.modelUsage` and are saved with the
+turn in History, under the meter "Claude plan" with no cost, since the plan
+isn't billed per token. Plan headroom comes from `rate_limit_event`. Its
+`rate_limit_info.unifiedWindows` lists each window the plan has (such as
+`five_hour` and `seven_day`), each with `utilization` (0 to 1), `resetsAt`
+(Unix seconds) and `status` (`rejected` once the limit is reached). The
+window nearest its limit is kept in `{config}/claude-plan-chats.json`, and
+Settings → AI models → Claude (your plan) shows it, for example "43% of your
+plan's weekly limit used. It resets Sun, Nov 22, 4:00 AM." The line goes
+away once that window resets, and shows in red when the limit is reached.
+The Fleet page already reads Claude Code's local transcripts for the 5-hour
+window and the week, so it needs no change.
 
 ## Platforms
 
@@ -157,7 +164,10 @@ Each step is its own PR into `beta`.
    also starts a new session, since Claude Code's session would still hold
    it, and deleting a chat drops it from the file. Tool rows aren't saved
    yet.
-6. **Usage.** The per-turn usage line and the plan headroom.
+6. **Usage.** Each turn's tokens are saved with it in History, and
+   Settings shows how much of the plan's nearest limit the last turn saw
+   used and when it resets. The chat itself has no per-turn usage line yet,
+   for any engine.
 7. **Live approvals.** The MCP approval server.
 
 ## Open

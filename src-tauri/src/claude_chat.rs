@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use grokhub_agent::claude_plan::stream::Headroom;
 use grokhub_agent::claude_plan::{self, ClaudePlan};
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +32,18 @@ pub struct ClaudeChats {
     /// the chat goes on with it after the app restarts.
     #[serde(default)]
     pub sessions: BTreeMap<String, SavedSession>,
+    /// The plan's newest limit reading from a chat turn, for Settings.
+    #[serde(default)]
+    pub headroom: Option<SeenHeadroom>,
+}
+
+/// A limit reading and when it came (Unix seconds).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeenHeadroom {
+    #[serde(flatten)]
+    pub reading: Headroom,
+    pub seen_at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +85,7 @@ pub fn set_allowed(dir: &Path, on: bool) -> Result<ClaudeChats, String> {
         if !on {
             chats.chats.clear();
             chats.sessions.clear();
+            chats.headroom = None;
         }
         Ok(())
     })
@@ -123,6 +137,20 @@ pub fn remember_session(dir: &Path, id: &str, session: &str, cwd: &Path) -> Resu
                     cwd: cwd.to_path_buf(),
                 },
             );
+        }
+        Ok(())
+    })
+    .map(|_| ())
+}
+
+/// Keeps a turn's limit reading for Settings, while chats are allowed.
+pub fn remember_headroom(dir: &Path, reading: Headroom, now: u64) -> Result<(), String> {
+    change(dir, |chats| {
+        if chats.allowed {
+            chats.headroom = Some(SeenHeadroom {
+                reading,
+                seen_at: now,
+            });
         }
         Ok(())
     })
@@ -216,6 +244,7 @@ mod tests {
                 allowed: true,
                 chats: vec!["chat-a".into(), "chat-b".into()],
                 sessions: BTreeMap::new(),
+                headroom: None,
             }
         );
         assert_eq!(read(&dir), both);
@@ -286,11 +315,44 @@ mod tests {
         assert!(is_on(&dir, "chat-a"));
     }
 
+    fn week(used: u8) -> Headroom {
+        Headroom {
+            window: "seven_day".into(),
+            used_pct: Some(used),
+            resets_at: Some(1_795_341_600),
+            limited: false,
+        }
+    }
+
+    #[test]
+    fn the_newest_limit_reading_is_kept_only_while_allowed() {
+        let dir = scratch("headroom");
+        remember_headroom(&dir, week(10), 1_000).unwrap();
+        assert_eq!(read(&dir).headroom, None, "not allowed yet");
+
+        set_allowed(&dir, true).unwrap();
+        remember_headroom(&dir, week(43), 2_000).unwrap();
+        remember_headroom(&dir, week(44), 3_000).unwrap();
+        assert_eq!(
+            read(&dir).headroom,
+            Some(SeenHeadroom {
+                reading: week(44),
+                seen_at: 3_000
+            })
+        );
+        let saved = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        assert!(
+            saved.contains(r#""window": "seven_day""#) && saved.contains(r#""usedPct": 44"#),
+            "{saved}"
+        );
+    }
+
     #[test]
     fn revoking_moves_every_chat_back() {
         let dir = scratch("revoke");
         set_allowed(&dir, true).unwrap();
         set_chat(&dir, "chat-a", true).unwrap();
+        remember_headroom(&dir, week(43), 1_000).unwrap();
         assert_eq!(set_allowed(&dir, false).unwrap(), ClaudeChats::default());
         assert!(!is_on(&dir, "chat-a"));
         assert_eq!(set_allowed(&dir, true).unwrap().chats, Vec::<String>::new());

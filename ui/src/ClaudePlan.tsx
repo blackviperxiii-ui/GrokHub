@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { claudePlanChats, claudePlanStatus, setClaudePlanAllowed, type ClaudeChats, type ClaudePlan } from "./api";
+import {
+  claudePlanChats,
+  claudePlanStatus,
+  setClaudePlanAllowed,
+  type ClaudeChats,
+  type ClaudePlan,
+  type PlanHeadroom,
+} from "./api";
 
 export const CLAUDE_PLAN_NOTE =
   "Runs Claude Code on this computer, signed in with your own Claude account. This app never sees or keeps your Claude sign-in.";
@@ -32,6 +39,43 @@ export function claudePlanLine(plan: ClaudePlan): string {
   }
 }
 
+const WINDOWS: Record<string, string> = {
+  five_hour: "5-hour limit",
+  seven_day: "weekly limit",
+  seven_day_opus: "weekly Opus limit",
+  seven_day_sonnet: "weekly Sonnet limit",
+};
+
+/** When a window resets, in the user's own clock. */
+function resetTime(secs: number, timeZone?: string): string {
+  return new Date(secs * 1000).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone,
+  });
+}
+
+/**
+ * The plan's limit as the last chat turn saw it. `null` once that window has
+ * reset, since the reading no longer says anything.
+ */
+export function headroomLine(h: PlanHeadroom, nowSecs: number, timeZone?: string): string | null {
+  if (h.resetsAt !== null && h.resetsAt <= nowSecs) return null;
+  const window = WINDOWS[h.window] ?? "usage limit";
+  const when = h.resetsAt === null ? null : resetTime(h.resetsAt, timeZone);
+  const resets = when === null ? "" : ` It resets ${when}.`;
+  if (h.limited) {
+    return when === null
+      ? `Your plan's ${window} is reached.`
+      : `Your plan's ${window} is reached. Chats on it can run again ${when}.`;
+  }
+  if (h.usedPct === null) return when === null ? null : `Your plan's ${window} resets ${when}.`;
+  return `${h.usedPct}% of your plan's ${window} used.${resets}`;
+}
+
 /** Settings → AI models → Claude (your plan). */
 export function ClaudePlanCard() {
   const [plan, setPlan] = useState<ClaudePlan | null>(null);
@@ -41,18 +85,25 @@ export function ClaudePlanCard() {
   const [busy, setBusy] = useState(true);
   const [saving, setSaving] = useState(false);
   const [asking, setAsking] = useState(false);
+  // Worked out when the store is read, against the clock at that moment.
+  const [headroom, setHeadroom] = useState<string | null>(null);
+
+  const take = useCallback((next: ClaudeChats) => {
+    setChats(next);
+    setHeadroom(next.headroom ? headroomLine(next.headroom, Date.now() / 1000) : null);
+  }, []);
 
   const read = useCallback(
     () =>
       Promise.all([claudePlanStatus(), claudePlanChats()]).then(
         ([next, allowed]) => {
           setPlan(next);
-          setChats(allowed);
+          take(allowed);
           setError(null);
         },
         (err) => setError(String(err)),
       ),
-    [],
+    [take],
   );
 
   useEffect(() => {
@@ -69,7 +120,7 @@ export function ClaudePlanCard() {
     setAsking(false);
     setSaving(true);
     try {
-      setChats(await setClaudePlanAllowed(on));
+      take(await setClaudePlanAllowed(on));
       setError(null);
     } catch (err) {
       setError(String(err));
@@ -90,6 +141,11 @@ export function ClaudePlanCard() {
         </p>
       )}
       {allowed && <div className="card-detail-line">{CLAUDE_ALLOWED}</div>}
+      {allowed && headroom && (
+        <div className={chats?.headroom?.limited ? "card-detail-line status--error" : "card-detail-line"}>
+          {headroom}
+        </div>
+      )}
       {asking && (
         <div className="card-buttons confirm-row" role="group" aria-label="Allow chats on your Claude plan">
           <span>Allow chats on your Claude plan? {CLAUDE_ALLOW}</span>
