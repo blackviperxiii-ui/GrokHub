@@ -1550,7 +1550,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             (Ok(()), _) => Ok(stop),
         };
         // Kept so the chat goes on with the same session after a restart.
-        if let Some(plan) = plan.as_ref().filter(|_| on_plan) {
+        if let Some(plan) = plan.as_mut().filter(|_| on_plan) {
             if let Some(session) = plan.session() {
                 let _ = crate::claude_chat::remember_session(
                     &config_dir,
@@ -1558,6 +1558,10 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     session,
                     plan.workspace(),
                 );
+            }
+            // How much of the plan's limit is used, for Settings.
+            if let Some((reading, seen_at)) = plan.take_headroom() {
+                let _ = crate::claude_chat::remember_headroom(&config_dir, reading, seen_at);
             }
         }
         let _ = done.send(result);

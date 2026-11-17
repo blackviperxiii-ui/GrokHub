@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeChats, ClaudePlan } from "./api";
@@ -10,7 +10,15 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("./api", () => api);
 
-import { CLAUDE_ALLOW, CLAUDE_ALLOWED, CLAUDE_MISSING, CLAUDE_NO_ANSWER, ClaudePlanCard, claudePlanLine } from "./ClaudePlan";
+import {
+  CLAUDE_ALLOW,
+  CLAUDE_ALLOWED,
+  CLAUDE_MISSING,
+  CLAUDE_NO_ANSWER,
+  ClaudePlanCard,
+  claudePlanLine,
+  headroomLine,
+} from "./ClaudePlan";
 
 const ALLOW_FOR_CHATS = { name: "Allow for chats" };
 
@@ -80,6 +88,50 @@ describe("Claude (your plan)", () => {
     await userEvent.click(screen.getByRole("button", { name: "Not now" }));
     expect(api.setClaudePlanAllowed).not.toHaveBeenCalled();
     expect(screen.getByRole("button", ALLOW_FOR_CHATS)).toBeInTheDocument();
+  });
+
+  it("says how much of the plan's limit the last chat saw used, until it resets", () => {
+    // Resets Sun, Nov 22, 2026, 4:00 AM in Chicago (10:00 UTC); seen Mon, Nov 16, 7:00 PM.
+    const week = { window: "seven_day", usedPct: 43, resetsAt: 1_795_341_600, limited: false, seenAt: 1_794_877_200 };
+    const now = 1_794_877_300;
+    const clock = { timeZone: "America/Chicago", locale: "en-US" };
+    expect(headroomLine(week, now, clock)).toBe(
+      "Your last chat on it (Mon, Nov 16, 7:00 PM) saw 43% of your plan's weekly limit used. It resets Sun, Nov 22, 4:00 AM.",
+    );
+    expect(headroomLine({ ...week, window: "five_hour", limited: true, usedPct: 100 }, now, clock)).toBe(
+      "Your last chat on it (Mon, Nov 16, 7:00 PM) found your plan's 5-hour limit reached. Chats on it can run again Sun, Nov 22, 4:00 AM.",
+    );
+    expect(headroomLine({ ...week, usedPct: null }, now, clock)).toBe(
+      "Your plan's weekly limit resets Sun, Nov 22, 4:00 AM.",
+    );
+    expect(headroomLine({ ...week, usedPct: null, resetsAt: null }, now, clock)).toBeNull();
+    expect(headroomLine(week, 1_795_341_600, clock)).toBeNull();
+
+    // No reset time: shown for five hours after it was seen, then dropped.
+    const untimed = { ...week, window: "new_kind", resetsAt: null, limited: true };
+    expect(headroomLine(untimed, week.seenAt + 4 * 3600, clock)).toBe(
+      "Your last chat on it (Mon, Nov 16, 7:00 PM) found your plan's usage limit reached.",
+    );
+    expect(headroomLine(untimed, week.seenAt + 5 * 3600, clock)).toBeNull();
+  });
+
+  it("shows the reading under Allowed, in red once the limit is reached, and drops it when it resets", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.claudePlanStatus.mockResolvedValue({ state: "plan", version: "2.1.300" });
+      const nowSecs = Date.now() / 1000;
+      const reached = { window: "five_hour", usedPct: 100, resetsAt: nowSecs + 90, limited: true, seenAt: nowSecs };
+      api.claudePlanChats.mockResolvedValue({ allowed: true, chats: [], headroom: reached });
+      render(<ClaudePlanCard />);
+      const line = await screen.findByText(/found your plan's 5-hour limit reached/);
+      expect(line).toHaveClass("status--error");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      expect(screen.queryByText(/found your plan's 5-hour limit reached/)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows a failed check instead of a blank", async () => {

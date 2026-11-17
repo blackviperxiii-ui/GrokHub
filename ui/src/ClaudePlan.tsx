@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { claudePlanChats, claudePlanStatus, setClaudePlanAllowed, type ClaudeChats, type ClaudePlan } from "./api";
+import {
+  claudePlanChats,
+  claudePlanStatus,
+  setClaudePlanAllowed,
+  type ClaudeChats,
+  type ClaudePlan,
+  type PlanHeadroom,
+} from "./api";
 
 export const CLAUDE_PLAN_NOTE =
   "Runs Claude Code on this computer, signed in with your own Claude account. This app never sees or keeps your Claude sign-in.";
@@ -32,6 +39,54 @@ export function claudePlanLine(plan: ClaudePlan): string {
   }
 }
 
+const WINDOWS: Record<string, string> = {
+  five_hour: "5-hour limit",
+  seven_day: "weekly limit",
+  seven_day_opus: "weekly Opus limit",
+  seven_day_sonnet: "weekly Sonnet limit",
+};
+
+/** How the line names times: the user's own clock unless a test fixes them. */
+export interface Clock {
+  timeZone?: string;
+  locale?: string;
+}
+
+/** A reading with no reset time is dropped after the shortest window. */
+const UNTIMED_SECS = 5 * 60 * 60;
+
+/** A time in the user's own clock. */
+function at(secs: number, clock: Clock): string {
+  return new Date(secs * 1000).toLocaleString(clock.locale, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: clock.timeZone,
+  });
+}
+
+/**
+ * The plan's limit as the last chat turn on it saw it, said as of then, since
+ * use elsewhere (Claude Code itself, claude.ai) counts too. `null` once that
+ * window has reset, since the reading no longer says anything.
+ */
+export function headroomLine(h: PlanHeadroom, nowSecs: number, clock: Clock = {}): string | null {
+  const over = h.resetsAt ?? h.seenAt + UNTIMED_SECS;
+  if (over <= nowSecs) return null;
+  const window = WINDOWS[h.window] ?? "usage limit";
+  const seen = `Your last chat on it (${at(h.seenAt, clock)})`;
+  const when = h.resetsAt === null ? null : at(h.resetsAt, clock);
+  if (h.limited) {
+    const again = when === null ? "" : ` Chats on it can run again ${when}.`;
+    return `${seen} found your plan's ${window} reached.${again}`;
+  }
+  if (h.usedPct === null) return when === null ? null : `Your plan's ${window} resets ${when}.`;
+  const resets = when === null ? "" : ` It resets ${when}.`;
+  return `${seen} saw ${h.usedPct}% of your plan's ${window} used.${resets}`;
+}
+
 /** Settings → AI models → Claude (your plan). */
 export function ClaudePlanCard() {
   const [plan, setPlan] = useState<ClaudePlan | null>(null);
@@ -41,6 +96,12 @@ export function ClaudePlanCard() {
   const [busy, setBusy] = useState(true);
   const [saving, setSaving] = useState(false);
   const [asking, setAsking] = useState(false);
+  // Ticks each minute, so an open card drops a reading once its window resets.
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const tick = window.setInterval(() => setNow(Date.now() / 1000), 60_000);
+    return () => window.clearInterval(tick);
+  }, []);
 
   const read = useCallback(
     () =>
@@ -79,6 +140,7 @@ export function ClaudePlanCard() {
   }
 
   const allowed = chats?.allowed ?? false;
+  const headroom = chats?.headroom ? headroomLine(chats.headroom, now) : null;
   return (
     <div className="card" aria-label="Claude (your plan)">
       <div className="card-title">Claude (your plan)</div>
@@ -90,6 +152,11 @@ export function ClaudePlanCard() {
         </p>
       )}
       {allowed && <div className="card-detail-line">{CLAUDE_ALLOWED}</div>}
+      {allowed && headroom && (
+        <div className={chats?.headroom?.limited ? "card-detail-line status--error" : "card-detail-line"}>
+          {headroom}
+        </div>
+      )}
       {asking && (
         <div className="card-buttons confirm-row" role="group" aria-label="Allow chats on your Claude plan">
           <span>Allow chats on your Claude plan? {CLAUDE_ALLOW}</span>

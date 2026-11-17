@@ -14,7 +14,7 @@ use std::time::Duration;
 use grokhub_core::wire::{AcpEvent, GrokUsage};
 use serde_json::{json, Value};
 
-use super::stream::{Outcome, Stream};
+use super::stream::{Headroom, Outcome, Stream};
 use crate::client::{CancelToken, ContentPart, InputItem, Usage};
 use crate::events::Engine;
 use crate::run::SteerQueue;
@@ -43,6 +43,15 @@ pub struct ClaudePlanEngine {
     /// The chat whose history file each turn is saved to, as native turns
     /// are; `None` saves nothing.
     chat: Option<String>,
+    /// The plan's newest limit reading and when it came (Unix seconds),
+    /// until the host takes it.
+    headroom: Option<(Headroom, u64)>,
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// How a saved turn names its model and meter in History.
@@ -60,6 +69,7 @@ impl ClaudePlanEngine {
             cancel,
             steer,
             chat: None,
+            headroom: None,
         }
     }
 
@@ -99,6 +109,11 @@ impl ClaudePlanEngine {
     /// Where `claude` is now, found again for each turn.
     pub fn set_cli(&mut self, cli: PathBuf) {
         self.cli = cli;
+    }
+
+    /// The plan's limit reading from the last turn that sent one, once.
+    pub fn take_headroom(&mut self) -> Option<(Headroom, u64)> {
+        self.headroom.take()
     }
 
     /// Starts a new Claude Code session on the next turn.
@@ -201,7 +216,13 @@ impl ClaudePlanEngine {
         let mut after_tool = false;
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            for event in stream.line(&line) {
+            let events = stream.line(&line);
+            if let Some(h) = stream.take_fresh_headroom() {
+                // Stamped as it comes, so a chat that ends later with an
+                // older reading doesn't replace a newer one from another.
+                self.headroom = Some((h, unix_now()));
+            }
+            for event in events {
                 said_error |= matches!(event, AcpEvent::Err(_));
                 match &event {
                     AcpEvent::Text(text) => {
@@ -658,6 +679,38 @@ mod tests {
                 read("args").contains(&format!("--resume {SID} ")),
                 "{}",
                 read("args")
+            );
+        }
+
+        #[test]
+        fn a_turn_hands_its_plan_limit_reading_to_the_host_once() {
+            let dir = scratch("headroom");
+            let limit = r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":0.43,"resetsAt":1795341600,"status":"allowed"}}}}"#;
+            let cli = fake_cli(&dir, &lines_of(&[&init(SID), limit, OK]));
+            let mut e = engine(&cli, &dir);
+            e.session = SID.into();
+            let before = unix_now();
+            run(&mut e, "hi");
+            let (reading, seen_at) = e.take_headroom().expect("a reading");
+            assert_eq!(
+                reading,
+                Headroom {
+                    window: "seven_day".into(),
+                    used_pct: Some(43),
+                    resets_at: Some(1_795_341_600),
+                    limited: false,
+                }
+            );
+            assert!((before..=unix_now()).contains(&seen_at), "{seen_at}");
+            assert_eq!(e.take_headroom(), None);
+
+            let quiet = fake_cli(&dir, &lines_of(&[&init(SID), OK]));
+            e.set_cli(quiet);
+            run(&mut e, "again");
+            assert_eq!(
+                e.take_headroom(),
+                None,
+                "no reading this turn, none handed over"
             );
         }
 

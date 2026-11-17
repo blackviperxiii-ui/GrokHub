@@ -27,6 +27,20 @@ pub enum Outcome {
     Failed(String),
 }
 
+/// How much of a limit window the plan has used, from a `rate_limit_event`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Headroom {
+    /// Claude Code's window name, such as `five_hour` or `seven_day`.
+    pub window: String,
+    /// Whole percent used, 0-100, when Claude Code said.
+    pub used_pct: Option<u8>,
+    /// Unix seconds when the window resets, when Claude Code said.
+    pub resets_at: Option<u64>,
+    /// The plan refused the turn: its limit is reached.
+    pub limited: bool,
+}
+
 /// One turn's stream.
 #[derive(Debug)]
 pub struct Stream {
@@ -37,6 +51,9 @@ pub struct Stream {
     text_streamed: bool,
     thought_streamed: bool,
     outcome: Outcome,
+    headroom: Option<Headroom>,
+    /// A reading came since the host last took one.
+    headroom_fresh: bool,
 }
 
 impl Default for Stream {
@@ -53,6 +70,8 @@ impl Stream {
             text_streamed: false,
             thought_streamed: false,
             outcome: Outcome::Running,
+            headroom: None,
+            headroom_fresh: false,
         }
     }
 
@@ -63,6 +82,19 @@ impl Stream {
 
     pub fn outcome(&self) -> &Outcome {
         &self.outcome
+    }
+
+    /// The plan's newest limit reading this turn, if Claude Code sent one.
+    pub fn headroom(&self) -> Option<&Headroom> {
+        self.headroom.as_ref()
+    }
+
+    /// The reading the last line brought, once, so the host can stamp it
+    /// with the time it came.
+    pub fn take_fresh_headroom(&mut self) -> Option<Headroom> {
+        std::mem::take(&mut self.headroom_fresh)
+            .then(|| self.headroom.clone())
+            .flatten()
     }
 
     /// The chat events for one stdout line. A line that isn't JSON, or a kind
@@ -77,6 +109,13 @@ impl Stream {
             "assistant" => self.assistant(&msg),
             "user" => self.tool_results(&msg),
             "result" => self.result(&msg),
+            "rate_limit_event" => {
+                if let Some(h) = headroom(&msg["rate_limit_info"]) {
+                    self.headroom = Some(h);
+                    self.headroom_fresh = true;
+                }
+                Vec::new()
+            }
             _ => Vec::new(),
         }
     }
@@ -350,6 +389,28 @@ fn usage(msg: &Value) -> GrokUsage {
     u
 }
 
+/// The window nearest its limit. `unifiedWindows` lists each window the plan
+/// has; without it, the line's own `rateLimitType` is the one.
+fn headroom(info: &Value) -> Option<Headroom> {
+    let reading = |name: &str, w: &Value| Headroom {
+        window: name.to_string(),
+        used_pct: w["utilization"]
+            .as_f64()
+            .filter(|u| u.is_finite())
+            .map(|u| (u.clamp(0.0, 1.0) * 100.0).round() as u8),
+        resets_at: w["resetsAt"].as_u64(),
+        limited: str_at(w, "status") == "rejected",
+    };
+    let windows = info["unifiedWindows"].as_object().filter(|m| !m.is_empty());
+    match windows {
+        Some(windows) => windows
+            .iter()
+            .map(|(name, w)| reading(name, w))
+            .max_by_key(|h| (h.limited, h.used_pct.unwrap_or(0))),
+        None => non_empty(str_at(info, "rateLimitType")).map(|name| reading(&name, info)),
+    }
+}
+
 /// The words for a failed `result`: its `errors`, else its `result` text,
 /// else what kind of stop it was.
 fn result_error(msg: &Value) -> String {
@@ -572,6 +633,62 @@ mod tests {
         assert_eq!(
             s.finish(),
             Err("Claude Code reached this chat's step limit.".into())
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_line_keeps_the_window_nearest_its_limit() {
+        // Shaped like Claude Code 2.1's line on a signed-in plan.
+        let (events, s) = run(&[
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1795341600,"rateLimitType":"seven_day","overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.12,"resetsAt":1794900000,"status":"allowed"},"seven_day":{"utilization":0.43,"resetsAt":1795341600,"status":"allowed"}}}}"#,
+        ]);
+        assert!(events.is_empty(), "{events:?}");
+        let mut s = s;
+        assert_eq!(s.take_fresh_headroom().map(|h| h.used_pct), Some(Some(43)));
+        assert_eq!(s.take_fresh_headroom(), None, "handed over once");
+        assert_eq!(
+            s.headroom(),
+            Some(&Headroom {
+                window: "seven_day".into(),
+                used_pct: Some(43),
+                resets_at: Some(1_795_341_600),
+                limited: false,
+            })
+        );
+    }
+
+    #[test]
+    fn a_refused_window_wins_and_a_later_line_replaces_an_earlier_one() {
+        let (_, s) = run(&[
+            r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":0.5}}}}"#,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":1.0,"resetsAt":1794900000,"status":"rejected"},"seven_day":{"utilization":1.7,"status":"allowed"}}}}"#,
+        ]);
+        assert_eq!(
+            s.headroom(),
+            Some(&Headroom {
+                window: "five_hour".into(),
+                used_pct: Some(100),
+                resets_at: Some(1_794_900_000),
+                limited: true,
+            })
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_line_without_windows_reads_its_own_fields() {
+        let (_, s) = run(&[
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"five_hour","resetsAt":1794900000}}"#,
+            r#"{"type":"rate_limit_event","rate_limit_info":{}}"#,
+            r#"{"type":"rate_limit_event"}"#,
+        ]);
+        assert_eq!(
+            s.headroom(),
+            Some(&Headroom {
+                window: "five_hour".into(),
+                used_pct: None,
+                resets_at: Some(1_794_900_000),
+                limited: false,
+            })
         );
     }
 

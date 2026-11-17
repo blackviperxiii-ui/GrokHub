@@ -5174,6 +5174,17 @@ export function claudePlanStatus(): Promise<ClaudePlan> {
 export interface ClaudeChats {
   allowed: boolean;
   chats: string[];
+  /** The plan's newest limit reading from a chat turn. */
+  headroom?: PlanHeadroom | null;
+}
+
+/** How much of one limit window the plan has used (Unix seconds). */
+export interface PlanHeadroom {
+  window: string;
+  usedPct: number | null;
+  resetsAt: number | null;
+  limited: boolean;
+  seenAt: number;
 }
 
 export function claudePlanChats(): Promise<ClaudeChats> {
