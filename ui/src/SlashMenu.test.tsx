@@ -58,6 +58,8 @@ const SETTINGS: Settings = {
   version: "3.1.0",
   summonHotkey: false,
   notifications: true,
+  dockPanels: false,
+  dockLayout: { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
 };
 
 const ROWS: SlashHit[] = [

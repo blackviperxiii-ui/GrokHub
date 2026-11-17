@@ -143,6 +143,8 @@ function shape(over: Partial<Shape>): Shape {
     summonHotkey: false,
     notifications: true,
     ...over,
+    dockPanels: over.dockPanels ?? false,
+    dockLayout: over.dockLayout ?? { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
   };
 }
 

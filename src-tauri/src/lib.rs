@@ -254,6 +254,10 @@ pub struct SettingsView {
     /// Settings → Account under a live Grok sign-in: the SuperGrok pool's
     /// room, or that xAI's plan gate refused the sign-in.
     pub plan_note: Option<String>,
+    /// Settings → Behavior → Dockable panels: the main pages as tabs in panes.
+    pub dock_panels: bool,
+    /// The dock's pane layout, kept in `shell.json`.
+    pub dock_layout: settings::DockLayout,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -284,6 +288,8 @@ fn view(settings: &ShellSettings) -> SettingsView {
         summon_hotkey: settings.summon_hotkey,
         notifications: settings.notifications,
         chat_objectives: settings.chat_objectives,
+        dock_panels: settings.dock_panels,
+        dock_layout: settings.dock_layout.clone(),
     }
 }
 
@@ -418,6 +424,35 @@ fn save_settings(
 fn set_theme(state: State<'_, ShellState>, theme: settings::Theme) -> Result<SettingsView, String> {
     let next = ShellSettings {
         theme,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(view(&next))
+}
+
+/// Settings → Behavior → Dockable panels, on or off. The layout is kept
+/// either way, so turning it back on restores the panes as they were.
+#[tauri::command]
+fn set_dock_panels(state: State<'_, ShellState>, on: bool) -> Result<SettingsView, String> {
+    let next = ShellSettings {
+        dock_panels: on,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(view(&next))
+}
+
+/// The dock's layout as the person left it (a drag, a resize, a split). It is
+/// cleaned on the way in, so what loads back always obeys the dock's rules.
+#[tauri::command]
+fn save_dock_layout(
+    state: State<'_, ShellState>,
+    layout: settings::DockLayout,
+) -> Result<SettingsView, String> {
+    let next = ShellSettings {
+        dock_layout: layout.cleaned(),
         ..current(&state)
     };
     settings::save(&state.config_dir, &next)?;
@@ -8007,6 +8042,8 @@ pub fn run() {
             clear_profile_picture,
             save_settings,
             set_theme,
+            set_dock_panels,
+            save_dock_layout,
             open_external,
             set_api_key,
             slash_hits,

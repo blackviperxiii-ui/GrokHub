@@ -12,11 +12,13 @@ import {
   onHalt,
   onLocalEngineEvent,
   onUpdateAvailable,
+  saveDockLayout,
   shareSchedulerClock,
   WEB,
   workboardSweepUndo,
   type BoardSwept,
   type Capabilities,
+  type DockLayout,
   type Profile,
 } from "./api";
 import { onGameCompanionNotice } from "./gameSession";
@@ -63,6 +65,16 @@ import { Rail } from "./Rail";
 import { ChatLeft, ChatSide, ChatSnapshot } from "./ChatSide";
 import { StatusPills } from "./StatusPills";
 import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
+import {
+  DOCKABLE,
+  Dock,
+  cleanLayout,
+  cycleFocus,
+  emptyLayout,
+  focusPage,
+  focusedPage,
+  isDockable,
+} from "./Dock";
 import { AutoNote, FirstRun, useAutoSetup } from "./AutoSetup";
 import { OnboardStage } from "./GetToKnowYou";
 import { WindowControls } from "./WindowControls";
@@ -237,6 +249,21 @@ export function App() {
   // The pages opened so far. Each mounts the first time it opens, not before.
   const [opened, setOpened] = useState<ReadonlySet<View>>(() => new Set(["chat"]));
   if (!opened.has(view)) setOpened(new Set(opened).add(view));
+  // Settings → Behavior → Dockable panels: off, the pages render as they
+  // always have; on (desktop shell only), they sit in the dock's panes.
+  const [dockPanels, setDockPanels] = useState(false);
+  const [dockLayout, setDockLayout] = useState<DockLayout>(emptyLayout);
+  const dockOn = dockPanels && inShell() && !caps.remote;
+  if (dockOn) {
+    // The focused pane follows the page: a tab, the palette or a notice
+    // opens a page, and the pane holding it takes focus (the cabin's
+    // sidebar rule). Adjusted during render, like `opened` above.
+    const available = DOCKABLE.filter((page) => hasPage(caps, page));
+    const synced = focusPage(cleanLayout(dockLayout, available), view);
+    if (synced !== dockLayout) setDockLayout(synced);
+    const tabs = dockLayout.panes.flatMap((pane) => pane.tabs) as View[];
+    if (tabs.some((tab) => !opened.has(tab))) setOpened(new Set([...opened, ...tabs]));
+  }
   // A screen recording or an audio check is running: the bar holding its
   // clock and Stop stays on screen in a narrow window too.
   const [recLive, setRecLive] = useState(false);
@@ -295,7 +322,11 @@ export function App() {
       .catch(() => CORE_ONLY)
       .then(setCaps);
     getSettings().then(
-      (s) => applyTheme(s.theme),
+      (s) => {
+        applyTheme(s.theme);
+        setDockPanels(s.dockPanels ?? false);
+        if (s.dockLayout) setDockLayout(s.dockLayout);
+      },
       () => {},
     );
     // A local read, so a chat's dock item can open its work card.
@@ -518,6 +549,38 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [canHalt, halt]);
+  // The dock switch lives in Settings, so it can only have changed while
+  // Settings was open: re-read it on the way out.
+  const viewBefore = useRef(view);
+  useEffect(() => {
+    const was = viewBefore.current;
+    viewBefore.current = view;
+    if (was !== "settings" || view === "settings") return;
+    getSettings().then(
+      (s) => setDockPanels(s.dockPanels ?? false),
+      () => {},
+    );
+  }, [view]);
+  // The layout is kept in shell.json as it changes, like the cabin kept its.
+  useEffect(() => {
+    if (!dockOn) return;
+    void saveDockLayout(dockLayout).catch(() => {});
+  }, [dockOn, dockLayout]);
+  // F6 walks pane focus, Shift+F6 back.
+  useEffect(() => {
+    if (!dockOn) return;
+    function onF6(event: KeyboardEvent) {
+      if (event.key !== "F6") return;
+      event.preventDefault();
+      const next = cycleFocus(dockLayout, event.shiftKey ? -1 : 1);
+      if (next === dockLayout) return;
+      setDockLayout(next);
+      const page = focusedPage(next);
+      if (page) setView(page);
+    }
+    window.addEventListener("keydown", onF6);
+    return () => window.removeEventListener("keydown", onF6);
+  }, [dockOn, dockLayout]);
 
   /** A page a tile, a chip or the chat asks for: opened only if this app has
    * it (`hasPage`). Whether it opened, so `/hub` can say when it did not. */
@@ -606,6 +669,262 @@ export function App() {
         () => notify("success", "Put the archived cards back in Todo.", undefined, "Workboard"),
         (err) => notify("error", `Undo didn't go through: ${String(err)}`, undefined, "Workboard"),
       );
+  }
+  /** One page's node, mounted only once it has opened and this platform has
+   * it. `shown` is whether it is the page on screen; `active` (the plain-div
+   * pages only) is whether it holds the window's focus — in the dock a
+   * visible page in an unfocused pane is shown but not active. The plain
+   * stack passes both as `view === name`; a dock pane passes shown and its
+   * own focus. */
+  function pageNode(name: View, shown: boolean, active: boolean = shown): ReactNode {
+    switch (name) {
+      case "chat":
+        // Chat and Automations are not in <Activity>: hidden there, their
+        // listeners would stop and a reply landing meanwhile would be lost.
+        return (
+          <div key="chat" hidden={!shown}>
+            <Chat
+              onOpenSettings={() => setView("settings")}
+              onSignIn={() => run({ kind: "settings", section: "account" })}
+              onOpenView={openView}
+              onOpenSection={(section) => run({ kind: "settings", section })}
+              onOpenPalette={() => setPalette("all")}
+              onQueue={onQueue}
+              queueAct={queueAct}
+              prefill={prefill}
+              open={open}
+              deleted={deleted}
+              clear={clear}
+              onConversation={setChatSession}
+              active={active}
+              remote={Boolean(caps.remote)}
+              grokSignIn={Boolean(caps.grokSignIn)}
+              side={
+                <ChatSide
+                  active={active}
+                  conversationId={chatSession}
+                  pulse={Boolean(caps.pulse)}
+                  remote={Boolean(caps.remote)}
+                  onOpen={openView}
+                />
+              }
+              left={
+                <ChatLeft
+                  active={active}
+                  conversationId={chatSession}
+                  onOpen={openView}
+                  onOpenChat={openSaved}
+                />
+              }
+              snapshot={<ChatSnapshot active={active} onOpen={openView} />}
+              tuned={auto.reply}
+            />
+          </div>
+        );
+      case "automations":
+        return (
+          <div key="automations" hidden={!shown}>
+            <Automations
+              active={active}
+              onStarted={(id, name) =>
+                setActivity((now) => ({
+                  ...pruneActivity(now, Date.now()),
+                  [`run:${id}`]: routineStarted(id, name, Date.now()),
+                }))
+              }
+              onFinished={(run) => {
+                notifyRun(run);
+                setActivity((now) => {
+                  const key = `run:${run.id}`;
+                  const item = now[key] ?? routineStarted(run.id, run.name, Date.now());
+                  return {
+                    ...pruneActivity(now, Date.now()),
+                    [key]: routineFinished(item, run.ok, run.text, Date.now()),
+                  };
+                });
+              }}
+            />
+          </div>
+        );
+      case "home":
+        return opened.has("home") ? (
+          <Page key="home" shown={shown}>
+            <Home
+              conversationId={openChat}
+              remote={Boolean(caps.remote)}
+              onOpen={openView}
+              onOpenChat={openSaved}
+              onAsk={ask}
+              onSettings={(section) => run({ kind: "settings", section })}
+            />
+          </Page>
+        ) : null;
+      case "objectives":
+        return opened.has("objectives") ? (
+          <Page key="objectives" shown={shown}>
+            <Objectives
+              conversationId={openChat}
+              remote={Boolean(caps.remote)}
+              onOpenChat={openSaved}
+              onHome={() => setView("home")}
+              onAsk={ask}
+            />
+          </Page>
+        ) : null;
+      case "pulse":
+        return opened.has("pulse") && caps.pulse ? (
+          <Page key="pulse" shown={shown}>
+            <Pulse
+              onRun={ask}
+              onOpenInterests={() => run({ kind: "settings", section: "pulse" })}
+              onOpenModel={caps.localAi ? openModel : undefined}
+              remote={Boolean(caps.remote)}
+            />
+          </Page>
+        ) : null;
+      case "workboard":
+        return opened.has("workboard") ? (
+          <Page key="workboard" shown={shown}>
+            <Workboard
+              onWork={ask}
+              resumable={!caps.remote}
+              openCard={openCard}
+              onCards={setCardChats}
+              onSwept={noteSweep}
+              onResume={({ prompt, conversationId }) => {
+                // The resume block goes once, as the resume turn's input.
+                setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true, conversationId }));
+                setView("chat");
+              }}
+            />
+          </Page>
+        ) : null;
+      case "code":
+        // Code hides its own pages: its agent window stays mounted like Chat.
+        return opened.has("code") && !caps.remote ? (
+          <PageBoundary key="code" shown={shown}>
+            <Suspense fallback={null}>
+              <Code
+                shown={shown}
+                onOpenSettings={() => setView("settings")}
+                onSignIn={() => run({ kind: "settings", section: "account" })}
+                onOpenView={openView}
+                onOpenPalette={() => setPalette("all")}
+                grokSignIn={Boolean(caps.grokSignIn)}
+                chatSession={chatSession}
+                onShowChat={() => setView("chat")}
+                onSession={onAgentSession}
+                deleted={deleted}
+              />
+            </Suspense>
+          </PageBoundary>
+        ) : null;
+      case "command":
+        return opened.has("command") && !caps.remote ? (
+          <Page key="command" shown={shown}>
+            <CommandBox onRun={askNow} />
+          </Page>
+        ) : null;
+      case "journal":
+        return opened.has("journal") && !caps.remote ? (
+          <Page key="journal" shown={shown}>
+            <Journal
+              onMission={({ prompt, conversationId }) => {
+                setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
+                setView("chat");
+              }}
+            />
+          </Page>
+        ) : null;
+      case "history":
+        return opened.has("history") && !caps.remote ? (
+          <Page key="history" shown={shown}>
+            <History
+              onOpen={openSaved}
+              onDeleted={(id) =>
+                setDeleted((now) => ({ id, ids: [...(now?.ids ?? []), id], n: (now?.n ?? 0) + 1 }))
+              }
+            />
+          </Page>
+        ) : null;
+      case "memory":
+        return opened.has("memory") ? (
+          <Page key="memory" shown={shown}>
+            <Memory />
+          </Page>
+        ) : null;
+      case "skills":
+        return opened.has("skills") ? (
+          <Page key="skills" shown={shown}>
+            <Skills onUse={ask} onOpenConnectors={() => setView("connectors")} remote={Boolean(caps.remote)} />
+          </Page>
+        ) : null;
+      case "connectors":
+        return opened.has("connectors") ? (
+          <Page key="connectors" shown={shown}>
+            <Connectors remote={Boolean(caps.remote)} />
+          </Page>
+        ) : null;
+      case "updates":
+        return opened.has("updates") && !caps.remote ? (
+          <Page key="updates" shown={shown}>
+            <UpdatesDrivers />
+          </Page>
+        ) : null;
+      case "library":
+        return opened.has("library") && caps.library ? (
+          <Page key="library" shown={shown}>
+            <Library />
+          </Page>
+        ) : null;
+      case "mods":
+        return opened.has("mods") && caps.mods && !caps.remote ? (
+          <Page key="mods" shown={shown}>
+            <Mods />
+          </Page>
+        ) : null;
+      case "settings":
+        return opened.has("settings") ? (
+          <Page key="settings" shown={shown}>
+            <Settings
+              caps={caps}
+              goTo={goTo}
+              onClose={() => setView(before)}
+              backTo={VIEW_LABELS[before]}
+              onProfile={setProfile}
+              onOpenConnectors={() => setView("connectors")}
+            />
+          </Page>
+        ) : null;
+      case "devices":
+        return opened.has("devices") && caps.webAccess && !caps.remote ? (
+          <Page key="devices" shown={shown}>
+            <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} onRun={askNow} />
+          </Page>
+        ) : null;
+      case "fleet":
+        return opened.has("fleet") && caps.webAccess && !caps.remote ? (
+          <Page key="fleet" shown={shown}>
+            <Fleet shown={shown} />
+          </Page>
+        ) : null;
+      case "imagine":
+        return opened.has("imagine") ? (
+          <Page key="imagine" shown={shown}>
+            <Imagine />
+          </Page>
+        ) : null;
+      case "agents":
+        return opened.has("agents") ? (
+          <Page key="agents" shown={shown}>
+            <Agents
+              conversationId={openChat}
+              onOpenChat={() => setView("chat")}
+              onRun={(prompt, threadId) => runQueued(prompt, threadId)}
+            />
+          </Page>
+        ) : null;
+    }
   }
   return (
     <div className={barAway ? "app bar-away" : "app"}>
@@ -713,7 +1032,20 @@ export function App() {
             <Palette caps={caps} only={moreViews(caps)} onPick={run} onClose={() => setPalette(false)} />
           )}
           {tabMenu && <ChatTabMenu at={tabMenu} onClear={() => setAskClear(true)} onClose={() => setTabMenu(null)} />}
-          {sheet && <Shortcuts keys={shellKeys(caps, runners)} onClose={() => setSheet(false)} />}
+          {sheet && (
+            <Shortcuts
+              keys={[
+                ...shellKeys(caps, runners),
+                ...(dockOn
+                  ? [
+                      { keys: "F6", action: "Next pane" },
+                      { keys: "Shift+F6", action: "Previous pane" },
+                    ]
+                  : []),
+              ]}
+              onClose={() => setSheet(false)}
+            />
+          )}
           {/* Chat and Automations stay mounted so a reply or a Run now in flight
               is not lost when another tab opens. */}
           {askClear && (
@@ -726,228 +1058,60 @@ export function App() {
               onClose={() => setAskClear(false)}
             />
           )}
-          <div hidden={view !== "chat"}>
-            <Chat
-              onOpenSettings={() => setView("settings")}
-              onSignIn={() => run({ kind: "settings", section: "account" })}
-              onOpenView={openView}
-              onOpenSection={(section) => run({ kind: "settings", section })}
-              onOpenPalette={() => setPalette("all")}
-              onQueue={onQueue}
-              queueAct={queueAct}
-              prefill={prefill}
-              open={open}
-              deleted={deleted}
-              clear={clear}
-              onConversation={setChatSession}
-              active={view === "chat"}
-              remote={Boolean(caps.remote)}
-              grokSignIn={Boolean(caps.grokSignIn)}
-              side={
-                <ChatSide
-                  active={view === "chat"}
-                  conversationId={chatSession}
-                  pulse={Boolean(caps.pulse)}
-                  remote={Boolean(caps.remote)}
-                  onOpen={openView}
+          {dockOn ? (
+            <>
+              {/* Pages the dock does not hold still take the whole area; the
+                  dock stays mounted underneath, so Chat never unmounts. */}
+              <div hidden={isDockable(view)}>
+                {pageNode("home", view === "home")}
+                {pageNode("objectives", view === "objectives")}
+                {pageNode("code", view === "code")}
+                {pageNode("command", view === "command")}
+                {pageNode("journal", view === "journal")}
+                {pageNode("history", view === "history")}
+                {pageNode("memory", view === "memory")}
+                {pageNode("connectors", view === "connectors")}
+                {pageNode("updates", view === "updates")}
+                {pageNode("library", view === "library")}
+                {pageNode("mods", view === "mods")}
+                {pageNode("settings", view === "settings")}
+                {pageNode("devices", view === "devices")}
+                {pageNode("fleet", view === "fleet")}
+                {pageNode("agents", view === "agents")}
+              </div>
+              <div hidden={!isDockable(view)}>
+                <Dock
+                  layout={cleanLayout(dockLayout, DOCKABLE.filter((page) => hasPage(caps, page)))}
+                  onLayout={setDockLayout}
+                  onFocusPage={setView}
+                  renderPage={(page, active) => pageNode(page, true, active)}
                 />
-              }
-              left={
-                <ChatLeft
-                  active={view === "chat"}
-                  conversationId={chatSession}
-                  onOpen={openView}
-                  onOpenChat={openSaved}
-                />
-              }
-              snapshot={<ChatSnapshot active={view === "chat"} onOpen={openView} />}
-              tuned={auto.reply}
-            />
-          </div>
-          <div hidden={view !== "automations"}>
-            <Automations
-              active={view === "automations"}
-              onStarted={(id, name) =>
-                setActivity((now) => ({
-                  ...pruneActivity(now, Date.now()),
-                  [`run:${id}`]: routineStarted(id, name, Date.now()),
-                }))
-              }
-              onFinished={(run) => {
-                notifyRun(run);
-                setActivity((now) => {
-                  const key = `run:${run.id}`;
-                  const item = now[key] ?? routineStarted(run.id, run.name, Date.now());
-                  return {
-                    ...pruneActivity(now, Date.now()),
-                    [key]: routineFinished(item, run.ok, run.text, Date.now()),
-                  };
-                });
-              }}
-            />
-          </div>
-          {/* Chat and Automations are not in <Activity>: hidden there, their
-              listeners would stop and a reply landing meanwhile would be lost. */}
-          {opened.has("home") && (
-            <Page shown={view === "home"}>
-              <Home
-                conversationId={openChat}
-                remote={Boolean(caps.remote)}
-                onOpen={openView}
-                onOpenChat={openSaved}
-                onAsk={ask}
-                onSettings={(section) => run({ kind: "settings", section })}
-              />
-            </Page>
-          )}
-          {opened.has("objectives") && (
-            <Page shown={view === "objectives"}>
-              <Objectives
-                conversationId={openChat}
-                remote={Boolean(caps.remote)}
-                onOpenChat={openSaved}
-                onHome={() => setView("home")}
-                onAsk={ask}
-              />
-            </Page>
-          )}
-          {opened.has("pulse") && caps.pulse && (
-            <Page shown={view === "pulse"}>
-              <Pulse
-                onRun={ask}
-                onOpenInterests={() => run({ kind: "settings", section: "pulse" })}
-                onOpenModel={caps.localAi ? openModel : undefined}
-                remote={Boolean(caps.remote)}
-              />
-            </Page>
-          )}
-          {opened.has("workboard") && (
-            <Page shown={view === "workboard"}>
-              <Workboard
-                onWork={ask}
-                resumable={!caps.remote}
-                openCard={openCard}
-                onCards={setCardChats}
-                onSwept={noteSweep}
-                onResume={({ prompt, conversationId }) => {
-                  // The resume block goes once, as the resume turn's input.
-                  setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true, conversationId }));
-                  setView("chat");
-                }}
-              />
-            </Page>
-          )}
-          {/* Code hides its own pages: its agent window stays mounted like Chat. */}
-          {opened.has("code") && !caps.remote && (
-            <PageBoundary shown={view === "code"}>
-              <Suspense fallback={null}>
-                <Code
-                  shown={view === "code"}
-                  onOpenSettings={() => setView("settings")}
-                  onSignIn={() => run({ kind: "settings", section: "account" })}
-                  onOpenView={openView}
-                  onOpenPalette={() => setPalette("all")}
-                  grokSignIn={Boolean(caps.grokSignIn)}
-                  chatSession={chatSession}
-                  onShowChat={() => setView("chat")}
-                  onSession={onAgentSession}
-                  deleted={deleted}
-                />
-              </Suspense>
-            </PageBoundary>
-          )}
-          {opened.has("command") && !caps.remote && (
-            <Page shown={view === "command"}>
-              <CommandBox
-                onRun={askNow}
-              />
-            </Page>
-          )}
-          {opened.has("journal") && !caps.remote && (
-            <Page shown={view === "journal"}>
-              <Journal
-                onMission={({ prompt, conversationId }) => {
-                  setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
-                  setView("chat");
-                }}
-              />
-            </Page>
-          )}
-          {opened.has("history") && !caps.remote && (
-            <Page shown={view === "history"}>
-              <History
-                onOpen={openSaved}
-                onDeleted={(id) =>
-                  setDeleted((now) => ({ id, ids: [...(now?.ids ?? []), id], n: (now?.n ?? 0) + 1 }))
-                }
-              />
-            </Page>
-          )}
-          {opened.has("memory") && (
-            <Page shown={view === "memory"}>
-              <Memory />
-            </Page>
-          )}
-          {opened.has("skills") && (
-            <Page shown={view === "skills"}>
-              <Skills onUse={ask} onOpenConnectors={() => setView("connectors")} remote={Boolean(caps.remote)} />
-            </Page>
-          )}
-          {opened.has("connectors") && (
-            <Page shown={view === "connectors"}>
-              <Connectors remote={Boolean(caps.remote)} />
-            </Page>
-          )}
-          {opened.has("updates") && !caps.remote && (
-            <Page shown={view === "updates"}>
-              <UpdatesDrivers />
-            </Page>
-          )}
-          {opened.has("library") && caps.library && (
-            <Page shown={view === "library"}>
-              <Library />
-            </Page>
-          )}
-          {opened.has("mods") && caps.mods && !caps.remote && (
-            <Page shown={view === "mods"}>
-              <Mods />
-            </Page>
-          )}
-          {opened.has("settings") && (
-            <Page shown={view === "settings"}>
-              <Settings
-                caps={caps}
-                goTo={goTo}
-                onClose={() => setView(before)}
-                backTo={VIEW_LABELS[before]}
-                onProfile={setProfile}
-                onOpenConnectors={() => setView("connectors")}
-              />
-            </Page>
-          )}
-          {opened.has("devices") && caps.webAccess && !caps.remote && (
-            <Page shown={view === "devices"}>
-              <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} onRun={askNow} />
-            </Page>
-          )}
-          {opened.has("fleet") && caps.webAccess && !caps.remote && (
-            <Page shown={view === "fleet"}>
-              <Fleet shown={view === "fleet"} />
-            </Page>
-          )}
-          {opened.has("imagine") && (
-            <Page shown={view === "imagine"}>
-              <Imagine />
-            </Page>
-          )}
-          {opened.has("agents") && (
-            <Page shown={view === "agents"}>
-              <Agents
-                conversationId={openChat}
-                onOpenChat={() => setView("chat")}
-                onRun={(prompt, threadId) => runQueued(prompt, threadId)}
-              />
-            </Page>
+              </div>
+            </>
+          ) : (
+            <>
+              {pageNode("chat", view === "chat")}
+              {pageNode("automations", view === "automations")}
+              {pageNode("home", view === "home")}
+              {pageNode("objectives", view === "objectives")}
+              {pageNode("pulse", view === "pulse")}
+              {pageNode("workboard", view === "workboard")}
+              {pageNode("code", view === "code")}
+              {pageNode("command", view === "command")}
+              {pageNode("journal", view === "journal")}
+              {pageNode("history", view === "history")}
+              {pageNode("memory", view === "memory")}
+              {pageNode("skills", view === "skills")}
+              {pageNode("connectors", view === "connectors")}
+              {pageNode("updates", view === "updates")}
+              {pageNode("library", view === "library")}
+              {pageNode("mods", view === "mods")}
+              {pageNode("settings", view === "settings")}
+              {pageNode("devices", view === "devices")}
+              {pageNode("fleet", view === "fleet")}
+              {pageNode("imagine", view === "imagine")}
+              {pageNode("agents", view === "agents")}
+            </>
           )}
         </main>
       </div>
