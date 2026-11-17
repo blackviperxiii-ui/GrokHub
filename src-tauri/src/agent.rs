@@ -1206,7 +1206,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     let mut plan: Option<ClaudePlanEngine> = None;
     // A plan turn ran since the native engine last read the chat's file.
     let mut plan_ran = false;
-    let mut inbox = Some(inbox);
+    // Both engines answer approval cards from it, so one chat has one inbox.
+    let inbox = Arc::new(inbox);
     while let Ok(job) = jobs.recv() {
         let Job {
             text,
@@ -1293,6 +1294,10 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     steer.clone(),
                 )
                 .for_chat(&conversation_id)
+                .with_approvals(grokhub_agent::claude_plan::engine::Approvals {
+                    permits: inbox.clone(),
+                    halted: Arc::clone(&halted),
+                })
             });
             plan.set_cli(cli);
             // The store decides which session goes on: the one kept for this
@@ -1309,8 +1314,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             plan_ran = true;
             plan
         } else {
-            let engine = match (&mut engine, inbox.take()) {
-                (Some(engine), _) => {
+            let engine = match &mut engine {
+                Some(engine) => {
                     // A report was saved into this chat between turns, or turns
                     // ran on the Claude plan: read the chat back from its file,
                     // so the model sees them too.
@@ -1324,12 +1329,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     engine.set_route(route.client, model, effort, system, route.auth_kind);
                     engine
                 }
-                (none, inbox) => {
-                    let Some(inbox) = inbox else {
-                        turn_ends(&conversation_id);
-                        let _ = done.send(Err("The chat worker stopped.".into()));
-                        return;
-                    };
+                none => {
                     // This engine reads the chat's file below, plan turns included.
                     plan_ran = false;
                     let engine = none.insert(NativeEngine::new(EngineParts {
@@ -1352,7 +1352,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                             }),
                             slot: frames.clone(),
                         })),
-                        permits: Arc::new(inbox),
+                        permits: inbox.clone(),
                     }));
                     engine.set_pause(Arc::clone(&pause));
                     engine.set_imagine(Some(Arc::new(crate::imagine::ChatImagine)));

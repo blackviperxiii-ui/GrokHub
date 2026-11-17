@@ -1,0 +1,1 @@
+- Claude plan: a chat on your Claude plan can now run commands and edit files in its folder. Each time Claude Code wants to run a command, change a file or read outside the folder, the chat shows the usual approval card first, with Allow once, Always allow (for the rest of that chat) and Deny. Stop while a card waits ends the turn without running the step.

@@ -78,21 +78,31 @@ so it isn't used.
 
 ## Tools and approvals
 
-- **First:** read-only tools only. A turn passes `--tools Read Grep Glob`
-  (no other tool exists in it), `--strict-mcp-config` (no MCP server from the
-  user's own config), `--permission-mode default` and
-  `--permission-prompts none`. No `--allowedTools` rule is added, since an
-  allow rule would also let Read reach outside the folder: Claude Code's own
-  rules let a read inside the chat's folder go ahead and refuse one outside
-  it, which shows as a failed row. Still to come: after the turn, a card
-  "Claude wanted to run X. Allow it for this chat?" that adds the tool for
-  the next turns.
-- **Next:** live approvals. A small stdio MCP server inside the app's binary
-  answers `--permission-prompt-tool`. It runs the app's own allow, ask and
-  deny rules and, on ask, shows the chat's normal approval card. The answer
-  goes back as `{behavior: "allow"}` or `{behavior: "deny", message}`.
-  "Always allow" stays an app rule passed as `--allowedTools`. The app never
-  writes Claude Code's settings.
+A chat turn passes `--strict-mcp-config` (no MCP server from the user's own
+config) and `--permission-mode default`, so a `bypassPermissions` default in
+the user's Claude Code settings doesn't apply. Claude Code's own rules
+decide which calls need asking: reading inside the chat's folder and
+read-only commands such as `echo` go ahead, and a command that changes
+something, an edit, a write, or a read outside the folder asks.
+
+- **Asking on the chat's card.** A chat turn passes
+  `--permission-prompt-tool stdio` and `--tools Read Grep Glob Bash Edit Write`.
+  No MCP server is needed: Claude Code writes a `control_request` line
+  (`subtype: can_use_tool`, with `tool_name`, `input`, `description` and
+  `permission_suggestions`) and waits. The app shows its normal approval card
+  (tool, command or file, and why) and writes back a `control_response` line:
+  `{behavior: "allow", updatedInput}` with the input unchanged, or
+  `{behavior: "deny", message}`. Stop or Halt while the card waits denies with
+  `interrupt: true`, which ends the turn. Any other control request gets an
+  error response, so a turn never hangs on one. stdin stays open until the
+  turn's `result` line, then closes so Claude Code exits.
+- **Always allow** keeps the rules Claude Code suggested for that call, such
+  as `Bash(touch notes.md *)`, and passes them as `--allowedTools` on the
+  chat's later turns. They're kept in memory for the open chat, not written to
+  Claude Code's settings or the user's project, and a restart forgets them.
+- **When nobody can be asked** (no approval cards, as in tests), a turn has
+  only `--tools Read Grep Glob` and `--permission-prompts none`, so anything
+  that would ask is refused and shows as a failed row.
 
 ## Choosing it
 
@@ -172,7 +182,9 @@ Each step is its own PR into `beta`.
    Settings shows how much of the plan's nearest limit the last turn saw
    used and when it resets. The chat itself has no per-turn usage line yet,
    for any engine.
-7. **Live approvals.** The MCP approval server.
+7. **Live approvals.** Claude Code asks on the chat's approval card before a
+   command, an edit, a write or a read outside the folder, through
+   `--permission-prompt-tool stdio`. "Always allow" lasts for the open chat.
 
 ## Open
 

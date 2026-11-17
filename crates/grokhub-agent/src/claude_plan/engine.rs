@@ -5,7 +5,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -14,15 +14,30 @@ use std::time::Duration;
 use grokhub_core::wire::{AcpEvent, GrokUsage};
 use serde_json::{json, Value};
 
+use super::ask::{self, Control, ToolAsk};
 use super::stream::{Headroom, Outcome, Stream};
 use crate::client::{CancelToken, ContentPart, InputItem, Usage};
 use crate::events::Engine;
+use crate::gate::{PermAnswer, PermitWait, Waited};
 use crate::run::SteerQueue;
+use grokhub_core::wire::PermissionAsk;
 
-/// The only tools a chat on the plan has until live approvals land. Claude
-/// Code's own rules still decide each call: reading inside the chat's folder
-/// needs no approval, and reading outside it would, so it's refused.
+/// The tools a chat on the plan has when nobody can be asked. Claude Code's
+/// own rules still decide each call: reading inside the chat's folder needs
+/// no approval, and reading outside it would, so it's refused.
 pub const READ_ONLY_TOOLS: [&str; 3] = ["Read", "Grep", "Glob"];
+/// The tools a chat on the plan has when its approval cards can ask the
+/// user. A call Claude Code's rules don't allow by themselves (a command
+/// that changes something, an edit, a read outside the folder) waits for
+/// the user's answer on the card.
+pub const ASKING_TOOLS: [&str; 6] = ["Read", "Grep", "Glob", "Bash", "Edit", "Write"];
+
+/// The chat's approval cards: answers come in by card id, and the desktop
+/// Halt stops a wait as Stop does.
+pub struct Approvals {
+    pub permits: Arc<dyn PermitWait + Send + Sync>,
+    pub halted: Arc<AtomicBool>,
+}
 
 /// How much of the end of Claude Code's stderr is kept for an error line.
 const STDERR_TAIL: usize = 4_096;
@@ -46,6 +61,12 @@ pub struct ClaudePlanEngine {
     /// The plan's newest limit reading and when it came (Unix seconds),
     /// until the host takes it.
     headroom: Option<(Headroom, u64)>,
+    /// Set: a tool call that needs approval asks on a card. Unset: only the
+    /// read-only tools exist, and a call that would ask is refused.
+    approvals: Option<Approvals>,
+    /// Rules the user picked "Always allow" for in this chat, like
+    /// `Bash(npm test *)`, passed to each later turn.
+    always: Vec<String>,
 }
 
 fn unix_now() -> u64 {
@@ -70,6 +91,8 @@ impl ClaudePlanEngine {
             steer,
             chat: None,
             headroom: None,
+            approvals: None,
+            always: Vec::new(),
         }
     }
 
@@ -77,6 +100,13 @@ impl ClaudePlanEngine {
     /// app's own models can read it if the chat is switched back.
     pub fn for_chat(mut self, chat: &str) -> Self {
         self.chat = Some(chat.to_string());
+        self
+    }
+
+    /// Asks the user on the chat's cards before a tool call that needs it,
+    /// and adds the tools that change things.
+    pub fn with_approvals(mut self, approvals: Approvals) -> Self {
+        self.approvals = Some(approvals);
         self
     }
 
@@ -143,13 +173,23 @@ impl ClaudePlanEngine {
             "--include-partial-messages",
             "--permission-mode",
             "default",
-            "--permission-prompts",
-            "none",
             "--strict-mcp-config",
         ]
         .iter()
         .map(|a| a.to_string())
         .collect();
+        let tools: &[&str] = if self.approvals.is_some() {
+            // Who answers: this app, on stdin.
+            args.extend(["--permission-prompt-tool".into(), "stdio".into()]);
+            if !self.always.is_empty() {
+                args.push("--allowedTools".into());
+                args.extend(self.always.iter().cloned());
+            }
+            &ASKING_TOOLS
+        } else {
+            args.extend(["--permission-prompts".into(), "none".into()]);
+            &READ_ONLY_TOOLS
+        };
         args.push(
             if self.started {
                 "--resume"
@@ -161,7 +201,7 @@ impl ClaudePlanEngine {
         args.push(self.session.clone());
         // Last: the flag takes every value after it.
         args.push("--tools".into());
-        args.extend(READ_ONLY_TOOLS.iter().map(|t| t.to_string()));
+        args.extend(tools.iter().map(|t| t.to_string()));
         args
     }
 
@@ -186,7 +226,9 @@ impl ClaudePlanEngine {
         };
         // A write that fails means Claude Code already quit; its output says why.
         let _ = writeln!(stdin, "{}", prompt_line(text, image));
-        drop(stdin);
+        // Kept open while the turn can ask: the answers go back on it.
+        // Claude Code ends once it's closed and the turn's result is out.
+        let mut stdin = self.approvals.is_some().then_some(stdin);
 
         let child = Arc::new(Mutex::new(child));
         let finished = Arc::new(AtomicBool::new(false));
@@ -216,6 +258,10 @@ impl ClaudePlanEngine {
         let mut after_tool = false;
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
+            if let Some(control) = ask::control(&line) {
+                self.answer(control, &mut stdin, emit);
+                continue;
+            }
             let events = stream.line(&line);
             if let Some(h) = stream.take_fresh_headroom() {
                 // Stamped as it comes, so a chat that ends later with an
@@ -239,7 +285,11 @@ impl ClaudePlanEngine {
                 }
                 emit(event);
             }
+            if *stream.outcome() != Outcome::Running {
+                stdin = None;
+            }
         }
+        drop(stdin);
         finished.store(true, Ordering::SeqCst);
         let _ = watcher.join();
         if let Ok(mut child) = child.lock() {
@@ -285,6 +335,61 @@ impl ClaudePlanEngine {
 impl ClaudePlanEngine {
     /// The turn's message and reply go to the chat's history file with its
     /// usage; a turn that wrote no reply (stopped early, or failed) isn't kept.
+    /// Answers one control request on stdin: a tool call after the user's
+    /// answer on its card, anything else with a refusal.
+    fn answer(
+        &mut self,
+        control: Control,
+        stdin: &mut Option<ChildStdin>,
+        emit: &mut dyn FnMut(AcpEvent),
+    ) {
+        let line = match control {
+            Control::Other { request_id } => ask::refuse_line(&request_id),
+            Control::Ask(ask) => {
+                let answer = self.ask_user(&ask, emit);
+                if answer == PermAnswer::Always {
+                    for rule in &ask.rules {
+                        if !self.always.contains(rule) {
+                            self.always.push(rule.clone());
+                        }
+                    }
+                }
+                ask::answer_line(&ask, answer)
+            }
+        };
+        let sent = stdin
+            .as_mut()
+            .is_some_and(|pipe| writeln!(pipe, "{line}").and_then(|()| pipe.flush()).is_ok());
+        if !sent {
+            *stdin = None;
+        }
+    }
+
+    /// Shows the ask on a card and waits for the user, Stop or Halt.
+    fn ask_user(&self, ask: &ToolAsk, emit: &mut dyn FnMut(AcpEvent)) -> PermAnswer {
+        let Some(approvals) = &self.approvals else {
+            return PermAnswer::Deny;
+        };
+        emit(AcpEvent::Permission(PermissionAsk {
+            rpc_id: Value::Null,
+            session_id: self.session.clone(),
+            title: ask.tool.clone(),
+            tool_call_id: ask.request_id.clone(),
+            action: ask.action.clone(),
+            reason: ask.reason.clone(),
+            reject_option: None,
+        }));
+        let halted = Arc::clone(&approvals.halted);
+        match approvals
+            .permits
+            .wait(&ask.request_id, &self.cancel, &move || {
+                halted.load(Ordering::SeqCst)
+            }) {
+            Waited::Answer(answer) => answer,
+            Waited::Cancelled | Waited::Halted => PermAnswer::Cancel,
+        }
+    }
+
     fn save_turn(&self, text: &str, reply: &str, used: Option<&GrokUsage>) {
         let Some(chat) = &self.chat else { return };
         if reply.trim().is_empty() {
@@ -502,8 +607,8 @@ mod tests {
         assert_eq!(
             joined,
             "-p --input-format stream-json --output-format stream-json --verbose \
-             --include-partial-messages --permission-mode default --permission-prompts none \
-             --strict-mcp-config --session-id 3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c \
+             --include-partial-messages --permission-mode default --strict-mcp-config \
+             --permission-prompts none --session-id 3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c \
              --tools Read Grep Glob"
         );
         assert!(
@@ -514,6 +619,53 @@ mod tests {
         assert_eq!(
             session_flag(&e.args()),
             ("--resume", "3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c")
+        );
+    }
+
+    /// Answers every card with one answer and keeps the ids it was asked.
+    struct Answers(PermAnswer, Mutex<Vec<String>>);
+
+    impl PermitWait for Answers {
+        fn wait(&self, call_id: &str, cancel: &CancelToken, _: &dyn Fn() -> bool) -> Waited {
+            self.1.lock().unwrap().push(call_id.to_string());
+            if cancel.is_cancelled() {
+                return Waited::Cancelled;
+            }
+            Waited::Answer(self.0)
+        }
+    }
+
+    fn asking(
+        cli: &Path,
+        workspace: &Path,
+        answer: PermAnswer,
+    ) -> (ClaudePlanEngine, Arc<Answers>) {
+        let answers = Arc::new(Answers(answer, Mutex::new(Vec::new())));
+        let e = engine(cli, workspace).with_approvals(Approvals {
+            permits: answers.clone(),
+            halted: Arc::new(AtomicBool::new(false)),
+        });
+        (e, answers)
+    }
+
+    #[test]
+    fn a_turn_that_can_ask_has_the_changing_tools_and_asks_this_app() {
+        let (mut e, _) = asking(Path::new("claude"), Path::new("."), PermAnswer::Allow);
+        e.session = "3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c".into();
+        assert_eq!(
+            e.args().join(" "),
+            "-p --input-format stream-json --output-format stream-json --verbose \
+             --include-partial-messages --permission-mode default --strict-mcp-config \
+             --permission-prompt-tool stdio --session-id 3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c \
+             --tools Read Grep Glob Bash Edit Write"
+        );
+        e.always.push("Bash(npm test *)".into());
+        let joined = e.args().join(" ");
+        assert!(
+            joined.contains(
+                "--permission-prompt-tool stdio --allowedTools Bash(npm test *) --session-id"
+            ),
+            "{joined}"
         );
     }
 
@@ -680,6 +832,117 @@ mod tests {
                 "{}",
                 read("args")
             );
+        }
+
+        const ASK: &str = r#"{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"touch made"},"description":"Make a file","permission_suggestions":[{"type":"addRules","behavior":"allow","rules":[{"toolName":"Bash","ruleContent":"touch made *"}]}]}}"#;
+
+        /// A `claude` that takes the prompt, asks once, saves the answer it
+        /// gets back, then ends the turn. `read` takes one line at a time,
+        /// so the answer is read only after the ask is out.
+        fn asking_cli(dir: &Path) -> PathBuf {
+            let body = format!(
+                "read -r prompt\nprintf '%s\\n' \"$prompt\" > \"{d}/stdin\"\n{ask}read -r answer\nprintf '%s\\n' \"$answer\" > \"{d}/answer\"\n{done}",
+                d = dir.display(),
+                ask = lines_of(&[&init(SID), ASK]),
+                done = lines_of(&[OK]),
+            );
+            use std::os::unix::fs::PermissionsExt;
+            let cli = dir.join("claude");
+            let script = format!(
+                "#!/bin/sh\necho \"$@\" > \"{d}/args\"\n{body}\n",
+                d = dir.display()
+            );
+            std::fs::write(&cli, script).unwrap();
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+            cli
+        }
+
+        fn answer_of(dir: &Path) -> Value {
+            parsed(std::fs::read_to_string(dir.join("answer")).unwrap().trim())
+        }
+
+        #[test]
+        fn a_tool_call_waits_on_the_card_and_the_answer_goes_back() {
+            let dir = scratch("ask-allow");
+            let (mut e, answers) = asking(&asking_cli(&dir), &dir, PermAnswer::Allow);
+            e.session = SID.into();
+            let seen = run(&mut e, "make a file");
+            assert_eq!(
+                seen.iter()
+                    .filter(|ev| !matches!(ev, AcpEvent::Usage(_)))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![
+                    AcpEvent::Ready {
+                        session_id: SID.into()
+                    },
+                    AcpEvent::Permission(PermissionAsk {
+                        rpc_id: Value::Null,
+                        session_id: SID.into(),
+                        title: "Bash".into(),
+                        tool_call_id: "req-1".into(),
+                        action: "touch made".into(),
+                        reason: "Make a file".into(),
+                        reject_option: None,
+                    }),
+                    AcpEvent::Done {
+                        stop_reason: "end_turn".into()
+                    },
+                ]
+            );
+            assert_eq!(*answers.1.lock().unwrap(), vec!["req-1".to_string()]);
+            assert_eq!(
+                answer_of(&dir)["response"]["response"],
+                serde_json::json!({"behavior": "allow", "updatedInput": {"command": "touch made"}})
+            );
+            assert_eq!(
+                parsed(std::fs::read_to_string(dir.join("stdin")).unwrap().trim()),
+                parsed(&prompt_line("make a file", None))
+            );
+        }
+
+        #[test]
+        fn always_allow_passes_the_rule_to_the_next_turn_and_deny_does_not() {
+            let dir = scratch("ask-always");
+            let (mut e, _) = asking(&asking_cli(&dir), &dir, PermAnswer::Always);
+            e.session = SID.into();
+            run(&mut e, "make a file");
+            run(&mut e, "again");
+            let args = std::fs::read_to_string(dir.join("args")).unwrap();
+            assert!(
+                args.contains("--allowedTools Bash(touch made *) --resume"),
+                "{args}"
+            );
+
+            let dir = scratch("ask-deny");
+            let (mut e, _) = asking(&asking_cli(&dir), &dir, PermAnswer::Deny);
+            e.session = SID.into();
+            run(&mut e, "make a file");
+            assert_eq!(answer_of(&dir)["response"]["response"]["behavior"], "deny");
+            run(&mut e, "again");
+            let args = std::fs::read_to_string(dir.join("args")).unwrap();
+            assert!(!args.contains("--allowedTools"), "{args}");
+        }
+
+        #[test]
+        fn a_stop_while_the_card_waits_denies_and_interrupts() {
+            /// Stop (or Halt) came while the card waited.
+            struct Stopped;
+            impl PermitWait for Stopped {
+                fn wait(&self, _: &str, _: &CancelToken, _: &dyn Fn() -> bool) -> Waited {
+                    Waited::Cancelled
+                }
+            }
+            let dir = scratch("ask-stop");
+            let mut e = engine(&asking_cli(&dir), &dir).with_approvals(Approvals {
+                permits: Arc::new(Stopped),
+                halted: Arc::new(AtomicBool::new(false)),
+            });
+            e.session = SID.into();
+            run(&mut e, "make a file");
+            let answer = answer_of(&dir);
+            assert_eq!(answer["response"]["response"]["behavior"], "deny");
+            assert_eq!(answer["response"]["response"]["interrupt"], true);
         }
 
         #[test]
