@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-14  
 **Version:** 2.6.32  
-**Decision:** The shipping Linux / Windows / Android product is Rust. No Electron. No Tauri.  
+**Decision (historical):** The shipping Linux / Windows / Android product is Rust. No Electron. No Tauri.  
+**Superseded:** Loadout is built with Tauri. The egui cabin is retired; Electron still stays out.  
 **Override:** Interactive chat is Grok Build (`grok -p` / ACP). Current cabin surface: `2026-08-19-grok-build-gui.md`. The 2.6.32 text below is the Rust-parity decision, not today's composer or host path.
 
 ## Why

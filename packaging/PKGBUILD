@@ -2,7 +2,7 @@
 pkgname=grokhub
 pkgver=3.5.0
 pkgrel=1
-pkgdesc="Loadout: a gaming and PC companion desktop app (Tauri) and its LAN hub, no Electron"
+pkgdesc="Loadout: a gaming and PC companion desktop app, built with Tauri, and its LAN hub; no Electron"
 arch=('x86_64')
 url="https://github.com/blackviperxiii-ui/GrokHub"
 license=('MIT')
