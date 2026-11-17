@@ -503,6 +503,17 @@ fn speak_xai(config_dir: &Path, to: &TtsTarget, voice: &str, text: &str) -> Resu
     })
 }
 
+/// On-device pieces run one at a time.
+static SPEAK_ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Said when the on-device voice, needing `mb`, doesn't fit in free memory now.
+fn no_room_to_speak(mb: u64) -> String {
+    format!(
+        "The on-device voice needs about {} GB of free memory, and this computer doesn't have it right now.",
+        mb.div_ceil(1024)
+    )
+}
+
 /// Kokoro in the on-device speech engine. None when the engine or a voice
 /// isn't downloaded.
 fn speak_on_device(
@@ -516,7 +527,19 @@ fn speak_on_device(
         return None;
     }
     let model = ve::voice_model(models_dir)?;
-    // Pieces are spoken side by side: each one writes its own new file.
+    // One piece at a time on this computer: the page asks for every piece of
+    // a reply at once, and each run loads the whole voice model.
+    let _one = SPEAK_ONE.lock().unwrap_or_else(|e| e.into_inner());
+    // The voice doesn't unload the chat model: that would reload it on every
+    // turn. Without room beside it, the piece isn't spoken.
+    let Ok(_speaking) = grokhub_agent::route::local_resident::reserve(
+        grokhub_agent::route::local_resident::Kind::Speech,
+        grokhub_agent::route::local_resident::Mem::ram(model.run_mb),
+        false,
+    ) else {
+        return Some(Err(no_room_to_speak(model.run_mb)));
+    };
+    // Each piece writes its own new file.
     let out = match ve::claim_speak_file(&std::env::temp_dir()) {
         Ok(out) => out,
         Err(_) => return Some(Err("The on-device voice had nowhere to write.".into())),

@@ -241,6 +241,58 @@ fn without_the_on_device_engine_there_is_no_local_voice() {
 }
 
 #[test]
+fn without_room_beside_the_chat_model_the_voice_declines_before_it_starts() {
+    use grokhub_agent::route::local_scale::{set_room, Room};
+    use grokhub_core::local_setup::ModelKind;
+    use grokhub_core::model_download as md;
+    let config = temp_dir("no-room");
+    let models = config.join("models");
+    // The engine and a voice look downloaded. The speaking program is an
+    // empty file: it can't run, so a decline is the only answer that
+    // doesn't say it failed to start.
+    let sherpa = &grokhub_core::voice_engine::SHERPA;
+    std::fs::create_dir_all(sherpa.program_path(&config).parent().unwrap()).unwrap();
+    std::fs::write(sherpa.program_path(&config), b"").unwrap();
+    std::fs::write(sherpa.dir(&config).join("version.txt"), sherpa.version).unwrap();
+    std::fs::create_dir_all(ve::tts_path(&config).parent().unwrap()).unwrap();
+    std::fs::write(ve::tts_path(&config), b"").unwrap();
+    let voice = grokhub_core::local_setup::local_models()
+        .iter()
+        .find(|m| m.kind == ModelKind::TextToSpeech)
+        .unwrap();
+    let dir = md::kind_dir(&models, ModelKind::TextToSpeech);
+    let put = |path: std::path::PathBuf| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"x").unwrap();
+    };
+    put(md::final_path(&dir, voice));
+    for part in voice.parts.iter() {
+        put(dir.join(part.file));
+    }
+    assert_eq!(ve::voice_model(&models).map(|m| m.run_mb), Some(1_024));
+    // 80% of 512 MB free is 409 MB; the voice needs 1,024.
+    let room = Room {
+        free_vram_mb: None,
+        free_ram_mb: 512,
+        cpu_busy_pct: None,
+        on_battery: false,
+        unified: false,
+    };
+    set_room(room, grokhub_core::now_ms());
+    let said = speak_on_device(&config, &models, "ara", "Hello.");
+    // A stale reading: later tests see no reading at all.
+    set_room(room, 0);
+    assert_eq!(
+        said.map(|r| r.map(|s| s.mime)),
+        Some(Err(
+            "The on-device voice needs about 1 GB of free memory, and this computer doesn't have it right now."
+                .to_string()
+        ))
+    );
+    assert!(!grokhub_agent::route::local_resident::held());
+}
+
+#[test]
 fn no_turn_hears_nothing() {
     assert_eq!(hear(None, |_| panic!("no upload")), Ok(String::new()));
 }

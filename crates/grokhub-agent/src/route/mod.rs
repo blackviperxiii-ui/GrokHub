@@ -49,6 +49,7 @@ pub mod local_kv;
 pub mod local_live;
 pub mod local_perf;
 pub mod local_prewarm;
+pub mod local_resident;
 pub mod local_sampler;
 pub mod local_scale;
 pub mod local_sidecar;

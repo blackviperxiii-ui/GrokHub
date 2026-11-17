@@ -18,6 +18,7 @@ use grokhub_core::image_engine as ie;
 use grokhub_core::local_setup::LocalModel;
 use serde_json::{json, Value};
 
+use super::local_resident as resident;
 use super::local_sidecar as sidecar;
 
 /// Longest one picture may take (a slow CPU-only machine still finishes).
@@ -35,6 +36,8 @@ pub const PAUSED: &str = "Not made yet: a game or a heavy app is running, so on-
 pub const GUARD_BLOCKED: &str = "Not shown, and deleted: the picture guard found something every picture is barred from (minors, non-consent, real people in sexual content, or animals).";
 /// The guard didn't give a clear answer, so the picture isn't shown.
 pub const GUARD_UNSURE: &str = "Not shown, and deleted: the picture guard couldn't check this picture, so it stays hidden. Try again.";
+/// There wasn't the memory to run the guard on the finished picture.
+pub const GUARD_NO_ROOM: &str = "Not shown, and deleted: this computer didn't have the free memory to check the picture. Close some apps, then ask again.";
 
 /// What's on disk for on-device pictures.
 pub struct Kit {
@@ -200,104 +203,10 @@ pub fn forced() -> bool {
 /// Memory kept free above the picture model while it draws.
 pub const DRAW_HEADROOM_MB: u64 = 512;
 
-/// Whether a picture fits in memory now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DrawRoom {
-    /// It fits beside what is loaded, or there is no reading to go by.
-    Fits,
-    /// It fits once the chat model is unloaded; the next message loads it again.
-    UnloadChat,
-    /// It doesn't fit even then; `need_mb` is what it needs free.
-    NoRoom { need_mb: u64 },
-}
-
-/// Room for a picture model of `image_mb` with `chat_ram_mb` of the chat
-/// model in RAM that could be unloaded (0 when none is, or it can't go).
-/// `sd-cli` keeps the picture model's weights in RAM (`--offload-to-cpu`),
-/// so free VRAM doesn't count. With no reading, it draws as it always has.
-pub fn draw_room(
-    image_mb: u64,
-    room: Option<&super::local_scale::Room>,
-    chat_ram_mb: u64,
-) -> DrawRoom {
-    let Some(room) = room else {
-        return DrawRoom::Fits;
-    };
-    let need_mb = image_mb + DRAW_HEADROOM_MB;
-    let free = room.free_ram_mb * super::local_scale::RAM_SHARE_PCT / 100;
-    if need_mb <= free {
-        DrawRoom::Fits
-    } else if chat_ram_mb > 0 && need_mb <= free + chat_ram_mb {
-        DrawRoom::UnloadChat
-    } else {
-        DrawRoom::NoRoom { need_mb }
-    }
-}
-
 /// Said when a picture can't fit in memory now.
 pub fn no_room_line(need_mb: u64) -> String {
     let gb = need_mb.div_ceil(1024);
     format!("Not made, and nothing was sent: drawing needs about {gb} GB of free memory and this computer doesn't have it right now. Close some apps, then ask again.")
-}
-
-/// The part of a loaded chat model's `mb` that sits in RAM: all of it on the
-/// CPU or with shared memory, the layers left off the GPU otherwise, and
-/// none when the launch isn't known and used the GPU.
-pub fn ram_share(
-    mb: u64,
-    launch: Option<&super::local_autoconfig::LaunchArgs>,
-    bare_cpu: bool,
-    unified: bool,
-) -> u64 {
-    if unified {
-        return mb;
-    }
-    match launch {
-        Some(a) if a.cpu_only || a.ngl == 0 => mb,
-        Some(a) => {
-            let all = u64::from(a.all_layers.max(1));
-            mb * all.saturating_sub(u64::from(a.ngl)) / all
-        }
-        None if bare_cpu => mb,
-        None => 0,
-    }
-}
-
-/// Memory the loaded chat model holds: the catalog size, or the file's,
-/// plus its draft's file.
-fn chat_mb(loaded: &sidecar::Loaded) -> u64 {
-    let file_mb = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len() / (1024 * 1024));
-    let main = super::local_swap::catalog_for(&loaded.model)
-        .map_or_else(|| file_mb(&loaded.model), |m| m.run_mb);
-    let draft = loaded
-        .launch
-        .as_ref()
-        .and_then(|l| l.draft.as_ref())
-        .and_then(|d| d.model.as_deref())
-        .map_or(0, file_mb);
-    main + draft
-}
-
-/// Make room for `kit`'s picture model: nothing to do, unload the chat
-/// model (it and its draft load again on the next message), or decline.
-/// The chat model stays when Keep loaded holds it or a request is in flight.
-fn make_room(kit: &Kit) -> Result<(), String> {
-    let room = super::local_scale::room(grokhub_core::now_ms());
-    let chat_ram = match sidecar::loaded() {
-        Some(l) if !sidecar::keep_loaded() && sidecar::in_flight() == 0 => ram_share(
-            chat_mb(&l),
-            l.launch.as_ref(),
-            l.bare_cpu,
-            room.as_ref().is_some_and(|r| r.unified),
-        ),
-        _ => 0,
-    };
-    match draw_room(kit.model.run_mb, room.as_ref(), chat_ram) {
-        DrawRoom::Fits => Ok(()),
-        DrawRoom::UnloadChat if sidecar::unload_for_picture() => Ok(()),
-        DrawRoom::UnloadChat => Err(no_room_line(kit.model.run_mb + DRAW_HEADROOM_MB)),
-        DrawRoom::NoRoom { need_mb } => Err(no_room_line(need_mb)),
-    }
 }
 
 /// Append `line` as its own paragraph to the first system message.
@@ -344,10 +253,11 @@ pub fn make(
     if explicit && kit.guard.is_none() {
         return Err(NEEDS_GUARD.into());
     }
-    // Held from the memory check to the end, so keep-warm doesn't load the
-    // chat model back into the room the picture needs.
-    let _drawing = sidecar::DrawHold::take();
-    make_room(kit)?;
+    // Held from the memory check until sd-cli exits, so keep-warm doesn't
+    // load the chat model back into the room the picture needs.
+    let need = kit.model.run_mb + DRAW_HEADROOM_MB;
+    let drawing = resident::reserve(resident::Kind::Picture, resident::Mem::ram(need), true)
+        .map_err(no_room_line)?;
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("Couldn't make the picture folder: {e}"))?;
     let out = out_dir.join(format!("image-{}-local.png", grokhub_core::now_ms()));
@@ -374,10 +284,19 @@ pub fn make(
         let _ = std::fs::remove_file(&out);
         return Err(e);
     }
+    drop(drawing);
     if !out.is_file() {
         return Err("The picture engine finished without a picture.".into());
     }
     if let Some(g) = kit.guard {
+        let Ok(_checking) = resident::reserve(
+            resident::Kind::PictureGuard,
+            resident::Mem::ram(g.run_mb),
+            true,
+        ) else {
+            let _ = std::fs::remove_file(&out);
+            return Err(GUARD_NO_ROOM.into());
+        };
         let verdict = judge(&kit.models_dir, g, &out, stop);
         if verdict != Ok(false) {
             let _ = std::fs::remove_file(&out);
@@ -574,83 +493,72 @@ mod tests {
         }
     }
 
-    fn room(free_vram_mb: Option<u64>, free_ram_mb: u64) -> super::super::local_scale::Room {
-        super::super::local_scale::Room {
-            free_vram_mb,
+    #[cfg(unix)]
+    #[test]
+    fn a_picture_declines_before_the_engine_starts_when_memory_is_short() {
+        use super::super::local_scale::{clear_room, set_room, Room};
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-image-room-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        // A stand-in engine: notes that it ran, then writes a PNG header to
+        // the path after -o.
+        let cli = root.join("sd-cli");
+        let ran = root.join("ran");
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\ntouch '{}'\nwhile [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then printf '\\211PNG' > \"$2\"; fi; shift; done\n",
+                ran.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let model = grokhub_core::local_setup::local_models()
+            .iter()
+            .find(|m| m.kind == grokhub_core::local_setup::ModelKind::Image)
+            .unwrap();
+        let kit = Kit {
+            cli,
+            models_dir: root.clone(),
+            model,
+            guard: None,
+        };
+        let room = |free_ram_mb| Room {
+            free_vram_mb: Some(24_576),
             free_ram_mb,
             cpu_busy_pct: None,
             on_battery: false,
             unified: false,
-        }
+        };
+        let out = root.join("media");
+        // No chat model is loaded, and 80% of 4 GB is short of the picture
+        // model plus 512 MB: declined, and sd-cli never ran.
+        set_room(room(4_096), grokhub_core::now_ms());
+        let short = make(&kit, "a fox", "1:1", false, &out, &|| false);
+        assert_eq!(short, Err(no_room_line(model.run_mb + DRAW_HEADROOM_MB)));
+        assert!(!ran.exists());
+        // Enough room: it draws, and the job leaves the ledger when done.
+        set_room(room(65_536), grokhub_core::now_ms());
+        let made = make(&kit, "a fox", "1:1", false, &out, &|| false);
+        clear_room();
+        let made = made.unwrap();
+        assert_eq!(std::fs::read(&made).unwrap(), b"\x89PNG");
+        assert!(ran.exists());
+        assert!(!super::super::local_resident::held());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn a_picture_draws_beside_the_chat_model_unloads_it_or_declines() {
-        // 7 GB picture model plus 512 MB to spare: 7,680 MB, all of it RAM.
-        // 80% of 10 GB free RAM is 8,192 MB: it fits beside the chat model.
+    fn a_picture_without_room_says_how_much_memory_it_needs() {
+        // 7 GB picture model plus 512 MB to spare.
         assert_eq!(
-            draw_room(7_168, Some(&room(None, 10_240)), 5_000),
-            DrawRoom::Fits
-        );
-        // 80% of 5 GB is 4,096 MB: only once 5 GB of chat model leaves RAM.
-        assert_eq!(
-            draw_room(7_168, Some(&room(Some(2_048), 5_120)), 5_000),
-            DrawRoom::UnloadChat
-        );
-        // Not even then, or nothing in RAM to unload.
-        assert_eq!(
-            draw_room(7_168, Some(&room(None, 2_048)), 3_000),
-            DrawRoom::NoRoom { need_mb: 7_680 }
-        );
-        assert_eq!(
-            draw_room(7_168, Some(&room(Some(2_048), 5_120)), 0),
-            DrawRoom::NoRoom { need_mb: 7_680 }
-        );
-        // Free VRAM doesn't hold the picture model's weights.
-        assert_eq!(
-            draw_room(7_168, Some(&room(Some(24_576), 2_048)), 0),
-            DrawRoom::NoRoom { need_mb: 7_680 }
-        );
-        // No reading: it draws as it always has.
-        assert_eq!(draw_room(7_168, None, 5_000), DrawRoom::Fits);
-        assert_eq!(
-            no_room_line(7_680),
+            no_room_line(7_168 + DRAW_HEADROOM_MB),
             "Not made, and nothing was sent: drawing needs about 8 GB of free memory and this computer doesn't have it right now. Close some apps, then ask again."
         );
-    }
-
-    #[test]
-    fn only_the_chat_model_layers_in_ram_count_as_room_it_can_free() {
-        use super::super::local_autoconfig::{on_cpu, KvType, LaunchArgs};
-        let gpu = LaunchArgs {
-            backend: grokhub_core::local_profile::Backend::Vulkan,
-            ngl: 30,
-            all_layers: 40,
-            n_cpu_moe: None,
-            ctx: 8192,
-            kv: KvType::Q8,
-            threads: 4,
-            threads_batch: None,
-            flash_attn: true,
-            mlock: false,
-            tensor_split: None,
-            draft: None,
-            cpu_only: false,
-            run: Default::default(),
-        };
-        // 10 of 40 layers stay off the GPU: a quarter of 8 GB.
-        assert_eq!(ram_share(8_000, Some(&gpu), false, false), 2_000);
-        let all_gpu = LaunchArgs {
-            ngl: 40,
-            ..gpu.clone()
-        };
-        assert_eq!(ram_share(8_000, Some(&all_gpu), false, false), 0);
-        assert_eq!(ram_share(8_000, Some(&on_cpu(&gpu)), false, false), 8_000);
-        // Shared memory: the GPU's share is RAM too.
-        assert_eq!(ram_share(8_000, Some(&all_gpu), false, true), 8_000);
-        // One-shot defaults: on the CPU all of it, on the GPU none counted.
-        assert_eq!(ram_share(8_000, None, true, false), 8_000);
-        assert_eq!(ram_share(8_000, None, false, false), 0);
     }
 
     #[test]
