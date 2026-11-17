@@ -64,9 +64,13 @@ pub struct ClaudePlanEngine {
     /// Set: a tool call that needs approval asks on a card. Unset: only the
     /// read-only tools exist, and a call that would ask is refused.
     approvals: Option<Approvals>,
-    /// Rules the user picked "Always allow" for in this chat, like
-    /// `Bash(npm test *)`, passed to each later turn.
-    always: Vec<String>,
+    /// What the user picked "Always allow" for in this chat (Claude Code's
+    /// own suggestions: allow rules, accepting edits, another folder),
+    /// passed to each later turn.
+    always: Vec<Value>,
+    /// This turn only plans or answers: it gets the read tools and none of
+    /// the "Always allow" grants, as a native turn in that mode does.
+    read_only: bool,
 }
 
 fn unix_now() -> u64 {
@@ -93,6 +97,7 @@ impl ClaudePlanEngine {
             headroom: None,
             approvals: None,
             always: Vec::new(),
+            read_only: false,
         }
     }
 
@@ -108,6 +113,12 @@ impl ClaudePlanEngine {
     pub fn with_approvals(mut self, approvals: Approvals) -> Self {
         self.approvals = Some(approvals);
         self
+    }
+
+    /// Whether the next turn is a read-only one (a plan not yet approved, a
+    /// question), set for each turn from its session mode.
+    pub fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
     }
 
     /// Goes on with a Claude Code session an earlier run of the app started
@@ -171,21 +182,40 @@ impl ClaudePlanEngine {
             "stream-json",
             "--verbose",
             "--include-partial-messages",
-            "--permission-mode",
-            "default",
+            // No settings file (the user's, the project's or its local one)
+            // can allow a call or add a hook, file tools stay in the folder,
+            // and a write to settings or git asks.
+            "--restricted",
             "--strict-mcp-config",
         ]
         .iter()
         .map(|a| a.to_string())
         .collect();
+        let grants = self.approvals.is_some() && !self.read_only;
+        let mode = if grants && ask::accepts_edits(&self.always) {
+            "acceptEdits"
+        } else {
+            "default"
+        };
+        args.extend(["--permission-mode".into(), mode.into()]);
         let tools: &[&str] = if self.approvals.is_some() {
             // Who answers: this app, on stdin.
             args.extend(["--permission-prompt-tool".into(), "stdio".into()]);
-            if !self.always.is_empty() {
+            let rules = ask::allowed_rules(&self.always);
+            if grants && !rules.is_empty() {
                 args.push("--allowedTools".into());
-                args.extend(self.always.iter().cloned());
+                args.extend(rules);
             }
-            &ASKING_TOOLS
+            let dirs = ask::added_dirs(&self.always);
+            if grants && !dirs.is_empty() {
+                args.push("--add-dir".into());
+                args.extend(dirs);
+            }
+            if self.read_only {
+                &READ_ONLY_TOOLS
+            } else {
+                &ASKING_TOOLS
+            }
         } else {
             args.extend(["--permission-prompts".into(), "none".into()]);
             &READ_ONLY_TOOLS
@@ -348,9 +378,9 @@ impl ClaudePlanEngine {
             Control::Ask(ask) => {
                 let answer = self.ask_user(&ask, emit);
                 if answer == PermAnswer::Always {
-                    for rule in &ask.rules {
-                        if !self.always.contains(rule) {
-                            self.always.push(rule.clone());
+                    for grant in &ask.always {
+                        if !self.always.contains(grant) {
+                            self.always.push(grant.clone());
                         }
                     }
                 }
@@ -607,8 +637,8 @@ mod tests {
         assert_eq!(
             joined,
             "-p --input-format stream-json --output-format stream-json --verbose \
-             --include-partial-messages --permission-mode default --strict-mcp-config \
-             --permission-prompts none --session-id 3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c \
+             --include-partial-messages --restricted --strict-mcp-config \
+             --permission-mode default --permission-prompts none --session-id 3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c \
              --tools Read Grep Glob"
         );
         assert!(
@@ -655,18 +685,34 @@ mod tests {
         assert_eq!(
             e.args().join(" "),
             "-p --input-format stream-json --output-format stream-json --verbose \
-             --include-partial-messages --permission-mode default --strict-mcp-config \
-             --permission-prompt-tool stdio --session-id 3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c \
+             --include-partial-messages --restricted --strict-mcp-config \
+             --permission-mode default --permission-prompt-tool stdio \
+             --session-id 3f1c2a4e-8b7d-4c6e-9a1b-2d3e4f5a6b7c \
              --tools Read Grep Glob Bash Edit Write"
         );
-        e.always.push("Bash(npm test *)".into());
+        e.always = vec![
+            serde_json::json!({"type": "addRules", "behavior": "allow", "rules": [{"toolName": "Bash", "ruleContent": "npm test *"}], "destination": "session"}),
+            serde_json::json!({"type": "setMode", "mode": "acceptEdits", "destination": "session"}),
+            serde_json::json!({"type": "addDirectories", "directories": ["/home/user/shared"], "destination": "session"}),
+        ];
         let joined = e.args().join(" ");
         assert!(
             joined.contains(
-                "--permission-prompt-tool stdio --allowedTools Bash(npm test *) --session-id"
+                "--permission-mode acceptEdits --permission-prompt-tool stdio \
+                 --allowedTools Bash(npm test *) --add-dir /home/user/shared --session-id"
             ),
             "{joined}"
         );
+
+        // A plan or a question: the read tools only, and no grant applies.
+        e.set_read_only(true);
+        let joined = e.args().join(" ");
+        assert!(
+            joined
+                .contains("--permission-mode default --permission-prompt-tool stdio --session-id"),
+            "{joined}"
+        );
+        assert!(joined.ends_with("--tools Read Grep Glob"), "{joined}");
     }
 
     #[test]

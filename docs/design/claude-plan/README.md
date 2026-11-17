@@ -78,9 +78,14 @@ so it isn't used.
 
 ## Tools and approvals
 
-A chat turn passes `--strict-mcp-config` (no MCP server from the user's own
-config) and `--permission-mode default`, so a `bypassPermissions` default in
-the user's Claude Code settings doesn't apply. Claude Code's own rules
+A chat turn passes `--restricted`, `--strict-mcp-config` and
+`--permission-mode default`. Restricted mode ignores the user's, the
+project's and the project's local Claude Code settings files, so no allow
+rule or hook there can approve a call without the card (a cloned project's
+`.claude/settings.json` included). It also keeps the file tools inside the
+chat's folder, refuses `bypassPermissions`, and asks before a write to
+settings, git or tool config. `--strict-mcp-config` loads no MCP server from
+the user's own config. Claude Code's own rules
 decide which calls need asking: reading inside the chat's folder and
 read-only commands such as `echo` go ahead, and a command that changes
 something, an edit, a write, or a read outside the folder asks.
@@ -96,10 +101,19 @@ something, an edit, a write, or a read outside the folder asks.
   `interrupt: true`, which ends the turn. Any other control request gets an
   error response, so a turn never hangs on one. stdin stays open until the
   turn's `result` line, then closes so Claude Code exits.
-- **Always allow** keeps the rules Claude Code suggested for that call, such
-  as `Bash(touch notes.md *)`, and passes them as `--allowedTools` on the
-  chat's later turns. They're kept in memory for the open chat, not written to
-  Claude Code's settings or the user's project, and a restart forgets them.
+- **Always allow** takes what Claude Code suggested for that call (its
+  `permission_suggestions`), set to last for that Claude Code session only,
+  and sends them back as `updatedPermissions`, so they hold for the rest of
+  the turn. The app keeps them for the open chat and passes them to later
+  turns: allow rules such as `Bash(touch notes.md)` as `--allowedTools`, an
+  extra folder as `--add-dir`, and accepting edits as
+  `--permission-mode acceptEdits`. Accepting every edit is kept only when the
+  call was itself an edit (Edit, Write), not for a command such as `touch`.
+  Nothing is written to Claude Code's settings or the user's project, and a
+  restart forgets them.
+- **Planning turns stay read-only.** A turn the app runs as a plan not yet
+  approved, or a question, gets only `--tools Read Grep Glob` and none of the
+  "Always allow" grants, as a native turn in that mode does.
 - **When nobody can be asked** (no approval cards, as in tests), a turn has
   only `--tools Read Grep Glob` and `--permission-prompts none`, so anything
   that would ask is refused and shows as a failed row.

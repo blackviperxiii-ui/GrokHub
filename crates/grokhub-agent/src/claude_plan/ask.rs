@@ -18,8 +18,10 @@ pub struct ToolAsk {
     pub action: String,
     /// What Claude said the call is for, when it said.
     pub reason: String,
-    /// Rules Claude Code offers for "Always allow", like `Bash(npm test *)`.
-    pub rules: Vec<String>,
+    /// What Claude Code offers for "Always allow" (allow rules such as
+    /// `Bash(npm test *)`, accepting edits, another folder), each set to
+    /// last for this Claude Code session only: the app keeps them itself.
+    pub always: Vec<Value>,
 }
 
 /// A `control_request` line: a tool to ask about, or another request this
@@ -29,6 +31,9 @@ pub enum Control {
     Ask(ToolAsk),
     Other { request_id: String },
 }
+
+/// The tools whose "Always allow" may accept every edit in the folder.
+const EDIT_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
 /// The control request on this line, if it is one.
 pub fn control(line: &str) -> Option<Control> {
@@ -52,13 +57,23 @@ pub fn control(line: &str) -> Option<Control> {
         .or_else(|| req["decision_reason"].as_str())
         .unwrap_or_default()
         .to_string();
-    let rules = req["permission_suggestions"]
+    let always = req["permission_suggestions"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|s| s["type"] == "addRules" && s["behavior"] == "allow")
-        .flat_map(|s| s["rules"].as_array().into_iter().flatten())
-        .filter_map(rule_text)
+        .filter(|s| match s["type"].as_str() {
+            Some("addRules") => s["behavior"] == "allow",
+            // Accepting every edit is kept only for an edit itself: for a
+            // command (`touch`), it would let much more than it showed.
+            Some("setMode") => s["mode"] == "acceptEdits" && EDIT_TOOLS.contains(&tool.as_str()),
+            Some("addDirectories") => true,
+            _ => false,
+        })
+        .map(|s| {
+            let mut s = s.clone();
+            s["destination"] = json!("session");
+            s
+        })
         .collect();
     Some(Control::Ask(ToolAsk {
         request_id,
@@ -66,8 +81,37 @@ pub fn control(line: &str) -> Option<Control> {
         input,
         action,
         reason,
-        rules,
+        always,
     }))
+}
+
+/// The allow rules among kept "Always allow" updates, as `--allowedTools`
+/// takes them.
+pub fn allowed_rules(always: &[Value]) -> Vec<String> {
+    always
+        .iter()
+        .filter(|u| u["type"] == "addRules")
+        .flat_map(|u| u["rules"].as_array().into_iter().flatten())
+        .filter_map(rule_text)
+        .collect()
+}
+
+/// Edits were allowed always: later turns run in `acceptEdits`.
+pub fn accepts_edits(always: &[Value]) -> bool {
+    always
+        .iter()
+        .any(|u| u["type"] == "setMode" && u["mode"] == "acceptEdits")
+}
+
+/// Folders allowed always, as `--add-dir` takes them.
+pub fn added_dirs(always: &[Value]) -> Vec<String> {
+    always
+        .iter()
+        .filter(|u| u["type"] == "addDirectories")
+        .flat_map(|u| u["directories"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
 }
 
 /// `Bash(npm test *)` from `{toolName, ruleContent}`; just the tool when
@@ -85,9 +129,15 @@ fn rule_text(rule: &Value) -> Option<String> {
 /// The line that answers `ask`. A stopped turn denies and interrupts.
 pub fn answer_line(ask: &ToolAsk, answer: PermAnswer) -> String {
     let response = match answer {
-        PermAnswer::Allow | PermAnswer::Always => json!({
+        PermAnswer::Allow => json!({
             "behavior": "allow",
             "updatedInput": ask.input,
+        }),
+        // Applied for the rest of this turn too, not only the next ones.
+        PermAnswer::Always => json!({
+            "behavior": "allow",
+            "updatedInput": ask.input,
+            "updatedPermissions": ask.always,
         }),
         PermAnswer::Deny => json!({
             "behavior": "deny",
@@ -151,8 +201,37 @@ mod tests {
                 input: json!({"command": "touch probe-file && ls probe-file", "description": "Create probe file and list it"}),
                 action: "touch probe-file && ls probe-file".into(),
                 reason: "Create probe file and list it".into(),
-                rules: vec!["Bash(touch probe-file *)".into()],
+                always: vec![
+                    json!({"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "touch probe-file *"}], "behavior": "allow", "destination": "session"}),
+                    json!({"type": "addDirectories", "directories": ["/home/user/elsewhere"], "destination": "session"}),
+                ],
             }
+        );
+        let always = touch().always;
+        assert_eq!(
+            allowed_rules(&always),
+            vec!["Bash(touch probe-file *)".to_string()]
+        );
+        assert_eq!(
+            added_dirs(&always),
+            vec!["/home/user/elsewhere".to_string()]
+        );
+        assert!(!accepts_edits(&always));
+    }
+
+    #[test]
+    fn a_command_never_turns_on_accepting_every_edit() {
+        let line = TOUCH.replace(
+            r#""permission_suggestions":["#,
+            r#""permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"},"#,
+        );
+        let Some(Control::Ask(ask)) = control(&line) else {
+            panic!()
+        };
+        assert!(!accepts_edits(&ask.always), "{:?}", ask.always);
+        assert_eq!(
+            allowed_rules(&ask.always),
+            vec!["Bash(touch probe-file *)".to_string()]
         );
     }
 
@@ -167,6 +246,17 @@ mod tests {
         let deny: Value = serde_json::from_str(&answer_line(&ask, PermAnswer::Deny)).unwrap();
         assert_eq!(deny["response"]["response"]["behavior"], "deny");
         assert_eq!(deny["response"]["response"].get("interrupt"), None);
+        let always: Value = serde_json::from_str(&answer_line(&ask, PermAnswer::Always)).unwrap();
+        assert_eq!(always["response"]["response"]["behavior"], "allow");
+        assert_eq!(
+            always["response"]["response"]["updatedPermissions"],
+            json!(ask.always),
+            "applies for the rest of this turn"
+        );
+        assert_eq!(
+            allow["response"]["response"].get("updatedPermissions"),
+            None
+        );
         let stop: Value = serde_json::from_str(&answer_line(&ask, PermAnswer::Cancel)).unwrap();
         assert_eq!(stop["response"]["response"]["interrupt"], true);
     }
@@ -194,13 +284,22 @@ mod tests {
     }
 
     #[test]
-    fn a_rule_without_content_is_the_whole_tool() {
-        let line = r#"{"type":"control_request","request_id":"r3","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"notes.md"},"permission_suggestions":[{"type":"addRules","behavior":"allow","rules":[{"toolName":"Write"}]},{"type":"addRules","behavior":"deny","rules":[{"toolName":"Bash","ruleContent":"rm *"}]}]}}"#;
+    fn an_edit_keeps_accept_edits_and_drops_deny_rules_and_other_modes() {
+        let line = r#"{"type":"control_request","request_id":"r3","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"notes.md"},"permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"},{"type":"setMode","mode":"bypassPermissions","destination":"session"},{"type":"addRules","behavior":"allow","rules":[{"toolName":"Write"}]},{"type":"addRules","behavior":"deny","rules":[{"toolName":"Bash","ruleContent":"rm *"}]}]}}"#;
         let Some(Control::Ask(ask)) = control(line) else {
             panic!()
         };
         assert_eq!(ask.action, "notes.md");
         assert_eq!(ask.reason, "");
-        assert_eq!(ask.rules, vec!["Write".to_string()]);
+        assert_eq!(
+            ask.always,
+            vec![
+                json!({"type": "setMode", "mode": "acceptEdits", "destination": "session"}),
+                json!({"type": "addRules", "behavior": "allow", "rules": [{"toolName": "Write"}], "destination": "session"}),
+            ]
+        );
+        assert!(accepts_edits(&ask.always));
+        assert_eq!(allowed_rules(&ask.always), vec!["Write".to_string()]);
+        assert_eq!(added_dirs(&ask.always), Vec::<String>::new());
     }
 }

@@ -1300,6 +1300,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 })
             });
             plan.set_cli(cli);
+            // Read-only until a plan is approved, as the native gate is.
+            plan.set_read_only(route.session != SessionMode::Chat);
             // The store decides which session goes on: the one kept for this
             // folder (also after a restart), or a new one when the chat was
             // switched off and on, a message was deleted, or Settings revoked it.
