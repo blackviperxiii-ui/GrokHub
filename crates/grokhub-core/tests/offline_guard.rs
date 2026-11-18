@@ -101,6 +101,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("src-tauri/src/catalog_refresh.rs", 1, "daily signed model catalog: runtime_download_url_ok + guard_quiet on every hop, public_only"),
     ("src-tauri/src/shell_update.rs", 1, "shell self-update release list: guard_quiet + public_only; the plugin's check and download refuse first (offline::refuse)"),
     ("src-tauri/src/local_engine.rs", 2, "engine and HF downloads: runtime_download_url_ok, download_engine and model_download::download refuse while on"),
+    ("crates/grokhub-agent/src/vstack_sync.rs", 1, "runtime upstream vstack skills sync: offline::refuse + github host allowlist + guard_quiet on every hop, public_only"),
     // On-device model (loopback only).
     ("crates/grokhub-agent/src/route/local_http.rs", 2, "llama-server chat and the /props context-window read, both loopback only"),
     ("crates/grokhub-agent/src/route/local_sidecar.rs", 1, "llama-server /health on loopback"),

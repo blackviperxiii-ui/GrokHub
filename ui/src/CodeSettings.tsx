@@ -7,8 +7,11 @@ import {
   codeTestRemembered,
   getCodeShip,
   saveCodeShip,
+  vstackSyncNow,
+  vstackSyncStatus,
   type CodeDeployPlan,
   type CodeShipSettings,
+  type VstackStatus,
 } from "./api";
 import { CodeSecrets } from "./CodeSecrets";
 import { Toggle } from "./Toggle";
@@ -214,6 +217,64 @@ export function DeploySettings() {
   );
 }
 
+/** Settings → Code → Coding skills (vstack): active version/commit, last sync time, and Sync now. */
+export function VstackSettings() {
+  const [status, setStatus] = useState<VstackStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    vstackSyncStatus().then(
+      (next) => setStatus(next),
+      (err) => setNote(String(err)),
+    );
+  }, []);
+
+  async function syncNow() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const next = await vstackSyncNow();
+      setStatus(next);
+    } catch (err) {
+      setNote(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const shortCommit = status ? status.commit.slice(0, 12) : "";
+  const sourceLabel = status?.source === "synced" ? "synced from upstream" : "bundled fallback";
+  const lastSyncLabel = status?.lastSyncMs != null ? new Date(status.lastSyncMs).toLocaleString() : "Never synced (offline fallback ready)";
+  const displayedNote = note ?? status?.lastError ?? null;
+
+  return (
+    <div className="code-settings" role="group" aria-label="Coding skills (vstack)">
+      <h3>Coding skills (vstack)</h3>
+      {status ? (
+        <>
+          <p className="note">
+            In use: <code>{status.version}</code> (<code>{shortCommit}</code>) · {status.skillCount} skills · {sourceLabel}
+          </p>
+          <p className="note">Last sync: {lastSyncLabel}</p>
+          <div className="code-test-row">
+            <button type="button" disabled={busy} onClick={() => void syncNow()}>
+              {busy ? "Syncing…" : "Sync now"}
+            </button>
+          </div>
+        </>
+      ) : (
+        !note && <p className="empty">Loading…</p>
+      )}
+      {displayedNote && (
+        <p className="note" role="status">
+          {displayedNote}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Settings → Code: forget the remembered test command for this project. */
 export function CodeSettings() {
   const [command, setCommand] = useState<string | null | undefined>(undefined);
@@ -261,6 +322,7 @@ export function CodeSettings() {
           )}
         </>
       )}
+      <VstackSettings />
       <ShipSettings />
       <DeploySettings />
       <CodeSecrets />

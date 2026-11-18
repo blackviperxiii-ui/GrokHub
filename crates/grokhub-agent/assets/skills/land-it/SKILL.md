@@ -9,11 +9,11 @@ Product-feel diagnosis when the app "almost" works but never quite lands. Not a 
 
 ## 1. Whole-app dive
 
-Boot real UI when possible (Playwright/browser/desktop runner). Else systematic code+flow read of every major surface: empty, error, loading, first-run, narrow/wide, light/dark. Name each flow.
+Boot real UI if possible (Playwright, browser, desktop). Else read code and flows of every major surface: empty, error, loading, first-run, narrow/wide, light/dark. Name each flow.
 
 ## 2. Miss-the-mark
 
-Where unfinished, confusing, inert, or almost-but-not-delightful. State intended experience vs what ships. Evidence: screenshot path, `file:line`, flow name.
+Where unfinished, confusing, inert, or almost delightful. Intended experience vs what ships. Evidence: screenshot, `file:line`, flow name.
 
 ## 3. Interactivity and QoL
 
@@ -21,8 +21,8 @@ Feedback, affordances, progressive disclosure, keyboard/shortcuts, undo, default
 
 ## 4. Code that hurts feel
 
-Dead-end state machines, missing optimistic UI, blocking waits, silent failures, half-wired features, copy/layout fighting code.
+Dead-end states, missing optimistic UI, blocking waits, silent failures, half-wired features, layout fighting code. Web UI vs **modern-web-guidance**.
 
 ## 5. Output
 
-One scannable report ranked P0/P1/P2. Each: where, why it fails to land, smallest fix, optional verify. Safe auto-fixes → **beta**; else **Needs decision**. Hand ship/security/tests to **qa-walkthrough**.
+One report ranked P0/P1/P2. Each: where, why it misses, smallest fix, optional verify. Safe auto-fixes → **beta**; else **Needs decision**. Ship/security/tests → **qa-walkthrough**.

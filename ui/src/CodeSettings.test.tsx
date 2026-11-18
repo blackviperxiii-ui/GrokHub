@@ -15,6 +15,8 @@ const api = vi.hoisted(() => ({
   codeDeployPlan: vi.fn(),
   codeDeploySave: vi.fn(),
   codeDeployForget: vi.fn(),
+  vstackSyncStatus: vi.fn(),
+  vstackSyncNow: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -34,6 +36,18 @@ const DEPLOY_OFF = {
   remembered: null as string | null,
   mode: "ask" as const,
   blocked: "Deploy is off for this project. Turn it on in Settings → Code.",
+};
+
+const VSTACK_DEFAULT = {
+  repo: "https://github.com/blackviperxiii-ui/vstack",
+  source: "bundled",
+  version: "v1.4.0",
+  tag: "v1.4.0",
+  commit: "11cca98b4a55da3118f51e749ac62faefbc21b3b",
+  lastSyncMs: null as number | null,
+  lastCheckMs: null as number | null,
+  lastError: null as string | null,
+  skillCount: 58,
 };
 
 /** The page as Settings holds it: mounted once, hidden while another tab shows. */
@@ -56,7 +70,11 @@ describe("Settings → Code", () => {
     api.codeDeployPlan.mockReset();
     api.codeDeploySave.mockReset();
     api.codeDeployForget.mockReset();
+    api.vstackSyncStatus.mockReset();
+    api.vstackSyncNow.mockReset();
     api.codeDeployPlan.mockResolvedValue(DEPLOY_OFF);
+    api.vstackSyncStatus.mockResolvedValue(VSTACK_DEFAULT);
+    api.vstackSyncNow.mockResolvedValue({ ...VSTACK_DEFAULT, source: "synced", lastSyncMs: 1_700_000_000_000 });
     api.saveCodeShip.mockReset();
     api.getCodeShip.mockResolvedValue(SHIP);
     api.saveCodeShip.mockImplementation((ship: typeof SHIP) => Promise.resolve(ship));
@@ -211,5 +229,29 @@ describe("Settings → Code", () => {
     await userEvent.click(screen.getByRole("switch", { name: "Remember this project's deploy command" }));
     expect(api.codeDeployForget).toHaveBeenCalledTimes(1);
     expect(await screen.findByText(DEPLOY_SETTINGS_NONE)).toBeInTheDocument();
+  });
+
+  it("shows vstack version/commit, last sync state, and runs manual Sync now", async () => {
+    api.codeTestRemembered.mockResolvedValue({ command: null });
+    api.vstackSyncNow.mockResolvedValue({
+      ...VSTACK_DEFAULT,
+      source: "synced",
+      version: "1.4.1",
+      commit: "22cca98b4a55da3118f51e749ac62faefbc21b3b",
+      lastSyncMs: 1_700_000_000_000,
+      skillCount: 59,
+    });
+    render(<CodeSettings />);
+    const group = await screen.findByRole("group", { name: "Coding skills (vstack)" });
+    expect(group).toHaveTextContent("v1.4.0");
+    expect(group).toHaveTextContent("11cca98b4a55");
+    expect(group).toHaveTextContent("58 skills");
+    expect(group).toHaveTextContent("bundled fallback");
+    await userEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(api.vstackSyncNow).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(group).toHaveTextContent("synced from upstream"));
+    expect(group).toHaveTextContent("1.4.1");
+    expect(group).toHaveTextContent("22cca98b4a55");
+    expect(group).toHaveTextContent("59 skills");
   });
 });

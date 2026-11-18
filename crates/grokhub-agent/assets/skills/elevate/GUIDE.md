@@ -69,6 +69,7 @@ Reject when present without brand intent:
 - Tokens for semantic color, type, space, surface; components consume tokens.
 - Set `color-scheme` on root and theme-color meta so browser chrome matches.
 - Semantic HTML / native controls; visible focus; density adapts by breakpoint.
+- Web frontend: before hand-rolling a dialog, popover, select, View Transition, scroll effect, form or theme switch, look it up in **modern-web-guidance** (`INDEX.md`, then the guide) and keep its fallbacks.
 - One job per section: one headline, short support, no competing promo chrome.
 
 ## Stop / handoff

@@ -79,6 +79,7 @@ mod tools;
 mod turn_budget;
 mod unattended;
 pub mod voice_session;
+pub mod vstack_sync;
 mod work;
 mod ws_mode;
 pub mod xai_keychain;
@@ -171,7 +172,8 @@ pub use session::{
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{
-    builtin_names, builtin_text, discover as discover_skills, discover_all as discover_all_skills,
+    active_always_on, active_builtin_bodies, builtin_names, builtin_text,
+    discover as discover_skills, discover_all as discover_all_skills, invalidate_discover_cache,
     set_skill_off_in, skill_is_off_in, skill_name_key, skills_off_in, Skill, SkillSource,
     BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES,
 };

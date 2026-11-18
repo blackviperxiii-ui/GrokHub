@@ -1,8 +1,8 @@
 {
   "about": "vstack skills bundled as Loadout built-ins. .github/scripts/vstack_sync.py reads this list and keeps the folders, CREDITS.md and src/builtin_skills.rs in step with it. always_on skills ride in full in every Code tab session; the rest load with the skill tool. A sync bundles a new upstream skill that is in neither list, and its PR then waits for a person.",
   "repo": "https://github.com/blackviperxiii-ui/vstack",
-  "tag": "v1.3.0",
-  "commit": "c296c0f714d0934353f99879e6f8b00ffdc7f789",
+  "tag": "v1.4.0",
+  "commit": "11cca98b4a55da3118f51e749ac62faefbc21b3b",
   "always_on": [
     "qa-walkthrough",
     "av-qa-walkthrough",
@@ -13,8 +13,10 @@
   "skills": [
     "architect",
     "av-qa-walkthrough",
+    "bag-and-tag",
     "benchmark-checklist",
     "blast-radius",
+    "chrome-extensions",
     "correct",
     "create-formal-verification-skill",
     "create-verification-skill",
@@ -25,9 +27,11 @@
     "in-your-own-words",
     "interrogate",
     "ketchup",
+    "ketchup-video",
     "land-it",
     "maintain-formal-verification-skill",
     "maintain-verification-skill",
+    "modern-web-guidance",
     "optimize",
     "principle-attack-the-premise",
     "principle-boundary-discipline",
@@ -49,8 +53,12 @@
     "principle-test-behavior-not-implementation",
     "principle-type-system-discipline",
     "qa-walkthrough",
+    "recall",
+    "reflect",
+    "setup-vstack",
     "sharpen",
     "show-me-your-work",
+    "stageshow",
     "statechart",
     "swarm",
     "tdd",
@@ -58,16 +66,9 @@
     "technical-writing",
     "typescript-best-practices",
     "unslop",
+    "updater",
     "viper-mode",
     "why"
   ],
-  "exclude": {
-    "bag-and-tag": "vstack's own release ritual: it bumps plugin manifests and checks installers other repos don't have",
-    "ketchup-video": "renders a slide video and embeds it in chat; the app has no video pipeline for it",
-    "recall": "rebuilds context from Cursor's agent-transcripts folder, which the app doesn't keep",
-    "reflect": "writes skill edits into Cursor's skill folders, not the app's skill store",
-    "setup-vstack": "installs vstack into a coding agent; the app ships these skills itself",
-    "stageshow": "ships a 2 MB React kit of example screens beside its text",
-    "updater": "runs its 52 KB scripts/updater.py from the skill folder, which is over the skill tool's file size and has no folder on disk to run from"
-  }
+  "exclude": {}
 }
