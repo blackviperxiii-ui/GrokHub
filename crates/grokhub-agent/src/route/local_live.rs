@@ -3,7 +3,7 @@
 //! when it unloads. [`snapshot`] reads the live state; [`lines`] words it.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use grokhub_core::local_draft::Decision;
@@ -209,41 +209,26 @@ fn group(n: u32) -> String {
     out
 }
 
-/// What runs, in the words of the line under a reply, when no ask decides it.
+/// What runs, in the words of the line under a reply, when no ask decides it:
+/// the stand-in's own reason, the one Settings shows too.
 fn running_why(stand_in: Option<StandIn>) -> String {
-    let why = match stand_in {
-        None => "your pick",
-        Some(StandIn::LowBattery) => "a smaller model while the battery is low",
-        Some(StandIn::OutOfMemory) => "a smaller model because your pick ran out of memory",
-        Some(StandIn::Gaming) => "the lightest model while a game runs",
-        Some(StandIn::Lighter) => "a smaller model while the computer saves power",
-        Some(StandIn::Tight) => "a smaller model because less memory is free than your pick needs",
-        Some(StandIn::Performance) => "a bigger model for a hard task while the computer is free",
-        Some(StandIn::BestFor(kind)) => {
-            return format!("a model stronger at {} than your pick", kind.words());
-        }
-        Some(StandIn::Asked(tier, _)) => {
-            return format!("the model an earlier {} ask loaded", tier_word(tier));
-        }
-    };
-    why.to_string()
+    stand_in.map_or_else(|| "your pick".to_string(), StandIn::reason)
 }
 
-/// The ask got its tier: what runs is the tier's model. A launch that
-/// stepped down (or landed on the pick) didn't, unless the ask was Balance.
-fn honored(tier: SpeedQuality, stand_in: Option<StandIn>) -> bool {
-    match stand_in {
-        None => tier == SpeedQuality::Balanced,
-        Some(StandIn::Asked(..) | StandIn::Performance | StandIn::BestFor(_)) => {
-            tier != SpeedQuality::Balanced
-        }
-        Some(_) => false,
+/// What an ask came to, given whether what runs is the model its plan aimed
+/// at (`met`). A plan that got its tier but whose launch stepped down, or
+/// landed elsewhere, didn't get it: no room for it.
+pub fn settle(ask: AskOutcome, met: bool) -> AskOutcome {
+    match ask {
+        AskOutcome::Got(tier, _) if !met => AskOutcome::Refused(tier, Refused::NoRoom),
+        other => other,
     }
 }
 
 /// The one line under an on-device reply: which model answered, with its
 /// draft or not, and why. A tier word (Speed, Balance, Performance) shows
-/// only when a chat's ask or setting chose or wanted it.
+/// only when a chat's ask or setting chose or wanted it. `ask` is what
+/// [`settle`] made of the plan's outcome.
 pub fn chat_line(
     name: &str,
     draft: bool,
@@ -264,7 +249,7 @@ pub fn chat_line(
     };
     let word = tier_word(tier);
     match ask {
-        AskOutcome::Got(t, source) if honored(t, stand_in) => {
+        AskOutcome::Got(t, source) => {
             let because = match (source, t) {
                 (Source::Pin, _) | (Source::Words, SpeedQuality::Balanced) => {
                     "this chat is set to it"
@@ -274,7 +259,7 @@ pub fn chat_line(
             };
             format!("{by}: {word}, because {because}.")
         }
-        AskOutcome::Got(..) | AskOutcome::Refused(_, Refused::NoRoom) => {
+        AskOutcome::Refused(_, Refused::NoRoom) => {
             let none = match tier {
                 SpeedQuality::Speed => "no faster model fits",
                 SpeedQuality::Quality => "no bigger model fits",
@@ -282,10 +267,16 @@ pub fn chat_line(
             };
             format!("{by}, {base}; {none} for {word} right now.")
         }
-        AskOutcome::Refused(_, Refused::Busy) => {
+        AskOutcome::Refused(_, Refused::Busy(Source::Pin)) => {
             format!(
                 "{by}, {base}; another chat was answering, so {word} loads with the next reply."
             )
+        }
+        AskOutcome::Refused(_, Refused::Busy(Source::Words)) => {
+            format!("{by}, {base}; another chat was answering, so this reply stayed on it.")
+        }
+        AskOutcome::Refused(_, Refused::LowBattery) => {
+            format!("{by}, {base}; the battery is low, so {word} doesn't load a bigger model.")
         }
         AskOutcome::Refused(_, Refused::KeptLoaded) => {
             format!("{by}, {base}; Keep loaded is on, so {word} doesn't swap the model.")
@@ -302,7 +293,7 @@ static LAST_LINE: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
 /// Keep the line for the reply that just ran on device for `conversation_id`
 /// (a later step of the same turn replaces it). With nothing loaded there
 /// is no line.
-pub fn note_reply(conversation_id: &str, ask: Option<AskOutcome>) {
+pub fn note_reply(conversation_id: &str, ask: Option<(AskOutcome, PathBuf)>) {
     let Some(l) = local_sidecar::loaded() else {
         forget_line(conversation_id);
         return;
@@ -318,7 +309,15 @@ pub fn note_reply(conversation_id: &str, ask: Option<AskOutcome>) {
     );
     let draft = local_spec::draft_status()
         .is_some_and(|(_, d)| matches!(d, Decision::On | Decision::NeedsTest));
-    let line = chat_line(&name, draft, l.stand_in, ask);
+    // What runs decides whether the ask got its tier, not the running
+    // model's label: a plan that keeps the model the ask wanted leaves the
+    // label of whatever loaded it.
+    let ask = ask.map(|(a, target)| settle(a, target == l.model));
+    keep_line(conversation_id, chat_line(&name, draft, l.stand_in, ask));
+}
+
+/// Keep `line` for `conversation_id`'s turn, until [`take_line`] takes it.
+pub fn keep_line(conversation_id: &str, line: String) {
     if let Ok(mut lines) = LAST_LINE.lock() {
         lines.insert(conversation_id.to_string(), line);
     }
@@ -566,14 +565,18 @@ mod tests {
         );
         // The launch landed on the pick, or stepped down: the ask didn't get it.
         assert_eq!(
-            line(true, None, Some(AskOutcome::Got(Quality, Source::Words))),
+            line(
+                true,
+                None,
+                Some(settle(AskOutcome::Got(Quality, Source::Words), false))
+            ),
             "Answered by Gemma 4 E2B with its draft, your pick; no bigger model fits for Performance right now."
         );
         assert_eq!(
             line(
                 true,
                 Some(StandIn::Tight),
-                Some(AskOutcome::Got(Quality, Source::Pin))
+                Some(settle(AskOutcome::Got(Quality, Source::Pin), false))
             ),
             "Answered by Gemma 4 E2B with its draft, a smaller model because less memory is free than your pick needs; no bigger model fits for Performance right now."
         );
@@ -589,7 +592,7 @@ mod tests {
             line(
                 true,
                 Some(StandIn::Tight),
-                Some(AskOutcome::Got(Balanced, Source::Pin))
+                Some(settle(AskOutcome::Got(Balanced, Source::Pin), false))
             ),
             "Answered by Gemma 4 E2B with its draft, a smaller model because less memory is free than your pick needs; your pick doesn't fit for Balance right now."
         );
@@ -597,9 +600,49 @@ mod tests {
             line(
                 true,
                 Some(StandIn::Performance),
-                Some(AskOutcome::Refused(Speed, Refused::Busy))
+                Some(AskOutcome::Refused(Speed, Refused::Busy(Source::Pin)))
             ),
-            "Answered by Gemma 4 E2B with its draft, a bigger model for a hard task while the computer is free; another chat was answering, so Speed loads with the next reply."
+            "Answered by Gemma 4 E2B with its draft, a bigger model than your pick for hard tasks while the computer is free; another chat was answering, so Speed loads with the next reply."
+        );
+        // Words ask for this reply only: the next one carries no ask.
+        assert_eq!(
+            line(
+                true,
+                None,
+                Some(AskOutcome::Refused(Speed, Refused::Busy(Source::Words)))
+            ),
+            "Answered by Gemma 4 E2B with its draft, your pick; another chat was answering, so this reply stayed on it."
+        );
+        // A low battery keeps Performance off even with no smaller model.
+        assert_eq!(
+            line(
+                true,
+                None,
+                Some(AskOutcome::Refused(Quality, Refused::LowBattery))
+            ),
+            "Answered by Gemma 4 E2B with its draft, your pick; the battery is low, so Performance doesn't load a bigger model."
+        );
+        // The ask's model was already running under an older label (a
+        // walk down, a low battery since charged, a power-saving stand-in):
+        // what runs is what the ask wanted, so the line says it got it.
+        for old in [StandIn::Tight, StandIn::LowBattery, StandIn::Lighter] {
+            assert_eq!(
+                line(
+                    true,
+                    Some(old),
+                    Some(settle(AskOutcome::Got(Speed, Source::Pin), true))
+                ),
+                "Answered by Gemma 4 E2B with its draft: Speed, because this chat is set to it.",
+                "{old:?}"
+            );
+        }
+        assert_eq!(
+            line(
+                true,
+                Some(StandIn::Lighter),
+                Some(settle(AskOutcome::Got(Speed, Source::Words), true))
+            ),
+            "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer."
         );
         assert_eq!(
             line(
@@ -633,20 +676,43 @@ mod tests {
         );
         assert_eq!(
             why(StandIn::Lighter),
-            "Answered by Gemma 4 E2B, a smaller model while the computer saves power."
+            "Answered by Gemma 4 E2B, a smaller model for light tasks while the computer saves power."
         );
         assert_eq!(
             why(StandIn::Performance),
-            "Answered by Gemma 4 E2B, a bigger model for a hard task while the computer is free."
+            "Answered by Gemma 4 E2B, a bigger model than your pick for hard tasks while the computer is free."
         );
         assert_eq!(
             why(StandIn::BestFor(TaskKind::Reason)),
-            "Answered by Gemma 4 E2B, a model stronger at reasoning and planning than your pick."
+            "Answered by Gemma 4 E2B, a model that's stronger at reasoning and planning than your pick."
         );
         assert_eq!(
             why(StandIn::Asked(Speed, Source::Words)),
-            "Answered by Gemma 4 E2B, the model an earlier Speed ask loaded."
+            "Answered by Gemma 4 E2B, a faster model than your pick because a chat asked for Speed."
         );
+        // One source for each reason: Settings' row says the same thing.
+        for s in [
+            StandIn::LowBattery,
+            StandIn::OutOfMemory,
+            StandIn::Gaming,
+            StandIn::Lighter,
+            StandIn::Tight,
+            StandIn::Performance,
+            StandIn::BestFor(TaskKind::Reason),
+            StandIn::Asked(Quality, Source::Pin),
+        ] {
+            let row = s.line();
+            let clause = why(s)
+                .strip_prefix("Answered by Gemma 4 E2B, ")
+                .and_then(|c| c.strip_suffix('.'))
+                .map(str::to_string);
+            assert!(
+                clause
+                    .as_ref()
+                    .is_some_and(|c| row.starts_with(&format!("Running {c}. "))),
+                "{s:?}: {row} / {clause:?}"
+            );
+        }
     }
 
     #[test]

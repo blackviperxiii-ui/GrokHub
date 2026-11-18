@@ -54,51 +54,51 @@ pub fn tier_word(tier: SpeedQuality) -> &'static str {
 }
 
 impl StandIn {
+    /// Why this model runs, as a clause both the running-model row in
+    /// Settings and the line under a reply use (`Running {reason}.` and
+    /// `Answered by …, {reason}.`), so the two never drift apart.
+    pub fn reason(self) -> String {
+        let why = match self {
+            StandIn::LowBattery => "a smaller model while the battery is low",
+            StandIn::OutOfMemory => "a smaller model because your pick ran out of memory",
+            StandIn::Gaming => "the lightest model while a game runs",
+            StandIn::Lighter => "a smaller model for light tasks while the computer saves power",
+            StandIn::Tight => "a smaller model because less memory is free than your pick needs",
+            StandIn::Performance => {
+                "a bigger model than your pick for hard tasks while the computer is free"
+            }
+            StandIn::BestFor(kind) => {
+                return format!("a model that's stronger at {} than your pick", kind.words());
+            }
+            StandIn::Asked(tier, source) => {
+                let how = if tier == SpeedQuality::Quality {
+                    "a bigger model than your pick"
+                } else {
+                    "a faster model than your pick"
+                };
+                let why = match source {
+                    Source::Words => "a chat asked for",
+                    Source::Pin => "a chat is set to",
+                };
+                return format!("{how} because {why} {}", tier_word(tier));
+            }
+        };
+        why.to_string()
+    }
+
     /// The running-model row that says why.
     pub fn line(self) -> String {
-        if let StandIn::BestFor(kind) = self {
-            return format!(
-                "Running a model that's stronger at {} than your pick. Turn off Dynamic to always use your pick.",
-                kind.words()
-            );
-        }
-        if let StandIn::Asked(tier, source) = self {
-            let how = if tier == SpeedQuality::Quality {
-                "a bigger model than your pick"
-            } else {
-                "a faster model than your pick"
-            };
-            let why = match source {
-                Source::Words => "a chat asked for",
-                Source::Pin => "a chat is set to",
-            };
-            return format!(
-                "Running {how} because {why} {}. Other chats get your pick again.",
-                tier_word(tier)
-            );
-        }
-        let line = match self {
-            StandIn::LowBattery => {
-                "Running a smaller model while the battery is low. Your pick comes back once it charges."
-            }
-            StandIn::OutOfMemory => {
-                "Running a smaller model because your pick ran out of memory. It tries your pick again after the next unload."
-            }
-            StandIn::Gaming => {
-                "Running the lightest model while a game runs. Your pick comes back after the game."
-            }
-            StandIn::Lighter => {
-                "Running a smaller model for light tasks while the computer saves power. Hard tasks get your pick."
-            }
-            StandIn::Tight => {
-                "Running a smaller model because less memory is free than your pick needs. Your pick comes back when there's room."
-            }
-            StandIn::Performance => {
-                "Running a bigger model than your pick for hard tasks while the computer is free. It steps back down when the computer gets busy."
-            }
-            StandIn::BestFor(_) | StandIn::Asked(..) => unreachable!("handled above"),
+        let then = match self {
+            StandIn::LowBattery => "Your pick comes back once it charges.",
+            StandIn::OutOfMemory => "It tries your pick again after the next unload.",
+            StandIn::Gaming => "Your pick comes back after the game.",
+            StandIn::Lighter => "Hard tasks get your pick.",
+            StandIn::Tight => "Your pick comes back when there's room.",
+            StandIn::Performance => "It steps back down when the computer gets busy.",
+            StandIn::BestFor(_) => "Turn off Dynamic to always use your pick.",
+            StandIn::Asked(..) => "Other chats get your pick again.",
         };
-        line.to_string()
+        format!("Running {}. {then}", self.reason())
     }
 }
 
@@ -495,6 +495,9 @@ fn chat_target(
                 .filter(|(m, _)| room.is_none_or(|r| fits(n, m, &r, resident, 0)))
                 .max_by(|(a, _), (b, _)| rate(a).cmp(&rate(b)).then(b.run_mb.cmp(&a.run_mb)))?
         }
+        // A low battery still wins over a Performance ask: nothing bigger
+        // loads, even with no smaller model to stand in.
+        SpeedQuality::Quality if n.low_battery => return None,
         SpeedQuality::Quality => {
             let room = room?;
             n.on_disk
@@ -511,14 +514,23 @@ fn chat_target(
     Some((p.clone(), why))
 }
 
+/// The model [`plan`] aims this request at, whether or not it loads now:
+/// what an ask's [`AskOutcome::Got`] means runs.
+pub fn target_model(n: &Now<'_>) -> PathBuf {
+    target(n).0
+}
+
 /// Why a chat's ask didn't get its tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refused {
     /// No faster (Speed) or bigger (Performance) model fits right now, or the
     /// pick doesn't (Balance).
     NoRoom,
-    /// Another chat's reply was running on the model, so it stayed.
-    Busy,
+    /// Another chat's reply was running on the model, so it stayed. A
+    /// chat's setting loads with its next reply; words asked only this one.
+    Busy(Source),
+    /// The battery is low: Performance loads nothing bigger.
+    LowBattery,
     /// Keep loaded is on: the pick stays.
     KeptLoaded,
     /// A model file was forced (`GROKHUB_LOCAL_MODEL`): nothing swaps.
@@ -528,7 +540,8 @@ pub enum Refused {
 /// What came of a chat's ask, for the line under its reply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AskOutcome {
-    /// The tier's model runs for it (the launch may still step it down).
+    /// The plan aims at the tier's model ([`target_model`]). The launch may
+    /// still step it down: the line checks what runs ([`super::local_live::settle`]).
     Got(SpeedQuality, Source),
     Refused(SpeedQuality, Refused),
 }
@@ -547,7 +560,7 @@ pub fn ask_outcome(n: &Now<'_>) -> Option<AskOutcome> {
     let (target, why) = target(n);
     if let Some((running, _)) = n.loaded {
         if running != target && n.in_flight > 0 {
-            return Some(AskOutcome::Refused(tier, Refused::Busy));
+            return Some(AskOutcome::Refused(tier, Refused::Busy(source)));
         }
     }
     if n.refused.contains(&target) {
@@ -556,6 +569,9 @@ pub fn ask_outcome(n: &Now<'_>) -> Option<AskOutcome> {
     match (tier, why) {
         (_, Some(StandIn::Asked(..))) | (SpeedQuality::Balanced, None) => {
             Some(AskOutcome::Got(tier, source))
+        }
+        (SpeedQuality::Quality, None) if n.low_battery => {
+            Some(AskOutcome::Refused(tier, Refused::LowBattery))
         }
         (_, None) => Some(AskOutcome::Refused(tier, Refused::NoRoom)),
         _ => None,

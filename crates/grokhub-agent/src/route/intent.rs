@@ -1040,11 +1040,23 @@ pub fn tell_main_text(question: &str, answer: &str) -> String {
         question.trim().to_string()
     } else {
         format!(
-            "I asked on the side: {}\nThe answer was: {}\nTake this into account.",
+            "{TELL_ASKED}{}{TELL_ANSWER}{}\nTake this into account.",
             question.trim(),
             clip_start(answer, SIDE_TELL_CLIP)
         )
     }
+}
+
+const TELL_ASKED: &str = "I asked on the side: ";
+const TELL_ANSWER: &str = "\nThe answer was: ";
+
+/// The person's own words in a user message: for [`tell_main_text`], only
+/// the side question, since the answer after it is a model's text.
+pub fn person_words(text: &str) -> &str {
+    text.trim_start()
+        .strip_prefix(TELL_ASKED)
+        .and_then(|rest| rest.split_once(TELL_ANSWER))
+        .map_or(text, |(question, _)| question)
 }
 
 #[cfg(test)]

@@ -149,9 +149,11 @@ pub type ChatTier = (SpeedQuality, Source);
 
 /// The tier for this on-device turn: words in this turn beat the chat's
 /// pin, which beats none (the automatic pick). A helper's turn reads no
-/// words, since its text is a brief another model wrote. Only words count:
-/// a quick class is never a speed ask, and "keep it short" alone asks for
-/// a short reply, not a faster model.
+/// words, since its text is a brief another model wrote; nor does a side
+/// answer, whose prompt carries the main reply so far. **Tell the main
+/// task** text counts only its question, not the side model's answer. Only
+/// words count: a quick class is never a speed ask, and "keep it short"
+/// alone asks for a short reply, not a faster model.
 pub fn chat_tier(
     text: &str,
     care_first: bool,
@@ -159,6 +161,7 @@ pub fn chat_tier(
     pin: Option<SpeedQuality>,
 ) -> Option<ChatTier> {
     if !helper {
+        let text = super::intent::person_words(text);
         match super::ladder::steer_for_turn(text, care_first) {
             Steer::Harder => return Some((SpeedQuality::Quality, Source::Words)),
             Steer::Quicker if super::ladder::asks_for_speed(text) => {
@@ -170,10 +173,16 @@ pub fn chat_tier(
     pin.map(|t| (t, Source::Pin))
 }
 
-/// A helper's turn: the helper class, or a helper's own conversation id
-/// (`parent/child`).
+/// The mark in a side answer's conversation id (`<chat>~side-<n>`).
+pub const SIDE_MARK: &str = "~side-";
+
+/// A turn whose text isn't the person's own ask: the helper class, a
+/// helper's own conversation id (`parent/child`), or a side answer
+/// (`<chat>`[`SIDE_MARK`]`<n>`), whose prompt quotes the main reply.
 pub fn helper_turn(class: &str, conversation_id: &str) -> bool {
-    class.trim() == super::boundary::HELPER_CLASS || conversation_id.contains('/')
+    class.trim() == super::boundary::HELPER_CLASS
+        || conversation_id.contains('/')
+        || conversation_id.contains(SIDE_MARK)
 }
 
 thread_local! {

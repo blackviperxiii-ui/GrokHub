@@ -1127,7 +1127,10 @@ fn keep_loaded_a_low_battery_a_game_and_a_reply_in_flight_beat_an_ask() {
     assert_eq!(plan(busy), Plan::Keep);
     assert_eq!(
         ask_outcome(&busy),
-        Some(AskOutcome::Refused(SpeedQuality::Speed, Refused::Busy))
+        Some(AskOutcome::Refused(
+            SpeedQuality::Speed,
+            Refused::Busy(Source::Pin)
+        ))
     );
     let low = Now {
         low_battery: true,
@@ -1272,5 +1275,174 @@ fn the_mode_follows_the_tier_a_chat_asked_for_before_dynamic_off() {
     assert_eq!(
         StandIn::Asked(SpeedQuality::Quality, Source::Words).line(),
         "Running a bigger model than your pick because a chat asked for Performance. Other chats get your pick again."
+    );
+}
+
+#[test]
+fn a_performance_ask_on_a_low_battery_loads_nothing_bigger_even_with_no_smaller_model() {
+    let disk = disk();
+    let home = file(SMALL);
+    let n = Now {
+        low_battery: true,
+        scale: with_room(free_room()),
+        paired: PAIRED,
+        chat: Some((SpeedQuality::Quality, Source::Words)),
+        ..now(&home, &disk)
+    };
+    assert_eq!(
+        plan(n),
+        Plan::Load {
+            model: home.clone(),
+            stand_in: None
+        }
+    );
+    let ask = ask_outcome(&n);
+    assert_eq!(
+        ask,
+        Some(AskOutcome::Refused(
+            SpeedQuality::Quality,
+            Refused::LowBattery
+        ))
+    );
+    assert_eq!(
+        super::super::local_live::chat_line("Gemma 4 E2B", true, None, ask),
+        "Answered by Gemma 4 E2B with its draft, your pick; the battery is low, so Performance doesn't load a bigger model."
+    );
+    // A chat set to Performance, with the pick running: it stays.
+    let pinned = Now {
+        loaded: Some((&home, None)),
+        loaded_paired: true,
+        chat: Some((SpeedQuality::Quality, Source::Pin)),
+        ..n
+    };
+    assert_eq!(plan(pinned), Plan::Keep);
+    // Charged again, the same ask steps up.
+    assert_eq!(
+        plan(Now {
+            low_battery: false,
+            ..n
+        }),
+        Plan::Load {
+            model: file(BIG),
+            stand_in: Some(StandIn::Asked(SpeedQuality::Quality, Source::Words))
+        }
+    );
+}
+
+#[test]
+fn a_speed_ask_for_the_model_already_running_keeps_it_and_the_line_says_it_got_speed() {
+    let disk = disk();
+    let home = file(MID);
+    let small = file(SMALL);
+    // A light turn while saving power loaded E2B as a stand-in.
+    let saving = Now {
+        loaded: Some((&small, Some(StandIn::Lighter))),
+        loaded_paired: true,
+        scale: Scale {
+            saving: true,
+            ..with_room(free_room())
+        },
+        paired: PAIRED,
+        chat: Some((SpeedQuality::Speed, Source::Words)),
+        ..now(&home, &disk)
+    };
+    // Too little memory for the pick's pair: the walk loaded E2B. 700 MB
+    // free with E2B's pair (4,307 MB) resident leaves 5,007 MB: E4B's pair
+    // (6,288 MB) doesn't fit, E2B's does.
+    let tight = Now {
+        loaded: Some((&small, Some(StandIn::Tight))),
+        scale: with_room(local_scale::Room {
+            free_vram_mb: Some(700),
+            free_ram_mb: 0,
+            ..free_room()
+        }),
+        chat: Some((SpeedQuality::Speed, Source::Pin)),
+        ..saving
+    };
+    for (n, source) in [(saving, Source::Words), (tight, Source::Pin)] {
+        assert_eq!(plan(n), Plan::Keep, "{source:?}");
+        assert_eq!(target_model(&n), small, "{source:?}");
+        let ask = ask_outcome(&n).expect("an ask");
+        assert_eq!(ask, AskOutcome::Got(SpeedQuality::Speed, source));
+        let running = n.loaded.map(|(p, _)| p.to_path_buf());
+        let met = running == Some(target_model(&n));
+        let because = match source {
+            Source::Words => "you asked for a quick answer",
+            Source::Pin => "this chat is set to it",
+        };
+        assert_eq!(
+            super::super::local_live::chat_line(
+                "Gemma 4 E2B",
+                true,
+                n.loaded.and_then(|(_, why)| why),
+                Some(super::super::local_live::settle(ask, met)),
+            ),
+            format!("Answered by Gemma 4 E2B with its draft: Speed, because {because}.")
+        );
+    }
+}
+
+#[test]
+fn a_speed_ask_sizes_each_model_with_its_drafter() {
+    let disk = disk();
+    let home = file(MID);
+    // 4,100 MB of VRAM and no RAM to spare: E2B alone (3,888 MB) fits, its
+    // pair (4,307 MB) doesn't, nor E4B's (6,288 MB). No pair fits below
+    // the pick, so the plan leaves the pick to the launch's walk rather
+    // than load E2B without its draft.
+    let room = local_scale::Room {
+        free_vram_mb: Some(4_100),
+        free_ram_mb: 0,
+        ..free_room()
+    };
+    let n = Now {
+        scale: with_room(room),
+        paired: PAIRED,
+        chat: Some((SpeedQuality::Speed, Source::Words)),
+        ..now(&home, &disk)
+    };
+    assert_eq!(
+        plan(n),
+        Plan::Load {
+            model: home.clone(),
+            stand_in: None
+        }
+    );
+    assert_eq!(
+        ask_outcome(&n),
+        Some(AskOutcome::Refused(SpeedQuality::Speed, Refused::NoRoom))
+    );
+    // With no drafters on disk, E2B alone fits and loads for Speed.
+    assert_eq!(
+        plan(Now { paired: &[], ..n }),
+        Plan::Load {
+            model: file(SMALL),
+            stand_in: Some(StandIn::Asked(SpeedQuality::Speed, Source::Words))
+        }
+    );
+}
+
+#[test]
+fn a_side_answer_and_the_tell_main_text_read_no_tier_from_model_text() {
+    use super::super::intent::{side_prompt, tell_main_text};
+    let side = "shell-a~side-1";
+    assert!(helper_turn("chat:default", side));
+    assert!(!helper_turn("chat:default", "shell-a"));
+    let prompt = side_prompt("what's a mutex?", "fix the build", "Take your time reading");
+    assert_eq!(
+        chat_tier(&prompt, false, helper_turn("chat:default", side), None),
+        None
+    );
+    // The answer is the side model's words; the question is the person's.
+    let told = tell_main_text("what's a mutex?", "Take your time: think hard about locks.");
+    assert_eq!(chat_tier(&told, false, false, None), None);
+    assert_eq!(
+        chat_tier(&told, false, false, Some(SpeedQuality::Speed)),
+        Some((SpeedQuality::Speed, Source::Pin))
+    );
+    let quick = tell_main_text("be quick: what's a mutex?", "A lock. Think hard about it.");
+    assert_eq!(
+        chat_tier(&quick, false, false, None),
+        Some((SpeedQuality::Speed, Source::Words))
     );
 }
