@@ -195,19 +195,26 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      `must_stay_here`) before the model call, again when xAI or a provider
      fails over to this computer, and when the step ends. The app's
      background calls and helpers don't write it. A chat with no step since
-     launch reads as online.
+     launch reads as online, unless the voice every chat speaks in is 18+:
+     that comes from the saved settings, so it holds from launch.
    - `VoiceEnv` gains `chat_here` and `chat_must_stay` (an 18+ voice). In
      `Auto`, a chat that runs here hears and speaks only on this computer
      once the on-device voice is ready, with no xAI behind it; until then
-     xAI stands in, with a line. An 18+ chat never plans xAI, a pin to
-     Grok Voice 3 included: it downloads the on-device voice or refuses.
+     xAI stands in, with a line, while the on-device voice downloads
+     (`wants_download`). A bare whisper on PATH names no model, so it
+     doesn't count as ready for a chat that runs here. An 18+ chat never
+     plans xAI, a pin to Grok Voice 3 included: it speaks here when the
+     voice is downloaded, else downloads it or refuses with the real reason
+     (Local AI off, or not downloaded).
    - Every voice call carries the chat: `transcribe`, `voice_live_start`,
      `voice_live_hear`, `voice_speak`, and `voice_live_chat` when voice
      mode follows another chat. A move to a chat that may not stream drops
-     the open stream, and one still opening for the chat before is never
-     attached. A reply's tail is spoken by its own chat's need.
+     the open stream (and its caption) at once, before any keychain read,
+     and one still opening for the chat before, or for an earlier voice
+     session, is never attached. A reply's tail is spoken by its own
+     chat's need.
    - Hearing on device reserves `Kind::Hearing` with `may_unload = false`,
-     one clip at a time: the voice never unloads or steps down the chat
+     one clip at a time (whisper too, held at 2 GB): the voice never unloads or steps down the chat
      pair or its draft, and declines with a line when there's no room. The
      clip goes to a fresh temp file only this user can read
      (`grokhub-hear-…`, mode 0600), removed on every path; both pipes are
@@ -222,10 +229,12 @@ Each step is its own PR into `beta`, green on Linux and Windows.
    - Not yet: the process-wide `local_warm` still puts on-device speech
      first for a cloud chat while a local model is loaded (an existing
      test locks it in); a `Pinned` Grok Voice 3 wins over a chat that runs
-     here (only 18+ overrides it); whisper on PATH runs with no `-m` model
-     and reserves no memory; download notices still show on the error
-     line; the record of where a chat runs is in memory only, so the first
-     spoken turn after a restart follows the cloud route.
+     here (only 18+ overrides it); whisper on PATH runs with no `-m`
+     model; download notices still show on the error line; the record of
+     where a chat runs is in memory only, so in a chat that isn't 18+ the
+     first spoken turn after a restart, before its first step, follows the
+     cloud route; a voice that dynamic chat hands an 18+ turn to is known
+     only once that step ran.
 7. **Vision.** Load the vision projector (`--mmproj`) with a model that
    has one when a picture is attached to an on-device chat.
 
