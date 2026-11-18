@@ -6,6 +6,7 @@ crates/grokhub-agent/src/prompt_template.md text eol=lf
 # The signed test catalog: its signature covers these exact bytes.
 crates/grokhub-core/data/test_catalog/** -text
 
-# The bundled vstack skills ship through include_str! and are checked byte for
-# byte by .github/scripts/vstack_sync.py check, so keep them LF everywhere.
-crates/grokhub-agent/assets/skills/** text eol=lf
+# The bundled vstack skills ship through include_str! / include_bytes! and are
+# hashed byte for byte by .github/scripts/vstack_sync.py check, so keep their
+# exact bytes everywhere without Git line-ending conversion.
+crates/grokhub-agent/assets/skills/** -text

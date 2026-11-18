@@ -109,7 +109,9 @@ impl Phase {
 static RUN: Mutex<Option<LiveRun>> = Mutex::new(None);
 
 fn with_run<T>(f: impl FnOnce(&mut Option<LiveRun>) -> Result<T, String>) -> Result<T, String> {
-    let mut guard = RUN.lock().map_err(|_| "The live fix is busy. Try again.".to_string())?;
+    let mut guard = RUN
+        .lock()
+        .map_err(|_| "The live fix is busy. Try again.".to_string())?;
     f(&mut guard)
 }
 
@@ -174,7 +176,9 @@ pub fn open(config_dir: &Path, id: &str, index: usize, now_ms: u64) -> Result<Li
         .as_ref()
         .and_then(|r| r.offers.get(index))
         .cloned()
-        .ok_or_else(|| "That fix is gone from the card. The page now shows what is left.".to_string())?;
+        .ok_or_else(|| {
+            "That fix is gone from the card. The page now shows what is left.".to_string()
+        })?;
     if action_mode(&offer_shape(&offer)) != ActionMode::Live {
         return Err("That fix opens in chat, not as a live checklist.".into());
     }
@@ -227,7 +231,10 @@ fn advance_marks(run: &mut LiveRun) {
     }
     for (i, step) in run.steps.iter_mut().enumerate() {
         if i < run.cursor {
-            if matches!(step.mark, StepMark::Pending | StepMark::Running | StepMark::NeedsOk) {
+            if matches!(
+                step.mark,
+                StepMark::Pending | StepMark::Running | StepMark::NeedsOk
+            ) {
                 step.mark = StepMark::Done;
             }
         } else if i == run.cursor {
@@ -317,7 +324,10 @@ pub fn stop(config_dir: &Path, now_ms: u64) -> Result<LiveView, String> {
             return Err("That fix is not running.".into());
         }
         if let Some(step) = run.steps.get_mut(run.cursor) {
-            if matches!(step.mark, StepMark::Running | StepMark::NeedsOk | StepMark::Pending) {
+            if matches!(
+                step.mark,
+                StepMark::Running | StepMark::NeedsOk | StepMark::Pending
+            ) {
                 step.mark = StepMark::Skipped;
             }
         }
@@ -363,10 +373,7 @@ pub fn close() -> Result<(), String> {
 
 fn write_receipt(config_dir: &Path, run: &LiveRun, now_ms: u64, undo: bool) -> Result<(), String> {
     let lines: Vec<String> = if undo {
-        vec![run
-            .result
-            .clone()
-            .unwrap_or_else(|| "Undone.".into())]
+        vec![run.result.clone().unwrap_or_else(|| "Undone.".into())]
     } else {
         let mut out: Vec<String> = run
             .steps
