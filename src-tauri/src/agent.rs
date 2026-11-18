@@ -251,6 +251,12 @@ pub enum UiEvent {
         recovery: String,
         tool_ran_not_verified: bool,
     },
+    /// The line under an on-device reply: which model answered, with its
+    /// draft or not, and why (`route::local_live::chat_line`). Not saved;
+    /// a reopened chat shows none.
+    ModelLine {
+        text: String,
+    },
     /// A report something on this computer wrote into the chat after its
     /// reply ended, such as a screen recording's diagnosis. It is saved as
     /// an assistant message, so it reads the same when the chat opens later.
@@ -1521,13 +1527,19 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     }
                     // The turn's extras, before Done as the Goal card is:
                     // the recap card for its Finished block, then the
-                    // evidence receipt the harness recorded for it.
+                    // evidence receipt the harness recorded for it, then the
+                    // line naming the on-device model that answered. The
+                    // line is taken either way, so it never outlives its turn.
+                    let model_line = grokhub_agent::route::local_live::take_line(&conversation_id);
                     if route.session != SessionMode::Btw {
                         if let Some(card) = recap_event(&reply, &tool_rows) {
                             emit(card);
                         }
                         if let Some(receipt) = evidence_event(&config_dir, &conversation_id) {
                             emit(receipt);
+                        }
+                        if let Some(text) = model_line {
+                            emit(UiEvent::ModelLine { text });
                         }
                     }
                     let btw = route.session == SessionMode::Btw;
@@ -2561,6 +2573,22 @@ mod tests {
         assert_eq!(
             json,
             serde_json::json!({"kind": "tool", "id": "call-1", "title": "read_file", "status": "completed", "detail": "ok"})
+        );
+    }
+
+    #[test]
+    fn the_model_line_goes_out_as_its_own_event_once() {
+        assert_eq!(
+            serde_json::to_value(UiEvent::ModelLine {
+                text: "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer.".into()
+            })
+            .expect("json"),
+            serde_json::json!({"kind": "modelLine", "text": "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer."})
+        );
+        assert_eq!(
+            grokhub_agent::route::local_live::take_line("shell-model-line-test"),
+            None,
+            "no on-device reply, no line"
         );
     }
 
