@@ -1,0 +1,1 @@
+- Code editor: Projects is the first side tab and the default on open (first launch and restart); other tabs keep their place after it.
