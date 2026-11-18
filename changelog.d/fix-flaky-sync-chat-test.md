@@ -1,0 +1,1 @@
+- Sync `Chat`'s `openNow` ref via `useLayoutEffect` and on conversation switches so background `/sync` results never land in a newly opened chat.
