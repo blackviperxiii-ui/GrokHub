@@ -16,7 +16,7 @@ Sizes: 1600×900 and 1100×720. Themes: Ops Dark and OLED Black. Screens: Chat, 
 ### Thresholds (locked palette, Nov 13 2026)
 
 - red pixels ≥ amber pixels, on every screen except Home, where the XP bars and streak days stay amber by design
-- amber ≤ 10% of non-black pixels
+- amber ≤ 10% of the full frame (all pixels, including true-black panels) on every theme
 - with `--baseline <dir>`, gray outline pixels ≤ 50% of that baseline’s gray count
 
 LO-UI-2 / LO-UI-3 are expected to make color-share pass; on today’s amber-accent UI it will exit nonzero — that is the harness working.
