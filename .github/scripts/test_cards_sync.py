@@ -21,7 +21,7 @@ CARD = "0123456789abcdef0123456789abcdef"
 MARK = f"<!-- notion-card: {CARD} -->"
 PAGE = f"{cards_sync.NOTION}/pages/{CARD}"
 ISSUES = f"{cards_sync.GH}/repos/{REPO}/issues"
-DOING = {"properties": {"Status": {"type": "select", "select": {"name": "Doing"}}}}
+DOING = {"properties": {"Status": {"type": "select", "select": {"name": cards_sync.STATUS_DOING}}}}
 
 
 def issue(login, association, number=7, state="closed", reason="completed", body=MARK):
@@ -88,7 +88,7 @@ class CardsSyncTest(unittest.TestCase):
         self.assertEqual(len(rec.writes()), 1, rec.writes())
         method, url, body = rec.writes()[0]
         self.assertEqual((method, url), ("PATCH", PAGE))
-        self.assertEqual(body["properties"]["Status"], {"select": {"name": "Done"}})
+        self.assertEqual(body["properties"]["Status"], {"select": {"name": cards_sync.STATUS_DONE}})
         self.assertEqual(body["properties"]["Result"]["rich_text"][0]["text"]["content"], result)
 
     # --- a closed issue event -------------------------------------------------
@@ -127,7 +127,7 @@ class CardsSyncTest(unittest.TestCase):
         rec = self.run_done(self.merged_pr(), replies)
         self.assertEqual([(m, u) for m, u, _ in rec.writes()],
                          [("PATCH", PAGE), ("PATCH", f"{ISSUES}/7")])
-        self.assertEqual(rec.writes()[0][2]["properties"]["Status"], {"select": {"name": "Done"}})
+        self.assertEqual(rec.writes()[0][2]["properties"]["Status"], {"select": {"name": cards_sync.STATUS_DONE}})
         self.assertEqual(rec.writes()[1][2], {"state": "closed", "state_reason": "completed"})
 
     def test_a_merged_pr_fixing_an_outsiders_issue_with_a_card_marker_changes_nothing(self):
@@ -163,6 +163,42 @@ class CardsSyncTest(unittest.TestCase):
                                 {k: v["number"] for k, v in cards_sync.card_issues("open").items()},
                                 {CARD: 7}))
         self.assertEqual(rec.writes(), [])
+
+    def test_sync_creates_antigravity_issue_and_marks_card_working_on_it_now(self):
+        card = {
+            "id": CARD,
+            "url": f"https://www.notion.so/{CARD}",
+            "properties": {
+                "Name": {"type": "title", "title": [{"plain_text": "Antigravity task"}]},
+                "Assigned": {"type": "select", "select": {"name": "Antigravity"}},
+            },
+        }
+        replies = {
+            ("GET", f"{ISSUES}?state=open"): [],
+            ("GET", f"{ISSUES}?state=closed"): [],
+            ("GET", f"{cards_sync.GH}/repos/{REPO}/pulls"): [],
+            ("POST", f"{cards_sync.NOTION}/data_sources/ds1/query"): {"results": [card]},
+            ("GET", f"{cards_sync.NOTION}/blocks/{CARD}/children"): {"results": [], "has_more": False},
+            ("POST", ISSUES): {"number": 42, "html_url": f"https://github.com/{REPO}/issues/42"},
+        }
+        rec = self.run_with(replies, cards_sync.sync)
+        queries = [c for c in rec.calls if c[0] == "POST" and "/query" in c[1]]
+        self.assertEqual(queries[0][2]["filter"]["and"][0],
+                         {"property": "Status", "select": {"equals": cards_sync.STATUS_READY}})
+        self.assertEqual([(m, u) for m, u, _ in rec.writes()],
+                         [("POST", ISSUES), ("PATCH", PAGE)])
+        self.assertEqual(rec.writes()[0][2]["labels"], ["antigravity"])
+        self.assertEqual(rec.writes()[1][2]["properties"]["Status"],
+                         {"select": {"name": cards_sync.STATUS_DOING}})
+
+    def test_archived_notion_card_still_closes_open_issue_on_merge(self):
+        replies = {
+            ("GET", f"{ISSUES}/7"): issue(*BOT, state="open", reason=None),
+            ("GET", PAGE): {"archived": True, **DOING},
+        }
+        rec = self.run_done(self.merged_pr(), replies)
+        self.assertEqual([(m, u, b) for m, u, b in rec.writes()],
+                         [("PATCH", f"{ISSUES}/7", {"state": "closed", "state_reason": "completed"})])
 
 
 if __name__ == "__main__":

@@ -28,9 +28,14 @@ CAP = 2
 MARK_RE = re.compile(r"<!--\s*notion-card:\s*([0-9a-fA-F-]{32,36})\s*-->")
 # GitHub's closing keywords, with or without a colon ("Fixes #12", "Fixes: #12").
 CLOSES_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)\b", re.I)
+STATUS_READY = "Ready for work"
+STATUS_DOING = "Working on it now"
+STATUS_DONE = "Completed"
+DONE_STATUSES = (STATUS_DONE, "Done", "Notes")
 CODERS = {
     "claude": {"label": "claude", "authors": set(), "branch": "claude/"},
     "jules": {"label": "jules", "authors": {"google-labs-jules", "google-labs-jules[bot]", "app/google-labs-jules"}, "branch": ""},
+    "antigravity": {"label": "antigravity", "authors": set(), "branch": "antigravity/"},
 }
 RULES = """## Rules
 - Base branch is `beta`, never `main`. Branch from `origin/beta`.
@@ -124,9 +129,9 @@ def page_body(page_id):
 def set_card(page_id, status, result=None):
     props = {"Status": {"select": {"name": status}}}
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    if status == "Doing":
+    if status == STATUS_DOING:
         props["Picked up"] = {"date": {"start": now}}
-    if status == "Done":
+    if status in (STATUS_DONE, "Done"):
         props["Done at"] = {"date": {"start": now}}
     if result is not None:
         props["Result"] = {"rich_text": [{"type": "text", "text": {"content": result[:1900]}}]}
@@ -168,7 +173,7 @@ def coder_load(open_prs, open_card_issues):
 def query_ready():
     ds = os.environ["NOTION_DATA_SOURCE_ID"]
     body = {"filter": {"and": [
-        {"property": "Status", "select": {"equals": "Ready"}},
+        {"property": "Status", "select": {"equals": STATUS_READY}},
         {"property": "Project", "select": {"equals": PROJECT}},
     ]}, "sorts": [{"property": "Order", "direction": "ascending"}], "page_size": 100}
     return notion(f"/data_sources/{ds}/query", "POST", body).get("results", [])
@@ -262,8 +267,9 @@ def sync():
         coder = (prop(card, "Assigned") or "").strip().lower()
         existing = open_issues.get(pid) or closed_issues.get(pid)
         if existing:
-            print(f"card {pid} already linked to #{existing['number']}; marking Doing")
-            set_card(card["id"], "Doing", existing["html_url"])
+            if not (card.get("archived") or card.get("in_trash")):
+                print(f"card {pid} already linked to #{existing['number']}; marking {STATUS_DOING}")
+                set_card(card["id"], STATUS_DOING, existing["html_url"])
             continue
         if coder not in CODERS:
             print(f"card {pid} '{title}': Assigned '{coder}' is not a GitHub coder; skipped")
@@ -281,7 +287,7 @@ def sync():
         open_issues[pid] = issue
         if coder == "claude":
             dispatch_claude(issue["number"])
-        set_card(card["id"], "Doing", issue["html_url"])
+        set_card(card["id"], STATUS_DOING, issue["html_url"])
     start_jules_sessions(open_prs)
     # Sweep: closed-as-completed card issues whose card is not Done yet.
     for pid, issue in closed_issues.items():
@@ -289,7 +295,7 @@ def sync():
             mark_done(pid, issue["html_url"])
     # Sweep: open card issues whose PR already merged into beta. beta is not the
     # default branch, so "Fixes #N" never closes them, and a missed done event
-    # would leave the card at Doing.
+    # would leave the card at Working on it now.
     for pid, issue in open_issues.items():
         if "number" not in issue:
             continue
@@ -324,9 +330,17 @@ def close_issue(number):
 
 def mark_done(pid, url, issue_number=None):
     page = notion(f"/pages/{pid}")
-    if prop(page, "Status") not in ("Done", "Notes"):
-        print(f"card {pid} -> Done ({url})")
-        set_card(pid, "Done", f"Done: {url}")
+    if page.get("archived") or page.get("in_trash"):
+        print(f"card {pid} is archived; skipped")
+    elif prop(page, "Status") not in DONE_STATUSES:
+        print(f"card {pid} -> {STATUS_DONE} ({url})")
+        try:
+            set_card(pid, STATUS_DONE, f"Done: {url}")
+        except RuntimeError as e:
+            if "archived" in str(e).lower():
+                print(f"card {pid} is archived; skipped")
+            else:
+                raise
     if issue_number:
         close_issue(issue_number)
 
