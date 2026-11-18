@@ -236,58 +236,67 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      cloud route; a voice that dynamic chat hands an 18+ turn to is known
      only once that step ran.
 7. **Vision.** Load the vision projector (`--mmproj`) with a model that
-   has one when a picture is attached to an on-device chat. First part
-   shipped (`route/local_vision.rs`); loading a projector is not built yet.
-   - Before this step a picture in a local chat failed: the router let the
-     local tier take it (its `input_modalities` are unknown), the chat
-     server had no `--mmproj`, and `llama-server` refused the `image_url`
-     part. The picture stayed in history, so every later local turn of
-     that chat failed the same way.
-   - On device: `serve_request` turns every picture into a short text note
-     (`BLIND_NOTE`) when the running launch has no projector
-     (`LaunchArgs.mmproj` is `None`, which is every launch today). When the
-     person's newest message carried a picture, the reply line adds "The
-     picture wasn't read: no model on this computer can see pictures yet."
-   - Routing: when the newest message has a picture, the running model
-     can't see it (`LocalGate.sees_pictures`), and the turn may leave this
-     computer (not 18+, voice not Local only, not sensitive without your
-     grant, not offline), the router drops the local tier from the
-     candidates and pushes `local:no_vision`, so `policy::fits` picks an
-     online model that reads pictures. It does that only while an online
-     candidate is left; the last-resort paths (no keys, cloud down) still
-     answer on device, without the picture. A chat whose last step ran
-     here shows "The model on this computer can't see pictures, so an
-     online model read this one." A chat that was online anyway shows
-     nothing.
-   - Launch seam: `LaunchArgs.mmproj` adds `--mmproj <file>` to the
-     launch, plus `--no-mmproj-offload` when no layers are on the GPU.
-     `--device none` already keeps the projector off every GPU. Both flags
-     are in the pinned b12017 `--help`.
+   has one when a picture is attached to an on-device chat. Only the first
+   part is built (`route/local_vision.rs`): a picture no longer breaks a
+   chat that runs here. On-device vision (loading a projector, counting it
+   in the residency ledger and the fit checks with the parent and its
+   drafter, stepping down a tier when they can't fit) is not built yet, so
+   this step stays open.
+   - Before this step a picture in a chat that ran here (offline, 18+, or
+     the no-keys and cloud-down fallbacks) failed: the local tier lists no
+     `input_modalities`, so `policy::fits` let it take the picture, the
+     chat server had no `--mmproj`, and `llama-server` refused the
+     `image_url` part. The picture stayed in history, so every later local
+     turn of that chat failed the same way.
+   - On device: no launch carries a projector yet, so `serve_request` turns
+     every picture into a short text note (`BLIND_NOTE`). When the
+     person's newest message carried a picture, the line under the reply
+     adds "The picture wasn't read: no model on this computer can see
+     pictures yet." (alone, when the reply names no model). An older
+     picture the chat carries adds nothing.
+   - Routing: online, a chat is never routed to the device (`LOCAL_CLASSES`
+     holds background steps only), so a chat picture already goes to an
+     online model by the image fit. For a step the device would take (a
+     warm background step), with a picture in the newest message, when the
+     step may leave this computer (not 18+, voice not Local only, not
+     sensitive without your grant, not offline), `Router::choose` picks
+     again among the online models listed as reading pictures
+     (`input_modalities` holds `image`) and pushes `local:no_vision`. A
+     model with unknown input kinds doesn't count. With none left, the
+     device keeps the step, without the picture. A step that went online
+     anyway gets no `local:no_vision`.
    - Left for the next part, in order:
      1. Real-engine check on b12017: does a draft run beside `--mmproj`?
         Older builds refused speculative decoding with a projector. If it
         refuses, strict pairing means no on-device vision for any paired
         Gemma row.
-     2. Catalog: five `vision-projector` rows (`remote_file =
+     2. Launch: a projector field on `LaunchArgs` that adds `--mmproj
+        <file>`, plus `--no-mmproj-offload` whenever `ngl == 0` or
+        `cpu_only`. `--device none` does not keep the projector off the
+        GPU: llama.cpp's `clip_ctx` starts the GPU backend whenever
+        `mmproj_use_gpu` is set and never reads the `--device` list. Both
+        flags are in the pinned b12017 `--help`.
+     3. Catalog: five `vision-projector` rows (`remote_file =
         "mmproj-model-bf16.gguf"`, a unique `file` each) with `projector =`
         on the Gemma 4 chat rows, version 5. Sizes (bytes) from the Hub:
         E2B 986,833,408; E4B 991,552,000; 12B 175,115,776; 26B-A4B
         1,194,827,872; 31B 1,200,726,112. The SHA-256 values still need
         fetching; the Hub listing reached from this box shows sizes only.
-     3. Sizing: `vision_mb` (pair plus projector), the projector counted in
+     4. Sizing: `vision_mb` (pair plus projector), the projector counted in
         `planned_as`, `chat_entry`/`chat_mem` and `load_bytes`;
         `warm_fits` refuses a projector; a plan sized with the projector
         never writes `LAST_REFUSAL`.
-     4. Swap: `vision_plan` beside `plan()` (keep-loaded, forced file,
+     5. Swap: `vision_plan` beside `plan()` (keep-loaded, forced file,
         held refusals and gaming rules apply), `StandIn::Vision` ("Your
         pick comes back once the chat is quiet."), the no-projector retry
         ahead of the drop-draft and out-of-memory branches, and a lasting
         record when the engine refuses a draft with a projector.
-     5. `sees_pictures` then means "can load a vision model now", from the
-        same inputs the swap builds, so routing and loading agree.
+     6. A "can see pictures" input on `LocalGate`, from the same inputs the
+        swap builds, so routing and loading agree; `serve_request` then
+        keeps pictures for a launch with its projector.
    - Open: a screenshot or `read_file` image the model took itself counts
-     as the person's newest message (`last_user_text`), so it goes online
-     too when allowed. Keeping those on device is a product call.
+     as the person's newest message (`last_user_text`). Keeping those on
+     device is a product call.
 
 ## Done when
 
