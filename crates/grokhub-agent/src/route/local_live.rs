@@ -504,4 +504,166 @@ mod tests {
             .iter()
             .any(|r| r.starts_with("Refusal check")));
     }
+
+    #[test]
+    fn the_line_under_a_reply_says_which_model_answered_and_why() {
+        use grokhub_core::local_skills::TaskKind;
+        use SpeedQuality::{Balanced, Quality, Speed};
+        let line = |draft, stand_in, ask| chat_line("Gemma 4 E2B", draft, stand_in, ask);
+        assert_eq!(
+            line(true, None, None),
+            "Answered by Gemma 4 E2B with its draft, your pick."
+        );
+        assert_eq!(
+            line(false, None, None),
+            "Answered by Gemma 4 E2B, your pick."
+        );
+        let asked = |t, s| Some(StandIn::Asked(t, s));
+        assert_eq!(
+            line(
+                true,
+                asked(Speed, Source::Words),
+                Some(AskOutcome::Got(Speed, Source::Words))
+            ),
+            "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer."
+        );
+        assert_eq!(
+            line(
+                true,
+                asked(Speed, Source::Pin),
+                Some(AskOutcome::Got(Speed, Source::Pin))
+            ),
+            "Answered by Gemma 4 E2B with its draft: Speed, because this chat is set to it."
+        );
+        assert_eq!(
+            line(
+                true,
+                asked(Quality, Source::Words),
+                Some(AskOutcome::Got(Quality, Source::Words))
+            ),
+            "Answered by Gemma 4 E2B with its draft: Performance, because you asked it to think harder."
+        );
+        assert_eq!(
+            line(
+                false,
+                asked(Quality, Source::Pin),
+                Some(AskOutcome::Got(Quality, Source::Pin))
+            ),
+            "Answered by Gemma 4 E2B: Performance, because this chat is set to it."
+        );
+        // The model the auto pick already ran for hard work serves the ask.
+        assert_eq!(
+            line(
+                true,
+                Some(StandIn::Performance),
+                Some(AskOutcome::Got(Quality, Source::Words))
+            ),
+            "Answered by Gemma 4 E2B with its draft: Performance, because you asked it to think harder."
+        );
+        assert_eq!(
+            line(true, None, Some(AskOutcome::Got(Balanced, Source::Pin))),
+            "Answered by Gemma 4 E2B with its draft: Balance, because this chat is set to it."
+        );
+        // The launch landed on the pick, or stepped down: the ask didn't get it.
+        assert_eq!(
+            line(true, None, Some(AskOutcome::Got(Quality, Source::Words))),
+            "Answered by Gemma 4 E2B with its draft, your pick; no bigger model fits for Performance right now."
+        );
+        assert_eq!(
+            line(
+                true,
+                Some(StandIn::Tight),
+                Some(AskOutcome::Got(Quality, Source::Pin))
+            ),
+            "Answered by Gemma 4 E2B with its draft, a smaller model because less memory is free than your pick needs; no bigger model fits for Performance right now."
+        );
+        assert_eq!(
+            line(
+                true,
+                None,
+                Some(AskOutcome::Refused(Speed, Refused::NoRoom))
+            ),
+            "Answered by Gemma 4 E2B with its draft, your pick; no faster model fits for Speed right now."
+        );
+        assert_eq!(
+            line(
+                true,
+                Some(StandIn::Tight),
+                Some(AskOutcome::Got(Balanced, Source::Pin))
+            ),
+            "Answered by Gemma 4 E2B with its draft, a smaller model because less memory is free than your pick needs; your pick doesn't fit for Balance right now."
+        );
+        assert_eq!(
+            line(
+                true,
+                Some(StandIn::Performance),
+                Some(AskOutcome::Refused(Speed, Refused::Busy))
+            ),
+            "Answered by Gemma 4 E2B with its draft, a bigger model for a hard task while the computer is free; another chat was answering, so Speed loads with the next reply."
+        );
+        assert_eq!(
+            line(
+                false,
+                None,
+                Some(AskOutcome::Refused(Quality, Refused::KeptLoaded))
+            ),
+            "Answered by Gemma 4 E2B, your pick; Keep loaded is on, so Performance doesn't swap the model."
+        );
+        assert_eq!(
+            line(
+                false,
+                None,
+                Some(AskOutcome::Refused(Speed, Refused::Forced))
+            ),
+            "Answered by Gemma 4 E2B, your pick; a model file is set for this app, so Speed doesn't swap it."
+        );
+        // The stand-ins, in short.
+        let why = |s| line(false, Some(s), None);
+        assert_eq!(
+            why(StandIn::LowBattery),
+            "Answered by Gemma 4 E2B, a smaller model while the battery is low."
+        );
+        assert_eq!(
+            why(StandIn::OutOfMemory),
+            "Answered by Gemma 4 E2B, a smaller model because your pick ran out of memory."
+        );
+        assert_eq!(
+            why(StandIn::Gaming),
+            "Answered by Gemma 4 E2B, the lightest model while a game runs."
+        );
+        assert_eq!(
+            why(StandIn::Lighter),
+            "Answered by Gemma 4 E2B, a smaller model while the computer saves power."
+        );
+        assert_eq!(
+            why(StandIn::Performance),
+            "Answered by Gemma 4 E2B, a bigger model for a hard task while the computer is free."
+        );
+        assert_eq!(
+            why(StandIn::BestFor(TaskKind::Reason)),
+            "Answered by Gemma 4 E2B, a model stronger at reasoning and planning than your pick."
+        );
+        assert_eq!(
+            why(StandIn::Asked(Speed, Source::Words)),
+            "Answered by Gemma 4 E2B, the model an earlier Speed ask loaded."
+        );
+    }
+
+    #[test]
+    fn a_chats_line_is_taken_once_and_a_failed_step_drops_it() {
+        let id = "shell-line-test";
+        if let Ok(mut lines) = LAST_LINE.lock() {
+            lines.insert(id.to_string(), "Answered by Gemma 4 E2B, your pick.".into());
+        }
+        assert_eq!(
+            take_line(id).as_deref(),
+            Some("Answered by Gemma 4 E2B, your pick.")
+        );
+        assert_eq!(take_line(id), None);
+        if let Ok(mut lines) = LAST_LINE.lock() {
+            lines.insert(id.to_string(), "stale".into());
+        }
+        forget_line(id);
+        assert_eq!(take_line(id), None);
+    }
 }
