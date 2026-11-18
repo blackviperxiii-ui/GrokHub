@@ -28,6 +28,7 @@ import {
 } from "./api";
 import { cardsByChat } from "./activity";
 import { newConversationId } from "./Chat";
+import { StatusTracker, statusFromLane } from "./Progress";
 import { CardChat, ownChat } from "./WorkboardChat";
 import { CardTriage, priorityChip } from "./WorkboardTriage";
 
@@ -627,6 +628,7 @@ function CardDetail({
 
   return (
     <div className="work-open">
+      <StatusTracker current={statusFromLane(lane)} label="Card status" />
       <CardTriage
         card={card}
         lane={lane}

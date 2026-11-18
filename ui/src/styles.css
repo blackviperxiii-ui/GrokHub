@@ -5015,19 +5015,8 @@ label.toggle-row {
 .fleet-machine--asleep {
   opacity: 0.55;
 }
-.fleet-bar {
-  display: block;
+.fleet .glow-bar.fleet-bar {
   margin-top: 4px;
-  max-width: 320px;
-  box-shadow: inset 0 0 0 1px var(--red);
-}
-.fleet-bar .xp-fill {
-  display: block;
-  background: var(--text);
-  box-shadow: none;
-}
-.fleet-bar--hot .xp-fill {
-  background: var(--red);
 }
 .fleet .fleet-refresh {
   background: var(--amber);
@@ -8091,4 +8080,291 @@ fieldset.channel label {
 .game-note textarea {
   width: 100%;
   resize: vertical;
+}
+
+/* Progress meters and steppers (Quix Progress & Steppers restyled for Loadout).
+ * Black track, red fill; amber only on the current step mark. Glow animation
+ * runs only when motion is allowed. */
+.status-tracker .sr-only,
+.step-tracker .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.usage-ring {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: var(--ring-size, 40px);
+  height: var(--ring-size, 40px);
+  flex: none;
+  color: var(--text);
+}
+
+.usage-ring svg {
+  display: block;
+  transform: rotate(-90deg);
+}
+
+.usage-ring-track,
+.usage-ring-fill {
+  fill: none;
+  stroke-width: 3.5;
+}
+
+.usage-ring-track {
+  stroke: var(--red-dim);
+}
+
+.usage-ring-fill {
+  stroke: var(--red);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 240ms var(--ease-out, ease-out);
+}
+
+.usage-ring--hot .usage-ring-fill {
+  stroke: var(--red-hover);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--red) 55%, transparent));
+}
+
+.usage-ring-pct {
+  position: absolute;
+  font-size: var(--font-caption);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+}
+
+.glow-bar {
+  display: block;
+  height: 6px;
+  margin-top: 4px;
+  max-width: 320px;
+  border-radius: 3px;
+  background: var(--red-dim);
+  box-shadow: inset 0 0 0 1px var(--red);
+  overflow: visible;
+}
+
+.glow-bar-fill {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  border-radius: inherit;
+  background: var(--text);
+  box-shadow: none;
+  transition: width 240ms var(--ease-out, ease-out);
+}
+
+.glow-bar--hot .glow-bar-fill {
+  background: var(--red);
+}
+
+.usage-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.usage-meter-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.status-tracker {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.status-tracker-step {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 8px;
+  align-items: start;
+  position: relative;
+  padding-bottom: 8px;
+  font-size: var(--font-body);
+  color: var(--muted);
+}
+
+.status-tracker-step:last-child {
+  padding-bottom: 0;
+}
+
+.status-tracker-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 14px;
+  bottom: 0;
+  width: 2px;
+  background: var(--red-dim);
+}
+
+.status-tracker-step--done:not(:last-child)::before,
+.status-tracker-step--current:not(:last-child)::before {
+  background: var(--red);
+}
+
+.status-tracker-mark {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--red-dim);
+  background: var(--bg);
+  box-sizing: border-box;
+}
+
+.status-tracker-step--done .status-tracker-mark {
+  border-color: var(--red);
+  background: var(--red);
+}
+
+.status-tracker-step--current .status-tracker-mark {
+  border-color: var(--amber);
+  background: var(--amber);
+  box-shadow: var(--amber-glow);
+}
+
+.status-tracker-step--done,
+.status-tracker-step--current {
+  color: var(--text);
+}
+
+.status-tracker-step--current .status-tracker-label {
+  font-weight: 600;
+  color: var(--amber);
+}
+
+.step-tracker {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  width: 100%;
+}
+
+.step-tracker-step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+  font-size: var(--font-caption);
+  color: var(--muted);
+  text-align: center;
+}
+
+.step-tracker-dot {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--red-dim);
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+  z-index: 1;
+  box-sizing: border-box;
+}
+
+.step-tracker-step--done .step-tracker-dot {
+  border-color: var(--red);
+  background: var(--red);
+  color: #000;
+}
+
+.step-tracker-step--current .step-tracker-dot {
+  border-color: var(--amber);
+  background: var(--amber);
+  color: #000;
+  box-shadow: var(--amber-glow);
+}
+
+.step-tracker-step--done,
+.step-tracker-step--current {
+  color: var(--text);
+}
+
+.step-tracker-step--current .step-tracker-label {
+  font-weight: 600;
+  color: var(--amber);
+}
+
+.step-tracker-line {
+  position: absolute;
+  top: 11px;
+  left: calc(50% + 11px);
+  right: calc(-50% + 11px);
+  height: 2px;
+  background: var(--red-dim);
+  z-index: 0;
+}
+
+.step-tracker-step--done .step-tracker-line,
+.step-tracker-step--current .step-tracker-line {
+  background: var(--red);
+}
+
+.step-tracker-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-reduce-motion="true"]) .glow-bar--hot .glow-bar-fill {
+    animation: glow-bar-pulse 1.6s ease-in-out infinite;
+  }
+
+  :root:not([data-reduce-motion="true"]) .usage-ring--hot .usage-ring-fill {
+    animation: usage-ring-pulse 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes glow-bar-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--red) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 10px 1px color-mix(in srgb, var(--red) 55%, transparent);
+  }
+}
+
+@keyframes usage-ring-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 2px color-mix(in srgb, var(--red) 25%, transparent));
+  }
+  50% {
+    filter: drop-shadow(0 0 8px color-mix(in srgb, var(--red) 65%, transparent));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-ring-fill,
+  .glow-bar-fill {
+    transition: none;
+  }
+
+  .glow-bar--hot .glow-bar-fill,
+  .usage-ring--hot .usage-ring-fill {
+    animation: none;
+  }
 }

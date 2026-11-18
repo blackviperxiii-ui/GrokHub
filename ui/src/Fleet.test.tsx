@@ -125,7 +125,8 @@ describe("Fleet page", () => {
     expect(grok).toHaveTextContent("Requests: 10 of 100 left");
     const bar = within(grok).getByRole("progressbar", { name: "Grok requests used" });
     expect(bar).toHaveAttribute("aria-valuenow", "90");
-    expect(bar).toHaveClass("fleet-bar--hot");
+    expect(bar).toHaveClass("glow-bar--hot", "fleet-bar");
+    expect(grok.querySelector(".usage-ring--hot .usage-ring-pct")).toHaveTextContent("90%");
 
     expect(screen.getByLabelText("Cursor")).toHaveTextContent("Not filled in yet.");
     expect(screen.getByLabelText("Antigravity")).toHaveTextContent("Not filled in yet.");

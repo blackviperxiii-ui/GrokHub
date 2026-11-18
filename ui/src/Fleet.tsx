@@ -10,6 +10,7 @@ import {
   type UsageTokens,
 } from "./api";
 import { ago } from "./Devices";
+import { UsageMeter } from "./Progress";
 import { StatusLine, useNote } from "./ui";
 
 /** Machines re-read this often while the page shows, so a computer that went to sleep dims. */
@@ -74,22 +75,6 @@ export function usedOf(left: number | null, limit: number | null): number | null
   return Math.min(1, Math.max(0, 1 - left / limit));
 }
 
-function Bar({ frac, label }: { frac: number; label: string }) {
-  const pct = Math.round(Math.min(1, Math.max(0, frac)) * 100);
-  return (
-    <span
-      className={`xp-track fleet-bar${pct >= 90 ? " fleet-bar--hot" : ""}`}
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={pct}
-    >
-      <span className="xp-fill" style={{ width: `${pct}%` }} />
-    </span>
-  );
-}
-
 function Machines({ machines, now }: { machines: FleetMachine[] | null; now: number }) {
   if (machines === null) return <p className="empty">Checking…</p>;
   return (
@@ -145,16 +130,16 @@ function Grok({ usage, now }: { usage: FleetUsage | null; now: number }) {
             {grok.resetsAtMs !== null ? resetsIn(grok.resetsAtMs, now) : `As of ${ago(grok.seenMs, now)}`}
           </div>
           {requests !== null && (
-            <div className="card-detail-line">
-              {`Requests: ${grok.requestsLeft} of ${grok.requestsLimit} left`}
-              <Bar frac={requests} label="Grok requests used" />
-            </div>
+            <UsageMeter frac={requests} label="Grok requests used">
+              <div className="card-detail-line">{`Requests: ${grok.requestsLeft} of ${grok.requestsLimit} left`}</div>
+            </UsageMeter>
           )}
           {pool !== null && (
-            <div className="card-detail-line">
-              {`Tokens: ${tokens(grok.tokensLeft ?? 0)} of ${tokens(grok.tokensLimit ?? 0)} left`}
-              <Bar frac={pool} label="Grok tokens used" />
-            </div>
+            <UsageMeter frac={pool} label="Grok tokens used">
+              <div className="card-detail-line">
+                {`Tokens: ${tokens(grok.tokensLeft ?? 0)} of ${tokens(grok.tokensLimit ?? 0)} left`}
+              </div>
+            </UsageMeter>
           )}
         </>
       )}
@@ -222,17 +207,17 @@ function ManualCard({ row, now, onSave }: { row: FleetRow; now: number; onSave: 
       <div className="card-title">{name}</div>
       <div className="card-status">{filled ? `You filled this in ${ago(row.updatedAt, now)}.` : "Not filled in yet."}</div>
       {!editing && row.windowPct !== null && (
-        <div className="card-detail-line">
-          {`Short window: ${row.windowPct}% used`}
-          <Bar frac={row.windowPct / 100} label={`${name} short window used`} />
-        </div>
+        <UsageMeter frac={row.windowPct / 100} label={`${name} short window used`}>
+          <div className="card-detail-line">{`Short window: ${row.windowPct}% used`}</div>
+        </UsageMeter>
       )}
       {!editing && row.periodPct !== null && (
-        <div className="card-detail-line">
-          {`This period: ${row.periodPct}% used`}
-          {row.periodResetsAtMs !== null && `, ${resetsIn(row.periodResetsAtMs, now)}`}
-          <Bar frac={row.periodPct / 100} label={`${name} period used`} />
-        </div>
+        <UsageMeter frac={row.periodPct / 100} label={`${name} period used`}>
+          <div className="card-detail-line">
+            {`This period: ${row.periodPct}% used`}
+            {row.periodResetsAtMs !== null && `, ${resetsIn(row.periodResetsAtMs, now)}`}
+          </div>
+        </UsageMeter>
       )}
       {editing && (
         <>
