@@ -2266,7 +2266,7 @@ button.md-copy {
 .voice-line {
   margin: 0 0 8px;
   color: var(--muted);
-  font-size: 0.85em;
+  font-size: var(--font-caption);
   overflow-wrap: anywhere;
 }
 
