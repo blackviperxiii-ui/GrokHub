@@ -814,3 +814,229 @@ fn a_heartbeat_pace_that_is_off_spends_no_review_call() {
         })
     );
 }
+
+fn seed_review_turns(d: &Path, id: &str, count: usize) {
+    let _config = grokhub_agent::perm::ConfigGuard::set(d);
+    let say = |role: &str, text: &str| InputItem::Message {
+        role: role.into(),
+        content: vec![ContentPart::InputText(text.into())],
+    };
+    let items: Vec<InputItem> = (0..count)
+        .flat_map(|i| {
+            [
+                say("user", &format!("Check item {id}-{i} on the harbor list")),
+                say("assistant", "Done."),
+            ]
+        })
+        .collect();
+    grokhub_agent::record_turn(
+        &grokhub_agent::scratch::shell_id(false, id),
+        "/home/user",
+        "grok-test",
+        &items,
+        &Usage::default(),
+        "",
+        "harbor list",
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_spent_heartbeat_day_cap_spends_no_review_call() {
+    let d = temp_dir("day-cap");
+    app_json(
+        &d,
+        "{\"memory_backend\":\"amr\",\"heartbeat\":{\"maxPerDay\":1,\"minIntervalMin\":0}}\n",
+    );
+    seed_review_turns(&d, "1", 8);
+    let calls = Arc::new(AtomicU32::new(0));
+    let conversation = Arc::new(std::sync::Mutex::new(String::new()));
+    let model = || -> Result<Box<dyn ModelClient>, String> {
+        Ok(Box::new(Answer {
+            text: "NOTHING",
+            calls: Arc::clone(&calls),
+            conversation: Arc::clone(&conversation),
+        }))
+    };
+
+    let mut state = NightState::default();
+    let spent_at = AT_3AM - 2 * 60 * MIN;
+    state
+        .throttle
+        .record_act(ProactiveAct::Anticipate, spent_at);
+    state
+        .throttle
+        .record_outcome(ProactiveAct::Anticipate, ActOutcome::Useful);
+
+    assert_eq!(
+        look(&d, PID, AT_3AM, Some(0), false, &model, &mut state),
+        Look::Ran(Night {
+            lessons: true,
+            review: None,
+            dream: Dream::Dreamed { card: false },
+        })
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    // Once the 24-hour window clears (and at or after the dream hour), the
+    // missed review catches up.
+    assert_eq!(
+        look(&d, PID, AT_3AM + DAY, Some(0), false, &model, &mut state),
+        Look::Ran(Night {
+            lessons: true,
+            review: Some(Reviewed::Ran {
+                kept: 0,
+                ideas: 0,
+                patched: 0,
+            }),
+            dream: Dream::NotDue,
+        })
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_review_call_counts_against_the_day_and_hour_caps() {
+    let d = temp_dir("review-caps");
+    app_json(
+        &d,
+        "{\"memory_backend\":\"amr\",\"dreamHour\":3,\"heartbeat\":{\"maxPerDay\":1,\"maxPerHour\":1,\"minIntervalMin\":0}}\n",
+    );
+    seed_review_turns(&d, "1", 8);
+    let calls = Arc::new(AtomicU32::new(0));
+    let conversation = Arc::new(std::sync::Mutex::new(String::new()));
+    let model = || -> Result<Box<dyn ModelClient>, String> {
+        Ok(Box::new(Answer {
+            text: "NOTHING",
+            calls: Arc::clone(&calls),
+            conversation: Arc::clone(&conversation),
+        }))
+    };
+
+    let mut state = NightState::default();
+    // Day 1 late night: review #1 runs and spends the single day/hour slot.
+    assert_eq!(
+        look(&d, PID, AT_11PM, Some(0), false, &model, &mut state),
+        Look::Ran(Night {
+            lessons: true,
+            review: Some(Reviewed::Ran {
+                kept: 0,
+                ideas: 0,
+                patched: 0,
+            }),
+            dream: Dream::NotDue,
+        })
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    // Day 2 early morning (4h later): new local day, still inside the 24h cap.
+    seed_review_turns(&d, "2", 8);
+    assert_eq!(
+        look(&d, PID, AT_3AM + DAY, Some(0), false, &model, &mut state),
+        Look::Ran(Night {
+            lessons: true,
+            review: None,
+            dream: Dream::Dreamed { card: false },
+        })
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    // Day 2 after the 24h window clears: review #2 runs.
+    assert_eq!(
+        look(
+            &d,
+            PID,
+            AT_11PM + DAY + MIN,
+            Some(0),
+            false,
+            &model,
+            &mut state
+        ),
+        Look::Ran(Night {
+            lessons: false,
+            review: Some(Reviewed::Ran {
+                kept: 0,
+                ideas: 0,
+                patched: 0,
+            }),
+            dream: Dream::NotDue,
+        })
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_spent_hour_cap_holds_review_until_the_hour_clears_and_not_worth_spends_nothing() {
+    let d = temp_dir("hour-cap");
+    app_json(
+        &d,
+        "{\"memory_backend\":\"amr\",\"heartbeat\":{\"maxPerHour\":1,\"maxPerDay\":1,\"minIntervalMin\":0}}\n",
+    );
+    let calls = Arc::new(AtomicU32::new(0));
+    let conversation = Arc::new(std::sync::Mutex::new(String::new()));
+    let model = || -> Result<Box<dyn ModelClient>, String> {
+        Ok(Box::new(Answer {
+            text: "NOTHING",
+            calls: Arc::clone(&calls),
+            conversation: Arc::clone(&conversation),
+        }))
+    };
+
+    let mut state = NightState::default();
+    // NotWorth (< 8 new turns) spends no cap slot.
+    assert_eq!(
+        look(&d, PID, AT_3AM, Some(0), false, &model, &mut state),
+        Look::Ran(Night {
+            lessons: true,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
+            dream: Dream::Dreamed { card: false },
+        })
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    // Another heartbeat act inside the hour holds the review once 8 new turns arrive.
+    seed_review_turns(&d, "1", 8);
+    let after_recount = AT_3AM + REVIEW_RECOUNT_MS;
+    state
+        .throttle
+        .record_act(ProactiveAct::Ideas, after_recount - 10 * MIN);
+    state
+        .throttle
+        .record_outcome(ProactiveAct::Ideas, ActOutcome::Useful);
+    // Only test HourCap by loosening day cap via app.json.
+    app_json(
+        &d,
+        "{\"memory_backend\":\"amr\",\"heartbeat\":{\"maxPerHour\":1,\"maxPerDay\":5,\"minIntervalMin\":0}}\n",
+    );
+    assert_eq!(
+        look(&d, PID, after_recount, Some(0), false, &model, &mut state),
+        Look::Ran(Night {
+            lessons: false,
+            review: None,
+            dream: Dream::NotDue,
+        })
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    assert_eq!(
+        look(
+            &d,
+            PID,
+            after_recount + 51 * MIN,
+            Some(0),
+            false,
+            &model,
+            &mut state
+        ),
+        Look::Ran(Night {
+            lessons: false,
+            review: Some(Reviewed::Ran {
+                kept: 0,
+                ideas: 0,
+                patched: 0,
+            }),
+            dream: Dream::NotDue,
+        })
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}

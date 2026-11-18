@@ -22,7 +22,9 @@ use std::time::Duration;
 use grokhub_agent::ModelClient;
 use grokhub_core::amr::{dream_report_path, ModelDreamOpts, MODEL_DREAM_OUTPUT_TOKEN_CAP};
 use grokhub_core::scheduler_lease::{read_lease, shell_may_fire};
-use grokhub_core::{HeartbeatPace, HeartbeatThrottle, PACE_NORMAL};
+use grokhub_core::{
+    ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate, ProactiveAct, PACE_NORMAL,
+};
 
 use crate::chat_review::Reviewed;
 
@@ -30,7 +32,7 @@ use crate::chat_review::Reviewed;
 const TICK: Duration = Duration::from_secs(5 * 60);
 
 /// What the thread remembers between looks: the local day each pass last
-/// ran, so a pass runs once a night.
+/// ran, so a pass runs once a night, and the in-memory heartbeat throttle.
 #[derive(Debug, Default)]
 pub struct NightState {
     lessons_day: Option<String>,
@@ -38,6 +40,7 @@ pub struct NightState {
     /// Too few new turns: the review looks again after this.
     review_after_ms: u64,
     dream_day: Option<String>,
+    throttle: HeartbeatThrottle,
 }
 
 /// How long a review with too few new turns waits before it counts again.
@@ -153,13 +156,15 @@ pub fn look(
         state.lessons_day = Some(today.clone());
         lessons = grokhub_agent::episode::lessons::dream_store(config_dir, now).is_ok();
     }
-    // A heartbeat pace that is off spends nothing proactive, as in the cabin.
+    // Respect the heartbeat pace (off, day/hour caps, backoff, min interval),
+    // as in the cabin. Busy and Halt already held or return before this.
+    let review_pace = pace(config_dir);
     let review = (!busy
         && state.review_day.as_deref() != Some(today.as_str())
         && now >= state.review_after_ms
         && !halted(config_dir, now)
-        && !pace(config_dir).is_off())
-    .then(|| review_tonight(config_dir, &today, &clock, hour, now, model, state));
+        && state.throttle.gate(&review_pace, now, busy) == PaceGate::Act)
+        .then(|| review_tonight(config_dir, &today, &clock, hour, now, model, state));
     // The review's call can take a long while (a batched request waits for
     // hours), so busy is stale by now: the dream waits for the next look.
     let reviewed = matches!(review, Some(Reviewed::Ran { .. } | Reviewed::Held(_)));
@@ -184,7 +189,8 @@ pub fn look(
     })
 }
 
-/// Tonight's chat review. The model is asked for only when the review calls.
+/// Tonight's chat review. The model is asked for only when the review calls,
+/// and only a real call spends a heartbeat cap slot.
 fn review_tonight(
     config_dir: &Path,
     today: &str,
@@ -194,8 +200,10 @@ fn review_tonight(
     model: &Model<'_>,
     state: &mut NightState,
 ) -> Reviewed {
+    let called = std::cell::Cell::new(false);
     let call = |system: &str, digest: &str| {
         let client = model()?;
+        called.set(true);
         crate::pulse_feed::ask_as(
             client.as_ref(),
             grokhub_core::model_for_mode("balanced"),
@@ -207,6 +215,14 @@ fn review_tonight(
         )
     };
     let reviewed = crate::chat_review::review_step(config_dir, today, clock, hour, now, &call);
+    if called.get() {
+        state.throttle.record_act(ProactiveAct::Review, now);
+        let outcome = match &reviewed {
+            Reviewed::Ran { .. } => ActOutcome::Useful,
+            _ => ActOutcome::Empty,
+        };
+        state.throttle.record_outcome(ProactiveAct::Review, outcome);
+    }
     match &reviewed {
         // Once a night, even when the file could not take the stamp.
         Reviewed::Ran { .. } | Reviewed::Held(_) => state.review_day = Some(today.to_string()),
