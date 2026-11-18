@@ -359,9 +359,12 @@ fn gw2_status(acct: Option<&Gw2Account>, has_key: bool, now: u64) -> String {
     }
 }
 
-fn gw2_keyring() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(credential::SERVICE, GW2_KEYRING_ACCOUNT)
-        .map_err(|e| format!("The system keychain is not available: {e}"))
+fn gw2_keychain_message(err: keyring::Error) -> String {
+    format!("The system keychain is not available: {err}")
+}
+
+fn gw2_backend() -> grokhub_agent::keyring_blob::OsBackend {
+    grokhub_agent::keyring_blob::OsBackend::new(credential::SERVICE, gw2_keychain_message)
 }
 
 fn gw2_load_key() -> Option<String> {
@@ -371,8 +374,8 @@ fn gw2_load_key() -> Option<String> {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
     }
-    match gw2_keyring().ok()?.get_password() {
-        Ok(k) if !k.trim().is_empty() => Some(k),
+    match grokhub_agent::keyring_blob::get(&gw2_backend(), GW2_KEYRING_ACCOUNT) {
+        Ok(Some(k)) if !k.trim().is_empty() => Some(k),
         _ => None,
     }
 }
@@ -383,15 +386,11 @@ fn gw2_store_key(key: Option<&str>) -> Result<(), String> {
             key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
         return Ok(());
     }
-    let entry = gw2_keyring()?;
     match key {
-        Some(k) => entry
-            .set_password(k.trim())
+        Some(k) => grokhub_agent::keyring_blob::set(&gw2_backend(), GW2_KEYRING_ACCOUNT, k.trim())
             .map_err(|e| format!("Couldn't save the Guild Wars 2 key: {e}")),
-        None => match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(format!("Couldn't remove the Guild Wars 2 key: {e}")),
-        },
+        None => grokhub_agent::keyring_blob::delete(&gw2_backend(), GW2_KEYRING_ACCOUNT)
+            .map_err(|e| format!("Couldn't remove the Guild Wars 2 key: {e}")),
     }
 }
 
@@ -941,9 +940,12 @@ fn destiny_status(p: Option<&DestinyProfile>, ready: bool, now: u64) -> String {
     }
 }
 
-fn destiny_keyring() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(credential::SERVICE, D2_KEYRING_ACCOUNT)
-        .map_err(|e| format!("The system keychain is not available: {e}"))
+fn destiny_keychain_message(err: keyring::Error) -> String {
+    format!("The system keychain is not available: {err}")
+}
+
+fn destiny_backend() -> grokhub_agent::keyring_blob::OsBackend {
+    grokhub_agent::keyring_blob::OsBackend::new(credential::SERVICE, destiny_keychain_message)
 }
 
 fn destiny_load_key() -> Option<String> {
@@ -953,8 +955,8 @@ fn destiny_load_key() -> Option<String> {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
     }
-    match destiny_keyring().ok()?.get_password() {
-        Ok(k) if !k.trim().is_empty() => Some(k),
+    match grokhub_agent::keyring_blob::get(&destiny_backend(), D2_KEYRING_ACCOUNT) {
+        Ok(Some(k)) if !k.trim().is_empty() => Some(k),
         _ => None,
     }
 }
@@ -965,15 +967,13 @@ fn destiny_store_key(key: Option<&str>) -> Result<(), String> {
             key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
         return Ok(());
     }
-    let entry = destiny_keyring()?;
     match key {
-        Some(k) => entry
-            .set_password(k.trim())
-            .map_err(|e| format!("Couldn't save the Destiny 2 key: {e}")),
-        None => match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(format!("Couldn't remove the Destiny 2 key: {e}")),
-        },
+        Some(k) => {
+            grokhub_agent::keyring_blob::set(&destiny_backend(), D2_KEYRING_ACCOUNT, k.trim())
+                .map_err(|e| format!("Couldn't save the Destiny 2 key: {e}"))
+        }
+        None => grokhub_agent::keyring_blob::delete(&destiny_backend(), D2_KEYRING_ACCOUNT)
+            .map_err(|e| format!("Couldn't remove the Destiny 2 key: {e}")),
     }
 }
 
