@@ -31,20 +31,24 @@ fn room_fit_and_speed_follow_free_memory() {
     let moe = m("gemma-4-26b-a4b-it-abliterated-q4_k");
     let dense = m("gemma-4-31b-it-abliterated-q4_k");
     let mid = m("gemma-4-12b-it-abliterated-q4_k");
-    assert!(fits(moe, &room, 0, HEADROOM_MB));
-    assert_eq!(est_tok_s(mid, &room, 0), 35, "all on the GPU");
-    assert_eq!(est_tok_s(moe, &room, 0), 40, "experts in RAM");
-    assert_eq!(est_tok_s(dense, &room, 0), 15, "a dense split");
+    assert!(fits(moe.run_mb, &room, 0, HEADROOM_MB));
+    assert_eq!(est_tok_s(mid, mid.run_mb, &room, 0), 35, "all on the GPU");
+    assert_eq!(est_tok_s(moe, moe.run_mb, &room, 0), 40, "experts in RAM");
+    assert_eq!(
+        est_tok_s(dense, dense.run_mb, &room, 0),
+        15,
+        "a dense split"
+    );
     let cpu = Room {
         free_vram_mb: None,
         ..room
     };
-    assert_eq!(est_tok_s(mid, &cpu, 0), 3);
+    assert_eq!(est_tok_s(mid, mid.run_mb, &cpu, 0), 3);
     let mac = Room {
         unified: true,
         ..cpu
     };
-    assert_eq!(est_tok_s(mid, &mac, 0), 20);
+    assert_eq!(est_tok_s(mid, mid.run_mb, &mac, 0), 20);
     assert!(performance_ready(&room));
     assert!(!performance_ready(&Room {
         cpu_busy_pct: Some(CPU_FREE_PCT + 1),
@@ -54,6 +58,30 @@ fn room_fit_and_speed_follow_free_memory() {
         on_battery: true,
         ..room
     }));
+}
+
+#[test]
+fn a_pair_fits_only_when_the_model_and_its_drafter_both_fit() {
+    // 9 GB free RAM, no GPU reading: 7,200 MB usable.
+    let room = Room {
+        free_vram_mb: None,
+        free_ram_mb: 9_000,
+        cpu_busy_pct: Some(10),
+        on_battery: false,
+        unified: false,
+    };
+    assert_eq!(usable_mb(&room, 0), 7_200);
+    // Gemma 4 E4B with its heads (6,288 MB) fits; the 12B pair (9,477) doesn't.
+    assert!(fits(6_288, &room, 0, 0));
+    assert!(!fits(9_477, &room, 0, 0));
+    // The drafter counts against the GPU: the 12B pair no longer runs all on it.
+    let gpu = Room {
+        free_vram_mb: Some(9_000),
+        ..room
+    };
+    let mid = m("gemma-4-12b-it-abliterated-q4_k");
+    assert_eq!(est_tok_s(mid, 8_399, &gpu, 0), 35);
+    assert_eq!(est_tok_s(mid, 9_477, &gpu, 0), 18);
 }
 
 #[test]

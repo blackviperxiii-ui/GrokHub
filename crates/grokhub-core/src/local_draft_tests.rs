@@ -336,9 +336,8 @@ fn verdicts_are_kept_per_device_and_pair() {
 }
 
 #[test]
-fn decide_checks_engine_then_level_then_tokenizer_then_room_then_the_test() {
+fn decide_checks_engine_then_tokenizer_then_the_verdict_then_room() {
     let ok = Check {
-        level_ok: true,
         engine_ok: true,
         tokenizer_ok: true,
         fits: true,
@@ -359,32 +358,78 @@ fn decide_checks_engine_then_level_then_tokenizer_then_room_then_the_test() {
         }),
         Decision::Off("the speed test found the draft model didn't help")
     );
+    // A pair that doesn't fit refuses the model, tested or not.
+    assert_eq!(decide(Check { fits: false, ..ok }), Decision::NoRoom);
     assert_eq!(
-        decide(Check { fits: false, ..ok }),
-        Decision::Off("there isn't room for the model and its draft model together")
+        decide(Check {
+            fits: false,
+            verdict: None,
+            ..ok
+        }),
+        Decision::NoRoom
+    );
+    // A pair the speed test turned off needs no room: the model runs alone.
+    assert_eq!(
+        decide(Check {
+            fits: false,
+            verdict: Some(false),
+            ..ok
+        }),
+        Decision::Off("the speed test found the draft model didn't help")
     );
     assert_eq!(
         decide(Check {
             tokenizer_ok: false,
+            fits: false,
             ..ok
         }),
         Decision::Off("the draft model's tokenizer doesn't match the model")
     );
     assert_eq!(
         decide(Check {
-            level_ok: false,
-            ..ok
-        }),
-        Decision::Off("the machine is busy, so the draft model is off")
-    );
-    assert_eq!(
-        decide(Check {
             engine_ok: false,
-            level_ok: false,
+            tokenizer_ok: false,
             ..ok
         }),
         Decision::Off("this engine can't run a draft model")
     );
+}
+
+#[test]
+fn a_pair_needs_the_model_and_its_drafter_once_the_drafter_is_on_disk() {
+    let m = |id: &str| local_setup::model_by_id(id).expect("catalog model");
+    let g12b = m("gemma-4-12b-it-abliterated-q4_k");
+    assert_eq!(pair_mb(g12b, false), 8_399);
+    assert_eq!(pair_mb(g12b, true), 9_477);
+    let e4b = m("gemma-4-e4b-it-abliterated-q4_k");
+    assert_eq!((pair_mb(e4b, false), pair_mb(e4b, true)), (5_868, 6_288));
+    let e2b = m("gemma-4-e2b-it-abliterated-q4_k");
+    assert_eq!((pair_mb(e2b, false), pair_mb(e2b, true)), (3_888, 4_307));
+    // The shared Qwen 3.5 0.8B drafter adds its 953 MB.
+    let qwen = m("qwen3.5-4b-heretic-q4_k_m");
+    assert_eq!(pair_mb(qwen, true), 4_392);
+    // No drafter in the catalog: the model alone either way.
+    let solo = m("nvidia-nemotron3.5-lightning-30b-a3b-heretic-q4_k_m");
+    assert_eq!(
+        (pair_mb(solo, false), pair_mb(solo, true)),
+        (24_279, 24_279)
+    );
+}
+
+#[test]
+fn a_drafter_counts_as_on_disk_in_any_of_its_folders() {
+    let root = std::env::temp_dir().join(format!("grokhub-pair-disk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dirs = [root.join("beside"), root.join("shared")];
+    let g12b = local_setup::model_by_id("gemma-4-12b-it-abliterated-q4_k").unwrap();
+    assert!(!drafter_on_disk(g12b, &dirs), "no file yet");
+    std::fs::create_dir_all(&dirs[1]).unwrap();
+    std::fs::write(dirs[1].join(G12B_MTP), b"x").unwrap();
+    assert!(drafter_on_disk(g12b, &dirs), "found in the second folder");
+    let solo =
+        local_setup::model_by_id("nvidia-nemotron3.5-lightning-30b-a3b-heretic-q4_k_m").unwrap();
+    assert!(!drafter_on_disk(solo, &dirs), "no catalog drafter");
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

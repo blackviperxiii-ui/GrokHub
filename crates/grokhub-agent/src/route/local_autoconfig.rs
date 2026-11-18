@@ -196,15 +196,20 @@ pub fn fits_beside(now: FreeNow, need: (u64, u64)) -> bool {
     room(now.vram_free_mb, need.0, 0) && room(now.ram_free_mb, need.1, BESIDE_RAM_RESERVE_MB)
 }
 
-/// `prev` with every GPU left out: no layers or experts on a GPU, no split,
-/// no drafter (it would run on the GPU too).
+/// `prev` with every GPU left out: no layers or experts on a GPU, no split.
+/// A drafter stays with its model, in RAM too.
 pub fn on_cpu(prev: &LaunchArgs) -> LaunchArgs {
     LaunchArgs {
         backend: Backend::Cpu,
         ngl: 0,
         n_cpu_moe: None,
         tensor_split: None,
-        draft: None,
+        draft: prev.draft.as_ref().map(|d| {
+            Box::new(DraftArgs {
+                on_gpu: false,
+                ..(**d).clone()
+            })
+        }),
         cpu_only: true,
         run: run_with_slots(1),
         ..prev.clone()
@@ -319,9 +324,28 @@ fn ctx_steps(
     CTX_STEPS.into_iter().filter(move |c| *c <= cap.max(4_096))
 }
 
-/// Whether the model and its KV fit `total_mb`, at the slots `slots(ctx)` gives.
-fn fits(meta: &GgufMeta, ctx: u32, kv: KvType, total_mb: u64, slots: &dyn Fn(u32) -> u32) -> bool {
-    meta.file_mb + kv_mb_for(meta, ctx, kv, slots(ctx)) + overhead_mb(ctx) <= total_mb
+/// MB one model (or drafter) takes at `ctx`: its file, KV cache and buffers.
+fn need_mb(meta: &GgufMeta, ctx: u32, kv: KvType, seqs: u32) -> u64 {
+    meta.file_mb + kv_mb_for(meta, ctx, kv, seqs) + overhead_mb(ctx)
+}
+
+/// MB the drafter in `reserve` takes beside the model at `ctx`.
+fn reserve_mb(reserve: Option<&GgufMeta>, ctx: u32, kv: KvType, seqs: u32) -> u64 {
+    reserve.map_or(0, |d| need_mb(d, ctx, kv, seqs))
+}
+
+/// Whether the model, its KV and the drafter in `reserve` fit `total_mb`, at
+/// the slots `slots(ctx)` gives.
+fn fits(
+    meta: &GgufMeta,
+    reserve: Option<&GgufMeta>,
+    ctx: u32,
+    kv: KvType,
+    total_mb: u64,
+    slots: &dyn Fn(u32) -> u32,
+) -> bool {
+    let seqs = slots(ctx);
+    need_mb(meta, ctx, kv, seqs) + reserve_mb(reserve, ctx, kv, seqs) <= total_mb
 }
 
 /// Context past this splits KV across GPU and RAM badly; partial offload stops here.
@@ -333,6 +357,7 @@ const CPU_CTX_CAP: u32 = 8_192;
 /// only q4 reaches the floor context.
 fn pick_ctx(
     meta: &GgufMeta,
+    reserve: Option<&GgufMeta>,
     steps: &[u32],
     limit: u64,
     floor: u32,
@@ -343,7 +368,7 @@ fn pick_ctx(
         steps
             .iter()
             .copied()
-            .find(|c| fits(meta, *c, kv, limit, slots))
+            .find(|c| fits(meta, reserve, *c, kv, limit, slots))
     };
     if let Some(kv) = kv {
         return largest(kv).map(|c| (c, kv));
@@ -358,12 +383,16 @@ fn pick_ctx(
 
 /// The launch for this machine, model and state. The whole model on the GPU
 /// wins over a longer context; past that, the longest context that fits.
+/// `reserve` is the drafter the model must load with: its file, KV and
+/// buffers come out of the room first, so the context shrinks before the
+/// drafter is left out.
 pub fn autoconfig(
     p: &LocalProfile,
     meta: &GgufMeta,
     backend: Backend,
     state: GovState,
     o: &Overrides,
+    reserve: Option<&GgufMeta>,
 ) -> LaunchArgs {
     let (gpu_mb, ram_mb) = budgets(p, backend, state);
     let steps: Vec<u32> = ctx_steps(meta, state, o.ctx).collect();
@@ -373,9 +402,11 @@ pub fn autoconfig(
     let on_cpu = gpu_mb == 0;
     let slots = |ctx: u32| super::local_flags::slot_count(state, ctx, on_cpu);
     let full = (gpu_mb > 0)
-        .then(|| pick_ctx(meta, &steps, gpu_mb, floor, o.kv, &slots))
+        .then(|| pick_ctx(meta, reserve, &steps, gpu_mb, floor, o.kv, &slots))
         .flatten()
-        .filter(|(c, _)| *c >= floor);
+        // A model split across GPU and RAM can't run its drafter, so a pair
+        // takes a shorter context to stay whole on the GPU.
+        .filter(|(c, _)| *c >= floor || reserve.is_some());
     let cap = if gpu_mb > 0 {
         PARTIAL_CTX_CAP
     } else {
@@ -383,11 +414,14 @@ pub fn autoconfig(
     };
     let capped: Vec<u32> = steps.iter().copied().filter(|c| *c <= cap).collect();
     let (ctx, kv) = full
-        .or_else(|| pick_ctx(meta, &capped, gpu_mb + ram_mb, floor, o.kv, &slots))
+        .or_else(|| pick_ctx(meta, reserve, &capped, gpu_mb + ram_mb, floor, o.kv, &slots))
         .unwrap_or((4_096, o.kv.unwrap_or(KvType::Q4)));
     let all_layers = meta.block_count + 1;
     let seqs = slots(ctx);
-    let (ngl, n_cpu_moe) = offload(meta, gpu_mb, ctx, kv, seqs);
+    // The drafter sits on the GPU beside a whole model, so the layers get
+    // what it leaves.
+    let gpu_left = gpu_mb.saturating_sub(reserve_mb(reserve, ctx, kv, seqs));
+    let (ngl, n_cpu_moe) = offload(meta, gpu_left, ctx, kv, seqs);
     let ngl = o.ngl.map_or(ngl, |n| n.min(all_layers));
     let p_cores = p.cpu.p_cores.max(1);
     let threads = match state {
@@ -482,18 +516,14 @@ pub enum Retry {
     SmallerModel,
 }
 
-/// After the `attempt`th out-of-memory failure: first the drafter goes,
-/// then 10% fewer GPU layers (for MoE, 10% more layers' experts in RAM), up
-/// to [`MAX_OOM_RETRIES`] times, then the next smaller model.
+/// After the `attempt`th out-of-memory failure: 10% fewer GPU layers (for
+/// MoE, 10% more layers' experts in RAM), up to [`MAX_OOM_RETRIES`] times,
+/// then the next smaller model. A model with a drafter goes straight to a
+/// smaller model: the pair never splits, and fewer layers leave no room for
+/// the drafter anyway.
 pub fn after_oom(prev: &LaunchArgs, attempt: u8) -> Retry {
-    if attempt > MAX_OOM_RETRIES {
+    if attempt > MAX_OOM_RETRIES || prev.draft.is_some() {
         return Retry::SmallerModel;
-    }
-    if prev.draft.is_some() {
-        return Retry::Again(LaunchArgs {
-            draft: None,
-            ..prev.clone()
-        });
     }
     if prev.ngl == 0 {
         return Retry::SmallerModel;
@@ -876,10 +906,18 @@ fn engine_files(binary: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// How a launch refused because the model and its drafter don't fit
+/// together begins. The caller tries a smaller model.
+pub const PAIR_NO_ROOM: &str = "there isn't room for the model and its draft model together";
+
+/// A planned launch, its `autotune.json` key and folder.
+pub type Planned = (LaunchArgs, String, PathBuf);
+
 /// The planned launch for `model` once the cabin has read the hardware;
-/// `None` (the one-shot `local_perf` defaults) before that or when the GGUF
-/// header can't be read. Also returns the `autotune.json` key and folder.
-pub fn launch_for(binary: &Path, model: &Path) -> Option<(LaunchArgs, String, PathBuf)> {
+/// `Ok(None)` (the one-shot `local_perf` defaults) before that or when the
+/// GGUF header can't be read. Also returns the `autotune.json` key and
+/// folder. `Err` ([`PAIR_NO_ROOM`]) when the model and its drafter don't fit.
+pub fn launch_for(binary: &Path, model: &Path) -> Result<Option<Planned>, String> {
     launch_with(binary, model, None)
 }
 
@@ -888,11 +926,15 @@ pub fn launch_with(
     binary: &Path,
     model: &Path,
     free: Option<FreeNow>,
-) -> Option<(LaunchArgs, String, PathBuf)> {
-    planned(binary, model, free).map(|(args, plan, key, dir)| {
-        local_spec::launched(&plan, &dir);
-        (args, key, dir)
-    })
+) -> Result<Option<Planned>, String> {
+    let Some((args, plan, key, dir)) = planned(binary, model, free) else {
+        return Ok(None);
+    };
+    if plan.decision == grokhub_core::local_draft::Decision::NoRoom {
+        return Err(PAIR_NO_ROOM.to_string());
+    }
+    local_spec::launched(&plan, &dir);
+    Ok(Some((args, key, dir)))
 }
 
 /// The draft half of [`launch_for`], for the speed test.
@@ -909,9 +951,12 @@ pub fn replan_free() -> FreeNow {
 
 /// [`launch_for`] as a fresh start of the running model would plan it (see
 /// [`replan_free`]), leaving the drafter's record alone. `None` before the
-/// profile is read or when the header can't be.
-pub fn replan_for(binary: &Path, model: &Path) -> Option<(LaunchArgs, String, PathBuf)> {
-    planned(binary, model, Some(replan_free())).map(|(args, _, key, dir)| (args, key, dir))
+/// profile is read, when the header can't be, or when the model and its
+/// drafter no longer fit (the reload then picks a smaller model).
+pub fn replan_for(binary: &Path, model: &Path) -> Option<Planned> {
+    planned(binary, model, Some(replan_free()))
+        .filter(|(_, plan, _, _)| plan.decision != grokhub_core::local_draft::Decision::NoRoom)
+        .map(|(args, _, key, dir)| (args, key, dir))
 }
 
 /// The second server of a warm relaunch, planned as `next`, fits beside the
@@ -973,42 +1018,40 @@ fn planned_as(
     let backend = local_profile::choose_backend(&p, &available, &|_| true);
     let bytes = std::fs::metadata(model).map(|m| m.len()).unwrap_or(0);
     let key = tune_key(model, bytes, &p, backend);
-    let args = autoconfig(&p, &meta, backend, state, &o);
+    let flags = local_spec::help_flags(binary);
+    let device = device_label(&p, backend);
+    // A paired model is sized with room for its drafter.
+    let pairing = local_spec::pairing(&flags, model, &meta, &dir, &device);
+    let args = autoconfig(&p, &meta, backend, state, &o, pairing.reserve());
     let mut args = match load_tuned(&dir).get(&key) {
         Some(t) => apply_tuned(args, t),
         None => args,
     };
-    let flags = local_spec::help_flags(binary);
-    let device = device_label(&p, backend);
-    let mut plan = local_spec::plan(&local_spec::Launch {
-        flags: &flags,
-        model,
-        meta: &meta,
-        profile: &p,
-        state,
-        args: &args,
-        tune_dir: &dir,
-        device: &device,
-        gaming: false,
-    });
+    let launch = |args: &LaunchArgs, device: &str, pairing: local_spec::Pairing| {
+        local_spec::plan_with(
+            &local_spec::Launch {
+                flags: &flags,
+                model,
+                meta: &meta,
+                profile: &p,
+                state,
+                args,
+                tune_dir: &dir,
+                device,
+            },
+            pairing,
+        )
+    };
+    let mut plan = launch(&args, &device, pairing);
     args.draft = plan.draft.clone().map(Box::new);
     // Gaming mode: a game holds the GPU, so the model runs on the CPU with
     // half the threads and the game keeps its frame rate. Its drafter joins
-    // on the CPU too, only when the gaming setup's own speed test kept it
-    // and both fit in RAM; otherwise the model runs alone.
+    // on the CPU too, with its own speed test there; when both don't fit in
+    // RAM the launch is refused and a smaller model runs.
     if gaming || gaming_test() || super::local_scale::gaming_reason(super::local_gov::reason()) {
         args = gaming_launch(&args);
-        plan = local_spec::plan(&local_spec::Launch {
-            flags: &flags,
-            model,
-            meta: &meta,
-            profile: &p,
-            state,
-            args: &args,
-            tune_dir: &dir,
-            device: local_spec::GAMING_DEVICE,
-            gaming: true,
-        });
+        let pairing = local_spec::pairing(&flags, model, &meta, &dir, local_spec::GAMING_DEVICE);
+        plan = launch(&args, local_spec::GAMING_DEVICE, pairing);
         args.draft = plan.draft.clone().map(Box::new);
     }
     let options = super::local_flags::engine_options(binary);
@@ -1031,15 +1074,7 @@ fn planned_as(
     };
     args.run.slots = slots;
     if !shared {
-        tune(
-            &mut args,
-            &mut plan,
-            &options,
-            &dir,
-            &key,
-            state,
-            p.free_ram_mb,
-        );
+        tune(&mut args, &options, &dir, &key, state, p.free_ram_mb);
     }
     Some((args, plan, key, dir))
 }
@@ -1048,7 +1083,6 @@ fn planned_as(
 /// [`super::local_tune`]); Throttle launches are never tuned.
 fn tune(
     args: &mut LaunchArgs,
-    plan: &mut local_spec::Plan,
     options: &std::collections::BTreeSet<String>,
     dir: &Path,
     key: &str,
@@ -1066,10 +1100,6 @@ fn tune(
     let arm = t::current(dir, &key, &cands, base);
     if arm.slots != base.slots {
         args.run.slots = super::local_flags::slots(options, arm.slots, ram_free_mb);
-    }
-    if !arm.draft {
-        args.draft = None;
-        plan.draft = None;
     }
     if arm.ubatch != base.ubatch {
         args.run.ubatch = Some(arm.ubatch);

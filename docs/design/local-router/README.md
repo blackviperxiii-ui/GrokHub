@@ -101,7 +101,23 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      speaks one piece at a time, and pieces of a reply the person talked
      over are dropped.
 4. **Strict draft pairing.** Count the draft in every fit check. If the
-   pair doesn't fit, step down a tier.
+   pair doesn't fit, step down a tier. Shipped in `route/local_spec.rs`
+   and the files around it:
+   - A model is paired when its drafter is on disk, the engine can run
+     it, the tokenizer matches and no speed test or live check turned it
+     off. A paired model always loads with its drafter.
+   - The launch saves room for the drafter first. The context shrinks
+     before the tier does.
+   - If the pair still doesn't fit, the launch is refused, and the next
+     smaller model on disk is tried. The swap planner sizes pairs the
+     same way, with `local_draft::pair_mb`.
+   - The drafter is never dropped to make room: not under Throttle, not
+     after running out of memory, not on the CPU fallback, and not by
+     auto-tune. A model split across GPU and RAM can't run a drafter, so
+     it steps down too.
+   - While the speed test is pending, the pair loads together.
+   - Not yet: the warm-relaunch and residency sizes leave the drafter
+     out, and the error names a smaller model by the model alone.
 5. **Tiers, pin and the active-model line.** Speed, balance and
    performance come from the ask or the chat's pin. The active model
    and its reason show in the chat.

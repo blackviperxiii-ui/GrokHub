@@ -253,8 +253,9 @@ pub fn diagnose(config_dir: &Path) -> Report {
         facts.push(match decision {
             ld::Decision::On => format!("Draft model {drafter}: on."),
             ld::Decision::Off(why) => format!("Draft model {drafter}: off, because {why}."),
-            ld::Decision::NeedsTest => {
-                format!("Draft model {drafter}: waiting for its speed test.")
+            ld::Decision::NeedsTest => format!("Draft model {drafter}: on; speed test pending."),
+            ld::Decision::NoRoom => {
+                format!("Draft model {drafter}: no room beside the model, so a smaller model runs.")
             }
         });
     }

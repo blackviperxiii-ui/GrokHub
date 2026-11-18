@@ -36,6 +36,7 @@ fn now<'a>(home: &'a Path, on_disk: &'a [(&'static LocalModel, PathBuf)]) -> Now
         home,
         loaded: None,
         on_disk,
+        paired: &[],
         low_battery: false,
         kept_loaded: false,
         forced: false,
@@ -355,10 +356,13 @@ fn a_bigger_model_stays_between_asks_and_steps_down_when_the_computer_gets_busy(
         }
     );
     let scale = with_room(busy);
-    assert!(local_scale::step_down_due(m(BIG), &scale));
-    assert!(!local_scale::step_down_due(m(BIG), &with_room(free_room())));
+    assert!(local_scale::step_down_due(m(BIG).run_mb, &scale));
+    assert!(!local_scale::step_down_due(
+        m(BIG).run_mb,
+        &with_room(free_room())
+    ));
     assert!(
-        !local_scale::step_down_due(m(BIG), &Scale::default()),
+        !local_scale::step_down_due(m(BIG).run_mb, &Scale::default()),
         "no reading: it stays"
     );
 }
@@ -450,6 +454,54 @@ fn less_free_memory_than_the_pick_needs_runs_the_largest_model_that_fits() {
             model: file(MID),
             stand_in: Some(StandIn::Tight)
         }
+    );
+}
+
+#[test]
+fn a_pick_that_fits_only_without_its_drafter_steps_down_to_a_pair_that_fits() {
+    let disk = disk();
+    let home = file(BIG);
+    // 11 GB free RAM: 8,800 MB usable.
+    let room = local_scale::Room {
+        free_vram_mb: None,
+        free_ram_mb: 11_000,
+        ..free_room()
+    };
+    // The 12B pair needs 9,477 MB; the E4B pair 6,288 fits.
+    let paired = Now {
+        scale: with_room(room),
+        paired: &[BIG, MID],
+        ..now(&home, &disk)
+    };
+    assert_eq!(
+        plan(paired),
+        Plan::Load {
+            model: file(MID),
+            stand_in: Some(StandIn::Tight)
+        }
+    );
+    // Without its drafter on disk the 12B alone (8,399 MB) fits.
+    assert_eq!(
+        plan(Now {
+            paired: &[],
+            ..paired
+        }),
+        Plan::Load {
+            model: home.clone(),
+            stand_in: None
+        }
+    );
+    // Stopping the running 12B frees its drafter too, so it stays.
+    assert_eq!(
+        plan(Now {
+            loaded: Some((&home, None)),
+            scale: with_room(local_scale::Room {
+                free_ram_mb: 1_000,
+                ..room
+            }),
+            ..paired
+        }),
+        Plan::Keep
     );
 }
 

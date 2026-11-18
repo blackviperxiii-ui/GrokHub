@@ -110,6 +110,9 @@ pub struct Now<'a> {
     pub loaded: Option<(&'a Path, Option<StandIn>)>,
     /// The chat models on disk, with their files.
     pub on_disk: &'a [(&'static LocalModel, PathBuf)],
+    /// The ids of the models on disk whose catalog drafter is on disk too:
+    /// they always load with it, so they need room for both.
+    pub paired: &'a [&'static str],
     pub low_battery: bool,
     /// "Keep the model loaded" is on: the pick stays, whatever happens.
     pub kept_loaded: bool,
@@ -128,6 +131,11 @@ pub struct Now<'a> {
     pub dynamic: bool,
     /// What the router learned about each model's misses per task.
     pub marks: &'a Marks,
+}
+
+/// MB `m` needs: with its drafter when that is on disk.
+fn need(n: &Now<'_>, m: &LocalModel) -> u64 {
+    grokhub_core::local_draft::pair_mb(m, n.paired.contains(&m.id))
 }
 
 /// The model the next load should run.
@@ -193,9 +201,9 @@ fn stays_big(
                 Some(room) if m.run_mb > home.run_mb => {
                     !n.scale.saving
                         && local_scale::performance_ready(&room)
-                        && local_scale::fits(m, &room, m.run_mb, 0)
+                        && local_scale::fits(need(n, m), &room, need(n, m), 0)
                 }
-                Some(room) => local_scale::fits(m, &room, m.run_mb, 0),
+                Some(room) => local_scale::fits(need(n, m), &room, need(n, m), 0),
                 None => m.run_mb <= home.run_mb,
             };
     }
@@ -208,7 +216,7 @@ fn stays_big(
     !n.scale.gaming
         && !n.scale.saving
         && local_scale::performance_ready(&room)
-        && local_scale::fits(m, &room, m.run_mb, 0)
+        && local_scale::fits(need(n, m), &room, need(n, m), 0)
 }
 
 /// The smallest chat model on disk lighter than `home`: what a game, a low
@@ -259,10 +267,11 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
         return gaming_below(home, n.on_disk)
             .map_or((home_path, None), |p| (p, Some(StandIn::Gaming)));
     }
+    // Stopping what runs frees its drafter too.
     let resident = n
         .loaded
         .and_then(|(p, _)| catalog_for(p))
-        .map_or(0, |m| m.run_mb);
+        .map_or(0, |m| need(n, m));
     if n.dynamic {
         if let Some(kind) = n.task {
             if let Some(p) = best_for(n, home, kind, resident) {
@@ -280,9 +289,11 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
                 .on_disk
                 .iter()
                 .filter(|(m, _)| m.run_mb > home.run_mb)
-                .filter(|(m, _)| local_scale::fits(m, &room, resident, local_scale::HEADROOM_MB))
                 .filter(|(m, _)| {
-                    local_scale::est_tok_s(m, &room, resident)
+                    local_scale::fits(need(n, m), &room, resident, local_scale::HEADROOM_MB)
+                })
+                .filter(|(m, _)| {
+                    local_scale::est_tok_s(m, need(n, m), &room, resident)
                         >= local_scale::PERFORMANCE_FLOOR_TOK_S
                 })
                 .max_by_key(|(m, _)| m.run_mb);
@@ -290,12 +301,14 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
                 return (p.clone(), Some(StandIn::Performance));
             }
         }
-        if !local_scale::fits(home, &room, resident, 0) {
+        // A pick that doesn't fit with its drafter gives way to the largest
+        // smaller model that fits with its own (or alone, without one).
+        if !local_scale::fits(need(n, home), &room, resident, 0) {
             let fitting = n
                 .on_disk
                 .iter()
                 .filter(|(m, _)| m.run_mb < home.run_mb)
-                .filter(|(m, _)| local_scale::fits(m, &room, resident, 0))
+                .filter(|(m, _)| local_scale::fits(need(n, m), &room, resident, 0))
                 .max_by_key(|(m, _)| m.run_mb);
             if let Some((_, p)) = fitting {
                 return (p.clone(), Some(StandIn::Tight));
@@ -339,10 +352,11 @@ fn may_run(
         Some(room) if m.run_mb > home.run_mb => {
             !n.scale.saving
                 && local_scale::performance_ready(room)
-                && local_scale::fits(m, room, resident, local_scale::HEADROOM_MB)
-                && local_scale::est_tok_s(m, room, resident) >= local_scale::PERFORMANCE_FLOOR_TOK_S
+                && local_scale::fits(need(n, m), room, resident, local_scale::HEADROOM_MB)
+                && local_scale::est_tok_s(m, need(n, m), room, resident)
+                    >= local_scale::PERFORMANCE_FLOOR_TOK_S
         }
-        Some(room) => local_scale::fits(m, room, resident, 0),
+        Some(room) => local_scale::fits(need(n, m), room, resident, 0),
         None => m.run_mb <= home.run_mb,
     }
 }

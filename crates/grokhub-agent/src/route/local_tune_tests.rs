@@ -12,12 +12,23 @@ fn arm(slots: u32, draft: bool, ubatch: u32) -> Arm {
 fn the_shadow_check_offers_only_arms_the_plan_has_memory_for() {
     let base = arm(2, true, 512);
     let c = candidates(base, true);
-    assert_eq!(c.len(), 8);
-    assert!(
-        c.iter().all(|a| a.slots <= 2),
-        "never more slots than sized"
+    // A paired model keeps its drafter in every arm.
+    assert_eq!(
+        c,
+        vec![
+            arm(1, true, 512),
+            arm(1, true, 256),
+            arm(2, true, 512),
+            arm(2, true, 256),
+        ]
     );
-    assert!(c.contains(&arm(1, false, 256)));
+    // A plain arm saved before pairing was strict is no longer a candidate,
+    // so the planner's own arm runs.
+    let old = Record {
+        promoted: Some("np1-plain-ub512".into()),
+        ..Record::default()
+    };
+    assert_eq!(old.current(&c, base), arm(2, true, 512));
     // No drafter planned: none tried. No `--ubatch-size`: the default only.
     assert_eq!(
         candidates(arm(1, false, 512), false),

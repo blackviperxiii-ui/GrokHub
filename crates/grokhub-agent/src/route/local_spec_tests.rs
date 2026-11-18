@@ -93,7 +93,7 @@ fn gemma_e2b() -> GgufMeta {
 }
 
 fn args(p: &LocalProfile, meta: &GgufMeta, backend: Backend, state: GovState) -> LaunchArgs {
-    autoconfig(p, meta, backend, state, &Overrides::default())
+    autoconfig(p, meta, backend, state, &Overrides::default(), None)
 }
 
 #[test]
@@ -269,7 +269,6 @@ impl Rig {
             args: &self.a,
             tune_dir: &self.dir,
             device: "NVIDIA GeForce RTX",
-            gaming: false,
         })
     }
 }
@@ -284,12 +283,19 @@ const G12B_FILE: &str = "Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-
 const G12B_MTP: &str = "Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
 
 #[test]
-fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
+fn a_matching_catalog_drafter_loads_with_the_model_before_and_after_the_speed_test() {
     let rig = Rig::new("pair", G12B_FILE, Some((G12B_MTP, VOCAB)));
     let key = "NVIDIA GeForce RTX|Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf|Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
+    let heads = DraftArgs {
+        kind: DraftKind::Mtp,
+        model: Some(rig.dir.join("drafters").join(G12B_MTP)),
+        on_gpu: true,
+        flags: rig.flags.clone(),
+    };
+    // Untested, the pair still loads together; the speed test runs later.
     let first = rig.plan(GovState::Normal);
     assert_eq!(first.decision, Decision::NeedsTest);
-    assert_eq!(first.draft, None);
+    assert_eq!(first.draft, Some(heads.clone()));
     assert_eq!(first.key.as_deref(), Some(key));
     assert_eq!(first.name.as_deref(), Some("Gemma 4 12B draft model"));
     let keep = Verdict {
@@ -301,15 +307,7 @@ fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
     ld::save_verdict(&rig.dir, key, keep).unwrap();
     let on = rig.plan(GovState::Normal);
     assert_eq!(on.decision, Decision::On);
-    assert_eq!(
-        on.draft,
-        Some(DraftArgs {
-            kind: DraftKind::Mtp,
-            model: Some(rig.dir.join("drafters").join(G12B_MTP)),
-            on_gpu: true,
-            flags: rig.flags.clone(),
-        })
-    );
+    assert_eq!(on.draft, Some(heads));
     // The heads file loads as the draft model and drafts four ahead.
     let args = on.draft.unwrap().to_args();
     assert!(args.windows(2).any(|w| w[1] == "draft-mtp"), "{args:?}");
@@ -319,19 +317,17 @@ fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
     );
     assert!(args.windows(2).any(|w| w[1] == "4"), "{args:?}");
     assert_eq!(rig.plan(GovState::RampUp).decision, Decision::On);
+    // Throttle's halved budget leaves no room for the pair: the model is
+    // refused, never run alone, so a smaller model takes its place.
+    let throttled = rig.plan(GovState::Throttle);
     assert_eq!(
-        rig.plan(GovState::Throttle).decision,
-        Decision::Off("the machine is busy, so the draft model is off")
+        (throttled.decision, throttled.draft),
+        (Decision::NoRoom, None)
     );
-    // The speed test skips the level check; Throttle's halved budget still
-    // leaves no room next to the 12B.
     set_force(Some(true));
     let forced = rig.plan(GovState::Throttle).decision;
     set_force(None);
-    assert_eq!(
-        forced,
-        Decision::Off("there isn't room for the model and its draft model together")
-    );
+    assert_eq!(forced, Decision::NoRoom);
     ld::save_verdict(
         &rig.dir,
         key,
@@ -660,10 +656,10 @@ fn the_refusal_check_reads_the_reply_not_the_reasoning() {
 }
 
 #[test]
-fn a_game_keeps_the_drafter_on_the_cpu_only_on_its_own_speed_test() {
+fn a_game_runs_the_pair_on_the_cpu_and_keeps_its_own_speed_test() {
     let rig = Rig::new("gaming", G12B_FILE, Some((G12B_MTP, VOCAB)));
     let cpu = crate::route::local_autoconfig::gaming_launch(&rig.a);
-    let at = |device: &str, gaming: bool| {
+    let at = |device: &str| {
         plan(&Launch {
             flags: &rig.flags,
             model: &rig.model,
@@ -673,17 +669,19 @@ fn a_game_keeps_the_drafter_on_the_cpu_only_on_its_own_speed_test() {
             args: &cpu,
             tune_dir: &rig.dir,
             device,
-            gaming,
         })
     };
-    assert_eq!(
-        at("cpu", false).decision,
-        Decision::Off("the machine is busy, so the draft model is off"),
-        "a throttled machine outside a game still turns it off"
-    );
-    let first = at(GAMING_DEVICE, true);
+    // Throttle no longer turns the drafter off: the pair runs in RAM.
+    let throttled = at("cpu");
+    assert_eq!(throttled.decision, Decision::NeedsTest);
+    assert_eq!(throttled.draft.map(|d| d.on_gpu), Some(false));
+    let first = at(GAMING_DEVICE);
     assert_eq!(first.decision, Decision::NeedsTest, "no gaming verdict yet");
-    assert_eq!(first.draft, None, "the model runs alone until it's tested");
+    assert_eq!(
+        first.draft.as_ref().map(|d| d.on_gpu),
+        Some(false),
+        "the untested pair runs together, off the GPU"
+    );
     let key = first.key.expect("verdict key");
     assert!(key.starts_with("cpu-gaming|"), "{key}");
     let keep = Verdict {
@@ -693,7 +691,7 @@ fn a_game_keeps_the_drafter_on_the_cpu_only_on_its_own_speed_test() {
         retest_at: None,
     };
     ld::save_verdict(&rig.dir, &key, keep).unwrap();
-    let on = at(GAMING_DEVICE, true);
+    let on = at(GAMING_DEVICE);
     assert_eq!(on.decision, Decision::On);
     assert_eq!(
         on.draft.map(|d| d.on_gpu),
@@ -709,9 +707,13 @@ fn a_game_keeps_the_drafter_on_the_cpu_only_on_its_own_speed_test() {
         },
     )
     .unwrap();
+    let lost = at(GAMING_DEVICE);
     assert_eq!(
-        at(GAMING_DEVICE, true).draft,
-        None,
-        "a lost test turns it off"
+        (lost.decision, lost.draft),
+        (
+            Decision::Off("the speed test found the draft model didn't help"),
+            None
+        ),
+        "a lost test turns it off and the model runs alone"
     );
 }

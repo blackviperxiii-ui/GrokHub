@@ -18,6 +18,7 @@ use super::local_autoconfig::{self as autoconfig, LaunchArgs, Retry};
 use super::local_gov;
 use super::local_health as health;
 use super::local_swap::Plan;
+use grokhub_core::local_draft as ld;
 use grokhub_core::local_setup::LocalModel;
 use grokhub_core::local_skills::TaskKind;
 
@@ -475,7 +476,7 @@ pub fn retry_on_cpu(err: &str, log: &str, launch: Option<&LaunchArgs>, bare_cpu:
 
 /// Start llama-server on a fresh loopback port.
 pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
-    let planned = autoconfig::launch_for(&paths.binary, &paths.model);
+    let planned = autoconfig::launch_for(&paths.binary, &paths.model)?;
     start_planned(paths, planned)
 }
 
@@ -483,7 +484,7 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
 /// fresh start would, while the old server still holds its memory).
 fn start_planned(
     paths: &SidecarPaths,
-    planned: Option<(LaunchArgs, String, PathBuf)>,
+    planned: Option<autoconfig::Planned>,
 ) -> Result<Sidecar, String> {
     if !paths.binary.is_file() {
         return Err(format!(
@@ -624,9 +625,12 @@ fn start_planned(
                     .and_then(|m| autoconfig::next_smaller(m.id))
                     .map(|m| format!(" Try {} in Settings → Local model.", m.name))
                     .unwrap_or_default();
-                return Err(format!(
-                    "{OUT_OF_MEMORY} even with fewer GPU layers.{smaller}"
-                ));
+                let how = if prev.draft.is_some() {
+                    "with its draft model"
+                } else {
+                    "even with fewer GPU layers"
+                };
+                return Err(format!("{OUT_OF_MEMORY} {how}.{smaller}"));
             }
         }
     }
@@ -1197,8 +1201,10 @@ fn runtime_paths(config_dir: &Path) -> Result<SidecarPaths, String> {
     }
 }
 
-/// [`start`], and on out-of-memory a smaller model on disk in its place.
-/// Returns what started, the model it loaded and why it stands in.
+/// [`start`], and a smaller model on disk in its place when the start ran
+/// out of memory (one step) or the model and its drafter don't fit (smaller
+/// models until a pair fits). Returns what started, the model it loaded and
+/// why it stands in.
 fn start_or_stand_in(
     config_dir: &Path,
     mut paths: SidecarPaths,
@@ -1208,21 +1214,62 @@ fn start_or_stand_in(
     PathBuf,
     Option<super::local_swap::StandIn>,
 ) {
+    let picked = paths.model.clone();
+    let disk = on_disk(config_dir);
+    let mut stepped_for_oom = false;
     let mut started = start(&paths);
+    while let Err(e) = &started {
+        let Some((model, why)) = stand_in_for(e, &paths.model, &disk).filter(|(_, why)| {
+            !(stepped_for_oom && *why == super::local_swap::StandIn::OutOfMemory)
+        }) else {
+            break;
+        };
+        stepped_for_oom |= why == super::local_swap::StandIn::OutOfMemory;
+        health::log_to(config_dir, health::start_failure(e), Some(e), None);
+        stand_in = Some(why);
+        health::log_to(config_dir, "swap", Some(&swap_note(&model, stand_in)), None);
+        paths.model = model;
+        started = start(&paths);
+    }
     if let Err(e) = &started {
-        let stand = e
-            .starts_with(OUT_OF_MEMORY)
-            .then(|| super::local_swap::out_of_memory_stand_in(&paths.model, &on_disk(config_dir)))
-            .flatten();
-        if let Some(model) = stand {
-            health::log_to(config_dir, health::start_failure(e), Some(e), None);
-            stand_in = Some(super::local_swap::StandIn::OutOfMemory);
-            health::log_to(config_dir, "swap", Some(&swap_note(&model, stand_in)), None);
-            paths.model = model;
-            started = start(&paths);
+        if e.starts_with(autoconfig::PAIR_NO_ROOM) {
+            started = Err(pair_no_room_error(&picked));
         }
     }
     (started, paths.model, stand_in)
+}
+
+/// The model to try after `failed` gave `err`, and why it stands in: a
+/// smaller model for a pair that doesn't fit, or one that ran out of memory.
+fn stand_in_for(
+    err: &str,
+    failed: &Path,
+    disk: &[(&'static LocalModel, PathBuf)],
+) -> Option<(PathBuf, super::local_swap::StandIn)> {
+    use super::local_swap::StandIn;
+    let why = if err.starts_with(autoconfig::PAIR_NO_ROOM) {
+        StandIn::Tight
+    } else if err.starts_with(OUT_OF_MEMORY) {
+        StandIn::OutOfMemory
+    } else {
+        return None;
+    };
+    super::local_swap::out_of_memory_stand_in(failed, disk).map(|m| (m, why))
+}
+
+/// The error when no model on disk fits with its drafter.
+fn pair_no_room_error(picked: &Path) -> String {
+    let name = super::local_swap::catalog_for(picked).map_or_else(
+        || {
+            picked
+                .file_stem()
+                .map_or_else(|| "the model".into(), |s| s.to_string_lossy().into_owned())
+        },
+        |m| m.name.to_string(),
+    );
+    format!(
+        "There isn't room for {name} and its draft model together, and no smaller model on disk fits with its draft. Close some apps, or download a smaller model in Settings → Local model."
+    )
 }
 
 /// Wakes loads waiting for another load to finish (see [`load`]).
@@ -1319,9 +1366,9 @@ fn relaunch_warm(
     }
     let generation = WARM_GEN.load(Ordering::SeqCst);
     std::thread::spawn(move || {
-        let planned =
-            autoconfig::launch_with(&paths.binary, &paths.model, Some(autoconfig::replan_free()));
-        let started = start_planned(&paths, planned);
+        let started =
+            autoconfig::launch_with(&paths.binary, &paths.model, Some(autoconfig::replan_free()))
+                .and_then(|planned| start_planned(&paths, planned));
         let mut slot = global_slot().lock().expect("sidecar global");
         match started {
             Ok(mut new) => {
@@ -1449,11 +1496,28 @@ fn on_disk(config_dir: &Path) -> Vec<(&'static LocalModel, PathBuf)> {
     super::local_swap::on_disk(&dirs)
 }
 
+/// The ids of the models in `on_disk` whose catalog drafter is downloaded:
+/// they load with it, so the planner sizes them as a pair.
+fn paired_on_disk(
+    config_dir: &Path,
+    on_disk: &[(&'static LocalModel, PathBuf)],
+) -> Vec<&'static str> {
+    let tune_dir = autoconfig::tune_dir().unwrap_or_else(|| config_dir.join("local"));
+    on_disk
+        .iter()
+        .filter(|(m, path)| {
+            ld::drafter_on_disk(m, &super::local_spec::drafter_dirs(path, &tune_dir))
+        })
+        .map(|(m, _)| m.id)
+        .collect()
+}
+
 /// What the next load runs: the pick, or another model on disk for a reason
 /// [`super::local_swap::plan`] gives. The caller holds the slot.
 fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Want) -> Plan {
     let loaded = running.map(|s| (s.model.as_path(), s.stand_in));
     let on_disk = on_disk(config_dir);
+    let paired = paired_on_disk(config_dir, &on_disk);
     let task = want_kind(want);
     if let Some(k) = task.filter(|k| *k != TaskKind::Chat) {
         *LAST_TASK_KIND.lock().expect("last task kind") = Some(k);
@@ -1463,6 +1527,7 @@ fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Wa
         home,
         loaded,
         on_disk: &on_disk,
+        paired: &paired,
         low_battery: super::local::low_battery(),
         kept_loaded: keep_loaded(),
         forced: std::env::var_os("GROKHUB_LOCAL_MODEL").is_some(),
@@ -1480,11 +1545,13 @@ fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Wa
 /// idle tick's RAM-warm.
 fn best_model_for(config_dir: &Path, home: &Path, kind: TaskKind) -> Option<PathBuf> {
     let on_disk = on_disk(config_dir);
+    let paired = paired_on_disk(config_dir, &on_disk);
     let marks = super::local_task::marks(config_dir);
     match super::local_swap::plan(super::local_swap::Now {
         home,
         loaded: None,
         on_disk: &on_disk,
+        paired: &paired,
         low_battery: super::local::low_battery(),
         kept_loaded: keep_loaded(),
         forced: std::env::var_os("GROKHUB_LOCAL_MODEL").is_some(),
@@ -1604,8 +1671,11 @@ pub fn tick_scale(config_dir: &Path) {
         return;
     };
     let step_down = side.stand_in == Some(super::local_swap::StandIn::Performance)
-        && super::local_swap::catalog_for(&side.model)
-            .is_some_and(|m| super::local_scale::step_down_due(m, &scale));
+        && super::local_swap::catalog_for(&side.model).is_some_and(|m| {
+            let paired = paired_on_disk(config_dir, &on_disk(config_dir));
+            let need = ld::pair_mb(m, paired.contains(&m.id));
+            super::local_scale::step_down_due(need, &scale)
+        });
     let gaming = scale.gaming && side.stand_in != Some(super::local_swap::StandIn::Gaming);
     if step_down || gaming {
         if let Some(side) = slot.take() {
@@ -2719,6 +2789,51 @@ mod tests {
             Some(&gpu),
             false
         ));
+    }
+
+    #[test]
+    fn a_pair_that_does_not_fit_steps_down_until_one_does() {
+        use super::super::local_swap::StandIn;
+        let m = |id: &str| grokhub_core::local_setup::model_by_id(id).unwrap();
+        let file = |id: &str| PathBuf::from("/home/user/models").join(m(id).file);
+        let (g12b, e4b, e2b) = (
+            "gemma-4-12b-it-abliterated-q4_k",
+            "gemma-4-e4b-it-abliterated-q4_k",
+            "gemma-4-e2b-it-abliterated-q4_k",
+        );
+        let disk: Vec<_> = [g12b, e4b, e2b]
+            .iter()
+            .map(|id| (m(id), file(id)))
+            .collect();
+        assert_eq!(
+            stand_in_for(autoconfig::PAIR_NO_ROOM, &file(g12b), &disk),
+            Some((file(e4b), StandIn::Tight))
+        );
+        assert_eq!(
+            stand_in_for(
+                "the local model ran out of memory with its draft model.",
+                &file(g12b),
+                &disk
+            ),
+            Some((file(e4b), StandIn::OutOfMemory))
+        );
+        assert_eq!(
+            stand_in_for(
+                "local model server stopped before it was ready",
+                &file(g12b),
+                &disk
+            ),
+            None
+        );
+        assert_eq!(
+            stand_in_for(autoconfig::PAIR_NO_ROOM, &file(e2b), &disk),
+            None,
+            "nothing smaller on disk"
+        );
+        assert_eq!(
+            pair_no_room_error(&file(g12b)),
+            "There isn't room for Gemma 4 12B and its draft model together, and no smaller model on disk fits with its draft. Close some apps, or download a smaller model in Settings → Local model."
+        );
     }
 
     #[test]

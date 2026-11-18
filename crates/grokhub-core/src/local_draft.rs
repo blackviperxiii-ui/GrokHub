@@ -1,13 +1,16 @@
 //! Speculative decoding: which draft model goes with which model, and when
-//! one is used. The pairs come from the catalog's `drafter` column (Gemma 4
-//! E4B/12B/26B/31B draft with E2B); a model whose GGUF carries
-//! multi-token-prediction heads drafts with them instead. Any pair, catalog or community file, must hash to the
-//! same tokenizer. The engine's own `--help` says which flags it has. A
-//! drafter is used only in RampUp or Normal, only when both fit, and only
-//! after the speed test found it accepted at least 40% of its guesses and
-//! answered at least 10% faster; that verdict is kept per device. Every
-//! shell downloads drafters into one folder, `~/GrokHub/models/drafters`.
-//! Everything here is pure apart from the verdict file and the home folder.
+//! one is used. The pairs come from the catalog's `drafter` column (each
+//! Gemma 4 model drafts with its own MTP heads file; a few optional models
+//! draft with a small model of their family); a model whose GGUF carries
+//! multi-token-prediction heads drafts with them instead. Any pair, catalog
+//! or community file, must hash to the same tokenizer. The engine's own
+//! `--help` says which flags it has. A paired model always loads with its
+//! drafter: when both don't fit, a smaller model runs instead. The pair
+//! stays off only when the speed test or live replies found it didn't help
+//! (at least 40% of its guesses kept and 10% faster); that verdict is kept
+//! per device. Every shell downloads drafters into one folder,
+//! `~/GrokHub/models/drafters`. Everything here is pure apart from the
+//! verdict file, the home folder and [`drafter_on_disk`].
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -126,6 +129,25 @@ pub fn pairs() -> Vec<Pair> {
 /// The catalog drafter for the model in `file`.
 pub fn pair_for_file(file: &str) -> Option<Pair> {
     pairs().into_iter().find(|p| p.target.file == file)
+}
+
+/// The catalog drafter of `m`, if it has one.
+fn drafter_of(m: &LocalModel) -> Option<&'static LocalModel> {
+    local_setup::model_by_id(m.drafter?)
+}
+
+/// Memory `m` runs in (MB), with its catalog drafter when that is on disk:
+/// a paired model always loads with it.
+pub fn pair_mb(m: &LocalModel, drafter_on_disk: bool) -> u64 {
+    let drafter = drafter_of(m)
+        .filter(|_| drafter_on_disk)
+        .map_or(0, |d| d.run_mb);
+    m.run_mb + drafter
+}
+
+/// `m`'s catalog drafter file sits in one of `dirs`.
+pub fn drafter_on_disk(m: &LocalModel, dirs: &[PathBuf]) -> bool {
+    drafter_of(m).is_some_and(|d| dirs.iter().any(|dir| dir.join(d.file).is_file()))
 }
 
 /// The draft flags this engine's `llama-server --help` lists, by the name it
@@ -430,8 +452,11 @@ pub fn save_verdict(dir: &Path, key: &str, v: Verdict) -> std::io::Result<()> {
 /// Whether a launch drafts, and why not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
+    /// The model loads alone.
     Off(&'static str),
-    /// Everything fits but the speed test hasn't run on this device yet.
+    /// The pair doesn't fit, so this model can't load: a smaller one runs.
+    NoRoom,
+    /// The pair loads, and the speed test hasn't run on this device yet.
     NeedsTest,
     On,
 }
@@ -439,8 +464,6 @@ pub enum Decision {
 /// Inputs to [`decide`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Check {
-    /// The governor allows it (RampUp or Normal).
-    pub level_ok: bool,
     pub engine_ok: bool,
     pub tokenizer_ok: bool,
     pub fits: bool,
@@ -448,23 +471,23 @@ pub struct Check {
     pub verdict: Option<bool>,
 }
 
+/// A pair turned off needs no room, so the verdict comes before the fit.
 pub fn decide(c: Check) -> Decision {
     if !c.engine_ok {
         return Decision::Off("this engine can't run a draft model");
     }
-    if !c.level_ok {
-        return Decision::Off("the machine is busy, so the draft model is off");
-    }
     if !c.tokenizer_ok {
         return Decision::Off("the draft model's tokenizer doesn't match the model");
     }
+    if c.verdict == Some(false) {
+        return Decision::Off("the speed test found the draft model didn't help");
+    }
     if !c.fits {
-        return Decision::Off("there isn't room for the model and its draft model together");
+        return Decision::NoRoom;
     }
     match c.verdict {
-        None => Decision::NeedsTest,
-        Some(false) => Decision::Off("the speed test found the draft model didn't help"),
         Some(true) => Decision::On,
+        _ => Decision::NeedsTest,
     }
 }
 
