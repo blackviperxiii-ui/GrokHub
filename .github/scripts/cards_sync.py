@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""Notion Command Center <-> GitHub completion sync (stdlib only).
+"""Notion Command Center <-> GitHub sync for Antigravity cards (stdlib only).
 
-GitHub no longer picks up Ready cards, opens card issues, dispatches Claude,
-or starts Jules sessions. Only completion sync runs:
+GitHub Actions never dispatches Claude or starts Jules sessions, and never
+touches cards assigned to other coders.
 
 Modes (argv[1]):
-  sync  - Scheduled sweep: closed-as-completed card issues and open card issues
-          whose PR already merged into beta are marked Completed in Notion.
+  sync  - Ready cards assigned to Antigravity for this repo's Project become
+          'antigravity' GitHub issues (capped at CAP, leaving Notion at Ready
+          for work until Antigravity starts them). Closed-as-completed card
+          issues and open card issues whose PR already merged into beta are
+          marked Completed in Notion.
+          Optional workflow_dispatch inputs:
+            START_ISSUE  - mark the linked Antigravity card(s) Working on it now.
+            RESET_ISSUES - return card(s) to Ready for work and close not_planned.
   done  - issues/pull_request closed event: mark the linked card Completed.
 
-Env: NOTION_TOKEN, GITHUB_TOKEN, GITHUB_REPOSITORY.
+Env: NOTION_TOKEN, NOTION_DATA_SOURCE_ID, GITHUB_TOKEN, GITHUB_REPOSITORY,
+CARDS_PROJECT (board Project option, default Loadout).
 """
 import json
 import os
@@ -23,6 +30,8 @@ NOTION = "https://api.notion.com/v1"
 NOTION_VERSION = "2025-09-03"
 GH = "https://api.github.com"
 REPO = os.environ.get("GITHUB_REPOSITORY", "")
+PROJECT = os.environ.get("CARDS_PROJECT") or "Loadout"
+CAP = 2
 MARK_RE = re.compile(r"<!--\s*notion-card:\s*([0-9a-fA-F-]{32,36})\s*-->")
 # GitHub's closing keywords, with or without a colon ("Fixes #12", "Fixes: #12").
 CLOSES_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)\b", re.I)
@@ -30,6 +39,15 @@ STATUS_READY = "Ready for work"
 STATUS_DOING = "Working on it now"
 STATUS_DONE = "Completed"
 DONE_STATUSES = (STATUS_DONE, "Done", "Notes")
+RULES = """## Rules
+- Base branch is `beta`, never `main`. Branch from `origin/beta`.
+- Keep the change small and inside this card only.
+- Before pushing, run locally: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run --workspace`, `bash scripts/ci-guards.sh` and `python3 scripts/pii-guard/pii_guard.py origin/beta`. Then push once.
+- No force-push, no rebase. To catch up, merge `origin/beta` normally.
+- No personal info (names, emails, home paths) in files, commits or the PR; use `user` and `/home/user`.
+- New UI registers through beta's single `GROKHUB_DECK_NAV` handler, never a separate `deck_nav()` handler.
+- One PR per issue; reference this issue with `Fixes #<n>` in the PR body.
+"""
 
 
 def req(url, method="GET", body=None, headers=None):
@@ -90,9 +108,31 @@ def prop(page, name):
     return ""
 
 
+def page_body(page_id):
+    lines, cursor = [], None
+    while True:
+        q = f"/blocks/{page_id}/children?page_size=100" + (f"&start_cursor={cursor}" if cursor else "")
+        res = notion(q)
+        for b in res.get("results", []):
+            t = b.get("type")
+            txt = text_of((b.get(t) or {}).get("rich_text"))
+            prefix = {"heading_1": "# ", "heading_2": "## ", "heading_3": "### ",
+                      "bulleted_list_item": "- ", "numbered_list_item": "1. ",
+                      "to_do": "- [ ] ", "quote": "> "}.get(t, "")
+            if t == "code":
+                txt = "```\n" + txt + "\n```"
+            if txt or t == "paragraph":
+                lines.append(prefix + txt)
+        if not res.get("has_more"):
+            return "\n".join(lines).strip()
+        cursor = res.get("next_cursor")
+
+
 def set_card(page_id, status, result=None):
     props = {"Status": {"select": {"name": status}}}
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if status == STATUS_DOING:
+        props["Picked up"] = {"date": {"start": now}}
     if status in (STATUS_DONE, "Done"):
         props["Done at"] = {"date": {"start": now}}
     if result is not None:
@@ -118,6 +158,105 @@ def card_issues(state):
         if m:
             out.setdefault(m.group(1).replace("-", ""), i)
     return out
+
+
+def antigravity_load(open_prs, open_card_issues):
+    prs = sum(
+        1 for p in open_prs
+        if (p.get("head") or {}).get("ref", "").startswith("antigravity/")
+        or "antigravity" in {lb["name"].lower() for lb in p.get("labels", [])}
+    )
+    iss = sum(
+        1 for i in open_card_issues.values()
+        if "antigravity" in {lb["name"].lower() for lb in i.get("labels", [])}
+    )
+    return max(prs, iss)
+
+
+def query_ready_antigravity():
+    ds = os.environ.get("NOTION_DATA_SOURCE_ID", "").strip()
+    if not ds:
+        return []
+    body = {
+        "filter": {"and": [
+            {"property": "Status", "select": {"equals": STATUS_READY}},
+            {"property": "Project", "select": {"equals": PROJECT}},
+            {"property": "Assigned", "select": {"equals": "Antigravity"}},
+        ]},
+        "sorts": [{"property": "Order", "direction": "ascending"}],
+        "page_size": 100,
+    }
+    return notion(f"/data_sources/{ds}/query", "POST", body).get("results", [])
+
+
+def sync_ready_antigravity(open_issues, closed_issues):
+    """Create 'antigravity' issues for Ready cards assigned to Antigravity (never touching other coders)."""
+    if not os.environ.get("NOTION_DATA_SOURCE_ID", "").strip():
+        return
+    open_prs = gh_all(f"/repos/{REPO}/pulls?state=open")
+    load = antigravity_load(open_prs, open_issues)
+    print(f"antigravity load: {load}/{CAP}")
+    for card in query_ready_antigravity():
+        pid = card["id"].replace("-", "")
+        title = prop(card, "Name") or "Untitled card"
+        assigned = (prop(card, "Assigned") or "").strip().lower()
+        if assigned != "antigravity":
+            print(f"card {pid} '{title}': Assigned '{assigned}' is not Antigravity; skipped")
+            continue
+        if card.get("archived") or card.get("in_trash"):
+            print(f"card {pid} is archived; skipped")
+            continue
+        if pid in open_issues:
+            continue
+        closed = closed_issues.get(pid)
+        if closed and closed.get("state_reason") == "completed":
+            continue
+        if load >= CAP:
+            print(f"card {pid} '{title}': antigravity is at cap {CAP}; left queued")
+            break
+        body = page_body(card["id"]) or "_No card body._"
+        issue_body = (f"{body}\n\nNotion card: {card.get('url', '')}\n\n{RULES}\n"
+                      f"<!-- notion-card: {pid} -->\n")
+        issue = gh(f"/repos/{REPO}/issues", "POST",
+                   {"title": title, "body": issue_body, "labels": ["antigravity"]})
+        print(f"card {pid} -> #{issue['number']} (antigravity)")
+        load += 1
+        open_issues[pid] = issue
+
+
+def start_antigravity(raw):
+    """Mark picked-up antigravity card issues as Working on it now in Notion."""
+    for token in re.split(r"[\s,]+", raw.strip()):
+        if not token.isdigit():
+            continue
+        number = int(token)
+        issue = gh(f"/repos/{REPO}/issues/{number}")
+        if "pull_request" in issue or not trusted(issue):
+            print(f"#{number}: untrusted or PR; skipped")
+            continue
+        labels = {lb["name"].lower() for lb in issue.get("labels", [])}
+        if "antigravity" not in labels:
+            print(f"#{number}: missing 'antigravity' label ({sorted(labels)}); refused")
+            continue
+        m = MARK_RE.search(issue.get("body") or "")
+        if not m:
+            print(f"#{number}: no notion-card marker; skipped")
+            continue
+        pid = m.group(1).replace("-", "")
+        page = notion(f"/pages/{pid}")
+        if page.get("archived") or page.get("in_trash"):
+            print(f"card {pid} is archived; skipped")
+            continue
+        assigned = (prop(page, "Assigned") or "").strip().lower()
+        if assigned and assigned != "antigravity":
+            print(f"card {pid} (#{number}): Assigned is '{assigned}', not Antigravity; refused")
+            continue
+        status = prop(page, "Status")
+        if status in DONE_STATUSES:
+            print(f"card {pid} (#{number}) already {status}; skipped")
+            continue
+        print(f"card {pid} (#{number}) -> {STATUS_DOING}")
+        set_card(pid, STATUS_DOING, issue["html_url"])
 
 
 def reset_ready(raw):
@@ -147,13 +286,18 @@ def reset_ready(raw):
 
 
 def sync():
-    """Completion sweep only (plus explicit reset_issues via workflow_dispatch)."""
+    """Sync Ready+Antigravity cards, sweep completions, or handle explicit start/reset."""
     reset_raw = os.environ.get("RESET_ISSUES", "").strip()
     if reset_raw:
         reset_ready(reset_raw)
         return
+    start_raw = os.environ.get("START_ISSUE", "").strip()
+    if start_raw:
+        start_antigravity(start_raw)
+        return
     open_issues = card_issues("open")
     closed_issues = card_issues("closed")
+    sync_ready_antigravity(open_issues, closed_issues)
     for pid, issue in closed_issues.items():
         if issue.get("state_reason") == "completed":
             mark_done(pid, issue["html_url"])
@@ -210,7 +354,8 @@ def mark_done(pid, url, issue_number=None):
 
 
 def done():
-    event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+    with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as f:
+        event = json.load(f)
     if "pull_request" in event:
         pr = event["pull_request"]
         if not pr.get("merged") or pr["base"]["ref"] != "beta":
