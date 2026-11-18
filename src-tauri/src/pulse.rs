@@ -364,19 +364,27 @@ pub struct Day {
 }
 
 fn load_unlocked(config_dir: &Path) -> Result<Vec<UpdateCard>, String> {
-    let path = path(config_dir);
-    if !path.is_file() {
+    if !path(config_dir).is_file() {
         return Ok(Vec::new());
     }
+    Ok(read_unlocked(config_dir)?.unwrap_or_default())
+}
+
+/// The store as written: `None` when it is blank, an error when it is
+/// missing, too large, unreadable or not a feed.
+fn read_unlocked(config_dir: &Path) -> Result<Option<Vec<UpdateCard>>, String> {
+    let path = path(config_dir);
     let len = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
     if len > STORE_CAP {
         return Err(format!("{FILE} is too large to be a feed."));
     }
     let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     if raw.trim().is_empty() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
-    serde_json::from_str(&raw).map_err(|e| format!("{FILE}: {e}"))
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|e| format!("{FILE}: {e}"))
 }
 
 /// Writes through a temp file and a rename, like the cabin. Callers hold
@@ -445,6 +453,14 @@ fn note(title: &str, reason: LedgerReason, date: &str) -> Result<(), String> {
 pub fn cards(config_dir: &Path) -> Result<Vec<UpdateCard>, String> {
     let _store = store();
     load_unlocked(config_dir)
+}
+
+/// The cards for a caller that deletes what no card names: a missing or
+/// blank store is an error here, not an empty feed, since a crash or another
+/// process's rename can leave it that way for a moment.
+pub fn stored_cards(config_dir: &Path) -> Result<Vec<UpdateCard>, String> {
+    let _store = store();
+    read_unlocked(config_dir)?.ok_or_else(|| format!("{FILE} is blank."))
 }
 
 /// Add one written post.

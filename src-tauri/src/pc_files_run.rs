@@ -459,8 +459,8 @@ pub fn identify_printer(endpoint: &str) -> Result<SavedPrinter, String> {
 }
 
 /// Keep the printer's webcam frame where Pulse reads card images; only a
-/// body of at most 4 MiB that `store_image` accepts is kept. Returns the
-/// cache key.
+/// body of at most 4 MiB that `store_image` accepts is kept, and a larger
+/// one is refused, not cut. Returns the cache key.
 fn cache_snapshot(config_dir: &Path, agent: &http::Agent, saved: &SavedPrinter) -> Option<String> {
     let base = base_url(&saved.endpoint);
     let query = format!("{base}{}", pa::webcam_query_path(saved.kind));
@@ -478,7 +478,9 @@ fn cache_snapshot(config_dir: &Path, agent: &http::Agent, saved: &SavedPrinter) 
     }
     let mut buf = Vec::new();
     resp.into_reader()
-        .take(4 * 1024 * 1024)
+        // One byte over the cap, so `store_image` refuses a larger frame
+        // instead of keeping its first 4 MiB.
+        .take(grokhub_core::pulse::IMAGE_MAX_BYTES as u64 + 1)
         .read_to_end(&mut buf)
         .ok()?;
     // No minimum size: a small or dark webcam frame is still the frame.

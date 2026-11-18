@@ -1551,6 +1551,29 @@ pub fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// Whether a JPEG or WebP file arrived whole. A JPEG must end with its
+/// end-of-image marker (trailing zero or whitespace padding allowed), and a
+/// WebP must be as long as its RIFF header says; JPEG decoders fill a cut-off
+/// scan with grey instead of failing. A PNG is left to its decoder, which
+/// refuses one cut short. Anything that isn't one of the three is `false`.
+pub fn image_is_whole(bytes: &[u8]) -> bool {
+    match image_mime(bytes) {
+        Some("image/jpeg") => {
+            let end = bytes
+                .iter()
+                .rposition(|b| *b != 0 && !b.is_ascii_whitespace())
+                .map_or(0, |i| i + 1);
+            bytes[..end].ends_with(&[0xFF, 0xD9])
+        }
+        Some("image/webp") => {
+            let riff = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+            usize::try_from(riff).is_ok_and(|len| bytes.len() >= len.saturating_add(8))
+        }
+        Some(_) => true,
+        None => false,
+    }
+}
+
 /// A downloaded image worth caching: a real JPEG, PNG or WebP, not tiny, not huge.
 pub fn image_bytes_ok(bytes: &[u8]) -> bool {
     image_mime(bytes).is_some() && (IMAGE_MIN_BYTES..=IMAGE_MAX_BYTES).contains(&bytes.len())
@@ -2805,6 +2828,26 @@ mod tests {
         assert_eq!(image_mime(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
         assert_eq!(image_mime(b"GIF89a"), None);
         assert_eq!(image_mime(b"<!doctype html>"), None);
+    }
+
+    #[test]
+    fn image_is_whole_spots_a_cut_off_jpeg_or_webp() {
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 0xFF, 0xD9];
+        assert!(image_is_whole(&jpeg));
+        assert!(!image_is_whole(&jpeg[..7]));
+        jpeg.extend_from_slice(b"\0\0\r\n");
+        assert!(image_is_whole(&jpeg), "padding after the marker");
+        jpeg.extend_from_slice(b"tail");
+        assert!(!image_is_whole(&jpeg), "data after the marker");
+
+        let mut webp = b"RIFF\x0c\0\0\0WEBPVP8 ".to_vec();
+        webp.extend_from_slice(&[0; 8]);
+        assert_eq!(webp.len(), 24);
+        assert!(!image_is_whole(&webp[..19]), "header says 20 bytes");
+        assert!(image_is_whole(&webp[..20]));
+
+        assert!(image_is_whole(&[0x89, b'P', b'N', b'G']));
+        assert!(!image_is_whole(b"GIF89a"));
     }
 
     #[test]

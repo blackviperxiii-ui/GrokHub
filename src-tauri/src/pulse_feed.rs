@@ -65,6 +65,8 @@ static WAKE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 static LAST_PRUNE_MS: AtomicU64 = AtomicU64::new(0);
 /// Makes each image temp file name unique within this process.
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Held while [`fit_image`] decodes, so at most one full-size image is live.
+static DECODE: Mutex<()> = Mutex::new(());
 
 fn state_lock() -> MutexGuard<'static, ()> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
@@ -79,8 +81,9 @@ pub fn images_dir(config_dir: &Path) -> PathBuf {
 }
 
 /// Save a downloaded image into the cache under `pc::image_cache_name(url)`.
-/// Only a JPEG, PNG or WebP of at most `pc::IMAGE_MAX_BYTES` is kept. A JPEG
-/// or PNG must decode within the decode limits, and one longer than
+/// Only a whole JPEG, PNG or WebP (`pc::image_is_whole`) of at most
+/// `pc::IMAGE_MAX_BYTES` is kept. A JPEG or PNG must decode within the
+/// decode limits, and one longer than
 /// [`THUMB_MAX_PX`] on a side is stored resized; WebP (which this build can't
 /// decode) and smaller images keep their original bytes. The file appears
 /// through a temp file and a rename, so a reader never sees half of it.
@@ -88,7 +91,7 @@ pub(crate) fn store_image(config_dir: &Path, url: &str, bytes: &[u8]) -> bool {
     let Some(mime) = pc::image_mime(bytes) else {
         return false;
     };
-    if bytes.len() > pc::IMAGE_MAX_BYTES {
+    if bytes.len() > pc::IMAGE_MAX_BYTES || !pc::image_is_whole(bytes) {
         return false;
     }
     let kept = match mime {
@@ -116,11 +119,15 @@ pub(crate) fn store_image(config_dir: &Path, url: &str, bytes: &[u8]) -> bool {
     true
 }
 
-/// Decode a JPEG or PNG within the limits. `None` when it doesn't decode;
-/// the original bytes when it already fits; otherwise the upright image
-/// resized to fit [`THUMB_MAX_PX`] and encoded in its own format.
+/// Decode a JPEG or PNG within the limits. `None` when it doesn't decode or
+/// its pixels would need more than [`DECODE_MAX_ALLOC`]; the original bytes
+/// when it already fits; otherwise the upright image shrunk to fit
+/// [`THUMB_MAX_PX`] and encoded in its own format with its colour profile.
+/// One decode runs at a time, so the Pulse tick and the printer poll never
+/// hold two full-size images at once.
 fn fit_image(bytes: &[u8], format: image::ImageFormat) -> Option<Cow<'_, [u8]>> {
-    use image::ImageDecoder as _;
+    use image::{ImageDecoder as _, ImageEncoder as _};
+    let _one = DECODE.lock().unwrap_or_else(|e| e.into_inner());
     let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(DECODE_MAX_PX);
@@ -128,36 +135,47 @@ fn fit_image(bytes: &[u8], format: image::ImageFormat) -> Option<Cow<'_, [u8]>> 
     limits.max_alloc = Some(DECODE_MAX_ALLOC);
     reader.limits(limits);
     let mut decoder = reader.into_decoder().ok()?;
+    // The JPEG decoder checks only the side limits, so the pixel budget is
+    // checked here, before anything is allocated.
+    if decoder.total_bytes() > DECODE_MAX_ALLOC {
+        return None;
+    }
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
-    let mut img = image::DynamicImage::from_decoder(decoder).ok()?;
+    let icc = decoder.icc_profile().ok().flatten();
+    let img = image::DynamicImage::from_decoder(decoder).ok()?;
     if img.width().max(img.height()) <= THUMB_MAX_PX {
         return Some(Cow::Borrowed(bytes));
     }
+    // Shrink first, then turn: the fit box is square, so the result is the
+    // same, and only the small image is copied. `thumbnail` averages areas
+    // without a full-size float buffer.
+    let mut img = img.thumbnail(THUMB_MAX_PX, THUMB_MAX_PX);
     img.apply_orientation(orientation);
-    let img = img.resize(
-        THUMB_MAX_PX,
-        THUMB_MAX_PX,
-        image::imageops::FilterType::Triangle,
-    );
     let mut out = Vec::new();
     let written = if format == image::ImageFormat::Jpeg {
-        img.to_rgb8()
-            .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
-                &mut out,
-                THUMB_JPEG_QUALITY,
-            ))
+        let mut encoder =
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, THUMB_JPEG_QUALITY);
+        if let Some(icc) = icc {
+            encoder.set_icc_profile(icc).ok()?;
+        }
+        img.to_rgb8().write_with_encoder(encoder)
     } else {
-        img.write_with_encoder(image::codecs::png::PngEncoder::new(&mut out))
+        let mut encoder = image::codecs::png::PngEncoder::new(&mut out);
+        if let Some(icc) = icc {
+            encoder.set_icc_profile(icc).ok()?;
+        }
+        img.write_with_encoder(encoder)
     };
     written.ok().map(|()| Cow::Owned(out))
 }
 
 /// Delete cache files no card references any more (see `pc::prune_plan`).
-/// A store that can't be read deletes nothing. Returns how many went.
+/// A store that is missing, blank or can't be read deletes nothing. Returns
+/// how many went.
 pub(crate) fn prune_images(config_dir: &Path, now_ms: u64) -> usize {
-    let Ok(cards) = crate::pulse::cards(config_dir) else {
+    let Ok(cards) = crate::pulse::stored_cards(config_dir) else {
         return 0;
     };
     let keep: HashSet<String> = cards
@@ -1356,14 +1374,84 @@ mod tests {
     }
 
     #[test]
-    fn store_image_refuses_a_truncated_jpeg() {
-        let d = dirs("store-truncated");
+    fn store_image_refuses_a_jpeg_with_a_broken_header() {
+        let d = dirs("store-broken");
         let dir = images_dir(&d.config);
         std::fs::create_dir_all(&dir).expect("dir");
         let mut broken = vec![0xFF, 0xD8, 0xFF, 0xE0];
         broken.resize(4 + 16 * 1024, 7);
+        broken.extend_from_slice(&[0xFF, 0xD9]);
+        assert!(
+            pc::image_is_whole(&broken),
+            "only the decoder can refuse it"
+        );
         assert!(!store_image(&d.config, HERO, &broken));
         assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0);
+    }
+
+    #[test]
+    fn store_image_refuses_a_jpeg_cut_off_mid_download() {
+        let d = dirs("store-cut");
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let big = jpeg(2560, 1440, 90, |x, y| [(x / 10) as u8, (y / 6) as u8, 128]);
+        let small = jpeg(480, 320, 90, |x, y| [(x / 2) as u8, (y / 2) as u8, 64]);
+        assert!(!store_image(&d.config, HERO, &big[..big.len() / 2]));
+        assert!(!store_image(&d.config, HERO, &small[..small.len() / 2]));
+        assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0);
+    }
+
+    /// A small JPEG whose header claims `w`×`h`: a decompression bomb.
+    fn jpeg_claiming(w: u16, h: u16) -> Vec<u8> {
+        let mut bytes = jpeg(64, 64, 90, |_, _| [90, 90, 90]);
+        let sof = bytes
+            .windows(2)
+            .position(|m| m == [0xFF, 0xC0])
+            .expect("baseline frame header");
+        bytes[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+        bytes[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn store_image_refuses_a_jpeg_too_big_to_decode() {
+        let d = dirs("store-bomb");
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        // 8192 x 6000 x 3 bytes is 140.6 MiB, over the 128 MiB budget, though
+        // each side is within DECODE_MAX_PX.
+        let bomb = jpeg_claiming(8192, 6000);
+        assert_eq!(decoded_header(&bomb), (8192, 6000));
+        assert!(!store_image(&d.config, HERO, &bomb));
+        assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0);
+    }
+
+    fn decoded_header(bytes: &[u8]) -> (u32, u32) {
+        image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Jpeg)
+            .into_dimensions()
+            .expect("header")
+    }
+
+    #[test]
+    fn store_image_keeps_the_colour_profile_of_a_resized_jpeg() {
+        use image::{ImageDecoder as _, ImageEncoder as _};
+        let d = dirs("store-icc");
+        let profile: Vec<u8> = (0..=255u8).cycle().take(600).collect();
+        let img = image::RgbImage::from_fn(2560, 1440, |x, y| {
+            image::Rgb([(x / 10) as u8, (y / 6) as u8, 128])
+        });
+        let mut src = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut src, 90);
+        encoder.set_icc_profile(profile.clone()).expect("icc");
+        img.write_with_encoder(encoder).expect("jpeg");
+
+        assert!(store_image(&d.config, HERO, &src));
+        let stored =
+            std::fs::read(images_dir(&d.config).join(pc::image_cache_name(HERO))).expect("stored");
+        assert_eq!(decoded_size(&stored), (1280, 720));
+        let mut decoder =
+            image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&stored)).expect("jpeg");
+        assert_eq!(decoder.icc_profile().expect("read"), Some(profile));
     }
 
     #[test]
@@ -1398,6 +1486,14 @@ mod tests {
             .and_then(|f| f.set_modified(two_hours_ago))
             .expect("mtime");
         let now = grokhub_core::now_ms();
+
+        assert!(!d.config.join("updates.json").exists());
+        assert_eq!(prune_images(&d.config, now), 0);
+        assert!(stray.is_file(), "a missing store deletes nothing");
+
+        std::fs::write(d.config.join("updates.json"), " \n").expect("store");
+        assert_eq!(prune_images(&d.config, now), 0);
+        assert!(stray.is_file(), "a blank store deletes nothing");
 
         std::fs::write(d.config.join("updates.json"), "{").expect("store");
         assert_eq!(prune_images(&d.config, now), 0);
