@@ -118,9 +118,10 @@ pub struct StreamTarget {
 
 /// The loopback fake in tests, else xAI when the shared voice router puts
 /// Grok Voice 3 first for speech-to-text and a credential (Grok sign-in or
-/// API key) is available. `None` when on-device speech is preferred/pinned or no
-/// credential is ready. Like the upload, the socket dials direct.
-pub fn target_for(config_dir: &Path) -> Option<StreamTarget> {
+/// API key) is available for `chat`. `None` when on-device speech is
+/// preferred/pinned, `chat` runs on this computer, or no credential is
+/// ready. Like the upload, the socket dials direct.
+pub fn target_for(config_dir: &Path, chat: &str) -> Option<StreamTarget> {
     if let Some(url) = ws_loopback_override(std::env::var(TEST_WS_ENV).ok().as_deref()) {
         return Some(StreamTarget {
             url,
@@ -129,7 +130,7 @@ pub fn target_for(config_dir: &Path) -> Option<StreamTarget> {
     }
     let cfg = grokhub_agent::route::voice_route::read(config_dir);
     let models = crate::voice::models_dir(config_dir);
-    let env = crate::voice::stt_env(config_dir, &models);
+    let env = crate::voice::stt_env(config_dir, &models, chat);
     let plan = grokhub_agent::route::voice_route::plan_stage(
         &cfg,
         grokhub_agent::route::voice_route::StageKind::Stt,

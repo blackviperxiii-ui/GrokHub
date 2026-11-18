@@ -433,6 +433,6 @@ fn local_only_voice_route_skips_xai_stream_target() {
     )
     .expect("write route");
     if ws_loopback_override(std::env::var(TEST_WS_ENV).ok().as_deref()).is_none() {
-        assert!(target_for(&dir).is_none());
+        assert!(target_for(&dir, "").is_none());
     }
 }

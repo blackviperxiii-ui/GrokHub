@@ -16,7 +16,7 @@ use grokhub_agent::route::local_resident::{reserve, Kind, Mem};
 use grokhub_agent::route::voice_route::{
     self, SpeechSource, StageKind, StagePlan, VoiceEnv, VoiceRouteMode,
 };
-use grokhub_agent::route::{connectivity, host, local};
+use grokhub_agent::route::{connectivity, host, local, local_live};
 use grokhub_core::runtime_download as rd;
 use grokhub_core::voice::{parse_stt_text, pcm_from_capture, stt_multipart, stt_url};
 use grokhub_core::voice_engine as ve;
@@ -33,6 +33,8 @@ pub const SECONDS_MAX: u64 = 60;
 /// The answer is a short JSON object; more than this is not a transcript.
 const ANSWER_MAX: u64 = 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// The on-device engine gets this long to start, plus twice the clip's length.
+const HEAR_BASE: Duration = Duration::from_secs(20);
 const BOUNDARY: &str = "----grokhubstt";
 
 pub const NO_KEY: &str =
@@ -132,7 +134,8 @@ pub fn local_stt_ready(config_dir: &Path, models: &Path) -> bool {
     (ve::installed(config_dir) && ve::speech_model(models).is_some()) || whisper_path().is_some()
 }
 
-pub(crate) fn stt_env(config_dir: &Path, models: &Path) -> VoiceEnv {
+/// The router's facts for hearing in `chat` (empty: no chat, reads as online).
+pub(crate) fn stt_env(config_dir: &Path, models: &Path, chat: &str) -> VoiceEnv {
     host::sync(config_dir);
     connectivity::sync_from_core();
     VoiceEnv {
@@ -145,7 +148,17 @@ pub(crate) fn stt_env(config_dir: &Path, models: &Path) -> VoiceEnv {
         local_warm: local::warm_runtime().is_some(),
         has_xai_auth: stt_bearer().is_ok(),
         xai_recently_failed: voice_route::xai_in_cooldown(StageKind::Stt, grokhub_core::now_ms()),
+        chat_here: local_live::runs_here(chat),
+        chat_must_stay: local_live::must_stay_here(chat),
     }
+}
+
+/// One recording's words, and the line naming the engine that heard them
+/// and why (none for a plain cloud chat).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Transcript {
+    pub words: String,
+    pub line: Option<String>,
 }
 
 /// Seconds of sound in a PCM WAV, from its header. `None` when it isn't one.
@@ -175,23 +188,40 @@ pub fn check(wav: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// Turns one push-to-talk recording into text without an app handle.
-pub fn transcribe(config_dir: &Path, wav: &[u8]) -> Result<String, String> {
-    transcribe_with(None, config_dir, wav)
+/// Turns one push-to-talk recording into text without an app handle or chat.
+pub fn transcribe(config_dir: &Path, wav: &[u8]) -> Result<Transcript, String> {
+    transcribe_with(None, config_dir, "", wav)
 }
 
-/// Turns one recording into text via the shared voice router, starting automatic
-/// local model download via `app` if local assets are needed and missing.
+/// Turns one recording made in `chat` into text via the shared voice router,
+/// starting automatic local model download via `app` if local assets are
+/// needed and missing.
 pub fn transcribe_with(
     app: Option<&tauri::AppHandle>,
     config_dir: &Path,
+    chat: &str,
     wav: &[u8],
-) -> Result<String, String> {
+) -> Result<Transcript, String> {
     check(wav)?;
     let cfg = voice_route::read(config_dir);
     let models = models_dir(config_dir);
-    let env = stt_env(config_dir, &models);
-    match voice_route::plan_stage(&cfg, StageKind::Stt, &env) {
+    let env = stt_env(config_dir, &models, chat);
+    transcribe_with_env(app, &cfg, &env, config_dir, &models, wav)
+}
+
+fn transcribe_with_env(
+    app: Option<&tauri::AppHandle>,
+    cfg: &voice_route::VoiceRouteConfig,
+    env: &VoiceEnv,
+    config_dir: &Path,
+    models: &Path,
+    wav: &[u8],
+) -> Result<Transcript, String> {
+    let heard = |used: SpeechSource, fell_back: bool, model: &str, words: String| Transcript {
+        line: voice_route::stage_line(StageKind::Stt, cfg, env, used, fell_back, model),
+        words,
+    };
+    match voice_route::plan_stage(cfg, StageKind::Stt, env) {
         StagePlan::Blocked(msg) => Err(msg),
         StagePlan::DownloadLocal => {
             if let Some(app) = app {
@@ -206,11 +236,12 @@ pub fn transcribe_with(
         StagePlan::Try(sources) => {
             let mut last_err: Option<String> = None;
             for (idx, source) in sources.iter().enumerate() {
+                let fell_back = last_err.is_some();
                 match source {
                     SpeechSource::GrokVoice3 => match target()
                         .and_then(|to| transcribe_at(config_dir, wav, &to))
                     {
-                        Ok(text) => return Ok(text),
+                        Ok(text) => return Ok(heard(*source, fell_back, "", text)),
                         Err(err) if err == EMPTY => return Err(err),
                         Err(err) => {
                             if !env.loopback_override && err != *grokhub_core::offline::OFFLINE_MSG
@@ -240,8 +271,10 @@ pub fn transcribe_with(
                             last_err = Some(err);
                         }
                     },
-                    SpeechSource::Local => match transcribe_on_device(config_dir, &models, wav) {
-                        Some(Ok(text)) => return Ok(text),
+                    SpeechSource::Local => match transcribe_on_device(config_dir, models, wav) {
+                        Some(Ok((text, model))) => {
+                            return Ok(heard(*source, fell_back, model, text))
+                        }
                         Some(Err(err)) if err == EMPTY => return Err(err),
                         Some(Err(err)) => last_err = Some(err),
                         None => {}
@@ -260,6 +293,41 @@ fn no_room_to_listen(mb: u64) -> String {
     )
 }
 
+/// Up to [`ANSWER_MAX`] of `pipe` into `buf`, then the rest drained unread,
+/// so a child that prints more never blocks on a full pipe.
+fn read_capped(mut pipe: impl Read, buf: &mut Vec<u8>) {
+    let _ = pipe.by_ref().take(ANSWER_MAX).read_to_end(buf);
+    let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+}
+
+/// How long the on-device engine gets for a clip `seconds` long.
+fn hear_limit(seconds: f64) -> Duration {
+    HEAR_BASE + Duration::from_secs_f64(2.0 * seconds.max(0.0))
+}
+
+/// One clip to hear, in its own private temp file; removed when dropped, on
+/// every path.
+struct Clip(PathBuf);
+
+impl Clip {
+    fn write(wav: &[u8]) -> Result<Self, String> {
+        let failed = || "The on-device speech engine couldn't write a recording.".to_string();
+        let (path, mut file) = ve::claim_hear_file(&std::env::temp_dir()).map_err(|_| failed())?;
+        let clip = Clip(path);
+        std::io::Write::write_all(&mut file, wav).map_err(|_| failed())?;
+        Ok(clip)
+    }
+}
+
+impl Drop for Clip {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// On-device clips are heard one at a time: each run loads the whole model.
+static HEAR_ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn run_capture(mut cmd: Command, limit: Duration) -> Result<String, String> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -277,14 +345,14 @@ fn run_capture(mut cmd: Command, limit: Duration) -> Result<String, String> {
     let out_reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(p) = out_pipe {
-            let _ = p.take(ANSWER_MAX).read_to_end(&mut buf);
+            read_capped(p, &mut buf);
         }
         buf
     });
     let err_reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(p) = err_pipe {
-            let _ = p.take(ANSWER_MAX).read_to_end(&mut buf);
+            read_capped(p, &mut buf);
         }
         buf
     });
@@ -312,68 +380,49 @@ fn run_capture(mut cmd: Command, limit: Duration) -> Result<String, String> {
     ))
 }
 
+/// The words and the name of the engine that heard them, or `None` when no
+/// on-device engine is set up. The engine never unloads the chat model: with
+/// no room beside it, the clip is declined with a line.
 fn transcribe_on_device(
     config_dir: &Path,
     models: &Path,
     wav: &[u8],
-) -> Option<Result<String, String>> {
+) -> Option<Result<(String, &'static str), String>> {
+    let limit = hear_limit(wav_seconds(wav).unwrap_or(0.0));
     if ve::installed(config_dir) {
         if let Some(model) = ve::speech_model(models) {
-            let Ok(_listening) = reserve(Kind::Speech, Mem::ram(model.run_mb), false) else {
+            let _one = HEAR_ONE.lock().unwrap_or_else(|e| e.into_inner());
+            let Ok(_listening) = reserve(Kind::Hearing, Mem::ram(model.run_mb), false) else {
                 return Some(Err(no_room_to_listen(model.run_mb)));
             };
-            let wav_path = match ve::claim_speak_file(&std::env::temp_dir()) {
-                Ok(p) => p,
-                Err(_) => {
-                    return Some(Err(
-                        "The on-device speech engine couldn't write a recording.".into(),
-                    ))
-                }
+            let clip = match Clip::write(wav) {
+                Ok(clip) => clip,
+                Err(e) => return Some(Err(e)),
             };
-            if std::fs::write(&wav_path, wav).is_err() {
-                let _ = std::fs::remove_file(&wav_path);
-                return Some(Err(
-                    "The on-device speech engine couldn't write a recording.".into(),
-                ));
-            }
-            let Some(args) = ve::transcribe_args(models, model, &wav_path) else {
-                let _ = std::fs::remove_file(&wav_path);
-                return None;
-            };
+            let args = ve::transcribe_args(models, model, &clip.0)?;
             let mut cmd = Command::new(ve::offline_path(config_dir));
             cmd.args(&args);
-            let done = run_capture(cmd, TIMEOUT);
-            let _ = std::fs::remove_file(&wav_path);
-            return Some(
-                done.and_then(|out| ve::transcript_from(&out).ok_or_else(|| EMPTY.to_string())),
-            );
+            return Some(run_capture(cmd, limit).and_then(|out| {
+                ve::transcript_from(&out)
+                    .map(|words| (words, model.name))
+                    .ok_or_else(|| EMPTY.to_string())
+            }));
         }
     }
     let whisper = whisper_path()?;
-    let wav_path = match ve::claim_speak_file(&std::env::temp_dir()) {
-        Ok(p) => p,
-        Err(_) => {
-            return Some(Err(
-                "The on-device speech engine couldn't write a recording.".into(),
-            ))
-        }
+    let _one = HEAR_ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let clip = match Clip::write(wav) {
+        Ok(clip) => clip,
+        Err(e) => return Some(Err(e)),
     };
-    if std::fs::write(&wav_path, wav).is_err() {
-        let _ = std::fs::remove_file(&wav_path);
-        return Some(Err(
-            "The on-device speech engine couldn't write a recording.".into(),
-        ));
-    }
     let mut cmd = Command::new(whisper);
-    cmd.arg("-f").arg(&wav_path).arg("-nt");
-    let done = run_capture(cmd, TIMEOUT);
-    let _ = std::fs::remove_file(&wav_path);
-    Some(done.and_then(|out| {
+    cmd.arg("-f").arg(&clip.0).arg("-nt");
+    Some(run_capture(cmd, limit).and_then(|out| {
         let text = out.trim().to_string();
         if text.is_empty() {
             Err(EMPTY.to_string())
         } else {
-            Ok(text)
+            Ok((text, "whisper"))
         }
     }))
 }
@@ -662,5 +711,130 @@ mod tests {
             err.contains("Offline") || err.contains("speech model"),
             "{err}"
         );
+    }
+
+    /// The on-device engine and Parakeet, as if downloaded, under `config`;
+    /// the models folder. The engine is a script that answers with the mode
+    /// of the clip it was given (`stat` is GNU's, so it only runs on Linux).
+    fn fake_hearing(config: &Path) -> PathBuf {
+        use grokhub_core::local_setup::ModelKind;
+        use grokhub_core::model_download as md;
+        let models = config.join("models");
+        let sherpa = &ve::SHERPA;
+        let program = sherpa.program_path(config);
+        std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\nprintf '{\"text\": \"%s\"}\\n' \"$(stat -c %a \"$last\")\"\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(sherpa.dir(config).join("version.txt"), sherpa.version).unwrap();
+        let model = grokhub_core::local_setup::local_models()
+            .iter()
+            .find(|m| m.kind == ModelKind::SpeechToText)
+            .unwrap();
+        let dir = md::kind_dir(&models, ModelKind::SpeechToText);
+        let put = |path: PathBuf| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"x").unwrap();
+        };
+        put(md::final_path(&dir, model));
+        for part in model.parts.iter() {
+            put(dir.join(part.file));
+        }
+        models
+    }
+
+    fn here_env() -> VoiceEnv {
+        VoiceEnv {
+            has_xai_auth: true,
+            local_enabled: true,
+            local_ai_capable: true,
+            local_ready: true,
+            chat_here: true,
+            ..Default::default()
+        }
+    }
+
+    fn clips_left() -> usize {
+        let mine = format!("grokhub-hear-{}-", std::process::id());
+        std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with(&mine))
+            .count()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_chat_that_runs_here_is_heard_on_this_computer_from_a_private_clip() {
+        let config = temp_dir("hear-here");
+        let models = fake_hearing(&config);
+        let got = transcribe_with_env(
+            None,
+            &voice_route::VoiceRouteConfig::default(),
+            &here_env(),
+            &config,
+            &models,
+            &wav(16_000),
+        );
+        assert_eq!(
+            got,
+            Ok(Transcript {
+                words: "600".into(),
+                line: Some(
+                    "Heard on this computer with Parakeet v3 speech to text: this chat runs here."
+                        .into()
+                ),
+            })
+        );
+        assert_eq!(clips_left(), 0, "the clip is gone");
+    }
+
+    #[test]
+    fn without_room_beside_the_chat_model_hearing_declines_and_never_goes_to_xai() {
+        use grokhub_agent::route::local_scale::{set_room, Room};
+        voice_route::clear_failures();
+        let config = temp_dir("hear-no-room");
+        let models = fake_hearing(&config);
+        let room = Room {
+            free_vram_mb: None,
+            free_ram_mb: 512,
+            cpu_busy_pct: None,
+            on_battery: false,
+            unified: false,
+        };
+        set_room(room, grokhub_core::now_ms());
+        let got = transcribe_with_env(
+            None,
+            &voice_route::VoiceRouteConfig::default(),
+            &here_env(),
+            &config,
+            &models,
+            &wav(16_000),
+        );
+        // A stale reading: later tests see no reading at all.
+        set_room(room, 0);
+        assert_eq!(
+            got,
+            Err("The on-device speech engine needs about 1 GB of free memory, and this computer doesn't have it right now.".to_string())
+        );
+        assert!(!voice_route::xai_in_cooldown(
+            StageKind::Stt,
+            grokhub_core::now_ms()
+        ));
+        assert!(!grokhub_agent::route::local_resident::held());
+        assert_eq!(clips_left(), 0);
+    }
+
+    #[test]
+    fn the_engine_gets_longer_for_a_longer_clip() {
+        assert_eq!(hear_limit(0.0), Duration::from_secs(20));
+        assert_eq!(hear_limit(60.0), Duration::from_secs(140));
     }
 }

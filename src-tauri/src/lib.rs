@@ -1154,14 +1154,16 @@ fn quiet_now(config_dir: &Path, now: u64) -> bool {
     false
 }
 
-/// Push to talk: one recording (a WAV, as base64) to text for the draft.
+/// Push to talk: one recording (a WAV, as base64) made in `conversation_id`
+/// to text for the draft, with the line naming the engine that heard it.
 /// Nothing is sent to chat; the person presses Send.
 #[tauri::command]
 async fn transcribe(
     app: AppHandle,
     state: State<'_, ShellState>,
     wav: String,
-) -> Result<String, String> {
+    conversation_id: Option<String>,
+) -> Result<voice::Transcript, String> {
     use base64::Engine as _;
     capabilities::needs(capabilities::current().voice, "Voice")?;
     // Base64 is 4 bytes per 3: refuse a body past the cap unread.
@@ -1172,8 +1174,9 @@ async fn transcribe(
         .decode(wav.trim())
         .map_err(|_| voice::NOT_WAV.to_string())?;
     let config_dir = state.config_dir.clone();
+    let chat = conversation_id.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
-        voice::transcribe_with(Some(&app), &config_dir, &bytes)
+        voice::transcribe_with(Some(&app), &config_dir, &chat, &bytes)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -8181,6 +8184,7 @@ pub fn run() {
             send_chat,
             transcribe,
             voice_live::voice_live_start,
+            voice_live::voice_live_chat,
             voice_live::voice_live_stop,
             voice_live::voice_live_push,
             voice_live::voice_live_listen,
