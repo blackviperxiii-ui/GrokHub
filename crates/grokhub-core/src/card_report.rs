@@ -92,7 +92,8 @@ pub struct CardReceipt {
 }
 
 /// How a fix offer runs. A chat offer is asked in the card's chat; a look is
-/// read only and runs quietly, with its receipt on the card.
+/// read only and runs quietly, with its receipt on the card; a live offer
+/// opens a checklist dialog with each step as it runs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OfferKind {
@@ -100,6 +101,9 @@ pub enum OfferKind {
     Chat,
     /// Read the card's program's crash history and services. Changes nothing.
     Look,
+    /// Changes the computer in more than one step, or needs a hard OK: a
+    /// live checklist dialog with Cancel, Stop and Undo.
+    Live,
 }
 
 impl OfferKind {
@@ -122,13 +126,17 @@ pub fn add_receipt(card: &mut UpdateCard, receipt: CardReceipt) {
 pub struct FixOffer {
     /// Short and says what it does: "Find out why", "Restart bluetooth".
     pub label: String,
-    /// What the fix run is asked to do, in the card's own chat.
+    /// What the fix run is asked to do, in the card's own chat (Chat) or as
+    /// the live dialog's summary of the plan (Live).
     pub prompt: String,
     #[serde(default, skip_serializing_if = "OfferKind::is_chat")]
     pub kind: OfferKind,
     /// Its kind of fix, for the switch that lets it run without a tap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fix_type: Option<crate::auto_fix::FixType>,
+    /// Guided steps for a Live offer's checklist. Empty on Chat and Look.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<String>,
 }
 
 /// What the card found: the report's headline, else the card's title.

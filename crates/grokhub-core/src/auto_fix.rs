@@ -90,6 +90,7 @@ mod tests {
                 prompt: "Read its crash history.".into(),
                 kind,
                 fix_type: Some(FixType::CrashCheck),
+                steps: vec![],
             }],
             ..Default::default()
         });

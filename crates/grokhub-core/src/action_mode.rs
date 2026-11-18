@@ -52,6 +52,13 @@ pub fn offer_shape(offer: &FixOffer) -> ActionShape {
             needs_choice: true,
             ..Default::default()
         },
+        // A Live offer always opens the checklist dialog: treat it as a
+        // multi-step system change even when the plan only named one step.
+        OfferKind::Live => ActionShape {
+            changes_system: true,
+            steps: offer.steps.len().max(2),
+            ..Default::default()
+        },
     }
 }
 
@@ -104,13 +111,20 @@ mod tests {
             prompt: "Read its crash history.".into(),
             kind: OfferKind::Look,
             fix_type: None,
+            steps: vec![],
         };
         assert_eq!(action_mode(&offer_shape(&look)), ActionMode::Background);
         let ask = FixOffer {
             kind: OfferKind::Chat,
             fix_type: None,
-            ..look
+            ..look.clone()
         };
         assert_eq!(action_mode(&offer_shape(&ask)), ActionMode::Chat);
+        let live = FixOffer {
+            kind: OfferKind::Live,
+            steps: vec!["Save settings.".into(), "Apply the fix.".into()],
+            ..look
+        };
+        assert_eq!(action_mode(&offer_shape(&live)), ActionMode::Live);
     }
 }

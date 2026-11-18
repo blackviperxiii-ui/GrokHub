@@ -1585,6 +1585,38 @@ export interface PulseChip {
   /** `pause` is Pause it on a failing automation's card: it pauses that job. */
   act: "offer" | "discuss" | "ignore" | "remind" | "pause";
   index: number;
+  /** How an offer runs: chat, live checklist, or quiet background. Empty on
+   * non-offer chips. */
+  mode?: "chat" | "live" | "background" | "";
+}
+
+/** Where one step of a live fix stands. */
+export type LiveStepMark =
+  | "pending"
+  | "running"
+  | "needsOk"
+  | "done"
+  | "failed"
+  | "skipped";
+
+/** One line of a live fix checklist. */
+export interface LiveStep {
+  plain: string;
+  mark: LiveStepMark;
+}
+
+/** The live fix dialog's state. */
+export interface LiveView {
+  cardId: string;
+  label: string;
+  title: string;
+  summary: string;
+  steps: LiveStep[];
+  phase: "ready" | "running" | "awaiting" | "done" | "stopped";
+  result: string | null;
+  canUndo: boolean;
+  primary: string | null;
+  stop: string | null;
 }
 
 /** What a card puts in the chat: its own conversation and the words for the
@@ -1751,9 +1783,40 @@ export function pulseDiscuss(id: string): Promise<PulseSeed> {
   return invoke<PulseSeed>("pulse_discuss", { id });
 }
 
-/** A card's fix chip: its words in the card's own chat. Nothing runs until sent. */
+/** A card's fix chip: its words in the card's own chat. Nothing runs until sent.
+ * Live offers open `pulseLiveOpen` instead. */
 export function pulseOffer(id: string, index: number): Promise<PulseSeed> {
   return invoke<PulseSeed>("pulse_offer", { id, index });
+}
+
+/** Open a Live offer's checklist dialog. */
+export function pulseLiveOpen(id: string, index: number): Promise<LiveView> {
+  return invoke<LiveView>("pulse_live_open", { id, index });
+}
+
+export function pulseLiveCurrent(): Promise<LiveView | null> {
+  return invoke<LiveView | null>("pulse_live_current");
+}
+
+/** Start the checklist, or Allow the step waiting for an OK. */
+export function pulseLiveAllow(): Promise<LiveView> {
+  return invoke<LiveView>("pulse_live_allow");
+}
+
+export function pulseLiveDeny(): Promise<LiveView> {
+  return invoke<LiveView>("pulse_live_deny");
+}
+
+export function pulseLiveStop(): Promise<LiveView> {
+  return invoke<LiveView>("pulse_live_stop");
+}
+
+export function pulseLiveUndo(): Promise<LiveView> {
+  return invoke<LiveView>("pulse_live_undo");
+}
+
+export function pulseLiveClose(): Promise<void> {
+  return invoke<void>("pulse_live_close");
 }
 
 /** Remind me later: hidden until a time that fits the day. */

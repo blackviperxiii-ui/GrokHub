@@ -7,6 +7,7 @@ import {
   pulseDiscuss,
   pulseDoneStop,
   pulseDoneUndo,
+  pulseLiveOpen,
   pulseOffer,
   pulsePauseAutomation,
   pulseRemind,
@@ -14,6 +15,7 @@ import {
   pulseReviewIssue,
   pulseWhy,
   saveFeedPrompt,
+  type LiveView,
   type PulseAct,
   type PulseChip,
   type PulseIdea,
@@ -23,6 +25,7 @@ import {
 import { FeedCard, IdeaRow, SkeletonRows } from "./FeedCard";
 import { SavedPage } from "./SavedPage";
 import { FixWindow } from "./PulseFix";
+import { LiveWindow } from "./PulseLive";
 import { StatusLine, useNote } from "./ui";
 
 export const FEED_EMPTY = "No posts yet. Tell me what your feed should cover with Edit feed instructions.";
@@ -193,6 +196,8 @@ export function Pulse({
   const [paged, setPaged] = useState(PAGE_SIZE);
   /** The PC health idea whose options window is open. */
   const [fixing, setFixing] = useState<PulseIdea | null>(null);
+  /** A Live offer's checklist dialog. */
+  const [live, setLive] = useState<LiveView | null>(null);
   const end = useRef<HTMLLIElement>(null);
   const feedList = useRef<HTMLUListElement>(null);
   const polls = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -315,9 +320,9 @@ export function Pulse({
     }
   }
 
-  /** A chip under a post: a fix goes to the card's own chat (nothing runs
-   * until it is sent there), Ignore for now hides it, Remind me later brings
-   * it back at a time that fits the day. */
+  /** A chip under a post: a Live fix opens the checklist dialog, other fixes
+   * go to the card's own chat (nothing runs until sent), Ignore for now hides
+   * it, Remind me later brings it back at a time that fits the day. */
   async function chip(id: string, c: PulseChip) {
     if (c.act === "ignore") {
       await act(id, "ignore", IGNORED_NOTE);
@@ -330,6 +335,10 @@ export function Pulse({
     }
     try {
       if (c.act === "offer") {
+        if (c.mode === "live") {
+          setLive(await pulseLiveOpen(id, c.index));
+          return;
+        }
         const seed = await pulseOffer(id, c.index);
         onRun(seed.text, seed.conversationId);
       } else if (c.act === "remind") {
@@ -529,6 +538,15 @@ export function Pulse({
             const idea = fixing;
             setFixing(null);
             void run(idea);
+          }}
+        />
+      )}
+      {live && (
+        <LiveWindow
+          initial={live}
+          onClose={() => {
+            setLive(null);
+            getPulse().then(setPage, () => {});
           }}
         />
       )}

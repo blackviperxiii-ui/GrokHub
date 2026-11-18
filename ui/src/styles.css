@@ -6182,6 +6182,66 @@ button.primary:not(.quick-chip) {
   z-index: 30;
 }
 
+/* A Live offer's checklist dialog (ActionMode::Live). */
+.live-window .live-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.live-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.live-steps li {
+  display: grid;
+  grid-template-columns: 1.25rem 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.live-steps li[data-mark="needsOk"],
+.live-steps li[data-mark="running"] {
+  border-color: var(--amber);
+  background: var(--amber-wash);
+}
+
+.live-steps li[data-mark="done"] .live-mark {
+  color: var(--amber);
+}
+
+.live-steps li[data-mark="failed"] .live-mark {
+  color: var(--red);
+}
+
+.live-mark {
+  font-weight: 600;
+}
+
+.live-status {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.live-result {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 4px solid var(--red);
+  background: var(--red-wash);
+}
+
+.live-actions {
+  justify-content: flex-end;
+}
+
 /* A short confirm in the fix window's frame. */
 .confirm-window {
   max-width: 420px;

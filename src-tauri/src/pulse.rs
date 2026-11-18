@@ -164,13 +164,30 @@ pub struct Item {
 
 /// One chip under a card. `act` is "offer", "discuss", "ignore", "remind"
 /// or "pause" (Pause it on a failing automation's card); `index` is the
-/// offer's place on the card.
+/// offer's place on the card. `mode` is how an offer runs: "chat", "live"
+/// or "background" (empty on non-offer chips).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Chip {
     pub label: String,
     pub act: &'static str,
     pub index: usize,
+    pub mode: &'static str,
+}
+
+fn offer_mode(card: &UpdateCard, index: usize) -> &'static str {
+    use grokhub_core::action_mode::{action_mode, offer_shape, ActionMode};
+    match card
+        .pulse
+        .report
+        .as_ref()
+        .and_then(|r| r.offers.get(index))
+        .map(|o| action_mode(&offer_shape(o)))
+    {
+        Some(ActionMode::Live) => "live",
+        Some(ActionMode::Background) => "background",
+        Some(ActionMode::Chat) | None => "chat",
+    }
 }
 
 fn chips(card: &UpdateCard, now_ms: u64) -> Vec<Chip> {
@@ -186,16 +203,17 @@ fn chips(card: &UpdateCard, now_ms: u64) -> Vec<Chip> {
     let mut out: Vec<Chip> = card_chips(card, &day, None)
         .into_iter()
         .map(|c| {
-            let (act, index) = match c.act {
-                ChipAct::Offer(i) => ("offer", i),
-                ChipAct::Discuss | ChipAct::Primary => ("discuss", 0),
-                ChipAct::Ignore => ("ignore", 0),
-                ChipAct::RemindAt(_) => ("remind", 0),
+            let (act, index, mode) = match c.act {
+                ChipAct::Offer(i) => ("offer", i, offer_mode(card, i)),
+                ChipAct::Discuss | ChipAct::Primary => ("discuss", 0, ""),
+                ChipAct::Ignore => ("ignore", 0, ""),
+                ChipAct::RemindAt(_) => ("remind", 0, ""),
             };
             Chip {
                 label: c.label,
                 act,
                 index,
+                mode,
             }
         })
         .collect();
@@ -211,6 +229,7 @@ fn chips(card: &UpdateCard, now_ms: u64) -> Vec<Chip> {
                 label: "Pause it".into(),
                 act: "pause",
                 index: 0,
+                mode: "",
             },
         );
     }
@@ -1139,7 +1158,7 @@ fn retract_idea_like_learned(config_dir: &Path, card: &UpdateCard) {
     }
 }
 
-fn find(config_dir: &Path, id: &str) -> Result<UpdateCard, String> {
+pub(crate) fn find(config_dir: &Path, id: &str) -> Result<UpdateCard, String> {
     cards(config_dir)?
         .into_iter()
         .find(|c| c.id == id)
@@ -1174,7 +1193,7 @@ pub fn card_chat_id(id: &str) -> String {
 /// Words for the box when Discuss opens a reported card's chat.
 pub const DISCUSS_ASK: &str = "Tell me more about this.";
 
-fn engaged(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Result<(), String> {
+pub(crate) fn engaged(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Result<(), String> {
     react(config_dir, card, Outcome::Tapped, None, now_ms);
     if card.kind != UpdateKind::Idea {
         learn_taste(config_dir, card, Some(Reaction::Engage), None, now_ms)?;
@@ -1204,17 +1223,24 @@ pub fn discuss(config_dir: &Path, id: &str, now_ms: u64) -> Result<Seed, String>
 }
 
 /// A card's offered fix: its words in the card's own chat, with the report.
-/// Nothing runs until the person sends it.
+/// Nothing runs until the person sends it. Live offers open the checklist
+/// dialog instead (`pulse_live::open`).
 pub fn offer(config_dir: &Path, id: &str, index: usize, now_ms: u64) -> Result<Seed, String> {
+    use grokhub_core::action_mode::{action_mode, offer_shape, ActionMode};
     let card = find(config_dir, id)?;
-    let prompt = card
+    let offer = card
         .pulse
         .report
         .as_ref()
         .and_then(|r| r.offers.get(index))
-        .map(|o| o.prompt.trim().to_string())
-        .filter(|p| !p.is_empty())
         .ok_or("That fix is gone from the card. The page now shows what is left.")?;
+    if action_mode(&offer_shape(offer)) == ActionMode::Live {
+        return Err("That fix opens as a live checklist, not in chat.".into());
+    }
+    let prompt = offer.prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("That fix is gone from the card. The page now shows what is left.".into());
+    }
     engaged(config_dir, &card, now_ms)?;
     Ok(Seed {
         conversation_id: card_chat_id(&card.id),
@@ -1485,12 +1511,14 @@ mod tests {
                     prompt: "Read bluetoothd's crash history.".into(),
                     kind: OfferKind::Look,
                     fix_type: None,
+                    steps: vec![],
                 },
                 FixOffer {
                     label: "Restart bluetooth".into(),
                     prompt: "Restart the bluetooth service.".into(),
                     kind: OfferKind::Chat,
                     fix_type: None,
+                    steps: vec![],
                 },
             ],
             ..Default::default()
@@ -1516,18 +1544,18 @@ mod tests {
             post.more,
             "It stopped with a segfault each time.\n\n**What was checked**\n- 4 crash reports since 9 AM"
         );
-        let chips: Vec<(&str, &str, usize)> = post
+        let chips: Vec<(&str, &str, usize, &str)> = post
             .chips
             .iter()
-            .map(|c| (c.label.as_str(), c.act, c.index))
+            .map(|c| (c.label.as_str(), c.act, c.index, c.mode))
             .collect();
         assert_eq!(
             chips,
             vec![
-                ("Find out why", "offer", 0),
-                ("Restart bluetooth", "offer", 1),
-                ("Ignore for now", "ignore", 0),
-                ("Remind me later", "remind", 0),
+                ("Find out why", "offer", 0, "background"),
+                ("Restart bluetooth", "offer", 1, "chat"),
+                ("Ignore for now", "ignore", 0, ""),
+                ("Remind me later", "remind", 0, ""),
             ]
         );
 

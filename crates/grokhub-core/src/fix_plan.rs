@@ -511,6 +511,8 @@ pub fn diagnosis_report(title: &str, details: &str, plan: &PlanBuild) -> CardRep
         PlanBuild::Plan(p) if !p.steps.is_empty() => vec![FixOffer {
             label: FIX_LABEL.into(),
             prompt: fix_prompt(p),
+            kind: crate::card_report::OfferKind::Live,
+            steps: p.steps.iter().map(|s| s.description.clone()).collect(),
             ..FixOffer::default()
         }],
         _ => Vec::new(),
@@ -680,6 +682,14 @@ mod tests {
         assert_eq!(card.summary, "");
         assert_eq!(card.offers.len(), 1);
         assert_eq!(card.offers[0].label, "Fix it");
+        assert_eq!(card.offers[0].kind, crate::card_report::OfferKind::Live);
+        assert_eq!(
+            card.offers[0].steps,
+            vec![
+                "Turn off unused plugins.".to_string(),
+                "Restart the app.".to_string(),
+            ]
+        );
         assert_eq!(
             card.offers[0].prompt,
             "Fix what my screen recording found, using the report's steps, one at a time:\n1. Turn off unused plugins. (Undo: Reverse the change manually in the same app or settings screen.)\n2. Restart the app. (Undo: Reverse the change manually in the same app or settings screen.)\n\nBefore each step, say what it will change. Ask me before anything that changes settings, files or devices, and stop if a step fails. Tell me which steps I have to do by hand."
