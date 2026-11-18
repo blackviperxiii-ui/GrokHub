@@ -1231,6 +1231,14 @@ fn turn_ends(chat: &str) {
     }
 }
 
+/// The line under `conversation_id`'s on-device reply, taken so it never
+/// outlives its turn, as the event to send: none for a side answer, whose
+/// reply has no bubble of its own to sit under.
+fn model_line_event(session: SessionMode, conversation_id: &str) -> Option<UiEvent> {
+    let text = grokhub_agent::route::local_live::take_line(conversation_id)?;
+    (session != SessionMode::Btw).then_some(UiEvent::ModelLine { text })
+}
+
 fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     let Worker {
         id: conversation_id,
@@ -1530,7 +1538,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     // evidence receipt the harness recorded for it, then the
                     // line naming the on-device model that answered. The
                     // line is taken either way, so it never outlives its turn.
-                    let model_line = grokhub_agent::route::local_live::take_line(&conversation_id);
+                    let model_line = model_line_event(route.session, &conversation_id);
                     if route.session != SessionMode::Btw {
                         if let Some(card) = recap_event(&reply, &tool_rows) {
                             emit(card);
@@ -1538,8 +1546,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                         if let Some(receipt) = evidence_event(&config_dir, &conversation_id) {
                             emit(receipt);
                         }
-                        if let Some(text) = model_line {
-                            emit(UiEvent::ModelLine { text });
+                        if let Some(line) = model_line {
+                            emit(line);
                         }
                     }
                     let btw = route.session == SessionMode::Btw;
@@ -2585,11 +2593,23 @@ mod tests {
             .expect("json"),
             serde_json::json!({"kind": "modelLine", "text": "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer."})
         );
+        let id = "shell-model-line-test";
         assert_eq!(
-            grokhub_agent::route::local_live::take_line("shell-model-line-test"),
+            model_line_event(SessionMode::Chat, id),
             None,
             "no on-device reply, no line"
         );
+        let line = "Answered by Gemma 4 E2B with its draft, your pick.";
+        grokhub_agent::route::local_live::keep_line(id, line.into());
+        assert_eq!(
+            model_line_event(SessionMode::Chat, id),
+            Some(UiEvent::ModelLine { text: line.into() })
+        );
+        assert_eq!(model_line_event(SessionMode::Chat, id), None, "taken once");
+        // A side answer's line is taken and dropped: it never shows later.
+        grokhub_agent::route::local_live::keep_line(id, line.into());
+        assert_eq!(model_line_event(SessionMode::Btw, id), None);
+        assert_eq!(model_line_event(SessionMode::Chat, id), None);
     }
 
     #[test]
