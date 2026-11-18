@@ -550,10 +550,10 @@ pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, get_started_oauth_error, has_auth, jwt_exp_ms,
     merge_refreshed, next_oauth_poll_secs, oauth_access_live, oauth_error_status,
     parse_device_start, parse_poll_result, parse_token_json, parse_userinfo_profile,
-    realtime_bearer, token_needs_refresh, trusted_profile_photo_url, trusted_xai_url,
-    unix_ms_to_rfc3339, DeviceCodeStart, OAuthProfile, PollResult, PollStatus, XaiOAuthTokens,
-    TOKEN_REFRESH_SKEW_MS, XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY,
-    XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
+    realtime_bearer, realtime_bearer_with, token_needs_refresh, trusted_profile_photo_url,
+    trusted_xai_url, unix_ms_to_rfc3339, DeviceCodeStart, OAuthProfile, PollResult, PollStatus,
+    XaiOAuthTokens, TOKEN_REFRESH_SKEW_MS, XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID,
+    XAI_OAUTH_DISCOVERY, XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
 };
 pub use openclaw::{
     default_openclaw_paths, import_memory_file, is_openclaw_workspace, merge_imported_memory,

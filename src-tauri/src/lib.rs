@@ -697,7 +697,7 @@ fn engine_op(
             }
             notice(grokhub_core::format_consult_reply(question, &done.text))
         }
-        slash::Op::HostStatus => notice(match chat_client() {
+        slash::Op::HostStatus => notice(match chat_client(&state.config_dir) {
             Ok(_) => format!(
                 "{} is ready on this computer",
                 grokhub_core::brand::product_name()
@@ -770,16 +770,25 @@ fn model_client() -> Result<(XaiClient, AuthKind), String> {
     signed_client(oauth::bearer(&oauth::Keychain), credential::load_key, idle)
 }
 
-/// [`model_client`] for a chat turn. With no usable sign-in or key and Local
-/// AI ready, the client has no bearer and the router answers on this
-/// computer, as the cabin's chat does.
-fn chat_client() -> Result<(XaiClient, AuthKind), String> {
+/// [`model_client`] for a chat turn. With no usable sign-in or key and either
+/// Local AI or an added provider ready, the client has no xAI bearer and the
+/// router answers on that route instead.
+fn chat_client(config_dir: &Path) -> Result<(XaiClient, AuthKind), String> {
     match model_client() {
         Ok(found) => Ok(found),
-        Err(_) if grokhub_agent::route::local::available() => Ok((
-            XaiClient::new(String::new(), AuthKind::ApiKey, Duration::from_secs(120)),
-            AuthKind::ApiKey,
-        )),
+        Err(_)
+            if grokhub_agent::route::local::available()
+                || !grokhub_agent::route::providers::usable(
+                    config_dir,
+                    grokhub_agent::route::providers::CALL_DATA,
+                )
+                .is_empty() =>
+        {
+            Ok((
+                XaiClient::new(String::new(), AuthKind::ApiKey, Duration::from_secs(120)),
+                AuthKind::ApiKey,
+            ))
+        }
         Err(err) => Err(err),
     }
 }
@@ -816,7 +825,7 @@ fn route(
     config_dir: &Path,
 ) -> Result<agent::Route, String> {
     grokhub_agent::route::host::sync(config_dir);
-    let (client, auth_kind) = chat_client()?;
+    let (client, auth_kind) = chat_client(config_dir)?;
     Ok(agent::Route {
         client: Arc::new(client),
         auth_kind,
@@ -1148,7 +1157,11 @@ fn quiet_now(config_dir: &Path, now: u64) -> bool {
 /// Push to talk: one recording (a WAV, as base64) to text for the draft.
 /// Nothing is sent to chat; the person presses Send.
 #[tauri::command]
-async fn transcribe(state: State<'_, ShellState>, wav: String) -> Result<String, String> {
+async fn transcribe(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    wav: String,
+) -> Result<String, String> {
     use base64::Engine as _;
     capabilities::needs(capabilities::current().voice, "Voice")?;
     // Base64 is 4 bytes per 3: refuse a body past the cap unread.
@@ -1159,9 +1172,11 @@ async fn transcribe(state: State<'_, ShellState>, wav: String) -> Result<String,
         .decode(wav.trim())
         .map_err(|_| voice::NOT_WAV.to_string())?;
     let config_dir = state.config_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || voice::transcribe(&config_dir, &bytes))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        voice::transcribe_with(Some(&app), &config_dir, &bytes)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -3869,7 +3884,7 @@ fn start_auto_resume(app: AppHandle) {
                         settings.desktop_control,
                         game.as_deref(),
                     );
-                    if waits || chat_client().is_err() {
+                    if waits || chat_client(&dir).is_err() {
                         continue;
                     }
                     if let Err(why) = resume_in_background(&dir, &settings, &card.id, true) {
@@ -3926,7 +3941,7 @@ fn start_card_queue(app: AppHandle) {
                 settings::Approvals::Auto => grokhub_core::wire::PermissionMode::Auto,
                 settings::Approvals::Always => grokhub_core::wire::PermissionMode::AlwaysApprove,
             };
-            let ready = || chat_client().is_ok();
+            let ready = || chat_client(&config_dir).is_ok();
             let new_chat = || card_chat::new_chat_id(now);
             let look = card_chat::Look {
                 now,
@@ -8004,12 +8019,13 @@ pub fn run() {
             {
                 let pinged = app.handle().clone();
                 let watched = app.handle().clone();
+                let proactive_dir = app.state::<ShellState>().config_dir.clone();
                 proactive::start(
                     app.state::<ShellState>().config_dir.clone(),
                     move |title: &str| os_extras::proactive_reminder(&pinged, title),
                     // A running chat or a waiting decision holds Done for you.
                     move || background_busy(&watched),
-                    || chat_client().is_ok(),
+                    move || chat_client(&proactive_dir).is_ok(),
                 );
             }
             // The local indexers read the scopes allowed in Permissions.
@@ -8175,6 +8191,8 @@ pub fn run() {
             voice_live::voice_reply_finish,
             voice_live::voice_reply_hush,
             voice_live::voice_speak,
+            voice_live::get_voice_route,
+            voice_live::set_voice_route,
             answer_permission,
             answer_elicit,
             helper_questions,

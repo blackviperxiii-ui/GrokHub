@@ -29,6 +29,7 @@ import {
 } from "./api";
 import { ModelLibrary, type LibraryFocus } from "./ModelLibrary";
 import { Toggle } from "./Toggle";
+import { VoiceRouteSettings } from "./VoiceRouteSettings";
 import { PRODUCT_NAME } from "./brand";
 
 /** Shown once per file before a model from outside the catalog is picked. */
@@ -719,6 +720,7 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
           {note.text}
         </p>
       )}
+      <VoiceRouteSettings />
       <ModelLibrary focus={focus} />
     </section>
   );

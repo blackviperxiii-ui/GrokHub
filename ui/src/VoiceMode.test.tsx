@@ -1,7 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LiveEvent, Spoken } from "./api";
+import type { LibraryStatus, LiveEvent, Spoken } from "./api";
+
+const libraryState = vi.hoisted(() => ({
+  handler: null as ((status: LibraryStatus) => void) | null,
+  unlisten: vi.fn<() => void>(),
+}));
 
 const api = vi.hoisted(() => ({
   voiceLiveStart: vi.fn<() => Promise<void>>(),
@@ -16,6 +21,10 @@ const api = vi.hoisted(() => ({
   voiceReplyHush: vi.fn<() => Promise<void>>(),
   voiceSpeak: vi.fn<(text: string) => Promise<Spoken>>(),
   transcribe: vi.fn(),
+  onModelLibraryEvent: vi.fn(async (cb: (status: LibraryStatus) => void) => {
+    libraryState.handler = cb;
+    return libraryState.unlisten;
+  }),
 }));
 vi.mock("./api", () => api);
 
@@ -100,6 +109,11 @@ function rig(): Rig {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  libraryState.handler = null;
+  api.onModelLibraryEvent.mockImplementation(async (cb) => {
+    libraryState.handler = cb;
+    return libraryState.unlisten;
+  });
   for (const fn of [
     api.voiceLiveStart,
     api.voiceLiveStop,
@@ -474,5 +488,44 @@ describe("live captions", () => {
     expect(screen.queryByText("“remind me”")).toBeNull();
     rerender(<VoiceCaption text="" state="listening" />);
     expect(document.querySelector(".voice-caption")).toBeNull();
+  });
+});
+
+describe("voice model downloads", () => {
+  it("reports voice model download progress without spamming and unlistens on stop", async () => {
+    const r = rig();
+    await r.session.start();
+    await flush();
+    expect(api.onModelLibraryEvent).toHaveBeenCalledTimes(1);
+
+    libraryState.handler?.({
+      job: { id: "parakeet-tdt-0.6b-v3-int8", line: "Downloading Parakeet: 10%", pct: 10 },
+      queued: 0,
+      message: null,
+      errors: {},
+      running: true,
+    });
+    libraryState.handler?.({
+      job: { id: "parakeet-tdt-0.6b-v3-int8", line: "Downloading Parakeet: 60%", pct: 60 },
+      queued: 0,
+      message: null,
+      errors: {},
+      running: true,
+    });
+    libraryState.handler?.({
+      job: null,
+      queued: 0,
+      message: "Installed Parakeet speech model.",
+      errors: {},
+      running: false,
+    });
+
+    expect(r.notes).toEqual([
+      "Downloading Parakeet: 10%",
+      "Installed Parakeet speech model.",
+    ]);
+
+    await r.session.stop();
+    expect(libraryState.unlisten).toHaveBeenCalledTimes(1);
   });
 });

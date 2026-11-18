@@ -614,6 +614,29 @@ export function voiceSpeak(text: string): Promise<Spoken> {
   return invoke<Spoken>("voice_speak", { text });
 }
 
+export type VoiceRouteMode = "auto" | "local_only" | "pinned";
+export type SpeechSource = "local" | "grok_voice_3";
+
+export interface VoicePin {
+  stt: SpeechSource | null;
+  reply: string | null;
+  tts: SpeechSource | null;
+}
+
+export interface VoiceRouteConfig {
+  mode: VoiceRouteMode;
+  pinned: VoicePin;
+}
+
+/** Shared voice routing preference across STT, reply model and TTS. */
+export function getVoiceRoute(): Promise<VoiceRouteConfig> {
+  return invoke<VoiceRouteConfig>("get_voice_route");
+}
+
+export function setVoiceRoute(config: VoiceRouteConfig): Promise<VoiceRouteConfig> {
+  return invoke<VoiceRouteConfig>("set_voice_route", { config });
+}
+
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */
 export function answerElicit(
   conversationId: string,

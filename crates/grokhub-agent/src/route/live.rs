@@ -613,6 +613,20 @@ impl Decision {
         {
             return super::local::offline_pause_text(&super::local::unavailable_reason());
         }
+        if self.budget_pause.is_none() && rule("voice:no_local") {
+            return "Voice routing is set to Local only, and no on-device model is ready. Download one in Settings → Local AI or switch Voice routing to Auto.".to_string();
+        }
+        if self.budget_pause.is_none()
+            && let Some(target) = self
+                .route
+                .rule_ids
+                .iter()
+                .find_map(|r| r.strip_prefix("voice:pinned_missing:"))
+        {
+            return format!(
+                "Voice reply is pinned to {target}, which isn't ready right now. Check Settings or switch Voice routing to Auto."
+            );
+        }
         self.pause_msg().to_string()
     }
 
@@ -874,6 +888,18 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             Some(model)
         })
     };
+    let voice_reply = super::voice_route::active_reply_pref(config_dir);
+    let sticky = sticky.filter(|m| match &voice_reply {
+        None => true,
+        Some(super::voice_route::ReplyPref::LocalOnly) => super::local::is_local(m),
+        Some(super::voice_route::ReplyPref::Provider(p)) => {
+            if p == super::PROVIDER_XAI {
+                !super::local::is_local(m) && !super::policy::is_new_provider(&reg, m)
+            } else {
+                split_provider_model(m).is_some_and(|(mp, _)| mp == p)
+            }
+        }
+    });
     // PR E: a failed verify on an on-device turn asks the next online pick to escalate.
     if rejects.unwrap_or(0) > 0 && !verify_ok {
         let was_local = sticky.as_deref().is_some_and(super::local::is_local)
@@ -993,6 +1019,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             && !key.is_empty()
             && tune::in_canary(key, super::trial::CANARY))
         .then_some(key),
+        voice_reply,
     };
     let mut route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     if let (Some(a), Some(p), Some((band, own))) = (&ask, &input.pick, chat_band)
@@ -1135,10 +1162,12 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     // switch: neither is a model to wait for.
     if live
         && route.no_route
-        && !route
-            .rule_ids
-            .iter()
-            .any(|r| r == "local:paused" || r == "offline:switch")
+        && !route.rule_ids.iter().any(|r| {
+            r == "local:paused"
+                || r == "offline:switch"
+                || r == "voice:no_local"
+                || r.starts_with("voice:pinned_missing:")
+        })
     {
         let failed = reg
             .get(call.model)
@@ -1949,6 +1978,7 @@ pub fn stream_routed(
     let mut provider_failed: Option<(String, ClientError, Duration)> = None;
     // Grok took a turn a provider failed: the turn is logged as Grok's.
     let mut grok_took_turn = false;
+    let allow_cross_provider_failover = super::voice_route::active_reply_pref(&dir).is_none();
     let out = if on_device {
         // Missing Grok creds already chose the device (`local:no_keys`): say so.
         if !class.trim().starts_with("background:") && super::local::fallback_active() {
@@ -1995,7 +2025,7 @@ pub fn stream_routed(
             &mut |ev: StreamEvent| super::adult::guard(&mut reply, &mut *sink, ev),
         );
         match out {
-            Err(err) if provider_fallible(&err) => {
+            Err(err) if allow_cross_provider_failover && provider_fallible(&err) => {
                 // The provider hit a limit, ran out of credit or fell over:
                 // cool it (credit and a refused key for the session) so the
                 // next pick, the resumed step included, skips it, and Grok
@@ -2043,7 +2073,9 @@ pub fn stream_routed(
         // failing that this computer's model (below). Only when xAI showed
         // nothing yet.
         let stand_in = match &out {
-            Err(err) if !streamed && xai_cant_answer(err) => outage_stand_in(&dir, &call, now),
+            Err(err) if allow_cross_provider_failover && !streamed && xai_cant_answer(err) => {
+                outage_stand_in(&dir, &call, now)
+            }
             _ => None,
         };
         match out {
@@ -2130,7 +2162,8 @@ pub fn stream_routed(
             // provider could take it. Only when xAI showed nothing yet: a
             // half-streamed xAI answer is never finished by another model.
             Err(err)
-                if !streamed
+                if allow_cross_provider_failover
+                    && !streamed
                     && !matches!(err, ClientError::Cancelled)
                     && super::local::available()
                     && xai_falls_to_local(&err) =>
