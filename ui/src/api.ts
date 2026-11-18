@@ -538,9 +538,18 @@ export async function onFileDrop(
   });
 }
 
-/** Push to talk: one WAV (base64) to text for the draft. Never sends. */
-export function transcribe(wav: string): Promise<string> {
-  return invoke<string>("transcribe", { wav });
+/** What a recording said, and which engine heard it and why: `line` is
+ * set only when it was heard on this computer, or by xAI in a chat that runs
+ * here; a chat that plainly runs online gets none. */
+export interface HeardWords {
+  words: string;
+  line: string | null;
+}
+
+/** Push to talk: one WAV (base64) to text for the draft, heard with the
+ * engine `conversationId` needs. Never sends. */
+export function transcribe(wav: string, conversationId?: string | null): Promise<HeardWords> {
+  return invoke<HeardWords>("transcribe", { wav, conversationId: conversationId ?? null });
 }
 
 /** What the open mic heard, as voice mode's backend reports it. */
@@ -557,11 +566,18 @@ export type LiveEvent =
 export interface Spoken {
   mime: string;
   audio: string;
+  /** Which voice spoke and why; none for a chat that plainly runs online. */
+  line?: string | null;
 }
 
-/** Voice mode on: one open mic, listening for the first turn. */
-export function voiceLiveStart(): Promise<void> {
-  return invoke<void>("voice_live_start");
+/** Voice mode on in `conversationId`: one open mic, listening for the first turn. */
+export function voiceLiveStart(conversationId?: string | null): Promise<void> {
+  return invoke<void>("voice_live_start", { conversationId: conversationId ?? null });
+}
+
+/** Voice mode moved to `conversationId`: the mic follows that chat's need. */
+export function voiceLiveChat(conversationId?: string | null): Promise<void> {
+  return invoke<void>("voice_live_chat", { conversationId: conversationId ?? null });
 }
 
 /** Voice mode off; drops any turn or reply under way. */
@@ -589,9 +605,10 @@ export function voiceLiveFinish(): Promise<void> {
   return invoke<void>("voice_live_finish");
 }
 
-/** The finished turn as text; empty when nothing was said. */
-export function voiceLiveHear(): Promise<string> {
-  return invoke<string>("voice_live_hear");
+/** The finished turn as text (empty when nothing was said), heard with the
+ * engine `conversationId` needs. */
+export function voiceLiveHear(conversationId?: string | null): Promise<HeardWords> {
+  return invoke<HeardWords>("voice_live_hear", { conversationId: conversationId ?? null });
 }
 
 /** More of the reply; the pieces ready to speak. */
@@ -609,9 +626,10 @@ export function voiceReplyHush(): Promise<void> {
   return invoke<void>("voice_reply_hush");
 }
 
-/** One piece of the reply as speech, in the chat's voice. */
-export function voiceSpeak(text: string): Promise<Spoken> {
-  return invoke<Spoken>("voice_speak", { text });
+/** One piece of the reply as speech, in the chat's voice, with the engine
+ * `conversationId` needs. */
+export function voiceSpeak(text: string, conversationId?: string | null): Promise<Spoken> {
+  return invoke<Spoken>("voice_speak", { text, conversationId: conversationId ?? null });
 }
 
 export type VoiceRouteMode = "auto" | "local_only" | "pinned";

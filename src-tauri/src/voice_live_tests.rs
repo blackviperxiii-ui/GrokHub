@@ -743,7 +743,7 @@ fn a_start_just_before_a_reply_ends_still_reaches_the_stream() {
 static TARGETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// A key for the first listen only, as if it was cleared after.
-fn key_once() -> Option<crate::stt_stream::StreamTarget> {
+fn key_once(_: &std::path::Path, _: &str) -> Option<crate::stt_stream::StreamTarget> {
     (TARGETS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0).then(|| {
         crate::stt_stream::StreamTarget {
             url: "ws://127.0.0.1:9/v1/stt".into(),
@@ -754,7 +754,11 @@ fn key_once() -> Option<crate::stt_stream::StreamTarget> {
 
 #[test]
 fn each_listen_reads_the_key_as_it_is_then() {
-    let mut live = Live::new(Some(opener(temp_dir("key-once"), key_once)));
+    let mut live = Live::new(Some(opener(
+        temp_dir("key-once"),
+        std::sync::Arc::default(),
+        key_once,
+    )));
     assert!(live.stt.is_some(), "the first listen streams");
     live.listen(false);
     assert!(live.stt.is_none(), "a cleared key opens nothing");
@@ -963,4 +967,185 @@ fn local_only_and_offline_modes_fail_over_cleanly_in_tts() {
         grokhub_core::now_ms()
     ));
     voice_route::clear_failures();
+}
+
+/// A stream for any chat but `here-1`, as the router plans it.
+fn stream_unless_here(_: &std::path::Path, chat: &str) -> Option<crate::stt_stream::StreamTarget> {
+    (chat != "here-1").then(|| crate::stt_stream::StreamTarget {
+        url: "ws://127.0.0.1:9/v1/stt".into(),
+        bearer: "sk-abcdefghijklmnopqrstuv".into(),
+    })
+}
+
+#[test]
+fn the_opener_asks_for_the_chat_voice_mode_is_in_now() {
+    let chat = std::sync::Arc::new(Mutex::new("here-1".to_string()));
+    let mut open = opener(temp_dir("opener-chat"), chat.clone(), stream_unless_here);
+    // A chat that runs here: no stream, so the open mic stays here.
+    assert!(open().is_none());
+    // Moved to a cloud chat: the next listen streams.
+    *chat.lock().unwrap() = "cloud-1".to_string();
+    assert!(open().is_some());
+}
+
+#[test]
+fn a_stream_opened_for_the_chat_before_a_move_here_is_never_attached() {
+    let (mut live, _streams) = streaming();
+    assert!(live.restart(false));
+    let mut open = live.lend_opener().expect("the opener");
+    let link = open();
+    assert!(link.is_some());
+    // Voice mode moved to a chat that runs here while the stream opened.
+    live.set_chat("c2", false);
+    assert_eq!(*live.chat.lock().unwrap(), "c2");
+    live.take_back(open, link);
+    assert!(live.stt.is_none(), "it was opened for the chat before");
+    assert!(live.open.is_some(), "the opener came back");
+
+    // A move to a chat that may stream, before lending, still attaches.
+    live.set_chat("c3", true);
+    assert!(live.restart(false));
+    let mut open = live.lend_opener().expect("the opener");
+    let link = open();
+    live.take_back(open, link);
+    assert!(live.stt.is_some());
+}
+
+#[test]
+fn a_move_to_a_chat_that_runs_here_drops_its_open_stream() {
+    let (mut live, _streams) = streaming();
+    assert!(live.stt.is_some(), "the first listen streams");
+    live.set_chat("c2", false);
+    assert!(live.stt.is_none());
+}
+
+#[test]
+fn a_chat_that_runs_here_speaks_on_device_and_never_tries_xai() {
+    let config = temp_dir("tts-here");
+    let models = fake_voice(&config);
+    voice_route::clear_failures();
+    let env = VoiceEnv {
+        chat_here: true,
+        has_xai_auth: true,
+        local_enabled: true,
+        local_ai_capable: true,
+        local_ready: true,
+        ..Default::default()
+    };
+    fn unreachable_target() -> Option<TtsTarget> {
+        Some(TtsTarget {
+            url: "http://127.0.0.1:1/v1/tts".into(),
+            bearer: "sk-abcdefghijklmnopqrstuv".into(),
+        })
+    }
+    let out = speak_with_env(
+        None,
+        &VoiceRouteConfig::default(),
+        &env,
+        &config,
+        &models,
+        "ara",
+        "Hello.",
+        hushes(),
+        unreachable_target,
+    );
+    // The on-device voice is an empty file here, and nothing falls to xAI.
+    assert_eq!(out, Err("The on-device voice didn't start.".to_string()));
+    assert!(!voice_route::xai_in_cooldown(
+        StageKind::Tts,
+        grokhub_core::now_ms()
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_piece_spoken_on_device_names_the_voice_and_why() {
+    use std::os::unix::fs::PermissionsExt;
+    let config = temp_dir("tts-here-line");
+    let models = fake_voice(&config);
+    // A speaking program that writes a short WAV where it is told to.
+    std::fs::write(
+        ve::tts_path(&config),
+        "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --output-filename=*) out=\"${a#--output-filename=}\";; esac; done\nprintf 'RIFF0000WAVEfmt ' > \"$out\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        ve::tts_path(&config),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let env = VoiceEnv {
+        chat_here: true,
+        has_xai_auth: true,
+        local_enabled: true,
+        local_ai_capable: true,
+        local_ready: true,
+        ..Default::default()
+    };
+    fn no_target() -> Option<TtsTarget> {
+        None
+    }
+    let out = speak_with_env(
+        None,
+        &VoiceRouteConfig::default(),
+        &env,
+        &config,
+        &models,
+        "ara",
+        "Hello.",
+        hushes(),
+        no_target,
+    )
+    .expect("spoken here");
+    assert_eq!(out.mime, "audio/wav");
+    assert_eq!(
+        out.line.as_deref(),
+        Some("Spoken on this computer with Kokoro text to speech: this chat runs here.")
+    );
+}
+
+#[test]
+fn a_move_here_clears_the_caption_its_dropped_stream_showed() {
+    let (mut live, streams) = streaming();
+    assert!(send(&mut live, &tone(1500)).contains(&LiveEvent::Started));
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Caption("remind me to".into()))
+        .expect("news");
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: "remind me to".into()
+        }]
+    );
+    live.set_chat("here-2", false);
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: String::new()
+        }]
+    );
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
+}
+
+#[test]
+fn a_stream_lent_by_an_earlier_session_never_reaches_a_new_one() {
+    let (old, _streams) = streaming();
+    let cell = Mutex::new(Some(old));
+    let (epoch, mut open) = with_in(&cell, |live| {
+        assert!(live.restart(false));
+        live.lend_opener().map(|open| (live.epoch, open))
+    })
+    .expect("voice mode on")
+    .expect("the opener");
+    let link = open();
+    assert!(link.is_some());
+    // Voice mode off and on again, in a chat that runs here: no opener.
+    *cell.lock().unwrap() = Some(Live::new(None));
+    with_in(&cell, |live| {
+        assert!(live.wants_stream());
+        live.take_back_from(epoch, open, link);
+        assert!(live.stt.is_none(), "the old session's stream goes");
+        assert!(live.open.is_none(), "and so does its opener");
+    })
+    .expect("voice mode on");
 }

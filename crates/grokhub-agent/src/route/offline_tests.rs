@@ -526,24 +526,33 @@ fn a_local_answer_streams_to_the_chat_like_any_other() {
     };
     let _mark = super::live::StepOnDeviceForTests::set(false);
     let mut shown = String::new();
+    let mut here_at_first_piece = None;
     let out = super::live::stream_routed(
         &Never,
         &req,
         &crate::client::CancelToken::new(),
         &mut |ev| {
             if let StreamEvent::TextDelta(t) = ev {
+                // Written before the model call, so the first spoken piece
+                // already uses this computer's voice.
+                here_at_first_piece
+                    .get_or_insert_with(|| super::local_live::runs_here("local-stream-1"));
                 shown.push_str(&t);
             }
         },
         "chat:default",
     )
     .expect("the device answers");
+    assert_eq!(here_at_first_piece, Some(true));
     assert_eq!(out.text, "hello offline");
     // The run loop shows only streamed text: a local answer that is returned
     // but never streamed is saved to the session and never seen in the chat.
     assert_eq!(shown, "hello offline");
     // The step ran here, so the tools it calls (a picture) run here too.
     assert!(super::live::step_on_device());
+    // And so does the chat's voice: the record says this chat runs here.
+    assert!(super::local_live::runs_here("local-stream-1"));
+    assert!(!super::local_live::must_stay_here("local-stream-1"));
     // The app's own call on the device leaves the chat step's mark alone.
     let _cloud_step = super::live::StepOnDeviceForTests::set(false);
     let summary = ResponsesRequest {
@@ -559,5 +568,7 @@ fn a_local_answer_streams_to_the_chat_like_any_other() {
     )
     .expect("the device sums it up");
     assert!(!super::live::step_on_device());
+    // The app's own call writes no record: that chat still reads as cloud.
+    assert!(!super::local_live::runs_here("local-stream-2"));
     let _ = std::fs::remove_dir_all(dir);
 }

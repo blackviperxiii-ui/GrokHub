@@ -336,6 +336,45 @@ pub fn take_line(conversation_id: &str) -> Option<String> {
     LAST_LINE.lock().ok()?.remove(conversation_id)
 }
 
+/// Where each chat's newest step ran, written when the step is decided so
+/// the voice picks its engine before the first spoken piece. In memory only:
+/// a chat with no step since launch reads as online.
+static RUNS_HERE: Mutex<BTreeMap<String, Here>> = Mutex::new(BTreeMap::new());
+
+#[derive(Debug, Clone, Copy, Default)]
+struct Here {
+    here: bool,
+    must_stay: bool,
+}
+
+/// `conversation_id`'s newest step runs on this computer (`here`), and the
+/// chat must stay here (`must_stay`: an 18+ voice).
+pub fn note_step_here(conversation_id: &str, here: bool, must_stay: bool) {
+    if let Ok(mut runs) = RUNS_HERE.lock() {
+        runs.insert(conversation_id.to_string(), Here { here, must_stay });
+    }
+}
+
+fn here_of(conversation_id: &str) -> Here {
+    RUNS_HERE
+        .lock()
+        .ok()
+        .and_then(|runs| runs.get(conversation_id).copied())
+        .unwrap_or_default()
+}
+
+/// `conversation_id`'s newest step ran on this computer. An unknown chat
+/// reads as false.
+pub fn runs_here(conversation_id: &str) -> bool {
+    here_of(conversation_id).here
+}
+
+/// `conversation_id` must stay on this computer (its newest step carried an
+/// 18+ voice). An unknown chat reads as false.
+pub fn must_stay_here(conversation_id: &str) -> bool {
+    here_of(conversation_id).must_stay
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,5 +770,20 @@ mod tests {
         }
         forget_line(id);
         assert_eq!(take_line(id), None);
+    }
+
+    #[test]
+    fn a_chat_reads_as_here_only_after_a_step_here() {
+        assert!(!runs_here("voice-c1"));
+        assert!(!must_stay_here("voice-c1"));
+        note_step_here("voice-c1", true, false);
+        assert!(runs_here("voice-c1"));
+        assert!(!must_stay_here("voice-c1"));
+        assert!(!runs_here("voice-c2"));
+        note_step_here("voice-c2", true, true);
+        assert!(must_stay_here("voice-c2"));
+        note_step_here("voice-c1", false, false);
+        assert!(!runs_here("voice-c1"));
+        assert!(runs_here("voice-c2"));
     }
 }

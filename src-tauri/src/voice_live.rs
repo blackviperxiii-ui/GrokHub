@@ -7,15 +7,16 @@
 //! the mic ends it the words are usually already there. A turn the stream
 //! can't hear goes up once as a recording ([`crate::voice::transcribe`]). The reply's text streams
 //! back through [`ReplyVoice`], which cuts it into pieces; each piece is
-//! spoken with xAI speech in the chat's voice, or with Kokoro on this PC when
-//! there is no API key and the on-device voice is downloaded. The page plays
-//! the pieces in order and stops them when someone talks over them.
+//! spoken by the engine the shared voice router picks for its chat: Kokoro
+//! on this PC for a chat that runs here (no stream to xAI either), else xAI
+//! speech in the chat's voice. The page plays the pieces in order and stops
+//! them when someone talks over them.
 
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use grokhub_agent::harness as hx;
@@ -109,7 +110,23 @@ pub struct Live {
     /// The stream closed while nobody talked and the listen still waits:
     /// open a new one.
     reopen: bool,
+    /// The chat voice mode is in now; the opener reads it for each stream.
+    chat: Arc<Mutex<String>>,
+    /// Bumped each time voice mode moves to a chat that may not stream.
+    moved: u64,
+    /// [`Live::moved`] when the opener was lent: a stream it opens after a
+    /// move like that was opened for the chat before it, and goes.
+    lent_at: u64,
+    /// This session among all voice sessions since launch: an opener lent
+    /// by an earlier one never comes back into this one, nor its stream.
+    epoch: u64,
+    /// A move dropped the stream while its caption showed: the next push
+    /// clears it.
+    uncaption: bool,
 }
+
+/// The last [`Live::epoch`] handed out.
+static EPOCHS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// How much audio before a start the stream gets: the detector's pre-roll
 /// plus its longest onset window (talking over the end of a reply).
@@ -117,15 +134,37 @@ const RECENT_MS: u32 =
     grokhub_core::voice_turn::PRE_ROLL_MS + grokhub_core::voice_turn::BARGE_IN_WINDOW_MS;
 
 impl Live {
-    /// A session listening for its first turn. `open` gives each listen
-    /// not over a reply its stream; without it every turn is uploaded.
+    /// [`Live::new_for`] in no chat, for tests.
+    #[cfg(test)]
     pub fn new(open: Option<Opener>) -> Self {
+        Self::new_for(open, Arc::default())
+    }
+
+    /// A session in `chat` listening for its first turn. `open` gives each
+    /// listen not over a reply its stream; without it every turn is
+    /// uploaded. The opener shares `chat`, set before the first listen, so
+    /// its stream already follows the chat's need.
+    pub fn new_for(open: Option<Opener>, chat: Arc<Mutex<String>>) -> Self {
         let mut live = Self {
             open,
+            chat,
+            epoch: EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
             ..Self::default()
         };
         live.listen(false);
         live
+    }
+
+    /// Voice mode moved to `id`. A stream a chat that runs here may not have
+    /// goes now, so no more of the turn reaches xAI. One the opener is
+    /// opening now, lent out, goes too when it comes back.
+    pub fn set_chat(&mut self, id: &str, stream_ok: bool) {
+        *self.chat.lock().unwrap_or_else(|e| e.into_inner()) = id.to_string();
+        if !stream_ok {
+            self.stt = None;
+            self.moved += 1;
+            self.uncaption |= std::mem::take(&mut self.captioned);
+        }
     }
 
     /// One block of 16 kHz mono s16le from the page.
@@ -198,10 +237,10 @@ impl Live {
             events.push(LiveEvent::Turn {
                 ms: ms_of(self.heard),
             });
-        } else if streaming && self.stt.is_none() {
-            // The stream went away mid-listen: its caption would stand still
-            // while they talk on, so it goes.
-            if std::mem::take(&mut self.captioned) {
+        } else if (streaming && self.stt.is_none()) || self.uncaption {
+            // The stream went away mid-listen (or a move dropped it): its
+            // caption would stand still while they talk on, so it goes.
+            if std::mem::take(&mut self.captioned) | std::mem::take(&mut self.uncaption) {
                 events.push(LiveEvent::Caption {
                     text: String::new(),
                 });
@@ -345,19 +384,30 @@ impl Live {
     /// The opener, lent out so a stream opens without the session locked
     /// (the key comes from the OS keychain).
     fn lend_opener(&mut self) -> Option<Opener> {
+        self.lent_at = self.moved;
         self.open.take()
     }
 
     /// The opener back, and its stream if the listen on now still wants
     /// one. A stream nothing was sent to yet is as good for a later listen
     /// (one that asked while the opener was lent) as for the one it was
-    /// opened for.
+    /// opened for. One opened for a chat voice mode has since left for a
+    /// chat that may not stream is never used.
     fn take_back(&mut self, open: Opener, link: Option<SttLink>) {
         if self.open.is_none() {
             self.open = Some(open);
         }
-        if self.wants_stream() {
+        if self.wants_stream() && self.moved == self.lent_at {
             self.stt = link;
+        }
+    }
+
+    /// [`Live::take_back`], when this is the session (`epoch`) that lent
+    /// the opener. One voice mode turned off and on meanwhile, maybe in a
+    /// chat that runs here, gets neither the old opener nor its stream.
+    fn take_back_from(&mut self, epoch: u64, open: Opener, link: Option<SttLink>) {
+        if self.epoch == epoch {
+            self.take_back(open, link);
         }
     }
 
@@ -416,6 +466,9 @@ pub struct Spoken {
     pub mime: &'static str,
     /// Base64 of the audio.
     pub audio: String,
+    /// The voice that spoke it and why, when that isn't plain xAI for a
+    /// cloud chat.
+    pub line: Option<String>,
 }
 
 /// Where speech goes and the bearer it carries.
@@ -440,7 +493,9 @@ fn tts_target() -> Option<TtsTarget> {
     })
 }
 
-fn tts_env(config_dir: &Path, models: &Path) -> VoiceEnv {
+/// The router's facts for speaking in `chat` (empty: no chat, reads as online).
+fn tts_env(config_dir: &Path, models: &Path, chat: &str) -> VoiceEnv {
+    let need = crate::voice::chat_need(config_dir, chat);
     grokhub_agent::route::host::sync(config_dir);
     grokhub_agent::route::connectivity::sync_from_core();
     VoiceEnv {
@@ -456,15 +511,19 @@ fn tts_env(config_dir: &Path, models: &Path) -> VoiceEnv {
         local_warm: grokhub_agent::route::local::warm_runtime().is_some(),
         has_xai_auth: crate::voice::stt_bearer().is_ok(),
         xai_recently_failed: voice_route::xai_in_cooldown(StageKind::Tts, grokhub_core::now_ms()),
+        chat_here: need.here,
+        chat_must_stay: need.must_stay,
     }
 }
 
-/// Speak `text` in `voice` via the shared voice router, starting automatic
-/// local voice download via `app` if local assets are needed and missing.
+/// Speak `text` from `chat` in `voice` via the shared voice router, starting
+/// automatic local voice download via `app` if local assets are needed and
+/// missing.
 pub fn speak_with(
     app: Option<&tauri::AppHandle>,
     config_dir: &Path,
     models_dir: &Path,
+    chat: &str,
     voice: &str,
     text: &str,
     asked: u64,
@@ -474,7 +533,7 @@ pub fn speak_with(
         return Err("Nothing to speak.".into());
     }
     let cfg = voice_route::read(config_dir);
-    let env = tts_env(config_dir, models_dir);
+    let env = tts_env(config_dir, models_dir, chat);
     speak_with_env(
         app, &cfg, &env, config_dir, models_dir, voice, text, asked, tts_target,
     )
@@ -505,15 +564,33 @@ fn speak_with_env(
             Err("Downloading the on-device voice (Kokoro). Spoken replies will start once it finishes.".into())
         }
         StagePlan::Try(sources) => {
+            if let Some(app) = app.filter(|_| voice_route::wants_download(cfg, StageKind::Tts, env))
+            {
+                // xAI stands in for a chat that runs here only while this runs.
+                let _ = crate::model_library::download(
+                    app.clone(),
+                    config_dir.to_path_buf(),
+                    vec![TTS_MODEL_ID.to_string()],
+                );
+            }
             let mut last_err: Option<String> = None;
             for (idx, source) in sources.iter().enumerate() {
+                let fell_back = last_err.is_some();
+                let line = |model: &str| {
+                    voice_route::stage_line(StageKind::Tts, cfg, env, *source, fell_back, model)
+                };
                 match source {
                     SpeechSource::GrokVoice3 => {
                         match resolve_target()
                             .ok_or_else(|| NO_VOICE.to_string())
                             .and_then(|to| speak_xai(config_dir, &to, voice, text))
                         {
-                            Ok(spoken) => return Ok(spoken),
+                            Ok(spoken) => {
+                                return Ok(Spoken {
+                                    line: line(""),
+                                    ..spoken
+                                })
+                            }
                             Err(err) => {
                                 if !env.loopback_override
                                     && err != *grokhub_core::offline::OFFLINE_MSG
@@ -547,7 +624,13 @@ fn speak_with_env(
                     }
                     SpeechSource::Local => {
                         match speak_on_device(config_dir, models_dir, voice, text, asked) {
-                            Some(Ok(spoken)) => return Ok(spoken),
+                            Some(Ok(spoken)) => {
+                                let model = ve::voice_model(models_dir).map_or("", |m| m.name);
+                                return Ok(Spoken {
+                                    line: line(model),
+                                    ..spoken
+                                });
+                            }
                             Some(Err(err)) if err == HUSHED => return Err(err),
                             Some(Err(err)) => last_err = Some(err),
                             None => {}
@@ -606,6 +689,7 @@ fn speak_xai(config_dir: &Path, to: &TtsTarget, voice: &str, text: &str) -> Resu
     Ok(Spoken {
         mime: "audio/mpeg",
         audio: base64::engine::general_purpose::STANDARD.encode(audio),
+        line: None,
     })
 }
 
@@ -686,6 +770,7 @@ fn speak_on_device(
     Some(done.map(|bytes| Spoken {
         mime: "audio/wav",
         audio: base64::engine::general_purpose::STANDARD.encode(bytes),
+        line: None,
     }))
 }
 
@@ -738,58 +823,79 @@ fn models_dir(config_dir: &Path) -> std::path::PathBuf {
     crate::local_ai::models_dir().unwrap_or_else(|| config_dir.join("models"))
 }
 
-/// Voice mode on: the mic is listening for the first turn, with a stream
-/// when the shared voice router puts Grok Voice 3 first.
-/// Each listen's stream re-checks auth and routing: a key or mode changed
-/// while voice mode is on takes effect on the next listen.
-#[cfg(test)]
+/// Each listen's stream, for the chat voice mode is in then, when `target`
+/// (the shared voice router) puts Grok Voice 3 first for it: a chat that runs
+/// here keeps the open mic on this computer. Each listen re-checks auth and
+/// routing: a key or mode changed while voice mode is on takes effect on the
+/// next listen.
 fn opener(
     dir: std::path::PathBuf,
-    target: fn() -> Option<crate::stt_stream::StreamTarget>,
+    chat: Arc<Mutex<String>>,
+    target: fn(&Path, &str) -> Option<crate::stt_stream::StreamTarget>,
 ) -> Opener {
-    Box::new(move || target().and_then(|to| crate::stt_stream::open(&dir, &to)))
-}
-
-fn opener_for(dir: std::path::PathBuf) -> Opener {
     Box::new(move || {
-        crate::stt_stream::target_for(&dir).and_then(|to| crate::stt_stream::open(&dir, &to))
+        let id = chat.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        target(&dir, &id).and_then(|to| crate::stt_stream::open(&dir, &to))
     })
 }
 
 /// Off the main thread: reads config/keychain, marks the voice session active
 /// for reply routing, starts any needed local voice asset download, and opens
-/// the first STT stream if Grok Voice 3 is planned first.
+/// the first STT stream if Grok Voice 3 is planned first for
+/// `conversation_id`.
 #[tauri::command]
 pub(crate) async fn voice_live_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::ShellState>,
+    conversation_id: Option<String>,
 ) -> Result<(), String> {
     crate::capabilities::needs(crate::capabilities::current().voice, "Voice")?;
     let dir = state.config_dir.clone();
+    let id = conversation_id.unwrap_or_default();
     crate::off_main(move || {
         voice_route::set_session_active(true);
         let cfg = voice_route::read(&dir);
         let models = models_dir(&dir);
         let mut missing = Vec::new();
-        if matches!(
-            voice_route::plan_stage(&cfg, StageKind::Stt, &crate::voice::stt_env(&dir, &models)),
-            StagePlan::DownloadLocal
+        // Also while xAI stands in for a chat that runs here.
+        if voice_route::wants_download(
+            &cfg,
+            StageKind::Stt,
+            &crate::voice::stt_env(&dir, &models, &id),
         ) {
             missing.push(crate::voice::STT_MODEL_ID.to_string());
         }
-        if matches!(
-            voice_route::plan_stage(&cfg, StageKind::Tts, &tts_env(&dir, &models)),
-            StagePlan::DownloadLocal
-        ) {
+        if voice_route::wants_download(&cfg, StageKind::Tts, &tts_env(&dir, &models, &id)) {
             missing.push(TTS_MODEL_ID.to_string());
         }
         if !missing.is_empty() {
             let _ = crate::model_library::download(app, dir.clone(), missing);
         }
-        let live = Live::new(Some(opener_for(dir)));
+        let chat = Arc::new(Mutex::new(id));
+        let open = opener(dir, chat.clone(), crate::stt_stream::target_for);
+        let live = Live::new_for(Some(open), chat);
         *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(live);
     })
     .await
+}
+
+/// Voice mode moved to `conversation_id`: later streams follow its need, and
+/// one a chat that runs here may not have goes now.
+#[tauri::command]
+pub(crate) async fn voice_live_chat(
+    state: tauri::State<'_, crate::ShellState>,
+    conversation_id: Option<String>,
+) -> Result<(), String> {
+    let id = conversation_id.unwrap_or_default();
+    let dir = state.config_dir.clone();
+    crate::off_main(move || {
+        // Only the chat's own need, no keychain read: a stream it may not
+        // have goes before more of the turn reaches xAI. The next listen
+        // plans the rest.
+        let stream_ok = crate::voice::chat_may_stream(&dir, &id);
+        with(|live| live.set_chat(&id, stream_ok))
+    })
+    .await?
 }
 
 /// Voice mode off: any turn under way is dropped.
@@ -826,15 +932,16 @@ fn then_open(
 ) -> Result<(), String> {
     let lent = with_in(cell, |live| {
         if change(live) {
-            live.lend_opener()
+            live.lend_opener().map(|open| (live.epoch, open))
         } else {
             None
         }
     })?;
-    if let Some(mut open) = lent {
+    if let Some((epoch, mut open)) = lent {
         let link = open();
-        // Voice mode turned off meanwhile: the stream just goes.
-        let _ = with_in(cell, |live| live.take_back(open, link));
+        // Voice mode turned off meanwhile (and maybe on again): the stream
+        // just goes.
+        let _ = with_in(cell, |live| live.take_back_from(epoch, open, link));
     }
     Ok(())
 }
@@ -856,17 +963,29 @@ pub(crate) fn voice_live_finish() -> Result<(), String> {
     with(Live::finish)
 }
 
-/// The last turn's words (empty: listen again).
+/// The last turn's words in `conversation_id` (empty: listen again), with
+/// the line naming the engine that heard them. Streamed words carry none:
+/// streams only open for chats that run online.
 #[tauri::command]
 pub(crate) async fn voice_live_hear(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::ShellState>,
-) -> Result<String, String> {
+    conversation_id: Option<String>,
+) -> Result<crate::voice::Transcript, String> {
     let turn = with(Live::take_turn)?;
     let dir = state.config_dir.clone();
+    let chat = conversation_id.unwrap_or_default();
     crate::off_main(move || {
-        hear(turn, |wav| {
-            crate::voice::transcribe_with(Some(&app), &dir, wav)
+        let line = std::cell::Cell::new(None);
+        let words = hear(turn, |wav| {
+            crate::voice::transcribe_with(Some(&app), &dir, &chat, wav).map(|heard| {
+                line.set(heard.line);
+                heard.words
+            })
+        })?;
+        Ok(crate::voice::Transcript {
+            words,
+            line: line.take(),
         })
     })
     .await?
@@ -888,20 +1007,34 @@ pub(crate) fn voice_reply_hush() -> Result<(), String> {
     with(Live::reply_hush)
 }
 
-/// One piece of a reply as speech, in the chat's voice.
+/// One piece of a reply from `conversation_id` as speech, in the chat's
+/// voice: a reply that ends after a chat switch is still spoken by its own
+/// chat's need.
 #[tauri::command]
 pub(crate) async fn voice_speak(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::ShellState>,
     text: String,
+    conversation_id: Option<String>,
 ) -> Result<Spoken, String> {
     crate::capabilities::needs(crate::capabilities::current().voice, "Voice")?;
     let dir = state.config_dir.clone();
     let voice = crate::personality::speech_voice(&dir, &crate::current(&state));
     // Taken as the page asks, so a hush that comes later drops this piece.
     let asked = hushes();
-    crate::off_main(move || speak_with(Some(&app), &dir, &models_dir(&dir), voice, &text, asked))
-        .await?
+    let chat = conversation_id.unwrap_or_default();
+    crate::off_main(move || {
+        speak_with(
+            Some(&app),
+            &dir,
+            &models_dir(&dir),
+            &chat,
+            voice,
+            &text,
+            asked,
+        )
+    })
+    .await?
 }
 
 #[tauri::command]

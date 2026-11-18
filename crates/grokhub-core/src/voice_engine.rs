@@ -188,17 +188,36 @@ pub fn claim_speak_file(dir: &Path) -> std::io::Result<PathBuf> {
     claim_in(dir, &NEXT)
 }
 
+/// A new WAV file in `dir` for one clip to hear, open for writing. Only this
+/// user can read it (mode 0600 on unix): it holds the person's voice. Clips
+/// are heard one at a time, but each still gets its own fresh name.
+pub fn claim_hear_file(dir: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    claim_named(dir, "grokhub-hear", &NEXT)
+}
+
 fn claim_in(dir: &Path, next: &std::sync::atomic::AtomicU64) -> std::io::Result<PathBuf> {
+    claim_named(dir, "grokhub-speak", next).map(|(path, _)| path)
+}
+
+fn claim_named(
+    dir: &Path,
+    prefix: &str,
+    next: &std::sync::atomic::AtomicU64,
+) -> std::io::Result<(PathBuf, std::fs::File)> {
     let mut last = None;
     for _ in 0..64 {
         let n = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = dir.join(format!("grokhub-speak-{}-{n}.wav", std::process::id()));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
+        let path = dir.join(format!("{prefix}-{}-{n}.wav", std::process::id()));
+        let mut open = std::fs::OpenOptions::new();
+        open.write(true).create_new(true);
+        #[cfg(unix)]
         {
-            Ok(_) => return Ok(path),
+            use std::os::unix::fs::OpenOptionsExt;
+            open.mode(0o600);
+        }
+        match open.open(&path) {
+            Ok(file) => return Ok((path, file)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
             Err(e) => return Err(e),
         }
@@ -326,6 +345,32 @@ mod tests {
             Err(std::io::ErrorKind::NotFound)
         );
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn a_clip_to_hear_gets_a_fresh_file_only_this_user_can_read() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-claim-hear-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (first, _) = claim_hear_file(&dir).unwrap();
+        let (second, _) = claim_hear_file(&dir).unwrap();
+        assert_ne!(first, second);
+        let name = first.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with(&format!("grokhub-hear-{}-", std::process::id())),
+            "{name}"
+        );
+        assert!(name.ends_with(".wav"), "{name}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&first).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

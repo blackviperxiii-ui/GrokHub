@@ -1761,6 +1761,14 @@ pub fn in_helper() -> bool {
     HELPER.with(std::cell::Cell::get)
 }
 
+/// Note where `conversation_id`'s step runs, for the voice: the app's own
+/// background calls and a helper's steps leave the chat's record alone.
+fn note_here(class: &str, conversation_id: &str, here: bool, must_stay: bool) {
+    if !class.trim().starts_with("background:") && !in_helper() {
+        super::local_live::note_step_here(conversation_id, here, must_stay);
+    }
+}
+
 /// The newest user text in a request (difficulty only; never stored), without
 /// the `<cabin-volatile>` notes, so style or playbook words never steer routing.
 /// Messages the app itself writes in the user's place (a cabin note, a
@@ -1863,6 +1871,8 @@ pub fn stream_routed(
     } else {
         grokhub_core::adult_guard::Dest::Xai
     };
+    // An 18+ voice keeps every turn of the chat here, so its voice stays here too.
+    let must_stay = super::adult::voice_on(&sent.input);
     // 18+ chat runs on this computer's model only, never online. With none
     // ready and an 18+ voice on, every turn gets the notice (with the
     // self-check's reason) and nothing is sent: a clean ask in that voice is
@@ -1874,9 +1884,10 @@ pub fn stream_routed(
             None => on_device = true,
             Some(notice) => {
                 let online = !class.trim().starts_with("background:")
-                    && !super::adult::voice_on(&sent.input)
+                    && !must_stay
                     && super::adult::leave_adult_out(&mut sent.input);
                 if !online {
+                    note_here(class, &req.conversation_id, false, must_stay);
                     let out = super::adult::notice_answer(class, &notice)?;
                     sink(StreamEvent::TextDelta(out.text.clone()));
                     return Ok(out);
@@ -1884,6 +1895,9 @@ pub fn stream_routed(
             }
         }
     }
+    // Before the model call, so the reply's first spoken piece already uses
+    // the right voice.
+    note_here(class, &req.conversation_id, on_device, must_stay);
     let mut on_provider = decision.on_provider() && !on_device;
     let model = if on_device && !decision.on_device() {
         super::local::live_tier().to_string()
@@ -2126,6 +2140,7 @@ pub fn stream_routed(
                         provider_failed = Some((m, e2, started.elapsed()));
                         on_provider = false;
                         on_device = true;
+                        note_here(class, &req.conversation_id, true, must_stay);
                         if asks_route {
                             let n =
                                 route_note(super::local::live_tier(), sent.effort.as_deref(), true);
@@ -2197,6 +2212,7 @@ pub fn stream_routed(
                 }
                 xai_failed = Some((err, started.elapsed()));
                 on_device = true;
+                note_here(class, &req.conversation_id, true, must_stay);
                 if asks_route {
                     let n = route_note(super::local::live_tier(), sent.effort.as_deref(), true);
                     super::ask::add_route_note(&mut sent.input, &n);
@@ -2252,6 +2268,7 @@ pub fn stream_routed(
     }
     // The app's own calls (the permission judge, a summary) don't run the
     // step's tools, so they leave the chat step's mark alone.
+    note_here(class, &req.conversation_id, on_device, must_stay);
     if !class.trim().starts_with("background:") {
         STEP_ON_DEVICE.with(|s| s.set(on_device));
         // A step answered elsewhere: the line under the reply names only the

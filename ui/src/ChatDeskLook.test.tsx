@@ -67,7 +67,7 @@ vi.mock("./VoiceMode", async (load) => {
       }, []);
       // Where the chat sends a spoken piece's loudness.
       session.talkTo = (talk) => void voices.talk.push(talk);
-      return { state, session, caption: voices.caption };
+      return { state, session, caption: voices.caption, line: "" };
     },
   };
 });

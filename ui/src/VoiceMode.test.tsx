@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LibraryStatus, LiveEvent, Spoken } from "./api";
+import type { HeardWords, LibraryStatus, LiveEvent, Spoken } from "./api";
 
 const libraryState = vi.hoisted(() => ({
   handler: null as ((status: LibraryStatus) => void) | null,
@@ -9,17 +9,18 @@ const libraryState = vi.hoisted(() => ({
 }));
 
 const api = vi.hoisted(() => ({
-  voiceLiveStart: vi.fn<() => Promise<void>>(),
+  voiceLiveStart: vi.fn<(conversationId?: string | null) => Promise<void>>(),
+  voiceLiveChat: vi.fn<(conversationId?: string | null) => Promise<void>>(),
   voiceLiveStop: vi.fn<() => Promise<void>>(),
   voiceLivePush: vi.fn<(block: string) => Promise<LiveEvent[]>>(),
   voiceLiveListen: vi.fn<(playing: boolean) => Promise<void>>(),
   voiceLivePlaying: vi.fn<(playing: boolean) => Promise<void>>(),
   voiceLiveFinish: vi.fn<() => Promise<void>>(),
-  voiceLiveHear: vi.fn<() => Promise<string>>(),
+  voiceLiveHear: vi.fn<(conversationId?: string | null) => Promise<HeardWords>>(),
   voiceReplyFeed: vi.fn<(delta: string) => Promise<string[]>>(),
   voiceReplyFinish: vi.fn<(whole: string) => Promise<string[]>>(),
   voiceReplyHush: vi.fn<() => Promise<void>>(),
-  voiceSpeak: vi.fn<(text: string) => Promise<Spoken>>(),
+  voiceSpeak: vi.fn<(text: string, conversationId?: string | null) => Promise<Spoken>>(),
   transcribe: vi.fn(),
   onModelLibraryEvent: vi.fn(async (cb: (status: LibraryStatus) => void) => {
     libraryState.handler = cb;
@@ -36,6 +37,7 @@ import {
   toPcm16,
   VoiceButton,
   VoiceCaption,
+  VoiceLine,
   VoiceSession,
   voiceStep,
   type Playing,
@@ -54,6 +56,8 @@ interface Rig {
   sent: string[];
   /** Every live caption, "" when one was cleared. */
   captions: string[];
+  /** Every voice line, "" when it was cleared. */
+  lines: string[];
   played: string[];
   /** What each piece's loudness went to. */
   talks: unknown[];
@@ -72,7 +76,7 @@ afterEach(async () => {
 });
 
 function rig(): Rig {
-  const r = { states: [], notes: [], sent: [], captions: [], played: [], talks: [], ends: [], stops: 0, closed: 0 } as unknown as Rig;
+  const r = { states: [], notes: [], sent: [], captions: [], lines: [], played: [], talks: [], ends: [], stops: 0, closed: 0 } as unknown as Rig;
   let take: ((s: Float32Array, rate: number) => void) | null = null;
   r.session = new VoiceSession({
     openMic: async (t) => {
@@ -97,6 +101,7 @@ function rig(): Rig {
     onState: (s) => r.states.push(s),
     onNote: (n) => r.notes.push(n),
     onCaption: (c) => r.captions.push(c),
+    onLine: (l) => r.lines.push(l),
   });
   made.push(r.session);
   r.hear = async (...events) => {
@@ -116,6 +121,7 @@ beforeEach(() => {
   });
   for (const fn of [
     api.voiceLiveStart,
+    api.voiceLiveChat,
     api.voiceLiveStop,
     api.voiceLiveListen,
     api.voiceLivePlaying,
@@ -124,7 +130,7 @@ beforeEach(() => {
   ])
     fn.mockResolvedValue(undefined);
   api.voiceLivePush.mockResolvedValue([]);
-  api.voiceLiveHear.mockResolvedValue("what's on tonight");
+  api.voiceLiveHear.mockResolvedValue({ words: "what's on tonight", line: null });
   api.voiceReplyFeed.mockResolvedValue([]);
   api.voiceReplyFinish.mockResolvedValue([]);
   api.voiceSpeak.mockImplementation(async (text) => ({ mime: "audio/mpeg", audio: text }));
@@ -244,7 +250,7 @@ describe("VoiceSession", () => {
 
   it("a turn with no words listens again and sends nothing", async () => {
     const r = rig();
-    api.voiceLiveHear.mockResolvedValueOnce("  ");
+    api.voiceLiveHear.mockResolvedValueOnce({ words: "  ", line: null });
     await r.session.start();
     await r.hear({ kind: "turn", ms: 400 });
     expect(r.sent).toEqual([]);
@@ -415,7 +421,7 @@ describe("live captions", () => {
     await r.session.start();
     await r.hear({ kind: "caption", text: "remind me" });
     expect(r.captions).toEqual(["remind me"]);
-    api.voiceLiveHear.mockResolvedValueOnce("Remind me.");
+    api.voiceLiveHear.mockResolvedValueOnce({ words: "Remind me.", line: null });
     await r.hear({ kind: "turn", ms: 1200 });
     expect(r.sent).toEqual(["Remind me."]);
     expect(r.captions).toEqual(["remind me", ""]);
@@ -527,5 +533,142 @@ describe("voice model downloads", () => {
 
     await r.session.stop();
     expect(libraryState.unlisten).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the voice by need", () => {
+  const KOKORO = "Spoken on this computer with Kokoro text to speech: this chat runs here.";
+  const PARAKEET = "Heard on this computer with Parakeet v3 speech to text: this chat runs here.";
+
+  it("starts, hears and speaks for the chat on screen, and shows the on-device line", async () => {
+    const r = rig();
+    r.session.forChat("chat-here");
+    await r.session.start();
+    expect(api.voiceLiveStart).toHaveBeenCalledWith("chat-here");
+    api.voiceLiveHear.mockResolvedValueOnce({ words: "what's on tonight", line: PARAKEET });
+    await r.hear({ kind: "turn", ms: 1500 });
+    expect(api.voiceLiveHear).toHaveBeenCalledWith("chat-here");
+    expect(r.sent).toEqual(["what's on tonight"]);
+    expect(r.lines).toEqual([PARAKEET]);
+    api.voiceSpeak.mockImplementationOnce(async (text) => ({ mime: "audio/wav", audio: text, line: KOKORO }));
+    api.voiceReplyFeed.mockResolvedValueOnce(["Nothing much."]);
+    r.session.feed("Nothing much. ");
+    await flush();
+    expect(api.voiceSpeak).toHaveBeenCalledWith("Nothing much.", "chat-here");
+    expect(r.played).toEqual(["Nothing much."]);
+    expect(r.lines).toEqual([PARAKEET, KOKORO]);
+    // Voice mode off: the line goes with it.
+    await r.session.stop();
+    expect(r.lines).toEqual([PARAKEET, KOKORO, ""]);
+  });
+
+  it("a plain cloud chat shows no line", async () => {
+    const r = rig();
+    r.session.forChat("chat-online");
+    await r.session.start();
+    await r.hear({ kind: "turn", ms: 1500 });
+    api.voiceReplyFeed.mockResolvedValueOnce(["Sure."]);
+    r.session.feed("Sure. ");
+    await flush();
+    expect(r.played).toEqual(["Sure."]);
+    expect(r.lines).toEqual([]);
+  });
+
+  it("tells the backend when voice mode moves to another chat, only while it is on", async () => {
+    const r = rig();
+    r.session.forChat("chat-a");
+    expect(api.voiceLiveChat).not.toHaveBeenCalled();
+    await r.session.start();
+    r.session.forChat("chat-a");
+    expect(api.voiceLiveChat).not.toHaveBeenCalled();
+    r.session.forChat("chat-b");
+    expect(api.voiceLiveChat).toHaveBeenCalledWith("chat-b");
+    await r.hear({ kind: "turn", ms: 900 });
+    expect(api.voiceLiveHear).toHaveBeenLastCalledWith("chat-b");
+  });
+
+  it("a chat opened while voice mode starts is the one the backend hears for", async () => {
+    const r = rig();
+    r.session.forChat("chat-a");
+    let started = () => {};
+    api.voiceLiveStart.mockImplementationOnce(() => new Promise<void>((res) => (started = res)));
+    const on = r.session.start();
+    await flush();
+    r.session.forChat("chat-b");
+    started();
+    await on;
+    r.session.forChat("chat-b");
+    expect(api.voiceLiveStart).toHaveBeenCalledWith("chat-a");
+    expect(api.voiceLiveChat.mock.calls).toEqual([["chat-b"]]);
+  });
+
+  it("a cloud turn after a local one, or another chat, clears the line", async () => {
+    const r = rig();
+    r.session.forChat("chat-here");
+    await r.session.start();
+    api.voiceLiveHear.mockResolvedValueOnce({ words: "what's on tonight", line: PARAKEET });
+    await r.hear({ kind: "turn", ms: 1500 });
+    expect(r.lines).toEqual([PARAKEET]);
+    // The next step went online: xAI heard this turn.
+    api.voiceLiveHear.mockResolvedValueOnce({ words: "and tomorrow", line: null });
+    await r.hear({ kind: "turn", ms: 900 });
+    expect(r.lines).toEqual([PARAKEET, ""]);
+    // A piece spoken here, then voice mode follows a cloud chat.
+    api.voiceSpeak.mockImplementationOnce(async (text) => ({ mime: "audio/wav", audio: text, line: KOKORO }));
+    api.voiceReplyFeed.mockResolvedValueOnce(["Rain."]);
+    r.session.feed("Rain. ");
+    await flush();
+    expect(r.lines).toEqual([PARAKEET, "", KOKORO]);
+    r.session.forChat("chat-online");
+    expect(r.lines).toEqual([PARAKEET, "", KOKORO, ""]);
+  });
+
+  it("a turn heard after voice mode went off shows no line, then or next time", async () => {
+    const r = rig();
+    r.session.forChat("chat-here");
+    await r.session.start();
+    let heard = (_: { words: string; line: string | null }) => {};
+    api.voiceLiveHear.mockImplementationOnce(() => new Promise((res) => (heard = res)));
+    await r.hear({ kind: "turn", ms: 1500 });
+    await r.session.stop();
+    heard({ words: "what's on tonight", line: PARAKEET });
+    await flush();
+    expect(r.lines).toEqual([]);
+    expect(r.sent).toEqual([]);
+    await r.session.start();
+    expect(r.lines).toEqual([]);
+  });
+
+  it("the end of a reply is spoken for its own chat after another chat opens", async () => {
+    const r = rig();
+    r.session.forChat("chat-here");
+    await r.session.start();
+    api.voiceReplyFinish.mockResolvedValueOnce(["See you."]);
+    r.session.replyDone("");
+    // The chat picked while the reply wrapped up opens now.
+    r.session.forChat("chat-online");
+    await flush();
+    expect(api.voiceSpeak).toHaveBeenCalledWith("See you.", "chat-here");
+    expect(api.voiceSpeak).not.toHaveBeenCalledWith("See you.", "chat-online");
+  });
+
+  it("a reply that ends after the switch is still spoken for the chat it named", async () => {
+    const r = rig();
+    r.session.forChat("chat-here");
+    await r.session.start();
+    // Chat's send resolves after the person opened another chat.
+    r.session.forChat("chat-online");
+    api.voiceReplyFinish.mockResolvedValueOnce(["See you."]);
+    r.session.replyDone("", "chat-here");
+    await flush();
+    expect(api.voiceSpeak).toHaveBeenCalledWith("See you.", "chat-here");
+    expect(api.voiceSpeak).not.toHaveBeenCalledWith("See you.", "chat-online");
+  });
+
+  it("the line shows on its own, whatever voice mode is doing", () => {
+    const { rerender } = render(<VoiceLine text={KOKORO} />);
+    expect(screen.getByText(KOKORO)).toHaveClass("voice-line");
+    rerender(<VoiceLine text="" />);
+    expect(document.querySelector(".voice-line")).toBeNull();
   });
 });

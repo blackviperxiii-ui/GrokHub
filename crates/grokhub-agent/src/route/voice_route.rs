@@ -86,6 +86,13 @@ pub struct VoiceEnv {
     pub local_warm: bool,
     pub has_xai_auth: bool,
     pub xai_recently_failed: bool,
+    /// The chat's newest step ran on this computer
+    /// ([`super::local_live::runs_here`]): its voice runs here too, with xAI
+    /// only as a fallback while the on-device voice isn't ready.
+    pub chat_here: bool,
+    /// The chat must stay on this computer (an 18+ voice,
+    /// [`super::local_live::must_stay_here`]): its voice never goes to xAI.
+    pub chat_must_stay: bool,
 }
 
 impl Default for VoiceEnv {
@@ -100,6 +107,8 @@ impl Default for VoiceEnv {
             local_warm: false,
             has_xai_auth: false,
             xai_recently_failed: false,
+            chat_here: false,
+            chat_must_stay: false,
         }
     }
 }
@@ -313,15 +322,71 @@ fn pinned_xai_offline_blocker(kind: StageKind, offline_only: bool) -> String {
     }
 }
 
+fn must_stay_blocker(kind: StageKind) -> String {
+    format!(
+        "{} in this 18+ chat stay on this computer, and the {} isn't downloaded. Install it in Settings → Local AI.",
+        stage_noun(kind),
+        model_noun(kind)
+    )
+}
+
+fn must_stay_off_blocker(kind: StageKind) -> String {
+    format!(
+        "{} in this 18+ chat stay on this computer, and Local AI is off. Turn it on in Settings → Local AI.",
+        stage_noun(kind)
+    )
+}
+
+/// An 18+ chat's voice stays on this computer, whatever the routing says
+/// (a Grok Voice 3 pin included): the on-device engine, its download, or a
+/// blocker naming the real reason.
+fn must_stay_plan(kind: StageKind, env: &VoiceEnv, offline: bool) -> StagePlan {
+    if env.local_enabled && env.local_ready {
+        StagePlan::Try(vec![SpeechSource::Local])
+    } else if !env.local_enabled {
+        StagePlan::Blocked(must_stay_off_blocker(kind))
+    } else if offline {
+        StagePlan::Blocked(local_offline_blocker(kind, env))
+    } else if env.local_ai_capable {
+        StagePlan::DownloadLocal
+    } else {
+        StagePlan::Blocked(must_stay_blocker(kind))
+    }
+}
+
+fn pinned_of(cfg: &VoiceRouteConfig, kind: StageKind) -> Option<SpeechSource> {
+    match kind {
+        StageKind::Stt => cfg.pinned.stt,
+        StageKind::Tts => cfg.pinned.tts,
+    }
+}
+
+fn pinned_to_xai(cfg: &VoiceRouteConfig, kind: StageKind) -> bool {
+    cfg.mode == VoiceRouteMode::Pinned && pinned_of(cfg, kind) == Some(SpeechSource::GrokVoice3)
+}
+
+/// Whether the on-device engine for `kind` should download now: the plan
+/// waits on it, or xAI stands in for a chat that runs here only until it is
+/// downloaded (not when routing is pinned to Grok Voice 3).
+pub fn wants_download(cfg: &VoiceRouteConfig, kind: StageKind, env: &VoiceEnv) -> bool {
+    let offline = env.offline_only || env.net.prefer_local();
+    matches!(plan_stage(cfg, kind, env), StagePlan::DownloadLocal)
+        || (env.chat_here
+            && !env.loopback_override
+            && !offline
+            && env.local_enabled
+            && env.local_ai_capable
+            && !env.local_ready
+            && !pinned_to_xai(cfg, kind)
+            && cfg.mode != VoiceRouteMode::LocalOnly)
+}
+
 /// Plans source order (or auto-download / actionable blocker) for STT or TTS.
 pub fn plan_stage(cfg: &VoiceRouteConfig, kind: StageKind, env: &VoiceEnv) -> StagePlan {
     if env.loopback_override {
         return StagePlan::Try(vec![SpeechSource::GrokVoice3]);
     }
-    let pinned = match kind {
-        StageKind::Stt => cfg.pinned.stt,
-        StageKind::Tts => cfg.pinned.tts,
-    };
+    let pinned = pinned_of(cfg, kind);
     let offline = env.offline_only || env.net.prefer_local();
     match (cfg.mode, pinned) {
         (VoiceRouteMode::LocalOnly, _) | (VoiceRouteMode::Pinned, Some(SpeechSource::Local)) => {
@@ -334,7 +399,9 @@ pub fn plan_stage(cfg: &VoiceRouteConfig, kind: StageKind, env: &VoiceEnv) -> St
             }
         }
         (VoiceRouteMode::Pinned, Some(SpeechSource::GrokVoice3)) => {
-            if !env.has_xai_auth {
+            if env.chat_must_stay {
+                must_stay_plan(kind, env, offline)
+            } else if !env.has_xai_auth {
                 StagePlan::Blocked(pinned_xai_auth_blocker(kind))
             } else if offline {
                 StagePlan::Blocked(pinned_xai_offline_blocker(kind, env.offline_only))
@@ -351,6 +418,18 @@ pub fn plan_stage(cfg: &VoiceRouteConfig, kind: StageKind, env: &VoiceEnv) -> St
                 } else {
                     StagePlan::Blocked(local_offline_blocker(kind, env))
                 };
+            }
+            // A chat that runs here hears and speaks here. No xAI behind it,
+            // so a decline (no room) shows its own line instead of leaving.
+            if env.chat_must_stay {
+                return must_stay_plan(kind, env, offline);
+            }
+            if env.chat_here && local_usable {
+                return StagePlan::Try(vec![SpeechSource::Local]);
+            }
+            if env.chat_here && online_usable {
+                // The fallback while the on-device voice isn't ready, with a line.
+                return StagePlan::Try(vec![SpeechSource::GrokVoice3]);
             }
             match (online_usable, local_usable) {
                 (true, true) => {
@@ -374,6 +453,71 @@ pub fn plan_stage(cfg: &VoiceRouteConfig, kind: StageKind, env: &VoiceEnv) -> St
     }
 }
 
+/// The line over the composer naming which voice engine ran a stage and why.
+/// Shown for the on-device engine, an xAI fallback, or an xAI stand-in for a
+/// chat that runs here; a plain cloud chat gets none. `fell_back` is true
+/// when `used` ran because the source before it failed; `model` names the
+/// on-device model that ran (unused for xAI).
+pub fn stage_line(
+    kind: StageKind,
+    cfg: &VoiceRouteConfig,
+    env: &VoiceEnv,
+    used: SpeechSource,
+    fell_back: bool,
+    model: &str,
+) -> Option<String> {
+    let verb = match kind {
+        StageKind::Stt => "Heard",
+        StageKind::Tts => "Spoken",
+    };
+    match used {
+        SpeechSource::Local => {
+            let pinned = pinned_of(cfg, kind);
+            let why = if env.offline_only {
+                "Offline only is on"
+            } else if env.net.prefer_local() {
+                "you're offline"
+            } else if cfg.mode == VoiceRouteMode::LocalOnly {
+                "voice routing is Local only"
+            } else if cfg.mode == VoiceRouteMode::Pinned && pinned == Some(SpeechSource::Local) {
+                "voice routing is pinned to this computer"
+            } else if env.chat_must_stay && pinned_to_xai(cfg, kind) {
+                "this 18+ chat stays on this computer, over the Grok Voice 3 pin"
+            } else if env.chat_must_stay {
+                "this 18+ chat stays on this computer"
+            } else if env.chat_here {
+                "this chat runs here"
+            } else if fell_back || env.xai_recently_failed {
+                "xAI didn't answer"
+            } else if !env.has_xai_auth {
+                "there's no xAI sign-in"
+            } else if env.net == NetState::Degraded {
+                "the connection is slow"
+            } else {
+                "a local model is already running"
+            };
+            Some(format!("{verb} on this computer with {model}: {why}."))
+        }
+        SpeechSource::GrokVoice3 if fell_back => Some(format!(
+            "{verb} by xAI: the {} didn't answer.",
+            model_noun(kind)
+        )),
+        SpeechSource::GrokVoice3 if env.chat_here => {
+            let but = if pinned_to_xai(cfg, kind) {
+                "voice routing is pinned to Grok Voice 3".to_string()
+            } else if !env.local_enabled {
+                "Local AI is off".to_string()
+            } else if !env.local_ready {
+                format!("the {} isn't downloaded", model_noun(kind))
+            } else {
+                format!("the {} isn't ready", model_noun(kind))
+            };
+            Some(format!("{verb} by xAI: this chat runs here, but {but}."))
+        }
+        SpeechSource::GrokVoice3 => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,6 +533,8 @@ mod tests {
             local_warm: false,
             has_xai_auth: false,
             xai_recently_failed: false,
+            chat_here: false,
+            chat_must_stay: false,
         }
     }
 
@@ -544,5 +690,244 @@ mod tests {
         assert!(!xai_in_cooldown(StageKind::Stt, 2_000));
         assert!(!xai_in_cooldown(StageKind::Tts, 1_000 + XAI_COOLDOWN_MS));
         clear_failures();
+    }
+
+    #[test]
+    fn a_chat_that_runs_here_hears_and_speaks_on_device() {
+        let cfg = VoiceRouteConfig::default();
+        let mut e = env();
+        e.has_xai_auth = true;
+        e.local_ready = true;
+        e.chat_here = true;
+        assert_eq!(
+            plan_stage(&cfg, StageKind::Stt, &e),
+            StagePlan::Try(vec![SpeechSource::Local])
+        );
+        assert_eq!(
+            plan_stage(&cfg, StageKind::Tts, &e),
+            StagePlan::Try(vec![SpeechSource::Local])
+        );
+    }
+
+    #[test]
+    fn a_chat_that_runs_here_uses_xai_only_while_local_isnt_ready() {
+        let cfg = VoiceRouteConfig::default();
+        let mut e = env();
+        e.chat_here = true;
+        e.has_xai_auth = true;
+        assert_eq!(
+            plan_stage(&cfg, StageKind::Stt, &e),
+            StagePlan::Try(vec![SpeechSource::GrokVoice3])
+        );
+        e.has_xai_auth = false;
+        assert_eq!(
+            plan_stage(&cfg, StageKind::Stt, &e),
+            StagePlan::DownloadLocal
+        );
+    }
+
+    #[test]
+    fn an_18_plus_chat_never_plans_xai() {
+        let mut e = env();
+        e.chat_must_stay = true;
+        e.has_xai_auth = true;
+        e.local_ai_capable = false;
+        let blocked = StagePlan::Blocked(
+            "Spoken replies in this 18+ chat stay on this computer, and the on-device voice (Kokoro) isn't downloaded. Install it in Settings → Local AI.".into(),
+        );
+        assert_eq!(
+            plan_stage(&VoiceRouteConfig::default(), StageKind::Tts, &e),
+            blocked
+        );
+        let pinned = VoiceRouteConfig {
+            mode: VoiceRouteMode::Pinned,
+            pinned: VoicePin {
+                stt: None,
+                reply: None,
+                tts: Some(SpeechSource::GrokVoice3),
+            },
+        };
+        assert_eq!(plan_stage(&pinned, StageKind::Tts, &e), blocked);
+        // With the voice downloaded it speaks here.
+        e.local_ready = true;
+        assert_eq!(
+            plan_stage(&VoiceRouteConfig::default(), StageKind::Tts, &e),
+            StagePlan::Try(vec![SpeechSource::Local])
+        );
+    }
+
+    #[test]
+    fn the_line_names_the_voice_and_why_and_stays_quiet_for_plain_cloud() {
+        let cfg = VoiceRouteConfig::default();
+        let mut here = env();
+        here.has_xai_auth = true;
+        here.local_ready = true;
+        here.chat_here = true;
+        assert_eq!(
+            stage_line(
+                StageKind::Tts,
+                &cfg,
+                &here,
+                SpeechSource::Local,
+                false,
+                "Kokoro text to speech"
+            )
+            .as_deref(),
+            Some("Spoken on this computer with Kokoro text to speech: this chat runs here.")
+        );
+        here.local_ready = false;
+        assert_eq!(
+            stage_line(StageKind::Stt, &cfg, &here, SpeechSource::GrokVoice3, false, "")
+                .as_deref(),
+            Some("Heard by xAI: this chat runs here, but the on-device speech model (Parakeet or whisper) isn't downloaded.")
+        );
+        let mut cloud = env();
+        cloud.has_xai_auth = true;
+        assert_eq!(
+            stage_line(
+                StageKind::Stt,
+                &cfg,
+                &cloud,
+                SpeechSource::GrokVoice3,
+                false,
+                ""
+            ),
+            None
+        );
+        assert_eq!(
+            stage_line(
+                StageKind::Tts,
+                &cfg,
+                &cloud,
+                SpeechSource::GrokVoice3,
+                true,
+                ""
+            )
+            .as_deref(),
+            Some("Spoken by xAI: the on-device voice (Kokoro) didn't answer.")
+        );
+        cloud.offline_only = true;
+        assert_eq!(
+            stage_line(
+                StageKind::Stt,
+                &cfg,
+                &cloud,
+                SpeechSource::Local,
+                false,
+                "Parakeet v3 speech to text"
+            )
+            .as_deref(),
+            Some("Heard on this computer with Parakeet v3 speech to text: Offline only is on.")
+        );
+    }
+
+    fn pinned_tts_xai() -> VoiceRouteConfig {
+        VoiceRouteConfig {
+            mode: VoiceRouteMode::Pinned,
+            pinned: VoicePin {
+                stt: None,
+                reply: None,
+                tts: Some(SpeechSource::GrokVoice3),
+            },
+        }
+    }
+
+    #[test]
+    fn an_18_plus_chat_speaks_here_over_a_grok_voice_3_pin_and_says_so() {
+        let pinned = pinned_tts_xai();
+        let mut e = env();
+        e.chat_must_stay = true;
+        e.has_xai_auth = true;
+        e.local_ready = true;
+        assert_eq!(
+            plan_stage(&pinned, StageKind::Tts, &e),
+            StagePlan::Try(vec![SpeechSource::Local])
+        );
+        assert_eq!(
+            stage_line(StageKind::Tts, &pinned, &e, SpeechSource::Local, false, "Kokoro text to speech")
+                .as_deref(),
+            Some("Spoken on this computer with Kokoro text to speech: this 18+ chat stays on this computer, over the Grok Voice 3 pin.")
+        );
+        // Downloaded but Local AI off: the blocker says that, in both modes.
+        e.local_enabled = false;
+        let off = StagePlan::Blocked(
+            "Spoken replies in this 18+ chat stay on this computer, and Local AI is off. Turn it on in Settings → Local AI.".into(),
+        );
+        assert_eq!(plan_stage(&pinned, StageKind::Tts, &e), off);
+        assert_eq!(
+            plan_stage(&VoiceRouteConfig::default(), StageKind::Tts, &e),
+            off
+        );
+        // Not downloaded yet, under the pin: it downloads, never xAI.
+        e.local_enabled = true;
+        e.local_ready = false;
+        assert_eq!(
+            plan_stage(&pinned, StageKind::Tts, &e),
+            StagePlan::DownloadLocal
+        );
+    }
+
+    #[test]
+    fn the_xai_line_for_a_chat_that_runs_here_names_the_real_reason() {
+        let mut e = env();
+        e.chat_here = true;
+        e.has_xai_auth = true;
+        e.local_ready = true;
+        let line = |cfg: &VoiceRouteConfig, e: &VoiceEnv| {
+            stage_line(StageKind::Tts, cfg, e, SpeechSource::GrokVoice3, false, "")
+        };
+        assert_eq!(
+            line(&pinned_tts_xai(), &e).as_deref(),
+            Some(
+                "Spoken by xAI: this chat runs here, but voice routing is pinned to Grok Voice 3."
+            )
+        );
+        e.local_enabled = false;
+        assert_eq!(
+            line(&VoiceRouteConfig::default(), &e).as_deref(),
+            Some("Spoken by xAI: this chat runs here, but Local AI is off.")
+        );
+        // A warm chat model is not the voice: the reason says what it is.
+        let mut warm = env();
+        warm.local_ready = true;
+        warm.local_warm = true;
+        warm.has_xai_auth = true;
+        assert_eq!(
+            stage_line(
+                StageKind::Stt,
+                &VoiceRouteConfig::default(),
+                &warm,
+                SpeechSource::Local,
+                false,
+                "whisper"
+            )
+            .as_deref(),
+            Some("Heard on this computer with whisper: a local model is already running.")
+        );
+    }
+
+    #[test]
+    fn a_chat_that_runs_here_downloads_its_voice_while_xai_stands_in() {
+        let cfg = VoiceRouteConfig::default();
+        let mut e = env();
+        e.chat_here = true;
+        e.has_xai_auth = true;
+        assert_eq!(
+            plan_stage(&cfg, StageKind::Tts, &e),
+            StagePlan::Try(vec![SpeechSource::GrokVoice3])
+        );
+        assert!(wants_download(&cfg, StageKind::Tts, &e));
+        assert!(wants_download(&cfg, StageKind::Stt, &e));
+        // Pinned to Grok Voice 3, ready, or a cloud chat: nothing to fetch.
+        assert!(!wants_download(&pinned_tts_xai(), StageKind::Tts, &e));
+        let mut cloud = e;
+        cloud.chat_here = false;
+        assert!(!wants_download(&cfg, StageKind::Tts, &cloud));
+        e.local_ready = true;
+        assert!(!wants_download(&cfg, StageKind::Tts, &e));
+        // The plan itself waits on the download.
+        let mut none = env();
+        none.has_xai_auth = false;
+        assert!(wants_download(&cfg, StageKind::Stt, &none));
     }
 }

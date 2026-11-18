@@ -173,7 +173,7 @@ vi.mock("./api", () => ({
     return Promise.resolve(() => {});
   },
   // Push to talk has its own tests (Mic.test.tsx).
-  transcribe: vi.fn(),
+  transcribe: vi.fn(async () => ({ words: "", line: null })),
   // Attachments have their own tests (AttachChips.test.tsx).
   onFileDrop: () => Promise.resolve(() => {}),
   stageAttachment: vi.fn(),
