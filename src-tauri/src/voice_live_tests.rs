@@ -899,3 +899,68 @@ fn a_start_the_mic_takes_back_ends_the_stream_and_its_caption() {
         Err(TryRecvError::Disconnected)
     );
 }
+
+#[test]
+fn local_only_and_offline_modes_fail_over_cleanly_in_tts() {
+    let config = temp_dir("tts-route");
+    let models = fake_voice(&config);
+    // In LocalOnly mode with fake_voice (empty sherpa binary), it skips xAI
+    // completely and attempts on-device Kokoro instead ("didn't start").
+    let cfg = VoiceRouteConfig {
+        mode: VoiceRouteMode::LocalOnly,
+        ..Default::default()
+    };
+    let env = VoiceEnv {
+        has_xai_auth: true,
+        local_enabled: true,
+        local_ai_capable: true,
+        local_ready: true,
+        ..Default::default()
+    };
+    fn unreachable_target() -> Option<TtsTarget> {
+        Some(TtsTarget {
+            url: "http://127.0.0.1:1/v1/tts".into(),
+            bearer: "sk-abcdefghijklmnopqrstuv".into(),
+        })
+    }
+    let out = speak_with_env(
+        None,
+        &cfg,
+        &env,
+        &config,
+        &models,
+        "ara",
+        "Hello.",
+        hushes(),
+        unreachable_target,
+    );
+    assert_eq!(out, Err("The on-device voice didn't start.".to_string()));
+
+    // In Auto mode when xAI fails mid-session and local is ready, it records xAI
+    // cooldown and fails over to local on-device voice cleanly.
+    voice_route::clear_failures();
+    let auto = VoiceRouteConfig::default();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+    let url = format!("http://127.0.0.1:{port}/v1/tts");
+    // Use speak_with_env via unreachable_target (port 1 fails immediately with Transport error).
+    let _ = url;
+    let out = speak_with_env(
+        None,
+        &auto,
+        &env,
+        &config,
+        &models,
+        "ara",
+        "Hello.",
+        hushes(),
+        unreachable_target,
+    );
+    assert_eq!(out, Err("The on-device voice didn't start.".to_string()));
+    assert!(voice_route::xai_in_cooldown(
+        StageKind::Tts,
+        grokhub_core::now_ms()
+    ));
+    voice_route::clear_failures();
+}

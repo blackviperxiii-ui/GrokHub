@@ -19,6 +19,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use grokhub_agent::harness as hx;
+use grokhub_agent::route::voice_route::{
+    self, SpeechSource, StageKind, StagePlan, VoiceEnv, VoiceRouteConfig, VoiceRouteMode,
+};
 use grokhub_core::voice_engine as ve;
 use grokhub_core::voice_live::{Heard, OpenMic, ReplyVoice};
 use grokhub_core::voice_turn::{s16le, wav, RATE};
@@ -29,6 +32,8 @@ use crate::stt_stream::{SttLink, SttNews};
 /// Points speak at a local mock TTS server, for tests only (same loopback
 /// rule as speech-to-text).
 pub const TEST_TTS_ENV: &str = "GROKHUB_SHELL_TTS_URL";
+/// Catalog id for the on-device voice auto-downloaded when needed.
+pub const TTS_MODEL_ID: &str = "kokoro-82m-multi-lang-v1_0";
 /// One block from the page: at most this many bytes of samples (a second).
 pub const BLOCK_MAX: usize = RATE as usize * 2;
 /// Spoken audio past this is not a piece of speech.
@@ -39,7 +44,7 @@ const ON_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub const NOT_ON: &str = "Voice mode isn't on.";
 pub const NO_VOICE: &str =
-    "Spoken replies need an xAI API key (Settings → Account) or the on-device voice.";
+    "Spoken replies need Grok sign-in or an xAI API key in Settings → Account, or Local AI enabled in Settings → Local AI.";
 pub const BAD_BLOCK: &str = "That audio block isn't 16-bit samples.";
 
 /// What the open mic heard, for the page.
@@ -419,7 +424,7 @@ struct TtsTarget {
     bearer: String,
 }
 
-/// The loopback mock in tests, else xAI with the saved key.
+/// The loopback mock in tests, else xAI with Grok sign-in or the saved API key.
 fn tts_target() -> Option<TtsTarget> {
     let test = std::env::var(TEST_TTS_ENV).ok();
     if let Some(url) = crate::voice::loopback_override(test.as_deref()) {
@@ -428,15 +433,47 @@ fn tts_target() -> Option<TtsTarget> {
             bearer: crate::credential::LOOPBACK_TEST_BEARER.into(),
         });
     }
-    let bearer = crate::credential::load_key().ok()?;
+    let bearer = crate::voice::stt_bearer().ok()?;
     Some(TtsTarget {
         url: grokhub_core::tts_url(),
         bearer,
     })
 }
 
-/// Speak `text` in `voice`: xAI with a key, else Kokoro on this PC.
+fn tts_env(config_dir: &Path, models: &Path) -> VoiceEnv {
+    grokhub_agent::route::host::sync(config_dir);
+    grokhub_agent::route::connectivity::sync_from_core();
+    VoiceEnv {
+        loopback_override: crate::voice::loopback_override(
+            std::env::var(TEST_TTS_ENV).ok().as_deref(),
+        )
+        .is_some(),
+        offline_only: grokhub_core::offline::enabled(),
+        net: grokhub_agent::route::connectivity::state(),
+        local_enabled: grokhub_agent::route::local::switched_on(),
+        local_ai_capable: crate::voice::local_ai_capable(),
+        local_ready: ve::tts_installed(config_dir) && ve::voice_model(models).is_some(),
+        local_warm: grokhub_agent::route::local::warm_runtime().is_some(),
+        has_xai_auth: crate::voice::stt_bearer().is_ok(),
+        xai_recently_failed: voice_route::xai_in_cooldown(StageKind::Tts, grokhub_core::now_ms()),
+    }
+}
+
+/// Speak `text` in `voice` using the shared voice router without an app handle.
 pub fn speak(
+    config_dir: &Path,
+    models_dir: &Path,
+    voice: &str,
+    text: &str,
+    asked: u64,
+) -> Result<Spoken, String> {
+    speak_with(None, config_dir, models_dir, voice, text, asked)
+}
+
+/// Speak `text` in `voice` via the shared voice router, starting automatic
+/// local voice download via `app` if local assets are needed and missing.
+pub fn speak_with(
+    app: Option<&tauri::AppHandle>,
     config_dir: &Path,
     models_dir: &Path,
     voice: &str,
@@ -447,12 +484,90 @@ pub fn speak(
     if text.is_empty() {
         return Err("Nothing to speak.".into());
     }
-    if let Some(to) = tts_target() {
-        return speak_xai(config_dir, &to, voice, text);
-    }
-    match speak_on_device(config_dir, models_dir, voice, text, asked) {
-        Some(done) => done,
-        None => Err(NO_VOICE.into()),
+    let cfg = voice_route::read(config_dir);
+    let env = tts_env(config_dir, models_dir);
+    speak_with_env(
+        app, &cfg, &env, config_dir, models_dir, voice, text, asked, tts_target,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn speak_with_env(
+    app: Option<&tauri::AppHandle>,
+    cfg: &VoiceRouteConfig,
+    env: &VoiceEnv,
+    config_dir: &Path,
+    models_dir: &Path,
+    voice: &str,
+    text: &str,
+    asked: u64,
+    resolve_target: fn() -> Option<TtsTarget>,
+) -> Result<Spoken, String> {
+    match voice_route::plan_stage(cfg, StageKind::Tts, env) {
+        StagePlan::Blocked(msg) => Err(msg),
+        StagePlan::DownloadLocal => {
+            if let Some(app) = app {
+                let _ = crate::model_library::download(
+                    app.clone(),
+                    config_dir.to_path_buf(),
+                    vec![TTS_MODEL_ID.to_string()],
+                );
+            }
+            Err("Downloading the on-device voice (Kokoro). Spoken replies will start once it finishes.".into())
+        }
+        StagePlan::Try(sources) => {
+            let mut last_err: Option<String> = None;
+            for (idx, source) in sources.iter().enumerate() {
+                match source {
+                    SpeechSource::GrokVoice3 => {
+                        match resolve_target()
+                            .ok_or_else(|| NO_VOICE.to_string())
+                            .and_then(|to| speak_xai(config_dir, &to, voice, text))
+                        {
+                            Ok(spoken) => return Ok(spoken),
+                            Err(err) => {
+                                if !env.loopback_override
+                                    && err != grokhub_core::offline::OFFLINE_MSG
+                                {
+                                    voice_route::note_xai_failure(
+                                        StageKind::Tts,
+                                        grokhub_core::now_ms(),
+                                    );
+                                }
+                                let has_local_after =
+                                    sources[idx + 1..].contains(&SpeechSource::Local);
+                                if !has_local_after
+                                    && cfg.mode != VoiceRouteMode::Pinned
+                                    && !env.local_ready
+                                    && !env.offline_only
+                                    && !env.net.prefer_local()
+                                    && env.local_enabled
+                                    && env.local_ai_capable
+                                    && !env.loopback_override
+                                    && let Some(app) = app
+                                {
+                                    let _ = crate::model_library::download(
+                                        app.clone(),
+                                        config_dir.to_path_buf(),
+                                        vec![TTS_MODEL_ID.to_string()],
+                                    );
+                                }
+                                last_err = Some(err);
+                            }
+                        }
+                    }
+                    SpeechSource::Local => {
+                        match speak_on_device(config_dir, models_dir, voice, text, asked) {
+                            Some(Ok(spoken)) => return Ok(spoken),
+                            Some(Err(err)) if err == HUSHED => return Err(err),
+                            Some(Err(err)) => last_err = Some(err),
+                            None => {}
+                        }
+                    }
+                }
+            }
+            Err(last_err.unwrap_or_else(|| NO_VOICE.to_string()))
+        }
     }
 }
 
@@ -478,7 +593,8 @@ fn speak_xai(config_dir: &Path, to: &TtsTarget, voice: &str, text: &str) -> Resu
         .map_err(|err| match err {
             grokhub_core::http::Error::Status { code: 401, .. }
             | grokhub_core::http::Error::Status { code: 403, .. } => {
-                "xAI didn't accept the API key. Check it in Settings → Account.".to_string()
+                "xAI didn't accept the Grok sign-in or API key. Check Settings → Account."
+                    .to_string()
             }
             grokhub_core::http::Error::Status { code, .. } => {
                 format!("Text to speech failed (HTTP {code}).")
@@ -634,9 +750,10 @@ fn models_dir(config_dir: &Path) -> std::path::PathBuf {
 }
 
 /// Voice mode on: the mic is listening for the first turn, with a stream
-/// when xAI speech-to-text can take one.
-/// Each listen's stream, with the key as it is then: a key cleared or
-/// replaced while voice mode is on is never used again.
+/// when the shared voice router puts Grok Voice 3 first.
+/// Each listen's stream re-checks auth and routing: a key or mode changed
+/// while voice mode is on takes effect on the next listen.
+#[cfg(test)]
 fn opener(
     dir: std::path::PathBuf,
     target: fn() -> Option<crate::stt_stream::StreamTarget>,
@@ -644,16 +761,43 @@ fn opener(
     Box::new(move || target().and_then(|to| crate::stt_stream::open(&dir, &to)))
 }
 
-/// Off the main thread: the key comes from the OS keychain, and opening a
-/// stream runs the egress guard and starts its thread.
+fn opener_for(dir: std::path::PathBuf) -> Opener {
+    Box::new(move || {
+        crate::stt_stream::target_for(&dir).and_then(|to| crate::stt_stream::open(&dir, &to))
+    })
+}
+
+/// Off the main thread: reads config/keychain, marks the voice session active
+/// for reply routing, starts any needed local voice asset download, and opens
+/// the first STT stream if Grok Voice 3 is planned first.
 #[tauri::command]
 pub(crate) async fn voice_live_start(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::ShellState>,
 ) -> Result<(), String> {
     crate::capabilities::needs(crate::capabilities::current().voice, "Voice")?;
     let dir = state.config_dir.clone();
     crate::off_main(move || {
-        let live = Live::new(Some(opener(dir, crate::stt_stream::target)));
+        voice_route::set_session_active(true);
+        let cfg = voice_route::read(&dir);
+        let models = models_dir(&dir);
+        let mut missing = Vec::new();
+        if matches!(
+            voice_route::plan_stage(&cfg, StageKind::Stt, &crate::voice::stt_env(&dir, &models)),
+            StagePlan::DownloadLocal
+        ) {
+            missing.push(crate::voice::STT_MODEL_ID.to_string());
+        }
+        if matches!(
+            voice_route::plan_stage(&cfg, StageKind::Tts, &tts_env(&dir, &models)),
+            StagePlan::DownloadLocal
+        ) {
+            missing.push(TTS_MODEL_ID.to_string());
+        }
+        if !missing.is_empty() {
+            let _ = crate::model_library::download(app, dir.clone(), missing);
+        }
+        let live = Live::new(Some(opener_for(dir)));
         *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(live);
     })
     .await
@@ -662,6 +806,7 @@ pub(crate) async fn voice_live_start(
 /// Voice mode off: any turn under way is dropped.
 #[tauri::command]
 pub(crate) fn voice_live_stop() {
+    voice_route::set_session_active(false);
     SESSION.lock().unwrap_or_else(|e| e.into_inner()).take();
 }
 
@@ -725,11 +870,17 @@ pub(crate) fn voice_live_finish() -> Result<(), String> {
 /// The last turn's words (empty: listen again).
 #[tauri::command]
 pub(crate) async fn voice_live_hear(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::ShellState>,
 ) -> Result<String, String> {
     let turn = with(Live::take_turn)?;
     let dir = state.config_dir.clone();
-    crate::off_main(move || hear(turn, |wav| crate::voice::transcribe(&dir, wav))).await?
+    crate::off_main(move || {
+        hear(turn, |wav| {
+            crate::voice::transcribe_with(Some(&app), &dir, wav)
+        })
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -751,6 +902,7 @@ pub(crate) fn voice_reply_hush() -> Result<(), String> {
 /// One piece of a reply as speech, in the chat's voice.
 #[tauri::command]
 pub(crate) async fn voice_speak(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::ShellState>,
     text: String,
 ) -> Result<Spoken, String> {
@@ -759,7 +911,21 @@ pub(crate) async fn voice_speak(
     let voice = crate::personality::speech_voice(&dir, &crate::current(&state));
     // Taken as the page asks, so a hush that comes later drops this piece.
     let asked = hushes();
-    crate::off_main(move || speak(&dir, &models_dir(&dir), voice, &text, asked)).await?
+    crate::off_main(move || speak_with(Some(&app), &dir, &models_dir(&dir), voice, &text, asked))
+        .await?
+}
+
+#[tauri::command]
+pub(crate) fn get_voice_route(state: tauri::State<'_, crate::ShellState>) -> VoiceRouteConfig {
+    voice_route::read(&state.config_dir)
+}
+
+#[tauri::command]
+pub(crate) fn set_voice_route(
+    state: tauri::State<'_, crate::ShellState>,
+    config: VoiceRouteConfig,
+) -> Result<VoiceRouteConfig, String> {
+    voice_route::write(&state.config_dir, config)
 }
 
 #[cfg(test)]

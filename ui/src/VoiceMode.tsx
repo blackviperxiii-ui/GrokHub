@@ -4,11 +4,16 @@
 
 import { useEffect, useState } from "react";
 import * as api from "./api";
-import type { LiveEvent, Spoken } from "./api";
+import type { LibraryStatus, LiveEvent, Spoken } from "./api";
 import type { DesktopNyxTalk } from "./desktopNyxApi";
 import { envelopeOf } from "./lipsync";
 import { CANT_RECORD, MIC_DENIED, NO_MIC, tap } from "./Mic";
 import { Downsampler, toBase64, WAV_RATE } from "./wav";
+
+const VOICE_LIBRARY_NAMES: Record<string, string> = {
+  "parakeet-tdt-0.6b-v3-int8": "speech-to-text model",
+  "kokoro-82m-multi-lang-v1_0": "on-device voice",
+};
 
 export type VoiceState = "off" | "listening" | "thinking" | "speaking";
 
@@ -92,6 +97,11 @@ export class VoiceSession {
   /** Someone is mid-turn. */
   talking = false;
   private closeMic: (() => void) | null = null;
+  private unlistenLibrary: (() => void) | null = null;
+  private libraryDropped = false;
+  private activeVoiceDownloads = new Set<string>();
+  private reportedLibraryErrors = new Map<string, string>();
+  private lastLibraryMessage: string | null = null;
   private pending = new Float32Array(0);
   private pushes: Promise<unknown> = Promise.resolve();
   private reply: Promise<unknown> = Promise.resolve();
@@ -138,14 +148,59 @@ export class VoiceSession {
     this.deps.onNote(err instanceof Error ? err.message : String(err));
   }
 
+  private handleLibraryStatus(status: LibraryStatus) {
+    if (this.state === "off") return;
+    if (status.job && status.job.id in VOICE_LIBRARY_NAMES) {
+      if (!this.activeVoiceDownloads.has(status.job.id)) {
+        this.activeVoiceDownloads.add(status.job.id);
+        this.deps.onNote(
+          status.job.line || `Downloading ${VOICE_LIBRARY_NAMES[status.job.id]}…`,
+        );
+      }
+    }
+    for (const [id, err] of Object.entries(status.errors)) {
+      if (!(id in VOICE_LIBRARY_NAMES)) continue;
+      if (this.reportedLibraryErrors.get(id) !== err.message) {
+        this.reportedLibraryErrors.set(id, err.message);
+        this.activeVoiceDownloads.delete(id);
+        this.deps.onNote(err.message);
+      }
+    }
+    if (this.activeVoiceDownloads.size > 0 && !status.job && !status.running) {
+      this.activeVoiceDownloads.clear();
+      if (status.message && status.message !== this.lastLibraryMessage) {
+        this.lastLibraryMessage = status.message;
+        this.deps.onNote(status.message);
+      } else if (!status.message && this.reportedLibraryErrors.size === 0) {
+        this.deps.onNote("On-device voice model is ready.");
+      }
+    }
+  }
+
+  private watchLibrary() {
+    if (typeof api.onModelLibraryEvent !== "function") return;
+    this.libraryDropped = false;
+    void api
+      .onModelLibraryEvent((status) => this.handleLibraryStatus(status))
+      .then((unlisten) => {
+        if (this.libraryDropped || this.state === "off") unlisten();
+        else this.unlistenLibrary = unlisten;
+      })
+      .catch(() => {});
+  }
+
   async start() {
     if (this.state !== "off") return;
     this.noVoice = false;
     this.warned = false;
+    this.activeVoiceDownloads.clear();
+    this.reportedLibraryErrors.clear();
+    this.lastLibraryMessage = null;
     if (live && live !== this) await live.stop();
     live = this;
     await api.voiceLiveStart();
     this.go("start");
+    this.watchLibrary();
     try {
       this.closeMic = await this.deps.openMic((s, rate) => this.take(s, rate));
     } catch (err) {
@@ -158,6 +213,12 @@ export class VoiceSession {
   async stop(note?: string) {
     if (live === this) live = null;
     const wasOn = this.state !== "off";
+    this.libraryDropped = true;
+    this.unlistenLibrary?.();
+    this.unlistenLibrary = null;
+    this.activeVoiceDownloads.clear();
+    this.reportedLibraryErrors.clear();
+    this.lastLibraryMessage = null;
     this.go("stop");
     this.closeMic?.();
     this.closeMic = null;

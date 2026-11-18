@@ -85,8 +85,11 @@ describe("outside links", () => {
 describe("chat errors", () => {
   it("offer Settings only for key and sign-in trouble", () => {
     expect(needsSettings("Sign in with Grok or add an API key.")).toBe(true);
+    expect(needsSettings("Voice needs Grok sign-in or an xAI API key in Settings → Account, or Local AI enabled in Settings → Local AI.")).toBe(true);
+    expect(needsSettings("Spoken replies need Grok sign-in or an xAI API key in Settings → Account, or Local AI enabled in Settings → Local AI.")).toBe(true);
     expect(needsSettings("API key rejected (HTTP 401): bad key")).toBe(true);
     expect(needsSettings("The system keychain is not available: no service")).toBe(true);
+    expect(needsSettings("Speech to text is set to Local only, and no on-device speech model is installed yet.")).toBe(false);
     expect(needsSettings("read_file failed: no such file")).toBe(false);
     expect(needsSettings("transport: connection reset")).toBe(false);
     expect(needsSettings("HTTP 500: server error")).toBe(false);

@@ -419,3 +419,20 @@ fn a_stream_nobody_talks_into_closes_after_the_idle_cap() {
     assert!(took < MAX_IDLE + Duration::from_millis(1500), "{took:?}");
     assert_eq!(seen.join().expect("fake").got, Vec::<Got>::new());
 }
+
+#[test]
+fn local_only_voice_route_skips_xai_stream_target() {
+    use grokhub_agent::route::voice_route::{self, VoiceRouteConfig, VoiceRouteMode};
+    let dir = temp_dir("local-only-target");
+    voice_route::write(
+        &dir,
+        VoiceRouteConfig {
+            mode: VoiceRouteMode::LocalOnly,
+            ..Default::default()
+        },
+    )
+    .expect("write route");
+    if ws_loopback_override(std::env::var(TEST_WS_ENV).ok().as_deref()).is_none() {
+        assert!(target_for(&dir).is_none());
+    }
+}

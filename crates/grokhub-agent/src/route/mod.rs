@@ -75,6 +75,7 @@ pub mod table;
 pub mod trial;
 pub mod trust;
 pub mod tune;
+pub mod voice_route;
 pub mod wait;
 
 use serde::{Deserialize, Serialize};
@@ -341,7 +342,11 @@ pub fn call_model(
             cancel,
         );
         match out {
-            Err(err) if live::provider_fallible(&err) && sent.model != call.model => {
+            Err(err)
+                if voice_route::active_reply_pref(&dir).is_none()
+                    && live::provider_fallible(&err)
+                    && sent.model != call.model =>
+            {
                 // The same rule as the chat path: cool the provider so the
                 // next pick skips it, and Grok takes the turn. Only when the
                 // router rerouted this call away from the caller's own model:
@@ -464,6 +469,8 @@ pub struct RouteInput<'a> {
     /// model; the live path draws it with [`tune::in_canary`]). The
     /// scorer then lets a model on tryout lead a tiny or short turn.
     pub probation_canary: Option<&'a str>,
+    /// Active voice session reply source preference (`None` = Auto).
+    pub voice_reply: Option<voice_route::ReplyPref>,
 }
 
 /// The lowest rung an xAI reasoning model takes without a listing that says otherwise.
@@ -1307,13 +1314,14 @@ impl Router {
         } else {
             None
         };
-        let chosen = if gov_paused && input.local.sensitive && !input.local.cloud_grant {
-            // Sensitive data stays on the device, and the device is paused.
-            local_paused(&mut rules)
-        } else if gov_paused
-            && input.local.offline
-            && local::eligible_if_running(&input.local, input.class, input.ctx_tokens)
+        let chosen = if gov_paused
+            && ((input.local.sensitive && !input.local.cloud_grant)
+                || (input.local.offline
+                    && local::eligible_if_running(&input.local, input.class, input.ctx_tokens))
+                || (matches!(input.voice_reply, Some(voice_route::ReplyPref::LocalOnly))
+                    && local::eligible_if_running(&as_offline, input.class, input.ctx_tokens)))
         {
+            // Sensitive data, offline mode, or voice Local only: keep on the paused device.
             local_paused(&mut rules)
         } else if local::privacy_only(&input.local) {
             // Sensitive data and no cloud grant: the device or nothing.
@@ -1422,6 +1430,76 @@ impl Router {
                 model: id.to_string(),
                 no_route: false,
                 replaced: None,
+            }
+        } else if let Some(pref) = &input.voice_reply {
+            match pref {
+                voice_route::ReplyPref::LocalOnly => match local_id.filter(|_| any_elig) {
+                    Some(id) => {
+                        rules.push("voice:local_only".into());
+                        ModelPick {
+                            model: id.to_string(),
+                            no_route: false,
+                            replaced: None,
+                        }
+                    }
+                    None => {
+                        rules.push("voice:no_local".into());
+                        ModelPick {
+                            model: input.current_model.trim().to_string(),
+                            no_route: true,
+                            replaced: None,
+                        }
+                    }
+                },
+                voice_route::ReplyPref::Provider(target) => {
+                    let target = target.as_str();
+                    let pinned_pool: Vec<&str> = cloud_ids
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            if target == PROVIDER_XAI {
+                                !policy::is_new_provider(reg, id)
+                            } else {
+                                split_provider_model(id).is_some_and(|(p, _)| p == target)
+                            }
+                        })
+                        .collect();
+                    if pinned_pool.is_empty()
+                        || (target == PROVIDER_XAI
+                            && !provider.eq_ignore_ascii_case(live::PROVIDER_GROK_BUILD)
+                            && reg.entitlement.credential == Credential::None)
+                    {
+                        rules.push(format!("voice:pinned_missing:{target}"));
+                        ModelPick {
+                            model: input.current_model.trim().to_string(),
+                            no_route: true,
+                            replaced: None,
+                        }
+                    } else {
+                        let mut pick = Self::pick_model(
+                            input,
+                            reg,
+                            profiles,
+                            &pinned_pool,
+                            table,
+                            e2,
+                            stronger,
+                            now_ms,
+                            &mut rules,
+                        );
+                        if !pick.no_route && !pinned_pool.contains(&pick.model.as_str()) {
+                            rules.push(format!("voice:pinned_missing:{target}"));
+                            pick = ModelPick {
+                                model: input.current_model.trim().to_string(),
+                                no_route: true,
+                                replaced: None,
+                            };
+                        } else if !pick.no_route {
+                            rules.push(format!("voice:pinned:{target}"));
+                        }
+                        pick
+                    }
+                }
             }
         } else if let Some(id) = warm_local {
             // The warm-local default (above): the loaded device model takes
@@ -2652,6 +2730,106 @@ mod tests {
         assert_eq!(body.get("reasoning"), None);
         let body = crate::client::responses_body(&req(NON_REASONING[0], Some("high"), "s", "hi"));
         assert_eq!(body.get("reasoning"), None);
+    }
+
+    #[test]
+    fn voice_reply_routing_respects_local_only_and_pinned_providers() {
+        let mut reg = Registry::default();
+        reg.entitlement.credential = Credential::Plan;
+        let xai_row = ModelMeta {
+            id: "grok-4.7".into(),
+            context_length: Some(256_000),
+            efforts: Some(vec!["low".into(), "medium".into(), "high".into()]),
+            tool_calling: Some(true),
+            prices: Prices {
+                prompt: Some(1),
+                cached: Some(1),
+                completion: Some(1),
+                ..Prices::default()
+            },
+            ..ModelMeta::default()
+        };
+        let or_row = ModelMeta {
+            id: "openrouter/vendor/reasoner".into(),
+            context_length: Some(128_000),
+            tool_calling: Some(true),
+            efforts: Some(vec!["low".into(), "high".into()]),
+            prices: Prices {
+                prompt: Some(1),
+                cached: Some(1),
+                completion: Some(1),
+                ..Prices::default()
+            },
+            ..ModelMeta::default()
+        };
+        let local_listing = Listing::new(
+            SourceKind::Local,
+            local::TIERS.iter().map(|t| local::tier_meta(t)).collect(),
+        );
+        reg.apply_refresh(
+            &[
+                Listing::new(SourceKind::XaiApi, vec![xai_row]),
+                Listing::new(SourceKind::OpenAiCompatible, vec![or_row]),
+                local_listing,
+            ],
+            &[],
+            1,
+        );
+        let none = BTreeMap::new();
+        let mut base = input("chat:default", "grok-4.7", 0.5);
+        base.spend.providers = vec!["openrouter".into()];
+        base.local = local::LocalGate {
+            enabled: true,
+            tier: "local:small".into(),
+            ..local::LocalGate::default()
+        };
+
+        // Pinned to OpenRouter selects OpenRouter even when xAI is online.
+        let mut or_pinned = base.clone();
+        or_pinned.voice_reply = Some(voice_route::ReplyPref::Provider("openrouter".into()));
+        let r = Router::choose(&or_pinned, &reg, &none, &no_table(), 10);
+        assert!(!r.no_route, "{r:?}");
+        assert_eq!(r.provider, "openrouter");
+        assert_eq!(r.model, "openrouter/vendor/reasoner");
+        assert!(r.rule_ids.iter().any(|id| id == "voice:pinned:openrouter"));
+
+        // Pinned to xAI selects xAI.
+        let mut xai_pinned = base.clone();
+        xai_pinned.voice_reply = Some(voice_route::ReplyPref::Provider("xai".into()));
+        let r = Router::choose(&xai_pinned, &reg, &none, &no_table(), 10);
+        assert!(!r.no_route, "{r:?}");
+        assert_eq!(r.provider, "xai");
+        assert_eq!(r.model, "grok-4.7");
+        assert!(r.rule_ids.iter().any(|id| id == "voice:pinned:xai"));
+
+        // LocalOnly routes online chat to on-device model.
+        let mut local_only = base.clone();
+        local_only.voice_reply = Some(voice_route::ReplyPref::LocalOnly);
+        let r = Router::choose(&local_only, &reg, &none, &no_table(), 10);
+        assert!(!r.no_route, "{r:?}");
+        assert_eq!(r.provider, "local");
+        assert!(local::is_local(&r.model));
+        assert!(r.rule_ids.iter().any(|id| id == "voice:local_only"));
+
+        // LocalOnly without local model pauses cleanly instead of sending to cloud.
+        let mut no_local = local_only.clone();
+        no_local.local.enabled = false;
+        let r = Router::choose(&no_local, &reg, &none, &no_table(), 10);
+        assert!(r.no_route, "{r:?}");
+        assert!(r.rule_ids.iter().any(|id| id == "voice:no_local"));
+
+        // Pinned to xAI when not signed in pauses cleanly instead of leaking local or openrouter.
+        let mut no_xai_reg = reg.clone();
+        no_xai_reg.entitlement.credential = Credential::None;
+        let r = Router::choose(&xai_pinned, &no_xai_reg, &none, &no_table(), 10);
+        assert!(r.no_route, "{r:?}");
+        assert!(r.rule_ids.iter().any(|id| id == "voice:pinned_missing:xai"));
+
+        // Auto without xAI credentials uses configured OpenRouter provider instead.
+        let r = Router::choose(&base, &no_xai_reg, &none, &no_table(), 10);
+        assert!(!r.no_route, "{r:?}");
+        assert_eq!(r.provider, "openrouter");
+        assert_eq!(r.model, "openrouter/vendor/reasoner");
     }
 }
 

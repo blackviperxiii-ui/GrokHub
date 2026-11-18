@@ -53,8 +53,9 @@ function drafterEvent(event: LocalDrafterEvent) {
 }
 
 vi.mock("./api", () => api);
-// Download models has its own tests.
+// Download models and voice routing have their own tests.
 vi.mock("./ModelLibrary", () => ({ ModelLibrary: () => null }));
+vi.mock("./VoiceRouteSettings", () => ({ VoiceRouteSettings: () => null }));
 
 import { ABLITERATED_NOTICE, LocalAi, MODEL_NOTICE } from "./LocalAi";
 

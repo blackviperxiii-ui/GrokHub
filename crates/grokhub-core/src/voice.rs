@@ -214,8 +214,8 @@ pub fn speech_can_connect(bearer: &str) -> bool {
     voice_can_connect(bearer)
 }
 
-pub fn realtime_can_connect(api_key: &str) -> bool {
-    !api_key.trim().is_empty()
+pub fn realtime_can_connect(api_key: &str, access_token: &str) -> bool {
+    crate::oauth::has_auth(api_key, access_token)
 }
 
 pub fn hey_grok_route(has_api_key: bool, has_speech_auth: bool, has_local: bool) -> HeyGrokRoute {
@@ -708,8 +708,10 @@ mod tests {
         assert_eq!(voice_tts_script("<think>plan</think>\nHello."), "Hello.");
         assert!(voice_tts_script("THINKING:\nonly thought").is_empty());
         assert!(!voice_tts_script("I'll look.\nHOST_CMD: echo hi\nDone.").contains("HOST_CMD"));
-        assert!(realtime_can_connect("xai-k"));
-        assert!(!realtime_can_connect(""));
+        assert!(realtime_can_connect("xai-k", ""));
+        assert!(realtime_can_connect("", "tok"));
+        assert!(realtime_can_connect("xai-k", "tok"));
+        assert!(!realtime_can_connect("", ""));
         assert!(speech_can_connect("tok"));
         assert!(speech_can_connect("xai-k"));
         assert!(!speech_can_connect(""));

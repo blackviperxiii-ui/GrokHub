@@ -1,0 +1,1 @@
+- Voice routing and auth: Voice mode and push-to-talk share the router across speech-to-text, reply model, and voice/TTS (`Auto`, `Local only`, or per-stage `Pinned` in Settings → Local AI). Grok sign-in (`oauth`) is accepted alongside an xAI API key for Grok Voice 3, with automatic failover and background local voice-model downloads when offline or unconfigured.
