@@ -26,6 +26,14 @@ makepkg -si
 
 `packaging/aur/PKGBUILD` builds the release tag `v<pkgver>` from GitHub. Both run the same steps as `install.sh`: `cargo build -p grokhub-hub`, `npm ci --prefix ui`, then `tauri build --no-bundle`. `build()` needs the network for cargo and npm downloads.
 
+After editing the AUR `PKGBUILD` recipe (depends, desc, …), refresh the committed `.SRCINFO`:
+
+```bash
+python3 scripts/aur-srcinfo.py --write
+```
+
+`cargo xtask bump` rewrites the `.SRCINFO` `pkgver` and source tag with the PKGBUILD; ci-guards fails when they drift.
+
 For on-device models, install optional `llama-cpp` from extra (`pacman -S llama-cpp`) so `llama-server` is on PATH, or use the in-app engine download in Settings.
 
 ## Layout

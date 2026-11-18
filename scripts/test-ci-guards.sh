@@ -25,13 +25,31 @@ W="$TMP/work"
 mkdir -p "$W/scripts" "$W/crates/grokhub-core/src/slash"
 cp "$SRC/scripts/ci-guards.sh" "$W/scripts/ci-guards.sh"
 cp -r "$SRC/scripts/ci-guards.d" "$W/scripts/ci-guards.d"
+cp "$SRC/scripts/aur-srcinfo.py" "$W/scripts/aur-srcinfo.py"
 printf 'fn main() {}\n' >"$W/crates/grokhub-core/src/slash/mod.rs"
 printf '[workspace.package]\nversion = "1.0.0"\n\n[workspace.dependencies]\n' >"$W/Cargo.toml"
 printf 'name = "grokhub-core"\nversion = "1.0.0"\n' >"$W/Cargo.lock"
 printf '1.0.0\n' >"$W/VERSION"
 mkdir -p "$W/packaging/aur"
 printf 'pkgname=grokhub\npkgver=1.0.0\npkgdesc="Old"\n' >"$W/packaging/PKGBUILD"
-printf 'pkgname=grokhub\npkgver=1.0.0\npkgdesc="Old"\n' >"$W/packaging/aur/PKGBUILD"
+# Full enough for scripts/aur-srcinfo.py --check (ci-guards 42-aur-srcinfo).
+cat >"$W/packaging/aur/PKGBUILD" <<'PKG'
+pkgname=grokhub
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Old"
+arch=('x86_64')
+url="https://example.com/GrokHub"
+license=('MIT')
+depends=('gtk3')
+optdepends=('ffmpeg: Imagine video')
+makedepends=('cargo' 'git')
+options=('!debug')
+install=grokhub.install
+source=("${pkgname}::git+https://example.com/GrokHub.git#tag=v${pkgver}")
+sha256sums=('SKIP')
+PKG
+python3 "$W/scripts/aur-srcinfo.py" --write
 mkdir -p "$W/.github/workflows"
 SHA=0123456789abcdef0123456789abcdef01234567
 # Job `a` stays last: the pinned-action cases append steps to it.
@@ -202,9 +220,20 @@ commit_pr
 run_guard fail "unparseable Cargo.toml version fails"
 
 fresh_pr
-sed -i 's/"Old"/"New"/' "$W/packaging/PKGBUILD" "$W/packaging/aur/PKGBUILD"
+sed -i 's/"Old"/"New"/' "$W/packaging/PKGBUILD"
 commit_pr
-run_guard pass "PKGBUILD recipe edit without a pkgver change passes"
+run_guard pass "clone PKGBUILD recipe edit without a pkgver change passes"
+
+fresh_pr
+sed -i 's/pkgdesc="Old"/pkgdesc="New"/' "$W/packaging/aur/PKGBUILD"
+commit_pr
+run_guard fail "AUR PKGBUILD edit without refreshing .SRCINFO fails"
+
+fresh_pr
+sed -i 's/pkgdesc="Old"/pkgdesc="New"/' "$W/packaging/aur/PKGBUILD"
+python3 "$W/scripts/aur-srcinfo.py" --write
+commit_pr
+run_guard pass "AUR PKGBUILD recipe edit with matching .SRCINFO passes"
 
 fresh_pr
 sed -i 's/^pkgver=1.0.0$/pkgver=1.0.1/' "$W/packaging/PKGBUILD"

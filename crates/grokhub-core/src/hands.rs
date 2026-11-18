@@ -256,6 +256,12 @@ mod tests {
             "clone install must skip grim/ydotool sidecars, turn off the old cabin unit and enable the hub: {sh}"
         );
         assert!(
+            sh.contains(
+                r#"[[ -z "${CARGO_TARGET_DIR:-}" ]] || export CARGO_TARGET_DIR="$(realpath -m "$CARGO_TARGET_DIR")""#
+            ),
+            "install.sh must resolve a relative CARGO_TARGET_DIR before cargo/tauri: {sh}"
+        );
+        assert!(
             !sh.contains("sudo pacman -S --needed ydotool"),
             "clone install must not hard-require pacman ydotool"
         );
@@ -520,5 +526,40 @@ mod tests {
                 .any(|l| l == "ExecStart=%h/.local/bin/grokhub-hub"),
             "the PKGBUILD sed matches this exact line: {unit}"
         );
+    }
+
+    /// A relative CARGO_TARGET_DIR must become absolute before cargo/tauri run,
+    /// otherwise the shell build (cwd src-tauri) and the install paths disagree.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn install_sh_resolves_relative_cargo_target_dir_absolute() {
+        let root =
+            std::env::temp_dir().join(format!("grokhub-cargo-target-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let status = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(
+                r#"set -euo pipefail
+cd "$1"
+CARGO_TARGET_DIR=rel-out
+[[ -z "${CARGO_TARGET_DIR:-}" ]] || export CARGO_TARGET_DIR="$(realpath -m "$CARGO_TARGET_DIR")"
+case "$CARGO_TARGET_DIR" in
+  /*) ;;
+  *) echo "expected absolute, got $CARGO_TARGET_DIR" >&2; exit 1 ;;
+esac
+test "$CARGO_TARGET_DIR" = "$1/rel-out"
+TARGET="${CARGO_TARGET_DIR:-$1/target}"
+SHELL_TARGET="${CARGO_TARGET_DIR:-$1/src-tauri/target}"
+test "$TARGET" = "$CARGO_TARGET_DIR"
+test "$SHELL_TARGET" = "$CARGO_TARGET_DIR"
+"#,
+            )
+            .arg("bash")
+            .arg(&root)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
