@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PermissionPage, RuleKind } from "./api";
+import type { HubSendGrant, PermissionPage, RuleKind } from "./api";
 
 const api = vi.hoisted(() => ({
   getPermissions: vi.fn<() => Promise<PermissionPage>>(),
@@ -10,17 +10,26 @@ const api = vi.hoisted(() => ({
   removePermissionRule: vi.fn<(index: number, rule: string) => Promise<PermissionPage>>(),
   rememberGrant: vi.fn<(command: string) => Promise<PermissionPage>>(),
   forgetGrant: vi.fn<(command: string) => Promise<PermissionPage>>(),
+  getHubSendGrant: vi.fn<() => Promise<HubSendGrant>>(),
+  allowHubSendEveryTime: vi.fn<() => Promise<HubSendGrant>>(),
+  askHubSendEachTime: vi.fn<() => Promise<HubSendGrant>>(),
 }));
 
 vi.mock("./api", () => api);
 
-import { Permissions, RULES_NOTE, UNTRUSTED_RULES } from "./Permissions";
+import { ASK_EACH_TIME, ALLOW_EVERY_TIME, HUB_GRANT_NOTE, Permissions, RULES_NOTE, UNTRUSTED_RULES } from "./Permissions";
 
 const EMPTY: PermissionPage = { rules: [], imported: [], grants: [], folderTrusted: false };
+const HUB_ASK: HubSendGrant = { everyTime: false, status: "" };
+const HUB_ALLOW: HubSendGrant = {
+  everyTime: true,
+  status: "Allowed every time. /sync and /inhabit go without asking until you choose Ask each time.",
+};
 
 describe("Permissions", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+    api.getHubSendGrant.mockResolvedValue(HUB_ASK);
   });
 
   it("adds a deny rule and removes it by its place in the list", async () => {
@@ -91,5 +100,40 @@ describe("Permissions", () => {
     await userEvent.click(grants.getByRole("button", { name: "Remove" }));
     expect(api.forgetGrant).toHaveBeenCalledWith("cargo build");
     expect(screen.getByText("No remembered commands for this project.")).toBeVisible();
+  });
+
+  it("allows every time then asks each time for paired computers", async () => {
+    api.getPermissions.mockResolvedValue(EMPTY);
+    api.allowHubSendEveryTime.mockResolvedValue(HUB_ALLOW);
+    api.askHubSendEachTime.mockResolvedValue({
+      everyTime: false,
+      status: "Asks each time. The current share and hand-off were dropped.",
+    });
+    render(<Permissions />);
+    const row = await screen.findByRole("group", { name: "Paired computers send" });
+    expect(screen.getByText(HUB_GRANT_NOTE)).toBeVisible();
+    expect(within(row).getByRole("button", { name: ASK_EACH_TIME })).toHaveAttribute("aria-pressed", "true");
+    expect(within(row).getByRole("button", { name: ALLOW_EVERY_TIME })).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(within(row).getByRole("button", { name: ALLOW_EVERY_TIME }));
+    expect(api.allowHubSendEveryTime).toHaveBeenCalled();
+    expect(await screen.findByText(HUB_ALLOW.status)).toBeVisible();
+    expect(within(row).getByRole("button", { name: ALLOW_EVERY_TIME })).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(within(row).getByRole("button", { name: ASK_EACH_TIME }));
+    expect(api.askHubSendEachTime).toHaveBeenCalled();
+    expect(
+      await screen.findByText("Asks each time. The current share and hand-off were dropped."),
+    ).toBeVisible();
+    expect(within(row).getByRole("button", { name: ASK_EACH_TIME })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("hides paired computers when the hub grant is not on this computer", async () => {
+    api.getPermissions.mockResolvedValue(EMPTY);
+    api.getHubSendGrant.mockRejectedValue(new Error("That works on your computer."));
+    render(<Permissions />);
+    expect(await screen.findByText("No remembered commands for this project.")).toBeVisible();
+    expect(screen.queryByText(HUB_GRANT_NOTE)).toBeNull();
+    expect(screen.queryByRole("button", { name: ALLOW_EVERY_TIME })).toBeNull();
   });
 });

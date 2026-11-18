@@ -340,6 +340,15 @@ impl HubShare {
         lock(&self.hub).inhabit = Some(bundle);
     }
 
+    /// Drop what `/sync` and `/inhabit` already published this launch.
+    /// Sharing and pairing stay as they are; a paired computer then gets
+    /// nothing until something is shared or handed off again.
+    pub fn drop_published(&self) {
+        let mut st = lock(&self.hub);
+        st.snapshot = None;
+        st.inhabit = None;
+    }
+
     /// Writes the file when a computer paired since the last write, and
     /// nothing otherwise. The page's poll and the app quitting both call it.
     pub fn save(&self) {
@@ -809,6 +818,35 @@ mod tests {
         assert_eq!(pair(on.port, &again.code, "Laptop").0, 200);
         assert!(share.view().paired_since_code);
         assert!(!share.stop().paired_since_code);
+    }
+
+    #[test]
+    fn drop_published_clears_the_share_and_hand_off_while_sharing_stays_on() {
+        let dir = temp("drop-published");
+        let path = dir.join("hub-state.json");
+        desk_saved(&path);
+        let share = HubShare::with(&dir, loopback, no_lan);
+        let on = share.start().unwrap();
+        share.publish(snap("harbor-chat", 10)).unwrap();
+        share.stage(bundle("stay kind"));
+        assert_eq!(thread_ids(on.port), ["harbor-chat"]);
+        assert_eq!(
+            get(on.port, "/v1/inhabit", "t-desk")["bundle"]["soul"],
+            "stay kind"
+        );
+        share.stage(bundle("left for later"));
+        share.drop_published();
+        let view = share.view();
+        assert!(view.on, "sharing stays on after a drop");
+        assert_eq!(view.peers.len(), 1);
+        assert_eq!(
+            get(on.port, "/v1/snapshot", "t-desk"),
+            serde_json::json!({ "ok": true, "snapshot": null })
+        );
+        assert_eq!(
+            get(on.port, "/v1/inhabit", "t-desk"),
+            serde_json::json!({ "ok": true, "bundle": null })
+        );
     }
 
     #[test]

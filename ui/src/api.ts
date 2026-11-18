@@ -3539,6 +3539,24 @@ export function forgetGrant(command: string): Promise<PermissionPage> {
   return invoke<PermissionPage>("forget_grant", { command });
 }
 
+/** Settings → Permissions → Paired computers (src-tauri/src/hub_send.rs). */
+export interface HubSendGrant {
+  everyTime: boolean;
+  status: string;
+}
+
+export function getHubSendGrant(): Promise<HubSendGrant> {
+  return invoke<HubSendGrant>("get_hub_send_grant");
+}
+
+export function allowHubSendEveryTime(): Promise<HubSendGrant> {
+  return invoke<HubSendGrant>("allow_hub_send_every_time");
+}
+
+export function askHubSendEachTime(): Promise<HubSendGrant> {
+  return invoke<HubSendGrant>("ask_hub_send_each_time");
+}
+
 /** Connectors → GitHub (src-tauri/src/github.rs). Never holds the token. */
 export interface GithubView {
   tokenSet: boolean;

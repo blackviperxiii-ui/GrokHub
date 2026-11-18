@@ -1,10 +1,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   addPermissionRule,
+  allowHubSendEveryTime,
+  askHubSendEachTime,
   forgetGrant,
+  getHubSendGrant,
   getPermissions,
   rememberGrant,
   removePermissionRule,
+  type HubSendGrant,
   type PermissionPage,
   type RuleKind,
 } from "./api";
@@ -17,6 +21,10 @@ export const RULE_HINT =
 export const UNTRUSTED_RULES =
   "Its allow rules apply only after you trust this folder under Connectors → Hooks.";
 export const GRANTS_NOTE = "Allow always for this project. Dangerous commands are not stored.";
+export const HUB_GRANT_NOTE =
+  "/sync and /inhabit share chats and memory with paired computers. Allow every time skips the ask until you choose Ask each time; Ask each time also drops anything already published.";
+export const ALLOW_EVERY_TIME = "Allow every time";
+export const ASK_EACH_TIME = "Ask each time";
 
 const KINDS: { value: RuleKind; label: string }[] = [
   { value: "allow", label: "Allow" },
@@ -30,6 +38,7 @@ const LABEL: Record<RuleKind, string> = { allow: "Allow", ask: "Ask", deny: "Den
  * project's remembered grants, from the same files the gate reads. */
 export function Permissions() {
   const [page, setPage] = useState<PermissionPage | null>(null);
+  const [hub, setHub] = useState<HubSendGrant | null>(null);
   const [rule, setRule] = useState("");
   const [kind, setKind] = useState<RuleKind>("allow");
   const [grant, setGrant] = useState("");
@@ -38,6 +47,7 @@ export function Permissions() {
 
   useEffect(() => {
     getPermissions().then(setPage, (err) => setNote(String(err)));
+    getHubSendGrant().then(setHub, () => setHub(null));
   }, []);
 
   async function run(work: () => Promise<PermissionPage>, done: string) {
@@ -51,6 +61,20 @@ export function Permissions() {
       // The cabin may have changed the list; show what the files hold now.
       await getPermissions().then(setPage, () => {});
       return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setHubGrant(everyTime: boolean) {
+    if (busy || !hub || hub.everyTime === everyTime) return;
+    setBusy(true);
+    try {
+      setHub(await (everyTime ? allowHubSendEveryTime() : askHubSendEachTime()));
+      setNote(null);
+    } catch (err) {
+      setNote(String(err));
+      await getHubSendGrant().then(setHub, () => {});
     } finally {
       setBusy(false);
     }
@@ -137,6 +161,37 @@ export function Permissions() {
             ))}
           </ul>
         </>
+      )}
+      {hub && (
+        <section aria-label="Paired computers">
+          <h2>Paired computers</h2>
+          <p className="note">{HUB_GRANT_NOTE}</p>
+          {hub.status && (
+            <p className="note" role="status">
+              {hub.status}
+            </p>
+          )}
+          <div className="chip-group" role="group" aria-label="Paired computers send">
+            <button
+              type="button"
+              className="chip"
+              aria-pressed={hub.everyTime}
+              disabled={busy}
+              onClick={() => void setHubGrant(true)}
+            >
+              {ALLOW_EVERY_TIME}
+            </button>
+            <button
+              type="button"
+              className="chip"
+              aria-pressed={!hub.everyTime}
+              disabled={busy}
+              onClick={() => void setHubGrant(false)}
+            >
+              {ASK_EACH_TIME}
+            </button>
+          </div>
+        </section>
       )}
       <h2>Remembered commands</h2>
       <p className="note">{GRANTS_NOTE}</p>
