@@ -308,6 +308,7 @@ fn crash_offers(
         prompt: prompt.to_string(),
         kind: crate::card_report::OfferKind::Look,
         fix_type: Some(crate::auto_fix::FixType::CrashCheck),
+        steps: vec![],
     }]
 }
 
@@ -817,6 +818,7 @@ mod tests {
                 prompt: "Help me investigate why bluetoothd keeps crashing (read crash logs metadata only).".into(),
                 kind: crate::card_report::OfferKind::Look,
                 fix_type: Some(crate::auto_fix::FixType::CrashCheck),
+                steps: vec![],
             }]
         );
     }

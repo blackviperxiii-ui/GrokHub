@@ -135,6 +135,7 @@ pub mod projects;
 pub mod pulse;
 pub mod pulse_digests;
 pub mod pulse_feed;
+pub mod pulse_live;
 pub mod queue;
 pub mod remote;
 pub mod remote_devices;
@@ -5639,6 +5640,7 @@ async fn pulse_discuss(state: State<'_, ShellState>, id: String) -> Result<pulse
 }
 
 /// A card's fix chip: its words in the card's own chat. Nothing runs until sent.
+/// Live offers open the checklist dialog via `pulse_live_open` instead.
 #[tauri::command]
 async fn pulse_offer(
     state: State<'_, ShellState>,
@@ -5649,6 +5651,59 @@ async fn pulse_offer(
     let dir = state.config_dir.clone();
     let seed = off_main(move || pulse::offer(&dir, &id, index, grokhub_core::now_ms())).await??;
     Ok(card_seed(&state, seed))
+}
+
+/// Open a Live offer's checklist dialog.
+#[tauri::command]
+async fn pulse_live_open(
+    state: State<'_, ShellState>,
+    id: String,
+    index: usize,
+) -> Result<pulse_live::LiveView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse_live::open(&dir, &id, index, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn pulse_live_current() -> Result<Option<pulse_live::LiveView>, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    pulse_live::current()
+}
+
+/// Start the live checklist, or Allow the step waiting for an OK.
+#[tauri::command]
+async fn pulse_live_allow(state: State<'_, ShellState>) -> Result<pulse_live::LiveView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse_live::start_or_allow(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn pulse_live_deny(state: State<'_, ShellState>) -> Result<pulse_live::LiveView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse_live::deny(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn pulse_live_stop(state: State<'_, ShellState>) -> Result<pulse_live::LiveView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse_live::stop(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn pulse_live_undo(state: State<'_, ShellState>) -> Result<pulse_live::LiveView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse_live::undo(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn pulse_live_close() -> Result<(), String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    pulse_live::close()
 }
 
 /// Remind me later: hidden until a time that fits the day.
@@ -7206,6 +7261,17 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "id")?,
             arg(args, "index")?,
         ))?),
+        "pulse_live_open" => out(block_on(pulse_live_open(
+            state,
+            arg(args, "id")?,
+            arg(args, "index")?,
+        ))?),
+        "pulse_live_current" => out(block_on(pulse_live_current())?),
+        "pulse_live_allow" => out(block_on(pulse_live_allow(state))?),
+        "pulse_live_deny" => out(block_on(pulse_live_deny(state))?),
+        "pulse_live_stop" => out(block_on(pulse_live_stop(state))?),
+        "pulse_live_undo" => out(block_on(pulse_live_undo(state))?),
+        "pulse_live_close" => out(block_on(pulse_live_close())?),
         "pulse_remind" => out(block_on(pulse_remind(
             state,
             arg(args, "id")?,
@@ -8276,6 +8342,13 @@ pub fn run() {
             pulse_review_issue,
             pulse_discuss,
             pulse_offer,
+            pulse_live_open,
+            pulse_live_current,
+            pulse_live_allow,
+            pulse_live_deny,
+            pulse_live_stop,
+            pulse_live_undo,
+            pulse_live_close,
             pulse_remind,
             pulse_why,
             pulse_saved,

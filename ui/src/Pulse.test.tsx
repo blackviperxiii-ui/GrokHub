@@ -5,6 +5,7 @@ import type {
   SavedFind,
   FeedPrompt,
   FixView,
+  LiveView,
   PulseAct,
   PulseIdea,
   PulsePage,
@@ -19,6 +20,12 @@ const api = vi.hoisted(() => ({
   pulseAct: vi.fn<(id: string, act: PulseAct) => Promise<PulsePage>>(),
   pulseDiscuss: vi.fn<(id: string) => Promise<PulseSeed>>(),
   pulseOffer: vi.fn<(id: string, index: number) => Promise<PulseSeed>>(),
+  pulseLiveOpen: vi.fn<(id: string, index: number) => Promise<LiveView>>(),
+  pulseLiveAllow: vi.fn<() => Promise<LiveView>>(),
+  pulseLiveDeny: vi.fn<() => Promise<LiveView>>(),
+  pulseLiveStop: vi.fn<() => Promise<LiveView>>(),
+  pulseLiveUndo: vi.fn<() => Promise<LiveView>>(),
+  pulseLiveClose: vi.fn<() => Promise<void>>(),
   pulseRemind: vi.fn<(id: string) => Promise<PulseReminded>>(),
   pulseWhy: vi.fn<(id: string) => Promise<string>>(),
   pulseImage: vi.fn<(name: string) => Promise<string>>(),
@@ -846,6 +853,46 @@ describe("Pulse", () => {
     expect(onRun).toHaveBeenLastCalledWith("Read bluetoothd's crash history.", "pulse-crash-1");
 
     expect(within(row).getByRole("button", { name: "Not interested" })).toBeInTheDocument();
+  });
+
+  it("a Live offer chip opens the checklist dialog, not chat", async () => {
+    const liveCard = post({
+      id: "fans-1",
+      title: "GPU hit 87°C in the last session",
+      summary: "The fans can run full speed for a bit.",
+      link: "",
+      chips: [
+        { label: "Run the fans at full speed", act: "offer", index: 0, mode: "live" },
+        { label: "Discuss", act: "discuss", index: 0 },
+      ],
+    });
+    const liveView: LiveView = {
+      cardId: "fans-1",
+      label: "Run the fans at full speed",
+      title: "GPU hit 87°C in the last session",
+      summary: "Save each fan, set full speed, then check.",
+      steps: [
+        { plain: "Save each fan's setting.", mark: "pending" },
+        { plain: "Set every fan to full speed.", mark: "pending" },
+      ],
+      phase: "ready",
+      result: null,
+      canUndo: false,
+      primary: "Start fix",
+      stop: null,
+    };
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [liveCard] });
+    api.pulseLiveOpen.mockResolvedValue(liveView);
+    api.pulseLiveClose.mockResolvedValue();
+    const onRun = vi.fn();
+    render(<Pulse onRun={onRun} />);
+    const card = await screen.findByRole("listitem", { name: "GPU hit 87°C in the last session" });
+    await userEvent.click(within(card).getByRole("button", { name: "Run the fans at full speed" }));
+    expect(api.pulseLiveOpen).toHaveBeenCalledWith("fans-1", 0);
+    expect(api.pulseOffer).not.toHaveBeenCalled();
+    expect(onRun).not.toHaveBeenCalled();
+    expect(await screen.findByRole("dialog", { name: "Run the fans at full speed" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Start fix" })).toBeVisible();
   });
 
   it("Pause it on a failing automation's card pauses it here and never opens a chat", async () => {

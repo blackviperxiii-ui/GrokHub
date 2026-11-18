@@ -426,27 +426,39 @@ mod tests {
     /// the others are done. One holder that never lets go still runs the
     /// wait out. Hands change twenty times inside one wait, so a busy test
     /// runner that stalls the handing thread can't pass for a stuck holder.
+    /// The barrier starts the waiter only after the first hand-off so a
+    /// starved spawn under parallel nextest cannot burn the whole wait
+    /// before any mtime refresh.
     #[test]
     fn a_lock_that_keeps_changing_hands_is_waited_for_not_given_up_on() {
+        use std::sync::{Arc, Barrier};
+
         let d = dir("lock-queue");
         let path = d.join("workboard.json");
         let lock = lock_path(&path);
         let wait = Duration::from_millis(1000);
         fs::write(&lock, "1").unwrap();
+        let ready = Arc::new(Barrier::new(2));
         let busy = {
-            let (lock, d) = (lock.clone(), d.clone());
+            let (lock, d, ready) = (lock.clone(), d.clone(), ready.clone());
             std::thread::spawn(move || {
                 // Hand the lock on (a fresh file over the old, no gap) every
-                // 50 ms for two waits, then release it.
+                // 50 ms for two waits, then release it. First hand-off runs
+                // before the barrier so the waiter's clock starts on a live
+                // queue, not on a delayed spawn.
                 for i in 0..40 {
-                    std::thread::sleep(Duration::from_millis(50));
                     let next = d.join(format!("next-{i}"));
                     fs::write(&next, "2").unwrap();
                     fs::rename(&next, &lock).unwrap();
+                    if i == 0 {
+                        ready.wait();
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
                 }
                 fs::remove_file(&lock).unwrap();
             })
         };
+        ready.wait();
         let started = Instant::now();
         let got = lock_board_within(&path, wait);
         busy.join().unwrap();

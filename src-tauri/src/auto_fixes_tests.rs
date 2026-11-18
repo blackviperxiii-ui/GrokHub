@@ -49,6 +49,7 @@ fn crash_card(id: &str, program: &str) -> UpdateCard {
             prompt: format!("Read {program}'s crash history."),
             kind: OfferKind::Look,
             fix_type: Some(FixType::CrashCheck),
+            steps: vec![],
         }],
         ..Default::default()
     });
