@@ -284,11 +284,11 @@ fn skill_list(ctx: &SelfCtx<'_>) -> String {
             format!("{id}: {}", s.description)
         })
         .collect();
-    // The user's own skills first, then the built-in Loadout skills (the
-    // bundled vstack skills), each group sorted.
+    // The user's own skills first, then the built-in Loadout skills (active
+    // synced or bundled vstack skills), each group sorted.
     rows.sort();
     let mut builtins = Vec::new();
-    for (name, body) in crate::skills::BUILTIN_SKILL_BODIES {
+    for (name, body) in crate::skills::active_builtin_bodies() {
         let desc = body
             .lines()
             .find_map(|line| {

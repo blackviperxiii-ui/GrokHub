@@ -42,9 +42,6 @@ TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 PART = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-# The skill tool clips a file at 48 KiB (skills.rs BODY_CAP); a bundled file
-# must arrive whole.
-FILE_CAP = 48 * 1024
 # rustfmt keeps a tuple on one line while its items fit this width
 # (fn_call_width), and wraps a line past max_width.
 CALL_WIDTH = 60
@@ -127,24 +124,30 @@ def upstream_files(src, tag):
     return out
 
 
+def is_binary(data):
+    if b"\0" in data:
+        return True
+    try:
+        data.decode("utf-8")
+        return False
+    except UnicodeDecodeError:
+        return True
+
+
 def check_file(skill, rel, data):
     if data is None:
         raise SyncError(f"{skill}/{rel} is a symlink or submodule; exclude {skill} in vstack.json")
     if not all(PART.match(p) for p in rel.split("/")):
         raise SyncError(f"{skill}/{rel}: unexpected characters in the path")
-    if b"\0" in data:
-        raise SyncError(f"{skill}/{rel} is binary; exclude {skill} in vstack.json")
-    try:
-        data.decode("utf-8")
-    except UnicodeDecodeError:
-        raise SyncError(f"{skill}/{rel} is not UTF-8; exclude {skill} in vstack.json")
-    if len(data) > FILE_CAP:
-        raise SyncError(
-            f"{skill}/{rel} is {len(data)} bytes, over the skill tool's {FILE_CAP}; "
-            f"exclude {skill} in vstack.json"
-        )
-    if b"\r" in data:
-        raise SyncError(f"{skill}/{rel} has CR line endings")
+    if rel == "SKILL.md":
+        if b"\0" in data:
+            raise SyncError(f"{skill}/{rel} is binary; exclude {skill} in vstack.json")
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise SyncError(f"{skill}/{rel} is not UTF-8; exclude {skill} in vstack.json")
+        if b"\r" in data:
+            raise SyncError(f"{skill}/{rel} has CR line endings")
 
 
 def plan(doc, upstream):
@@ -202,7 +205,7 @@ def tuple_lines(items, indent):
     out = [pad + "("]
     for item in items:
         line = pad + "    " + item + ","
-        call = re.match(r"^(include_str!\()(.*)\)$", item)
+        call = re.match(r"^(include_(?:str|bytes)!\()(.*)\)$", item)
         if len(line) > MAX_WIDTH and call:
             out += [pad + "    " + call[1], pad + "        " + call[2], pad + "    ),"]
         else:
@@ -216,6 +219,12 @@ def emit_table(doc, files):
         "//! `assets/skills/vstack.json`. Do not edit by hand: run",
         "//! `python3 .github/scripts/vstack_sync.py sync --tag vX.Y.Z`.",
         "",
+        "/// Bundled upstream vstack tag.",
+        f'pub const BUILTIN_VSTACK_TAG: &str = {rust_str(doc["tag"])};',
+        "",
+        "/// Bundled upstream vstack commit.",
+        f'pub const BUILTIN_VSTACK_COMMIT: &str = {rust_str(doc["commit"])};',
+        "",
         "/// Bundled vstack skills (MIT; see `assets/skills/CREDITS.md`): folder and",
         "/// `SKILL.md`.",
         "pub const BUILTIN_SKILL_BODIES: &[(&str, &str)] = &[",
@@ -226,15 +235,31 @@ def emit_table(doc, files):
     lines += [
         "];",
         "",
-        "/// The other files in a bundled skill's folder: folder, path inside it, text.",
+        "/// The other UTF-8 text files in a bundled skill's folder: folder, path inside it, text.",
         "pub const BUILTIN_SKILL_FILES: &[(&str, &str, &str)] = &[",
     ]
+    binaries = []
     for name in doc["skills"]:
         for rel in files.get(name, []):
             if rel == "SKILL.md":
                 continue
-            inc = f'include_str!("../assets/skills/{name}/{rel}")'
-            lines += tuple_lines([rust_str(name), rust_str(rel), inc], 4)
+            full = os.path.join(ASSETS, name, *rel.split("/"))
+            with open(full, "rb") as fh:
+                data = fh.read()
+            if is_binary(data):
+                binaries.append((name, rel))
+            else:
+                inc = f'include_str!("../assets/skills/{name}/{rel}")'
+                lines += tuple_lines([rust_str(name), rust_str(rel), inc], 4)
+    lines += [
+        "];",
+        "",
+        "/// Non-UTF-8 binary files in a bundled skill's folder: folder, path inside it, bytes.",
+        "pub const BUILTIN_SKILL_BINARIES: &[(&str, &str, &[u8])] = &[",
+    ]
+    for name, rel in binaries:
+        inc = f'include_bytes!("../assets/skills/{name}/{rel}")'
+        lines += tuple_lines([rust_str(name), rust_str(rel), inc], 4)
     lines += [
         "];",
         "",
@@ -427,11 +452,52 @@ def newer():
         print(best)
 
 
+def check_upstream(src=None):
+    """Fail when vstack `main` skills/ list differs from vstack.json `skills`."""
+    doc = load()
+    tmp = None
+    if src is None:
+        tmp = tempfile.mkdtemp(prefix="vstack-up-")
+        src = os.path.join(tmp, "vstack")
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--quiet",
+                "--depth",
+                "1",
+                "--branch",
+                "main",
+                "--filter=blob:none",
+                "--no-checkout",
+                doc["repo"],
+                src,
+            ],
+            check=True,
+        )
+    try:
+        rows = git(src, "ls-tree", "-d", "--name-only", "HEAD:skills")
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+    upstream = sorted(line.strip() for line in rows.splitlines() if line.strip())
+    bundled = sorted(doc["skills"])
+    missing = sorted(set(upstream) - set(bundled))
+    extra = sorted(set(bundled) - set(upstream))
+    if missing or extra:
+        raise SyncError(
+            f"bundled skill list drifted from upstream main (missing={missing}, extra={extra})"
+        )
+    print(f"vstack-sync: {len(bundled)} bundled skills match upstream main")
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("newer")
     sub.add_parser("check")
+    cu = sub.add_parser("check-upstream")
+    cu.add_argument("--src", help="a vstack git repository checked out on main")
     s = sub.add_parser("sync")
     s.add_argument("--tag", required=True)
     s.add_argument("--src", help="a vstack git repository that has the tag")
@@ -442,6 +508,8 @@ def main(argv):
             newer()
         elif args.cmd == "check":
             check()
+        elif args.cmd == "check-upstream":
+            check_upstream(args.src)
         else:
             sync(args.tag, args.src, args.summary)
     except (SyncError, subprocess.CalledProcessError) as err:

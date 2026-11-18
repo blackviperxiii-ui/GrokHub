@@ -9,11 +9,11 @@ Last gate before ship: beta→main, big features, or "run a QA walkthrough". Any
 
 ## 1. App walk
 
-Boot the real app (Playwright/browser, desktop dev, or the repo's runner). Walk screens, flows, settings: empty, error, loading, offline, first-run, light/dark, narrow/wide. Hunt bugs, UI defects (layout, overflow, contrast, alignment, broken states, style drift), a11y and confusing UX. Screenshot evidence.
+Boot the real app (Playwright/browser, desktop dev, repo runner). Walk screens, flows, settings: empty, error, loading, offline, first-run, light/dark, narrow/wide. Hunt bugs, UI defects (layout, overflow, contrast, broken states, drift), a11y and confusing UX. Screenshot it.
 
 ## 2. Code review
 
-Read every changed area, then its neighbors. Check logic, edge cases, error handling, races, resource leaks, and that docs match behavior. Root-cause each bug via **principle-fix-root-causes**.
+Read every changed area, then its neighbors. Check logic, edge cases, errors, races, leaks, docs vs behavior; web frontend vs **modern-web-guidance**. Root-cause each bug via **principle-fix-root-causes**.
 
 ## 3. Security and vulnerabilities
 

@@ -64,15 +64,16 @@ fn user_only(text: &str) -> bool {
 /// A skill upstream marks user-only still loads when the user names it.
 pub fn skills_block() -> String {
     let mut out = format!("{SKILLS_HEAD}\n\n{SKILLS_NOTE}\n\n{PUSH_NOTE}");
-    for name in grokhub_agent::BUILTIN_ALWAYS_ON {
+    let always = grokhub_agent::active_always_on();
+    for name in &always {
         if let Some(text) = grokhub_agent::builtin_text(name) {
             out.push_str(&format!("\n\n### {name}\n\n{}", body(&text)));
         }
     }
     out.push_str(&format!("\n\n{MORE_HEAD}\n\n{MORE_NOTE}\n"));
-    for (name, text) in grokhub_agent::BUILTIN_SKILL_BODIES {
-        if !grokhub_agent::BUILTIN_ALWAYS_ON.contains(name) && !user_only(text) {
-            out.push_str(&format!("\n- {name}: {}", description(text)));
+    for (name, text) in grokhub_agent::active_builtin_bodies() {
+        if !always.contains(&name.as_str()) && !user_only(&text) {
+            out.push_str(&format!("\n- {name}: {}", description(&text)));
         }
     }
     out

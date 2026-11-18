@@ -1,7 +1,7 @@
 # Built-in vstack skills: credit and license
 
 Bundled from [vstack](https://github.com/blackviperxiii-ui/vstack) release
-[`v1.3.0`](https://github.com/blackviperxiii-ui/vstack/releases/tag/v1.3.0) (commit `c296c0f714d0934353f99879e6f8b00ffdc7f789`).
+[`v1.4.0`](https://github.com/blackviperxiii-ui/vstack/releases/tag/v1.4.0) (commit `11cca98b4a55da3118f51e749ac62faefbc21b3b`).
 `.github/scripts/vstack_sync.py` writes this file, the skill folders and
 `../../src/builtin_skills.rs` from `vstack.json`; edit that list, not these files.
 
@@ -16,8 +16,10 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 
 - architect
 - av-qa-walkthrough
+- bag-and-tag
 - benchmark-checklist
 - blast-radius
+- chrome-extensions
 - correct
 - create-formal-verification-skill
 - create-verification-skill
@@ -28,9 +30,11 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - in-your-own-words
 - interrogate
 - ketchup
+- ketchup-video
 - land-it
 - maintain-formal-verification-skill
 - maintain-verification-skill
+- modern-web-guidance
 - optimize
 - principle-attack-the-premise
 - principle-boundary-discipline
@@ -52,8 +56,12 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - principle-test-behavior-not-implementation
 - principle-type-system-discipline
 - qa-walkthrough
+- recall
+- reflect
+- setup-vstack
 - sharpen
 - show-me-your-work
+- stageshow
 - statechart
 - swarm
 - tdd
@@ -61,19 +69,14 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - technical-writing
 - typescript-best-practices
 - unslop
+- updater
 - viper-mode
 - why
 
 Left out:
 
-- bag-and-tag: vstack's own release ritual: it bumps plugin manifests and checks installers other repos don't have
-- ketchup-video: renders a slide video and embeds it in chat; the app has no video pipeline for it
-- recall: rebuilds context from Cursor's agent-transcripts folder, which the app doesn't keep
-- reflect: writes skill edits into Cursor's skill folders, not the app's skill store
-- setup-vstack: installs vstack into a coding agent; the app ships these skills itself
-- stageshow: ships a 2 MB React kit of example screens beside its text
-- updater: runs its 52 KB scripts/updater.py from the skill folder, which is over the skill tool's file size and has no folder on disk to run from
+
 
 Do not install these as a Cursor plugin from this tree; they are app built-ins.
 
-Bundle SHA-256: `f6e54de8266b7a7ae343d9d65d6d256a50d78f9a09c0d73b86866493a3eace9c`
+Bundle SHA-256: `db2aff9fa228ccc8385b52397dde7fef6b74a8243cee0fb3dfc5a23b438420ef`

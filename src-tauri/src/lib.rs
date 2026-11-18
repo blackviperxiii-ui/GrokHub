@@ -170,6 +170,7 @@ mod turns;
 pub mod unattended;
 pub mod voice;
 mod voice_live;
+mod vstack_sync;
 pub mod workboard;
 
 use std::collections::HashMap;
@@ -3685,6 +3686,21 @@ fn save_code_ship(
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
     Ok(ship)
+}
+
+/// Settings → Code → vstack skills: active version/commit, last sync time,
+/// and manual Sync now trigger.
+#[tauri::command]
+fn vstack_sync_status(state: State<'_, ShellState>) -> grokhub_core::vstack_sync::VstackStatus {
+    vstack_sync::status(&state.config_dir)
+}
+
+#[tauri::command]
+async fn vstack_sync_now(
+    state: State<'_, ShellState>,
+) -> Result<grokhub_core::vstack_sync::VstackStatus, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || vstack_sync::sync_now(&dir)).await?
 }
 
 #[tauri::command]
@@ -7879,6 +7895,7 @@ pub fn run() {
             });
             steam_checks::start(config_dir.clone());
             catalog_refresh::start(config_dir.clone());
+            vstack_sync::start(config_dir.clone());
             local_model_checks::start(config_dir.clone());
             pc_health::start(config_dir.clone());
             // The learning engine: chips, cards and runs record to it from
@@ -8299,6 +8316,8 @@ pub fn run() {
             code_session_resume,
             get_code_ship,
             save_code_ship,
+            vstack_sync_status,
+            vstack_sync_now,
             get_journal,
             journal_add,
             journal_act,

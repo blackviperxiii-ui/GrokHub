@@ -39,7 +39,8 @@ fn the_skills_block_carries_every_bundled_skill_in_full() {
     assert!(elevate.ends_with("/elevate"), "{elevate}");
     assert!(!full.contains("### elevate"), "{full}");
     assert!(!more.contains("\n- follow-through:"), "{more}");
-    assert!(!more.contains("setup-vstack"), "{more}");
+    assert!(more.contains("\n- setup-vstack:"), "{more}");
+    assert!(more.contains("\n- stageshow:"), "{more}");
     // Skills upstream marks user-only stay out of the list the model picks from.
     assert!(!more.contains("\n- swarm:"), "{more}");
     assert!(!more.contains("\n- unslop:"), "{more}");

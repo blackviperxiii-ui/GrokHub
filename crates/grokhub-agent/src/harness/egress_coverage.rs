@@ -77,6 +77,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-hub/src/doctor.rs", 1, "hub_health: guard_quiet (loopback) before its /v1/health read on 127.0.0.1"),
     ("grokhub-agent/src/mods_net.rs", 1, "ModsNet::once (both shells): guard_quiet (chat when a search carries text) to the mod source's own hosts, redirects checked by hand, public IPs only"),
     ("grokhub-agent/src/xai_keychain.rs", 1, "Sign in with Grok get_json / post_form (desktop app and grokhub-hub --oauth): guard_quiet (codes and tokens only) before every call; the test override is loopback only"),
+    ("grokhub-agent/src/vstack_sync.rs", 1, "runtime upstream vstack skills sync: offline::refuse + github host allowlist + guard_quiet (no user data) on every hop"),
 ];
 
 /// The part of a source file that ships: CRLF normalized, `#[cfg(test)] mod …` cut off.

@@ -9,7 +9,7 @@ Improve an app's UI toward spectacular craft. Not **land-it** (diagnose misses) 
 
 **Read `GUIDE.md` in this folder** for checklists (premium tells, motion budget, AI gates, states).
 
-Cite **viper-mode**, **principle-experience-first**, **principle-subtract-before-you-add**, **principle-minimize-reader-load**. Polish prose via **sharpen**/**unslop**. No sibling skill growth.
+Cite **viper-mode**, **principle-experience-first**, **principle-subtract-before-you-add**, **principle-minimize-reader-load**. Prose: **sharpen**/**unslop**. No sibling skill growth.
 
 ## Playbook
 
@@ -18,5 +18,5 @@ Cite **viper-mode**, **principle-experience-first**, **principle-subtract-before
 3. Hierarchy: type → space → color → surface. Work area leads; chrome recedes.
 4. States: empty, loading, error, success, focus; light and dark; text zoom.
 5. Motion: purpose only; timing budget; `prefers-reduced-motion` parallel path.
-6. Gate AI defaults (GUIDE). Prefer tokens + semantic controls in code.
-7. Prove in real UI. Diagnosis-only → **land-it**. Ship gate → **qa-walkthrough**. Stop when criteria met.
+6. Gate AI defaults (GUIDE). Web code → **modern-web-guidance**.
+7. Prove in real UI. Diagnosis → **land-it**. Ship gate → **qa-walkthrough**. Stop at criteria.

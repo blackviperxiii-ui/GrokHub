@@ -109,14 +109,16 @@ class Files(unittest.TestCase):
             vs.check_file("qa", rel, data)
         self.assertIn(words, str(err.exception))
 
-    def test_text_files_pass(self):
+    def test_text_and_binary_auxiliary_files_pass(self):
         vs.check_file("qa", "scripts/closeout.py", b"print('ok')\n")
+        vs.check_file("qa", "big.py", b"x" * (48 * 1024 + 1))
+        vs.check_file("qa", "logo.png", b"\x89PNG\0")
+        vs.check_file("qa", "brand.svg", b"<svg/>\r\n")
 
-    def test_files_the_skill_tool_cannot_serve_are_refused(self):
-        self.refused("logo.png", b"\x89PNG\0", "is binary")
-        self.refused("a.md", b"\xff\xfe", "is not UTF-8")
-        self.refused("big.py", b"x" * (48 * 1024 + 1), "over the skill tool's 49152")
-        self.refused("crlf.md", b"a\r\nb\r\n", "CR line endings")
+    def test_unsafe_or_invalid_skill_md_files_are_refused(self):
+        self.refused("SKILL.md", b"\x89PNG\0", "is binary")
+        self.refused("SKILL.md", b"\xff\xfe", "is not UTF-8")
+        self.refused("SKILL.md", b"a\r\nb\r\n", "CR line endings")
         self.refused("../up.md", b"x", "unexpected characters")
         self.refused("GUIDE.md", None, "is a symlink or submodule")
 
@@ -317,6 +319,27 @@ class EndToEnd(unittest.TestCase):
         with self.assertRaises(vs.SyncError):
             vs.sync("v2.0.0", self.src, None)
         self.assertEqual(self.snapshot(), before)
+
+    def test_check_upstream_passes_when_in_sync_and_fails_on_drift(self):
+        vs.sync("v2.0.0", self.src, None)
+        # Align manifest with fake upstream (setup included without exclude)
+        doc = vs.load()
+        doc["skills"] = sorted(doc["skills"] + ["setup"])
+        doc["exclude"] = {}
+        vs.write(vs.MANIFEST, vs.emit_manifest(doc))
+        vs.check_upstream(self.src)
+
+        # Add an upstream skill on main not yet bundled -> must fail
+        new_skill = os.path.join(self.src, "skills", "brand-new", "SKILL.md")
+        os.makedirs(os.path.dirname(new_skill), exist_ok=True)
+        with open(new_skill, "w", encoding="utf-8") as fh:
+            fh.write("---\nname: brand-new\ndescription: New.\n---\n")
+        run("git", "add", "-A", cwd=self.src)
+        run("git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+            "commit", "-q", "-m", "add brand-new", cwd=self.src)
+        with self.assertRaises(vs.SyncError) as err:
+            vs.check_upstream(self.src)
+        self.assertIn("brand-new", str(err.exception))
 
 
 if __name__ == "__main__":
