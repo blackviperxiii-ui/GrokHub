@@ -77,7 +77,10 @@
   --tracking-section: -0.017em;
   --tracking-headline: -0.019em;
   --tracking-display: -0.022em;
+  /* Nested corners: inner = max(--radius-xs, outer − pad − border). No squircles. */
+  --radius-xs: 4px;
   --radius-sm: 8px;
+  --radius-menu: 10px;
   --radius-md: 12px;
   --radius-lg: 16px;
   /* Elevation: bg → surface → raised. The dark themes tint the outer shadow
@@ -1980,7 +1983,10 @@ span.profile-avatar {
   min-width: 170px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-menu);
+  --r-outer: var(--radius-menu);
+  --pad: 8px;
+  --bw: 1px;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
 }
 
@@ -1992,7 +1998,7 @@ span.profile-avatar {
   border: 0;
   color: inherit;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
   cursor: pointer;
 }
 
@@ -2663,6 +2669,9 @@ button.md-copy {
   flex-wrap: wrap;
   gap: 4px 12px;
   align-items: baseline;
+  --r-outer: var(--radius-md);
+  --pad: 12px;
+  --bw: 1.5px;
 }
 
 .card pre {
@@ -2706,6 +2715,11 @@ button.md-copy {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* Inset actions use the concentric radius, not the global button radius. */
+.card-buttons button {
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
 }
 
 /* Grok's question with options: one tappable row each, recommended first. */
@@ -4170,7 +4184,10 @@ label.toggle-row {
   flex-direction: column;
   padding: 4px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-menu);
+  --r-outer: var(--radius-menu);
+  --pad: 4px;
+  --bw: 1px;
   background: var(--panel);
   box-shadow: 0 6px 20px rgb(0 0 0 / 16%);
 }
@@ -4180,6 +4197,7 @@ label.toggle-row {
   background: transparent;
   color: var(--text);
   text-align: left;
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
 }
 
 .feed-menu button.danger {
@@ -5454,7 +5472,10 @@ button.primary:not(.quick-chip) {
   list-style: none;
   background: var(--panel, var(--bg));
   border: 1px solid var(--line, currentColor);
-  border-radius: 10px;
+  border-radius: var(--radius-menu);
+  --r-outer: var(--radius-menu);
+  --pad: 4px;
+  --bw: 1px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
 }
 .slash-row {
@@ -5462,7 +5483,7 @@ button.primary:not(.quick-chip) {
   gap: 8px;
   align-items: baseline;
   padding: 8px 8px;
-  border-radius: 6px;
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
   cursor: pointer;
 }
 .slash-row[aria-selected="true"] {
@@ -5769,6 +5790,9 @@ button.primary:not(.quick-chip) {
   padding: 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
+  --r-outer: var(--radius-md);
+  --pad: 8px;
+  --bw: 1px;
 }
 
 .board-column.follow-up {
@@ -5802,6 +5826,10 @@ button.primary:not(.quick-chip) {
   flex-wrap: nowrap;
   align-items: stretch;
   gap: 8px;
+}
+
+.board-column .card.board-card {
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
 }
 
 .card.board-card[draggable="true"] {
@@ -5842,9 +5870,20 @@ button.primary:not(.quick-chip) {
   flex-direction: column;
   padding: 4px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-menu);
+  --r-outer: var(--radius-menu);
+  --pad: 4px;
+  --bw: 1px;
   background: var(--panel);
   box-shadow: 0 6px 20px rgb(0 0 0 / 16%);
+}
+
+.board-menu button {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
 }
 
 .board-confirm {

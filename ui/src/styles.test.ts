@@ -70,6 +70,27 @@ function block(selector: string): Record<string, string> {
 
 const PALETTE = block(':root,\n:root[data-theme="dark"],\n:root[data-theme="ops-dark"]');
 
+describe("styles.css concentric nested radii", () => {
+  const nested =
+    "border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));";
+
+  it("keeps the floor and menu tokens on the scale", () => {
+    expect(CSS).toContain("--radius-xs: 4px;");
+    expect(CSS).toContain("--radius-menu: 10px;");
+  });
+
+  it("derives nested menu item radii from outer − pad − border", () => {
+    expect(rule(CSS, ".nyx-desk-menu {")).toContain("--r-outer: var(--radius-menu);");
+    expect(rule(CSS, ".nyx-desk-menu button {")).toContain(nested);
+    expect(rule(CSS, ".feed-menu {")).toContain("--r-outer: var(--radius-menu);");
+    expect(rule(CSS, ".feed-menu button {")).toContain(nested);
+    expect(rule(CSS, ".board-menu {")).toContain("--r-outer: var(--radius-menu);");
+    expect(rule(CSS, ".board-menu button {")).toContain(nested);
+    expect(rule(CSS, ".slash-menu {")).toContain("--r-outer: var(--radius-menu);");
+    expect(rule(CSS, ".slash-row {")).toContain(nested);
+  });
+});
+
 /** A colour, following `var(--x)` through the Ops palette. */
 function resolve(vars: Record<string, string>, name: string): string {
   const value = vars[name] ?? PALETTE[name];
