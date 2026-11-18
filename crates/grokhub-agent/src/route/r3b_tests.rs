@@ -4241,3 +4241,85 @@ fn a_rate_limit_cools_for_minutes_and_an_outage_for_one() {
     assert!(!live::cooling(&dir, "anthropic/y", NOW + 61_000));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Local router step 7: a chat whose last step ran here, its newest message
+/// a picture, the fleet with the device on it. The answer, what the chat thought, and the route log's
+/// model and rules.
+type PictureTurn = (Result<TurnOutput, ClientError>, String, String, Vec<String>);
+
+fn picture_turn(id: &str, xai: &dyn ModelClient) -> PictureTurn {
+    let (dir, _wire) = setup(id);
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    let mut reg = fleet();
+    reg.apply_refresh(
+        &[Listing::new(
+            SourceKind::Local,
+            super::local::TIERS
+                .iter()
+                .map(|t| super::local::tier_meta(t))
+                .collect(),
+        )],
+        &[],
+        2,
+    );
+    save_registry(&dir, &reg).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    super::local_live::note_step_here(id, true, false);
+    let mut req = chat(id, &[]);
+    req.input.push(InputItem::Message {
+        role: "user".into(),
+        content: vec![
+            ContentPart::InputText("hey".into()),
+            ContentPart::InputImage("data:image/png;base64,YQ==".into()),
+        ],
+    });
+    let mut thought = String::new();
+    let out = live::stream_routed(
+        xai,
+        &req,
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::ReasoningDelta(t) = ev {
+                thought.push_str(&t);
+            }
+        },
+        "chat:default",
+    );
+    let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES).pop().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    (out, thought, rec.chosen.model, rec.rule_ids)
+}
+
+/// Online, a chat is never routed to the device, so a chat that last ran
+/// here sends its picture to the online model that reads it; nothing in the
+/// chat says the device was passed over.
+#[test]
+fn a_chat_picture_goes_online_with_the_picture_when_the_cloud_answers() {
+    let xai = XaiRec::default();
+    let (out, thought, model, rules) = picture_turn("vision-online-1", &xai);
+    assert_eq!(out.unwrap().text, "hey you");
+    assert_eq!(model, "grok-4.3");
+    assert!(!rules.iter().any(|r| r == "local:no_vision"), "{rules:?}");
+    assert_eq!(thought, "");
+    let sent = xai.0.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert!(
+        matches!(&sent[0].input.last(), Some(InputItem::Message { content, .. })
+            if content.iter().any(|p| matches!(p, ContentPart::InputImage(_)))),
+        "{:?}",
+        sent[0].input.last()
+    );
+}
+
+/// The online call fails before it shows anything and the device answers
+/// without the picture: the line under the reply says it wasn't read.
+#[test]
+fn a_chat_picture_that_lands_on_the_device_says_it_wasnt_read() {
+    let (out, thought, _, _) = picture_turn("vision-back-1", &XaiSignedOut);
+    assert_eq!(out.unwrap().text, "local here");
+    assert_eq!(thought, super::local::LOCAL_FALLBACK_MSG);
+    assert_eq!(
+        super::local_live::take_line("vision-back-1").as_deref(),
+        Some(super::local_live::BLIND_LINE)
+    );
+}

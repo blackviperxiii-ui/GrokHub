@@ -189,7 +189,6 @@ fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
             mlock: true,
             tensor_split: None,
             draft: None,
-            mmproj: None,
             cpu_only: false,
             run: run_with_slots(1),
         }
@@ -785,7 +784,6 @@ fn whole_gpu_12b() -> LaunchArgs {
         mlock: false,
         tensor_split: None,
         draft: None,
-        mmproj: None,
         cpu_only: false,
         run: Default::default(),
     }

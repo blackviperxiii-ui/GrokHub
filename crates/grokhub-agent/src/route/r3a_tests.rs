@@ -578,7 +578,6 @@ fn the_local_flag_is_off_by_default_and_no_route_picks_local_in_1000_random_inpu
             offline_switch: false,
             local_verify_failed: false,
             capacity: local::LocalCapacity::now(),
-            sees_pictures: false,
         };
         let mut input = ask(class, gate);
         input.ctx_tokens = (x >> 40) % 8_000;

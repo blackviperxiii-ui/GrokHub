@@ -1,40 +1,36 @@
-//! Pictures in a local chat (local router, step 7).
+//! Pictures in a local chat (local router, step 7, first part).
 //!
 //! A `llama-server` started without `--mmproj` refuses any request that
 //! carries an `image_url` part, and pictures stay in the chat's history, so
-//! every later local turn of that chat failed the same way. A server with no
-//! picture reader therefore gets each picture swapped for [`BLIND_NOTE`]:
-//! the turn is answered without the picture instead of failing.
+//! every later local turn of that chat failed the same way. No chat launch
+//! carries a picture reader yet, so each picture is swapped for
+//! [`BLIND_NOTE`]: the turn is answered without the picture instead of
+//! failing.
+
+use std::collections::BTreeMap;
+
+use grokhub_core::model_registry::profile::ModelProfile;
+use grokhub_core::model_registry::Registry;
 
 use crate::client::{ContentPart, InputItem};
 
-use super::local_autoconfig::LaunchArgs;
 use super::RouteInput;
 
 /// What stands in for a picture the running model can't see.
 pub const BLIND_NOTE: &str =
     "[A picture was attached here. The model on this computer can't see pictures, so it wasn't read.]";
 
-/// Whether the running launch can read pictures: it was started with its
-/// projector (`--mmproj`). The one-shot defaults never carry one.
-pub fn sees_pictures(launch: Option<&LaunchArgs>) -> bool {
-    launch.is_some_and(|l| l.mmproj.is_some())
-}
-
-/// Said in a chat that ran on this computer when a picture moved the turn
-/// online ([`reads_online`]).
-pub const ONLINE_LINE: &str =
-    "The model on this computer can't see pictures, so an online model read this one.";
-
 /// The router's rule when [`reads_online`] took the device out of the pick.
 pub const NO_VISION_RULE: &str = "local:no_vision";
 
 /// A picture the device can't see goes to an online model that can, when
 /// the turn may leave this computer: never an 18+ turn, a voice set to
-/// Local only, sensitive data without your grant, or offline.
+/// Local only, sensitive data without your grant, or offline. Online, only
+/// background steps reach the device through the router (a chat is never in
+/// [`super::local::LOCAL_CLASSES`]), so a chat picture already goes online
+/// by the image fit in [`super::policy::fits`].
 pub fn reads_online(input: &RouteInput<'_>) -> bool {
     input.needs_image
-        && !input.local.sees_pictures
         && !input.adult
         && !matches!(
             input.voice_reply,
@@ -43,6 +39,17 @@ pub fn reads_online(input: &RouteInput<'_>) -> bool {
         && !(input.local.sensitive && !input.local.cloud_grant)
         && !input.local.offline
         && !input.local.offline_switch
+}
+
+/// `id` is listed as reading pictures. A model whose input kinds are
+/// unknown may not, so it never stands in for the device on a picture:
+/// the chat would say an online model read a picture nothing read.
+pub fn reads_pictures(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, id: &str) -> bool {
+    profiles
+        .get(id)
+        .and_then(|p| p.metadata.input_modalities.as_ref())
+        .or(reg.get(id).and_then(|r| r.meta.input_modalities.as_ref()))
+        .is_some_and(|m| m.iter().any(|x| x == "image"))
 }
 
 /// Turn every picture in `input` into [`BLIND_NOTE`]. Returns how many it
@@ -129,84 +136,5 @@ mod tests {
             serde_json::json!(format!("hi\n{BLIND_NOTE}"))
         );
         assert!(!body.to_string().contains("image_url"));
-    }
-
-    #[test]
-    fn only_a_launch_with_its_projector_sees_pictures() {
-        assert!(!sees_pictures(None));
-        let mut l = LaunchArgs {
-            backend: grokhub_core::local_profile::Backend::Vulkan,
-            ngl: 40,
-            all_layers: 40,
-            n_cpu_moe: None,
-            ctx: 8192,
-            kv: super::super::local_autoconfig::KvType::Q8,
-            threads: 4,
-            threads_batch: None,
-            flash_attn: true,
-            mlock: false,
-            tensor_split: None,
-            draft: None,
-            mmproj: None,
-            cpu_only: false,
-            run: Default::default(),
-        };
-        assert!(!sees_pictures(Some(&l)));
-        assert!(!l.to_args().iter().any(|a| a.contains("mmproj")));
-        l.mmproj = Some("/m/p.gguf".into());
-        assert!(sees_pictures(Some(&l)));
-    }
-
-    /// The projector flags the launch passes, each listed by the pinned
-    /// engine's `--help`.
-    #[test]
-    fn a_launch_with_its_projector_passes_mmproj() {
-        let gpu = LaunchArgs {
-            backend: grokhub_core::local_profile::Backend::Vulkan,
-            ngl: 40,
-            all_layers: 40,
-            n_cpu_moe: None,
-            ctx: 8192,
-            kv: super::super::local_autoconfig::KvType::Q8,
-            threads: 4,
-            threads_batch: None,
-            flash_attn: true,
-            mlock: false,
-            tensor_split: None,
-            draft: None,
-            mmproj: Some("/m/p.gguf".into()),
-            cpu_only: false,
-            run: Default::default(),
-        };
-        let mmproj = |l: &LaunchArgs| -> Vec<String> {
-            let a = l.to_args();
-            let at = a.iter().position(|x| x == "--mmproj").unwrap();
-            a[at..]
-                .iter()
-                .take_while(|x| *x != "--device" && *x != "--cache-prompt")
-                .cloned()
-                .collect()
-        };
-        assert_eq!(mmproj(&gpu), ["--mmproj", "/m/p.gguf"]);
-        // No layers on the GPU: the projector stays off it too.
-        let no_layers = LaunchArgs {
-            ngl: 0,
-            ..gpu.clone()
-        };
-        assert_eq!(
-            mmproj(&no_layers),
-            ["--mmproj", "/m/p.gguf", "--no-mmproj-offload"]
-        );
-        // `--device none` already keeps it off every GPU.
-        let cpu = super::super::local_autoconfig::on_cpu(&gpu);
-        assert_eq!(mmproj(&cpu), ["--mmproj", "/m/p.gguf"]);
-        assert_eq!(
-            cpu.to_args().last().map(String::as_str),
-            Some("--cache-prompt")
-        );
-        let help =
-            include_str!("../../../grokhub-core/tests/fixtures/llama_server_help_b12017.txt");
-        assert!(help.contains("--mmproj FILE"));
-        assert!(help.contains("--no-mmproj-offload"));
     }
 }

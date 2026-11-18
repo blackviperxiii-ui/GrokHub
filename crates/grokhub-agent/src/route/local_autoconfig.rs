@@ -95,9 +95,6 @@ pub struct LaunchArgs {
     pub tensor_split: Option<Vec<u64>>,
     /// Speculative decoding, when [`local_spec::plan`] turned it on.
     pub draft: Option<Box<DraftArgs>>,
-    /// The chat model's picture reader (`--mmproj`), on a launch planned
-    /// for a turn with a picture. `None` reads text only.
-    pub mmproj: Option<PathBuf>,
     /// Keep every GPU out of it (`--device none`): set after the GPU backend
     /// crashed the engine at start. See [`on_cpu`].
     pub cpu_only: bool,
@@ -139,14 +136,6 @@ impl LaunchArgs {
         a.extend(self.run.to_args());
         if let Some(d) = &self.draft {
             a.extend(d.to_args());
-        }
-        if let Some(p) = &self.mmproj {
-            a.extend(["--mmproj".into(), p.display().to_string()]);
-            // With `--device none` the projector already follows the model
-            // off the GPU; a launch with no layers on it says so itself.
-            if self.ngl == 0 && !self.cpu_only {
-                a.push("--no-mmproj-offload".into());
-            }
         }
         if self.cpu_only {
             // `-ngl 0` alone still lets the GPU take big matmuls; this keeps
@@ -458,7 +447,6 @@ pub fn autoconfig(
         mlock: p.free_ram_mb.is_some_and(|free| free > 2 * meta.file_mb),
         tensor_split: p.device_plan().tensor_split,
         draft: None,
-        mmproj: None,
         cpu_only: false,
         run: run_with_slots(seqs),
     }

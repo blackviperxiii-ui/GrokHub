@@ -495,8 +495,6 @@ pub struct LocalGate {
     pub local_verify_failed: bool,
     /// The governor's level and whether the runtime is there at all.
     pub capacity: LocalCapacity,
-    /// The running model was started with its picture reader (`--mmproj`).
-    pub sees_pictures: bool,
 }
 
 impl LocalGate {
@@ -513,11 +511,6 @@ impl LocalGate {
             offline: super::connectivity::state().prefer_local(),
             offline_switch: grokhub_core::offline::enabled(),
             local_verify_failed: local_verify_failed(),
-            sees_pictures: super::local_vision::sees_pictures(
-                super::local_sidecar::loaded()
-                    .and_then(|l| l.launch)
-                    .as_ref(),
-            ),
         }
     }
 }
@@ -911,12 +904,11 @@ pub fn serve_request(
         super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
         req.effort.as_deref(),
     );
-    // A server started without its picture reader refuses any request with
-    // a picture in it, and the picture stays in the chat, so each later turn
-    // would fail too: the model is told a picture was there instead.
-    let launch = super::local_sidecar::loaded().and_then(|l| l.launch);
-    let blind = !super::local_vision::sees_pictures(launch.as_ref())
-        && super::local_vision::strip_images(&mut req.input) > 0;
+    // No launch carries a picture reader (`--mmproj`) yet, and a server
+    // without one refuses any request with a picture in it. The picture
+    // stays in the chat, so each later turn would fail too: the model is
+    // told a picture was there instead.
+    let blind = super::local_vision::strip_images(&mut req.input) > 0;
     // The device window is often 4k to 16k: send only what fits, with room to
     // answer. With or without tools, so a long chat is trimmed on the way
     // (the oldest turns first) instead of being refused for its length.

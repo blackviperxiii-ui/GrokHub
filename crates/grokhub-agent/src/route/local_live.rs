@@ -333,12 +333,15 @@ pub fn blind_line(line: &str) -> String {
     format!("{line} {BLIND_LINE}")
 }
 
-/// Add [`BLIND_LINE`] to `conversation_id`'s kept line.
+/// Add [`BLIND_LINE`] to `conversation_id`'s kept line, or keep it alone
+/// when the reply named no model: the device answered without the picture
+/// either way.
 pub fn note_blind(conversation_id: &str) {
     if let Ok(mut lines) = LAST_LINE.lock() {
-        if let Some(line) = lines.get_mut(conversation_id) {
-            *line = blind_line(line);
-        }
+        let line = lines
+            .get(conversation_id)
+            .map_or_else(|| BLIND_LINE.to_string(), |l| blind_line(l));
+        lines.insert(conversation_id.to_string(), line);
     }
 }
 
@@ -412,9 +415,12 @@ mod tests {
                  no model on this computer can see pictures yet."
             )
         );
-        // No kept line (the step failed): nothing to add to.
+        // No model named under the reply: the line is the blind line alone.
         super::note_blind("blind-none");
-        assert_eq!(super::take_line("blind-none"), None);
+        assert_eq!(
+            super::take_line("blind-none").as_deref(),
+            Some(super::BLIND_LINE)
+        );
     }
 
     use super::*;

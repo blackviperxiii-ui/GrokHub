@@ -1113,6 +1113,32 @@ impl Router {
         table: &RoutingTable,
         now_ms: u64,
     ) -> Route {
+        let route = Self::choose_among(input, reg, profiles, table, now_ms, false);
+        // A picture moves the turn online only when the device would have
+        // taken it and an online model that reads pictures is left: a turn
+        // that went online anyway never says the picture moved it.
+        if !local::is_local(&route.model) || !local_vision::reads_online(input) {
+            return route;
+        }
+        let online = Self::choose_among(input, reg, profiles, table, now_ms, true);
+        if online.no_route || local::is_local(&online.model) {
+            route
+        } else {
+            online
+        }
+    }
+
+    /// [`Self::choose`]'s pick. `for_picture` keeps only the online models
+    /// listed as reading pictures, and pushes [`local_vision::NO_VISION_RULE`]
+    /// when that left one.
+    fn choose_among(
+        input: &RouteInput<'_>,
+        reg: &Registry,
+        profiles: &BTreeMap<String, ModelProfile>,
+        table: &RoutingTable,
+        now_ms: u64,
+        for_picture: bool,
+    ) -> Route {
         connectivity::sync_from_core();
         let mut rules: Vec<String> = Vec::new();
         let provider = if input.provider.is_empty() {
@@ -1165,12 +1191,17 @@ impl Router {
         // A picture this computer's model can't see goes to an online model
         // that reads pictures, while one is left; the last-resort paths below
         // still answer on the device, without the picture.
-        let ids: Vec<&str> = if local_vision::reads_online(input)
-            && ids.iter().any(|id| local::is_local(id))
-            && ids.iter().any(|id| !local::is_local(id))
+        let ids: Vec<&str> = if for_picture
+            && ids
+                .iter()
+                .any(|id| !local::is_local(id) && local_vision::reads_pictures(reg, profiles, id))
         {
             rules.push(local_vision::NO_VISION_RULE.into());
-            ids.into_iter().filter(|id| !local::is_local(id)).collect()
+            ids.into_iter()
+                .filter(|id| {
+                    !local::is_local(id) && local_vision::reads_pictures(reg, profiles, id)
+                })
+                .collect()
         } else {
             ids
         };
