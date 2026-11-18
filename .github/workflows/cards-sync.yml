@@ -1,11 +1,15 @@
 name: cards-sync
-# Mark linked Notion Command Center cards Completed when PRs merge to beta or card issues close.
+# Sync Ready cards assigned to Antigravity and mark linked cards Working on it now / Completed.
 # Needs secret NOTION_TOKEN; no-ops without the token.
 on:
   schedule:
     - cron: "17 */2 * * *"
   workflow_dispatch:
     inputs:
+      start_issue:
+        description: Comma-separated antigravity issue numbers to mark Working on it now
+        required: false
+        default: ""
       reset_issues:
         description: Comma-separated card issue numbers to put back to Ready for work
         required: false
@@ -34,10 +38,13 @@ jobs:
           ref: beta
           sparse-checkout: .github/scripts
           persist-credentials: false
-      - name: Sweep merged/closed card issues to Completed
+      - name: Sync Antigravity cards and sweep completions
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATA_SOURCE_ID: ${{ vars.NOTION_DATA_SOURCE_ID }}
+          CARDS_PROJECT: ${{ vars.CARDS_PROJECT }}
           GITHUB_TOKEN: ${{ github.token }}
+          START_ISSUE: ${{ inputs.start_issue }}
           RESET_ISSUES: ${{ inputs.reset_issues }}
         run: python3 .github/scripts/cards_sync.py sync
   done:
