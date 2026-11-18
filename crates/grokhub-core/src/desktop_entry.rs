@@ -1,10 +1,10 @@
 //! Freedesktop desktop-entry rewrite so a user-prefix install does not depend
 //! on the GUI session inheriting `~/.local/bin` on PATH.
 
-/// `{prefix}/bin/grokhub` with no trailing slash on prefix.
+/// `{prefix}/bin/grokhub-shell` with no trailing slash on prefix.
 pub fn desktop_bin_path(prefix: &str) -> String {
     let prefix = prefix.trim_end_matches('/');
-    format!("{prefix}/bin/grokhub")
+    format!("{prefix}/bin/grokhub-shell")
 }
 
 /// Rewrite `Exec=` / `TryExec=` from the in-tree template to the prefix binary.
@@ -13,10 +13,10 @@ pub fn rewrite_desktop_entry(template: &str, prefix: &str) -> String {
     let bin = desktop_bin_path(prefix);
     let mut out = String::with_capacity(template.len() + bin.len());
     for line in template.lines() {
-        if line == "Exec=grokhub" {
+        if line == "Exec=grokhub-shell" {
             out.push_str("Exec=");
             out.push_str(&bin);
-        } else if line == "TryExec=grokhub" {
+        } else if line == "TryExec=grokhub-shell" {
             out.push_str("TryExec=");
             out.push_str(&bin);
         } else {
@@ -27,7 +27,7 @@ pub fn rewrite_desktop_entry(template: &str, prefix: &str) -> String {
     out
 }
 
-/// True when Exec/TryExec name the prefix binary, not a PATH-relative `grokhub`.
+/// True when Exec/TryExec name the prefix binary, not a PATH-relative `grokhub-shell`.
 pub fn desktop_entry_uses_prefix_bin(entry: &str, prefix: &str) -> bool {
     let bin = desktop_bin_path(prefix);
     let exec = format!("Exec={bin}");
@@ -39,18 +39,18 @@ pub fn desktop_entry_uses_prefix_bin(entry: &str, prefix: &str) -> bool {
 mod tests {
     use super::*;
 
-    const TEMPLATE: &str = include_str!("../../../packaging/grokhub.desktop");
+    const TEMPLATE: &str = include_str!("../../../packaging/grokhub-shell.desktop");
 
     #[test]
     fn user_prefix_exec_does_not_need_local_bin_on_path() {
         assert!(
-            TEMPLATE.lines().any(|l| l == "Exec=grokhub"),
+            TEMPLATE.lines().any(|l| l == "Exec=grokhub-shell"),
             "in-tree template stays PATH-relative; install rewrites it: {TEMPLATE}"
         );
-        let prefix = "/home/cabin/.local";
+        let prefix = "/home/user/.local";
         let entry = rewrite_desktop_entry(TEMPLATE, prefix);
         let bin = desktop_bin_path(prefix);
-        assert_eq!(bin, "/home/cabin/.local/bin/grokhub");
+        assert_eq!(bin, "/home/user/.local/bin/grokhub-shell");
         assert!(
             desktop_entry_uses_prefix_bin(&entry, prefix),
             "menu Exec must be the prefix binary: {entry}"
@@ -58,15 +58,15 @@ mod tests {
         assert!(
             !entry
                 .lines()
-                .any(|l| l == "Exec=grokhub" || l == "TryExec=grokhub"),
-            "PATH-relative grokhub must not remain after rewrite: {entry}"
+                .any(|l| l == "Exec=grokhub-shell" || l == "TryExec=grokhub-shell"),
+            "PATH-relative grokhub-shell must not remain after rewrite: {entry}"
         );
         // A session PATH that lacks ~/.local/bin still has an absolute Exec.
         let path_without_prefix = "/usr/bin:/bin";
         assert!(
             !path_without_prefix
                 .split(':')
-                .any(|p| p == "/home/cabin/.local/bin"),
+                .any(|p| p == "/home/user/.local/bin"),
             "fixture PATH must omit the prefix bin dir"
         );
         assert!(
@@ -80,8 +80,8 @@ mod tests {
         let sh = include_str!("../../../scripts/install.sh");
         assert!(
             sh.contains("rewrite_desktop_entry")
-                || (sh.contains("Exec=") && sh.contains("$PREFIX/bin/grokhub")),
-            "install.sh must write Exec=$PREFIX/bin/grokhub: {sh}"
+                || (sh.contains("Exec=") && sh.contains("$PREFIX/bin/grokhub-shell")),
+            "install.sh must write Exec=$PREFIX/bin/grokhub-shell: {sh}"
         );
         assert!(
             sh.contains("update-desktop-database"),
@@ -97,9 +97,18 @@ mod tests {
             "sync-user-integration.sh already refreshed the database: {sync}"
         );
         assert!(
-            sync.contains("$PREFIX/bin/grokhub")
+            sync.contains("$PREFIX/bin/grokhub-shell")
+                && sync.contains("packaging/grokhub-shell.desktop")
                 && (sync.contains("Exec=") || sync.contains("rewrite")),
-            "sync-user-integration.sh must also write a prefix Exec: {sync}"
+            "sync-user-integration.sh must write a prefix Exec for the shell: {sync}"
+        );
+        assert!(
+            !sync.contains("packaging/grokhub.desktop"),
+            "sync must not use the retired cabin desktop template: {sync}"
+        );
+        assert!(
+            sync.contains("rm -f \"$PREFIX/share/applications/grokhub.desktop\""),
+            "sync must remove a leftover cabin menu entry: {sync}"
         );
     }
 }
