@@ -1685,7 +1685,7 @@ fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Wa
         *LAST_TASK_KIND.lock().expect("last task kind") = Some(k);
     }
     let marks = super::local_task::marks(config_dir);
-    super::local_swap::plan(super::local_swap::Now {
+    let now = super::local_swap::Now {
         home,
         loaded,
         on_disk: &on_disk,
@@ -1702,7 +1702,35 @@ fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Wa
         task,
         dynamic: super::local_task::dynamic(config_dir),
         marks: &marks,
-    })
+        chat: want_chat(want),
+    };
+    if !matches!(want, Want::Warm(_)) {
+        let ask = super::local_swap::ask_outcome(&now)
+            .map(|a| (a, super::local_swap::target_model(&now)));
+        ASK_OUTCOME.with(|o| o.set(ask));
+    }
+    super::local_swap::plan(now)
+}
+
+thread_local! {
+    /// What this thread's last plan did with its request's ask, and the
+    /// model it aimed at, for the line under the reply.
+    static ASK_OUTCOME: std::cell::Cell<Option<(super::local_swap::AskOutcome, PathBuf)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// What the last plan on this thread did with its request's ask, and the
+/// model it aimed at; it clears.
+pub fn take_ask_outcome() -> Option<(super::local_swap::AskOutcome, PathBuf)> {
+    ASK_OUTCOME.with(std::cell::Cell::take)
+}
+
+/// A request plans for its chat's tier; a keep-warm load for none.
+fn want_chat(want: Want) -> Option<super::local_scale::ChatTier> {
+    match want {
+        Want::Warm(_) => None,
+        Want::Any | Want::Request => super::local_scale::current_chat(),
+    }
 }
 
 /// The model `best_for` would pick for `kind` with nothing loaded, for the
@@ -1729,6 +1757,7 @@ fn best_model_for(config_dir: &Path, home: &Path, kind: TaskKind) -> Option<Path
         task: Some(kind),
         dynamic: super::local_task::dynamic(config_dir),
         marks: &marks,
+        chat: None,
     }) {
         Plan::Load {
             model,
@@ -1927,6 +1956,12 @@ fn swap_note(model: &Path, why: Option<super::local_swap::StandIn>) -> String {
         Some(super::local_swap::StandIn::Performance) => format!("{name} for a hard task"),
         Some(super::local_swap::StandIn::BestFor(kind)) => {
             format!("{name}, best on disk for {}", kind.words())
+        }
+        Some(super::local_swap::StandIn::Asked(tier, _)) => {
+            format!(
+                "{name} for a chat's {} ask",
+                super::local_swap::tier_word(tier)
+            )
         }
         None => format!("{name}, the Settings pick"),
     }
@@ -2810,6 +2845,60 @@ mod tests {
             "a request in flight keeps its model"
         );
         drop(held);
+    }
+
+    #[test]
+    fn a_turns_tier_reaches_the_planner_and_its_outcome_is_taken_once() {
+        use super::super::local_scale::{ChatGuard, Source, SpeedQuality};
+        use super::super::local_swap::{AskOutcome, StandIn};
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        super::super::local_scale::clear_room();
+        let dir = std::env::temp_dir().join(format!("grokhub-tier-plan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let models = dir.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        let file = |id: &str| {
+            let m = grokhub_core::local_setup::model_by_id(id).expect("catalog model");
+            let p = grokhub_core::model_download::final_path(&models, m);
+            std::fs::write(&p, b"gguf").unwrap();
+            p
+        };
+        let mid = file("gemma-4-e4b-it-abliterated-q4_k");
+        let small = file("gemma-4-e2b-it-abliterated-q4_k");
+        let mut side = idle_child_sidecar(600, unix_secs());
+        side.model = mid.clone();
+        take_ask_outcome();
+        assert_eq!(
+            swap_plan(&dir, &mid, Some(&side), Want::Request),
+            Plan::Keep,
+            "no tier: the pick stays"
+        );
+        assert_eq!(take_ask_outcome(), None, "no ask, no outcome");
+        {
+            let _tier = ChatGuard::set(Some((SpeedQuality::Speed, Source::Words)));
+            assert_eq!(
+                swap_plan(&dir, &mid, Some(&side), Want::Request),
+                Plan::Load {
+                    model: small.clone(),
+                    stand_in: Some(StandIn::Asked(SpeedQuality::Speed, Source::Words))
+                }
+            );
+            assert_eq!(
+                take_ask_outcome(),
+                Some((
+                    AskOutcome::Got(SpeedQuality::Speed, Source::Words),
+                    small.clone()
+                ))
+            );
+            assert_eq!(take_ask_outcome(), None, "taken once");
+        }
+        assert_eq!(
+            swap_plan(&dir, &mid, Some(&side), Want::Request),
+            Plan::Keep,
+            "the guard dropped: back on Auto"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

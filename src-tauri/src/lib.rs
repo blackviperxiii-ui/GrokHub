@@ -6039,6 +6039,31 @@ async fn set_claude_plan_chat(
     off_main(move || claude_chat::set_chat(&dir, &conversation_id, on)).await?
 }
 
+/// A chat's on-device tier from its tab menu: `None` is Auto, else Speed,
+/// Balance or Performance, from its next message on. Words in a message
+/// ("be quick", "think hard") still beat it for that message.
+#[tauri::command]
+async fn set_local_chat_pin(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    tier: Option<grokhub_agent::route::table::SpeedQuality>,
+) -> Result<Option<grokhub_agent::route::table::SpeedQuality>, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || grokhub_agent::route::local_pin::set(&dir, &conversation_id, tier)).await?
+}
+
+/// The tier a chat is set to, or `None` on Auto.
+#[tauri::command]
+async fn local_chat_pin(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+) -> Result<Option<grokhub_agent::route::table::SpeedQuality>, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || grokhub_agent::route::local_pin::get(&dir, &conversation_id)).await
+}
+
 /// Posts the key's approval card; nothing is saved until `answer_ai_models_card`.
 #[tauri::command]
 async fn add_ai_provider(
@@ -8374,6 +8399,8 @@ pub fn run() {
             set_claude_plan_allowed,
             #[cfg(desktop)]
             set_claude_plan_chat,
+            set_local_chat_pin,
+            local_chat_pin,
             add_ai_provider,
             start_openrouter_sign_in,
             wait_openrouter_sign_in,

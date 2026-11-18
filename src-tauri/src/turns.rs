@@ -13,8 +13,9 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::{agent, ShellState, CHAT_EVENT};
 
-/// A side answer runs under `<chat>~side-<n>`.
-pub const SIDE_MARK: &str = "~side-";
+/// A side answer runs under `<chat>~side-<n>`. The on-device router reads
+/// the same mark, so a side answer never asks for a tier.
+pub const SIDE_MARK: &str = grokhub_agent::route::local_scale::SIDE_MARK;
 
 /// Each chat's last read message and the route it took, so "no, just
 /// answer" or "make a plan first" right after it can fix it.

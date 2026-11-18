@@ -251,6 +251,12 @@ pub enum UiEvent {
         recovery: String,
         tool_ran_not_verified: bool,
     },
+    /// The line under an on-device reply: which model answered, with its
+    /// draft or not, and why (`route::local_live::chat_line`). Not saved;
+    /// a reopened chat shows none.
+    ModelLine {
+        text: String,
+    },
     /// A report something on this computer wrote into the chat after its
     /// reply ended, such as a screen recording's diagnosis. It is saved as
     /// an assistant message, so it reads the same when the chat opens later.
@@ -1225,6 +1231,14 @@ fn turn_ends(chat: &str) {
     }
 }
 
+/// The line under `conversation_id`'s on-device reply, taken so it never
+/// outlives its turn, as the event to send: none for a side answer, whose
+/// reply has no bubble of its own to sit under.
+fn model_line_event(session: SessionMode, conversation_id: &str) -> Option<UiEvent> {
+    let text = grokhub_agent::route::local_live::take_line(conversation_id)?;
+    (session != SessionMode::Btw).then_some(UiEvent::ModelLine { text })
+}
+
 fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     let Worker {
         id: conversation_id,
@@ -1521,13 +1535,19 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     }
                     // The turn's extras, before Done as the Goal card is:
                     // the recap card for its Finished block, then the
-                    // evidence receipt the harness recorded for it.
+                    // evidence receipt the harness recorded for it, then the
+                    // line naming the on-device model that answered. The
+                    // line is taken either way, so it never outlives its turn.
+                    let model_line = model_line_event(route.session, &conversation_id);
                     if route.session != SessionMode::Btw {
                         if let Some(card) = recap_event(&reply, &tool_rows) {
                             emit(card);
                         }
                         if let Some(receipt) = evidence_event(&config_dir, &conversation_id) {
                             emit(receipt);
+                        }
+                        if let Some(line) = model_line {
+                            emit(line);
                         }
                     }
                     let btw = route.session == SessionMode::Btw;
@@ -2562,6 +2582,34 @@ mod tests {
             json,
             serde_json::json!({"kind": "tool", "id": "call-1", "title": "read_file", "status": "completed", "detail": "ok"})
         );
+    }
+
+    #[test]
+    fn the_model_line_goes_out_as_its_own_event_once() {
+        assert_eq!(
+            serde_json::to_value(UiEvent::ModelLine {
+                text: "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer.".into()
+            })
+            .expect("json"),
+            serde_json::json!({"kind": "modelLine", "text": "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer."})
+        );
+        let id = "shell-model-line-test";
+        assert_eq!(
+            model_line_event(SessionMode::Chat, id),
+            None,
+            "no on-device reply, no line"
+        );
+        let line = "Answered by Gemma 4 E2B with its draft, your pick.";
+        grokhub_agent::route::local_live::keep_line(id, line.into());
+        assert_eq!(
+            model_line_event(SessionMode::Chat, id),
+            Some(UiEvent::ModelLine { text: line.into() })
+        );
+        assert_eq!(model_line_event(SessionMode::Chat, id), None, "taken once");
+        // A side answer's line is taken and dropped: it never shows later.
+        grokhub_agent::route::local_live::keep_line(id, line.into());
+        assert_eq!(model_line_event(SessionMode::Btw, id), None);
+        assert_eq!(model_line_event(SessionMode::Chat, id), None);
     }
 
     #[test]

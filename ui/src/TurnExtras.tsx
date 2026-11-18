@@ -176,3 +176,25 @@ export function EvidenceCard({ event }: { event: EvidenceEvent }) {
     </div>
   );
 }
+
+/** The tier words a chat's ask or setting puts in the model line. */
+const TIER_WORD = /\b(Speed|Balance|Performance)\b/;
+
+/** The muted line under an on-device reply: which model answered and why.
+ * A tier the chat asked for, or is set to, shows in red. */
+export function ModelLine({ text }: { text: string }) {
+  const tier = TIER_WORD.exec(text);
+  return (
+    <p className="note model-line" data-role="model-line">
+      {tier ? (
+        <>
+          {text.slice(0, tier.index)}
+          <span className="model-tier">{tier[0]}</span>
+          {text.slice(tier.index + tier[0].length)}
+        </>
+      ) : (
+        text
+      )}
+    </p>
+  );
+}

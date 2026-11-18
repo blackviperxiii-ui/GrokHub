@@ -144,7 +144,46 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      read runs the one-shot defaults, so a paired model loads alone there.
 5. **Tiers, pin and the active-model line.** Speed, balance and
    performance come from the ask or the chat's pin. The active model
-   and its reason show in the chat.
+   and its reason show in the chat. Shipped in `route/local_scale.rs`
+   (`chat_tier`), `route/local_swap.rs`, `route/local_pin.rs` and
+   `route/local_live.rs` (`chat_line`):
+   - The tier comes from the person's words in this turn, else the chat's
+     setting in its tab menu ("Model for this chat": Auto, Speed, Balance,
+     Performance, kept in `{config}/local-chat-pins.json`), else the
+     automatic pick. The phrases are the cloud effort steer's
+     (`ladder::Steer`): "think hard" asks for Performance, "be quick" for
+     Speed. "Keep it short" alone asks for a short reply, not a faster
+     model. A helper's turn and a side answer (`<chat>~side-<n>`, whose
+     prompt quotes the main reply) read no words, **Tell the main task**
+     text counts only its question, and the quick class is never a speed
+     ask. Scripts decide; the model never picks its tier. A pin this build
+     can't read (a newer tier, a hand edit) reads as Auto and is kept on
+     the next write; a pins file that isn't JSON is never overwritten.
+   - Speed runs the fastest model at or below the pick that fits with its
+     drafter (the lighter one on a tie). Performance runs the biggest model
+     above the pick that fits with its drafter and headroom at 12 tok/s or
+     more, on battery or a busy CPU too. Balance runs the pick, with no
+     model picked for the task and no lighter one while saving power. When
+     no pair fits, the walk steps down a tier as before; the drafter is
+     never dropped.
+   - An ask or a setting loads now, past the 120 s cooldown and the wait
+     for a quiet chat. A reply in flight, Keep loaded, a forced model file,
+     a low battery and a game still win. On a low battery Performance loads
+     nothing bigger, even when no smaller model is on disk.
+   - The line under each on-device reply names the model, whether its
+     draft ran, and why: the pick, the tier the chat asked for, why an ask
+     didn't get its tier (no faster or bigger pair fits, another chat was
+     answering, a low battery, Keep loaded or a forced file), or the
+     stand-in's reason, the same clause (`StandIn::reason`) the Settings row
+     uses. An ask got its tier when the model running is the one its plan
+     aimed at, whatever label that model loaded under. A setting refused
+     because another chat was answering loads with the next reply; words
+     asked only for this one. It isn't saved, so a reopened chat shows none.
+     The Settings row keeps the running model's own label when an ask is
+     met by the model already running.
+   - Not yet: a pin for one model (the store keeps room for it), the line
+     for cloud turns, and a tier that the cloud router reads. Two chats set
+     to different tiers reload the model on each turn. The speed estimate doesn't count the drafter's speedup.
 6. **Voice on device.** On-device speech-to-text, then text-to-speech
    chosen by need (an on-device chat or Offline only) instead of by
    whether a key is saved.

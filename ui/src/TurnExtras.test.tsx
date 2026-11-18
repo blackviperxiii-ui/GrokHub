@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "./api";
-import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
+import { EvidenceCard, FindingsCard, ModelLine, RecapCard } from "./TurnExtras";
 
 type FindingsEvent = Extract<ChatEvent, { kind: "findings" }>;
 type RecapEvent = Extract<ChatEvent, { kind: "recap" }>;
@@ -50,6 +50,26 @@ const EVIDENCE: EvidenceEvent = {
   recovery: "unavailable",
   toolRanNotVerified: false,
 };
+
+describe("ModelLine", () => {
+  it("says which model answered, with the tier a chat asked for in red", () => {
+    const { container } = render(
+      <ModelLine text="Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer." />,
+    );
+    const line = container.querySelector('[data-role="model-line"]');
+    expect(line).toHaveTextContent(
+      "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer.",
+    );
+    expect(line).toHaveClass("note", "model-line");
+    expect(line?.querySelector(".model-tier")?.textContent).toBe("Speed");
+  });
+
+  it("marks no tier when the line names none", () => {
+    const { container } = render(<ModelLine text="Answered by Gemma 4 E4B, your pick." />);
+    expect(container.querySelector('[data-role="model-line"]')).toHaveTextContent("Answered by Gemma 4 E4B, your pick.");
+    expect(container.querySelector(".model-tier")).toBeNull();
+  });
+});
 
 describe("FindingsCard", () => {
   it("renders the findings and a pill per fix; a pill hands its prompt over", async () => {
