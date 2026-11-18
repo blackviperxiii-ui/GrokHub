@@ -5,6 +5,11 @@ on:
   schedule:
     - cron: "17 */2 * * *"
   workflow_dispatch:
+    inputs:
+      reset_issues:
+        description: Comma-separated card issue numbers to put back to Ready for work
+        required: false
+        default: ""
   issues:
     types: [closed]
   pull_request:
@@ -33,6 +38,7 @@ jobs:
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
+          RESET_ISSUES: ${{ inputs.reset_issues }}
         run: python3 .github/scripts/cards_sync.py sync
   done:
     # An issue counts only when the sync opened it or one of the project's own

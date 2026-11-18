@@ -26,6 +26,7 @@ REPO = os.environ.get("GITHUB_REPOSITORY", "")
 MARK_RE = re.compile(r"<!--\s*notion-card:\s*([0-9a-fA-F-]{32,36})\s*-->")
 # GitHub's closing keywords, with or without a colon ("Fixes #12", "Fixes: #12").
 CLOSES_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)\b", re.I)
+STATUS_READY = "Ready for work"
 STATUS_DOING = "Working on it now"
 STATUS_DONE = "Completed"
 DONE_STATUSES = (STATUS_DONE, "Done", "Notes")
@@ -119,8 +120,38 @@ def card_issues(state):
     return out
 
 
+def reset_ready(raw):
+    """Return unstarted card issues' Notion cards to Ready for work and close them not_planned."""
+    for token in re.split(r"[\s,]+", raw.strip()):
+        if not token.isdigit():
+            continue
+        number = int(token)
+        issue = gh(f"/repos/{REPO}/issues/{number}")
+        m = MARK_RE.search(issue.get("body") or "")
+        if not m or not trusted(issue):
+            continue
+        pid = m.group(1).replace("-", "")
+        page = notion(f"/pages/{pid}")
+        if page.get("archived") or page.get("in_trash"):
+            print(f"card {pid} is archived; skipped")
+        elif prop(page, "Status") not in DONE_STATUSES:
+            print(f"card {pid} (#{number}) -> {STATUS_READY}")
+            notion(f"/pages/{pid}", "PATCH", {"properties": {
+                "Status": {"select": {"name": STATUS_READY}},
+                "Picked up": {"date": None},
+                "Result": {"rich_text": []},
+            }})
+        if issue.get("state") == "open":
+            gh(f"/repos/{REPO}/issues/{number}", "PATCH",
+               {"state": "closed", "state_reason": "not_planned"})
+
+
 def sync():
-    """Completion sweep only: never pick up Ready cards or dispatch agents."""
+    """Completion sweep only (plus explicit reset_issues via workflow_dispatch)."""
+    reset_raw = os.environ.get("RESET_ISSUES", "").strip()
+    if reset_raw:
+        reset_ready(reset_raw)
+        return
     open_issues = card_issues("open")
     closed_issues = card_issues("closed")
     for pid, issue in closed_issues.items():

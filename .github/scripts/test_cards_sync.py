@@ -199,6 +199,23 @@ class CardsSyncTest(unittest.TestCase):
         )
         self.assertFalse(any("/query" in url or "/dispatches" in url or "jules" in url for _, url, _ in rec.calls))
 
+    def test_reset_ready_puts_cards_back_to_ready_and_closes_not_planned(self):
+        replies = {
+            ("GET", f"{ISSUES}/2004"): issue(*BOT, number=2004, state="open", reason=None),
+            ("GET", PAGE): DOING,
+        }
+        with mock.patch.dict(os.environ, {"RESET_ISSUES": "2004"}):
+            rec = self.run_with(replies, cards_sync.sync)
+        self.assertEqual(
+            [(m, u) for m, u, _ in rec.writes()],
+            [("PATCH", PAGE), ("PATCH", f"{ISSUES}/2004")],
+        )
+        props = rec.writes()[0][2]["properties"]
+        self.assertEqual(props["Status"], {"select": {"name": cards_sync.STATUS_READY}})
+        self.assertEqual(props["Picked up"], {"date": None})
+        self.assertEqual(props["Result"], {"rich_text": []})
+        self.assertEqual(rec.writes()[1][2], {"state": "closed", "state_reason": "not_planned"})
+
     def test_archived_notion_card_still_closes_open_issue_on_merge(self):
         replies = {
             ("GET", f"{ISSUES}/7"): issue(*BOT, state="open", reason=None),
