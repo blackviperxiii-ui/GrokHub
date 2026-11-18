@@ -213,7 +213,8 @@ pub fn transcribe_with(
                         Ok(text) => return Ok(text),
                         Err(err) if err == EMPTY => return Err(err),
                         Err(err) => {
-                            if !env.loopback_override && err != grokhub_core::offline::OFFLINE_MSG {
+                            if !env.loopback_override && err != *grokhub_core::offline::OFFLINE_MSG
+                            {
                                 voice_route::note_xai_failure(
                                     StageKind::Stt,
                                     grokhub_core::now_ms(),

@@ -527,7 +527,7 @@ fn speak_with_env(
                             Ok(spoken) => return Ok(spoken),
                             Err(err) => {
                                 if !env.loopback_override
-                                    && err != grokhub_core::offline::OFFLINE_MSG
+                                    && err != *grokhub_core::offline::OFFLINE_MSG
                                 {
                                     voice_route::note_xai_failure(
                                         StageKind::Tts,
