@@ -1167,6 +1167,10 @@ mod tests {
             "remove_permission_rule",
             "remember_grant",
             "forget_grant",
+            // Standing hub send grant: desktop only (needs this computer's hub).
+            "get_hub_send_grant",
+            "allow_hub_send_every_time",
+            "ask_hub_send_each_time",
             "get_personalities",
             "set_personality",
             "set_explicit_personalities",

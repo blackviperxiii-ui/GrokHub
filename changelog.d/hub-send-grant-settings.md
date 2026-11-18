@@ -1,0 +1,1 @@
+- Settings → Permissions: Paired computers Allow every time / Ask each time for the standing hub send grant; Ask each time drops the published `/sync` share and `/inhabit` hand-off.
