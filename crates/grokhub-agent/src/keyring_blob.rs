@@ -1,5 +1,5 @@
 //! Split a large keyring secret across numbered entries so Windows Credential
-//! Manager's 2560 UTF-16-unit password limit does not reject Grok OAuth JSON.
+//! Manager's 2560-byte UTF-16LE blob limit does not reject Grok OAuth JSON.
 //!
 //! Layout under one service:
 //! - `account` — legacy / small single-entry secret
@@ -10,11 +10,13 @@
 //! fit the platform limit stay as one entry and clear any leftover chunks;
 //! larger values replace the single entry with chunks.
 
-/// Windows Credential Manager limit reported by `keyring` (UTF-16 code units).
-pub const PLATFORM_UTF16_LIMIT: usize = 2560;
+/// Windows Credential Manager `CRED_MAX_CREDENTIAL_BLOB_SIZE` is 2560 **bytes**.
+/// Passwords are stored as UTF-16LE (2 bytes per unit), so the usable limit is
+/// 1280 UTF-16 units. `keyring` still reports the byte cap as "2560 chars".
+pub const PLATFORM_UTF16_LIMIT: usize = 1280;
 
 /// Max UTF-16 units per chunk (headroom under [`PLATFORM_UTF16_LIMIT`]).
-pub const CHUNK_UTF16_MAX: usize = 2400;
+pub const CHUNK_UTF16_MAX: usize = 1200;
 
 /// One named keyring slot under a fixed service. The OS backend uses
 /// `keyring`; tests use an in-memory map.
@@ -223,11 +225,15 @@ mod tests {
     #[test]
     fn a_secret_over_the_windows_limit_round_trips_in_chunks() {
         let store = Mem::default();
-        // ASCII: one char == one UTF-16 unit. Past 2560 so a single entry would fail.
+        // ASCII: one char == one UTF-16 unit. Past 1280 so a single entry would fail.
         let secret: String = (0..PLATFORM_UTF16_LIMIT + 80)
             .map(|i| char::from(b'A' + (i % 26) as u8))
             .collect();
         assert!(utf16_units(&secret) > PLATFORM_UTF16_LIMIT);
+        assert!(
+            utf16_units(&secret) * 2 > 2560,
+            "must exceed the 2560-byte blob cap"
+        );
         set(&store, "shell-xai-oauth", &secret).unwrap();
         assert!(store.get("shell-xai-oauth").unwrap().is_none());
         let n: usize = store
@@ -303,5 +309,57 @@ mod tests {
             assert!(utf16_units(p) <= 30);
         }
         assert_eq!(parts.concat(), s);
+    }
+
+    /// Each OS-backed store's account name round-trips a >2560-unit secret
+    /// through the same chunking path those writers now call.
+    #[test]
+    fn every_store_account_round_trips_a_long_secret() {
+        let store = Mem::default();
+        let secret: String = "L".repeat(PLATFORM_UTF16_LIMIT + 100);
+        let accounts = [
+            "shell-xai-oauth",
+            "xai-oauth",
+            "shell-console-key",
+            "code-secret:repo:DEPLOY_TOKEN",
+            "hub-join-token",
+            "desktop-portal-restore",
+            "learned-tier-key",
+            "provider-openrouter",
+            "gw2-api-key",
+            "destiny2-api-key",
+        ];
+        for account in accounts {
+            set(&store, account, &secret).unwrap();
+            assert_eq!(
+                get(&store, account).unwrap().as_deref(),
+                Some(secret.as_str()),
+                "{account}"
+            );
+            delete(&store, account).unwrap();
+            assert!(get(&store, account).unwrap().is_none(), "{account}");
+        }
+    }
+
+    /// Live Windows Credential Manager: a chunked write must survive a real
+    /// round-trip on CI's windows-latest runner.
+    #[cfg(windows)]
+    #[test]
+    fn windows_credential_manager_round_trips_a_chunked_secret() {
+        fn map_err(err: keyring::Error) -> String {
+            err.to_string()
+        }
+        let account = format!(
+            "grokhub-keyring-blob-ci-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        );
+        let backend = OsBackend::new(grokhub_core::brand::INTERNAL_ID, map_err);
+        let secret: String = "W".repeat(PLATFORM_UTF16_LIMIT + 120);
+        set(&backend, &account, &secret).expect("Windows Credential Manager set");
+        let got = get(&backend, &account).expect("get");
+        assert_eq!(got.as_deref(), Some(secret.as_str()));
+        delete(&backend, &account).expect("delete");
+        assert!(get(&backend, &account).expect("get after delete").is_none());
     }
 }

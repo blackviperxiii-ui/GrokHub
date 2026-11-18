@@ -501,27 +501,25 @@ pub trait KeyVault: Send + Sync {
 /// The OS keyring through `keyring` 4: Secret Service, Windows Credential Manager, Keychain.
 pub struct OsKeyVault;
 
+fn keyvault_message(err: keyring::Error) -> String {
+    err.to_string()
+}
+
+fn keyvault_backend() -> crate::keyring_blob::OsBackend {
+    crate::keyring_blob::OsBackend::new(KEY_SERVICE, keyvault_message)
+}
+
 impl KeyVault for OsKeyVault {
     fn get(&self, id: &str) -> Result<Option<Zeroizing<String>>, String> {
-        let entry = keyring::Entry::new(KEY_SERVICE, id).map_err(|e| e.to_string())?;
-        match entry.get_password() {
-            Ok(k) => Ok(Some(Zeroizing::new(k))),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(e.to_string()),
-        }
+        Ok(crate::keyring_blob::get(&keyvault_backend(), id)?.map(Zeroizing::new))
     }
 
     fn set(&self, id: &str, key: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(KEY_SERVICE, id).map_err(|e| e.to_string())?;
-        entry.set_password(key).map_err(|e| e.to_string())
+        crate::keyring_blob::set(&keyvault_backend(), id, key)
     }
 
     fn delete(&self, id: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(KEY_SERVICE, id).map_err(|e| e.to_string())?;
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        }
+        crate::keyring_blob::delete(&keyvault_backend(), id)
     }
 }
 

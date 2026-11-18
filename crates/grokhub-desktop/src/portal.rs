@@ -156,11 +156,18 @@ fn keychain_error(err: &str) -> String {
 
 pub(crate) struct KeychainRestoreStore;
 
+fn restore_keychain_message(err: keyring::Error) -> String {
+    keychain_error(&err.to_string())
+}
+
+fn restore_backend() -> grokhub_agent::keyring_blob::OsBackend {
+    grokhub_agent::keyring_blob::OsBackend::new(SERVICE, restore_keychain_message)
+}
+
 impl RestoreStore for KeychainRestoreStore {
     fn load(&self) -> Result<Option<String>, String> {
-        let entry = keyring_entry()?;
-        match entry.get_password() {
-            Ok(raw) => {
+        match grokhub_agent::keyring_blob::get(&restore_backend(), ACCOUNT)? {
+            Some(raw) => {
                 let token = raw.trim().to_string();
                 if token.is_empty() {
                     Ok(None)
@@ -168,27 +175,17 @@ impl RestoreStore for KeychainRestoreStore {
                     Ok(Some(token))
                 }
             }
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(err) => Err(keychain_error(&err.to_string())),
+            None => Ok(None),
         }
     }
 
     fn save(&self, token: &str) -> Result<(), String> {
-        keyring_entry()?
-            .set_password(token)
-            .map_err(|err| keychain_error(&err.to_string()))
+        grokhub_agent::keyring_blob::set(&restore_backend(), ACCOUNT, token)
     }
 
     fn delete(&self) -> Result<(), String> {
-        match keyring_entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(err) => Err(keychain_error(&err.to_string())),
-        }
+        grokhub_agent::keyring_blob::delete(&restore_backend(), ACCOUNT)
     }
-}
-
-fn keyring_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, ACCOUNT).map_err(|err| keychain_error(&err.to_string()))
 }
 
 enum Cmd {

@@ -285,12 +285,20 @@ pub fn send_now(config_dir: &Path, share: &crate::hub_share::HubShare) {
 /// The token in tests, which never touch the real keychain.
 static TEST_TOKEN: Mutex<Option<String>> = Mutex::new(None);
 
+fn join_keychain_message(err: keyring::Error) -> String {
+    format!("The system keychain is not available: {err}")
+}
+
+fn join_backend() -> grokhub_agent::keyring_blob::OsBackend {
+    grokhub_agent::keyring_blob::OsBackend::new(crate::credential::SERVICE, join_keychain_message)
+}
+
 fn load_token() -> Option<String> {
     if cfg!(test) {
         return TEST_TOKEN.lock().unwrap_or_else(|e| e.into_inner()).clone();
     }
-    match keyring_entry().ok()?.get_password() {
-        Ok(token) if !token.trim().is_empty() => Some(token),
+    match grokhub_agent::keyring_blob::get(&join_backend(), KEYRING_ACCOUNT) {
+        Ok(Some(token)) if !token.trim().is_empty() => Some(token),
         _ => None,
     }
 }
@@ -300,23 +308,12 @@ fn store_token(token: Option<&str>) -> Result<(), String> {
         *TEST_TOKEN.lock().unwrap_or_else(|e| e.into_inner()) = token.map(str::to_string);
         return Ok(());
     }
-    let entry = keyring_entry()?;
     match token {
-        Some(token) => entry
-            .set_password(token)
+        Some(token) => grokhub_agent::keyring_blob::set(&join_backend(), KEYRING_ACCOUNT, token)
             .map_err(|e| format!("Couldn't keep the pairing in the system keychain: {e}")),
-        None => match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(format!(
-                "Couldn't remove the pairing from the system keychain: {e}"
-            )),
-        },
+        None => grokhub_agent::keyring_blob::delete(&join_backend(), KEYRING_ACCOUNT)
+            .map_err(|e| format!("Couldn't remove the pairing from the system keychain: {e}")),
     }
-}
-
-fn keyring_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(crate::credential::SERVICE, KEYRING_ACCOUNT)
-        .map_err(|e| format!("The system keychain is not available: {e}"))
 }
 
 #[cfg(test)]

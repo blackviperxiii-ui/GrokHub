@@ -59,30 +59,22 @@ fn keychain_message(err: keyring::Error) -> String {
     }
 }
 
-fn entry(account: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, account).map_err(keychain_message)
+fn backend() -> grokhub_agent::keyring_blob::OsBackend {
+    grokhub_agent::keyring_blob::OsBackend::new(SERVICE, keychain_message)
 }
 
 impl Vault for Keychain {
     fn get(&self, account: &str) -> Result<Option<String>, String> {
-        match entry(account)?.get_password() {
-            Ok(v) => Ok(Some(v)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(err) => Err(keychain_message(err)),
-        }
+        grokhub_agent::keyring_blob::get(&backend(), account)
     }
 
     fn set(&self, account: &str, value: &str) -> Result<(), String> {
-        entry(account)?
-            .set_password(value)
-            .map_err(keychain_message)
+        // Chunk when a value exceeds Windows Credential Manager's limit.
+        grokhub_agent::keyring_blob::set(&backend(), account, value)
     }
 
     fn delete(&self, account: &str) -> Result<(), String> {
-        match entry(account)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(err) => Err(keychain_message(err)),
-        }
+        grokhub_agent::keyring_blob::delete(&backend(), account)
     }
 }
 
