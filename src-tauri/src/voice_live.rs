@@ -459,17 +459,6 @@ fn tts_env(config_dir: &Path, models: &Path) -> VoiceEnv {
     }
 }
 
-/// Speak `text` in `voice` using the shared voice router without an app handle.
-pub fn speak(
-    config_dir: &Path,
-    models_dir: &Path,
-    voice: &str,
-    text: &str,
-    asked: u64,
-) -> Result<Spoken, String> {
-    speak_with(None, config_dir, models_dir, voice, text, asked)
-}
-
 /// Speak `text` in `voice` via the shared voice router, starting automatic
 /// local voice download via `app` if local assets are needed and missing.
 pub fn speak_with(

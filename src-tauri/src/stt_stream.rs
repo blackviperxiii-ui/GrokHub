@@ -150,11 +150,6 @@ pub fn target_for(config_dir: &Path) -> Option<StreamTarget> {
     })
 }
 
-/// [`target_for`] using the agent's configured directory.
-pub fn target() -> Option<StreamTarget> {
-    target_for(&grokhub_agent::perm::config_dir())
-}
-
 /// A stream for one listen to `to`. `None` when it can't be used: this key
 /// was refused earlier this run, or the egress guard says no.
 pub fn open(config_dir: &Path, to: &StreamTarget) -> Option<SttLink> {
