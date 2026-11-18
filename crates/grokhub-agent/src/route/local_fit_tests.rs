@@ -558,3 +558,59 @@ fn with_nothing_to_draw_with_only_a_picture_ask_says_what_to_download() {
     assert!(li::NO_KIT.contains("Settings → Download models → Image"));
     assert!(li::NO_KIT.contains("picture guard"));
 }
+
+/// Local router step 7: one on-device turn whose history is `history`;
+/// what the device was sent and the line kept under the reply.
+fn blind_turn(history: Vec<InputItem>) -> (ResponsesRequest, Option<String>) {
+    let rt = std::sync::Arc::new(SmallWindow {
+        n_ctx: Some(32_768),
+        sent: Default::default(),
+    });
+    let _on = crate::route::local::ForceOn::with(Some(rt.clone()));
+    let req = real_request(history);
+    crate::route::local::serve_request("chat:default", &req, &crate::client::CancelToken::new())
+        .unwrap();
+    let sent = rt.sent.lock().unwrap()[0].clone();
+    (
+        sent,
+        crate::route::local_live::take_line(&req.conversation_id),
+    )
+}
+
+fn with_picture(body: &str) -> InputItem {
+    InputItem::Message {
+        role: "user".into(),
+        content: vec![
+            ContentPart::InputText(body.into()),
+            ContentPart::InputImage("data:image/png;base64,YQ==".into()),
+        ],
+    }
+}
+
+#[test]
+fn a_device_with_no_picture_reader_answers_without_the_picture_and_says_so() {
+    use crate::route::local_vision::BLIND_NOTE;
+    let (sent, line) = blind_turn(vec![
+        with_picture("what is this?"),
+        text("assistant", "A fox."),
+        with_picture("and this one?"),
+    ]);
+    let body = crate::route::providers::openai_body("local", None, &sent).to_string();
+    assert!(!body.contains("image_url"), "{body}");
+    assert_eq!(body.matches(BLIND_NOTE).count(), 2, "{body}");
+    assert_eq!(line.as_deref(), Some(crate::route::local_live::BLIND_LINE));
+}
+
+#[test]
+fn an_older_picture_alone_adds_no_line_under_the_reply() {
+    use crate::route::local_vision::BLIND_NOTE;
+    let (sent, line) = blind_turn(vec![
+        with_picture("what is this?"),
+        text("assistant", "A fox."),
+        text("user", "thanks"),
+    ]);
+    let body = crate::route::providers::openai_body("local", None, &sent).to_string();
+    assert!(!body.contains("image_url"), "{body}");
+    assert_eq!(body.matches(BLIND_NOTE).count(), 1, "{body}");
+    assert_eq!(line, None);
+}
