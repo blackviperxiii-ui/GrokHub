@@ -5,7 +5,7 @@
 // table. Exits nonzero when any screen fails:
 //   - red pixels ≥ amber pixels, except on Home, where XP bars and streak
 //     days stay amber by design
-//   - amber ≤ 10% of non-black pixels
+//   - amber ≤ 10% of the full frame (all pixels, including true-black panels)
 //   - neutral-gray outline pixels ≥ 50% lower than a baseline (when given)
 //
 //   npm run colorshare --prefix ui
@@ -130,13 +130,13 @@ function viewOf(file) {
 }
 
 function check(row, baselineGray) {
-  const nonBlack = row.total - row.black;
   const fails = [];
   if (row.red < row.amber && !RED_RULE_EXEMPT.has(viewOf(row.file))) {
     fails.push(`red(${row.red}) < amber(${row.amber})`);
   }
-  const amberShare = nonBlack ? row.amber / nonBlack : 0;
-  if (amberShare > 0.1) fails.push(`amber ${pct(row.amber, nonBlack)}% > 10% of non-black`);
+  // Full-frame denominator on every theme (incl. OLED): black panels count.
+  const amberShare = row.total ? row.amber / row.total : 0;
+  if (amberShare > 0.1) fails.push(`amber ${pct(row.amber, row.total)}% > 10% of full frame`);
   if (baselineGray != null) {
     if (row.gray > baselineGray * 0.5) {
       fails.push(`gray(${row.gray}) not ≤ 50% of baseline(${baselineGray})`);
@@ -190,14 +190,13 @@ async function run() {
     ].join(" "),
   );
   for (const row of rows) {
-    const nonBlack = row.total - row.black;
     console.log(
       [
         row.file.slice(0, 48).padEnd(48),
         String(row.red).padStart(8),
         String(row.amber).padStart(8),
         String(row.gray).padStart(8),
-        pct(row.amber, nonBlack).padStart(8),
+        pct(row.amber, row.total).padStart(8),
         row.fails.length ? "FAIL" : "ok",
       ].join(" "),
     );
