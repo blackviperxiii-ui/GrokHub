@@ -495,6 +495,8 @@ pub struct LocalGate {
     pub local_verify_failed: bool,
     /// The governor's level and whether the runtime is there at all.
     pub capacity: LocalCapacity,
+    /// The running model was started with its picture reader (`--mmproj`).
+    pub sees_pictures: bool,
 }
 
 impl LocalGate {
@@ -511,6 +513,11 @@ impl LocalGate {
             offline: super::connectivity::state().prefer_local(),
             offline_switch: grokhub_core::offline::enabled(),
             local_verify_failed: local_verify_failed(),
+            sees_pictures: super::local_vision::sees_pictures(
+                super::local_sidecar::loaded()
+                    .and_then(|l| l.launch)
+                    .as_ref(),
+            ),
         }
     }
 }

@@ -1162,6 +1162,18 @@ impl Router {
             })
             .filter(|id| policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms))
             .collect();
+        // A picture this computer's model can't see goes to an online model
+        // that reads pictures, while one is left; the last-resort paths below
+        // still answer on the device, without the picture.
+        let ids: Vec<&str> = if local_vision::reads_online(input)
+            && ids.iter().any(|id| local::is_local(id))
+            && ids.iter().any(|id| !local::is_local(id))
+        {
+            rules.push(local_vision::NO_VISION_RULE.into());
+            ids.into_iter().filter(|id| !local::is_local(id)).collect()
+        } else {
+            ids
+        };
         // Failover PR 5: a long task never spends itself on a free provider
         // model while a route that can carry it exists — a paid route (xAI,
         // the plan, or a paid provider) or the device through its own

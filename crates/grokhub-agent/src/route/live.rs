@@ -1895,6 +1895,16 @@ pub fn stream_routed(
             }
         }
     }
+    // A chat that was running here and moved online for a picture says why,
+    // once per such turn; a chat that was online anyway hears nothing.
+    let vision_line = (!on_device
+        && super::local_live::runs_here(&req.conversation_id)
+        && decision
+            .route
+            .rule_ids
+            .iter()
+            .any(|r| r == super::local_vision::NO_VISION_RULE))
+    .then_some(super::local_vision::ONLINE_LINE);
     // Before the model call, so the reply's first spoken piece already uses
     // the right voice.
     note_here(class, &req.conversation_id, on_device, must_stay);
@@ -1993,6 +2003,9 @@ pub fn stream_routed(
     // Grok took a turn a provider failed: the turn is logged as Grok's.
     let mut grok_took_turn = false;
     let allow_cross_provider_failover = super::voice_route::active_reply_pref(&dir).is_none();
+    if let Some(line) = vision_line {
+        sink(StreamEvent::ReasoningDelta(line.into()));
+    }
     let out = if on_device {
         // Missing Grok creds already chose the device (`local:no_keys`): say so.
         if !class.trim().starts_with("background:") && super::local::fallback_active() {

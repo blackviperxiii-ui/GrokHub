@@ -9,6 +9,7 @@
 use crate::client::{ContentPart, InputItem};
 
 use super::local_autoconfig::LaunchArgs;
+use super::RouteInput;
 
 /// What stands in for a picture the running model can't see.
 pub const BLIND_NOTE: &str =
@@ -18,6 +19,30 @@ pub const BLIND_NOTE: &str =
 /// projector (`--mmproj`). The one-shot defaults never carry one.
 pub fn sees_pictures(launch: Option<&LaunchArgs>) -> bool {
     launch.is_some_and(|l| l.mmproj.is_some())
+}
+
+/// Said in a chat that ran on this computer when a picture moved the turn
+/// online ([`reads_online`]).
+pub const ONLINE_LINE: &str =
+    "The model on this computer can't see pictures, so an online model read this one.";
+
+/// The router's rule when [`reads_online`] took the device out of the pick.
+pub const NO_VISION_RULE: &str = "local:no_vision";
+
+/// A picture the device can't see goes to an online model that can, when
+/// the turn may leave this computer: never an 18+ turn, a voice set to
+/// Local only, sensitive data without your grant, or offline.
+pub fn reads_online(input: &RouteInput<'_>) -> bool {
+    input.needs_image
+        && !input.local.sees_pictures
+        && !input.adult
+        && !matches!(
+            input.voice_reply,
+            Some(super::voice_route::ReplyPref::LocalOnly)
+        )
+        && !(input.local.sensitive && !input.local.cloud_grant)
+        && !input.local.offline
+        && !input.local.offline_switch
 }
 
 /// Turn every picture in `input` into [`BLIND_NOTE`]. Returns how many it

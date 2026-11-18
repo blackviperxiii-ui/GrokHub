@@ -410,3 +410,38 @@ fn an_upgraded_turn_leaves_its_free_episode_model() {
         r.model
     );
 }
+
+#[test]
+fn a_picture_the_device_cant_see_goes_online_unless_the_turn_must_stay() {
+    let reg = fleet();
+    let choose = |input: &RouteInput<'_>| {
+        Router::choose(input, &reg, &none(), &RoutingTable::default(), NOW)
+    };
+    let no_vision = |r: &super::Route| r.rule_ids.iter().any(|x| x == "local:no_vision");
+    // Control: the warm device takes the tiny text step.
+    let mut input = warm_ask(TaskSize::Tiny, Level::Normal, true);
+    assert_eq!(choose(&input).model, "local:small");
+    // A picture it can't see: an online model reads it.
+    input.needs_image = true;
+    let r = choose(&input);
+    assert!(!local::is_local(&r.model), "got {}", r.model);
+    assert!(!r.no_route);
+    assert!(no_vision(&r), "{:?}", r.rule_ids);
+    // Started with its picture reader: the device keeps it.
+    input.local.sees_pictures = true;
+    let r = choose(&input);
+    assert_eq!(r.model, "local:small");
+    assert!(!no_vision(&r));
+    input.local.sees_pictures = false;
+    // An 18+ turn never leaves the device, picture or not.
+    input.adult = true;
+    let r = choose(&input);
+    assert_eq!(r.model, "local:small");
+    assert!(!no_vision(&r));
+    input.adult = false;
+    // Sensitive data with no grant to send it: the device or nothing.
+    input.local.sensitive = true;
+    let r = choose(&input);
+    assert_eq!(r.model, "local:small");
+    assert!(!no_vision(&r));
+}
