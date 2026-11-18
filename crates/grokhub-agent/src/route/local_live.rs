@@ -172,7 +172,10 @@ pub fn lines(l: &LocalLive) -> Vec<String> {
                 None => format!("Draft model: {drafter} is on."),
             },
             Decision::NeedsTest => format!(
-                "Draft model: {drafter} is off until its speed test runs, which happens on its own when the computer is idle."
+                "Draft model: {drafter} is on; its speed test is pending and runs on its own when the computer is idle."
+            ),
+            Decision::NoRoom => format!(
+                "Draft model: {drafter} doesn't fit beside the model, so a smaller model runs."
             ),
             Decision::Off(why) => format!("Draft model: {drafter} is off because {why}."),
         });
@@ -250,7 +253,7 @@ mod tests {
             tok_s: None,
             draft: Some((
                 "Gemma 4 31B draft model".into(),
-                Decision::Off("there isn't room for the model and its draft model together"),
+                Decision::Off("the speed test found the draft model didn't help"),
                 None,
             )),
             unload_in_secs: None,
@@ -268,7 +271,7 @@ mod tests {
             got[2],
             "Last reply: none since it loaded, with room for 16,384 tokens of chat."
         );
-        assert_eq!(got[3], "Draft model: Gemma 4 31B draft model is off because there isn't room for the model and its draft model together.");
+        assert_eq!(got[3], "Draft model: Gemma 4 31B draft model is off because the speed test found the draft model didn't help.");
         assert_eq!(
             got[4],
             "Stays loaded until you close the app or a game needs the memory."
@@ -277,7 +280,18 @@ mod tests {
             draft: Some(("X".into(), Decision::NeedsTest, None)),
             ..loaded()
         };
-        assert!(lines(&needs)[3].contains("happens on its own when the computer is idle"));
+        assert_eq!(
+            lines(&needs)[3],
+            "Draft model: X is on; its speed test is pending and runs on its own when the computer is idle."
+        );
+        let no_room = LocalLive {
+            draft: Some(("X".into(), Decision::NoRoom, None)),
+            ..loaded()
+        };
+        assert_eq!(
+            lines(&no_room)[3],
+            "Draft model: X doesn't fit beside the model, so a smaller model runs."
+        );
     }
 
     #[test]

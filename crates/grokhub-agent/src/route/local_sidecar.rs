@@ -18,6 +18,7 @@ use super::local_autoconfig::{self as autoconfig, LaunchArgs, Retry};
 use super::local_gov;
 use super::local_health as health;
 use super::local_swap::Plan;
+use grokhub_core::local_draft as ld;
 use grokhub_core::local_setup::LocalModel;
 use grokhub_core::local_skills::TaskKind;
 
@@ -73,6 +74,8 @@ pub struct Sidecar {
     pub thinking: super::local_effort::Thinking,
     /// Why this isn't the Settings pick, when it isn't.
     stand_in: Option<super::local_swap::StandIn>,
+    /// Models a start refused before this one ran.
+    refused: super::local_swap::Refusals,
     /// Requests on this server; a retired one stops once it reaches 0.
     in_flight: Arc<AtomicUsize>,
     /// See [`health_timeout`].
@@ -475,15 +478,41 @@ pub fn retry_on_cpu(err: &str, log: &str, launch: Option<&LaunchArgs>, bare_cpu:
 
 /// Start llama-server on a fresh loopback port.
 pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
-    let planned = autoconfig::launch_for(&paths.binary, &paths.model);
+    let mut planned = autoconfig::launch_for(&paths.binary, &paths.model)?;
+    // The one-shot defaults never load a drafter: before the hardware read
+    // is done, read it here and plan again.
+    if planned.is_none() && autoconfig::profile().is_none() && crate::device::read_now() {
+        planned = autoconfig::launch_for(&paths.binary, &paths.model)?;
+    }
     start_planned(paths, planned)
+}
+
+/// Bytes a start reads off the disk: the model, and the drafter file the
+/// launch loads beside it.
+fn load_bytes(model: &Path, launch: Option<&LaunchArgs>) -> u64 {
+    let len = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len());
+    let drafter = launch
+        .and_then(|l| l.draft.as_ref()?.model.as_deref())
+        .map_or(0, len);
+    len(model) + drafter
+}
+
+/// The error for a start planned as `prev` that ran out of memory;
+/// `smaller` names a model to try instead, or is empty.
+fn oom_error(prev: &LaunchArgs, smaller: &str) -> String {
+    let how = if prev.draft.is_some() {
+        "with its draft model"
+    } else {
+        "even with fewer GPU layers"
+    };
+    format!("{OUT_OF_MEMORY} {how}.{smaller}")
 }
 
 /// [`start`] with the launch already planned (a warm relaunch plans it as a
 /// fresh start would, while the old server still holds its memory).
 fn start_planned(
     paths: &SidecarPaths,
-    planned: Option<(LaunchArgs, String, PathBuf)>,
+    planned: Option<autoconfig::Planned>,
 ) -> Result<Sidecar, String> {
     if !paths.binary.is_file() {
         return Err(format!(
@@ -499,7 +528,10 @@ fn start_planned(
     }
     let host = "127.0.0.1".to_string();
     autoconfig::clear_resident();
-    let wait = health_timeout(std::fs::metadata(&paths.model).map_or(0, |m| m.len()));
+    let wait = health_timeout(load_bytes(
+        &paths.model,
+        planned.as_ref().map(|(l, _, _)| l),
+    ));
     let mut launch = planned.as_ref().map(|(l, _, _)| l.clone());
     let idle = super::local_perf::current_defaults().idle_unload_secs;
     let mut attempt: u8 = 0;
@@ -537,6 +569,7 @@ fn start_planned(
             bare_cpu,
             thinking: Default::default(),
             stand_in: None,
+            refused: Default::default(),
             in_flight: Arc::new(AtomicUsize::new(0)),
             health_timeout: wait,
         };
@@ -624,9 +657,7 @@ fn start_planned(
                     .and_then(|m| autoconfig::next_smaller(m.id))
                     .map(|m| format!(" Try {} in Settings → Local model.", m.name))
                     .unwrap_or_default();
-                return Err(format!(
-                    "{OUT_OF_MEMORY} even with fewer GPU layers.{smaller}"
-                ));
+                return Err(oom_error(prev, &smaller));
             }
         }
     }
@@ -1139,13 +1170,14 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
         // and a stop never wait for a cold start.
         drop(slot);
         let began = Instant::now();
+        let home = paths.model.clone();
         let paths = SidecarPaths {
             binary: paths.binary,
             model,
         };
         let measured = paths.model.clone();
         let cached = super::local_warm::resident_pct(&measured);
-        let (started, model, stand_in) = start_or_stand_in(config_dir, paths, stand_in);
+        let (started, model, stand_in) = start_or_stand_in(config_dir, &home, paths, stand_in);
         let mut slot = global_slot().lock().expect("sidecar global");
         STARTING.store(false, Ordering::SeqCst);
         LOAD_DONE.notify_all();
@@ -1197,32 +1229,171 @@ fn runtime_paths(config_dir: &Path) -> Result<SidecarPaths, String> {
     }
 }
 
-/// [`start`], and on out-of-memory a smaller model on disk in its place.
-/// Returns what started, the model it loaded and why it stands in.
+/// [`start`], and a smaller model on disk in its place when the start ran
+/// out of memory (one step) or the model and its drafter don't fit (smaller
+/// models until a pair fits). `home` is the Settings pick. Returns what
+/// started, the model it loaded and why it stands in; a server that started
+/// keeps the models refused on the way.
 fn start_or_stand_in(
     config_dir: &Path,
+    home: &Path,
     mut paths: SidecarPaths,
-    mut stand_in: Option<super::local_swap::StandIn>,
+    planned: Option<super::local_swap::StandIn>,
 ) -> (
     Result<Sidecar, String>,
     PathBuf,
     Option<super::local_swap::StandIn>,
 ) {
+    use super::local_swap::StandIn;
+    let picked = paths.model.clone();
+    let disk = on_disk(config_dir);
+    let mut walk: Option<StandIn> = None;
+    let mut refused = super::local_swap::Refusals::default();
     let mut started = start(&paths);
+    while let Err(e) = &started {
+        let oom_before = walk == Some(StandIn::OutOfMemory);
+        let Some((model, why)) = next_step(e, &paths.model, &disk, oom_before) else {
+            break;
+        };
+        let hold = autoconfig::take_refusal(&paths.model)
+            .filter(|_| e.starts_with(autoconfig::PAIR_NO_ROOM))
+            .map_or(
+                super::local_swap::Hold::UntilUnload,
+                super::local_swap::Hold::Pair,
+            );
+        refused.models.push((paths.model.clone(), hold));
+        health::log_to(config_dir, health::start_failure(e), Some(e), None);
+        walk = Some(why);
+        let label = stand_in_label(&model, home, planned, walk);
+        health::log_to(config_dir, "swap", Some(&swap_note(&model, label)), None);
+        paths.model = model;
+        started = start(&paths);
+    }
     if let Err(e) = &started {
-        let stand = e
-            .starts_with(OUT_OF_MEMORY)
-            .then(|| super::local_swap::out_of_memory_stand_in(&paths.model, &on_disk(config_dir)))
-            .flatten();
-        if let Some(model) = stand {
-            health::log_to(config_dir, health::start_failure(e), Some(e), None);
-            stand_in = Some(super::local_swap::StandIn::OutOfMemory);
-            health::log_to(config_dir, "swap", Some(&swap_note(&model, stand_in)), None);
-            paths.model = model;
-            started = start(&paths);
+        if e.starts_with(autoconfig::PAIR_NO_ROOM) {
+            started = Err(pair_no_room_error(&picked, e));
         }
     }
-    (started, paths.model, stand_in)
+    if let Ok(side) = started.as_mut() {
+        note_pick_refused(home, &paths.model, &refused);
+        refused.since_ms = unix_ms();
+        side.refused = refused;
+    }
+    let label = stand_in_label(&paths.model, home, planned, walk);
+    (started, paths.model, label)
+}
+
+/// The last time the walk refused the pick: the pick, and the model that
+/// started in its place. It outlives that model's unload, so the speed test
+/// still times the model that runs for the pick; the pick loading clears it.
+static PICK_REFUSED: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
+
+/// Keep [`PICK_REFUSED`] after a walk for the pick `home` started `started`
+/// with `refused` on the way.
+pub(crate) fn note_pick_refused(
+    home: &Path,
+    started: &Path,
+    refused: &super::local_swap::Refusals,
+) {
+    let Ok(mut last) = PICK_REFUSED.lock() else {
+        return;
+    };
+    if started == home {
+        *last = None;
+    } else if refused.models.iter().any(|(m, _)| m == home) {
+        *last = Some((home.to_path_buf(), started.to_path_buf()));
+    }
+}
+
+/// The model that started in place of `pick` the last time a start refused
+/// it, until the pick itself loads.
+pub fn stand_in_for_refused(pick: &Path) -> Option<PathBuf> {
+    let last = PICK_REFUSED.lock().ok()?;
+    last.as_ref()
+        .filter(|(p, _)| p == pick)
+        .map(|(_, s)| s.clone())
+}
+
+/// The model to try after `failed` gave `err`, and why it stands in: a
+/// smaller model for a pair that doesn't fit, or one that ran out of memory.
+fn stand_in_for(
+    err: &str,
+    failed: &Path,
+    disk: &[(&'static LocalModel, PathBuf)],
+) -> Option<(PathBuf, super::local_swap::StandIn)> {
+    use super::local_swap::StandIn;
+    let why = if err.starts_with(autoconfig::PAIR_NO_ROOM) {
+        StandIn::Tight
+    } else if err.starts_with(OUT_OF_MEMORY) {
+        StandIn::OutOfMemory
+    } else {
+        return None;
+    };
+    super::local_swap::out_of_memory_stand_in(failed, disk).map(|m| (m, why))
+}
+
+/// One step of [`start_or_stand_in`]'s walk after `failed` gave `err`. Out
+/// of memory steps down once: after it (`oom_before`) a second one stops the
+/// walk, and a pair that doesn't fit still steps as
+/// [`StandIn::OutOfMemory`](super::local_swap::StandIn::OutOfMemory), so the
+/// planner holds the stand-in until the next unload.
+fn next_step(
+    err: &str,
+    failed: &Path,
+    disk: &[(&'static LocalModel, PathBuf)],
+    oom_before: bool,
+) -> Option<(PathBuf, super::local_swap::StandIn)> {
+    use super::local_swap::StandIn;
+    let (model, why) = stand_in_for(err, failed, disk)?;
+    match (why, oom_before) {
+        (StandIn::OutOfMemory, true) => None,
+        (_, true) => Some((model, StandIn::OutOfMemory)),
+        _ => Some((model, why)),
+    }
+}
+
+/// Why `model` runs instead of the pick `home`: the plan's reason
+/// (`planned`) when the walk didn't step (`walk` is `None`) or still runs a
+/// bigger model than the pick, none when it landed on the pick itself, else
+/// the walk's reason.
+fn stand_in_label(
+    model: &Path,
+    home: &Path,
+    planned: Option<super::local_swap::StandIn>,
+    walk: Option<super::local_swap::StandIn>,
+) -> Option<super::local_swap::StandIn> {
+    let Some(why) = walk else {
+        return planned;
+    };
+    if model == home {
+        return None;
+    }
+    let size = |p: &Path| super::local_swap::catalog_for(p).map(|m| m.run_mb);
+    match (size(model), size(home)) {
+        (Some(m), Some(h)) if m > h => planned,
+        _ => Some(why),
+    }
+}
+
+/// The error when no model on disk fits with its drafter; `err` is the last
+/// refusal, which may name the Settings GPU layers override as the cause.
+fn pair_no_room_error(picked: &Path, err: &str) -> String {
+    let name = super::local_swap::catalog_for(picked).map_or_else(
+        || {
+            picked
+                .file_stem()
+                .map_or_else(|| "the model".into(), |s| s.to_string_lossy().into_owned())
+        },
+        |m| m.name.to_string(),
+    );
+    if err.contains(autoconfig::PAIR_OVERRIDE) {
+        return format!(
+            "There isn't room for {name} and its draft model together, because the GPU layers setting in Settings → Local model keeps part of the model off the GPU, and no smaller model on disk fits with its draft. Clear the GPU layers setting, or download a smaller model."
+        );
+    }
+    format!(
+        "There isn't room for {name} and its draft model together, and no smaller model on disk fits with its draft. Close some apps, or download a smaller model in Settings → Local model."
+    )
 }
 
 /// Wakes loads waiting for another load to finish (see [`load`]).
@@ -1290,7 +1461,12 @@ fn restart_locked(slot: &mut Option<Sidecar>, reload: bool) {
                 binary: side.binary.clone(),
                 model: side.model.clone(),
             };
-            relaunch_warm(paths, side.port, side.stand_in, side.idle_unload_secs);
+            relaunch_warm(
+                paths,
+                side.port,
+                (side.stand_in, side.refused.clone()),
+                side.idle_unload_secs,
+            );
         }
         Relaunch::Cold if in_flight() == 0 => {
             local_gov::clear_restart();
@@ -1311,7 +1487,10 @@ fn restart_locked(slot: &mut Option<Sidecar>, reload: bool) {
 fn relaunch_warm(
     paths: SidecarPaths,
     old_port: u16,
-    stand_in: Option<super::local_swap::StandIn>,
+    (stand_in, refused): (
+        Option<super::local_swap::StandIn>,
+        super::local_swap::Refusals,
+    ),
     idle: u64,
 ) {
     if RELAUNCHING.swap(true, Ordering::SeqCst) {
@@ -1319,9 +1498,9 @@ fn relaunch_warm(
     }
     let generation = WARM_GEN.load(Ordering::SeqCst);
     std::thread::spawn(move || {
-        let planned =
-            autoconfig::launch_with(&paths.binary, &paths.model, Some(autoconfig::replan_free()));
-        let started = start_planned(&paths, planned);
+        let started =
+            autoconfig::launch_with(&paths.binary, &paths.model, Some(autoconfig::replan_free()))
+                .and_then(|planned| start_planned(&paths, planned));
         let mut slot = global_slot().lock().expect("sidecar global");
         match started {
             Ok(mut new) => {
@@ -1329,6 +1508,7 @@ fn relaunch_warm(
                     && WARM_GEN.load(Ordering::SeqCst) == generation;
                 if current {
                     new.stand_in = stand_in;
+                    new.refused = refused;
                     new.idle_unload_secs = idle;
                     let old = slot.replace(new);
                     drop(slot);
@@ -1449,11 +1629,57 @@ fn on_disk(config_dir: &Path) -> Vec<(&'static LocalModel, PathBuf)> {
     super::local_swap::on_disk(&dirs)
 }
 
+/// The running server loaded a drafter file beside its model.
+fn loaded_paired(s: &Sidecar) -> bool {
+    s.launch
+        .as_ref()
+        .and_then(|l| l.draft.as_ref())
+        .is_some_and(|d| d.model.is_some())
+}
+
+/// What the swap planner needs from a running server: it loaded a drafter
+/// file, and the models refused before it still held (see
+/// [`super::local_swap::held`]). `room` is the sampler's reading and when it
+/// was taken; one older than the server doesn't count.
+fn running_view(
+    running: Option<&Sidecar>,
+    room: Option<(super::local_scale::Room, u64)>,
+) -> (bool, Vec<PathBuf>) {
+    let Some(s) = running else {
+        return (false, Vec::new());
+    };
+    let free = room
+        .filter(|(_, at)| *at >= s.refused.since_ms)
+        .map(|(r, _)| {
+            let now = autoconfig::FreeNow {
+                vram_free_mb: r.free_vram_mb,
+                ram_free_mb: Some(r.free_ram_mb),
+            };
+            autoconfig::with_own(now, autoconfig::own_use())
+        });
+    let now = super::local_swap::HoldNow {
+        state: autoconfig::state(),
+        free,
+    };
+    (loaded_paired(s), s.refused.holding(&now))
+}
+
 /// What the next load runs: the pick, or another model on disk for a reason
 /// [`super::local_swap::plan`] gives. The caller holds the slot.
 fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Want) -> Plan {
     let loaded = running.map(|s| (s.model.as_path(), s.stand_in));
     let on_disk = on_disk(config_dir);
+    // Background work never loads a model, so it sizes no pairs (and never
+    // asks the engine for its flags).
+    let binary = match running {
+        _ if want_need(want) == super::local_scale::Need::Background => None,
+        Some(s) => Some(s.binary.clone()),
+        None => resolve_paths(config_dir).map(|p| p.binary),
+    };
+    let paired = binary.map_or_else(Vec::new, |b| autoconfig::pair_view(&b, &on_disk));
+    let now_ms = unix_ms();
+    let scale = super::local_scale::scale_now(now_ms);
+    let (loaded_paired, refused) = running_view(running, super::local_scale::room_at(now_ms));
     let task = want_kind(want);
     if let Some(k) = task.filter(|k| *k != TaskKind::Chat) {
         *LAST_TASK_KIND.lock().expect("last task kind") = Some(k);
@@ -1463,13 +1689,16 @@ fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Wa
         home,
         loaded,
         on_disk: &on_disk,
+        paired: &paired,
+        loaded_paired,
+        refused: &refused,
         low_battery: super::local::low_battery(),
         kept_loaded: keep_loaded(),
         forced: std::env::var_os("GROKHUB_LOCAL_MODEL").is_some(),
         in_flight: in_flight(),
         secs_since_swap: unix_secs().saturating_sub(LAST_SWAP_SECS.load(Ordering::SeqCst)),
         need: want_need(want),
-        scale: super::local_scale::scale_now(unix_ms()),
+        scale,
         task,
         dynamic: super::local_task::dynamic(config_dir),
         marks: &marks,
@@ -1480,11 +1709,16 @@ fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Wa
 /// idle tick's RAM-warm.
 fn best_model_for(config_dir: &Path, home: &Path, kind: TaskKind) -> Option<PathBuf> {
     let on_disk = on_disk(config_dir);
+    let paired = resolve_paths(config_dir)
+        .map_or_else(Vec::new, |p| autoconfig::pair_view(&p.binary, &on_disk));
     let marks = super::local_task::marks(config_dir);
     match super::local_swap::plan(super::local_swap::Now {
         home,
         loaded: None,
         on_disk: &on_disk,
+        paired: &paired,
+        loaded_paired: false,
+        refused: &[],
         low_battery: super::local::low_battery(),
         kept_loaded: keep_loaded(),
         forced: std::env::var_os("GROKHUB_LOCAL_MODEL").is_some(),
@@ -1604,8 +1838,11 @@ pub fn tick_scale(config_dir: &Path) {
         return;
     };
     let step_down = side.stand_in == Some(super::local_swap::StandIn::Performance)
-        && super::local_swap::catalog_for(&side.model)
-            .is_some_and(|m| super::local_scale::step_down_due(m, &scale));
+        && super::local_swap::catalog_for(&side.model).is_some_and(|m| {
+            // Sized by what it really loaded.
+            let need = ld::pair_mb(m, loaded_paired(side));
+            super::local_scale::step_down_due(need, &scale)
+        });
     let gaming = scale.gaming && side.stand_in != Some(super::local_swap::StandIn::Gaming);
     if step_down || gaming {
         if let Some(side) = slot.take() {
@@ -2356,9 +2593,64 @@ mod tests {
             bare_cpu: false,
             thinking: Default::default(),
             stand_in: None,
+            refused: Default::default(),
             in_flight: Arc::new(AtomicUsize::new(0)),
             health_timeout: HEALTH_TIMEOUT,
         }
+    }
+
+    #[test]
+    fn a_refused_pair_holds_only_while_its_server_runs_and_against_newer_readings() {
+        use super::super::local_scale::Room;
+        use super::super::local_swap::{Hold, Refusals};
+        let pick = PathBuf::from("/home/user/models/pick.gguf");
+        let pair = Hold::Pair(autoconfig::PairRefusal {
+            pool: autoconfig::Pool::Vram,
+            free_mb: Some(6_000),
+            state: autoconfig::state(),
+            on_gpu: true,
+        });
+        let mut side = idle_child_sidecar(600, 0);
+        side.refused = Refusals {
+            models: vec![(pick.clone(), pair)],
+            since_ms: 5_000,
+        };
+        let grown = Room {
+            free_vram_mb: Some(9_000),
+            free_ram_mb: 10_000,
+            ..Room::default()
+        };
+        // The next unload drops the server and its refusals with it.
+        assert_eq!(running_view(None, Some((grown, 6_000))), (false, vec![]));
+        // Up, it holds the pick until a reading taken since then shows room.
+        assert_eq!(
+            running_view(Some(&side), Some((grown, 4_999))),
+            (false, vec![pick.clone()])
+        );
+        assert_eq!(running_view(Some(&side), None), (false, vec![pick.clone()]));
+        assert_eq!(
+            running_view(Some(&side), Some((grown, 5_000))),
+            (false, vec![])
+        );
+    }
+
+    #[test]
+    fn the_pick_refused_record_outlives_the_stand_in_and_clears_when_the_pick_loads() {
+        use super::super::local_swap::{Hold, Refusals};
+        let pick = PathBuf::from("/home/user/models/pick-record.gguf");
+        let stand_in = PathBuf::from("/home/user/models/stand-in-record.gguf");
+        let refused = Refusals {
+            models: vec![(pick.clone(), Hold::UntilUnload)],
+            since_ms: 0,
+        };
+        note_pick_refused(&pick, &stand_in, &refused);
+        assert_eq!(stand_in_for_refused(&pick), Some(stand_in.clone()));
+        assert_eq!(stand_in_for_refused(&stand_in), None, "only for that pick");
+        // A walk that didn't refuse the pick leaves the record alone.
+        note_pick_refused(&pick, &stand_in, &Refusals::default());
+        assert_eq!(stand_in_for_refused(&pick), Some(stand_in.clone()));
+        note_pick_refused(&pick, &pick, &Refusals::default());
+        assert_eq!(stand_in_for_refused(&pick), None);
     }
 
     #[test]
@@ -2719,6 +3011,154 @@ mod tests {
             Some(&gpu),
             false
         ));
+    }
+
+    #[test]
+    fn a_pair_that_does_not_fit_steps_down_until_one_does() {
+        use super::super::local_swap::StandIn;
+        let m = |id: &str| grokhub_core::local_setup::model_by_id(id).unwrap();
+        let file = |id: &str| PathBuf::from("/home/user/models").join(m(id).file);
+        let (g12b, e4b, e2b) = (
+            "gemma-4-12b-it-abliterated-q4_k",
+            "gemma-4-e4b-it-abliterated-q4_k",
+            "gemma-4-e2b-it-abliterated-q4_k",
+        );
+        let disk: Vec<_> = [g12b, e4b, e2b]
+            .iter()
+            .map(|id| (m(id), file(id)))
+            .collect();
+        let no_room = autoconfig::PAIR_NO_ROOM;
+        // Each pair refused in turn walks down to the smallest model, then stops.
+        assert_eq!(
+            next_step(no_room, &file(g12b), &disk, false),
+            Some((file(e4b), StandIn::Tight))
+        );
+        assert_eq!(
+            next_step(no_room, &file(e4b), &disk, false),
+            Some((file(e2b), StandIn::Tight))
+        );
+        assert_eq!(
+            next_step(no_room, &file(e2b), &disk, false),
+            None,
+            "nothing smaller on disk"
+        );
+        // Out of memory steps once; a second one ends the walk.
+        let drafted = LaunchArgs {
+            draft: Some(Box::new(super::super::local_spec::DraftArgs {
+                kind: ld::DraftKind::Mtp,
+                model: Some(PathBuf::from("/home/user/models/drafters/heads.gguf")),
+                on_gpu: true,
+                flags: Default::default(),
+            })),
+            ..gpu_launch()
+        };
+        let oom = oom_error(&drafted, "");
+        assert_eq!(
+            next_step(&oom, &file(g12b), &disk, false),
+            Some((file(e4b), StandIn::OutOfMemory))
+        );
+        assert_eq!(next_step(&oom, &file(e4b), &disk, true), None);
+        // A pair refused after that still stands in as out of memory, so the
+        // planner holds it until the next unload.
+        assert_eq!(
+            next_step(no_room, &file(e4b), &disk, true),
+            Some((file(e2b), StandIn::OutOfMemory))
+        );
+        assert_eq!(
+            next_step(
+                "local model server stopped before it was ready",
+                &file(g12b),
+                &disk,
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            pair_no_room_error(&file(g12b), no_room),
+            "There isn't room for Gemma 4 12B and its draft model together, and no smaller model on disk fits with its draft. Close some apps, or download a smaller model in Settings → Local model."
+        );
+        assert_eq!(
+            pair_no_room_error(
+                &file(g12b),
+                &format!("{no_room}, because {}", autoconfig::PAIR_OVERRIDE)
+            ),
+            "There isn't room for Gemma 4 12B and its draft model together, because the GPU layers setting in Settings → Local model keeps part of the model off the GPU, and no smaller model on disk fits with its draft. Clear the GPU layers setting, or download a smaller model."
+        );
+    }
+
+    #[test]
+    fn a_stand_in_is_labelled_smaller_only_when_it_is_smaller_than_the_pick() {
+        use super::super::local_swap::StandIn;
+        let m = |id: &str| grokhub_core::local_setup::model_by_id(id).unwrap();
+        let file = |id: &str| PathBuf::from("/home/user/models").join(m(id).file);
+        let (moe, g12b, e4b) = (
+            "gemma-4-26b-a4b-it-abliterated-q4_k",
+            "gemma-4-12b-it-abliterated-q4_k",
+            "gemma-4-e4b-it-abliterated-q4_k",
+        );
+        let perf = Some(StandIn::Performance);
+        let tight = Some(StandIn::Tight);
+        assert_eq!(stand_in_label(&file(e4b), &file(g12b), None, tight), tight);
+        // A refused step up that lands on the pick runs the pick.
+        assert_eq!(stand_in_label(&file(g12b), &file(g12b), perf, tight), None);
+        assert_eq!(
+            stand_in_label(&file(g12b), &file(g12b), perf, Some(StandIn::OutOfMemory)),
+            None
+        );
+        // One still bigger than the pick is still the step up.
+        assert_eq!(stand_in_label(&file(moe), &file(e4b), perf, tight), perf);
+        assert_eq!(stand_in_label(&file(e4b), &file(g12b), perf, None), perf);
+    }
+
+    #[test]
+    fn the_out_of_memory_error_says_whether_the_drafter_was_loaded() {
+        let drafted = LaunchArgs {
+            draft: Some(Box::new(super::super::local_spec::DraftArgs {
+                kind: ld::DraftKind::Mtp,
+                model: Some(PathBuf::from("/home/user/models/drafters/heads.gguf")),
+                on_gpu: true,
+                flags: Default::default(),
+            })),
+            ..gpu_launch()
+        };
+        let try_e4b = " Try Gemma 4 E4B in Settings → Local model.";
+        assert_eq!(
+            oom_error(&drafted, try_e4b),
+            "the local model ran out of memory with its draft model. Try Gemma 4 E4B in Settings → Local model."
+        );
+        assert_eq!(
+            oom_error(&gpu_launch(), ""),
+            "the local model ran out of memory even with fewer GPU layers."
+        );
+    }
+
+    #[test]
+    fn a_start_waits_for_the_drafter_file_too() {
+        let dir = std::env::temp_dir().join(format!("gh-load-bytes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = dir.join("model.gguf");
+        let heads = dir.join("heads.gguf");
+        std::fs::write(&model, [0u8; 3]).unwrap();
+        std::fs::write(&heads, [0u8; 5]).unwrap();
+        let with = |model: Option<PathBuf>| LaunchArgs {
+            draft: Some(Box::new(super::super::local_spec::DraftArgs {
+                kind: ld::DraftKind::Mtp,
+                model,
+                on_gpu: true,
+                flags: Default::default(),
+            })),
+            ..gpu_launch()
+        };
+        assert_eq!(load_bytes(&model, None), 3);
+        assert_eq!(load_bytes(&model, Some(&gpu_launch())), 3);
+        assert_eq!(load_bytes(&model, Some(&with(Some(heads.clone())))), 8);
+        assert_eq!(
+            load_bytes(&model, Some(&with(None))),
+            3,
+            "heads inside the model"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

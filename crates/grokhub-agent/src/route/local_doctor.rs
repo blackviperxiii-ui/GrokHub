@@ -250,13 +250,7 @@ pub fn diagnose(config_dir: &Path) -> Report {
         None => "The engine finds no chat model to load.".into(),
     });
     if let Some((drafter, decision)) = local_spec::draft_status() {
-        facts.push(match decision {
-            ld::Decision::On => format!("Draft model {drafter}: on."),
-            ld::Decision::Off(why) => format!("Draft model {drafter}: off, because {why}."),
-            ld::Decision::NeedsTest => {
-                format!("Draft model {drafter}: waiting for its speed test.")
-            }
-        });
+        facts.push(draft_fact(&drafter, decision));
     }
     let start_error = local::start_failure();
     if let Some(e) = &start_error {
@@ -318,9 +312,45 @@ pub fn note(report: &Report) -> String {
     )
 }
 
+/// The check's line for the running model's drafter and its decision.
+fn draft_fact(drafter: &str, decision: ld::Decision) -> String {
+    match decision {
+        ld::Decision::On => format!("Draft model {drafter}: on."),
+        ld::Decision::Off(why) => format!("Draft model {drafter}: off, because {why}."),
+        ld::Decision::NeedsTest => format!("Draft model {drafter}: on; speed test pending."),
+        ld::Decision::NoRoom => {
+            format!("Draft model {drafter}: no room beside the model, so a smaller model runs.")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_draft_line_says_on_off_pending_or_no_room() {
+        let d = "Gemma 4 12B draft model";
+        assert_eq!(
+            draft_fact(d, ld::Decision::On),
+            "Draft model Gemma 4 12B draft model: on."
+        );
+        assert_eq!(
+            draft_fact(
+                d,
+                ld::Decision::Off("the speed test found the draft model didn't help")
+            ),
+            "Draft model Gemma 4 12B draft model: off, because the speed test found the draft model didn't help."
+        );
+        assert_eq!(
+            draft_fact(d, ld::Decision::NeedsTest),
+            "Draft model Gemma 4 12B draft model: on; speed test pending."
+        );
+        assert_eq!(
+            draft_fact(d, ld::Decision::NoRoom),
+            "Draft model Gemma 4 12B draft model: no room beside the model, so a smaller model runs."
+        );
+    }
 
     #[test]
     fn asks_about_the_local_model_get_the_check_and_others_dont() {

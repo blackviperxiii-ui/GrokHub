@@ -101,7 +101,47 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      speaks one piece at a time, and pieces of a reply the person talked
      over are dropped.
 4. **Strict draft pairing.** Count the draft in every fit check. If the
-   pair doesn't fit, step down a tier.
+   pair doesn't fit, step down a tier. Shipped in `route/local_spec.rs`
+   and the files around it:
+   - A model is paired when its drafter is on disk, the engine can run
+     it, the tokenizer matches and no speed test or live check turned it
+     off. A paired model always loads with its drafter.
+   - The launch saves room for the drafter first. The context shrinks
+     before the tier does, on the GPU and in the gaming setup's RAM.
+   - The launch decides. If the pair still doesn't fit, the launch
+     refuses it, and the next smaller model on disk is tried.
+   - The swap planner only filters, and errs on the side of trying. It
+     counts the drafter for a model the launch would pair
+     (`local_autoconfig::pair_view`). It sizes the pair at its catalog
+     size against all free VRAM plus a share of free RAM. That is more
+     room than the launch's GPU budget, so the launch makes the close
+     calls.
+   - A model the launch refused is held: the model that started in its
+     place stays. A pair is held until the model unloads, the governor
+     state changes, or the memory the pair needed has 2 GB more free than
+     at the refusal. That memory is VRAM when the launch planned the pair
+     on a GPU, else RAM. A GPU pair with no VRAM reading has nothing to
+     compare, so it is held until the model unloads or the state changes. The refusal's reading is the
+     launch's own, taken after the previous model stopped. The reading
+     now adds back what the model in its place uses. A start that ran out
+     of memory is held until the next unload.
+   - The drafter is never dropped to make room: not under Throttle, not
+     after running out of memory, not on the CPU fallback, and not by
+     auto-tune. A model split across GPU and RAM can't run a drafter, so
+     it steps down too. An old out-of-memory layer cap doesn't refuse a
+     pair. When the Settings GPU layers setting splits the model, the
+     error says so.
+   - While the speed test is pending, the pair loads together. When a
+     start refused the pick, the speed test times the model that started
+     in its place, even after it unloaded, and the refusal check waits.
+     That record clears when the pick loads. A test plans as a fresh
+     start would: the memory of the model that runs counts as free.
+   - A start that comes before the hardware read finishes reads the
+     hardware itself, so the first launch loads the drafter too.
+   - Not yet: the warm-relaunch and residency sizes leave the drafter
+     out, and the error names a smaller model by the model alone. Only
+     the desktop app reads the hardware. A host that never starts that
+     read runs the one-shot defaults, so a paired model loads alone there.
 5. **Tiers, pin and the active-model line.** Speed, balance and
    performance come from the ask or the chat's pin. The active model
    and its reason show in the chat.

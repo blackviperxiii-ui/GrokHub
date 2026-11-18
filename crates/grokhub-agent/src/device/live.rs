@@ -23,6 +23,11 @@ static CURRENT: Mutex<Option<DeviceProfile>> = Mutex::new(None);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 static STARTED: AtomicBool = AtomicBool::new(false);
 static CONFIG: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// Where models go, once [`start`] ran.
+static HOME: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// Held while the hardware is read, so [`read_now`] waits for the thread's
+/// read instead of running a second one.
+static READING: Mutex<()> = Mutex::new(());
 
 /// How often power and the OS look are read again.
 const RELOOK: Duration = Duration::from_secs(5 * 60);
@@ -112,14 +117,16 @@ pub fn start(home: PathBuf, config_dir: PathBuf) {
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
+    if let Ok(mut h) = HOME.lock() {
+        *h = Some(home.clone());
+    }
     if let Some(cached) = load_cached(&config_dir) {
         apply_to_router(&cached, true);
     }
     let spawned = std::thread::Builder::new()
         .name("device-read".into())
         .spawn(move || {
-            let profile = super::read_profile(&home);
-            crate::route::local_autoconfig::set_profile(profile.clone(), config_dir.join("local"));
+            let profile = read_local(&home, &config_dir);
             let d = super::read_device(&home, &profile);
             apply_to_router(&d, true);
             store(d);
@@ -131,6 +138,46 @@ pub fn start(home: PathBuf, config_dir: PathBuf) {
     if spawned.is_err() {
         STARTED.store(false, Ordering::SeqCst);
     }
+}
+
+/// The hardware for the local-model launcher, read once: the thread's read,
+/// or [`read_now`]'s when a start came first.
+fn read_local(home: &Path, config_dir: &Path) -> LocalProfile {
+    read_local_with(home, config_dir, &super::read_profile)
+}
+
+/// [`read_local`] with `read` reading the hardware.
+fn read_local_with(
+    home: &Path,
+    config_dir: &Path,
+    read: &dyn Fn(&Path) -> LocalProfile,
+) -> LocalProfile {
+    let _one = READING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(p) = crate::route::local_autoconfig::profile() {
+        return p;
+    }
+    let profile = read(home);
+    crate::route::local_autoconfig::set_profile(profile.clone(), config_dir.join("local"));
+    profile
+}
+
+/// Read the hardware on this thread when a model starts before the
+/// background read is done, so its launch is planned (with its drafter)
+/// rather than the one-shot defaults. False when [`start`] never ran (the
+/// command line and tests), so there is nothing to read with.
+pub fn read_now() -> bool {
+    read_now_with(&super::read_profile)
+}
+
+/// [`read_now`] with `read` reading the hardware.
+fn read_now_with(read: &dyn Fn(&Path) -> LocalProfile) -> bool {
+    let home = HOME.lock().ok().and_then(|h| h.clone());
+    let config = CONFIG.lock().ok().and_then(|c| c.clone());
+    let (Some(home), Some(config)) = (home, config) else {
+        return false;
+    };
+    read_local_with(&home, &config, read);
+    true
 }
 
 /// Make the last saved record live and remember where records go.
@@ -181,6 +228,66 @@ mod tests {
             free_disk_mb: 120_000,
             ..DeviceProfile::default()
         }
+    }
+
+    #[test]
+    fn an_early_start_reads_the_hardware_once_and_the_device_read_reuses_it() {
+        use std::sync::atomic::AtomicUsize;
+        let root = std::env::temp_dir().join(format!("gh-read-now-{}", std::process::id()));
+        let (home, config) = (root.join("home"), root.join("config"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        let set = |h: Option<PathBuf>, c: Option<PathBuf>| {
+            *HOME.lock().unwrap() = h;
+            *CONFIG.lock().unwrap() = c;
+        };
+        let reads = AtomicUsize::new(0);
+        let machine = LocalProfile {
+            os: "linux",
+            arch: "x86_64",
+            gpus: Vec::new(),
+            cpu: grokhub_core::local_profile::CpuInfo::new(
+                8,
+                4,
+                0,
+                grokhub_core::local_picker::CpuSimd::Avx2,
+            ),
+            ram_mb: 12_345,
+            free_ram_mb: Some(8_000),
+            power: PowerInfo::default(),
+            thermal: grokhub_core::local_profile::Thermal::Nominal,
+            free_disk_mb: 100_000,
+        };
+        let read = |_: &Path| {
+            reads.fetch_add(1, Ordering::SeqCst);
+            machine.clone()
+        };
+        crate::route::local_autoconfig::forget_profile();
+        // No device read began (the command line): nothing to read with, so
+        // the start keeps its one-shot defaults.
+        set(None, None);
+        assert!(!read_now_with(&read));
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        assert_eq!(crate::route::local_autoconfig::profile(), None);
+        // Once it began, a start that comes first reads the hardware itself.
+        set(Some(home.clone()), Some(config.clone()));
+        assert!(read_now_with(&read));
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            crate::route::local_autoconfig::profile().map(|p| p.ram_mb),
+            Some(12_345)
+        );
+        assert_eq!(
+            crate::route::local_autoconfig::tune_dir(),
+            Some(config.join("local"))
+        );
+        // A second start and the device thread reuse that read.
+        assert!(read_now_with(&read));
+        assert_eq!(read_local_with(&home, &config, &read).ram_mb, 12_345);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        crate::route::local_autoconfig::forget_profile();
+        set(None, None);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
