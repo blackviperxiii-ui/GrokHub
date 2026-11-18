@@ -1,0 +1,1 @@
+- Summary compaction tail now keeps parallel tool call batches and their outputs intact as an atomic unit instead of dropping outputs or leaving orphaned calls.
