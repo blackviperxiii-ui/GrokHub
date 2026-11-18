@@ -164,32 +164,57 @@ class CardsSyncTest(unittest.TestCase):
                                 {CARD: 7}))
         self.assertEqual(rec.writes(), [])
 
-    def test_sync_creates_antigravity_issue_and_marks_card_working_on_it_now(self):
-        card = {
-            "id": CARD,
-            "url": f"https://www.notion.so/{CARD}",
-            "properties": {
-                "Name": {"type": "title", "title": [{"plain_text": "Antigravity task"}]},
-                "Assigned": {"type": "select", "select": {"name": "Antigravity"}},
-            },
+    def test_sync_only_sweeps_completed_cards_and_never_picks_up_ready_cards(self):
+        open_issue = issue(*BOT, number=42, state="open", reason=None)
+        merged_timeline = [{
+            "event": "cross-referenced",
+            "source": {"issue": {
+                "number": 99,
+                "repository": {"full_name": REPO},
+                "pull_request": {"merged_at": "2026-11-18T00:00:00Z"},
+            }},
+        }]
+        merged_pr = {
+            "number": 99,
+            "merged": True,
+            "base": {"ref": "beta"},
+            "body": "Fixes #42",
+            "html_url": f"https://github.com/{REPO}/pull/99",
         }
         replies = {
-            ("GET", f"{ISSUES}?state=open"): [],
+            ("GET", f"{ISSUES}?state=open"): [open_issue],
             ("GET", f"{ISSUES}?state=closed"): [],
-            ("GET", f"{cards_sync.GH}/repos/{REPO}/pulls"): [],
-            ("POST", f"{cards_sync.NOTION}/data_sources/ds1/query"): {"results": [card]},
-            ("GET", f"{cards_sync.NOTION}/blocks/{CARD}/children"): {"results": [], "has_more": False},
-            ("POST", ISSUES): {"number": 42, "html_url": f"https://github.com/{REPO}/issues/42"},
+            ("GET", f"{ISSUES}/42/timeline"): merged_timeline,
+            ("GET", f"{cards_sync.GH}/repos/{REPO}/pulls/99"): merged_pr,
+            ("GET", PAGE): DOING,
         }
         rec = self.run_with(replies, cards_sync.sync)
-        queries = [c for c in rec.calls if c[0] == "POST" and "/query" in c[1]]
-        self.assertEqual(queries[0][2]["filter"]["and"][0],
-                         {"property": "Status", "select": {"equals": cards_sync.STATUS_READY}})
-        self.assertEqual([(m, u) for m, u, _ in rec.writes()],
-                         [("POST", ISSUES), ("PATCH", PAGE)])
-        self.assertEqual(rec.writes()[0][2]["labels"], ["antigravity"])
-        self.assertEqual(rec.writes()[1][2]["properties"]["Status"],
-                         {"select": {"name": cards_sync.STATUS_DOING}})
+        self.assertEqual(
+            [(m, u) for m, u, _ in rec.writes()],
+            [("PATCH", PAGE), ("PATCH", f"{ISSUES}/42")],
+        )
+        self.assertEqual(
+            rec.writes()[0][2]["properties"]["Status"],
+            {"select": {"name": cards_sync.STATUS_DONE}},
+        )
+        self.assertFalse(any("/query" in url or "/dispatches" in url or "jules" in url for _, url, _ in rec.calls))
+
+    def test_reset_ready_puts_cards_back_to_ready_and_closes_not_planned(self):
+        replies = {
+            ("GET", f"{ISSUES}/2004"): issue(*BOT, number=2004, state="open", reason=None),
+            ("GET", PAGE): DOING,
+        }
+        with mock.patch.dict(os.environ, {"RESET_ISSUES": "2004"}):
+            rec = self.run_with(replies, cards_sync.sync)
+        self.assertEqual(
+            [(m, u) for m, u, _ in rec.writes()],
+            [("PATCH", PAGE), ("PATCH", f"{ISSUES}/2004")],
+        )
+        props = rec.writes()[0][2]["properties"]
+        self.assertEqual(props["Status"], {"select": {"name": cards_sync.STATUS_READY}})
+        self.assertEqual(props["Picked up"], {"date": None})
+        self.assertEqual(props["Result"], {"rich_text": []})
+        self.assertEqual(rec.writes()[1][2], {"state": "closed", "state_reason": "not_planned"})
 
     def test_archived_notion_card_still_closes_open_issue_on_merge(self):
         replies = {

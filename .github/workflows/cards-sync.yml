@@ -1,10 +1,15 @@
 name: cards-sync
-# Notion Command Center cards -> issues for this repo, and card -> Done on close.
-# Needs secret NOTION_TOKEN and variable NOTION_DATA_SOURCE_ID; no-ops without the token.
+# Mark linked Notion Command Center cards Completed when PRs merge to beta or card issues close.
+# Needs secret NOTION_TOKEN; no-ops without the token.
 on:
   schedule:
     - cron: "17 */2 * * *"
   workflow_dispatch:
+    inputs:
+      reset_issues:
+        description: Comma-separated card issue numbers to put back to Ready for work
+        required: false
+        default: ""
   issues:
     types: [closed]
   pull_request:
@@ -23,20 +28,17 @@ jobs:
       contents: read
       issues: write
       pull-requests: read
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: beta
           sparse-checkout: .github/scripts
           persist-credentials: false
-      - name: Sync Ready cards to issues
+      - name: Sweep merged/closed card issues to Completed
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATA_SOURCE_ID: ${{ vars.NOTION_DATA_SOURCE_ID }}
-          CARDS_PROJECT: ${{ vars.CARDS_PROJECT }}
-          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
+          RESET_ISSUES: ${{ inputs.reset_issues }}
         run: python3 .github/scripts/cards_sync.py sync
   done:
     # An issue counts only when the sync opened it or one of the project's own
