@@ -82,7 +82,11 @@ fn bump_check(root: &Path) -> Result<(), String> {
     check_cargo_toml(root, &version)?;
     check_contains(root, "packaging/PKGBUILD", &format!("pkgver={version}"))?;
     check_contains(root, "packaging/aur/PKGBUILD", &format!("pkgver={version}"))?;
-    check_contains(root, "packaging/aur/.SRCINFO", &format!("pkgver = {version}"))?;
+    check_contains(
+        root,
+        "packaging/aur/.SRCINFO",
+        &format!("pkgver = {version}"),
+    )?;
     check_contains(root, "packaging/aur/.SRCINFO", &format!("#tag=v{version}"))?;
     check_contains(root, SHELL_TOML, &shell_toml_line(&version))?;
     check_contains(root, SHELL_CONF, &shell_conf_line(&version))?;

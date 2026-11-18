@@ -533,10 +533,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn install_sh_resolves_relative_cargo_target_dir_absolute() {
-        let root = std::env::temp_dir().join(format!(
-            "grokhub-cargo-target-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("grokhub-cargo-target-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let status = std::process::Command::new("bash")
