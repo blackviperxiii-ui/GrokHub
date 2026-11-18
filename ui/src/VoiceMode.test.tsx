@@ -652,6 +652,19 @@ describe("the voice by need", () => {
     expect(api.voiceSpeak).not.toHaveBeenCalledWith("See you.", "chat-online");
   });
 
+  it("a reply that ends after the switch is still spoken for the chat it named", async () => {
+    const r = rig();
+    r.session.forChat("chat-here");
+    await r.session.start();
+    // Chat's send resolves after the person opened another chat.
+    r.session.forChat("chat-online");
+    api.voiceReplyFinish.mockResolvedValueOnce(["See you."]);
+    r.session.replyDone("", "chat-here");
+    await flush();
+    expect(api.voiceSpeak).toHaveBeenCalledWith("See you.", "chat-here");
+    expect(api.voiceSpeak).not.toHaveBeenCalledWith("See you.", "chat-online");
+  });
+
   it("the line shows on its own, whatever voice mode is doing", () => {
     const { rerender } = render(<VoiceLine text={KOKORO} />);
     expect(screen.getByText(KOKORO)).toHaveClass("voice-line");

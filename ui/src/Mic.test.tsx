@@ -6,6 +6,7 @@ import type { Settings, HeardWords } from "./api";
 const api = vi.hoisted(() => ({
   transcribe: vi.fn<(wav: string, conversationId?: string | null) => Promise<HeardWords>>(),
   sendChat: vi.fn<(...args: unknown[]) => Promise<string>>(),
+  loadChat: vi.fn<(id: string, limit?: number) => Promise<unknown>>(),
 }));
 
 vi.mock("./api", async () => {
@@ -16,7 +17,7 @@ vi.mock("./api", async () => {
   chipOutcome: () => Promise.resolve(true),
   // No chat saved from an earlier launch.
   getStartChat: () => Promise.resolve(null),
-  loadChat: vi.fn(),
+  loadChat: api.loadChat,
   transcribe: api.transcribe,
   sendChat: api.sendChat,
   getSettings: () =>
@@ -103,6 +104,7 @@ describe("push to talk", () => {
   beforeEach(() => {
     api.transcribe.mockReset();
     api.sendChat.mockReset();
+    api.loadChat.mockReset();
   });
   afterEach(async () => {
     await closeMic();
@@ -264,16 +266,22 @@ describe("push to talk", () => {
       words: "turn on the lights",
       line: "Heard on this computer with Parakeet v3 speech to text: this chat runs here.",
     });
-    render(<Chat onOpenSettings={() => {}} />);
+    api.loadChat.mockResolvedValue({
+      id: "shell-saved",
+      title: "lights",
+      lines: [{ role: "user", text: "are the lights on" }],
+      earlier: 0,
+    });
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(await screen.findByText("are the lights on")).toBeVisible();
     const button = screen.getByRole("button", { name: MIC });
     fireEvent.pointerDown(button);
     await waitFor(() => expect(mic.processor).not.toBeNull());
     mic.feed(new Float32Array(4800).fill(0.25));
     fireEvent.pointerUp(button);
     await waitFor(() => expect(api.transcribe).toHaveBeenCalledTimes(1));
-    const chat = api.transcribe.mock.calls[0][1];
-    expect(typeof chat).toBe("string");
-    expect(chat).not.toBe("");
+    expect(api.transcribe.mock.calls[0][1]).toBe("shell-saved");
     await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("turn on the lights"));
     expect(
       screen.getByText("Heard on this computer with Parakeet v3 speech to text: this chat runs here."),
