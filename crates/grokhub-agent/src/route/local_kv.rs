@@ -255,6 +255,7 @@ mod tests {
             mlock: false,
             tensor_split: None,
             draft: None,
+            mmproj: None,
             cpu_only: false,
             run: Default::default(),
         }

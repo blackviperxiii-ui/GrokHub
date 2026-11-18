@@ -323,6 +323,25 @@ pub fn keep_line(conversation_id: &str, line: String) {
     }
 }
 
+/// Said under a reply when the person's newest picture went to a model that
+/// can't see it ([`super::local_vision::strip_images`]).
+pub const BLIND_LINE: &str =
+    "The picture wasn't read: no model on this computer can see pictures yet.";
+
+/// `line` with [`BLIND_LINE`] after it.
+pub fn blind_line(line: &str) -> String {
+    format!("{line} {BLIND_LINE}")
+}
+
+/// Add [`BLIND_LINE`] to `conversation_id`'s kept line.
+pub fn note_blind(conversation_id: &str) {
+    if let Ok(mut lines) = LAST_LINE.lock() {
+        if let Some(line) = lines.get_mut(conversation_id) {
+            *line = blind_line(line);
+        }
+    }
+}
+
 /// Drop `conversation_id`'s line: its last step didn't answer on device.
 pub fn forget_line(conversation_id: &str) {
     if let Ok(mut lines) = LAST_LINE.lock() {
@@ -377,6 +396,27 @@ pub fn must_stay_here(conversation_id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_blind_reply_says_the_picture_wasnt_read() {
+        assert_eq!(
+            super::blind_line("Answered by Gemma 4 E2B with its draft, your pick."),
+            "Answered by Gemma 4 E2B with its draft, your pick. The picture wasn't read: \
+             no model on this computer can see pictures yet."
+        );
+        super::keep_line("blind-c", "Answered by Gemma 4 E2B, your pick.".into());
+        super::note_blind("blind-c");
+        assert_eq!(
+            super::take_line("blind-c").as_deref(),
+            Some(
+                "Answered by Gemma 4 E2B, your pick. The picture wasn't read: \
+                 no model on this computer can see pictures yet."
+            )
+        );
+        // No kept line (the step failed): nothing to add to.
+        super::note_blind("blind-none");
+        assert_eq!(super::take_line("blind-none"), None);
+    }
+
     use super::*;
 
     fn loaded() -> LocalLive {

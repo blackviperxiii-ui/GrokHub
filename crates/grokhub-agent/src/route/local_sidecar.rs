@@ -3051,6 +3051,7 @@ mod tests {
             mlock: false,
             tensor_split: Some(vec![3, 1]),
             draft: None,
+            mmproj: None,
             cpu_only: false,
             run: Default::default(),
         }
@@ -3286,6 +3287,7 @@ mod tests {
             mlock: false,
             tensor_split: None,
             draft: None,
+            mmproj: None,
             cpu_only: false,
             run: Default::default(),
         };

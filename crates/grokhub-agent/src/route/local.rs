@@ -859,7 +859,7 @@ pub fn serve_request(
     req: &crate::client::ResponsesRequest,
     cancel: &CancelToken,
 ) -> Result<TurnOutput, ClientError> {
-    let (text, _) = super::live::last_user_text(&req.input);
+    let (text, picture) = super::live::last_user_text(&req.input);
     let class_norm = class_row(class).map(|r| r.class).unwrap_or(class);
     // Only the app's own background work is text-only; every other class is a
     // reply someone reads (a math turn, a plan, an 18+ turn kept on device).
@@ -904,6 +904,12 @@ pub fn serve_request(
         super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
         req.effort.as_deref(),
     );
+    // A server started without its picture reader refuses any request with
+    // a picture in it, and the picture stays in the chat, so each later turn
+    // would fail too: the model is told a picture was there instead.
+    let launch = super::local_sidecar::loaded().and_then(|l| l.launch);
+    let blind = !super::local_vision::sees_pictures(launch.as_ref())
+        && super::local_vision::strip_images(&mut req.input) > 0;
     // The device window is often 4k to 16k: send only what fits, with room to
     // answer. With or without tools, so a long chat is trimmed on the way
     // (the oldest turns first) instead of being refused for its length.
@@ -937,7 +943,14 @@ pub fn serve_request(
     let ask = super::local_sidecar::take_ask_outcome();
     if !helper {
         match &out {
-            Ok(_) => super::local_live::note_reply(&req.conversation_id, ask),
+            Ok(_) => {
+                super::local_live::note_reply(&req.conversation_id, ask);
+                // Only the person's newest message: an older picture the
+                // chat carries isn't news under this reply.
+                if blind && picture {
+                    super::local_live::note_blind(&req.conversation_id);
+                }
+            }
             Err(_) => super::local_live::forget_line(&req.conversation_id),
         }
     }
