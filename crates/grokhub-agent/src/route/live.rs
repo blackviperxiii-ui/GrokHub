@@ -8,8 +8,11 @@
 //! new user message), on a second VerifyGate reject at the ceiling (E2), or
 //! when the episode's model goes unhealthy; otherwise every step of the
 //! episode keeps it, so the prompt cache stays warm. Nothing you set pins,
-//! forces or steers the model or the effort: the router alone picks them. With
-//! no healthy, included model the call pauses instead of sending.
+//! forces or steers the cloud model or the effort: the router alone picks
+//! them. On device, a chat's tier (its words this turn, else its tab menu's
+//! "Model for this chat", see [`super::local_pin`]) steers which model on
+//! disk loads, and the swap planner still decides it. With no healthy,
+//! included model the call pauses instead of sending.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -2218,6 +2221,11 @@ pub fn stream_routed(
     // step's tools, so they leave the chat step's mark alone.
     if !class.trim().starts_with("background:") {
         STEP_ON_DEVICE.with(|s| s.set(on_device));
+        // A step answered elsewhere: the line under the reply names only the
+        // on-device model that answered the turn's last step.
+        if !on_device {
+            super::local_live::forget_line(&req.conversation_id);
+        }
     }
     if on_device {
         call.provider = super::local::PROVIDER_LOCAL;
