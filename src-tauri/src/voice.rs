@@ -128,28 +128,62 @@ pub fn whisper_path() -> Option<PathBuf> {
     None
 }
 
-/// Whether on-device speech-to-text (`sherpa-onnx` + catalog model or
-/// `whisper` on PATH) is ready right now.
-pub fn local_stt_ready(config_dir: &Path, models: &Path) -> bool {
-    (ve::installed(config_dir) && ve::speech_model(models).is_some()) || whisper_path().is_some()
+/// What a chat itself asks of its voice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChatNeed {
+    /// Its newest step ran on this computer.
+    pub here: bool,
+    /// It must stay on this computer: an 18+ voice spoke a step of it, or
+    /// the voice every chat speaks in is 18+. The second is read from the
+    /// saved settings, so it holds from launch, before any step ran.
+    pub must_stay: bool,
+}
+
+/// `chat`'s need (empty: no chat). A chat with no step since launch reads
+/// as online unless its voice is 18+.
+pub(crate) fn chat_need(config_dir: &Path, chat: &str) -> ChatNeed {
+    ChatNeed {
+        here: local_live::runs_here(chat),
+        must_stay: local_live::must_stay_here(chat)
+            || crate::personality::speaks_18_plus(config_dir, &crate::settings::load(config_dir)),
+    }
+}
+
+/// Whether voice mode's open mic may stream to xAI for `chat` by its own
+/// need alone (the rest of the plan is the same for every chat). In-memory
+/// and settings reads only, so a move to a chat that runs here drops a
+/// stream before any keychain read.
+pub(crate) fn chat_may_stream(config_dir: &Path, chat: &str) -> bool {
+    let need = chat_need(config_dir, chat);
+    !need.here && !need.must_stay
+}
+
+/// Whether on-device hearing counts as ready for routing. A bare whisper on
+/// `PATH` names no model, so it may not hear at all: a chat that runs here
+/// waits for Parakeet (xAI stands in meanwhile, with a line), while one that
+/// must stay takes whisper over nothing.
+fn hearing_ready(parakeet: bool, whisper: bool, need: ChatNeed) -> bool {
+    parakeet || (whisper && (need.must_stay || !need.here))
 }
 
 /// The router's facts for hearing in `chat` (empty: no chat, reads as online).
 pub(crate) fn stt_env(config_dir: &Path, models: &Path, chat: &str) -> VoiceEnv {
     host::sync(config_dir);
     connectivity::sync_from_core();
+    let need = chat_need(config_dir, chat);
+    let parakeet = ve::installed(config_dir) && ve::speech_model(models).is_some();
     VoiceEnv {
         loopback_override: loopback_override(std::env::var(TEST_URL_ENV).ok().as_deref()).is_some(),
         offline_only: grokhub_core::offline::enabled(),
         net: connectivity::state(),
         local_enabled: local::switched_on(),
         local_ai_capable: local_ai_capable(),
-        local_ready: local_stt_ready(config_dir, models),
+        local_ready: hearing_ready(parakeet, whisper_path().is_some(), need),
         local_warm: local::warm_runtime().is_some(),
         has_xai_auth: stt_bearer().is_ok(),
         xai_recently_failed: voice_route::xai_in_cooldown(StageKind::Stt, grokhub_core::now_ms()),
-        chat_here: local_live::runs_here(chat),
-        chat_must_stay: local_live::must_stay_here(chat),
+        chat_here: need.here,
+        chat_must_stay: need.must_stay,
     }
 }
 
@@ -244,6 +278,15 @@ fn transcribe_with_env(
             Err("Downloading the on-device speech model (Parakeet). Try again in a moment.".into())
         }
         StagePlan::Try(sources) => {
+            if let Some(app) = app.filter(|_| voice_route::wants_download(cfg, StageKind::Stt, env))
+            {
+                // xAI stands in for a chat that runs here only while this runs.
+                let _ = crate::model_library::download(
+                    app.clone(),
+                    config_dir.to_path_buf(),
+                    vec![STT_MODEL_ID.to_string()],
+                );
+            }
             let mut last_err: Option<String> = None;
             for (idx, source) in sources.iter().enumerate() {
                 let fell_back = last_err.is_some();
@@ -420,21 +463,35 @@ fn transcribe_on_device(
         }
     }
     let whisper = whisper_path()?;
+    Some(hear_with_whisper(&whisper, wav, limit))
+}
+
+/// What a whisper run is held to in the residency ledger: it names no
+/// model, so this is the size of whisper's larger common models.
+const WHISPER_MB: u64 = 2048;
+
+/// One clip through `whisper`, beside the chat model only when there is
+/// room for it: never in place of it.
+fn hear_with_whisper(
+    whisper: &Path,
+    wav: &[u8],
+    limit: Duration,
+) -> Result<(String, &'static str), String> {
     let _one = HEAR_ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let clip = match Clip::write(wav) {
-        Ok(clip) => clip,
-        Err(e) => return Some(Err(e)),
+    let Ok(_listening) = reserve(Kind::Hearing, Mem::ram(WHISPER_MB), false) else {
+        return Err(no_room_to_listen(WHISPER_MB));
     };
+    let clip = Clip::write(wav)?;
     let mut cmd = Command::new(whisper);
     cmd.arg("-f").arg(&clip.0).arg("-nt");
-    Some(run_capture(cmd, limit).and_then(|out| {
+    run_capture(cmd, limit).and_then(|out| {
         let text = out.trim().to_string();
         if text.is_empty() {
             Err(EMPTY.to_string())
         } else {
             Ok((text, "whisper"))
         }
-    }))
+    })
 }
 
 /// [`transcribe`] against `to`: the egress guard, then one POST.
@@ -875,5 +932,103 @@ mod tests {
     fn the_engine_gets_longer_for_a_longer_clip() {
         assert_eq!(hear_limit(0.0), Duration::from_secs(20));
         assert_eq!(hear_limit(60.0), Duration::from_secs(140));
+    }
+
+    #[test]
+    fn a_chat_reads_as_here_from_its_newest_step_and_keeps_its_mic_off_xai() {
+        let config = temp_dir("need-here");
+        grokhub_agent::route::local_live::note_step_here("need-c1", true, false);
+        assert_eq!(
+            chat_need(&config, "need-c1"),
+            ChatNeed {
+                here: true,
+                must_stay: false
+            }
+        );
+        assert!(!chat_may_stream(&config, "need-c1"));
+        grokhub_agent::route::local_live::note_step_here("need-c2", false, true);
+        assert_eq!(
+            chat_need(&config, "need-c2"),
+            ChatNeed {
+                here: false,
+                must_stay: true
+            }
+        );
+        assert!(!chat_may_stream(&config, "need-c2"));
+        assert_eq!(
+            chat_need(&config, "need-cloud"),
+            ChatNeed {
+                here: false,
+                must_stay: false
+            }
+        );
+        assert!(chat_may_stream(&config, "need-cloud"));
+    }
+
+    #[test]
+    fn an_18_plus_voice_keeps_a_chat_here_from_launch_before_any_step() {
+        let config = temp_dir("need-adult");
+        let settings = crate::settings::ShellSettings {
+            personality: "whore".into(),
+            explicit_personalities: true,
+            adult_confirmed: true,
+            ..crate::settings::load(&config)
+        };
+        crate::settings::save(&config, &settings).expect("saved");
+        assert!(crate::personality::speaks_18_plus(&config, &settings));
+        assert_eq!(
+            chat_need(&config, "adult-never-stepped"),
+            ChatNeed {
+                here: false,
+                must_stay: true
+            }
+        );
+        assert!(!chat_may_stream(&config, ""));
+        let env = VoiceEnv {
+            has_xai_auth: true,
+            local_enabled: true,
+            local_ai_capable: false,
+            chat_must_stay: chat_need(&config, "").must_stay,
+            ..Default::default()
+        };
+        assert_eq!(
+            voice_route::plan_stage(&voice_route::VoiceRouteConfig::default(), StageKind::Stt, &env),
+            StagePlan::Blocked("Speech to text in this 18+ chat stay on this computer, and the on-device speech model (Parakeet or whisper) isn't downloaded. Install it in Settings → Local AI.".into())
+        );
+    }
+
+    #[test]
+    fn a_bare_whisper_is_ready_for_a_cloud_or_18_plus_chat_not_one_that_runs_here() {
+        let need = |here, must_stay| ChatNeed { here, must_stay };
+        assert!(hearing_ready(true, false, need(true, false)));
+        assert!(hearing_ready(false, true, need(false, false)));
+        assert!(hearing_ready(false, true, need(true, true)));
+        assert!(!hearing_ready(false, true, need(true, false)));
+        assert!(!hearing_ready(false, false, need(false, true)));
+    }
+
+    #[test]
+    fn whisper_declines_without_room_beside_the_chat_model() {
+        use grokhub_agent::route::local_scale::{set_room, Room};
+        let room = Room {
+            free_vram_mb: None,
+            free_ram_mb: 512,
+            cpu_busy_pct: None,
+            on_battery: false,
+            unified: false,
+        };
+        set_room(room, grokhub_core::now_ms());
+        let got = hear_with_whisper(
+            Path::new("/nonexistent/whisper"),
+            &wav(16_000),
+            Duration::from_secs(5),
+        );
+        set_room(room, 0);
+        assert_eq!(
+            got,
+            Err("The on-device speech engine needs about 2 GB of free memory, and this computer doesn't have it right now.".to_string())
+        );
+        assert!(!grokhub_agent::route::local_resident::held());
+        assert_eq!(clips_left(), 0);
     }
 }

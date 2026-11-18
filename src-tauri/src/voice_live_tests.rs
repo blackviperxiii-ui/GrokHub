@@ -1103,3 +1103,49 @@ fn a_piece_spoken_on_device_names_the_voice_and_why() {
         Some("Spoken on this computer with Kokoro text to speech: this chat runs here.")
     );
 }
+
+#[test]
+fn a_move_here_clears_the_caption_its_dropped_stream_showed() {
+    let (mut live, streams) = streaming();
+    assert!(send(&mut live, &tone(1500)).contains(&LiveEvent::Started));
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Caption("remind me to".into()))
+        .expect("news");
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: "remind me to".into()
+        }]
+    );
+    live.set_chat("here-2", false);
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: String::new()
+        }]
+    );
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
+}
+
+#[test]
+fn a_stream_lent_by_an_earlier_session_never_reaches_a_new_one() {
+    let (old, _streams) = streaming();
+    let cell = Mutex::new(Some(old));
+    let (epoch, mut open) = with_in(&cell, |live| {
+        assert!(live.restart(false));
+        live.lend_opener().map(|open| (live.epoch, open))
+    })
+    .expect("voice mode on")
+    .expect("the opener");
+    let link = open();
+    assert!(link.is_some());
+    // Voice mode off and on again, in a chat that runs here: no opener.
+    *cell.lock().unwrap() = Some(Live::new(None));
+    with_in(&cell, |live| {
+        assert!(live.wants_stream());
+        live.take_back_from(epoch, open, link);
+        assert!(live.stt.is_none(), "the old session's stream goes");
+        assert!(live.open.is_none(), "and so does its opener");
+    })
+    .expect("voice mode on");
+}

@@ -117,7 +117,16 @@ pub struct Live {
     /// [`Live::moved`] when the opener was lent: a stream it opens after a
     /// move like that was opened for the chat before it, and goes.
     lent_at: u64,
+    /// This session among all voice sessions since launch: an opener lent
+    /// by an earlier one never comes back into this one, nor its stream.
+    epoch: u64,
+    /// A move dropped the stream while its caption showed: the next push
+    /// clears it.
+    uncaption: bool,
 }
+
+/// The last [`Live::epoch`] handed out.
+static EPOCHS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// How much audio before a start the stream gets: the detector's pre-roll
 /// plus its longest onset window (talking over the end of a reply).
@@ -139,6 +148,7 @@ impl Live {
         let mut live = Self {
             open,
             chat,
+            epoch: EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
             ..Self::default()
         };
         live.listen(false);
@@ -153,6 +163,7 @@ impl Live {
         if !stream_ok {
             self.stt = None;
             self.moved += 1;
+            self.uncaption |= std::mem::take(&mut self.captioned);
         }
     }
 
@@ -226,10 +237,10 @@ impl Live {
             events.push(LiveEvent::Turn {
                 ms: ms_of(self.heard),
             });
-        } else if streaming && self.stt.is_none() {
-            // The stream went away mid-listen: its caption would stand still
-            // while they talk on, so it goes.
-            if std::mem::take(&mut self.captioned) {
+        } else if (streaming && self.stt.is_none()) || self.uncaption {
+            // The stream went away mid-listen (or a move dropped it): its
+            // caption would stand still while they talk on, so it goes.
+            if std::mem::take(&mut self.captioned) | std::mem::take(&mut self.uncaption) {
                 events.push(LiveEvent::Caption {
                     text: String::new(),
                 });
@@ -391,6 +402,15 @@ impl Live {
         }
     }
 
+    /// [`Live::take_back`], when this is the session (`epoch`) that lent
+    /// the opener. One voice mode turned off and on meanwhile, maybe in a
+    /// chat that runs here, gets neither the old opener nor its stream.
+    fn take_back_from(&mut self, epoch: u64, open: Opener, link: Option<SttLink>) {
+        if self.epoch == epoch {
+            self.take_back(open, link);
+        }
+    }
+
     /// End the turn now (a tap while they talk).
     pub fn finish(&mut self) {
         self.mic.finish();
@@ -475,7 +495,7 @@ fn tts_target() -> Option<TtsTarget> {
 
 /// The router's facts for speaking in `chat` (empty: no chat, reads as online).
 fn tts_env(config_dir: &Path, models: &Path, chat: &str) -> VoiceEnv {
-    use grokhub_agent::route::local_live;
+    let need = crate::voice::chat_need(config_dir, chat);
     grokhub_agent::route::host::sync(config_dir);
     grokhub_agent::route::connectivity::sync_from_core();
     VoiceEnv {
@@ -491,8 +511,8 @@ fn tts_env(config_dir: &Path, models: &Path, chat: &str) -> VoiceEnv {
         local_warm: grokhub_agent::route::local::warm_runtime().is_some(),
         has_xai_auth: crate::voice::stt_bearer().is_ok(),
         xai_recently_failed: voice_route::xai_in_cooldown(StageKind::Tts, grokhub_core::now_ms()),
-        chat_here: local_live::runs_here(chat),
-        chat_must_stay: local_live::must_stay_here(chat),
+        chat_here: need.here,
+        chat_must_stay: need.must_stay,
     }
 }
 
@@ -544,6 +564,15 @@ fn speak_with_env(
             Err("Downloading the on-device voice (Kokoro). Spoken replies will start once it finishes.".into())
         }
         StagePlan::Try(sources) => {
+            if let Some(app) = app.filter(|_| voice_route::wants_download(cfg, StageKind::Tts, env))
+            {
+                // xAI stands in for a chat that runs here only while this runs.
+                let _ = crate::model_library::download(
+                    app.clone(),
+                    config_dir.to_path_buf(),
+                    vec![TTS_MODEL_ID.to_string()],
+                );
+            }
             let mut last_err: Option<String> = None;
             for (idx, source) in sources.iter().enumerate() {
                 let fell_back = last_err.is_some();
@@ -828,20 +857,15 @@ pub(crate) async fn voice_live_start(
         let cfg = voice_route::read(&dir);
         let models = models_dir(&dir);
         let mut missing = Vec::new();
-        if matches!(
-            voice_route::plan_stage(
-                &cfg,
-                StageKind::Stt,
-                &crate::voice::stt_env(&dir, &models, &id)
-            ),
-            StagePlan::DownloadLocal
+        // Also while xAI stands in for a chat that runs here.
+        if voice_route::wants_download(
+            &cfg,
+            StageKind::Stt,
+            &crate::voice::stt_env(&dir, &models, &id),
         ) {
             missing.push(crate::voice::STT_MODEL_ID.to_string());
         }
-        if matches!(
-            voice_route::plan_stage(&cfg, StageKind::Tts, &tts_env(&dir, &models, &id)),
-            StagePlan::DownloadLocal
-        ) {
+        if voice_route::wants_download(&cfg, StageKind::Tts, &tts_env(&dir, &models, &id)) {
             missing.push(TTS_MODEL_ID.to_string());
         }
         if !missing.is_empty() {
@@ -865,10 +889,10 @@ pub(crate) async fn voice_live_chat(
     let id = conversation_id.unwrap_or_default();
     let dir = state.config_dir.clone();
     crate::off_main(move || {
-        let cfg = voice_route::read(&dir);
-        let env = crate::voice::stt_env(&dir, &models_dir(&dir), &id);
-        let plan = voice_route::plan_stage(&cfg, StageKind::Stt, &env);
-        let stream_ok = crate::voice::streams_to_xai(&plan, &env);
+        // Only the chat's own need, no keychain read: a stream it may not
+        // have goes before more of the turn reaches xAI. The next listen
+        // plans the rest.
+        let stream_ok = crate::voice::chat_may_stream(&dir, &id);
         with(|live| live.set_chat(&id, stream_ok))
     })
     .await?
@@ -908,15 +932,16 @@ fn then_open(
 ) -> Result<(), String> {
     let lent = with_in(cell, |live| {
         if change(live) {
-            live.lend_opener()
+            live.lend_opener().map(|open| (live.epoch, open))
         } else {
             None
         }
     })?;
-    if let Some(mut open) = lent {
+    if let Some((epoch, mut open)) = lent {
         let link = open();
-        // Voice mode turned off meanwhile: the stream just goes.
-        let _ = with_in(cell, |live| live.take_back(open, link));
+        // Voice mode turned off meanwhile (and maybe on again): the stream
+        // just goes.
+        let _ = with_in(cell, |live| live.take_back_from(epoch, open, link));
     }
     Ok(())
 }
