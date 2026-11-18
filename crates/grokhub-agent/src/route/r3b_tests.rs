@@ -2194,6 +2194,8 @@ fn a_refused_grok_key_retries_the_turn_on_the_local_model() {
         super::local::fallback_active(),
         "Grok refusal marks the local fallback chip"
     );
+    // The turn moved to this computer, so its voice runs here too.
+    assert!(super::local_live::runs_here("auth-local-1"));
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -2300,6 +2302,9 @@ fn an_18_plus_chat_keeps_answering_after_its_local_model_is_unloaded() {
     assert_eq!(out.unwrap().text, "local here");
     assert_eq!(shown, "local here");
     assert_eq!(sent_to_xai(), 0);
+    // Its voice runs here and must stay here.
+    assert!(super::local_live::runs_here("adult-unload-1"));
+    assert!(super::local_live::must_stay_here("adult-unload-1"));
 
     // Unloaded for a game.
     drop(loaded);
@@ -2310,6 +2315,9 @@ fn an_18_plus_chat_keeps_answering_after_its_local_model_is_unloaded() {
     assert_eq!(out.unwrap().text, LOCAL_ONLY_MISSING);
     assert_eq!(shown, LOCAL_ONLY_MISSING);
     assert_eq!(sent_to_xai(), 0);
+    // No step ran here this time, but the voice still may not leave.
+    assert!(!super::local_live::runs_here("adult-unload-1"));
+    assert!(super::local_live::must_stay_here("adult-unload-1"));
     // An 18+ turn says in one line why it can't run, and sends nothing.
     let (out, shown, _) = send("lets get naked", "chat:default");
     assert_eq!(out.unwrap().text, LOCAL_ONLY_MISSING);

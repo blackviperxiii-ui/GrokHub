@@ -30,6 +30,8 @@ pub enum Kind {
     PictureGuard,
     /// The on-device voice speaking one piece.
     Speech,
+    /// The on-device engine hearing one clip.
+    Hearing,
 }
 
 /// Memory in MB, split by where it sits.
@@ -361,6 +363,7 @@ fn reason(kind: Kind) -> &'static str {
         Kind::Picture => "made room for a picture",
         Kind::PictureGuard => "made room for the picture guard",
         Kind::Speech => "made room for the voice",
+        Kind::Hearing => "made room for listening",
     }
 }
 
