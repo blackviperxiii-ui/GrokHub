@@ -25,6 +25,7 @@ import {
   type TodoState,
 } from "./api";
 import { CodeShip } from "./CodeShip";
+import { StatusTracker, statusFromWork } from "./Progress";
 import { TaskDetailWindow } from "./TaskDetail";
 import { inShell } from "./transport";
 import { useModalFocus } from "./ui";
@@ -1020,6 +1021,7 @@ export function Agents({
                 return (
                   <li key={row.key} data-work={row.key} className={`card agent work ${row.state}`} aria-label={row.title}>
                     <div className="card-title">{row.title}</div>
+                    <StatusTracker current={statusFromWork(row.state)} label={`${row.title} status`} />
                     <div className="card-status task-work">{workLine(row, true)}</div>
                     {row.partial && <div className="card-status work-partial">Partial · {row.ended}</div>}
                     {row.redoOf && <div className="card-status work-detail">Redo of: {row.redoOf}</div>}
