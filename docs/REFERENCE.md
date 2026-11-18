@@ -241,6 +241,9 @@ systemctl --user disable --now grokhub-hub.service
 rm -f ~/.config/systemd/user/grokhub-hub.service
 rm -f ~/.local/bin/grokhub-shell ~/.local/bin/grokhub-hub ~/.local/bin/grokhub
 rm -f ~/.local/share/applications/grokhub-shell.desktop
+rm -f ~/.local/share/applications/grokhub-shell-dev.desktop   # only if a build-folder KWin fix created it
+rm -f ~/.local/share/applications/grokhub-hub.desktop         # only if a hub MCP KWin fix created it
+rm -f ~/.local/share/applications/grokhub.desktop             # leftover cabin menu entry, if any
 rm -f ~/.config/autostart/Loadout.desktop   # only if Start at login was on
 # Arch package (makepkg -si)
 sudo pacman -R grokhub

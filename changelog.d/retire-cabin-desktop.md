@@ -1,0 +1,1 @@
+- Linux: `scripts/sync-user-integration.sh` now writes `grokhub-shell.desktop` (absolute Exec to the shell) and removes a leftover cabin `grokhub.desktop`; the retired cabin template is gone.
