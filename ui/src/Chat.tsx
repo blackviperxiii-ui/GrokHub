@@ -99,7 +99,7 @@ import { settingAsk } from "./autoSetupApi";
 import { Episode } from "./Episode";
 import { ScreenshotOffer } from "./ScreenshotOffer";
 import { openImport } from "./onboardApi";
-import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
+import { EvidenceCard, FindingsCard, ModelLine, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
 import { desktopNyxLook, desktopNyxTalk } from "./desktopNyxApi";
 import { inShell } from "./transport";
@@ -175,6 +175,8 @@ export type Item =
   | Extract<ChatEvent, { kind: "recap" }>
   /** The evidence receipt for the turn that just ended (Order 733). */
   | Extract<ChatEvent, { kind: "evidence" }>
+  /** Which on-device model answered the reply above, and why. Never saved. */
+  | Extract<ChatEvent, { kind: "modelLine" }>
   | ElicitItem;
 
 type Ended = "ended" | "halted";
@@ -395,6 +397,17 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     case "findings":
     case "evidence":
       return [...items, { ...event }];
+    // The model line sits right under the reply it names.
+    case "modelLine": {
+      let at = items.length;
+      for (let i = items.length - 1; i >= 0 && items[i].kind !== "user"; i--) {
+        if (items[i].kind === "assistant") {
+          at = i + 1;
+          break;
+        }
+      }
+      return [...items.slice(0, at), { ...event }, ...items.slice(at)];
+    }
     // The Finished block leaves the bubble for its card: the last reply's
     // text becomes the reply without the block.
     case "recap": {
@@ -781,6 +794,8 @@ function LogItem({
       return <RecapCard event={item} />;
     case "evidence":
       return <EvidenceCard event={item} />;
+    case "modelLine":
+      return <ModelLine text={item.text} />;
     case "slash":
       return (
         <div className="card notice slash-notice" role="status" aria-label={`${item.command} result`}>

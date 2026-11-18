@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CLEAR_CHAT_QUESTION } from "./ClearChat";
-import type { ChatTab, ClaudeChats } from "./api";
+import type { ChatTab, ClaudeChats, LocalTier } from "./api";
 
 const api = vi.hoisted(() => ({
   listChatTabs: vi.fn<() => Promise<ChatTab[]>>(),
@@ -17,11 +17,21 @@ const api = vi.hoisted(() => ({
   chatTabRestoreDeleted: vi.fn<(id: string) => Promise<ChatTab>>(),
   claudePlanChats: vi.fn<() => Promise<ClaudeChats>>(),
   setClaudePlanChat: vi.fn<(id: string, on: boolean) => Promise<ClaudeChats>>(),
+  localChatPin: vi.fn<(id: string) => Promise<LocalTier | null>>(),
+  setLocalChatPin: vi.fn<(id: string, tier: LocalTier | null) => Promise<LocalTier | null>>(),
 }));
 
 vi.mock("./api", () => api);
 
-import { CHAT_TABS_LABEL, ChatTabs, HangoutHeader, MAIN_TAB_HINT, NEW_CHAT_TAB, ON_CLAUDE_PLAN } from "./ChatTabs";
+import {
+  CHAT_TABS_LABEL,
+  ChatTabs,
+  HangoutHeader,
+  MAIN_TAB_HINT,
+  MODEL_FOR_CHAT,
+  NEW_CHAT_TAB,
+  ON_CLAUDE_PLAN,
+} from "./ChatTabs";
 
 function tab(id: string, title: string, pinned = false, main = false): ChatTab {
   return { id, title, pinned, updated: 1, main };
@@ -41,6 +51,8 @@ describe("ChatTabs", () => {
     api.chatTabRename.mockReset().mockResolvedValue();
     api.claudePlanChats.mockReset().mockResolvedValue({ allowed: false, chats: [] });
     api.setClaudePlanChat.mockReset();
+    api.localChatPin.mockReset().mockRejectedValue("AI models is only on the desktop app.");
+    api.setLocalChatPin.mockReset();
   });
 
   async function openMenu(name: RegExp | string) {
@@ -72,6 +84,30 @@ describe("ChatTabs", () => {
     api.setClaudePlanChat.mockResolvedValue({ allowed: true, chats: ["shell-a"] });
     await userEvent.click(on);
     expect(api.setClaudePlanChat).toHaveBeenLastCalledWith("shell-b", false);
+  });
+
+  it("sets a chat's on-device tier from its tab menu, the chosen one checked", async () => {
+    api.localChatPin.mockImplementation(async (id) => (id === "shell-b" ? "quality" : null));
+    api.setLocalChatPin.mockResolvedValue("speed");
+    render(strip());
+    let menu = await openMenu(/Beta chat/i);
+    let group = await within(menu).findByRole("group", { name: MODEL_FOR_CHAT });
+    expect(within(group).getAllByRole("menuitemradio").map((b) => b.textContent)).toEqual([
+      "Auto",
+      "Speed",
+      "Balance",
+      "Performance",
+    ]);
+    expect(within(group).getByRole("menuitemradio", { name: "Performance" })).toHaveAttribute("aria-checked", "true");
+    expect(within(group).getByRole("menuitemradio", { name: "Auto" })).toHaveAttribute("aria-checked", "false");
+    await userEvent.keyboard("{Escape}");
+
+    menu = await openMenu(/Alpha chat/i);
+    group = await within(menu).findByRole("group", { name: MODEL_FOR_CHAT });
+    expect(within(group).getByRole("menuitemradio", { name: "Auto" })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(within(group).getByRole("menuitemradio", { name: "Speed" }));
+    expect(api.setLocalChatPin).toHaveBeenCalledWith("shell-a", "speed");
+    expect(screen.queryByRole("menu", { name: "Chat tab" })).toBeNull();
   });
 
   it("hides the Claude plan switch until it's allowed, and where it isn't there", async () => {

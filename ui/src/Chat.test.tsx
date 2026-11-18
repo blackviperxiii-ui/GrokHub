@@ -1877,6 +1877,25 @@ describe("Chat", () => {
 });
 
 describe("applyEvent", () => {
+  it("puts the model line right under the reply it names, above the turn's cards", () => {
+    let items: Item[] = [{ kind: "user", text: "be quick: what's DNS?" }];
+    items = applyEvent(items, { kind: "text", text: "It maps names to addresses." });
+    items = applyEvent(items, { kind: "findings", items: [], fixes: [], doAll: null });
+    items = applyEvent(items, {
+      kind: "modelLine",
+      text: "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer.",
+    });
+    expect(items).toEqual([
+      { kind: "user", text: "be quick: what's DNS?" },
+      { kind: "assistant", text: "It maps names to addresses.", streaming: true },
+      {
+        kind: "modelLine",
+        text: "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer.",
+      },
+      { kind: "findings", items: [], fixes: [], doAll: null },
+    ]);
+  });
+
   it("joins text, starts a new bubble after a tool, and updates a tool card in place", () => {
     let items: Item[] = [{ kind: "user", text: "go" }];
     items = applyEvent(items, { kind: "text", text: "Look" });
