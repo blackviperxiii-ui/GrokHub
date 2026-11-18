@@ -1402,20 +1402,20 @@ pub fn save_prompt(config_dir: &Path, text: &str) -> Result<Prompt, String> {
 }
 
 /// A cached gallery image as a data URL, so no page (desktop or web) ever
-/// loads it from the source site. Only names the writer made are read.
+/// loads it from the source site. Only names the writer made are read, and
+/// the type comes from the file's own bytes: a URL with no image extension
+/// is cached as `.img`.
 pub fn image(config_dir: &Path, name: &str) -> Result<String, String> {
     let (stem, ext) = name.split_once('.').ok_or("Not a Pulse image.")?;
-    let mime = match ext {
-        "jpg" => "image/jpeg",
-        "png" => "image/png",
-        "webp" => "image/webp",
-        _ => return Err("Not a Pulse image.".into()),
-    };
-    if stem.len() != 16 || !stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !matches!(ext, "jpg" | "png" | "webp" | "img")
+        || stem.len() != 16
+        || !stem.bytes().all(|b| b.is_ascii_hexdigit())
+    {
         return Err("Not a Pulse image.".into());
     }
     let bytes = std::fs::read(pulse_feed::images_dir(config_dir).join(name))
         .map_err(|_| "That image is no longer cached.".to_string())?;
+    let mime = pc::image_mime(&bytes).ok_or("Not a Pulse image.")?;
     use base64::Engine as _;
     Ok(format!(
         "data:{mime};base64,{}",
@@ -2250,6 +2250,29 @@ mod tests {
         );
         assert!(image(&d.config, "../updates.json").is_err());
         assert!(image(&d.config, "0123456789abcdef.svg").is_err());
+    }
+
+    #[test]
+    fn an_img_file_serves_by_its_bytes() {
+        let d = dirs("images-img", &[]);
+        let dir = pulse_feed::images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let png = [0x89, b'P', b'N', b'G'];
+        std::fs::write(dir.join("0123456789abcdef.img"), png).expect("img");
+        std::fs::write(dir.join("fedcba9876543210.jpg"), png).expect("jpg");
+        std::fs::write(dir.join("1111111111111111.img"), b"<html>").expect("html");
+        assert_eq!(
+            image(&d.config, "0123456789abcdef.img"),
+            Ok("data:image/png;base64,iVBORw==".to_string())
+        );
+        assert_eq!(
+            image(&d.config, "fedcba9876543210.jpg"),
+            Ok("data:image/png;base64,iVBORw==".to_string())
+        );
+        assert_eq!(
+            image(&d.config, "1111111111111111.img"),
+            Err("Not a Pulse image.".to_string())
+        );
     }
 
     /// A PC health card reads its verdict on the Ideas row and opens an

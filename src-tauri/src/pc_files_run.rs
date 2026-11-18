@@ -459,7 +459,8 @@ pub fn identify_printer(endpoint: &str) -> Result<SavedPrinter, String> {
 }
 
 /// Keep the printer's webcam frame where Pulse reads card images; only a
-/// small body that decodes as a picture is kept. Returns the cache key.
+/// body of at most 4 MiB that `store_image` accepts is kept. Returns the
+/// cache key.
 fn cache_snapshot(config_dir: &Path, agent: &http::Agent, saved: &SavedPrinter) -> Option<String> {
     let base = base_url(&saved.endpoint);
     let query = format!("{base}{}", pa::webcam_query_path(saved.kind));
@@ -480,11 +481,8 @@ fn cache_snapshot(config_dir: &Path, agent: &http::Agent, saved: &SavedPrinter) 
         .take(4 * 1024 * 1024)
         .read_to_end(&mut buf)
         .ok()?;
-    image::load_from_memory(&buf).ok()?;
-    let dir = crate::pulse_feed::images_dir(config_dir);
-    std::fs::create_dir_all(&dir).ok()?;
-    std::fs::write(dir.join(grokhub_core::pulse::image_cache_name(&url)), buf).ok()?;
-    Some(url)
+    // No minimum size: a small or dark webcam frame is still the frame.
+    crate::pulse_feed::store_image(config_dir, &url, &buf).then_some(url)
 }
 
 /// One poll of the saved printers that are on. `fetch` reads a printer.
