@@ -196,7 +196,7 @@ fn cache() -> &'static Mutex<Cache> {
 }
 
 /// A drafter's header, read once per file and size.
-fn header(path: &Path) -> Option<GgufMeta> {
+pub fn header(path: &Path) -> Option<GgufMeta> {
     let len = std::fs::metadata(path).ok()?.len();
     let key = (path.to_path_buf(), len);
     if let Some(m) = cache().lock().ok()?.headers.get(&key) {
@@ -551,7 +551,9 @@ pub fn tick_auto_test(config_dir: &Path, q: &ld::Quiet) {
     let Some(paths) = super::local_sidecar::resolve_paths(config_dir) else {
         return;
     };
-    let needs = autoconfig::draft_plan(&paths.binary, &paths.model)
+    let timed = timed_model(&paths);
+    let pick_refused = timed != paths.model || pair_wont_start(&paths);
+    let needs = autoconfig::draft_plan_with(&paths.binary, &timed, fresh_free())
         .is_some_and(|p| p.decision == Decision::NeedsTest);
     // Then the model a game swaps to, timed in the gaming setup now, while
     // no game runs, so its drafter can join it during one.
@@ -563,8 +565,8 @@ pub fn tick_auto_test(config_dir: &Path, q: &ld::Quiet) {
                 .is_some_and(|p| p.decision == Decision::NeedsTest)
         });
     // With the drafters settled, a model that hasn't had its refusal check
-    // gets it next.
-    let refusal = !needs && gaming.is_none() && refusal_due(&paths.model);
+    // gets it next; a pick that can't start with its drafter waits.
+    let refusal = !needs && gaming.is_none() && !pick_refused && refusal_due(&paths.model);
     if !needs && gaming.is_none() && !refusal {
         return;
     }
@@ -622,10 +624,47 @@ pub fn measure(base_url: &str, token: &str) -> Result<Timing, String> {
 }
 
 /// Time the model with and without its drafter and keep the verdict. `None`
-/// when there's no drafter to test.
+/// when there's no drafter to test. When a start refused the pick, the
+/// model that started in its place is timed, loaded for the test as the
+/// pick would be, even after it unloaded.
 pub fn run_bench(config_dir: &Path) -> Option<String> {
     let paths = super::local_sidecar::resolve_paths(config_dir)?;
-    bench(&paths)
+    let model = timed_model(&paths);
+    bench(&super::local_sidecar::SidecarPaths {
+        binary: paths.binary,
+        model,
+    })
+}
+
+/// The model the speed test times: the pick, or the model that started in
+/// its place the last time a start refused it (see
+/// [`super::local_sidecar::stand_in_for_refused`]).
+fn timed_model(paths: &super::local_sidecar::SidecarPaths) -> PathBuf {
+    super::local_sidecar::stand_in_for_refused(&paths.model).unwrap_or_else(|| paths.model.clone())
+}
+
+/// The pick's pair doesn't fit as a fresh start of it would see memory,
+/// though no start has refused it yet this session.
+pub(crate) fn pair_wont_start(paths: &super::local_sidecar::SidecarPaths) -> bool {
+    autoconfig::draft_plan_with(&paths.binary, &paths.model, fresh_free())
+        .is_some_and(|p| p.decision == Decision::NoRoom)
+}
+
+/// What a test's fresh start would see free: with a model loaded, the
+/// probe's reading plus that model's own memory, since the test stops it
+/// first. `None` (the plain probe) with nothing loaded.
+fn fresh_free() -> Option<autoconfig::FreeNow> {
+    super::local_sidecar::loaded().map(|_| autoconfig::replan_free())
+}
+
+/// A test's line when its start failed with `e`. A pair that doesn't fit
+/// waits for room, in plain words.
+fn start_line(test: &str, e: &str) -> String {
+    if e.starts_with(autoconfig::PAIR_NO_ROOM) {
+        format!("The {test} runs once the model and its draft model fit together.")
+    } else {
+        format!("The {test} couldn't start the model: {e}")
+    }
 }
 
 /// [`run_bench`] for `model` in the gaming setup (CPU, half the threads), so
@@ -643,7 +682,7 @@ pub fn run_gaming_bench(config_dir: &Path, model: PathBuf) -> Option<String> {
 }
 
 fn bench(paths: &super::local_sidecar::SidecarPaths) -> Option<String> {
-    let planned = autoconfig::draft_plan(&paths.binary, &paths.model)?;
+    let planned = autoconfig::draft_plan_with(&paths.binary, &paths.model, fresh_free())?;
     match planned.decision {
         // The pair doesn't fit, so the drafted run couldn't start.
         Decision::NoRoom => return None,
@@ -687,6 +726,9 @@ fn bench(paths: &super::local_sidecar::SidecarPaths) -> Option<String> {
         }
         (Ok(_), Ok((_, false))) => {
             format!("{name} couldn't run next to the model, so it stays off.")
+        }
+        (Err(e), _) | (_, Err(e)) if e.starts_with(autoconfig::PAIR_NO_ROOM) => {
+            start_line("draft model test", &e)
         }
         (Err(e), _) | (_, Err(e)) => format!("The draft model test stopped: {e}"),
     };
@@ -751,14 +793,19 @@ pub fn run_refusal_check(config_dir: &Path) -> Option<String> {
     use grokhub_core::local_refusal as lr;
     let paths = super::local_sidecar::resolve_paths(config_dir)?;
     let (dir, file) = (autoconfig::tune_dir()?, model_file(&paths.model)?);
-    if !lr::due(&dir, &file) {
+    // A pick a start refused, or whose pair can't start, isn't stopped for
+    // nothing.
+    if !lr::due(&dir, &file)
+        || super::local_sidecar::stand_in_for_refused(&paths.model).is_some()
+        || pair_wont_start(&paths)
+    {
         return None;
     }
     let _gate = super::local_sidecar::speed_test_gate();
     super::local_sidecar::stop_global();
     let side = match super::local_sidecar::start(&paths) {
         Ok(s) => s,
-        Err(e) => return Some(format!("The refusal check couldn't start the model: {e}")),
+        Err(e) => return Some(start_line("refusal check", &e)),
     };
     let mut replies = Vec::with_capacity(lr::PROMPTS.len());
     for p in lr::PROMPTS {

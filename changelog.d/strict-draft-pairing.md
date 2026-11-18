@@ -1,1 +1,1 @@
-- Local AI: a model with a draft model always loads with it. When both don't fit, a smaller model on disk runs instead, and the draft model no longer turns off when memory is tight.
+- Local AI: a model with a draft model always loads with it. When both don't fit, a smaller model on disk runs instead. It stays until the model unloads, the power mode changes, or more memory is free where the pair needs it. The draft model no longer turns off when memory is tight.

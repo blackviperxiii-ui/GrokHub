@@ -871,6 +871,15 @@ pub fn set_profile(p: LocalProfile, tune_dir: PathBuf) {
     }
 }
 
+/// Tests: forget the hardware read.
+#[cfg(test)]
+pub(crate) fn forget_profile() {
+    if let Ok(mut l) = live().lock() {
+        l.profile = None;
+        l.tune_dir = None;
+    }
+}
+
 /// The cabin's hardware read, once it has one.
 pub fn profile() -> Option<LocalProfile> {
     live().lock().ok()?.profile.clone()
@@ -882,8 +891,8 @@ pub fn set_state(s: GovState) {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn state() -> GovState {
+/// The governor state launches plan in.
+pub fn state() -> GovState {
     live().lock().map(|l| l.state).unwrap_or_default()
 }
 
@@ -910,6 +919,20 @@ fn engine_files(binary: &Path) -> Vec<String> {
 /// together begins. The caller tries a smaller model.
 pub const PAIR_NO_ROOM: &str = "there isn't room for the model and its draft model together";
 
+/// Why a pair was refused when the Settings GPU layers override is the cause.
+pub const PAIR_OVERRIDE: &str = "the GPU layers override keeps part of the model off the GPU";
+
+/// The refusal for a pair planned as `a`: it names the GPU layers override
+/// (`override_ngl`) when that keeps part of a launch that puts the pair on
+/// the GPU (`on_gpu`) off it, since a pair only runs whole there.
+pub fn pair_refusal(override_ngl: Option<u32>, a: &LaunchArgs, on_gpu: bool) -> String {
+    if on_gpu && override_ngl.is_some_and(|n| n < a.all_layers) {
+        format!("{PAIR_NO_ROOM}, because {PAIR_OVERRIDE}")
+    } else {
+        PAIR_NO_ROOM.to_string()
+    }
+}
+
 /// A planned launch, its `autotune.json` key and folder.
 pub type Planned = (LaunchArgs, String, PathBuf);
 
@@ -927,26 +950,106 @@ pub fn launch_with(
     model: &Path,
     free: Option<FreeNow>,
 ) -> Result<Option<Planned>, String> {
-    let Some((args, plan, key, dir)) = planned(binary, model, free) else {
+    let Some(Planning {
+        args,
+        plan,
+        key,
+        dir,
+        refusal,
+    }) = planned(binary, model, free)
+    else {
         return Ok(None);
     };
-    if plan.decision == grokhub_core::local_draft::Decision::NoRoom {
-        return Err(PAIR_NO_ROOM.to_string());
+    if let Some(r) = refusal {
+        if let Ok(mut last) = LAST_REFUSAL.lock() {
+            *last = Some((model.to_path_buf(), r));
+        }
+        let o = live().lock().map_or(None, |l| l.overrides.ngl);
+        return Err(pair_refusal(o, &args, r.on_gpu));
     }
     local_spec::launched(&plan, &dir);
     Ok(Some((args, key, dir)))
 }
 
+/// Where a launch sized a pair it refused (see [`local_spec::fits`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pool {
+    Vram,
+    Ram,
+}
+
+/// A pair a launch refused, for the hold that keeps the planner from
+/// reloading into the same refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PairRefusal {
+    /// VRAM when the launch planned the pair on a GPU, else RAM.
+    pub pool: Pool,
+    /// What that pool had free at the refusal (the launch's own live read,
+    /// taken after the previous server stopped); `None` without a reading.
+    pub free_mb: Option<u64>,
+    /// The governor state the launch planned in.
+    pub state: GovState,
+    /// The launch planned the pair on a GPU (an iGPU too).
+    pub on_gpu: bool,
+}
+
+/// The refusal of a pair launched as `a` on `p` (its free memory already
+/// `now`) in `state`.
+fn refusal_of(p: &LocalProfile, a: &LaunchArgs, state: GovState, now: FreeNow) -> PairRefusal {
+    let on_gpu = budgets(p, a.backend, state).0 > 0;
+    // A GPU launch with no VRAM reading was sized from a fixed figure that
+    // more free RAM doesn't change: no baseline, so it holds until unload.
+    let (pool, free_mb) = if on_gpu {
+        (Pool::Vram, now.vram_free_mb)
+    } else {
+        (Pool::Ram, now.ram_free_mb)
+    };
+    PairRefusal {
+        pool,
+        free_mb,
+        state,
+        on_gpu,
+    }
+}
+
+/// The last pair refusal [`launch_with`] gave, and for which model.
+static LAST_REFUSAL: Mutex<Option<(PathBuf, PairRefusal)>> = Mutex::new(None);
+
+/// The refusal [`launch_with`] last gave `model`, taken.
+pub fn take_refusal(model: &Path) -> Option<PairRefusal> {
+    let mut last = LAST_REFUSAL.lock().ok()?;
+    match last.take() {
+        Some((m, r)) if m == model => Some(r),
+        other => {
+            *last = other;
+            None
+        }
+    }
+}
+
 /// The draft half of [`launch_for`], for the speed test.
 pub fn draft_plan(binary: &Path, model: &Path) -> Option<local_spec::Plan> {
-    planned(binary, model, None).map(|(_, plan, _, _)| plan)
+    draft_plan_with(binary, model, None)
+}
+
+/// [`draft_plan`] planned against `free` instead of the probe's reading.
+pub fn draft_plan_with(
+    binary: &Path,
+    model: &Path,
+    free: Option<FreeNow>,
+) -> Option<local_spec::Plan> {
+    planned(binary, model, free).map(|p| p.plan)
 }
 
 /// What a fresh start of the running model would see free now: the probe's
 /// reading with the model's own memory added back.
 pub fn replan_free() -> FreeNow {
-    let own = live().lock().map(|l| l.own).unwrap_or_default();
-    with_own(free_now(), own)
+    with_own(free_now(), own_use())
+}
+
+/// What the running model itself takes, as measured once it was resident.
+pub fn own_use() -> FreeNow {
+    live().lock().map(|l| l.own).unwrap_or_default()
 }
 
 /// [`launch_for`] as a fresh start of the running model would plan it (see
@@ -955,8 +1058,8 @@ pub fn replan_free() -> FreeNow {
 /// drafter no longer fit (the reload then picks a smaller model).
 pub fn replan_for(binary: &Path, model: &Path) -> Option<Planned> {
     planned(binary, model, Some(replan_free()))
-        .filter(|(_, plan, _, _)| plan.decision != grokhub_core::local_draft::Decision::NoRoom)
-        .map(|(args, _, key, dir)| (args, key, dir))
+        .filter(|p| p.refusal.is_none())
+        .map(|p| (p.args, p.key, p.dir))
 }
 
 /// The second server of a warm relaunch, planned as `next`, fits beside the
@@ -977,17 +1080,61 @@ pub fn tune_dir() -> Option<PathBuf> {
     live().lock().ok()?.tune_dir.clone()
 }
 
-fn planned(
-    binary: &Path,
-    model: &Path,
-    free: Option<FreeNow>,
-) -> Option<(LaunchArgs, local_spec::Plan, String, PathBuf)> {
+/// One planned launch: its args and draft plan, its `autotune.json` key and
+/// folder, and the refusal when its pair doesn't fit.
+struct Planning {
+    args: LaunchArgs,
+    plan: local_spec::Plan,
+    key: String,
+    dir: PathBuf,
+    refusal: Option<PairRefusal>,
+}
+
+fn planned(binary: &Path, model: &Path, free: Option<FreeNow>) -> Option<Planning> {
     planned_as(binary, model, free, false)
+}
+
+/// The backend a launch of `binary` uses on `p`.
+fn backend_for(p: &LocalProfile, binary: &Path) -> Backend {
+    let files = engine_files(binary);
+    let files: Vec<&str> = files.iter().map(String::as_str).collect();
+    let available = local_profile::engine_backends(&files);
+    // The speed test gates backends once card 5.3 caches it; until then the engine decides.
+    local_profile::choose_backend(p, &available, &|_| true)
+}
+
+/// The hardware read, and where `autotune.json` lives.
+fn hardware_read() -> Option<(LocalProfile, PathBuf)> {
+    let l = live().lock().ok()?;
+    Some((l.profile.clone()?, l.tune_dir.clone()?))
+}
+
+/// The ids of the models in `on_disk` that launch with a separate drafter
+/// file on this device and engine (see [`local_spec::pairing`]), so the swap
+/// planner sizes them as a pair. Empty before the hardware read, when a
+/// launch runs the one-shot defaults alone.
+pub fn pair_view(binary: &Path, on_disk: &[(&'static LocalModel, PathBuf)]) -> Vec<&'static str> {
+    let Some((p, dir)) = hardware_read() else {
+        return Vec::new();
+    };
+    let device = device_label(&p, backend_for(&p, binary));
+    let flags = local_spec::help_flags(binary);
+    on_disk
+        .iter()
+        .filter(|(_, path)| {
+            local_spec::header(path).is_some_and(|meta| {
+                local_spec::pairing(&flags, path, &meta, &dir, &device)
+                    .reserve()
+                    .is_some()
+            })
+        })
+        .map(|(m, _)| m.id)
+        .collect()
 }
 
 /// [`draft_plan`] for `model` in the gaming setup, whether a game runs or not.
 pub fn gaming_draft_plan(binary: &Path, model: &Path) -> Option<local_spec::Plan> {
-    planned_as(binary, model, None, true).map(|(_, plan, _, _)| plan)
+    planned_as(binary, model, None, true).map(|p| p.plan)
 }
 
 /// [`planned`]; `gaming` plans the gaming setup even with no game running.
@@ -996,7 +1143,7 @@ fn planned_as(
     model: &Path,
     free: Option<FreeNow>,
     gaming: bool,
-) -> Option<(LaunchArgs, local_spec::Plan, String, PathBuf)> {
+) -> Option<Planning> {
     let (p, dir, state, o, probe) = {
         let l = live().lock().ok()?;
         (
@@ -1011,11 +1158,7 @@ fn planned_as(
     let now = free.unwrap_or_else(|| probe.as_ref().map(|f| f()).unwrap_or_default());
     let p = with_free_now(p, now);
     let meta = gguf::read_meta(model).ok()?;
-    let files = engine_files(binary);
-    let files: Vec<&str> = files.iter().map(String::as_str).collect();
-    let available = local_profile::engine_backends(&files);
-    // The speed test gates backends once card 5.3 caches it; until then the engine decides.
-    let backend = local_profile::choose_backend(&p, &available, &|_| true);
+    let backend = backend_for(&p, binary);
     let bytes = std::fs::metadata(model).map(|m| m.len()).unwrap_or(0);
     let key = tune_key(model, bytes, &p, backend);
     let flags = local_spec::help_flags(binary);
@@ -1024,6 +1167,16 @@ fn planned_as(
     let pairing = local_spec::pairing(&flags, model, &meta, &dir, &device);
     let args = autoconfig(&p, &meta, backend, state, &o, pairing.reserve());
     let mut args = match load_tuned(&dir).get(&key) {
+        // A pair never splits, so a layer cap from an older back-off would
+        // refuse it on every launch: only its context and KV caps count.
+        Some(t) if pairing.reserve().is_some() => apply_tuned(
+            args,
+            &Tuned {
+                ngl: u32::MAX,
+                n_cpu_moe: None,
+                ..t.clone()
+            },
+        ),
         Some(t) => apply_tuned(args, t),
         None => args,
     };
@@ -1049,8 +1202,21 @@ fn planned_as(
     // on the CPU too, with its own speed test there; when both don't fit in
     // RAM the launch is refused and a smaller model runs.
     if gaming || gaming_test() || super::local_scale::gaming_reason(super::local_gov::reason()) {
-        args = gaming_launch(&args);
         let pairing = local_spec::pairing(&flags, model, &meta, &dir, local_spec::GAMING_DEVICE);
+        // The pair moves to RAM: size the context for the RAM budget with
+        // the drafter in it, so the context shrinks before the tier does.
+        if let Some(d) = pairing.reserve() {
+            let q4 = (args.kv == KvType::Q4).then_some(KvType::Q4);
+            let capped = Overrides {
+                ctx: Some(args.ctx),
+                kv: o.kv.or(q4),
+                ..o.clone()
+            };
+            let ram = autoconfig(&p, &meta, Backend::Cpu, state, &capped, Some(d));
+            args.ctx = ram.ctx;
+            args.kv = ram.kv;
+        }
+        args = gaming_launch(&args);
         plan = launch(&args, local_spec::GAMING_DEVICE, pairing);
         args.draft = plan.draft.clone().map(Box::new);
     }
@@ -1076,7 +1242,15 @@ fn planned_as(
     if !shared {
         tune(&mut args, &options, &dir, &key, state, p.free_ram_mb);
     }
-    Some((args, plan, key, dir))
+    let refusal = (plan.decision == grokhub_core::local_draft::Decision::NoRoom)
+        .then(|| refusal_of(&p, &args, state, now));
+    Some(Planning {
+        args,
+        plan,
+        key,
+        dir,
+        refusal,
+    })
 }
 
 /// Runs the auto-tune arm for this device × model × mode on `args` (see

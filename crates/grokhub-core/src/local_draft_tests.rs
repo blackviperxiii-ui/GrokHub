@@ -396,7 +396,7 @@ fn decide_checks_engine_then_tokenizer_then_the_verdict_then_room() {
 }
 
 #[test]
-fn a_pair_needs_the_model_and_its_drafter_once_the_drafter_is_on_disk() {
+fn a_pair_needs_the_model_and_its_drafter_when_it_launches_with_it() {
     let m = |id: &str| local_setup::model_by_id(id).expect("catalog model");
     let g12b = m("gemma-4-12b-it-abliterated-q4_k");
     assert_eq!(pair_mb(g12b, false), 8_399);
@@ -414,22 +414,6 @@ fn a_pair_needs_the_model_and_its_drafter_once_the_drafter_is_on_disk() {
         (pair_mb(solo, false), pair_mb(solo, true)),
         (24_279, 24_279)
     );
-}
-
-#[test]
-fn a_drafter_counts_as_on_disk_in_any_of_its_folders() {
-    let root = std::env::temp_dir().join(format!("grokhub-pair-disk-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    let dirs = [root.join("beside"), root.join("shared")];
-    let g12b = local_setup::model_by_id("gemma-4-12b-it-abliterated-q4_k").unwrap();
-    assert!(!drafter_on_disk(g12b, &dirs), "no file yet");
-    std::fs::create_dir_all(&dirs[1]).unwrap();
-    std::fs::write(dirs[1].join(G12B_MTP), b"x").unwrap();
-    assert!(drafter_on_disk(g12b, &dirs), "found in the second folder");
-    let solo =
-        local_setup::model_by_id("nvidia-nemotron3.5-lightning-30b-a3b-heretic-q4_k_m").unwrap();
-    assert!(!drafter_on_disk(solo, &dirs), "no catalog drafter");
-    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

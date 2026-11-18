@@ -983,3 +983,271 @@ fn an_out_of_memory_cap_grows_back_a_step_after_two_clean_starts() {
     clean_start(&dir, "c", 31).unwrap();
     assert_eq!(load_tuned(&dir).get("c"), Some(&crashed));
 }
+
+/// The 12B's file and its catalog MTP heads, as they sit on disk (for the
+/// unix-only pair rig).
+#[cfg(unix)]
+const G12B_FILE: &str = "Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+#[cfg(unix)]
+const G12B_MTP: &str = "Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
+
+/// An NVIDIA card with `free_vram_mb` free and `free_ram_mb` of RAM free.
+fn card(free_vram_mb: u64, free_ram_mb: u64) -> LocalProfile {
+    machine(
+        vec![gpu(
+            GpuVendor::Nvidia,
+            "NVIDIA GeForce RTX",
+            8_192,
+            Some(free_vram_mb),
+        )],
+        32_768,
+        Some(free_ram_mb),
+        CpuInfo::new(16, 8, 0, CpuSimd::Avx2),
+    )
+}
+
+/// A folder with an engine that lists the draft flags, the 12B (a tiny
+/// header) and its MTP heads in `drafters/`.
+#[cfg(unix)]
+fn pair_rig(label: &str) -> (PathBuf, PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::temp_dir().join(format!("grokhub-{label}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("drafters")).unwrap();
+    let binary = root.join("bin").join("llama-server");
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\ncat <<'EOF'\n--spec-draft-n-max N   number of tokens to draft\n--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N\n--spec-draft-model, -md, --model-draft FNAME\n--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash\nEOF\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(root.join("bin").join("libggml-cuda.so"), b"").unwrap();
+    let model = root.join(G12B_FILE);
+    std::fs::write(&model, tiny_gguf()).unwrap();
+    std::fs::write(root.join("drafters").join(G12B_MTP), tiny_gguf()).unwrap();
+    (root, binary, model)
+}
+
+/// Settings reads no drafter until a launch says what runs.
+#[cfg(unix)]
+fn forget_draft_status() {
+    local_spec::launched(
+        &local_spec::Plan {
+            decision: grokhub_core::local_draft::Decision::NeedsTest,
+            draft: None,
+            key: None,
+            name: None,
+        },
+        Path::new("/home/user"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pair_that_does_not_fit_is_refused_and_one_that_does_loads_its_drafter() {
+    use grokhub_core::local_draft::Decision;
+    let _one = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, binary, model) = pair_rig("pair-launch");
+    let heads = root.join("drafters").join(G12B_MTP);
+    let before = local_spec::Plan {
+        decision: Decision::On,
+        draft: None,
+        key: None,
+        name: Some("what ran before".into()),
+    };
+    local_spec::launched(&before, &root);
+    // 1,000 MB of VRAM free plans for 800: the pair needs 1,160 at the
+    // shortest context, so the launch is refused and nothing is launched.
+    set_profile(card(1_000, 24_000), root.join("local"));
+    set_free_probe(Arc::new(|| FreeNow {
+        vram_free_mb: Some(1_000),
+        ram_free_mb: Some(24_000),
+    }));
+    assert_eq!(launch_for(&binary, &model), Err(PAIR_NO_ROOM.to_string()));
+    // The refusal keeps where the launch sized the pair and what was free
+    // there, for the hold; it is taken once, and only for that model.
+    assert_eq!(take_refusal(&root.join("other.gguf")), None);
+    assert_eq!(
+        take_refusal(&model),
+        Some(PairRefusal {
+            pool: Pool::Vram,
+            free_mb: Some(1_000),
+            state: GovState::Normal,
+            on_gpu: true,
+        })
+    );
+    assert_eq!(take_refusal(&model), None);
+    // Without a VRAM reading the GPU pair has no baseline: more free RAM
+    // can't release it, only an unload or a new governor state.
+    set_free_probe(Arc::new(|| FreeNow {
+        vram_free_mb: None,
+        ram_free_mb: Some(24_000),
+    }));
+    assert_eq!(launch_for(&binary, &model), Err(PAIR_NO_ROOM.to_string()));
+    assert_eq!(
+        take_refusal(&model),
+        Some(PairRefusal {
+            pool: Pool::Vram,
+            free_mb: None,
+            state: GovState::Normal,
+            on_gpu: true,
+        })
+    );
+    // A resident pair whose own 1,000 MB of VRAM leaves 1,000 free reads
+    // as no room against the probe alone, and fits once its own memory is
+    // added back, as a fresh start of it (or a speed test) would see.
+    let probe = |vram: u64| {
+        set_free_probe(Arc::new(move || FreeNow {
+            vram_free_mb: Some(vram),
+            ram_free_mb: Some(24_000),
+        }));
+    };
+    probe(2_000);
+    clear_resident();
+    probe(1_000);
+    mark_resident();
+    assert_eq!(
+        draft_plan(&binary, &model).map(|p| p.decision),
+        Some(Decision::NoRoom)
+    );
+    assert_eq!(
+        draft_plan_with(&binary, &model, Some(replan_free())).map(|p| p.decision),
+        Some(Decision::NeedsTest)
+    );
+    // With nothing loaded, that pick's pair can't start, so the refusal
+    // check leaves the running model alone though no start refused it yet.
+    let paths = super::super::local_sidecar::SidecarPaths {
+        binary: binary.clone(),
+        model: model.clone(),
+    };
+    assert!(local_spec::pair_wont_start(&paths));
+    probe(1_600);
+    assert!(
+        !local_spec::pair_wont_start(&paths),
+        "1,600 MB fits the pair"
+    );
+    reset_free_probe();
+    assert_eq!(replan_for(&binary, &model), None);
+    assert_eq!(
+        local_spec::draft_status(),
+        Some(("what ran before".to_string(), Decision::On))
+    );
+    // 1,563 MB free plans for 1,250: alone the model takes 8,192 tokens at
+    // q8 (712 MB), but the pair (1,424) fits only at 4,096 (1,224), so the
+    // context shrinks and the heads load beside it on the GPU.
+    set_profile(card(1_563, 24_000), root.join("local"));
+    let (args, key, dir) = launch_for(&binary, &model).unwrap().expect("planned");
+    assert_eq!(
+        (args.ngl, args.all_layers, args.ctx, args.kv),
+        (17, 17, 4_096, KvType::Q8)
+    );
+    let draft = args.draft.clone().expect("the pair loads together");
+    assert_eq!(
+        (draft.kind, draft.model.as_deref(), draft.on_gpu),
+        (
+            grokhub_core::local_draft::DraftKind::Mtp,
+            Some(heads.as_path()),
+            true
+        )
+    );
+    assert_eq!(
+        local_spec::draft_status(),
+        Some(("Gemma 4 12B draft model".to_string(), Decision::NeedsTest))
+    );
+    // The planner sees the same pair.
+    let g12b = local_setup::model_by_id("gemma-4-12b-it-abliterated-q4_k").unwrap();
+    assert_eq!(
+        pair_view(&binary, &[(g12b, model.clone())]),
+        vec!["gemma-4-12b-it-abliterated-q4_k"]
+    );
+    // An older out-of-memory record capped the layers: a pair ignores the
+    // cap (it would refuse it on every launch) but keeps the context cap.
+    let capped = Tuned {
+        ngl: 10,
+        n_cpu_moe: None,
+        ctx: 4_096,
+        kv: KvType::Q8,
+        cpu_only: false,
+        clean: 0,
+    };
+    save_tuned(&dir, &key, &capped).unwrap();
+    let (paired, _, _) = launch_for(&binary, &model).unwrap().expect("planned");
+    assert_eq!((paired.ngl, paired.ctx), (17, 4_096));
+    // The Settings GPU layers override is what refuses it, and says so.
+    set_overrides(Overrides {
+        ngl: Some(10),
+        ..Overrides::default()
+    });
+    assert_eq!(
+        launch_for(&binary, &model),
+        Err(format!("{PAIR_NO_ROOM}, because {PAIR_OVERRIDE}"))
+    );
+    set_overrides(Overrides::default());
+    // In the gaming setup the pair moves to RAM: 1,563 MB free plans for
+    // 1,250 there too, so the context shrinks before the tier does.
+    std::fs::remove_file(dir.join(AUTOTUNE_FILE)).unwrap();
+    set_profile(card(6_000, 1_563), root.join("local"));
+    let (gpu, _, _) = launch_for(&binary, &model).unwrap().expect("planned");
+    assert_eq!((gpu.ctx, gpu.kv), (8_192, KvType::Q8));
+    set_gaming_test(true);
+    let gaming = launch_for(&binary, &model);
+    set_gaming_test(false);
+    let (gaming, _, _) = gaming.unwrap().expect("planned");
+    assert_eq!(
+        (gaming.ngl, gaming.cpu_only, gaming.ctx, gaming.kv),
+        (0, true, 4_096, KvType::Q8)
+    );
+    assert_eq!(gaming.draft.map(|d| d.on_gpu), Some(false));
+    // A standing verdict against the heads: the model loads alone, and the
+    // planner no longer counts the drafter.
+    let device = "NVIDIA GeForce RTX";
+    grokhub_core::local_draft::save_verdict(
+        &dir,
+        &grokhub_core::local_draft::verdict_key(device, G12B_FILE, G12B_MTP),
+        grokhub_core::local_draft::Verdict {
+            keep: false,
+            acceptance: 0.2,
+            gain: 0.9,
+            retest_at: None,
+        },
+    )
+    .unwrap();
+    let (alone, _, _) = launch_for(&binary, &model).unwrap().expect("planned");
+    assert_eq!((alone.ctx, alone.draft), (8_192, None));
+    assert_eq!(
+        pair_view(&binary, &[(g12b, model.clone())]),
+        Vec::<&str>::new()
+    );
+    forget_draft_status();
+    if let Ok(mut l) = live().lock() {
+        l.profile = None;
+        l.tune_dir = None;
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_pair_refusal_names_the_gpu_layers_override_only_when_it_is_why() {
+    let whole = LaunchArgs {
+        ngl: 17,
+        all_layers: 17,
+        ..autoconfig(
+            &card(6_000, 24_000),
+            &dense_12b(),
+            Backend::Cuda,
+            GovState::Normal,
+            &Overrides::default(),
+            None,
+        )
+    };
+    let because = "there isn't room for the model and its draft model together, because the GPU layers override keeps part of the model off the GPU";
+    assert_eq!(pair_refusal(Some(10), &whole, true), because);
+    assert_eq!(pair_refusal(Some(17), &whole, true), PAIR_NO_ROOM);
+    assert_eq!(pair_refusal(None, &whole, true), PAIR_NO_ROOM);
+    assert_eq!(
+        pair_refusal(Some(10), &whole, false),
+        PAIR_NO_ROOM,
+        "the pair runs in RAM"
+    );
+}

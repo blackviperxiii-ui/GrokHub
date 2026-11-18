@@ -37,6 +37,8 @@ fn now<'a>(home: &'a Path, on_disk: &'a [(&'static LocalModel, PathBuf)]) -> Now
         loaded: None,
         on_disk,
         paired: &[],
+        loaded_paired: false,
+        refused: &[],
         low_battery: false,
         kept_loaded: false,
         forced: false,
@@ -495,6 +497,7 @@ fn a_pick_that_fits_only_without_its_drafter_steps_down_to_a_pair_that_fits() {
     assert_eq!(
         plan(Now {
             loaded: Some((&home, None)),
+            loaded_paired: true,
             scale: with_room(local_scale::Room {
                 free_ram_mb: 1_000,
                 ..room
@@ -502,6 +505,164 @@ fn a_pick_that_fits_only_without_its_drafter_steps_down_to_a_pair_that_fits() {
             ..paired
         }),
         Plan::Keep
+    );
+}
+
+#[test]
+fn the_planner_tries_a_pair_the_launch_may_load_and_leaves_the_call_to_it() {
+    let disk = disk();
+    let home = file(BIG);
+    // A 12 GB card with 11,000 MB free and 1,000 MB of RAM free: 11,800 MB
+    // usable. The 12B pair (9,477 MB at its default context) is over the
+    // launch's 8,800 MB GPU budget, but the launch may still load it at a
+    // shorter context, so the planner tries the pick.
+    let room = local_scale::Room {
+        free_vram_mb: Some(11_000),
+        free_ram_mb: 1_000,
+        ..free_room()
+    };
+    let n = Now {
+        scale: with_room(room),
+        paired: &[BIG, MID, SMALL],
+        ..now(&home, &disk)
+    };
+    assert_eq!(
+        plan(n),
+        Plan::Load {
+            model: home.clone(),
+            stand_in: None
+        }
+    );
+    // A 12B that runs without its drafter frees only itself (8,399 MB): with
+    // 1,000 MB free RAM and no VRAM reading the pair no longer fits.
+    let tight = local_scale::Room {
+        free_vram_mb: None,
+        free_ram_mb: 1_000,
+        ..free_room()
+    };
+    let running_alone = Now {
+        loaded: Some((&home, None)),
+        scale: with_room(tight),
+        paired: &[BIG, MID],
+        ..now(&home, &disk)
+    };
+    assert_eq!(
+        plan(running_alone),
+        Plan::Load {
+            model: file(MID),
+            stand_in: Some(StandIn::Tight)
+        }
+    );
+    assert_eq!(
+        plan(Now {
+            loaded_paired: true,
+            ..running_alone
+        }),
+        Plan::Keep
+    );
+}
+
+#[test]
+fn a_stand_in_for_a_refused_pair_stays_while_the_refusal_holds() {
+    let disk = disk();
+    let home = file(BIG);
+    // The planner thinks the 12B fits (no reading), but its launch refused
+    // the pair and the E4B stood in.
+    let refused = [home.clone()];
+    let n = Now {
+        loaded: Some((&file(MID), Some(StandIn::Tight))),
+        paired: &[BIG, MID],
+        ..now(&home, &disk)
+    };
+    assert_eq!(
+        plan(n),
+        Plan::Later {
+            model: home.clone(),
+            stand_in: None
+        },
+        "without the hold it reloads into the same refusal"
+    );
+    assert_eq!(
+        plan(Now {
+            refused: &refused,
+            ..n
+        }),
+        Plan::Keep
+    );
+}
+
+#[test]
+fn a_pair_hold_ends_on_a_new_governor_state_or_more_room_in_its_own_pool() {
+    use super::super::local_autoconfig::{FreeNow, GovState, PairRefusal, Pool};
+    let free = |vram: u64, ram: u64| FreeNow {
+        vram_free_mb: Some(vram),
+        ram_free_mb: Some(ram),
+    };
+    let on = |state: GovState, f: Option<FreeNow>| HoldNow { state, free: f };
+    // Refused on a GPU with 6,000 MB of VRAM and 10,000 MB of RAM free.
+    let gpu = Hold::Pair(PairRefusal {
+        pool: Pool::Vram,
+        free_mb: Some(6_000),
+        state: GovState::Normal,
+        on_gpu: true,
+    });
+    assert!(held(&gpu, &on(GovState::Normal, Some(free(6_000, 10_000)))));
+    assert!(held(&gpu, &on(GovState::Normal, None)), "no reading");
+    assert!(held(&gpu, &on(GovState::Normal, Some(free(8_047, 10_000)))));
+    assert!(!held(
+        &gpu,
+        &on(GovState::Normal, Some(free(8_048, 10_000)))
+    ));
+    // RAM grew but the pair needed VRAM: still held.
+    assert!(held(&gpu, &on(GovState::Normal, Some(free(6_000, 30_000)))));
+    // The governor state changed (Throttle back to Normal, say): released.
+    assert!(!held(
+        &gpu,
+        &on(GovState::Throttle, Some(free(6_000, 10_000)))
+    ));
+    assert!(!held(&gpu, &on(GovState::RampUp, None)));
+    // A GPU pair refused with no VRAM reading has no baseline: neither
+    // more RAM nor a later VRAM reading releases it; a new state does.
+    let blind = Hold::Pair(PairRefusal {
+        pool: Pool::Vram,
+        free_mb: None,
+        state: GovState::Normal,
+        on_gpu: true,
+    });
+    assert!(held(
+        &blind,
+        &on(GovState::Normal, Some(free(30_000, 60_000)))
+    ));
+    assert!(!held(&blind, &on(GovState::Throttle, None)));
+    // A pair sized in RAM (no GPU) is released by RAM.
+    let ram = Hold::Pair(PairRefusal {
+        pool: Pool::Ram,
+        free_mb: Some(10_000),
+        state: GovState::Normal,
+        on_gpu: false,
+    });
+    assert!(held(
+        &ram,
+        &on(GovState::Normal, Some(free(20_000, 12_047)))
+    ));
+    assert!(!held(&ram, &on(GovState::Normal, Some(free(0, 12_048)))));
+    // Out of memory holds until the next unload, whatever happens.
+    let oom = Hold::UntilUnload;
+    assert!(held(
+        &oom,
+        &on(GovState::Throttle, Some(free(90_000, 90_000)))
+    ));
+    let r = Refusals {
+        models: vec![(file(BIG), gpu), (file(MID), oom)],
+        since_ms: 0,
+    };
+    assert_eq!(
+        r.holding(&on(GovState::Normal, Some(free(6_000, 10_000)))),
+        vec![file(BIG), file(MID)]
+    );
+    assert_eq!(
+        r.holding(&on(GovState::Normal, Some(free(9_000, 10_000)))),
+        vec![file(MID)]
     );
 }
 

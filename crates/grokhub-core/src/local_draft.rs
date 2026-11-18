@@ -10,7 +10,7 @@
 //! (at least 40% of its guesses kept and 10% faster); that verdict is kept
 //! per device. Every shell downloads drafters into one folder,
 //! `~/GrokHub/models/drafters`. Everything here is pure apart from the
-//! verdict file, the home folder and [`drafter_on_disk`].
+//! verdict file and the home folder.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -136,18 +136,11 @@ fn drafter_of(m: &LocalModel) -> Option<&'static LocalModel> {
     local_setup::model_by_id(m.drafter?)
 }
 
-/// Memory `m` runs in (MB), with its catalog drafter when that is on disk:
-/// a paired model always loads with it.
-pub fn pair_mb(m: &LocalModel, drafter_on_disk: bool) -> u64 {
-    let drafter = drafter_of(m)
-        .filter(|_| drafter_on_disk)
-        .map_or(0, |d| d.run_mb);
+/// Memory `m` runs in (MB), with its catalog drafter when it launches with
+/// one (`paired`).
+pub fn pair_mb(m: &LocalModel, paired: bool) -> u64 {
+    let drafter = drafter_of(m).filter(|_| paired).map_or(0, |d| d.run_mb);
     m.run_mb + drafter
-}
-
-/// `m`'s catalog drafter file sits in one of `dirs`.
-pub fn drafter_on_disk(m: &LocalModel, dirs: &[PathBuf]) -> bool {
-    drafter_of(m).is_some_and(|d| dirs.iter().any(|dir| dir.join(d.file).is_file()))
 }
 
 /// The draft flags this engine's `llama-server --help` lists, by the name it

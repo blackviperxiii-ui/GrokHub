@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use grokhub_core::local_setup::{self, LocalModel};
 use grokhub_core::local_skills::{self, TaskKind};
 
+use super::local_autoconfig::{FreeNow, GovState, PairRefusal, Pool};
 use super::local_scale::{self, Need, Room, Scale};
 use super::local_task::Marks;
 
@@ -110,9 +111,15 @@ pub struct Now<'a> {
     pub loaded: Option<(&'a Path, Option<StandIn>)>,
     /// The chat models on disk, with their files.
     pub on_disk: &'a [(&'static LocalModel, PathBuf)],
-    /// The ids of the models on disk whose catalog drafter is on disk too:
-    /// they always load with it, so they need room for both.
+    /// The ids of the models on disk that launch with a drafter file (see
+    /// `local_autoconfig::pair_view`): they need room for both.
     pub paired: &'a [&'static str],
+    /// What runs loaded a drafter file beside it.
+    pub loaded_paired: bool,
+    /// Models a start refused since the last unload, still holding (see
+    /// [`Refusals::holding`]): they aren't tried again yet, so a request
+    /// never reloads into the same refusal.
+    pub refused: &'a [PathBuf],
     pub low_battery: bool,
     /// "Keep the model loaded" is on: the pick stays, whatever happens.
     pub kept_loaded: bool,
@@ -133,9 +140,86 @@ pub struct Now<'a> {
     pub marks: &'a Marks,
 }
 
-/// MB `m` needs: with its drafter when that is on disk.
+/// Why a refused model isn't tried again yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hold {
+    /// Its start ran out of memory: held until the next unload.
+    UntilUnload,
+    /// The launch refused its pair: held until the next unload, a change in
+    /// the governor state, or more room in the pool the pair needed.
+    Pair(PairRefusal),
+}
+
+/// Models a start refused before what runs loaded. They live on the running
+/// server, so the next unload drops them all.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Refusals {
+    pub models: Vec<(PathBuf, Hold)>,
+    /// When the server holding them was up (ms), so an older room reading
+    /// never judges them.
+    pub since_ms: u64,
+}
+
+/// What a [`Hold`] is checked against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HoldNow {
+    pub state: GovState,
+    /// Free memory now, with the running model's own use added back: what a
+    /// fresh start would see. `None` without a reading since the server was up.
+    pub free: Option<FreeNow>,
+}
+
+/// The hold still keeps the model out. A pair is released when the governor
+/// state changed, or when the pool it was sized from has
+/// [`local_scale::HEADROOM_MB`] more free than at the refusal. Only that
+/// pool counts: more RAM never releases a pair that needed VRAM.
+pub fn held(hold: &Hold, now: &HoldNow) -> bool {
+    let Hold::Pair(r) = hold else {
+        return true;
+    };
+    if r.state != now.state {
+        return false;
+    }
+    let free = now.free.unwrap_or_default();
+    let now_mb = match r.pool {
+        Pool::Vram => free.vram_free_mb,
+        Pool::Ram => free.ram_free_mb,
+    };
+    !matches!((r.free_mb, now_mb), (Some(at), Some(n)) if n >= at + local_scale::HEADROOM_MB)
+}
+
+impl Refusals {
+    /// The refused models still held (see [`held`]).
+    pub fn holding(&self, now: &HoldNow) -> Vec<PathBuf> {
+        self.models
+            .iter()
+            .filter(|(_, h)| held(h, now))
+            .map(|(p, _)| p.clone())
+            .collect()
+    }
+}
+
+/// MB `m` needs: with its drafter when it launches with one. The planner
+/// only filters: the launch decides whether a pair fits, so this errs on the
+/// side of trying.
 fn need(n: &Now<'_>, m: &LocalModel) -> u64 {
     grokhub_core::local_draft::pair_mb(m, n.paired.contains(&m.id))
+}
+
+/// `m` fits once `resident` MB are freed, with `headroom` to spare.
+fn fits(n: &Now<'_>, m: &LocalModel, room: &Room, resident: u64, headroom: u64) -> bool {
+    local_scale::fits(need(n, m), room, resident, headroom)
+}
+
+/// `m`'s rough speed once `resident` MB are freed.
+fn speed(n: &Now<'_>, m: &LocalModel, room: &Room, resident: u64) -> u32 {
+    local_scale::est_tok_s(m, need(n, m), room, resident)
+}
+
+/// What runs still fits, sized by what it really loaded.
+fn still_fits(n: &Now<'_>, running: &LocalModel, room: &Room) -> bool {
+    let mb = grokhub_core::local_draft::pair_mb(running, n.loaded_paired);
+    local_scale::fits(mb, room, mb, 0)
 }
 
 /// The model the next load should run.
@@ -153,8 +237,11 @@ pub fn plan(n: Now<'_>) -> Plan {
     };
     let settled = running == target
         // The stand-in for a pick that ran out of memory stays until the next
-        // unload, so a request doesn't retry a start that just failed.
+        // unload, so a request doesn't retry a start that just failed. So
+        // does what runs for a model a start refused, even where this
+        // planner thought it fits.
         || (why == Some(StandIn::OutOfMemory) && stand_in.is_none())
+        || n.refused.contains(&target)
         || stays_big(&n, running, why, stand_in);
     if settled || n.in_flight > 0 || n.secs_since_swap < SWAP_COOLDOWN_SECS {
         return Plan::Keep;
@@ -201,9 +288,9 @@ fn stays_big(
                 Some(room) if m.run_mb > home.run_mb => {
                     !n.scale.saving
                         && local_scale::performance_ready(&room)
-                        && local_scale::fits(need(n, m), &room, need(n, m), 0)
+                        && still_fits(n, m, &room)
                 }
-                Some(room) => local_scale::fits(need(n, m), &room, need(n, m), 0),
+                Some(room) => still_fits(n, m, &room),
                 None => m.run_mb <= home.run_mb,
             };
     }
@@ -216,7 +303,7 @@ fn stays_big(
     !n.scale.gaming
         && !n.scale.saving
         && local_scale::performance_ready(&room)
-        && local_scale::fits(need(n, m), &room, need(n, m), 0)
+        && still_fits(n, m, &room)
 }
 
 /// The smallest chat model on disk lighter than `home`: what a game, a low
@@ -267,11 +354,10 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
         return gaming_below(home, n.on_disk)
             .map_or((home_path, None), |p| (p, Some(StandIn::Gaming)));
     }
-    // Stopping what runs frees its drafter too.
-    let resident = n
-        .loaded
-        .and_then(|(p, _)| catalog_for(p))
-        .map_or(0, |m| need(n, m));
+    // Stopping what runs frees its drafter too, when it loaded one.
+    let resident = n.loaded.and_then(|(p, _)| catalog_for(p)).map_or(0, |m| {
+        grokhub_core::local_draft::pair_mb(m, n.loaded_paired)
+    });
     if n.dynamic {
         if let Some(kind) = n.task {
             if let Some(p) = best_for(n, home, kind, resident) {
@@ -289,12 +375,9 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
                 .on_disk
                 .iter()
                 .filter(|(m, _)| m.run_mb > home.run_mb)
+                .filter(|(m, _)| fits(n, m, &room, resident, local_scale::HEADROOM_MB))
                 .filter(|(m, _)| {
-                    local_scale::fits(need(n, m), &room, resident, local_scale::HEADROOM_MB)
-                })
-                .filter(|(m, _)| {
-                    local_scale::est_tok_s(m, need(n, m), &room, resident)
-                        >= local_scale::PERFORMANCE_FLOOR_TOK_S
+                    speed(n, m, &room, resident) >= local_scale::PERFORMANCE_FLOOR_TOK_S
                 })
                 .max_by_key(|(m, _)| m.run_mb);
             if let Some((_, p)) = bigger {
@@ -303,12 +386,12 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
         }
         // A pick that doesn't fit with its drafter gives way to the largest
         // smaller model that fits with its own (or alone, without one).
-        if !local_scale::fits(need(n, home), &room, resident, 0) {
+        if !fits(n, home, &room, resident, 0) {
             let fitting = n
                 .on_disk
                 .iter()
                 .filter(|(m, _)| m.run_mb < home.run_mb)
-                .filter(|(m, _)| local_scale::fits(need(n, m), &room, resident, 0))
+                .filter(|(m, _)| fits(n, m, &room, resident, 0))
                 .max_by_key(|(m, _)| m.run_mb);
             if let Some((_, p)) = fitting {
                 return (p.clone(), Some(StandIn::Tight));
@@ -352,11 +435,10 @@ fn may_run(
         Some(room) if m.run_mb > home.run_mb => {
             !n.scale.saving
                 && local_scale::performance_ready(room)
-                && local_scale::fits(need(n, m), room, resident, local_scale::HEADROOM_MB)
-                && local_scale::est_tok_s(m, need(n, m), room, resident)
-                    >= local_scale::PERFORMANCE_FLOOR_TOK_S
+                && fits(n, m, room, resident, local_scale::HEADROOM_MB)
+                && speed(n, m, room, resident) >= local_scale::PERFORMANCE_FLOOR_TOK_S
         }
-        Some(room) => local_scale::fits(need(n, m), room, resident, 0),
+        Some(room) => fits(n, m, room, resident, 0),
         None => m.run_mb <= home.run_mb,
     }
 }

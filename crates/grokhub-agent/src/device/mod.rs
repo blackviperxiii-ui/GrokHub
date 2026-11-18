@@ -18,7 +18,7 @@
 mod live;
 mod look;
 
-pub use live::{apply_to_router, current, generation, set_display, start};
+pub use live::{apply_to_router, current, generation, read_now, set_display, start};
 pub use look::read_device;
 
 use std::path::{Path, PathBuf};

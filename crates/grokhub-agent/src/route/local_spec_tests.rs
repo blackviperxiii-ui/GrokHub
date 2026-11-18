@@ -647,6 +647,43 @@ fn live_replies_that_keep_few_guesses_turn_the_drafter_off_until_a_retest() {
 }
 
 #[test]
+fn a_refused_pick_times_the_model_that_started_in_its_place_even_once_it_unloaded() {
+    use super::super::local_swap::{Hold, Refusals};
+    let pick = PathBuf::from("/home/user/models/my-app-12b.gguf");
+    let stand_in = PathBuf::from("/home/user/models/my-app-4b.gguf");
+    let paths = super::super::local_sidecar::SidecarPaths {
+        binary: PathBuf::from("/home/user/bin/llama-server"),
+        model: pick.clone(),
+    };
+    let note = super::super::local_sidecar::note_pick_refused;
+    note(&pick, &pick, &Refusals::default());
+    assert_eq!(timed_model(&paths), pick);
+    // The walk refused the pick and the 4B started; nothing is loaded now
+    // (it idle-unloaded), and the 4B is still the one timed.
+    let refused = Refusals {
+        models: vec![(pick.clone(), Hold::UntilUnload)],
+        since_ms: 0,
+    };
+    note(&pick, &stand_in, &refused);
+    assert_eq!(timed_model(&paths), stand_in);
+    // The pick loading clears it.
+    note(&pick, &pick, &Refusals::default());
+    assert_eq!(timed_model(&paths), pick);
+    // A pair that doesn't fit reads in plain words, never the internal reason.
+    assert_eq!(
+        start_line("refusal check", autoconfig::PAIR_NO_ROOM),
+        "The refusal check runs once the model and its draft model fit together."
+    );
+    assert_eq!(
+        start_line(
+            "refusal check",
+            "local model file missing: /home/user/m.gguf"
+        ),
+        "The refusal check couldn't start the model: local model file missing: /home/user/m.gguf"
+    );
+}
+
+#[test]
 fn the_refusal_check_reads_the_reply_not_the_reasoning() {
     let j = r#"{"choices":[{"message":{"role":"assistant","content":"  Use kill -9.  ","reasoning_content":"I can't..."}}]}"#;
     assert_eq!(reply_text(j).as_deref(), Some("Use kill -9."));

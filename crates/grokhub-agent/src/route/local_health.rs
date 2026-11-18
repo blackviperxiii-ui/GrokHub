@@ -40,6 +40,9 @@ pub fn start_failure(err: &str) -> &'static str {
         "missing_model"
     } else if e.contains("out of memory") || e.contains("outofdevicememory") {
         "oom"
+    } else if e.contains("draft model together") {
+        // A pair refused for room, even when the GPU layers setting is why.
+        "start_failed"
     } else if ["vulkan", "cuda", "metal", "ggml_", "gpu"]
         .iter()
         .any(|k| e.contains(k))
@@ -147,6 +150,12 @@ mod tests {
         );
         assert_eq!(
             start_failure("local model server stopped before it was ready"),
+            "start_failed"
+        );
+        assert_eq!(
+            start_failure(
+                "there isn't room for the model and its draft model together, because the GPU layers override keeps part of the model off the GPU"
+            ),
             "start_failed"
         );
     }
