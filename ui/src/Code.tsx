@@ -38,9 +38,10 @@ import { inShell } from "./transport";
 import { useCardFocus } from "./ui";
 
 /** Right-column panes (former under-stack panels). */
-export type CodeSideTab = "editor" | "tests" | "skills" | "helpers";
+export type CodeSideTab = "projects" | "editor" | "tests" | "skills" | "helpers";
 
 export const CODE_SIDE_TABS: { id: CodeSideTab; label: string }[] = [
+  { id: "projects", label: "Projects" },
   { id: "editor", label: "Editor" },
   { id: "tests", label: "Tests" },
   { id: "skills", label: "Skills" },
@@ -48,6 +49,33 @@ export const CODE_SIDE_TABS: { id: CodeSideTab; label: string }[] = [
 ];
 
 export const CODE_HELPERS = "Helpers";
+
+/** Remembered Code window side tab. Default Projects (first launch / clear). */
+export const CODE_SIDE_TAB_KEY = "code.sideTab";
+export const CODE_SIDE_TAB_DEFAULT: CodeSideTab = "projects";
+
+export function isCodeSideTab(value: string | null | undefined): value is CodeSideTab {
+  return CODE_SIDE_TABS.some((tab) => tab.id === value);
+}
+
+/** Last side tab, or Projects when none is stored. Mid-session picks survive restart. */
+export function readSideTab(): CodeSideTab {
+  try {
+    const raw = localStorage.getItem(CODE_SIDE_TAB_KEY);
+    if (isCodeSideTab(raw)) return raw;
+  } catch {
+    /* private mode */
+  }
+  return CODE_SIDE_TAB_DEFAULT;
+}
+
+export function writeSideTab(tab: CodeSideTab): void {
+  try {
+    localStorage.setItem(CODE_SIDE_TAB_KEY, tab);
+  } catch {
+    /* private mode */
+  }
+}
 
 /** Remembered agent column width (% of the Code tab). Default ~62%. */
 export const CODE_AGENT_WIDTH_KEY = "code.agentWidthPct";
@@ -153,10 +181,15 @@ export function Code({
   const sessionNow = useRef<string>(undefined);
   const busyNow = useRef(false);
   const appFolder = useRef<string>(undefined);
-  const [sideTab, setSideTab] = useState<CodeSideTab>("editor");
+  const [sideTab, setSideTab] = useState<CodeSideTab>(readSideTab);
   const [agentPct, setAgentPct] = useState(readAgentWidthPct);
   const tabRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ startX: number; startPct: number } | null>(null);
+
+  const selectSideTab = useCallback((tab: CodeSideTab) => {
+    setSideTab(tab);
+    writeSideTab(tab);
+  }, []);
 
   /** A new session, with `text` waiting in its box. It has its folder
    * before the agent window shows it. */
@@ -249,10 +282,19 @@ export function Code({
   // The app works in another folder than when this tab last looked (a switch
   // here, or a project bound in chat): the agent window starts a session
   // there. A reply still running keeps its session and its folder.
+  // With no open project, the window stays on Projects (restart default),
+  // not a mid-session Editor/Helpers/Tests/Skills pick from last time.
   const onFolder = useCallback(
     (next: string) => {
       const before = appFolder.current;
       appFolder.current = next;
+      if (!next.trim()) {
+        setSideTab((tab) => {
+          if (tab === "projects") return tab;
+          writeSideTab("projects");
+          return "projects";
+        });
+      }
       if (before !== undefined && before !== next && !busyNow.current) startSession("");
     },
     [startSession],
@@ -369,15 +411,6 @@ export function Code({
       />
       <Activity mode={shown ? "visible" : "hidden"}>
         <section className="code code-side" aria-label="Code">
-          <CodeProjects
-            onSwitched={() => setSwitches((n) => n + 1)}
-            onNewSession={() => startSession("")}
-            onOpenSession={openSession}
-            onFolder={onFolder}
-            agentBusy={busy}
-            openSession={session}
-            refresh={ended}
-          />
           <div className="code-side-tabs" role="tablist" aria-label="Code panels">
             {CODE_SIDE_TABS.map((tab) => (
               <button
@@ -388,7 +421,7 @@ export function Code({
                 aria-selected={sideTab === tab.id}
                 aria-controls={`code-side-panel-${tab.id}`}
                 tabIndex={sideTab === tab.id ? 0 : -1}
-                onClick={() => setSideTab(tab.id)}
+                onClick={() => selectSideTab(tab.id)}
               >
                 {tab.label}
               </button>
@@ -400,6 +433,19 @@ export function Code({
             id={`code-side-panel-${sideTab}`}
             aria-labelledby={`code-side-tab-${sideTab}`}
           >
+            {/* Keep Projects mounted so folder/session refresh still lands
+                while another side tab is open. */}
+            <div className="code-projects-host" hidden={sideTab !== "projects"}>
+              <CodeProjects
+                onSwitched={() => setSwitches((n) => n + 1)}
+                onNewSession={() => startSession("")}
+                onOpenSession={openSession}
+                onFolder={onFolder}
+                agentBusy={busy}
+                openSession={session}
+                refresh={ended}
+              />
+            </div>
             {/* Keep Helpers mounted while the Code tab shows so live task
                 updates still land when another side tab is open. */}
             <div className="code-helpers-host" hidden={sideTab !== "helpers"}>
@@ -411,7 +457,7 @@ export function Code({
                 onShipped={() => setShipped((n) => n + 1)}
               />
             </div>
-            {sideTab !== "helpers" && (
+            {sideTab !== "helpers" && sideTab !== "projects" && (
               <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} shipped={shipped} tab={sideTab} />
             )}
           </div>

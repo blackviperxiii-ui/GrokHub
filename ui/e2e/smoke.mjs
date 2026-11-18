@@ -434,7 +434,7 @@ async function onView(s, label) {
   );
 }
 
-/** Opens a Code window side tab (Editor / Tests / Skills / Helpers). */
+/** Opens a Code window side tab (Projects / Editor / Tests / Skills / Helpers). */
 async function codeSideTab(s, label) {
   const button =
     "//div[contains(@class,'code-side-tabs')][@role='tablist']//button[@role='tab'][normalize-space()='" +
@@ -1418,6 +1418,7 @@ async function codeProjects(s, config, workspace) {
   writeFileSync(join(other, "only-in-second.txt"), "second");
 
   await tab(s, "Code");
+  await codeSideTab(s, "Projects");
   await press("Add to projects", `${inBar}//button[normalize-space()='Add to projects']`);
   await waitFor("the folder in the project list", () => rows().some((r) => r.kind === "project" && r.path === bound()));
   await waitFor("the chat as a session of this project", () =>
@@ -1432,6 +1433,7 @@ async function codeProjects(s, config, workspace) {
   );
   await tab(s, "Chat");
   await tab(s, "Code");
+  await codeSideTab(s, "Projects");
   await press("Switch project", `${inBar}//button[normalize-space()='Switch project']`);
   await shot(s, "code-projects");
   await press("the second project's row", `${inBar}//ul[@aria-label='Projects']//button[contains(.,'Second smoke project')]`);
@@ -1439,9 +1441,11 @@ async function codeProjects(s, config, workspace) {
   await waitFor("the second project's name on the bar", async () =>
     (await textOf(s, ".code-projects > .code-head .card-title")) === "Second smoke project",
   );
+  await codeSideTab(s, "Editor");
   await waitFor("the second project's file in the editor", async () =>
     (await xp("//section[@aria-label='Code']//button[normalize-space()='only-in-second.txt']"))[0],
   );
+  await codeSideTab(s, "Projects");
   const stale = await xp(`${inBar}//ul[@aria-label='Sessions']//button`);
   if (stale.length) throw new Error("the second project lists the first project's sessions");
   await shot(s, "code-project-switched");
@@ -1477,6 +1481,7 @@ async function codeAgent(s, config, workspace) {
   await typeInto(s, chatBox, bind);
 
   await tab(s, "Code");
+  await codeSideTab(s, "Projects");
   await waitFor("the session's folder under the agent window's title", async () =>
     (await textOf(s, `${pane} > .code-head .note`)) === `Works in ${name}`,
   );
@@ -1499,6 +1504,7 @@ async function codeAgent(s, config, workspace) {
   await click(s, "section[aria-label='Chat'] form.composer button[type='submit']");
   await waitFor("the app in the second project", () => realpathSync(bound()) === realpathSync(other));
   await tab(s, "Code");
+  await codeSideTab(s, "Projects");
   await waitFor("the second project's name on the bar", async () =>
     (await textOf(s, ".code-projects > .code-head .card-title")) === "Second smoke project",
   );
@@ -1570,6 +1576,7 @@ async function codeAgent(s, config, workspace) {
 
   // Back in the first project, the session is one of its sessions and the
   // agent window starts a new one there.
+  await codeSideTab(s, "Projects");
   await waitFor("the first project again", async () => {
     if (realpathSync(bound()) === realpathSync(workspace)) return true;
     const [open] = await xp("//div[contains(@class,'code-projects')]//ul[@aria-label='Projects']//button[not(@disabled)]");

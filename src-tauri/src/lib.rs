@@ -6795,6 +6795,34 @@ async fn hub_send_approve(
     off_main(move || hub_send::approve(&config_dir, &share, send)).await?
 }
 
+/// Settings → Permissions → Paired computers: standing hub send grant.
+#[cfg(desktop)]
+#[tauri::command]
+async fn get_hub_send_grant(state: State<'_, ShellState>) -> Result<hub_send::HubGrantRow, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || hub_send::grant_row(&dir, "")).await
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn allow_hub_send_every_time(
+    state: State<'_, ShellState>,
+) -> Result<hub_send::HubGrantRow, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || hub_send::allow_every_time(&dir)).await?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn ask_hub_send_each_time(
+    state: State<'_, ShellState>,
+    share: State<'_, Arc<hub_share::HubShare>>,
+) -> Result<hub_send::HubGrantRow, String> {
+    let share = Arc::clone(&share);
+    let dir = state.config_dir.clone();
+    off_main(move || hub_send::ask_each_time(&dir, &share)).await?
+}
+
 #[cfg(desktop)]
 #[tauri::command]
 async fn new_share_code(
@@ -8502,6 +8530,12 @@ pub fn run() {
             set_fleet_row,
             #[cfg(desktop)]
             hub_send_approve,
+            #[cfg(desktop)]
+            get_hub_send_grant,
+            #[cfg(desktop)]
+            allow_hub_send_every_time,
+            #[cfg(desktop)]
+            ask_hub_send_each_time,
             get_update_status,
             set_update_channel,
             check_shell_update,

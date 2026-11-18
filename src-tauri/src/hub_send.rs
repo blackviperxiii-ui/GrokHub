@@ -13,6 +13,7 @@ use std::path::Path;
 
 use grokhub_agent::harness as hx;
 use grokhub_core::{now_ms, redact_for_share, state::Peer, HubMemoryFile, InhabitBundle};
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::hub_share::{HubPeers, HubShare};
@@ -25,6 +26,25 @@ pub const SYNC_NOTE: &str = "They can fetch your chats, memory files, skills, au
 pub const NOTHING_TO_HAND: &str =
     "There's nothing to hand off yet: SOUL.md, your skills and the goal pin are all empty.";
 const PHONE: &str = "A phone can't pick up a hand-off.";
+
+/// Settings → Permissions → Paired computers: standing hub send grant.
+pub const HUB_GRANT_NOTE: &str =
+    "/sync and /inhabit share chats and memory with paired computers. Allow every time skips the ask until you choose Ask each time; Ask each time also drops anything already published.";
+pub const ALLOWED_EVERY_TIME: &str =
+    "Allowed every time. /sync and /inhabit go without asking until you choose Ask each time.";
+pub const ASKS_EACH_TIME: &str = "Asks each time. The current share and hand-off were dropped.";
+pub const ALREADY_EVERY_TIME: &str = "Already allowed every time.";
+pub const ALREADY_EACH_TIME: &str = "Already asks each time.";
+
+/// What Settings → Permissions shows for the standing hub send grant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HubGrantRow {
+    /// True when a standing hub grant covers Chat + Personal.
+    pub every_time: bool,
+    /// One line under the chips after a load or a click.
+    pub status: String,
+}
 
 /// What `/inhabit` carries: SOUL.md is memory, and skill names and the goal
 /// pin say what you work on. No chat goes with it.
@@ -107,6 +127,61 @@ fn unlocked(config_dir: &Path, ledger: &hx::ConsentLedger) -> Result<(), String>
         },
     };
     Err(format!("Nothing was sent. {why}"))
+}
+
+/// Whether Settings has Allow every time for destination `hub`.
+fn standing(config_dir: &Path) -> Option<hx::Grant> {
+    hx::ConsentLedger::load(config_dir)
+        .destination_grant(hx::HUB_DEST, hx::HUB_SYNC_DATA)
+        .cloned()
+}
+
+/// Settings → Permissions: the Paired computers row as the ledger has it.
+pub fn grant_row(config_dir: &Path, status: &str) -> HubGrantRow {
+    HubGrantRow {
+        every_time: standing(config_dir).is_some(),
+        status: status.to_string(),
+    }
+}
+
+/// Allow every time: write a standing hub grant (Settings click only).
+pub fn allow_every_time(config_dir: &Path) -> Result<HubGrantRow, String> {
+    if let Some(why) = hx::ConsentLedger::load(config_dir).locked() {
+        return Err(why.message());
+    }
+    if standing(config_dir).is_some() {
+        return Ok(grant_row(config_dir, ALREADY_EVERY_TIME));
+    }
+    hx::grant_destination(
+        config_dir,
+        hx::HUB_DEST,
+        hx::HUB_SYNC_DATA,
+        hx::UserClick::from_click(),
+    )?;
+    Ok(grant_row(config_dir, ALLOWED_EVERY_TIME))
+}
+
+/// Ask each time: revoke the standing grant and drop what is already published.
+pub fn ask_each_time(config_dir: &Path, share: &HubShare) -> Result<HubGrantRow, String> {
+    if let Some(why) = hx::ConsentLedger::load(config_dir).locked() {
+        return Err(why.message());
+    }
+    let had = match standing(config_dir) {
+        Some(g) => {
+            hx::revoke_grant(config_dir, &g.id)?;
+            true
+        }
+        None => false,
+    };
+    share.drop_published();
+    Ok(grant_row(
+        config_dir,
+        if had {
+            ASKS_EACH_TIME
+        } else {
+            ALREADY_EACH_TIME
+        },
+    ))
 }
 
 /// The slash line: sends at once under a standing grant, else asks on a card.
@@ -591,6 +666,79 @@ mod tests {
         assert_eq!(sent(&hub.cfg), vec![("hub".to_string(), grant.id)]);
         let snap = call(port, "GET", "/v1/snapshot", &token, "").1;
         assert_eq!(snap["snapshot"]["threads"][0]["id"], "shell-harbor");
+    }
+
+    #[test]
+    fn settings_allow_every_time_then_ask_each_time_drops_the_share() {
+        let hub = hub("settings-grant");
+        let (port, token) = pair(&hub, "d-desk", "Desk");
+        assert_eq!(
+            grant_row(&hub.cfg, ""),
+            HubGrantRow {
+                every_time: false,
+                status: String::new(),
+            }
+        );
+        assert_eq!(
+            check(&hub.cfg, &hub.share, HubSend::Sync),
+            Ok(Effect::HubAsk {
+                send: HubSend::Sync,
+                prompt: SYNC_ASK.into(),
+                note: SYNC_NOTE.into(),
+            })
+        );
+
+        let allowed = allow_every_time(&hub.cfg).expect("allow");
+        assert!(allowed.every_time);
+        assert_eq!(allowed.status, ALLOWED_EVERY_TIME);
+        assert_eq!(
+            check(&hub.cfg, &hub.share, HubSend::Sync),
+            Ok(Effect::Notice {
+                text: "Shared chats and memory with your paired computer.".into()
+            })
+        );
+        let grant_id = sent(&hub.cfg)[0].1.clone();
+        assert!(
+            !grant_id.is_empty() && grant_id != "approved-once",
+            "{grant_id}"
+        );
+        assert_eq!(
+            call(port, "GET", "/v1/snapshot", &token, "").1["snapshot"]["threads"][0]["id"],
+            "shell-harbor"
+        );
+        hub.share.stage(InhabitBundle {
+            soul: "stay kind".into(),
+            to_id: Some("d-desk".into()),
+            ..Default::default()
+        });
+
+        let asked = ask_each_time(&hub.cfg, &hub.share).expect("ask");
+        assert!(!asked.every_time);
+        assert_eq!(asked.status, ASKS_EACH_TIME);
+        assert_eq!(
+            check(&hub.cfg, &hub.share, HubSend::Sync),
+            Ok(Effect::HubAsk {
+                send: HubSend::Sync,
+                prompt: SYNC_ASK.into(),
+                note: SYNC_NOTE.into(),
+            })
+        );
+        assert_eq!(
+            call(port, "GET", "/v1/snapshot", &token, ""),
+            (200, json!({ "ok": true, "snapshot": null }))
+        );
+        assert_eq!(
+            call(port, "GET", "/v1/inhabit", &token, ""),
+            (200, json!({ "ok": true, "bundle": null }))
+        );
+        assert_eq!(
+            ask_each_time(&hub.cfg, &hub.share).expect("again").status,
+            ALREADY_EACH_TIME
+        );
+        assert_eq!(
+            allow_every_time(&hub.cfg).expect("again").status,
+            ALLOWED_EVERY_TIME
+        );
     }
 
     #[test]
