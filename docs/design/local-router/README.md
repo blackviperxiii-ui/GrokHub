@@ -120,7 +120,8 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      place stays. A pair is held until the model unloads, the governor
      state changes, or the memory the pair needed has 2 GB more free than
      at the refusal. That memory is VRAM when the launch planned the pair
-     on a GPU with a VRAM reading, else RAM. The refusal's reading is the
+     on a GPU, else RAM. A GPU pair with no VRAM reading has nothing to
+     compare, so it is held until the model unloads or the state changes. The refusal's reading is the
      launch's own, taken after the previous model stopped. The reading
      now adds back what the model in its place uses. A start that ran out
      of memory is held until the next unload.
