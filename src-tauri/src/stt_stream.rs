@@ -136,10 +136,7 @@ pub fn target_for(config_dir: &Path, chat: &str) -> Option<StreamTarget> {
         grokhub_agent::route::voice_route::StageKind::Stt,
         &env,
     );
-    let grokhub_agent::route::voice_route::StagePlan::Try(sources) = plan else {
-        return None;
-    };
-    if sources.first() != Some(&grokhub_agent::route::voice_route::SpeechSource::GrokVoice3) {
+    if !crate::voice::streams_to_xai(&plan, &env) {
         return None;
     }
     Some(StreamTarget {

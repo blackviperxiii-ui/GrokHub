@@ -153,6 +153,16 @@ pub(crate) fn stt_env(config_dir: &Path, models: &Path, chat: &str) -> VoiceEnv 
     }
 }
 
+/// Whether voice mode's open mic may stream to xAI under `plan`: only when
+/// it puts Grok Voice 3 first, and never in a chat that runs on this
+/// computer or must stay here. There, a turn xAI stands in for goes up once
+/// as a recording, after the mic ends it.
+pub(crate) fn streams_to_xai(plan: &StagePlan, env: &VoiceEnv) -> bool {
+    !env.chat_here
+        && !env.chat_must_stay
+        && matches!(plan, StagePlan::Try(sources) if sources.first() == Some(&SpeechSource::GrokVoice3))
+}
+
 /// One recording's words, and the line naming the engine that heard them
 /// and why (none for a plain cloud chat).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -830,6 +840,35 @@ mod tests {
         ));
         assert!(!grokhub_agent::route::local_resident::held());
         assert_eq!(clips_left(), 0);
+    }
+
+    #[test]
+    fn the_open_mic_streams_to_xai_only_for_a_cloud_chat() {
+        let xai_first = StagePlan::Try(vec![SpeechSource::GrokVoice3, SpeechSource::Local]);
+        let cloud = VoiceEnv {
+            has_xai_auth: true,
+            ..Default::default()
+        };
+        assert!(streams_to_xai(&xai_first, &cloud));
+        assert!(!streams_to_xai(
+            &StagePlan::Try(vec![SpeechSource::Local, SpeechSource::GrokVoice3]),
+            &cloud
+        ));
+        assert!(!streams_to_xai(&StagePlan::DownloadLocal, &cloud));
+        // xAI stands in for a chat that runs here: turns upload, never stream.
+        let here = VoiceEnv {
+            chat_here: true,
+            ..cloud
+        };
+        assert!(!streams_to_xai(
+            &StagePlan::Try(vec![SpeechSource::GrokVoice3]),
+            &here
+        ));
+        let adult = VoiceEnv {
+            chat_must_stay: true,
+            ..cloud
+        };
+        assert!(!streams_to_xai(&xai_first, &adult));
     }
 
     #[test]

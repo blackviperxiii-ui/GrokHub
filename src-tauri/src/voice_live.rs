@@ -867,10 +867,8 @@ pub(crate) async fn voice_live_chat(
     crate::off_main(move || {
         let cfg = voice_route::read(&dir);
         let env = crate::voice::stt_env(&dir, &models_dir(&dir), &id);
-        let stream_ok = matches!(
-            voice_route::plan_stage(&cfg, StageKind::Stt, &env),
-            StagePlan::Try(sources) if sources.first() == Some(&SpeechSource::GrokVoice3)
-        );
+        let plan = voice_route::plan_stage(&cfg, StageKind::Stt, &env);
+        let stream_ok = crate::voice::streams_to_xai(&plan, &env);
         with(|live| live.set_chat(&id, stream_ok))
     })
     .await?

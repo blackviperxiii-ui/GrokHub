@@ -186,7 +186,46 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      to different tiers reload the model on each turn. The speed estimate doesn't count the drafter's speedup.
 6. **Voice on device.** On-device speech-to-text, then text-to-speech
    chosen by need (an on-device chat or Offline only) instead of by
-   whether a key is saved.
+   whether a key is saved. #2032 built the shared voice router
+   (`route/voice_route.rs`: `Auto`, `Local only`, `Pinned`; `plan_stage`
+   over a `VoiceEnv`), with Offline only, Grok sign-in, xAI cooldowns and
+   automatic downloads. This step adds the chat's own need to it:
+   - The router writes where each chat's newest step runs
+     (`route/local_live.rs`: `note_step_here`, `runs_here`,
+     `must_stay_here`) before the model call, again when xAI or a provider
+     fails over to this computer, and when the step ends. The app's
+     background calls and helpers don't write it. A chat with no step since
+     launch reads as online.
+   - `VoiceEnv` gains `chat_here` and `chat_must_stay` (an 18+ voice). In
+     `Auto`, a chat that runs here hears and speaks only on this computer
+     once the on-device voice is ready, with no xAI behind it; until then
+     xAI stands in, with a line. An 18+ chat never plans xAI, a pin to
+     Grok Voice 3 included: it downloads the on-device voice or refuses.
+   - Every voice call carries the chat: `transcribe`, `voice_live_start`,
+     `voice_live_hear`, `voice_speak`, and `voice_live_chat` when voice
+     mode follows another chat. A move to a chat that may not stream drops
+     the open stream, and one still opening for the chat before is never
+     attached. A reply's tail is spoken by its own chat's need.
+   - Hearing on device reserves `Kind::Hearing` with `may_unload = false`,
+     one clip at a time: the voice never unloads or steps down the chat
+     pair or its draft, and declines with a line when there's no room. The
+     clip goes to a fresh temp file only this user can read
+     (`grokhub-hear-…`, mode 0600), removed on every path; both pipes are
+     read on threads and drained past the cap; the time limit is 20 s plus
+     twice the clip's length.
+   - The line names the engine and why ("Spoken on this computer with
+     Kokoro text to speech: this chat runs here."; `stage_line`). It shows
+     for the on-device engine, an xAI fallback, or xAI standing in for a
+     chat that runs here, never for a plain cloud chat. Voice mode shows it
+     on its own line over the composer; push to talk shows it there as a
+     hint, not on the error line.
+   - Not yet: the process-wide `local_warm` still puts on-device speech
+     first for a cloud chat while a local model is loaded (an existing
+     test locks it in); a `Pinned` Grok Voice 3 wins over a chat that runs
+     here (only 18+ overrides it); whisper on PATH runs with no `-m` model
+     and reserves no memory; download notices still show on the error
+     line; the record of where a chat runs is in memory only, so the first
+     spoken turn after a restart follows the cloud route.
 7. **Vision.** Load the vision projector (`--mmproj`) with a model that
    has one when a picture is attached to an on-device chat.
 
