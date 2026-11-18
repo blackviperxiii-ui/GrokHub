@@ -85,6 +85,9 @@ export interface VoiceDeps {
   onNote: (note: string) => void;
   /** Everything heard so far in this turn, or "" once the turn is over. */
   onCaption?: (text: string) => void;
+  /** Which voice heard or spoke last and why, or "" once voice mode is off.
+   * Only set on this computer, or for xAI in a chat that runs here. */
+  onLine?: (line: string) => void;
 }
 
 /** The one session voice mode is on in. The backend keeps one open mic, so
@@ -111,6 +114,10 @@ export class VoiceSession {
   private finished = false;
   /** The caption the page shows now. */
   private shown = "";
+  /** The voice line the page shows now. */
+  private lineShown = "";
+  /** The chat voice mode hears and speaks for: it picks the engines. */
+  private chat: string | null = null;
   /** A piece failed to speak: the rest of this reply stays quiet. */
   private noVoice = false;
   /** The failure was shown once this session. */
@@ -132,6 +139,16 @@ export class VoiceSession {
   /** Where the spoken reply's loudness goes from now on (her talk hop). */
   talkTo(talk: Talk) {
     this.deps = { ...this.deps, talk };
+  }
+
+  /** The chat on screen. Voice mode on follows it: a chat that runs on this
+   * computer hears and speaks here, and its mic never streams to xAI. */
+  forChat(id: string | null) {
+    if (id === this.chat) return;
+    this.chat = id;
+    // The last chat's line says nothing true about this one.
+    this.line("");
+    if (this.state !== "off") void api.voiceLiveChat(id).catch(() => {});
   }
 
   private go(event: VoiceEvent) {
@@ -198,8 +215,12 @@ export class VoiceSession {
     this.lastLibraryMessage = null;
     if (live && live !== this) await live.stop();
     live = this;
-    await api.voiceLiveStart();
+    this.line("");
+    const asked = this.chat;
+    await api.voiceLiveStart(asked);
     this.go("start");
+    // Another chat opened while it started: the backend still has the first.
+    if (this.chat !== asked) void api.voiceLiveChat(this.chat).catch(() => {});
     this.watchLibrary();
     try {
       this.closeMic = await this.deps.openMic((s, rate) => this.take(s, rate));
@@ -227,6 +248,7 @@ export class VoiceSession {
     this.pending = new Float32Array(0);
     this.down = null;
     this.caption("");
+    this.line("");
     if (note) this.deps.onNote(note);
     if (wasOn) await api.voiceLiveStop().catch(() => {});
   }
@@ -293,8 +315,12 @@ export class VoiceSession {
 
   private async hear() {
     this.go("turn");
-    const words = (await api.voiceLiveHear().catch((e) => (this.note(e), ""))).trim();
+    const chat = this.chat;
+    const heard = await api.voiceLiveHear(chat).catch((e) => (this.note(e), null));
+    const words = (heard?.words ?? "").trim();
     if (this.state !== "thinking") return;
+    // Each turn heard says which voice heard it: none for a plain cloud chat.
+    if (words && chat === this.chat) this.line(heard?.line ?? "");
     if (!words) {
       this.go("empty");
       await api.voiceLiveListen(false);
@@ -307,6 +333,12 @@ export class VoiceSession {
     if (text === this.shown) return;
     this.shown = text;
     this.deps.onCaption?.(text);
+  }
+
+  private line(text: string) {
+    if (text === this.lineShown) return;
+    this.lineShown = text;
+    this.deps.onLine?.(text);
   }
 
   /** Stop speaking and listen for them. */
@@ -323,40 +355,48 @@ export class VoiceSession {
     this.player = null;
   }
 
-  /** More of the reply as it streams. */
-  feed(delta: string) {
+  /** More of the reply as it streams. `chat` is the chat the reply is for:
+   * its pieces are spoken with that chat's voice, even once another opens. */
+  feed(delta: string, chat: string | null = this.chat) {
     if (this.state === "off") return;
     this.reply = this.reply
       // Off by now (voice mode moved to another chat): nothing reaches the
       // backend's next session.
       .then(() => (this.state === "off" ? [] : api.voiceReplyFeed(delta)))
-      .then((pieces) => this.enqueue(pieces))
+      .then((pieces) => this.enqueue(pieces, chat))
       .catch((e) => this.note(e));
   }
 
-  /** The reply is complete; `whole` is spoken if nothing streamed. */
-  replyDone(whole: string) {
+  /** The reply for `chat` is complete; `whole` is spoken if nothing streamed. */
+  replyDone(whole: string, chat: string | null = this.chat) {
     if (this.state === "off") return;
     this.reply = this.reply
       .then(() => (this.state === "off" ? [] : api.voiceReplyFinish(whole)))
       .then((pieces) => {
-        this.enqueue(pieces);
+        this.enqueue(pieces, chat);
         this.finished = true;
         return this.drained();
       })
       .catch((e) => this.note(e));
   }
 
-  private enqueue(pieces: string[]) {
+  private enqueue(pieces: string[], chat: string | null) {
     if (this.noVoice || this.state === "off") return;
     for (const piece of pieces) {
       this.queue.push(
-        api.voiceSpeak(piece).catch((e) => {
-          if (!this.warned) this.note(e);
-          this.warned = true;
-          this.noVoice = true;
-          return null;
-        }),
+        api.voiceSpeak(piece, chat).then(
+          (spoken) => {
+            // Each piece says which voice spoke it: none for a plain cloud chat.
+            if (this.state !== "off" && chat === this.chat) this.line(spoken.line ?? "");
+            return spoken;
+          },
+          (e) => {
+            if (!this.warned) this.note(e);
+            this.warned = true;
+            this.noVoice = true;
+            return null;
+          },
+        ),
       );
     }
     void this.pump();
@@ -490,6 +530,7 @@ const HINT: Record<VoiceState, string> = {
 export function useVoiceMode() {
   const [state, setState] = useState<VoiceState>("off");
   const [caption, setCaption] = useState("");
+  const [line, setLine] = useState("");
   const [session] = useState(
     () =>
       new VoiceSession({
@@ -499,6 +540,7 @@ export function useVoiceMode() {
         onState: setState,
         onNote: () => {},
         onCaption: setCaption,
+        onLine: setLine,
       }),
   );
   useEffect(
@@ -507,7 +549,7 @@ export function useVoiceMode() {
     },
     [session],
   );
-  return { state, session, caption };
+  return { state, session, caption, line };
 }
 
 /** How long a live caption may run: its end shows, the start is cut. */
@@ -527,6 +569,18 @@ export function VoiceCaption({ text, state }: { text: string; state: VoiceState 
   return (
     <p className="voice-caption" aria-live="off">
       {captionLine(text)}
+    </p>
+  );
+}
+
+/** Which voice heard or spoke last and why: on this computer, or xAI in a
+ * chat that runs here. Its own line, apart from the caption and the error
+ * line, so it stays while voice mode thinks and speaks. */
+export function VoiceLine({ text }: { text: string }) {
+  if (!text.trim()) return null;
+  return (
+    <p className="voice-line" aria-live="polite">
+      {text}
     </p>
   );
 }

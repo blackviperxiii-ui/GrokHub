@@ -2261,6 +2261,15 @@ button.md-copy {
   overflow-wrap: anywhere;
 }
 
+/* Which voice heard or spoke and why: a quiet note over the composer, apart
+   from the caption and the error line. */
+.voice-line {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+
 .composer .voice-mode[aria-pressed="true"] {
   border-color: var(--red);
   background: var(--tab-open-bg);

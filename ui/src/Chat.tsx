@@ -74,7 +74,7 @@ import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
 import { appendDraft, Mic } from "./Mic";
-import { useVoiceMode, VoiceButton, VoiceCaption } from "./VoiceMode";
+import { useVoiceMode, VoiceButton, VoiceCaption, VoiceLine } from "./VoiceMode";
 import { ElicitCard, type ElicitItem } from "./Modes";
 import { SIDE_MARK, SideCards, withSide, type Side } from "./Side";
 import { DOCK_MIN_WIDTH, NyxDock, SIDE_MIN_WIDTH } from "./NyxDock";
@@ -1012,6 +1012,8 @@ export function Chat({
   const deskChat = useRef(Symbol("chat"));
   const voice = useVoiceMode();
   const voiceSession = voice.session;
+  /** Which engine push to talk heard the last words with, and why. */
+  const [micLine, setMicLine] = useState("");
   /** The queued message whose turn came: it sends after this render. */
   const [nextUp, setNextUp] = useState<{
     text: string;
@@ -1415,7 +1417,7 @@ export function Chat({
         setItems(event.stop === HALTED_STOP ? settleHalted : settle);
       }
       else if (event.kind === "text") {
-        voiceSession.feed(event.text);
+        voiceSession.feed(event.text, id);
         setItems((now) => applyEvent(now, event));
       }
       // Not a transition: one would hold the page's next updates while the
@@ -1610,7 +1612,7 @@ export function Chat({
     setBusy(false);
     setRunIn(undefined);
     setError(stillBusy);
-    voiceSession.replyDone("");
+    voiceSession.replyDone("", from);
     // Another chat opened meanwhile: what waits now was typed there, so it
     // goes, and the lines on screen are that chat's, not this reply's.
     const moved = openNow.current !== from;
@@ -1668,12 +1670,16 @@ export function Chat({
   // Voice mode: what it hears goes as a message, or waits behind a running
   // reply; what it has to say shows where errors do.
   const showVoiceNote = (note: string) => setError(note);
-  useEffect(() =>
+  useEffect(() => {
     voiceSession.handlers((words) => {
       if (busyRef.current) changeQueue([...queueRef.current, words]);
       else void deliver(words, [], false);
-    }, showVoiceNote),
-  );
+    }, showVoiceNote);
+    // The chat on screen picks where voice mode hears and speaks.
+    voiceSession.forChat(conversationId);
+  });
+  // Push to talk's line belongs to the chat it was heard for.
+  useEffect(() => setMicLine(""), [conversationId]);
 
   /** A panel button sends its action as a turn, behind a running reply if
    * there is one, so any step it leads to asks like any other. */
@@ -2453,6 +2459,7 @@ export function Chat({
       />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       {!remote && <VoiceCaption text={voice.caption} state={voice.state} />}
+      {!remote && <VoiceLine text={voice.state === "off" ? micLine : voice.line} />}
       <form className={glow && busyHere ? "composer slash-wrap glowing" : "composer slash-wrap"} onSubmit={send}>
         {slashOpen && (
           <SlashMenu
@@ -2493,7 +2500,14 @@ export function Chat({
         </div>
         {!remote && (
           <>
-            <Mic onText={(words) => setDraft((now) => appendDraft(now, words))} onError={setError} busy={busy} active={active} />
+            <Mic
+              onText={(words) => setDraft((now) => appendDraft(now, words))}
+              onError={setError}
+              onHint={setMicLine}
+              conversationId={conversationId}
+              busy={busy}
+              active={active}
+            />
             <VoiceButton state={voice.state} session={voice.session} />
           </>
         )}

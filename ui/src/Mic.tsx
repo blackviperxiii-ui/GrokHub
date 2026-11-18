@@ -3,7 +3,7 @@
 // stays open for a couple of minutes after a hold, so the next one starts at
 // once and keeps the half second before the press; letting go keeps a short
 // tail so the last word is not cut off.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { transcribe } from "./api";
 import { PRODUCT_NAME } from "./brand";
 import { Orb } from "./Orb";
@@ -163,12 +163,20 @@ type State = "idle" | "recording" | "transcribing";
 export function Mic({
   onText,
   onError,
+  onHint,
+  conversationId,
   busy,
   active,
 }: {
   onText: (words: string) => void;
   /** A note for the chat's error line (no mic, permission, the desktop's refusal). */
   onError: (note: string) => void;
+  /** Which engine heard the words and why, or "" as a new hold starts. Only
+   * set when it was heard on this computer, or by xAI in a chat that runs
+   * here; it is a hint, never the error line. */
+  onHint?: (line: string) => void;
+  /** The chat the words are for: it picks the engine. */
+  conversationId?: string | null;
   busy: boolean;
   active: boolean;
 }) {
@@ -178,9 +186,18 @@ export function Mic({
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // True once the mic is open; until then a permission prompt may hold the focus.
   const opened = useRef(false);
+  // The chat on screen now, and the one the hold began in: a line heard for
+  // one never shows under the other.
+  const chatNow = useRef(conversationId);
+  useLayoutEffect(() => {
+    chatNow.current = conversationId;
+  }, [conversationId]);
+  const heldIn = useRef(conversationId);
 
   function start() {
     if (pending.current || busy) return;
+    onHint?.("");
+    heldIn.current = conversationId;
     setState("recording");
     opened.current = false;
     pending.current = record().then(
@@ -213,7 +230,10 @@ export function Mic({
         setNote(NOTHING_HEARD);
         return;
       }
-      onText(await transcribe(toBase64(wav)));
+      const chat = heldIn.current;
+      const heard = await transcribe(toBase64(wav), chat);
+      onText(heard.words);
+      if (heard.line && chatNow.current === chat) onHint?.(heard.line);
     } catch (err) {
       setNote(String(err));
     } finally {

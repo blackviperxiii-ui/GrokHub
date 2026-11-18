@@ -65,7 +65,7 @@ vi.mock("./api", async () => {
   onChatEvent: (_handler: (envelope: ChatEnvelope) => void) => Promise.resolve(() => {}),
   helperQuestions: () => Promise.resolve([]),
   onEventGap: () => Promise.resolve(() => {}),
-  transcribe: vi.fn(),
+  transcribe: vi.fn(async () => ({ words: "", line: null })),
   onFileDrop: () => Promise.resolve(() => {}),
   stageAttachment: vi.fn(),
   stageAttachmentPaths: vi.fn(),
