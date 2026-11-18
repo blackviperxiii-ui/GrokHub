@@ -2218,9 +2218,9 @@ mod tests {
         }
         let took = started.elapsed();
         // Debug bar; about 120 ms measured. Release target is under 50 ms
-        // (about 13 ms measured).
+        // (about 13 ms measured). Windows CI runners have hit ~500 ms under load.
         assert!(
-            took < std::time::Duration::from_millis(500),
+            took < std::time::Duration::from_millis(750),
             "1,000 classify calls took {took:?}"
         );
     }
