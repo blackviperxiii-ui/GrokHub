@@ -978,7 +978,7 @@ export function Chat({
   const [runIn, setRunIn] = useState<string>();
   /** The chat on screen now, read after a reply ends. */
   const openNow = useRef(conversationId);
-  useEffect(() => {
+  useLayoutEffect(() => {
     openNow.current = conversationId;
   }, [conversationId]);
   const busyHere = busy && runIn === conversationId;
@@ -1190,7 +1190,9 @@ export function Chat({
   }
 
   function startFresh(scratch = false) {
+    const nextId = newConversationId(scratch);
     openAfter.current = null;
+    openNow.current = nextId;
     queueBackToBox();
     leaveSides();
     touched.current = true;
@@ -1198,11 +1200,12 @@ export function Chat({
     setItems([]);
     setEarlier(0);
     setError(null);
-    setConversationId(newConversationId(scratch));
+    setConversationId(nextId);
   }
 
   function show(transcript: Transcript) {
     openAfter.current = null;
+    openNow.current = transcript.id;
     leaveSides();
     setGoalAsk(null);
     setConversationId(transcript.id);
@@ -1341,6 +1344,7 @@ export function Chat({
       setItems([]);
       setEarlier(0);
       setError(null);
+      openNow.current = to;
       setConversationId(to);
     }
     if (next.send && next.text) {

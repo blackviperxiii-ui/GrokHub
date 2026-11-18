@@ -1,0 +1,1 @@
+- Limit `cards-sync` Ready pickup to `Antigravity`-assigned cards without touching other coders' cards, and add `start_issue` support to mark started cards `Working on it now`.
