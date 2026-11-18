@@ -2,16 +2,19 @@
 //! model is loaded, where it runs, how fast it answered, its draft model and
 //! when it unloads. [`snapshot`] reads the live state; [`lines`] words it.
 
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Mutex;
 
 use grokhub_core::local_draft::Decision;
 use grokhub_core::local_setup;
 
 use super::local_autoconfig::LaunchArgs;
 use super::local_scale::Mode;
+use super::local_scale::{Source, SpeedQuality};
 use super::local_sidecar;
 use super::local_spec;
-use super::local_swap::StandIn;
+use super::local_swap::{tier_word, AskOutcome, Refused, StandIn};
 
 /// Where the loaded model's layers run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,6 +207,134 @@ fn group(n: u32) -> String {
         out.push(c);
     }
     out
+}
+
+/// What runs, in the words of the line under a reply, when no ask decides it.
+fn running_why(stand_in: Option<StandIn>) -> String {
+    let why = match stand_in {
+        None => "your pick",
+        Some(StandIn::LowBattery) => "a smaller model while the battery is low",
+        Some(StandIn::OutOfMemory) => "a smaller model because your pick ran out of memory",
+        Some(StandIn::Gaming) => "the lightest model while a game runs",
+        Some(StandIn::Lighter) => "a smaller model while the computer saves power",
+        Some(StandIn::Tight) => "a smaller model because less memory is free than your pick needs",
+        Some(StandIn::Performance) => "a bigger model for a hard task while the computer is free",
+        Some(StandIn::BestFor(kind)) => {
+            return format!("a model stronger at {} than your pick", kind.words());
+        }
+        Some(StandIn::Asked(tier, _)) => {
+            return format!("the model an earlier {} ask loaded", tier_word(tier));
+        }
+    };
+    why.to_string()
+}
+
+/// The ask got its tier: what runs is the tier's model. A launch that
+/// stepped down (or landed on the pick) didn't, unless the ask was Balance.
+fn honored(tier: SpeedQuality, stand_in: Option<StandIn>) -> bool {
+    match stand_in {
+        None => tier == SpeedQuality::Balanced,
+        Some(StandIn::Asked(..) | StandIn::Performance | StandIn::BestFor(_)) => {
+            tier != SpeedQuality::Balanced
+        }
+        Some(_) => false,
+    }
+}
+
+/// The one line under an on-device reply: which model answered, with its
+/// draft or not, and why. A tier word (Speed, Balance, Performance) shows
+/// only when a chat's ask or setting chose or wanted it.
+pub fn chat_line(
+    name: &str,
+    draft: bool,
+    stand_in: Option<StandIn>,
+    ask: Option<AskOutcome>,
+) -> String {
+    let by = if draft {
+        format!("Answered by {name} with its draft")
+    } else {
+        format!("Answered by {name}")
+    };
+    let base = running_why(stand_in);
+    let Some(ask) = ask else {
+        return format!("{by}, {base}.");
+    };
+    let tier = match ask {
+        AskOutcome::Got(t, _) | AskOutcome::Refused(t, _) => t,
+    };
+    let word = tier_word(tier);
+    match ask {
+        AskOutcome::Got(t, source) if honored(t, stand_in) => {
+            let because = match (source, t) {
+                (Source::Pin, _) | (Source::Words, SpeedQuality::Balanced) => {
+                    "this chat is set to it"
+                }
+                (Source::Words, SpeedQuality::Speed) => "you asked for a quick answer",
+                (Source::Words, SpeedQuality::Quality) => "you asked it to think harder",
+            };
+            format!("{by}: {word}, because {because}.")
+        }
+        AskOutcome::Got(..) | AskOutcome::Refused(_, Refused::NoRoom) => {
+            let none = match tier {
+                SpeedQuality::Speed => "no faster model fits",
+                SpeedQuality::Quality => "no bigger model fits",
+                SpeedQuality::Balanced => "your pick doesn't fit",
+            };
+            format!("{by}, {base}; {none} for {word} right now.")
+        }
+        AskOutcome::Refused(_, Refused::Busy) => {
+            format!(
+                "{by}, {base}; another chat was answering, so {word} loads with the next reply."
+            )
+        }
+        AskOutcome::Refused(_, Refused::KeptLoaded) => {
+            format!("{by}, {base}; Keep loaded is on, so {word} doesn't swap the model.")
+        }
+        AskOutcome::Refused(_, Refused::Forced) => {
+            format!("{by}, {base}; a model file is set for this app, so {word} doesn't swap it.")
+        }
+    }
+}
+
+/// The line for each chat's last on-device reply, until the chat takes it.
+static LAST_LINE: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+
+/// Keep the line for the reply that just ran on device for `conversation_id`
+/// (a later step of the same turn replaces it). With nothing loaded there
+/// is no line.
+pub fn note_reply(conversation_id: &str, ask: Option<AskOutcome>) {
+    let Some(l) = local_sidecar::loaded() else {
+        forget_line(conversation_id);
+        return;
+    };
+    let name = super::local_swap::catalog_for(&l.model).map_or_else(
+        || {
+            l.model
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        },
+        |m| m.name.to_string(),
+    );
+    let draft = local_spec::draft_status()
+        .is_some_and(|(_, d)| matches!(d, Decision::On | Decision::NeedsTest));
+    let line = chat_line(&name, draft, l.stand_in, ask);
+    if let Ok(mut lines) = LAST_LINE.lock() {
+        lines.insert(conversation_id.to_string(), line);
+    }
+}
+
+/// Drop `conversation_id`'s line: its last step didn't answer on device.
+pub fn forget_line(conversation_id: &str) {
+    if let Ok(mut lines) = LAST_LINE.lock() {
+        lines.remove(conversation_id);
+    }
+}
+
+/// The line for `conversation_id`'s turn that just ended, once: it clears,
+/// so a later turn that ran elsewhere shows none.
+pub fn take_line(conversation_id: &str) -> Option<String> {
+    LAST_LINE.lock().ok()?.remove(conversation_id)
 }
 
 #[cfg(test)]

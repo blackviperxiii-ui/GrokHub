@@ -49,6 +49,7 @@ fn now<'a>(home: &'a Path, on_disk: &'a [(&'static LocalModel, PathBuf)]) -> Now
         task: None,
         dynamic: true,
         marks: &NO_MARKS,
+        chat: None,
     }
 }
 

@@ -18,7 +18,7 @@ use grokhub_core::local_setup::{self, LocalModel};
 use grokhub_core::local_skills::{self, TaskKind};
 
 use super::local_autoconfig::{FreeNow, GovState, PairRefusal, Pool};
-use super::local_scale::{self, Need, Room, Scale};
+use super::local_scale::{self, ChatTier, Need, Room, Scale, Source, SpeedQuality};
 use super::local_task::Marks;
 
 /// Why a model other than the Settings pick runs.
@@ -39,6 +39,18 @@ pub enum StandIn {
     /// Dynamic is on and another model on disk is clearly better at this
     /// kind of task.
     BestFor(TaskKind),
+    /// A chat asked for a tier in words, or is set to one: the fastest
+    /// model that fits for Speed, the biggest for Performance.
+    Asked(SpeedQuality, Source),
+}
+
+/// The word a tier goes by in the chat and in Settings.
+pub fn tier_word(tier: SpeedQuality) -> &'static str {
+    match tier {
+        SpeedQuality::Speed => "Speed",
+        SpeedQuality::Balanced => "Balance",
+        SpeedQuality::Quality => "Performance",
+    }
 }
 
 impl StandIn {
@@ -48,6 +60,21 @@ impl StandIn {
             return format!(
                 "Running a model that's stronger at {} than your pick. Turn off Dynamic to always use your pick.",
                 kind.words()
+            );
+        }
+        if let StandIn::Asked(tier, source) = self {
+            let how = if tier == SpeedQuality::Quality {
+                "a bigger model than your pick"
+            } else {
+                "a faster model than your pick"
+            };
+            let why = match source {
+                Source::Words => "a chat asked for",
+                Source::Pin => "a chat is set to",
+            };
+            return format!(
+                "Running {how} because {why} {}. Other chats get your pick again.",
+                tier_word(tier)
             );
         }
         let line = match self {
@@ -69,7 +96,7 @@ impl StandIn {
             StandIn::Performance => {
                 "Running a bigger model than your pick for hard tasks while the computer is free. It steps back down when the computer gets busy."
             }
-            StandIn::BestFor(_) => unreachable!("handled above"),
+            StandIn::BestFor(_) | StandIn::Asked(..) => unreachable!("handled above"),
         };
         line.to_string()
     }
@@ -138,6 +165,11 @@ pub struct Now<'a> {
     pub dynamic: bool,
     /// What the router learned about each model's misses per task.
     pub marks: &'a Marks,
+    /// The tier this chat asked for this turn, in words or by its setting.
+    /// It loads now, past the cooldown and the wait for a quiet chat; only a
+    /// reply in flight, Keep loaded, a forced file, a low battery and a game
+    /// still win.
+    pub chat: Option<ChatTier>,
 }
 
 /// Why a refused model isn't tried again yet.
@@ -243,8 +275,17 @@ pub fn plan(n: Now<'_>) -> Plan {
         || (why == Some(StandIn::OutOfMemory) && stand_in.is_none())
         || n.refused.contains(&target)
         || stays_big(&n, running, why, stand_in);
-    if settled || n.in_flight > 0 || n.secs_since_swap < SWAP_COOLDOWN_SECS {
+    // A chat's ask is the person's own word: it skips the cooldown and the
+    // wait for a quiet chat, but never swaps a model mid-reply.
+    let asked = n.chat.is_some();
+    if settled || n.in_flight > 0 || (!asked && n.secs_since_swap < SWAP_COOLDOWN_SECS) {
         return Plan::Keep;
+    }
+    if asked {
+        return Plan::Load {
+            model: target,
+            stand_in,
+        };
     }
     let bigger = match (catalog_for(&target), catalog_for(running)) {
         (Some(t), Some(r)) => t.run_mb > r.run_mb,
@@ -274,7 +315,7 @@ fn stays_big(
     why: Option<StandIn>,
     target_why: Option<StandIn>,
 ) -> bool {
-    if target_why.is_some() || n.scale.gaming {
+    if n.chat.is_some() || target_why.is_some() || n.scale.gaming {
         return false;
     }
     if let Some(StandIn::BestFor(_)) = why {
@@ -358,7 +399,15 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
     let resident = n.loaded.and_then(|(p, _)| catalog_for(p)).map_or(0, |m| {
         grokhub_core::local_draft::pair_mb(m, n.loaded_paired)
     });
-    if n.dynamic {
+    // A chat's tier replaces the automatic pick (the task's best model, a
+    // step up for hard work, a lighter one while saving power); only the
+    // walk down for a pick that doesn't fit is left after it.
+    let auto = n.chat.is_none();
+    if let Some((tier, source)) = n.chat {
+        if let Some(p) = chat_target(n, home, tier, source, resident) {
+            return p;
+        }
+    } else if n.dynamic {
         if let Some(kind) = n.task {
             if let Some(p) = best_for(n, home, kind, resident) {
                 return p;
@@ -366,7 +415,8 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
         }
     }
     if let Some(room) = n.scale.room {
-        if n.dynamic
+        if auto
+            && n.dynamic
             && n.need == Need::Hard
             && !n.scale.saving
             && local_scale::performance_ready(&room)
@@ -398,7 +448,7 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
             }
         }
     }
-    if n.scale.saving && n.dynamic {
+    if auto && n.scale.saving && n.dynamic {
         let lighter = match n.need {
             Need::Hard => None,
             Need::Light | Need::Background => smallest(),
@@ -414,6 +464,102 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
         }
     }
     (home_path, None)
+}
+
+/// The model a chat's tier runs on, when it isn't the walk's to decide:
+/// - Speed: the fastest model at or below the pick that fits with its
+///   drafter (on a tie, the lighter one). The pick itself means no stand-in.
+/// - Performance: the biggest model above the pick that fits with its
+///   drafter and headroom and still runs at
+///   [`local_scale::PERFORMANCE_FLOOR_TOK_S`], on battery or a busy CPU too.
+///   It needs a room reading.
+/// - Balance: none, so the pick runs (or the walk steps down).
+fn chat_target(
+    n: &Now<'_>,
+    home: &LocalModel,
+    tier: SpeedQuality,
+    source: Source,
+    resident: u64,
+) -> Option<(PathBuf, Option<StandIn>)> {
+    let room = n.scale.room;
+    let (m, p) = match tier {
+        SpeedQuality::Balanced => return None,
+        SpeedQuality::Speed => {
+            let rate = |m: &LocalModel| match &room {
+                Some(r) => speed(n, m, r, resident),
+                None => m.tok_s.cpu,
+            };
+            n.on_disk
+                .iter()
+                .filter(|(m, _)| m.run_mb <= home.run_mb)
+                .filter(|(m, _)| room.is_none_or(|r| fits(n, m, &r, resident, 0)))
+                .max_by(|(a, _), (b, _)| rate(a).cmp(&rate(b)).then(b.run_mb.cmp(&a.run_mb)))?
+        }
+        SpeedQuality::Quality => {
+            let room = room?;
+            n.on_disk
+                .iter()
+                .filter(|(m, _)| m.run_mb > home.run_mb)
+                .filter(|(m, _)| fits(n, m, &room, resident, local_scale::HEADROOM_MB))
+                .filter(|(m, _)| {
+                    speed(n, m, &room, resident) >= local_scale::PERFORMANCE_FLOOR_TOK_S
+                })
+                .max_by_key(|(m, _)| m.run_mb)?
+        }
+    };
+    let why = (m.id != home.id).then_some(StandIn::Asked(tier, source));
+    Some((p.clone(), why))
+}
+
+/// Why a chat's ask didn't get its tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused {
+    /// No faster (Speed) or bigger (Performance) model fits right now, or the
+    /// pick doesn't (Balance).
+    NoRoom,
+    /// Another chat's reply was running on the model, so it stayed.
+    Busy,
+    /// Keep loaded is on: the pick stays.
+    KeptLoaded,
+    /// A model file was forced (`GROKHUB_LOCAL_MODEL`): nothing swaps.
+    Forced,
+}
+
+/// What came of a chat's ask, for the line under its reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskOutcome {
+    /// The tier's model runs for it (the launch may still step it down).
+    Got(SpeedQuality, Source),
+    Refused(SpeedQuality, Refused),
+}
+
+/// What [`plan`] does with this request's ask, if it made one. `None` when
+/// it made none, or when a low battery, a game or too little memory chose
+/// the model: their own line says why.
+pub fn ask_outcome(n: &Now<'_>) -> Option<AskOutcome> {
+    let (tier, source) = n.chat?;
+    if n.forced {
+        return Some(AskOutcome::Refused(tier, Refused::Forced));
+    }
+    if n.kept_loaded {
+        return Some(AskOutcome::Refused(tier, Refused::KeptLoaded));
+    }
+    let (target, why) = target(n);
+    if let Some((running, _)) = n.loaded {
+        if running != target && n.in_flight > 0 {
+            return Some(AskOutcome::Refused(tier, Refused::Busy));
+        }
+    }
+    if n.refused.contains(&target) {
+        return Some(AskOutcome::Refused(tier, Refused::NoRoom));
+    }
+    match (tier, why) {
+        (_, Some(StandIn::Asked(..))) | (SpeedQuality::Balanced, None) => {
+            Some(AskOutcome::Got(tier, source))
+        }
+        (_, None) => Some(AskOutcome::Refused(tier, Refused::NoRoom)),
+        _ => None,
+    }
 }
 
 /// `m`'s score for `kind`, less what the router learned about its misses.
@@ -500,12 +646,18 @@ pub fn out_of_memory_stand_in(
         .map(|(_, p)| p.clone())
 }
 
-/// The running-model row's mode: Gaming while a game holds the GPU,
-/// Performance while a bigger model runs for hard work, Fixed while Dynamic
-/// is off, else Balanced.
+/// The running-model row's mode: Gaming while a game holds the GPU, the
+/// tier a chat asked for while its model runs, Performance while a bigger
+/// model runs for hard work, Fixed while Dynamic is off, else Balanced.
 pub fn mode(stand_in: Option<StandIn>, scale: &Scale, dynamic: bool) -> local_scale::Mode {
     if scale.gaming || stand_in == Some(StandIn::Gaming) {
         local_scale::Mode::Gaming
+    } else if let Some(StandIn::Asked(tier, _)) = stand_in {
+        match tier {
+            SpeedQuality::Speed => local_scale::Mode::Speed,
+            SpeedQuality::Quality => local_scale::Mode::Performance,
+            SpeedQuality::Balanced => local_scale::Mode::Balanced,
+        }
     } else if !dynamic {
         local_scale::Mode::Fixed
     } else if stand_in == Some(StandIn::Performance) {

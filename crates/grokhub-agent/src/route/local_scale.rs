@@ -18,6 +18,9 @@ use std::sync::Mutex;
 
 use grokhub_core::local_setup::LocalModel;
 
+use super::ladder::Steer;
+pub use super::table::SpeedQuality;
+
 /// How much model a task needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Need {
@@ -40,6 +43,8 @@ pub enum Mode {
     Performance,
     /// Dynamic is off: the pick answers every task.
     Fixed,
+    /// A chat asked for speed, or is set to it: the fastest model that fits.
+    Speed,
 }
 
 impl Mode {
@@ -57,6 +62,9 @@ impl Mode {
             }
             Mode::Fixed => {
                 "Mode: Your pick. Dynamic is off, so your pick answers every task. A game, a low battery or too little memory still swaps to a lighter one."
+            }
+            Mode::Speed => {
+                "Mode: Speed. A chat asked for speed, so the fastest model that fits answers it."
             }
         }
     }
@@ -125,6 +133,72 @@ impl Drop for NeedGuard {
 /// The need of the request this thread is loading for.
 pub fn current_need() -> Need {
     NEED.with(Cell::get)
+}
+
+/// Where a chat's tier came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// Words in this turn of the person's own ("be quick", "think hard").
+    Words,
+    /// The chat's setting in its tab menu ([`super::local_pin`]).
+    Pin,
+}
+
+/// The tier a chat asked for this turn, and where the ask came from.
+pub type ChatTier = (SpeedQuality, Source);
+
+/// The tier for this on-device turn: words in this turn beat the chat's
+/// pin, which beats none (the automatic pick). A helper's turn reads no
+/// words, since its text is a brief another model wrote. Only words count:
+/// a quick class is never a speed ask, and "keep it short" alone asks for
+/// a short reply, not a faster model.
+pub fn chat_tier(
+    text: &str,
+    care_first: bool,
+    helper: bool,
+    pin: Option<SpeedQuality>,
+) -> Option<ChatTier> {
+    if !helper {
+        match super::ladder::steer_for_turn(text, care_first) {
+            Steer::Harder => return Some((SpeedQuality::Quality, Source::Words)),
+            Steer::Quicker if super::ladder::asks_for_speed(text) => {
+                return Some((SpeedQuality::Speed, Source::Words));
+            }
+            _ => {}
+        }
+    }
+    pin.map(|t| (t, Source::Pin))
+}
+
+/// A helper's turn: the helper class, or a helper's own conversation id
+/// (`parent/child`).
+pub fn helper_turn(class: &str, conversation_id: &str) -> bool {
+    class.trim() == super::boundary::HELPER_CLASS || conversation_id.contains('/')
+}
+
+thread_local! {
+    static CHAT: Cell<Option<ChatTier>> = const { Cell::new(None) };
+}
+
+/// Sets this thread's [`ChatTier`] until dropped, for the load the request
+/// makes.
+pub struct ChatGuard(Option<ChatTier>);
+
+impl ChatGuard {
+    pub fn set(tier: Option<ChatTier>) -> Self {
+        ChatGuard(CHAT.with(|c| c.replace(tier)))
+    }
+}
+
+impl Drop for ChatGuard {
+    fn drop(&mut self) {
+        CHAT.with(|c| c.set(self.0));
+    }
+}
+
+/// The tier of the request this thread is loading for.
+pub fn current_chat() -> Option<ChatTier> {
+    CHAT.with(Cell::get)
 }
 
 /// What is free on the machine, from the cabin's sampler.

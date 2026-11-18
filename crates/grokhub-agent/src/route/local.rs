@@ -871,6 +871,18 @@ pub fn serve_request(
         super::local_scale::NeedGuard::set(super::local_scale::need(class_norm, tokens, &text));
     let kind = super::local_task::kind(class_norm, tokens, &text);
     let _kind = super::local_task::KindGuard::set(kind);
+    // The chat's tier: the person's words this turn, else the chat's setting.
+    // The router decides the model from it; the model never picks it.
+    let config_dir = crate::perm::config_dir();
+    let helper = super::local_scale::helper_turn(class, &req.conversation_id);
+    let tier = super::local_scale::chat_tier(
+        &text,
+        crate::brain::care_first_enabled(&config_dir),
+        helper,
+        super::local_pin::get(&config_dir, &req.conversation_id),
+    );
+    let _tier = super::local_scale::ChatGuard::set(tier);
+    super::local_sidecar::take_ask_outcome();
     if heavy(class_norm, tokens) && super::local_gov::level() != Level::RampUp {
         match super::local_gov::wait_for_ramp_up(HEAVY_WAIT, &|| cancel.is_cancelled()) {
             None => return Err(ClientError::Cancelled),
@@ -920,6 +932,15 @@ pub fn serve_request(
         }
     };
     note_task_reply(kind, &out, cancel);
+    // The line under the reply: which model answered and why. A helper's
+    // steps never show one.
+    let ask = super::local_sidecar::take_ask_outcome();
+    if !helper {
+        match &out {
+            Ok(_) => super::local_live::note_reply(&req.conversation_id, ask),
+            Err(_) => super::local_live::forget_line(&req.conversation_id),
+        }
+    }
     out.map_err(ClientError::Protocol)
 }
 
