@@ -1,0 +1,1 @@
+- `cards-sync` now only marks linked Notion Command Center cards Completed when PRs merge to `beta` or card issues close; GitHub Actions no longer picks up Ready cards, creates issues, or dispatches Claude/Jules runs.
