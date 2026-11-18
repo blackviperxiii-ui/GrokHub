@@ -180,6 +180,11 @@ if [[ "$SWITCH" -eq 1 ]]; then
   echo "channel $CHANNEL: $(git rev-parse --short=7 HEAD) on $BRANCH"
 fi
 
+# The tauri CLI runs cargo from src-tauri, so a relative target dir would
+# land somewhere else for the shell; make it absolute first (same as the
+# PKGBUILDs). After `cd "$ROOT"` above, a relative value resolves against
+# the clone root.
+[[ -z "${CARGO_TARGET_DIR:-}" ]] || export CARGO_TARGET_DIR="$(realpath -m "$CARGO_TARGET_DIR")"
 GROKHUB_CHANNEL="$CHANNEL" cargo build --release --locked -p grokhub-hub
 TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 # src-tauri is its own workspace, so its build lands in src-tauri/target

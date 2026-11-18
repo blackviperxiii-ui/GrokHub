@@ -10,6 +10,7 @@
 #   30) a PR edits Cargo.lock without a Cargo.toml dep edit or the dependencies
 #       label, or a non-release PR touches version lockstep files
 #   40) VERSION copies disagree (cargo xtask bump --check)
+#   42) packaging/aur/.SRCINFO drifts from packaging/aur/PKGBUILD
 #   50) the linux or windows job in ci.yml could skip, and so pass as a
 #       required check, when the changes job fails
 #   70) a workflow or composite action uses an action by tag or branch instead

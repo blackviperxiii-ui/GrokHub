@@ -13,8 +13,11 @@
 ## Change recipe
 - Edit the script, then run the core tests above: they pin strings like `update-desktop-database`, `enable --now grokhub-hub.service`, `alsa-utils`, and the absence of `build-hands.sh`, `ydotoold`, and `pgrep grokhub`.
 - Keep `install.sh` and both PKGBUILDs in step; the tests check all three. Edit them in a normal PR; CI green, then squash-merge into `beta` (`CLAUDE.md`). A PKGBUILD's `pkgver=` line moves only with `cargo xtask bump`.
+- `CARGO_TARGET_DIR`: `install.sh` and both PKGBUILDs run `realpath -m` before the build so a relative value stays one folder for the hub and the shell (tauri cds into `src-tauri`).
+- After an AUR `PKGBUILD` recipe edit, refresh `packaging/aur/.SRCINFO` with `python3 scripts/aur-srcinfo.py --write` (ci-guards compares them; `xtask bump` rewrites the version lines).
 ## What breaks it
 - A new step that can fail the overlay under `set -euo pipefail`: package installs and the systemd steps deliberately continue on failure.
+- Leaving `CARGO_TARGET_DIR` relative: the shell build and the install paths disagree after tauri's cwd change.
 - Adding a Grok Build CLI install or update step: `crates/grokhub-core/tests/no_grok_cli.rs` fails when packaging or an install script installs or bundles the CLI, or a deleted CLI installer comes back.
 - A remembered channel that does not match the checkout: `install.sh` refuses so a build is not labeled for the wrong channel.
 ## What depends on it

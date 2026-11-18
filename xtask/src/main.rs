@@ -82,6 +82,8 @@ fn bump_check(root: &Path) -> Result<(), String> {
     check_cargo_toml(root, &version)?;
     check_contains(root, "packaging/PKGBUILD", &format!("pkgver={version}"))?;
     check_contains(root, "packaging/aur/PKGBUILD", &format!("pkgver={version}"))?;
+    check_contains(root, "packaging/aur/.SRCINFO", &format!("pkgver = {version}"))?;
+    check_contains(root, "packaging/aur/.SRCINFO", &format!("#tag=v{version}"))?;
     check_contains(root, SHELL_TOML, &shell_toml_line(&version))?;
     check_contains(root, SHELL_CONF, &shell_conf_line(&version))?;
     check_reference(root, &version)?;
@@ -268,6 +270,26 @@ fn plan_bump(root: &Path, new_version: &str, today: &str) -> Result<BumpPlan, St
             return Err(format!("{rel} missing {from:?}"));
         }
         plan.writes.push((rel.into(), text.replacen(&from, &to, 1)));
+    }
+    // AUR .SRCINFO tracks PKGBUILD: bump pkgver and the source tag together.
+    // scripts/aur-srcinfo.py --check (ci-guards) catches non-version drift.
+    {
+        let rel = "packaging/aur/.SRCINFO";
+        let text = read_rel(root, rel)?;
+        let from_ver = format!("pkgver = {old}");
+        let to_ver = format!("pkgver = {new_version}");
+        let from_tag = format!("#tag=v{old}");
+        let to_tag = format!("#tag=v{new_version}");
+        if !text.contains(&from_ver) {
+            return Err(format!("{rel} missing {from_ver:?}"));
+        }
+        if !text.contains(&from_tag) {
+            return Err(format!("{rel} missing {from_tag:?}"));
+        }
+        let next = text
+            .replacen(&from_ver, &to_ver, 1)
+            .replacen(&from_tag, &to_tag, 1);
+        plan.writes.push((rel.into(), next));
     }
     plan.writes.push((
         "docs/REFERENCE.md".into(),
@@ -535,7 +557,7 @@ mod tests {
 
     const OLD: &str = "3.0.2";
     const NEW: &str = "3.1.0";
-    const FILES: [&str; 10] = [
+    const FILES: [&str; 11] = [
         "VERSION",
         "Cargo.toml",
         "Cargo.lock",
@@ -544,6 +566,7 @@ mod tests {
         "src-tauri/tauri.conf.json",
         "packaging/PKGBUILD",
         "packaging/aur/PKGBUILD",
+        "packaging/aur/.SRCINFO",
         "docs/REFERENCE.md",
         "CHANGELOG.md",
     ];
@@ -578,6 +601,10 @@ mod tests {
             }
             fx.put("packaging/PKGBUILD", &format!("pkgver={OLD}\n"));
             fx.put("packaging/aur/PKGBUILD", &format!("pkgver={OLD}\n"));
+            fx.put(
+                "packaging/aur/.SRCINFO",
+                &format!("pkgver = {OLD}\nsource = grokhub::git+#tag=v{OLD}\n"),
+            );
             fx.put(
                 SHELL_TOML,
                 &format!("{}edition = \"2021\"\n", shell_toml_line(OLD)),
@@ -710,6 +737,10 @@ mod tests {
         assert_eq!(
             fx.get("src-tauri/tauri.conf.json"),
             "{\n  \"productName\": \"GrokHub Shell\",\n  \"version\": \"3.1.0\",\n}\n"
+        );
+        assert_eq!(
+            fx.get("packaging/aur/.SRCINFO"),
+            "pkgver = 3.1.0\nsource = grokhub::git+#tag=v3.1.0\n"
         );
         // Dependency version in [workspace.dependencies] is untouched.
         assert!(fx
