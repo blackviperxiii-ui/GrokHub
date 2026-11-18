@@ -59,7 +59,97 @@ impl SkillSource {
 
 // Bundled vstack skills (MIT; see `assets/skills/CREDITS.md`). The table is
 // generated from `assets/skills/vstack.json` by `.github/scripts/vstack_sync.py`.
-pub use crate::builtin_skills::{BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES, BUILTIN_SKILL_FILES};
+pub use crate::builtin_skills::{
+    BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BINARIES, BUILTIN_SKILL_BODIES, BUILTIN_SKILL_FILES,
+    BUILTIN_VSTACK_TAG,
+};
+
+/// Drop cached discovery results so a fresh vstack sync takes effect on the
+/// very next turn.
+pub fn invalidate_discover_cache() {
+    if let Ok(mut guard) = DISCOVER_CACHE.lock() {
+        *guard = None;
+    }
+}
+
+fn active_synced_root() -> Option<PathBuf> {
+    grokhub_core::vstack_sync::active_synced_skills_dir(
+        &crate::perm::config_dir(),
+        BUILTIN_VSTACK_TAG,
+    )
+}
+
+fn synced_skill_folders(root: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(rd) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut folders = Vec::new();
+    for ent in rd.flatten() {
+        let name = ent.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let dir = ent.path();
+        if real_dir(&dir) && regular_file(&dir.join("SKILL.md")) {
+            folders.push((name, dir));
+        }
+    }
+    folders.sort_by(|a, b| a.0.cmp(&b.0));
+    folders
+}
+
+fn synced_skill_dir_for(name: &str) -> Option<(String, PathBuf, String)> {
+    let root = active_synced_root()?;
+    let want = normalize_name(name);
+    for (folder, dir) in synced_skill_folders(&root) {
+        let Ok(text) = fs::read_to_string(dir.join("SKILL.md")) else {
+            continue;
+        };
+        if folder == name
+            || normalize_name(&folder) == want
+            || parse_skill(&text, Some(&folder)).is_some_and(|p| p.name == want)
+        {
+            return Some((folder, dir, text));
+        }
+    }
+    None
+}
+
+/// Active built-in `(folder, SKILL.md)` entries: synced on-disk vstack set when
+/// valid and current, otherwise the bundled snapshot.
+pub fn active_builtin_bodies() -> Vec<(String, String)> {
+    if let Some(root) = active_synced_root() {
+        let mut out = Vec::new();
+        for (folder, dir) in synced_skill_folders(&root) {
+            if let Ok(text) = fs::read_to_string(dir.join("SKILL.md")) {
+                out.push((folder, text));
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    BUILTIN_SKILL_BODIES
+        .iter()
+        .map(|(n, b)| ((*n).to_string(), (*b).to_string()))
+        .collect()
+}
+
+/// Always-on built-in skill names filtered to those present in the active
+/// built-in set.
+pub fn active_always_on() -> Vec<&'static str> {
+    if let Some(root) = active_synced_root() {
+        let active: Vec<&'static str> = BUILTIN_ALWAYS_ON
+            .iter()
+            .copied()
+            .filter(|name| regular_file(&root.join(name).join("SKILL.md")))
+            .collect();
+        if !active.is_empty() {
+            return active;
+        }
+    }
+    BUILTIN_ALWAYS_ON.to_vec()
+}
 
 fn builtin_body(name: &str) -> Option<&'static str> {
     BUILTIN_SKILL_BODIES
@@ -68,7 +158,7 @@ fn builtin_body(name: &str) -> Option<&'static str> {
         .map(|(_, body)| *body)
 }
 
-/// The other files in a built-in skill's folder: path inside it and text.
+/// The other text files in a built-in skill's folder: path inside it and text.
 fn builtin_files(name: &str) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
     BUILTIN_SKILL_FILES
         .iter()
@@ -76,11 +166,37 @@ fn builtin_files(name: &str) -> impl Iterator<Item = (&'static str, &'static str
         .map(|(_, rel, text)| (*rel, *text))
 }
 
+/// Non-UTF-8 binary files in a built-in skill's folder: path inside it and bytes.
+fn builtin_binary_files(name: &str) -> impl Iterator<Item = (&'static str, &'static [u8])> + '_ {
+    BUILTIN_SKILL_BINARIES
+        .iter()
+        .filter(move |(n, _, _)| *n == name || normalize_name(n) == normalize_name(name))
+        .map(|(_, rel, bytes)| (*rel, *bytes))
+}
+
 /// Where a built-in skill's own files are written, under the config dir, so a
 /// script its text names can run.
 const BUILTIN_DIR: &str = "builtin-skills";
 /// How a vstack skill's text names its own folder.
 const THIS_SKILL: &str = "<this skill>";
+
+fn write_if_changed(path: &Path, bytes: &[u8]) -> Option<()> {
+    if fs::read(path).ok().as_deref() == Some(bytes) {
+        return Some(());
+    }
+    fs::create_dir_all(path.parent()?).ok()?;
+    // Write aside, then rename, so a session running the script never
+    // reads it half written.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("tmp-{}-{n}", std::process::id()));
+    fs::write(&tmp, bytes).ok()?;
+    if fs::rename(&tmp, path).is_err() {
+        let _ = fs::remove_file(&tmp);
+        return None;
+    }
+    Some(())
+}
 
 /// For a built-in skill whose text runs files from `<this skill>/`, writes its
 /// extra files to `{GROKHUB_CONFIG}/builtin-skills/<skill>/` (only the ones that
@@ -93,25 +209,17 @@ fn builtin_folder(name: &str) -> Option<PathBuf> {
     if !text.contains(THIS_SKILL) {
         return None;
     }
-    let mut files = builtin_files(folder).peekable();
-    files.peek()?;
+    let has_text = builtin_files(folder).next().is_some();
+    let has_bin = builtin_binary_files(folder).next().is_some();
+    if !has_text && !has_bin {
+        return None;
+    }
     let dir = crate::perm::config_dir().join(BUILTIN_DIR).join(folder);
-    for (rel, text) in files {
-        let path = dir.join(rel);
-        if fs::read_to_string(&path).is_ok_and(|have| have == text) {
-            continue;
-        }
-        fs::create_dir_all(path.parent()?).ok()?;
-        // Write aside, then rename, so a session running the script never
-        // reads it half written.
-        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = path.with_extension(format!("tmp-{}-{n}", std::process::id()));
-        fs::write(&tmp, text).ok()?;
-        if fs::rename(&tmp, &path).is_err() {
-            let _ = fs::remove_file(&tmp);
-            return None;
-        }
+    for (rel, body) in builtin_files(folder) {
+        write_if_changed(&dir.join(rel), body.as_bytes())?;
+    }
+    for (rel, bytes) in builtin_binary_files(folder) {
+        write_if_changed(&dir.join(rel), bytes)?;
     }
     Some(dir)
 }
@@ -125,6 +233,13 @@ fn slashed(dir: &Path) -> String {
 /// quoted path under the folder its files were written to. `None` for a name
 /// that isn't built in.
 pub fn builtin_text(name: &str) -> Option<String> {
+    if let Some((_, dir, text)) = synced_skill_dir_for(name) {
+        return Some(if text.contains(THIS_SKILL) {
+            quote_folder(&text, &slashed(&dir))
+        } else {
+            text
+        });
+    }
     let text = builtin_body(name)?;
     Some(match builtin_folder(name) {
         Some(dir) => quote_folder(text, &slashed(&dir)),
@@ -154,6 +269,30 @@ fn quote_folder(text: &str, dir: &str) -> String {
 }
 
 fn builtin_skills() -> Vec<Skill> {
+    if let Some(root) = active_synced_root() {
+        let folders = synced_skill_folders(&root);
+        let mut out = Vec::with_capacity(folders.len());
+        for (folder, dir) in folders {
+            let path = dir.join("SKILL.md");
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Some(parsed) = parse_skill(&text, Some(&folder)) else {
+                continue;
+            };
+            out.push(Skill {
+                name: parsed.name,
+                description: parsed.description,
+                allowed_tools: parsed.allowed_tools,
+                source: SkillSource::Builtin,
+                path,
+                dir,
+            });
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
     let mut out = Vec::with_capacity(BUILTIN_SKILL_BODIES.len());
     for (folder, text) in BUILTIN_SKILL_BODIES {
         let Some(parsed) = parse_skill(text, Some(folder)) else {
@@ -272,6 +411,16 @@ fn discover_cache_key(
     }
     let cabin = cabin_skills_dir();
     keys.push((cabin.clone(), skill_root_mtime(&cabin)));
+    let cfg = crate::perm::config_dir();
+    let synced = grokhub_core::vstack_sync::skills_dir(&cfg);
+    let synced_state = grokhub_core::vstack_sync::state_path(&cfg);
+    keys.push((synced.clone(), skill_root_mtime(&synced)));
+    keys.push((
+        synced_state.clone(),
+        fs::symlink_metadata(&synced_state)
+            .and_then(|m| m.modified())
+            .ok(),
+    ));
     for dir in plugin_dirs {
         keys.push((dir.clone(), skill_root_mtime(dir)));
     }
@@ -506,11 +655,28 @@ pub fn tool_run(workspace: &Path, args: &Value) -> ToolOutput {
 }
 
 fn render(skill: &Skill, rel: Option<&str>) -> ToolOutput {
+    let synced_disk = skill.source == SkillSource::Builtin && regular_file(&skill.path);
     let body = if skill.source == SkillSource::Builtin {
-        match builtin_text(&skill.name) {
-            Some(text) => clip_chars(&skill_body(&text), BODY_CAP),
-            None => {
-                return ToolOutput::err(format!("unknown builtin skill `{}`", skill.name));
+        if synced_disk {
+            match fs::read_to_string(&skill.path) {
+                Ok(text) => {
+                    let expanded = if text.contains(THIS_SKILL) {
+                        quote_folder(&text, &slashed(&skill.dir))
+                    } else {
+                        text
+                    };
+                    clip_chars(&skill_body(&expanded), BODY_CAP)
+                }
+                Err(err) => {
+                    return ToolOutput::err(format!("read {}: {err}", skill.path.display()));
+                }
+            }
+        } else {
+            match builtin_text(&skill.name) {
+                Some(text) => clip_chars(&skill_body(&text), BODY_CAP),
+                None => {
+                    return ToolOutput::err(format!("unknown builtin skill `{}`", skill.name));
+                }
             }
         }
     } else {
@@ -537,9 +703,14 @@ fn render(skill: &Skill, rel: Option<&str>) -> ToolOutput {
         out.push('\n');
     }
     out.push_str("Files:\n");
-    if skill.source == SkillSource::Builtin {
+    if skill.source == SkillSource::Builtin && !synced_disk {
         out.push_str("- SKILL.md\n");
         for (file, _) in builtin_files(&skill.name) {
+            out.push_str("- ");
+            out.push_str(file);
+            out.push('\n');
+        }
+        for (file, _) in builtin_binary_files(&skill.name) {
             out.push_str("- ");
             out.push_str(file);
             out.push('\n');
@@ -553,11 +724,14 @@ fn render(skill: &Skill, rel: Option<&str>) -> ToolOutput {
             let rel = rel.strip_prefix("./").unwrap_or(rel);
             let text = if rel == "SKILL.md" {
                 body
+            } else if let Some((_, text)) =
+                builtin_files(&skill.name).find(|(file, _)| *file == rel)
+            {
+                clip_chars(text, BODY_CAP)
+            } else if builtin_binary_files(&skill.name).any(|(file, _)| file == rel) {
+                return ToolOutput::err("binary file cannot be read as UTF-8 text");
             } else {
-                match builtin_files(&skill.name).find(|(file, _)| *file == rel) {
-                    Some((_, text)) => clip_chars(text, BODY_CAP),
-                    None => return ToolOutput::err("path is not available"),
-                }
+                return ToolOutput::err("path is not available");
             };
             out.push_str("\nFile ");
             out.push_str(rel);
@@ -569,6 +743,11 @@ fn render(skill: &Skill, rel: Option<&str>) -> ToolOutput {
     for file in list_files(&skill.dir) {
         out.push_str("- ");
         out.push_str(&file);
+        out.push('\n');
+    }
+    if synced_disk && fs::read_to_string(&skill.path).is_ok_and(|t| t.contains(THIS_SKILL)) {
+        out.push_str("Folder on disk: ");
+        out.push_str(&slashed(&skill.dir));
         out.push('\n');
     }
     if let Some(rel) = rel {
@@ -1267,9 +1446,25 @@ mod tests {
             );
             let read = load_in(&repo, name, Some(rel));
             assert!(!read.failed, "{name}/{rel}: {}", read.text);
+            let expected = clip_chars(text, BODY_CAP);
             assert!(
-                read.text.ends_with(&format!("\nFile {rel}:\n{text}")),
+                read.text.ends_with(&format!("\nFile {rel}:\n{expected}")),
                 "{name}/{rel}"
+            );
+        }
+        for (name, rel, bytes) in BUILTIN_SKILL_BINARIES {
+            let on_disk = fs::read(assets.join(name).join(rel)).unwrap();
+            assert_eq!(*bytes, on_disk.as_slice(), "{name}/{rel}");
+            let listed = load_in(&repo, name, None);
+            assert!(
+                listed.text.contains(&format!("\n- {rel}\n")),
+                "{}",
+                listed.text
+            );
+            let read = load_in(&repo, name, Some(rel));
+            assert!(
+                read.failed,
+                "{name}/{rel} should refuse text dump of binary"
             );
         }
         let guide = load_in(&repo, "elevate", Some("GUIDE.md"));
@@ -1277,10 +1472,16 @@ mod tests {
         let missing = load_in(&repo, "elevate", Some("NOPE.md"));
         assert!(missing.failed);
         assert_eq!(missing.text, "path is not available");
-        // Left-out skills stay out.
-        for name in ["setup-vstack", "stageshow"] {
-            assert!(doc["exclude"][name].is_string(), "{name}");
-            assert!(found.iter().all(|s| s.name != name), "{name}");
+        // Full vstack set is bundled: nothing excluded and former exclusions are present.
+        assert!(doc["exclude"].as_object().unwrap().is_empty());
+        for name in [
+            "setup-vstack",
+            "stageshow",
+            "updater",
+            "modern-web-guidance",
+            "chrome-extensions",
+        ] {
+            assert!(found.iter().any(|s| s.name == name), "{name}");
         }
 
         let credits = fs::read_to_string(assets.join("CREDITS.md")).unwrap();
@@ -1309,6 +1510,84 @@ mod tests {
             .collect();
         assert_eq!(credit_list(&credits, "Left out:"), left);
         assert!(assets.join("LICENSE-upstream").is_file());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn synced_vstack_skills_override_bundled_and_reflect_updates_and_deletions() {
+        fn tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
+            grokhub_core::vstack_sync::tar_gz_for_test(entries).unwrap()
+        }
+
+        let root = scratch("synced-runtime");
+        let repo = root.join("repo");
+        let home = root.join("empty-home");
+        let cfg = root.join("cfg");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+
+        // Before sync, bundled snapshot is active.
+        let before = discover(&repo, Some(&home), &[]);
+        assert!(before.iter().any(|s| s.name == "elevate"));
+
+        // Install synced snapshot v9.9.0 with qa-walkthrough, alpha, and beta.
+        let sha1 = "1111111111111111111111111111111111111111";
+        let ar1 = tar_gz(&[
+            (&format!("vstack-{sha1}/VERSION"), b"9.9.0\n"),
+            (
+                &format!("vstack-{sha1}/skills/qa-walkthrough/SKILL.md"),
+                b"---\nname: qa-walkthrough\ndescription: synced qa\n---\nSynced QA body.\n",
+            ),
+            (
+                &format!("vstack-{sha1}/skills/alpha-sync/SKILL.md"),
+                b"---\nname: alpha-sync\ndescription: synced alpha\n---\nRun <this skill>/scripts/run.py\n",
+            ),
+            (
+                &format!("vstack-{sha1}/skills/alpha-sync/scripts/run.py"),
+                b"print('ok')\n",
+            ),
+        ]);
+        grokhub_core::vstack_sync::install_archive(&cfg, &ar1, sha1, Some("v9.9.0".into()), 1_000)
+            .unwrap();
+        invalidate_discover_cache();
+
+        let synced1 = discover(&repo, Some(&home), &[]);
+        assert!(synced1.iter().any(|s| s.name == "alpha-sync"));
+        assert!(!synced1.iter().any(|s| s.name == "elevate"));
+        let alpha_out = load_in(&repo, "alpha-sync", None);
+        assert!(!alpha_out.failed, "{}", alpha_out.text);
+        assert!(alpha_out.text.contains("scripts/run.py"));
+        assert!(alpha_out.text.contains("Folder on disk:"));
+        assert!(!alpha_out.text.contains("<this skill>"));
+        assert_eq!(active_always_on(), vec!["qa-walkthrough"]);
+        assert!(active_builtin_bodies()
+            .iter()
+            .any(|(n, _)| n == "alpha-sync"));
+
+        // Update qa-walkthrough, remove alpha-sync, add gamma-sync.
+        let sha2 = "2222222222222222222222222222222222222222";
+        let ar2 = tar_gz(&[
+            (&format!("vstack-{sha2}/VERSION"), b"9.9.1\n"),
+            (
+                &format!("vstack-{sha2}/skills/qa-walkthrough/SKILL.md"),
+                b"---\nname: qa-walkthrough\ndescription: synced qa v2\n---\nUpdated QA.\n",
+            ),
+            (
+                &format!("vstack-{sha2}/skills/gamma-sync/SKILL.md"),
+                b"---\nname: gamma-sync\ndescription: synced gamma\n---\nGamma.\n",
+            ),
+        ]);
+        grokhub_core::vstack_sync::install_archive(&cfg, &ar2, sha2, None, 2_000).unwrap();
+        invalidate_discover_cache();
+
+        let synced2 = discover(&repo, Some(&home), &[]);
+        assert!(!synced2.iter().any(|s| s.name == "alpha-sync"));
+        assert!(synced2.iter().any(|s| s.name == "gamma-sync"));
+        assert!(builtin_text("qa-walkthrough")
+            .unwrap()
+            .contains("Updated QA."));
+
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -231,6 +231,7 @@ pub mod voice_engine;
 pub mod voice_flow;
 pub mod voice_live;
 pub mod voice_turn;
+pub mod vstack_sync;
 pub mod watch_learn;
 pub mod week_recap;
 pub mod what_changed;

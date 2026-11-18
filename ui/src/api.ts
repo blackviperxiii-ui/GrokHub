@@ -5221,6 +5221,27 @@ export function codeDeployRun(
   return invoke<CodeTestResult>("code_deploy_run", { command, confirmed });
 }
 
+/** Settings → Code → Coding skills (vstack): active version/commit and sync state. */
+export interface VstackStatus {
+  repo: string;
+  source: "synced" | "bundled" | string;
+  version: string;
+  tag: string | null;
+  commit: string;
+  lastSyncMs: number | null;
+  lastCheckMs: number | null;
+  lastError: string | null;
+  skillCount: number;
+}
+
+export function vstackSyncStatus(): Promise<VstackStatus> {
+  return invoke<VstackStatus>("vstack_sync_status");
+}
+
+export function vstackSyncNow(): Promise<VstackStatus> {
+  return invoke<VstackStatus>("vstack_sync_now");
+}
+
 export function onCodeDeployRun(
   handler: (chunk: CodeRunChunk) => void,
 ): Promise<UnlistenFn> {

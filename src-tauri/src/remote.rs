@@ -1349,7 +1349,7 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-          const REVIEWED: [&str; 99] = [
+        const REVIEWED: [&str; 99] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
