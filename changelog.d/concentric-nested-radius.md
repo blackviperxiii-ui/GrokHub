@@ -1,0 +1,1 @@
+- UI: concentric nested corner radii on menus and inset card actions (inner = outer − gap, floored at 4px).
