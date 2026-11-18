@@ -100,7 +100,7 @@ pub struct DreamRetire {
 }
 
 /// What one pass did.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DreamReport {
     pub date: String,
     /// Live nodes that could be read.
@@ -117,8 +117,28 @@ pub struct DreamReport {
     pub sealed_skipped: usize,
     /// Lines proposed for USER.md, not applied.
     pub proposed_user: Vec<String>,
+    /// Retention window used (`0` or `u64::MAX` keeps everything).
+    pub ttl_days: u64,
     /// Where the report was written.
     pub path: Option<PathBuf>,
+}
+
+impl Default for DreamReport {
+    fn default() -> Self {
+        Self {
+            date: String::new(),
+            looked_at: 0,
+            recent: 0,
+            backlog: 0,
+            merges: Vec::new(),
+            retired: Vec::new(),
+            linked: 0,
+            sealed_skipped: 0,
+            proposed_user: Vec::new(),
+            ttl_days: DREAM_TTL_DAYS,
+            path: None,
+        }
+    }
 }
 
 impl DreamReport {
@@ -193,12 +213,20 @@ impl DreamReport {
             }
             out.push_str("```\n");
         }
+        let stale_setting = match self.ttl_days {
+            0 | u64::MAX => format!(
+                "stale below confidence {} never retired (keeps everything)",
+                DREAM_STALE_BELOW
+            ),
+            days => format!(
+                "stale below confidence {} after {} days",
+                DREAM_STALE_BELOW, days
+            ),
+        };
         out.push_str(&format!(
-            "\nSettings: duplicates at {}% shared words (or {}% with the same tags), stale below confidence {} after {} days.\n",
+            "\nSettings: duplicates at {}% shared words (or {}% with the same tags), {stale_setting}.\n",
             pct(DREAM_DUP_JACCARD),
             pct(DREAM_TAG_JACCARD),
-            DREAM_STALE_BELOW,
-            DREAM_TTL_DAYS
         ));
         redact_secrets(&out)
     }
@@ -487,6 +515,7 @@ impl AmrStore {
             date: date.clone(),
             looked_at: nodes.len(),
             sealed_skipped: loaded.locked,
+            ttl_days: opts.ttl_days,
             ..DreamReport::default()
         };
         let recent: Vec<bool> = nodes
@@ -560,7 +589,7 @@ impl AmrStore {
             if losers.contains(&i) || winners.contains(&i) || link_of(&n.id) != Linked::None {
                 continue;
             }
-            if low[i] && n.updated < ttl_cut {
+            if opts.ttl_days != 0 && opts.ttl_days != u64::MAX && low[i] && n.updated < ttl_cut {
                 stale.push(i);
                 report.retired.push(DreamRetire {
                     id: n.id.clone(),
@@ -984,7 +1013,7 @@ mod tests {
         );
     }
 
-    /// "Keep everything" reaches the dream as an endless TTL: nothing is retired.
+    /// "Keep everything" reaches the dream as an endless TTL (or 0): nothing is retired.
     #[test]
     fn an_endless_ttl_retires_nothing() {
         let tmp = Tmp::new("endless-ttl");
@@ -999,17 +1028,70 @@ mod tests {
                 &[],
             ))
             .unwrap();
-        let report = store
+        for ttl in [u64::MAX, 0] {
+            let report = store
+                .dream_once(
+                    NOW,
+                    &DreamOpts {
+                        ttl_days: ttl,
+                        ..DreamOpts::default()
+                    },
+                )
+                .unwrap();
+            assert_eq!(report.retired.len(), 0);
+            assert!(!store.is_forgotten("old-guess"));
+            let md = report.markdown();
+            assert!(md.contains("never retired (keeps everything)."), "{md}");
+        }
+    }
+
+    #[test]
+    fn dream_report_settings_line_reflects_retention_days() {
+        let tmp = Tmp::new("retention-settings");
+        let store = AmrStore::at(&tmp.0);
+        store.init().unwrap();
+        store
+            .remember(&node(
+                "mid-guess",
+                "Maybe the pier closes early",
+                0.2,
+                MIDDLE,
+                &[],
+            ))
+            .unwrap();
+
+        let thirty = store
             .dream_once(
                 NOW,
                 &DreamOpts {
-                    ttl_days: u64::MAX,
+                    ttl_days: 30,
                     ..DreamOpts::default()
                 },
             )
             .unwrap();
-        assert_eq!(report.retired.len(), 0);
-        assert!(!store.is_forgotten("old-guess"));
+        assert_eq!(thirty.retired.len(), 1);
+        let written = fs::read_to_string(thirty.path.as_ref().unwrap()).unwrap();
+        assert!(
+            written.contains("stale below confidence 0.3 after 30 days."),
+            "{written}"
+        );
+        assert!(!written.contains("after 90 days"), "{written}");
+
+        let keep = DreamReport {
+            ttl_days: 0,
+            ..DreamReport::default()
+        };
+        let keep_md = keep.markdown();
+        assert!(
+            keep_md.contains("stale below confidence 0.3 never retired (keeps everything)."),
+            "{keep_md}"
+        );
+
+        let default_md = DreamReport::default().markdown();
+        assert!(
+            default_md.contains("stale below confidence 0.3 after 90 days."),
+            "{default_md}"
+        );
     }
 
     #[test]
