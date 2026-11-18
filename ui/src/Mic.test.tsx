@@ -31,6 +31,8 @@ vi.mock("./api", async () => {
       version: "3.5.0",
       summonHotkey: false,
       notifications: true,
+      dockPanels: false,
+      dockLayout: { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
     } satisfies Settings),
   saveSettings: vi.fn(),
   answerElicit: vi.fn(),

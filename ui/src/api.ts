@@ -40,6 +40,30 @@ export interface Settings {
   /** Settings → Account under a live Grok sign-in: the SuperGrok pool's room,
    * or that xAI's plan gate refused the sign-in. */
   planNote?: string | null;
+  /** Settings → Behavior → Dockable panels: the main pages as tabs in panes. */
+  dockPanels: boolean;
+  /** The dock's pane layout, kept in shell.json. */
+  dockLayout: DockLayout;
+}
+
+/** One pane of the dock (src-tauri/src/settings.rs `DockPane`). */
+export interface DockPane {
+  /** The pane's stable name: it survives tab moves, so the page mounted in
+   * the pane is not remounted when its tabs change. */
+  id: string;
+  /** The pane's page tabs, by page name. */
+  tabs: string[];
+  /** The showing tab: an index into `tabs`. */
+  active: number;
+  /** This pane's share of the row, per-mille. 0 reads as an equal share. */
+  share: number;
+}
+
+/** The dock's layout: panes side by side, one of them focused. */
+export interface DockLayout {
+  panes: DockPane[];
+  /** The pane nav and focus follow: an index into `panes`. */
+  focused: number;
 }
 
 /** What this platform runs (src-tauri/src/capabilities.rs). */
@@ -357,6 +381,14 @@ export function setSummonHotkey(on: boolean): Promise<Settings> {
 
 export function setNotifications(on: boolean): Promise<Settings> {
   return invoke<Settings>("set_notifications", { on });
+}
+
+export function setDockPanels(on: boolean): Promise<Settings> {
+  return invoke<Settings>("set_dock_panels", { on });
+}
+
+export function saveDockLayout(layout: DockLayout): Promise<Settings> {
+  return invoke<Settings>("save_dock_layout", { layout });
 }
 
 export function setApiKey(key: string): Promise<Settings> {

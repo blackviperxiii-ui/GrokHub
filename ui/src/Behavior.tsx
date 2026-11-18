@@ -20,6 +20,8 @@ const laneLabel = (lane: Lane) => LANES.find((l) => l.value === lane)?.label ?? 
 export const QUIET_NOTE = "Leave both empty for no quiet hours.";
 export const SCHEDULE_NOTE = `Automations run on their schedule while ${PRODUCT_NAME} is open or in the tray. Quiet hours hold back Pulse digests and suggestions. PC alerts, such as low disk, and scheduled automations still go ahead, and the daily budget doesn't hold an automation back yet.`;
 export const PAUSE_NOTE = "Saved for later: scheduled work doesn't wait on the budget yet. Chat still sends.";
+export const DOCK_NOTE =
+  "Main pages become rearrangeable tabs in side-by-side panes: drag a tab to move it, drop it on a pane's edge to split, drag the divider to resize. Off keeps today's fixed layout. The layout is kept in shell.json.";
 
 function quietLabel(b: Shape) {
   return b.quietStart ? `${b.quietStart}–${b.quietEnd}` : "None";
@@ -31,12 +33,15 @@ export function Behavior({
   tray,
   readOnly = false,
   onCloseToTray,
+  dock,
 }: {
   /** This platform has a tray. */
   tray: boolean;
   readOnly?: boolean;
   /** Settings keeps its own copy of the tray choice for General's save. */
   onCloseToTray?: (on: boolean) => void;
+  /** Dockable panels, on the desktop shell only; absent anywhere else. */
+  dock?: { on: boolean; onToggle: (on: boolean) => void } | null;
 }) {
   const [page, setPage] = useState<BehaviorPage | null>(null);
   const [start, setStart] = useState("");
@@ -162,6 +167,15 @@ export function Behavior({
         Composer glow
       </Toggle>
       <p className="note">{COMPOSER_GLOW_NOTE}</p>
+      {dock && (
+        <>
+          <h2>Pages</h2>
+          <Toggle checked={dock.on} onChange={dock.onToggle}>
+            Dockable panels
+          </Toggle>
+          <p className="note">{DOCK_NOTE}</p>
+        </>
+      )}
       <h2>Automations &amp; limits</h2>
       <form onSubmit={saveQuiet}>
         <label>
