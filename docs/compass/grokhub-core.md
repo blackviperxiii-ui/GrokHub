@@ -31,5 +31,6 @@
 - Some modules assert on their own source with `include_str!` (`chips.rs`, `state.rs`); a reworded string or moved fn can fail a test.
 - `crates/grokhub-core/src/imagine_auth.rs` only re-exports `xai_signin`; keychain storage for Imagine is the retired cabin's imagine_auth.rs.
 - The harness is not here: it lives in `crates/grokhub-agent/src/harness/mod.rs`.
+- Messaging channels' shared trust rules are in `crates/grokhub-core/src/msg_channels.rs`: `DmTrust` (pairing codes, paired senders per channel in `channels/trust.json`), `verify_webhook` (HMAC-SHA256 over `"{timestamp}.{body}"`, 5-minute skew) and the declarative webhook `Filter`s. No adapter talks to a network yet.
 ## See also
 - [amr](amr.md), [slash](slash.md), [desktop-mcp](desktop-mcp.md), [grokhub-hub](grokhub-hub.md), [install-scripts](install-scripts.md)
