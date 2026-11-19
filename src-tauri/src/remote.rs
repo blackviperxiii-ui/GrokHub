@@ -1210,6 +1210,8 @@ mod tests {
             "get_bot_desktop",
             "set_bot_desktop",
             "bot_desktop_frame",
+            "get_browser_attach",
+            "save_browser_attach",
             "set_summon_hotkey",
             "set_notifications",
             "nyx_tiles",

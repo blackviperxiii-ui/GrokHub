@@ -113,7 +113,7 @@ pub fn mentioned_connectors<'a>(text: &str, known: &'a [String]) -> Vec<&'a str>
             continue;
         }
         let pat = format!(" {needle} ");
-        if padded.contains(&pat) && !out.iter().any(|n| *n == name.as_str()) {
+        if padded.contains(&pat) && !out.contains(&name.as_str()) {
             out.push(name.as_str());
         }
     }

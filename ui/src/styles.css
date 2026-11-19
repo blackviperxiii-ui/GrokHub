@@ -2589,6 +2589,31 @@ button.md-copy {
   align-items: flex-start;
 }
 
+/* Settings → Your browser: the allowed sites, each with Remove. */
+.settings .attach-sites {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings .attach-sites li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.settings .attach-add {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+
 /* Settings → Bot Desktop: the hidden screen, scaled to the column. */
 .settings .bot-desktop-preview {
   width: 100%;
