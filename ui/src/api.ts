@@ -2543,8 +2543,6 @@ export function goalAct(acts: GoalAct[]): Promise<GoalsSaved> {
 }
 
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
-export type LocalMode = "auto" | "manual";
-
 export interface LocalCaps {
   rampUp: number;
   normal: number;
@@ -2567,13 +2565,13 @@ export interface LocalManual {
 }
 
 export interface LocalAiConfig {
-  mode: LocalMode;
   pauseForGames: boolean;
   useIdleTime: boolean;
   throttleOnBattery: boolean;
   manual: LocalManual;
-  /** A catalog id or a model file's path; empty for the tier default. */
-  localModel: { selected: string };
+  /** Model files the user added (.gguf paths); Auto loads the first one on
+   * disk when no downloaded model is there. */
+  ownFiles: string[];
   /** Model files whose notice was read. */
   noticeSeen: string[];
 }

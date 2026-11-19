@@ -151,12 +151,13 @@ fn name(p: &Path) -> String {
         .unwrap_or_else(|| p.display().to_string())
 }
 
-/// The raw pick in `local_ai.json`, when one is set.
-fn raw_pick(config_dir: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(config_dir.join("local_ai.json")).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let pick = v.get("localModel")?.get("selected")?.as_str()?.trim();
-    (!pick.is_empty()).then(|| pick.to_string())
+/// How many model files the user added in `local_ai.json` (`ownFiles`).
+fn added_files(config_dir: &Path) -> usize {
+    std::fs::read_to_string(config_dir.join("local_ai.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("ownFiles")?.as_array().map(Vec::len))
+        .unwrap_or(0)
 }
 
 /// What the models folders hold, one line each.
@@ -236,12 +237,14 @@ pub fn diagnose(config_dir: &Path) -> Report {
         None => "Engine: llama-server not found in the app's bin folder or on PATH.".into(),
     });
     folder_facts(config_dir, &mut facts);
-    let pick = raw_pick(config_dir);
-    let picked = local_sidecar::picked_model(config_dir);
-    if let Some(p) = &pick {
-        facts.push(match &picked {
-            Some(f) => format!("Picked model: {}.", f.display()),
-            None => format!("Picked model {p} isn't on disk, so the engine looks for another."),
+    let added = added_files(config_dir);
+    if added > 0 {
+        facts.push(match local_sidecar::own_model(config_dir) {
+            Some(f) => format!(
+                "Added model file: {} (loads when no downloaded model is there).",
+                f.display()
+            ),
+            None => format!("None of the {added} added model file(s) is on disk."),
         });
     }
     let model = local_sidecar::find_model(config_dir);

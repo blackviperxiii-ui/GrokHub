@@ -3237,13 +3237,9 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   padding-left: 24px;
 }
 
-.local-mode {
-  display: flex;
-  gap: 8px;
-}
-
-.local-mode button[aria-pressed="true"] {
-  border-color: var(--accent);
+.local-advanced > summary {
+  cursor: pointer;
+  font-weight: 600;
 }
 
 .local-manual {
@@ -3263,24 +3259,18 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   background: var(--panel);
 }
 
-.local-model .check {
-  gap: 8px;
-  flex-wrap: wrap;
+.local-model button {
+  align-self: flex-start;
 }
 
 .local-model-name {
   font-weight: 600;
 }
 
-.local-model-meta,
-.local-model-reason {
+.local-model-meta {
   color: var(--muted);
   font-size: var(--font-body);
   overflow-wrap: anywhere;
-}
-
-.local-model.hidden {
-  opacity: 0.7;
 }
 
 .badge {

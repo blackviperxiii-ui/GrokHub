@@ -1,13 +1,17 @@
-//! Settings → Local AI: Auto (the default) or Manual, the model picker
-//! (`local_picker::score`), the files already on this PC, what hardware
-//! detection could not see, and the tray's state chip.
+//! Settings → Local AI: what Auto picks for this PC (`local_picker::score`),
+//! the model files the user added, the Advanced engine tuning, what hardware
+//! detection could not see, and the tray's state chip. There is no model
+//! picker: Auto picks the model, and a model file the user adds loads when no
+//! downloaded catalog model is there.
 //!
-//! Choices live in `local_ai.json` in the GrokHub config folder, the pick
-//! under `localModel.selected`. The `app.json` `localModel` on/off switch is
-//! separate: `local_use` owns it, and the typo tidy (`prompt_tidy`) only
-//! reads it. The game,
-//! idle and battery switches and the app lists go to `local/governor.json`,
-//! which the cabin's governor reads.
+//! Choices live in `local_ai.json` in the GrokHub config folder, the added
+//! files under `ownFiles`. A file from before (with the old Auto / Manual
+//! `mode` and a `localModel.selected` pick) is read by [`load`]: a picked
+//! model file becomes an added file, a catalog pick goes back to Auto, and
+//! tuning saved under Auto is dropped. The `app.json` `localModel` on/off
+//! switch is separate: `local_use` owns it, and the typo tidy (`prompt_tidy`)
+//! only reads it. The game, idle and battery switches and the app lists go to
+//! `local/governor.json`, which the cabin's governor reads.
 
 use std::path::{Path, PathBuf};
 
@@ -31,17 +35,6 @@ const CTX_MAX: u32 = 131_072;
 const NGL_MAX: u32 = 999;
 const IDLE_MAX_MIN: u32 = 240;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    Manual,
-    /// GrokHub picks the model and its settings for this machine. A value
-    /// this build doesn't know reads as Auto (serde wants it last).
-    #[default]
-    #[serde(other)]
-    Auto,
-}
-
 /// Memory share each governor state may plan for, in percent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -61,6 +54,8 @@ impl Default for Caps {
     }
 }
 
+/// Settings → Local AI → Advanced: engine tuning that applies whenever it's
+/// set (blank is Auto), and the game app lists. Saved under `manual`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Manual {
@@ -98,23 +93,17 @@ impl Default for Manual {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Selected {
-    /// A catalog id, or the path of a model file. Empty: the tier default.
-    pub selected: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LocalAiConfig {
-    pub mode: Mode,
     pub pause_for_games: bool,
     pub use_idle_time: bool,
     /// Local AI slows down on battery.
     pub throttle_on_battery: bool,
     pub manual: Manual,
-    pub local_model: Selected,
+    /// Model files the user added (`.gguf` paths). The engine loads the first
+    /// one on disk when no downloaded catalog model is there.
+    pub own_files: Vec<String>,
     /// Third-party model files whose notice the user has read.
     pub notice_seen: Vec<String>,
 }
@@ -122,12 +111,11 @@ pub struct LocalAiConfig {
 impl Default for LocalAiConfig {
     fn default() -> Self {
         LocalAiConfig {
-            mode: Mode::Auto,
             pause_for_games: true,
             use_idle_time: true,
             throttle_on_battery: true,
             manual: Manual::default(),
-            local_model: Selected::default(),
+            own_files: Vec::new(),
             notice_seen: Vec::new(),
         }
     }
@@ -140,6 +128,17 @@ fn one_of(value: &str, allowed: &[&str]) -> String {
     } else {
         "auto".into()
     }
+}
+
+/// Trimmed paths, each once, in order.
+fn paths(list: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in list.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        if !out.iter().any(|o| o == p) {
+            out.push(p.to_string());
+        }
+    }
+    out
 }
 
 fn app_list(apps: &[String]) -> Vec<String> {
@@ -175,7 +174,7 @@ impl LocalAiConfig {
         }
         m.allow_apps = app_list(&m.allow_apps);
         m.deny_apps = app_list(&m.deny_apps);
-        self.local_model.selected = self.local_model.selected.trim().to_string();
+        self.own_files = paths(&self.own_files);
         self.notice_seen = app_list(&self.notice_seen);
         self
     }
@@ -192,11 +191,8 @@ impl LocalAiConfig {
         }
     }
 
-    /// The launch overrides Manual sets; Auto sets none.
+    /// The launch overrides Advanced sets; a blank one stays on Auto.
     pub fn overrides(&self) -> local_autoconfig::Overrides {
-        if self.mode == Mode::Auto {
-            return local_autoconfig::Overrides::default();
-        }
         let m = &self.manual;
         local_autoconfig::Overrides {
             ngl: m.ngl,
@@ -215,12 +211,41 @@ pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join(FILE)
 }
 
-/// A missing or broken file gives the defaults.
+/// A missing or broken file gives the defaults. A file from before the
+/// model picker went away is read as [`from_old`] says.
 pub fn load(config_dir: &Path) -> LocalAiConfig {
-    std::fs::read_to_string(path(config_dir))
+    let Some(raw) = std::fs::read_to_string(path(config_dir))
         .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    else {
+        return LocalAiConfig::default();
+    };
+    let config = serde_json::from_value(raw.clone()).unwrap_or_default();
+    from_old(&raw, config)
+}
+
+/// The old page had an Auto / Manual `mode` and a model pick
+/// (`localModel.selected`). A picked model file becomes an added file; a
+/// catalog pick goes back to Auto. Tuning only counted under Manual, so
+/// tuning saved under Auto is dropped rather than switched on now.
+fn from_old(raw: &serde_json::Value, mut config: LocalAiConfig) -> LocalAiConfig {
+    let pick = raw
+        .get("localModel")
+        .and_then(|m| m.get("selected"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let is_file = Path::new(pick)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("gguf"));
+    if is_file && !config.own_files.iter().any(|f| f == pick) {
+        config.own_files.push(pick.to_string());
+    }
+    if raw.get("mode").and_then(serde_json::Value::as_str) == Some("auto") {
+        let m = &mut config.manual;
+        (m.ngl, m.ctx, m.threads, m.kv) = (None, None, None, "auto".into());
+    }
+    config
 }
 
 fn write(path: &Path, text: &str) -> Result<(), String> {
@@ -391,7 +416,7 @@ pub struct Picker {
     /// Recommended first, then May be slow, then Hidden (shown under Show all).
     pub models: Vec<ModelRow>,
     pub on_this_pc: Vec<FileRow>,
-    /// The pick: the saved one, else the tier default.
+    /// What Auto picks for this PC: the tier default.
     pub selected: String,
 }
 
@@ -474,14 +499,11 @@ pub fn picker(
         .iter()
         .map(|f| file_row(&f.path, f.bytes, source_name(f.source), &config.notice_seen))
         .collect();
-    let selected = match config.local_model.selected.as_str() {
-        "" => models
-            .iter()
-            .find(|m| m.preselected)
-            .map(|m| m.id.clone())
-            .unwrap_or_default(),
-        s => s.to_string(),
-    };
+    let selected = models
+        .iter()
+        .find(|m| m.preselected)
+        .map(|m| m.id.clone())
+        .unwrap_or_default();
     Picker {
         models,
         on_this_pc,
@@ -804,11 +826,7 @@ pub fn view(config_dir: &Path) -> LocalAiView {
         local_gov::level(),
         local_gov::reason(),
     );
-    let selected = if config.local_model.selected.is_empty() {
-        picker.selected.as_str()
-    } else {
-        config.local_model.selected.as_str()
-    };
+    let selected = picker.selected.as_str();
     let env = |k: &str| std::env::var(k).ok();
     LocalAiView {
         limits: limits(&machine, std::env::consts::OS, &env),
@@ -826,7 +844,7 @@ pub fn view(config_dir: &Path) -> LocalAiView {
     }
 }
 
-/// "Use a model file": the path must be a `.gguf` that exists.
+/// "Add a model file": the path must be a `.gguf` that exists.
 pub fn model_file(path: &str, seen: &[String]) -> Result<FileRow, String> {
     let path = PathBuf::from(path.trim());
     let gguf = path
@@ -861,29 +879,28 @@ pub const SPEED_TEST_LOCAL_OFF: &str =
 
 /// Saves the page's choices, clamped, and reads the page again.
 pub fn save_view(config_dir: &Path, config: LocalAiConfig) -> Result<LocalAiView, String> {
-    let before = local_sidecar::picked_model(config_dir);
+    let before = local_sidecar::find_model(config_dir);
     save(config_dir, &config.clamped(max_threads()))?;
-    // A new pick loads on the next request, not after a restart.
-    if local_sidecar::picked_model(config_dir) != before {
+    // A newly added (or removed) model file loads on the next request, not
+    // after a restart.
+    if local_sidecar::find_model(config_dir) != before {
         local_sidecar::stop_global();
     }
     Ok(refreshed(config_dir))
 }
 
-/// Reset to Auto: Manual's values and the pick go back to the defaults; the
-/// switches and the notices already read stay.
+/// Reset Advanced: the tuning and app lists go back to the defaults; the
+/// switches, the added files and the notices already read stay.
 pub fn reset(config_dir: &Path) -> Result<LocalAiView, String> {
     let old = load(config_dir);
     let config = LocalAiConfig {
-        mode: Mode::Auto,
         manual: Manual::default(),
-        local_model: Selected::default(),
         ..old
     };
     save_view(config_dir, config)
 }
 
-/// "Use a model file", against the notices already read.
+/// "Add a model file", against the notices already read.
 pub fn check_file(config_dir: &Path, path: &str) -> Result<FileRow, String> {
     model_file(path, &load(config_dir).notice_seen)
 }

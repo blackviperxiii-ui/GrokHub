@@ -200,17 +200,11 @@ fn an_apple_16_gb_mac_preselects_e4b_on_unified_memory() {
 }
 
 #[test]
-fn a_saved_pick_wins_and_status_says_when_nothing_is_set_up() {
+fn status_names_the_model_picked_for_this_pc_and_says_when_nothing_is_set_up() {
     let m = machine(vec![gpu("RTX 4090", 24_576)], 65_536);
-    let config = LocalAiConfig {
-        local_model: Selected {
-            selected: "gemma-4-12b-it-abliterated-q4_k".into(),
-        },
-        ..LocalAiConfig::default()
-    };
     let p = m.profile();
-    let picker = picker(&p, &BenchCache::new(), &[], &config);
-    assert_eq!(picker.selected, "gemma-4-12b-it-abliterated-q4_k");
+    let picker = picker(&p, &BenchCache::new(), &[], &LocalAiConfig::default());
+    assert_eq!(picker.selected, "gemma-4-26b-a4b-it-abliterated-q4_k");
     let s = status(
         &p,
         &picker,
@@ -223,36 +217,10 @@ fn a_saved_pick_wins_and_status_says_when_nothing_is_set_up() {
     assert_eq!(
         (s.model.as_str(), s.state.as_str(), s.reason.as_str()),
         (
-            "Gemma 4 12B",
+            "Gemma 4 26B-A4B",
             "Not set up",
             "No local engine or model is installed yet."
         )
-    );
-    // A stock Gemma 4 id saved by an older catalog is no catalog model now:
-    // it shows as saved, with no speed estimate.
-    let stale = super::picker(
-        &p,
-        &BenchCache::new(),
-        &[],
-        &LocalAiConfig {
-            local_model: Selected {
-                selected: "gemma-4-12b-it-q4_k_m".into(),
-            },
-            ..LocalAiConfig::default()
-        },
-    );
-    let s = status(
-        &p,
-        &stale,
-        &BenchCache::new(),
-        true,
-        true,
-        Level::Normal,
-        "x",
-    );
-    assert_eq!(
-        (s.model.as_str(), s.tok_s.as_str()),
-        ("gemma-4-12b-it-q4_k_m", "")
     );
     let paused = status(
         &p,
@@ -285,7 +253,7 @@ fn a_saved_pick_wins_and_status_says_when_nothing_is_set_up() {
 #[test]
 fn values_are_clamped_and_caps_never_pass_90_percent() {
     let wild = LocalAiConfig {
-        mode: Mode::Manual,
+        own_files: vec![" /m/a.gguf ".into(), "/m/a.gguf".into(), "".into()],
         manual: Manual {
             backend: "Vulkan".into(),
             ngl: Some(5_000),
@@ -330,15 +298,11 @@ fn values_are_clamped_and_caps_never_pass_90_percent() {
             kv: Some(local_autoconfig::KvType::Q4),
         }
     );
-    let auto = LocalAiConfig {
-        mode: Mode::Auto,
-        ..wild.clone()
-    };
-    assert_eq!(auto.overrides(), local_autoconfig::Overrides::default());
+    assert_eq!(wild.own_files, ["/m/a.gguf"]);
 }
 
 #[test]
-fn saving_writes_the_pick_and_the_governors_rules() {
+fn saving_writes_the_added_files_and_the_governors_rules() {
     let dir = std::env::temp_dir().join(format!("grokhub-local-ai-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(load(&dir), LocalAiConfig::default());
@@ -346,9 +310,7 @@ fn saving_writes_the_pick_and_the_governors_rules() {
         pause_for_games: false,
         use_idle_time: false,
         throttle_on_battery: false,
-        local_model: Selected {
-            selected: "/models/x.gguf".into(),
-        },
+        own_files: vec!["/models/x.gguf".into()],
         manual: Manual {
             deny_apps: vec!["blender".into()],
             ..Manual::default()
@@ -359,8 +321,9 @@ fn saving_writes_the_pick_and_the_governors_rules() {
     assert_eq!(load(&dir), config);
     let raw: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join(FILE)).unwrap()).unwrap();
-    assert_eq!(raw["localModel"]["selected"], "/models/x.gguf");
-    assert_eq!(raw["mode"], "auto");
+    assert_eq!(raw["ownFiles"], serde_json::json!(["/models/x.gguf"]));
+    assert_eq!(raw.get("mode"), None);
+    assert_eq!(raw.get("localModel"), None);
     let rules = Rules::from_json(
         &std::fs::read_to_string(dir.join("local").join("governor.json")).unwrap(),
     );
@@ -626,4 +589,40 @@ fn the_speed_test_waits_while_local_ai_is_switched_off() {
         speed_test(&d),
         Err("Set up a local engine and model first, then run the speed test.".to_string())
     );
+}
+
+#[test]
+fn an_old_manual_pick_becomes_an_added_file_and_old_auto_drops_its_tuning() {
+    let dir = std::env::temp_dir().join(format!("grokhub-local-ai-old-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let manual = r#"{"mode":"manual","localModel":{"selected":"/models/mine.gguf"},
+        "manual":{"ngl":20,"ctx":8192,"kv":"q8","denyApps":["blender"]}}"#;
+    std::fs::write(dir.join(FILE), manual).unwrap();
+    let c = load(&dir);
+    assert_eq!(c.own_files, ["/models/mine.gguf"]);
+    assert_eq!(
+        (c.manual.ngl, c.manual.ctx, c.manual.kv.as_str()),
+        (Some(20), Some(8_192), "q8")
+    );
+    assert_eq!(c.manual.deny_apps, ["blender"]);
+    // Auto never applied the tuning, so it must not start applying now; a
+    // catalog id is no file and is dropped.
+    let auto = r#"{"mode":"auto","localModel":{"selected":"gemma-4-12b-it-abliterated-q4_k"},
+        "manual":{"ngl":20,"ctx":8192,"kv":"q8","denyApps":["blender"]}}"#;
+    std::fs::write(dir.join(FILE), auto).unwrap();
+    let c = load(&dir);
+    assert_eq!(c.own_files, Vec::<String>::new());
+    assert_eq!(
+        (
+            c.manual.ngl,
+            c.manual.ctx,
+            c.manual.threads,
+            c.manual.kv.as_str()
+        ),
+        (None, None, None, "auto")
+    );
+    assert_eq!(c.manual.deny_apps, ["blender"]);
+    assert_eq!(c.overrides(), local_autoconfig::Overrides::default());
+    let _ = std::fs::remove_dir_all(dir);
 }
