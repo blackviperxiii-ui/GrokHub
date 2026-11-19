@@ -34,8 +34,11 @@
 # the refusals and how (`abliteration` or `heretic`). `refusal_score` is the
 # share of the refusal check's prompts the model answered, once measured.
 #
-# Only the main GGUF downloads; the repos' vision projector
-# (`mmproj-model-bf16.gguf`) isn't fetched yet, so no row claims vision.
+# `projector` names a chat row's vision projector (a `vision-projector` row,
+# the repo's `mmproj-model-bf16.gguf` under a name of its own). The router
+# loads it with the model, beside its drafter, only for a chat whose newest
+# message carries a picture; no row claims the `vision` badge, since a
+# picture is read only once the projector is on disk.
 
 # `skills = { quality, chat, code, reason, write, long, adult }` on a chat
 # row: what it is good at, 0 to 100, from public results for its family
@@ -51,7 +54,7 @@
 # tier's reference GPU, where it fits), `gaming_safe` (light and capable
 # enough to run beside a game) and `estimate` (fields nobody has measured;
 # list one in `measured` once it is). CI fails when they are stale.
-version = 4
+version = 5
 
 [[model]]
 id = "nvidia-nemotron3.5-lightning-30b-a3b-heretic-q4_k_m"
@@ -159,6 +162,8 @@ run_mb = 19_799
 needs_avx2 = true
 # Its own abliterated MTP draft heads, from the same repo.
 drafter = "gemma-4-31b-it-abliterated-mtp"
+# Its vision projector, from the same repo.
+projector = "gemma-4-31b-it-abliterated-mmproj"
 min_budget = { gpu = 20_480, unified = 40_960 }
 tok_s = { gpu = 35, unified = 25, cpu = 2 }
 tok_s_tier = { T4 = 32 }
@@ -246,6 +251,8 @@ needs_avx2 = true
 # fit run from RAM and it stays fast.
 # Its own abliterated MTP draft heads, from the same repo.
 drafter = "gemma-4-26b-a4b-it-abliterated-mtp"
+# Its vision projector, from the same repo.
+projector = "gemma-4-26b-a4b-it-abliterated-mmproj"
 min_budget = { gpu = 15_360, unified = 20_480 }
 tok_s = { gpu = 60, unified = 50, cpu = 6 }
 tok_s_tier = { T4 = 172 }
@@ -388,6 +395,8 @@ run_mb = 8_399
 needs_avx2 = true
 # Its own abliterated MTP draft heads, from the same repo.
 drafter = "gemma-4-12b-it-abliterated-mtp"
+# Its vision projector, from the same repo.
+projector = "gemma-4-12b-it-abliterated-mmproj"
 min_budget = { gpu = 10_240, unified = 14_336 }
 tok_s = { gpu = 35, unified = 20, cpu = 3 }
 tok_s_tier = { T3 = 51, T4 = 80 }
@@ -559,6 +568,8 @@ run_mb = 5_868
 needs_avx2 = true
 # Its own abliterated MTP draft heads, from the same repo.
 drafter = "gemma-4-e4b-it-abliterated-mtp"
+# Its vision projector, from the same repo.
+projector = "gemma-4-e4b-it-abliterated-mmproj"
 min_budget = { gpu = 6_144, unified = 8_192, cpu = 6_144 }
 tok_s = { gpu = 40, unified = 30, cpu = 5 }
 tok_s_tier = { T2 = 61, T3 = 130, T4 = 202 }
@@ -618,6 +629,8 @@ run_mb = 3_888
 needs_avx2 = false
 # Its own abliterated MTP draft heads, from the same repo.
 drafter = "gemma-4-e2b-it-abliterated-mtp"
+# Its vision projector, from the same repo.
+projector = "gemma-4-e2b-it-abliterated-mmproj"
 min_budget = { gpu = 3_072, unified = 3_072, cpu = 3_072 }
 tok_s = { gpu = 60, unified = 35, cpu = 7 }
 tok_s_tier = { T1 = 74, T2 = 115, T3 = 246, T4 = 384 }
@@ -877,6 +890,126 @@ tier = "T1"
 route = "local:tiny"
 ctx_default = 8_192
 run_mb = 419
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "gemma-4-31b-it-abliterated-mmproj"
+name = "Gemma 4 31B vision projector"
+repo = "huihui-ai/Huihui-gemma-4-31B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its projector the same, so it lands under its own name.
+file = "Huihui-gemma-4-31B-it-abliterated-mmproj-BF16.gguf"
+remote_file = "mmproj-model-bf16.gguf"
+sha256 = "fa3c584233a103b5fac2e0533b4054a6bc74ec91d836b804663d8e6f5e624afa"
+download_mb = 1_146
+quant = "BF16"
+license = "Apache-2.0"
+kind = "vision-projector"
+pairs_with = "gemma-4-31b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T4"
+route = "local:small"
+ctx_default = 32_768
+# Its file plus about 15% for the picture encoder's compute buffer.
+run_mb = 1_318
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "gemma-4-26b-a4b-it-abliterated-mmproj"
+name = "Gemma 4 26B-A4B vision projector"
+repo = "huihui-ai/Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its projector the same, so it lands under its own name.
+file = "Huihui-gemma-4-26B-A4B-it-abliterated-mmproj-BF16.gguf"
+remote_file = "mmproj-model-bf16.gguf"
+sha256 = "966dbada52d2dd1ab1e3a6faa393ca6242df881bb404286a3c4619fd9c760212"
+download_mb = 1_140
+quant = "BF16"
+license = "Apache-2.0"
+kind = "vision-projector"
+pairs_with = "gemma-4-26b-a4b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T3"
+route = "local:small"
+ctx_default = 16_384
+# Its file plus about 15% for the picture encoder's compute buffer.
+run_mb = 1_311
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "gemma-4-12b-it-abliterated-mmproj"
+name = "Gemma 4 12B vision projector"
+repo = "huihui-ai/Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its projector the same, so it lands under its own name.
+file = "Huihui-gemma-4-12B-it-abliterated-mmproj-BF16.gguf"
+remote_file = "mmproj-model-bf16.gguf"
+sha256 = "bd94de2c9e403f851cc3841ffd45c478c3530072dfb006476534d18825e0bc84"
+download_mb = 168
+quant = "BF16"
+license = "Apache-2.0"
+kind = "vision-projector"
+pairs_with = "gemma-4-12b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T3"
+route = "local:small"
+ctx_default = 16_384
+# Its file plus about 15% for the picture encoder's compute buffer.
+run_mb = 193
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "gemma-4-e4b-it-abliterated-mmproj"
+name = "Gemma 4 E4B vision projector"
+repo = "huihui-ai/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its projector the same, so it lands under its own name.
+file = "Huihui-gemma-4-E4B-it-abliterated-mmproj-BF16.gguf"
+remote_file = "mmproj-model-bf16.gguf"
+sha256 = "ed22c2c5277b72aa4ef5f94e8a081219eb7615bbfb30bc4087c97e2c2b522374"
+download_mb = 946
+quant = "BF16"
+license = "Apache-2.0"
+kind = "vision-projector"
+pairs_with = "gemma-4-e4b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T2"
+route = "local:small"
+ctx_default = 8_192
+# Its file plus about 15% for the picture encoder's compute buffer.
+run_mb = 1_088
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+
+[[model]]
+id = "gemma-4-e2b-it-abliterated-mmproj"
+name = "Gemma 4 E2B vision projector"
+repo = "huihui-ai/Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its projector the same, so it lands under its own name.
+file = "Huihui-gemma-4-E2B-it-abliterated-mmproj-BF16.gguf"
+remote_file = "mmproj-model-bf16.gguf"
+sha256 = "d77ea8edb2f703d0bfd2a805d8471b1c99b11340c9ae7749fed4b5f2c9de0c48"
+download_mb = 942
+quant = "BF16"
+license = "Apache-2.0"
+kind = "vision-projector"
+pairs_with = "gemma-4-e2b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T1"
+route = "local:tiny"
+ctx_default = 8_192
+# Its file plus about 15% for the picture encoder's compute buffer.
+run_mb = 1_083
 needs_avx2 = false
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }

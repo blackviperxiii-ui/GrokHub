@@ -668,6 +668,7 @@ mod tests {
             abliterated: None,
             refusal_score: None,
             drafter: None,
+            projector: None,
             min_budget: Default::default(),
             tok_s: Default::default(),
             parts: &[],
