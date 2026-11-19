@@ -302,6 +302,9 @@ pub struct Research {
     pub url: String,
     pub source: String,
     pub text: String,
+    /// The item's own image from its feed (`SourceItem::image`), https only.
+    /// The writer never sees it; a post citing the item caches it first.
+    pub images: Vec<String>,
 }
 
 pub fn research_from(picks: &[Ranked]) -> Vec<Research> {
@@ -313,6 +316,7 @@ pub fn research_from(picks: &[Ranked]) -> Vec<Research> {
             url: r.item.url.clone(),
             source: r.item.source_name.clone(),
             text: r.item.summary.clone(),
+            images: r.item.image.iter().cloned().collect(),
         })
         .collect()
 }
@@ -580,12 +584,14 @@ mod tests {
                 url: "https://blog.rust-lang.org/2026/10/20/Rust-1.99.html".into(),
                 source: "Rust Blog".into(),
                 text: "Async closures are stable.".into(),
+                images: Vec::new(),
             },
             Research {
                 title: "Tauri 2.5 released".into(),
                 url: "https://tauri.app/blog/tauri-2-5/".into(),
                 source: "tauri.app".into(),
                 text: "Faster builds on Windows.".into(),
+                images: Vec::new(),
             },
         ]
     }
@@ -849,6 +855,7 @@ mod tests {
             url: "https://blog.rust-lang.org/2026/10/20/Rust-1.99.html".into(),
             source: "Blog".into(),
             text: "x".into(),
+            images: Vec::new(),
         }];
         let post = parse_written(reply, &research, &[]).expect("post");
         assert_eq!(
@@ -916,6 +923,34 @@ mod tests {
         let r = research_from(&picks);
         assert_eq!(r.len(), RESEARCH_MAX);
         assert_eq!(r[4].url, "https://news.example.com/4");
+    }
+
+    #[test]
+    fn research_from_keeps_the_feed_image() {
+        let pick = |image: Option<&str>| Ranked {
+            item: SourceItem {
+                title: "Rust 1.99 in ten minutes".into(),
+                url: "https://www.youtube.com/watch?v=abc".into(),
+                kind: SourceKind::YouTube,
+                source_name: "YouTube".into(),
+                published_ms: NOW,
+                summary: "A quick tour.".into(),
+                image: image.map(str::to_string),
+                topic: None,
+                engagement: 0,
+            },
+            score: 50,
+            because: None,
+        };
+        let research = research_from(&[
+            pick(Some("https://i.ytimg.com/vi/abc/hqdefault.jpg")),
+            pick(None),
+        ]);
+        assert_eq!(
+            research[0].images,
+            vec!["https://i.ytimg.com/vi/abc/hqdefault.jpg".to_string()]
+        );
+        assert_eq!(research[1].images, Vec::<String>::new());
     }
 
     #[test]

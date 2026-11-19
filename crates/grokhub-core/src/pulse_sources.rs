@@ -746,11 +746,13 @@ fn parse_reddit(req: &SourceReq, body: &str) -> Vec<SourceItem> {
             .filter(|u| !is_self && http_url(u))
             .map(str::to_string)
             .unwrap_or(thread);
+        // Without `raw_json=1` Reddit HTML-escapes these URLs (`&amp;`),
+        // and the escaped form is refused by the image host.
         let image = d["preview"]["images"][0]["source"]["url"]
             .as_str()
             .or_else(|| d["thumbnail"].as_str())
             .filter(|u| u.starts_with("https://"))
-            .map(str::to_string);
+            .map(|u| u.replace("&amp;", "&"));
         let sub = d["subreddit"].as_str().unwrap_or("");
         out.push(SourceItem {
             title: one_line(d["title"].as_str().unwrap_or(""), 200),
@@ -2164,6 +2166,24 @@ mod tests {
             "<html>blocked</html>"
         )
         .is_empty());
+    }
+
+    #[test]
+    fn reddit_preview_urls_lose_their_html_escaping() {
+        let rd = r#"{"data":{"children":[
+ {"data":{"title":"egui 0.40 is out","is_self":false,"url_overridden_by_dest":"https://github.com/emilk/egui/releases","permalink":"/r/rust/comments/4/e/","subreddit":"rust","created_utc":1791701000.0,
+   "preview":{"images":[{"source":{"url":"https://preview.redd.it/egui.png?width=640&amp;format=png&amp;s=abc"}}]}}},
+ {"data":{"title":"A tiny crate","is_self":false,"url_overridden_by_dest":"https://crates.io/crates/tiny","permalink":"/r/rust/comments/5/t/","subreddit":"rust","created_utc":1791701000.0,
+   "thumbnail":"https://b.thumbs.redditmedia.com/t.jpg?a=1&amp;b=2"}}]}}"#;
+        let items = parse(&req(SourceKind::Reddit, "r/rust", None), rd);
+        let images: Vec<Option<&str>> = items.iter().map(|i| i.image.as_deref()).collect();
+        assert_eq!(
+            images,
+            vec![
+                Some("https://preview.redd.it/egui.png?width=640&format=png&s=abc"),
+                Some("https://b.thumbs.redditmedia.com/t.jpg?a=1&b=2"),
+            ]
+        );
     }
 
     #[test]

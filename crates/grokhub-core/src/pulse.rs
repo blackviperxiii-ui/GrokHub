@@ -1634,7 +1634,7 @@ pub fn prune_plan(files: &[CachedFile], keep: &HashSet<String>, now_ms: u64) -> 
         .collect()
 }
 
-/// `<16 hex>.<jpg|png|webp|img>`, optionally followed by `.<pid>-<n>.tmp`.
+/// `<16 hex>.<jpg|png|webp|img|miss>`, optionally followed by `.<pid>-<n>.tmp`.
 fn cache_owned_name(name: &str) -> bool {
     let Some((stem, rest)) = name.split_once('.') else {
         return false;
@@ -1643,7 +1643,7 @@ fn cache_owned_name(name: &str) -> bool {
         return false;
     }
     let (ext, temp) = rest.split_once('.').unwrap_or((rest, ""));
-    if !matches!(ext, "jpg" | "png" | "webp" | "img") {
+    if !matches!(ext, "jpg" | "png" | "webp" | "img" | "miss") {
         return false;
     }
     if temp.is_empty() {
@@ -1719,6 +1719,81 @@ pub fn image_cache_name(url: &str) -> String {
         .map(|e| if e == ".jpeg" { ".jpg" } else { e })
         .unwrap_or(".img");
     format!("{h:016x}{ext}")
+}
+
+/// The negative-cache marker for an image URL that failed to download:
+/// the URL's cache stem with `.miss`. It sits next to the cache files and is
+/// pruned like them.
+pub fn image_miss_name(url: &str) -> String {
+    let name = image_cache_name(url);
+    let stem = name.split_once('.').map_or(name.as_str(), |(stem, _)| stem);
+    format!("{stem}.miss")
+}
+
+/// How long a download that failed for a passing reason waits, times the
+/// failures so far, before it is tried again.
+pub const IMAGE_RETRY_MS: u64 = 15 * 60_000;
+/// Failures for a passing reason after which a URL is never tried again.
+pub const IMAGE_TRIES_MAX: u32 = 3;
+
+/// What a `.miss` marker ([`image_miss_name`]) says about an image URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageMiss {
+    /// The address answered for good (an HTTP 4xx, not an image, too big)
+    /// or failed [`IMAGE_TRIES_MAX`] times: never asked again.
+    Gone,
+    /// Failed `tries` times for a passing reason (the network, a server
+    /// error, the egress guard); asked again from `retry_at_ms`.
+    Later { tries: u32, retry_at_ms: u64 },
+}
+
+impl ImageMiss {
+    /// Read a marker's text. Anything that isn't a well-formed `later` line
+    /// is [`ImageMiss::Gone`], so a damaged marker never brings back a fetch.
+    pub fn parse(text: &str) -> Self {
+        let mut words = text.split_whitespace();
+        if words.next() != Some("later") {
+            return Self::Gone;
+        }
+        let tries = words.next().and_then(|w| w.parse().ok());
+        let retry_at_ms = words.next().and_then(|w| w.parse().ok());
+        match (tries, retry_at_ms, words.next()) {
+            (Some(tries), Some(retry_at_ms), None) => Self::Later { tries, retry_at_ms },
+            _ => Self::Gone,
+        }
+    }
+
+    pub fn render(self) -> String {
+        match self {
+            Self::Gone => "gone\n".into(),
+            Self::Later { tries, retry_at_ms } => format!("later {tries} {retry_at_ms}\n"),
+        }
+    }
+
+    /// Whether the URL may be asked again at `now_ms`.
+    pub fn due(self, now_ms: u64) -> bool {
+        match self {
+            Self::Gone => false,
+            Self::Later { retry_at_ms, .. } => now_ms >= retry_at_ms,
+        }
+    }
+
+    /// The marker after one more failure. `gone` is a failure that asking
+    /// again can't fix.
+    pub fn after_failure(prev: Option<Self>, gone: bool, now_ms: u64) -> Self {
+        let tries = match prev {
+            Some(Self::Later { tries, .. }) => tries.saturating_add(1),
+            Some(Self::Gone) => return Self::Gone,
+            None => 1,
+        };
+        if gone || tries >= IMAGE_TRIES_MAX {
+            return Self::Gone;
+        }
+        Self::Later {
+            tries,
+            retry_at_ms: now_ms.saturating_add(IMAGE_RETRY_MS.saturating_mul(u64::from(tries))),
+        }
+    }
 }
 
 /// Site name for a post's source line: `www.theverge.com/…` → `theverge.com`.
@@ -2894,12 +2969,82 @@ mod tests {
             file("cccccccccccccccc.img", 10 * 60_000),
             file("dddddddddddddddd.png.7-0.tmp", hours_2),
             file("notes.txt", hours_2),
+            file("eeeeeeeeeeeeeeee.miss", hours_2),
+            file("ffffffffffffffff.miss", hours_2),
+            file("1111111111111111.miss", 10 * 60_000),
+            file("short.miss", hours_2),
         ];
-        let keep: HashSet<String> = ["aaaaaaaaaaaaaaaa.jpg".to_string()].into();
+        let keep: HashSet<String> = [
+            "aaaaaaaaaaaaaaaa.jpg".to_string(),
+            "ffffffffffffffff.miss".to_string(),
+        ]
+        .into();
         assert_eq!(
             prune_plan(&files, &keep, now),
-            vec!["bbbbbbbbbbbbbbbb.jpg", "dddddddddddddddd.png.7-0.tmp"]
+            vec![
+                "bbbbbbbbbbbbbbbb.jpg",
+                "dddddddddddddddd.png.7-0.tmp",
+                "eeeeeeeeeeeeeeee.miss"
+            ]
         );
+    }
+
+    #[test]
+    fn a_miss_marker_shares_the_cache_stem() {
+        let url = "https://cdn.akamai.steamstatic.com/steam/apps/620/header.jpg";
+        let name = image_cache_name(url);
+        assert_eq!(name.len(), 20);
+        assert_eq!(image_miss_name(url), format!("{}.miss", &name[..16]));
+        assert_eq!(
+            image_miss_name("https://img.test/a?x=1"),
+            format!("{}.miss", &image_cache_name("https://img.test/a?x=1")[..16])
+        );
+        assert!(image_cache_name("https://img.test/a?x=1").ends_with(".img"));
+    }
+
+    #[test]
+    fn a_miss_marker_retries_a_passing_failure_twice_then_gives_up() {
+        let now = 1_800_000_000_000;
+        let first = ImageMiss::after_failure(None, false, now);
+        assert_eq!(
+            first,
+            ImageMiss::Later {
+                tries: 1,
+                retry_at_ms: now + 900_000
+            }
+        );
+        assert!(!first.due(now + 899_999));
+        assert!(first.due(now + 900_000));
+        let second = ImageMiss::after_failure(Some(first), false, now + 900_000);
+        assert_eq!(
+            second,
+            ImageMiss::Later {
+                tries: 2,
+                retry_at_ms: now + 900_000 + 1_800_000
+            }
+        );
+        assert_eq!(
+            ImageMiss::after_failure(Some(second), false, now),
+            ImageMiss::Gone
+        );
+        assert_eq!(ImageMiss::after_failure(None, true, now), ImageMiss::Gone);
+        assert!(!ImageMiss::Gone.due(u64::MAX));
+    }
+
+    #[test]
+    fn a_miss_marker_round_trips_and_a_damaged_one_means_gone() {
+        let later = ImageMiss::Later {
+            tries: 2,
+            retry_at_ms: 1_800_000_900_000,
+        };
+        assert_eq!(later.render(), "later 2 1800000900000\n");
+        assert_eq!(ImageMiss::parse(&later.render()), later);
+        assert_eq!(ImageMiss::Gone.render(), "gone\n");
+        assert_eq!(ImageMiss::parse("gone\n"), ImageMiss::Gone);
+        assert_eq!(ImageMiss::parse(""), ImageMiss::Gone);
+        assert_eq!(ImageMiss::parse("later 2"), ImageMiss::Gone);
+        assert_eq!(ImageMiss::parse("later x 5"), ImageMiss::Gone);
+        assert_eq!(ImageMiss::parse("later 1 5 junk"), ImageMiss::Gone);
     }
 
     #[test]
