@@ -13,9 +13,7 @@ use std::time::{Duration, Instant};
 
 use grokhub_agent::harness as hx;
 use grokhub_agent::route::local_resident::{reserve, Kind, Mem};
-use grokhub_agent::route::voice_route::{
-    self, SpeechSource, StageKind, StagePlan, VoiceEnv, VoiceRouteMode,
-};
+use grokhub_agent::route::voice_route::{self, SpeechSource, StageKind, StagePlan, VoiceEnv};
 use grokhub_agent::route::{connectivity, host, local, local_live};
 use grokhub_core::runtime_download as rd;
 use grokhub_core::voice::{parse_stt_text, pcm_from_capture, stt_multipart, stt_url};
@@ -306,7 +304,6 @@ fn transcribe_with_env(
                             }
                             let has_local_after = sources[idx + 1..].contains(&SpeechSource::Local);
                             if !has_local_after
-                                && cfg.mode != VoiceRouteMode::Pinned
                                 && !env.local_ready
                                 && !env.offline_only
                                 && !env.net.prefer_local()
@@ -768,8 +765,7 @@ mod tests {
         voice_route::write(
             &config,
             voice_route::VoiceRouteConfig {
-                mode: VoiceRouteMode::LocalOnly,
-                ..Default::default()
+                mode: voice_route::VoiceRouteMode::LocalOnly,
             },
         )
         .expect("write route");

@@ -585,17 +585,6 @@ impl Decision {
         if self.budget_pause.is_none() && rule("voice:no_local") {
             return "Voice routing is set to Local only, and no on-device model is ready. Download one in Settings → Local AI or switch Voice routing to Auto.".to_string();
         }
-        if self.budget_pause.is_none()
-            && let Some(target) = self
-                .route
-                .rule_ids
-                .iter()
-                .find_map(|r| r.strip_prefix("voice:pinned_missing:"))
-        {
-            return format!(
-                "Voice reply is pinned to {target}, which isn't ready right now. Check Settings or switch Voice routing to Auto."
-            );
-        }
         self.pause_msg().to_string()
     }
 
@@ -864,13 +853,6 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         .filter(|m| match &voice_reply {
             None => true,
             Some(super::voice_route::ReplyPref::LocalOnly) => super::local::is_local(m),
-            Some(super::voice_route::ReplyPref::Provider(p)) => {
-                if p == super::PROVIDER_XAI {
-                    !super::local::is_local(m) && !super::policy::is_new_provider(&reg, m)
-                } else {
-                    split_provider_model(m).is_some_and(|(mp, _)| mp == p)
-                }
-            }
         });
     // PR E: a failed verify on an on-device turn asks the next online pick to escalate.
     if rejects.unwrap_or(0) > 0 && !verify_ok {
@@ -1118,12 +1100,10 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     // switch: neither is a model to wait for.
     if live
         && route.no_route
-        && !route.rule_ids.iter().any(|r| {
-            r == "local:paused"
-                || r == "offline:switch"
-                || r == "voice:no_local"
-                || r.starts_with("voice:pinned_missing:")
-        })
+        && !route
+            .rule_ids
+            .iter()
+            .any(|r| r == "local:paused" || r == "offline:switch" || r == "voice:no_local")
     {
         let failed = reg
             .get(call.model)
