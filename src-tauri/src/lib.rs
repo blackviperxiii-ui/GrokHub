@@ -432,6 +432,13 @@ fn get_bot_desktop(state: State<'_, ShellState>) -> bot_screen::BotDesktopView {
     bot_screen::view(current(&state).bot_desktop, None)
 }
 
+/// Settings → Bot Desktop's preview: the screen now, or nothing when it
+/// isn't running.
+#[tauri::command]
+async fn bot_desktop_frame() -> Result<Option<String>, String> {
+    off_main(bot_screen::frame).await
+}
+
 /// Settings → Bot Desktop, on or off. It applies at once, and the next
 /// desktop step of a running chat goes to the screen now in use. A screen
 /// that can't start leaves the switch off and says why.
@@ -8804,6 +8811,7 @@ pub fn run() {
             os_extras::set_autostart,
             get_bot_desktop,
             set_bot_desktop,
+            bot_desktop_frame,
             #[cfg(desktop)]
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]

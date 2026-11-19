@@ -2589,6 +2589,15 @@ button.md-copy {
   align-items: flex-start;
 }
 
+/* Settings → Bot Desktop: the hidden screen, scaled to the column. */
+.settings .bot-desktop-preview {
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
 .settings label {
   display: flex;
   flex-direction: column;

@@ -23,3 +23,12 @@ export async function setBotDesktop(on: boolean): Promise<BotDesktop | null> {
   if (!inShell()) return null;
   return call<BotDesktop>("set_bot_desktop", { on });
 }
+
+/** How often the preview asks for a new frame. */
+export const PREVIEW_EVERY_MS = 1500;
+
+/** The Bot Desktop as it is now, as an image URL; null when it isn't running. */
+export async function botDesktopFrame(): Promise<string | null> {
+  if (!inShell()) return null;
+  return call<string | null>("bot_desktop_frame");
+}

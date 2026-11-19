@@ -1,0 +1,1 @@
+- Settings → General → Bot Desktop shows a live preview of the hidden screen while it runs.

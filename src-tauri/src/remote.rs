@@ -1208,6 +1208,7 @@ mod tests {
             "set_autostart",
             "get_bot_desktop",
             "set_bot_desktop",
+            "bot_desktop_frame",
             "set_summon_hotkey",
             "set_notifications",
             "nyx_tiles",
