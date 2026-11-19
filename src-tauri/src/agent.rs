@@ -1326,6 +1326,15 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 continue;
             }
         }
+        // "Use Opus for the refactor" or "use high effort for debugging"
+        // steers that kind of task in this chat and its helpers from now on;
+        // "back to auto" clears it. There is no picker.
+        if let Err(why) =
+            grokhub_agent::route::task_steer::hear(&config_dir, &conversation_id, &text)
+        {
+            let _ = done.send(Err(why));
+            continue;
+        }
         // A Stop from an earlier turn doesn't carry over; one pressed while
         // Claude Code's sign-in is checked ends this turn before it starts.
         if crate::claude_chat::is_on(&config_dir, &conversation_id) {
