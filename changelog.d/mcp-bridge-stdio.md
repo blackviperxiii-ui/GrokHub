@@ -1,0 +1,1 @@
+- `grokhub --mcp-bridge` / `grokhub-hub --mcp-bridge`: opt-in stdio MCP server for local IDE clients with read-only unsealed AMR memory search and automation status; `.sealed` nodes are never opened (stdio only, no network listen).

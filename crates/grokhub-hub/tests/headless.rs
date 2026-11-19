@@ -108,6 +108,51 @@ fn rpc(
 const INIT: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}"#;
 
 #[test]
+fn mcp_bridge_answers_initialize_and_denies_sealed_memory() {
+    let dir = temp_config("mcp-bridge");
+    std::fs::create_dir_all(dir.join("amr/nodes")).unwrap();
+    std::fs::write(
+        dir.join("amr/nodes/fact-dock.md"),
+        "---\nid: fact-dock\ntype: fact\ncreated: 2026-11-19T00:00:00Z\nupdated: 2026-11-19T00:00:00Z\nsource: user\nconfidence: 0.9\ntags: [dock]\n---\nDock layout is plain.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("amr/nodes/fact-secret.sealed"),
+        "gh-sealed:v1:not-readable-by-bridge\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("automations.json"),
+        r#"[{"id":"a1","name":"Inbox","schedule":"heartbeat","time":"","heartbeatEveryMin":15,"instructions":"check","enabled":true,"runCount":1,"health":{"outcome":"ok"}}]"#,
+    )
+    .unwrap();
+    let (code, lines) = rpc(
+        &["--mcp-bridge"],
+        &dir,
+        &[
+            INIT,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"memory_search","arguments":{"query":"dock"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"memory_search","arguments":{"query":"fact-secret"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"automation_status","arguments":{}}}"#,
+        ],
+    );
+    assert_eq!(code, Some(0));
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert_eq!(lines[0]["result"]["serverInfo"]["name"], "grokhub-bridge");
+    let dock = lines[1]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(dock.contains("fact-dock"), "{dock}");
+    assert_eq!(lines[1]["result"]["isError"], false);
+    assert_eq!(
+        lines[2]["result"]["content"][0]["text"],
+        "Sealed memory nodes are not available over the MCP bridge."
+    );
+    assert_eq!(lines[2]["result"]["isError"], true);
+    let status = lines[3]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(status.contains("a1\ton\tevery 15 min\tok"), "{status}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn mcp_desktop_answers_initialize_and_refuses_while_the_switch_is_off() {
     let dir = temp_config("mcp-desktop");
     let (code, lines) = rpc(

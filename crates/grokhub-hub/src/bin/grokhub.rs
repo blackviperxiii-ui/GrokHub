@@ -1,9 +1,10 @@
 //! `grokhub` was the cabin's binary. The cabin is retired, and its headless
-//! modes (`--mcp-self`, `--mcp-desktop`, `--mcp-cua`, `--doctor`, `--oauth`,
-//! `--update`, `--hub` and `bench local`) live in `grokhub-hub`. This shim keeps old MCP configs and scripts working for at
-//! least one release cycle: it hands those flags to `grokhub-hub` with the
-//! same arguments, returns its exit code, and prints one line on stderr naming
-//! the new binary. Stdout is the target's own, so MCP stdio is untouched.
+//! modes (`--mcp-self`, `--mcp-desktop`, `--mcp-cua`, `--mcp-bridge`, `--doctor`,
+//! `--oauth`, `--update`, `--hub` and `bench local`) live in `grokhub-hub`. This
+//! shim keeps old MCP configs and scripts working for at least one release
+//! cycle: it hands those flags to `grokhub-hub` with the same arguments, returns
+//! its exit code, and prints one line on stderr naming the new binary. Stdout
+//! is the target's own, so MCP stdio is untouched.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -32,6 +33,7 @@ fn forwards(args: &[String]) -> bool {
                 "--mcp-self"
                     | "--mcp-desktop"
                     | "--mcp-cua"
+                    | "--mcp-bridge"
                     | "--doctor"
                     | "--oauth"
                     | "--update"
@@ -92,6 +94,7 @@ mod tests {
         assert!(forwards(&args(&["--mcp-self"])));
         assert!(forwards(&args(&["--mcp-desktop"])));
         assert!(forwards(&args(&["--mcp-cua"])));
+        assert!(forwards(&args(&["--mcp-bridge"])));
         assert!(forwards(&args(&["--doctor"])));
         assert!(forwards(&args(&["--hub", "--mcp-self"])));
         assert!(forwards(&args(&["--oauth"])));
