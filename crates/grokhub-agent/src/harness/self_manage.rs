@@ -356,6 +356,7 @@ mod tests {
             instructions: format!("{name} now"),
             heartbeat_every_min: every,
             check_command: String::new(),
+            gate: Default::default(),
             enabled: true,
             last_run: None,
             next_run: Some(1_000),

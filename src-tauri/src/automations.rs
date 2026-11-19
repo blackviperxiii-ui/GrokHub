@@ -144,9 +144,13 @@ pub const ADD_HINT: &str =
     "Say when, like \"every weekday at 9am summarize my inbox\" or \"heartbeat every 30 min check the build\".";
 
 pub fn add(config_dir: &Path, text: &str, clock: LocalClock) -> Result<Vec<Automation>, String> {
-    let a = grokhub_core::parse_nl_automation(text).ok_or_else(|| ADD_HINT.to_string())?;
+    let mut a = grokhub_core::parse_nl_automation(text).ok_or_else(|| ADD_HINT.to_string())?;
     if a.name.trim().is_empty() {
         return Err(ADD_HINT.into());
+    }
+    if let Some(words) = grokhub_core::automation_check::script_words(text) {
+        a.check_command = words.command;
+        a.gate = words.gate;
     }
     add_parsed(config_dir, a, clock)
 }
@@ -206,8 +210,9 @@ pub fn set_enabled(
 }
 
 /// Edit in place: the new words set the name, the ask and the schedule. The
-/// id, pause state, run count, last run, health and any cabin check command
-/// stay. Words with no time are refused and nothing is written.
+/// id, pause state, run count, last run and health stay, and so does the
+/// check command unless the words name one. Words with no time are refused
+/// and nothing is written.
 pub fn edit(
     config_dir: &Path,
     id: &str,
@@ -218,12 +223,27 @@ pub fn edit(
     if parsed.name.trim().is_empty() {
         return Err(ADD_HINT.into());
     }
+    let words = grokhub_core::automation_check::script_words(text);
     change(config_dir, id, |list, at| {
         let old = &list[at];
+        let (check_command, gate) = match words {
+            // Same command: keep what it printed last, for the next diff.
+            Some(w) if w.command == old.check_command => (
+                w.command,
+                grokhub_core::automation_check::CheckGate {
+                    last_hash: old.gate.last_hash.clone(),
+                    last_output: old.gate.last_output.clone(),
+                    ..w.gate
+                },
+            ),
+            Some(w) => (w.command, w.gate),
+            None => (old.check_command.clone(), old.gate.clone()),
+        };
         let next = Automation {
             id: old.id.clone(),
             enabled: old.enabled,
-            check_command: old.check_command.clone(),
+            check_command,
+            gate,
             last_run: old.last_run,
             next_run: None,
             run_count: old.run_count,
@@ -428,6 +448,14 @@ pub fn next_due(
 pub fn settle_skip(config_dir: &Path, id: &str, clock: LocalClock) -> Result<(), String> {
     change(config_dir, id, |list, at| {
         list[at] = grokhub_core::mark_automation_skipped(list[at].clone(), clock.now_ms, clock);
+    })
+    .map(drop)
+}
+
+/// The check output a run used, saved on its row for the next diff.
+pub fn remember_check(config_dir: &Path, id: &str, output: &str) -> Result<(), String> {
+    change(config_dir, id, |list, at| {
+        list[at].gate = list[at].gate.remember(output);
     })
     .map(drop)
 }
@@ -788,6 +816,41 @@ mod tests {
         assert_eq!(
             (edited[0].check_command.as_str(), edited[0].time.as_str()),
             ("test -d ~/Downloads", "18:00")
+        );
+    }
+
+    #[test]
+    fn words_with_a_backticked_check_set_the_command_and_its_gate() {
+        let dir = temp_dir("add-check");
+        let list = add(
+            &dir,
+            "every day at 9am check `df -h /` and tell me only when it changes",
+            tuesday_8am(),
+        )
+        .expect("add");
+        assert_eq!(list[0].check_command, "df -h /");
+        assert!(list[0].gate.on_change);
+        assert!(!list[0].gate.no_agent);
+        let id = list[0].id.clone();
+        remember_check(&dir, &id, "/dev/sda1 80%").expect("remember");
+        // The same command, now without AI: what it printed last stays.
+        let edited = edit(
+            &dir,
+            &id,
+            "every day at 9am check `df -h /` without AI",
+            tuesday_8am(),
+        )
+        .expect("edit");
+        assert_eq!(edited[0].check_command, "df -h /");
+        assert!(edited[0].gate.no_agent);
+        assert!(!edited[0].gate.on_change);
+        assert_eq!(edited[0].gate.last_output, "/dev/sda1 80%");
+        // A new command starts with nothing to diff against.
+        let moved = edit(&dir, &id, "every day at 9am run `uptime`", tuesday_8am()).expect("edit");
+        assert_eq!(moved[0].check_command, "uptime");
+        assert_eq!(
+            moved[0].gate,
+            grokhub_core::automation_check::CheckGate::default()
         );
     }
 
