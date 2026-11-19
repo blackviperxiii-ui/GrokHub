@@ -487,14 +487,17 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
     start_planned(paths, planned)
 }
 
-/// Bytes a start reads off the disk: the model, and the drafter file the
-/// launch loads beside it.
+/// Bytes a start reads off the disk: the model, and the drafter file and
+/// vision projector the launch loads beside it.
 fn load_bytes(model: &Path, launch: Option<&LaunchArgs>) -> u64 {
     let len = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len());
     let drafter = launch
         .and_then(|l| l.draft.as_ref()?.model.as_deref())
         .map_or(0, len);
-    len(model) + drafter
+    let projector = launch
+        .and_then(|l| l.projector.as_ref())
+        .map_or(0, |v| len(&v.file));
+    len(model) + drafter + projector
 }
 
 /// The error for a start planned as `prev` that ran out of memory;
@@ -3053,6 +3056,7 @@ mod tests {
             draft: None,
             cpu_only: false,
             run: Default::default(),
+            projector: None,
         }
     }
 
@@ -3288,6 +3292,7 @@ mod tests {
             draft: None,
             cpu_only: false,
             run: Default::default(),
+            projector: None,
         };
         for args in [
             llama_args(Path::new("/m.gguf"), "127.0.0.1", 4711),

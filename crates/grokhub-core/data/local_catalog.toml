@@ -913,7 +913,7 @@ tier = "T4"
 route = "local:small"
 ctx_default = 32_768
 # Its file plus about 15% for the picture encoder's compute buffer.
-run_mb = 1_318
+run_mb = 1_317
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
@@ -985,7 +985,7 @@ tier = "T2"
 route = "local:small"
 ctx_default = 8_192
 # Its file plus about 15% for the picture encoder's compute buffer.
-run_mb = 1_088
+run_mb = 1_087
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
