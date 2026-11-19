@@ -3112,6 +3112,16 @@ fn open_code_project(state: &ShellState, folder: &str) -> Result<projects::CodeP
     }
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let _ = (old_dir, keep);
+    // Local open: pick up origin URL and preferred branch; never check out.
+    // Do not overwrite a user branch override (`force: false`).
+    let linked = grokhub_code::link::inspect_local(Path::new(&path), None);
+    let _ = projects::apply_link(
+        &state.config_dir,
+        &path,
+        linked.remote_url.as_deref(),
+        Some(linked.preferred_branch.as_str()),
+        false,
+    );
     projects::listing(&state.config_dir, &path)
 }
 
@@ -3158,6 +3168,112 @@ async fn code_project_new(app: AppHandle, name: String) -> Result<projects::Code
         let state = app.state::<ShellState>();
         let dir = projects::create(&state.config_dir, &name)?;
         open_code_project(&state, &dir)
+    })
+    .await?
+}
+
+/// Code tab: link a remote git URL (clone under the work root) and open it.
+/// Uses the saved GitHub PAT for HTTPS github.com clones only; never returns
+/// the token. Existing local folders are reused, never wiped.
+#[tauri::command]
+async fn code_project_link_remote(
+    app: AppHandle,
+    url: String,
+    preferred_branch: Option<String>,
+) -> Result<projects::CodeProjects, String> {
+    off_main(move || {
+        let state = app.state::<ShellState>();
+        let token = grokhub_agent::route::providers::named_key(
+            &state.config_dir,
+            grokhub_agent::route::providers::NamedKey::GithubToken,
+        )
+        .ok()
+        .flatten();
+        let work_root = PathBuf::from(grokhub_core::cabin_work_root(
+            cfg!(windows),
+            std::env::var("HOME").ok().as_deref(),
+            std::env::var("USERPROFILE").ok().as_deref(),
+        ));
+        let linked = grokhub_code::link::link_remote(
+            &url,
+            &work_root,
+            token.as_deref(),
+            preferred_branch.as_deref(),
+        )?;
+        drop(token);
+        let _ = open_code_project(&state, &linked.path)?;
+        projects::apply_link(
+            &state.config_dir,
+            &linked.path,
+            linked.remote_url.as_deref(),
+            Some(linked.preferred_branch.as_str()),
+            true,
+        )?;
+        let _ = linked.note;
+        projects::listing(&state.config_dir, &linked.path)
+    })
+    .await?
+}
+
+/// Code tab: set or clear the open project's preferred working branch.
+#[tauri::command]
+async fn code_project_set_branch(
+    app: AppHandle,
+    project_id: String,
+    branch: Option<String>,
+) -> Result<projects::CodeProjects, String> {
+    off_main(move || {
+        let state = app.state::<ShellState>();
+        projects::set_preferred_branch(
+            &state.config_dir,
+            &project_id,
+            branch.as_deref(),
+        )?;
+        let bound = current(&state).workspace;
+        projects::listing(&state.config_dir, &bound)
+    })
+    .await?
+}
+
+/// Code tab: discovered repo rules for the open project (918.5 handoff shape).
+#[tauri::command]
+async fn code_project_rules(
+    state: State<'_, ShellState>,
+) -> Result<grokhub_agent::RepoRulesBundle, String> {
+    let (dir, bound) = (state.config_dir.clone(), current(&state).workspace);
+    off_main(move || {
+        if bound.trim().is_empty() {
+            return Err("Open a project first.".into());
+        }
+        let path = PathBuf::from(&bound);
+        let nodes = projects::load(&dir).unwrap_or_default();
+        let node = nodes
+            .iter()
+            .find(|n| n.kind == grokhub_core::ProjectKind::Project && projects::is_open(&n.path, &bound));
+        let project_id = node.map(|n| n.id.as_str()).unwrap_or("");
+        let override_branch = node.and_then(|n| n.preferred_branch.as_deref());
+        let remote = node
+            .and_then(|n| n.remote_url.clone())
+            .or_else(|| grokhub_code::link::remote_url(&path));
+        let has_beta = grokhub_code::link::has_beta(&path);
+        let default_branch = grokhub_code::ship::default_branch(&path);
+        let repo = grokhub_code::repo::repo(&path);
+        Ok(grokhub_agent::discover_repo_rules(
+            &path,
+            grokhub_agent::RepoRulesInput {
+                project_id,
+                remote_url: remote.as_deref(),
+                preferred_branch: override_branch,
+                active_branch: repo.branch.as_deref(),
+                default_branch: default_branch.as_deref(),
+                has_beta,
+                sync: repo.is_repo.then_some(grokhub_agent::RepoSync {
+                    ahead: repo.ahead,
+                    behind: repo.behind,
+                    upstream: repo.upstream.clone(),
+                }),
+            },
+        ))
     })
     .await?
 }
@@ -8359,6 +8475,9 @@ pub fn run() {
             code_project_open,
             code_project_pick,
             code_project_new,
+            code_project_link_remote,
+            code_project_set_branch,
+            code_project_rules,
             code_session_bind,
             code_session_lead,
             code_session_plan,
