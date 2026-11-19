@@ -382,10 +382,35 @@ pub fn run_now(
     workspace: PathBuf,
     gate: RunGate,
 ) -> Result<RunResult, String> {
+    run_now_preflight(config_dir, id, client, model, workspace, gate, true)
+}
+
+/// `run_now`, with an optional route-ready flag for preflight (false when the
+/// shell already knows there is no model route).
+pub fn run_now_preflight(
+    config_dir: &Path,
+    id: &str,
+    client: Arc<dyn ModelClient + Send + Sync>,
+    model: &str,
+    workspace: PathBuf,
+    gate: RunGate,
+    route_ready: bool,
+) -> Result<RunResult, String> {
     let job = load(config_dir)?
         .into_iter()
         .find(|a| a.id == id)
         .ok_or_else(|| "That automation is gone.".to_string())?;
+    if let Some(why) = run_now_preflight_line(config_dir, &job, &workspace, route_ready) {
+        // Run now is not a scheduled claim: mark health only, leave next_run.
+        let _ = change(config_dir, id, |list, at| {
+            list[at] = grokhub_core::mark_automation_failed(list[at].clone(), &why);
+        });
+        return Ok(RunResult {
+            text: String::new(),
+            error: why,
+            stop: grokhub_core::PREFLIGHT_STOP.into(),
+        });
+    }
     let _running = Running::claim(id)?;
     let started = grokhub_core::now_ms();
     let result = run_on_board(config_dir, &job, client, model, workspace, gate, "run now");
@@ -394,6 +419,54 @@ pub fn run_now(
         list[at] = settle(ran, &result);
     })?;
     Ok(result)
+}
+
+fn run_now_preflight_line(
+    _config_dir: &Path,
+    job: &Automation,
+    workspace: &Path,
+    route_ready: bool,
+) -> Option<String> {
+    let script_only = job.gate.no_agent;
+    let rows = crate::connectors::list(workspace);
+    let mut ready = Vec::new();
+    let mut blocked = Vec::new();
+    let mut configured = Vec::new();
+    for row in &rows {
+        configured.push(row.name.clone());
+        if !row.enabled || row.needs_sign_in || row.status == "error" || row.status == "disabled" {
+            let detail = if row.needs_sign_in {
+                "needs sign-in".into()
+            } else if !row.error.is_empty() {
+                row.error.clone()
+            } else if !row.enabled || row.status == "disabled" {
+                "disabled".into()
+            } else {
+                row.status.clone()
+            };
+            blocked.push((row.name.clone(), detail));
+        } else {
+            ready.push(row.name.clone());
+        }
+    }
+    let home = grokhub_core::user_home()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let route_error = if route_ready {
+        ""
+    } else {
+        grokhub_core::XAI_NEED_SIGNIN
+    };
+    let ctx = grokhub_core::PreflightCtx {
+        route_ready,
+        route_error,
+        ready_connectors: &ready,
+        blocked_connectors: &blocked,
+        configured_connectors: &configured,
+        path_env: None,
+        home: &home,
+    };
+    grokhub_core::preflight(job, script_only, &ctx).map(|b| b.line())
 }
 
 /// The scheduler's claim: takes the first due job the shell may fire and
@@ -448,6 +521,25 @@ pub fn next_due(
 pub fn settle_skip(config_dir: &Path, id: &str, clock: LocalClock) -> Result<(), String> {
     change(config_dir, id, |list, at| {
         list[at] = grokhub_core::mark_automation_skipped(list[at].clone(), clock.now_ms, clock);
+    })
+    .map(drop)
+}
+
+/// Preflight refused the run: mark health failed and advance the next slot
+/// without counting a fire or spending tokens.
+pub fn settle_preflight(
+    config_dir: &Path,
+    id: &str,
+    why: &str,
+    clock: LocalClock,
+) -> Result<(), String> {
+    change(config_dir, id, |list, at| {
+        list[at] = grokhub_core::mark_automation_preflight_failed(
+            list[at].clone(),
+            why,
+            clock.now_ms,
+            clock,
+        );
     })
     .map(drop)
 }

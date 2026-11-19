@@ -2,9 +2,20 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
-import type { AutomationRow, RunResult, ScheduledRun, SuggestedTile } from "./api";
+import type { AutomationRow, Blueprint, RunResult, ScheduledRun, SuggestedTile } from "./api";
 
 const ranHandlers = vi.hoisted(() => [] as ((run: ScheduledRun) => void)[]);
+
+const DISK: Blueprint = {
+  id: "disk-watch",
+  title: "Disk watch",
+  body: "Check free space on a path; wake the model only when output changes.",
+  seed: "every day at {time} run `df -h {path}` only when it changes and summarize what filled up",
+  slots: [
+    { key: "path", label: "Path", placeholder: "/" },
+    { key: "time", label: "Time", placeholder: "09:00" },
+  ],
+};
 
 const api = vi.hoisted(() => ({
   listAutomations: vi.fn<() => Promise<AutomationRow[]>>(),
@@ -14,7 +25,18 @@ const api = vi.hoisted(() => ({
   runAutomation: vi.fn<(id: string) => Promise<RunResult>>(),
   editAutomation: vi.fn<(id: string, text: string) => Promise<AutomationRow[]>>(),
   listSuggestedAutomations: vi.fn<() => Promise<SuggestedTile[]>>(),
+  listAutomationBlueprints: vi.fn<() => Promise<Blueprint[]>>(),
   addSuggestedAutomation: vi.fn<(seed: string) => Promise<AutomationRow[]>>(),
+  fillBlueprintSeed: vi.fn((seed: string, values: Record<string, string>) => {
+    let out = seed;
+    for (const [key, raw] of Object.entries(values)) {
+      const value = raw.trim();
+      if (!value) throw new Error(`Fill in ${key} first.`);
+      out = out.split(`{${key}}`).join(value);
+    }
+    if (out.includes("{") && out.includes("}")) throw new Error("Fill in every field first.");
+    return out;
+  }),
   onAutomationRan: vi.fn((handler: (run: ScheduledRun) => void) => {
     ranHandlers.push(handler);
     return Promise.resolve(() => {
@@ -54,7 +76,58 @@ describe("Automations", () => {
     ])
       fn.mockReset();
     api.listSuggestedAutomations.mockReset().mockResolvedValue([]);
+    api.listAutomationBlueprints.mockReset().mockResolvedValue([]);
     ranHandlers.length = 0;
+  });
+
+  it("renders a Blueprint and saves the filled seed", async () => {
+    api.listAutomations.mockResolvedValue([]);
+    api.listAutomationBlueprints.mockResolvedValue([DISK]);
+    api.addAutomation.mockResolvedValue([
+      row({
+        id: "auto-disk",
+        name: "run `df -h /home/user` only when it changes and summarize what filled up",
+        summary: "daily at 08:00 · next today 8:00 AM",
+      }),
+    ]);
+    render(<Automations />);
+    const gallery = within(await screen.findByRole("region", { name: "Blueprints" }));
+    expect(
+      gallery.getByText(
+        "Starters with a few fields to fill — script-first checks that fail closed before a model call.",
+      ),
+    ).toBeInTheDocument();
+    const tile = within(gallery.getByRole("listitem", { name: "Disk watch" }));
+    await userEvent.click(tile.getByRole("button", { name: "Use" }));
+    const path = tile.getByRole("textbox", { name: "Disk watch Path" });
+    const time = tile.getByRole("textbox", { name: "Disk watch Time" });
+    await userEvent.clear(path);
+    await userEvent.type(path, "/home/user");
+    await userEvent.clear(time);
+    await userEvent.type(time, "08:00");
+    await userEvent.click(tile.getByRole("button", { name: "Save" }));
+    expect(api.fillBlueprintSeed).toHaveBeenCalledWith(DISK.seed, {
+      path: "/home/user",
+      time: "08:00",
+    });
+    expect(api.addAutomation).toHaveBeenCalledWith(
+      "every day at 08:00 run `df -h /home/user` only when it changes and summarize what filled up",
+    );
+    expect(
+      await screen.findByRole("listitem", { name: /summarize what filled up/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows no Blueprints section when the catalog cannot load", async () => {
+    api.listAutomations.mockResolvedValue([]);
+    api.listAutomationBlueprints.mockRejectedValue("unknown command");
+    render(<Automations />);
+    expect(
+      await screen.findByText(
+        "No automations yet. Describe one above in plain words and it runs on its own schedule.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Blueprints" })).toBeNull();
   });
 
   it("adds a Suggested tile and drops it from the list", async () => {

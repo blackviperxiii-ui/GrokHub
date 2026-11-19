@@ -3116,6 +3116,41 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   gap: 8px;
 }
 
+.automations .blueprints,
+.automations .suggested {
+  margin-top: 16px;
+}
+
+.automations .blueprints h3,
+.automations .suggested h3 {
+  margin: 0 0 4px;
+  font-size: var(--font-prose);
+  color: var(--amber, #ff9f1a);
+}
+
+.automations .blueprint-fill {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.automations .blueprint-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--font-small, 0.85rem);
+}
+
+.automations .blueprint-slot input {
+  border-color: color-mix(in srgb, var(--amber, #ff9f1a) 35%, var(--border, #333));
+}
+
+.automations .card.blueprint {
+  border-color: color-mix(in srgb, var(--red, #d7263d) 28%, var(--border, #333));
+}
+
 .card.automation,
 .card.hit {
   max-width: none;
