@@ -414,7 +414,9 @@ pub struct ChipThread {
 pub struct ChipInput<'a> {
     pub chat: &'a [(String, String)],
     pub draft: &'a str,
-    pub grok_connected: bool,
+    /// Some AI source can answer: a Grok sign-in, an allowed provider key,
+    /// or a model on this PC. Without one the row leads with "Set up AI".
+    pub ai_ready: bool,
     pub mode: &'a str,
     pub thread_title: &'a str,
     pub usage_messages: u32,
@@ -959,16 +961,20 @@ fn seed_chips(stage: ChipStage) -> Vec<QuickChip> {
         .collect()
 }
 
+/// The hint on "Set up AI": every way to get an answer, none first.
+const NO_AI_HINT: &str =
+    "Nothing can answer yet: sign in with Grok, add a provider key, or get a model for this PC";
+
 fn guide_chips(connected: bool) -> Vec<QuickChip> {
     let mut out = Vec::new();
     if !connected {
         out.push(chip(
             "guide-connect",
-            "Connect",
+            "Set up AI",
             "__nav:settings",
             ChipKind::Nav,
             130.0,
-            "Sign in first",
+            NO_AI_HINT,
         ));
     }
     out.push(chip(
@@ -2828,7 +2834,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         // A feature offer is about what the PC is doing now, so it shows
         // even while the first-run guide holds the row.
         let mut chips: Vec<QuickChip> = input.extra.to_vec();
-        chips.extend(guide_chips(input.grok_connected));
+        chips.extend(guide_chips(input.ai_ready));
         chips.retain(|c| {
             let id = c.id.to_ascii_lowercase();
             let val = c.value.trim().to_ascii_lowercase();
@@ -2869,14 +2875,14 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         }
     }
 
-    if !input.grok_connected {
+    if !input.ai_ready {
         chips.push(chip(
             "ctx-connect",
-            "Connect Grok",
+            "Set up AI",
             "__nav:settings",
             ChipKind::Nav,
             120.0,
-            "You're not connected — this is the best next step",
+            NO_AI_HINT,
         ));
     }
     // Feature offers come first so a plain chip with the same text yields.
@@ -3047,7 +3053,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             && !(input.signals.anticheat && touches_the_game(c))
             && !(input.signals.gaming && waits_while_gaming(c))
     });
-    if input.grok_connected {
+    if input.ai_ready {
         chips.retain(|c| !is_stale_connect_chip(c));
     }
     let draft = input.draft.trim().to_ascii_lowercase();
@@ -3157,7 +3163,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
 }
 
 /// Score that puts a reply's follow-ups at the front of the row, under only
-/// "Connect Grok".
+/// "Set up AI".
 const FOLLOW_UP_SCORE: f32 = 112.0;
 
 /// Right after a reply, its one-tap follow-ups ([`reply_suggestions`]) lead
@@ -3343,7 +3349,7 @@ mod tests {
         ChipInput {
             chat,
             draft,
-            grok_connected: true,
+            ai_ready: true,
             mode: "auto",
             thread_title: "Chat",
             usage_messages: 1,
@@ -3603,14 +3609,19 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_surfaces_connect_grok() {
+    fn with_no_ai_source_the_row_leads_with_set_up_ai() {
         let mem = ChipMemory::default();
         let mut inp = input(&[], "", &mem, &[], &[]);
-        inp.grok_connected = false;
+        inp.ai_ready = false;
         // A brand-new empty home is the guide, which has its own connect chip.
         inp.usage_messages = 12;
         let chips = build_quick_chips(inp);
         assert_eq!(chips[0].id, "ctx-connect");
+        assert_eq!(chips[0].label, "Set up AI");
+        assert_eq!(
+            chips[0].hint,
+            "Nothing can answer yet: sign in with Grok, add a provider key, or get a model for this PC"
+        );
         assert_eq!(chips[0].value, "__nav:settings");
         assert_eq!(nav_from_chip_value(&chips[0].value), Some("settings"));
     }
@@ -3640,7 +3651,7 @@ mod tests {
             primary: true,
         }];
         let mut inp = input(&[], "", &mem, &[], &llm);
-        inp.grok_connected = true;
+        inp.ai_ready = true;
         let chips = build_quick_chips(inp);
         assert!(
             chips
