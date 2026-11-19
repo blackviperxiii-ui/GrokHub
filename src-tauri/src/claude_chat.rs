@@ -1,7 +1,8 @@
 //! Chats on the user's own Claude plan (`grokhub_agent::claude_plan`):
-//! whether Settings allowed it, and which chats were switched to it, in
-//! `{config}/claude-plan-chats.json`. No credential is ever kept here;
-//! Claude Code signs itself in.
+//! whether Settings allowed it, and which chats the user moved to it in their
+//! own words ("from now on, use Claude"; see [`steer`]), in
+//! `{config}/claude-plan-chats.json`. There is no switch for it. No
+//! credential is ever kept here; Claude Code signs itself in.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -19,15 +20,19 @@ pub const NO_CLI: &str = "This chat runs on your Claude plan, but Claude Code di
 pub const SIGNED_OUT: &str = "This chat runs on your Claude plan, but Claude Code isn't signed in, so nothing was sent. In a terminal, run claude auth login, then send again.";
 pub const NO_SIDE: &str =
     "Side answers don't run on Claude (your plan) yet. Ask it in the chat instead.";
-pub const NOT_PLAN: &str = "This chat runs on your Claude plan, but Claude Code is signed in another way now, so nothing was sent. Sign in with your plan (claude auth login), or switch this chat back in its tab menu.";
+pub const NOT_PLAN: &str = "This chat runs on your Claude plan, but Claude Code is signed in another way now, so nothing was sent. Sign in with your plan (claude auth login), or tell this chat \"stop using Claude\".";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeChats {
     /// Settings' Allow for chats on the plan.
     pub allowed: bool,
-    /// The chats switched to it, by conversation id.
+    /// The chats moved to it by the user's words, by conversation id.
     pub chats: Vec<String>,
+    /// The chat list was set by words. Without it the list came from the
+    /// old tab menu switch, so it reads as empty: those chats are back on Auto.
+    #[serde(default)]
+    pub by_words: bool,
     /// Each chat's Claude Code session and the folder it lives under, so
     /// the chat goes on with it after the app restarts.
     #[serde(default)]
@@ -56,10 +61,44 @@ pub struct SavedSession {
 static LOCK: Mutex<()> = Mutex::new(());
 
 pub fn read(dir: &Path) -> ClaudeChats {
-    std::fs::read(dir.join(FILE))
+    let mut chats: ClaudeChats = std::fs::read(dir.join(FILE))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if !chats.by_words {
+        chats.chats.clear();
+        chats.by_words = true;
+    }
+    chats
+}
+
+/// Words that move a chat onto the plan from its next turn on.
+const ONTO_PLAN: &[&str] = &[
+    "from now on, use claude",
+    "from now on use claude",
+    "use my claude plan",
+    "switch this chat to claude",
+    "run this chat on claude",
+];
+
+/// Words that move a chat back to Auto.
+const OFF_PLAN: &[&str] = &[
+    "stop using claude",
+    "switch this chat off claude",
+    "back to auto",
+];
+
+/// What the user's words in a turn do to the chat: `Some(true)` moves it
+/// onto the plan, `Some(false)` back to Auto, `None` leaves it as it is.
+pub fn steer(text: &str) -> Option<bool> {
+    let words = text.to_lowercase().replace('\u{2019}', "'");
+    if OFF_PLAN.iter().any(|p| words.contains(p)) {
+        Some(false)
+    } else if ONTO_PLAN.iter().any(|p| words.contains(p)) {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 fn change(
@@ -91,7 +130,7 @@ pub fn set_allowed(dir: &Path, on: bool) -> Result<ClaudeChats, String> {
     })
 }
 
-/// A chat's tab menu switch.
+/// Move a chat onto the plan or back to Auto, from the user's words.
 pub fn set_chat(dir: &Path, id: &str, on: bool) -> Result<ClaudeChats, String> {
     change(dir, |chats| {
         if on && !chats.allowed {
@@ -230,7 +269,11 @@ mod tests {
     #[test]
     fn a_chat_switches_on_only_once_settings_allowed_it() {
         let dir = scratch("allow");
-        assert_eq!(read(&dir), ClaudeChats::default());
+        let empty = ClaudeChats {
+            by_words: true,
+            ..ClaudeChats::default()
+        };
+        assert_eq!(read(&dir), empty);
         assert_eq!(set_chat(&dir, "chat-a", true), Err(NOT_ALLOWED.to_string()));
         assert_eq!(turn_cli(&dir, "chat-a", &dir), None);
 
@@ -243,6 +286,7 @@ mod tests {
             ClaudeChats {
                 allowed: true,
                 chats: vec!["chat-a".into(), "chat-b".into()],
+                by_words: true,
                 sessions: BTreeMap::new(),
                 headroom: None,
             }
@@ -315,11 +359,30 @@ mod tests {
     }
 
     #[test]
-    fn a_store_from_before_sessions_still_reads() {
+    fn a_chat_the_old_tab_menu_switched_is_back_on_auto_and_allow_stays() {
         let dir = scratch("old-store");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE), r#"{"allowed":true,"chats":["chat-a"]}"#).unwrap();
+        assert!(!is_on(&dir, "chat-a"));
+        assert!(read(&dir).allowed);
+        // A list set by words reads as saved.
+        std::fs::write(
+            dir.join(FILE),
+            r#"{"allowed":true,"chats":["chat-a"],"byWords":true}"#,
+        )
+        .unwrap();
         assert!(is_on(&dir, "chat-a"));
+    }
+
+    #[test]
+    fn words_move_a_chat_onto_the_plan_and_back() {
+        assert_eq!(steer("From now on, use Claude for this"), Some(true));
+        assert_eq!(steer("please use my Claude plan"), Some(true));
+        assert_eq!(steer("Switch this chat to Claude"), Some(true));
+        assert_eq!(steer("Stop using Claude."), Some(false));
+        assert_eq!(steer("ok, back to auto"), Some(false));
+        assert_eq!(steer("What does Claude think of Rust?"), None);
+        assert_eq!(steer("use claude's api in my-app"), None);
     }
 
     fn week(used: u8) -> Headroom {
@@ -362,7 +425,13 @@ mod tests {
         set_allowed(&dir, true).unwrap();
         set_chat(&dir, "chat-a", true).unwrap();
         remember_headroom(&dir, week(43), 1_000).unwrap();
-        assert_eq!(set_allowed(&dir, false).unwrap(), ClaudeChats::default());
+        assert_eq!(
+            set_allowed(&dir, false).unwrap(),
+            ClaudeChats {
+                by_words: true,
+                ..ClaudeChats::default()
+            }
+        );
         assert!(!is_on(&dir, "chat-a"));
         assert_eq!(set_allowed(&dir, true).unwrap().chats, Vec::<String>::new());
         assert_eq!(turn_cli(&dir, "chat-a", &dir), None);

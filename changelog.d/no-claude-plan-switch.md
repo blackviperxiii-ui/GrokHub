@@ -1,0 +1,1 @@
+- Chat: the tab menu no longer has a "Run on Claude (your plan)" switch. Once Settings allows the plan, tell a chat "from now on, use Claude" to move it onto your plan, or "stop using Claude" to move it back. A chat switched with the old menu is back on Auto.

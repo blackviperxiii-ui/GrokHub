@@ -1318,6 +1318,14 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 continue;
             }
         };
+        // "From now on, use Claude" moves the chat onto the plan from this
+        // turn on, and "stop using Claude" moves it back; there is no switch.
+        if let Some(on) = crate::claude_chat::steer(&text) {
+            if let Err(why) = crate::claude_chat::set_chat(&config_dir, &conversation_id, on) {
+                let _ = done.send(Err(why));
+                continue;
+            }
+        }
         // A Stop from an earlier turn doesn't carry over; one pressed while
         // Claude Code's sign-in is checked ends this turn before it starts.
         if crate::claude_chat::is_on(&config_dir, &conversation_id) {

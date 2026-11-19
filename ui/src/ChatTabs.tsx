@@ -11,13 +11,10 @@ import {
   chatTabSoftDelete,
   chatTabSwitch,
   chatTabUnarchive,
-  claudePlanChats,
   listArchivedChats,
   listChatTabs,
   listDeletedChats,
-  setClaudePlanChat,
   type ChatTab,
-  type ClaudeChats,
 } from "./api";
 import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { ClearChatDialog } from "./ClearChat";
@@ -26,7 +23,6 @@ import { useDismiss } from "./ui";
 export const CHAT_TABS_LABEL = "Chat tabs";
 export const NEW_CHAT_TAB = "New chat";
 export const MAIN_TAB_HINT = "Main: always here. Clear empties it.";
-export const ON_CLAUDE_PLAN = "Run on Claude (your plan)";
 
 function shortTitle(title: string): string {
   const words = title.trim().split(/\s+/).filter(Boolean).slice(0, 4);
@@ -294,7 +290,6 @@ export function ChatTabs({
             (menu.id === activeId && shown.length <= 1 && draftEmpty)
           }
         >
-          <PlanSwitch id={menu.id} onClose={() => setMenu(null)} onError={onError} />
         </TabContextMenu>
       )}
 
@@ -442,32 +437,6 @@ function TabContextMenu({
       )}
       {children}
     </div>
-  );
-}
-
-/** A chat's switch to the user's Claude plan; shown once Settings allowed it. */
-function PlanSwitch({ id, onClose, onError }: { id: string; onClose: () => void; onError: (note: string) => void }) {
-  const [chats, setChats] = useState<ClaudeChats | null>(null);
-
-  useEffect(() => {
-    // Where the command isn't there (the web page, a phone), the switch stays hidden.
-    claudePlanChats().then(setChats, () => setChats(null));
-  }, []);
-
-  if (!chats?.allowed) return null;
-  const on = chats.chats.includes(id);
-  return (
-    <button
-      type="button"
-      role="menuitemcheckbox"
-      aria-checked={on}
-      onClick={() => {
-        onClose();
-        setClaudePlanChat(id, !on).catch((err: unknown) => onError(String(err)));
-      }}
-    >
-      {ON_CLAUDE_PLAN}
-    </button>
   );
 }
 
