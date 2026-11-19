@@ -4,9 +4,14 @@
 # replace itself in place, each with the asset's download URL and its
 # minisign signature (base64 of the .minisig file, the plugin's format).
 #   linux-x86_64-appimage  grokhub-shell-vX.Y.Z-linux-amd64.AppImage
+#   linux-x86_64-deb       grokhub-shell-vX.Y.Z-linux-amd64.deb (installed
+#                          through pkexec dpkg -i)
 #   windows-x86_64-nsis    GrokHub-Shell-Setup-X.Y.Z.exe
-# The .deb is left out on purpose: the package manager owns it.
-# Fails unless both assets and their .minisig files sit in the directory.
+#   darwin-aarch64-app     grokhub-shell-vX.Y.Z-macos-arm64.app.tar.gz, only
+#                          when the release built macOS (a per-merge beta
+#                          doesn't)
+# Fails unless the Linux and Windows assets and their .minisig files sit in
+# the directory, and when the macOS one is there without its .minisig.
 #
 #   scripts/shell-update-manifest.sh <dist dir> <tag> <owner/repo>
 set -euo pipefail
@@ -46,7 +51,12 @@ one() {
   entries+=("$1" "$(basename "$asset")" "$(base64 -w0 < "$asset.minisig")")
 }
 one linux-x86_64-appimage "grokhub-shell-v$ver-linux-amd64.AppImage"
+one linux-x86_64-deb "grokhub-shell-v$ver-linux-amd64.deb"
 one windows-x86_64-nsis "GrokHub-Shell-Setup-$ver.exe"
+mac="grokhub-shell-v$ver-macos-arm64.app.tar.gz"
+if [ -e "$dir/$mac" ]; then
+  one darwin-aarch64-app "$mac"
+fi
 
 python3 - "$dir/latest.json" "${tag#v}" "$tag" "$repo" "${entries[@]}" <<'PY'
 import json, sys, datetime

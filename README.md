@@ -115,7 +115,7 @@ GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub   # run the standalone LAN sync 
 
 ### Beta Channel
 
-- **In the app:** switch to **Beta** in **Settings → About → Updates**. The Windows installer and the AppImage then install the newest signed beta pre-release; a `.deb`, AUR or clone install keeps the choice and updates outside the app. You can switch back to stable anytime.
+- **In the app:** switch to **Beta** in **Settings → About → Updates**. The Windows installer, the AppImage, the `.deb` (it asks for your password to install the new package) and the Mac app then install the newest signed beta pre-release. Per-merge betas carry no Mac build, so a Mac waits for the next tagged or nightly one. An AUR or clone install keeps the choice and updates outside the app. You can switch back to stable anytime.
 - **From a Linux source clone:**
   ```bash
   ./scripts/install.sh --user --from-source --channel beta     # track origin/beta, build, and install

@@ -203,8 +203,9 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
       # The shell's self-updater (LU-06) installs only what this signs: the
-      # AppImage and the NSIS installer, listed in latest.json with their
-      # minisign signatures. No key, no manifest, so shells don't offer it.
+      # AppImage, the .deb, the NSIS installer and (when macOS was built) the
+      # .app archive, listed in latest.json with their minisign signatures.
+      # No key, no manifest, so shells don't offer it.
       - name: Sign the shell updates
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
@@ -221,7 +222,10 @@ jobs:
           umask 077
           key="$RUNNER_TEMP/minisign.key"
           printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
-          for f in "dist-release/grokhub-shell-v$ver-linux-amd64.AppImage" "dist-release/GrokHub-Shell-Setup-$ver.exe"; do
+          files=("dist-release/grokhub-shell-v$ver-linux-amd64.AppImage" "dist-release/grokhub-shell-v$ver-linux-amd64.deb" "dist-release/GrokHub-Shell-Setup-$ver.exe")
+          mac="dist-release/grokhub-shell-v$ver-macos-arm64.app.tar.gz"
+          if [ -e "$mac" ]; then files+=("$mac"); fi
+          for f in "${files[@]}"; do
             minisign -S -s "$key" -m "$f" -t "loadout shell $TAG"
             minisign -V -p packaging/minisign.pub -m "$f"
           done
