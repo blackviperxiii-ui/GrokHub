@@ -293,9 +293,10 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      next smaller model with a projector, and with none left the planned
      model starts without one.
    - A failed start sheds its projector first (`shed`), ahead of the
-     drop-draft retry and the out-of-memory back-off. When the same launch
-     then runs without it (not out of memory, drafter kept), the engine
-     refused the projector with that model: `vision_refused.json`, beside
+     drop-draft retry and the out-of-memory back-off. When the engine
+     stopped while loading it (not out of memory or a slow load) and the
+     same launch then runs without it, drafter kept, the engine refused the
+     projector with that model: `vision_refused.json`, beside
      `autotune.json`, keeps a lasting record by model file and engine
      build, and vision leaves that model alone until the engine changes. A
      governor restart with the same plan keeps the projector
@@ -330,9 +331,9 @@ Each step is its own PR into `beta`, green on Linux and Windows.
         desktop app); you fetch it from Download models → Other.
      3. A projector is found only beside its model's file, not in the
         other models folder.
-     4. A dead-server restart, a governor stop and reload, and the idle
-        reload start without the projector; the next picture loads it
-        again. A warm relaunch never carries one.
+     4. A governor stop and reload and a reload after an idle unload start
+        without the projector (a crashed server restarts with it); the next
+        picture loads it again. A warm relaunch never carries one.
      5. `tick_scale`'s step-down sizes a running model by its pair, not its
         projector, and the speed test and the refusal check run without
         the projector.

@@ -470,11 +470,16 @@ fn spawn_llama(
 /// Appended to the one-shot defaults to keep the engine off every GPU.
 const CPU_ONLY_ARGS: [&str; 4] = ["-ngl", "0", "--device", "none"];
 
+/// The engine stopped while it loaded, rather than taking too long.
+fn engine_died(err: &str) -> bool {
+    err.contains("stopped before it was ready")
+}
+
 /// Whether a failed start should be tried again with every GPU left out: the
 /// engine died while loading (a GPU driver or backend crash, not a slow load
 /// or out-of-memory) and this launch could still reach a GPU.
 pub fn retry_on_cpu(err: &str, log: &str, launch: Option<&LaunchArgs>, bare_cpu: bool) -> bool {
-    let died = err.contains("stopped before it was ready");
+    let died = engine_died(err);
     let on_gpu = match launch {
         Some(l) => !l.cpu_only,
         None => !bare_cpu,
@@ -566,9 +571,9 @@ fn start_planned(
     let mut gpu_err: Option<String> = None;
     // The drafter came off after it stopped a start (see below).
     let mut dropped_draft = false;
-    // The projector came off after it stopped a start, and whether that
-    // start ran out of memory (see below).
-    let mut dropped_projector: Option<bool> = None;
+    // The projector came off after the engine stopped while loading it, not
+    // out of memory or a slow load (see below).
+    let mut projector_refused = false;
     loop {
         let port = free_loopback_port()?;
         let token = random_token();
@@ -624,7 +629,7 @@ fn start_planned(
                 // won't load it with this model (beside its drafter, when it
                 // has one): vision leaves the model alone until the engine
                 // changes.
-                if dropped_projector == Some(false) && !dropped_draft {
+                if projector_refused && !dropped_draft {
                     super::local_vision::note_refused(&paths.binary, &paths.model);
                 }
                 if let (Some(l), Some((_, key, dir))) = (launch.as_ref(), planned.as_ref()) {
@@ -661,7 +666,7 @@ fn start_planned(
         {
             Some(Shed::Projector { oom }) => {
                 health::log("projector_off", Some(&err));
-                dropped_projector = Some(oom);
+                projector_refused = !oom && engine_died(&err);
                 continue;
             }
             Some(Shed::Draft) => {
