@@ -150,6 +150,10 @@ pub struct BoardCard {
     /// When the last run updated this card.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub updated_ms: u64,
+    /// When this card is due, as unix ms. Pulse reminders and "due within a
+    /// day" proactive offers read it; nothing guesses one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<u64>,
     /// Agent or you. `None` only on cards saved before owners; loading fills it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<WorkOrigin>,
@@ -470,6 +474,7 @@ impl BoardCard {
             result_sent: false,
             fresh: false,
             updated_ms: 0,
+            due_at: None,
             origin: Some(WorkOrigin::User),
             kind: WorkKind::Task,
             touched: false,

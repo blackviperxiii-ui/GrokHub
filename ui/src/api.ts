@@ -2086,6 +2086,8 @@ export interface BoardCard {
   userSteps: boolean;
   /** The steps as the editor shows them, one a line with its mark. */
   stepsText: string;
+  /** When this card is due, as unix ms. Missing when it has no due time. */
+  dueAt?: number | null;
 }
 
 export interface BoardColumn {
@@ -2136,7 +2138,8 @@ export type BoardAct =
   | { kind: "block"; reason: string }
   | { kind: "unblock" }
   | { kind: "steps"; text: string }
-  | { kind: "place"; to: BoardLane; before: string | null };
+  | { kind: "place"; to: BoardLane; before: string | null }
+  | { kind: "due"; dueAt: number | null };
 
 /** Make it recurring: the schedules offered, in the order the shell's
  * `work_triage::RECUR_CHOICES` keeps them. */

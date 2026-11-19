@@ -30,7 +30,7 @@ import { cardsByChat } from "./activity";
 import { newConversationId } from "./Chat";
 import { StatusTracker, statusFromLane } from "./Progress";
 import { CardChat, ownChat } from "./WorkboardChat";
-import { CardTriage, priorityChip } from "./WorkboardTriage";
+import { CardTriage, dueLocalValue, priorityChip } from "./WorkboardTriage";
 
 export const BOARD_EMPTY = "No cards yet. A chat run files one here, or add your own.";
 export const BOARD_HELP =
@@ -878,6 +878,11 @@ function BoardCardRow({
             {card.queued && <span className="work-badge queued">{card.queued}</span>}
             {priorityChip(card.priority) && (
               <span className={`work-badge priority ${card.priority}`}>{priorityChip(card.priority)}</span>
+            )}
+            {card.dueAt != null && (
+              <span className="work-badge due" title={dueLocalValue(card.dueAt)}>
+                Due {new Date(card.dueAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+              </span>
             )}
             {meta.length > 0 && <span className="card-status">{meta.join(" · ")}</span>}
           </div>

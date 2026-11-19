@@ -458,13 +458,13 @@ pub fn game_launch(app: &AppHandle, card: &grokhub_core::UpdateCard) {
     let _ = app.emit(GAME_NOTICE_EVENT, line);
 }
 
-/// One day's reminder notices, shared by every reminder (the cabin's three a day).
-static REMINDERS: Mutex<grokhub_core::pulse::PingGate> =
-    Mutex::new(grokhub_core::pulse::PingGate::new());
+/// One read-change-write of the day's reminder count at a time.
+static REMINDERS: Mutex<()> = Mutex::new(());
 
 /// A proactive card is due within the hour (Settings → Pulse → Reminder
 /// notifications): one notice, at most three a day, never mid-game or in
-/// quiet hours.
+/// quiet hours. The day's count lives in `ping_gate.json` beside
+/// `proactive.json`, so a relaunch keeps it.
 pub fn proactive_reminder(app: &AppHandle, title: &str) {
     let enabled = crate::current(&app.state::<ShellState>()).notifications
         && capabilities::current().notifications;
@@ -481,12 +481,13 @@ pub fn proactive_reminder(app: &AppHandle, title: &str) {
         quiet_hours: quiet,
         day: &day,
     };
-    if !REMINDERS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .take(&ask)
     {
-        return;
+        let _lock = REMINDERS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut gate = grokhub_core::pulse::PingGate::load(&config_dir);
+        if !gate.take(&ask) {
+            return;
+        }
+        let _ = gate.save(&config_dir);
     }
     let id = app.state::<ShellState>().notified.fresh_id();
     notify(app, id, "Coming up", &short(title, DETAIL_CHARS), false);
@@ -571,6 +572,38 @@ mod tests {
         assert!(!companion_ping_ok(false, false, false), "notifications off");
         assert!(!companion_ping_ok(true, true, false), "window in front");
         assert!(!companion_ping_ok(true, false, true), "quiet hours");
+    }
+
+    #[test]
+    fn reminder_pings_keep_the_day_count_across_a_reload() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-reminders-{}-{}",
+            std::process::id(),
+            grokhub_core::new_token()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let day = "2026-11-18";
+        let ask = grokhub_core::pulse::PingAsk {
+            time_sensitive: true,
+            game_running: false,
+            quiet_hours: false,
+            day,
+        };
+        {
+            let _lock = REMINDERS.lock().unwrap_or_else(|e| e.into_inner());
+            let mut gate = grokhub_core::pulse::PingGate::load(&dir);
+            assert!(gate.take(&ask));
+            assert!(gate.take(&ask));
+            assert!(gate.take(&ask));
+            assert!(!gate.take(&ask));
+            gate.save(&dir).expect("save");
+        }
+        assert!(dir.join(grokhub_core::pulse::PING_GATE_FILE).is_file());
+        let again = grokhub_core::pulse::PingGate::load(&dir);
+        assert_eq!(again.sent_on(day), 3);
+        assert!(!again.may_ping(&ask));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

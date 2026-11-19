@@ -90,6 +90,7 @@ function card(over: Partial<BoardCard> = {}): BoardCard {
     flow: null,
     userSteps: false,
     stepsText: "",
+    dueAt: null,
     ...over,
   };
 }
