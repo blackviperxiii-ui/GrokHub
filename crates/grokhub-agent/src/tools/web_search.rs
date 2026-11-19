@@ -260,7 +260,7 @@ pub(crate) fn schema() -> Value {
 pub(crate) fn run_with_ports(args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     match super::ports::current().fetch {
         Some(fetch) => run(args, fetch.as_ref(), stop),
-        None => ToolOutput::err(grokhub_core::XAI_NEED_SIGNIN),
+        None => ToolOutput::err(super::NO_WEB_PORT),
     }
 }
 

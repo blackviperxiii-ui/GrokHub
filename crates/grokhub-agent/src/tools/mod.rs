@@ -458,6 +458,10 @@ pub(crate) fn dry_imagine_body(args: &Value) -> Result<Value, String> {
 pub use media::{imagine_client, run_media_tool, ImagineApi, ImagineSource};
 pub use show_panel::SHOW_PANEL;
 
+/// `web_fetch` and `web_search` outside a turn that installed the network:
+/// neither needs a sign-in, so the note names none.
+pub(crate) const NO_WEB_PORT: &str = "Web access isn't set up for this run.";
+
 /// Install fetch and Imagine clients for this thread. `web_fetch` and
 /// `web_search` never send the bearer, so they work without one; each hop still
 /// passes the permission gate, the public-only resolver and the egress guard.

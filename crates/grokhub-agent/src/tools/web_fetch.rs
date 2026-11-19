@@ -168,7 +168,7 @@ pub(crate) fn schema() -> Value {
 pub(crate) fn run_with_ports(args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     match super::ports::current().fetch {
         Some(fetch) => run(args, fetch.as_ref(), stop),
-        None => ToolOutput::err(grokhub_core::XAI_NEED_SIGNIN),
+        None => ToolOutput::err(super::NO_WEB_PORT),
     }
 }
 
@@ -521,6 +521,19 @@ pub fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::Socket
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// With no network installed, web fetch and web search name no sign-in:
+    /// neither needs xAI.
+    #[test]
+    fn with_no_network_installed_the_web_tools_ask_for_no_sign_in() {
+        let _none = super::super::ports::enter(super::super::ports::Ports::default());
+        let fetch = run_with_ports(&json!({"url": "https://example.com/"}), &|| false);
+        let search = super::super::web_search::run_with_ports(&json!({"query": "rust"}), &|| false);
+        for out in [fetch, search] {
+            assert!(out.failed);
+            assert_eq!(out.text, "Web access isn't set up for this run.");
+        }
+    }
     use crate::auto_review::{review, ReviewIn};
     use crate::gate::{decide_with, Decision, Gate, PermMode};
     use crate::perm::{parse_rule, Action, Policy};
