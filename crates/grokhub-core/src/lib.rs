@@ -152,6 +152,7 @@ pub mod model_lineup;
 pub mod model_registry;
 pub mod mods;
 pub mod msg_channels;
+pub mod msg_telegram;
 pub mod net_log;
 pub mod nudge_watchers;
 pub mod oauth;
