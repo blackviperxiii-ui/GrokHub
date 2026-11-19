@@ -590,6 +590,7 @@ pub fn hf_files(config_dir: &Path, repo: &str) -> Result<Vec<HfFileRow>, String>
 /// Download one GGUF (first path of a group) into the models folder and add it
 /// to the Auto pool (`ownFiles`). No runtime model picker.
 pub fn download_hf(config_dir: &Path, repo: &str, path: &str) -> Result<String, String> {
+    use md::Fetch as _;
     use std::io::{Read, Write};
     let repo = repo.trim().trim_matches('/');
     let path = path.trim().trim_start_matches('/');

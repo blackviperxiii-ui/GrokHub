@@ -8092,7 +8092,7 @@ mod tests {
 }
 
 /// The desktop tools' host: the shell's config folder and its switch. Cua
-/// follows the `cuaDriver` flag the cabin saved (Linux only).
+/// follows the `cuaDriver` flag the cabin saved (Linux and macOS).
 #[cfg(desktop)]
 fn install_desktop_host() {
     // Pin the start time now, as the cabin does: a Halt after it keeps desktop
