@@ -1452,7 +1452,20 @@ fn a_vision_launch_counts_its_projector_and_never_leaves_a_pair_refusal() {
     );
     // The pair itself fits, so nothing holds it.
     assert_eq!(take_refusal(&model), None);
+    // The check a picture turn makes before it stops anything says the same,
+    // and where it was sized, for its own hold.
+    assert_eq!(
+        vision_fit(&binary, &model, None),
+        Err(Some(PairRefusal {
+            pool: Pool::Vram,
+            free_mb: Some(1_600),
+            state: GovState::Normal,
+            on_gpu: true,
+        }))
+    );
+    assert_eq!(take_refusal(&model), None);
     probe(4_000);
+    assert_eq!(vision_fit(&binary, &model, None), Ok(()));
     let (seeing, _, _) = vision_launch_with(&binary, &model, None)
         .unwrap()
         .expect("planned");
@@ -1472,6 +1485,7 @@ fn a_vision_launch_counts_its_projector_and_never_leaves_a_pair_refusal() {
         Err(NO_PROJECTOR.to_string())
     );
     assert_eq!(vision_view(&binary, &[]), Vec::<&str>::new());
+    assert_eq!(vision_fit(&binary, &model, None), Err(None));
     std::fs::remove_file(
         root.join("local")
             .join(super::super::local_vision::REFUSED_FILE),

@@ -296,15 +296,25 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      own projector; a low battery or a game
      keeps the model it chose; held refusals aren't tried. A picture loads
      now, past the cooldown, like an ask. A launch that already reads
-     pictures keeps its model for the next picture. At start
-     (`start_seeing`) a vision launch that is refused steps down to the
-     next smaller model with a projector, and with none left the planned
-     model starts without one.
+     pictures keeps its model for the next picture. Before what runs stops,
+     the launch planner checks the vision launch as a fresh start would see
+     memory (`vision_fit`): one it refuses is held (`hold_vision`, keyed by
+     the running server, released by more free memory where it was sized,
+     another governor state, or that server stopping), and the next is
+     planned without it, so a refused picture keeps the running model
+     instead of reloading it blind every turn. At start (`start_seeing`) a
+     vision launch that is refused, or that ran only once its projector came
+     off, steps down to the next smaller model with a projector and is held
+     on the server that runs after. When none is left the planned model
+     runs as it started; a smaller one that still can't see stops, so no
+     smaller model stands in without seeing the picture. Keep loaded and a
+     forced file try only the pick.
    - A failed start sheds its projector first (`shed`), ahead of the
      drop-draft retry and the out-of-memory back-off. When the engine
      stopped while loading it (not out of memory or a slow load) and the
-     same launch then runs without it, drafter kept, the engine refused the
-     projector with that model: `vision_refused.json`, beside
+     very next start, with nothing else changed (no drafter dropped, no CPU
+     retry, no back-off), runs without it, the engine refused the projector
+     with that model (`ProjectorBlame`): `vision_refused.json`, beside
      `autotune.json`, keeps a lasting record by model file and engine
      build, and vision leaves that model alone until the engine changes. A
      governor restart with the same plan keeps the projector
@@ -330,25 +340,33 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      device keeps the step, without the picture. A step that went online
      anyway gets no `local:no_vision`.
    - Not yet:
-     0. A Speed or Performance ask hits the same wall on a busy profile: a
+     1. A Speed or Performance ask hits the same wall on a busy profile: a
         request in flight refuses it (`Refused::Busy`) with no wait.
-     1. The real-app check: on Linux, a chat that runs here gets a picture,
+     2. The real-app check: on Linux, a chat that runs here gets a picture,
         loads the E2B (or the pick) with its projector, reads it, and the
-        next text turn stays on that launch. Only the engine was run by
-        hand; the app path is covered by unit tests.
-     2. A projector doesn't download with its chat model the way a drafter
+        next text turn stays on that launch. A first run in the app found
+        the picture losing to background requests in flight (fixed by the
+        wait above); the fixed path is covered by unit tests only.
+     3. A projector doesn't download with its chat model the way a drafter
         does (the Chat tab's "rides right behind", the drafter job in the
-        desktop app); you fetch it from Download models → Other.
-     3. A projector is found only beside its model's file, not in the
+        desktop app); you fetch it from Download models → Other, and
+        Download all takes it only with its chat model.
+     4. A projector is found only beside its model's file, not in the
         other models folder.
-     4. A governor stop and reload and a reload after an idle unload start
+     5. A governor stop and reload and a reload after an idle unload start
         without the projector (a crashed server restarts with it); the next
         picture loads it again. A warm relaunch never carries one.
-     5. `tick_scale`'s step-down sizes a running model by its pair, not its
+     6. `tick_scale`'s step-down sizes a running model by its pair, not its
         projector, and the speed test and the refusal check run without
         the projector.
-     6. The record of a refused projector keys on the engine file's size,
+     7. The record of a refused projector keys on the engine file's size,
         so a rebuilt engine of the same size isn't retried.
+     8. Sizing: the E2B projector measured about 1.1 GB of VRAM over the
+        pair, in line with its file plus 15%. One reader flagged the 12B's
+        (a 167 MB file, sized 193 MB) as undercounted; not confirmed on an
+        engine.
+     9. A kept picture is budgeted at 765 tokens in the fit; Gemma 4 may
+        take up to about 1,120 per picture.
    - Open: a screenshot or `read_file` image the model took itself counts
      as the person's newest message (`last_user_text`). Keeping those on
      device is a product call.

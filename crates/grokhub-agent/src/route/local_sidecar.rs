@@ -1341,12 +1341,15 @@ fn start_or_stand_in(
     vision: bool,
 ) -> Started {
     use super::local_swap::StandIn;
+    let mut holds = Vec::new();
     if vision {
         // Keep loaded and a forced file keep the pick: only it may load its
         // projector.
         let pick_only = keep_loaded() || std::env::var_os("GROKHUB_LOCAL_MODEL").is_some();
-        if let Some(started) = start_seeing(config_dir, home, &paths, planned, pick_only) {
-            return started;
+        let (found, refused) = start_seeing(config_dir, home, &paths, planned, pick_only);
+        holds = refused;
+        if let Some(started) = found {
+            return with_holds(started, holds);
         }
     }
     let picked = paths.model.clone();
@@ -1384,7 +1387,21 @@ fn start_or_stand_in(
         side.refused = refused;
     }
     let label = stand_in_label(&paths.model, home, planned, walk);
-    (started, paths.model, label)
+    with_holds((started, paths.model, label), holds)
+}
+
+/// Vision launches a picture start found wouldn't run, to hold on the
+/// server that runs after it (see [`hold_vision`]).
+type VisionHolds = Vec<(PathBuf, super::local_swap::Hold)>;
+
+/// `started` with `holds` kept on its server, when one started.
+fn with_holds(started: Started, holds: VisionHolds) -> Started {
+    if let Ok(side) = &started.0 {
+        for (model, hold) in holds {
+            hold_vision(&side.token, model, hold);
+        }
+    }
+    started
 }
 
 /// [`start_vision`] for the model in `paths`, else for the next smaller
@@ -1394,18 +1411,21 @@ fn start_or_stand_in(
 /// and a smaller one stops so the planned model runs instead: no smaller
 /// model stands in without seeing the picture. `None` starts the planned
 /// model without a projector. With `pick_only` (Keep loaded, a forced file)
-/// only the planned model is tried. A model refused here may still fit
-/// without its projector, so nothing is held against it.
+/// only the planned model is tried. Each model that didn't run with its
+/// projector comes back to be held, so the next picture turn doesn't try it
+/// again (it may still fit without its projector, so the walk holds nothing
+/// against it).
 fn start_seeing(
     config_dir: &Path,
     home: &Path,
     paths: &SidecarPaths,
     planned: Option<super::local_swap::StandIn>,
     pick_only: bool,
-) -> Option<Started> {
-    use super::local_swap::StandIn;
+) -> (Option<Started>, VisionHolds) {
+    use super::local_swap::{Hold, StandIn};
     let disk = on_disk(config_dir);
     let seeing = autoconfig::vision_view(&paths.binary, &disk);
+    let mut holds = VisionHolds::new();
     let mut model = paths.model.clone();
     loop {
         let try_paths = SidecarPaths {
@@ -1419,22 +1439,34 @@ fn start_seeing(
         };
         let next = next_seeing(&model, &disk, &seeing, pick_only);
         match start_vision(&try_paths) {
-            Ok(side) if side.sees_pictures() => return Some((Ok(side), model, label)),
+            Ok(side) if side.sees_pictures() => return (Some((Ok(side), model, label)), holds),
             // Its projector came off at start.
             Ok(side) => {
                 health::log_to(config_dir, "vision_off", Some(PROJECTOR_SHED), None);
+                holds.push((model.clone(), Hold::UntilUnload));
                 match &next {
                     Some(_) => side.stop(),
-                    None if model == paths.model => return Some((Ok(side), model, label)),
+                    None if model == paths.model => {
+                        return (Some((Ok(side), model, label)), holds);
+                    }
                     None => {
                         side.stop();
-                        return None;
+                        return (None, holds);
                     }
                 }
             }
-            Err(e) => health::log_to(config_dir, "vision_off", Some(&e), None),
+            Err(e) => {
+                health::log_to(config_dir, "vision_off", Some(&e), None);
+                let hold = match autoconfig::vision_fit(&paths.binary, &model, None) {
+                    Err(Some(r)) => Hold::Pair(r),
+                    _ => Hold::UntilUnload,
+                };
+                holds.push((model.clone(), hold));
+            }
         }
-        let next = next?;
+        let Some(next) = next else {
+            return (None, holds);
+        };
         health::log_to(
             config_dir,
             "swap",
@@ -1837,20 +1869,64 @@ fn running_view(
     let Some(s) = running else {
         return (false, Vec::new());
     };
-    let free = room
-        .filter(|(_, at)| *at >= s.refused.since_ms)
-        .map(|(r, _)| {
-            let now = autoconfig::FreeNow {
-                vram_free_mb: r.free_vram_mb,
-                ram_free_mb: Some(r.free_ram_mb),
-            };
-            autoconfig::with_own(now, autoconfig::own_use())
-        });
-    let now = super::local_swap::HoldNow {
+    let now = hold_now(s.refused.since_ms, room);
+    (loaded_paired(s), s.refused.holding(&now))
+}
+
+/// What a hold taken at `since_ms` is checked against: the governor state,
+/// and the room reading (when newer than the hold) with the running model's
+/// own memory added back, as a fresh start would see it.
+fn hold_now(
+    since_ms: u64,
+    room: Option<(super::local_scale::Room, u64)>,
+) -> super::local_swap::HoldNow {
+    let free = room.filter(|(_, at)| *at >= since_ms).map(|(r, _)| {
+        let now = autoconfig::FreeNow {
+            vram_free_mb: r.free_vram_mb,
+            ram_free_mb: Some(r.free_ram_mb),
+        };
+        autoconfig::with_own(now, autoconfig::own_use())
+    });
+    super::local_swap::HoldNow {
         state: autoconfig::state(),
         free,
-    };
-    (loaded_paired(s), s.refused.holding(&now))
+    }
+}
+
+/// Vision launches found not to run while one server ran (keyed by its
+/// token, new with every start): a picture turn doesn't stop that server for
+/// one of them again until its hold releases (more free memory where it was
+/// sized, another governor state) or the server stops.
+static VISION_HOLDS: Mutex<Option<(String, super::local_swap::Refusals)>> = Mutex::new(None);
+
+/// Hold `model`'s vision launch while the server with `token` runs.
+fn hold_vision(token: &str, model: PathBuf, hold: super::local_swap::Hold) {
+    let mut holds = VISION_HOLDS.lock().unwrap_or_else(|e| e.into_inner());
+    match holds.as_mut() {
+        Some((t, r)) if t == token => {
+            r.models.retain(|(m, _)| *m != model);
+            r.models.push((model, hold));
+        }
+        _ => {
+            *holds = Some((
+                token.to_string(),
+                super::local_swap::Refusals {
+                    models: vec![(model, hold)],
+                    since_ms: unix_ms(),
+                },
+            ));
+        }
+    }
+}
+
+/// The models whose vision launch is held while the server with `token`
+/// runs (see [`hold_vision`]).
+fn vision_held(token: &str, room: Option<(super::local_scale::Room, u64)>) -> Vec<PathBuf> {
+    let holds = VISION_HOLDS.lock().unwrap_or_else(|e| e.into_inner());
+    match holds.as_ref() {
+        Some((t, r)) if t == token => r.holding(&hold_now(r.since_ms, room)),
+        _ => Vec::new(),
+    }
 }
 
 /// How long a picture turn waits for the requests on a server that can't see
@@ -1971,7 +2047,7 @@ fn swap_plan(
         if running.is_some_and(Sidecar::sees_pictures) {
             return (Plan::Keep, false);
         }
-        let seeing = binary
+        let all_seeing = binary
             .as_deref()
             .map_or_else(Vec::new, |b| autoconfig::vision_view(b, &on_disk));
         // Once the turn waited for them (see [`wait_for_vision`]), requests
@@ -1985,8 +2061,46 @@ fn swap_plan(
         } else {
             now
         };
-        if let Some(p) = super::local_swap::vision_plan(&vnow, &seeing) {
-            return (p, true);
+        // The launch planner checks each vision launch before what runs
+        // stops: one it refuses is held, and the next is planned without it.
+        let mut held = running.map_or_else(Vec::new, |s| {
+            vision_held(&s.token, super::local_scale::room_at(now_ms))
+        });
+        loop {
+            let seeing: Vec<&'static str> = all_seeing
+                .iter()
+                .copied()
+                .filter(|id| {
+                    !held
+                        .iter()
+                        .any(|p| super::local_swap::catalog_for(p).is_some_and(|m| m.id == *id))
+                })
+                .collect();
+            let Some(p) = super::local_swap::vision_plan(&vnow, &seeing) else {
+                break;
+            };
+            // With nothing running, the start walks down by itself.
+            let (Some(s), Some(b), Plan::Load { model, .. }) = (running, binary.as_deref(), &p)
+            else {
+                return (p, true);
+            };
+            match autoconfig::vision_fit(b, model, Some(autoconfig::replan_free())) {
+                Ok(()) => return (p, true),
+                Err(r) => {
+                    let hold = r.map_or(
+                        super::local_swap::Hold::UntilUnload,
+                        super::local_swap::Hold::Pair,
+                    );
+                    health::log_to(
+                        config_dir,
+                        "vision_off",
+                        Some(&swap_note(model, None)),
+                        None,
+                    );
+                    hold_vision(&s.token, model.clone(), hold);
+                    held.push(model.clone());
+                }
+            }
         }
     }
     (super::local_swap::plan(now), false)
@@ -3617,6 +3731,186 @@ mod tests {
         );
         drop(held);
         assert_eq!(VISION_DRAIN, Duration::from_secs(20));
+    }
+
+    /// A GGUF header the launch planner reads: 16 layers, 8k context.
+    #[cfg(unix)]
+    fn tiny_gguf() -> Vec<u8> {
+        let mut kv = Vec::new();
+        let key = |kv: &mut Vec<u8>, k: &str, t: u32| {
+            kv.extend((k.len() as u64).to_le_bytes());
+            kv.extend(k.as_bytes());
+            kv.extend(t.to_le_bytes());
+        };
+        key(&mut kv, "general.architecture", 8);
+        kv.extend(5u64.to_le_bytes());
+        kv.extend(b"llama");
+        for (k, v) in [
+            ("llama.block_count", 16u32),
+            ("llama.context_length", 8_192),
+            ("llama.embedding_length", 2_048),
+            ("llama.attention.head_count", 32),
+            ("llama.attention.head_count_kv", 8),
+        ] {
+            key(&mut kv, k, 4);
+            kv.extend(v.to_le_bytes());
+        }
+        let mut out = b"GGUF".to_vec();
+        out.extend(3u32.to_le_bytes());
+        out.extend(0u64.to_le_bytes());
+        out.extend(6u64.to_le_bytes());
+        out.extend(kv);
+        out
+    }
+
+    /// A machine with no GPU and `free_ram_mb` of RAM free.
+    #[cfg(unix)]
+    fn cpu_box(free_ram_mb: u64) -> grokhub_core::local_profile::LocalProfile {
+        use grokhub_core::local_picker::CpuSimd;
+        use grokhub_core::local_profile::{CpuInfo, LocalProfile, PowerInfo, Thermal};
+        LocalProfile {
+            os: "linux",
+            arch: "x86_64",
+            gpus: Vec::new(),
+            cpu: CpuInfo::new(16, 8, 0, CpuSimd::Avx2),
+            ram_mb: 32_768,
+            free_ram_mb: Some(free_ram_mb),
+            power: PowerInfo::default(),
+            thermal: Thermal::Nominal,
+            free_disk_mb: 500_000,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_picture_keeps_the_running_model_when_the_launch_planner_refuses_every_vision_launch() {
+        use super::super::local_vision::PictureGuard;
+        use std::os::unix::fs::PermissionsExt;
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        super::super::local_scale::clear_room();
+        let dir = std::env::temp_dir().join(format!("grokhub-vision-fit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let models = dir.join("models");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(&models).unwrap();
+        let binary = dir.join("bin").join("llama-server");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\ncat <<'EOF'\n-mm,   --mmproj FILE   path to a multimodal projector file\n--mmproj-offload, --no-mmproj-offload   offload\nEOF\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let place = |id: &str, body: Option<&[u8]>| {
+            let m = grokhub_core::local_setup::model_by_id(id).expect("catalog model");
+            let p = grokhub_core::model_download::final_path(&models, m);
+            match body {
+                Some(b) => std::fs::write(&p, b).unwrap(),
+                // A 200 MB projector, sparse.
+                None => std::fs::File::create(&p)
+                    .unwrap()
+                    .set_len(200 * 1024 * 1024)
+                    .unwrap(),
+            }
+            p
+        };
+        let mid = place("gemma-4-e4b-it-abliterated-q4_k", Some(&tiny_gguf()));
+        let small = place("gemma-4-e2b-it-abliterated-q4_k", Some(&tiny_gguf()));
+        place("gemma-4-e4b-it-abliterated-mmproj", None);
+        place("gemma-4-e2b-it-abliterated-mmproj", None);
+        let mut side = idle_child_sidecar(600, unix_secs());
+        side.model = mid.clone();
+        side.binary = binary;
+        side.token = "vision-fit-server".into();
+        // 300 MB of RAM free plans for 240: no model fits with its 230 MB
+        // projector, so the running model stays and both launches are held.
+        autoconfig::set_profile(cpu_box(300), dir.join("local"));
+        autoconfig::set_free_probe(Arc::new(|| autoconfig::FreeNow {
+            vram_free_mb: None,
+            ram_free_mb: Some(300),
+        }));
+        let _picture = PictureGuard::set(true);
+        let plan = |side: &Sidecar| swap_plan(&dir, &mid, Some(side), Want::Request);
+        assert_eq!(plan(&side), (Plan::Keep, false));
+        assert_eq!(
+            vision_held(&side.token, None),
+            vec![mid.clone(), small.clone()]
+        );
+        // A newer server holds nothing, and with room the pick reloads with
+        // its projector.
+        side.token = "vision-fit-server-2".into();
+        autoconfig::set_free_probe(Arc::new(|| autoconfig::FreeNow {
+            vram_free_mb: None,
+            ram_free_mb: Some(24_000),
+        }));
+        autoconfig::set_profile(cpu_box(24_000), dir.join("local"));
+        assert_eq!(
+            plan(&side),
+            (
+                Plan::Load {
+                    model: mid.clone(),
+                    stand_in: None
+                },
+                true
+            )
+        );
+        *VISION_HOLDS.lock().unwrap() = None;
+        autoconfig::reset_free_probe();
+        autoconfig::forget_profile();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_held_vision_launch_releases_with_more_room_and_goes_with_its_server() {
+        use super::super::local_autoconfig::{PairRefusal, Pool};
+        use super::super::local_scale::{Room, HEADROOM_MB};
+        use super::super::local_swap::Hold;
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (g12b, e2b) = (
+            PathBuf::from("/home/user/models/g12b.gguf"),
+            PathBuf::from("/home/user/models/e2b.gguf"),
+        );
+        let refusal = PairRefusal {
+            pool: Pool::Vram,
+            free_mb: Some(1_000),
+            state: autoconfig::state(),
+            on_gpu: true,
+        };
+        hold_vision("server-a", g12b.clone(), Hold::Pair(refusal));
+        hold_vision("server-a", e2b.clone(), Hold::UntilUnload);
+        // No newer reading: both hold.
+        assert_eq!(
+            vision_held("server-a", None),
+            vec![g12b.clone(), e2b.clone()]
+        );
+        let room = |vram: u64| {
+            Some((
+                Room {
+                    free_vram_mb: Some(vram),
+                    free_ram_mb: 0,
+                    cpu_busy_pct: Some(10),
+                    on_battery: false,
+                    unified: false,
+                },
+                unix_ms() + 1_000,
+            ))
+        };
+        let own = autoconfig::own_use().vram_free_mb.unwrap_or(0);
+        assert_eq!(
+            vision_held("server-a", room(1_000 + HEADROOM_MB - 1 - own)),
+            vec![g12b.clone(), e2b.clone()]
+        );
+        // The pool the vision launch was sized from has room again.
+        assert_eq!(
+            vision_held("server-a", room(1_000 + HEADROOM_MB - own)),
+            vec![e2b.clone()]
+        );
+        // Another server holds nothing, and its first hold replaces these.
+        assert_eq!(vision_held("server-b", None), Vec::<PathBuf>::new());
+        hold_vision("server-b", e2b.clone(), Hold::UntilUnload);
+        assert_eq!(vision_held("server-b", None), vec![e2b.clone()]);
+        assert_eq!(vision_held("server-a", None), Vec::<PathBuf>::new());
+        *VISION_HOLDS.lock().unwrap() = None;
     }
 
     #[test]

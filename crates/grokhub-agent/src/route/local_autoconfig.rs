@@ -1171,6 +1171,9 @@ struct Planning {
     /// Planned with a vision projector: whether the model, its drafter and
     /// the projector all fit. `true` without one.
     projector_fits: bool,
+    /// Where a vision launch that doesn't fit was sized, for the hold that
+    /// keeps a picture turn from tearing down the running model for it again.
+    projector_refusal: Option<PairRefusal>,
 }
 
 fn planned(binary: &Path, model: &Path, free: Option<FreeNow>) -> Option<Planning> {
@@ -1219,6 +1222,22 @@ pub fn vision_launch_with(
     }
     local_spec::launched(&p.plan, &p.dir);
     Ok(Some((p.args, p.key, p.dir)))
+}
+
+/// Whether a vision launch of `model` fits as a fresh start would see
+/// memory (`free`), planned as [`vision_launch_with`] would but launching
+/// nothing. `Ok` also before the hardware read (the start decides then);
+/// `Err` says where it was sized, or `None` without a projector to load.
+pub fn vision_fit(
+    binary: &Path,
+    model: &Path,
+    free: Option<FreeNow>,
+) -> Result<(), Option<PairRefusal>> {
+    let projector = projector_args(binary, model).ok_or(None)?;
+    match planned_as(binary, model, free, false, Some(&projector)) {
+        Some(p) if !p.projector_fits => Err(p.projector_refusal),
+        _ => Ok(()),
+    }
 }
 
 /// [`replan_for`] keeping the running launch's vision projector, so a
@@ -1418,6 +1437,7 @@ fn planned_as(
                 need_mb(&meta, args.ctx, args.kv, seqs) + projector_mb <= gpu + ram
             }
         });
+    let projector_refusal = (!projector_fits).then(|| refusal_of(&p, &args, state, now));
     Some(Planning {
         args,
         plan,
@@ -1425,6 +1445,7 @@ fn planned_as(
         dir,
         refusal,
         projector_fits,
+        projector_refusal,
     })
 }
 
