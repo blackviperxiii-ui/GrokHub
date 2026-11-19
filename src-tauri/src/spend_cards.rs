@@ -105,20 +105,17 @@ pub fn view(card: &Card) -> CardView {
     }
 }
 
-/// The card up now. A chat that paused at 100% raises the ask first.
+/// The card up now, if one is due. App-side weekly budget ask cards are never emitted.
 pub fn current() -> Option<CardView> {
-    let mut c = cards();
-    if grokhub_agent::route::live::take_budget_ask() {
-        c.card = Some(Card::Ask);
-    }
+    let c = cards();
     c.card.as_ref().map(view)
 }
 
-/// A tally landed: the 80% card once a week, else the nudge when its rule
-/// allows. One card at a time; no OS notice.
+/// A tally landed: the upgrade nudge when its rule allows. App-side 80%
+/// weekly budget cards are disabled.
 pub fn landed(
     config_dir: &Path,
-    b: &Budget,
+    _b: &Budget,
     facts: NudgeFacts,
     gate: NudgeGate,
     tier: Option<&str>,
@@ -130,12 +127,6 @@ pub fn landed(
         return;
     }
     let mut notes = BudgetNotes::load(config_dir);
-    if notes.eighty_due(b) {
-        notes.eighty_week = b.week;
-        notes.save(config_dir);
-        c.card = Some(Card::Eighty);
-        return;
-    }
     if budget::nudge_due(&facts, &notes, gate, now) {
         notes.nudge_shown_ms = now;
         notes.save(config_dir);
@@ -207,17 +198,17 @@ pub fn tally(config_dir: &Path, gate: NudgeGate, now: u64) {
     );
 }
 
-/// Settings → Account's line under a live sign-in: the plan gate's refusal
-/// within the last hour, else the pool's room as xAI last reported it.
+/// Settings → Account's line under a live sign-in: only the plan gate's refusal
+/// within the last hour (never a SuperGrok room meter).
 pub fn plan_note(
     refused_ms: Option<u64>,
-    room: Option<&plan_room::PlanRoom>,
+    _room: Option<&plan_room::PlanRoom>,
     now_ms: u64,
 ) -> Option<String> {
     if refused_ms.is_some_and(|t| now_ms.saturating_sub(t) <= plan_room::FRESH_MS) {
         return Some(ACCOUNT_PLAN_HINT.into());
     }
-    room.and_then(|r| plan_room::room_line(r, now_ms))
+    None
 }
 
 /// [`plan_note`] from what this run's signed-in replies said.

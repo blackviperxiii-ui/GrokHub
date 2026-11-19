@@ -287,13 +287,85 @@ pub fn chat_line(
     }
 }
 
+/// Formats the on-device chat line with an optional local routing reason.
+pub fn chat_line_with_reason(
+    name: &str,
+    draft: bool,
+    stand_in: Option<StandIn>,
+    ask: Option<AskOutcome>,
+    reason: Option<&str>,
+) -> String {
+    let base = chat_line(name, draft, stand_in, ask);
+    match reason.map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => {
+            let trimmed = base.strip_suffix('.').unwrap_or(&base);
+            format!("{trimmed} — routed locally because {r}.")
+        }
+        None => base,
+    }
+}
+
+/// Derives a plain-English local routing reason from the router's rule ids and
+/// any upstream server handoff rule.
+pub fn routing_reason(rules: &[String], handoff_rule: Option<&str>) -> &'static str {
+    let has = |id: &str| rules.iter().any(|r| r == id);
+    if has("size:warm_local") {
+        "already warm on this computer"
+    } else if has("local:cloud_benched") {
+        "cloud models are benched"
+    } else if has("privacy:local_only") {
+        "keeping sensitive content on this computer"
+    } else if has("adult:local_only") {
+        "keeping explicit content on this computer"
+    } else if has("offline:local") {
+        "offline mode is on"
+    } else if has("local:no_keys") {
+        "no online sign-in or API key is configured"
+    } else if has("voice:local_only") {
+        "voice replies are set to local only"
+    } else if let Some(h) = handoff_rule {
+        match h {
+            "handoff:limit" => "cloud model hit its rate limit",
+            "handoff:credit" => "cloud account is out of credit",
+            "handoff:auth" => "cloud sign-in or API key was refused",
+            "handoff:free_cap" => "cloud free tier hit its limit",
+            _ => "cloud model was unavailable",
+        }
+    } else if has("local:cloud_down") {
+        "online models were unavailable"
+    } else {
+        "selected for on-device execution"
+    }
+}
+
+/// Formats the chat loading note with an optional routing reason.
+pub fn loading_note(reason: Option<&str>) -> String {
+    match reason.map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => format!("{} (Reason: {r}.)", super::local::LOCAL_LOADING_NOTE),
+        None => super::local::LOCAL_LOADING_NOTE.to_string(),
+    }
+}
+
 /// The line for each chat's last on-device reply, until the chat takes it.
 static LAST_LINE: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+/// Why the chat's current step was routed locally, for display on the reply/loading note.
+static ROUTE_REASON: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+
+pub fn note_route_reason(conversation_id: &str, reason: &str) {
+    if let Ok(mut map) = ROUTE_REASON.lock() {
+        map.insert(conversation_id.to_string(), reason.to_string());
+    }
+}
+
+pub fn take_route_reason(conversation_id: &str) -> Option<String> {
+    ROUTE_REASON.lock().ok()?.remove(conversation_id)
+}
 
 /// Keep the line for the reply that just ran on device for `conversation_id`
 /// (a later step of the same turn replaces it). With nothing loaded there
 /// is no line.
 pub fn note_reply(conversation_id: &str, ask: Option<(AskOutcome, PathBuf)>) {
+    let reason = take_route_reason(conversation_id);
     let Some(l) = local_sidecar::loaded() else {
         forget_line(conversation_id);
         return;
@@ -313,7 +385,10 @@ pub fn note_reply(conversation_id: &str, ask: Option<(AskOutcome, PathBuf)>) {
     // model's label: a plan that keeps the model the ask wanted leaves the
     // label of whatever loaded it.
     let ask = ask.map(|(a, target)| settle(a, target == l.model));
-    keep_line(conversation_id, chat_line(&name, draft, l.stand_in, ask));
+    keep_line(
+        conversation_id,
+        chat_line_with_reason(&name, draft, l.stand_in, ask, reason.as_deref()),
+    );
 }
 
 /// Keep `line` for `conversation_id`'s turn, until [`take_line`] takes it.
@@ -349,6 +424,9 @@ pub fn note_blind(conversation_id: &str) {
 pub fn forget_line(conversation_id: &str) {
     if let Ok(mut lines) = LAST_LINE.lock() {
         lines.remove(conversation_id);
+    }
+    if let Ok(mut reasons) = ROUTE_REASON.lock() {
+        reasons.remove(conversation_id);
     }
 }
 
@@ -399,6 +477,39 @@ pub fn must_stay_here(conversation_id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn routing_reason_and_chat_line_explain_why_local_was_used() {
+        assert_eq!(
+            super::routing_reason(&["size:warm_local".into()], None),
+            "already warm on this computer"
+        );
+        assert_eq!(
+            super::routing_reason(&["local:cloud_benched".into()], None),
+            "cloud models are benched"
+        );
+        assert_eq!(
+            super::routing_reason(&[], Some("handoff:limit")),
+            "cloud model hit its rate limit"
+        );
+        assert_eq!(
+            super::chat_line_with_reason(
+                "Gemma 4 E4B",
+                false,
+                None,
+                None,
+                Some("cloud models are benched")
+            ),
+            "Answered by Gemma 4 E4B, your pick — routed locally because cloud models are benched."
+        );
+        assert_eq!(
+            super::loading_note(Some("already warm on this computer")),
+            format!(
+                "{} (Reason: already warm on this computer.)",
+                super::super::local::LOCAL_LOADING_NOTE
+            )
+        );
+    }
+
     #[test]
     fn a_blind_reply_says_the_picture_wasnt_read() {
         assert_eq!(

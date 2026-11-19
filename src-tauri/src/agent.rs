@@ -1205,6 +1205,38 @@ pub fn save_report(chat: &str, cwd: &str, text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Save a handled user + assistant exchange (e.g., chat model benching) into
+/// `chat` and mark any live engine to reload its history before its next turn.
+pub fn save_bench_exchange(
+    chat: &str,
+    cwd: &str,
+    user_text: &str,
+    reply_text: &str,
+) -> Result<(), String> {
+    grokhub_agent::record_turn(
+        chat,
+        cwd,
+        "system",
+        &[
+            grokhub_agent::InputItem::Message {
+                role: "user".into(),
+                content: vec![grokhub_agent::ContentPart::InputText(user_text.to_string())],
+            },
+            grokhub_agent::InputItem::Message {
+                role: "assistant".into(),
+                content: vec![grokhub_agent::ContentPart::InputText(reply_text.to_string())],
+            },
+        ],
+        &grokhub_agent::Usage::default(),
+        "",
+        "",
+    )?;
+    let mut late = late();
+    let entry = late.entry(chat.to_string()).or_default();
+    entry.reload = true;
+    Ok(())
+}
+
 /// A turn starts: reports wait until it ends. True when the chat's file
 /// gained a report since the last turn, so the engine reads it back.
 fn turn_starts(chat: &str) -> bool {

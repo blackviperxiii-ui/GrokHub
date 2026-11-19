@@ -851,6 +851,28 @@ fn run_gate(route: &agent::Route) -> unattended::RunGate {
 
 /// Runs one prompt through the agent loop. Text, tool cards and permission
 /// asks arrive as `chat://event`; this resolves with the stop reason.
+fn maybe_handle_bench_turn_to_disk(
+    config_dir: &Path,
+    conversation_id: &str,
+    text: &str,
+    cwd: &str,
+) -> Result<Option<String>, String> {
+    let (reg, _) = grokhub_agent::route::live::snapshot(config_dir);
+    let known: Vec<&str> = reg.models.keys().map(String::as_str).collect();
+    let Some(action) =
+        grokhub_agent::route::user_bench::parse_chat_command_with_known(text, &known)
+    else {
+        return Ok(None);
+    };
+    let outcome = grokhub_agent::route::user_bench::apply_and_save(
+        config_dir,
+        action,
+        grokhub_core::now_ms(),
+    )?;
+    agent::save_bench_exchange(conversation_id, cwd, text, &outcome.message)?;
+    Ok(Some(outcome.message))
+}
+
 #[tauri::command]
 async fn send_chat(
     app: AppHandle,
@@ -892,7 +914,8 @@ async fn send_chat(
     #[cfg(desktop)]
     let text = {
         let on = pc_helpers::read(&state.config_dir).focus_help
-            && !grokhub_agent::research::is_command(&text);
+            && !grokhub_agent::research::is_command(&text)
+            && grokhub_agent::route::user_bench::parse_chat_command(&text).is_none();
         let focus = state
             .focus_help
             .lock()
@@ -959,6 +982,41 @@ async fn chat_turn(
         clock,
     } = turn;
     let files = state.trays.take(&conversation_id, &attachments)?;
+    let own_folder = state.code_sessions.of(&conversation_id);
+    if files.is_empty() {
+        let bench_cwd = own_folder
+            .clone()
+            .unwrap_or_else(|| agent::workspace_for(&settings.workspace))
+            .to_string_lossy()
+            .into_owned();
+        if let Some(reply) = maybe_handle_bench_turn_to_disk(
+            &state.config_dir,
+            &conversation_id,
+            &text,
+            &bench_cwd,
+        )? {
+            let text_ev = agent::UiEvent::Text { text: reply };
+            inbox::note(&conversation_id, &text_ev);
+            let _ = app.emit(
+                CHAT_EVENT,
+                ChatEvent {
+                    conversation_id: &conversation_id,
+                    event: &text_ev,
+                },
+            );
+            let stop = "end_turn".to_string();
+            let done_ev = agent::UiEvent::Done { stop: stop.clone() };
+            inbox::note(&conversation_id, &done_ev);
+            let _ = app.emit(
+                CHAT_EVENT,
+                ChatEvent {
+                    conversation_id: &conversation_id,
+                    event: &done_ev,
+                },
+            );
+            return Ok(stop);
+        }
+    }
     let asked = text.clone();
     // A card's chat shows Stop on its card while this turn runs.
     card_chat::turn_began(&conversation_id);
@@ -973,7 +1031,6 @@ async fn chat_turn(
     let session = session(state, &conversation_id);
     let config_dir = state.config_dir.clone();
     // A Code tab session works in its own project's folder, not the app's.
-    let own_folder = state.code_sessions.of(&conversation_id);
     // Its agent pushes through the Code tab's push guard and codes with the
     // bundled skills always on.
     let coding = own_folder.is_some();
@@ -3197,7 +3254,7 @@ async fn code_project_link_remote(
         let linked = grokhub_code::link::link_remote(
             &url,
             &work_root,
-            token.as_deref(),
+            token.as_deref().map(String::as_str),
             preferred_branch.as_deref(),
         )?;
         drop(token);
@@ -3224,11 +3281,7 @@ async fn code_project_set_branch(
 ) -> Result<projects::CodeProjects, String> {
     off_main(move || {
         let state = app.state::<ShellState>();
-        projects::set_preferred_branch(
-            &state.config_dir,
-            &project_id,
-            branch.as_deref(),
-        )?;
+        projects::set_preferred_branch(&state.config_dir, &project_id, branch.as_deref())?;
         let bound = current(&state).workspace;
         projects::listing(&state.config_dir, &bound)
     })
@@ -3247,9 +3300,9 @@ async fn code_project_rules(
         }
         let path = PathBuf::from(&bound);
         let nodes = projects::load(&dir).unwrap_or_default();
-        let node = nodes
-            .iter()
-            .find(|n| n.kind == grokhub_core::ProjectKind::Project && projects::is_open(&n.path, &bound));
+        let node = nodes.iter().find(|n| {
+            n.kind == grokhub_core::ProjectKind::Project && projects::is_open(&n.path, &bound)
+        });
         let project_id = node.map(|n| n.id.as_str()).unwrap_or("");
         let override_branch = node.and_then(|n| n.preferred_branch.as_deref());
         let remote = node
@@ -6303,6 +6356,26 @@ async fn save_ai_spend(
     .await?
 }
 
+#[tauri::command]
+async fn bench_ai_model(
+    state: State<'_, ShellState>,
+    target: String,
+) -> Result<ai_models::AiModelsView, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || ai_models::bench_model(&dir, &target)).await?
+}
+
+#[tauri::command]
+async fn unbench_ai_model(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<ai_models::AiModelsView, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || ai_models::unbench_model(&dir, &id)).await?
+}
+
 /// Settings → AI models → Web search: the backend and SearXNG URL.
 #[tauri::command]
 async fn save_web_search(
@@ -8598,6 +8671,8 @@ pub fn run() {
             answer_ai_models_card,
             remove_ai_provider,
             save_ai_spend,
+            bench_ai_model,
+            unbench_ai_model,
             save_web_search,
             save_brave_key,
             revoke_ai_premium,
@@ -9396,6 +9471,40 @@ mod open_url_tests {
         ] {
             assert!(openable_url(bad).is_err(), "{bad} must be refused");
         }
+    }
+}
+
+#[cfg(test)]
+mod chat_bench_tests {
+    use super::maybe_handle_bench_turn_to_disk;
+
+    #[test]
+    fn chat_turn_bench_command_persists_and_unbenches_without_normal_chat_interference() {
+        let dir = std::env::temp_dir().join(format!("loadout-chat-bench-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _cfg = grokhub_agent::perm::ConfigGuard::set(&dir);
+
+        assert_eq!(
+            maybe_handle_bench_turn_to_disk(&dir, "bench-chat-1", "don't use tabs", "/tmp")
+                .unwrap(),
+            None
+        );
+
+        let reply = maybe_handle_bench_turn_to_disk(&dir, "bench-chat-1", "stop using Grok", "/tmp")
+            .unwrap()
+            .expect("should confirm bench");
+        assert!(reply.contains("Benched Grok (xAI)"), "{reply}");
+        assert!(grokhub_agent::route::user_bench::load(&dir).matches_model("grok-4.7"));
+
+        let reply2 =
+            maybe_handle_bench_turn_to_disk(&dir, "bench-chat-1", "use Grok again", "/tmp")
+                .unwrap()
+                .expect("should confirm unbench");
+        assert!(reply2.contains("Unbenched Grok (xAI)"), "{reply2}");
+        assert!(!grokhub_agent::route::user_bench::load(&dir).matches_model("grokhub-nonexistent"));
+        assert!(!grokhub_agent::route::user_bench::load(&dir).matches_model("grok-4.7"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

@@ -49,68 +49,18 @@ fn nudge_facts() -> NudgeFacts {
 }
 
 #[test]
-fn the_eighty_card_shows_once_a_week_and_ok_or_change_cap_answers_it() {
+fn app_side_eighty_percent_card_is_disabled() {
     let (_g, dir) = fresh("eighty");
-    landed(&dir.0, &at(79), NudgeFacts::default(), OPEN, None, NOW);
-    assert_eq!(cards().card, None);
-
     landed(&dir.0, &at(82), NudgeFacts::default(), OPEN, None, NOW);
-    let shown = cards().card.as_ref().map(view).unwrap();
-    assert_eq!(
-        (shown.key, shown.eyebrow, shown.primary, shown.secondary),
-        ("eighty", "This week's usage", "OK", "Change cap")
-    );
-    assert_eq!(shown.title, budget::EIGHTY_CARD);
-    let ok = answer(&dir.0, "eighty", true, NOW).unwrap();
-    assert_eq!(ok.status, "OK. Chats stay at normal quality.");
-    assert!(!ok.open_ai_models);
-
-    // Same week: it doesn't come back.
-    landed(
-        &dir.0,
-        &at(90),
-        NudgeFacts::default(),
-        OPEN,
-        None,
-        NOW + 1_000,
-    );
     assert_eq!(cards().card, None);
-
-    // Next week it does; Change cap opens Settings → AI models.
-    let next = Budget {
-        week: budget::week_of(NOW) + 1,
-        ..at(85)
-    };
-    landed(
-        &dir.0,
-        &next,
-        NudgeFacts::default(),
-        OPEN,
-        None,
-        NOW + budget::WEEK_MS,
-    );
-    let change = answer(&dir.0, "eighty", false, NOW + budget::WEEK_MS).unwrap();
-    assert!(change.open_ai_models);
-    assert_eq!(
-        answer(&dir.0, "eighty", true, NOW).unwrap_err(),
-        "That card is gone."
-    );
+    landed(&dir.0, &at(100), NudgeFacts::default(), OPEN, None, NOW + 1_000);
+    assert_eq!(cards().card, None);
 }
 
 #[test]
-fn keep_going_at_one_hundred_percent_lets_chats_go_on_this_week() {
-    let (_g, dir) = fresh("ask");
-    cards().card = Some(Card::Ask);
-    let shown = current().unwrap();
-    assert_eq!(
-        (shown.key, shown.primary, shown.secondary),
-        ("ask", "Keep going", "Wait")
-    );
-    assert_eq!(shown.title, budget::BUDGET_ASK);
-    assert!(BudgetNotes::load(&dir.0).must_ask(&at(100)));
-    let went = answer(&dir.0, "ask", true, NOW).unwrap();
-    assert_eq!(went.status, "Chats go on this week. Background work waits.");
-    assert!(!BudgetNotes::load(&dir.0).must_ask(&at(100)));
+fn current_never_promotes_take_budget_ask() {
+    let (_g, _dir) = fresh("ask");
+    assert!(!grokhub_agent::route::live::take_budget_ask());
     assert_eq!(current(), None);
 }
 
@@ -162,7 +112,7 @@ fn the_nudge_waits_for_a_quiet_moment_and_not_now_mutes_it_for_thirty_days() {
 }
 
 #[test]
-fn account_says_the_plan_refused_within_the_hour_else_the_pools_room() {
+fn account_says_only_recent_plan_refusal_never_supergrok_room_meter() {
     let room = plan_room::PlanRoom {
         requests_left: Some(1_200),
         requests_limit: Some(2_000),
@@ -170,15 +120,12 @@ fn account_says_the_plan_refused_within_the_hour_else_the_pools_room() {
         seen_ms: NOW,
         ..Default::default()
     };
-    assert_eq!(
-        plan_note(None, Some(&room), NOW + 60_000).as_deref(),
-        Some("SuperGrok room: 1,200 of 2,000 requests left, resets in 9 min")
-    );
+    assert_eq!(plan_note(None, Some(&room), NOW + 60_000), None);
     assert_eq!(
         plan_note(Some(NOW), Some(&room), NOW + 60_000).as_deref(),
         Some(ACCOUNT_PLAN_HINT)
     );
-    // An old refusal and an old reading say nothing.
+    // An old refusal says nothing.
     let later = NOW + plan_room::FRESH_MS + 1;
     assert_eq!(plan_note(Some(NOW), Some(&room), later), None);
     assert_eq!(plan_note(None, None, NOW), None);

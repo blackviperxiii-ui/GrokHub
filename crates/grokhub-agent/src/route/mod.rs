@@ -76,6 +76,7 @@ pub mod table;
 pub mod trial;
 pub mod trust;
 pub mod tune;
+pub mod user_bench;
 pub mod voice_route;
 pub mod wait;
 
@@ -307,85 +308,144 @@ pub fn call_model(
         grokhub_core::adult_guard::Dest::Xai
     };
     // 18+ chat runs on this computer's model only, never online.
+    let bench = user_bench::load(&dir);
     if adult::to_local(&sent.input, dest) {
         if let Some(notice) = adult::no_local_notice() {
             let out = adult::notice_answer(&call.class, &notice)?;
             let tokens = CallTokens::of(&sent, &out.usage);
             return Ok(Routed { out, tokens });
         }
+        if bench.blocks_local() {
+            return Err(ClientError::Protocol(
+                "Local models are benched. Unbench them in chat or Settings → AI models to answer on device."
+                    .into(),
+            ));
+        }
         on_device = true;
         sent.model = local::live_tier().to_string();
     }
-    let on_provider = decision.on_provider() && !on_device;
+    let mut on_provider = decision.on_provider() && !on_device;
     let started = std::time::Instant::now();
     crate::harness::replay::clear_last();
-    // Set when Grok took a turn the picked provider failed: logged as Grok's.
-    let mut grok_model = String::new();
-    let out = if on_device {
-        local::serve(&call.class, &text, cancel)
-    } else if on_provider {
-        let span_id = format!(
-            "{}:{now}",
-            if call.session.is_empty() {
-                &call.conversation_id
-            } else {
-                &call.session
-            }
-        );
-        let out = providers::call_model(
-            &dir,
-            &call.class,
-            &sent.model,
-            sent.effort.as_deref(),
-            &sent.request(),
-            providers::call_data(rc.sensitive),
-            &span_id,
-            cancel,
-        );
-        match out {
-            Err(err)
-                if voice_route::active_reply_pref(&dir).is_none()
-                    && live::provider_fallible(&err)
-                    && sent.model != call.model =>
-            {
-                // The same rule as the chat path: cool the provider so the
-                // next pick skips it, and Grok takes the turn. Only when the
-                // router rerouted this call away from the caller's own model:
-                // a caller that named the provider model gets its error.
-                live::cool_down_for(&dir, &sent.model, &err, now);
-                // Failover PR 7: the switch lands on this call's route
-                // record like the chat path's (no packet here: this path's
-                // callers re-plan their own retries).
-                handoff::log_switch(
-                    if call.session.is_empty() {
-                        &call.conversation_id
-                    } else {
-                        &call.session
-                    },
-                    &sent.model,
-                    &call.model,
-                    &err,
-                );
-                grok_model = call.model.clone();
-                sent.model = grok_model.clone();
-                client.stream(&sent.request(), cancel, &mut |_| {})
-            }
-            out => out,
-        }
+    let allow_failover = voice_route::active_reply_pref(&dir).is_none();
+    let session_key = if call.session.is_empty() {
+        call.conversation_id.as_str()
     } else {
-        client.stream(&sent.request(), cancel, &mut |_| {})
+        call.session.as_str()
     };
+    let mut active_provider = decision.route.provider.clone();
+    let mut active_decision = decision;
+    let mut tried: Vec<String> = Vec::new();
+    let mut out = Err(ClientError::Protocol("no route".into()));
+    for attempt in 0..3 {
+        tried.push(sent.model.clone());
+        let step = if on_device {
+            let r = local_live::routing_reason(&active_decision.route.rule_ids, None);
+            local_live::note_route_reason(&call.conversation_id, r);
+            local::serve(&call.class, &text, cancel)
+        } else if on_provider {
+            let span_id = format!("{session_key}:{now}:{attempt}");
+            providers::call_model(
+                &dir,
+                &call.class,
+                &sent.model,
+                sent.effort.as_deref(),
+                &sent.request(),
+                providers::call_data(rc.sensitive),
+                &span_id,
+                cancel,
+            )
+        } else {
+            client.stream(&sent.request(), cancel, &mut |_| {})
+        };
+        match step {
+            Ok(v) => {
+                out = Ok(v);
+                break;
+            }
+            Err(err)
+                if !on_device
+                    && allow_failover
+                    && attempt < 2
+                    && ((on_provider && live::provider_fallible(&err))
+                        || (!on_provider && live::xai_cant_answer(&err))) =>
+            {
+                let retry_now = grokhub_core::now_ms();
+                live::cool_down_for(&dir, &sent.model, &err, retry_now);
+                let next = live::decide(&dir, &rc, retry_now);
+                let next_model = next.send_model(&call.model);
+                let next_local = next.on_device();
+                let next_provider = next.on_provider() && !next_local;
+                let next_dest = if next_local {
+                    grokhub_core::adult_guard::Dest::Local
+                } else if next_provider {
+                    providers::dest(&dir, &next_model)
+                } else {
+                    grokhub_core::adult_guard::Dest::Xai
+                };
+                let next_ok = !next.paused()
+                    && !bench.matches_model(&next_model)
+                    && (next_local
+                        || (!tried.contains(&next_model)
+                            && !adult::to_local(&sent.input, next_dest)));
+                if next_ok {
+                    handoff::log_switch(session_key, &sent.model, &next_model, &err);
+                    sent.model = next_model;
+                    sent.effort = next.send_effort(call.effort.as_deref());
+                    on_device = next_local;
+                    on_provider = next_provider;
+                    active_provider = next.route.provider.clone();
+                    active_decision = next;
+                    continue;
+                }
+                if !on_provider
+                    && let Some(stand_in) = live::outage_stand_in(&dir, &rc, retry_now)
+                        .filter(|m| !tried.contains(m) && !bench.matches_model(m))
+                {
+                    let stand_dest = providers::dest(&dir, &stand_in);
+                    if !adult::to_local(&sent.input, stand_dest) {
+                        handoff::log_switch(session_key, &sent.model, &stand_in, &err);
+                        active_provider = split_provider_model(&stand_in)
+                            .map_or("openrouter", |(p, _)| p)
+                            .to_string();
+                        sent.model = stand_in;
+                        on_device = false;
+                        on_provider = true;
+                        continue;
+                    }
+                }
+                if !bench.blocks_local()
+                    && local::available()
+                    && (on_provider || live::xai_falls_to_local(&err))
+                {
+                    let tier = local::live_tier().to_string();
+                    handoff::log_switch(session_key, &sent.model, &tier, &err);
+                    sent.model = tier;
+                    on_device = true;
+                    on_provider = false;
+                    active_provider = local::PROVIDER_LOCAL.to_string();
+                    continue;
+                }
+                out = Err(err);
+                break;
+            }
+            Err(err) => {
+                out = Err(err);
+                break;
+            }
+        }
+    }
     if on_device {
         rc.provider = local::PROVIDER_LOCAL;
-    } else if on_provider && grok_model.is_empty() {
-        rc.provider = &decision.route.provider;
+    } else if on_provider {
+        rc.provider = &active_provider;
     }
     rc.effort = sent.effort.as_deref();
     rc.model = &sent.model;
     route_log(
         &dir,
         &rc,
-        &decision,
+        &active_decision,
         &RouteDone::of(&out, started.elapsed()),
     );
     let mut out = out?;
@@ -472,6 +532,8 @@ pub struct RouteInput<'a> {
     pub probation_canary: Option<&'a str>,
     /// Active voice session reply source preference (`None` = Auto).
     pub voice_reply: Option<voice_route::ReplyPref>,
+    /// User-benched models/providers to exclude from routing.
+    pub user_bench: user_bench::UserBench,
 }
 
 /// The lowest rung an xAI reasoning model takes without a listing that says otherwise.
@@ -853,6 +915,7 @@ impl Router {
         }
         if reg.get(current).is_some()
             && !ids.contains(&current)
+            && !input.user_bench.matches_model(current)
             && policy::route_class(reg, current, gb, &input.spend) == CostClass::Premium
         {
             // Over your $/M ceiling and not approved: stand in, and the cabin asks once.
@@ -877,11 +940,22 @@ impl Router {
             .copied()
             .filter(|m| reg.get(m).is_some_and(|r| r.state != ModelState::Degraded))
             .collect();
+        let preferred_healthy: Vec<&str> = preferred
+            .iter()
+            .copied()
+            .filter(|m| reg.get(m).is_some_and(|r| r.state != ModelState::Degraded))
+            .collect();
+        let preferred_pool: &[&str] = if preferred_healthy.is_empty() {
+            &preferred
+        } else {
+            &preferred_healthy
+        };
         let pool: &[&str] = if healthy.is_empty() { &own } else { &healthy };
         let sound = |m: &str| {
             ids.contains(&m)
                 && (healthy.contains(&m)
-                    || policy::is_new_provider(reg, m)
+                    || (policy::is_new_provider(reg, m)
+                        && reg.get(m).is_some_and(|r| r.state != ModelState::Degraded))
                     || !healthy.iter().any(|h| *h != m))
         };
         // Stand in for `from`: its redirect successor, then its family chain, then the ranked list.
@@ -943,7 +1017,7 @@ impl Router {
                 let mut ranked = attention::rank_models(
                     attn.kind,
                     input.lane(),
-                    &preferred,
+                    preferred_pool,
                     table,
                     reg,
                     current,
@@ -1066,7 +1140,7 @@ impl Router {
         let mut ranked = attention::rank_models(
             attn.kind,
             input.lane(),
-            &preferred,
+            preferred_pool,
             table,
             reg,
             current,
@@ -1182,6 +1256,7 @@ impl Router {
             .models
             .keys()
             .map(String::as_str)
+            .filter(|id| !input.user_bench.matches_model(id))
             .filter(|id| {
                 !local::is_local(id)
                     || local::admits(&input.local, id, input.class, input.ctx_tokens)
@@ -1323,7 +1398,8 @@ impl Router {
         // keeps prepare:hard, cloud-only and hard-tool steps off it).
         let no_keys_ok = any_elig;
         let local_id = reg.models.keys().map(String::as_str).find(|id| {
-            local::admits(&as_offline, id, input.class, input.ctx_tokens)
+            !input.user_bench.matches_model(id)
+                && local::admits(&as_offline, id, input.class, input.ctx_tokens)
                 && policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms)
         });
         // Failover PR 5, the warm-local rule (corrected 2026-11-07): a model
@@ -1560,9 +1636,15 @@ impl Router {
             // Every cloud model is down, not just left out for its price or this
             // step's needs (those keep the premium ask and the stand-in).
             let cloud_down = !cloud_can_answer(reg, profiles, fit.grok_build, &input.spend, now_ms);
+            let cloud_benched = !input.user_bench.is_empty()
+                && cloud_ids.is_empty()
+                && reg
+                    .models
+                    .keys()
+                    .any(|id| !local::is_local(id) && input.user_bench.matches_model(id));
             // Online, the cloud always wins while any cloud model can take the step:
             // the device is the last resort, never a cheaper pick.
-            let pool = if cloud_ids.is_empty() && cloud_down {
+            let pool = if cloud_ids.is_empty() && (cloud_down || cloud_benched) {
                 &ids
             } else {
                 &cloud_ids
@@ -1572,14 +1654,19 @@ impl Router {
             );
             // No sign-in or key and no provider you added took it: no cloud model can answer.
             let no_keys = no_cloud_route(&rules, &pick);
-            // Cloud pool empty + local already won: retag as cloud_down.
+            // Cloud pool empty + local already won: retag as cloud_down / cloud_benched.
             let cloud_pool_empty_local = !input.local.offline
                 && !pick.no_route
                 && local::is_local(&pick.model)
                 && cloud_ids.is_empty()
                 && elig;
             // Online: hard/long work must not stay on local if pick_model somehow chose it.
-            if !input.local.offline && !pick.no_route && local::is_local(&pick.model) && too_hard {
+            if !input.local.offline
+                && !pick.no_route
+                && local::is_local(&pick.model)
+                && too_hard
+                && !cloud_benched
+            {
                 rules.push("local:escalate_hard".into());
                 let from = pick.model.clone();
                 pick = Self::pick_model(
@@ -1589,13 +1676,16 @@ impl Router {
                     pick.replaced = Some(from);
                 }
             } else if (pick.no_route && cloud_down && last_resort)
+                || (pick.no_route && cloud_benched && any_elig)
                 || (no_keys && no_keys_ok)
                 || cloud_pool_empty_local
             {
-                // Plan models down / no healthy cloud route / no keys: fall back to local.
+                // Plan models down / cloud benched / no healthy cloud route / no keys: fall back to local.
                 if let Some(id) = local_id {
                     rules.push(
-                        if no_keys {
+                        if cloud_benched {
+                            "local:cloud_benched"
+                        } else if no_keys {
                             "local:no_keys"
                         } else {
                             "local:cloud_down"
@@ -1607,7 +1697,11 @@ impl Router {
                         no_route: false,
                         replaced: Some(input.current_model.trim().to_string()),
                     };
+                } else if !input.user_bench.is_empty() && ids.is_empty() {
+                    rules.push("bench:all_benched".into());
                 }
+            } else if pick.no_route && !input.user_bench.is_empty() && ids.is_empty() {
+                rules.push("bench:all_benched".into());
             } else if pick.no_route
                 && gov_paused
                 && local::eligible_if_running(&input.local, input.class, input.ctx_tokens)
@@ -1651,7 +1745,6 @@ impl Router {
                 fast_entitled(reg, f) && policy::fits_any_cost(reg, profiles, f, fit, now_ms)
             })
             .map(str::to_string);
-        let mut fast_fallback = None;
         let (model, base) = match (
             &fast,
             fast.as_ref().map(|_| spend::fast_verdict(&input.spend)),
@@ -1660,11 +1753,8 @@ impl Router {
                 rules.push(rule.into());
                 (f.clone(), Some(chosen.model.clone()))
             }
-            (Some(f), Some(Err(rule))) => {
+            (Some(_), Some(Err(rule))) => {
                 rules.push(rule.into());
-                if rule == "fast:budget_tight" {
-                    fast_fallback = Some(f.clone());
-                }
                 (chosen.model.clone(), None)
             }
             _ => (chosen.model.clone(), None),
@@ -1764,11 +1854,12 @@ impl Router {
                 "{tier_word} · {}: you're waiting, so the faster model is worth it.",
                 effort_word(effort.as_deref())
             ),
-            _ if fast_fallback.is_some() => format!(
-                "{tier_word} · {}: this week's budget is tight, so not {}.",
-                effort_word(effort.as_deref()),
-                fast_fallback.as_deref().unwrap_or_default()
-            ),
+            (Some(from), _) if rules.iter().any(|r| r == "local:cloud_benched") => {
+                format!(
+                    "{tier_word} · {}: {from} is benched (using local).",
+                    effort_word(effort.as_deref())
+                )
+            }
             (Some(from), _) if rules.iter().any(|r| r == "local:escalate_verify") => {
                 local::escalate_note(from, &model)
             }

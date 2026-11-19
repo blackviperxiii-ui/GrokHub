@@ -12,6 +12,7 @@ import {
   saveWebSearch,
   startOpenRouterSignIn,
   stopOpenRouterSignIn,
+  unbenchAiModel,
   waitOpenRouterSignIn,
   type AiModelsCard,
   type AiModelsView,
@@ -26,9 +27,10 @@ export const KEY_NOTE = "The key is saved to your keyring after you approve the 
 export const ALLOW_NOTE =
   "Your chats and memory would go to this provider. Allow keeps it until you revoke it in Settings → Permissions.";
 export const SPEND_NOTE =
-  "API key only. At 80% background work moves to cheaper settings. At 100% it pauses and chats ask first. These are limits; nothing here spends money.";
+  "Models over your price limit ask once before Auto uses them. Server responses govern rate and quota limits.";
 export const LOCAL_NOTE = "Models that run on this PC, and whether each task gets its own model, are set in Local AI.";
 export const PREMIUM_NONE = "None. A model over your price limit asks once before Auto uses it.";
+export const BENCHED_NONE = "None. You can tell chat to stop using a model or provider at any time.";
 export const WEB_SEARCH_NOTE =
   "For OpenRouter and the local model. Free DuckDuckGo Lite by default, no account. Grok still uses xAI's own search.";
 export const BACKEND_HINT = "Default stays free. SearXNG needs your instance URL. Brave needs a key in your keyring.";
@@ -516,27 +518,12 @@ export function AiModels() {
       <p className="note">{SPEND_NOTE}</p>
       <div className="card-buttons">
         <label>
-          Weekly spend cap
-          <select
-            aria-label="Weekly spend cap"
-            value={spend.weeklyCapUsd}
-            disabled={busy}
-            onChange={(e) => void run(() => saveAiSpend(Number(e.target.value), spend.priceCeilingUsdPerM))}
-          >
-            {spend.caps.map((c) => (
-              <option key={c} value={c}>
-                {capLabel(c)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
           Price limit
           <select
             aria-label="Price limit"
             value={spend.priceCeilingUsdPerM}
             disabled={busy}
-            onChange={(e) => void run(() => saveAiSpend(spend.weeklyCapUsd, Number(e.target.value)))}
+            onChange={(e) => void run(() => saveAiSpend(0, Number(e.target.value)))}
           >
             {spend.ceilings.map((c) => (
               <option key={c} value={c}>
@@ -546,6 +533,21 @@ export function AiModels() {
           </select>
         </label>
       </div>
+
+      <h3>Benched models</h3>
+      <ul className="rows" aria-label="Benched models">
+        {view.benched.length === 0 && <li className="empty">{BENCHED_NONE}</li>}
+        {view.benched.map((b) => (
+          <li key={b.id} className="card" aria-label={b.label}>
+            <div className="card-title">{b.label}</div>
+            <div className="card-buttons">
+              <button type="button" className="quiet" disabled={busy} onClick={() => void run(() => unbenchAiModel(b.id))}>
+                Unbench
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
 
       <h3>Paid upgrades</h3>
       <ul className="rows" aria-label="Paid upgrades">
