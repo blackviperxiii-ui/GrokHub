@@ -1700,6 +1700,52 @@ pub fn in_helper() -> bool {
     HELPER.with(std::cell::Cell::get)
 }
 
+/// The model, effort and reason a step was sent with, for a helper's row.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RouteSeen {
+    pub model: String,
+    /// Empty when the step sent no effort.
+    pub effort: String,
+    /// The route's reason sentence ("balanced · High: a multi-file change.").
+    pub why: String,
+}
+
+type RouteSink = Box<dyn Fn(&RouteSeen)>;
+
+thread_local! {
+    static ROUTE_WATCH: std::cell::RefCell<Option<RouteSink>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Hears each step this thread sends until dropped, so a helper's row can
+/// say which model and effort the router gave it, and why.
+pub struct RouteWatch {
+    prev: Option<RouteSink>,
+}
+
+impl RouteWatch {
+    pub fn enter(sink: RouteSink) -> Self {
+        Self {
+            prev: ROUTE_WATCH.with(|w| w.replace(Some(sink))),
+        }
+    }
+}
+
+impl Drop for RouteWatch {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        ROUTE_WATCH.with(|w| *w.borrow_mut() = prev);
+    }
+}
+
+/// Tells this thread's [`RouteWatch`], if any, what a step was sent with.
+pub fn tell_route(seen: &RouteSeen) {
+    ROUTE_WATCH.with(|w| {
+        if let Some(sink) = w.borrow().as_ref() {
+            sink(seen);
+        }
+    });
+}
+
 /// Note where `conversation_id`'s step runs, for the voice: the app's own
 /// background calls and a helper's steps leave the chat's record alone.
 fn note_here(class: &str, conversation_id: &str, here: bool, must_stay: bool) {
@@ -2178,6 +2224,13 @@ pub fn stream_routed(
     // Only the xAI client queues; a local or provider answer was timed live.
     done.batched = client.batches() && !active_on_device && !active_on_provider;
     route_log(&dir, &call, &active_decision, &done);
+    if out.is_ok() {
+        tell_route(&RouteSeen {
+            model: call.model.to_string(),
+            effort: call.effort.unwrap_or_default().to_string(),
+            why: active_decision.route.reason.clone(),
+        });
+    }
     out
 }
 

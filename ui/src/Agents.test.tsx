@@ -77,6 +77,7 @@ import {
   secretLine,
   sessionCommitsLine,
   taskProgress,
+  taskRoute,
   TASKS_EMPTY,
   TASKS_NOTE,
   TESTS_CHANGED_FILES,
@@ -108,7 +109,15 @@ const PROGRESS_QUEUE: Queue = {
       ? {
           ...task,
           model: "grok-4.7",
-          progress: { steps: 3, lastStep: "read_file", tokens: 1234, seconds: 125, model: "grok-4.7" },
+          progress: {
+            steps: 3,
+            lastStep: "read_file",
+            tokens: 1234,
+            seconds: 125,
+            model: "grok-4.7",
+            effort: "high",
+            why: "quality · High: debugging.",
+          },
         }
       : task,
   ),
@@ -2014,6 +2023,15 @@ describe("Agents", () => {
     expect(api.getQueue).toHaveBeenCalledTimes(2);
   });
 
+  it("says which model a helper ran on and why, once a step was routed", () => {
+    const base = { steps: 1, lastStep: "shell", tokens: 0, seconds: 1 };
+    expect(taskRoute(base)).toBeNull();
+    expect(taskRoute({ ...base, model: "grok-4.7" })).toBe("Ran on grok-4.7");
+    expect(
+      taskRoute({ ...base, model: "grok-4.3", effort: "high", why: "quality · High: a multi-file change." }),
+    ).toBe("Ran on grok-4.3 · quality · High: a multi-file change.");
+  });
+
   it("says a helper's progress in one line", () => {
     expect(taskProgress({ steps: 3, lastStep: "read_file", tokens: 1234, seconds: 125 })).toBe(
       "Step 3: read_file · 1.2k tokens · 2m 5s",
@@ -2031,12 +2049,12 @@ describe("Agents", () => {
     const tasks = await screen.findByRole("list", { name: "Tasks" });
     expect(within(tasks).getAllByRole("listitem").map((row) => row.textContent)).toEqual([
       "Read the specDone",
-      "Write the pageRunning · helper s2Step 3: read_file · 1.2k tokens · 2m 5s",
+      "Write the pageRunning · helper s2Step 3: read_file · 1.2k tokens · 2m 5sRan on grok-4.7 · quality · High: debugging.",
     ]);
     const hub = screen.getByRole("list", { name: "Helpers and commands" });
     expect(within(hub).getAllByRole("listitem").map((row) => row.textContent)).toEqual([
       "cargo test --workspaceRunning · t1Stop",
-      "failed to fetch the docsFailed · s2Step 3: read_file · 1.2k tokens · 2m 5sStopDetails",
+      "failed to fetch the docsFailed · s2Step 3: read_file · 1.2k tokens · 2m 5sRan on grok-4.7 · quality · High: debugging.StopDetails",
       "npm run buildFailed · t3",
       "Monitor: build logDone · m4",
     ]);
@@ -2044,6 +2062,9 @@ describe("Agents", () => {
       "data-model",
       "grok-4.7",
     );
+    const route = within(hub).getByText("Ran on grok-4.7 · quality · High: debugging.");
+    expect(route).toHaveClass("task-route");
+    expect(route).toHaveAttribute("data-effort", "high");
     expect(screen.getAllByRole("button", { name: /details$/ }).map((b) => b.getAttribute("aria-label"))).toEqual([
       "Helper s2 details",
     ]);

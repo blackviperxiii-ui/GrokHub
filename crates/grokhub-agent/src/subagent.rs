@@ -725,6 +725,13 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     let agent_id = job.agent_id.clone();
     let _class = job.class.map(crate::route::live::ClassScope::enter);
     let _helper = crate::route::live::HelperScope::enter();
+    // The Helpers tab shows the model and effort the router gave this
+    // helper, and why.
+    let _route = {
+        let hub = Arc::clone(&job.tasks);
+        let id = agent_id.clone();
+        crate::route::live::RouteWatch::enter(Box::new(move |seen| hub.note_route(&id, seen)))
+    };
     let _fork = job
         .fork
         .as_ref()

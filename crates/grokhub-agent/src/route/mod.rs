@@ -448,6 +448,13 @@ pub fn call_model(
         &active_decision,
         &RouteDone::of(&out, started.elapsed()),
     );
+    if out.is_ok() {
+        live::tell_route(&live::RouteSeen {
+            model: sent.model.clone(),
+            effort: sent.effort.clone().unwrap_or_default(),
+            why: active_decision.route.reason.clone(),
+        });
+    }
     let mut out = out?;
     out.text = grokhub_core::adult_guard::screen_reply(&out.text).to_string();
     let tokens = CallTokens::of(&sent, &out.usage);
@@ -2257,6 +2264,58 @@ mod tests {
             crate::client::responses_body(echo.0.lock().unwrap().last().unwrap()).to_string(),
             body
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The Helpers tab hears each routed step of a watched thread: the model
+    /// and effort that went out, and the route's reason. Nothing after the
+    /// watch ends.
+    #[test]
+    fn a_watched_thread_hears_the_model_effort_and_why_of_each_step() {
+        let dir = crate::harness::test_dir("route-watch");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let echo = Echo(Mutex::new(Vec::new()));
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let session = auto_session("route-watch");
+        let ask = req(
+            "grok-4.7",
+            Some("low"),
+            &session,
+            "debug why this test panics on Windows",
+        );
+        let send = || {
+            live::stream_routed(
+                &echo,
+                &ask,
+                &CancelToken::new(),
+                &mut |_| {},
+                "chat:default",
+            )
+            .unwrap();
+        };
+        {
+            let heard = std::rc::Rc::clone(&seen);
+            let _watch = live::RouteWatch::enter(Box::new(move |s: &live::RouteSeen| {
+                heard.borrow_mut().push(s.clone())
+            }));
+            send();
+        }
+        send();
+        let first = echo.0.lock().unwrap()[0].clone();
+        assert_eq!(
+            (first.model.as_str(), first.effort.as_deref()),
+            ("grok-4.7", Some("high"))
+        );
+        assert_eq!(
+            *seen.borrow(),
+            vec![live::RouteSeen {
+                model: "grok-4.7".into(),
+                effort: "high".into(),
+                why: "quality · High: debugging.".into(),
+            }],
+            "one step heard while watched, none after"
+        );
+        assert_eq!(echo.0.lock().unwrap().len(), 2);
         let _ = std::fs::remove_dir_all(dir);
     }
 

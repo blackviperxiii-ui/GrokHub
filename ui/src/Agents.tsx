@@ -85,6 +85,13 @@ export function taskProgress(p: QueueProgress): string {
   return parts.join(" · ");
 }
 
+/** Which model and effort the router gave a helper, and why; null before its
+ * first routed step. */
+export function taskRoute(p: QueueProgress): string | null {
+  if (!p.model) return null;
+  return p.why ? `Ran on ${p.model} · ${p.why}` : `Ran on ${p.model}`;
+}
+
 export const WORK_TITLE = "Helper work";
 export const WORK_NOTE =
   "A helper's work stays in a worktree of its own until you merge it. Merged files are uncommitted changes in the project folder.";
@@ -936,6 +943,11 @@ export function Agents({
                     {todo.owner ? ` · helper ${todo.owner}` : ""}
                   </div>
                   {progress && <div className="card-status task-progress">{taskProgress(progress)}</div>}
+                  {progress && taskRoute(progress) && (
+                    <div className="card-status task-route" data-effort={progress.effort || undefined}>
+                      {taskRoute(progress)}
+                    </div>
+                  )}
                 </li>
               );
             })}
@@ -967,6 +979,11 @@ export function Agents({
                     {TASK_LABELS[task.status]} · {task.id}
                   </div>
                   {progress && <div className="card-status task-progress">{taskProgress(progress)}</div>}
+                  {progress && taskRoute(progress) && (
+                    <div className="card-status task-route" data-effort={progress.effort || undefined}>
+                      {taskRoute(progress)}
+                    </div>
+                  )}
                   {made && <div className="card-status task-work">{made}</div>}
                   {(task.live || progress) && (
                     <div className="card-buttons">
