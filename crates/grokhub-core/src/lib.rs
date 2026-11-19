@@ -12,6 +12,7 @@ pub mod attach;
 pub mod audio_check;
 pub mod auto_fix;
 pub mod automation;
+pub mod automation_check;
 pub mod autonomy;
 pub mod autotune;
 pub mod backup_nudge;

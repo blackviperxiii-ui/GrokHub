@@ -4,7 +4,10 @@
 //! pulse, and the shell defers while that beat is fresh.
 //!
 //! A due job gated by a check command runs that command first; only a passing
-//! check is claimed and fired. Other due jobs are claimed first (last run,
+//! check is claimed and fired, and the model gets what it printed
+//! ([`grokhub_core::automation_check`]). Under "only when it changes" an
+//! unchanged output waits with no model call, and a "without AI" job's run is
+//! the output alone. Other due jobs are claimed first (last run,
 //! count and next run saved), then run unattended under your Approvals, as
 //! Run now does: Ask stays read-only, and anything that would need an answer
 //! is skipped.
@@ -15,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use grokhub_agent::ModelClient;
+use grokhub_core::automation_check::{check_step, CheckStep};
 use grokhub_core::scheduler_lease::{
     read_lease, shell_may_fire, write_lease, LeaseOwner, SchedulerLease,
 };
@@ -25,6 +29,8 @@ use crate::automations::{self, Clock, RunResult};
 
 /// The event the UI hears when a scheduled run ends.
 pub const RAN_EVENT: &str = "automations://ran";
+/// The stop reason of a run that was the check's output alone ("without AI").
+pub const SCRIPT_ONLY: &str = "script_only";
 /// How often the scheduler looks for due jobs.
 const TICK: Duration = Duration::from_secs(30);
 
@@ -103,26 +109,54 @@ pub fn tick_with_check(
             beat_ms: now.now_ms,
         };
         write_lease(config_dir, &beat)?;
-        // Check-gated jobs: run the gate before claiming a successful run.
+        // Check-gated jobs: run the gate before claiming a run. A failed or
+        // empty check, or an unchanged one under "only when it changes",
+        // waits with no model call.
+        let mut step = None;
         if let Some(pending) = automations::next_due(config_dir, now, &seen)? {
             if let Some(cmd) = grokhub_core::night_check_command(&pending.check_command) {
-                let receipt = check(cmd);
-                if grokhub_core::skip_night_check_receipt(&receipt) {
+                let next = check_step(&pending.gate, &check(cmd));
+                if next.waits() {
                     automations::settle_skip(config_dir, &pending.id, now)?;
                     seen.insert(pending.id);
                     continue;
                 }
+                step = Some((pending.id, next));
             }
         }
         let Some(job) = automations::claim_due(config_dir, now, &seen)? else {
             return Ok(fired);
         };
         seen.insert(job.id.clone());
+        let step = step.filter(|(id, _)| *id == job.id).map(|(_, s)| s);
         let result = match automations::Running::claim(&job.id) {
-            Ok(_held) => run(&job),
+            Ok(_held) => match &step {
+                Some(CheckStep::ScriptOnly { output }) => RunResult {
+                    text: output.clone(),
+                    error: String::new(),
+                    stop: SCRIPT_ONLY.into(),
+                },
+                Some(CheckStep::Ask { shown, .. }) => run(&Automation {
+                    instructions: grokhub_core::automation_check::check_prompt(
+                        &job.instructions,
+                        &job.check_command,
+                        shown,
+                        job.gate.on_change,
+                    ),
+                    ..job.clone()
+                }),
+                _ => run(&job),
+            },
             // A Run now of it started after the claim; that run counts.
             Err(_) => continue,
         };
+        // The output that ran is the next diff's base. A failed model run
+        // keeps the old one, so the change is shown again next time.
+        if let Some(CheckStep::ScriptOnly { output } | CheckStep::Ask { output, .. }) = &step {
+            if !result.failed() {
+                let _ = automations::remember_check(config_dir, &job.id, output);
+            }
+        }
         // The job may have been removed while it ran.
         let _ = automations::settle_run(config_dir, &job.id, &result);
         fired.push(Fired {
@@ -528,5 +562,111 @@ mod tests {
             _ => None,
         });
         assert_eq!(refusal.as_deref(), Some(REFUSED));
+    }
+
+    const DAY: u64 = 24 * HOUR;
+
+    fn gated_job(name: &str, gate: &str) -> (PathBuf, u64) {
+        let dir = temp_dir(name);
+        let nine = FRI_8AM + HOUR;
+        std::fs::write(
+            automations::path(&dir),
+            format!(
+                r#"[{{"id":"auto-disk","name":"disk","schedule":"daily","time":"09:00","instructions":"Tell me if a disk is nearly full.","checkCommand":"df -h","gate":{gate},"enabled":true,"nextRun":{nine}}}]"#
+            ),
+        )
+        .expect("seed");
+        (dir, nine)
+    }
+
+    fn receipt(lines: &str) -> String {
+        format!("$ df -h\nexit 0 · 4ms\n{lines}\n")
+    }
+
+    #[test]
+    fn only_when_it_changes_wakes_the_model_with_the_new_lines_and_not_again_for_the_same() {
+        let (dir, nine) = gated_job("on-change", r#"{"onChange":true}"#);
+        let mut asks = Vec::new();
+        let mut run = |job: &Automation| {
+            asks.push(job.instructions.clone());
+            ok("noted")
+        };
+        let first = tick_with_check(&dir, &at(nine), PID, &mut run, &mut |_| {
+            receipt("/dev/sda1 80%\n/dev/sdb1 12%")
+        })
+        .expect("tick");
+        assert_eq!(first.len(), 1);
+        let same = tick_with_check(&dir, &at(nine + DAY), PID, &mut run, &mut |_| {
+            receipt("/dev/sda1 80%\n/dev/sdb1 12%")
+        })
+        .expect("tick");
+        assert_eq!(same, Vec::new());
+        let moved = tick_with_check(&dir, &at(nine + 2 * DAY), PID, &mut run, &mut |_| {
+            receipt("/dev/sda1 91%\n/dev/sdb1 12%")
+        })
+        .expect("tick");
+        assert_eq!(moved.len(), 1);
+        assert_eq!(
+            asks,
+            vec![
+                "Tell me if a disk is nearly full.\n\nThe check command `df -h` printed these new lines since the last run:\n```\n/dev/sda1 80%\n/dev/sdb1 12%\n```".to_string(),
+                "Tell me if a disk is nearly full.\n\nThe check command `df -h` printed these new lines since the last run:\n```\n/dev/sda1 91%\n```".to_string(),
+            ]
+        );
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.run_count, 2);
+        assert_eq!(row.gate.last_output, "/dev/sda1 91%\n/dev/sdb1 12%");
+        assert!(row.gate.on_change);
+    }
+
+    #[test]
+    fn a_failed_model_run_keeps_the_old_output_so_the_change_shows_again() {
+        let (dir, nine) = gated_job("on-change-fail", r#"{"onChange":true}"#);
+        let mut run = |_: &Automation| RunResult {
+            text: String::new(),
+            error: "busy".into(),
+            stop: "error".into(),
+        };
+        tick_with_check(&dir, &at(nine), PID, &mut run, &mut |_| {
+            receipt("/dev/sda1 91%")
+        })
+        .expect("tick");
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.gate.last_output, "");
+        assert_eq!(row.gate.last_hash, "");
+    }
+
+    #[test]
+    fn a_without_ai_job_records_the_output_and_wakes_no_model() {
+        let (dir, nine) = gated_job("no-agent", r#"{"noAgent":true}"#);
+        let mut runs = 0;
+        let fired = tick_with_check(
+            &dir,
+            &at(nine),
+            PID,
+            &mut |_| {
+                runs += 1;
+                ok("should not run")
+            },
+            &mut |_| receipt("backed up 3 files"),
+        )
+        .expect("tick");
+        assert_eq!(runs, 0);
+        assert_eq!(
+            fired,
+            vec![Fired {
+                id: "auto-disk".into(),
+                name: "disk".into(),
+                result: RunResult {
+                    text: "backed up 3 files".into(),
+                    error: String::new(),
+                    stop: SCRIPT_ONLY.into(),
+                },
+            }]
+        );
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.run_count, 1);
+        assert_eq!(row.health.outcome, grokhub_core::AutoOutcome::Ok);
+        assert_eq!(row.gate.last_output, "backed up 3 files");
     }
 }

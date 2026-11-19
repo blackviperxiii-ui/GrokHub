@@ -22,6 +22,12 @@ pub struct Automation {
     pub heartbeat_every_min: u32,
     #[serde(default)]
     pub check_command: String,
+    /// How the check command's output is used ([`crate::automation_check`]).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::automation_check::CheckGate::is_plain"
+    )]
+    pub gate: crate::automation_check::CheckGate,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default)]
@@ -411,6 +417,7 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
             instructions: t.to_string(),
             heartbeat_every_min: mins,
             check_command: String::new(),
+            gate: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,
@@ -452,6 +459,7 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
         instructions: t.to_string(),
         heartbeat_every_min: 0,
         check_command: String::new(),
+        gate: Default::default(),
         enabled: true,
         last_run: None,
         next_run: None,
@@ -1219,6 +1227,7 @@ mod tests {
                 instructions: "check".into(),
                 heartbeat_every_min: 0,
                 check_command: String::new(),
+                gate: Default::default(),
                 enabled: true,
                 last_run: None,
                 next_run: Some(500),
@@ -1281,6 +1290,7 @@ mod tests {
             instructions: "rm -rf /tmp/x".into(),
             heartbeat_every_min: 15,
             check_command: String::new(),
+            gate: Default::default(),
             enabled: true,
             last_run: None,
             next_run: Some(500),
@@ -1301,6 +1311,7 @@ mod tests {
             instructions: "hello".into(),
             heartbeat_every_min: 0,
             check_command: "test -f /missing".into(),
+            gate: Default::default(),
             enabled: true,
             last_run: None,
             next_run: Some(500),
@@ -1325,6 +1336,7 @@ mod tests {
             instructions: "summarize".into(),
             heartbeat_every_min: 0,
             check_command: String::new(),
+            gate: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,
@@ -1421,6 +1433,7 @@ mod tests {
             instructions: "summarize the board".into(),
             heartbeat_every_min: 0,
             check_command: String::new(),
+            gate: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,

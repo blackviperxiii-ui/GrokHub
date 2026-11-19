@@ -205,6 +205,7 @@ pub fn automation_from_seed(seed: &str) -> Option<Automation> {
                 instructions: prompt,
                 heartbeat_every_min: mins as u32,
                 check_command: String::new(),
+                gate: Default::default(),
                 enabled: true,
                 last_run: None,
                 next_run: None,
