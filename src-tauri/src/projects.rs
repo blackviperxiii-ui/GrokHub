@@ -409,7 +409,11 @@ pub fn set_preferred_branch(
 }
 
 /// Persist a remote URL (sanitized) on a project row.
-pub fn set_remote_url(config_dir: &Path, project_id: &str, url: Option<&str>) -> Result<(), String> {
+pub fn set_remote_url(
+    config_dir: &Path,
+    project_id: &str,
+    url: Option<&str>,
+) -> Result<(), String> {
     let mut nodes = load(config_dir)?;
     let node = nodes
         .iter_mut()
@@ -434,9 +438,10 @@ pub fn apply_link(
 ) -> Result<(), String> {
     let home = home();
     let mut nodes = load(config_dir)?;
-    let Some(node) = nodes.iter_mut().find(|n| {
-        n.kind == ProjectKind::Project && same_folder(&n.path, folder, home.as_deref())
-    }) else {
+    let Some(node) = nodes
+        .iter_mut()
+        .find(|n| n.kind == ProjectKind::Project && same_folder(&n.path, folder, home.as_deref()))
+    else {
         return Ok(());
     };
     if let Some(url) = remote_url.map(str::trim).filter(|s| !s.is_empty()) {
