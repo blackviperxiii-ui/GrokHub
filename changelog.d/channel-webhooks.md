@@ -1,0 +1,1 @@
+- Messaging channels, part 2: the hub takes signed webhooks at `POST /v1/hook/<name>` (set up in `channels/webhooks.json`). A request must carry `X-Webhook-Signature: sha256=<hex>` over `"{X-Webhook-Timestamp}.{body}"`; filtered ones are dropped, and the rest wait in `channels/inbox/` for the app. Web pages can't send one.

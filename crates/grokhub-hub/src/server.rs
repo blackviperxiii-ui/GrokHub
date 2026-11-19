@@ -153,6 +153,13 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         };
     }
 
+    // A signed webhook proves itself with its HMAC, not a pairing token.
+    if method == Method::Post
+        && let Some(name) = path.strip_prefix("/v1/hook/")
+    {
+        return hook(req, name);
+    }
+
     let token = bearer(&req);
     let mut st = lock(state);
     if st.peer_for_token(&token).is_none() {
@@ -353,6 +360,54 @@ fn bearer(req: &Request) -> String {
                 .map(|s| s.to_string())
         })
         .unwrap_or_default()
+}
+
+fn header(req: &Request, name: &'static str) -> String {
+    req.headers()
+        .iter()
+        .find(|h| h.field.equiv(name))
+        .map(|h| h.value.as_str().to_string())
+        .unwrap_or_default()
+}
+
+/// `POST /v1/hook/<name>`: an inbound webhook the user set up. It must be
+/// signed (`X-Webhook-Signature: sha256=<hex>` over `"{X-Webhook-Timestamp}.{body}"`),
+/// pass its filters, and is then queued for the app. A web page can't send one.
+fn hook(mut req: Request, name: &str) -> Result<(), ()> {
+    use grokhub_core::msg_channels::{self as mc, Received};
+    if from_web_page(&req) {
+        return send_json(
+            req,
+            403,
+            json!({ "ok": false, "error": "Webhooks come from servers, not web pages." }),
+        );
+    }
+    let mut body = Vec::new();
+    if req
+        .as_reader()
+        .take(mc::WEBHOOK_MAX_BODY as u64 + 1)
+        .read_to_end(&mut body)
+        .is_err()
+    {
+        return reject_body(req, "Couldn't read the request body.");
+    }
+    let got = mc::receive(
+        &grokhub_core::paths::config_dir(),
+        name,
+        &header(&req, "X-Webhook-Signature"),
+        &header(&req, "X-Webhook-Timestamp"),
+        &body,
+        grokhub_core::now_ms(),
+    );
+    let status = got.status();
+    let reply = match got {
+        Received::Queued(_) => json!({ "ok": true, "queued": true }),
+        Received::Filtered => json!({ "ok": true, "queued": false }),
+        Received::Unknown => json!({ "ok": false, "error": "unknown webhook" }),
+        Received::TooBig => json!({ "ok": false, "error": "Request body is too large." }),
+        Received::Refused(why) => json!({ "ok": false, "error": why }),
+    };
+    send_json(req, status, reply)
 }
 
 /// The hub state, even after a handler panicked holding it: one bad request must not
@@ -648,6 +703,65 @@ mod tests {
                 "{method} {path}"
             );
         }
+    }
+
+    /// A signed webhook reaches the hub with no pairing token and is queued;
+    /// a bad signature, a filtered body and a web page are not.
+    #[test]
+    fn a_signed_webhook_is_queued_without_a_pairing_token() {
+        use grokhub_core::msg_channels as mc;
+        let dir = std::env::temp_dir().join(format!("grokhub-hub-hook-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("channels")).unwrap();
+        let secret = "whsec-abcdefghijklmnopqrstuv";
+        std::fs::write(
+            mc::webhooks_path(&dir),
+            format!(
+                r#"[{{"name":"deploys","secret":"{secret}","filters":[{{"path":"status","op":"equals","value":"failed"}}]}}]"#
+            ),
+        )
+        .unwrap();
+        // The hub reads the config folder from here, as the app sets it.
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &dir) };
+        let state = Arc::new(Mutex::new(HubState::empty()));
+        let port = serve_background(state, 0).expect("bind");
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let ts = (grokhub_core::now_ms() / 1000).to_string();
+        let post = |body: &str, sig_body: &str, extra: &str| {
+            let mut signed = format!("{ts}.").into_bytes();
+            signed.extend_from_slice(sig_body.as_bytes());
+            let sig: String = mc::hmac_sha256(secret.as_bytes(), &signed)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            http(
+                port,
+                &format!(
+                    "POST /v1/hook/deploys HTTP/1.0\r\nHost: 127.0.0.1\r\nX-Webhook-Signature: sha256={sig}\r\nX-Webhook-Timestamp: {ts}\r\n{extra}Content-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+        let failed = r#"{"status":"failed"}"#;
+        let (status, _, body) = post(failed, failed, "");
+        assert_eq!(
+            (status, String::from_utf8_lossy(&body).to_string()),
+            (202, r#"{"ok":true,"queued":true}"#.into())
+        );
+        let (status, _, _) = post(r#"{"status":"passed"}"#, r#"{"status":"passed"}"#, "");
+        assert_eq!(status, 204);
+        let (status, _, body) = post(failed, r#"{"status":"passed"}"#, "");
+        assert_eq!(
+            (status, String::from_utf8_lossy(&body).to_string()),
+            (
+                401,
+                r#"{"error":"the webhook signature doesn't match","ok":false}"#.into()
+            )
+        );
+        let (status, _, _) = post(failed, failed, "Origin: https://example.com\r\n");
+        assert_eq!(status, 403);
+        assert_eq!(std::fs::read_dir(mc::inbox_dir(&dir)).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
