@@ -5523,10 +5523,11 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             why: "You follow Rust.".into(),
             cites: vec!["https://blog.rust-lang.org/".into()],
             traits: Vec::new(),
+            details: Vec::new(),
         };
         rows.push((
             "post_card",
-            crate::pulse_writer::post_card(&written, &[], at),
+            crate::pulse_writer::post_card(&written, &[], at, None),
             "Async closures",
         ));
         let idea = crate::pulse_ideas::MuseIdea {

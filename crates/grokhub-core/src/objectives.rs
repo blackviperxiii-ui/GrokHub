@@ -46,8 +46,8 @@ pub use game_data::{
     apply_game_data, goal_steam_games, match_finished, refresh_from_games, GameData,
 };
 pub use season::{
-    badges, done_this_season, pick_up_line, season_bonus_note, season_firsts, season_label,
-    short_date, today_picks, Pick, BADGE_GOALS, XP_SEASON_FIRST,
+    badges, done_this_season, long_date, pick_up_line, season_bonus_note, season_firsts,
+    season_label, short_date, today_picks, Pick, BADGE_GOALS, XP_SEASON_FIRST,
 };
 pub use typed::{parse_goal, KnownGame};
 pub use week::{week_from_disk, your_week, YourWeek, WEEK_LINES};
