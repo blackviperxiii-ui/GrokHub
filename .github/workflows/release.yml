@@ -274,7 +274,8 @@ jobs:
 
             ## Install
             **Linux:** `grokhub-shell-v*-linux-amd64.AppImage` or `.deb`, or
-            `./scripts/install.sh --user` from a clone.
+            `curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | bash`,
+            which checks the signature first (`--from-source` builds a clone instead).
 
             **Windows:** run `GrokHub-Shell-Setup-*.exe`.
 

@@ -95,11 +95,11 @@ describe("Updates", () => {
     api.getUpdateStatus.mockResolvedValue({
       ...STABLE,
       updatable: false,
-      note: "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --channel stable again in the clone you built it from.",
+      note: "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --from-source --channel stable again in the clone you built it from.",
     });
     render(<Updates />);
     expect(
-      await screen.findByText("This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --channel stable again in the clone you built it from."),
+      await screen.findByText("This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --from-source --channel stable again in the clone you built it from."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });

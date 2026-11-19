@@ -10,3 +10,7 @@ crates/grokhub-core/data/test_catalog/** -text
 # hashed byte for byte by .github/scripts/vstack_sync.py check, so keep their
 # exact bytes everywhere without Git line-ending conversion.
 crates/grokhub-agent/assets/skills/** -text
+
+# Signed release files for the install.sh test: the signature covers
+# these exact bytes.
+scripts/testdata/** -text
