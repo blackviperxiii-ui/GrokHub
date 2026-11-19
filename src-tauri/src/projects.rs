@@ -226,6 +226,24 @@ pub fn run_in(
     }
 }
 
+/// Sync state for the open project's git repo.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeProjectSync {
+    pub ahead: u32,
+    pub behind: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+}
+
+/// One discovered rule file shown on the project bar.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeProjectRule {
+    pub path: String,
+    pub kind: String,
+}
+
 /// One project on the Code tab's project bar.
 #[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -237,6 +255,20 @@ pub struct CodeProject {
     pub current: bool,
     /// The folder is no longer on disk.
     pub missing: bool,
+    /// Linked remote URL when set (never includes credentials).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
+    /// Working / PR-base branch for this project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_branch: Option<String>,
+    /// Checked-out branch when this is a git repo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync: Option<CodeProjectSync>,
+    /// Rule files in force (paths + kinds).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<CodeProjectRule>,
 }
 
 /// The Code tab's project bar: every project in the list, and which one is
@@ -257,21 +289,167 @@ fn listing_in(config_dir: &Path, bound: &str, home: Option<&str>) -> Result<Code
     let projects = load(config_dir)?
         .into_iter()
         .filter(|n| n.kind == ProjectKind::Project)
-        .map(|n| {
-            let dir = grokhub_core::expand_project_root(&n.path, home);
-            CodeProject {
-                name: grokhub_core::project_display_name(&n.name).to_string(),
-                current: same_folder(&n.path, bound, home),
-                missing: !Path::new(&dir).is_dir(),
-                id: n.id,
-                path: n.path,
-            }
-        })
+        .map(|n| enrich_project(n, bound, home))
         .collect();
     Ok(CodeProjects {
         bound: bound.trim().to_string(),
         projects,
     })
+}
+
+fn enrich_project(n: ProjectNode, bound: &str, home: Option<&str>) -> CodeProject {
+    let dir = grokhub_core::expand_project_root(&n.path, home);
+    let current = same_folder(&n.path, bound, home);
+    let missing = !Path::new(&dir).is_dir();
+    let mut remote_url = n.remote_url.clone();
+    let mut preferred_branch = n.preferred_branch.clone();
+    let mut active_branch = None;
+    let mut sync = None;
+    let mut rules = Vec::new();
+    // Deep git + rules only for the open project so the list stays cheap.
+    if !missing && current {
+        let path = Path::new(&dir);
+        if remote_url.is_none() {
+            remote_url = grokhub_code::link::remote_url(path);
+        }
+        let has_beta = grokhub_code::link::has_beta(path);
+        let default_branch = grokhub_code::ship::default_branch(path);
+        let repo = grokhub_code::repo::repo(path);
+        if repo.is_repo {
+            active_branch = repo.branch.clone();
+            sync = Some(CodeProjectSync {
+                ahead: repo.ahead,
+                behind: repo.behind,
+                upstream: repo.upstream.clone(),
+            });
+        }
+        preferred_branch = Some(grokhub_agent::resolve_preferred_branch(
+            &grokhub_agent::RepoRulesInput {
+                preferred_branch: n.preferred_branch.as_deref(),
+                has_beta,
+                default_branch: default_branch.as_deref(),
+                active_branch: active_branch.as_deref(),
+                ..Default::default()
+            },
+        ));
+        let bundle = grokhub_agent::discover_repo_rules(
+            path,
+            grokhub_agent::RepoRulesInput {
+                project_id: &n.id,
+                remote_url: remote_url.as_deref(),
+                preferred_branch: preferred_branch.as_deref(),
+                active_branch: active_branch.as_deref(),
+                default_branch: default_branch.as_deref(),
+                has_beta,
+                sync: sync.as_ref().map(|s| grokhub_agent::RepoSync {
+                    ahead: s.ahead,
+                    behind: s.behind,
+                    upstream: s.upstream.clone(),
+                }),
+            },
+        );
+        rules = bundle
+            .files
+            .into_iter()
+            .map(|f| CodeProjectRule {
+                path: f.path,
+                kind: rule_kind_label(f.kind).into(),
+            })
+            .collect();
+    }
+    CodeProject {
+        id: n.id,
+        name: grokhub_core::project_display_name(&n.name).to_string(),
+        path: n.path,
+        current,
+        missing,
+        remote_url,
+        preferred_branch,
+        active_branch,
+        sync,
+        rules,
+    }
+}
+
+fn rule_kind_label(kind: grokhub_agent::RuleKind) -> &'static str {
+    match kind {
+        grokhub_agent::RuleKind::Agents => "agents",
+        grokhub_agent::RuleKind::Claude => "claude",
+        grokhub_agent::RuleKind::CursorRules => "cursorRules",
+        grokhub_agent::RuleKind::Contributing => "contributing",
+        grokhub_agent::RuleKind::PrTemplate => "prTemplate",
+        grokhub_agent::RuleKind::Codeowners => "codeowners",
+        grokhub_agent::RuleKind::Workflow => "workflow",
+        grokhub_agent::RuleKind::PreCommit => "preCommit",
+        grokhub_agent::RuleKind::CommitConvention => "commitConvention",
+        grokhub_agent::RuleKind::Other => "other",
+    }
+}
+
+/// Set or clear the per-project preferred branch override.
+pub fn set_preferred_branch(
+    config_dir: &Path,
+    project_id: &str,
+    branch: Option<&str>,
+) -> Result<(), String> {
+    let mut nodes = load(config_dir)?;
+    let node = nodes
+        .iter_mut()
+        .find(|n| n.id == project_id && n.kind == ProjectKind::Project)
+        .ok_or_else(|| "Project not found.".to_string())?;
+    let branch = branch.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(b) = branch {
+        grokhub_code::ship::branch_ok(b)
+            .map_err(|_| "That isn't a branch name git accepts.".to_string())?;
+        node.preferred_branch = Some(b.to_string());
+    } else {
+        node.preferred_branch = None;
+    }
+    save(config_dir, &nodes)
+}
+
+/// Persist a remote URL (sanitized) on a project row.
+pub fn set_remote_url(config_dir: &Path, project_id: &str, url: Option<&str>) -> Result<(), String> {
+    let mut nodes = load(config_dir)?;
+    let node = nodes
+        .iter_mut()
+        .find(|n| n.id == project_id && n.kind == ProjectKind::Project)
+        .ok_or_else(|| "Project not found.".to_string())?;
+    node.remote_url = url
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(grokhub_code::link::sanitize_remote_url);
+    save(config_dir, &nodes)
+}
+
+/// After a bind, copy link metadata onto the matching project row.
+/// When `force` is false, only fills blank fields (so Open folder keeps a
+/// user override). Remote link passes `force: true`.
+pub fn apply_link(
+    config_dir: &Path,
+    folder: &str,
+    remote_url: Option<&str>,
+    preferred_branch: Option<&str>,
+    force: bool,
+) -> Result<(), String> {
+    let home = home();
+    let mut nodes = load(config_dir)?;
+    let Some(node) = nodes.iter_mut().find(|n| {
+        n.kind == ProjectKind::Project && same_folder(&n.path, folder, home.as_deref())
+    }) else {
+        return Ok(());
+    };
+    if let Some(url) = remote_url.map(str::trim).filter(|s| !s.is_empty()) {
+        if force || node.remote_url.is_none() {
+            node.remote_url = Some(grokhub_code::link::sanitize_remote_url(url));
+        }
+    }
+    if let Some(b) = preferred_branch.map(str::trim).filter(|s| !s.is_empty()) {
+        if force || node.preferred_branch.is_none() {
+            node.preferred_branch = Some(b.to_string());
+        }
+    }
+    save(config_dir, &nodes)
 }
 
 /// Makes a project under the work root and names its folder, so the Code tab
@@ -513,6 +691,8 @@ mod tests {
                     path: String::new(),
                     parent: None,
                     open: true,
+                    remote_url: None,
+                    preferred_branch: None,
                 },
                 ProjectNode {
                     id: "p1".into(),
@@ -521,6 +701,8 @@ mod tests {
                     path: here.clone(),
                     parent: Some("f1".into()),
                     open: false,
+                    remote_url: None,
+                    preferred_branch: None,
                 },
                 ProjectNode {
                     id: "p2".into(),
@@ -529,31 +711,25 @@ mod tests {
                     path: gone.clone(),
                     parent: None,
                     open: false,
+                    remote_url: None,
+                    preferred_branch: None,
                 },
             ],
         )
         .expect("save");
         let list = listing_in(&config, &format!("{here}/"), None).expect("listing");
         assert_eq!(list.bound, format!("{here}/"));
-        assert_eq!(
-            list.projects,
-            vec![
-                CodeProject {
-                    id: "p1".into(),
-                    name: "Harbor".into(),
-                    path: here,
-                    current: true,
-                    missing: false,
-                },
-                CodeProject {
-                    id: "p2".into(),
-                    name: "Dawn".into(),
-                    path: gone,
-                    current: false,
-                    missing: true,
-                },
-            ]
-        );
+        assert_eq!(list.projects.len(), 2);
+        assert_eq!(list.projects[0].id, "p1");
+        assert_eq!(list.projects[0].name, "Harbor");
+        assert_eq!(list.projects[0].path, here);
+        assert!(list.projects[0].current);
+        assert!(!list.projects[0].missing);
+        assert_eq!(list.projects[1].id, "p2");
+        assert_eq!(list.projects[1].name, "Dawn");
+        assert_eq!(list.projects[1].path, gone);
+        assert!(!list.projects[1].current);
+        assert!(list.projects[1].missing);
         let none = listing_in(&config, "", None).expect("unbound");
         assert_eq!(none.bound, "");
         assert!(none.projects.iter().all(|p| !p.current));
