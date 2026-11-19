@@ -18,15 +18,36 @@ fn main() {
         return;
     }
     #[cfg(desktop)]
-    if std::env::args().nth(1).as_deref() == Some(AUTOMATIONS_ARG) {
-        grokhub_shell::run_automations();
+    match std::env::args().nth(1).as_deref() {
+        Some(grokhub_shell::AUTOMATIONS_ARG) => grokhub_shell::run_automations(),
+        Some(INSTALL_ARG) => finish(grokhub_shell::headless_service::install()),
+        Some(REMOVE_ARG) => finish(grokhub_shell::headless_service::remove()),
+        _ => {}
     }
     grokhub_shell::run()
 }
 
-/// Run scheduled automations with no window (a login service, while the app
-/// is closed).
-const AUTOMATIONS_ARG: &str = "--automations";
+/// Set up, or remove, the login service that runs automations with the app
+/// closed.
+#[cfg(desktop)]
+const INSTALL_ARG: &str = "--install-automations";
+#[cfg(desktop)]
+const REMOVE_ARG: &str = "--remove-automations";
+
+/// Print a service step's result and leave: 0 when it worked.
+#[cfg(desktop)]
+fn finish(done: Result<String, String>) -> ! {
+    match done {
+        Ok(text) => {
+            print!("{text}");
+            std::process::exit(0)
+        }
+        Err(why) => {
+            eprintln!("{why}");
+            std::process::exit(1)
+        }
+    }
+}
 
 /// `--version` / `-V` and `--help` / `-h`, answered without starting the app.
 fn cli_reply(args: impl IntoIterator<Item = String>) -> Option<String> {
@@ -40,6 +61,8 @@ fn cli_reply(args: impl IntoIterator<Item = String>) -> Option<String> {
 grokhub-shell              open the app\n  \
 grokhub-shell --autostart  start in the tray (also --agent, --tray)\n  \
 grokhub-shell --automations  run scheduled automations with no window\n  \
+grokhub-shell --install-automations  keep automations running with the app closed\n  \
+grokhub-shell --remove-automations   stop that\n  \
 grokhub-shell --version\n\n\
 Headless tools (--mcp-self, bench local, --askpass) are in grokhub-hub.\n"
                 ))
@@ -79,10 +102,20 @@ mod tests {
             ),
             "{help}"
         );
+        assert!(
+            help.contains(
+                "  grokhub-shell --install-automations  keep automations running with the app closed\n"
+            ),
+            "{help}"
+        );
         assert_eq!(cli_reply(args(&["grokhub-shell", "-h"])), Some(help));
         assert_eq!(cli_reply(args(&["grokhub-shell"])), None);
         assert_eq!(cli_reply(args(&["grokhub-shell", "--autostart"])), None);
         assert_eq!(cli_reply(args(&["grokhub-shell", "--automations"])), None);
+        assert_eq!(
+            cli_reply(args(&["grokhub-shell", "--install-automations"])),
+            None
+        );
         let main = include_str!("main.rs");
         let body = main.split("fn main() {").nth(1).expect("main");
         assert!(
