@@ -12,11 +12,13 @@
 //! person's open journal questions, interest topics, recent chats and feed
 //! posts.
 
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use grokhub_agent::harness as hx;
 use grokhub_agent::{CancelToken, ContentPart, InputItem, ModelClient, ResponsesRequest};
@@ -33,6 +35,15 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 const REDIRECTS_MAX: usize = 4;
 const PAGE_CAP: u64 = 2 * 1024 * 1024;
 const SOURCE_CAP: u64 = 4 * 1024 * 1024;
+/// Longest side a cached image keeps; larger JPEG and PNG files are resized.
+const THUMB_MAX_PX: u32 = 1280;
+const THUMB_JPEG_QUALITY: u8 = 82;
+/// Decode limits for a downloaded image: wider or taller files, or ones that
+/// need more memory than this to decode, are refused.
+const DECODE_MAX_PX: u32 = 8192;
+const DECODE_MAX_ALLOC: u64 = 128 * 1024 * 1024;
+/// The image cache is cleaned at most this often.
+const PRUNE_EVERY_MS: u64 = 24 * 3_600_000;
 
 /// Points the writer's network at a local mock (the shell smoke test). Only a
 /// plain-http loopback URL is accepted, so it can never move real traffic.
@@ -50,6 +61,12 @@ static IDEAS: Mutex<()> = Mutex::new(());
 static RUNNING: AtomicBool = AtomicBool::new(false);
 /// Wakes the clock early (a saved prompt owes a post now).
 static WAKE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+/// When this process last cleaned the image cache (0: not yet).
+static LAST_PRUNE_MS: AtomicU64 = AtomicU64::new(0);
+/// Makes each image temp file name unique within this process.
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Held while [`fit_image`] decodes, so at most one full-size image is live.
+static DECODE: Mutex<()> = Mutex::new(());
 
 fn state_lock() -> MutexGuard<'static, ()> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
@@ -61,6 +78,131 @@ fn state_path(config_dir: &Path) -> PathBuf {
 
 pub fn images_dir(config_dir: &Path) -> PathBuf {
     config_dir.join(IMAGES_DIR)
+}
+
+/// Save a downloaded image into the cache under `pc::image_cache_name(url)`.
+/// Only a whole JPEG, PNG or WebP (`pc::image_is_whole`) of at most
+/// `pc::IMAGE_MAX_BYTES` is kept. A JPEG or PNG must decode within the
+/// decode limits, and one longer than
+/// [`THUMB_MAX_PX`] on a side is stored resized; WebP (which this build can't
+/// decode) and smaller images keep their original bytes. The file appears
+/// through a temp file and a rename, so a reader never sees half of it.
+pub(crate) fn store_image(config_dir: &Path, url: &str, bytes: &[u8]) -> bool {
+    let Some(mime) = pc::image_mime(bytes) else {
+        return false;
+    };
+    if bytes.len() > pc::IMAGE_MAX_BYTES || !pc::image_is_whole(bytes) {
+        return false;
+    }
+    let kept = match mime {
+        "image/jpeg" => fit_image(bytes, image::ImageFormat::Jpeg),
+        "image/png" => fit_image(bytes, image::ImageFormat::Png),
+        _ => Some(Cow::Borrowed(bytes)),
+    };
+    let Some(kept) = kept else {
+        return false;
+    };
+    let dir = images_dir(config_dir);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let name = pc::image_cache_name(url);
+    let tmp = dir.join(format!(
+        "{name}.{}-{}.tmp",
+        std::process::id(),
+        TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    if std::fs::write(&tmp, &kept).is_err() || std::fs::rename(&tmp, dir.join(&name)).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return false;
+    }
+    true
+}
+
+/// Decode a JPEG or PNG within the limits. `None` when it doesn't decode or
+/// its pixels would need more than [`DECODE_MAX_ALLOC`]; the original bytes
+/// when it already fits; otherwise the upright image shrunk to fit
+/// [`THUMB_MAX_PX`] and encoded in its own format with its colour profile.
+/// One decode runs at a time, so the Pulse tick and the printer poll never
+/// hold two full-size images at once.
+fn fit_image(bytes: &[u8], format: image::ImageFormat) -> Option<Cow<'_, [u8]>> {
+    use image::{ImageDecoder as _, ImageEncoder as _};
+    let _one = DECODE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(DECODE_MAX_PX);
+    limits.max_image_height = Some(DECODE_MAX_PX);
+    limits.max_alloc = Some(DECODE_MAX_ALLOC);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().ok()?;
+    // The JPEG decoder checks only the side limits, so the pixel budget is
+    // checked here, before anything is allocated.
+    if decoder.total_bytes() > DECODE_MAX_ALLOC {
+        return None;
+    }
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let icc = decoder.icc_profile().ok().flatten();
+    let img = image::DynamicImage::from_decoder(decoder).ok()?;
+    if img.width().max(img.height()) <= THUMB_MAX_PX {
+        return Some(Cow::Borrowed(bytes));
+    }
+    // Shrink first, then turn: the fit box is square, so the result is the
+    // same, and only the small image is copied. `thumbnail` averages areas
+    // without a full-size float buffer.
+    let mut img = img.thumbnail(THUMB_MAX_PX, THUMB_MAX_PX);
+    img.apply_orientation(orientation);
+    let mut out = Vec::new();
+    let written = if format == image::ImageFormat::Jpeg {
+        let mut encoder =
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, THUMB_JPEG_QUALITY);
+        if let Some(icc) = icc {
+            encoder.set_icc_profile(icc).ok()?;
+        }
+        img.to_rgb8().write_with_encoder(encoder)
+    } else {
+        let mut encoder = image::codecs::png::PngEncoder::new(&mut out);
+        if let Some(icc) = icc {
+            encoder.set_icc_profile(icc).ok()?;
+        }
+        img.write_with_encoder(encoder)
+    };
+    written.ok().map(|()| Cow::Owned(out))
+}
+
+/// Delete cache files no card references any more (see `pc::prune_plan`).
+/// A store that is missing, blank or can't be read deletes nothing. Returns
+/// how many went.
+pub(crate) fn prune_images(config_dir: &Path, now_ms: u64) -> usize {
+    let Ok(cards) = crate::pulse::stored_cards(config_dir) else {
+        return 0;
+    };
+    let keep: HashSet<String> = cards
+        .iter()
+        .flat_map(|card| card.pulse.image_urls.iter())
+        .map(|url| pc::image_cache_name(url))
+        .collect();
+    let dir = images_dir(config_dir);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    let files: Vec<pc::CachedFile> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok().filter(|m| m.is_file())?;
+            let since_epoch = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+            Some(pc::CachedFile {
+                name: entry.file_name().into_string().ok()?,
+                modified_ms: u64::try_from(since_epoch.as_millis()).ok()?,
+            })
+        })
+        .collect();
+    pc::prune_plan(&files, &keep, now_ms)
+        .into_iter()
+        // A file another program holds open stays until the next prune.
+        .filter(|name| std::fs::remove_file(dir.join(name)).is_ok())
+        .count()
 }
 
 /// Read, change and write the writer state under its lock.
@@ -389,14 +531,18 @@ fn cache_gallery(config_dir: &Path, net: &dyn Net, cites: &[String]) -> Vec<Stri
     let mut kept = Vec::new();
     for url in pc::gallery_images(&html, page_url) {
         let file = dir.join(pc::image_cache_name(&url));
-        if !file.is_file() {
+        if file.is_file() {
+            // Fresh again, so a prune before the post lands keeps it.
+            let _ = std::fs::File::options()
+                .write(true)
+                .open(&file)
+                .and_then(|f| f.set_modified(SystemTime::now()));
+        } else {
             let Ok(bytes) = net.image(&url) else {
                 continue;
             };
-            if !pc::image_bytes_ok(&bytes)
-                || std::fs::create_dir_all(&dir).is_err()
-                || std::fs::write(&file, &bytes).is_err()
-            {
+            // The minimum size skips tracking pixels and spacers.
+            if !pc::image_bytes_ok(&bytes) || !store_image(config_dir, &url, &bytes) {
                 continue;
             }
         }
@@ -477,6 +623,10 @@ fn tick(
         return;
     }
     let now = grokhub_core::now_ms();
+    if now.saturating_sub(LAST_PRUNE_MS.load(Ordering::Relaxed)) >= PRUNE_EVERY_MS {
+        LAST_PRUNE_MS.store(now, Ordering::Relaxed);
+        prune_images(config_dir, now);
+    }
     let state = state(config_dir);
     let quiet = quiet_now(config_dir, &state, now);
     if !pw::writer_due(&state, now, just_opened, quiet) {
@@ -753,6 +903,32 @@ mod tests {
 
     const HN: &str = r#"{"hits":[{"title":"Rust 1.99 ships async closures","url":"https://blog.rust-lang.org/2026/10/20/Rust-1.99.html","points":420,"created_at_i":1799990000,"objectID":"1"}]}"#;
 
+    /// An RGB JPEG drawn by `px`.
+    fn jpeg(w: u32, h: u32, quality: u8, px: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb(px(x, y)));
+        let mut out = Vec::new();
+        img.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut out, quality,
+        ))
+        .expect("jpeg");
+        out
+    }
+
+    /// The page's hero image: a real 256×256 JPEG of noise, well over
+    /// `pc::IMAGE_MIN_BYTES` and small enough to be cached as is.
+    static FIXTURE: std::sync::LazyLock<Vec<u8>> = std::sync::LazyLock::new(|| {
+        let noise = |x: u32, y: u32, c: u32| {
+            let mut v = (x * 7919 + y * 104_729 + c * 1_299_709) ^ 0x9E37_79B9;
+            v ^= v << 13;
+            v ^= v >> 17;
+            v ^= v << 5;
+            v.to_le_bytes()[0]
+        };
+        jpeg(256, 256, 90, |x, y| {
+            [noise(x, y, 0), noise(x, y, 1), noise(x, y, 2)]
+        })
+    });
+
     struct FakeNet;
 
     impl Net for FakeNet {
@@ -774,9 +950,7 @@ mod tests {
 
         fn image(&self, url: &str) -> Result<Vec<u8>, String> {
             assert_eq!(url, "https://blog.rust-lang.org/hero.jpg");
-            let mut jpg = vec![0xFF, 0xD8, 0xFF, 0xE0];
-            jpg.resize(pc::IMAGE_MIN_BYTES * 2, 7);
-            Ok(jpg)
+            Ok(FIXTURE.clone())
         }
     }
 
@@ -867,7 +1041,7 @@ mod tests {
             images_dir(&d.config).join(pc::image_cache_name("https://blog.rust-lang.org/hero.jpg"));
         assert_eq!(
             std::fs::metadata(&cached).expect("cached").len(),
-            (pc::IMAGE_MIN_BYTES * 2) as u64
+            FIXTURE.len() as u64
         );
 
         let s = state(&d.config);
@@ -1169,5 +1343,165 @@ mod tests {
             redirect_target("https://a.example.com/x", "https://b.example.com/"),
             "https://b.example.com/"
         );
+    }
+
+    const HERO: &str = "https://example.com/hero.jpg";
+
+    fn decoded_size(bytes: &[u8]) -> (u32, u32) {
+        let img = image::load_from_memory(bytes).expect("decodes");
+        (img.width(), img.height())
+    }
+
+    #[test]
+    fn store_image_shrinks_a_large_jpeg() {
+        let d = dirs("store-large");
+        let big = jpeg(2560, 1440, 90, |x, y| [(x / 10) as u8, (y / 6) as u8, 128]);
+        assert!(store_image(&d.config, HERO, &big));
+        let stored =
+            std::fs::read(images_dir(&d.config).join(pc::image_cache_name(HERO))).expect("stored");
+        assert_eq!(decoded_size(&stored), (1280, 720));
+        assert_eq!(pc::image_mime(&stored), Some("image/jpeg"));
+    }
+
+    #[test]
+    fn store_image_keeps_a_small_jpeg_byte_for_byte() {
+        let d = dirs("store-small");
+        let small = jpeg(480, 320, 90, |x, y| [(x / 2) as u8, (y / 2) as u8, 64]);
+        assert!(store_image(&d.config, HERO, &small));
+        let stored =
+            std::fs::read(images_dir(&d.config).join(pc::image_cache_name(HERO))).expect("stored");
+        assert_eq!(stored, small);
+    }
+
+    #[test]
+    fn store_image_refuses_a_jpeg_with_a_broken_header() {
+        let d = dirs("store-broken");
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let mut broken = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        broken.resize(4 + 16 * 1024, 7);
+        broken.extend_from_slice(&[0xFF, 0xD9]);
+        assert!(
+            pc::image_is_whole(&broken),
+            "only the decoder can refuse it"
+        );
+        assert!(!store_image(&d.config, HERO, &broken));
+        assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0);
+    }
+
+    #[test]
+    fn store_image_refuses_a_jpeg_cut_off_mid_download() {
+        let d = dirs("store-cut");
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let big = jpeg(2560, 1440, 90, |x, y| [(x / 10) as u8, (y / 6) as u8, 128]);
+        let small = jpeg(480, 320, 90, |x, y| [(x / 2) as u8, (y / 2) as u8, 64]);
+        assert!(!store_image(&d.config, HERO, &big[..big.len() / 2]));
+        assert!(!store_image(&d.config, HERO, &small[..small.len() / 2]));
+        assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0);
+    }
+
+    /// A small JPEG whose header claims `w`×`h`: a decompression bomb.
+    fn jpeg_claiming(w: u16, h: u16) -> Vec<u8> {
+        let mut bytes = jpeg(64, 64, 90, |_, _| [90, 90, 90]);
+        let sof = bytes
+            .windows(2)
+            .position(|m| m == [0xFF, 0xC0])
+            .expect("baseline frame header");
+        bytes[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+        bytes[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn store_image_refuses_a_jpeg_too_big_to_decode() {
+        let d = dirs("store-bomb");
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        // 8192 x 6000 x 3 bytes is 140.6 MiB, over the 128 MiB budget, though
+        // each side is within DECODE_MAX_PX.
+        let bomb = jpeg_claiming(8192, 6000);
+        assert_eq!(decoded_header(&bomb), (8192, 6000));
+        assert!(!store_image(&d.config, HERO, &bomb));
+        assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0);
+    }
+
+    fn decoded_header(bytes: &[u8]) -> (u32, u32) {
+        image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Jpeg)
+            .into_dimensions()
+            .expect("header")
+    }
+
+    #[test]
+    fn store_image_keeps_the_colour_profile_of_a_resized_jpeg() {
+        use image::{ImageDecoder as _, ImageEncoder as _};
+        let d = dirs("store-icc");
+        let profile: Vec<u8> = (0..=255u8).cycle().take(600).collect();
+        let img = image::RgbImage::from_fn(2560, 1440, |x, y| {
+            image::Rgb([(x / 10) as u8, (y / 6) as u8, 128])
+        });
+        let mut src = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut src, 90);
+        encoder.set_icc_profile(profile.clone()).expect("icc");
+        img.write_with_encoder(encoder).expect("jpeg");
+
+        assert!(store_image(&d.config, HERO, &src));
+        let stored =
+            std::fs::read(images_dir(&d.config).join(pc::image_cache_name(HERO))).expect("stored");
+        assert_eq!(decoded_size(&stored), (1280, 720));
+        let mut decoder =
+            image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&stored)).expect("jpeg");
+        assert_eq!(decoder.icc_profile().expect("read"), Some(profile));
+    }
+
+    #[test]
+    fn store_image_refuses_a_too_wide_png() {
+        let d = dirs("store-wide");
+        let img = image::RgbImage::from_pixel(9000, 10, image::Rgb([200, 30, 30]));
+        let mut png = Vec::new();
+        img.write_with_encoder(image::codecs::png::PngEncoder::new(&mut png))
+            .expect("png");
+        assert_eq!(pc::image_mime(&png), Some("image/png"));
+        assert!(!store_image(
+            &d.config,
+            "https://example.com/wide.png",
+            &png
+        ));
+        assert!(!images_dir(&d.config)
+            .join(pc::image_cache_name("https://example.com/wide.png"))
+            .exists());
+    }
+
+    #[test]
+    fn prune_images_keeps_everything_when_the_store_is_damaged() {
+        let d = dirs("prune-damaged");
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let stray = dir.join("0123456789abcdef.jpg");
+        std::fs::write(&stray, &*FIXTURE).expect("img");
+        let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&stray)
+            .and_then(|f| f.set_modified(two_hours_ago))
+            .expect("mtime");
+        let now = grokhub_core::now_ms();
+
+        assert!(!d.config.join("updates.json").exists());
+        assert_eq!(prune_images(&d.config, now), 0);
+        assert!(stray.is_file(), "a missing store deletes nothing");
+
+        std::fs::write(d.config.join("updates.json"), " \n").expect("store");
+        assert_eq!(prune_images(&d.config, now), 0);
+        assert!(stray.is_file(), "a blank store deletes nothing");
+
+        std::fs::write(d.config.join("updates.json"), "{").expect("store");
+        assert_eq!(prune_images(&d.config, now), 0);
+        assert!(stray.is_file(), "a damaged store deletes nothing");
+
+        // The same file goes once the store reads and no card names it.
+        std::fs::write(d.config.join("updates.json"), "[]").expect("store");
+        assert_eq!(prune_images(&d.config, now), 1);
+        assert!(!stray.exists());
     }
 }

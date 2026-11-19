@@ -359,3 +359,86 @@ fn git_runs_with_no_console_window_and_no_stdin() {
         "every git call in this file goes through run_git"
     );
 }
+
+/// A one-shot printer on 127.0.0.1: answers the webcam list, then serves
+/// `frame` as the snapshot. Returns its `host:port`.
+fn serve_webcam(frame: Vec<u8>) -> String {
+    use std::io::Write as _;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+        for _ in 0..2 {
+            let Ok((mut conn, _)) = listener.accept() else {
+                return;
+            };
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && conn.read(&mut byte).unwrap_or(0) == 1 {
+                head.push(byte[0]);
+            }
+            let (kind, body) = if head.starts_with(b"GET /server/webcams/list ") {
+                (
+                    "application/json",
+                    br#"{"result":{"webcams":[{"snapshot_url":"/webcam/?action=snapshot"}]}}"#
+                        .to_vec(),
+                )
+            } else {
+                ("image/jpeg", frame.clone())
+            };
+            let _ = write!(
+                conn,
+                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = conn.write_all(&body);
+        }
+    });
+    addr
+}
+
+fn webcam_frame(padded_to: usize) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(480, 320, |x, y| image::Rgb([x as u8, y as u8, 90]));
+    let mut frame = Vec::new();
+    img.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+        &mut frame, 90,
+    ))
+    .unwrap();
+    frame.resize(padded_to.max(frame.len()), 0);
+    frame
+}
+
+fn webcam_printer(endpoint: String) -> SavedPrinter {
+    SavedPrinter {
+        endpoint,
+        kind: PrinterKind::Moonraker,
+        name: "voron".into(),
+        enabled: true,
+        api_key: None,
+    }
+}
+
+#[test]
+fn a_webcam_frame_is_cached_by_its_snapshot_url() {
+    let c = dir("snap-ok");
+    let frame = webcam_frame(0);
+    let printer = webcam_printer(serve_webcam(frame.clone()));
+    let url = cache_snapshot(&c, &agent(), &printer).expect("cached");
+    assert_eq!(
+        url,
+        format!("http://{}/webcam/?action=snapshot", printer.endpoint)
+    );
+    let stored = std::fs::read(
+        crate::pulse_feed::images_dir(&c).join(grokhub_core::pulse::image_cache_name(&url)),
+    )
+    .unwrap();
+    assert_eq!(stored, frame);
+}
+
+#[test]
+fn a_webcam_frame_over_four_mib_is_refused_not_cut() {
+    let c = dir("snap-big");
+    let frame = webcam_frame(5 * 1024 * 1024);
+    let printer = webcam_printer(serve_webcam(frame));
+    assert_eq!(cache_snapshot(&c, &agent(), &printer), None);
+    assert!(!crate::pulse_feed::images_dir(&c).exists());
+}

@@ -4,6 +4,8 @@
 //! structured ledger line per choice, and the ledger feeds the next ranking and
 //! the feed instructions rewrite.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ideas::{same_topic_words, topic_words};
@@ -1535,12 +1537,92 @@ const GALLERY_SKIP: &[&str] = &[
     "logo", "icon", "avatar", "sprite", "badge", "pixel", "spacer", "emoji", "favicon", "button",
 ];
 
+/// The MIME type of a JPEG, PNG or WebP file, read from its magic bytes.
+/// Anything else (GIF, SVG, an HTML error page) is `None`.
+pub fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// Whether a JPEG or WebP file arrived whole. A JPEG must end with its
+/// end-of-image marker (trailing zero or whitespace padding allowed), and a
+/// WebP must be as long as its RIFF header says; JPEG decoders fill a cut-off
+/// scan with grey instead of failing. A PNG is left to its decoder, which
+/// refuses one cut short. Anything that isn't one of the three is `false`.
+pub fn image_is_whole(bytes: &[u8]) -> bool {
+    match image_mime(bytes) {
+        Some("image/jpeg") => {
+            let end = bytes
+                .iter()
+                .rposition(|b| *b != 0 && !b.is_ascii_whitespace())
+                .map_or(0, |i| i + 1);
+            bytes[..end].ends_with(&[0xFF, 0xD9])
+        }
+        Some("image/webp") => {
+            let riff = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+            usize::try_from(riff).is_ok_and(|len| bytes.len() >= len.saturating_add(8))
+        }
+        Some(_) => true,
+        None => false,
+    }
+}
+
 /// A downloaded image worth caching: a real JPEG, PNG or WebP, not tiny, not huge.
 pub fn image_bytes_ok(bytes: &[u8]) -> bool {
-    let real = bytes.starts_with(&[0xFF, 0xD8, 0xFF])
-        || bytes.starts_with(&[0x89, b'P', b'N', b'G'])
-        || (bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP");
-    real && (IMAGE_MIN_BYTES..=IMAGE_MAX_BYTES).contains(&bytes.len())
+    image_mime(bytes).is_some() && (IMAGE_MIN_BYTES..=IMAGE_MAX_BYTES).contains(&bytes.len())
+}
+
+/// A file found in the image cache folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedFile {
+    pub name: String,
+    pub modified_ms: u64,
+}
+
+/// How long an unreferenced cache file is kept: covers the gap between
+/// caching a post's images and adding the post to the store.
+pub const PRUNE_GRACE_MS: u64 = 3_600_000;
+
+/// The cache files to delete: names the cache itself writes (a 16-hex stem
+/// and an image extension, or that name's temp file) that no card in
+/// `keep` references and that are older than [`PRUNE_GRACE_MS`]. Every
+/// other file in the folder is left alone.
+pub fn prune_plan(files: &[CachedFile], keep: &HashSet<String>, now_ms: u64) -> Vec<String> {
+    files
+        .iter()
+        .filter(|f| cache_owned_name(&f.name))
+        .filter(|f| !keep.contains(&f.name))
+        .filter(|f| now_ms.saturating_sub(f.modified_ms) > PRUNE_GRACE_MS)
+        .map(|f| f.name.clone())
+        .collect()
+}
+
+/// `<16 hex>.<jpg|png|webp|img>`, optionally followed by `.<pid>-<n>.tmp`.
+fn cache_owned_name(name: &str) -> bool {
+    let Some((stem, rest)) = name.split_once('.') else {
+        return false;
+    };
+    if stem.len() != 16 || !stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return false;
+    }
+    let (ext, temp) = rest.split_once('.').unwrap_or((rest, ""));
+    if !matches!(ext, "jpg" | "png" | "webp" | "img") {
+        return false;
+    }
+    if temp.is_empty() {
+        return true;
+    }
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    temp.strip_suffix(".tmp")
+        .and_then(|t| t.split_once('-'))
+        .is_some_and(|(pid, n)| digits(pid) && digits(n))
 }
 
 fn attr<'a>(tag: &'a str, tag_lower: &str, name: &str) -> Option<&'a str> {
@@ -2737,6 +2819,57 @@ mod tests {
         let mut huge = vec![0x89, b'P', b'N', b'G'];
         huge.resize(IMAGE_MAX_BYTES + 1, 0);
         assert!(!image_bytes_ok(&huge));
+    }
+
+    #[test]
+    fn image_mime_reads_magic_bytes() {
+        assert_eq!(image_mime(&[0xFF, 0xD8, 0xFF]), Some("image/jpeg"));
+        assert_eq!(image_mime(&[0x89, b'P', b'N', b'G']), Some("image/png"));
+        assert_eq!(image_mime(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+        assert_eq!(image_mime(b"GIF89a"), None);
+        assert_eq!(image_mime(b"<!doctype html>"), None);
+    }
+
+    #[test]
+    fn image_is_whole_spots_a_cut_off_jpeg_or_webp() {
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 0xFF, 0xD9];
+        assert!(image_is_whole(&jpeg));
+        assert!(!image_is_whole(&jpeg[..7]));
+        jpeg.extend_from_slice(b"\0\0\r\n");
+        assert!(image_is_whole(&jpeg), "padding after the marker");
+        jpeg.extend_from_slice(b"tail");
+        assert!(!image_is_whole(&jpeg), "data after the marker");
+
+        let mut webp = b"RIFF\x0c\0\0\0WEBPVP8 ".to_vec();
+        webp.extend_from_slice(&[0; 8]);
+        assert_eq!(webp.len(), 24);
+        assert!(!image_is_whole(&webp[..19]), "header says 20 bytes");
+        assert!(image_is_whole(&webp[..20]));
+
+        assert!(image_is_whole(&[0x89, b'P', b'N', b'G']));
+        assert!(!image_is_whole(b"GIF89a"));
+    }
+
+    #[test]
+    fn prune_plan_drops_only_old_unreferenced_owned_files() {
+        let now = 1_800_000_000_000;
+        let file = |name: &str, age_ms: u64| CachedFile {
+            name: name.into(),
+            modified_ms: now - age_ms,
+        };
+        let hours_2 = 2 * 3_600_000;
+        let files = [
+            file("aaaaaaaaaaaaaaaa.jpg", hours_2),
+            file("bbbbbbbbbbbbbbbb.jpg", hours_2),
+            file("cccccccccccccccc.img", 10 * 60_000),
+            file("dddddddddddddddd.png.7-0.tmp", hours_2),
+            file("notes.txt", hours_2),
+        ];
+        let keep: HashSet<String> = ["aaaaaaaaaaaaaaaa.jpg".to_string()].into();
+        assert_eq!(
+            prune_plan(&files, &keep, now),
+            vec!["bbbbbbbbbbbbbbbb.jpg", "dddddddddddddddd.png.7-0.tmp"]
+        );
     }
 
     #[test]

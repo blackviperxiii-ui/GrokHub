@@ -1,0 +1,1 @@
+- Pulse: card images cached from links without an image extension (such as printer webcam snapshots) now show, large images are stored resized to 1280 px, and images no card uses any more are cleaned up once a day.
