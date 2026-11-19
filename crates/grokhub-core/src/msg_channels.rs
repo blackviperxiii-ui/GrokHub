@@ -275,6 +275,122 @@ pub fn keep(filters: &[Filter], body: &Value) -> bool {
     filters.iter().all(|f| f.passes(body))
 }
 
+/// One inbound webhook the user set up: `POST /v1/hook/<name>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Webhook {
+    pub name: String,
+    /// The shared HMAC secret. Kept in the config folder, never sent back.
+    pub secret: String,
+    #[serde(default)]
+    pub filters: Vec<Filter>,
+    #[serde(default = "on")]
+    pub enabled: bool,
+}
+
+fn on() -> bool {
+    true
+}
+
+/// The largest webhook body taken.
+pub const WEBHOOK_MAX_BODY: usize = 256 * 1024;
+
+/// What happened to one webhook request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Received {
+    /// Saved for the app to act on.
+    Queued(PathBuf),
+    /// Signed, but a filter dropped it: no model sees it.
+    Filtered,
+    /// No enabled webhook has that name.
+    Unknown,
+    TooBig,
+    /// The signature or timestamp failed, or the body isn't JSON.
+    Refused(String),
+}
+
+impl Received {
+    /// The HTTP status for it.
+    pub fn status(&self) -> u16 {
+        match self {
+            Self::Queued(_) => 202,
+            Self::Filtered => 204,
+            Self::Unknown => 404,
+            Self::TooBig => 413,
+            Self::Refused(_) => 401,
+        }
+    }
+}
+
+pub fn webhooks_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("channels").join("webhooks.json")
+}
+
+/// Where accepted webhooks wait for the app.
+pub fn inbox_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join("channels").join("inbox")
+}
+
+pub fn load_webhooks(config_dir: &Path) -> Vec<Webhook> {
+    std::fs::read_to_string(webhooks_path(config_dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn valid_name(name: &str) -> bool {
+    (1..=40).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// One `POST /v1/hook/<name>`: checked, filtered, then queued in
+/// [`inbox_dir`]. Nothing here calls a model.
+pub fn receive(
+    config_dir: &Path,
+    name: &str,
+    signature: &str,
+    timestamp: &str,
+    body: &[u8],
+    now_ms: u64,
+) -> Received {
+    if !valid_name(name) {
+        return Received::Unknown;
+    }
+    let Some(hook) = load_webhooks(config_dir)
+        .into_iter()
+        .find(|h| h.enabled && h.name == name)
+    else {
+        return Received::Unknown;
+    };
+    if body.len() > WEBHOOK_MAX_BODY {
+        return Received::TooBig;
+    }
+    if let Err(why) = verify_webhook(hook.secret.as_bytes(), body, signature, timestamp, now_ms) {
+        return Received::Refused(why);
+    }
+    let Ok(json) = serde_json::from_slice::<Value>(body) else {
+        return Received::Refused("the webhook body isn't JSON".into());
+    };
+    if !keep(&hook.filters, &json) {
+        return Received::Filtered;
+    }
+    let mut id = [0u8; 4];
+    crate::fill_random(&mut id);
+    let path = inbox_dir(config_dir).join(format!("{now_ms}-{name}-{}.json", hex::encode(id)));
+    let record = serde_json::json!({
+        "channel": "webhook",
+        "hook": name,
+        "receivedMs": now_ms,
+        "body": json,
+    });
+    match crate::pulse_writer::write_atomic(&path, &record.to_string()) {
+        Ok(()) => Received::Queued(path),
+        Err(e) => Received::Refused(format!("couldn't save the webhook: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,6 +567,78 @@ mod tests {
             Err("Too many wrong codes, so every waiting code was dropped. Ask the sender to message again.".into())
         );
         assert!(trust.pending.is_empty());
+    }
+
+    #[test]
+    fn a_webhook_is_checked_filtered_and_queued_without_any_model() {
+        let dir = std::env::temp_dir().join(format!("grokhub-hooks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let hooks = vec![
+            Webhook {
+                name: "deploys".into(),
+                secret: String::from_utf8(SECRET.to_vec()).unwrap(),
+                filters: vec![Filter {
+                    path: "status".into(),
+                    test: Test::Equals("failed".into()),
+                }],
+                enabled: true,
+            },
+            Webhook {
+                name: "old".into(),
+                secret: String::from_utf8(SECRET.to_vec()).unwrap(),
+                filters: vec![],
+                enabled: false,
+            },
+        ];
+        std::fs::create_dir_all(dir.join("channels")).unwrap();
+        std::fs::write(webhooks_path(&dir), serde_json::to_string(&hooks).unwrap()).unwrap();
+        let ts = "1763550000";
+        let failed = br#"{"status":"failed","app":"my-app"}"#;
+        let passed = br#"{"status":"passed","app":"my-app"}"#;
+
+        let Received::Queued(saved) = receive(&dir, "deploys", &sign(ts, failed), ts, failed, NOW)
+        else {
+            panic!("a signed failure is queued");
+        };
+        assert_eq!(saved.parent(), Some(inbox_dir(&dir).as_path()));
+        let record: Value =
+            serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
+        assert_eq!(
+            record,
+            json!({"channel": "webhook", "hook": "deploys", "receivedMs": NOW, "body": {"status": "failed", "app": "my-app"}})
+        );
+        assert_eq!(
+            receive(&dir, "deploys", &sign(ts, passed), ts, passed, NOW),
+            Received::Filtered
+        );
+        assert_eq!(
+            receive(&dir, "deploys", &sign(ts, passed), ts, failed, NOW),
+            Received::Refused("the webhook signature doesn't match".into())
+        );
+        assert_eq!(
+            receive(&dir, "old", &sign(ts, failed), ts, failed, NOW),
+            Received::Unknown
+        );
+        assert_eq!(
+            receive(&dir, "../trust", &sign(ts, failed), ts, failed, NOW),
+            Received::Unknown
+        );
+        assert_eq!(
+            receive(&dir, "nobody", &sign(ts, failed), ts, failed, NOW).status(),
+            404
+        );
+        let big = vec![b' '; WEBHOOK_MAX_BODY + 1];
+        assert_eq!(
+            receive(&dir, "deploys", &sign(ts, &big), ts, &big, NOW),
+            Received::TooBig
+        );
+        let text = b"not json";
+        assert_eq!(
+            receive(&dir, "deploys", &sign(ts, text), ts, text, NOW),
+            Received::Refused("the webhook body isn't JSON".into())
+        );
+        assert_eq!(std::fs::read_dir(inbox_dir(&dir)).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
