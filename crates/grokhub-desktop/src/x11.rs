@@ -27,11 +27,16 @@ pub(crate) struct X11Backend {
 impl X11Backend {
     pub(crate) fn connect() -> Result<Self, String> {
         let (conn, screen) = RustConnection::connect(None).map_err(|e| format!("X11: {e}"))?;
-        Ok(Self {
+        Ok(Self::over(conn, screen))
+    }
+
+    /// A backend over a connection made elsewhere, such as the Bot Desktop's.
+    pub(crate) fn over(conn: RustConnection, screen: usize) -> Self {
+        Self {
             conn,
             screen,
             lock_at: None,
-        })
+        }
     }
 
     fn root(&self) -> u32 {
