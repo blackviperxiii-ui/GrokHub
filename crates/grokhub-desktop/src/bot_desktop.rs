@@ -239,6 +239,32 @@ impl BotDesktop {
         Ok((conn, 0))
     }
 
+    /// Starts `program` (a name on PATH, no arguments) on this screen.
+    pub fn launch(&self, program: &str) -> Result<(), String> {
+        if program.is_empty()
+            || program.contains(['/', '\\'])
+            || program.contains(char::is_whitespace)
+        {
+            return Err(format!("\"{program}\" isn't a program name"));
+        }
+        let path = crate::resolve_bin(program).ok_or_else(|| {
+            format!("{program} isn't installed, so it can't open on the Bot Desktop")
+        })?;
+        let mut cmd = Command::new(path);
+        for (key, value) in self.env() {
+            match value {
+                Some(v) => cmd.env(key, v),
+                None => cmd.env_remove(key),
+            };
+        }
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("{program}: {e}"))
+    }
+
     /// The desktop backend, driving this screen instead of the user's.
     pub fn backend(&self) -> Result<Box<dyn DesktopBackend + Send>, String> {
         let (conn, screen) = self.connect()?;
@@ -385,6 +411,65 @@ mod tests {
         let auth = desk.xauthority().to_path_buf();
         drop(desk);
         assert!(!auth.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The native desktop tools, pointed at a real Xvfb Bot Desktop: a
+    /// screenshot and a move land there, apps open only by name, and the
+    /// window tools say they don't reach it.
+    #[test]
+    fn the_desktop_tools_run_on_the_bot_desktop() {
+        if crate::resolve_bin("Xvfb").is_none() {
+            eprintln!("skipped: no Xvfb");
+            return;
+        }
+        use grokhub_agent::DesktopOps;
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::ConnectionExt;
+        let dir =
+            std::env::temp_dir().join(format!("grokhub-botdesk-tools-{}", std::process::id()));
+        let desk = std::sync::Arc::new(
+            BotDesktop::start_with(Server::Xvfb, &dir, (800, 600)).expect("starts"),
+        );
+        let tools = crate::NativeDesktop::on_bot_desktop(desk.clone());
+        let shot = tools.call("screenshot", &serde_json::json!({}));
+        assert!(!shot.failed, "{}", shot.text);
+        assert!(shot.image_data_url.is_some());
+        let moved = tools.call("move", &serde_json::json!({"x": 200, "y": 150}));
+        assert!(!moved.failed, "{}", moved.text);
+        let (conn, screen) = desk.connect().unwrap();
+        let root = conn.setup().roots[screen].root;
+        let at = conn.query_pointer(root).unwrap().reply().unwrap();
+        assert_eq!((at.root_x, at.root_y), (200, 150));
+
+        let windows = tools.call("focus_window", &serde_json::json!({"title": "Files"}));
+        assert!(windows.failed);
+        assert!(
+            windows
+                .text
+                .contains("The Bot Desktop has no window list yet"),
+            "{}",
+            windows.text
+        );
+        let open = tools.call(
+            "open_app",
+            &serde_json::json!({"app": "grokhub-no-such-app"}),
+        );
+        assert!(open.failed);
+        assert!(
+            open.text.contains(
+                "grokhub-no-such-app isn't installed, so it can't open on the Bot Desktop"
+            ),
+            "{}",
+            open.text
+        );
+        assert_eq!(desk.launch("true"), Ok(()));
+        assert_eq!(
+            desk.launch("sh -c id"),
+            Err("\"sh -c id\" isn't a program name".to_string())
+        );
+        drop(tools);
+        drop(desk);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
