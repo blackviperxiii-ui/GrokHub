@@ -89,10 +89,7 @@ pub fn page(list: &[Automation], behavior: &Behavior, now_ms: u64) -> Page {
         runner: runner(),
         next_due,
         quiet,
-        budget: format!(
-            "Daily token budget: {}",
-            grokhub_core::token_budget_label(behavior.daily_token_budget)
-        ),
+        budget: "Limits: Server-governed (no app-side token cap)".into(),
         rows: list
             .iter()
             .map(|a| Row {
@@ -182,7 +179,10 @@ mod tests {
             "a paused job is never next"
         );
         assert_eq!(got.quiet, "Quiet hours 22:00–07:00");
-        assert_eq!(got.budget, "Daily token budget: 1.0M tokens a day");
+        assert_eq!(
+            got.budget,
+            "Limits: Server-governed (no app-side token cap)"
+        );
         assert_eq!(
             got.rows
                 .iter()
@@ -213,7 +213,12 @@ mod tests {
                 got.budget.as_str(),
                 got.rows
             ),
-            (None, "No quiet hours", "Daily token budget: Off", vec![])
+            (
+                None,
+                "No quiet hours",
+                "Limits: Server-governed (no app-side token cap)",
+                vec![]
+            )
         );
     }
 }

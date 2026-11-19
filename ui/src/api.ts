@@ -5332,10 +5332,17 @@ export interface AiWebSearch {
   braveKeySet: boolean;
 }
 
+export interface AiBenchedRow {
+  id: string;
+  label: string;
+  benchedAtMs: number;
+}
+
 export interface AiModelsView {
   providers: AiProviderRow[];
   spend: AiSpend;
   premium: AiPremiumRow[];
+  benched: AiBenchedRow[];
   table: AiClassView[];
   tableBuiltAt: number;
   locked: string;
@@ -5472,6 +5479,14 @@ export function saveAiSpend(
   ceiling: number,
 ): Promise<AiModelsView> {
   return invoke<AiModelsView>("save_ai_spend", { cap, ceiling });
+}
+
+export function benchAiModel(target: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("bench_ai_model", { target });
+}
+
+export function unbenchAiModel(id: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("unbench_ai_model", { id });
 }
 
 export function revokeAiPremium(id: string): Promise<AiModelsView> {

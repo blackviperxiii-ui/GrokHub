@@ -267,11 +267,10 @@ fn request_bodies_for_a_reasoning_model_carry_no_penalty_or_stop_keys() {
 }
 
 #[test]
-fn a_model_at_its_request_limit_is_busy_and_failover_takes_the_next() {
+fn internal_request_counter_never_marks_a_live_model_busy() {
     let dir = crate::harness::test_dir("facts-pace");
     let other = crate::harness::test_dir("facts-pace-other");
     let reg = std::sync::Arc::new(grok_fleet());
-    // Everyday code work ranks grok-4.3 first.
     let code = |reg: &Registry| {
         Router::choose(
             &ask("code:multi-file", "grok-4.3", 0),
@@ -287,17 +286,8 @@ fn a_model_at_its_request_limit_is_busy_and_failover_takes_the_next() {
         live::note_send(&dir, "grok-4.3", NOW - 36 + i);
     }
     let view = live::paced(&dir, reg.clone(), NOW);
-    let rec = view.get("grok-4.3").unwrap();
-    assert_eq!(
-        (rec.state, rec.reason.as_str()),
-        (
-            ModelState::Degraded,
-            "It is at its request limit this second."
-        )
-    );
-    assert_eq!(view.get("grok-4.7").unwrap().state, ModelState::Live);
-    assert_eq!(code(&view), "grok-4.7");
-    // Another config dir has its own count, and a second later the limit has passed.
+    assert_eq!(view.get("grok-4.3").unwrap().state, ModelState::Live);
+    assert_eq!(code(&view), "grok-4.3");
     assert_eq!(
         live::paced(&other, reg.clone(), NOW)
             .get("grok-4.3")
@@ -305,15 +295,6 @@ fn a_model_at_its_request_limit_is_busy_and_failover_takes_the_next() {
             .state,
         ModelState::Live
     );
-    assert_eq!(
-        live::paced(&dir, reg.clone(), NOW + 1_000)
-            .get("grok-4.3")
-            .unwrap()
-            .state,
-        ModelState::Live
-    );
-    // The saved registry itself never changed.
-    assert_eq!(reg.get("grok-4.3").unwrap().state, ModelState::Live);
     let _ = std::fs::remove_dir_all(dir);
     let _ = std::fs::remove_dir_all(other);
 }

@@ -300,15 +300,15 @@ impl Default for Behavior {
 }
 
 impl Behavior {
-    /// The same choices with the quiet hours written as `HH:MM`, or why not.
+    /// The same choices with quiet hours written as `HH:MM`, or why not.
+    /// Legacy daily token budget caps are always cleared so no internal limit blocks work.
     pub fn checked(self) -> Result<Self, String> {
         let (quiet_start, quiet_end) = quiet_hours(&self.quiet_start, &self.quiet_end)?;
-        if !grokhub_core::TOKEN_BUDGETS.contains(&self.daily_token_budget) {
-            return Err("Pick a daily token budget from the list.".into());
-        }
         Ok(Self {
             quiet_start,
             quiet_end,
+            daily_token_budget: 0,
+            pause_over_budget: false,
             ..self
         })
     }
@@ -355,12 +355,8 @@ fn lenient_behavior<'de, D: Deserializer<'de>>(d: D) -> Result<Behavior, D::Erro
             .unwrap_or(true),
         quiet_start,
         quiet_end,
-        daily_token_budget: raw
-            .get("dailyTokenBudget")
-            .and_then(Value::as_u64)
-            .filter(|b| grokhub_core::TOKEN_BUDGETS.contains(b))
-            .unwrap_or(0),
-        pause_over_budget: flag("pauseOverBudget"),
+        daily_token_budget: 0,
+        pause_over_budget: false,
         lane: Lane::read(text("lane")),
     })
 }
@@ -623,8 +619,8 @@ mod tests {
                 suggestions: false,
                 quiet_start: "22:00".into(),
                 quiet_end: "07:00".into(),
-                daily_token_budget: 1_000_000,
-                pause_over_budget: true,
+                daily_token_budget: 0,
+                pause_over_budget: false,
                 lane: Lane::Life,
             },
             summon_hotkey: true,
@@ -679,8 +675,6 @@ mod tests {
         assert!(raw.contains("\"theme\": \"dark\""), "{raw}");
         assert!(raw.contains("\"lastChat\": \"shell-abc-123\""), "{raw}");
         assert!(raw.contains("\"quietStart\": \"22:00\""), "{raw}");
-        assert!(raw.contains("\"dailyTokenBudget\": 1000000"), "{raw}");
-        assert!(raw.contains("\"pauseOverBudget\": true"), "{raw}");
         assert!(raw.contains("\"lane\": \"life\""), "{raw}");
         assert!(raw.contains("\"summonHotkey\": true"), "{raw}");
         assert!(raw.contains("\"notifications\": false"), "{raw}");
@@ -896,20 +890,13 @@ mod tests {
             quiet_start: "9:00".into(),
             quiet_end: "17:00".into(),
             daily_token_budget: 500_000,
+            pause_over_budget: true,
             ..Behavior::default()
         };
-        assert_eq!(
-            picked.clone().checked().map(|b| b.quiet_start),
-            Ok("09:00".to_string())
-        );
-        assert_eq!(
-            Behavior {
-                daily_token_budget: 7,
-                ..picked
-            }
-            .checked(),
-            Err("Pick a daily token budget from the list.".to_string())
-        );
+        let checked = picked.checked().unwrap();
+        assert_eq!(checked.quiet_start, "09:00");
+        assert_eq!(checked.daily_token_budget, 0);
+        assert!(!checked.pause_over_budget);
     }
 
     #[test]

@@ -23,7 +23,7 @@ describe("Background", () => {
       runner: RUNNER,
       nextDue: "Build check · Next check in 12m",
       quiet: "Quiet hours 22:00–07:00",
-      budget: "Daily token budget: Off",
+      budget: "Limits: Server-governed (no app-side token cap)",
       rows: [
         { id: "a", name: "Build check", next: "Next check in 12m", last: "Hasn't run yet", health: null },
         { id: "b", name: "Inbox", next: "Paused", last: "Last ran 2h ago", health: "Last run failed" },
@@ -32,7 +32,9 @@ describe("Background", () => {
     render(<Background />);
     expect(await screen.findByText("Next due: Build check · Next check in 12m")).toBeInTheDocument();
     expect(screen.getByText(RUNNER)).toBeInTheDocument();
-    expect(screen.getByText("Quiet hours 22:00–07:00 · Daily token budget: Off")).toBeInTheDocument();
+    expect(
+      screen.getByText("Quiet hours 22:00–07:00 · Limits: Server-governed (no app-side token cap)"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Paused · Last ran 2h ago")).toBeInTheDocument();
     expect(screen.getByText("Last run failed")).toHaveClass("warn");
     expect(screen.queryByRole("button")).toBeNull();
@@ -43,7 +45,7 @@ describe("Background", () => {
       runner: RUNNER,
       nextDue: null,
       quiet: "No quiet hours",
-      budget: "Daily token budget: Off",
+      budget: "Limits: Server-governed (no app-side token cap)",
       rows: [],
     });
     render(<Background />);

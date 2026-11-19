@@ -72,7 +72,6 @@ export function Behavior({
   if (!page) return <p className="note">{note ?? "Loading…"}</p>;
   const loaded = page;
   const b = loaded.behavior;
-  const budgetLabel = loaded.budgets.find((c) => c.value === b.dailyTokenBudget)?.label ?? "Off";
 
   if (readOnly) {
     return (
@@ -97,14 +96,6 @@ export function Behavior({
         <dd>{b.composerGlow ? "On" : "Off"}</dd>
         <dt>Quiet hours</dt>
         <dd>{quietLabel(b)}</dd>
-        <dt>Daily token budget</dt>
-        <dd>{budgetLabel}</dd>
-        {b.dailyTokenBudget > 0 && (
-          <>
-            <dt>Pause scheduled work over budget</dt>
-            <dd>{b.pauseOverBudget ? "On" : "Off"}</dd>
-          </>
-        )}
       </dl>
     );
   }
@@ -189,27 +180,6 @@ export function Behavior({
         <p className="note">{QUIET_NOTE}</p>
         <button type="submit">Save quiet hours</button>
       </form>
-      <label>
-        Daily token budget
-        <select
-          value={b.dailyTokenBudget}
-          onChange={(e) => change({ dailyTokenBudget: Number(e.target.value) })}
-        >
-          {loaded.budgets.map((c) => (
-            <option key={c.value} value={c.value}>
-              {c.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      {b.dailyTokenBudget > 0 && (
-        <>
-          <Toggle checked={b.pauseOverBudget} onChange={(on) => change({ pauseOverBudget: on })}>
-            Pause scheduled work over budget
-          </Toggle>
-          <p className="note">{PAUSE_NOTE}</p>
-        </>
-      )}
       <p className="note">{SCHEDULE_NOTE}</p>
       <SelfImprove />
       <ChangeRows />
