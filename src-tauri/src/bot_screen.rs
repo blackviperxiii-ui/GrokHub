@@ -60,6 +60,13 @@ mod imp {
     pub fn stop() {
         bot_desktop::stop_shared();
     }
+
+    /// The screen as it is now, scaled for the preview.
+    pub fn frame() -> Option<String> {
+        let desk = bot_desktop::shared()?;
+        let shot = desk.backend().ok()?.screenshot("all").ok()?;
+        preview_jpeg(&shot.bytes)
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -84,13 +91,61 @@ mod imp {
     }
 
     pub fn stop() {}
+
+    pub fn frame() -> Option<String> {
+        None
+    }
 }
 
-pub use imp::{apply, stop, view};
+pub use imp::{apply, frame, stop, view};
+
+/// How wide the preview is drawn.
+pub const PREVIEW_WIDTH: u32 = 640;
+
+/// `bytes` (any image) as a JPEG data URL at most [`PREVIEW_WIDTH`] wide.
+pub fn preview_jpeg(bytes: &[u8]) -> Option<String> {
+    use base64::Engine as _;
+    let img = image::load_from_memory(bytes).ok()?;
+    let img = if img.width() > PREVIEW_WIDTH {
+        img.resize(
+            PREVIEW_WIDTH,
+            u32::MAX,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        img
+    };
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 70)
+        .encode_image(&img.to_rgb8())
+        .ok()?;
+    Some(format!(
+        "data:image/jpeg;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(out.into_inner())
+    ))
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_preview_is_a_jpeg_scaled_to_its_width() {
+        let big = image::RgbImage::from_pixel(1280, 800, image::Rgb([200, 30, 30]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        big.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let url = preview_jpeg(png.get_ref()).expect("a preview");
+        let b64 = url
+            .strip_prefix("data:image/jpeg;base64,")
+            .expect("jpeg url");
+        use base64::Engine as _;
+        let jpeg = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        let back = image::load_from_memory(&jpeg).unwrap();
+        assert_eq!((back.width(), back.height()), (640, 400));
+        assert_eq!(preview_jpeg(b"not an image"), None);
+    }
 
     #[test]
     fn the_screen_files_live_in_their_own_config_folder() {
@@ -116,7 +171,14 @@ mod tests {
         let shown = on.display.expect("a display");
         assert!(shown.starts_with(':'), "{shown}");
         assert!(dir(&config).is_dir());
+        let shot = frame().expect("a frame while it runs");
+        assert!(
+            shot.starts_with("data:image/jpeg;base64,"),
+            "{}",
+            &shot[..40]
+        );
         apply(&config, false).unwrap();
+        assert_eq!(frame(), None);
         assert_eq!(
             view(false, None),
             BotDesktopView {

@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { getBotDesktop, setBotDesktop, type BotDesktop as Shape } from "./botDesktopApi";
+import {
+  botDesktopFrame,
+  getBotDesktop,
+  PREVIEW_EVERY_MS,
+  setBotDesktop,
+  type BotDesktop as Shape,
+} from "./botDesktopApi";
 import { PRODUCT_NAME } from "./brand";
 import { Toggle } from "./Toggle";
 
@@ -15,6 +21,9 @@ export function BotDesktop() {
   useEffect(() => {
     getBotDesktop().then(setShown, () => setShown(null));
   }, []);
+
+  const running = Boolean(shown?.on && shown.display);
+  const frame = usePreview(running);
 
   if (!shown?.supported) return null;
 
@@ -38,8 +47,37 @@ export function BotDesktop() {
         Let {PRODUCT_NAME} work on its own screen
       </Toggle>
       <p className="note">{BOT_DESKTOP_NOTE}</p>
-      {shown.on && shown.display && <p className="note">Running on display {shown.display}.</p>}
+      {running && <p className="note">Running on display {shown.display}.</p>}
+      {running && frame && (
+        <img className="bot-desktop-preview" src={frame} alt="What the Bot Desktop shows now" />
+      )}
       {problem && <p className="note warn">{problem}</p>}
     </div>
   );
+}
+
+/** A new frame every [`PREVIEW_EVERY_MS`] while `running` and the window is shown. */
+function usePreview(running: boolean): string | null {
+  const [frame, setFrame] = useState<string | null>(null);
+  useEffect(() => {
+    if (!running) return;
+    let live = true;
+    const grab = () => {
+      if (document.hidden) return;
+      botDesktopFrame().then(
+        (next) => {
+          if (live) setFrame(next);
+        },
+        () => {},
+      );
+    };
+    grab();
+    const timer = window.setInterval(grab, PREVIEW_EVERY_MS);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [running]);
+  // A stopped screen shows no old frame.
+  return running ? frame : null;
 }
