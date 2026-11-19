@@ -17,8 +17,16 @@ fn main() {
         print!("{text}");
         return;
     }
+    #[cfg(desktop)]
+    if std::env::args().nth(1).as_deref() == Some(AUTOMATIONS_ARG) {
+        grokhub_shell::run_automations();
+    }
     grokhub_shell::run()
 }
+
+/// Run scheduled automations with no window (a login service, while the app
+/// is closed).
+const AUTOMATIONS_ARG: &str = "--automations";
 
 /// `--version` / `-V` and `--help` / `-h`, answered without starting the app.
 fn cli_reply(args: impl IntoIterator<Item = String>) -> Option<String> {
@@ -31,6 +39,7 @@ fn cli_reply(args: impl IntoIterator<Item = String>) -> Option<String> {
                     "grokhub-shell {version}\n\n  \
 grokhub-shell              open the app\n  \
 grokhub-shell --autostart  start in the tray (also --agent, --tray)\n  \
+grokhub-shell --automations  run scheduled automations with no window\n  \
 grokhub-shell --version\n\n\
 Headless tools (--mcp-self, bench local, --askpass) are in grokhub-hub.\n"
                 ))
@@ -64,9 +73,16 @@ mod tests {
             ),
             "{help}"
         );
+        assert!(
+            help.contains(
+                "  grokhub-shell --automations  run scheduled automations with no window\n"
+            ),
+            "{help}"
+        );
         assert_eq!(cli_reply(args(&["grokhub-shell", "-h"])), Some(help));
         assert_eq!(cli_reply(args(&["grokhub-shell"])), None);
         assert_eq!(cli_reply(args(&["grokhub-shell", "--autostart"])), None);
+        assert_eq!(cli_reply(args(&["grokhub-shell", "--automations"])), None);
         let main = include_str!("main.rs");
         let body = main.split("fn main() {").nth(1).expect("main");
         assert!(

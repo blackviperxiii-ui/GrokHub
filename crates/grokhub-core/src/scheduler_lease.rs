@@ -5,6 +5,10 @@
 //! [`LEASE_BEAT_MS`], and the shell fires nothing while that beat is fresh.
 //! Once the cabin is closed the beat goes stale and the shell takes over,
 //! beating as `shell` so a second shell process defers to the first.
+//!
+//! With the window closed, `grokhub-shell --automations` keeps the jobs
+//! firing and beats as `headless`. An open shell takes the lease from it at
+//! once, and the headless run waits until the shell's beat goes stale.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,6 +28,8 @@ const LEASE_CAP: u64 = 4 * 1024;
 pub enum LeaseOwner {
     Cabin,
     Shell,
+    /// `grokhub-shell --automations`, with no window.
+    Headless,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,10 +52,24 @@ pub fn lease_fresh(lease: &SchedulerLease, now_ms: u64) -> bool {
 }
 
 /// The shell fires only when no fresh lease belongs to someone else: the
-/// cabin while it is open, or another shell process.
+/// cabin while it is open, or another shell process. A headless run's lease
+/// doesn't hold it off: the open app takes over.
 pub fn shell_may_fire(lease: Option<&SchedulerLease>, pid: u32, now_ms: u64) -> bool {
     match lease {
-        Some(l) if lease_fresh(l, now_ms) => l.owner == LeaseOwner::Shell && l.pid == pid,
+        Some(l) if lease_fresh(l, now_ms) => match l.owner {
+            LeaseOwner::Shell => l.pid == pid,
+            LeaseOwner::Headless => true,
+            LeaseOwner::Cabin => false,
+        },
+        _ => true,
+    }
+}
+
+/// A headless run fires only while no one else holds a fresh lease: not an
+/// open app, and not a second headless run.
+pub fn headless_may_fire(lease: Option<&SchedulerLease>, pid: u32, now_ms: u64) -> bool {
+    match lease {
+        Some(l) if lease_fresh(l, now_ms) => l.owner == LeaseOwner::Headless && l.pid == pid,
         _ => true,
     }
 }
@@ -136,6 +156,24 @@ mod tests {
         let mine = lease(LeaseOwner::Shell, 9, NOW);
         assert!(shell_may_fire(Some(&mine), 9, NOW + 30_000));
         assert!(shell_may_fire(None, 9, NOW));
+    }
+
+    #[test]
+    fn an_open_app_takes_over_from_a_headless_run_which_waits_for_it() {
+        let headless = lease(LeaseOwner::Headless, 5, NOW);
+        assert!(shell_may_fire(Some(&headless), 9, NOW + 30_000));
+        assert!(headless_may_fire(Some(&headless), 5, NOW + 30_000));
+        assert!(!headless_may_fire(Some(&headless), 6, NOW + 30_000));
+        let app = lease(LeaseOwner::Shell, 9, NOW);
+        assert!(!headless_may_fire(Some(&app), 5, NOW + 30_000));
+        assert!(headless_may_fire(Some(&app), 5, NOW + 90_000));
+        let cabin = lease(LeaseOwner::Cabin, 7, NOW);
+        assert!(!headless_may_fire(Some(&cabin), 5, NOW + 30_000));
+        assert!(headless_may_fire(None, 5, NOW));
+        assert_eq!(
+            serde_json::to_string(&headless).expect("json"),
+            r#"{"owner":"headless","pid":5,"beat_ms":1800000000000}"#
+        );
     }
 
     #[test]

@@ -2124,6 +2124,7 @@ name = "grokhub-shell"
 version = "3.5.0"
 dependencies = [
  "base64 0.23.1",
+ "chrono",
  "grokhub-agent",
  "grokhub-code",
  "grokhub-core",

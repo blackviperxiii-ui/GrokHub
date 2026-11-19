@@ -21,7 +21,7 @@ use grokhub_agent::check_decide::Decision;
 use grokhub_agent::ModelClient;
 use grokhub_core::automation_check::{check_step, CheckStep};
 use grokhub_core::scheduler_lease::{
-    read_lease, shell_may_fire, write_lease, LeaseOwner, SchedulerLease,
+    headless_may_fire, read_lease, shell_may_fire, write_lease, LeaseOwner, SchedulerLease,
 };
 use grokhub_core::{Automation, LocalClock};
 use serde::Serialize;
@@ -117,15 +117,41 @@ pub fn tick_deciding(
     check: &mut dyn FnMut(&str) -> String,
     decide: &mut dyn FnMut(&Automation, &str) -> Option<Decision>,
 ) -> Result<Vec<Fired>, String> {
+    tick_as(
+        LeaseOwner::Shell,
+        config_dir,
+        clock,
+        pid,
+        run,
+        check,
+        decide,
+    )
+}
+
+/// `tick_deciding` for the lease `owner`: the open app as `Shell`, or the
+/// headless run as `Headless`, which yields to an open app.
+pub fn tick_as(
+    owner: LeaseOwner,
+    config_dir: &Path,
+    clock: &dyn Fn() -> LocalClock,
+    pid: u32,
+    run: &mut dyn FnMut(&Automation) -> RunResult,
+    check: &mut dyn FnMut(&str) -> String,
+    decide: &mut dyn FnMut(&Automation, &str) -> Option<Decision>,
+) -> Result<Vec<Fired>, String> {
+    let may_fire = match owner {
+        LeaseOwner::Headless => headless_may_fire,
+        _ => shell_may_fire,
+    };
     let mut fired = Vec::new();
     let mut seen = HashSet::new();
     loop {
         let now = clock();
-        if !shell_may_fire(read_lease(config_dir).as_ref(), pid, now.now_ms) {
+        if !may_fire(read_lease(config_dir).as_ref(), pid, now.now_ms) {
             return Ok(fired);
         }
         let beat = SchedulerLease {
-            owner: LeaseOwner::Shell,
+            owner,
             pid,
             beat_ms: now.now_ms,
         };
@@ -233,44 +259,75 @@ pub fn start(
         let Some(offset) = utc_offset() else {
             continue;
         };
-        let clock = || local_clock(grokhub_core::now_ms(), offset);
-        let mut run = |job: &Automation| match route() {
-            Ok((client, model, workspace, gate)) => {
-                automations::execute(&config_dir, job, client, &model, workspace, gate)
-            }
-            Err(error) => RunResult {
-                text: String::new(),
-                error,
-                stop: "error".into(),
-            },
-        };
-        // The decision step uses the same route as the run, with no tools.
-        let mut decide = |job: &Automation, shown: &str| {
-            let (client, model, _, _) = route().ok()?;
-            let _config = grokhub_agent::perm::ConfigGuard::set(&config_dir);
-            grokhub_agent::check_decide::decide(
-                client.as_ref(),
-                &grokhub_agent::CancelToken::new(),
-                &model,
-                &format!("shell-auto-{}-decide", job.id),
-                &job.instructions,
-                &job.check_command,
-                shown,
-            )
-        };
-        if let Ok(fired) = tick_deciding(
-            &config_dir,
-            &clock,
-            std::process::id(),
-            &mut run,
-            &mut |cmd| grokhub_core::run_night_check_command(cmd),
-            &mut decide,
-        ) {
+        if let Ok(fired) = tick_live(LeaseOwner::Shell, &config_dir, offset, &route) {
             for f in &fired {
                 emit(f);
             }
         }
     });
+}
+
+/// `grokhub-shell --automations`: the same ticks with no window, for when
+/// the app is closed (a login service runs it). The local clock comes from
+/// the OS, since there is no window to report it. An open app takes the
+/// lease, and this waits until its beat goes stale. Never returns.
+pub fn run_headless(
+    config_dir: &Path,
+    route: impl Fn() -> Result<Route, String>,
+    report: impl Fn(&Fired),
+) -> ! {
+    loop {
+        let offset = chrono::Local::now().offset().local_minus_utc() / 60;
+        if let Ok(fired) = tick_live(LeaseOwner::Headless, config_dir, offset, &route) {
+            for f in &fired {
+                report(f);
+            }
+        }
+        std::thread::sleep(TICK);
+    }
+}
+
+/// One tick with the live route, the real check runner and the decision step.
+fn tick_live(
+    owner: LeaseOwner,
+    config_dir: &Path,
+    offset: i32,
+    route: &dyn Fn() -> Result<Route, String>,
+) -> Result<Vec<Fired>, String> {
+    let clock = || local_clock(grokhub_core::now_ms(), offset);
+    let mut run = |job: &Automation| match route() {
+        Ok((client, model, workspace, gate)) => {
+            automations::execute(config_dir, job, client, &model, workspace, gate)
+        }
+        Err(error) => RunResult {
+            text: String::new(),
+            error,
+            stop: "error".into(),
+        },
+    };
+    // The decision step uses the same route as the run, with no tools.
+    let mut decide = |job: &Automation, shown: &str| {
+        let (client, model, _, _) = route().ok()?;
+        let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
+        grokhub_agent::check_decide::decide(
+            client.as_ref(),
+            &grokhub_agent::CancelToken::new(),
+            &model,
+            &format!("shell-auto-{}-decide", job.id),
+            &job.instructions,
+            &job.check_command,
+            shown,
+        )
+    };
+    tick_as(
+        owner,
+        config_dir,
+        &clock,
+        std::process::id(),
+        &mut run,
+        &mut |cmd| grokhub_core::run_night_check_command(cmd),
+        &mut decide,
+    )
 }
 
 #[cfg(test)]
@@ -840,5 +897,55 @@ mod tests {
         )
         .expect("tick");
         assert_eq!(judged, 0);
+    }
+
+    #[test]
+    fn a_headless_tick_yields_to_an_open_app_and_the_app_takes_over_from_it() {
+        let (dir, _id) = nine_am_job("headless");
+        let nine = FRI_8AM + HOUR;
+        let app = SchedulerLease {
+            owner: LeaseOwner::Shell,
+            pid: PID,
+            beat_ms: nine - 10_000,
+        };
+        write_lease(&dir, &app).expect("app beat");
+        let mut runs = 0;
+        let fired = tick_as(
+            LeaseOwner::Headless,
+            &dir,
+            &at(nine),
+            PID + 1,
+            &mut |_| {
+                runs += 1;
+                ok("headless ran")
+            },
+            &mut |_| String::new(),
+            &mut |_, _| None,
+        )
+        .expect("tick");
+        assert_eq!((fired.len(), runs), (0, 0));
+        // The app's beat goes stale: the headless run fires and beats as headless.
+        let fired = tick_as(
+            LeaseOwner::Headless,
+            &dir,
+            &at(nine + 90_000),
+            PID + 1,
+            &mut |_| ok("headless ran"),
+            &mut |_| String::new(),
+            &mut |_, _| None,
+        )
+        .expect("tick");
+        assert_eq!(fired.len(), 1);
+        assert_eq!(
+            read_lease(&dir),
+            Some(SchedulerLease {
+                owner: LeaseOwner::Headless,
+                pid: PID + 1,
+                beat_ms: nine + 90_000,
+            })
+        );
+        // An app that opens now is not held off by the headless beat.
+        tick(&dir, &at(nine + 100_000), PID, &mut |_| ok("app ran")).expect("tick");
+        assert_eq!(read_lease(&dir).map(|l| l.owner), Some(LeaseOwner::Shell));
     }
 }

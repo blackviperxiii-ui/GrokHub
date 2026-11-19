@@ -7664,25 +7664,60 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
     }
 }
 
-/// Scheduled automations fire from here while the cabin is closed, with the
-/// settings as they are at each run.
+/// A scheduled run's route, with the settings as they are at each run.
+#[cfg(desktop)]
+fn scheduled_route(config_dir: &Path) -> Result<scheduler::Route, String> {
+    let settings = settings::load(config_dir);
+    let route = route(&settings, agent::SessionMode::Chat, config_dir)?;
+    let (model, _) = grokhub_agent::route::host::chat_start();
+    let gate = run_gate(&route);
+    Ok((route.client, model, route.workspace, gate))
+}
+
+/// Scheduled automations fire from here while the cabin is closed.
 #[cfg(desktop)]
 fn start_scheduler(app: &tauri::App) {
     let config_dir = app.state::<ShellState>().config_dir.clone();
     let handle = app.handle().clone();
+    let dir = config_dir.clone();
     scheduler::start(
-        config_dir.clone(),
-        move || {
-            let settings = settings::load(&config_dir);
-            let route = route(&settings, agent::SessionMode::Chat, &config_dir)?;
-            let (model, _) = grokhub_agent::route::host::chat_start();
-            let gate = run_gate(&route);
-            Ok((route.client, model, route.workspace, gate))
-        },
+        config_dir,
+        move || scheduled_route(&dir),
         move |fired| {
             let _ = handle.emit(scheduler::RAN_EVENT, fired);
         },
     );
+}
+
+/// `grokhub-shell --automations`: scheduled automations with no window, for
+/// a login service while the app is closed. Sets up what a scheduled run
+/// reads (the router's settings, provider keys and the learned-tier key from
+/// the OS keyring, the device profile), then ticks until stopped. An open
+/// app takes the jobs over, and this waits for it to close.
+#[cfg(desktop)]
+pub fn run_automations() -> ! {
+    let config_dir = grokhub_agent::perm::config_dir();
+    grokhub_agent::route::host::sync(&config_dir);
+    grokhub_agent::route::providers::use_os_vault();
+    grokhub_agent::harness::use_os_keyring();
+    grokhub_agent::device::start(
+        grokhub_core::paths::user_home().unwrap_or_default(),
+        config_dir.clone(),
+    );
+    grokhub_core::learn::hub::start(&config_dir);
+    let dir = config_dir.clone();
+    scheduler::run_headless(
+        &config_dir,
+        move || scheduled_route(&dir),
+        |fired| {
+            let how = if fired.result.failed() {
+                format!("failed: {}", fired.result.error)
+            } else {
+                "ok".to_string()
+            };
+            eprintln!("automations: {} {how}", fired.name);
+        },
+    )
 }
 
 #[tauri::command]
