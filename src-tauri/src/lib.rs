@@ -6564,6 +6564,33 @@ async fn remove_library_model(
 }
 
 #[tauri::command]
+async fn search_hf_gguf(query: String, limit: Option<usize>) -> Result<Vec<model_library::HfHit>, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    off_main(move || model_library::search_hf(&query, limit.unwrap_or(20))).await?
+}
+
+#[tauri::command]
+async fn list_hf_gguf_files(
+    state: State<'_, ShellState>,
+    repo: String,
+) -> Result<Vec<model_library::HfFileRow>, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || model_library::hf_files(&dir, &repo)).await?
+}
+
+#[tauri::command]
+async fn download_hf_gguf(
+    state: State<'_, ShellState>,
+    repo: String,
+    path: String,
+) -> Result<String, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || model_library::download_hf(&dir, &repo, &path)).await?
+}
+
+#[tauri::command]
 async fn run_local_speed_test(state: State<'_, ShellState>) -> Result<String, String> {
     capabilities::needs(capabilities::current().local_ai, "Local AI")?;
     let dir = state.config_dir.clone();
@@ -8797,6 +8824,9 @@ pub fn run() {
             download_models,
             pause_model_downloads,
             remove_library_model,
+            search_hf_gguf,
+            list_hf_gguf_files,
+            download_hf_gguf,
             get_web_access,
             set_web_access,
             get_devices,

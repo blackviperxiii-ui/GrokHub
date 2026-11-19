@@ -10,6 +10,9 @@ const api = vi.hoisted(() => ({
   downloadModels: vi.fn<(ids: string[]) => Promise<LibraryView>>(),
   pauseModelDownloads: vi.fn<() => Promise<void>>(),
   removeLibraryModel: vi.fn<(id: string) => Promise<LibraryView>>(),
+  searchHfGguf: vi.fn(),
+  listHfGgufFiles: vi.fn(),
+  downloadHfGguf: vi.fn(),
   onModelLibraryEvent: vi.fn(async (cb: (s: LibraryStatus) => void) => {
     events.push(cb);
     return () => undefined;
@@ -238,5 +241,43 @@ describe("ModelLibrary", () => {
     expect(screen.getByRole("tab", { name: "Chat (2)" })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByRole("listitem", { current: true })).toBeNull();
     expect(api.downloadModels).toHaveBeenCalledTimes(0);
+  });
+
+  it("searches Hugging Face GGUF repos and downloads a quant into Auto", async () => {
+    api.getModelLibrary.mockResolvedValue(library());
+    api.searchHfGguf.mockResolvedValue([
+      {
+        repo: "unsloth/Qwen3-8B-GGUF",
+        downloads: 12,
+        likes: 1,
+        updated: "2026-01-01",
+        gated: false,
+      },
+    ]);
+    api.listHfGgufFiles.mockResolvedValue([
+      {
+        label: "Q4_K_M",
+        paths: ["Qwen3-8B-Q4_K_M.gguf"],
+        size: "4.7 GB",
+        fit: "Fits this PC",
+        fitKind: "yes",
+      },
+    ]);
+    api.downloadHfGguf.mockResolvedValue("Downloaded Qwen3-8B-Q4_K_M.gguf into Auto.");
+    render(<ModelLibrary />);
+    expect(await screen.findByLabelText("Search Hugging Face GGUF")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Search Hugging Face for GGUF models"), "qwen3");
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+    expect(api.searchHfGguf).toHaveBeenCalledWith("qwen3");
+    expect(await screen.findByText("unsloth/Qwen3-8B-GGUF")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Show quants" }));
+    expect(api.listHfGgufFiles).toHaveBeenCalledWith("unsloth/Qwen3-8B-GGUF");
+    expect(await screen.findByText(/Q4_K_M · 4.7 GB/)).toBeInTheDocument();
+    expect(screen.getByText("Fits this PC")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Download into Auto" }));
+    expect(api.downloadHfGguf).toHaveBeenCalledWith("unsloth/Qwen3-8B-GGUF", "Qwen3-8B-Q4_K_M.gguf");
+    expect(await screen.findByText("Downloaded Qwen3-8B-Q4_K_M.gguf into Auto.")).toBeInTheDocument();
+    // No runtime / chat model picker.
+    expect(screen.queryByRole("combobox", { name: /model/i })).toBeNull();
   });
 });

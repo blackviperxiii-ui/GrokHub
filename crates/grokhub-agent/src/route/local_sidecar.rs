@@ -581,6 +581,11 @@ fn start_planned(
                 // really has, not a fixed default.
                 if let Some(l) = launch.as_ref() {
                     super::local::set_ctx_cap(u64::from(l.ctx));
+                    // When Ollama is up, prefer its effective num_ctx (Modelfile
+                    // or GGUF), never above this server's window.
+                    let _ = super::local::probe_ollama_num_ctx(None, Some(u64::from(l.ctx)));
+                } else {
+                    let _ = super::local::probe_ollama_num_ctx(None, None);
                 }
                 side.thinking = super::local_effort::fetch_thinking(
                     &side.host,
@@ -757,6 +762,11 @@ fn paths_stamp(config_dir: &Path) -> PathsStamp {
 
 type PathsCache = Mutex<Option<(PathBuf, PathsStamp, Instant, Option<SidecarPaths>)>>;
 static PATHS_CACHE: PathsCache = Mutex::new(None);
+
+/// Drop the cached binary/model paths so a newly downloaded GGUF is seen.
+pub fn clear_paths_cache() {
+    *PATHS_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
 
 /// `llama-server` from `GROKHUB_LLAMA_SERVER`, `{config}/bin`, then `PATH`.
 pub fn find_binary(config_dir: &Path) -> Option<PathBuf> {

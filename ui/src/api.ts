@@ -2877,6 +2877,36 @@ export function onModelLibraryEvent(
   return subscribe<LibraryStatus>("model-library", handler);
 }
 
+/** Live Hugging Face GGUF search (Download models → browse). */
+export interface HfGgufHit {
+  repo: string;
+  downloads: number;
+  likes: number;
+  updated: string;
+  gated: boolean;
+}
+
+export interface HfGgufFile {
+  label: string;
+  paths: string[];
+  size: string;
+  fit: string;
+  fitKind: "yes" | "tight" | "no";
+}
+
+export function searchHfGguf(query: string, limit = 20): Promise<HfGgufHit[]> {
+  return invoke<HfGgufHit[]>("search_hf_gguf", { query, limit });
+}
+
+export function listHfGgufFiles(repo: string): Promise<HfGgufFile[]> {
+  return invoke<HfGgufFile[]>("list_hf_gguf_files", { repo });
+}
+
+/** Downloads into the models folder and registers the file in Auto only. */
+export function downloadHfGguf(repo: string, path: string): Promise<string> {
+  return invoke<string>("download_hf_gguf", { repo, path });
+}
+
 export function runLocalSpeedTest(): Promise<string> {
   return invoke<string>("run_local_speed_test");
 }
