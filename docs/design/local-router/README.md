@@ -319,7 +319,9 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      build, and vision leaves that model alone until the engine changes. A
      governor restart with the same plan keeps the projector
      (`replan_vision_for`).
-   - Reading: `serve_request` turns pictures into `BLIND_NOTE` only when
+   - Reading: the fit counts each picture it keeps at 1,120 tokens
+     (`LOCAL_IMAGE_TOKENS`, about the most Gemma 4 takes), not the cloud's
+     765. `serve_request` turns pictures into `BLIND_NOTE` only when
      the server the request was admitted to has no projector
      (`LocalRuntime::sees_pictures`, from the sidecar's `Endpoint`);
      otherwise they go as they are. When the person's newest message
@@ -365,8 +367,6 @@ Each step is its own PR into `beta`, green on Linux and Windows.
         pair, in line with its file plus 15%. One reader flagged the 12B's
         (a 167 MB file, sized 193 MB) as undercounted; not confirmed on an
         engine.
-     9. A kept picture is budgeted at 765 tokens in the fit; Gemma 4 may
-        take up to about 1,120 per picture.
    - Open: a screenshot or `read_file` image the model took itself counts
      as the person's newest message (`last_user_text`). Keeping those on
      device is a product call.

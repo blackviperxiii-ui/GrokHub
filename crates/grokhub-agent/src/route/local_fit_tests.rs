@@ -700,3 +700,17 @@ fn a_device_that_reads_pictures_gets_them_as_they_are() {
     assert!(!asked);
     assert!(!wants_picture(), "the guard is gone after the turn");
 }
+
+#[test]
+fn a_picture_the_device_reads_counts_at_gemma_4s_most_tokens() {
+    let req = real_request(vec![with_picture("hi")]);
+    let base = request_tokens(&real_request(vec![text("user", "hi")]));
+    assert_eq!(request_tokens(&req), base + 1_120);
+    assert_eq!(LOCAL_IMAGE_TOKENS, 1_120);
+    // Two pictures, twice.
+    let two = real_request(vec![with_picture("hi"), with_picture("hi")]);
+    assert_eq!(
+        request_tokens(&two),
+        request_tokens(&real_request(vec![text("user", "hi"), text("user", "hi")])) + 2 * 1_120
+    );
+}
