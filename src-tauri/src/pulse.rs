@@ -2395,6 +2395,21 @@ mod tests {
     }
 
     #[test]
+    fn an_old_written_post_without_a_report_has_no_more() {
+        let d = dirs("old-written", &[]);
+        let json = r#"{"id":"w","kind":"digest","title":"Async closures are stable","body":"Rust 1.99 makes [them stable](https://blog.rust-lang.org/).","sourceId":"pulse:writer:1","citations":["https://blog.rust-lang.org/"],"createdAt":1,"status":"unread"}"#;
+        let card: UpdateCard = serde_json::from_str(json).expect("an old post loads");
+        assert_eq!(card.pulse.report, None);
+        let p = post(&d.config, &card, &[], &[], NOW);
+        assert_eq!(p.more, "");
+        assert_eq!(
+            p.summary,
+            "Rust 1.99 makes [them stable](https://blog.rust-lang.org/)."
+        );
+        assert_eq!(p.title, "Async closures are stable");
+    }
+
+    #[test]
     fn an_upgrade_card_names_its_model_and_a_release_card_only_links_out() {
         use grokhub_core::local_model_news::{self as lm, Suggestion};
         use grokhub_core::local_picker::{BenchCache, CpuSimd, Memory, Profile};

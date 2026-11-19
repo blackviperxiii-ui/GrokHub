@@ -1,0 +1,1 @@
+- Pulse: written posts now read the top two stories' own pages before writing, so a post explains what the article says and Show more lists its key facts, its score and when it was published.

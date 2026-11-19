@@ -806,8 +806,10 @@ mod tests {
             let _config = grokhub_agent::perm::ConfigGuard::set(&config);
             let path = grokhub_agent::session_file("shell-code").expect("path");
             let raw = std::fs::read_to_string(&path).expect("read");
-            let mut lines: Vec<serde_json::Value> =
-                raw.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+            let mut lines: Vec<serde_json::Value> = raw
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect();
             if let Some(meta) = lines.first_mut() {
                 meta["cwd"] = serde_json::json!(pier.to_string_lossy());
             }

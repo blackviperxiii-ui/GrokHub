@@ -1555,6 +1555,188 @@ pub fn gallery_images(html: &str, page_url: &str) -> Vec<String> {
     out
 }
 
+/// What a source page says about itself, as plain text: its own summary,
+/// its first real paragraphs, who wrote it and when. All of it is outside
+/// text, so the writer gets it fenced as data, never as instructions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageContext {
+    /// `og:description`, else `description`, else `twitter:description`.
+    pub description: String,
+    /// The first paragraphs of the article, else the main part, else the body.
+    pub lead: String,
+    pub author: Option<String>,
+    pub published_ms: Option<u64>,
+}
+
+/// A paragraph shorter than this is a caption, a byline or a button.
+const LEAD_MIN_CHARS: usize = 60;
+/// Words that mark a paragraph as the page's furniture, not its story.
+const LEAD_SKIP: &[&str] = &[
+    "cookie",
+    "subscribe",
+    "newsletter",
+    "sign in",
+    "sign up",
+    "log in",
+    "javascript",
+    "advertisement",
+    "all rights reserved",
+];
+/// Longest author name kept.
+const AUTHOR_CHARS: usize = 80;
+
+/// Read a page's own text for a post: its description and its first
+/// paragraphs, each at most `max_chars`, plus its author and published time.
+/// A page that is not HTML, or holds only short lines, gives empty text.
+pub fn page_context(html: &str, max_chars: usize) -> PageContext {
+    use crate::pulse_sources::{decode_entities, parse_date_ms, strip_tags};
+    let lower = html.to_ascii_lowercase();
+    let flat = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let description = ["og:description", "description", "twitter:description"]
+        .iter()
+        .filter_map(|key| meta_content(html, &lower, key))
+        .map(|raw| flat(&strip_tags(&decode_entities(raw))))
+        .find(|text| !text.is_empty())
+        .map(|text| clip_chars(&text, max_chars))
+        .unwrap_or_default();
+    let (from, to) = ["article", "main", "body"]
+        .iter()
+        .find_map(|tag| element_span(&lower, tag))
+        .unwrap_or((0, lower.len()));
+    let mut lead = String::new();
+    let mut at = from;
+    while lead.chars().count() < max_chars {
+        let Some((start, end, next)) = next_paragraph(&lower, at, to) else {
+            break;
+        };
+        at = next;
+        let text = flat(&decode_entities(&strip_tags(&html[start..end])));
+        let text_lower = text.to_lowercase();
+        if text.chars().count() < LEAD_MIN_CHARS
+            || text == description
+            || LEAD_SKIP.iter().any(|w| text_lower.contains(w))
+        {
+            continue;
+        }
+        if !lead.is_empty() {
+            lead.push(' ');
+        }
+        lead.push_str(&text);
+    }
+    let author = ["author", "article:author"]
+        .iter()
+        .filter_map(|key| meta_content(html, &lower, key))
+        .map(|raw| plain_name(&flat(&strip_tags(&decode_entities(raw)))))
+        .find(|name| !name.is_empty() && !name.contains("://"))
+        .map(|name| clip_chars(&name, AUTHOR_CHARS));
+    PageContext {
+        description,
+        lead: clip_chars(&lead, max_chars),
+        author,
+        published_ms: meta_content(html, &lower, "article:published_time").and_then(parse_date_ms),
+    }
+}
+
+/// The first non-empty `content` of a `<meta>` whose `property` or `name` is `key`.
+fn meta_content<'a>(html: &'a str, lower: &str, key: &str) -> Option<&'a str> {
+    let mut from = 0;
+    while let Some(pos) = lower[from..].find("<meta") {
+        let start = from + pos;
+        let end = lower[start..]
+            .find('>')
+            .map(|e| start + e)
+            .unwrap_or(lower.len());
+        let (tag, tag_lower) = (&html[start..end], &lower[start..end]);
+        from = end;
+        let named = [
+            attr(tag, tag_lower, "property"),
+            attr(tag, tag_lower, "name"),
+        ]
+        .iter()
+        .flatten()
+        .any(|n| n.trim().eq_ignore_ascii_case(key));
+        if let Some(content) =
+            attr(tag, tag_lower, "content").filter(|c| named && !c.trim().is_empty())
+        {
+            return Some(content);
+        }
+    }
+    None
+}
+
+/// Where the first `<tag …>` element's content starts and ends, in bytes.
+fn element_span(lower: &str, tag: &str) -> Option<(usize, usize)> {
+    let open = format!("<{tag}");
+    let mut from = 0;
+    loop {
+        let at = from + lower[from..].find(&open)?;
+        let after = at + open.len();
+        from = after;
+        if !matches!(
+            lower.as_bytes().get(after),
+            Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
+        ) {
+            continue;
+        }
+        let start = after + lower[after..].find('>')? + 1;
+        let end = lower[start..]
+            .find(&format!("</{tag}"))
+            .map_or(lower.len(), |e| start + e);
+        return Some((start, end));
+    }
+}
+
+/// The next `<p>` between `from` and `to`: its content's start and end, and
+/// where to look after it.
+fn next_paragraph(lower: &str, from: usize, to: usize) -> Option<(usize, usize, usize)> {
+    let mut at = from;
+    loop {
+        let open = at + lower.get(at..to)?.find("<p")?;
+        at = open + 2;
+        if !matches!(
+            lower.as_bytes().get(at),
+            Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
+        ) {
+            continue;
+        }
+        let start = at + lower[at..to].find('>')? + 1;
+        // An unclosed paragraph ends where the next one opens. Looking for
+        // the close only up to there keeps a page of unclosed `<p>` linear.
+        let next_open = lower[start..to].find("<p").map_or(to, |e| start + e);
+        let end = lower[start..next_open]
+            .find("</p")
+            .map_or(next_open, |e| start + e);
+        return Some((start, end, end));
+    }
+}
+
+/// A name with the characters that would make it markdown or a tag dropped.
+fn plain_name(name: &str) -> String {
+    let kept: String = name
+        .chars()
+        .filter(|c| {
+            !matches!(
+                c,
+                '[' | ']' | '(' | ')' | '<' | '>' | '*' | '_' | '`' | '#' | '|' | '\\' | '!'
+            )
+        })
+        .collect();
+    kept.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// At most `max` characters, cut at a word with "…" when it was longer.
+fn clip_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    if let Some(cut) = out.rfind(' ') {
+        out.truncate(cut);
+    }
+    out.push('…');
+    out
+}
+
 /// Most images on one post.
 pub const GALLERY_MAX: usize = 3;
 /// An image marked narrower or shorter than this is not a content image.
@@ -2702,6 +2884,96 @@ mod tests {
             digest.body.as_deref(),
             Some("• Repo synced: ok\n• Price check ran: ok")
         );
+    }
+
+    const STORY_PAGE: &str = r#"<html><head>
+<meta property="og:description" content="Async closures are stable.">
+<meta name="description" content="Rust 1.99 notes">
+<meta name="author" content="The *Rust* [Release](x) Team">
+<meta property="article:published_time" content="2026-10-20T12:00:00Z">
+</head><body>
+<nav><p>Home, Blog, Releases, Community, Install, Learn, Tools, Governance, Get help</p></nav>
+<article class="post">
+<p>Rust 1.99</p>
+<p>We use cookies to improve your reading experience. Accept cookies to keep reading this.</p>
+<p>Rust 1.99 stabilizes async closures, so <a href="/x">closures</a> can be <em>awaited</em> directly &amp; without boxing.</p>
+<pre>let f = async || {}; // a long code sample that should never be read as a paragraph at all</pre>
+<p class="lead">The release also ships 12 new Clippy lints and faster incremental builds on Windows.</p>
+</article>
+<p>Copyright notice and other footer text that sits outside the article element.</p>
+</body></html>"#;
+
+    #[test]
+    fn page_context_reads_description_and_article_paragraphs() {
+        let page = page_context(STORY_PAGE, 1200);
+        assert_eq!(page.description, "Async closures are stable.");
+        assert_eq!(
+            page.lead,
+            "Rust 1.99 stabilizes async closures, so closures can be awaited directly & without boxing. The release also ships 12 new Clippy lints and faster incremental builds on Windows."
+        );
+        assert!(!page.lead.contains("cookies"), "{}", page.lead);
+        assert_eq!(page.author.as_deref(), Some("The Rust Releasex Team"));
+        assert_eq!(page.published_ms, Some(1_792_497_600_000));
+    }
+
+    #[test]
+    fn page_context_caps_text() {
+        let para = format!(
+            "<p>{}</p>",
+            "Async closures ship in this release today. ".repeat(10)
+        );
+        let html = format!(
+            "<meta name=\"description\" content=\"{}\"><main>{}</main>",
+            "word ".repeat(400),
+            para.repeat(10)
+        );
+        let page = page_context(&html, 1200);
+        assert!(page.lead.chars().count() <= 1200, "{}", page.lead.len());
+        assert!(page.lead.ends_with('…'), "{}", page.lead);
+        assert!(page.description.chars().count() <= 1200);
+        assert!(page.description.ends_with('…'));
+    }
+
+    #[test]
+    fn page_context_reads_a_huge_page_of_unclosed_paragraphs_in_one_pass() {
+        // A 2 MB page (the page cap) where no paragraph is ever closed.
+        let mut html = "<p>ab".repeat(400_000);
+        html.push_str(
+            "<p>The one real paragraph of this page is long enough to be read as the story.",
+        );
+        let started = std::time::Instant::now();
+        let page = page_context(&html, 1200);
+        assert_eq!(
+            page.lead,
+            "The one real paragraph of this page is long enough to be read as the story."
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn page_context_reads_published_time() {
+        let html = r#"<meta property="article:published_time" content="2026-10-20T12:00:00Z">"#;
+        assert_eq!(
+            page_context(html, 1200).published_ms,
+            Some(1_792_497_600_000)
+        );
+        assert_eq!(page_context("<p>x</p>", 1200).published_ms, None);
+    }
+
+    #[test]
+    fn page_context_of_a_page_that_is_not_html_is_empty() {
+        let json = r#"{"title":"Rust 1.99 ships async closures and much more for everyone today","url":"https://x"}"#;
+        assert_eq!(page_context(json, 1200), PageContext::default());
+        let binary =
+            String::from_utf8_lossy(&[0x25, 0x50, 0x44, 0x46, 0xff, 0x00, 0x3c, 0x70]).into_owned();
+        assert_eq!(page_context(&binary, 1200), PageContext::default());
+        // An author that is a link is no name.
+        let linked = r#"<meta name="author" content="https://example.com/team">"#;
+        assert_eq!(page_context(linked, 1200).author, None);
     }
 
     #[test]
