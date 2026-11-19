@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use grokhub_agent::check_decide::Decision;
 use grokhub_agent::ModelClient;
 use grokhub_core::automation_check::{check_step, CheckStep};
 use grokhub_core::scheduler_lease::{
@@ -31,6 +32,9 @@ use crate::automations::{self, Clock, RunResult};
 pub const RAN_EVENT: &str = "automations://ran";
 /// The stop reason of a run that was the check's output alone ("without AI").
 pub const SCRIPT_ONLY: &str = "script_only";
+/// The stop reason of a run the decision step ended: the change didn't call
+/// for action.
+pub const DECIDED_NO: &str = "decided_no";
 /// How often the scheduler looks for due jobs.
 const TICK: Duration = Duration::from_secs(30);
 
@@ -88,13 +92,30 @@ pub fn tick(
     })
 }
 
-/// `tick`, with a custom check-command runner (for tests).
+/// `tick`, with a custom check-command runner (for tests). Nothing is
+/// judged before a run.
 pub fn tick_with_check(
     config_dir: &Path,
     clock: &dyn Fn() -> LocalClock,
     pid: u32,
     run: &mut dyn FnMut(&Automation) -> RunResult,
     check: &mut dyn FnMut(&str) -> String,
+) -> Result<Vec<Fired>, String> {
+    tick_deciding(config_dir, clock, pid, run, check, &mut |_, _| None)
+}
+
+/// `tick_with_check`, with the decision step: for an "only when it changes"
+/// job whose output changed, `decide(job, new lines)` is asked first. A no
+/// ends the run with the reason and no agent turn; a yes runs the job with
+/// only the lines the judge picked. `None` (the judge failed) runs the job
+/// with every new line.
+pub fn tick_deciding(
+    config_dir: &Path,
+    clock: &dyn Fn() -> LocalClock,
+    pid: u32,
+    run: &mut dyn FnMut(&Automation) -> RunResult,
+    check: &mut dyn FnMut(&str) -> String,
+    decide: &mut dyn FnMut(&Automation, &str) -> Option<Decision>,
 ) -> Result<Vec<Fired>, String> {
     let mut fired = Vec::new();
     let mut seen = HashSet::new();
@@ -136,15 +157,37 @@ pub fn tick_with_check(
                     error: String::new(),
                     stop: SCRIPT_ONLY.into(),
                 },
-                Some(CheckStep::Ask { shown, .. }) => run(&Automation {
-                    instructions: grokhub_core::automation_check::check_prompt(
-                        &job.instructions,
-                        &job.check_command,
-                        shown,
-                        job.gate.on_change,
-                    ),
-                    ..job.clone()
-                }),
+                Some(CheckStep::Ask { shown, .. }) => {
+                    let decision = if job.gate.on_change {
+                        decide(&job, shown)
+                    } else {
+                        None
+                    };
+                    match decision {
+                        Some(d) if !d.act => RunResult {
+                            text: format!("Checked, nothing to do: {}", d.why),
+                            error: String::new(),
+                            stop: DECIDED_NO.into(),
+                        },
+                        d => {
+                            let picked = d.map(|d| d.items.join("\n")).unwrap_or_default();
+                            let shown = if picked.trim().is_empty() {
+                                shown.as_str()
+                            } else {
+                                picked.as_str()
+                            };
+                            run(&Automation {
+                                instructions: grokhub_core::automation_check::check_prompt(
+                                    &job.instructions,
+                                    &job.check_command,
+                                    shown,
+                                    job.gate.on_change,
+                                ),
+                                ..job.clone()
+                            })
+                        }
+                    }
+                }
                 _ => run(&job),
             },
             // A Run now of it started after the claim; that run counts.
@@ -201,7 +244,28 @@ pub fn start(
                 stop: "error".into(),
             },
         };
-        if let Ok(fired) = tick(&config_dir, &clock, std::process::id(), &mut run) {
+        // The decision step uses the same route as the run, with no tools.
+        let mut decide = |job: &Automation, shown: &str| {
+            let (client, model, _, _) = route().ok()?;
+            let _config = grokhub_agent::perm::ConfigGuard::set(&config_dir);
+            grokhub_agent::check_decide::decide(
+                client.as_ref(),
+                &grokhub_agent::CancelToken::new(),
+                &model,
+                &format!("shell-auto-{}-decide", job.id),
+                &job.instructions,
+                &job.check_command,
+                shown,
+            )
+        };
+        if let Ok(fired) = tick_deciding(
+            &config_dir,
+            &clock,
+            std::process::id(),
+            &mut run,
+            &mut |cmd| grokhub_core::run_night_check_command(cmd),
+            &mut decide,
+        ) {
             for f in &fired {
                 emit(f);
             }
@@ -668,5 +732,113 @@ mod tests {
         assert_eq!(row.run_count, 1);
         assert_eq!(row.health.outcome, grokhub_core::AutoOutcome::Ok);
         assert_eq!(row.gate.last_output, "backed up 3 files");
+    }
+
+    #[test]
+    fn the_decision_step_ends_a_no_with_its_reason_and_runs_a_yes_on_the_picked_lines() {
+        let (dir, nine) = gated_job("decide", r#"{"onChange":true}"#);
+        let mut asks = Vec::new();
+        let mut judged = Vec::new();
+        let mut answers = vec![
+            Some(Decision {
+                act: true,
+                why: "sda1 is nearly full.".into(),
+                items: vec!["/dev/sda1 91%".into()],
+            }),
+            Some(Decision {
+                act: false,
+                why: "Every disk has room.".into(),
+                items: Vec::new(),
+            }),
+        ]
+        .into_iter();
+        let mut run = |job: &Automation| {
+            asks.push(job.instructions.clone());
+            ok("warned")
+        };
+        let mut decide = |job: &Automation, shown: &str| {
+            judged.push((job.id.clone(), shown.to_string()));
+            answers.next().flatten()
+        };
+        let yes = tick_deciding(
+            &dir,
+            &at(nine),
+            PID,
+            &mut run,
+            &mut |_| receipt("/dev/sda1 91%\n/dev/sdb1 12%"),
+            &mut decide,
+        )
+        .expect("tick");
+        assert_eq!(yes[0].result.text, "warned");
+        let no = tick_deciding(
+            &dir,
+            &at(nine + DAY),
+            PID,
+            &mut run,
+            &mut |_| receipt("/dev/sda1 91%\n/dev/sdb1 13%"),
+            &mut decide,
+        )
+        .expect("tick");
+        assert_eq!(
+            no[0].result,
+            RunResult {
+                text: "Checked, nothing to do: Every disk has room.".into(),
+                error: String::new(),
+                stop: DECIDED_NO.into(),
+            }
+        );
+        assert_eq!(
+            judged,
+            vec![
+                (
+                    "auto-disk".to_string(),
+                    "/dev/sda1 91%\n/dev/sdb1 12%".to_string()
+                ),
+                ("auto-disk".to_string(), "/dev/sdb1 13%".to_string()),
+            ]
+        );
+        assert_eq!(
+            asks,
+            vec!["Tell me if a disk is nearly full.\n\nThe check command `df -h` printed these new lines since the last run:\n```\n/dev/sda1 91%\n```".to_string()]
+        );
+        // A judged no still moves the diff base, so the same lines aren't judged again.
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.gate.last_output, "/dev/sda1 91%\n/dev/sdb1 13%");
+        assert_eq!(row.health.outcome, grokhub_core::AutoOutcome::Ok);
+    }
+
+    #[test]
+    fn a_failed_judge_runs_the_job_on_every_new_line_and_a_plain_check_is_never_judged() {
+        let (dir, nine) = gated_job("judge-down", r#"{"onChange":true}"#);
+        let mut asks = Vec::new();
+        let fired = tick_deciding(
+            &dir,
+            &at(nine),
+            PID,
+            &mut |job| {
+                asks.push(job.instructions.clone());
+                ok("ran")
+            },
+            &mut |_| receipt("/dev/sda1 91%"),
+            &mut |_, _| None,
+        )
+        .expect("tick");
+        assert_eq!(fired[0].result.text, "ran");
+        assert!(asks[0].ends_with("```\n/dev/sda1 91%\n```"), "{}", asks[0]);
+        let (plain, nine) = gated_job("plain", "{}");
+        let mut judged = 0;
+        tick_deciding(
+            &plain,
+            &at(nine),
+            PID,
+            &mut |_| ok("ran"),
+            &mut |_| receipt("/dev/sda1 91%"),
+            &mut |_, _| {
+                judged += 1;
+                None
+            },
+        )
+        .expect("tick");
+        assert_eq!(judged, 0);
     }
 }
