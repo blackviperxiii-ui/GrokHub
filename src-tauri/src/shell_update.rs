@@ -193,6 +193,8 @@ pub struct UpdateView {
     pub note: Option<String>,
     /// The version a check found, ready to install.
     pub available: Option<String>,
+    /// Set when the last update was rolled back because it didn't stay up.
+    pub rolled_back: Option<String>,
 }
 
 impl UpdateView {
@@ -210,6 +212,10 @@ impl UpdateView {
                 not_updatable_note(os, config_dir, channel, &exe)
             }),
             available: None,
+            #[cfg(desktop)]
+            rolled_back: crate::update_rollback::rolled_back_note(config_dir),
+            #[cfg(not(desktop))]
+            rolled_back: None,
         }
     }
 }
@@ -273,10 +279,18 @@ pub mod plugin {
         let update = check(app, config_dir)
             .await?
             .ok_or("no update to install")?;
-        update
-            .download_and_install(|_, _| {}, || {})
-            .await
-            .map_err(|e| format!("update not installed: {e}"))?;
+        // An AppImage keeps a copy of itself, so a new version that can't
+        // stay up is rolled back (crate::update_rollback). Without the copy
+        // the update still installs.
+        let appimage = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from);
+        if let Some(target) = appimage.as_deref().filter(|p| p.is_file()) {
+            let _ =
+                crate::update_rollback::prepare(config_dir, target, &version(), &update.version);
+        }
+        if let Err(e) = update.download_and_install(|_, _| {}, || {}).await {
+            crate::update_rollback::abandon(config_dir);
+            return Err(format!("update not installed: {e}"));
+        }
         app.restart()
     }
 }
