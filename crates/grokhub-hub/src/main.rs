@@ -1,6 +1,7 @@
 //! LAN hub — same /v1 contract as grokhub --hub — plus the headless tools
 //! the desktop shell has no console for (`--mcp-self`, `--mcp-desktop`,
-//! `--mcp-cua`, `--doctor`, `--oauth`, `--update`, `--askpass`, `bench local`).
+//! `--mcp-cua`, `--mcp-bridge`, `--doctor`, `--oauth`, `--update`, `--askpass`,
+//! `bench local`).
 
 use grokhub_core::DEFAULT_PORT;
 use grokhub_hub::{askpass_socket, parse_args, Launch};
@@ -46,6 +47,7 @@ grokhub-hub              listen on GROKHUB_HUB_PORT or :18766 (also --hub)\n  \
 grokhub-hub --mcp-self   the agent's skill, connection and automation tools on stdin\n  \
 grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n  \
 grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n  \
+grokhub-hub --mcp-bridge read-only unsealed memory search and automation status on stdin\n  \
 grokhub-hub --doctor     auth / memory / hub checks\n  \
 grokhub-hub --oauth      sign in with Grok (device code) for the desktop app\n  \
 grokhub-hub --update     how this install updates (runs nothing)\n  \
@@ -83,6 +85,10 @@ fn main() {
             use_os_stores();
             grokhub_desktop::host::install_standalone();
             std::process::exit(grokhub_desktop::run_cua_stdio());
+        }
+        Launch::McpBridge => {
+            let dir = grokhub_core::paths::config_dir();
+            std::process::exit(grokhub_hub::mcp_bridge::run_stdio(&dir));
         }
         Launch::Doctor => {
             let dir = grokhub_core::paths::config_dir();
@@ -163,6 +169,7 @@ mod tests {
             "  grokhub-hub --askpass <socket>  answer a sudo prompt (the app runs this)\n",
             "  grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n",
             "  grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n",
+            "  grokhub-hub --mcp-bridge read-only unsealed memory search and automation status on stdin\n",
             "  grokhub-hub --doctor     auth / memory / hub checks\n",
             "  grokhub-hub --oauth      sign in with Grok (device code) for the desktop app\n",
             "  grokhub-hub --update     how this install updates (runs nothing)\n",

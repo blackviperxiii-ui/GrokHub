@@ -3,6 +3,7 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod doctor;
+pub mod mcp_bridge;
 pub mod oauth_cli;
 mod server;
 pub mod update;
@@ -23,6 +24,8 @@ pub enum Launch {
     McpDesktop,
     /// The Cua Driver gate proxy on stdio (Linux, `cuaDriver` flag).
     McpCua,
+    /// Read-only unsealed AMR + automation status for local IDE MCP clients.
+    McpBridge,
     /// Auth, memory folder and hub checks; exits 1 on any ERR.
     Doctor,
     /// Says how this install updates. Runs nothing.
@@ -53,6 +56,7 @@ pub fn parse_args(args: &[String]) -> Launch {
             "--mcp-self" => return Launch::McpSelf,
             "--mcp-desktop" => return Launch::McpDesktop,
             "--mcp-cua" => return Launch::McpCua,
+            "--mcp-bridge" => return Launch::McpBridge,
             "--doctor" => return Launch::Doctor,
             "--update" => return Launch::Update,
             "--oauth" => return Launch::OAuth,
@@ -252,6 +256,10 @@ mod tests {
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "--mcp-cua"])),
             Launch::McpCua
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--mcp-bridge"])),
+            Launch::McpBridge
         );
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "--doctor"])),
