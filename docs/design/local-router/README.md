@@ -236,64 +236,108 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      cloud route; a voice that dynamic chat hands an 18+ turn to is known
      only once that step ran.
 7. **Vision.** Load the vision projector (`--mmproj`) with a model that
-   has one when a picture is attached to an on-device chat. Only the first
-   part is built (`route/local_vision.rs`): a picture no longer breaks a
-   chat that runs here. On-device vision (loading a projector, counting it
-   in the residency ledger and the fit checks with the parent and its
-   drafter, stepping down a tier when they can't fit) is not built yet, so
-   this step stays open.
+   has one when a picture is attached to an on-device chat. Both parts are
+   built: a picture no longer breaks a chat that runs here, and a Gemma 4
+   model whose projector is on disk reads it. The step stays open for the
+   real-app check and the items under "Not yet".
    - Before this step a picture in a chat that ran here (offline, 18+, or
      the no-keys and cloud-down fallbacks) failed: the local tier lists no
      `input_modalities`, so `policy::fits` let it take the picture, the
      chat server had no `--mmproj`, and `llama-server` refused the
      `image_url` part. The picture stayed in history, so every later local
      turn of that chat failed the same way.
-   - On device: no launch carries a projector yet, so `serve_request` turns
-     every picture into a short text note (`BLIND_NOTE`). When the
-     person's newest message carried a picture, the line under the reply
-     adds "The picture wasn't read: no model on this computer can see
-     pictures yet." (alone, when the reply names no model). An older
-     picture the chat carries adds nothing.
+   - Engine check (b12017 Vulkan, a 16 GB card, Linux): an MTP draft
+     (`--spec-type draft-mtp --spec-draft-model <file> -ngld all
+     --spec-draft-n-max 4`) runs beside `--mmproj` for Gemma 4 E2B, E4B,
+     12B and 26B-A4B (26B with `--n-cpu-moe 12`), and each read a test
+     picture. Draft acceptance was 46-73% on picture turns and 71-96% on
+     text. Strict pairing doesn't block vision. Without `--mmproj` a
+     picture request gets HTTP 500. The E2B projector took about 1.1 GB
+     of VRAM over the pair at `-c 8192`. On the CPU (`-ngl 0 --device none
+     -ngld 0`) it ran at about 63 tok/s; with `--no-mmproj-offload` VRAM
+     stayed flat.
+   - Catalog (version 5): five `vision-projector` rows, the repos'
+     `mmproj-model-bf16.gguf` under a file name of their own, pinned by
+     SHA-256, each naming its chat row in `pairs_with`; the Gemma 4 chat
+     rows name theirs in `projector` (`LocalModel::projector`). A
+     projector downloads into the models folder, beside its chat model,
+     from Download models → Other. No row claims the `vision` badge.
+   - Launch: `LaunchArgs::projector` adds `--mmproj <file>`, and
+     `--no-mmproj-offload` when `ngl == 0` or `cpu_only` (`--device none`
+     alone doesn't keep the projector off the GPU: llama.cpp's `clip_ctx`
+     starts the GPU backend on its own). The projector is planned only when
+     the engine's `--help` lists `--mmproj`, and the second flag only when
+     it lists that.
+   - Sizing: a projector takes its file plus 15% (`projector_mb`; the
+     catalog's `run_mb` for each projector row says the same). It comes out
+     of the room like the drafter (`autoconfig_beside`), the drafter's room
+     check counts it (`local_spec::pair_need_mb`), and the swap planner
+     sizes a model with it (`vision_mb`: pair plus projector). A vision plan
+     that doesn't fit (`vision_launch_with`, `PROJECTOR_NO_ROOM`) never
+     writes `LAST_REFUSAL`: the pair itself may fit. `warm_fits` refuses a
+     projector; the residency ledger (`chat_entry`, `projector_mem`) and
+     the start timeout (`load_bytes`) count it.
+   - Swap: `serve_request` marks a request whose newest person message
+     carries a picture (`local_vision::PictureGuard`; a helper's turn never
+     does). When what runs can't see it, `swap_plan` asks
+     `local_swap::vision_plan`, beside `plan()`: the model `plan()` aims at
+     loads with its projector when its pair and projector fit, else the
+     biggest smaller model whose projector is on disk and fits
+     (`StandIn::Vision`, "Your pick comes back once the chat is quiet.").
+     A reply in flight keeps its model; Keep loaded and a forced file keep
+     the pick, which may load its own projector; a low battery or a game
+     keeps the model it chose; held refusals aren't tried. A picture loads
+     now, past the cooldown, like an ask. A launch that already reads
+     pictures keeps its model for the next picture. At start
+     (`start_seeing`) a vision launch that is refused steps down to the
+     next smaller model with a projector, and with none left the planned
+     model starts without one.
+   - A failed start sheds its projector first (`shed`), ahead of the
+     drop-draft retry and the out-of-memory back-off. When the same launch
+     then runs without it (not out of memory, drafter kept), the engine
+     refused the projector with that model: `vision_refused.json`, beside
+     `autotune.json`, keeps a lasting record by model file and engine
+     build, and vision leaves that model alone until the engine changes. A
+     governor restart with the same plan keeps the projector
+     (`replan_vision_for`).
+   - Reading: `serve_request` turns pictures into `BLIND_NOTE` only when
+     the server the request was admitted to has no projector
+     (`LocalRuntime::sees_pictures`, from the sidecar's `Endpoint`);
+     otherwise they go as they are. When the person's newest message
+     carried a picture that wasn't read, the line under the reply adds
+     "The picture wasn't read: the model that answered on this computer
+     can't see pictures." (alone, when the reply names no model).
    - Routing: online, a chat is never routed to the device (`LOCAL_CLASSES`
      holds background steps only), so a chat picture already goes to an
-     online model by the image fit. For a step the device would take (a
-     warm background step), with a picture in the newest message, when the
-     step may leave this computer (not 18+, voice not Local only, not
-     sensitive without your grant, not offline), `Router::choose` picks
-     again among the online models listed as reading pictures
+     online model by the image fit. A background step rides on the model
+     loaded now and never swaps one, so `LocalGate::sees_pictures` is
+     whether that launch carries its projector. For a step the device would
+     take, with a picture in the newest message, when the device can't see
+     it and the step may leave this computer (not 18+, voice not Local
+     only, not sensitive without your grant, not offline), `Router::choose`
+     picks again among the online models listed as reading pictures
      (`input_modalities` holds `image`) and pushes `local:no_vision`. A
      model with unknown input kinds doesn't count. With none left, the
      device keeps the step, without the picture. A step that went online
      anyway gets no `local:no_vision`.
-   - Left for the next part, in order:
-     1. Real-engine check on b12017: does a draft run beside `--mmproj`?
-        Older builds refused speculative decoding with a projector. If it
-        refuses, strict pairing means no on-device vision for any paired
-        Gemma row.
-     2. Launch: a projector field on `LaunchArgs` that adds `--mmproj
-        <file>`, plus `--no-mmproj-offload` whenever `ngl == 0` or
-        `cpu_only`. `--device none` does not keep the projector off the
-        GPU: llama.cpp's `clip_ctx` starts the GPU backend whenever
-        `mmproj_use_gpu` is set and never reads the `--device` list. Both
-        flags are in the pinned b12017 `--help`.
-     3. Catalog: five `vision-projector` rows (`remote_file =
-        "mmproj-model-bf16.gguf"`, a unique `file` each) with `projector =`
-        on the Gemma 4 chat rows, version 5. Sizes (bytes) from the Hub:
-        E2B 986,833,408; E4B 991,552,000; 12B 175,115,776; 26B-A4B
-        1,194,827,872; 31B 1,200,726,112. The SHA-256 values still need
-        fetching; the Hub listing reached from this box shows sizes only.
-     4. Sizing: `vision_mb` (pair plus projector), the projector counted in
-        `planned_as`, `chat_entry`/`chat_mem` and `load_bytes`;
-        `warm_fits` refuses a projector; a plan sized with the projector
-        never writes `LAST_REFUSAL`.
-     5. Swap: `vision_plan` beside `plan()` (keep-loaded, forced file,
-        held refusals and gaming rules apply), `StandIn::Vision` ("Your
-        pick comes back once the chat is quiet."), the no-projector retry
-        ahead of the drop-draft and out-of-memory branches, and a lasting
-        record when the engine refuses a draft with a projector.
-     6. A "can see pictures" input on `LocalGate`, from the same inputs the
-        swap builds, so routing and loading agree; `serve_request` then
-        keeps pictures for a launch with its projector.
+   - Not yet:
+     1. The real-app check: on Linux, a chat that runs here gets a picture,
+        loads the E2B (or the pick) with its projector, reads it, and the
+        next text turn stays on that launch. Only the engine was run by
+        hand; the app path is covered by unit tests.
+     2. A projector doesn't download with its chat model the way a drafter
+        does (the Chat tab's "rides right behind", the drafter job in the
+        desktop app); you fetch it from Download models → Other.
+     3. A projector is found only beside its model's file, not in the
+        other models folder.
+     4. A dead-server restart, a governor stop and reload, and the idle
+        reload start without the projector; the next picture loads it
+        again. A warm relaunch never carries one.
+     5. `tick_scale`'s step-down sizes a running model by its pair, not its
+        projector, and the speed test and the refusal check run without
+        the projector.
+     6. The record of a refused projector keys on the engine file's size,
+        so a rebuilt engine of the same size isn't retried.
    - Open: a screenshot or `read_file` image the model took itself counts
      as the person's newest message (`last_user_text`). Keeping those on
      device is a product call.
