@@ -1224,7 +1224,9 @@ pub fn save_bench_exchange(
             },
             grokhub_agent::InputItem::Message {
                 role: "assistant".into(),
-                content: vec![grokhub_agent::ContentPart::InputText(reply_text.to_string())],
+                content: vec![grokhub_agent::ContentPart::InputText(
+                    reply_text.to_string(),
+                )],
             },
         ],
         &grokhub_agent::Usage::default(),
