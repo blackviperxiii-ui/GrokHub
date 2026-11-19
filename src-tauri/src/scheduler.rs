@@ -35,6 +35,8 @@ pub const SCRIPT_ONLY: &str = "script_only";
 /// The stop reason of a run the decision step ended: the change didn't call
 /// for action.
 pub const DECIDED_NO: &str = "decided_no";
+/// The stop reason when preflight blocked the job before a claim or model call.
+pub const PREFLIGHT: &str = grokhub_core::PREFLIGHT_STOP;
 /// How often the scheduler looks for due jobs.
 const TICK: Duration = Duration::from_secs(30);
 
@@ -125,11 +127,13 @@ pub fn tick_deciding(
         run,
         check,
         decide,
+        &mut |_, _| None,
     )
 }
 
 /// `tick_deciding` for the lease `owner`: the open app as `Shell`, or the
 /// headless run as `Headless`, which yields to an open app.
+/// `preflight(job, script_only)` returns a block reason before claim/decide.
 pub fn tick_as(
     owner: LeaseOwner,
     config_dir: &Path,
@@ -138,6 +142,7 @@ pub fn tick_as(
     run: &mut dyn FnMut(&Automation) -> RunResult,
     check: &mut dyn FnMut(&str) -> String,
     decide: &mut dyn FnMut(&Automation, &str) -> Option<Decision>,
+    preflight: &mut dyn FnMut(&Automation, bool) -> Option<String>,
 ) -> Result<Vec<Fired>, String> {
     let may_fire = match owner {
         LeaseOwner::Headless => headless_may_fire,
@@ -168,7 +173,25 @@ pub fn tick_as(
                     seen.insert(pending.id);
                     continue;
                 }
-                step = Some((pending.id, next));
+                step = Some((pending.id.clone(), next));
+            }
+            let script_only = matches!(
+                step.as_ref().map(|(_, s)| s),
+                Some(CheckStep::ScriptOnly { .. })
+            );
+            if let Some(why) = preflight(&pending, script_only) {
+                automations::settle_preflight(config_dir, &pending.id, &why, now)?;
+                seen.insert(pending.id.clone());
+                fired.push(Fired {
+                    id: pending.id,
+                    name: pending.name,
+                    result: RunResult {
+                        text: String::new(),
+                        error: why,
+                        stop: PREFLIGHT.into(),
+                    },
+                });
+                continue;
             }
         }
         let Some(job) = automations::claim_due(config_dir, now, &seen)? else {
@@ -319,6 +342,9 @@ fn tick_live(
             shown,
         )
     };
+    let mut preflight = |job: &Automation, script_only: bool| {
+        live_preflight_block(config_dir, job, script_only, route)
+    };
     tick_as(
         owner,
         config_dir,
@@ -327,7 +353,56 @@ fn tick_live(
         &mut run,
         &mut |cmd| grokhub_core::run_night_check_command(cmd),
         &mut decide,
+        &mut preflight,
     )
+}
+
+/// Build a preflight block from the live route and configured connectors.
+fn live_preflight_block(
+    config_dir: &Path,
+    job: &Automation,
+    script_only: bool,
+    route: &dyn Fn() -> Result<Route, String>,
+) -> Option<String> {
+    let (route_ready, route_error, workspace) = match route() {
+        Ok((_, _, workspace, _)) => (true, String::new(), workspace),
+        Err(e) => (false, e, config_dir.to_path_buf()),
+    };
+    let rows = crate::connectors::list(&workspace);
+    let mut ready = Vec::new();
+    let mut blocked = Vec::new();
+    let mut configured = Vec::new();
+    for row in &rows {
+        configured.push(row.name.clone());
+        if !row.enabled || row.needs_sign_in || row.status == "error" || row.status == "disabled"
+        {
+            let detail = if row.needs_sign_in {
+                "needs sign-in".into()
+            } else if !row.error.is_empty() {
+                row.error.clone()
+            } else if !row.enabled || row.status == "disabled" {
+                "disabled".into()
+            } else {
+                row.status.clone()
+            };
+            blocked.push((row.name.clone(), detail));
+        } else {
+            ready.push(row.name.clone());
+        }
+    }
+    let home = grokhub_core::user_home()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ctx = grokhub_core::PreflightCtx {
+        route_ready,
+        route_error: &route_error,
+        ready_connectors: &ready,
+        blocked_connectors: &blocked,
+        configured_connectors: &configured,
+        path_env: None,
+        home: &home,
+    };
+    grokhub_core::preflight(job, script_only, &ctx).map(|b| b.line())
 }
 
 #[cfg(test)]
@@ -921,6 +996,7 @@ mod tests {
             },
             &mut |_| String::new(),
             &mut |_, _| None,
+            &mut |_, _| None,
         )
         .expect("tick");
         assert_eq!((fired.len(), runs), (0, 0));
@@ -932,6 +1008,7 @@ mod tests {
             PID + 1,
             &mut |_| ok("headless ran"),
             &mut |_| String::new(),
+            &mut |_, _| None,
             &mut |_, _| None,
         )
         .expect("tick");
@@ -947,5 +1024,45 @@ mod tests {
         // An app that opens now is not held off by the headless beat.
         tick(&dir, &at(nine + 100_000), PID, &mut |_| ok("app ran")).expect("tick");
         assert_eq!(read_lease(&dir).map(|l| l.owner), Some(LeaseOwner::Shell));
+    }
+
+    #[test]
+    fn preflight_blocks_before_claim_and_decide() {
+        let (dir, _id) = nine_am_job("preflight");
+        let nine = FRI_8AM + HOUR;
+        let mut runs = 0;
+        let mut decides = 0;
+        let fired = tick_as(
+            LeaseOwner::Shell,
+            &dir,
+            &at(nine),
+            PID,
+            &mut |_| {
+                runs += 1;
+                ok("should not run")
+            },
+            &mut |_| String::new(),
+            &mut |_, _| {
+                decides += 1;
+                None
+            },
+            &mut |_, _| Some("Preflight: Sign in with Grok or add an API key.".into()),
+        )
+        .expect("tick");
+        assert_eq!(runs, 0);
+        assert_eq!(decides, 0);
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].result.stop, PREFLIGHT);
+        assert!(fired[0].result.error.contains("Sign in with Grok"));
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.run_count, 0);
+        assert!(
+            grokhub_core::automation_health_line(row)
+                .unwrap()
+                .contains("Preflight"),
+            "{:?}",
+            row.health
+        );
+        assert!(row.next_run.unwrap() > nine);
     }
 }

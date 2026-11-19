@@ -13,6 +13,8 @@ pub mod audio_check;
 pub mod auto_fix;
 pub mod automation;
 pub mod automation_check;
+pub mod automation_preflight;
+pub mod blueprint_catalog;
 pub mod autonomy;
 pub mod autotune;
 pub mod backup_nudge;
@@ -288,6 +290,14 @@ pub use automation::{
     teach_routine, teachable_steps, user_asked_to_schedule, watch_once_keeps_running, AutoHealth,
     AutoOutcome, Automation, AutomationAlert, ScheduleRoute,
 };
+pub use automation_preflight::{
+    check_binary, mark_automation_preflight_failed, mentioned_connectors, needs_model_route,
+    preflight, PreflightBlock, PreflightCtx, PREFLIGHT_STOP, WELL_KNOWN_CONNECTORS,
+};
+pub use blueprint_catalog::{
+    catalog as blueprint_catalog, fill as fill_blueprint, Blueprint, BlueprintSlot,
+};
+
 pub use autonomy::{
     anticipate_consumes_slot, anticipated_need, cabin_system_prompt, host_plan_autorun,
     host_step_autorun, should_anticipate, HostAuto, LearnMode, Policy, SkillFollow, SkillWrite,
