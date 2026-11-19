@@ -140,7 +140,7 @@ pub fn current_need() -> Need {
 pub enum Source {
     /// Words in this turn of the person's own ("be quick", "think hard").
     Words,
-    /// The chat's setting in its tab menu ([`super::local_pin`]).
+    /// A standing ask from earlier words in the chat ([`super::local_pin`]).
     Pin,
 }
 
@@ -171,6 +171,45 @@ pub fn chat_tier(
         }
     }
     pin.map(|t| (t, Source::Pin))
+}
+
+/// Words that make this turn's tier ask stand for the rest of the chat.
+const FROM_NOW_ON: &[&str] = &[
+    "from now on",
+    "from here on",
+    "going forward",
+    "for the rest of this chat",
+    "for this whole chat",
+];
+
+/// Words that hand the chat's model back to Auto.
+const BACK_TO_AUTO: &[&str] = &[
+    "back to auto",
+    "go back to normal",
+    "let auto pick",
+    "pick the model yourself",
+];
+
+/// What this turn's words do to the chat's standing tier: `Some(Some(t))`
+/// keeps `t` from now on ("from now on, be quick"), `Some(None)` hands the
+/// chat back to Auto ("back to auto"), and `None` leaves it as it is. Only
+/// the person's own words count, never a helper's or a side answer's, and
+/// only words [`chat_tier`] already reads as a tier ask.
+pub fn standing_ask(text: &str, care_first: bool, helper: bool) -> Option<Option<SpeedQuality>> {
+    if helper {
+        return None;
+    }
+    let words = super::intent::person_words(text).to_ascii_lowercase();
+    if BACK_TO_AUTO.iter().any(|p| words.contains(p)) {
+        return Some(None);
+    }
+    if !FROM_NOW_ON.iter().any(|p| words.contains(p)) {
+        return None;
+    }
+    match chat_tier(text, care_first, false, None) {
+        Some((tier, Source::Words)) => Some(Some(tier)),
+        _ => None,
+    }
 }
 
 /// The mark in a side answer's conversation id (`<chat>~side-<n>`).

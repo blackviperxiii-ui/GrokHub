@@ -4371,25 +4371,6 @@ a.feed-title:focus-visible {
   color: var(--danger-text);
 }
 
-/* A tab menu's group of choices, such as "Model for this chat". */
-.tab-menu-group {
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--border);
-  margin-top: 4px;
-  padding-top: 4px;
-}
-
-.tab-menu-heading {
-  color: var(--muted);
-  font-size: var(--font-body);
-  padding: 4px 12px;
-}
-
-.feed-menu button[role="menuitemradio"][aria-checked="true"] {
-  color: var(--red);
-}
-
 .feed-menu-date {
   color: var(--muted);
   font-size: var(--font-body);

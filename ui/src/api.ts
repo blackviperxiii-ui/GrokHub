@@ -5470,19 +5470,6 @@ export function setClaudePlanAllowed(on: boolean): Promise<ClaudeChats> {
   return invoke<ClaudeChats>("set_claude_plan_allowed", { on });
 }
 
-/** A chat's on-device tier from its tab menu; `null` is Auto. */
-export type LocalTier = "speed" | "balanced" | "quality";
-
-/** The tier a chat is set to, or `null` on Auto. */
-export function localChatPin(conversationId: string): Promise<LocalTier | null> {
-  return invoke<LocalTier | null>("local_chat_pin", { conversationId });
-}
-
-/** Set a chat's tier from its next message on; `null` puts it back on Auto. */
-export function setLocalChatPin(conversationId: string, tier: LocalTier | null): Promise<LocalTier | null> {
-  return invoke<LocalTier | null>("set_local_chat_pin", { conversationId, tier });
-}
-
 /** A chat's switch to the Claude plan, from its next message on. */
 export function setClaudePlanChat(conversationId: string, on: boolean): Promise<ClaudeChats> {
   return invoke<ClaudeChats>("set_claude_plan_chat", { conversationId, on });

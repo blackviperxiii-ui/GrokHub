@@ -111,3 +111,35 @@ fn the_need_guard_sets_and_restores_the_threads_need() {
     }
     assert_eq!(current_need(), Need::Normal);
 }
+
+#[test]
+fn only_from_now_on_words_set_a_standing_tier_and_back_to_auto_drops_it() {
+    use SpeedQuality::{Quality, Speed};
+    assert_eq!(
+        standing_ask("From now on, be quick.", false, false),
+        Some(Some(Speed))
+    );
+    assert_eq!(
+        standing_ask("Think hard for the rest of this chat", false, false),
+        Some(Some(Quality))
+    );
+    assert_eq!(
+        standing_ask("OK, back to auto please", false, false),
+        Some(None)
+    );
+    // One turn's ask stays one turn's ask.
+    assert_eq!(standing_ask("be quick", false, false), None);
+    // A short reply isn't a faster model, even from now on.
+    assert_eq!(
+        standing_ask("from now on keep it short", false, false),
+        None
+    );
+    assert_eq!(
+        standing_ask("from now on, call me user", false, false),
+        None
+    );
+    // A helper's or side answer's text is never the person's ask.
+    assert_eq!(standing_ask("from now on, be quick", false, true), None);
+    // Care-first lets the Brief pick effort, so words set no tier.
+    assert_eq!(standing_ask("from now on, be quick", true, false), None);
+}
