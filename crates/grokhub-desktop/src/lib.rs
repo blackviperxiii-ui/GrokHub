@@ -165,12 +165,10 @@ fn guard_refusal_line(line: &str, guard: game_guard::GameGuard) -> Option<String
     Some(harness_gate::refusal_reply(&call.id, &msg))
 }
 
-/// Linux only, the pinned release only, from `cuaDriverPath` or PATH.
+/// Linux and macOS only, the pinned release only, from `cuaDriverPath` or PATH.
 fn start_cua_child(dir: &std::path::Path) -> Result<grokhub_agent::harness::StdioChild, String> {
     use grokhub_agent::harness as hx;
-    if !cfg!(target_os = "linux") {
-        return Err((*hx::CUA_LINUX_ONLY_MSG).into());
-    }
+    hx::cua_platform(std::env::consts::OS, std::env::consts::ARCH)?;
     let bin = hx::find_cua_driver(&crate::host::settings().cua_driver_path)
         .ok_or_else(|| hx::CUA_MISSING_MSG.to_string())?;
     hx::verify_cua_driver(&bin)?;
@@ -178,7 +176,7 @@ fn start_cua_child(dir: &std::path::Path) -> Result<grokhub_agent::harness::Stdi
 }
 
 /// The Cua proxy is registered only while desktop control and the `cuaDriver`
-/// flag are both on (and only on Linux).
+/// flag are both on (and only where Cua runs: Linux and macOS).
 pub fn cua_wanted(desktop_control: bool, cua_flag: bool) -> bool {
     grokhub_agent::harness::ComputerUseBackend::selected(cua_flag, desktop_control)
         == grokhub_agent::harness::ComputerUseBackend::CuaDriver

@@ -19,7 +19,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComputerUseBackend {
     GrokBuild,
-    /// Spike-2a: Cua Driver behind `grokhub --mcp-cua`. Linux only.
+    /// Spike-2a: Cua Driver behind `grokhub --mcp-cua`. Linux and macOS.
     CuaDriver,
 }
 
@@ -32,9 +32,10 @@ impl ComputerUseBackend {
     }
 
     /// Cua only when the `cuaDriver` spike flag and desktop control are both
-    /// on, and only on Linux. Everything else is Grok Build.
+    /// on, and only where Cua runs ([`crate::harness::cua::cua_here`]).
+    /// Everything else is Grok Build.
     pub fn selected(cua_flag: bool, desktop_control: bool) -> Self {
-        if cua_flag && desktop_control && cfg!(target_os = "linux") {
+        if cua_flag && desktop_control && crate::harness::cua::cua_here() {
             Self::CuaDriver
         } else {
             Self::GrokBuild

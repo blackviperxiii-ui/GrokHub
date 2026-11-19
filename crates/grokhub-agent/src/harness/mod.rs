@@ -132,11 +132,11 @@ pub use consent::{
     SCOPE_KINDS,
 };
 pub use cua::{
-    check_cua_version, cua_as_desk, cua_manifest, cua_manifest_path, cua_socket_path,
-    cua_spawn_args, cua_spawn_env, find_cua_driver, spawn_cua_child, verify_cua_driver, CuaChild,
-    CuaGate, CuaProxy, StdioChild, CUA_DRIVER_LICENSE, CUA_DRIVER_TAG, CUA_DRIVER_VERSION,
-    CUA_ENV_REMOVE, CUA_LINUX_ASSET, CUA_LINUX_ONLY_MSG, CUA_LINUX_SHA256, CUA_MISSING_MSG,
-    CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
+    check_cua_version, cua_as_desk, cua_manifest, cua_manifest_path, cua_platform, cua_socket_path,
+    cua_spawn_args, cua_spawn_env, find_cua_driver, spawn_cua_child, verify_cua_driver, CuaAsset,
+    CuaChild, CuaGate, CuaProxy, StdioChild, CUA_ASSETS, CUA_DRIVER_LICENSE, CUA_DRIVER_TAG,
+    CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE,
+    CUA_TOOLS, CUA_UNSUPPORTED_MSG, CUA_WINDOWS_MSG,
 };
 pub use detect::{
     action_loop, approval_gate_violation, claimed_click_no_change, claims_done, claims_success,
