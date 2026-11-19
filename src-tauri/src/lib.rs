@@ -6226,19 +6226,6 @@ async fn set_claude_plan_allowed(
     off_main(move || claude_chat::set_allowed(&dir, on)).await?
 }
 
-/// A chat tab's switch to the Claude plan, from its next message on.
-#[cfg(desktop)]
-#[tauri::command]
-async fn set_claude_plan_chat(
-    state: State<'_, ShellState>,
-    conversation_id: String,
-    on: bool,
-) -> Result<claude_chat::ClaudeChats, String> {
-    capabilities::needs(capabilities::current().local_ai, "AI models")?;
-    let dir = state.config_dir.clone();
-    off_main(move || claude_chat::set_chat(&dir, &conversation_id, on)).await?
-}
-
 /// Posts the key's approval card; nothing is saved until `answer_ai_models_card`.
 #[tauri::command]
 async fn add_ai_provider(
@@ -8630,8 +8617,6 @@ pub fn run() {
             claude_plan_chats,
             #[cfg(desktop)]
             set_claude_plan_allowed,
-            #[cfg(desktop)]
-            set_claude_plan_chat,
             add_ai_provider,
             start_openrouter_sign_in,
             wait_openrouter_sign_in,

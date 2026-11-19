@@ -123,9 +123,11 @@ something, an edit, a write, or a read outside the folder asks.
 There's no per-chat model picker today. Settings → AI models gets a
 **Claude (your plan)** row showing installed, signed in and the billing kind.
 While Claude Code is signed in with a plan, **Allow for chats** asks first
-(what runs, where, and that it counts against the plan). Once allowed, a
-chat's tab menu has **Run on Claude (your plan)**, and the choice is kept per
-chat in `{config}/claude-plan-chats.json`. **Stop using for chats** switches
+(what runs, where, and that it counts against the plan). Once allowed, the
+user moves a chat onto the plan in words ("from now on, use Claude") and back
+("stop using Claude"); there is no switch. The choice is kept per chat in
+`{config}/claude-plan-chats.json` (`byWords`; a list the old tab menu switch
+saved reads as empty, so those chats are back on Auto). **Stop using for chats** switches
 every chat back. Auto routing never picks it on its own.
 
 Each turn checks `claude auth status` again (about a quarter of a second). A
