@@ -76,6 +76,7 @@ pub mod table;
 pub mod trial;
 pub mod trust;
 pub mod tune;
+pub mod user_bench;
 pub mod voice_route;
 pub mod wait;
 
