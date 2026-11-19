@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  downloadHfGguf,
   downloadModels,
   getModelLibrary,
+  listHfGgufFiles,
   onModelLibraryEvent,
   pauseModelDownloads,
   removeLibraryModel,
+  searchHfGguf,
+  type HfGgufFile,
+  type HfGgufHit,
   type LibraryRow,
   type LibraryStatus,
   type LibraryView,
@@ -30,6 +35,12 @@ export function ModelLibrary({ focus }: { focus?: LibraryFocus } = {}) {
   const focusedRow = useRef<HTMLLIElement>(null);
   /** The focus `n` the row was already scrolled to and focused for. */
   const movedFor = useRef<number | null>(null);
+  const [hfQuery, setHfQuery] = useState("");
+  const [hfHits, setHfHits] = useState<HfGgufHit[]>([]);
+  const [hfRepo, setHfRepo] = useState<string | null>(null);
+  const [hfFiles, setHfFiles] = useState<HfGgufFile[]>([]);
+  const [hfNote, setHfNote] = useState<string | null>(null);
+  const [hfBusy, setHfBusy] = useState(false);
 
   // Applied once the rows are in, so the right tab can be picked.
   if (view && focus && focus.n !== shown?.n) {
@@ -131,10 +142,125 @@ export function ModelLibrary({ focus }: { focus?: LibraryFocus } = {}) {
     }
   };
 
+  const searchHf = async () => {
+    setHfBusy(true);
+    setHfNote(null);
+    setHfRepo(null);
+    setHfFiles([]);
+    try {
+      setHfHits(await searchHfGguf(hfQuery.trim()));
+      if (!hfQuery.trim()) setHfNote(null);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setHfBusy(false);
+    }
+  };
+
+  const openHfRepo = async (repo: string) => {
+    setHfBusy(true);
+    setHfNote(null);
+    setHfRepo(repo);
+    try {
+      setHfFiles(await listHfGgufFiles(repo));
+    } catch (err) {
+      setError(String(err));
+      setHfFiles([]);
+    } finally {
+      setHfBusy(false);
+    }
+  };
+
+  const downloadHf = async (repo: string, path: string) => {
+    setHfBusy(true);
+    setHfNote(null);
+    try {
+      setHfNote(await downloadHfGguf(repo, path));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setHfBusy(false);
+    }
+  };
+
   return (
     <div className="local-library" aria-label="Download models">
       <h3>Download models</h3>
       {shown && !shown.found && <p className="note">That model isn't in this app's model list.</p>}
+      <div className="hf-browse" aria-label="Search Hugging Face GGUF">
+        <p className="note">
+          Search Hugging Face for GGUF quants. Downloads join Auto only — there is no model picker
+          in chat.
+        </p>
+        <div className="hf-browse-search">
+          <input
+            type="search"
+            aria-label="Search Hugging Face for GGUF models"
+            placeholder="Search GGUF models"
+            value={hfQuery}
+            onChange={(e) => setHfQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void searchHf();
+            }}
+          />
+          <button type="button" className="quiet" disabled={hfBusy} onClick={() => void searchHf()}>
+            Search
+          </button>
+        </div>
+        {hfHits.length > 0 && (
+          <ul aria-label="Hugging Face GGUF results">
+            {hfHits.map((hit) => (
+              <li key={hit.repo} className="local-library-row">
+                <p>{hit.repo}</p>
+                <p className="note">
+                  {hit.downloads.toLocaleString()} downloads
+                  {hit.gated ? " · gated" : ""}
+                </p>
+                <button
+                  type="button"
+                  className="quiet"
+                  disabled={hfBusy}
+                  onClick={() => void openHfRepo(hit.repo)}
+                >
+                  Show quants
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {hfRepo && (
+          <div className="hf-browse-files" aria-label={`Quants in ${hfRepo}`}>
+            <h4>{hfRepo}</h4>
+            {hfFiles.length === 0 ? (
+              <p className="note">{hfBusy ? "Reading quants…" : "No servable GGUF files in this repo."}</p>
+            ) : (
+              <ul>
+                {hfFiles.map((file) => (
+                  <li key={file.paths.join("|")} className="local-library-row">
+                    <p>
+                      {file.label} · {file.size}{" "}
+                      <span className={`badge hf-fit-${file.fitKind}`}>{file.fit}</span>
+                    </p>
+                    <button
+                      type="button"
+                      className="quiet"
+                      disabled={hfBusy || file.fitKind === "no"}
+                      onClick={() => void downloadHf(hfRepo, file.paths[0] ?? "")}
+                    >
+                      Download into Auto
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        {hfNote && (
+          <p className="note" role="status">
+            {hfNote}
+          </p>
+        )}
+      </div>
       <div className="local-library-tabs" role="tablist" aria-label="Model kinds">
         {view.tabs.map((t) => (
           <button

@@ -58,6 +58,80 @@ pub fn ctx_cap() -> u64 {
 pub fn set_ctx_cap(cap: u64) {
     CTX_CAP.store(cap.max(LOCAL_CTX_CAP), Ordering::SeqCst);
 }
+
+/// When an Ollama HTTP server is up, probe `/api/show` for the effective
+/// `num_ctx` and raise [`ctx_cap`]. `get` fetches a URL body; `post` posts
+/// a JSON body. Prefer a discovered model name; otherwise the first `/api/tags`
+/// entry. Returns the applied window when Ollama answered.
+pub fn apply_ollama_num_ctx(
+    ollama_host: Option<&str>,
+    prefer: Option<&str>,
+    ceiling: Option<u64>,
+    mut get: impl FnMut(&str) -> Result<String, String>,
+    mut post: impl FnMut(&str, &str) -> Result<String, String>,
+) -> Option<u64> {
+    use grokhub_core::ollama_show::{self as os};
+    let root = os::root_from_env(ollama_host);
+    let tags = get(&os::tags_url(&root)).ok()?;
+    if !os::looks_like_ollama(&tags) {
+        let ver = get(&os::version_url(&root)).ok()?;
+        if !os::looks_like_ollama(&ver) {
+            return None;
+        }
+    }
+    let name = prefer
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| os::parse_tags(&tags).into_iter().next())?;
+    let body = post(&os::show_url(&root), &os::show_body(&name)).ok()?;
+    let detected = os::show_context(&body, false)?;
+    let cap = os::capped(detected, ceiling);
+    if cap == 0 {
+        return None;
+    }
+    set_ctx_cap(cap);
+    Some(ctx_cap())
+}
+
+/// Probe the default local Ollama root with a short-timeout agent and apply
+/// [`apply_ollama_num_ctx`]. No-op when Ollama is down. `prefer` is an Ollama
+/// model name (`gemma4:e4b`) when one is known.
+pub fn probe_ollama_num_ctx(prefer: Option<&str>, ceiling: Option<u64>) -> Option<u64> {
+    use std::time::Duration;
+    let host = std::env::var("OLLAMA_HOST").ok();
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(2),
+        read: Some(Duration::from_secs(3)),
+        redirects: 0,
+        // Ollama is loopback; public_only would refuse it.
+        public_only: false,
+        ..Default::default()
+    });
+    apply_ollama_num_ctx(
+        host.as_deref(),
+        prefer,
+        ceiling,
+        |url| {
+            let resp = agent
+                .get(url)
+                .header("user-agent", crate::USER_AGENT)
+                .call()
+                .map_err(|e| e.to_string())?;
+            resp.into_string().map_err(|e| e.to_string())
+        },
+        |url, body| {
+            let resp = agent
+                .post(url)
+                .header("user-agent", crate::USER_AGENT)
+                .header("content-type", "application/json")
+                .send_string(body)
+                .map_err(|e| e.to_string())?;
+            resp.into_string().map_err(|e| e.to_string())
+        },
+    )
+}
+
 /// The classes a local route may take while online (background helpers).
 pub const LOCAL_CLASSES: &[&str] = &[
     "background:classify",
@@ -1043,6 +1117,50 @@ fn serve_within_at(
         usage: Usage::default(),
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod ollama_ctx_tests {
+    use super::*;
+
+    #[test]
+    fn apply_ollama_num_ctx_sets_cap_from_show() {
+        set_ctx_cap(LOCAL_CTX_CAP);
+        let cap = apply_ollama_num_ctx(
+            Some("http://127.0.0.1:11434"),
+            Some("gemma4:e4b"),
+            None,
+            |url| {
+                assert!(url.ends_with("/api/tags"));
+                Ok(r#"{"models":[{"name":"gemma4:e4b"}]}"#.into())
+            },
+            |url, body| {
+                assert!(url.ends_with("/api/show"));
+                assert!(body.contains("gemma4:e4b"));
+                Ok(
+                    r#"{"parameters":"num_ctx 8192","model_info":{"gemma3.context_length":32768}}"#
+                        .into(),
+                )
+            },
+        );
+        assert_eq!(cap, Some(8192));
+        assert_eq!(ctx_cap(), 8192);
+        set_ctx_cap(LOCAL_CTX_CAP);
+    }
+
+    #[test]
+    fn apply_ollama_num_ctx_skips_when_not_ollama() {
+        set_ctx_cap(LOCAL_CTX_CAP);
+        let cap = apply_ollama_num_ctx(
+            None,
+            None,
+            None,
+            |_| Ok(r#"{"ok":true}"#.into()),
+            |_, _| panic!("no show"),
+        );
+        assert_eq!(cap, None);
+        assert_eq!(ctx_cap(), LOCAL_CTX_CAP);
+    }
 }
 
 /// What [`scan_pii`] found.
