@@ -1,0 +1,1 @@
+- `grokhub-shell --automations` runs scheduled automations with no window, so jobs keep firing after the app is closed (for a login service). The open app takes the jobs over right away, and the headless run waits until the app closes. It takes its local clock from the OS.
