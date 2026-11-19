@@ -1853,6 +1853,62 @@ fn running_view(
     (loaded_paired(s), s.refused.holding(&now))
 }
 
+/// How long a picture turn waits for the requests on a server that can't see
+/// it before the swap stops that server anyway. Background helpers (ask
+/// offers, the pulse writer) send their own requests right after each
+/// person message, so something is nearly always in flight then.
+pub const VISION_DRAIN: Duration = Duration::from_secs(20);
+
+/// How a [`wait_for_vision`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Drain {
+    /// Nothing is in flight, or nothing needed waiting for.
+    Free,
+    /// Requests were still in flight at the deadline.
+    TimedOut,
+    Cancelled,
+}
+
+/// For a picture turn: when the model loaded now can't see pictures and a
+/// model on disk can, wait up to `deadline` for the requests on it to
+/// finish, so the swap to a model that sees doesn't cut them. Past the
+/// deadline the swap goes ahead (it stops the old server before the new one
+/// starts, so the two never share memory). The slot isn't held meanwhile.
+pub fn wait_for_vision(
+    config_dir: &Path,
+    deadline: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Drain {
+    let needed = {
+        let slot = global_slot().lock().unwrap_or_else(|e| e.into_inner());
+        slot.as_ref().is_some_and(|s| {
+            !s.sees_pictures()
+                && !autoconfig::vision_view(&s.binary, &on_disk(config_dir)).is_empty()
+        })
+    };
+    if !needed {
+        return Drain::Free;
+    }
+    wait_until_idle(deadline, cancelled)
+}
+
+/// Wait up to `deadline` for no request to be in flight.
+fn wait_until_idle(deadline: Duration, cancelled: &dyn Fn() -> bool) -> Drain {
+    let until = Instant::now() + deadline;
+    loop {
+        if cancelled() {
+            return Drain::Cancelled;
+        }
+        if in_flight() == 0 {
+            return Drain::Free;
+        }
+        if Instant::now() >= until {
+            return Drain::TimedOut;
+        }
+        std::thread::sleep(HEALTH_POLL);
+    }
+}
+
 /// What the next load runs: the pick, or another model on disk for a reason
 /// [`super::local_swap::plan`] gives, and whether it loads its vision
 /// projector: a request whose newest message carries a picture plans with
@@ -1918,7 +1974,18 @@ fn swap_plan(
         let seeing = binary
             .as_deref()
             .map_or_else(Vec::new, |b| autoconfig::vision_view(b, &on_disk));
-        if let Some(p) = super::local_swap::vision_plan(&now, &seeing) {
+        // Once the turn waited for them (see [`wait_for_vision`]), requests
+        // still on the running server don't keep the picture from loading a
+        // model that sees it: the swap stops that server first.
+        let vnow = if super::local_vision::waited() {
+            super::local_swap::Now {
+                in_flight: 0,
+                ..now
+            }
+        } else {
+            now
+        };
+        if let Some(p) = super::local_swap::vision_plan(&vnow, &seeing) {
             return (p, true);
         }
     }
@@ -3140,6 +3207,27 @@ mod tests {
             assert!(side.sees_pictures() && side.endpoint().sees_pictures);
             assert_eq!(plan(&side), (Plan::Keep, false));
         }
+        // A background request holds the model that can't see: the picture
+        // waits for it, then loads the model that can, past it.
+        side.launch = None;
+        std::fs::write(&mid_eyes, b"gguf").unwrap();
+        let held = busy();
+        assert_eq!(in_flight(), 1);
+        let _picture = PictureGuard::set(true);
+        assert_eq!(plan(&side), (Plan::Keep, false), "a reply in flight");
+        super::super::local_vision::note_waited();
+        assert_eq!(
+            plan(&side),
+            (
+                Plan::Load {
+                    model: mid.clone(),
+                    stand_in: None
+                },
+                true
+            ),
+            "the turn waited: the swap goes ahead"
+        );
+        drop(held);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3482,6 +3570,53 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn a_picture_waits_for_the_requests_in_flight_until_they_finish_or_the_deadline() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        assert_eq!(in_flight(), 0);
+        assert_eq!(
+            wait_until_idle(Duration::from_secs(5), &|| false),
+            Drain::Free
+        );
+        // A background request that ends after 200 ms: the wait ends with it.
+        let held = busy();
+        let done = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(held);
+        });
+        let began = Instant::now();
+        assert_eq!(
+            wait_until_idle(Duration::from_secs(5), &|| false),
+            Drain::Free
+        );
+        assert!(began.elapsed() < Duration::from_secs(5));
+        assert!(began.elapsed() >= Duration::from_millis(150));
+        done.join().unwrap();
+        // One that never ends: the deadline, then the swap goes ahead.
+        let held = busy();
+        let began = Instant::now();
+        assert_eq!(
+            wait_until_idle(Duration::from_millis(300), &|| false),
+            Drain::TimedOut
+        );
+        assert!(began.elapsed() >= Duration::from_millis(300));
+        // Stop ends the wait at once.
+        assert_eq!(
+            wait_until_idle(Duration::from_secs(5), &|| true),
+            Drain::Cancelled
+        );
+        drop(held);
+        // Nothing loaded: nothing to wait for.
+        let held = busy();
+        assert_eq!(
+            wait_for_vision(&std::env::temp_dir(), Duration::from_secs(5), &|| false),
+            Drain::Free
+        );
+        drop(held);
+        assert_eq!(VISION_DRAIN, Duration::from_secs(20));
     }
 
     #[test]

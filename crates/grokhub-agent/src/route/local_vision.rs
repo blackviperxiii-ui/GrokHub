@@ -64,30 +64,57 @@ pub fn reads_pictures(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>,
         .is_some_and(|m| m.iter().any(|x| x == "image"))
 }
 
+/// Where this thread's request stands with a picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Picture {
+    None,
+    /// The person's newest message carries one.
+    Wanted,
+    /// ...and the turn already waited for the requests on a server that
+    /// can't see it ([`note_waited`]).
+    Waited,
+}
+
 thread_local! {
-    /// The person's newest message in this request carries a picture.
-    static PICTURE: Cell<bool> = const { Cell::new(false) };
+    static PICTURE: Cell<Picture> = const { Cell::new(Picture::None) };
 }
 
 /// Marks this thread's request as carrying a picture in the person's newest
 /// message, for the swap planner, until dropped.
-pub struct PictureGuard(bool);
+pub struct PictureGuard(Picture);
 
 impl PictureGuard {
     pub fn set(on: bool) -> Self {
-        PictureGuard(PICTURE.with(|p| p.replace(on)))
+        let p = if on { Picture::Wanted } else { Picture::None };
+        PictureGuard(PICTURE.with(|c| c.replace(p)))
     }
 }
 
 impl Drop for PictureGuard {
     fn drop(&mut self) {
-        PICTURE.with(|p| p.set(self.0));
+        PICTURE.with(|c| c.set(self.0));
     }
 }
 
 /// This thread's request wants its newest picture read ([`PictureGuard`]).
 pub fn wants_picture() -> bool {
-    PICTURE.with(Cell::get)
+    PICTURE.with(Cell::get) != Picture::None
+}
+
+/// The picture turn waited, as long as it may, for the requests on the
+/// running server (background helpers hold it right after a person's
+/// message): the swap goes ahead past them now.
+pub fn note_waited() {
+    PICTURE.with(|c| {
+        if c.get() == Picture::Wanted {
+            c.set(Picture::Waited);
+        }
+    });
+}
+
+/// [`note_waited`] ran for this thread's picture turn.
+pub fn waited() -> bool {
+    PICTURE.with(Cell::get) == Picture::Waited
 }
 
 /// The catalog's vision projector for the chat model in `model`, when its

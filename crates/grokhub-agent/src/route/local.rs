@@ -898,6 +898,19 @@ pub fn serve_request(
     // that can see it, when one is on disk and fits (a helper's turn never
     // swaps a model for a picture it quotes).
     let _picture = super::local_vision::PictureGuard::set(picture && !helper);
+    // Background helpers hold the model right after a person's message: the
+    // picture waits for them (a while) instead of losing to them.
+    if picture && !helper {
+        let waited = super::local_sidecar::wait_for_vision(
+            &config_dir,
+            super::local_sidecar::VISION_DRAIN,
+            &|| cancel.is_cancelled(),
+        );
+        if waited == super::local_sidecar::Drain::Cancelled {
+            return Err(ClientError::Cancelled);
+        }
+        super::local_vision::note_waited();
+    }
     super::local_sidecar::take_ask_outcome();
     if heavy(class_norm, tokens) && super::local_gov::level() != Level::RampUp {
         match super::local_gov::wait_for_ramp_up(HEAVY_WAIT, &|| cancel.is_cancelled()) {

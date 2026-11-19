@@ -284,8 +284,16 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      loads with its projector when its pair and projector fit, else the
      biggest smaller model whose projector is on disk and fits
      (`StandIn::Vision`, "Your pick comes back once the chat is quiet.").
-     A reply in flight keeps its model; Keep loaded and a forced file keep
-     the pick, which may load its own projector; a low battery or a game
+     Background helpers (ask offers, the pulse writer) send their own
+     requests right after each person message, so a request is nearly
+     always in flight when a picture turn plans: the turn first waits up to
+     20 s (`VISION_DRAIN`, `wait_for_vision`, Stop ends it) for them, when
+     what runs can't see and a model on disk can, and then plans past them.
+     The swap stops the old server before the new one starts, so the two
+     never share memory; a request still on it is cut. Before that wait a
+     reply in flight kept its model every time and the picture was read as
+     a note. Keep loaded and a forced file keep the pick, which may load its
+     own projector; a low battery or a game
      keeps the model it chose; held refusals aren't tried. A picture loads
      now, past the cooldown, like an ask. A launch that already reads
      pictures keeps its model for the next picture. At start
@@ -322,6 +330,8 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      device keeps the step, without the picture. A step that went online
      anyway gets no `local:no_vision`.
    - Not yet:
+     0. A Speed or Performance ask hits the same wall on a busy profile: a
+        request in flight refuses it (`Refused::Busy`) with no wait.
      1. The real-app check: on Linux, a chat that runs here gets a picture,
         loads the E2B (or the pick) with its projector, reads it, and the
         next text turn stays on that launch. Only the engine was run by
