@@ -26,8 +26,9 @@ pub enum Launch {
     McpCua,
     /// Read-only unsealed AMR + automation status for local IDE MCP clients.
     McpBridge,
-    /// Auth, memory folder and hub checks; exits 1 on any ERR.
-    Doctor,
+    /// Auth, memory, hub and security checks; exits 1 on any ERR.
+    /// `fix`: apply safe permission repairs before reporting.
+    Doctor { fix: bool },
     /// Says how this install updates. Runs nothing.
     Update,
     /// Sign in with Grok (device code) into the shell's keychain entry.
@@ -57,7 +58,10 @@ pub fn parse_args(args: &[String]) -> Launch {
             "--mcp-desktop" => return Launch::McpDesktop,
             "--mcp-cua" => return Launch::McpCua,
             "--mcp-bridge" => return Launch::McpBridge,
-            "--doctor" => return Launch::Doctor,
+            "--doctor" => {
+                let fix = args.iter().skip(1).any(|a| a == "--fix");
+                return Launch::Doctor { fix };
+            }
             "--update" => return Launch::Update,
             "--oauth" => return Launch::OAuth,
             _ => {}
@@ -263,7 +267,11 @@ mod tests {
         );
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "--doctor"])),
-            Launch::Doctor
+            Launch::Doctor { fix: false }
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--doctor", "--fix"])),
+            Launch::Doctor { fix: true }
         );
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "--oauth"])),

@@ -8239,6 +8239,12 @@ pub fn run() {
             // Provider keys are read from the OS keyring from the first chat,
             // not only once Settings → AI models has been opened.
             grokhub_agent::route::providers::use_os_vault();
+            // Android: install the OS Keystore store before the first read
+            // (keyring's v1 facade has no Android backend).
+            #[cfg(target_os = "android")]
+            if let Err(e) = grokhub_agent::keyring_blob::ensure_android_store() {
+                eprintln!("android keyring: {e}");
+            }
             // The learned-tier key (sealed memory, scope grants and what the
             // indexers learn) lives in the OS keyring too, as in the cabin.
             grokhub_agent::harness::use_os_keyring();
