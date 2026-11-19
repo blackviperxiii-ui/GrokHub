@@ -36,9 +36,13 @@ pub const NO_VISION_RULE: &str = "local:no_vision";
 /// Local only, sensitive data without your grant, or offline. Online, only
 /// background steps reach the device through the router (a chat is never in
 /// [`super::local::LOCAL_CLASSES`]), so a chat picture already goes online
-/// by the image fit in [`super::policy::fits`].
+/// by the image fit in [`super::policy::fits`]. A step rides on the model
+/// loaded now (background work never swaps one), so the device keeps a
+/// picture when that launch carries its projector
+/// ([`super::local::LocalGate::sees_pictures`]).
 pub fn reads_online(input: &RouteInput<'_>) -> bool {
     input.needs_image
+        && !input.local.sees_pictures
         && !input.adult
         && !matches!(
             input.voice_reply,
