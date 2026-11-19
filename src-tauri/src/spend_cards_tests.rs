@@ -53,7 +53,14 @@ fn app_side_eighty_percent_card_is_disabled() {
     let (_g, dir) = fresh("eighty");
     landed(&dir.0, &at(82), NudgeFacts::default(), OPEN, None, NOW);
     assert_eq!(cards().card, None);
-    landed(&dir.0, &at(100), NudgeFacts::default(), OPEN, None, NOW + 1_000);
+    landed(
+        &dir.0,
+        &at(100),
+        NudgeFacts::default(),
+        OPEN,
+        None,
+        NOW + 1_000,
+    );
     assert_eq!(cards().card, None);
 }
 

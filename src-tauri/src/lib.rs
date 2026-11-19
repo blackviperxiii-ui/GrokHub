@@ -989,12 +989,9 @@ async fn chat_turn(
             .unwrap_or_else(|| agent::workspace_for(&settings.workspace))
             .to_string_lossy()
             .into_owned();
-        if let Some(reply) = maybe_handle_bench_turn_to_disk(
-            &state.config_dir,
-            &conversation_id,
-            &text,
-            &bench_cwd,
-        )? {
+        if let Some(reply) =
+            maybe_handle_bench_turn_to_disk(&state.config_dir, &conversation_id, &text, &bench_cwd)?
+        {
             let text_ev = agent::UiEvent::Text { text: reply };
             inbox::note(&conversation_id, &text_ev);
             let _ = app.emit(
@@ -9490,9 +9487,10 @@ mod chat_bench_tests {
             None
         );
 
-        let reply = maybe_handle_bench_turn_to_disk(&dir, "bench-chat-1", "stop using Grok", "/tmp")
-            .unwrap()
-            .expect("should confirm bench");
+        let reply =
+            maybe_handle_bench_turn_to_disk(&dir, "bench-chat-1", "stop using Grok", "/tmp")
+                .unwrap()
+                .expect("should confirm bench");
         assert!(reply.contains("Benched Grok (xAI)"), "{reply}");
         assert!(grokhub_agent::route::user_bench::load(&dir).matches_model("grok-4.7"));
 
