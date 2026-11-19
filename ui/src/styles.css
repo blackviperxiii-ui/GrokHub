@@ -7221,6 +7221,44 @@ button.primary:not(.quick-chip) {
   padding-left: 16px;
 }
 
+/* Download models: live HF GGUF browse (Auto pool only). */
+.hf-browse {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid color-mix(in srgb, #000 18%, transparent);
+}
+.hf-browse-search {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.hf-browse-search input {
+  flex: 1;
+  min-width: 0;
+}
+.hf-browse-files h4 {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.95rem;
+}
+.badge.hf-fit-yes {
+  color: #000;
+  background: color-mix(in srgb, var(--amber) 35%, transparent);
+  border: 1px solid var(--amber);
+}
+.badge.hf-fit-tight {
+  color: #000;
+  background: color-mix(in srgb, var(--amber) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber) 55%, #000);
+}
+.badge.hf-fit-no {
+  color: #fff;
+  background: var(--red);
+  border: 1px solid var(--red);
+}
+
 /* Download models: kind tabs, then one row per model. */
 .local-library-tabs,
 .local-library-queue {

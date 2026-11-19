@@ -478,6 +478,184 @@ pub fn remove(config_dir: &Path, id: &str) -> Result<LibraryView, String> {
     Ok(view(config_dir))
 }
 
+// --- Live Hugging Face GGUF browse (Auto pool only; no runtime picker) ---
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HfHit {
+    pub repo: String,
+    pub downloads: u64,
+    pub likes: u64,
+    pub updated: String,
+    pub gated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HfFileRow {
+    pub label: String,
+    pub paths: Vec<String>,
+    pub size: String,
+    /// Fits this PC / Fits, may be slow / Won't run well here.
+    pub fit: &'static str,
+    pub fit_kind: &'static str,
+}
+
+fn hf_get_json(url: &str) -> Result<String, String> {
+    use std::io::Read;
+    use std::time::Duration;
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(15),
+        read: Some(Duration::from_secs(30)),
+        redirects: 0,
+        public_only: true,
+        ..Default::default()
+    });
+    let resp = agent
+        .get(url)
+        .header("user-agent", grokhub_agent::USER_AGENT)
+        .call()
+        .map_err(|e| e.to_string())?;
+    if resp.status() >= 400 {
+        return Err(format!("Hugging Face returned HTTP {}.", resp.status()));
+    }
+    let mut body = String::new();
+    resp.into_reader()
+        .read_to_string(&mut body)
+        .map_err(|e| e.to_string())?;
+    Ok(body)
+}
+
+fn budget_mb(config_dir: &Path) -> (u64, u64) {
+    let p = crate::local_ai::read_machine(config_dir).profile();
+    let (mem, usable) = p.budget();
+    let ram = match mem {
+        grokhub_core::local_picker::Memory::Gpu => p.ram_mb.saturating_sub(4_096),
+        _ => 0,
+    };
+    (usable, ram)
+}
+
+/// Search Hugging Face for GGUF models (most downloaded first).
+pub fn search_hf(query: &str, limit: usize) -> Result<Vec<HfHit>, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let body = hf_get_json(&grokhub_core::hf_gguf::search_url(q, limit))?;
+    Ok(grokhub_core::hf_gguf::parse_search(&body)
+        .into_iter()
+        .map(|h| HfHit {
+            repo: h.repo,
+            downloads: h.downloads,
+            likes: h.likes,
+            updated: h.updated,
+            gated: h.gated,
+        })
+        .collect())
+}
+
+/// GGUF quants in `repo`, priced for this PC.
+pub fn hf_files(config_dir: &Path, repo: &str) -> Result<Vec<HfFileRow>, String> {
+    let repo = repo.trim().trim_matches('/');
+    if !repo.contains('/') {
+        return Err("Pick a Hugging Face repo like owner/name.".into());
+    }
+    let body = hf_get_json(&grokhub_core::hf_gguf::tree_url(repo))?;
+    let (vram, ram) = budget_mb(config_dir);
+    let groups = grokhub_core::hf_gguf::price_groups(
+        &grokhub_core::hf_gguf::parse_tree(&body),
+        vram,
+        ram,
+    );
+    Ok(groups
+        .into_iter()
+        .map(|g| {
+            let fit_kind = match g.fit {
+                Fit::Yes => "yes",
+                Fit::Tight => "tight",
+                Fit::No => "no",
+            };
+            HfFileRow {
+                label: g.label,
+                paths: g.paths,
+                size: ls::size_label(g.total_bytes / MIB),
+                fit: g.fit.label(),
+                fit_kind,
+            }
+        })
+        .collect())
+}
+
+/// Download one GGUF (first path of a group) into the models folder and add it
+/// to the Auto pool (`ownFiles`). No runtime model picker.
+pub fn download_hf(config_dir: &Path, repo: &str, path: &str) -> Result<String, String> {
+    use std::io::{Read, Write};
+    let repo = repo.trim().trim_matches('/');
+    let path = path.trim().trim_start_matches('/');
+    if !repo.contains('/') || path.is_empty() || !path.to_ascii_lowercase().ends_with(".gguf") {
+        return Err("Pick a .gguf file in a Hugging Face repo.".into());
+    }
+    if path.contains("..") {
+        return Err("That file path isn't allowed.".into());
+    }
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let dest_dir = crate::local_ai::models_dir().unwrap_or_else(|| config_dir.join("models"));
+    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+    let dest = dest_dir.join(name);
+    if dest.exists() {
+        register_own_file(config_dir, &dest)?;
+        return Ok(format!("{name} is already on this PC. Added to Auto."));
+    }
+    let url = grokhub_core::hf_gguf::file_url(repo, path);
+    let fetch = HfFetch;
+    let (mut reader, _, total) = fetch.open(&url, 0)?;
+    let part = {
+        let mut s = dest.as_os_str().to_owned();
+        s.push(".part");
+        PathBuf::from(s)
+    };
+    let mut out = std::fs::File::create(&part).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; 256 * 1_024];
+    let mut done = 0u64;
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        done += n as u64;
+        if total.is_some_and(|t| done > t.saturating_mul(2)) {
+            let _ = std::fs::remove_file(&part);
+            return Err("Download grew past the size Hugging Face reported.".into());
+        }
+    }
+    drop(out);
+    // Prefer the Hub LFS oid when the tree lists it.
+    if let Ok(want) = fetch.sha256(repo, path) {
+        let got = md::sha256_file(&part).map_err(|e| e.to_string())?;
+        if !got.eq_ignore_ascii_case(&want) {
+            let _ = std::fs::remove_file(&part);
+            return Err("The downloaded file didn't match Hugging Face's checksum.".into());
+        }
+    }
+    std::fs::rename(&part, &dest).map_err(|e| e.to_string())?;
+    register_own_file(config_dir, &dest)?;
+    // Auto may pick it up without a restart once assets refresh.
+    local_sidecar::clear_paths_cache();
+    Ok(format!("Downloaded {name} into Auto."))
+}
+
+fn register_own_file(config_dir: &Path, path: &Path) -> Result<(), String> {
+    let shown = path.display().to_string();
+    let mut config = crate::local_ai::load(config_dir);
+    if !config.own_files.iter().any(|f| f == &shown) {
+        config.own_files.push(shown);
+        crate::local_ai::save(config_dir, &config)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

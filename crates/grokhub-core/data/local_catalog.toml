@@ -2,6 +2,12 @@
 # picker (`local_picker.rs`) read. Biggest first. Every file is SHA-256 pinned
 # to the Hugging Face LFS oid; a download that hashes differently is deleted.
 #
+# Live Hugging Face GGUF search (`hf_gguf.rs`) is the firehose beside this
+# curated list: day-0 / community quants with rough VRAM fit badges. A browsed
+# download lands in the models folder and joins the Auto pool only (no runtime
+# model picker). Ollama's `/api/show` num_ctx probe (`ollama_show.rs`) raises
+# the local context cap when an Ollama server is detected.
+#
 # Sizes are MiB. `min_budget` is the usable memory a model needs to be
 # Recommended on each kind of memory (dedicated GPU VRAM, Apple unified memory
 # at 70% of RAM, or system RAM minus 4 GB); a missing key means never
