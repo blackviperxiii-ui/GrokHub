@@ -5,6 +5,8 @@
 
 mod apps;
 #[cfg(target_os = "linux")]
+pub mod bot_desktop;
+#[cfg(target_os = "linux")]
 mod broker;
 #[cfg(target_os = "linux")]
 mod capture;
