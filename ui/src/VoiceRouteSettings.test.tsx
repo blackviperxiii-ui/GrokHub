@@ -27,6 +27,7 @@ function modelsView(providers: AiModelsView["providers"]): AiModelsView {
     providers,
     spend: { weeklyCapUsd: 0, priceCeilingUsdPerM: 0, caps: [], ceilings: [] },
     premium: [],
+    benched: [],
     table: [],
     tableBuiltAt: 0,
     locked: "",

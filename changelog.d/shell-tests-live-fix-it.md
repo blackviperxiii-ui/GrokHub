@@ -1,0 +1,1 @@
+- Tests: the audio check and screen recording shell tests now expect a report's Fix it to open the live checklist, as it has since the Pulse live dialog shipped, so the shell job passes again.

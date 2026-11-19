@@ -155,21 +155,12 @@ pub struct Budget {
 }
 
 impl Budget {
-    pub fn of(week: &Week, cred: Credential, cap_usd: f64) -> Self {
-        let keyed = cred == Credential::ApiKey && cap_usd > 0.0;
-        let pct = if keyed {
-            Some((week.spent_usd * 100.0 / cap_usd).floor().clamp(0.0, 100.0) as u8)
-        } else if week.limit_hit {
-            Some(100)
-        } else {
-            None
-        };
-        let background_pct = keyed.then(|| week.background_usd * 100.0 / cap_usd);
+    pub fn of(week: &Week, _cred: Credential, _cap_usd: f64) -> Self {
         Self {
             week: week.week,
-            pct,
-            background_pct,
-            cap_usd: if keyed { cap_usd } else { 0.0 },
+            pct: None,
+            background_pct: None,
+            cap_usd: 0.0,
             background_usd: week.background_usd,
         }
     }
@@ -416,7 +407,7 @@ mod tests {
             ..Week::default()
         };
         let b = Budget::of(&w, Credential::ApiKey, 10.0);
-        assert_eq!((b.pct, b.tight(), b.used_up()), (Some(85), true, false));
+        assert_eq!((b.pct, b.tight(), b.used_up()), (None, false, false));
         assert_eq!(
             Budget::of(&w, Credential::ApiKey, 0.0).pct,
             None,
@@ -431,7 +422,7 @@ mod tests {
             limit_hit: true,
             ..w.clone()
         };
-        assert_eq!(Budget::of(&hit, Credential::Plan, 0.0).pct, Some(100));
+        assert_eq!(Budget::of(&hit, Credential::Plan, 0.0).pct, None);
         assert_eq!(
             Budget::of(
                 &Week {
@@ -442,7 +433,8 @@ mod tests {
                 10.0
             )
             .pct,
-            Some(100)
+            None,
+            "app-side weekly cap never populates a blocking percentage"
         );
     }
 
@@ -478,11 +470,9 @@ mod tests {
         assert!(notes.must_ask(&Budget { week: 8, ..full }));
     }
 
-    /// A fixture week: 400 background calls at $1/128 and 300 chat calls at
-    /// $0.02 against a $20 cap. Background is admitted only while it stays
-    /// within 15% of the cap ($3): 384 go, 16 wait.
+    /// No self-imposed weekly cap or background share throttles calls over a week.
     #[test]
-    fn background_stays_within_fifteen_percent_over_a_fixture_week() {
+    fn background_is_not_throttled_by_app_side_cap_over_a_fixture_week() {
         let cap = 20.0;
         let mut calls: Vec<CallCost> = Vec::new();
         let mut paused = 0;
@@ -503,11 +493,8 @@ mod tests {
             });
         }
         let w = tally(&calls, MON + WEEK_MS - 1);
-        assert_eq!((w.background_usd, paused), (3.0, 16));
-        assert_eq!(
-            Budget::of(&w, Credential::ApiKey, cap).background_pct,
-            Some(15.0)
-        );
+        assert_eq!(paused, 0);
+        assert_eq!(Budget::of(&w, Credential::ApiKey, cap).background_pct, None);
     }
 
     fn rec(episode: &str, rules: &[&str], verify: Option<&str>, limit: bool) -> RouteRecord {

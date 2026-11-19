@@ -1564,6 +1564,8 @@ mod tests {
             path: path.into(),
             parent: parent.map(str::to_string),
             open: true,
+            remote_url: None,
+            preferred_branch: None,
         }
     }
 

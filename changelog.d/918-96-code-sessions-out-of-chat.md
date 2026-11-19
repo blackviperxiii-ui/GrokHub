@@ -1,0 +1,1 @@
+- Code project sessions and their helpers/runners stay in the Editor (Projects / Helpers); Hangout Chat tabs, History, and recent chats no longer list them.

@@ -53,6 +53,7 @@ pub mod prefix_guard;
 mod prompt;
 mod recovery;
 pub mod repair;
+mod repo_rules;
 pub mod research;
 mod retry;
 pub mod review;
@@ -152,6 +153,11 @@ pub use prompt::{
 pub use recovery::{
     project as project_recovery, state_for_rung, DriveFact, RecoveryFacts, RecoverySnapshot,
     RecoveryState,
+};
+pub use repo_rules::{
+    discover as discover_repo_rules, resolve_preferred_branch,
+    task_prefix as repo_rules_task_prefix, RepoRulesBundle, RepoRulesInput, RepoSync, RuleFile,
+    RuleKind, PROMPT_CAP as REPO_RULES_PROMPT_CAP,
 };
 pub use retry::{
     decide_retry, jitter_backoff, resolve_max_retries_with_env, retry_after_or_backoff,

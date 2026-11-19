@@ -63,20 +63,28 @@ fn save_budget(config_dir: &Path, budget: &ProactiveBudget) -> Result<(), String
     std::fs::rename(&tmp, budget_path(config_dir)).map_err(|e| e.to_string())
 }
 
-/// Open board cards as the engine sees them: blocked, or a report not opened.
+/// Open board cards as the engine sees them: blocked, a report not opened, or
+/// a card with a due time (Pulse reminders and "due within a day" offers).
 pub fn work_items(config_dir: &Path) -> Vec<pro::WorkItem> {
     let cards = grokhub_core::work_file::read_board(&crate::workboard::path(config_dir))
         .unwrap_or_default();
     cards
         .iter()
         .filter_map(|c| {
+            if matches!(
+                c.status,
+                grokhub_core::BoardStatus::Done | grokhub_core::BoardStatus::Dismissed
+            ) {
+                return None;
+            }
             let blocked = c.status == grokhub_core::BoardStatus::Blocked;
             let fresh_report = c.status == grokhub_core::BoardStatus::FollowUp && c.fresh;
-            (blocked || fresh_report).then(|| pro::WorkItem {
+            let due_at = c.due_at;
+            (blocked || fresh_report || due_at.is_some()).then(|| pro::WorkItem {
                 title: c.title.clone(),
                 blocked,
                 fresh_report,
-                due_at: None,
+                due_at,
             })
         })
         .collect()
@@ -482,6 +490,31 @@ mod tests {
         let on_page = crate::pulse::cards(&dir).expect("cards");
         assert_eq!(on_page.len(), 1);
         assert_eq!(load_budget(&dir).shown, vec![NOW]);
+    }
+
+    #[test]
+    fn a_workboard_due_time_lands_on_the_proactive_card() {
+        let dir = temp_dir("due");
+        let due = NOW + 30 * MIN;
+        let mut card = BoardCard::new("Ship notes", "", "");
+        card.id = "due-1".into();
+        card.status = BoardStatus::Todo;
+        card.due_at = Some(due);
+        grokhub_core::work_file::write_board(&crate::workboard::path(&dir), &[card])
+            .expect("write board");
+        let items = work_items(&dir);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Ship notes");
+        assert_eq!(items[0].due_at, Some(due));
+        assert!(!items[0].blocked);
+        let posted = tick(&dir, PID, NOW, false, 8).expect("tick");
+        assert_eq!(posted.len(), 1);
+        assert_eq!(posted[0].title, "I can get \"Ship notes\" ready");
+        assert_eq!(posted[0].pulse.due_at, Some(due));
+        assert_eq!(
+            crate::auto_fixes::reminder(&posted[0], NOW, true),
+            Some("I can get \"Ship notes\" ready".into())
+        );
     }
 
     #[test]

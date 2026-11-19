@@ -249,13 +249,18 @@ fn ensure_known(config_dir: &Path, id: &str) -> Result<(), String> {
     history::saved(config_dir, id).map(|_| ())
 }
 
-/// Live tabs: not archived, not soft-deleted. Main first, then pinned, then
-/// newest.
+/// Live tabs: not archived, not soft-deleted, and not a Code project
+/// session (those stay in the Editor Projects tab). Main first, then
+/// pinned, then newest.
 pub fn list_tabs(config_dir: &Path) -> Vec<ChatTab> {
     let store = purged_store(config_dir);
     let mut tabs: Vec<ChatTab> = history::list(config_dir)
         .into_iter()
-        .filter(|row| !is_archived(&store, &row.id) && !is_deleted(&store, &row.id))
+        .filter(|row| {
+            !is_archived(&store, &row.id)
+                && !is_deleted(&store, &row.id)
+                && (row.main || row.project.is_none())
+        })
         .map(|row| row_from(&row, &store))
         .collect();
     // Stable: the rest keep history's order.
@@ -787,5 +792,62 @@ mod tests {
         );
         assert_eq!(get_hangout_mode(&config), HangoutMode::Talk);
         assert!(HangoutMode::parse("nope").is_err());
+    }
+
+    #[test]
+    fn hangout_tabs_omit_code_project_sessions() {
+        let config = temp_dir("tabs-no-code");
+        let main = ensure_main(&config, 0x80).expect("main");
+        let pier = temp_dir("tabs-pier");
+        write_session(&config, "shell-hangout", "Hangout chat", 0x81);
+        write_session(&config, "shell-code", "Code session", 0x82);
+        // Bind the code session's cwd to a project so History tags it.
+        {
+            let _config = grokhub_agent::perm::ConfigGuard::set(&config);
+            let path = grokhub_agent::session_file("shell-code").expect("path");
+            let raw = std::fs::read_to_string(&path).expect("read");
+            let mut lines: Vec<serde_json::Value> =
+                raw.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+            if let Some(meta) = lines.first_mut() {
+                meta["cwd"] = serde_json::json!(pier.to_string_lossy());
+            }
+            let out: String = lines
+                .iter()
+                .map(|v| serde_json::to_string(v).expect("json") + "\n")
+                .collect();
+            std::fs::write(&path, out).expect("write");
+        }
+        crate::projects::save(
+            &config,
+            &[grokhub_core::ProjectNode {
+                id: "p1".into(),
+                name: "Pier".into(),
+                kind: grokhub_core::ProjectKind::Project,
+                path: pier.to_string_lossy().into(),
+                parent: None,
+                open: true,
+                remote_url: None,
+                preferred_branch: None,
+            }],
+        )
+        .expect("save projects");
+        let history_ids: Vec<String> = history::list(&config).into_iter().map(|r| r.id).collect();
+        assert!(
+            history_ids.iter().any(|id| id == "shell-code"),
+            "{history_ids:?}"
+        );
+        assert_eq!(
+            history::list(&config)
+                .iter()
+                .find(|r| r.id == "shell-code")
+                .expect("code")
+                .project
+                .as_deref(),
+            Some("p1")
+        );
+        let ids: Vec<String> = list_tabs(&config).into_iter().map(|t| t.id).collect();
+        assert!(ids.contains(&main), "{ids:?}");
+        assert!(ids.iter().any(|id| id == "shell-hangout"), "{ids:?}");
+        assert!(!ids.iter().any(|id| id == "shell-code"), "{ids:?}");
     }
 }

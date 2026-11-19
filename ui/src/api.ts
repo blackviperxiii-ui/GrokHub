@@ -2086,6 +2086,8 @@ export interface BoardCard {
   userSteps: boolean;
   /** The steps as the editor shows them, one a line with its mark. */
   stepsText: string;
+  /** When this card is due, as unix ms. Missing when it has no due time. */
+  dueAt?: number | null;
 }
 
 export interface BoardColumn {
@@ -2136,7 +2138,8 @@ export type BoardAct =
   | { kind: "block"; reason: string }
   | { kind: "unblock" }
   | { kind: "steps"; text: string }
-  | { kind: "place"; to: BoardLane; before: string | null };
+  | { kind: "place"; to: BoardLane; before: string | null }
+  | { kind: "due"; dueAt: number | null };
 
 /** Make it recurring: the schedules offered, in the order the shell's
  * `work_triage::RECUR_CHOICES` keeps them. */
@@ -4810,6 +4813,19 @@ export interface CodeDiff {
   cut: boolean;
 }
 
+/** Sync ahead/behind for the open project's git repo. */
+export interface CodeProjectSync {
+  ahead: number;
+  behind: number;
+  upstream?: string | null;
+}
+
+/** One discovered rule file on the project bar. */
+export interface CodeProjectRule {
+  path: string;
+  kind: string;
+}
+
 /** Code tab: one project on the project bar. */
 export interface CodeProject {
   id: string;
@@ -4819,12 +4835,38 @@ export interface CodeProject {
   current: boolean;
   /** The folder is no longer on disk. */
   missing: boolean;
+  /** Linked remote URL when set (never includes credentials). */
+  remoteUrl?: string | null;
+  /** Working / PR-base branch for this project. */
+  preferredBranch?: string | null;
+  /** Checked-out branch when this is a git repo. */
+  activeBranch?: string | null;
+  sync?: CodeProjectSync | null;
+  /** Rule files in force for the open project. */
+  rules?: CodeProjectRule[];
 }
 
 /** Code tab: every project in the list, and the open folder ("" when none is). */
 export interface CodeProjects {
   bound: string;
   projects: CodeProject[];
+}
+
+/** Discovered repo rules for orchestrator helpers (Order 918.5 / 918.95). */
+export interface RepoRulesBundle {
+  projectId: string;
+  workspace: string;
+  remoteUrl?: string | null;
+  preferredBranch: string;
+  activeBranch?: string | null;
+  sync?: CodeProjectSync | null;
+  files: Array<{
+    path: string;
+    kind: string;
+    excerpt?: string | null;
+    bytes: number;
+  }>;
+  promptBlock: string;
 }
 
 export function codeProjects(): Promise<CodeProjects> {
@@ -4844,6 +4886,33 @@ export function codeProjectPick(): Promise<CodeProjects | null> {
 /** Make a project in the work folder and open it. */
 export function codeProjectNew(name: string): Promise<CodeProjects> {
   return invoke<CodeProjects>("code_project_new", { name });
+}
+
+/** Clone (or reuse) a remote git URL under the work root and open it. */
+export function codeProjectLinkRemote(
+  url: string,
+  preferredBranch?: string | null,
+): Promise<CodeProjects> {
+  return invoke<CodeProjects>("code_project_link_remote", {
+    url,
+    preferredBranch: preferredBranch ?? null,
+  });
+}
+
+/** Set or clear the per-project preferred working branch. */
+export function codeProjectSetBranch(
+  projectId: string,
+  branch?: string | null,
+): Promise<CodeProjects> {
+  return invoke<CodeProjects>("code_project_set_branch", {
+    projectId,
+    branch: branch ?? null,
+  });
+}
+
+/** Discovered repo rules for the open project — same shape helpers receive. */
+export function codeProjectRules(): Promise<RepoRulesBundle> {
+  return invoke<RepoRulesBundle>("code_project_rules");
 }
 
 /** The agent window shows this session: it takes the open project's folder
@@ -5332,10 +5401,17 @@ export interface AiWebSearch {
   braveKeySet: boolean;
 }
 
+export interface AiBenchedRow {
+  id: string;
+  label: string;
+  benchedAtMs: number;
+}
+
 export interface AiModelsView {
   providers: AiProviderRow[];
   spend: AiSpend;
   premium: AiPremiumRow[];
+  benched: AiBenchedRow[];
   table: AiClassView[];
   tableBuiltAt: number;
   locked: string;
@@ -5472,6 +5548,14 @@ export function saveAiSpend(
   ceiling: number,
 ): Promise<AiModelsView> {
   return invoke<AiModelsView>("save_ai_spend", { cap, ceiling });
+}
+
+export function benchAiModel(target: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("bench_ai_model", { target });
+}
+
+export function unbenchAiModel(id: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("unbench_ai_model", { id });
 }
 
 export function revokeAiPremium(id: string): Promise<AiModelsView> {

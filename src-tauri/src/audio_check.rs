@@ -392,11 +392,24 @@ mod tests {
         assert!(first.starts_with(&card.title), "{first}");
         assert_eq!(report.details, opened);
         assert_eq!(post.chips[0].label, "Fix it");
-        let seed = crate::pulse::offer(&dir, &card.id, 0, NOW).unwrap();
+        // Fix it changes a device, so it opens the live checklist, not chat.
+        assert_eq!(post.chips[0].mode, "live");
         assert_eq!(
-            seed.text,
+            crate::pulse::offer(&dir, &card.id, 0, NOW).err().as_deref(),
+            Some("That fix opens as a live checklist, not in chat.")
+        );
+        let live = crate::pulse_live::open(&dir, &card.id, 0, NOW).unwrap();
+        assert_eq!(live.label, "Fix it");
+        assert_eq!(
+            live.summary,
             "Fix what my audio check found, using the report's steps, one at a time:\n1. Lower Yeti Stereo Microphone's input volume or gain knob until loud speech peaks around -6 dBFS. (Undo: Lower the volume or gain again to where it was.)\n\nBefore each step, say what it will change. Ask me before anything that changes settings, files or devices, and stop if a step fails. Tell me which steps I have to do by hand."
         );
+        let steps: Vec<&str> = live.steps.iter().map(|s| s.plain.as_str()).collect();
+        assert_eq!(
+            steps,
+            ["Lower Yeti Stereo Microphone's input volume or gain knob until loud speech peaks around -6 dBFS."]
+        );
+        assert_eq!(live.phase, "ready");
     }
 
     #[test]

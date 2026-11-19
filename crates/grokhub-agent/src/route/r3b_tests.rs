@@ -2339,10 +2339,13 @@ fn an_18_plus_chat_keeps_answering_after_its_local_model_is_unloaded() {
     );
     drop(again);
 
-    // Ready but not loaded yet: the chat says it's loading, never a silent wait.
+    // Ready but not loaded yet: the chat says it's loading with why it routed locally.
     let _cold = super::local::ForceOn::with(None);
     let (out, _, thought) = send("lets get naked", "chat:default");
-    assert_eq!(thought, super::local::LOCAL_LOADING_NOTE);
+    assert!(
+        thought.starts_with(super::local::LOCAL_LOADING_NOTE) && thought.contains("Reason:"),
+        "expected loading note with routing reason, got: {thought}"
+    );
     assert!(out.is_err(), "no engine here, so it can't start: {out:?}");
     assert_eq!(sent_to_xai(), 0);
     assert_eq!(wire.n(), 0);
@@ -3388,11 +3391,11 @@ fn stand_in(dir: &Path) -> Option<String> {
 
 #[test]
 fn a_busy_or_slow_provider_stands_in_after_a_healthy_one() {
-    // Healthy: Grok on OpenRouter goes first, so the reply keeps its voice.
+    // Both healthy: no primary-provider Grok bias (rule 918.6); a healthy provider answers.
     let dir = two_providers("health-ok", &[(200, true, false, 1_500)]);
-    assert_eq!(stand_in(&dir).as_deref(), Some("openrouter/x-ai/grok-test"));
+    assert_eq!(stand_in(&dir).as_deref(), Some("groq/vendor/fast"));
     let _ = std::fs::remove_dir_all(dir);
-    // Three of its last five calls answered 429: the other provider goes first.
+    // Three of OpenRouter's last five calls answered 429: the other healthy provider goes first.
     let busy = [
         (500, false, true, 0),
         (400, false, true, 0),
@@ -3411,7 +3414,7 @@ fn a_busy_or_slow_provider_stands_in_after_a_healthy_one() {
     assert_eq!(stand_in(&dir).as_deref(), Some("groq/vendor/fast"));
     let _ = std::fs::remove_dir_all(dir);
     // A batched call's queueing (0, no sample) teaches nothing, and an hour-old
-    // busy spell is over.
+    // busy spell is over; a healthy candidate stands in.
     let old_and_queued = [
         (2 * 60 * 60 * 1000, false, true, 0),
         (2 * 60 * 60 * 1000 - 1, false, true, 0),
@@ -3421,7 +3424,7 @@ fn a_busy_or_slow_provider_stands_in_after_a_healthy_one() {
         (100, true, false, 0),
     ];
     let dir = two_providers("health-queued", &old_and_queued);
-    assert_eq!(stand_in(&dir).as_deref(), Some("openrouter/x-ai/grok-test"));
+    assert_eq!(stand_in(&dir).as_deref(), Some("groq/vendor/fast"));
     let _ = std::fs::remove_dir_all(dir);
 }
 

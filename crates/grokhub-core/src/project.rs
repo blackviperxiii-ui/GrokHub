@@ -22,6 +22,27 @@ pub struct ProjectNode {
     pub parent: Option<String>,
     #[serde(default)]
     pub open: bool,
+    /// Remote git URL when this project is linked to an online repo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
+    /// Per-project working / PR-base branch override (e.g. `beta`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_branch: Option<String>,
+}
+
+impl Default for ProjectNode {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            kind: ProjectKind::Project,
+            path: String::new(),
+            parent: None,
+            open: false,
+            remote_url: None,
+            preferred_branch: None,
+        }
+    }
 }
 
 pub fn clean_project_name(name: &str) -> Option<String> {
@@ -73,6 +94,8 @@ pub fn seed_from_bound(bound_path: &str) -> Vec<ProjectNode> {
         path: path.to_string(),
         parent: None,
         open: false,
+        remote_url: None,
+        preferred_branch: None,
     }]
 }
 
@@ -117,6 +140,8 @@ pub fn create_project(
         path,
         parent,
         open: false,
+        remote_url: None,
+        preferred_branch: None,
     });
     Ok(nodes.len() - 1)
 }
@@ -139,6 +164,8 @@ pub fn stage_project(
         path: String::new(),
         parent,
         open: false,
+        remote_url: None,
+        preferred_branch: None,
     });
     Ok(nodes.len() - 1)
 }
@@ -360,6 +387,8 @@ pub fn create_folder(
         path: String::new(),
         parent: None,
         open: true,
+        remote_url: None,
+        preferred_branch: None,
     });
     Ok(nodes.len() - 1)
 }
@@ -482,6 +511,8 @@ pub fn upsert_bound_in(
         path: path.to_string(),
         parent: None,
         open: false,
+        remote_url: None,
+        preferred_branch: None,
     });
     Some(id)
 }
@@ -1020,6 +1051,8 @@ mod tests {
             path: "~/GrokHub-Work/night-watch".into(),
             parent: None,
             open: false,
+            remote_url: None,
+            preferred_branch: None,
         }];
         create_project(&mut nodes, "p2", "Night watch", None, &work).unwrap();
         assert_eq!(nodes.len(), 2);
@@ -1054,6 +1087,8 @@ mod tests {
             path: "~/work/proj".into(),
             parent: None,
             open: false,
+            remote_url: None,
+            preferred_branch: None,
         }];
         let out = drop_selected_in(&mut nodes, "p1", "/home/j/work/proj", Some("/home/j"));
         assert!(out.dropped);
@@ -1068,6 +1103,8 @@ mod tests {
             path: "$HOME/work/proj".into(),
             parent: None,
             open: false,
+            remote_url: None,
+            preferred_branch: None,
         }];
         let out = drop_selected_in(&mut nodes, "p1", "/home/j/work/proj", Some("/home/j"));
         assert!(
@@ -1085,6 +1122,8 @@ mod tests {
             path: "~/work/proj".into(),
             parent: None,
             open: false,
+            remote_url: None,
+            preferred_branch: None,
         }];
         let id = upsert_bound_in(&mut nodes, "/home/j/work/proj", Some("/home/j"));
         assert_eq!(id.as_deref(), Some("p1"));

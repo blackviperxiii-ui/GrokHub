@@ -11,7 +11,7 @@ use grokhub_core::model_registry::profile::ModelProfile;
 use grokhub_core::model_registry::store::save_registry;
 use grokhub_core::model_registry::{Credential, Listing, ModelMeta, Prices, Registry, SourceKind};
 
-use super::budget::{self, BudgetNotes, BUDGET_PAUSE_MSG};
+use super::budget::{self};
 use super::live::{self, RouteCall, RouteDone};
 use super::spend::{self, fast_verdict, Latency, Spend, SpendSettings};
 use super::table::{table_path, ClassTable, RoutingTable, SpeedQuality, TableRow};
@@ -143,24 +143,20 @@ fn fast_goes_to_a_live_waiting_turn_and_falls_back_to_grok_4_7_when_the_budget_i
         r.reason,
         "balanced · Medium: you're waiting, so the faster model is worth it."
     );
-    // Budget tight: Grok 4.7, and the record says why.
+    // Budget tight: internal budget flags never downgrade away from Fast.
     let tight = Spend {
         budget_tight: true,
         ..waiting()
     };
     let r = Router::choose(&ask("grok-4.7", tight), &reg, &no_profiles(), &table(), NOW);
     assert_eq!(
-        (r.model.as_str(), r.cost_class, r.base.clone()),
-        ("grok-4.7", CostClass::Included, None)
+        (r.model.as_str(), r.cost_class, r.base.as_deref()),
+        (FAST, CostClass::AutonomousPremium, Some("grok-4.7"))
     );
     assert!(
-        r.rule_ids.contains(&"fast:budget_tight".to_string()),
+        r.rule_ids.contains(&"fast:waiting".to_string()),
         "{:?}",
         r.rule_ids
-    );
-    assert_eq!(
-        r.reason,
-        "balanced · Medium: this week's budget is tight, so not grok-4.7-fast."
     );
     // Nobody waiting: plain Grok 4.7.
     let r = Router::choose(
@@ -451,7 +447,7 @@ fn a_premium_route_waits_for_your_grant_and_revoking_it_stops_the_next_one() {
 }
 
 #[test]
-fn at_100_percent_background_pauses_and_chat_asks_until_you_say_go_on() {
+fn spending_over_weekly_cap_never_blocks_chat_or_background() {
     let dir = crate::harness::test_dir("r2b-budget");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet(Credential::ApiKey)).unwrap();
@@ -470,7 +466,6 @@ fn at_100_percent_background_pauses_and_chat_asks_until_you_say_go_on() {
         text: "hi",
         ..RouteCall::default()
     };
-    // One chat call that cost $0.85: 85%, tight but not used up.
     let spent = |usd: f64| RouteDone {
         ok: true,
         http: 200,
@@ -484,32 +479,20 @@ fn at_100_percent_background_pauses_and_chat_asks_until_you_say_go_on() {
     live::route_log(&dir, &call("chat:default"), &d, &spent(0.85));
     budget::forget_week();
     let d = live::decide(&dir, &call("chat:default"), now);
-    assert_eq!((d.budget_pct, d.paused()), (Some(85), false));
-    let rec = live::route_log(&dir, &call("chat:default"), &d, &spent(0.15));
+    assert_eq!((d.budget_pct, d.paused()), (None, false));
+    let rec = live::route_log(&dir, &call("chat:default"), &d, &spent(0.50));
     assert_eq!(
         (rec.signals.budget_pct, rec.cost_class.as_str()),
-        (Some(85), "included")
+        (None, "included")
     );
     budget::forget_week();
     let _ = live::take_budget_ask();
     let bg = live::decide(&dir, &call("background:summarize"), now);
-    assert_eq!(
-        (bg.budget_pct, bg.paused(), bg.pause_msg()),
-        (Some(100), true, *BUDGET_PAUSE_MSG)
-    );
+    assert_eq!((bg.budget_pct, bg.paused()), (None, false));
     let chat = live::decide(&dir, &call("chat:default"), now);
-    assert_eq!((chat.paused(), chat.pause_msg()), (true, *BUDGET_PAUSE_MSG));
-    assert!(live::take_budget_ask());
-    // A budget pause is not a no-route wait: it never retries on its own, it waits for you.
+    assert!(!chat.paused());
+    assert!(!live::take_budget_ask());
     assert_eq!(live::take_no_route(), None);
-    // You said to keep going this week: chat goes, background still waits.
-    BudgetNotes {
-        go_on_week: budget::week_of(now),
-        ..BudgetNotes::default()
-    }
-    .save(&dir);
-    assert!(!live::decide(&dir, &call("chat:default"), now).paused());
-    assert!(live::decide(&dir, &call("background:summarize"), now).paused());
     spend::set_spend(SpendSettings::default());
     budget::forget_week();
     let _ = std::fs::remove_dir_all(dir);

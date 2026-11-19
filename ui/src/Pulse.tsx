@@ -2,7 +2,6 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import {
   getFeedPrompt,
   getPulse,
-  openUrl,
   pulseAct,
   pulseDiscuss,
   pulseDoneStop,
@@ -448,11 +447,9 @@ export function Pulse({
                 busy={busy}
                 onLove={() => void act(post.id, post.loved ? "unlove" : "love")}
                 onDiscuss={() => void discuss(post.id)}
-                onOpen={() => {
-                  void openUrl(post.link).catch(fail);
-                  // Read it counts as engagement for card taste; quietly.
-                  void pulseAct(post.id, "opened").catch(() => {});
-                }}
+                // Opening the source counts as engagement for card taste; quietly.
+                onOpen={() => void pulseAct(post.id, "opened").catch(() => {})}
+                onOpenFailed={fail}
                 onOpenModel={
                   onOpenModel &&
                   (() => {
