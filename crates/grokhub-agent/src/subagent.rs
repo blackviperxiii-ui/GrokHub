@@ -365,6 +365,24 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     } else {
         (prompt, None)
     };
+    // Order 918.95 / 918.5: every helper task gets discovered repo rules.
+    let prompt = {
+        let git = workspace.join(".git");
+        let has_beta = git.join("refs/heads/beta").is_file()
+            || git.join("refs/remotes/origin/beta").is_file();
+        let input = crate::repo_rules::RepoRulesInput {
+            project_id: "",
+            has_beta,
+            ..Default::default()
+        };
+        let bundle = crate::repo_rules::discover(&workspace, input);
+        let prefix = crate::repo_rules::task_prefix(&bundle);
+        if prefix.is_empty() {
+            prompt
+        } else {
+            format!("{prefix}{prompt}")
+        }
+    };
     let job = ChildJob {
         client: Arc::clone(&client),
         permits: call
