@@ -82,6 +82,7 @@ pub fn remote_url(dir: &Path) -> Option<String> {
 /// Clone `url` into `dest` (parent must exist). `github_token` is used only for
 /// HTTPS GitHub clones and never logged. Existing `dest` is left alone on failure.
 pub fn clone_remote(url: &str, dest: &Path, github_token: Option<&str>) -> Result<(), String> {
+    grokhub_core::offline::refuse()?;
     if dest.exists() {
         return Err(format!(
             "That folder already exists: {}. Open it instead of cloning again.",
@@ -287,6 +288,16 @@ fn git_ok(dir: &Path, args: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clone_is_refused_offline_and_makes_no_folder() {
+        let _offline = grokhub_core::offline::force_for_thread(true);
+        let tmp = std::env::temp_dir().join(format!("link-offline-{}", std::process::id()));
+        let dest = tmp.join("app");
+        let err = clone_remote("https://github.com/org/app.git", &dest, None).unwrap_err();
+        assert_eq!(err, *grokhub_core::offline::OFFLINE_MSG);
+        assert!(!tmp.exists());
+    }
 
     #[test]
     fn remote_url_parsing_and_sanitize() {
