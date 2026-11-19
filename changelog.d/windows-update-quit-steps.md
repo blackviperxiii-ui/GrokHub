@@ -1,0 +1,1 @@
+- A Windows update now stops the on-device model server, any test run or deploy, and saves the learning memory and hub pairings before the installer starts. The updater exits the app itself, which skipped the normal quit steps.

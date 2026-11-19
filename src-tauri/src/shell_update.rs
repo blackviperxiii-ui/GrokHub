@@ -235,8 +235,11 @@ pub mod plugin {
             Version::parse(&version()).map_err(|e| format!("this build's version: {e}"))?;
         let switching = ch != build_channel();
         let pubkey = updater_pubkey().ok_or("this build has no release key")?;
+        let handle = app.clone();
         let updater = app
             .updater_builder()
+            // Windows exits inside the install; run the app's quit steps first.
+            .on_before_exit(move || crate::before_update_exit(&handle))
             .endpoints(vec![url
                 .parse()
                 .map_err(|_| "bad manifest link".to_string())?])
@@ -262,8 +265,10 @@ pub mod plugin {
     }
 
     /// Download, verify (the plugin refuses a bad signature) and install the
-    /// offered update, then restart into it. Windows' installer exits the app
-    /// itself.
+    /// offered update, then restart into it. On Windows the plugin starts the
+    /// installer and exits the process itself, after the app's quit steps
+    /// ([`crate::before_update_exit`]); a launch it can't make comes back as
+    /// an error.
     pub async fn install(app: &AppHandle, config_dir: &Path) -> Result<(), String> {
         let update = check(app, config_dir)
             .await?
