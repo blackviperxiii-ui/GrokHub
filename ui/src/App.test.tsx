@@ -122,11 +122,27 @@ vi.mock("./Journal", () => ({
   ),
 }));
 vi.mock("./History", () => ({
-  History: ({ onOpen, onDeleted }: { onOpen: (id: string) => void; onDeleted: (id: string) => void }) => (
+  History: ({
+    onOpen,
+    onOpenCode,
+    onDeleted,
+  }: {
+    onOpen: (id: string) => void;
+    onOpenCode?: () => void;
+    onDeleted: (id: string) => void;
+  }) => (
     <div>
       <button type="button" onClick={() => onOpen("shell-old")}>
         Open old chat
       </button>
+      <button type="button" onClick={() => onOpen("shell-code")}>
+        Open code session
+      </button>
+      {onOpenCode && (
+        <button type="button" onClick={onOpenCode}>
+          Open Code tab
+        </button>
+      )}
       <button type="button" onClick={() => onDeleted("shell-gone")}>
         Delete a chat
       </button>
@@ -182,19 +198,16 @@ vi.mock("./Memory", () => ({
 vi.mock("./Code", () => ({
   Code: (p: {
     shown: boolean;
-    chatSession?: string;
-    onShowChat?: () => void;
     onSession?: (id: string) => void;
     deleted?: { id: string };
+    open?: { id: string; n: number };
   }) => (
     <div hidden={!p.shown}>
       <p>Code page</p>
       {p.deleted && <p>Code heard deleted {p.deleted.id}</p>}
+      {p.open && <p>Code opened {p.open.id}</p>}
       <button type="button" onClick={() => p.onSession?.("shell-old")}>
         Agent window shows shell-old
-      </button>
-      <button type="button" onClick={p.onShowChat}>
-        That session is in Chat
       </button>
     </div>
   ),
@@ -326,6 +339,9 @@ describe("App", () => {
     api.getCapabilities.mockReset();
     api.getProfile.mockReset();
     api.getProfile.mockRejectedValue(new Error("not mocked"));
+    api.listChats.mockReset().mockResolvedValue([
+      { id: "shell-c9", title: "Trip plans", created: 1, updated: 2 },
+    ]);
   });
 
   it("puts the main pages on the rail and the rest under More on a desktop, and hands Settings the report", async () => {
@@ -626,10 +642,19 @@ describe("App", () => {
     await openPage("History");
     await userEvent.click(screen.getByRole("button", { name: "Delete a chat" }));
     expect(screen.getByText("Code heard deleted shell-gone")).toBeInTheDocument();
-    // A session the Chat tab holds is shown there.
-    await userEvent.click(screen.getByRole("button", { name: "Code" }));
-    await userEvent.click(screen.getByRole("button", { name: "That session is in Chat" }));
-    expect(view("Chat")).toHaveAttribute("aria-current", "page");
+  });
+
+  it("a Code project session from History opens in the Editor, not Hangout Chat", async () => {
+    api.getCapabilities.mockResolvedValue({ ...DESKTOP, code: true });
+    api.listChats.mockResolvedValue([
+      { id: "shell-code", title: "Fix the build", created: 1, updated: 2, project: "p1" },
+    ]);
+    render(<App />);
+    await openPage("History");
+    await userEvent.click(await screen.findByRole("button", { name: "Open code session" }));
+    await waitFor(() => expect(view("Code")).toHaveAttribute("aria-current", "page"));
+    expect(await screen.findByText("Code opened shell-code")).toBeVisible();
+    expect(screen.queryByText("Opened shell-code")).not.toBeInTheDocument();
   });
 
   it("Run on a queued job opens Chat in the job's chat and sends its prompt", async () => {

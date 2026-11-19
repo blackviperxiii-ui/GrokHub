@@ -828,17 +828,16 @@ describe("Code tab", () => {
     expect(chat).toHaveTextContent("session chat-7");
   });
 
-  it("sends a session the Chat tab has open to the Chat tab, and tells the app its own session", async () => {
+  it("opens a project session in the agent window and tells the app, even if Chat had that id", async () => {
     api.codeRepo.mockResolvedValue(repo());
-    const onShowChat = vi.fn();
     const onSession = vi.fn();
-    render(<Code shown onOpenSettings={() => {}} chatSession="chat-7" onShowChat={onShowChat} onSession={onSession} />);
+    render(<Code shown onOpenSettings={() => {}} onSession={onSession} />);
     expect(onSession).toHaveBeenLastCalledWith("shell-first");
     await userEvent.click(barButton("stub open session"));
-    expect(onShowChat).toHaveBeenCalledTimes(1);
     await settle();
-    expect(screen.getByTestId("agent-chat")).toHaveTextContent("session shell-first");
-    expect(api.codeSessionBind).not.toHaveBeenCalledWith("chat-7");
+    expect(api.codeSessionBind).toHaveBeenCalledWith("chat-7");
+    expect(await screen.findByTestId("agent-chat")).toHaveTextContent("session chat-7");
+    expect(onSession).toHaveBeenCalledWith("chat-7");
   });
 
   it("passes History's deletes to the agent window, and reads the project again after a typed command", async () => {

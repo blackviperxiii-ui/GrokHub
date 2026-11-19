@@ -204,6 +204,8 @@ export function App() {
   const [goTo, setGoTo] = useState<{ section: Section; n: number; model?: string }>();
   const [notices, setNotices] = useState<Notices>(NO_NOTICES);
   const [open, setOpen] = useState<{ id: string; n: number }>();
+  /** Open a Code project session in the agent window (not Hangout Chat). */
+  const [codeOpen, setCodeOpen] = useState<{ id: string; n: number }>();
   /** The chat History deleted last, and every chat it has deleted: Delete all
    * reports its chats in one tick, so one id would lose all but the last. */
   const [deleted, setDeleted] = useState<{ id: string; ids: string[]; n: number }>();
@@ -242,9 +244,16 @@ export function App() {
   const [chatSession, setChatSession] = useState<string>();
   const [agentSession, setAgentSession] = useState<string>();
   const agentNow = useRef<string>(undefined);
+  const chatNow = useRef<string | undefined>(undefined);
+  chatNow.current = chatSession;
   const onAgentSession = useCallback((id: string) => {
     agentNow.current = id;
     setAgentSession(id);
+    // One conversation in one place: if Hangout still held this Code session,
+    // start a fresh Chat so the agent window keeps it alone.
+    if (chatNow.current === id) {
+      setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: newConversationId() }));
+    }
   }, []);
   // The pages opened so far. Each mounts the first time it opens, not before.
   const [opened, setOpened] = useState<ReadonlySet<View>>(() => new Set(["chat"]));
@@ -623,7 +632,8 @@ export function App() {
     shortcuts: () => setSheet(true),
   };
 
-  /** A saved chat, opened in Chat as History opens one. The web app has no
+  /** A saved chat, opened in Chat as History opens one. Code project
+   * sessions open in the Editor agent window instead. The web app has no
    * History, so there it switches to the browser's own chat. */
   function openSaved(id: string) {
     // The agent window has it open: it shows there, cards and all.
@@ -631,19 +641,32 @@ export function App() {
       setView("code");
       return;
     }
-    if (caps.remote) setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: id }));
-    else setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
-    setView("chat");
+    const openInChat = () => {
+      if (caps.remote) setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: id }));
+      else setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
+      setView("chat");
+    };
+    // Project-bound sessions stay out of Hangout Chat (and its pop-out panes).
+    listChats().then(
+      (rows) => {
+        const row = rows.find((r) => r.id === id);
+        if (row?.project && !row.main && !caps.remote) {
+          setCodeOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
+          setView("code");
+          return;
+        }
+        openInChat();
+      },
+      () => openInChat(),
+    );
   }
 
   function run(action: PaletteAction) {
     if (action.kind === "view") setView(action.view);
     else if (action.kind === "ask") ask(action.text);
     else if (action.kind === "command") runners[action.id]?.();
-    else if (action.kind === "chat") {
-      setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: action.id }));
-      setView("chat");
-    } else {
+    else if (action.kind === "chat") openSaved(action.id);
+    else {
       setGoTo((now) => ({ section: action.section, n: (now?.n ?? 0) + 1 }));
       setView("settings");
     }
@@ -811,10 +834,9 @@ export function App() {
                 onOpenView={openView}
                 onOpenPalette={() => setPalette("all")}
                 grokSignIn={Boolean(caps.grokSignIn)}
-                chatSession={chatSession}
-                onShowChat={() => setView("chat")}
                 onSession={onAgentSession}
                 deleted={deleted}
+                open={codeOpen}
               />
             </Suspense>
           </PageBoundary>
@@ -841,6 +863,7 @@ export function App() {
           <Page key="history" shown={shown}>
             <History
               onOpen={openSaved}
+              onOpenCode={() => setView("code")}
               onDeleted={(id) =>
                 setDeleted((now) => ({ id, ids: [...(now?.ids ?? []), id], n: (now?.n ?? 0) + 1 }))
               }

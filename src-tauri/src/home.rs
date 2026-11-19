@@ -608,7 +608,7 @@ pub fn toggle_for(src: &Sources<'_>, done: bool, now: u64) -> Result<MissionPage
 fn recent_chats(src: &Sources<'_>) -> Tile {
     let chats = history::list(src.config_dir)
         .into_iter()
-        .filter(|row| src.viewer.sees(&row.id))
+        .filter(|row| src.viewer.sees(&row.id) && (row.main || row.project.is_none()))
         .take(TILE_ROWS)
         .map(|row| ChatLine {
             id: row.id,

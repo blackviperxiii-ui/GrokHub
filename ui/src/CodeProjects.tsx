@@ -31,6 +31,12 @@ export function folderName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+/** A chat bound to a Code project: its sessions and runners live in the
+ * Editor (Projects / Helpers), not in Chat Hangout, History or Agents. */
+export function isCodeSession(row: { project?: string | null; main?: boolean }): boolean {
+  return !row.main && !!row.project;
+}
+
 /** The open project's saved chats, newest first. */
 export function projectSessions(chats: ChatRow[], project: string): ChatRow[] {
   return chats.filter((c) => c.project === project).sort((a, b) => b.updated - a.updated);

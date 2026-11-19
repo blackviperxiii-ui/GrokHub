@@ -263,6 +263,15 @@ describe("Objectives beside chat", () => {
     expect(recentChats(rows, "r7").map((r) => r.id)).toEqual(["r6", "r5", "r4", "r3", "r2"]);
   });
 
+  it("leaves Code project sessions out of the recent list beside Chat", () => {
+    const rows = [
+      chat("c1", "Hangout", 300),
+      chat("c2", "Code session", 200, { project: "p1" }),
+      chat("c3", "Also hangout", 100),
+    ];
+    expect(recentChats(rows, undefined).map((r) => r.id)).toEqual(["c1", "c3"]);
+  });
+
   it("says so when there is no objective or no other chat", async () => {
     api.getMission.mockResolvedValue({ xp: XP, mission: null });
     api.listChats.mockResolvedValue([chat("c1", "Open", 800)]);
