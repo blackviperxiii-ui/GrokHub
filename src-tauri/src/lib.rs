@@ -170,6 +170,8 @@ pub mod suggested;
 mod task_feed;
 mod turns;
 pub mod unattended;
+#[cfg(desktop)]
+mod update_rollback;
 pub mod voice;
 mod voice_live;
 mod vstack_sync;
@@ -8096,6 +8098,23 @@ pub fn run() {
             #[cfg(desktop)]
             if !app_guard::take_profile(app.handle(), &config_dir) {
                 return Ok(());
+            }
+            // A self-update that keeps ending early is put back to the old
+            // version, which then runs instead of this one.
+            #[cfg(desktop)]
+            {
+                let running = shell_update::version();
+                if let Some(old) = update_rollback::on_launch(&config_dir, &running) {
+                    let mut cmd = std::process::Command::new(&old);
+                    cmd.args(std::env::args_os().skip(1));
+                    let _ = cmd.spawn();
+                    std::process::exit(0);
+                }
+                let dir = config_dir.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(update_rollback::HEALTHY_AFTER);
+                    update_rollback::mark_healthy(&dir, &running);
+                });
             }
             // Before anything reads the local model catalog.
             catalog_refresh::tidy(&config_dir);
