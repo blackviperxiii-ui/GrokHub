@@ -44,6 +44,10 @@ const DECODE_MAX_PX: u32 = 8192;
 const DECODE_MAX_ALLOC: u64 = 128 * 1024 * 1024;
 /// The image cache is cleaned at most this often.
 const PRUNE_EVERY_MS: u64 = 24 * 3_600_000;
+/// Most images [`fill_images`] downloads in one tick.
+const FILL_PER_TICK: usize = 6;
+/// Only cards posted this recently get their images downloaded later.
+const FILL_WINDOW_MS: u64 = 24 * 3_600_000;
 
 /// Points the writer's network at a local mock (the shell smoke test). Only a
 /// plain-http loopback URL is accepted, so it can never move real traffic.
@@ -178,10 +182,11 @@ pub(crate) fn prune_images(config_dir: &Path, now_ms: u64) -> usize {
     let Ok(cards) = crate::pulse::stored_cards(config_dir) else {
         return 0;
     };
+    // A referenced URL keeps its file and its failure marker.
     let keep: HashSet<String> = cards
         .iter()
         .flat_map(|card| card.pulse.image_urls.iter())
-        .map(|url| pc::image_cache_name(url))
+        .flat_map(|url| [pc::image_cache_name(url), pc::image_miss_name(url)])
         .collect();
     let dir = images_dir(config_dir);
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -256,11 +261,110 @@ pub fn wake() {
     cv.notify_all();
 }
 
+/// Download the remote images of recent cards that don't have them cached
+/// yet: release radar, wishlist and achievement capsules, daily drop
+/// thumbnails, and any other card that names an `image_urls` entry.
+///
+/// - Nothing at all while Offline only is on.
+/// - Live cards from the last [`FILL_WINDOW_MS`], newest first, and at most
+///   [`FILL_PER_TICK`] downloads. Only public http(s) URLs; a printer
+///   snapshot on the local network is never asked.
+/// - Every download goes through `net` (the guarded [`LiveNet`]) and is kept
+///   only through [`store_image`].
+/// - A failure leaves a `.miss` marker (`pc::ImageMiss`), so a URL that
+///   answered for good is never asked again and a passing failure is retried
+///   at most twice, later. Cards are never edited.
+///
+/// The store lock is held only while the cards are read. Returns how many
+/// downloads it asked for.
+pub(crate) fn fill_images(config_dir: &Path, net: &dyn Net, now_ms: u64) -> usize {
+    if grokhub_core::offline::enabled() {
+        return 0;
+    }
+    let Ok(mut cards) = crate::pulse::cards(config_dir) else {
+        return 0;
+    };
+    cards.retain(|c| {
+        c.status != grokhub_core::UpdateStatus::Dismissed
+            && now_ms.saturating_sub(c.created_at) <= FILL_WINDOW_MS
+    });
+    cards.sort_by_key(|c| std::cmp::Reverse(c.created_at));
+    let dir = images_dir(config_dir);
+    let mut seen = HashSet::new();
+    let mut asked = 0;
+    for url in cards.iter().flat_map(|c| c.pulse.image_urls.iter()) {
+        if asked >= FILL_PER_TICK {
+            break;
+        }
+        if !seen.insert(url.as_str())
+            || !grokhub_core::public_http_url(url)
+            || dir.join(pc::image_cache_name(url)).is_file()
+        {
+            continue;
+        }
+        let marker = dir.join(pc::image_miss_name(url));
+        let prev = std::fs::read_to_string(&marker)
+            .ok()
+            .map(|text| pc::ImageMiss::parse(&text));
+        if prev.is_some_and(|miss| !miss.due(now_ms)) {
+            continue;
+        }
+        asked += 1;
+        let gone = match net.image(url) {
+            Ok(bytes) if pc::image_bytes_ok(&bytes) && store_image(config_dir, url, &bytes) => {
+                let _ = std::fs::remove_file(&marker);
+                continue;
+            }
+            // Not an image, a tracking pixel, too big, or it won't decode.
+            Ok(_) | Err(FetchErr::Gone(_)) => true,
+            Err(FetchErr::Later(_)) => false,
+        };
+        let miss = pc::ImageMiss::after_failure(prev, gone, now_ms);
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::write(&marker, miss.render());
+        }
+    }
+    asked
+}
+
+/// Why a fetch failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchErr {
+    /// Asking again gets the same answer: an HTTP 4xx, an address that
+    /// isn't public, a redirect with no target, or too many redirects.
+    Gone(String),
+    /// Worth asking again later: the network, a timeout, a server error, a
+    /// rate limit, or the egress guard.
+    Later(String),
+}
+
+impl From<FetchErr> for String {
+    fn from(err: FetchErr) -> Self {
+        match err {
+            FetchErr::Gone(why) | FetchErr::Later(why) => why,
+        }
+    }
+}
+
+impl From<http::Error> for FetchErr {
+    fn from(err: http::Error) -> Self {
+        match err {
+            http::Error::Status { code, .. }
+                if (400..500).contains(&code) && code != 408 && code != 429 =>
+            {
+                Self::Gone(format!("HTTP {code}"))
+            }
+            http::Error::Status { code, .. } => Self::Later(format!("HTTP {code}")),
+            http::Error::Transport { .. } => Self::Later("network error".into()),
+        }
+    }
+}
+
 /// The network a run uses. The live one fetches public pages only.
 pub trait Net {
     fn source(&self, req: &SourceReq, have: Option<&CacheEntry>) -> Fetched;
     fn page(&self, url: &str) -> Result<String, String>;
-    fn image(&self, url: &str) -> Result<Vec<u8>, String>;
+    fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -499,7 +603,7 @@ fn write_post(
         }
     };
     let mut card = pw::post_card(&written, &research, now_ms);
-    card.pulse.image_urls = cache_gallery(config_dir, net, &written.cites);
+    card.pulse.image_urls = cache_gallery(config_dir, net, &written.cites, &research);
     let id = card.id.clone();
     crate::pulse::add_post(config_dir, card)?;
     let used: Vec<ps::Ranked> = picks
@@ -517,19 +621,40 @@ fn write_post(
     Ok(Outcome::Posted(id))
 }
 
-/// The first cited page's gallery, downloaded once into the local cache.
-/// Returns the image URLs that are cached; the page shows those files and
-/// never loads the image from its site.
-fn cache_gallery(config_dir: &Path, net: &dyn Net, cites: &[String]) -> Vec<String> {
+/// A post's images, downloaded once into the local cache: first the cited
+/// items' own feed images (a video thumbnail, a feed's media, a Reddit
+/// preview), then the first cited page's gallery, without repeats and at
+/// most `pc::GALLERY_MAX`. Returns the image URLs that are cached; the page
+/// shows those files and never loads the image from its site.
+fn cache_gallery(
+    config_dir: &Path,
+    net: &dyn Net,
+    cites: &[String],
+    research: &[pw::Research],
+) -> Vec<String> {
     let Some(page_url) = cites.first() else {
         return Vec::new();
     };
-    let Ok(html) = net.page(page_url) else {
-        return Vec::new();
-    };
+    let mut wanted: Vec<String> = cites
+        .iter()
+        .flat_map(|cite| {
+            research
+                .iter()
+                .filter(|r| ps::canonical_url(&r.url) == ps::canonical_url(cite))
+                .flat_map(|r| r.images.iter().cloned())
+        })
+        .collect();
+    if let Ok(html) = net.page(page_url) {
+        wanted.extend(pc::gallery_images(&html, page_url));
+    }
+    let mut seen = HashSet::new();
+    wanted.retain(|url| seen.insert(url.clone()));
     let dir = images_dir(config_dir);
     let mut kept = Vec::new();
-    for url in pc::gallery_images(&html, page_url) {
+    for url in wanted {
+        if kept.len() >= pc::GALLERY_MAX {
+            break;
+        }
         let file = dir.join(pc::image_cache_name(&url));
         if file.is_file() {
             // Fresh again, so a prune before the post lands keeps it.
@@ -627,6 +752,7 @@ fn tick(
         LAST_PRUNE_MS.store(now, Ordering::Relaxed);
         prune_images(config_dir, now);
     }
+    fill_images(config_dir, net().as_ref(), now);
     let state = state(config_dir);
     let quiet = quiet_now(config_dir, &state, now);
     if !pw::writer_due(&state, now, just_opened, quiet) {
@@ -686,20 +812,19 @@ impl LoopbackNet {
         })
     }
 
-    fn get(&self, kind: &str, url: &str) -> Result<Vec<u8>, String> {
+    fn get(&self, kind: &str, url: &str) -> Result<Vec<u8>, FetchErr> {
         let at = format!("{}/pulse/{kind}?url={}", self.base, ps::query_value(url));
         let resp = http::agent(http::Opts {
             overall: Some(FETCH_TIMEOUT),
             ..Default::default()
         })
         .get(&at)
-        .call()
-        .map_err(|e| e.to_string())?;
+        .call()?;
         let mut buf = Vec::new();
         resp.into_reader()
             .take(SOURCE_CAP)
             .read_to_end(&mut buf)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| FetchErr::Later(e.to_string()))?;
         Ok(buf)
     }
 }
@@ -712,16 +837,17 @@ impl Net for LoopbackNet {
                 etag: None,
                 last_modified: None,
             },
-            Err(why) => Fetched::Failed(why),
+            Err(why) => Fetched::Failed(why.into()),
         }
     }
 
     fn page(&self, url: &str) -> Result<String, String> {
         self.get("page", url)
             .map(|body| String::from_utf8_lossy(&body).into_owned())
+            .map_err(String::from)
     }
 
-    fn image(&self, url: &str) -> Result<Vec<u8>, String> {
+    fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
         self.get("image", url)
     }
 }
@@ -754,16 +880,17 @@ impl LiveNet {
         data: &[hx::DataClass],
         have: Option<&CacheEntry>,
         cap: u64,
-    ) -> Result<Got, String> {
+    ) -> Result<Got, FetchErr> {
         let mut url = url.to_string();
         for hop in 0..=REDIRECTS_MAX {
             if !grokhub_core::public_http_url(&url) {
-                return Err("not a public address".into());
+                return Err(FetchErr::Gone("not a public address".into()));
             }
             hx::guard_quiet(
                 &grokhub_agent::perm::config_dir(),
                 &hx::EgressReq::new(&url, data),
-            )?;
+            )
+            .map_err(FetchErr::Later)?;
             let mut call = Self::agent()
                 .get(&url)
                 .header("user-agent", grokhub_agent::USER_AGENT)
@@ -778,11 +905,7 @@ impl LiveNet {
                     }
                 }
             }
-            let resp = match call.call() {
-                Ok(resp) => resp,
-                Err(http::Error::Status { code, .. }) => return Err(format!("HTTP {code}")),
-                Err(http::Error::Transport { .. }) => return Err("network error".into()),
-            };
+            let resp = call.call()?;
             let status = resp.status();
             if (300..400).contains(&status) && status != 304 {
                 match resp.header("location") {
@@ -790,7 +913,7 @@ impl LiveNet {
                         url = redirect_target(&url, loc);
                         continue;
                     }
-                    None => return Err(format!("HTTP {status}")),
+                    None => return Err(FetchErr::Gone(format!("HTTP {status}"))),
                 }
             }
             let etag = resp.header("etag").map(str::to_string);
@@ -799,7 +922,7 @@ impl LiveNet {
             resp.into_reader()
                 .take(cap)
                 .read_to_end(&mut buf)
-                .map_err(|_| "timed out or dropped".to_string())?;
+                .map_err(|_| FetchErr::Later("timed out or dropped".into()))?;
             return Ok(Got {
                 status,
                 body: buf,
@@ -807,7 +930,7 @@ impl LiveNet {
                 last_modified: modified,
             });
         }
-        Err("too many redirects".into())
+        Err(FetchErr::Gone("too many redirects".into()))
     }
 }
 
@@ -840,7 +963,7 @@ impl Net for LiveNet {
                 etag: got.etag,
                 last_modified: got.last_modified,
             },
-            Err(why) => Fetched::Failed(why),
+            Err(why) => Fetched::Failed(why.into()),
         }
     }
 
@@ -849,7 +972,7 @@ impl Net for LiveNet {
         Ok(String::from_utf8_lossy(&got.body).into_owned())
     }
 
-    fn image(&self, url: &str) -> Result<Vec<u8>, String> {
+    fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
         let cap = pc::IMAGE_MAX_BYTES as u64 + 1;
         Ok(Self::get(url, "image/webp,image/png,image/jpeg", &[], None, cap)?.body)
     }
@@ -948,7 +1071,7 @@ mod tests {
             Ok(r#"<meta property="og:image" content="https://blog.rust-lang.org/hero.jpg"><img src="/logo.png" width="900">"#.into())
         }
 
-        fn image(&self, url: &str) -> Result<Vec<u8>, String> {
+        fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
             assert_eq!(url, "https://blog.rust-lang.org/hero.jpg");
             Ok(FIXTURE.clone())
         }
@@ -1179,7 +1302,7 @@ mod tests {
             FakeNet.page(url)
         }
 
-        fn image(&self, url: &str) -> Result<Vec<u8>, String> {
+        fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
             FakeNet.image(url)
         }
     }
@@ -1503,5 +1626,353 @@ mod tests {
         std::fs::write(d.config.join("updates.json"), "[]").expect("store");
         assert_eq!(prune_images(&d.config, now), 1);
         assert!(!stray.exists());
+    }
+
+    const YT: &str = r#"<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <title>Rust Tours</title>
+ <entry><title>Rust 1.99 in ten minutes</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=abc"/>
+  <published>2027-01-15T06:00:00+00:00</published>
+  <media:group><media:title>Rust 1.99</media:title>
+   <media:thumbnail url="https://i.ytimg.com/vi/abc/hqdefault.jpg" width="480" height="360"/>
+   <media:description>A quick tour of Rust 1.99.</media:description></media:group>
+ </entry></feed>"#;
+
+    /// One YouTube channel and the page FakeNet serves; records image asks.
+    #[derive(Default)]
+    struct VideoNet(Mutex<Vec<String>>);
+
+    impl Net for VideoNet {
+        fn source(&self, req: &SourceReq, _have: Option<&CacheEntry>) -> Fetched {
+            if req.url.contains("youtube.com/feeds") {
+                Fetched::Body {
+                    body: YT.into(),
+                    etag: None,
+                    last_modified: None,
+                }
+            } else {
+                Fetched::Failed("offline".into())
+            }
+        }
+
+        fn page(&self, url: &str) -> Result<String, String> {
+            FakeNet.page(url)
+        }
+
+        fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
+            self.0.lock().unwrap().push(url.to_string());
+            Ok(FIXTURE.clone())
+        }
+    }
+
+    #[test]
+    fn a_written_video_post_caches_its_thumbnail_then_the_page_image() {
+        let d = dirs("video");
+        std::fs::write(
+            d.config.join("app.json"),
+            r#"{"pulseSources":{"hackerNews":false,"webSearch":false,"reddit":false,"github":false,"rss":false,"channels":["UCabc"]}}"#,
+        )
+        .expect("app.json");
+        let client = Script::new(&[
+            r#"{"title":"Rust 1.99 in ten minutes","snippet":"A [quick tour](https://www.youtube.com/watch?v=abc) of Rust 1.99.","icon":"🦀","why":"You follow Rust."}"#,
+        ]);
+        let net = VideoNet::default();
+        let out = run_once(&d.config, "grok-test", &client, &net, NOW).expect("run");
+        let Outcome::Posted(id) = out else {
+            panic!("{out:?}");
+        };
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        let card = cards.iter().find(|c| c.id == id).expect("posted");
+        assert_eq!(
+            card.pulse.image_urls,
+            vec![
+                "https://i.ytimg.com/vi/abc/hqdefault.jpg".to_string(),
+                "https://blog.rust-lang.org/hero.jpg".to_string()
+            ]
+        );
+        assert_eq!(
+            *net.0.lock().unwrap(),
+            vec![
+                "https://i.ytimg.com/vi/abc/hqdefault.jpg".to_string(),
+                "https://blog.rust-lang.org/hero.jpg".to_string()
+            ]
+        );
+        let page = crate::pulse::load(&d.config, None, NOW).expect("page");
+        assert_eq!(
+            page.feed[0].images,
+            vec![
+                pc::image_cache_name("https://i.ytimg.com/vi/abc/hqdefault.jpg"),
+                pc::image_cache_name("https://blog.rust-lang.org/hero.jpg")
+            ]
+        );
+    }
+
+    const CAPSULE_620: &str = "https://cdn.akamai.steamstatic.com/steam/apps/620/header.jpg";
+
+    /// A release radar post for `app_id`, posted at `at`.
+    fn capsule_card(app_id: u32, at: u64) -> grokhub_core::UpdateCard {
+        let reminder = grokhub_core::release_radar::Reminder {
+            name: format!("Game {app_id}"),
+            date_ms: at,
+        };
+        grokhub_core::release_radar::out_today_card(app_id, &reminder, at)
+    }
+
+    fn store(config: &Path, cards: &[grokhub_core::UpdateCard]) {
+        std::fs::write(
+            config.join("updates.json"),
+            serde_json::to_string(cards).expect("json"),
+        )
+        .expect("updates.json");
+    }
+
+    /// Answers every image ask with `answer` (the fixture JPEG by default)
+    /// and writes the ask down.
+    #[derive(Default)]
+    struct Images {
+        asked: Mutex<Vec<String>>,
+        answer: Mutex<Option<Result<Vec<u8>, FetchErr>>>,
+    }
+
+    impl Images {
+        fn answering(answer: Result<Vec<u8>, FetchErr>) -> Self {
+            Self {
+                asked: Mutex::new(Vec::new()),
+                answer: Mutex::new(Some(answer)),
+            }
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    impl Net for Images {
+        fn source(&self, _req: &SourceReq, _have: Option<&CacheEntry>) -> Fetched {
+            Fetched::Failed("no sources here".into())
+        }
+
+        fn page(&self, _url: &str) -> Result<String, String> {
+            Err("no pages here".into())
+        }
+
+        fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
+            self.asked.lock().unwrap().push(url.to_string());
+            self.answer
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| Ok(FIXTURE.clone()))
+        }
+    }
+
+    fn marker(config: &Path, url: &str) -> Option<String> {
+        std::fs::read_to_string(images_dir(config).join(pc::image_miss_name(url))).ok()
+    }
+
+    #[test]
+    fn fill_images_caches_a_release_radar_capsule() {
+        let d = dirs("fill-capsule");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let net = Images::default();
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        assert_eq!(net.asked(), vec![CAPSULE_620.to_string()]);
+        let page = crate::pulse::load(&d.config, None, NOW).expect("page");
+        assert_eq!(page.feed[0].images, vec![pc::image_cache_name(CAPSULE_620)]);
+        // Cached: the next tick asks nothing.
+        assert_eq!(fill_images(&d.config, &net, NOW + 60_000), 0);
+        assert_eq!(net.asked().len(), 1);
+    }
+
+    #[test]
+    fn fill_images_never_asks_again_for_a_url_that_answers_html() {
+        let d = dirs("fill-html");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let mut html = b"<!doctype html><title>Not found</title>".to_vec();
+        html.resize(pc::IMAGE_MIN_BYTES * 2, b' ');
+        let net = Images::answering(Ok(html));
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        assert_eq!(marker(&d.config, CAPSULE_620).as_deref(), Some("gone\n"));
+        assert_eq!(fill_images(&d.config, &net, NOW + 3_600_000), 0);
+        assert_eq!(net.asked(), vec![CAPSULE_620.to_string()]);
+        // The card itself is never edited, and it shows no image.
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        assert_eq!(cards[0].pulse.image_urls, vec![CAPSULE_620.to_string()]);
+        let page = crate::pulse::load(&d.config, None, NOW).expect("page");
+        assert_eq!(page.feed[0].images, Vec::<String>::new());
+    }
+
+    #[test]
+    fn fill_images_never_asks_again_after_a_404_or_a_tracking_pixel() {
+        let d = dirs("fill-404");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let net = Images::answering(Err(FetchErr::Gone("HTTP 404".into())));
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        assert_eq!(fill_images(&d.config, &net, NOW + 3_600_000), 0);
+        assert_eq!(marker(&d.config, CAPSULE_620).as_deref(), Some("gone\n"));
+
+        let d = dirs("fill-pixel");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        // A whole 1×1 JPEG: an image, but far under the size floor.
+        let pixel = jpeg(1, 1, 90, |_, _| [0, 0, 0]);
+        let net = Images::answering(Ok(pixel));
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        assert_eq!(marker(&d.config, CAPSULE_620).as_deref(), Some("gone\n"));
+        assert!(!images_dir(&d.config)
+            .join(pc::image_cache_name(CAPSULE_620))
+            .exists());
+    }
+
+    #[test]
+    fn fill_images_keeps_a_url_on_network_error_and_retries_it_twice_later() {
+        let d = dirs("fill-later");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let net = Images::answering(Err(FetchErr::Later("network error".into())));
+        let min = 60_000;
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        assert_eq!(
+            marker(&d.config, CAPSULE_620).as_deref(),
+            Some("later 1 1800000900000\n")
+        );
+        assert_eq!(fill_images(&d.config, &net, NOW + min), 0, "waits 15 min");
+        assert_eq!(fill_images(&d.config, &net, NOW + 15 * min), 1);
+        assert_eq!(fill_images(&d.config, &net, NOW + 44 * min), 0, "then 30");
+        assert_eq!(fill_images(&d.config, &net, NOW + 45 * min), 1);
+        assert_eq!(marker(&d.config, CAPSULE_620).as_deref(), Some("gone\n"));
+        assert_eq!(fill_images(&d.config, &net, NOW + 600 * min), 0);
+        assert_eq!(net.asked().len(), 3);
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        assert_eq!(cards[0].pulse.image_urls.len(), 1);
+    }
+
+    #[test]
+    fn a_retry_that_works_caches_the_image_and_clears_its_marker() {
+        let d = dirs("fill-recover");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let net = Images::answering(Err(FetchErr::Later("HTTP 503".into())));
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        *net.answer.lock().unwrap() = None;
+        assert_eq!(fill_images(&d.config, &net, NOW + 15 * 60_000), 1);
+        assert_eq!(marker(&d.config, CAPSULE_620), None);
+        assert!(images_dir(&d.config)
+            .join(pc::image_cache_name(CAPSULE_620))
+            .is_file());
+    }
+
+    #[test]
+    fn fill_images_stops_at_six_per_tick_newest_first() {
+        let d = dirs("fill-six");
+        let cards: Vec<_> = (1..=8)
+            .map(|app| capsule_card(app, NOW - 3_600_000 + u64::from(app)))
+            .collect();
+        store(&d.config, &cards);
+        let net = Images::default();
+        let capsule =
+            |app: u32| format!("https://cdn.akamai.steamstatic.com/steam/apps/{app}/header.jpg");
+        assert_eq!(fill_images(&d.config, &net, NOW), 6);
+        assert_eq!(net.asked(), (3..=8).rev().map(capsule).collect::<Vec<_>>());
+        assert_eq!(fill_images(&d.config, &net, NOW + 60_000), 2);
+        assert_eq!(net.asked()[6..], [capsule(2), capsule(1)]);
+    }
+
+    #[test]
+    fn fill_images_never_asks_a_lan_url_an_old_card_or_a_dismissed_one() {
+        let d = dirs("fill-lan");
+        let mut printer = capsule_card(1, NOW - 60_000);
+        printer.pulse.image_urls = vec![
+            "http://192.168.1.20/webcam/?action=snapshot".into(),
+            "http://localhost:8080/snap.jpg".into(),
+            "model-thumb:benchy.stl:1".into(),
+        ];
+        let old = capsule_card(2, NOW - FILL_WINDOW_MS - 1);
+        let mut dismissed = capsule_card(3, NOW - 60_000);
+        dismissed.status = grokhub_core::UpdateStatus::Dismissed;
+        store(&d.config, &[printer, old, dismissed]);
+        let net = Images::default();
+        assert_eq!(fill_images(&d.config, &net, NOW), 0);
+        assert_eq!(net.asked(), Vec::<String>::new());
+        assert!(!images_dir(&d.config).exists(), "no marker either");
+    }
+
+    #[test]
+    fn fill_images_does_nothing_offline() {
+        let d = dirs("fill-offline");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let net = Images::default();
+        {
+            let _off = grokhub_core::offline::force_for_thread(true);
+            assert_eq!(fill_images(&d.config, &net, NOW), 0);
+        }
+        assert_eq!(net.asked(), Vec::<String>::new());
+        assert_eq!(marker(&d.config, CAPSULE_620), None);
+        assert_eq!(
+            fill_images(&d.config, &net, NOW),
+            1,
+            "and runs once it's off"
+        );
+    }
+
+    #[test]
+    fn prune_images_keeps_the_marker_of_a_url_a_card_still_names() {
+        let d = dirs("prune-miss");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let named = dir.join(pc::image_miss_name(CAPSULE_620));
+        let stray = dir.join(pc::image_miss_name("https://img.test/gone.jpg"));
+        let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 3600);
+        for path in [&named, &stray] {
+            std::fs::write(path, "gone\n").expect("marker");
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .and_then(|f| f.set_modified(two_hours_ago))
+                .expect("mtime");
+        }
+        assert_eq!(prune_images(&d.config, grokhub_core::now_ms()), 1);
+        assert!(named.is_file());
+        assert!(!stray.exists());
+    }
+
+    #[test]
+    fn a_4xx_is_gone_and_a_5xx_or_rate_limit_is_later() {
+        let status = |code| http::Error::Status {
+            code,
+            body: String::new(),
+            retry_after: None,
+            message: format!("status code {code}"),
+        };
+        assert_eq!(
+            FetchErr::from(status(404)),
+            FetchErr::Gone("HTTP 404".into())
+        );
+        assert_eq!(
+            FetchErr::from(status(410)),
+            FetchErr::Gone("HTTP 410".into())
+        );
+        assert_eq!(
+            FetchErr::from(status(429)),
+            FetchErr::Later("HTTP 429".into())
+        );
+        assert_eq!(
+            FetchErr::from(status(408)),
+            FetchErr::Later("HTTP 408".into())
+        );
+        assert_eq!(
+            FetchErr::from(status(503)),
+            FetchErr::Later("HTTP 503".into())
+        );
+        let transport = http::Error::Transport {
+            kind: http::TransportKind::Connect,
+            message: "refused".into(),
+        };
+        assert_eq!(
+            FetchErr::from(transport),
+            FetchErr::Later("network error".into())
+        );
+        assert_eq!(
+            LiveNet.image("http://192.168.1.20/webcam/?action=snapshot"),
+            Err(FetchErr::Gone("not a public address".into()))
+        );
     }
 }
