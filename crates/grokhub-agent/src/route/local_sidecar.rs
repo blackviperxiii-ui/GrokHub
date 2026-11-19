@@ -3346,6 +3346,30 @@ mod tests {
     }
 
     #[test]
+    fn a_drafter_or_vision_projector_file_is_never_the_chat_model() {
+        use grokhub_core::local_setup::{local_models, ModelKind};
+        let dir = Path::new("/home/user/GrokHub/models");
+        let helpers: Vec<_> = local_models()
+            .iter()
+            .filter(|m| matches!(m.kind, ModelKind::Drafter | ModelKind::VisionProjector))
+            .collect();
+        assert_eq!(
+            helpers
+                .iter()
+                .filter(|m| m.kind == ModelKind::VisionProjector)
+                .count(),
+            5
+        );
+        for m in helpers {
+            assert!(helper_gguf(&dir.join(m.file)), "{}", m.file);
+        }
+        assert!(!helper_gguf(&dir.join(
+            "Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf"
+        )));
+        assert!(helper_gguf(&dir.join("mmproj-gemma-4-E4B-it-BF16.gguf")));
+    }
+
+    #[test]
     fn a_failed_start_sheds_its_projector_before_its_drafter() {
         let both = LaunchArgs {
             draft: Some(Box::new(super::super::local_spec::DraftArgs {

@@ -898,8 +898,9 @@ tok_s = { gpu = 0, unified = 0, cpu = 0 }
 id = "gemma-4-31b-it-abliterated-mmproj"
 name = "Gemma 4 31B vision projector"
 repo = "huihui-ai/Huihui-gemma-4-31B-it-qat-q4_0-unquantized-abliterated-GGUF"
-# Every repo names its projector the same, so it lands under its own name.
-file = "Huihui-gemma-4-31B-it-abliterated-mmproj-BF16.gguf"
+# Every repo names its projector the same, so it lands under its own name,
+# led by `mmproj-` so no model list takes it for a chat model.
+file = "mmproj-Huihui-gemma-4-31B-it-abliterated-BF16.gguf"
 remote_file = "mmproj-model-bf16.gguf"
 sha256 = "fa3c584233a103b5fac2e0533b4054a6bc74ec91d836b804663d8e6f5e624afa"
 download_mb = 1_146
@@ -921,8 +922,9 @@ tok_s = { gpu = 0, unified = 0, cpu = 0 }
 id = "gemma-4-26b-a4b-it-abliterated-mmproj"
 name = "Gemma 4 26B-A4B vision projector"
 repo = "huihui-ai/Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated-GGUF"
-# Every repo names its projector the same, so it lands under its own name.
-file = "Huihui-gemma-4-26B-A4B-it-abliterated-mmproj-BF16.gguf"
+# Every repo names its projector the same, so it lands under its own name,
+# led by `mmproj-` so no model list takes it for a chat model.
+file = "mmproj-Huihui-gemma-4-26B-A4B-it-abliterated-BF16.gguf"
 remote_file = "mmproj-model-bf16.gguf"
 sha256 = "966dbada52d2dd1ab1e3a6faa393ca6242df881bb404286a3c4619fd9c760212"
 download_mb = 1_140
@@ -944,8 +946,9 @@ tok_s = { gpu = 0, unified = 0, cpu = 0 }
 id = "gemma-4-12b-it-abliterated-mmproj"
 name = "Gemma 4 12B vision projector"
 repo = "huihui-ai/Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-GGUF"
-# Every repo names its projector the same, so it lands under its own name.
-file = "Huihui-gemma-4-12B-it-abliterated-mmproj-BF16.gguf"
+# Every repo names its projector the same, so it lands under its own name,
+# led by `mmproj-` so no model list takes it for a chat model.
+file = "mmproj-Huihui-gemma-4-12B-it-abliterated-BF16.gguf"
 remote_file = "mmproj-model-bf16.gguf"
 sha256 = "bd94de2c9e403f851cc3841ffd45c478c3530072dfb006476534d18825e0bc84"
 download_mb = 168
@@ -967,8 +970,9 @@ tok_s = { gpu = 0, unified = 0, cpu = 0 }
 id = "gemma-4-e4b-it-abliterated-mmproj"
 name = "Gemma 4 E4B vision projector"
 repo = "huihui-ai/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-GGUF"
-# Every repo names its projector the same, so it lands under its own name.
-file = "Huihui-gemma-4-E4B-it-abliterated-mmproj-BF16.gguf"
+# Every repo names its projector the same, so it lands under its own name,
+# led by `mmproj-` so no model list takes it for a chat model.
+file = "mmproj-Huihui-gemma-4-E4B-it-abliterated-BF16.gguf"
 remote_file = "mmproj-model-bf16.gguf"
 sha256 = "ed22c2c5277b72aa4ef5f94e8a081219eb7615bbfb30bc4087c97e2c2b522374"
 download_mb = 946
@@ -990,8 +994,9 @@ tok_s = { gpu = 0, unified = 0, cpu = 0 }
 id = "gemma-4-e2b-it-abliterated-mmproj"
 name = "Gemma 4 E2B vision projector"
 repo = "huihui-ai/Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-GGUF"
-# Every repo names its projector the same, so it lands under its own name.
-file = "Huihui-gemma-4-E2B-it-abliterated-mmproj-BF16.gguf"
+# Every repo names its projector the same, so it lands under its own name,
+# led by `mmproj-` so no model list takes it for a chat model.
+file = "mmproj-Huihui-gemma-4-E2B-it-abliterated-BF16.gguf"
 remote_file = "mmproj-model-bf16.gguf"
 sha256 = "d77ea8edb2f703d0bfd2a805d8471b1c99b11340c9ae7749fed4b5f2c9de0c48"
 download_mb = 942

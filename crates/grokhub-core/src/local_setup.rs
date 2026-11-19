@@ -763,6 +763,8 @@ mod tests {
             let t = model_by_id(v.pairs_with.unwrap()).unwrap();
             assert_eq!(t.projector, Some(v.id), "{}", v.id);
             assert_eq!(v.remote_name(), "mmproj-model-bf16.gguf", "{}", v.id);
+            // Every folder scan skips a file led by `mmproj`.
+            assert!(v.file.starts_with("mmproj-"), "{}", v.file);
         }
         // Every projector a chat row names is in the catalog, under a file
         // of its own.

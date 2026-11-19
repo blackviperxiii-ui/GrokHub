@@ -1419,7 +1419,7 @@ fn vision_rig(label: &str, mb: u64) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     )
     .unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let file = root.join("Huihui-gemma-4-12B-it-abliterated-mmproj-BF16.gguf");
+    let file = root.join("mmproj-Huihui-gemma-4-12B-it-abliterated-BF16.gguf");
     std::fs::File::create(&file)
         .unwrap()
         .set_len(mb * 1024 * 1024)
