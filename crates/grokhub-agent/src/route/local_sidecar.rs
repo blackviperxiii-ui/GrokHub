@@ -1958,8 +1958,17 @@ pub fn wait_for_vision(
     let needed = {
         let slot = global_slot().lock().unwrap_or_else(|e| e.into_inner());
         slot.as_ref().is_some_and(|s| {
+            // A model that can see, and whose launch isn't held.
+            let held = vision_held(&s.token, super::local_scale::room_at(unix_ms()));
+            let free = |id: &&'static str| {
+                !held
+                    .iter()
+                    .any(|p| super::local_swap::catalog_for(p).is_some_and(|m| m.id == *id))
+            };
             !s.sees_pictures()
-                && !autoconfig::vision_view(&s.binary, &on_disk(config_dir)).is_empty()
+                && autoconfig::vision_view(&s.binary, &on_disk(config_dir))
+                    .iter()
+                    .any(free)
         })
     };
     if !needed {
@@ -3857,6 +3866,61 @@ mod tests {
         *VISION_HOLDS.lock().unwrap() = None;
         autoconfig::reset_free_probe();
         autoconfig::forget_profile();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_picture_waits_only_while_a_model_that_can_see_it_could_load() {
+        use super::super::local_swap::Hold;
+        use std::os::unix::fs::PermissionsExt;
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        super::super::local_scale::clear_room();
+        let dir = std::env::temp_dir().join(format!("grokhub-vision-wait-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let models = dir.join("models");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(&models).unwrap();
+        let binary = dir.join("bin").join("llama-server");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\ncat <<'EOF'\n-mm,   --mmproj FILE   path to a multimodal projector file\nEOF\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let place = |id: &str| {
+            let m = grokhub_core::local_setup::model_by_id(id).expect("catalog model");
+            let p = grokhub_core::model_download::final_path(&models, m);
+            std::fs::write(&p, b"gguf").unwrap();
+            p
+        };
+        let mid = place("gemma-4-e4b-it-abliterated-q4_k");
+        place("gemma-4-e4b-it-abliterated-mmproj");
+        let mut side = idle_child_sidecar(600, unix_secs());
+        side.model = mid.clone();
+        side.binary = binary;
+        side.token = "vision-wait-server".into();
+        *global_slot().lock().unwrap() = Some(side);
+        let held = busy();
+        // The E4B can load its projector: the picture waits for the request.
+        let began = Instant::now();
+        assert_eq!(
+            wait_for_vision(&dir, Duration::from_millis(300), &|| false),
+            Drain::TimedOut
+        );
+        assert!(began.elapsed() >= Duration::from_millis(300));
+        // Once its vision launch is held there's nothing to wait for.
+        hold_vision("vision-wait-server", mid.clone(), Hold::UntilUnload);
+        let began = Instant::now();
+        assert_eq!(
+            wait_for_vision(&dir, Duration::from_secs(5), &|| false),
+            Drain::Free
+        );
+        assert!(began.elapsed() < Duration::from_secs(1));
+        drop(held);
+        stop_global();
+        *VISION_HOLDS.lock().unwrap() = None;
         let _ = std::fs::remove_dir_all(&dir);
     }
 
