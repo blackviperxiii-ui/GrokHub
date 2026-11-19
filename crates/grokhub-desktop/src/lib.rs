@@ -736,6 +736,85 @@ impl NativeDesktop {
     }
 }
 
+/// The desktop tools the app's chats get: the user's screen, or the shared
+/// Bot Desktop while it runs ([`bot_desktop::start_shared`]). Each call
+/// checks, so switching the Bot Desktop on or off takes effect at the next
+/// step of a running chat.
+pub struct AppDesktop {
+    user: NativeDesktop,
+    #[cfg(target_os = "linux")]
+    bot: std::cell::RefCell<Option<BotTools>>,
+}
+
+#[cfg(target_os = "linux")]
+type BotTools = (
+    std::sync::Arc<bot_desktop::BotDesktop>,
+    std::rc::Rc<NativeDesktop>,
+);
+
+impl AppDesktop {
+    pub fn new() -> Self {
+        Self {
+            user: NativeDesktop::new(),
+            #[cfg(target_os = "linux")]
+            bot: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// Runs `f` on the tools for the screen in use now.
+    fn with<T>(&self, f: impl FnOnce(&NativeDesktop) -> T) -> T {
+        #[cfg(target_os = "linux")]
+        if let Some(tools) = self.bot_tools() {
+            return f(&tools);
+        }
+        f(&self.user)
+    }
+
+    /// The Bot Desktop's tools, built once per screen it starts.
+    #[cfg(target_os = "linux")]
+    fn bot_tools(&self) -> Option<std::rc::Rc<NativeDesktop>> {
+        let desk = bot_desktop::shared();
+        let mut slot = self.bot.borrow_mut();
+        let Some(desk) = desk else {
+            *slot = None;
+            return None;
+        };
+        if let Some((built_for, tools)) = slot.as_ref()
+            && std::sync::Arc::ptr_eq(built_for, &desk)
+        {
+            return Some(tools.clone());
+        }
+        let tools = std::rc::Rc::new(NativeDesktop::on_bot_desktop(desk.clone()));
+        *slot = Some((desk, tools.clone()));
+        Some(tools)
+    }
+}
+
+impl Default for AppDesktop {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl grokhub_agent::DesktopOps for AppDesktop {
+    fn halted(&self) -> bool {
+        // Halt is one stamp for every screen.
+        self.user.halted()
+    }
+
+    fn locked(&self) -> bool {
+        self.with(|tools| tools.locked())
+    }
+
+    fn call(&self, name: &str, args: &serde_json::Value) -> grokhub_agent::ToolOutput {
+        self.with(|tools| tools.call(name, args))
+    }
+
+    fn hint(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
+        self.with(|tools| tools.hint(name, args))
+    }
+}
+
 impl Default for NativeDesktop {
     fn default() -> Self {
         Self::new()

@@ -64,6 +64,9 @@ pub struct ShellSettings {
     pub always_collapse_thoughts: bool,
     /// Settings → Let Grok control the desktop. Off until the person turns it on.
     pub desktop_control: bool,
+    /// Settings → Bot Desktop: the desktop tools work on a private screen
+    /// of their own (Linux). Off until the person turns it on.
+    pub bot_desktop: bool,
     /// Settings → Personality: the preset id. Empty is the default voice.
     pub personality: String,
     /// Settings → Personality → Adults-only personalities. Off hides the
@@ -369,6 +372,7 @@ impl Default for ShellSettings {
             approvals: Approvals::Ask,
             always_collapse_thoughts: false,
             desktop_control: false,
+            bot_desktop: false,
             personality: String::new(),
             explicit_personalities: false,
             adult_confirmed: false,
@@ -538,6 +542,7 @@ mod tests {
                 approvals: Approvals::Ask,
                 always_collapse_thoughts: false,
                 desktop_control: false,
+                bot_desktop: false,
                 personality: "nyx".into(),
                 explicit_personalities: false,
                 adult_confirmed: false,
@@ -604,6 +609,7 @@ mod tests {
             approvals: Approvals::Always,
             always_collapse_thoughts: true,
             desktop_control: true,
+            bot_desktop: true,
             personality: "pirate".into(),
             explicit_personalities: true,
             adult_confirmed: true,
@@ -715,6 +721,7 @@ mod tests {
                 approvals: Approvals::Ask,
                 always_collapse_thoughts: false,
                 desktop_control: false,
+                bot_desktop: false,
                 personality: String::new(),
                 explicit_personalities: false,
                 adult_confirmed: false,
@@ -762,6 +769,7 @@ mod tests {
                 approvals: Approvals::Auto,
                 always_collapse_thoughts: false,
                 desktop_control: false,
+                bot_desktop: false,
                 personality: "pirate".into(),
                 explicit_personalities: false,
                 adult_confirmed: false,

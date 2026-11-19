@@ -7,13 +7,19 @@
 //! listens only on a local socket, never TCP, and accepts only clients that
 //! hold its random MIT-MAGIC-COOKIE, which lives in a mode-0600 file in the
 //! config folder. Programs started on it get `DISPLAY` and `XAUTHORITY` from
-//! [`BotDesktop::env`]. The server stops when the handle drops.
+//! [`BotDesktop::env`]. The server stops when the handle drops, or at
+//! [`BotDesktop::stop`].
+//!
+//! The app keeps one shared screen ([`start_shared`], [`shared`],
+//! [`stop_shared`]); while it runs, [`crate::AppDesktop`] sends the desktop
+//! tools there.
 
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use grokhub_core::desktop_mcp::DesktopBackend;
@@ -27,6 +33,45 @@ const COOKIE_NAME: &[u8] = b"MIT-MAGIC-COOKIE-1";
 /// Xauthority's wildcard family: the entry matches any host.
 const FAMILY_WILD: u16 = 0xffff;
 const READY_WITHIN: Duration = Duration::from_secs(10);
+/// The shared screen's size.
+pub const SHARED_SIZE: (u32, u32) = (1280, 800);
+
+static SHARED: Mutex<Option<Arc<BotDesktop>>> = Mutex::new(None);
+
+/// The app's Bot Desktop while it runs.
+pub fn shared() -> Option<Arc<BotDesktop>> {
+    let mut slot = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+    if slot.as_ref().is_some_and(|desk| !desk.running()) {
+        *slot = None;
+    }
+    slot.clone()
+}
+
+/// Starts the app's Bot Desktop, keeping its files under `dir`, or hands back
+/// the one already running.
+pub fn start_shared(dir: &Path) -> Result<Arc<BotDesktop>, String> {
+    if let Some(desk) = shared() {
+        return Ok(desk);
+    }
+    let desk = Arc::new(BotDesktop::start(dir, SHARED_SIZE)?);
+    let mut slot = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+    // Two starts at once: keep the first, and this one stops as it drops.
+    if let Some(first) = slot.as_ref().filter(|d| d.running()) {
+        return Ok(first.clone());
+    }
+    *slot = Some(desk.clone());
+    Ok(desk)
+}
+
+/// Stops the app's Bot Desktop. True when one was running.
+pub fn stop_shared() -> bool {
+    let desk = SHARED.lock().unwrap_or_else(|e| e.into_inner()).take();
+    desk.is_some_and(|desk| {
+        let was = desk.running();
+        desk.stop();
+        was
+    })
+}
 
 /// Which X server runs the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,7 +164,7 @@ pub fn free_display(
 
 /// A running Bot Desktop.
 pub struct BotDesktop {
-    child: Child,
+    child: Mutex<Child>,
     server: Server,
     display: u32,
     auth: PathBuf,
@@ -157,8 +202,8 @@ impl BotDesktop {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("couldn't start {}: {e}", server.program()))?;
-        let mut desk = Self {
-            child,
+        let desk = Self {
+            child: Mutex::new(child),
             server,
             display,
             auth,
@@ -170,13 +215,14 @@ impl BotDesktop {
         Ok(desk)
     }
 
-    fn wait_ready(&mut self) -> Result<(), String> {
+    fn wait_ready(&self) -> Result<(), String> {
         let started = Instant::now();
         loop {
             if self.connect().is_ok() {
                 return Ok(());
             }
-            if let Ok(Some(status)) = self.child.try_wait() {
+            let exited = self.child().try_wait();
+            if let Ok(Some(status)) = exited {
                 return Err(format!(
                     "{} stopped at start ({status})",
                     self.server.program()
@@ -187,6 +233,28 @@ impl BotDesktop {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    fn child(&self) -> std::sync::MutexGuard<'_, Child> {
+        self.child.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The X server is still up.
+    pub fn running(&self) -> bool {
+        matches!(self.child().try_wait(), Ok(None))
+    }
+
+    /// Stops the X server and removes its cookie and socket files. Programs
+    /// on the screen lose their display and end. Safe to call twice.
+    pub fn stop(&self) {
+        let mut child = self.child();
+        if matches!(child.try_wait(), Ok(None)) {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        drop(child);
+        let _ = std::fs::remove_file(&self.auth);
+        let _ = std::fs::remove_file(&self.rfb);
     }
 
     pub fn server(&self) -> Server {
@@ -274,10 +342,7 @@ impl BotDesktop {
 
 impl Drop for BotDesktop {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.auth);
-        let _ = std::fs::remove_file(&self.rfb);
+        self.stop();
     }
 }
 
@@ -469,6 +534,50 @@ mod tests {
             Err("\"sh -c id\" isn't a program name".to_string())
         );
         drop(tools);
+        drop(desk);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The app's tools follow the shared Bot Desktop: on, a move lands on
+    /// that screen; stopped, the server and its cookie are gone and the next
+    /// call goes back to the user's screen.
+    #[test]
+    fn the_app_tools_follow_the_shared_bot_desktop_on_and_off() {
+        if Server::installed().is_none() {
+            eprintln!("skipped: no Xvnc or Xvfb");
+            return;
+        }
+        use grokhub_agent::DesktopOps;
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::ConnectionExt;
+        let dir =
+            std::env::temp_dir().join(format!("grokhub-botdesk-shared-{}", std::process::id()));
+        let app = crate::AppDesktop::new();
+        assert!(shared().is_none());
+        assert!(!stop_shared());
+
+        let desk = start_shared(&dir).expect("starts");
+        assert_eq!(desk.size(), SHARED_SIZE);
+        assert!(Arc::ptr_eq(&desk, &start_shared(&dir).unwrap()));
+        let moved = app.call("move", &serde_json::json!({"x": 300, "y": 200}));
+        assert!(!moved.failed, "{}", moved.text);
+        let (conn, screen) = desk.connect().unwrap();
+        let root = conn.setup().roots[screen].root;
+        let at = conn.query_pointer(root).unwrap().reply().unwrap();
+        assert_eq!((at.root_x, at.root_y), (300, 200));
+        drop(conn);
+        let on_bot = app.call("focus_window", &serde_json::json!({"title": "Files"}));
+        assert!(on_bot.failed);
+        assert_eq!(on_bot.text, crate::BOT_NO_WINDOWS);
+
+        let auth = desk.xauthority().to_path_buf();
+        assert!(stop_shared());
+        assert!(!desk.running());
+        assert!(!auth.exists());
+        assert!(shared().is_none());
+        assert!(desk.connect().is_err());
+        let after = app.call("focus_window", &serde_json::json!({"title": "Files"}));
+        assert_ne!(after.text, crate::BOT_NO_WINDOWS);
         drop(desk);
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1206,6 +1206,8 @@ mod tests {
             "pick_attachments",
             "get_autostart",
             "set_autostart",
+            "get_bot_desktop",
+            "set_bot_desktop",
             "set_summon_hotkey",
             "set_notifications",
             "nyx_tiles",
