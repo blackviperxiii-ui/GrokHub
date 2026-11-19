@@ -143,9 +143,6 @@ pub fn fast_verdict(spend: &Spend) -> Result<&'static str, &'static str> {
     let Some(rule) = spend.latency.rule() else {
         return Err("fast:not_waiting");
     };
-    if spend.budget_tight {
-        return Err("fast:budget_tight");
-    }
     Ok(rule)
 }
 
