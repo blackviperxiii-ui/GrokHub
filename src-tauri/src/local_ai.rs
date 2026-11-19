@@ -771,13 +771,9 @@ fn found_models(config_dir: &Path) -> Vec<FoundModel> {
         .collect();
     local_discover::discover(&home, ollama.as_deref(), &dirs)
         .into_iter()
-        .filter(|f| {
-            let name = f.path.file_name().map(|n| n.to_string_lossy().into_owned());
-            // Drafters pair with a model; they aren't one to chat with.
-            !ls::local_models()
-                .iter()
-                .any(|m| m.is_drafter && Some(m.file.to_string()) == name)
-        })
+        // Drafters and vision projectors pair with a model; they aren't one
+        // to chat with, and loading one as the model stops the engine.
+        .filter(|f| !local_sidecar::helper_gguf(&f.path))
         .collect()
 }
 
