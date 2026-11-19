@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Checks scripts/shell-update-manifest.sh against a throwaway minisign key:
-# the manifest lists only the AppImage and the NSIS installer, points at the
+# the manifest lists the AppImage, the .deb and the NSIS installer, plus the
+# macOS .app archive only when the release built one, points at the
 # tag's release assets, carries signatures that verify, and refuses missing
 # assets, missing signatures and odd tags. Needs minisign.
 set -euo pipefail
@@ -24,8 +25,9 @@ app="grokhub-shell-v$ver-linux-amd64.AppImage"
 exe="GrokHub-Shell-Setup-$ver.exe"
 printf 'appimage bytes\n' > "$d/$app"
 printf 'installer bytes\n' > "$d/$exe"
-printf 'deb bytes\n' > "$d/grokhub-shell-v$ver-linux-amd64.deb"
-for f in "$app" "$exe"; do
+deb="grokhub-shell-v$ver-linux-amd64.deb"
+printf 'deb bytes\n' > "$d/$deb"
+for f in "$app" "$deb" "$exe"; do
   minisign -S -s "$TMP/key.sec" -m "$d/$f" -t "loadout shell v$ver-beta.7" >/dev/null
 done
 
@@ -45,10 +47,15 @@ PY
 }
 
 if check "assert m['version'] == '$ver-beta.7', m['version']"; then ok "version is the tag without v"; else bad "version is the tag without v"; fi
-if check "assert sorted(m['platforms']) == ['linux-x86_64-appimage', 'windows-x86_64-nsis'], sorted(m['platforms'])"; then
-  ok "only the AppImage and NSIS installer (no .deb)"
+if check "assert sorted(m['platforms']) == ['linux-x86_64-appimage', 'linux-x86_64-deb', 'windows-x86_64-nsis'], sorted(m['platforms'])"; then
+  ok "the AppImage, .deb and NSIS installer (no macOS build, no macOS entry)"
 else
-  bad "only the AppImage and NSIS installer (no .deb)"
+  bad "the AppImage, .deb and NSIS installer (no macOS build, no macOS entry)"
+fi
+if check "assert m['platforms']['linux-x86_64-deb']['url'] == 'https://github.com/blackviperxiii-ui/GrokHub/releases/download/v$ver-beta.7/$deb'"; then
+  ok ".deb URL is the tag's release asset"
+else
+  bad ".deb URL is the tag's release asset"
 fi
 if check "assert m['platforms']['linux-x86_64-appimage']['url'] == 'https://github.com/blackviperxiii-ui/GrokHub/releases/download/v$ver-beta.7/$app'"; then
   ok "AppImage URL is the tag's release asset"
@@ -62,7 +69,7 @@ else
 fi
 
 # The signature field decodes back to a .minisig that verifies the asset.
-for pair in "linux-x86_64-appimage:$app" "windows-x86_64-nsis:$exe"; do
+for pair in "linux-x86_64-appimage:$app" "linux-x86_64-deb:$deb" "windows-x86_64-nsis:$exe"; do
   key="${pair%%:*}"
   f="${pair#*:}"
   python3 -c 'import json,sys,base64; m=json.load(open(sys.argv[1])); sys.stdout.buffer.write(base64.b64decode(m["platforms"][sys.argv[2]]["signature"]))' "$d/latest.json" "$key" > "$TMP/back.minisig"
@@ -86,6 +93,23 @@ else
   ok "missing .minisig fails"
 fi
 mv "$TMP/exe.minisig.bak" "$d/$exe.minisig"
+
+# A macOS build adds its .app archive, which must be signed too.
+mac="grokhub-shell-v$ver-macos-arm64.app.tar.gz"
+printf 'app archive bytes\n' > "$d/$mac"
+if bash "$script" "$d" "v$ver" "blackviperxiii-ui/GrokHub" >/dev/null 2>&1; then
+  bad "an unsigned macOS archive fails"
+else
+  ok "an unsigned macOS archive fails"
+fi
+minisign -S -s "$TMP/key.sec" -m "$d/$mac" -t "loadout shell v$ver" >/dev/null
+if bash "$script" "$d" "v$ver" "blackviperxiii-ui/GrokHub" >/dev/null &&
+  check "assert m['platforms']['darwin-aarch64-app']['url'] == 'https://github.com/blackviperxiii-ui/GrokHub/releases/download/v$ver/$mac'"; then
+  ok "a macOS build adds darwin-aarch64-app"
+else
+  bad "a macOS build adds darwin-aarch64-app"
+fi
+rm -f "$d/$mac" "$d/$mac.minisig"
 
 mv "$d/$app" "$TMP/app.bak"
 if bash "$script" "$d" "v$ver-beta.7" "blackviperxiii-ui/GrokHub" >/dev/null 2>&1; then
