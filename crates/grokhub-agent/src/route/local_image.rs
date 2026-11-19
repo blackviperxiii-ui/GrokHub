@@ -26,6 +26,9 @@ const DRAW_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// Longest the guard may take to load and answer.
 const GUARD_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 
+/// Nothing here can draw a picture: no Grok Imagine sign-in and no picture
+/// model on disk.
+pub const NO_SOURCE: &str = "Not made, and nothing was sent: nothing here can draw pictures yet. Download Z-Image Turbo from Settings → Download models → Image, or sign in with Grok or add an API key.";
 /// Why a picture wasn't made on this computer.
 pub const NOT_SET_UP: &str = "Not made, and nothing was sent: on-device pictures need Z-Image Turbo from Settings → Download models.";
 /// An 18+ ask with no guard on disk.
@@ -40,6 +43,7 @@ pub const GUARD_UNSURE: &str = "Not shown, and deleted: the picture guard couldn
 pub const GUARD_NO_ROOM: &str = "Not shown, and deleted: this computer didn't have the free memory to check the picture. Close some apps, then ask again.";
 
 /// What's on disk for on-device pictures.
+#[derive(Clone)]
 pub struct Kit {
     pub cli: PathBuf,
     pub models_dir: PathBuf,
