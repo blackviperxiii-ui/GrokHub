@@ -520,15 +520,14 @@ impl Governor {
     }
 
     /// Every job's line for Settings → Background, in registration order.
-    pub fn status(&self, budgets: &BackgroundBudgets) -> Vec<JobStatus> {
+    pub fn status(&self, _budgets: &BackgroundBudgets) -> Vec<JobStatus> {
         self.slots
             .iter()
             .map(|s| JobStatus {
                 kind: s.spec.kind,
                 next_due_ms: s.next_due_ms,
                 spent_today: s.spent_today,
-                daily_budget: (s.spec.budget == BudgetClass::Tokens)
-                    .then(|| budgets.daily_tokens(s.spec.kind)),
+                daily_budget: None,
                 waiting: s.held,
             })
             .collect()
@@ -594,11 +593,9 @@ impl Governor {
         if quiet && spec.quiet == QuietRule::Holds {
             return Some(JobHold::Quiet);
         }
-        if spec.budget == BudgetClass::Tokens
-            && slot.spent_today >= ctx.budgets.daily_tokens(spec.kind)
-        {
-            return Some(JobHold::BudgetSpent);
-        }
+        // App-side daily token budgets no longer block scheduled background work;
+        // server responses govern usage limits.
+        let _ = (ctx.budgets, slot.spent_today);
         if ctx.hold_heavy && spec.heavy {
             return Some(JobHold::Heavy);
         }
@@ -857,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn a_spent_budget_stops_that_kind_for_the_day_with_a_named_note() {
+    fn charged_tokens_never_hold_a_kind_for_app_side_budget() {
         let budgets = BackgroundBudgets {
             daily_tokens: BTreeMap::from([("review".to_string(), 1_000)]),
         };
@@ -870,25 +867,11 @@ mod tests {
         assert_eq!(g.spent_today(JobKind::Review), 1_000);
         let later = T0 + DAILY_CHECK_MS;
         let plan = g.tick(&ctx(later, DAY, "12:01", &budgets));
-        assert!(!plan.runs(JobKind::Review));
-        assert!(plan.held.contains(&(JobKind::Review, JobHold::BudgetSpent)));
-        assert_eq!(
-            plan.new_notes,
-            vec![GovernorNote {
-                kind: JobKind::Review,
-                day: DAY.to_string(),
-                text: "Nightly review used today's background budget (1000 of 1000 tokens), so it stops until tomorrow."
-                    .to_string(),
-            }]
-        );
-        // Other kinds keep running, and the note is left once.
+        assert!(plan.runs(JobKind::Review));
+        assert!(!plan.held.contains(&(JobKind::Review, JobHold::BudgetSpent)));
+        assert_eq!(plan.new_notes, Vec::<GovernorNote>::new());
+        assert!(g.notes().is_empty());
         assert!(plan.runs(JobKind::NightPasses));
-        let again = g.tick(&ctx(later + DAILY_CHECK_MS, DAY, "12:02", &budgets));
-        assert!(!again.runs(JobKind::Review));
-        assert_eq!(again.new_notes, Vec::<GovernorNote>::new());
-        assert_eq!(g.notes().len(), 1);
-        assert_eq!(g.notes()[0].kind, JobKind::Review);
-        // A new local day resets the spend and clears the note.
         let next = g.tick(&ctx(
             later + 2 * DAILY_CHECK_MS,
             "2026-10-12",
@@ -901,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn local_jobs_are_never_charged_and_a_zero_budget_stops_a_kind() {
+    fn local_jobs_are_never_charged_and_a_zero_budget_does_not_hold_a_kind() {
         let budgets = BackgroundBudgets {
             daily_tokens: BTreeMap::from([("anticipate".to_string(), 0)]),
         };
@@ -910,11 +893,9 @@ mod tests {
         assert_eq!(g.spent_today(JobKind::Indexers), 0);
         let plan = g.tick(&ctx(T0, DAY, "12:00", &budgets));
         assert!(plan.runs(JobKind::Indexers));
-        assert_eq!(plan.held, vec![(JobKind::Anticipate, JobHold::BudgetSpent)]);
-        assert_eq!(
-            plan.new_notes[0].text,
-            "Anticipate used today's background budget (0 of 0 tokens), so it stops until tomorrow."
-        );
+        assert!(plan.runs(JobKind::Anticipate));
+        assert!(plan.held.is_empty());
+        assert!(plan.new_notes.is_empty());
     }
 
     #[test]
@@ -1045,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn quiet_hours_and_spent_budgets_win_over_activity_and_settings_rows_say_why() {
+    fn quiet_hours_win_over_activity_while_budgets_do_not_hold_settings_rows() {
         let budgets = BackgroundBudgets {
             daily_tokens: BTreeMap::from([("review".to_string(), 1_000)]),
         };
@@ -1061,29 +1042,26 @@ mod tests {
                 (JobKind::Ideas, JobHold::Quiet),
                 (JobKind::Anticipate, JobHold::Quiet),
                 (JobKind::Digest, JobHold::Quiet),
-                (JobKind::Review, JobHold::BudgetSpent),
                 (JobKind::NightPasses, JobHold::Heavy),
                 (JobKind::Indexers, JobHold::Quiet),
             ]
         );
-        assert_eq!(plan.cheap, Vec::<JobKind>::new());
-        assert_eq!(
-            plan.new_notes[0].text,
-            "Nightly review used today's background budget (1000 of 1000 tokens), so it stops until tomorrow."
-        );
+        assert!(plan.runs(JobKind::Review));
+        assert_eq!(plan.cheap, vec![JobKind::Review]);
+        assert!(plan.new_notes.is_empty());
         let rows = g.status(&budgets);
         let row = |k: JobKind| rows.iter().find(|r| r.kind == k).cloned().expect("row");
         assert_eq!(
             row(JobKind::Review),
             JobStatus {
                 kind: JobKind::Review,
-                next_due_ms: 0,
+                next_due_ms: T0 + DAILY_CHECK_MS,
                 spent_today: 1_000,
-                daily_budget: Some(1_000),
-                waiting: Some(JobHold::BudgetSpent),
+                daily_budget: None,
+                waiting: None,
             }
         );
-        assert_eq!(row(JobKind::Digest).daily_budget, Some(75_000));
+        assert_eq!(row(JobKind::Digest).daily_budget, None);
         assert_eq!(row(JobKind::Indexers).daily_budget, None);
         assert_eq!(row(JobKind::Indexers).waiting, Some(JobHold::Quiet));
         assert_eq!(row(JobKind::Proactive).waiting, None);

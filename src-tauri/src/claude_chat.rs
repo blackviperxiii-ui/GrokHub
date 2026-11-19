@@ -198,7 +198,7 @@ pub fn is_on(dir: &Path, id: &str) -> bool {
 /// sign-out or a switch to an API key (the user's or the project's Claude
 /// Code settings) sends nothing rather than billing somewhere else.
 pub fn turn_cli(dir: &Path, id: &str, workspace: &Path) -> Option<Result<PathBuf, String>> {
-    if !is_on(dir, id) {
+    if !is_on(dir, id) || grokhub_agent::route::user_bench::load(dir).blocks_claude_plan() {
         return None;
     }
     Some(plan_cli(claude_plan::find(), |cli| {
@@ -255,6 +255,13 @@ mod tests {
         assert!(is_on(&dir, "chat-b"));
         // Another chat never runs on the plan.
         assert_eq!(turn_cli(&dir, "chat-a", &dir), None);
+
+        // Benching Claude skips Claude Plan CLI execution.
+        let bench_cmd =
+            grokhub_agent::route::user_bench::parse_chat_command("stop using Claude").unwrap();
+        grokhub_agent::route::user_bench::apply_and_save(&dir, bench_cmd, 1).unwrap();
+        assert_eq!(turn_cli(&dir, "chat-b", &dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

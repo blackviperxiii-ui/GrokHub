@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   removeAiProvider: vi.fn<(id: string) => Promise<AiModelsView>>(),
   saveAiSpend: vi.fn<(cap: number, ceiling: number) => Promise<AiModelsView>>(),
   revokeAiPremium: vi.fn<(id: string) => Promise<AiModelsView>>(),
+  unbenchAiModel: vi.fn<(id: string) => Promise<AiModelsView>>(),
   saveWebSearch: vi.fn<(backend: string, searxngUrl: string) => Promise<AiModelsView>>(),
   saveBraveKey: vi.fn<(key: string) => Promise<AiModelsView>>(),
   startOpenRouterSignIn: vi.fn<() => Promise<OpenRouterSignIn>>(),
@@ -53,8 +54,9 @@ function later<T>() {
 
 const EMPTY: AiModelsView = {
   providers: [],
-  spend: { weeklyCapUsd: 0, priceCeilingUsdPerM: 15, caps: [0, 5, 10, 25, 50, 100], ceilings: [5, 15, 30, 60] },
+  spend: { weeklyCapUsd: 0, priceCeilingUsdPerM: 15, caps: [0], ceilings: [5, 15, 30, 60] },
   premium: [],
+  benched: [],
   table: [],
   tableBuiltAt: 0,
   locked: "",
@@ -122,8 +124,9 @@ describe("AiModels", () => {
     expect(screen.getByRole("heading", { name: "Spend limits" })).toBeVisible();
     expect(screen.getByText(PREMIUM_NONE)).toBeVisible();
     expect(screen.getByText("No routing table yet. It builds after the first few chats.")).toBeVisible();
-    expect(screen.getByLabelText("Weekly spend cap")).toHaveValue("0");
+    expect(screen.queryByLabelText("Weekly spend cap")).toBeNull();
     expect(screen.getByLabelText("Price limit")).toHaveValue("15");
+    expect(screen.getByRole("heading", { name: "Benched models" })).toBeVisible();
   });
 
   it("keeps the key field write-only and empties it as the key leaves", async () => {
@@ -181,14 +184,31 @@ describe("AiModels", () => {
     expect(screen.queryByRole("button", { name: "Allow openrouter.ai" })).toBeNull();
   });
 
-  it("saves a new weekly cap keeping the price limit", async () => {
-    api.saveAiSpend.mockResolvedValue({ ...EMPTY, spend: { ...EMPTY.spend, weeklyCapUsd: 25 }, status: "Saved." });
+  it("saves a new price limit without a weekly spend cap", async () => {
+    api.saveAiSpend.mockResolvedValue({ ...EMPTY, spend: { ...EMPTY.spend, priceCeilingUsdPerM: 30 }, status: "Saved." });
     render(<AiModels />);
     await screen.findByText("No other providers yet.");
-    await userEvent.selectOptions(screen.getByLabelText("Weekly spend cap"), "25");
-    expect(api.saveAiSpend).toHaveBeenCalledWith(25, 15);
+    await userEvent.selectOptions(screen.getByLabelText("Price limit"), "30");
+    expect(api.saveAiSpend).toHaveBeenCalledWith(0, 30);
     expect(await screen.findByText("Saved.")).toBeVisible();
-    expect(screen.getByLabelText("Weekly spend cap")).toHaveValue("25");
+    expect(screen.getByLabelText("Price limit")).toHaveValue("30");
+  });
+
+  it("shows benched models and lets you unbench one", async () => {
+    api.getAiModels.mockResolvedValue({
+      ...EMPTY,
+      benched: [{ id: "grok", label: "Grok (xAI)", benchedAtMs: 123 }],
+    });
+    api.unbenchAiModel.mockResolvedValue({
+      ...EMPTY,
+      benched: [],
+      status: "Unbenched Grok (xAI). It is available to routing again.",
+    });
+    render(<AiModels />);
+    const row = await screen.findByRole("listitem", { name: "Grok (xAI)" });
+    await userEvent.click(within(row).getByRole("button", { name: "Unbench" }));
+    expect(api.unbenchAiModel).toHaveBeenCalledWith("grok");
+    expect(await screen.findByText("Unbenched Grok (xAI). It is available to routing again.")).toBeVisible();
   });
 
   it("revokes a paid upgrade and shows the empty line", async () => {

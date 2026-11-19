@@ -60,10 +60,10 @@ describe("Behavior", () => {
     api.saveBehavior.mockReset();
   });
 
-  it("starts with autocomplete, budget and quiet hours off, and says nothing waits yet", async () => {
+  it("starts with autocomplete and quiet hours off, without a daily budget cap", async () => {
     render(<Behavior tray />);
     expect(await screen.findByLabelText("Sentence autocomplete")).not.toBeChecked();
-    expect(screen.getByLabelText("Daily token budget")).toHaveValue("0");
+    expect(screen.queryByLabelText("Daily token budget")).toBeNull();
     expect(screen.getByLabelText("Quiet hours start")).toHaveValue("");
     expect(screen.getByLabelText("Quiet hours end")).toHaveValue("");
     expect(screen.queryByLabelText("Pause scheduled work over budget")).toBeNull();
@@ -119,26 +119,8 @@ describe("Behavior", () => {
     await userEvent.click(screen.getByLabelText(/keeps Loadout in the tray/));
     expect(api.saveBehavior).toHaveBeenLastCalledWith(false, { ...OFF, autocomplete: true });
     expect(onCloseToTray).toHaveBeenCalledWith(false);
-
-    api.saveBehavior.mockResolvedValueOnce(page({ autocomplete: true, dailyTokenBudget: 1000000 }, false));
-    await userEvent.selectOptions(screen.getByLabelText("Daily token budget"), "1000000");
-    expect(api.saveBehavior).toHaveBeenLastCalledWith(false, {
-      ...OFF,
-      autocomplete: true,
-      dailyTokenBudget: 1000000,
-    });
-    const pause = await screen.findByLabelText("Pause scheduled work over budget");
-    expect(pause).not.toBeChecked();
-    api.saveBehavior.mockResolvedValueOnce(
-      page({ autocomplete: true, dailyTokenBudget: 1000000, pauseOverBudget: true }, false),
-    );
-    await userEvent.click(pause);
-    expect(api.saveBehavior).toHaveBeenLastCalledWith(false, {
-      ...OFF,
-      autocomplete: true,
-      dailyTokenBudget: 1000000,
-      pauseOverBudget: true,
-    });
+    expect(screen.queryByLabelText("Daily token budget")).toBeNull();
+    expect(screen.queryByLabelText("Pause scheduled work over budget")).toBeNull();
   });
 
   it("composer glow starts off and saves at once", async () => {
@@ -193,10 +175,10 @@ describe("Behavior", () => {
   });
 
   it("the web app sees the choices with nothing to change them", async () => {
-    api.getBehavior.mockResolvedValue(page({ quietStart: "22:00", quietEnd: "07:00", dailyTokenBudget: 1000000 }));
+    api.getBehavior.mockResolvedValue(page({ quietStart: "22:00", quietEnd: "07:00" }));
     render(<Behavior tray readOnly />);
     expect(await screen.findByText("22:00–07:00")).toBeInTheDocument();
-    expect(screen.getByText("1.0M tokens a day")).toBeInTheDocument();
+    expect(screen.queryByText("Daily token budget")).toBeNull();
     expect(screen.getByText("Composer glow").nextElementSibling).toHaveTextContent("Off");
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();

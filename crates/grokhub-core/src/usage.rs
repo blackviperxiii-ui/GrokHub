@@ -68,9 +68,9 @@ pub fn take_budget_note(day: &mut UsageDay, cap: u64) -> Option<BudgetLevel> {
     Some(level)
 }
 
-/// Scheduled work waits for tomorrow once today is over budget, when you asked it to.
-pub fn budget_holds_scheduled(day: &UsageDay, cap: u64, pause: bool) -> bool {
-    pause && budget_level(tokens_today(day), cap) == Some(BudgetLevel::Over)
+/// Scheduled work is never held by an app-side token budget; server responses govern limits.
+pub fn budget_holds_scheduled(_day: &UsageDay, _cap: u64, _pause: bool) -> bool {
+    false
 }
 
 /// "Off" or "1.0M tokens a day".
@@ -252,7 +252,7 @@ mod tests {
         add_tokens(&mut d, 0, 0, 200_000);
         assert_eq!(take_budget_note(&mut d, 1_000_000), Some(BudgetLevel::Over));
         assert_eq!(take_budget_note(&mut d, 1_000_000), None, "over shows once");
-        assert!(budget_holds_scheduled(&d, 1_000_000, true));
+        assert!(!budget_holds_scheduled(&d, 1_000_000, true));
         assert!(
             !budget_holds_scheduled(&d, 1_000_000, false),
             "pause is opt-in"

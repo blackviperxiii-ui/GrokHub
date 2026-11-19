@@ -129,6 +129,7 @@ function Grok({ usage, now }: { usage: FleetUsage | null; now: number }) {
           <div className="card-status">
             {grok.resetsAtMs !== null ? resetsIn(grok.resetsAtMs, now) : `As of ${ago(grok.seenMs, now)}`}
           </div>
+          <div className="card-detail-line">Server-reported limit (informational only — never blocks)</div>
           {requests !== null && (
             <UsageMeter frac={requests} label="Grok requests used">
               <div className="card-detail-line">{`Requests: ${grok.requestsLeft} of ${grok.requestsLimit} left`}</div>

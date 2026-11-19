@@ -1300,6 +1300,8 @@ mod tests {
             "answer_ai_models_card",
             "remove_ai_provider",
             "save_ai_spend",
+            "bench_ai_model",
+            "unbench_ai_model",
             "save_web_search",
             "save_brave_key",
             "revoke_ai_premium",

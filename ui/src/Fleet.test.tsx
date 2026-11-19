@@ -122,6 +122,7 @@ describe("Fleet page", () => {
 
     const grok = screen.getByLabelText("Grok");
     expect(grok).toHaveTextContent("resets in 1 h 30 min");
+    expect(grok).toHaveTextContent("Server-reported limit (informational only — never blocks)");
     expect(grok).toHaveTextContent("Requests: 10 of 100 left");
     const bar = within(grok).getByRole("progressbar", { name: "Grok requests used" });
     expect(bar).toHaveAttribute("aria-valuenow", "90");
