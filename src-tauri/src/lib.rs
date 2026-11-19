@@ -2380,7 +2380,7 @@ fn chip_row(
             },
             follow_ups: &follow,
             mode: mode.as_str(),
-            signed_in: credential::has_key() || oauth::signed_in(&oauth::Keychain).is_some(),
+            ai_ready: ai_ready(dir),
             first_run,
             hour: local.hour as u8,
             weekday: local.weekday,
@@ -7102,6 +7102,20 @@ fn set_diagnostics(
 ) -> Result<diagnostics::Page, String> {
     capabilities::needs(capabilities::current().plugins, "Diagnostics")?;
     diagnostics::set(&state.config_dir, mode, include_logs)
+}
+
+/// Some AI source can answer a chat: a Grok sign-in or key, a provider with
+/// a key the user allowed, or a model on this PC. xAI is one of these, not a
+/// requirement.
+pub(crate) fn ai_ready(dir: &Path) -> bool {
+    credential::has_key()
+        || oauth::signed_in(&oauth::Keychain).is_some()
+        || grokhub_agent::route::local::installed()
+        || !grokhub_agent::route::providers::usable(
+            dir,
+            grokhub_agent::route::providers::call_data(false),
+        )
+        .is_empty()
 }
 
 /// Builds the redacted bundle and keeps it for Save; nothing is written yet.

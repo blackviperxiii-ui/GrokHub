@@ -1,0 +1,1 @@
+- The "Connect Grok" chip is now "Set up AI" and only shows when nothing can answer: a Grok sign-in, an allowed provider key, or a model on this PC each count. Its hint names every way to set one up.
