@@ -2125,7 +2125,7 @@ h2.md-heading {
 .md-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
 }
 
 .md-strike {
@@ -4125,11 +4125,155 @@ label.toggle-row {
   min-height: 96px;
   border-color: var(--red-dim);
   transition: border-color var(--t-fast) var(--ease-out);
+  /* The lead image sits beside the text on a wide card, under the head on a narrow one. */
+  container-type: inline-size;
 }
 
 .card.feed-card:hover,
-.card.feed-card:focus-within {
+.card.feed-card:focus-within,
+.card.feed-card.open {
   border-color: var(--red);
+}
+
+/* Text on the left, the 16:9 lead image (or link tile) on the right. */
+.feed-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "head lead"
+    "text lead";
+  grid-template-rows: auto 1fr;
+  column-gap: 16px;
+  row-gap: 12px;
+}
+
+.feed-main > .feed-head {
+  grid-area: head;
+}
+
+.feed-text {
+  grid-area: text;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.feed-lead {
+  grid-area: lead;
+  width: 240px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--red-dim);
+  border-radius: 10px;
+  background: #000;
+}
+
+.feed-lead .media-item {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.feed-lead .media-item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.feed-lead .media-item:focus-visible,
+.feed-expanded .media-item:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: -2px;
+}
+
+/* A link with no image: the topic icon, kept small, and the link's host. */
+.feed-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  padding: 8px;
+}
+
+.feed-tile-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.feed-tile-icon.plain {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-section);
+}
+
+.feed-tile-host {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+@container (max-width: 599px) {
+  .feed-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "head"
+      "lead"
+      "text";
+    grid-template-rows: auto;
+  }
+
+  .feed-lead {
+    width: 100%;
+  }
+
+  /* A full-width tile with no picture would be a black band: keep it one row. */
+  .feed-lead:has(> .feed-tile) {
+    aspect-ratio: auto;
+  }
+
+  .feed-tile {
+    flex-direction: row;
+  }
+}
+
+.feed-more {
+  align-self: flex-start;
+  padding: 4px 8px;
+}
+
+.feed-more:focus-visible {
+  outline: 2px solid var(--red);
+}
+
+/* Behind Show more: the full report, images 2 and 3, and why the card is here. */
+.feed-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.feed-expanded[hidden] {
+  display: none;
+}
+
+.feed-why {
+  margin: 0;
+  color: var(--muted);
+}
+
+.feed-why-label {
+  display: block;
+  color: var(--text);
+  font-size: var(--font-caption);
+  font-weight: 600;
 }
 
 .pulse-head .switch button:not([aria-pressed="true"]) {
@@ -4163,6 +4307,24 @@ label.toggle-row {
   font-weight: 600;
   line-height: var(--lh-prose);
   padding-top: 2px;
+}
+
+/* A title with a source page opens it. */
+a.feed-title {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.feed-title:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--red);
+  text-underline-offset: 2px;
+}
+
+a.feed-title:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .feed-corner {
@@ -4240,26 +4402,20 @@ label.toggle-row {
   text-underline-offset: 2px;
 }
 
-.media.hero .media-item img {
-  display: block;
-  height: 170px;
-  width: auto;
-  max-width: 100%;
-  border-radius: 10px;
-}
-
 .media.gallery {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 240px));
   gap: 8px;
 }
 
 .media.gallery .media-item img {
   display: block;
   width: 100%;
-  aspect-ratio: 1;
+  aspect-ratio: 16 / 9;
   object-fit: cover;
+  border: 1px solid var(--red-dim);
   border-radius: 10px;
+  background: #000;
 }
 
 .media-item {
@@ -7009,15 +7165,7 @@ button.primary:not(.quick-chip) {
   vertical-align: middle;
 }
 
-/* A card's full report, opened under its summary. */
-.feed-card .link-button {
-  align-self: flex-start;
-  padding: 0;
-  border: 0;
-  background: none;
-  text-decoration: underline;
-}
-
+/* A card's full report, and a digest's items. */
 .feed-report {
   margin: 4px 0 8px;
   color: var(--muted);

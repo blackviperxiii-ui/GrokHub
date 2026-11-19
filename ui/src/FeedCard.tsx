@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { pulseImage, type PulseChip, type PulseIdea, type PulsePost } from "./api";
+import { externalUrlOk, openExternal } from "./external";
 import { Markdown } from "./Markdown";
 import { VerdictLine } from "./PulseFix";
 import { reducedMotion } from "./rubberBand";
@@ -79,22 +80,115 @@ export function Snippet({ text }: { text: string }) {
   );
 }
 
-/** Cached images as data URLs, loaded once per name. */
-function useImages(names: string[]): string[] {
-  const [urls, setUrls] = useState<string[]>([]);
+/** A card shows at most this many images: the lead, then two behind Show more. */
+const IMAGES_MAX = 3;
+/** Data URLs kept across remounts (a refresh, a tab switch), oldest out first. */
+const IMAGE_CACHE_MAX = 48;
+const imageCache = new Map<string, Promise<string>>();
+
+/** One cached image as a data URL, asked of the app once per name. A failed
+ * read is forgotten, so the next mount asks again. */
+function loadImage(name: string): Promise<string> {
+  const hit = imageCache.get(name);
+  if (hit) {
+    imageCache.delete(name);
+    imageCache.set(name, hit);
+    return hit;
+  }
+  const got = pulseImage(name);
+  imageCache.set(name, got);
+  got.catch(() => {
+    if (imageCache.get(name) === got) imageCache.delete(name);
+  });
+  for (const old of imageCache.keys()) {
+    if (imageCache.size <= IMAGE_CACHE_MAX) break;
+    imageCache.delete(old);
+  }
+  return got;
+}
+
+/** A loaded image: its cached name, its data URL and its place on the card (1-based). */
+interface Shot {
+  name: string;
+  src: string;
+  n: number;
+}
+
+/** The images in `names` that loaded, in order, or null until they have.
+ * Nothing is asked until `enabled`. `first` is the first name's place on the card. */
+function useImages(names: string[], enabled: boolean, first: number): Shot[] | null {
   // `names` is a new array on every page load; its JSON only changes when a name does.
   const key = JSON.stringify(names);
+  const [got, setGot] = useState<{ key: string; shots: Shot[] } | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     let live = true;
     const list: string[] = JSON.parse(key);
-    Promise.all(list.map((n) => pulseImage(n).catch(() => ""))).then((got) => {
-      if (live) setUrls(got.filter(Boolean));
+    Promise.all(
+      list.map((name, i) =>
+        loadImage(name).then(
+          (src): Shot | null => (src ? { name, src, n: first + i } : null),
+          () => null,
+        ),
+      ),
+    ).then((all) => {
+      if (live) setGot({ key, shots: all.filter((s): s is Shot => s !== null) });
     });
     return () => {
       live = false;
     };
-  }, [key]);
-  return urls;
+  }, [key, enabled, first]);
+  return got?.key === key ? got.shots : null;
+}
+
+/** True once `ref`'s element comes within 600 px of the screen, and from then
+ * on. Without IntersectionObserver it is true at once. */
+function useNearScreen(ref: RefObject<Element | null>, watch: boolean): boolean {
+  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
+  useEffect(() => {
+    const el = ref.current;
+    if (near || !watch || !el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setNear(true);
+      },
+      { rootMargin: "600px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref, near, watch]);
+  return near;
+}
+
+const MIME_EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+
+/** The Download name: the cached name with the extension its bytes call for,
+ * so a `.img` file saves as what it is. */
+function downloadName(shot: Shot): string {
+  const mime = /^data:([^;,]+)/.exec(shot.src)?.[1] ?? "";
+  const ext = MIME_EXT[mime];
+  if (!ext) return shot.name;
+  const dot = shot.name.lastIndexOf(".");
+  return `${dot > 0 ? shot.name.slice(0, dot) : shot.name}.${ext}`;
+}
+
+/** The host of a web link ("blog.rust-lang.org"), or "" when it is not one. */
+function linkHost(link: string): string {
+  if (!externalUrlOk(link)) return "";
+  return new URL(link).hostname;
+}
+
+function ShotButton({ shot, onOpen }: { shot: Shot; onOpen: (shot: Shot) => void }) {
+  return (
+    <button
+      type="button"
+      className="media-item"
+      aria-label={`Open image ${shot.n}`}
+      onClick={() => onOpen(shot)}
+    >
+      <img src={shot.src} alt="" decoding="async" />
+    </button>
+  );
 }
 
 /** One picture full size, with Download; `video` plays a clip instead. */
@@ -139,30 +233,46 @@ export function Lightbox({
   );
 }
 
-function Media({ post }: { post: PulsePost }) {
-  const urls = useImages(post.images);
-  const [open, setOpen] = useState<number | null>(null);
-  if (urls.length === 0) return null;
-  const one = urls.length === 1;
+/** The card's right column: its first image once the card nears the screen,
+ * in a fixed 16:9 black box so nothing shifts. A card with a link and no
+ * image shows its topic icon and the link's host instead; a card with neither
+ * has no lead, so no artwork is made up. */
+function Lead({ post, onOpen }: { post: PulsePost; onOpen: (shot: Shot) => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  const lead = post.images.slice(0, 1);
+  // Watch the lead box, not the card: the card's dwell watcher owns the <li>.
+  const near = useNearScreen(box, lead.length > 0);
+  const shots = useImages(lead, near, 1);
+  const host = linkHost(post.link);
+  const shot = shots?.[0];
+  const loading = lead.length > 0 && shots === null;
+  if (!shot && !loading && !host) return null;
   return (
-    <>
-      <div className={one ? "media hero" : "media gallery"}>
-        {urls.slice(0, 3).map((src, i) => (
-          <button
-            key={i}
-            type="button"
-            className="media-item"
-            aria-label={`Open image ${i + 1}`}
-            onClick={() => setOpen(i)}
-          >
-            <img src={src} alt="" />
-          </button>
-        ))}
-      </div>
-      {open !== null && urls[open] && (
-        <Lightbox src={urls[open]} name={post.images[open] ?? "image"} onClose={() => setOpen(null)} />
+    <div className="feed-lead" ref={box}>
+      {shot ? (
+        <ShotButton shot={shot} onOpen={onOpen} />
+      ) : (
+        !loading && (
+          <div className="feed-tile" aria-hidden="true">
+            <TopicIcon icon={post.icon} className="feed-tile-icon" />
+            <span className="feed-tile-host">{host}</span>
+          </div>
+        )
       )}
-    </>
+    </div>
+  );
+}
+
+/** Images 2 and 3, behind Show more; asked for only once the card is open. */
+function Gallery({ post, onOpen }: { post: PulsePost; onOpen: (shot: Shot) => void }) {
+  const shots = useImages(post.images.slice(1, IMAGES_MAX), true, 2);
+  if (!shots?.length) return null;
+  return (
+    <div className="media gallery">
+      {shots.map((shot) => (
+        <ShotButton key={shot.name} shot={shot} onOpen={onOpen} />
+      ))}
+    </div>
   );
 }
 
@@ -251,8 +361,10 @@ export interface FeedCardProps {
   /** Like, or take it back when the post is already liked. */
   onLove: () => void;
   onDiscuss: () => void;
-  /** Open the post's source page. */
+  /** The post's source page opened in the browser, from the title or Read it. */
   onOpen?: () => void;
+  /** The browser could not open the source page. */
+  onOpenFailed?: (err: unknown) => void;
   /** A catalog upgrade card's Open in Settings: the model library, on that
    * model. Its Download button is the approval. */
   onOpenModel?: () => void;
@@ -277,19 +389,26 @@ export interface FeedCardProps {
   onStop?: () => void;
 }
 
-/** One Feed post, always fully open: icon, title, where it is from and why,
- * verdict, cited snippet, the full report, media; then one row of buttons
- * (Like, the card's chips or Discuss, Read it or a model card's Open in
- * Settings, Snooze when it suits the card, a self-review card's Apply
- * change, Revert or Save idea, Not interested). Not interested drops the
- * card immediately. The ⋯ menu holds "Why I created this", plus Copy as
- * GitHub issue on a code idea; nothing collapses. */
+/** Elements whose own click is not a click on the card body. */
+const OWN_CLICK = "a, button, input, textarea, select, video, [role=menu], [role=dialog]";
+
+/** One Feed post: icon, title (a link to the source when there is one),
+ * where it is from and why, verdict, cited snippet and a digest's items, with
+ * the lead image or a link tile beside them. Show more (or a click on the card
+ * body) opens the full report, images 2 and 3, and why the card is here; a
+ * self-review card starts open, so Apply never runs on text the user hasn't
+ * seen. Then one row of buttons (Like, the card's chips or Discuss, Read it
+ * or a model card's Open in Settings, Snooze when it suits the card, a
+ * self-review card's Apply change, Revert or Save idea, Not interested). Not
+ * interested drops the card immediately. The ⋯ menu holds "Why I created
+ * this", plus Copy as GitHub issue on a code idea. */
 export function FeedCard({
   post,
   busy,
   onLove,
   onDiscuss,
   onOpen,
+  onOpenFailed,
   onOpenModel,
   onDislike,
   onWhy,
@@ -307,74 +426,153 @@ export function FeedCard({
   const [undoing, setUndoing] = useState(false);
   const openDone = post.done != null && !post.done.answered;
   const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
+  // Per card; the card is keyed by post id, so it stays open across refreshes.
+  const [open, setOpen] = useState(() => Boolean(post.review));
+  const [shown, setShown] = useState<Shot | null>(null);
+  const linked = externalUrlOk(post.link);
+  const hasMore = Boolean(post.more || post.why) || post.images.length > 1;
+  const regionId = `more-${post.id}`;
   async function askWhy() {
     setMenu(false);
     if (onWhy) setWhy(await onWhy().catch((err) => String(err)));
   }
+  function openSource() {
+    void openExternal(post.link).catch((err) => onOpenFailed?.(err));
+    onOpen?.();
+  }
+  // A pointer click on the card's own text toggles it; links, buttons, the
+  // menu, the lightbox and a text selection keep their own meaning. The
+  // Show more button is the keyboard path.
+  function clickBody(e: MouseEvent<HTMLLIElement>) {
+    if (!hasMore) return;
+    if (e.target instanceof Element && e.target.closest(OWN_CLICK)) return;
+    if (window.getSelection()?.toString()) return;
+    setOpen((o) => !o);
+  }
   return (
-    <li className="card post feed-card" aria-label={post.title} data-card-id={post.id}>
-      <div className="feed-head">
-        <TopicIcon icon={post.icon} />
-        <div className="feed-title">{post.title}</div>
-        <div className="feed-corner" ref={corner}>
-          <span className="card-status" title={fullDate(post.createdAt)}>
-            {post.ago}
-          </span>
-          {onWhy && (
-            <button
-              type="button"
-              className="quiet icon-button"
-              aria-label="More"
-              aria-haspopup="menu"
-              aria-expanded={menu}
-              onClick={() => setMenu((m) => !m)}
+    <li
+      className={open ? "card post feed-card open" : "card post feed-card"}
+      aria-label={post.title}
+      data-card-id={post.id}
+      onClick={clickBody}
+    >
+      <div className="feed-main">
+        <div className="feed-head">
+          <TopicIcon icon={post.icon} />
+          {linked ? (
+            <a
+              className="feed-title"
+              href={post.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => {
+                e.preventDefault();
+                openSource();
+              }}
             >
-              ⋯
-            </button>
+              {post.title}
+            </a>
+          ) : (
+            <div className="feed-title">{post.title}</div>
           )}
-          {menu && (
-            <div className="feed-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => void askWhy()}>
-                Why I created this
+          <div className="feed-corner" ref={corner}>
+            <span className="card-status" title={fullDate(post.createdAt)}>
+              {post.ago}
+            </span>
+            {onWhy && (
+              <button
+                type="button"
+                className="quiet icon-button"
+                aria-label="More"
+                aria-haspopup="menu"
+                aria-expanded={menu}
+                onClick={() => setMenu((m) => !m)}
+              >
+                ⋯
               </button>
-              {post.issue && onIssue && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenu(false);
-                    onIssue();
-                  }}
-                >
-                  Copy as GitHub issue
+            )}
+            {menu && (
+              <div className="feed-menu" role="menu">
+                <button type="button" role="menuitem" onClick={() => void askWhy()}>
+                  Why I created this
                 </button>
-              )}
+                {post.issue && onIssue && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenu(false);
+                      onIssue();
+                    }}
+                  >
+                    Copy as GitHub issue
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="feed-text">
+          <p className="feed-source">
+            {post.source}
+            {post.because && ` · ${post.because}`}
+          </p>
+          <VerdictLine verdict={post.verdict} />
+          {post.summary && <Snippet text={post.summary} />}
+          {/* A digest's items are its body, so they stay out from behind Show more. */}
+          {post.items?.length > 0 && (
+            <div className="feed-report">
+              <ul className="feed-items">
+                {post.items.map((item) => (
+                  <li key={item.cardId}>
+                    <strong>{item.found}</strong>
+                    {item.summary && ` ${item.summary}`}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
-        </div>
-      </div>
-      <p className="feed-source">
-        {post.source}
-        {post.because && ` · ${post.because}`}
-      </p>
-      <VerdictLine verdict={post.verdict} />
-      {post.summary && <Snippet text={post.summary} />}
-      {(post.items?.length > 0 || post.more) && (
-        <div className="feed-report">
-          {post.items?.length > 0 && (
-            <ul className="feed-items">
-              {post.items.map((item) => (
-                <li key={item.cardId}>
-                  <strong>{item.found}</strong>
-                  {item.summary && ` ${item.summary}`}
-                </li>
-              ))}
-            </ul>
+          {hasMore && (
+            <button
+              type="button"
+              className="quiet feed-more"
+              aria-expanded={open}
+              aria-controls={regionId}
+              onClick={() => setOpen((o) => !o)}
+            >
+              {open ? "Show less" : "Show more"}
+            </button>
           )}
-          {post.more && <Markdown text={post.more} />}
+        </div>
+        <Lead post={post} onOpen={setShown} />
+      </div>
+      {hasMore && (
+        <div
+          id={regionId}
+          className="feed-expanded"
+          role="region"
+          aria-label={`More about ${post.title}`}
+          hidden={!open}
+        >
+          {open && (
+            <>
+              {post.more && (
+                <div className="feed-report">
+                  <Markdown text={post.more} />
+                </div>
+              )}
+              <Gallery post={post} onOpen={setShown} />
+              {post.why && (
+                <p className="feed-why">
+                  <span className="feed-why-label">Why you&apos;re seeing this</span>
+                  {post.why}
+                </p>
+              )}
+            </>
+          )}
         </div>
       )}
-      <Media post={post} />
+      {shown && <Lightbox src={shown.src} name={downloadName(shown)} onClose={() => setShown(null)} />}
       {why && (
         <p className="card-status why" role="note">
           {why}
@@ -433,8 +631,8 @@ export function FeedCard({
             Stop doing this
           </button>
         )}
-        {post.link && onOpen && (
-          <button type="button" className="quiet" disabled={busy} onClick={onOpen}>
+        {linked && onOpen && (
+          <button type="button" className="quiet" disabled={busy} onClick={openSource}>
             Read it
           </button>
         )}
