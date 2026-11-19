@@ -911,8 +911,7 @@ fn local_only_and_offline_modes_fail_over_cleanly_in_tts() {
     // In LocalOnly mode with fake_voice (empty sherpa binary), it skips xAI
     // completely and attempts on-device Kokoro instead ("didn't start").
     let cfg = VoiceRouteConfig {
-        mode: VoiceRouteMode::LocalOnly,
-        ..Default::default()
+        mode: voice_route::VoiceRouteMode::LocalOnly,
     };
     let env = VoiceEnv {
         has_xai_auth: true,

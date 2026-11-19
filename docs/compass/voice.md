@@ -13,7 +13,7 @@
 - `crates/grokhub-core/src/voice_turn.rs`: `TurnDetector` (noise floor, pre-roll, `set_playing`) and `SpeechChunker` (sentences, hides thinking and commands).
 - `crates/grokhub-core/src/stt_stream.rs`: socket URL, `parse_stt_event`, `SttTurn`.
 - `crates/grokhub-core/src/voice.rs`: `stt_url`, `tts_url`, `tts_voice`, `realtime_can_connect`.
-- `crates/grokhub-agent/src/route/voice_route.rs`: `VoiceRouteMode` (`Auto` / `LocalOnly` / `Pinned`), `VoicePin`, `plan_stage`, 5-minute xAI cooldown, and `active_reply_pref` (`voice-route.json`).
+- `crates/grokhub-agent/src/route/voice_route.rs`: `VoiceRouteMode` (`Auto` / `LocalOnly`; an old `pinned` file reads as Auto), `plan_stage`, 5-minute xAI cooldown, and `active_reply_pref` (`voice-route.json`).
 
 ## Change recipe
 - Turn timing: change constants in `crates/grokhub-core/src/voice_turn.rs` and `crates/grokhub-core/src/voice_turn_tests.rs`.

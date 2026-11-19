@@ -632,18 +632,11 @@ export function voiceSpeak(text: string, conversationId?: string | null): Promis
   return invoke<Spoken>("voice_speak", { text, conversationId: conversationId ?? null });
 }
 
-export type VoiceRouteMode = "auto" | "local_only" | "pinned";
-export type SpeechSource = "local" | "grok_voice_3";
-
-export interface VoicePin {
-  stt: SpeechSource | null;
-  reply: string | null;
-  tts: SpeechSource | null;
-}
+/** Auto picks every voice source; Local only keeps them all on this computer. */
+export type VoiceRouteMode = "auto" | "local_only";
 
 export interface VoiceRouteConfig {
   mode: VoiceRouteMode;
-  pinned: VoicePin;
 }
 
 /** Shared voice routing preference across STT, reply model and TTS. */

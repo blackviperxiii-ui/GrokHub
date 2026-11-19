@@ -1571,55 +1571,6 @@ impl Router {
                         }
                     }
                 },
-                voice_route::ReplyPref::Provider(target) => {
-                    let target = target.as_str();
-                    let pinned_pool: Vec<&str> = cloud_ids
-                        .iter()
-                        .copied()
-                        .filter(|id| {
-                            if target == PROVIDER_XAI {
-                                !policy::is_new_provider(reg, id)
-                            } else {
-                                split_provider_model(id).is_some_and(|(p, _)| p == target)
-                            }
-                        })
-                        .collect();
-                    if pinned_pool.is_empty()
-                        || (target == PROVIDER_XAI
-                            && !provider.eq_ignore_ascii_case(live::PROVIDER_GROK_BUILD)
-                            && reg.entitlement.credential == Credential::None)
-                    {
-                        rules.push(format!("voice:pinned_missing:{target}"));
-                        ModelPick {
-                            model: input.current_model.trim().to_string(),
-                            no_route: true,
-                            replaced: None,
-                        }
-                    } else {
-                        let mut pick = Self::pick_model(
-                            input,
-                            reg,
-                            profiles,
-                            &pinned_pool,
-                            table,
-                            e2,
-                            stronger,
-                            now_ms,
-                            &mut rules,
-                        );
-                        if !pick.no_route && !pinned_pool.contains(&pick.model.as_str()) {
-                            rules.push(format!("voice:pinned_missing:{target}"));
-                            pick = ModelPick {
-                                model: input.current_model.trim().to_string(),
-                                no_route: true,
-                                replaced: None,
-                            };
-                        } else if !pick.no_route {
-                            rules.push(format!("voice:pinned:{target}"));
-                        }
-                        pick
-                    }
-                }
             }
         } else if let Some(id) = warm_local {
             // The warm-local default (above): the loaded device model takes
@@ -2868,7 +2819,7 @@ mod tests {
     }
 
     #[test]
-    fn voice_reply_routing_respects_local_only_and_pinned_providers() {
+    fn voice_reply_routing_respects_local_only() {
         let mut reg = Registry::default();
         reg.entitlement.credential = Credential::Plan;
         let xai_row = ModelMeta {
@@ -2919,24 +2870,6 @@ mod tests {
             ..local::LocalGate::default()
         };
 
-        // Pinned to OpenRouter selects OpenRouter even when xAI is online.
-        let mut or_pinned = base.clone();
-        or_pinned.voice_reply = Some(voice_route::ReplyPref::Provider("openrouter".into()));
-        let r = Router::choose(&or_pinned, &reg, &none, &no_table(), 10);
-        assert!(!r.no_route, "{r:?}");
-        assert_eq!(r.provider, "openrouter");
-        assert_eq!(r.model, "openrouter/vendor/reasoner");
-        assert!(r.rule_ids.iter().any(|id| id == "voice:pinned:openrouter"));
-
-        // Pinned to xAI selects xAI.
-        let mut xai_pinned = base.clone();
-        xai_pinned.voice_reply = Some(voice_route::ReplyPref::Provider("xai".into()));
-        let r = Router::choose(&xai_pinned, &reg, &none, &no_table(), 10);
-        assert!(!r.no_route, "{r:?}");
-        assert_eq!(r.provider, "xai");
-        assert_eq!(r.model, "grok-4.7");
-        assert!(r.rule_ids.iter().any(|id| id == "voice:pinned:xai"));
-
         // LocalOnly routes online chat to on-device model.
         let mut local_only = base.clone();
         local_only.voice_reply = Some(voice_route::ReplyPref::LocalOnly);
@@ -2953,13 +2886,8 @@ mod tests {
         assert!(r.no_route, "{r:?}");
         assert!(r.rule_ids.iter().any(|id| id == "voice:no_local"));
 
-        // Pinned to xAI when not signed in pauses cleanly instead of leaking local or openrouter.
         let mut no_xai_reg = reg.clone();
         no_xai_reg.entitlement.credential = Credential::None;
-        let r = Router::choose(&xai_pinned, &no_xai_reg, &none, &no_table(), 10);
-        assert!(r.no_route, "{r:?}");
-        assert!(r.rule_ids.iter().any(|id| id == "voice:pinned_missing:xai"));
-
         // Auto without xAI credentials uses configured OpenRouter provider instead.
         let r = Router::choose(&base, &no_xai_reg, &none, &no_table(), 10);
         assert!(!r.no_route, "{r:?}");
