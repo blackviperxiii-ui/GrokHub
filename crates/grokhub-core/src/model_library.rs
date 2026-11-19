@@ -148,8 +148,8 @@ fn rows_from(
 }
 
 /// What "Download all that fit" fetches, for one tab or (`None`) every tab:
-/// models not on disk that fit, best fits first, each draft model after its
-/// chat model and only with it. Stops before the disk runs out and keeps the
+/// models not on disk that fit, best fits first, each draft model and
+/// vision projector after its chat model and only with it. Stops before the disk runs out and keeps the
 /// standard models at the cap.
 pub fn queue(
     rows: &[Row],
@@ -178,7 +178,7 @@ pub fn queue(
         .flat_map(|f| rows.iter().filter(move |r| r.fit == f));
     for r in ordered.filter(want) {
         let m = r.model;
-        if m.kind == ModelKind::Drafter {
+        if matches!(m.kind, ModelKind::Drafter | ModelKind::VisionProjector) {
             // Only beside its chat model: on disk already or queued here.
             let paired = m.pairs_with.is_some_and(|id| {
                 out.iter().any(|q| q.id == id) || rows.iter().any(|o| o.model.id == id && o.on_disk)
@@ -368,6 +368,20 @@ mod tests {
         let mid = ids.iter().position(|i| *i == MID).unwrap();
         assert_eq!(ids[mid + 1], MID_DRAFT, "{ids:?}");
         assert_eq!(ids.iter().filter(|i| **i == MID_DRAFT).count(), 1);
+        // A projector comes after its chat model, never without it.
+        for (at, id) in ids.iter().enumerate() {
+            let m = ls::model_by_id(id).unwrap();
+            if m.kind == ModelKind::VisionProjector {
+                let chat = m.pairs_with.unwrap();
+                assert!(ids[..at].contains(&chat), "{id} before {chat}: {ids:?}");
+            }
+        }
+        let big_eyes = "gemma-4-31b-it-abliterated-mmproj";
+        assert_eq!(
+            ids.contains(&big_eyes),
+            ids.contains(&BIG),
+            "the 31B's projector comes only with the 31B: {ids:?}"
+        );
         let first_tight = ids.iter().position(|i| by_id(&rows, i).fit == Fit::Tight);
         let last_yes = ids
             .iter()
@@ -393,6 +407,13 @@ mod tests {
             [MID_DRAFT],
             "on the Drafts tab only a downloaded model's draft model comes"
         );
+        // Likewise on the Other tab only a downloaded model's projector.
+        let eyes: Vec<&str> = queue(&rows, Some(ModelTab::Other), None)
+            .iter()
+            .filter(|m| m.kind == ModelKind::VisionProjector)
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(eyes, ["gemma-4-12b-it-abliterated-mmproj"]);
         assert_eq!(queue_line(&[]), "Everything that fits is downloaded.");
         assert!(queue_line(&q).contains(" in all") || q.len() < 2);
     }
