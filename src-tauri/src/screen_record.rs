@@ -1037,17 +1037,25 @@ mod tests {
         let page = crate::pulse::load(&cfg, None, now_ms()).unwrap();
         let post = page.feed.iter().find(|p| p.id == cards[0].id).unwrap();
         assert_eq!(post.chips[0].label, "Fix it");
-        assert_eq!((post.chips[0].act, post.chips[0].index), ("offer", 0));
-        let seed = crate::pulse::offer(&cfg, &cards[0].id, 0, now_ms()).unwrap();
         assert_eq!(
-            seed.text,
+            (post.chips[0].act, post.chips[0].index, post.chips[0].mode),
+            ("offer", 0, "live")
+        );
+        // Fix it changes the computer, so it opens the live checklist, not chat.
+        assert_eq!(
+            crate::pulse::offer(&cfg, &cards[0].id, 0, now_ms())
+                .err()
+                .as_deref(),
+            Some("That fix opens as a live checklist, not in chat.")
+        );
+        let live = crate::pulse_live::open(&cfg, &cards[0].id, 0, now_ms()).unwrap();
+        assert_eq!(
+            live.summary,
             "Fix what my screen recording found, using the report's steps, one at a time:\n1. Turn off unused plugins. (Undo: Reverse the change manually in the same app or settings screen.)\n\nBefore each step, say what it will change. Ask me before anything that changes settings, files or devices, and stop if a step fails. Tell me which steps I have to do by hand."
         );
-        let carry = seed.carry.unwrap();
-        assert!(
-            carry.contains(&format!("Full report:\n{opened}")),
-            "{carry}"
-        );
+        let steps: Vec<&str> = live.steps.iter().map(|s| s.plain.as_str()).collect();
+        assert_eq!(steps, ["Turn off unused plugins."]);
+        assert_eq!(live.phase, "ready");
         let after = status();
         assert_eq!((after.recording, after.diagnosing), (None, None));
         assert!(!stop(), "nothing left to stop");

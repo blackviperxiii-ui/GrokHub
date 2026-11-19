@@ -1788,12 +1788,14 @@ async function codeShip(s, config, workspace) {
   const status = gitIn(project, ["status", "--porcelain"]);
   if (status !== "") throw new Error(`the status after the commit is ${JSON.stringify(status)}`);
   // The workspace beside the panel reads the repo again: nothing is left listed.
+  await codeSideTab(s, "Editor");
   await waitFor("the workspace to read the repo after the commit", async () =>
     (await xp("//ul[contains(@class,'code-changed')][@aria-label='Changed files']")).length === 0 &&
     (await first("//p[normalize-space()='No changes since the last commit.']"))
       ? true
       : null,
   );
+  await codeSideTab(s, "Helpers");
   await shot(s, "code-ship-committed");
   console.log(`code tab: waived the review's blocker, allowed the flagged line and committed ${head.slice(0, 8)} with the reviewed tree`);
 
