@@ -875,12 +875,14 @@ pub fn serve_request(
     // The router decides the model from it; the model never picks it.
     let config_dir = crate::perm::config_dir();
     let helper = super::local_scale::helper_turn(class, &req.conversation_id);
-    let tier = super::local_scale::chat_tier(
-        &text,
-        crate::brain::care_first_enabled(&config_dir),
-        helper,
-        super::local_pin::get(&config_dir, &req.conversation_id),
-    );
+    let care_first = crate::brain::care_first_enabled(&config_dir);
+    let mut standing = super::local_pin::get(&config_dir, &req.conversation_id);
+    // "From now on, be quick" keeps the tier after a restart; "back to auto"
+    // drops it. A save that fails still serves this turn as asked.
+    if let Some(ask) = super::local_scale::standing_ask(&text, care_first, helper) {
+        standing = super::local_pin::set(&config_dir, &req.conversation_id, ask).unwrap_or(ask);
+    }
+    let tier = super::local_scale::chat_tier(&text, care_first, helper, standing);
     let _tier = super::local_scale::ChatGuard::set(tier);
     super::local_sidecar::take_ask_outcome();
     if heavy(class_norm, tokens) && super::local_gov::level() != Level::RampUp {

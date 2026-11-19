@@ -1,9 +1,12 @@
-//! Each chat's on-device tier from its tab menu ("Model for this chat"), in
-//! `{config}/local-chat-pins.json` as `{"chats": {"<conversation id>": tier}}`.
-//! A chat with no entry is on Auto. Words in a turn ("be quick", "think
-//! hard") still beat the setting for that turn (see
-//! [`super::local_scale::chat_tier`]). A helper's own conversation id
-//! (`parent/child`) never has an entry, so a helper runs on whatever loads.
+//! Each chat's standing on-device tier, set only by the person's own words
+//! ("from now on, be quick", "back to auto"; see
+//! [`super::local_scale::standing_ask`]), in `{config}/local-chat-steer.json`
+//! as `{"chats": {"<conversation id>": tier}}`. There is no menu for it: a
+//! chat with no entry is on Auto. Words in a turn ("be quick", "think hard")
+//! still beat it for that turn (see [`super::local_scale::chat_tier`]). A
+//! helper's own conversation id (`parent/child`) never has an entry, so a
+//! helper runs on whatever loads. The old menu's `local-chat-pins.json` is
+//! never read, so a tier picked there is back on Auto.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -14,7 +17,7 @@ use serde_json::Value;
 
 use super::table::SpeedQuality;
 
-const FILE: &str = "local-chat-pins.json";
+const FILE: &str = "local-chat-steer.json";
 
 /// The chats set to a tier, by conversation id. Each entry is read on its
 /// own: one this build can't read (a tier from a newer build, a hand edit)
@@ -115,6 +118,21 @@ mod tests {
     }
 
     #[test]
+    fn a_tier_the_old_tab_menu_saved_is_back_on_auto() {
+        let dir =
+            std::env::temp_dir().join(format!("grokhub-local-pin-old-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("local-chat-pins.json"),
+            r#"{"chats": {"shell-a": "speed"}}"#,
+        )
+        .unwrap();
+        assert_eq!(get(&dir, "shell-a"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_tier_this_build_cant_read_is_kept_and_a_broken_file_is_never_overwritten() {
         let dir =
             std::env::temp_dir().join(format!("grokhub-local-pin-new-{}", std::process::id()));
@@ -146,7 +164,7 @@ mod tests {
         std::fs::write(dir.join(FILE), "{not json").unwrap();
         assert_eq!(get(&dir, "shell-a"), None);
         assert!(set(&dir, "shell-a", Some(SpeedQuality::Quality))
-            .is_err_and(|e| e.starts_with("Couldn't read local-chat-pins.json")));
+            .is_err_and(|e| e.starts_with("Couldn't read local-chat-steer.json")));
         assert_eq!(
             std::fs::read_to_string(dir.join(FILE)).unwrap(),
             "{not json",

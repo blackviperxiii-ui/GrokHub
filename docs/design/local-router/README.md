@@ -148,9 +148,11 @@ Each step is its own PR into `beta`, green on Linux and Windows.
    (`chat_tier`), `route/local_swap.rs`, `route/local_pin.rs` and
    `route/local_live.rs` (`chat_line`):
    - The tier comes from the person's words in this turn, else the chat's
-     setting in its tab menu ("Model for this chat": Auto, Speed, Balance,
-     Performance, kept in `{config}/local-chat-pins.json`), else the
-     automatic pick. The phrases are the cloud effort steer's
+     standing ask, else the automatic pick. There is no picker: "from now
+     on, be quick" or "think hard for the rest of this chat" keeps a tier
+     in `{config}/local-chat-steer.json` across restarts, and "back to
+     auto" drops it (`local_scale::standing_ask`). The old tab menu's
+     `local-chat-pins.json` is never read, so its picks are back on Auto. The phrases are the cloud effort steer's
      (`ladder::Steer`): "think hard" asks for Performance, "be quick" for
      Speed. "Keep it short" alone asks for a short reply, not a faster
      model. A helper's turn and a side answer (`<chat>~side-<n>`, whose
