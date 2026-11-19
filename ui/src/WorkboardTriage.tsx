@@ -24,6 +24,23 @@ export function priorityChip(p: string): string | null {
 export const QUEUED_NOTE = "Queued. It starts once no game is up, no chat is replying and other runs leave room. It reuses its own chat, or opens a new one.";
 export const STEPS_HELP = "One step a line. [x] done, [>] doing, [-] skipped. The agent works from your version.";
 
+/** `datetime-local` value for a unix-ms due time, in the person's local zone. */
+export function dueLocalValue(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return "";
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Parse a `datetime-local` string to unix ms, or null when cleared. */
+export function dueFromLocal(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const ms = new Date(trimmed).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
 type OnAct = (what: BoardAct, done?: string) => Promise<boolean>;
 
 /** Under an open card: Agent: do this (Now or Queue), the priority chip,
@@ -134,6 +151,21 @@ export function CardTriage({
               </option>
             ))}
           </select>
+        </label>
+        <label className="card-status">
+          Due{" "}
+          <input
+            type="datetime-local"
+            aria-label="Due"
+            disabled={busy}
+            value={dueLocalValue(card.dueAt)}
+            onChange={(e) =>
+              void onAct(
+                { kind: "due", dueAt: dueFromLocal(e.target.value) },
+                e.target.value.trim() ? "Due time saved. Pulse can remind you." : "Due time cleared.",
+              )
+            }
+          />
         </label>
         {lane === "blocked" ? (
           <button

@@ -1189,11 +1189,16 @@ pub struct PingAsk<'a> {
 }
 
 /// The one gate every Pulse-origin OS notification goes through.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Saved next to `proactive.json` so a relaunch keeps the day's count.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PingGate {
     day: String,
     sent: u32,
 }
+
+/// Sibling of `proactive.json`: the day's reminder ping count.
+pub const PING_GATE_FILE: &str = "ping_gate.json";
 
 impl PingGate {
     pub const fn new() -> Self {
@@ -1226,6 +1231,31 @@ impl PingGate {
         self.sent = self.sent_on(ask.day) + 1;
         self.day = ask.day.to_string();
         true
+    }
+
+    /// The day's count from a sibling of `proactive.json`, or a fresh gate.
+    pub fn load(config_dir: &std::path::Path) -> Self {
+        let path = config_dir.join(PING_GATE_FILE);
+        let Ok(meta) = std::fs::metadata(&path) else {
+            return Self::default();
+        };
+        // A few small fields; anything bigger is not one.
+        if meta.len() > 4 * 1024 {
+            return Self::default();
+        }
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Write the day's count next to `proactive.json`.
+    pub fn save(&self, config_dir: &std::path::Path) -> Result<(), String> {
+        std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+        let raw = serde_json::to_string(self).map_err(|e| e.to_string())?;
+        let tmp = config_dir.join(format!("{PING_GATE_FILE}.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, &raw).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, config_dir.join(PING_GATE_FILE)).map_err(|e| e.to_string())
     }
 }
 
@@ -2759,5 +2789,44 @@ mod tests {
         assert_eq!(gate.sent_on("2026-11-06"), 3);
         assert!(gate.take(&ask(true, false, false, "2026-11-07")));
         assert_eq!(gate.sent_on("2026-11-07"), 1);
+    }
+
+    #[test]
+    fn the_ping_gate_survives_a_save_and_a_new_day() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-ping-gate-{}-{}",
+            std::process::id(),
+            crate::new_token()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let mut gate = PingGate::default();
+        let ask = |day| PingAsk {
+            time_sensitive: true,
+            game_running: false,
+            quiet_hours: false,
+            day,
+        };
+        assert!(gate.take(&ask("2026-11-18")));
+        assert!(gate.take(&ask("2026-11-18")));
+        gate.save(&dir).expect("save");
+        let path = dir.join(PING_GATE_FILE);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            r#"{"day":"2026-11-18","sent":2}"#
+        );
+        let loaded = PingGate::load(&dir);
+        assert_eq!(loaded.sent_on("2026-11-18"), 2);
+        assert_eq!(loaded.sent_on("2026-11-19"), 0);
+        let mut next = loaded;
+        assert!(next.take(&ask("2026-11-19")));
+        assert_eq!(next.sent_on("2026-11-19"), 1);
+        assert_eq!(next.sent_on("2026-11-18"), 0);
+        // Broken or oversized files start a fresh day.
+        std::fs::write(&path, "not json").expect("write");
+        assert_eq!(PingGate::load(&dir), PingGate::default());
+        std::fs::write(&path, vec![b'x'; 5 * 1024]).expect("write");
+        assert_eq!(PingGate::load(&dir), PingGate::default());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
