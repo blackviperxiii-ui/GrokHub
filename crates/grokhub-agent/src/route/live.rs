@@ -7,12 +7,14 @@
 //! R2a: one model per episode. The model is picked at an episode boundary (a
 //! new user message), on a second VerifyGate reject at the ceiling (E2), or
 //! when the episode's model goes unhealthy; otherwise every step of the
-//! episode keeps it, so the prompt cache stays warm. Nothing you set pins,
-//! forces or steers the cloud model or the effort: the router alone picks
-//! them. On device, a chat's tier (its words this turn, else its tab menu's
-//! "Model for this chat", see [`super::local_pin`]) steers which model on
-//! disk loads, and the swap planner still decides it. With no healthy,
-//! included model the call pauses instead of sending.
+//! episode keeps it, so the prompt cache stays warm. No setting pins,
+//! forces or steers the cloud model or the effort. Only the chat's own words
+//! do ([`super::task_steer`]: "use Opus for the refactor"), and even then the
+//! router picks among the models that carry the name. On device, a chat's
+//! tier (its words this turn, else its standing ask, see
+//! [`super::local_pin`]) steers which model on disk loads, and the swap
+//! planner still decides it. With no healthy, included model the call pauses
+//! instead of sending.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -676,6 +678,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         super::knn::blend_turn(config_dir, bank_key, call.text, turn, &cx, read, now_ms)
     });
     let lane = ask.as_ref().map(|a| a.lane());
+    // What the chat's words asked for this kind of task ("use Opus for the
+    // refactor"); a helper reads its chat's asks.
+    let (named_model, named_effort) = ask
+        .as_ref()
+        .map(|a| {
+            let asks = super::task_steer::asks(config_dir, key);
+            super::task_steer::for_kind(&asks, a.kind)
+        })
+        .unwrap_or_default();
     let d = match &ask {
         Some(a) if rt.is_none() => a.d,
         _ => estimate(
@@ -953,6 +964,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         prior_escalated,
         care_first,
         lane,
+        named_model: named_model.as_deref(),
+        named_effort: named_effort.as_deref(),
         size: Some(size_est),
         // Failover PR 5: whether a local model is already loaded, for the
         // warm-local default. Never starts the sidecar to find out.

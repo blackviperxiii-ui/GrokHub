@@ -73,6 +73,7 @@ pub mod sizing;
 pub mod sources;
 pub mod spend;
 pub mod table;
+pub mod task_steer;
 pub mod trial;
 pub mod trust;
 pub mod tune;
@@ -513,6 +514,12 @@ pub struct RouteInput<'a> {
     /// drives the band, the model needs and the ranking. Eligibility (privacy,
     /// the local gate, cloud-only) stays on `class`.
     pub lane: Option<&'a str>,
+    /// The model name the chat's words asked for this kind of task
+    /// ([`task_steer`]): Auto picks among the models that carry it.
+    pub named_model: Option<&'a str>,
+    /// The effort the chat's words asked for this kind of task, held inside
+    /// the class's floor and ceiling.
+    pub named_effort: Option<&'a str>,
     /// Failover PR 5: the turn's size estimate ([`sizing`]), when the call
     /// site sized it. A long task keeps free provider models out of the pick
     /// while a carrier route exists and ranks the paid routes first (xAI,
@@ -742,6 +749,21 @@ pub(crate) fn lane_needs_reasoning(class: &str) -> bool {
 /// listed price stays out (an OpenRouter router may pick any model at any
 /// price, and some providers list no prices at all). Auto picks the model
 /// itself, so never one of OpenRouter's own routers.
+/// Balanced/Quality Auto pool: reasoning models only. A provider model
+/// reasons when its listing's `supported_parameters` name `reasoning`
+/// (OpenRouter); a listing that doesn't say leaves out only one named
+/// non-reasoning, and the ranking decides.
+fn auto_ok(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, lane: &str, m: &str) -> bool {
+    local::is_local(m)
+        || !lane_needs_reasoning(lane)
+        || if policy::is_new_provider(reg, m) {
+            reg.get(m)
+                .is_some_and(|r| providers::takes_reasoning(m, &r.meta))
+        } else {
+            table::is_reasoning_model(reg, profiles, m)
+        }
+}
+
 pub(crate) fn in_auto_pool(reg: &Registry, m: &str, ceiling_usd_per_m: f64) -> bool {
     let over_ceiling = || {
         reg.get(m).is_some_and(|r| {
@@ -826,21 +848,7 @@ impl Router {
             rules.push("registry:empty".into());
             return keep(current);
         }
-        let need_reasoning = lane_needs_reasoning(input.lane());
-        // Balanced/Quality Auto pool: reasoning models only. A provider model
-        // reasons when its listing's `supported_parameters` name `reasoning`
-        // (OpenRouter); a listing that doesn't say leaves out only one named
-        // non-reasoning, and the ranking decides.
-        let auto_ok = |m: &str| {
-            local::is_local(m)
-                || !need_reasoning
-                || if policy::is_new_provider(reg, m) {
-                    reg.get(m)
-                        .is_some_and(|r| providers::takes_reasoning(m, &r.meta))
-                } else {
-                    table::is_reasoning_model(reg, profiles, m)
-                }
-        };
+        let auto_ok = |m: &str| auto_ok(reg, profiles, input.lane(), m);
         let allowed = |m: &str| in_auto_pool(reg, m, input.spend.settings.ceiling_usd_per_m);
         // A provider model ranks after xAI and the device unless the routing
         // table ranks it for this step.
@@ -1316,6 +1324,29 @@ impl Router {
         } else {
             ids
         };
+        // The chat's words named a model for this kind of task: Auto picks
+        // among the models that carry the name and that Auto could send.
+        let ids: Vec<&str> = match input.named_model {
+            Some(name) => {
+                let named: Vec<&str> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| task_steer::names(id, name))
+                    .filter(|id| {
+                        in_auto_pool(reg, id, input.spend.settings.ceiling_usd_per_m)
+                            && auto_ok(reg, profiles, input.lane(), id)
+                    })
+                    .collect();
+                if named.is_empty() {
+                    rules.push(task_steer::MODEL_MISSING_RULE.into());
+                    ids
+                } else {
+                    rules.push(task_steer::MODEL_RULE.into());
+                    named
+                }
+            }
+            None => ids,
+        };
         let row = policy::class_row(input.lane());
         let band = row.map(|r| ladder::Band::tuned(r, input.bump, input.start));
         let mut pick = match (row, band) {
@@ -1359,6 +1390,15 @@ impl Router {
                     p.rules.push(attn.rule.into());
                 }
             }
+        }
+        // The chat's words named an effort for this kind of task.
+        if let (Some(band), Some(p), Some(rung)) = (
+            band,
+            pick.as_mut(),
+            input.named_effort.and_then(ladder::rung),
+        ) {
+            p.rung = rung.clamp(band.floor, band.ceiling);
+            p.rules.push(task_steer::EFFORT_RULE.into());
         }
         let e2 = pick.as_ref().is_some_and(|p| {
             p.rules
@@ -2319,6 +2359,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A chat's words reach its helper's routed step: "use low effort for
+    /// debugging" sends a debugging helper's step at the class floor.
+    #[test]
+    fn a_chats_words_steer_its_helpers_routed_step() {
+        let dir = crate::harness::test_dir("route-task-steer");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let echo = Echo(Mutex::new(Vec::new()));
+        let chat = (0..)
+            .map(|i| format!("steer-chat-{i}"))
+            .find(|c| !guard::in_holdout(c) && !guard::in_holdout(&format!("{c}/s1")))
+            .unwrap();
+        let helper = format!("{chat}/s1");
+        let ask = req(
+            "grok-4.7",
+            Some("low"),
+            &helper,
+            "debug why the parser panics on Windows",
+        );
+        let r = &ask;
+        assert_eq!(
+            sent_effort(&echo, r, "chat:default").as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            task_steer::hear(&dir, &chat, "from here on use low effort for debugging"),
+            Ok(true)
+        );
+        assert_eq!(
+            sent_effort(&echo, r, "chat:default").as_deref(),
+            Some("medium")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// A chat session id outside the 10% holdout.
     fn auto_session(tag: &str) -> String {
         (0..)
@@ -2685,6 +2759,58 @@ mod tests {
         reg.entitlement.credential = Credential::Plan;
         reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, rows)], &[], 1);
         reg
+    }
+
+    /// The chat's words narrow Auto to the named model and hold the named
+    /// effort inside the class band; a name nothing carries changes nothing.
+    #[test]
+    fn a_named_model_and_effort_steer_the_pick_and_a_missing_name_does_not() {
+        let reg = xai_listed(&["grok-4.7", "grok-4.3"]);
+        let none = BTreeMap::new();
+        let mut base = input("debug", "grok-4.7", 0.5);
+        base.lane = Some("debug");
+        let auto = Router::choose(&base, &reg, &none, &no_table(), 10);
+        assert_eq!(auto.model, "grok-4.7", "{auto:?}");
+        let named = RouteInput {
+            named_model: Some("grok-4.3"),
+            ..base.clone()
+        };
+        let r = Router::choose(&named, &reg, &none, &no_table(), 10);
+        assert_eq!(r.model, "grok-4.3", "{r:?}");
+        assert!(
+            r.rule_ids.iter().any(|id| id == task_steer::MODEL_RULE),
+            "{r:?}"
+        );
+        let missing = RouteInput {
+            named_model: Some("opus"),
+            ..base.clone()
+        };
+        let r = Router::choose(&missing, &reg, &none, &no_table(), 10);
+        assert_eq!(r.model, auto.model);
+        assert!(
+            r.rule_ids
+                .iter()
+                .any(|id| id == task_steer::MODEL_MISSING_RULE),
+            "{r:?}"
+        );
+        // Debug's floor is medium: a "low" ask is held there; "xhigh" is kept.
+        for (asked, sent) in [("low", "medium"), ("xhigh", "xhigh")] {
+            let r = Router::choose(
+                &RouteInput {
+                    named_effort: Some(asked),
+                    ..base.clone()
+                },
+                &reg,
+                &none,
+                &no_table(),
+                10,
+            );
+            assert_eq!(r.effort.as_deref(), Some(sent), "{asked}: {r:?}");
+            assert!(
+                r.rule_ids.iter().any(|id| id == task_steer::EFFORT_RULE),
+                "{r:?}"
+            );
+        }
     }
 
     const NON_REASONING: [&str; 2] = [
