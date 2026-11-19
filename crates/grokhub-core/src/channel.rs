@@ -98,7 +98,7 @@ mod tests {
         let receipt = cfg.join("channel").display().to_string();
         let plan = |c: &str, b: &str, sw: u8| {
             format!(
-                "channel={c} branch={b} switch={sw} prefix=/tmp/gh-chan receipt={receipt} app=shell"
+                "channel={c} branch={b} switch={sw} prefix=/tmp/gh-chan receipt={receipt} app=shell mode=prebuilt"
             )
         };
         assert_eq!(run(&["--user", "--dry-run"]).1, plan("stable", "main", 0));
@@ -132,8 +132,110 @@ mod tests {
                 "error: --channel takes beta or stable".into()
             )
         );
+        assert_eq!(
+            run(&["--user", "--from-source", "--channel", "beta", "--dry-run"]).1,
+            plan("beta", "beta", 1).replace("mode=prebuilt", "mode=source")
+        );
+        assert_eq!(
+            run(&["--from-source", "--version", "v3.5.0", "--dry-run"]),
+            (
+                Some(2),
+                String::new(),
+                "error: --version and --from-dir pick a prebuilt release; leave them out with --from-source".into()
+            )
+        );
+        assert_eq!(
+            run(&["--version", "latest", "--dry-run"]),
+            (
+                Some(2),
+                String::new(),
+                "error: --version takes a release tag like v3.5.0, not 'latest'".into()
+            )
+        );
         assert_eq!(run(&["--bogus"]).0, Some(2));
         let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    /// The prebuilt install trusts only the release key.
+    #[test]
+    fn install_scripts_carry_the_release_key() {
+        let key = include_str!("../../../packaging/minisign.pub")
+            .lines()
+            .nth(1)
+            .expect("key line")
+            .trim();
+        assert_eq!(
+            key,
+            "RWR4FhfLw4OqMXxiX+l3k/KmAVfsRzTpUD28zoz3HacmWPiwbTnyXgeD"
+        );
+        let sh = include_str!("../../../scripts/install.sh").replace("\r\n", "\n");
+        assert!(sh.contains(&format!("\nRELEASE_PUBKEY=\"{key}\"\n")));
+        let ps = include_str!("../../../scripts/install.ps1").replace("\r\n", "\n");
+        assert!(ps.contains(&format!("\n$ReleasePubkey = '{key}'\n")));
+    }
+
+    /// Runs the real prebuilt path on v3.5.0's signed SHA256SUMS with
+    /// `--from-dir` (no network): a good signature gets as far as the hash
+    /// check, which a stand-in AppImage fails, and an edited SHA256SUMS stops
+    /// at the signature. Nothing is installed either way.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn the_prebuilt_install_checks_the_signature_then_the_hash() {
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/install.sh");
+        let signed = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/testdata/release-v3.5.0"
+        );
+        let tmp = std::env::temp_dir().join(format!("grokhub-prebuilt-sh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let rel = tmp.join("rel");
+        std::fs::create_dir_all(&rel).unwrap();
+        for f in ["SHA256SUMS", "SHA256SUMS.minisig"] {
+            std::fs::copy(format!("{signed}/{f}"), rel.join(f)).unwrap();
+        }
+        std::fs::write(
+            rel.join("grokhub-shell-v3.5.0-linux-amd64.AppImage"),
+            "not the app",
+        )
+        .unwrap();
+        let prefix = tmp.join("prefix");
+        let run = || {
+            let out = std::process::Command::new("bash")
+                .arg(script)
+                .arg("--from-dir")
+                .arg(&rel)
+                .arg(format!("--prefix={}", prefix.display()))
+                .env("GROKHUB_CONFIG", tmp.join("cfg"))
+                .output()
+                .unwrap();
+            (
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            )
+        };
+        assert_eq!(
+            run(),
+            (
+                Some(1),
+                "error: grokhub-shell-v3.5.0-linux-amd64.AppImage doesn't match SHA256SUMS; nothing was installed".into()
+            )
+        );
+        let sums = std::fs::read_to_string(rel.join("SHA256SUMS")).unwrap();
+        std::fs::write(
+            rel.join("SHA256SUMS"),
+            sums.replace("3.5.0.exe", "3.5.1.exe"),
+        )
+        .unwrap();
+        assert_eq!(
+            run(),
+            (
+                Some(1),
+                "error: SHA256SUMS isn't signed by the release key; nothing was installed".into()
+            )
+        );
+        assert!(!prefix.exists());
+        assert!(!tmp.join("cfg/channel").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// `--app` picks which desktop app the clone install builds. No `--app`
@@ -163,7 +265,7 @@ mod tests {
         let receipt = cfg.join("channel").display().to_string();
         let plan = |app: &str| {
             format!(
-                "channel=stable branch=main switch=0 prefix=/tmp/gh-app receipt={receipt} app={app}"
+                "channel=stable branch=main switch=0 prefix=/tmp/gh-app receipt={receipt} app={app} mode=prebuilt"
             )
         };
         assert_eq!(
@@ -226,7 +328,7 @@ mod tests {
         std::fs::write(cfg.join("channel"), Channel::Beta.receipt()).unwrap();
         let out = std::process::Command::new("bash")
             .arg(repo.join("scripts/install.sh"))
-            .arg("--user")
+            .args(["--user", "--from-source"])
             .env("GROKHUB_CONFIG", &cfg)
             .env("PREFIX", base.join("prefix"))
             .output()
@@ -311,7 +413,7 @@ mod tests {
         );
         std::process::Command::new("bash")
             .arg(repo.join("scripts/install.sh"))
-            .args(["--user", "--channel", "beta"])
+            .args(["--user", "--from-source", "--channel", "beta"])
             .env("GROKHUB_CONFIG", base.join("cfg"))
             .env("PREFIX", base.join("prefix"))
             .env("PATH", path)

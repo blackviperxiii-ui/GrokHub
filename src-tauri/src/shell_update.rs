@@ -113,10 +113,10 @@ pub fn not_updatable_note(os: &str, config_dir: &Path, channel: Channel, exe: &P
         .filter(|_| in_bin && !exe.starts_with("/usr"));
     match clone {
         Some(clone) => format!(
-            "Built from the clone in {clone}: to update it, run scripts/install.sh --channel {ch} there with the options you installed it with."
+            "Built from the clone in {clone}: to update it, run scripts/install.sh --from-source --channel {ch} there with the options you installed it with."
         ),
         None => format!(
-            "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --channel {ch} again in the clone you built it from."
+            "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --from-source --channel {ch} again in the clone you built it from."
         ),
     }
 }

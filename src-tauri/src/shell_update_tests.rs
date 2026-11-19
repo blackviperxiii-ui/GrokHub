@@ -75,7 +75,7 @@ fn a_build_that_cant_update_itself_says_how_to_update_it() {
     let note = |os: &str, channel: Channel, exe: &str| {
         not_updatable_note(os, &dir, channel, Path::new(exe))
     };
-    let outside = "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --channel beta again in the clone you built it from.";
+    let outside = "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --from-source --channel beta again in the clone you built it from.";
     let not_yet = "This build doesn't update itself yet.";
     // No receipt: nothing says where this copy came from.
     assert_eq!(
@@ -99,7 +99,7 @@ fn a_build_that_cant_update_itself_says_how_to_update_it() {
         assert_eq!(
             note("linux", Channel::Stable, exe),
             format!(
-                "Built from the clone in {shown}: to update it, run scripts/install.sh --channel stable there with the options you installed it with."
+                "Built from the clone in {shown}: to update it, run scripts/install.sh --from-source --channel stable there with the options you installed it with."
             ),
             "{exe}"
         );
