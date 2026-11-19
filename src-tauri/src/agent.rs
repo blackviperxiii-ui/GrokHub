@@ -1077,7 +1077,8 @@ impl Drop for Session {
 /// The real desktop tools behind the hard gate, with the shell as their host.
 #[cfg(desktop)]
 pub(crate) fn native_desktop() -> Box<dyn DesktopOps> {
-    Box::new(grokhub_desktop::NativeDesktop::new())
+    // The user's screen, or the Bot Desktop while Settings has it on.
+    Box::new(grokhub_desktop::AppDesktop::new())
 }
 
 /// Phones have no desktop tools; the capability report keeps them unoffered,

@@ -14,6 +14,7 @@ pub mod auto_setup;
 pub mod automations;
 pub mod background;
 pub mod bg_runs;
+pub mod bot_screen;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
@@ -423,6 +424,33 @@ fn save_settings(
     let _ = &app;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     Ok(view(&next))
+}
+
+/// Settings → Bot Desktop.
+#[tauri::command]
+fn get_bot_desktop(state: State<'_, ShellState>) -> bot_screen::BotDesktopView {
+    bot_screen::view(current(&state).bot_desktop, None)
+}
+
+/// Settings → Bot Desktop, on or off. It applies at once, and the next
+/// desktop step of a running chat goes to the screen now in use. A screen
+/// that can't start leaves the switch off and says why.
+#[tauri::command]
+async fn set_bot_desktop(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<bot_screen::BotDesktopView, String> {
+    let dir = state.config_dir.clone();
+    // Starting waits for the X server, so it runs off the main thread.
+    let started = off_main(move || bot_screen::apply(&dir, on)).await?;
+    let on = on && started.is_ok();
+    let next = ShellSettings {
+        bot_desktop: on,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    Ok(bot_screen::view(on, started.err()))
 }
 
 /// Settings → Appearance; the page applies it at once.
@@ -8126,6 +8154,14 @@ pub fn run() {
                 if loaded.desktop_control && capabilities::current().desktop_control {
                     grokhub_desktop::set_desktop_enabled(true);
                 }
+                // The Bot Desktop comes back with the app; a failed start
+                // shows in Settings when the person looks.
+                if loaded.bot_desktop {
+                    let dir = config_dir.clone();
+                    std::thread::spawn(move || {
+                        let _ = bot_screen::apply(&dir, true);
+                    });
+                }
                 episode::sync_cua(
                     loaded.desktop_control && capabilities::current().desktop_control,
                     episode::cua_flag(&config_dir),
@@ -8766,6 +8802,8 @@ pub fn run() {
             os_extras::get_autostart,
             #[cfg(desktop)]
             os_extras::set_autostart,
+            get_bot_desktop,
+            set_bot_desktop,
             #[cfg(desktop)]
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]
@@ -9000,6 +9038,8 @@ fn quit_steps() {
     grokhub_core::learn::hub::flush();
     code_runs::stop();
     grokhub_agent::route::local_sidecar::stop_global();
+    // Its X server would outlive the app otherwise.
+    bot_screen::stop();
 }
 
 /// A Windows update ends the process from inside the updater (it starts the
@@ -9241,6 +9281,7 @@ mod command_tests {
             "grokhub_core::learn::hub::flush();",
             "code_runs::stop();",
             "grokhub_agent::route::local_sidecar::stop_global();",
+            "bot_screen::stop();",
         ] {
             assert!(steps.contains(step), "{step} in {steps}");
         }
