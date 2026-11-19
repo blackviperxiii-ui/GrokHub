@@ -15,6 +15,7 @@ pub mod automations;
 pub mod background;
 pub mod bg_runs;
 pub mod bot_screen;
+pub mod browser_attach;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
@@ -430,6 +431,29 @@ fn save_settings(
 #[tauri::command]
 fn get_bot_desktop(state: State<'_, ShellState>) -> bot_screen::BotDesktopView {
     bot_screen::view(current(&state).bot_desktop, None)
+}
+
+/// Settings → General → Your browser.
+#[tauri::command]
+fn get_browser_attach(state: State<'_, ShellState>) -> browser_attach::AttachView {
+    browser_attach::load(&state.config_dir)
+}
+
+/// Saves the attached browser and its allowed sites, then restarts a running
+/// browser tool so its next step uses them.
+#[tauri::command]
+async fn save_browser_attach(
+    state: State<'_, ShellState>,
+    endpoint: String,
+    sites: Vec<String>,
+) -> Result<browser_attach::AttachView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let saved = browser_attach::save(&dir, &endpoint, &sites)?;
+        grokhub_agent::mcp::browser_attach_changed();
+        Ok(saved)
+    })
+    .await?
 }
 
 /// Settings → Bot Desktop's preview: the screen now, or nothing when it
@@ -8820,6 +8844,8 @@ pub fn run() {
             get_bot_desktop,
             set_bot_desktop,
             bot_desktop_frame,
+            get_browser_attach,
+            save_browser_attach,
             #[cfg(desktop)]
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]

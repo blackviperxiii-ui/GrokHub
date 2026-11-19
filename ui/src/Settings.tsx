@@ -20,6 +20,7 @@ import { AutoSetupPage } from "./AutoSetup";
 import { Background } from "./Background";
 import { Behavior } from "./Behavior";
 import { BotDesktop } from "./BotDesktop";
+import { BrowserAttach } from "./BrowserAttach";
 import { CodeSettings } from "./CodeSettings";
 import { Defaults } from "./Defaults";
 import { GrokSignIn } from "./GrokSignIn";
@@ -378,6 +379,7 @@ export function Settings({
           </button>
         </form>
         <BotDesktop />
+        <BrowserAttach />
         {onThisComputer}
       </>
     );
