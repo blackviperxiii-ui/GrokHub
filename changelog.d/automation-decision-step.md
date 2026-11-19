@@ -1,0 +1,1 @@
+- An automation set to run "only when it changes" now asks one cheap judge call about the new lines before a full agent turn. If the change doesn't call for action, the run ends with the reason ("Checked, nothing to do: …") and no agent turn. If it does, the agent sees only the lines the judge picked. When the judge fails, the agent runs on every new line, so no change is lost.
