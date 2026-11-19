@@ -48,7 +48,7 @@ grokhub-hub --mcp-self   the agent's skill, connection and automation tools on s
 grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n  \
 grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n  \
 grokhub-hub --mcp-bridge read-only unsealed memory search and automation status on stdin\n  \
-grokhub-hub --doctor     auth / memory / hub checks\n  \
+grokhub-hub --doctor [--fix]  auth / memory / hub / security checks\n  \
 grokhub-hub --oauth      sign in with Grok (device code) for the desktop app\n  \
 grokhub-hub --update     how this install updates (runs nothing)\n  \
 grokhub-hub bench local  on-device speed + eval\n  \
@@ -90,10 +90,13 @@ fn main() {
             let dir = grokhub_core::paths::config_dir();
             std::process::exit(grokhub_hub::mcp_bridge::run_stdio(&dir));
         }
-        Launch::Doctor => {
+        Launch::Doctor { fix } => {
             let dir = grokhub_core::paths::config_dir();
-            let (text, ok) =
-                grokhub_hub::doctor::report(&grokhub_hub::doctor::gather(&dir, hub_port()));
+            let (text, ok) = grokhub_hub::doctor::report(&grokhub_hub::doctor::gather(
+                &dir,
+                hub_port(),
+                fix,
+            ));
             print!("{text}");
             std::process::exit(if ok { 0 } else { 1 });
         }
@@ -170,7 +173,7 @@ mod tests {
             "  grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n",
             "  grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n",
             "  grokhub-hub --mcp-bridge read-only unsealed memory search and automation status on stdin\n",
-            "  grokhub-hub --doctor     auth / memory / hub checks\n",
+            "  grokhub-hub --doctor [--fix]  auth / memory / hub / security checks\n",
             "  grokhub-hub --oauth      sign in with Grok (device code) for the desktop app\n",
             "  grokhub-hub --update     how this install updates (runs nothing)\n",
         ] {

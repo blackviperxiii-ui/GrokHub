@@ -177,10 +177,22 @@ fn mcp_desktop_answers_initialize_and_refuses_while_the_switch_is_off() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(unix)]
+fn tighten_doctor_fixture(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let secrets = dir.join("secrets.json");
+    if secrets.is_file() {
+        std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
 #[test]
 fn doctor_with_a_saved_key_and_a_live_hub_exits_0() {
     let dir = temp_config("doctor");
     std::fs::write(dir.join("secrets.json"), r#"{"apiKey":"xai-test"}"#).unwrap();
+    #[cfg(unix)]
+    tighten_doctor_fixture(&dir);
     let port = {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         l.local_addr().unwrap().port()
@@ -217,6 +229,57 @@ fn doctor_with_a_saved_key_and_a_live_hub_exits_0() {
         "{text}"
     );
     assert!(dir.join("memory").is_dir());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_fix_tightens_perms_then_passes_the_perm_rows() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_config("doctor-fix");
+    std::fs::write(dir.join("secrets.json"), r#"{"apiKey":"xai-test"}"#).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(
+        dir.join("secrets.json"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let before = Command::new(env!("CARGO_BIN_EXE_grokhub-hub"))
+        .arg("--doctor")
+        .env("GROKHUB_CONFIG", &dir)
+        .env("GROKHUB_HUB_PORT", port.to_string())
+        .output()
+        .unwrap();
+    let before_text = String::from_utf8(before.stdout).unwrap();
+    assert!(
+        before_text.contains("ERR secrets.json mode"),
+        "{before_text}"
+    );
+    let after = Command::new(env!("CARGO_BIN_EXE_grokhub-hub"))
+        .args(["--doctor", "--fix"])
+        .env("GROKHUB_CONFIG", &dir)
+        .env("GROKHUB_HUB_PORT", port.to_string())
+        .output()
+        .unwrap();
+    let after_text = String::from_utf8(after.stdout).unwrap();
+    assert!(
+        after_text.contains("ok  secrets.json mode 0600"),
+        "{after_text}"
+    );
+    assert!(
+        after_text.contains("ok  config dir mode 0700"),
+        "{after_text}"
+    );
+    let mode = std::fs::metadata(dir.join("secrets.json"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

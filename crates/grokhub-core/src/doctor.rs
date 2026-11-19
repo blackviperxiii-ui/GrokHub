@@ -1,3 +1,4 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoctorLine {
     pub ok: bool,
     pub text: String,

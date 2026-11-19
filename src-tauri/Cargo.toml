@@ -95,6 +95,14 @@ tauri-plugin-updater = "=2.14.1"
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0.2"
 
+# Android seals credentials in the OS Keystore (SharedPreferences encrypted
+# with a Keystore key). keyring's `v1` feature has no Android store; the
+# agent installs this via keyring_blob::ensure_android_store. Named here so
+# feature unification keeps the store on phone builds.
+[target.'cfg(target_os = "android")'.dependencies]
+android-native-keyring-store = "1"
+keyring-core = "1"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

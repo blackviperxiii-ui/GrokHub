@@ -84,9 +84,12 @@ In `grokhub-agent` they sit in `sudo_pass.rs`, `tools/shell.rs`,
   iOS: `apple-native-keyring-store` needs its `protected` feature there.
 - CI job `cross-check` runs that clippy matrix on macOS and Ubuntu (NDK)
   runners.
-- Known for Phase 4: keyring's `v1` feature has no Android store. On Android,
-  `keyring::Entry::new` will fail until the app enables
-  `android-native-keyring-store`.
+- Android keyring (Order 966): keyring's `v1` facade still has no Android
+  store, so phone builds depend on `android-native-keyring-store` +
+  `keyring-core` behind `cfg(target_os = "android")`. Startup calls
+  `grokhub_agent::keyring_blob::ensure_android_store()` (SharedPreferences
+  sealed with the OS Keystore) before `use_os_keyring`, and `OsBackend`
+  reads/writes through `keyring_core::Entry` on Android only.
 
 
 ## Phase 2 status
@@ -546,9 +549,9 @@ connectors only.
   `phone_smoke_report` command refuses.
 - CI jobs `phone (android)` (an API 34 x86_64 emulator) and `phone (ios)` (a
   booted iPhone simulator) run this on every PR.
-- Not yet: saving an API key on Android, because keyring has no Android store
-  until the app enables `android-native-keyring-store`. Sign-in on phones is
-  only mocked so far.
+- Android credentials seal in the OS Keystore via
+  `android-native-keyring-store` (see Phase 1). Sign-in on phones is still
+  only mocked in the smoke path so far.
 
 ## Phase 5 status
 
