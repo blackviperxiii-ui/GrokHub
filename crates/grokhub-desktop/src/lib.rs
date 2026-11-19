@@ -514,7 +514,15 @@ struct LiveBackend {
     inner: Option<Box<dyn DesktopBackend>>,
     error: Option<String>,
     tried: bool,
+    /// Set when the tools drive the Bot Desktop instead of the user's screen.
+    #[cfg(target_os = "linux")]
+    bot: Option<std::sync::Arc<bot_desktop::BotDesktop>>,
 }
+
+/// What the window tools say on the Bot Desktop, which has no window list.
+#[cfg(target_os = "linux")]
+const BOT_NO_WINDOWS: &str =
+    "The Bot Desktop has no window list yet; take a screenshot to see what is open.";
 
 impl LiveBackend {
     fn new() -> Self {
@@ -522,13 +530,35 @@ impl LiveBackend {
             inner: None,
             error: None,
             tried: false,
+            #[cfg(target_os = "linux")]
+            bot: None,
         }
+    }
+
+    /// Whether the tools drive the Bot Desktop.
+    fn on_bot(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.bot.is_some()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+
+    fn connect(&self) -> Result<Box<dyn DesktopBackend>, String> {
+        #[cfg(target_os = "linux")]
+        if let Some(bot) = &self.bot {
+            return bot.backend().map(|b| b as Box<dyn DesktopBackend>);
+        }
+        connect_backend()
     }
 
     fn ensure(&mut self) -> Result<&mut dyn DesktopBackend, String> {
         if self.inner.is_none() && !self.tried {
             self.tried = true;
-            match connect_backend() {
+            match self.connect() {
                 Ok(backend) => self.inner = Some(backend),
                 Err(e) => {
                     eprintln!("desktop-mcp: {e}");
@@ -607,12 +637,24 @@ impl DesktopBackend for LiveBackend {
     // Open, focus, list, and trash go straight to the OS, not the input
     // backend, so they work on every session the input route supports.
     fn open_app(&mut self, app: &str) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if let Some(bot) = &self.bot {
+            return bot.launch(app);
+        }
         apps::open_app(app)
     }
     fn focus_window(&mut self, title: &str) -> Result<String, String> {
+        #[cfg(target_os = "linux")]
+        if self.on_bot() {
+            return Err(BOT_NO_WINDOWS.into());
+        }
         apps::focus_window(title)
     }
     fn list_windows(&mut self) -> Result<grokhub_core::desktop_mcp::DesktopWindows, String> {
+        #[cfg(target_os = "linux")]
+        if self.on_bot() {
+            return Err(BOT_NO_WINDOWS.into());
+        }
         // Reading every window's title sends each app (the game too) a message.
         if let Some(msg) = game_guard::current().blocks(game_guard::Guarded::WindowCheck) {
             return Err(msg);
@@ -623,6 +665,10 @@ impl DesktopBackend for LiveBackend {
         &mut self,
         title: &str,
     ) -> Result<grokhub_core::desktop_mcp::WindowGeom, String> {
+        #[cfg(target_os = "linux")]
+        if self.on_bot() {
+            return Err(BOT_NO_WINDOWS.into());
+        }
         apps::window_geometry(title)
     }
     fn set_window_geometry(
@@ -630,6 +676,10 @@ impl DesktopBackend for LiveBackend {
         title: &str,
         geom: &grokhub_core::desktop_mcp::WindowGeom,
     ) -> Result<String, String> {
+        #[cfg(target_os = "linux")]
+        if self.on_bot() {
+            return Err(BOT_NO_WINDOWS.into());
+        }
         apps::set_window_geometry(title, geom)
     }
     fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
@@ -638,6 +688,10 @@ impl DesktopBackend for LiveBackend {
     // Spike-2b: AT-SPI on Linux, UI Automation on Windows. Both capped at 300 ms.
     #[cfg(target_os = "linux")]
     fn target_at(&mut self, x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
+        // AT-SPI reads the user's session, not the Bot Desktop.
+        if self.on_bot() {
+            return None;
+        }
         crate::host::target_at(x, y)
     }
     #[cfg(windows)]
@@ -645,6 +699,10 @@ impl DesktopBackend for LiveBackend {
         crate::uia::target_at(x, y)
     }
     fn game_guard(&mut self) -> game_guard::GameGuard {
+        // The Bot Desktop is its own screen: nothing there reaches a game.
+        if self.on_bot() {
+            return game_guard::GameGuard::default();
+        }
         game_guard::current()
     }
 }
@@ -660,6 +718,20 @@ impl NativeDesktop {
                 env!("CARGO_PKG_VERSION"),
                 LiveBackend::new(),
             )),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl NativeDesktop {
+    /// The same tools, driving `desk` instead of the user's screen: the
+    /// pointer, keys and screenshots stay on the Bot Desktop, apps open
+    /// there, and a fullscreen game doesn't pause them.
+    pub fn on_bot_desktop(desk: std::sync::Arc<bot_desktop::BotDesktop>) -> Self {
+        let mut backend = LiveBackend::new();
+        backend.bot = Some(desk);
+        Self {
+            inner: Mutex::new(DesktopServer::new(env!("CARGO_PKG_VERSION"), backend)),
         }
     }
 }
