@@ -6,7 +6,7 @@
 ## Quick commands
 - `cargo test -p grokhub-agent --locked -- --test-threads=1`
 - `cargo test -p grokhub-agent --test mcp_transport` (spawns the `fake_mcp` bin)
-- `cargo run -p grokhub-agent --example eval` (dry-run; `--live` is refused)
+- `cargo run -p grokhub-agent --example eval` (dry-run default; `--live` needs `GROKHUB_EVAL_API_KEY` and `--budget-usd` ≤ 0.20; never on default PR CI)
 ## Key files
 - `crates/grokhub-agent/src/lib.rs`: module list and the public surface the app uses. `crates/grokhub-agent/src/skill_write.rs`: the skill create/edit write path (`new_skill`, `save_skill`, `save_skill_logged`) over `{config}/skills`, parameterized by config dir and logged in the harness ChangeLedger; the shell's Skills page calls it for create/edit. Verify scripts are written from `## Verify` on save, never run here.
 - `crates/grokhub-agent/src/run.rs` (`run_loop`) and `crates/grokhub-agent/src/events.rs` (loop events to `AcpEvent` for the shell). Before the loop, `crates/grokhub-agent/src/brain/instant.rs` answers a plain read-only ask ("list my skills", "how much disk space do I have") from one tool and a fixed reply with no model call, only when the Brief is a sure question or task and the gate and PreToolUse hooks say Run; anything else falls through.
