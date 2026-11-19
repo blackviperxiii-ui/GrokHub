@@ -59,6 +59,8 @@ pub mod game_companion;
 pub mod game_watch;
 pub mod games;
 pub mod goals;
+#[cfg(desktop)]
+pub mod headless_service;
 mod helper_asks;
 #[cfg(desktop)]
 mod helper_loop;
@@ -7688,6 +7690,9 @@ fn start_scheduler(app: &tauri::App) {
         },
     );
 }
+
+/// The flag that runs scheduled automations with no window.
+pub const AUTOMATIONS_ARG: &str = "--automations";
 
 /// `grokhub-shell --automations`: scheduled automations with no window, for
 /// a login service while the app is closed. Sets up what a scheduled run
