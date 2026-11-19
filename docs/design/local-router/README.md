@@ -257,7 +257,9 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      -ngld 0`) it ran at about 63 tok/s; with `--no-mmproj-offload` VRAM
      stayed flat.
    - Catalog (version 5): five `vision-projector` rows, the repos'
-     `mmproj-model-bf16.gguf` under a file name of their own, pinned by
+     `mmproj-model-bf16.gguf` under a file name of their own led by
+     `mmproj-` (every folder scan skips those, and the desktop app's found
+     models skip every drafter and projector, `helper_gguf`), pinned by
      SHA-256, each naming its chat row in `pairs_with`; the Gemma 4 chat
      rows name theirs in `projector` (`LocalModel::projector`). A
      projector downloads into the models folder, beside its chat model,
