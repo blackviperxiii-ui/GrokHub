@@ -8954,9 +8954,7 @@ pub fn run() {
         Ok(app) => app.run(|app, event| {
             // What the learning engine holds in memory is written on the way out.
             if let tauri::RunEvent::Exit = event {
-                grokhub_core::learn::hub::flush();
-                // A test run or deploy does not outlive the app.
-                code_runs::stop();
+                quit_steps();
                 // A computer that paired since Devices last looked stays paired.
                 #[cfg(desktop)]
                 if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {
@@ -8974,6 +8972,28 @@ pub fn run() {
             std::process::exit(1);
         }
     }
+}
+
+/// What every way out runs before the process ends: the learning engine's
+/// memory is written, a test run or deploy is stopped, and the on-device
+/// model server is stopped so it doesn't outlive the app.
+fn quit_steps() {
+    grokhub_core::learn::hub::flush();
+    code_runs::stop();
+    grokhub_agent::route::local_sidecar::stop_global();
+}
+
+/// A Windows update ends the process from inside the updater (it starts the
+/// installer, then exits), so `RunEvent::Exit` never runs. This runs the same
+/// steps first, so nothing the app started holds a file the installer
+/// replaces, then Tauri's own cleanup, which the updater would run alone.
+#[cfg(desktop)]
+pub(crate) fn before_update_exit(app: &AppHandle) {
+    quit_steps();
+    if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {
+        share.save();
+    }
+    app.cleanup_before_exit();
 }
 
 #[cfg(test)]
@@ -9169,6 +9189,47 @@ mod command_tests {
             .expect("run must have an Exit arm");
         arm.contains("if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {")
             && arm.contains("share.save();")
+    }
+
+    #[test]
+    fn a_windows_update_runs_the_quit_steps_before_the_installer_starts() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let arm = src
+            .split("if let tauri::RunEvent::Exit = event {")
+            .nth(1)
+            .and_then(|s| s.split("\n            }\n").next())
+            .expect("Exit arm");
+        assert!(arm.contains("quit_steps();"), "{arm}");
+        let hook = src
+            .split("pub(crate) fn before_update_exit(app: &AppHandle) {")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("update hook");
+        for step in [
+            "quit_steps();",
+            "app.try_state::<Arc<hub_share::HubShare>>()",
+            "share.save();",
+            "app.cleanup_before_exit();",
+        ] {
+            assert!(hook.contains(step), "{step} in {hook}");
+        }
+        let steps = src
+            .split("fn quit_steps() {")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("quit_steps");
+        for step in [
+            "grokhub_core::learn::hub::flush();",
+            "code_runs::stop();",
+            "grokhub_agent::route::local_sidecar::stop_global();",
+        ] {
+            assert!(steps.contains(step), "{step} in {steps}");
+        }
+        let update = include_str!("shell_update.rs").replace("\r\n", "\n");
+        assert!(
+            update.contains(".on_before_exit(move || crate::before_update_exit(&handle))"),
+            "the updater must run the app's quit steps"
+        );
     }
 
     #[test]
