@@ -1,0 +1,3 @@
+- Settings → Local AI: the Auto / Manual buttons and the model list are gone. Auto picks the model for this PC. Engine tuning, memory caps, app lists and the draft model offer moved under **Advanced**, and they now apply without a Manual switch. Reset Advanced puts only those back.
+- Your own model files: Advanced → Your model files adds a `.gguf` (with the same one-time notice for third-party or safety-removed builds), lists what you added with Remove, and loads the first one on disk when no downloaded model is on this PC. A model file picked under the old Manual list becomes an added file; a catalog pick goes back to Auto, and tuning saved while Auto was on is dropped.
+- The Home Local AI tile now says "Picked for this PC" instead of the old pick's name.

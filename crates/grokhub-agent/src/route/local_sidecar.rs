@@ -689,10 +689,9 @@ pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool 
 /// - `GROKHUB_LLAMA_SERVER`: path to `llama-server`
 /// - `GROKHUB_LOCAL_MODEL`: path to a `.gguf`
 /// - binary else: `{config}/bin/llama-server`, else `llama-server` on `PATH`
-/// - model else: the pick in `{config}/local_ai.json` (`localModel.selected`,
-///   a model file's path or a downloaded catalog id), then
-///   `model_download::installed` under `~/GrokHub/models` (or
-///   `{config}/models`), then the first `*.gguf` in those folders
+/// - model else: `model_download::installed` under `~/GrokHub/models` (or
+///   `{config}/models`), then a model file the user added
+///   ([`own_model`]), then the first `*.gguf` in those folders
 pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
     let stamp = paths_stamp(config_dir);
     let mut cache = PATHS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -848,56 +847,40 @@ fn user_models_dir() -> Option<PathBuf> {
     )
 }
 
-/// The model picked in Settings → Local AI, when its file is on disk.
-pub fn picked_model(config_dir: &Path) -> Option<PathBuf> {
+/// The first model file the user added in Settings → Local AI
+/// (`ownFiles` in `{config}/local_ai.json`) that is on disk and can be a chat
+/// model. There is no pick: it loads only when no downloaded catalog model
+/// is there ([`resolve_model_file`]).
+pub fn own_model(config_dir: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(config_dir.join("local_ai.json")).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let pick = v.get("localModel")?.get("selected")?.as_str()?.trim();
-    if pick.is_empty() {
-        return None;
-    }
-    let path = PathBuf::from(pick);
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
-    {
-        return path.is_file().then_some(path);
-    }
-    let m = grokhub_core::local_setup::model_by_id(pick)?;
-    [user_models_dir(), Some(config_dir.join("models"))]
-        .into_iter()
-        .flatten()
-        .map(|dir| grokhub_core::model_download::final_path(&dir, m))
-        .find(|p| p.is_file())
-}
-
-/// Record `pick` (a catalog id or a model file's path) as the Settings pick in
-/// `{config}/local_ai.json`, keeping the file's other keys.
-pub fn set_pick(config_dir: &Path, pick: &str) -> Result<(), String> {
-    let path = config_dir.join("local_ai.json");
-    let mut v: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .filter(serde_json::Value::is_object)
-        .unwrap_or_else(|| serde_json::json!({}));
-    v["localModel"] = serde_json::json!({ "selected": pick });
-    let text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
-    std::fs::write(&path, format!("{text}\n")).map_err(|e| format!("Couldn't save the pick: {e}"))
+    v.get("ownFiles")?
+        .as_array()?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .map(|p| PathBuf::from(p.trim()))
+        .find(|p| {
+            p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
+                && p.is_file()
+                && !helper_gguf(p)
+        })
 }
 
 fn resolve_model_file(config_dir: &Path) -> Option<PathBuf> {
-    if let Some(p) = picked_model(config_dir) {
-        return Some(p);
-    }
     let dirs = [user_models_dir(), Some(config_dir.join("models"))];
-    for dir in dirs.into_iter().flatten() {
-        if let Some(rec) = grokhub_core::model_download::installed(&dir) {
+    for dir in dirs.iter().flatten() {
+        if let Some(rec) = grokhub_core::model_download::installed(dir) {
             let path = dir.join(&rec.file);
             if path.is_file() {
                 return Some(path);
             }
         }
+    }
+    if let Some(p) = own_model(config_dir) {
+        return Some(p);
+    }
+    for dir in dirs.into_iter().flatten() {
         if let Some(p) = first_gguf(&dir) {
             return Some(p);
         }
@@ -1620,7 +1603,7 @@ static LAST_SWAP_SECS: AtomicU64 = AtomicU64::new(0);
 /// The model the idle timer last unloaded, and when.
 static LAST_IDLE_UNLOAD: Mutex<Option<(PathBuf, u64)>> = Mutex::new(None);
 
-/// The chat models downloaded where [`picked_model`] looks.
+/// The catalog chat models downloaded in the models folders.
 fn on_disk(config_dir: &Path) -> Vec<(&'static LocalModel, PathBuf)> {
     let dirs: Vec<PathBuf> = [user_models_dir(), Some(config_dir.join("models"))]
         .into_iter()
@@ -3453,9 +3436,9 @@ mod tests {
         std::fs::write(dir.join("models").join("b.gguf"), b"gguf").unwrap();
         let next = resolve_paths(&dir).expect("paths");
         assert!(next.model.ends_with("b.gguf"), "{:?}", next.model);
-        // A pick saved in Settings is a file it reads, so it counts too.
+        // The added files live in a Settings file it reads, so it counts too.
         let before = paths_stamp(&dir);
-        set_pick(&dir, "x").unwrap();
+        std::fs::write(dir.join("local_ai.json"), r#"{"ownFiles":["/x.gguf"]}"#).unwrap();
         assert_ne!(paths_stamp(&dir), before);
     }
 
@@ -3559,38 +3542,43 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_pick_wins_over_the_last_download() {
-        let dir = std::env::temp_dir().join(format!("gh-sidecar-pick-{}", std::process::id()));
+    fn an_added_model_file_loads_only_when_no_download_is_there() {
+        let dir = std::env::temp_dir().join(format!("gh-sidecar-own-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let models = dir.join("models");
         std::fs::create_dir_all(&models).unwrap();
+        let own = dir.join("mine.gguf");
+        std::fs::write(&own, b"gguf").unwrap();
+        let added = |files: &[&std::path::Path]| {
+            let list: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
+            std::fs::write(
+                dir.join("local_ai.json"),
+                serde_json::json!({ "ownFiles": list }).to_string(),
+            )
+            .unwrap();
+            resolve_model_file(&dir)
+        };
+        // A file that's gone or a projector is skipped; the next one loads.
+        let gone = dir.join("gone.gguf");
+        let projector = dir.join("mmproj-x.gguf");
+        std::fs::write(&projector, b"gguf").unwrap();
+        assert_eq!(added(&[&gone, &projector, &own]), Some(own.clone()));
+        // An old Settings pick is no longer read.
+        std::fs::write(
+            dir.join("local_ai.json"),
+            serde_json::json!({ "localModel": { "selected": own.display().to_string() } })
+                .to_string(),
+        )
+        .unwrap();
+        assert_ne!(resolve_model_file(&dir), Some(own.clone()));
+        // A downloaded catalog model wins over an added file.
         std::fs::write(models.join("last.gguf"), b"12345").unwrap();
         std::fs::write(
             models.join("installed.json"),
             r#"{"id":"x","file":"last.gguf","sha256":"abc","bytes":5}"#,
         )
         .unwrap();
-        std::fs::write(dir.join("local_ai.json"), r#"{"mode":"manual"}"#).unwrap();
-        let pick = |selected: &str| {
-            set_pick(&dir, selected).unwrap();
-            resolve_model_file(&dir)
-        };
-        let own = dir.join("mine.gguf");
-        std::fs::write(&own, b"gguf").unwrap();
-        assert_eq!(pick(&own.display().to_string()), Some(own.clone()));
-        let m = grokhub_core::local_setup::local_models()
-            .iter()
-            .find(|m| m.is_chat())
-            .unwrap();
-        std::fs::write(models.join(m.file), b"gguf").unwrap();
-        assert_eq!(pick(m.id), Some(models.join(m.file)));
-        // A pick whose file is gone falls back to the last download.
-        assert_eq!(
-            pick(&dir.join("gone.gguf").display().to_string()),
-            Some(models.join("last.gguf"))
-        );
-        let saved = std::fs::read_to_string(dir.join("local_ai.json")).unwrap();
-        assert!(saved.contains(r#""mode": "manual""#), "{saved}");
+        assert_eq!(added(&[&own]), Some(models.join("last.gguf")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

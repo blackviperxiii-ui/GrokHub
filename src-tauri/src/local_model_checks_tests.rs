@@ -208,19 +208,19 @@ fn off_by_default_and_check_now_needs_it_on() {
 }
 
 #[test]
-fn the_installed_model_is_the_picked_catalog_file() {
+fn the_installed_model_is_the_added_catalog_file() {
     let dir = temp_dir("installed");
     let twelve = model_by_id(TWELVE_B).expect("12B");
     let file = dir.join(Path::new(twelve.file).file_name().expect("name"));
     std::fs::write(&file, b"gguf").expect("model file");
-    let pick = serde_json::json!({ "localModel": { "selected": file.to_string_lossy() } });
+    let pick = serde_json::json!({ "ownFiles": [file.to_string_lossy()] });
     std::fs::write(dir.join("local_ai.json"), pick.to_string()).expect("pick");
     assert_eq!(installed_model(&dir).map(|m| m.id), Some(TWELVE_B));
 
     // A model file the catalog doesn't list: nothing to compare.
     let other = dir.join("my-own-model.Q4_K_M.gguf");
     std::fs::write(&other, b"gguf").expect("other file");
-    let pick = serde_json::json!({ "localModel": { "selected": other.to_string_lossy() } });
+    let pick = serde_json::json!({ "ownFiles": [other.to_string_lossy()] });
     std::fs::write(dir.join("local_ai.json"), pick.to_string()).expect("pick");
     assert_eq!(installed_model(&dir).map(|m| m.id), None);
     let _ = std::fs::remove_dir_all(&dir);
