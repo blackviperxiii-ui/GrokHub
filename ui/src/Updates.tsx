@@ -82,6 +82,11 @@ export function Updates() {
         ))}
       </fieldset>
       <p className="note">{CHANNEL_NOTE}</p>
+      {view.rolledBack && (
+        <p className="note" role="status">
+          {view.rolledBack}
+        </p>
+      )}
       {view.updatable ? (
         <>
           <p className="note">{VERIFY_NOTE}</p>

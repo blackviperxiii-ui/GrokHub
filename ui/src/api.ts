@@ -3636,6 +3636,8 @@ export interface UpdateView {
   note: string | null;
   /** The version a check found, ready to install. */
   available: string | null;
+  /** Set when the last update was rolled back because it didn't stay up. */
+  rolledBack: string | null;
 }
 
 /** Emitted when the background check (every 2 hours) finds an update. */
