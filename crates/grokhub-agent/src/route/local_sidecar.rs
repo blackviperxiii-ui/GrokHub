@@ -571,9 +571,9 @@ fn start_planned(
     let mut gpu_err: Option<String> = None;
     // The drafter came off after it stopped a start (see below).
     let mut dropped_draft = false;
-    // The projector came off after the engine stopped while loading it, not
-    // out of memory or a slow load (see below).
-    let mut projector_refused = false;
+    // Whether the projector alone kept the last start from running (see
+    // below).
+    let mut blame = ProjectorBlame::default();
     loop {
         let port = free_loopback_port()?;
         let token = random_token();
@@ -629,7 +629,7 @@ fn start_planned(
                 // won't load it with this model (beside its drafter, when it
                 // has one): vision leaves the model alone until the engine
                 // changes.
-                if projector_refused && !dropped_draft {
+                if blame.ran() {
                     super::local_vision::note_refused(&paths.binary, &paths.model);
                 }
                 if let (Some(l), Some((_, key, dir))) = (launch.as_ref(), planned.as_ref()) {
@@ -660,13 +660,13 @@ fn start_planned(
         };
         side.stop();
         let log = std::fs::read_to_string(server_log_path(&paths.binary)).unwrap_or_default();
-        match launch
+        let taken = launch
             .as_mut()
-            .and_then(|l| shed(l, autoconfig::oom_in_log(&log)))
-        {
-            Some(Shed::Projector { oom }) => {
+            .and_then(|l| shed(l, autoconfig::oom_in_log(&log)));
+        blame.failed(taken, &err);
+        match taken {
+            Some(Shed::Projector { .. }) => {
                 health::log("projector_off", Some(&err));
-                projector_refused = !oom && engine_died(&err);
                 continue;
             }
             Some(Shed::Draft) => {
@@ -713,6 +713,24 @@ enum Shed {
         oom: bool,
     },
     Draft,
+}
+
+/// Whether the vision projector alone kept a start from running: the engine
+/// stopped while loading it (not out of memory, not a slow load), it came
+/// off, and the very next start, with nothing else changed, ran.
+#[derive(Debug, Default)]
+struct ProjectorBlame(bool);
+
+impl ProjectorBlame {
+    /// A start failed with `err`, and `shed` came off before the next one.
+    fn failed(&mut self, shed: Option<Shed>, err: &str) {
+        self.0 = shed == Some(Shed::Projector { oom: false }) && engine_died(err);
+    }
+
+    /// The start that just ran is the one right after the projector came off.
+    fn ran(&self) -> bool {
+        self.0
+    }
 }
 
 /// Take the next thing off a launch whose start failed (`oom`: out of
@@ -1324,7 +1342,10 @@ fn start_or_stand_in(
 ) -> Started {
     use super::local_swap::StandIn;
     if vision {
-        if let Some(started) = start_seeing(config_dir, home, &paths, planned) {
+        // Keep loaded and a forced file keep the pick: only it may load its
+        // projector.
+        let pick_only = keep_loaded() || std::env::var_os("GROKHUB_LOCAL_MODEL").is_some();
+        if let Some(started) = start_seeing(config_dir, home, &paths, planned, pick_only) {
             return started;
         }
     }
@@ -1367,15 +1388,20 @@ fn start_or_stand_in(
 }
 
 /// [`start_vision`] for the model in `paths`, else for the next smaller
-/// model on disk whose projector this engine loads, until one starts.
-/// `None` when none does: the caller starts the planned model without one.
-/// A model refused here may still fit without its projector, so nothing is
-/// held against it.
+/// model on disk whose projector this engine loads ([`next_seeing`]), until
+/// one starts with its projector. A start that shed its projector tries the
+/// next one too; when none is left, the planned model runs as it started,
+/// and a smaller one stops so the planned model runs instead: no smaller
+/// model stands in without seeing the picture. `None` starts the planned
+/// model without a projector. With `pick_only` (Keep loaded, a forced file)
+/// only the planned model is tried. A model refused here may still fit
+/// without its projector, so nothing is held against it.
 fn start_seeing(
     config_dir: &Path,
     home: &Path,
     paths: &SidecarPaths,
     planned: Option<super::local_swap::StandIn>,
+    pick_only: bool,
 ) -> Option<Started> {
     use super::local_swap::StandIn;
     let disk = on_disk(config_dir);
@@ -1386,31 +1412,59 @@ fn start_seeing(
             binary: paths.binary.clone(),
             model: model.clone(),
         };
-        let e = match start_vision(&try_paths) {
-            Ok(side) => {
-                let label = if model == paths.model {
-                    planned
-                } else {
-                    (model != home).then_some(StandIn::Vision)
-                };
-                return Some((Ok(side), model, label));
-            }
-            Err(e) => e,
+        let label = if model == paths.model {
+            planned
+        } else {
+            (model != home).then_some(StandIn::Vision)
         };
-        health::log_to(config_dir, "vision_off", Some(&e), None);
-        let size = super::local_swap::catalog_for(&model)?.run_mb;
-        let (_, next) = disk
-            .iter()
-            .filter(|(m, _)| m.run_mb < size && seeing.contains(&m.id))
-            .max_by_key(|(m, _)| m.run_mb)?;
+        let next = next_seeing(&model, &disk, &seeing, pick_only);
+        match start_vision(&try_paths) {
+            Ok(side) if side.sees_pictures() => return Some((Ok(side), model, label)),
+            // Its projector came off at start.
+            Ok(side) => {
+                health::log_to(config_dir, "vision_off", Some(PROJECTOR_SHED), None);
+                match &next {
+                    Some(_) => side.stop(),
+                    None if model == paths.model => return Some((Ok(side), model, label)),
+                    None => {
+                        side.stop();
+                        return None;
+                    }
+                }
+            }
+            Err(e) => health::log_to(config_dir, "vision_off", Some(&e), None),
+        }
+        let next = next?;
         health::log_to(
             config_dir,
             "swap",
-            Some(&swap_note(next, Some(StandIn::Vision))),
+            Some(&swap_note(&next, Some(StandIn::Vision))),
             None,
         );
-        model = next.clone();
+        model = next;
     }
+}
+
+/// The health log's note when a start ran only once its projector came off.
+const PROJECTOR_SHED: &str = "the model started only without its vision projector";
+
+/// The model [`start_seeing`] tries after `model`: the biggest smaller one
+/// on disk whose projector this engine loads (`seeing`). None with
+/// `pick_only`, or for a model the catalog doesn't list.
+fn next_seeing(
+    model: &Path,
+    disk: &[(&'static LocalModel, PathBuf)],
+    seeing: &[&'static str],
+    pick_only: bool,
+) -> Option<PathBuf> {
+    if pick_only {
+        return None;
+    }
+    let size = super::local_swap::catalog_for(model)?.run_mb;
+    disk.iter()
+        .filter(|(m, _)| m.run_mb < size && seeing.contains(&m.id))
+        .max_by_key(|(m, _)| m.run_mb)
+        .map(|(_, p)| p.clone())
 }
 
 /// The last time the walk refused the pick: the pick, and the model that
@@ -3367,6 +3421,67 @@ mod tests {
             "Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf"
         )));
         assert!(helper_gguf(&dir.join("mmproj-gemma-4-E4B-it-BF16.gguf")));
+    }
+
+    #[test]
+    fn only_a_start_the_projector_alone_stopped_blames_the_projector() {
+        let died = "local model server stopped before it was ready";
+        let slow = "local model server did not become healthy in time";
+        let off = Some(Shed::Projector { oom: false });
+        let mut blame = ProjectorBlame::default();
+        assert!(!blame.ran(), "a clean first start");
+        blame.failed(off, died);
+        assert!(blame.ran(), "it ran right after the projector came off");
+        // Anything else that changed after it clears the blame: the drafter
+        // came off, or the CPU retry (nothing shed) ran.
+        blame.failed(Some(Shed::Draft), died);
+        assert!(!blame.ran());
+        blame.failed(off, died);
+        blame.failed(None, died);
+        assert!(!blame.ran(), "the start that ran was the CPU retry");
+        // Out of memory or a slow load isn't the engine refusing it.
+        blame.failed(Some(Shed::Projector { oom: true }), died);
+        assert!(!blame.ran());
+        blame.failed(off, slow);
+        assert!(!blame.ran());
+    }
+
+    #[test]
+    fn a_picture_start_steps_down_only_to_a_smaller_model_that_can_see_it() {
+        let m = |id: &str| grokhub_core::local_setup::model_by_id(id).unwrap();
+        let file = |id: &str| PathBuf::from("/home/user/models").join(m(id).file);
+        let (g26, g12b, mistral, e2b) = (
+            "gemma-4-26b-a4b-it-abliterated-q4_k",
+            "gemma-4-12b-it-abliterated-q4_k",
+            "mistral-small3.2-24b-heretic-q4_k_m",
+            "gemma-4-e2b-it-abliterated-q4_k",
+        );
+        let disk: Vec<_> = [g26, mistral, g12b, e2b]
+            .iter()
+            .map(|id| (m(id), file(id)))
+            .collect();
+        let seeing = [g26, g12b, e2b];
+        assert_eq!(
+            next_seeing(&file(g26), &disk, &seeing, false),
+            Some(file(g12b)),
+            "past the model that can't see"
+        );
+        assert_eq!(
+            next_seeing(&file(mistral), &disk, &seeing, false),
+            Some(file(g12b))
+        );
+        assert_eq!(next_seeing(&file(e2b), &disk, &seeing, false), None);
+        // Keep loaded or a forced file: the pick only.
+        assert_eq!(next_seeing(&file(g26), &disk, &seeing, true), None);
+        assert_eq!(
+            next_seeing(
+                Path::new("/home/user/models/own.gguf"),
+                &disk,
+                &seeing,
+                false
+            ),
+            None
+        );
     }
 
     #[test]
