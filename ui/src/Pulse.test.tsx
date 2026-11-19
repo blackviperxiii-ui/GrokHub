@@ -44,6 +44,13 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
+const ext = vi.hoisted(() => ({ openExternal: vi.fn<(url: string) => Promise<void>>() }));
+
+vi.mock("./external", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./external")>()),
+  ...ext,
+}));
+
 import { emojiImage, Snippet } from "./FeedCard";
 import {
   ADD_INTERESTS,
@@ -176,6 +183,8 @@ describe("Pulse", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
     api.pulseImage.mockImplementation((name) => Promise.resolve(`data:image/jpeg;base64,${name}`));
+    ext.openExternal.mockReset();
+    ext.openExternal.mockResolvedValue();
   });
 
   afterEach(() => {
@@ -218,7 +227,13 @@ describe("Pulse", () => {
     expect(card).not.toHaveTextContent("https://blog.rust-lang.org/1.99.html");
   });
 
-  it("one image is a hero and two or three are a gallery that opens a lightbox", async () => {
+  it("the lead image loads near the screen, and Show more opens the rest in a gallery and a lightbox", async () => {
+    installMockIO();
+    api.pulseImage.mockImplementation((name) =>
+      Promise.resolve(
+        name.endsWith(".img") ? `data:image/png;base64,${name}` : `data:image/jpeg;base64,${name}`,
+      ),
+    );
     api.getPulse.mockResolvedValue({
       ...PAGE,
       feed: [
@@ -226,24 +241,52 @@ describe("Pulse", () => {
         post({
           id: "post-2",
           title: "Tauri 2.5 ships",
-          images: ["bbbbbbbbbbbbbbbb.jpg", "cccccccccccccccc.png", "dddddddddddddddd.webp"],
+          images: ["bbbbbbbbbbbbbbbb.jpg", "cccccccccccccccc.img", "dddddddddddddddd.webp"],
         }),
       ],
     });
     const { container } = render(<Pulse onRun={() => {}} />);
 
     const hero = await screen.findByRole("listitem", { name: TITLE });
-    await within(hero).findByRole("button", { name: "Open image 1" });
-    expect(hero.querySelector(".media")).toHaveClass("hero");
     const gallery = screen.getByRole("listitem", { name: "Tauri 2.5 ships" });
+    const heroLead = hero.querySelector(".feed-lead")!;
+    const galleryLead = gallery.querySelector(".feed-lead")!;
+    await vi.waitFor(() => {
+      expect(observers.some((o) => o.els.has(heroLead))).toBe(true);
+      expect(observers.some((o) => o.els.has(galleryLead))).toBe(true);
+    });
+    // Off screen: nothing is read yet, and the lead box holds its place empty.
+    expect(api.pulseImage).not.toHaveBeenCalled();
+    expect(heroLead.querySelector("img")).toBeNull();
+
+    trigger(heroLead, 0.1);
+    await within(hero).findByRole("button", { name: "Open image 1" });
+    expect(api.pulseImage.mock.calls).toEqual([["aaaaaaaaaaaaaaaa.jpg"]]);
+    expect(hero.querySelector(".feed-lead .media-item img")).toHaveAttribute(
+      "src",
+      "data:image/jpeg;base64,aaaaaaaaaaaaaaaa.jpg",
+    );
+
+    trigger(galleryLead, 0.1);
+    await within(gallery).findByRole("button", { name: "Open image 1" });
+    // Only the lead until the card is opened.
+    expect(api.pulseImage.mock.calls).toEqual([["aaaaaaaaaaaaaaaa.jpg"], ["bbbbbbbbbbbbbbbb.jpg"]]);
+    expect(gallery.querySelector(".media.gallery")).toBeNull();
+
+    await userEvent.click(within(gallery).getByRole("button", { name: "Show more" }));
     await within(gallery).findByRole("button", { name: "Open image 3" });
-    expect(gallery.querySelector(".media")).toHaveClass("gallery");
-    expect(gallery.querySelectorAll(".media img")).toHaveLength(3);
-    expect(api.pulseImage).toHaveBeenCalledWith("cccccccccccccccc.png");
+    expect(gallery.querySelectorAll(".media.gallery img")).toHaveLength(2);
+    expect(api.pulseImage.mock.calls).toEqual([
+      ["aaaaaaaaaaaaaaaa.jpg"],
+      ["bbbbbbbbbbbbbbbb.jpg"],
+      ["cccccccccccccccc.img"],
+      ["dddddddddddddddd.webp"],
+    ]);
 
     await userEvent.click(within(gallery).getByRole("button", { name: "Open image 2" }));
     const box = screen.getByRole("dialog", { name: "Image" });
-    expect(box.querySelector("img")).toHaveAttribute("src", "data:image/jpeg;base64,cccccccccccccccc.png");
+    expect(box.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,cccccccccccccccc.img");
+    // A .img file saves under the type its bytes are.
     expect(within(box).getByRole("link", { name: "Download" })).toHaveAttribute(
       "download",
       "cccccccccccccccc.png",
@@ -251,6 +294,11 @@ describe("Pulse", () => {
     await userEvent.click(within(box).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog", { name: "Image" })).not.toBeInTheDocument();
     expect(container.querySelector(".lightbox")).toBeNull();
+    // Closing the lightbox leaves the card open.
+    expect(within(gallery).getByRole("button", { name: "Show less" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 
   it("the menu holds only Why I created this", async () => {
@@ -401,9 +449,15 @@ describe("Pulse", () => {
     render(<Pulse onRun={onRun} />);
 
     const card = await screen.findByRole("listitem", { name: "bluetoothd crashed 4 times today" });
-    // Always fully open: the report shows with no toggle.
-    expect(card).toHaveTextContent("It stopped with a segfault each time.");
-    expect(card).toHaveTextContent("4 crash reports since 9 AM");
+    // The report waits behind Show more.
+    expect(card).toHaveTextContent("Your Bluetooth service keeps restarting.");
+    expect(card).not.toHaveTextContent("It stopped with a segfault each time.");
+    await userEvent.click(within(card).getByRole("button", { name: "Show more" }));
+    const report = within(card).getByRole("region", {
+      name: "More about bluetoothd crashed 4 times today",
+    });
+    expect(report).toHaveTextContent("It stopped with a segfault each time.");
+    expect(report).toHaveTextContent("4 crash reports since 9 AM");
     // Every button in the row looks the same.
     const fix = within(card).getByRole("button", { name: "Restart bluetooth" });
     expect(fix).toHaveClass("quiet");
@@ -434,7 +488,6 @@ describe("Pulse", () => {
       ...PAGE,
       feed: [post({ source: "Helldivers 2 on Steam", because: "You play Helldivers 2" })],
     });
-    api.openUrl.mockResolvedValue();
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
 
@@ -443,9 +496,14 @@ describe("Pulse", () => {
       "Helldivers 2 on Steam · You play Helldivers 2",
     );
     await userEvent.click(within(card).getByRole("button", { name: "Read it" }));
-    expect(api.openUrl).toHaveBeenCalledWith("https://blog.rust-lang.org/1.99.html");
+    // openExternal, not openUrl: a paired browser opens the page in its own tab.
+    expect(ext.openExternal.mock.calls).toEqual([["https://blog.rust-lang.org/1.99.html"]]);
+    expect(api.openUrl).not.toHaveBeenCalled();
     // Reading counts toward card taste, quietly.
-    expect(api.pulseAct).toHaveBeenCalledWith("post-1", "opened");
+    expect(api.pulseAct.mock.calls).toEqual([["post-1", "opened"]]);
+    expect(ext.openExternal.mock.invocationCallOrder[0]).toBeLessThan(
+      api.pulseAct.mock.invocationCallOrder[0],
+    );
   });
 
   it("a post with no source page has no Read it", async () => {
