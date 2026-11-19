@@ -17,6 +17,7 @@ import {
   type PulsePage,
   type TileView,
 } from "./api";
+import { isCodeSession } from "./CodeProjects";
 import { NO_STEPS, XpBar } from "./Home";
 import { NyxDeskControls } from "./NyxDock";
 import type { View } from "./Palette";
@@ -177,10 +178,11 @@ export function ChatSide({
 export const RECENT_MAX = 5;
 export const RECENT_EMPTY = "Other chats show up here.";
 
-/** The chats to list beside `openId`: newest first, without it or Main. */
+/** The chats to list beside `openId`: newest first, without it, Main, or
+ * Code project sessions (those stay in the Editor Projects tab). */
 export function recentChats(rows: ChatRow[], openId: string | undefined): ChatRow[] {
   return rows
-    .filter((row) => row.id !== openId && !row.main)
+    .filter((row) => row.id !== openId && !row.main && !isCodeSession(row))
     .sort((a, b) => b.updated - a.updated)
     .slice(0, RECENT_MAX);
 }

@@ -20,6 +20,7 @@ vi.mock("./History", () => ({ whenLabel: (updated: number) => `at ${updated}` })
 import {
   CodeProjects,
   folderName,
+  isCodeSession,
   projectLinkLine,
   projectRulesLine,
   projectSessions,
@@ -262,6 +263,13 @@ describe("helpers", () => {
     const rows = [chat("a", "p1", 10), chat("b", "p2", 30), chat("c", "p1", 20)];
     expect(projectSessions(rows, "p1").map((r) => r.id)).toEqual(["c", "a"]);
     expect(projectSessions(rows, "p4")).toEqual([]);
+  });
+
+  it("isCodeSession is true only for non-Main project-bound chats", () => {
+    expect(isCodeSession({ project: "p1" })).toBe(true);
+    expect(isCodeSession({ project: "p1", main: true })).toBe(false);
+    expect(isCodeSession({ project: null })).toBe(false);
+    expect(isCodeSession({})).toBe(false);
   });
 
   it("projectLinkLine and projectRulesLine summarize the open project", () => {

@@ -54,6 +54,7 @@ import {
   grouped,
   groupOf,
   History,
+  HISTORY_CODE_IN_EDITOR,
   HISTORY_EMPTY,
   HISTORY_NO_HITS,
   projectTree,
@@ -338,33 +339,20 @@ describe("Projects tree, Pinned group and read-only chats", () => {
     ]);
   });
 
-  it("lists a project's chats under it, and keeps them out of the day groups", async () => {
-    api.listProjectNodes.mockResolvedValue([
-      node("f", "Boats", "folder"),
-      node("p", "Pier", "project", "f"),
-    ]);
+  it("keeps project sessions out of Chat History and points at the Code tab", async () => {
     api.listChats.mockResolvedValue([{ ...TODAY, project: "p" }, WEEK]);
-    render(<History onOpen={() => {}} onDeleted={() => {}} />);
-    const projects = await screen.findByRole("region", { name: "Projects" });
+    const onOpenCode = vi.fn();
+    render(<History onOpen={() => {}} onDeleted={() => {}} onOpenCode={onOpenCode} />);
+    const code = await screen.findByRole("region", { name: "Code sessions" });
+    expect(within(code).getByText(HISTORY_CODE_IN_EDITOR)).toBeVisible();
+    expect(screen.queryByRole("listitem", { name: "Fix the build" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Projects" })).toBeNull();
     expect(
-      within(projects).getByRole("button", { name: /Boats/ }),
-    ).toHaveAttribute("aria-expanded", "true");
-    expect(
-      within(projects).getByRole("button", { name: "▾ Pier (1)" }),
-    ).toBeVisible();
-    expect(
-      within(projects).getByRole("listitem", { name: "Fix the build" }),
-    ).toBeVisible();
-    expect(
-      within(screen.getByRole("region", { name: "This week" })).getByText(
-        "Plan a trip",
-      ),
+      within(screen.getByRole("region", { name: "This week" })).getByText("Plan a trip"),
     ).toBeVisible();
     expect(screen.queryByRole("region", { name: "Today" })).toBeNull();
-    await userEvent.click(
-      within(projects).getByRole("button", { name: /Boats/ }),
-    );
-    expect(screen.queryByText("Fix the build")).toBeNull();
+    await userEvent.click(within(code).getByRole("button", { name: "Open Code" }));
+    expect(onOpenCode).toHaveBeenCalledTimes(1);
   });
 
   it("lists pinned chats first, and the menu pins and unpins", async () => {

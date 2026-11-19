@@ -7786,6 +7786,12 @@ fieldset.channel label {
   display: none;
 }
 
+/* Projects / Helpers stay mounted off-tab for live updates; never paint into chat. */
+.code-projects-host[hidden],
+.code-helpers-host[hidden] {
+  display: none;
+}
+
 .code-editor-host .cm-cursor {
   border-left-color: var(--text);
 }

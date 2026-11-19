@@ -11,7 +11,6 @@ import {
   deleteChat,
   exportChat,
   listChats,
-  listProjectNodes,
   listReadOnlyChats,
   pinChat,
   renameChat,
@@ -26,8 +25,16 @@ import {
   type StepRow,
   type Transcript,
 } from "./api";
+import { isCodeSession } from "./CodeProjects";
 import { SavedCard } from "./SavedCard";
 import { ConfirmRow, StatusLine, useDismiss, useNote } from "./ui";
+
+/** Project sessions live in the Code Editor Projects tab, not here. */
+export const HISTORY_CODE_IN_EDITOR =
+  "Project sessions are in the Code tab's Projects panel, not in Chat History.";
+
+/** Opens the Code tab so project sessions can be opened there. */
+export type HistoryOpenCode = () => void;
 
 /** A search waits this long after the last key, like the cabin's History. */
 export const SEARCH_DELAY_MS = 250;
@@ -209,21 +216,24 @@ function ChatMenu({
 }
 
 /** The shell's saved chats with search. Pinned chats list first, then the
- * Projects tree (each project's chats), then the rest by day. Grok CLI and
- * cabin chats list read only below. A click opens a chat in Chat; the menu
- * pins, renames, exports or deletes it (Delete asks first). Delete all asks
- * twice: the first click arms it for a few seconds and shows how many chats
- * the app will delete, which is every chat, whatever a search lists.
- * `onDeleted` is called once for each chat that was deleted. */
+ * rest by day. Code project sessions are not listed: they live in the
+ * Editor Projects tab. Grok CLI and cabin chats list read only below. A
+ * click opens a chat in Chat; the menu pins, renames, exports or deletes
+ * it (Delete asks first). Delete all asks twice: the first click arms it
+ * for a few seconds and shows how many chats the app will delete, which
+ * is every chat, whatever a search lists. `onDeleted` is called once for
+ * each chat that was deleted. */
 export function History({
   onOpen,
   onDeleted,
+  onOpenCode,
 }: {
   onOpen: (id: string) => void;
   onDeleted: (id: string) => void;
+  /** Opens the Code tab when History points at project sessions there. */
+  onOpenCode?: HistoryOpenCode;
 }) {
   const [rows, setRows] = useState<ChatRow[] | null>(null);
-  const [nodes, setNodes] = useState<ProjectNode[]>([]);
   const [readOnly, setReadOnly] = useState<ReadOnlyRow[]>([]);
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [query, setQuery] = useState("");
@@ -234,9 +244,6 @@ export function History({
   const [asking, setAsking] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<SavedFile | null>(null);
-  // Folders and projects the person folded or unfolded here; the file's own
-  // open flag decides the rest.
-  const [folded, setFolded] = useState<Record<string, boolean>>({});
   const [viewing, setViewing] = useState<Transcript | null>(null);
   // The number of chats the app said a second click deletes; null when
   // Delete all is not armed.
@@ -256,11 +263,6 @@ export function History({
     (text ? searchChats(text) : listChats()).then(
       (found) => current(() => setRows(found)),
       (err) => current(() => fail(err)),
-    );
-    // The extras never block the chat list: a failure there leaves them empty.
-    listProjectNodes().then(
-      (found) => current(() => setNodes(found)),
-      () => current(() => setNodes([])),
     );
     listReadOnlyChats(text).then(
       (found) => current(() => setReadOnly(found)),
@@ -443,51 +445,13 @@ export function History({
   );
 
   const all = rows ?? [];
-  const pinned = all.filter((r) => r.pinned);
-  const knownProjects = new Set(
-    nodes.filter((n) => n.kind === "project").map((n) => n.id),
-  );
-  const inProject = (r: ChatRow) => !!r.project && knownProjects.has(r.project);
-  const projectChats = (id: string) =>
-    all.filter((r) => !r.pinned && r.project === id);
-  const rest = all.filter((r) => !r.pinned && !inProject(r));
+  // Code project sessions stay in the Editor Projects tab; Chat History
+  // only lists Hangout chats (and pinned ones that are not project-bound).
+  const hangout = all.filter((r) => !isCodeSession(r));
+  const pinned = hangout.filter((r) => r.pinned);
+  const rest = hangout.filter((r) => !r.pinned);
+  const codeSessionCount = all.filter(isCodeSession).length;
   const searching = query.trim() !== "";
-
-  const hasChats = (t: TreeNode): boolean =>
-    t.node.kind === "project"
-      ? projectChats(t.node.id).length > 0
-      : t.children.some(hasChats);
-
-  const renderNode = (t: TreeNode) => {
-    // A search shows only the branches that hold a hit.
-    if (searching && !hasChats(t)) return null;
-    const open = folded[t.node.id] ?? t.node.open;
-    const chats = t.node.kind === "project" ? projectChats(t.node.id) : [];
-    return (
-      <li key={t.node.id} className="project-node">
-        <button
-          type="button"
-          className="quiet project-toggle"
-          aria-expanded={open}
-          onClick={() => setFolded((f) => ({ ...f, [t.node.id]: !open }))}
-        >
-          {open ? "▾" : "▸"} {t.node.name}
-          {t.node.kind === "project" ? ` (${chats.length})` : ""}
-        </button>
-        {open && (
-          <ul className="rows project-children">
-            {chats.map(renderRow)}
-            {t.node.kind === "project" && chats.length === 0 && (
-              <li className="empty">No chats yet.</li>
-            )}
-            {t.children.map(renderNode)}
-          </ul>
-        )}
-      </li>
-    );
-  };
-
-  const tree = projectTree(nodes);
   const sourceLabel = (r: ReadOnlyRow) =>
     r.source === "cli" ? "Grok CLI" : "Older chat";
 
@@ -544,10 +508,15 @@ export function History({
           <ul className="rows">{pinned.map(renderRow)}</ul>
         </section>
       )}
-      {tree.length > 0 && tree.some((t) => !searching || hasChats(t)) && (
-        <section className="history-group" aria-label="Projects">
-          <h3>Projects</h3>
-          <ul className="rows project-tree">{tree.map(renderNode)}</ul>
+      {codeSessionCount > 0 && (
+        <section className="history-group" aria-label="Code sessions">
+          <h3>Code sessions</h3>
+          <p className="note">{HISTORY_CODE_IN_EDITOR}</p>
+          {onOpenCode && (
+            <button type="button" className="quiet" onClick={onOpenCode}>
+              Open Code
+            </button>
+          )}
         </section>
       )}
       {grouped(rest).map(([group, list]) => (

@@ -136,14 +136,12 @@ interface Props {
   onOpenView?: (view: View) => boolean | void;
   onOpenPalette?: () => void;
   grokSignIn?: boolean;
-  /** The conversation the Chat tab has open. A session row for it goes
-   * there: one conversation is never open in both places. */
-  chatSession?: string;
-  onShowChat?: () => void;
   /** The session in the agent window, each time it changes. */
   onSession?: (id: string) => void;
   /** Chats History deleted: the agent window leaves one it is showing. */
   deleted?: { id: string; ids?: string[]; n: number };
+  /** Open this saved session in the agent window (from History / palette). */
+  open?: { id: string; n: number };
 }
 
 /** The Code tab: the project bar, the open project's sessions and its
@@ -155,10 +153,9 @@ export function Code({
   onOpenView,
   onOpenPalette,
   grokSignIn,
-  chatSession,
-  onShowChat,
   onSession,
   deleted,
+  open: openAsk,
 }: Props) {
   // Counts project switches: a new value starts the workspace below afresh in
   // the new folder, with nothing kept from the old one.
@@ -205,16 +202,19 @@ export function Code({
     if (id) setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, send: true, conversationId: id }));
   }, []);
 
-  /** A saved session. The Chat tab keeps the one it has open; any other
-   * takes its folder first, so opening it is not the Chat tab's last chat. */
+  /** A saved project session: always opens in the agent window. Hangout Chat
+   * no longer lists these; App vacates Chat when the agent takes the same id. */
   function openSession(id: string) {
-    if (id === chatSession) {
-      onShowChat?.();
-      return;
-    }
     const show = () => setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
     codeSessionBind(id).then(show, show);
   }
+
+  // History / palette asked to open a project session here.
+  const takeOpen = useEffectEvent((id: string) => openSession(id));
+  useEffect(() => {
+    if (!openAsk) return;
+    takeOpen(openAsk.id);
+  }, [openAsk]);
 
   const onConversation = useCallback(
     (id: string) => {
