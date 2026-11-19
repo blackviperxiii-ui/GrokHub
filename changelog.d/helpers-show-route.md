@@ -1,0 +1,1 @@
+- Code → Helpers and the Tasks panel: each helper now says which model it ran on and why, for example "Ran on grok-4.7 · quality · High: debugging." The router reads every helper's task on its own, so a debugging helper and a quick-lookup helper can get different models and effort; this line shows what it picked.

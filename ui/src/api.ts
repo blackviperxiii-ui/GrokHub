@@ -3740,6 +3740,10 @@ export interface QueueProgress {
   seconds: number;
   /** The model this helper ran on; absent when unknown. */
   model?: string;
+  /** The effort its last step went out with; absent when none or unknown. */
+  effort?: string;
+  /** Why the router sent it there ("quality · High: debugging."). */
+  why?: string;
 }
 
 /** A background command, subagent or monitor of the open chat. */
