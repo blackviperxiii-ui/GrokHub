@@ -3197,7 +3197,7 @@ async fn code_project_link_remote(
         let linked = grokhub_code::link::link_remote(
             &url,
             &work_root,
-            token.as_deref(),
+            token.as_deref().map(String::as_str),
             preferred_branch.as_deref(),
         )?;
         drop(token);
@@ -3224,11 +3224,7 @@ async fn code_project_set_branch(
 ) -> Result<projects::CodeProjects, String> {
     off_main(move || {
         let state = app.state::<ShellState>();
-        projects::set_preferred_branch(
-            &state.config_dir,
-            &project_id,
-            branch.as_deref(),
-        )?;
+        projects::set_preferred_branch(&state.config_dir, &project_id, branch.as_deref())?;
         let bound = current(&state).workspace;
         projects::listing(&state.config_dir, &bound)
     })
@@ -3247,9 +3243,9 @@ async fn code_project_rules(
         }
         let path = PathBuf::from(&bound);
         let nodes = projects::load(&dir).unwrap_or_default();
-        let node = nodes
-            .iter()
-            .find(|n| n.kind == grokhub_core::ProjectKind::Project && projects::is_open(&n.path, &bound));
+        let node = nodes.iter().find(|n| {
+            n.kind == grokhub_core::ProjectKind::Project && projects::is_open(&n.path, &bound)
+        });
         let project_id = node.map(|n| n.id.as_str()).unwrap_or("");
         let override_branch = node.and_then(|n| n.preferred_branch.as_deref());
         let remote = node

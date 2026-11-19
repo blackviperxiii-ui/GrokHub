@@ -81,11 +81,7 @@ pub fn remote_url(dir: &Path) -> Option<String> {
 
 /// Clone `url` into `dest` (parent must exist). `github_token` is used only for
 /// HTTPS GitHub clones and never logged. Existing `dest` is left alone on failure.
-pub fn clone_remote(
-    url: &str,
-    dest: &Path,
-    github_token: Option<&str>,
-) -> Result<(), String> {
+pub fn clone_remote(url: &str, dest: &Path, github_token: Option<&str>) -> Result<(), String> {
     if dest.exists() {
         return Err(format!(
             "That folder already exists: {}. Open it instead of cloning again.",
@@ -135,9 +131,7 @@ pub fn checkout_preferred(dir: &Path, branch: &str) -> Option<String> {
         return None;
     }
     if ref_exists(dir, &format!("refs/heads/{branch}")) {
-        return if git_ok(dir, &["checkout", "--", branch])
-            || git_ok(dir, &["checkout", branch])
-        {
+        return if git_ok(dir, &["checkout", "--", branch]) || git_ok(dir, &["checkout", branch]) {
             None
         } else {
             Some(format!(
@@ -206,7 +200,8 @@ pub fn link_remote(
     if !looks_like_remote(url) {
         return Err("That doesn't look like a git URL.".into());
     }
-    let name = repo_name_from_url(url).ok_or_else(|| "Could not read a repo name from that URL.".to_string())?;
+    let name = repo_name_from_url(url)
+        .ok_or_else(|| "Could not read a repo name from that URL.".to_string())?;
     let dest = unique_dest(work_root, &name);
     if dest.exists() {
         // Reuse: never wipe. Refresh link metadata only.
@@ -306,15 +301,17 @@ mod tests {
             sanitize_remote_url("https://x-access-token:secret@github.com/org/app.git"),
             "https://github.com/org/app.git"
         );
-        assert!(!auth_clone_url("https://github.com/org/app.git", Some("tok")).contains("tok")
-            || auth_clone_url("https://github.com/org/app.git", Some("tok"))
-                .contains("x-access-token:tok@"));
-        // Token stays out of sanitize output.
-        let auth = auth_clone_url("https://github.com/org/app.git", Some("sk-abcdefghijklmnopqrstuv"));
-        assert!(auth.contains("x-access-token:sk-abcdefghijklmnopqrstuv@"));
-        assert_eq!(
-            sanitize_remote_url(&auth),
-            "https://github.com/org/app.git"
+        assert!(
+            !auth_clone_url("https://github.com/org/app.git", Some("tok")).contains("tok")
+                || auth_clone_url("https://github.com/org/app.git", Some("tok"))
+                    .contains("x-access-token:tok@")
         );
+        // Token stays out of sanitize output.
+        let auth = auth_clone_url(
+            "https://github.com/org/app.git",
+            Some("sk-abcdefghijklmnopqrstuv"),
+        );
+        assert!(auth.contains("x-access-token:sk-abcdefghijklmnopqrstuv@"));
+        assert_eq!(sanitize_remote_url(&auth), "https://github.com/org/app.git");
     }
 }

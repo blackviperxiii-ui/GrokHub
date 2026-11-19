@@ -88,13 +88,21 @@ pub struct RepoRulesInput<'a> {
 
 /// Pick the working branch: override → beta (when present) → default → active → `main` last.
 pub fn resolve_preferred_branch(input: &RepoRulesInput<'_>) -> String {
-    if let Some(b) = input.preferred_branch.map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(b) = input
+        .preferred_branch
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         return b.to_string();
     }
     if input.has_beta {
         return "beta".into();
     }
-    if let Some(b) = input.default_branch.map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(b) = input
+        .default_branch
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         return b.to_string();
     }
     if let Some(b) = input.active_branch.map(str::trim).filter(|s| !s.is_empty()) {
@@ -389,7 +397,10 @@ mod tests {
             },
         );
         assert_eq!(bundle.preferred_branch, "beta");
-        assert_eq!(bundle.remote_url.as_deref(), Some("https://github.com/org/app.git"));
+        assert_eq!(
+            bundle.remote_url.as_deref(),
+            Some("https://github.com/org/app.git")
+        );
         assert!(bundle.files.iter().any(|f| f.path == "AGENTS.md"));
         assert!(bundle
             .files
