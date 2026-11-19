@@ -1050,8 +1050,50 @@ export interface SuggestedTile {
   seed: string;
 }
 
+/** One fillable field on a Blueprint starter. */
+export interface BlueprintSlot {
+  key: string;
+  label: string;
+  placeholder: string;
+}
+
+/** A slot-filled starter on the Automations Blueprints gallery. */
+export interface Blueprint {
+  id: string;
+  title: string;
+  body: string;
+  seed: string;
+  slots: BlueprintSlot[];
+}
+
 export function listSuggestedAutomations(): Promise<SuggestedTile[]> {
   return invoke<SuggestedTile[]>("list_suggested_automations");
+}
+
+export function listAutomationBlueprints(): Promise<Blueprint[]> {
+  return invoke<Blueprint[]>("list_automation_blueprints");
+}
+
+/** Replace `{key}` slots in a Blueprint seed. */
+export function fillBlueprintSeed(
+  seed: string,
+  values: Record<string, string>,
+): string {
+  let out = seed;
+  for (const [key, raw] of Object.entries(values)) {
+    const value = raw.trim();
+    if (!value) throw new Error(`Fill in ${key} first.`);
+    if (value.includes("`") || value.includes("\n")) {
+      throw new Error(`The value for ${key} cannot include backticks or new lines.`);
+    }
+    const needle = `{${key}}`;
+    if (!out.includes(needle)) throw new Error(`This Blueprint has no {${key}} field.`);
+    out = out.split(needle).join(value);
+  }
+  if (out.includes("{") && out.includes("}")) {
+    throw new Error("Fill in every field first.");
+  }
+  return out;
 }
 
 export function addSuggestedAutomation(seed: string): Promise<AutomationRow[]> {

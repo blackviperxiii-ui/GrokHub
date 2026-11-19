@@ -2522,6 +2522,12 @@ fn list_suggested_automations(state: State<'_, ShellState>) -> Vec<SuggestedTile
     suggested::suggested(&state.config_dir)
 }
 
+/// Slot-filled starter Blueprints for the Automations gallery.
+#[tauri::command]
+fn list_automation_blueprints() -> Vec<grokhub_core::Blueprint> {
+    grokhub_core::blueprint_catalog()
+}
+
 /// Add a Suggested tile: its seed becomes an automation.
 #[tauri::command]
 fn add_suggested_automation(
@@ -7446,6 +7452,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "clock")?,
         )?),
         "list_suggested_automations" => out(list_suggested_automations(state)),
+        "list_automation_blueprints" => out(list_automation_blueprints()),
         "add_suggested_automation" => out(add_suggested_automation(
             state,
             arg(args, "seed")?,
@@ -8544,6 +8551,7 @@ pub fn run() {
             list_automations,
             add_automation,
             list_suggested_automations,
+            list_automation_blueprints,
             add_suggested_automation,
             set_automation_enabled,
             remove_automation,

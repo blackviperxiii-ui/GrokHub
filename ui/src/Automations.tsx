@@ -3,6 +3,8 @@ import {
   addAutomation,
   addSuggestedAutomation,
   editAutomation,
+  fillBlueprintSeed,
+  listAutomationBlueprints,
   listAutomations,
   listSuggestedAutomations,
   onAutomationRan,
@@ -10,6 +12,7 @@ import {
   runAutomation,
   setAutomationEnabled,
   type AutomationRow,
+  type Blueprint,
   type RunResult,
   type SuggestedTile,
 } from "./api";
@@ -22,6 +25,9 @@ export function resultLine(result: RunResult): string {
 }
 
 export const SUGGESTED_NOTE = "Suggested from your recent work";
+
+export const BLUEPRINTS_NOTE =
+  "Starters with a few fields to fill — script-first checks that fail closed before a model call.";
 
 export const AUTOMATIONS_EMPTY =
   "No automations yet. Describe one above in plain words and it runs on its own schedule.";
@@ -50,7 +56,10 @@ export function Automations({
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
   const [tiles, setTiles] = useState<SuggestedTile[]>([]);
+  const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [adding, setAdding] = useState<string | null>(null);
+  const [filling, setFilling] = useState<string | null>(null);
+  const [slotValues, setSlotValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (active) listAutomations().then(setRows, (err) => setNote(String(err)));
@@ -69,6 +78,18 @@ export function Automations({
       stale = true;
     };
   }, [active, rows]);
+
+  useEffect(() => {
+    if (!active) return;
+    let stale = false;
+    listAutomationBlueprints().then(
+      (got) => !stale && setBlueprints(got),
+      () => !stale && setBlueprints([]),
+    );
+    return () => {
+      stale = true;
+    };
+  }, [active]);
 
   // A scheduled run the shell fired: show its reply and the row's new count.
   useEffect(() => {
@@ -126,6 +147,31 @@ export function Automations({
     setAdding(seed);
     try {
       setRows(await addSuggestedAutomation(seed));
+      setNote(null);
+    } catch (err) {
+      setNote(String(err));
+    } finally {
+      setAdding(null);
+    }
+  }
+
+  function openBlueprint(tile: Blueprint) {
+    const next: Record<string, string> = {};
+    for (const slot of tile.slots) next[slot.key] = slot.placeholder;
+    setSlotValues(next);
+    setFilling(tile.id);
+    setNote(null);
+  }
+
+  async function saveBlueprint(tile: Blueprint) {
+    setAdding(tile.id);
+    try {
+      const values: Record<string, string> = {};
+      for (const slot of tile.slots) values[slot.key] = slotValues[slot.key] ?? "";
+      const seed = fillBlueprintSeed(tile.seed, values);
+      setRows(await addAutomation(seed));
+      setFilling(null);
+      setSlotValues({});
       setNote(null);
     } catch (err) {
       setNote(String(err));
@@ -246,6 +292,69 @@ export function Automations({
           </li>
         ))}
       </ul>
+      {blueprints.length > 0 && (
+        <section className="blueprints" aria-label="Blueprints">
+          <h3>Blueprints</h3>
+          <p className="note">{BLUEPRINTS_NOTE}</p>
+          <ul className="rows">
+            {blueprints.map((tile) => (
+              <li key={tile.id} className="card automation blueprint" aria-label={tile.title}>
+                <div className="card-title">{tile.title}</div>
+                <div className="card-status">{tile.body}</div>
+                {filling === tile.id ? (
+                  <form
+                    className="blueprint-fill"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void saveBlueprint(tile);
+                    }}
+                  >
+                    {tile.slots.map((slot) => (
+                      <label key={slot.key} className="blueprint-slot">
+                        <span>{slot.label}</span>
+                        <input
+                          aria-label={`${tile.title} ${slot.label}`}
+                          value={slotValues[slot.key] ?? ""}
+                          placeholder={slot.placeholder}
+                          onChange={(e) =>
+                            setSlotValues((now) => ({ ...now, [slot.key]: e.target.value }))
+                          }
+                        />
+                      </label>
+                    ))}
+                    <div className="card-buttons">
+                      <button type="submit" disabled={adding !== null}>
+                        {adding === tile.id ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        type="button"
+                        className="quiet"
+                        disabled={adding !== null}
+                        onClick={() => {
+                          setFilling(null);
+                          setSlotValues({});
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="card-buttons">
+                    <button
+                      type="button"
+                      disabled={adding !== null}
+                      onClick={() => openBlueprint(tile)}
+                    >
+                      Use
+                    </button>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {tiles.length > 0 && (
         <section className="suggested" aria-label="Suggested">
           <h3>Suggested</h3>

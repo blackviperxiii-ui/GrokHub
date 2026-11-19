@@ -91,6 +91,7 @@ pub const WEB_COMMANDS: &[&str] = &[
     "list_automations",
     "add_automation",
     "list_suggested_automations",
+    "list_automation_blueprints",
     "add_suggested_automation",
     "set_automation_enabled",
     "remove_automation",
@@ -1358,7 +1359,7 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-        const REVIEWED: [&str; 99] = [
+        const REVIEWED: [&str; 100] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
@@ -1402,6 +1403,7 @@ mod tests {
             "imagine_cancel",
             "imagine_generate",
             "imagine_image",
+            "list_automation_blueprints",
             "list_automations",
             "list_connectors",
             "list_suggested_automations",
