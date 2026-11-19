@@ -50,6 +50,10 @@ pub fn good_for(m: &LocalModel) -> String {
             Some(pair) => format!("Makes {} reply faster.", pair.name),
             None => "Makes replies come faster.".into(),
         },
+        ModelKind::VisionProjector => match m.pairs_with.and_then(ls::model_by_id) {
+            Some(pair) => format!("Lets {} see pictures on this PC.", pair.name),
+            None => "Lets a chat model see pictures on this PC.".into(),
+        },
         ModelKind::Chat => match m.run_mb {
             0..=5_000 => "Quick chats and background tasks, even on a laptop.",
             5_001..=9_000 => "Everyday chat and writing on a mid-range PC.",
@@ -313,6 +317,17 @@ mod tests {
         assert_eq!(draft.why, "Comes with Gemma 4 12B.");
         assert_eq!(good_for(draft.model), "Makes Gemma 4 12B reply faster.");
         assert!(row_line(by_id(&rows, MID)).contains(" · Uncensored · "));
+        // A vision projector fits as its chat model does too, under Other.
+        let eyes = by_id(&rows, "gemma-4-12b-it-abliterated-mmproj");
+        assert_eq!(eyes.tab(), ModelTab::Other);
+        assert_eq!(eyes.fit, by_id(&rows, MID).fit);
+        assert_eq!(eyes.why, "Comes with Gemma 4 12B.");
+        assert_eq!(
+            good_for(eyes.model),
+            "Lets Gemma 4 12B see pictures on this PC."
+        );
+        // It only reads pictures: it has no refusals to remove.
+        assert!(!row_line(eyes).contains("Uncensored"), "{}", row_line(eyes));
         // The picture models and their guard share the Image tab.
         assert_eq!(
             rows.iter().filter(|r| r.tab() == ModelTab::Image).count(),
