@@ -1,4 +1,5 @@
-//! Phase 16 parity harness. Dry-run is the default. `--live` is refused here.
+//! Phase 16 parity harness. Dry-run is the default. `--live` is opt-in under
+//! a hard dollar/token budget cap and never runs on default PR CI.
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -13,14 +14,25 @@ fn main() {
         eprintln!("{err}");
         std::process::exit(1);
     }
-    let items = grokhub_agent::run_suite(&opts);
+    let (items, spend) = if opts.live {
+        let suite = grokhub_agent::run_live_suite(&opts);
+        (suite.items, Some(suite.spend))
+    } else {
+        (grokhub_agent::run_suite(&opts), None)
+    };
     for item in &items {
         eprintln!(
             "eval item={} engine={} wall_ms={} success={} turns={} status={}",
             item.item, item.engine, item.wall_ms, item.success, item.turns, item.status
         );
     }
-    let report = grokhub_agent::render_report(&items);
+    if let Some(spend) = spend {
+        eprintln!(
+            "eval live spent_ticks={} budget_ticks={}",
+            spend.spent_ticks, spend.budget_ticks
+        );
+    }
+    let report = grokhub_agent::render_report_with(&items, spend);
     if let Some(path) = &opts.out {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {

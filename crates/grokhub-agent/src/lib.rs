@@ -106,9 +106,10 @@ pub use eval::live::{
 pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
 pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{
-    load_tasks, parse_args, reject_live, render_markdown, render_report, run_suite,
-    run_technique_matrix, ItemResult, Opts, Recommendation, Technique, TechniqueArm,
-    TechniqueMatrixReport, SUITE_ITEMS,
+    live_budget_ticks, load_tasks, parse_args, reject_live, render_markdown, render_report,
+    render_report_with, run_live_suite, run_live_suite_with, run_suite, run_technique_matrix,
+    ItemResult, LiveSpend, LiveSuite, Opts, Recommendation, Technique, TechniqueArm,
+    TechniqueMatrixReport, LIVE_BUDGET_CAP_CENTS, SUITE_ITEMS,
 };
 pub use events::{Engine, EngineParts, EpisodeSeed, NativeEngine, StampHalt};
 pub use file_checkpoint::{

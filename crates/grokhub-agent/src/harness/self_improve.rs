@@ -171,7 +171,8 @@ pub struct ReplayOpts {
     pub live: bool,
 }
 
-/// Same rule as `eval::reject_live`: this build never replays live.
+/// Skill replay stays offline: live replay is refused (the parity harness
+/// `--live` path is a separate opt-in under its own budget cap).
 pub fn reject_live_replay(opts: &ReplayOpts) -> Result<(), String> {
     if opts.live {
         Err(REPLAY_LIVE_REFUSED.into())
