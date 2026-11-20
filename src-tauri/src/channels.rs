@@ -13,6 +13,7 @@ use std::time::Duration;
 use grokhub_agent::channels_net::{
     self, DiscordLink, TelegramLink, POLL_WAIT_S, TELEGRAM_TOKEN_REFUSED,
 };
+use grokhub_agent::harness::DataClass;
 use grokhub_agent::keyring_blob::Backend;
 use grokhub_core::msg_channels::{self, ChannelKind, DmTrust};
 use serde::Serialize;
@@ -53,10 +54,91 @@ pub struct ChannelsView {
     pub pending: Vec<PendingView>,
     pub paired: Vec<PairedView>,
     pub webhooks: Vec<WebhookView>,
+    /// The newest answered messages and webhooks.
+    pub recent: Vec<RecentView>,
     /// A webhook's secret, only in the answer that made it.
     pub new_secret: Option<String>,
     /// What the last step did, for the page's status line.
     pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentView {
+    /// "Telegram", "Discord" or "Webhook".
+    pub source: String,
+    /// The sender's label or the webhook's name.
+    pub from: String,
+    /// What they wrote; empty for a webhook.
+    pub text: String,
+    pub answer: String,
+    pub problem: Option<String>,
+    pub done_ms: u64,
+}
+
+/// How many answered records the page lists.
+const RECENT_SHOWN: usize = 10;
+
+fn recent(config_dir: &Path) -> Vec<RecentView> {
+    crate::channel_inbox::recent(config_dir, RECENT_SHOWN)
+        .into_iter()
+        .map(|r| {
+            let field = |k: &str| {
+                r.get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let source = match field("channel").as_str() {
+                "telegram" => "Telegram",
+                "discord" => "Discord",
+                "webhook" => "Webhook",
+                _ => "Unknown",
+            };
+            RecentView {
+                source: source.into(),
+                from: if source == "Webhook" {
+                    field("hook")
+                } else {
+                    field("label")
+                },
+                text: field("text"),
+                answer: field("answer").trim().to_string(),
+                problem: r
+                    .get("problem")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                done_ms: r.get("doneMs").and_then(|v| v.as_u64()).unwrap_or(0),
+            }
+        })
+        .collect()
+}
+
+/// Send an answer back to a paired chat with the bot's saved token, only
+/// while the sender is still paired. The text is chat the assistant wrote.
+pub fn send_answer(
+    config_dir: &Path,
+    store: &dyn Backend,
+    to: &crate::channel_inbox::ReplyTo,
+    text: &str,
+) -> Result<(), String> {
+    if !DmTrust::load(config_dir).is_paired(to.channel, &to.sender) {
+        return Err("The sender was unpaired, so the answer wasn't sent.".into());
+    }
+    let token = channels_net::load_token(store, to.channel)?
+        .ok_or_else(|| format!("{} isn't connected any more.", name(to.channel)))?;
+    match to.channel {
+        ChannelKind::Telegram => {
+            let chat: i64 = to
+                .to
+                .parse()
+                .map_err(|_| "That isn't a Telegram chat id.".to_string())?;
+            TelegramLink::new(&token)?.send(config_dir, chat, text, &[DataClass::Chat])
+        }
+        ChannelKind::Discord => {
+            DiscordLink::new(&token)?.send(config_dir, &to.to, text, &[DataClass::Chat])
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -144,6 +226,7 @@ pub fn view(config_dir: &Path, store: &dyn Backend, status: Option<String>) -> C
         pending,
         paired,
         webhooks,
+        recent: recent(config_dir),
         new_secret: None,
         status,
     }
@@ -503,6 +586,75 @@ mod tests {
         assert_eq!(
             remove_webhook(&dir, &store, "deploys").unwrap_err(),
             "There's no webhook named deploys."
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_answer_goes_only_to_a_still_paired_sender_with_a_saved_token() {
+        let dir = std::env::temp_dir().join(format!("grokhub-shell-answer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = MemoryStore::default();
+        let to = crate::channel_inbox::ReplyTo {
+            channel: ChannelKind::Telegram,
+            sender: "777".into(),
+            to: "5001".into(),
+        };
+        assert_eq!(
+            send_answer(&dir, &store, &to, "hi").unwrap_err(),
+            "The sender was unpaired, so the answer wasn't sent."
+        );
+        let mut trust = DmTrust::default();
+        trust
+            .paired
+            .entry(ChannelKind::Telegram)
+            .or_default()
+            .insert("777".into());
+        trust.save(&dir).unwrap();
+        assert_eq!(
+            send_answer(&dir, &store, &to, "hi").unwrap_err(),
+            "Telegram isn't connected any more."
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn answered_records_are_listed_newest_first() {
+        let dir = std::env::temp_dir().join(format!("grokhub-shell-recent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let done = crate::channel_inbox::done_dir(&dir);
+        std::fs::create_dir_all(&done).unwrap();
+        std::fs::write(
+            done.join("1-telegram-a.json"),
+            serde_json::json!({ "channel": "telegram", "label": "@user", "text": "hi", "answer": " Hello. ", "problem": null, "doneMs": 5 }).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            done.join("2-deploys-b.json"),
+            serde_json::json!({ "channel": "webhook", "hook": "deploys", "answer": "", "problem": "No model is set up.", "doneMs": 6 }).to_string(),
+        )
+        .unwrap();
+        let store = MemoryStore::default();
+        assert_eq!(
+            view(&dir, &store, None).recent,
+            vec![
+                RecentView {
+                    source: "Webhook".into(),
+                    from: "deploys".into(),
+                    text: String::new(),
+                    answer: String::new(),
+                    problem: Some("No model is set up.".into()),
+                    done_ms: 6,
+                },
+                RecentView {
+                    source: "Telegram".into(),
+                    from: "@user".into(),
+                    text: "hi".into(),
+                    answer: "Hello.".into(),
+                    problem: None,
+                    done_ms: 5,
+                },
+            ]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
