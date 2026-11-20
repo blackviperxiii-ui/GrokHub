@@ -1,0 +1,1 @@
+- Design note for a script-first runtime (`docs/design/script-first-runtime/`): saved routines that run without the model, the four points where the model wakes, and a phased build plan. No code changes.
