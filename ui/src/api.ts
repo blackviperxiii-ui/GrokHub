@@ -1389,6 +1389,11 @@ export function exportPersonal(): Promise<string> {
   return invoke<string>("export_personal");
 }
 
+/** Updates the Obsidian-friendly wiki of the plain memory; returns the page's line. Desktop only. */
+export function exportMemoryWiki(): Promise<string> {
+  return invoke<string>("export_memory_wiki");
+}
+
 export interface PersonalWiped {
   removed: number;
   /** Private lines that were locked and stay until opened. */

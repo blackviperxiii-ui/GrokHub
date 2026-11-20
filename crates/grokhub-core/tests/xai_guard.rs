@@ -57,6 +57,11 @@ const ALLOWED: &[(&str, usize, &str)] = &[
         1,
         "xAI websocket chat adapter",
     ),
+    (
+        "crates/grokhub-agent/src/eval/mod.rs",
+        1,
+        "opt-in --live eval suite (GROKHUB_EVAL_API_KEY), never in default runs",
+    ),
     ("crates/grokhub-core/src/chat.rs", 1, "xAI base URL"),
     (
         "crates/grokhub-core/src/connector.rs",

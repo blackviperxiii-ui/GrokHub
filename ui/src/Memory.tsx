@@ -7,6 +7,7 @@ import {
   approveMemoryRow,
   dismissMemoryRawTidy,
   editMemoryRow,
+  exportMemoryWiki,
   exportPersonal,
   forgetMemoryRow,
   getMemory,
@@ -316,6 +317,14 @@ export function Memory() {
     }
   }
 
+  async function exportWiki() {
+    try {
+      ok(await exportMemoryWiki());
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   async function wipe() {
     setBusy(true);
     try {
@@ -534,6 +543,9 @@ export function Memory() {
         <div className="memory-keep">
           <button type="button" className="quiet" onClick={() => void exportCopy()}>
             Export to Downloads
+          </button>
+          <button type="button" className="quiet" onClick={() => void exportWiki()}>
+            Update wiki
           </button>
           {wipeAsk ? (
             <ConfirmRow

@@ -6,7 +6,7 @@ use crate::gate::Gate;
 
 use super::{
     connections, control, desktop, glob, grep, list_dir, local_ai, media, models_check, mods, ptc,
-    read_file, search_replace, shell, show_panel, web_fetch, web_search, write,
+    read_file, search_replace, session_search, shell, show_panel, web_fetch, web_search, write,
 };
 
 /// One row in the native catalog. When deferred loading is on, `defer` tools ship as
@@ -63,7 +63,7 @@ fn desktop_schema(i: usize) -> Value {
 
 /// Read-only tools, sent first. All eager except `scheduler_list`.
 pub fn read_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 14] = [
+    static DEFS: [ToolDef; 15] = [
         ToolDef {
             name: "read_file",
             blurb: "Read a workspace file",
@@ -97,6 +97,13 @@ pub fn read_defs() -> &'static [ToolDef] {
             blurb: "Read background command or subagent output",
             defer: false,
             schema: control::output_schema,
+            visible: always,
+        },
+        ToolDef {
+            name: session_search::NAME,
+            blurb: "Search earlier chats for something said, no model call",
+            defer: true,
+            schema: session_search::schema,
             visible: always,
         },
         ToolDef {

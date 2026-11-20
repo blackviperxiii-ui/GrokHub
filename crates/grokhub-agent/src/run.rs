@@ -7970,6 +7970,12 @@ mod tests {
                 r#"{"live":true,"url":"https://x.example"}"#,
                 ALL,
             ),
+            ("session_search", r#"{"query":"ferry","page":2}"#, ALL),
+            (
+                "run_tool_script",
+                r#"{"script":"print(1)","path":"a.py"}"#,
+                ALL,
+            ),
             (
                 "mods_search",
                 r#"{"game":"skyrim","query":"ui","url":"https://x.example"}"#,
@@ -8236,7 +8242,7 @@ mod tests {
         native.sort_unstable();
         native.dedup();
         assert_eq!(covered, native);
-        assert_eq!(native.len(), 72);
+        assert_eq!(native.len(), 74);
     }
 
     #[test]
