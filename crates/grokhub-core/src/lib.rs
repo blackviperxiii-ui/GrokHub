@@ -573,6 +573,7 @@ pub use oauth::{
 };
 pub use openclaw::{
     default_openclaw_paths, import_memory_file, is_openclaw_workspace, merge_imported_memory,
+    preview_mcp_json, preview_skill_md, ImportedMcpPreview, ImportedSkillPreview,
 };
 pub use organs::{
     cap_from_text, cap_label, daily_units_blocked, date_out_from, greet_from_last_job,
