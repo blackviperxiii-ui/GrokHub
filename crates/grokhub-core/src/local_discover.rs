@@ -282,4 +282,20 @@ mod tests {
             vec![]
         );
     }
+
+    #[test]
+    fn a_catalog_vision_projector_in_a_models_folder_is_never_listed_as_a_model() {
+        let home = tmp("projector");
+        let models = home.join("models");
+        let chat = crate::local_setup::model_by_id("gemma-4-e2b-it-abliterated-q4_k").unwrap();
+        let eyes = crate::local_setup::model_by_id("gemma-4-e2b-it-abliterated-mmproj").unwrap();
+        put(&models.join(chat.file), b"gguf-1");
+        put(&models.join(eyes.file), b"proj");
+        let found: Vec<_> = discover(&home, None, std::slice::from_ref(&models))
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(found, vec![models.join(chat.file)]);
+        let _ = fs::remove_dir_all(home);
+    }
 }

@@ -191,6 +191,7 @@ fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
             draft: None,
             cpu_only: false,
             run: run_with_slots(1),
+            projector: None,
         }
     );
     assert_eq!(
@@ -786,6 +787,7 @@ fn whole_gpu_12b() -> LaunchArgs {
         draft: None,
         cpu_only: false,
         run: Default::default(),
+        projector: None,
     }
 }
 
@@ -1250,4 +1252,252 @@ fn a_pair_refusal_names_the_gpu_layers_override_only_when_it_is_why() {
         PAIR_NO_ROOM,
         "the pair runs in RAM"
     );
+}
+
+fn projector(off_gpu_flag: bool) -> Option<Box<ProjectorArgs>> {
+    Some(Box::new(ProjectorArgs {
+        file: PathBuf::from("/home/user/models/mmproj.gguf"),
+        mb: 1_083,
+        off_gpu_flag,
+    }))
+}
+
+#[test]
+fn a_projector_loads_with_mmproj_and_stays_off_the_gpu_with_the_model() {
+    let gpu = LaunchArgs {
+        projector: projector(true),
+        ..whole_gpu_12b()
+    };
+    let a = gpu.to_args();
+    let at = a.iter().position(|x| x == "--mmproj").expect("--mmproj");
+    assert_eq!(a[at + 1], "/home/user/models/mmproj.gguf");
+    assert!(!a.contains(&"--no-mmproj-offload".to_string()), "{a:?}");
+    // On the CPU the picture encoder would still start the GPU backend.
+    let cpu = on_cpu(&gpu).to_args();
+    assert!(cpu.contains(&"--no-mmproj-offload".to_string()), "{cpu:?}");
+    assert!(cpu.contains(&"--mmproj".to_string()));
+    let no_layers = LaunchArgs {
+        ngl: 0,
+        ..gpu.clone()
+    }
+    .to_args();
+    assert!(no_layers.contains(&"--no-mmproj-offload".to_string()));
+    // An engine without the flag never gets it.
+    let older = LaunchArgs {
+        projector: projector(false),
+        ..on_cpu(&gpu)
+    };
+    assert!(!older.to_args().contains(&"--no-mmproj-offload".to_string()));
+    assert!(!whole_gpu_12b().to_args().contains(&"--mmproj".to_string()));
+}
+
+#[test]
+fn a_projector_takes_its_file_and_a_seventh_more() {
+    assert_eq!(projector_mb(986_833_408), 1_083);
+    assert_eq!(projector_mb(175_115_776), 193);
+    assert_eq!(projector_mb(0), 0);
+    // The catalog's projector rows say the same.
+    for m in local_setup::local_models()
+        .iter()
+        .filter(|m| m.kind == local_setup::ModelKind::VisionProjector)
+    {
+        assert_eq!(
+            projector_mb(m.download_mb * 1024 * 1024),
+            m.run_mb,
+            "{}",
+            m.id
+        );
+    }
+}
+
+#[test]
+fn a_projector_comes_out_of_the_room_before_the_layers_and_the_context() {
+    // A 12 GB card with 12,000 MB free: 9,600 MB to plan for.
+    let p = machine(
+        vec![gpu(
+            GpuVendor::Nvidia,
+            "NVIDIA GeForce RTX 3060",
+            12_288,
+            Some(12_000),
+        )],
+        32_768,
+        Some(24_000),
+        CpuInfo::new(16, 8, 0, CpuSimd::Avx2),
+    );
+    let meta = dense_12b();
+    let heads = GgufMeta {
+        block_count: 1,
+        file_mb: 822,
+        ..dense_12b()
+    };
+    let plan = |drafter: Option<&GgufMeta>, projector_mb: u64| {
+        autoconfig_beside(
+            &p,
+            &meta,
+            Backend::Cuda,
+            GovState::Normal,
+            &Overrides::default(),
+            Beside {
+                drafter,
+                projector_mb,
+            },
+        )
+    };
+    // Alone the 12B keeps 8k whole on the GPU. A 1,311 MB projector leaves
+    // no whole-GPU room at 8k, so, like any model alone, it keeps its
+    // context and moves layers to RAM instead.
+    let alone = plan(None, 0);
+    assert_eq!((alone.ngl, alone.ctx), (49, 8_192));
+    let plain = autoconfig(
+        &p,
+        &meta,
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+        None,
+    );
+    assert_eq!(alone, plain);
+    let seeing = plan(None, 1_311);
+    assert_eq!(
+        (seeing.ngl, seeing.ctx, seeing.kv),
+        (30, 16_384, KvType::Q8)
+    );
+    // With its drafter too there is no whole-GPU room left, so the drafter's
+    // check refuses the pair once the projector is counted in it.
+    let pair = plan(Some(&heads), 1_311);
+    let with = LaunchArgs {
+        projector: Some(Box::new(ProjectorArgs {
+            file: PathBuf::from("/home/user/models/mmproj.gguf"),
+            mb: 1_311,
+            off_gpu_flag: true,
+        })),
+        ..pair.clone()
+    };
+    assert_eq!(
+        local_spec::fits(&p, &meta, &with, GovState::Normal, &heads),
+        None
+    );
+    assert_eq!(
+        local_spec::pair_need_mb(&meta, &with, &heads),
+        local_spec::pair_need_mb(&meta, &pair, &heads) + 1_311
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_warm_relaunch_never_starts_a_projector_beside_the_running_server() {
+    let _one = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let root = std::env::temp_dir().join(format!("grokhub-warm-vision-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let model = root.join("tiny.gguf");
+    std::fs::write(&model, tiny_gguf()).unwrap();
+    set_free_probe(Arc::new(|| FreeNow {
+        vram_free_mb: Some(64_000),
+        ram_free_mb: Some(64_000),
+    }));
+    let next = whole_gpu_12b();
+    assert!(warm_fits(&model, &next));
+    let seeing = LaunchArgs {
+        projector: projector(true),
+        ..next
+    };
+    assert!(!warm_fits(&model, &seeing));
+    reset_free_probe();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// [`pair_rig`] with an engine that also lists the projector flags, and the
+/// 12B's projector (`mb` MiB, sparse) beside the model.
+#[cfg(unix)]
+fn vision_rig(label: &str, mb: u64) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, binary, model) = pair_rig(label);
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\ncat <<'EOF'\n--spec-draft-n-max N   number of tokens to draft\n--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N\n--spec-draft-model, -md, --model-draft FNAME\n--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash\n-mm,   --mmproj FILE                    path to a multimodal projector file\n--mmproj-offload, --no-mmproj-offload   whether to enable GPU offloading for multimodal projector\nEOF\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let file = root.join("mmproj-Huihui-gemma-4-12B-it-abliterated-BF16.gguf");
+    std::fs::File::create(&file)
+        .unwrap()
+        .set_len(mb * 1024 * 1024)
+        .unwrap();
+    (root, binary, model, file)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_vision_launch_counts_its_projector_and_never_leaves_a_pair_refusal() {
+    let _one = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, binary, model, file) = vision_rig("vision-launch", 200);
+    let probe = |vram: u64| {
+        set_free_probe(Arc::new(move || FreeNow {
+            vram_free_mb: Some(vram),
+            ram_free_mb: Some(24_000),
+        }));
+    };
+    // 1,600 MB free plans for 1,280: the pair (1,160 at the shortest
+    // context) fits, and the pair with a 230 MB projector doesn't.
+    set_profile(card(1_600, 24_000), root.join("local"));
+    probe(1_600);
+    let (alone, _, _) = launch_for(&binary, &model)
+        .unwrap()
+        .expect("the pair plans");
+    assert!(alone.draft.is_some() && alone.projector.is_none());
+    assert_eq!(
+        vision_launch_with(&binary, &model, None),
+        Err(PROJECTOR_NO_ROOM.to_string())
+    );
+    // The pair itself fits, so nothing holds it.
+    assert_eq!(take_refusal(&model), None);
+    // The check a picture turn makes before it stops anything says the same,
+    // and where it was sized, for its own hold.
+    assert_eq!(
+        vision_fit(&binary, &model, None),
+        Err(Some(PairRefusal {
+            pool: Pool::Vram,
+            free_mb: Some(1_600),
+            state: GovState::Normal,
+            on_gpu: true,
+        }))
+    );
+    assert_eq!(take_refusal(&model), None);
+    probe(4_000);
+    assert_eq!(vision_fit(&binary, &model, None), Ok(()));
+    let (seeing, _, _) = vision_launch_with(&binary, &model, None)
+        .unwrap()
+        .expect("planned");
+    assert_eq!(
+        seeing.projector.as_deref(),
+        Some(&ProjectorArgs {
+            file: file.clone(),
+            mb: 230,
+            off_gpu_flag: true,
+        })
+    );
+    assert!(seeing.draft.is_some(), "the drafter stays with its model");
+    // An engine that refused this projector with this model is not asked again.
+    super::super::local_vision::note_refused(&binary, &model);
+    assert_eq!(
+        vision_launch_with(&binary, &model, None),
+        Err(NO_PROJECTOR.to_string())
+    );
+    assert_eq!(vision_view(&binary, &[]), Vec::<&str>::new());
+    assert_eq!(vision_fit(&binary, &model, None), Err(None));
+    std::fs::remove_file(
+        root.join("local")
+            .join(super::super::local_vision::REFUSED_FILE),
+    )
+    .unwrap();
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(
+        vision_launch_with(&binary, &model, None),
+        Err(NO_PROJECTOR.to_string())
+    );
+    reset_free_probe();
+    forget_profile();
+    forget_draft_status();
+    let _ = std::fs::remove_dir_all(root);
 }

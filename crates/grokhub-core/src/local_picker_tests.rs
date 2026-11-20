@@ -262,6 +262,7 @@ fn with_optional_row() -> &'static [LocalModel] {
         min_llama_build: Some(10_353),
         optional: true,
         drafter: None,
+        projector: None,
         min_budget: crate::local_setup::Budgets {
             gpu: Some(22_528),
             unified: Some(32_768),

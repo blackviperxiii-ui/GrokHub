@@ -55,13 +55,14 @@ impl DraftArgs {
 }
 
 /// MB the model and its drafter take together at `a`'s context and slots:
-/// each brings its file, its KV cache and its compute buffers.
+/// each brings its file, its KV cache and its compute buffers. A vision
+/// projector the launch loads beside them counts too.
 pub fn pair_need_mb(meta: &GgufMeta, a: &LaunchArgs, drafter: &GgufMeta) -> u64 {
     let seqs = a.run.seqs();
     let one = |m: &GgufMeta| {
         m.file_mb + autoconfig::kv_mb_for(m, a.ctx, a.kv, seqs) + autoconfig::overhead_mb(a.ctx)
     };
-    one(meta) + one(drafter)
+    one(meta) + one(drafter) + a.projector.as_ref().map_or(0, |v| v.mb)
 }
 
 /// Whether the drafter fits next to the planned launch: `Some(true)` on the

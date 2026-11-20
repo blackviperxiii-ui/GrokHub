@@ -1446,3 +1446,165 @@ fn a_side_answer_and_the_tell_main_text_read_no_tier_from_model_text() {
         Some((SpeedQuality::Speed, Source::Words))
     );
 }
+
+/// A GPU with `vram` MB free and no RAM to spare, so only the GPU counts.
+fn gpu_room(vram: u64) -> Scale {
+    with_room(local_scale::Room {
+        free_vram_mb: Some(vram),
+        free_ram_mb: 0,
+        ..free_room()
+    })
+}
+
+#[test]
+fn a_picture_loads_the_model_that_can_see_it_and_steps_down_when_it_cannot_fit() {
+    let disk = disk();
+    let home = file(MID);
+    let mid = file(MID);
+    let paired = [BIG, MID, SMALL];
+    // The E4B runs with its drafter; its projector is on disk, so is the
+    // E2B's, and the 12B's isn't.
+    let seeing = [MID, SMALL];
+    let running = Now {
+        loaded: Some((&mid, None)),
+        paired: &paired,
+        loaded_paired: true,
+        ..now(&home, &disk)
+    };
+    // Freeing the E4B pair (6,288) and 1,100 more fits it with its
+    // projector (7,375): the pick reloads with it.
+    assert_eq!(
+        vision_plan(
+            &Now {
+                scale: gpu_room(1_100),
+                ..running
+            },
+            &seeing
+        ),
+        Some(Plan::Load {
+            model: mid.clone(),
+            stand_in: None
+        })
+    );
+    // 500 more doesn't: the E2B with its drafter and projector (5,390) does.
+    let tight = Now {
+        scale: gpu_room(500),
+        ..running
+    };
+    assert_eq!(
+        vision_plan(&tight, &seeing),
+        Some(Plan::Load {
+            model: file(SMALL),
+            stand_in: Some(StandIn::Vision)
+        })
+    );
+    // A start refused the E2B: nothing left can see it.
+    let small = [file(SMALL)];
+    assert_eq!(
+        vision_plan(
+            &Now {
+                refused: &small,
+                ..tight
+            },
+            &seeing
+        ),
+        None
+    );
+    // Nothing else can see pictures, or nothing fits.
+    assert_eq!(vision_plan(&tight, &[MID]), None);
+    assert_eq!(vision_plan(&running, &[]), None);
+    let full = Now {
+        loaded: None,
+        scale: gpu_room(5_000),
+        ..running
+    };
+    assert_eq!(vision_plan(&full, &seeing), None);
+    // Without a room reading the launch decides: the pick loads its own.
+    assert_eq!(
+        vision_plan(&running, &seeing),
+        Some(Plan::Load {
+            model: mid.clone(),
+            stand_in: None
+        })
+    );
+    // A reply in flight keeps its model, past which a picture loads at once,
+    // inside the cooldown too.
+    assert_eq!(
+        vision_plan(
+            &Now {
+                in_flight: 1,
+                ..running
+            },
+            &seeing
+        ),
+        None
+    );
+    assert_eq!(
+        vision_plan(
+            &Now {
+                secs_since_swap: 5,
+                ..tight
+            },
+            &seeing
+        ),
+        Some(Plan::Load {
+            model: file(SMALL),
+            stand_in: Some(StandIn::Vision)
+        })
+    );
+}
+
+#[test]
+fn keep_loaded_a_forced_file_a_low_battery_and_a_game_keep_their_model_for_a_picture() {
+    let disk = disk();
+    let home = file(MID);
+    let mid = file(MID);
+    let running = Now {
+        loaded: Some((&mid, None)),
+        scale: gpu_room(0),
+        ..now(&home, &disk)
+    };
+    let kept = Now {
+        kept_loaded: true,
+        ..running
+    };
+    // The pick may load its own projector, and no other model loads.
+    assert_eq!(
+        vision_plan(&kept, &[MID, SMALL]),
+        Some(Plan::Load {
+            model: mid.clone(),
+            stand_in: None
+        })
+    );
+    assert_eq!(vision_plan(&kept, &[SMALL]), None);
+    let forced = Now {
+        forced: true,
+        ..running
+    };
+    assert_eq!(vision_plan(&forced, &[SMALL]), None);
+    // A game runs the lightest gaming model: only it may see.
+    let gaming = Now {
+        scale: Scale {
+            gaming: true,
+            ..Scale::default()
+        },
+        ..running
+    };
+    assert_eq!(
+        vision_plan(&gaming, &[MID, SMALL]),
+        Some(Plan::Load {
+            model: file(SMALL),
+            stand_in: Some(StandIn::Gaming)
+        })
+    );
+    assert_eq!(vision_plan(&gaming, &[MID]), None);
+    let low = Now {
+        low_battery: true,
+        ..running
+    };
+    assert_eq!(vision_plan(&low, &[MID]), None);
+    assert_eq!(
+        StandIn::Vision.line(),
+        "Running a model that can see the picture your pick can't. Your pick comes back once the chat is quiet."
+    );
+}

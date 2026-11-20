@@ -460,6 +460,12 @@ fn a_picture_the_device_cant_see_goes_online_unless_the_turn_must_stay() {
     assert_eq!(r.model, "local:small");
     assert!(!no_vision(&r));
     input.voice_reply = None;
+    // The model loaded now carries its vision projector: the step rides on
+    // it and the device reads the picture itself.
+    input.local.sees_pictures = true;
+    let r = choose(&input);
+    assert_eq!(r.model, "local:small");
+    assert!(!no_vision(&r));
 }
 
 #[test]
