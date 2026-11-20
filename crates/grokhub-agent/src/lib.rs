@@ -5,6 +5,7 @@ pub mod batch;
 pub mod brain;
 mod builtin_skills;
 pub mod cache_watch;
+pub mod channels_net;
 pub mod check_decide;
 mod checkpoint;
 pub mod claude_plan;
