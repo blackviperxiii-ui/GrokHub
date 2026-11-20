@@ -117,6 +117,26 @@ static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static STT_XAI_COOLDOWN_UNTIL: AtomicU64 = AtomicU64::new(0);
 static TTS_XAI_COOLDOWN_UNTIL: AtomicU64 = AtomicU64::new(0);
 
+thread_local! {
+    static TEST_SESSION_ACTIVE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// RAII guard pinning [`session_active`] on the current thread so parallel
+/// unit tests never race the process-wide voice session flag.
+pub struct SessionActiveGuard(Option<bool>);
+
+impl SessionActiveGuard {
+    pub fn set(active: bool) -> Self {
+        Self(TEST_SESSION_ACTIVE.with(|c| c.replace(Some(active))))
+    }
+}
+
+impl Drop for SessionActiveGuard {
+    fn drop(&mut self) {
+        TEST_SESSION_ACTIVE.with(|c| c.set(self.0));
+    }
+}
+
 /// Marks whether an open-mic voice session is active in this process so
 /// reply routing applies [`VoiceRouteConfig`] only during voice conversations.
 pub fn set_session_active(active: bool) {
@@ -124,7 +144,28 @@ pub fn set_session_active(active: bool) {
 }
 
 pub fn session_active() -> bool {
+    if let Some(active) = TEST_SESSION_ACTIVE.with(std::cell::Cell::get) {
+        return active;
+    }
     SESSION_ACTIVE.load(Ordering::SeqCst)
+}
+
+pub const VOICE_SPEED_REASON: &str = "live voice turn";
+
+/// True when an active voice session is running in `Auto` mode, so the
+/// router automatically favors low-latency reply routes (`goal:speed` and
+/// live waiting fast-variant eligibility) without any UI picker.
+pub fn auto_fast_turn(dir: &Path) -> bool {
+    session_active() && read(dir).mode == VoiceRouteMode::Auto
+}
+
+/// Default speed goal injected on user-facing voice turns in `Auto` mode
+/// when no explicit session/pinned goal overrides it.
+pub fn voice_turn_goal(dir: &Path) -> Option<super::goal::RouteGoal> {
+    auto_fast_turn(dir).then(|| super::goal::RouteGoal {
+        goal: super::goal::Goal::Speed,
+        reason: VOICE_SPEED_REASON.to_string(),
+    })
 }
 
 fn cooldown_cell(kind: StageKind) -> &'static AtomicU64 {
@@ -784,5 +825,40 @@ mod tests {
         let mut none = env();
         none.has_xai_auth = false;
         assert!(wants_download(&cfg, StageKind::Stt, &none));
+    }
+
+    #[test]
+    fn auto_voice_session_injects_speed_goal_and_local_only_does_not() {
+        let dir = std::env::temp_dir().join(format!(
+            "gh-voice-fast-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        {
+            let _off = SessionActiveGuard::set(false);
+            assert!(!auto_fast_turn(&dir));
+            assert_eq!(voice_turn_goal(&dir), None);
+        }
+        {
+            let _on = SessionActiveGuard::set(true);
+            assert!(auto_fast_turn(&dir));
+            let goal = voice_turn_goal(&dir).expect("speed goal in auto voice session");
+            assert_eq!(goal.goal, super::super::goal::Goal::Speed);
+            assert_eq!(goal.reason, VOICE_SPEED_REASON);
+
+            write(
+                &dir,
+                VoiceRouteConfig {
+                    mode: VoiceRouteMode::LocalOnly,
+                },
+            )
+            .unwrap();
+            assert!(!auto_fast_turn(&dir));
+            assert_eq!(voice_turn_goal(&dir), None);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
