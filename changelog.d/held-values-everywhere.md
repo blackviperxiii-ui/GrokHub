@@ -1,0 +1,1 @@
+- Chat: values you asked the app to hold back are now hidden in desktop tasks and instant answers too (live text, thoughts and tool cards), and in the tool calls and tool outputs of the saved chat, not only in replies and thoughts.

@@ -746,6 +746,9 @@ impl NativeEngine {
             self.usage.clone(),
         );
         let limit = self.context_length;
+        // Values held for the chat leave text, thoughts and tool cards here
+        // too, and the thoughts are kept for the save, as in `prompt`.
+        let mut shown = crate::held::Shown::new(&session);
         let out = crate::episode::run_episode(&k, ep, view, &mut |ev| {
             let ev = match ev {
                 LoopEvent::Usage(u) => {
@@ -755,10 +758,17 @@ impl NativeEngine {
                 }
                 other => other,
             };
+            for ev in shown.pass(ev) {
+                if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
+                    emit(acp);
+                }
+            }
+        });
+        for ev in shown.finish() {
             if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
                 emit(acp);
             }
-        });
+        }
         self.usage.add(&out.usage);
         let turn = vec![
             InputItem::Message {
@@ -771,11 +781,12 @@ impl NativeEngine {
             },
         ];
         let cwd = self.workspace.display().to_string();
-        let _ = crate::session::record_turn(
+        let _ = crate::session::record_turn_with(
             &session,
             &cwd,
             &self.model,
             &turn,
+            &shown.thoughts,
             &out.usage,
             kind.meter(),
             text,
@@ -883,10 +894,14 @@ impl NativeEngine {
         }
         let (kind, limit) = (self.auth_kind, self.context_length);
         let reply = pick.reply(&crate::tools::fence::display_text(&output.text));
+        // Values held for the chat leave the tool card and the reply.
+        let mut shown = crate::held::Shown::new(&session);
         {
             let mut on_event = |ev: LoopEvent| {
-                if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
-                    emit(acp);
+                for ev in shown.pass(ev) {
+                    if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
+                        emit(acp);
+                    }
                 }
             };
             let id = call.call_id.clone();
@@ -906,8 +921,13 @@ impl NativeEngine {
                 &output.text,
                 output.image_data_url.clone(),
             );
+            on_event(LoopEvent::Text(reply.clone()));
         }
-        emit(AcpEvent::Text(reply.clone()));
+        for ev in shown.finish() {
+            if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
+                emit(acp);
+            }
+        }
         // The next model turn sees the ask, the call, its output and the reply,
         // paired by call id like any tool turn.
         let before = self.history.len();
@@ -1826,6 +1846,62 @@ mod tests {
             None,
             "the turn after a compaction starts fresh"
         );
+    }
+
+    /// An instant answer (no model call) shows and saves nothing held for
+    /// the chat: not in its tool card, its reply, or the saved call output.
+    #[test]
+    fn an_instant_answer_redacts_values_held_for_the_chat() {
+        let dir = std::env::temp_dir().join(format!("gh-eng-instant-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        // The config folder the tools read (GROKHUB_CONFIG wins over the pin).
+        let skill = crate::perm::config_dir().join("skills/dock");
+        std::fs::create_dir_all(&skill).unwrap();
+        // A value the user held: skills refuse key-shaped text, so a code word.
+        let token = "bluefin-harbor-4471";
+        std::fs::write(
+            skill.join("SKILL.md"),
+            format!(
+                "---\nname: dock\ndescription: Signs in with {token}\n---\nUse the dock key.\n"
+            ),
+        )
+        .unwrap();
+        let id = "native-instant-held";
+        crate::held::hold_secret(id, token);
+        let model = Arc::new(Summarize {
+            calls: AtomicUsize::new(0),
+            fail: true,
+        });
+        let mut engine = engine(&dir, id, model.clone());
+        let events = Mutex::new(Vec::new());
+        engine
+            .prompt("list my skills", None, &mut |ev| {
+                events.lock().unwrap().push(ev)
+            })
+            .unwrap();
+        let events = events.into_inner().unwrap();
+        assert_eq!(
+            model.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "answered with no model call"
+        );
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            AcpEvent::Tool(card) if card.kind == "skill_list" && card.detail.contains("dock: Signs in with [redacted]")
+        )));
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            AcpEvent::Text(text) if text.contains("dock: Signs in with [redacted]")
+        )));
+        assert!(!format!("{events:?}").contains(token), "{events:?}");
+        let file = std::fs::read_to_string(crate::session::session_file(id).unwrap()).unwrap();
+        assert!(file.contains("[redacted]"), "{file}");
+        assert!(!file.contains(token), "{file}");
+        let _ = std::fs::remove_dir_all(&skill);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn engine(

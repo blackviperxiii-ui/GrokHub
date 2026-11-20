@@ -523,8 +523,8 @@ fn thought_record(id: &str, text: &str) -> Option<Record> {
     (!text.trim().is_empty()).then_some(Record::Thought(text))
 }
 
-/// An assistant message with the values held for chat `id` redacted; any
-/// other item as it is.
+/// An assistant message, a tool call's arguments and a tool's output with
+/// the values held for chat `id` redacted; any other item as it is.
 fn redact_reply(id: &str, item: &InputItem) -> InputItem {
     match item {
         InputItem::Message { role, content } if role == "assistant" => InputItem::Message {
@@ -538,6 +538,19 @@ fn redact_reply(id: &str, item: &InputItem) -> InputItem {
                     other => other.clone(),
                 })
                 .collect(),
+        },
+        InputItem::FunctionCall {
+            call_id,
+            name,
+            arguments,
+        } => InputItem::FunctionCall {
+            call_id: call_id.clone(),
+            name: name.clone(),
+            arguments: crate::held::redact(id, arguments),
+        },
+        InputItem::FunctionCallOutput { call_id, output } => InputItem::FunctionCallOutput {
+            call_id: call_id.clone(),
+            output: crate::held::redact(id, output),
         },
         other => other.clone(),
     }
@@ -2374,6 +2387,41 @@ mod tests {
         );
         let file = fs::read_to_string(session_file(id).unwrap()).unwrap();
         assert!(!file.contains(token), "{file}");
+    }
+
+    #[test]
+    fn a_held_value_is_redacted_from_saved_tool_calls_and_outputs() {
+        let (_dir, _guard) = isolated("tools-held");
+        let id = "native-tools-held";
+        let token = "sk-abcdefghijklmnopqrstuv";
+        crate::held::hold_secret(id, token);
+        let items = [
+            user("connect github"),
+            InputItem::FunctionCall {
+                call_id: "c1".into(),
+                name: "write_file".into(),
+                arguments: format!(r#"{{"path":".env","content":"KEY={token}"}}"#),
+            },
+            InputItem::FunctionCallOutput {
+                call_id: "c1".into(),
+                output: format!("wrote KEY={token}"),
+            },
+            assistant("Saved."),
+        ];
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &items,
+            &Usage::default(),
+            "",
+            "connect github",
+        )
+        .unwrap();
+        let file = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        assert!(!file.contains(token), "{file}");
+        assert!(file.contains(r#"KEY=[redacted]\"}"#), "{file}");
+        assert!(file.contains("wrote KEY=[redacted]"), "{file}");
     }
 
     #[test]
