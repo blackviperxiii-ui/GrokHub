@@ -76,7 +76,6 @@ pub use signal::{
     user_model_type, ChatLine, Correction, Noted, Usage,
 };
 pub use store::{AmrStore, ForgetReport, Meaning, RecallOpts, RecallReport};
-pub use wiki::{WikiReport, WIKI_DIR};
 pub use user_model::{
     add_fact, approval_samples, approve_node, calibrate_reflect_min, edit_node, forget_node,
     memory_rows, memory_text, pause_node, personal_export, reflect_diff, reflect_threshold_log,
@@ -84,6 +83,7 @@ pub use user_model::{
     ApprovalSample, MemoryRow, PersonalGroup, ReflectDiff, SourceLink, UserForget, WipeReport,
     PROPOSED_TAG, REFLECT_MIN_CONFIDENCE,
 };
+pub use wiki::{WikiReport, WIKI_DIR};
 pub use write::{
     line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered,
 };

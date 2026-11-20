@@ -269,7 +269,7 @@ impl AmrStore {
             let node = &nodes[at];
             let mut lines = score_lines(node, &words);
             // Most words first; a stable sort keeps line order on ties.
-            lines.sort_by(|a, b| b.0.cmp(&a.0));
+            lines.sort_by_key(|line| std::cmp::Reverse(line.0));
             let mut lines: Vec<String> = lines.into_iter().map(|(_, line)| line).collect();
             if lines.is_empty() {
                 // A prefix match the substring scan missed: the first line.
@@ -312,7 +312,11 @@ impl AmrStore {
             return;
         }
         let top = scored.iter().map(|s| s.0).fold(0.0f64, f64::max);
-        let top = if scored.is_empty() || top <= 0.0 { 1.0 } else { top };
+        let top = if scored.is_empty() || top <= 0.0 {
+            1.0
+        } else {
+            top
+        };
         let mut near: Vec<(f32, usize, String)> = nodes
             .iter()
             .enumerate()
@@ -333,8 +337,7 @@ impl AmrStore {
         near.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
         let mut only = 0usize;
         for (cos, at, line) in near {
-            let share =
-                f64::from((cos - meaning.floor) / (1.0 - meaning.floor)).clamp(0.0, 1.0);
+            let share = f64::from((cos - meaning.floor) / (1.0 - meaning.floor)).clamp(0.0, 1.0);
             let boost = top * meaning.weight * share * decay(&nodes[at]);
             if let Some(hit) = scored.iter_mut().find(|s| s.1 == at) {
                 hit.0 += boost;
