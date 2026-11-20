@@ -59,6 +59,10 @@ pub struct Sidecar {
     pub token: String,
     pub binary: PathBuf,
     pub model: PathBuf,
+    /// Multimodal projector (`--mmproj`) loaded alongside `model`, when present.
+    pub mmproj: Option<PathBuf>,
+    /// Managed local embeddings slot model ID (router mode), when resident.
+    pub embedding_model: Option<String>,
     restarts: AtomicU64,
     /// Unix seconds of the last successful use (idle unload).
     last_used_secs: AtomicU64,
@@ -90,6 +94,8 @@ impl std::fmt::Debug for Sidecar {
             .field("token", &"[redacted]")
             .field("binary", &self.binary)
             .field("model", &self.model)
+            .field("mmproj", &self.mmproj)
+            .field("embedding_model", &self.embedding_model)
             .field("restarts", &self.restart_count())
             .field("idle_unload_secs", &self.idle_unload_secs)
             .field("thinking", &self.thinking)
@@ -174,6 +180,21 @@ pub fn busy() -> Busy {
             }
         }
     }
+}
+
+/// True when the running global sidecar has an `--mmproj` vision projector.
+pub fn sidecar_has_vision() -> bool {
+    let slot = global_slot().lock().unwrap_or_else(|e| e.into_inner());
+    slot.as_ref().is_some_and(Sidecar::has_vision)
+}
+
+/// Loopback `(base_url, token, model_id)` for the running sidecar's managed
+/// local embeddings slot (router mode), if an embedding GGUF is resident.
+pub fn sidecar_embedding_endpoint() -> Option<(String, String, String)> {
+    let slot = global_slot().lock().unwrap_or_else(|e| e.into_inner());
+    let side = slot.as_ref()?;
+    let model = side.embedding_model.clone()?;
+    Some((side.base_url(), side.token.clone(), model))
 }
 
 pub fn in_flight() -> usize {
@@ -264,6 +285,11 @@ impl Sidecar {
     /// The child's process id, so the governor can leave its load out.
     pub fn pid(&self) -> u32 {
         self.child.lock().expect("sidecar lock").id()
+    }
+
+    /// True when the running server has a multimodal vision projector (`--mmproj`).
+    pub fn has_vision(&self) -> bool {
+        self.mmproj.is_some()
     }
 
     /// Stop the child (best effort). Called from [`Drop`].
@@ -410,11 +436,38 @@ fn spawn_llama(
             ));
         }
     }
-    let mut args = spawn_args(model, host, port, launch, bare_cpu);
+    let mmproj = super::local_preset::discover_mmproj_for(model);
+    let models_dir = model
+        .parent()
+        .and_then(Path::parent)
+        .or_else(|| model.parent());
+    let help = super::local_flags::help_text(binary);
+    let preset = super::local_preset::RouterPreset::from_sidecar_plan(model, launch, models_dir);
+    let use_router = super::local_preset::supports_router_mode(&help) && preset.models.len() > 1;
+    let mut args = if use_router {
+        let preset_path = binary.with_file_name("llama-models-preset.ini");
+        match preset.write_to(&preset_path) {
+            Ok(written) => {
+                super::local_preset::llama_router_args(&written, host, port, preset.models_max)
+            }
+            Err(_) => {
+                let mut a = spawn_args(model, host, port, launch, bare_cpu);
+                if let Some(proj) = &mmproj {
+                    a.extend(["--mmproj".to_string(), proj.display().to_string()]);
+                }
+                a
+            }
+        }
+    } else {
+        let mut a = spawn_args(model, host, port, launch, bare_cpu);
+        if let Some(proj) = &mmproj {
+            a.extend(["--mmproj".to_string(), proj.display().to_string()]);
+        }
+        a
+    };
     // A planned launch can save and restore its KV cache (see `local_kv`),
     // and a cold one wholly on the GPU with RAM short skips the page cache.
     if let Some(l) = launch {
-        let help = super::local_flags::help_text(binary);
         let file_mb = std::fs::metadata(model).map_or(0, |m| m.len()) / (1024 * 1024);
         let facts = super::local_warm::LoadFacts {
             whole_on_gpu: !l.cpu_only && l.ngl >= l.all_layers && l.n_cpu_moe.is_none(),
@@ -555,6 +608,15 @@ fn start_planned(
             launch.as_ref(),
             bare_cpu,
         )?;
+        let mmproj = super::local_preset::discover_mmproj_for(&paths.model);
+        let models_dir = paths
+            .model
+            .parent()
+            .and_then(Path::parent)
+            .or_else(|| paths.model.parent());
+        let embedding_model = models_dir
+            .and_then(super::local_preset::discover_embedding_model)
+            .map(|_| super::local_preset::SLOT_EMBED.to_string());
         let mut side = Sidecar {
             child: Mutex::new(child),
             host: host.clone(),
@@ -562,6 +624,8 @@ fn start_planned(
             token,
             binary: paths.binary.clone(),
             model: paths.model.clone(),
+            mmproj,
+            embedding_model,
             restarts: AtomicU64::new(0),
             last_used_secs: AtomicU64::new(unix_secs()),
             idle_unload_secs: idle,
@@ -2614,6 +2678,8 @@ mod tests {
             token: "t".into(),
             binary: PathBuf::from("llama-server"),
             model: PathBuf::from("m.gguf"),
+            mmproj: None,
+            embedding_model: None,
             restarts: AtomicU64::new(0),
             last_used_secs: AtomicU64::new(last_used_secs),
             idle_unload_secs,
