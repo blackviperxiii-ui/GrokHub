@@ -1,0 +1,1 @@
+- Local AI: Hugging Face model search and file lists now refuse while Offline only is on.

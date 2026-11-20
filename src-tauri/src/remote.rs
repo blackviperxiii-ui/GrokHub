@@ -1111,6 +1111,7 @@ mod tests {
             "set_game_companion_ping",
             // Export saves on the computer and Wipe can't be undone: desktop only.
             "export_personal",
+            "export_memory_wiki",
             "wipe_personal",
             "save_settings",
             // The web rail shows the profile; changing it stays on the computer.

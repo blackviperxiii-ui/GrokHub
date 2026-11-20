@@ -50,6 +50,7 @@ mod schema;
 mod signal;
 mod store;
 mod user_model;
+mod wiki;
 mod write;
 
 pub use dream::{
@@ -75,6 +76,7 @@ pub use signal::{
     user_model_type, ChatLine, Correction, Noted, Usage,
 };
 pub use store::{AmrStore, ForgetReport, Meaning, RecallOpts, RecallReport};
+pub use wiki::{WikiReport, WIKI_DIR};
 pub use user_model::{
     add_fact, approval_samples, approve_node, calibrate_reflect_min, edit_node, forget_node,
     memory_rows, memory_text, pause_node, personal_export, reflect_diff, reflect_threshold_log,
