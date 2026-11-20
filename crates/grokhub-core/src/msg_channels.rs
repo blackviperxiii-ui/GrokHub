@@ -376,19 +376,58 @@ pub fn receive(
     if !keep(&hook.filters, &json) {
         return Received::Filtered;
     }
-    let mut id = [0u8; 4];
-    crate::fill_random(&mut id);
-    let path = inbox_dir(config_dir).join(format!("{now_ms}-{name}-{}.json", hex::encode(id)));
     let record = serde_json::json!({
         "channel": "webhook",
         "hook": name,
         "receivedMs": now_ms,
         "body": json,
     });
-    match crate::pulse_writer::write_atomic(&path, &record.to_string()) {
-        Ok(()) => Received::Queued(path),
+    match queue(config_dir, name, now_ms, &record) {
+        Ok(path) => Received::Queued(path),
         Err(e) => Received::Refused(format!("couldn't save the webhook: {e}")),
     }
+}
+
+/// Save `record` in [`inbox_dir`] as `{now_ms}-{tag}-{random}.json`.
+fn queue(config_dir: &Path, tag: &str, now_ms: u64, record: &Value) -> Result<PathBuf, String> {
+    let mut id = [0u8; 4];
+    crate::fill_random(&mut id);
+    let path = inbox_dir(config_dir).join(format!("{now_ms}-{tag}-{}.json", hex::encode(id)));
+    crate::pulse_writer::write_atomic(&path, &record.to_string()).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// One direct message from a paired sender, as a channel adapter hands it on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Forwarded<'a> {
+    pub channel: ChannelKind,
+    pub sender: &'a str,
+    pub label: &'a str,
+    /// Where an answer goes: the Telegram chat id or the Discord DM channel id.
+    pub reply_to: &'a str,
+    pub text: &'a str,
+}
+
+/// Queue a paired sender's message in [`inbox_dir`] for the app, beside the
+/// webhooks. Nothing here calls a model.
+pub fn queue_message(
+    config_dir: &Path,
+    msg: &Forwarded<'_>,
+    now_ms: u64,
+) -> Result<PathBuf, String> {
+    let tag = match msg.channel {
+        ChannelKind::Telegram => "telegram",
+        ChannelKind::Discord => "discord",
+    };
+    let record = serde_json::json!({
+        "channel": msg.channel,
+        "sender": msg.sender,
+        "label": msg.label,
+        "replyTo": msg.reply_to,
+        "text": msg.text,
+        "receivedMs": now_ms,
+    });
+    queue(config_dir, tag, now_ms, &record).map_err(|e| format!("couldn't save the message: {e}"))
 }
 
 #[cfg(test)]
@@ -656,6 +695,36 @@ mod tests {
         assert_eq!(DmTrust::load(&dir), trust);
         let text = std::fs::read_to_string(DmTrust::path(&dir)).unwrap();
         assert!(text.contains("\"discord\""), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_paired_message_is_queued_beside_the_webhooks() {
+        let dir = std::env::temp_dir().join(format!("grokhub-queue-msg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let msg = Forwarded {
+            channel: ChannelKind::Telegram,
+            sender: "777",
+            label: "@user",
+            reply_to: "5001",
+            text: "hi there",
+        };
+        let path = queue_message(&dir, &msg, NOW).unwrap();
+        assert_eq!(path.parent().unwrap(), inbox_dir(&dir));
+        let name = path.file_name().unwrap().to_str().unwrap().to_string();
+        assert!(name.starts_with(&format!("{NOW}-telegram-")), "{name}");
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved,
+            json!({
+                "channel": "telegram",
+                "sender": "777",
+                "label": "@user",
+                "replyTo": "5001",
+                "text": "hi there",
+                "receivedMs": NOW,
+            })
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
