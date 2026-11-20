@@ -694,9 +694,8 @@ pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool 
 /// - `GROKHUB_LLAMA_SERVER`: path to `llama-server`
 /// - `GROKHUB_LOCAL_MODEL`: path to a `.gguf`
 /// - binary else: `{config}/bin/llama-server`, else `llama-server` on `PATH`
-/// - model else: `model_download::installed` under `~/GrokHub/models` (or
-///   `{config}/models`), then a model file the user added
-///   ([`own_model`]), then the first `*.gguf` in those folders
+/// - model else: Auto's best among downloads and added files
+///   ([`resolve_model_file`]), then the first `*.gguf` in those folders
 pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
     let stamp = paths_stamp(config_dir);
     let mut cache = PATHS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -857,37 +856,70 @@ fn user_models_dir() -> Option<PathBuf> {
     )
 }
 
-/// The first model file the user added in Settings → Local AI
-/// (`ownFiles` in `{config}/local_ai.json`) that is on disk and can be a chat
-/// model. There is no pick: it loads only when no downloaded catalog model
-/// is there ([`resolve_model_file`]).
-pub fn own_model(config_dir: &Path) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(config_dir.join("local_ai.json")).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    v.get("ownFiles")?
-        .as_array()?
-        .iter()
-        .filter_map(serde_json::Value::as_str)
-        .map(|p| PathBuf::from(p.trim()))
-        .find(|p| {
-            p.extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
-                && p.is_file()
-                && !helper_gguf(p)
+/// Model files the user added in Settings → Local AI (`ownFiles` in
+/// `{config}/local_ai.json`) that are on disk and can be a chat model.
+pub fn own_files(config_dir: &Path) -> Vec<PathBuf> {
+    let text = match std::fs::read_to_string(config_dir.join("local_ai.json")) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let v: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    v.get("ownFiles")
+        .and_then(|x| x.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(|p| PathBuf::from(p.trim()))
+                .filter(|p| {
+                    p.extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
+                        && p.is_file()
+                        && !helper_gguf(p)
+                })
+                .collect()
         })
+        .unwrap_or_default()
 }
 
+/// The first added model file on disk ([`own_files`]).
+pub fn own_model(config_dir: &Path) -> Option<PathBuf> {
+    own_files(config_dir).into_iter().next()
+}
+
+/// Auto's home model: downloads and added files scored on merit (size,
+/// published or measured speed), then the first `*.gguf` in the models
+/// folders. There is no picker.
 fn resolve_model_file(config_dir: &Path) -> Option<PathBuf> {
     let dirs = [user_models_dir(), Some(config_dir.join("models"))];
+    let mut files: Vec<grokhub_core::local_picker::AutoFile> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
     for dir in dirs.iter().flatten() {
+        for m in grokhub_core::model_download::downloaded(dir) {
+            push_auto_file(
+                &mut files,
+                &mut seen,
+                grokhub_core::model_download::final_path(dir, m),
+                Some(m),
+            );
+        }
         if let Some(rec) = grokhub_core::model_download::installed(dir) {
             let path = dir.join(&rec.file);
-            if path.is_file() {
-                return Some(path);
-            }
+            let model = grokhub_core::local_setup::model_by_id(&rec.id);
+            push_auto_file(&mut files, &mut seen, path, model);
         }
     }
-    if let Some(p) = own_model(config_dir) {
+    for path in own_files(config_dir) {
+        let model = path.file_name().and_then(|n| n.to_str()).and_then(|name| {
+            grokhub_core::local_setup::local_models()
+                .iter()
+                .find(|m| m.is_chat() && m.file == name)
+        });
+        push_auto_file(&mut files, &mut seen, path, model);
+    }
+    if let Some(p) = grokhub_core::local_picker::auto_home(&files) {
         return Some(p);
     }
     for dir in dirs.into_iter().flatten() {
@@ -896,6 +928,24 @@ fn resolve_model_file(config_dir: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn push_auto_file(
+    files: &mut Vec<grokhub_core::local_picker::AutoFile>,
+    seen: &mut std::collections::BTreeSet<PathBuf>,
+    path: PathBuf,
+    model: Option<&'static grokhub_core::local_setup::LocalModel>,
+) {
+    if !path.is_file() || helper_gguf(&path) || !seen.insert(path.clone()) {
+        return;
+    }
+    let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    files.push(grokhub_core::local_picker::AutoFile {
+        path,
+        model,
+        bytes,
+        measured: None,
+    });
 }
 
 fn llama_server_name() -> &'static str {
@@ -1613,13 +1663,14 @@ static LAST_SWAP_SECS: AtomicU64 = AtomicU64::new(0);
 /// The model the idle timer last unloaded, and when.
 static LAST_IDLE_UNLOAD: Mutex<Option<(PathBuf, u64)>> = Mutex::new(None);
 
-/// The catalog chat models downloaded in the models folders.
+/// The catalog chat models on disk: downloads in the models folders, plus
+/// added files that match a catalog chat model so Auto can score them.
 fn on_disk(config_dir: &Path) -> Vec<(&'static LocalModel, PathBuf)> {
     let dirs: Vec<PathBuf> = [user_models_dir(), Some(config_dir.join("models"))]
         .into_iter()
         .flatten()
         .collect();
-    super::local_swap::on_disk(&dirs)
+    super::local_swap::with_own(super::local_swap::on_disk(&dirs), &own_files(config_dir))
 }
 
 /// The running server loaded a drafter file beside its model.
@@ -3552,7 +3603,7 @@ mod tests {
     }
 
     #[test]
-    fn an_added_model_file_loads_only_when_no_download_is_there() {
+    fn an_added_model_file_loads_when_it_is_the_only_one_or_scores_best() {
         let dir = std::env::temp_dir().join(format!("gh-sidecar-own-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let models = dir.join("models");
@@ -3581,14 +3632,31 @@ mod tests {
         )
         .unwrap();
         assert_ne!(resolve_model_file(&dir), Some(own.clone()));
-        // A downloaded catalog model wins over an added file.
-        std::fs::write(models.join("last.gguf"), b"12345").unwrap();
+        // A tiny added file can beat a slow catalog download on merit.
+        let slow = grokhub_core::local_setup::model_by_id("bytedance-seed-oss-36b-heretic-q4_k_m")
+            .expect("slow catalog model");
+        let fast = grokhub_core::local_setup::model_by_id("gemma-4-e4b-it-abliterated-q4_k")
+            .expect("fast capable catalog model");
+        let slow_path = models.join(slow.file);
+        std::fs::write(&slow_path, vec![0u8; 64]).unwrap();
         std::fs::write(
             models.join("installed.json"),
-            r#"{"id":"x","file":"last.gguf","sha256":"abc","bytes":5}"#,
+            serde_json::json!({
+                "id": slow.id,
+                "file": slow.file,
+                "sha256": "abc",
+                "bytes": 64
+            })
+            .to_string(),
         )
         .unwrap();
-        assert_eq!(added(&[&own]), Some(models.join("last.gguf")));
+        let own_fast = dir.join(fast.file);
+        std::fs::write(&own_fast, vec![0u8; 32]).unwrap();
+        assert_eq!(
+            added(&[&own_fast]),
+            Some(own_fast.clone()),
+            "the faster added catalog file beats the slow download"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

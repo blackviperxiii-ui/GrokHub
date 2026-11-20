@@ -1,4 +1,5 @@
 use super::*;
+use std::path::PathBuf;
 use Bucket::{Hidden as H, MaySlow as S, Recommended as R};
 
 const ALL: [&str; 5] = [
@@ -581,4 +582,67 @@ fn optional_makers_never_change_the_pick() {
 
 fn pre_id(picks: &[Pick]) -> Option<&'static str> {
     picks.iter().find(|x| x.preselected).map(|x| x.model.id)
+}
+
+#[test]
+fn an_added_file_wins_auto_home_when_it_scores_best() {
+    // Both are capable (≥ CAPABLE_QUALITY); the added one is much faster.
+    let slow = local_models()
+        .iter()
+        .find(|m| m.id == "bytedance-seed-oss-36b-heretic-q4_k_m")
+        .expect("slow catalog model");
+    let fast = local_models()
+        .iter()
+        .find(|m| m.id == "gemma-4-e4b-it-abliterated-q4_k")
+        .expect("fast capable catalog model");
+    assert!(crate::local_skills::resolved(fast).quality >= CAPABLE_QUALITY);
+    let installed = AutoFile {
+        path: PathBuf::from("/models").join(slow.file),
+        model: Some(slow),
+        bytes: slow.download_mb * 1_024 * 1_024,
+        measured: None,
+    };
+    let added = AutoFile {
+        path: PathBuf::from("/home/user/models").join(fast.file),
+        model: Some(fast),
+        bytes: fast.download_mb * 1_024 * 1_024,
+        measured: None,
+    };
+    assert_eq!(
+        auto_home(&[installed.clone(), added.clone()]),
+        Some(added.path.clone()),
+        "the faster added file beats the slow download"
+    );
+    // A third-party file with a measured speed test can win on merit too.
+    let tiny = AutoFile {
+        path: PathBuf::from("/home/user/models/mine.gguf"),
+        model: None,
+        bytes: 400 * 1_024 * 1_024,
+        measured: Some(120.0),
+    };
+    assert_eq!(
+        auto_home(&[installed, tiny.clone()]),
+        Some(tiny.path),
+        "a small added file with a strong speed test beats the slow download"
+    );
+}
+
+#[test]
+fn auto_home_keeps_the_only_file_and_prefers_a_capable_fast_one() {
+    let e2b = local_models()
+        .iter()
+        .find(|m| m.id == "gemma-4-e2b-it-abliterated-q4_k")
+        .expect("e2b");
+    let only = AutoFile {
+        path: PathBuf::from("/models").join(e2b.file),
+        model: Some(e2b),
+        bytes: e2b.download_mb * 1_024 * 1_024,
+        measured: None,
+    };
+    assert_eq!(auto_home(std::slice::from_ref(&only)), Some(only.path));
+    assert_eq!(auto_home(&[]), None);
+    assert!(
+        (own_speed(3_258 * 1_024 * 1_024) - OWN_REF_TOK_S).abs() < 1e-6,
+        "the size reference matches the published tiny-model speed"
+    );
 }

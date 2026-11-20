@@ -101,8 +101,8 @@ pub struct LocalAiConfig {
     /// Local AI slows down on battery.
     pub throttle_on_battery: bool,
     pub manual: Manual,
-    /// Model files the user added (`.gguf` paths). The engine loads the first
-    /// one on disk when no downloaded catalog model is there.
+    /// Model files the user added (`.gguf` paths). Auto scores them on merit
+    /// (size, speed) alongside downloaded catalog models.
     pub own_files: Vec<String>,
     /// Third-party model files whose notice the user has read.
     pub notice_seen: Vec<String>,

@@ -702,6 +702,28 @@ pub fn on_disk(dirs: &[PathBuf]) -> Vec<(&'static LocalModel, PathBuf)> {
         .collect()
 }
 
+/// Add user-added `.gguf` paths that match a catalog chat model, so Auto can
+/// score them for a task beside downloads. Paths that are already on `disk`
+/// (same catalog id or same path) are left alone.
+pub fn with_own(
+    mut disk: Vec<(&'static LocalModel, PathBuf)>,
+    own: &[PathBuf],
+) -> Vec<(&'static LocalModel, PathBuf)> {
+    for path in own {
+        let Some(m) = catalog_for(path) else {
+            continue;
+        };
+        if !m.is_chat() {
+            continue;
+        }
+        if disk.iter().any(|(c, p)| c.id == m.id || p == path) {
+            continue;
+        }
+        disk.push((m, path.clone()));
+    }
+    disk
+}
+
 /// A reload within this long of an idle unload means the timer was too short.
 pub const RELOAD_SOON_SECS: u64 = 60;
 /// A reload this long after an idle unload means the timer can come down.
