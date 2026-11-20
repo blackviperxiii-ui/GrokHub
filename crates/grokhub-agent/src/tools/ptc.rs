@@ -175,8 +175,11 @@ fn clip_chars(text: &str, max: usize) -> String {
 fn spawn_sandboxed_python(cwd: &Path) -> Result<Child, String> {
     let mut plan = crate::sandbox::plan_for_call("run_terminal_command", &json!({}), cwd);
     // PTC scripts are read-only; remove all writable filesystem roots under the OS sandbox.
+    // The harness runs on this computer, so it keeps the host sandbox even
+    // when the shell's commands go to a container.
     if let Some(p) = plan.as_mut() {
         p.writable.clear();
+        p.container = None;
     }
     let py = python_program();
     let argv = [py, "-I", "-B", "-u", "-c", PYTHON_HARNESS];

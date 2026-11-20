@@ -16,6 +16,7 @@
 //! permission policy and the consent ledger, so a command that could write it
 //! could loosen its own gate.
 
+pub mod container;
 pub mod git_guard;
 #[cfg(target_os = "linux")]
 pub mod landlock;
@@ -52,6 +53,8 @@ pub const OUTSIDE_ARG: &str = "outside_sandbox";
 /// enabled = true          # false runs commands as before
 /// network_guard = true    # false leaves the proxy variables alone
 /// writable = ["~/src/other-repo", "/opt/sdk"]
+/// backend = "container"  # opt-in: run in a rootless Podman/Docker container
+/// image = "docker.io/library/debian:stable-slim"
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
@@ -61,6 +64,11 @@ pub struct Settings {
     /// it (writes, network and secrets). `auto_allow = false` asks as before.
     pub auto_allow: bool,
     pub writable: Vec<PathBuf>,
+    /// `backend = "container"`: run in a container ([`container`]) when a
+    /// rootless runtime is there. Anything else keeps the host sandbox.
+    pub container: bool,
+    /// The container image; [`container::DEFAULT_IMAGE`] when unset.
+    pub image: String,
 }
 
 impl Default for Settings {
@@ -70,6 +78,8 @@ impl Default for Settings {
             network_guard: true,
             auto_allow: true,
             writable: Vec::new(),
+            container: false,
+            image: container::DEFAULT_IMAGE.into(),
         }
     }
 }
@@ -85,7 +95,14 @@ fn parse_file(text: &str, home: Option<&Path>) -> Settings {
     let file = crate::config_file::parse(
         CONFIG_NAME,
         text,
-        &["writable", "enabled", "network_guard", "auto_allow"],
+        &[
+            "writable",
+            "enabled",
+            "network_guard",
+            "auto_allow",
+            "backend",
+            "image",
+        ],
     );
     let defaults = Settings::default();
     let writable = file
@@ -106,6 +123,14 @@ fn parse_file(text: &str, home: Option<&Path>) -> Settings {
         network_guard: file.flag("network_guard", defaults.network_guard),
         auto_allow: file.flag("auto_allow", defaults.auto_allow),
         writable,
+        container: file
+            .get("backend")
+            .is_some_and(|v| v.trim().trim_matches(['"', '\'']) == "container"),
+        image: file
+            .get("image")
+            .map(|v| v.trim().trim_matches(['"', '\'']).to_string())
+            .filter(|v| !v.is_empty() && !v.starts_with('-'))
+            .unwrap_or(defaults.image),
     }
 }
 
@@ -132,6 +157,10 @@ pub struct Plan {
     /// [`seatbelt`]). Windows 11: its process container (see [`mxc`]). None
     /// elsewhere.
     pub isolation: Option<Isolation>,
+    /// Set when the container backend is on and a rootless runtime is there:
+    /// the shell runs in it instead, and the host fields above serve the
+    /// callers that stay on the host (the PTC Python harness).
+    pub container: Option<container::Container>,
 }
 
 impl Plan {
@@ -140,6 +169,10 @@ impl Plan {
     /// its own network namespace; macOS its Seatbelt profile with the proxy
     /// port; Windows its process container with the proxy port.
     pub fn enforced(&self) -> bool {
+        if self.container.is_some() {
+            // Writes only in the mounts, no network at all.
+            return true;
+        }
         let net = self.isolation.as_ref().is_some_and(|i| i.net_confined);
         #[cfg(target_os = "linux")]
         let writes = landlock::abi().is_some();
@@ -196,10 +229,20 @@ pub fn plan_in(config_dir: &Path, tool: &str, args: &Value, workspace: &Path) ->
         None
     };
     let isolation = isolation(config_dir, workspace, home.as_deref(), proxy.as_deref());
+    let container = settings
+        .container
+        .then(container::detect)
+        .flatten()
+        .map(|runtime| container::Container {
+            runtime,
+            image: settings.image.clone(),
+            mounts: container::mounts(workspace, &settings.writable),
+        });
     Some(Plan {
         writable,
         proxy,
         isolation,
+        container,
     })
 }
 
@@ -294,6 +337,11 @@ pub fn network_note(plan: Option<&Plan>, failed: bool, output: &str) -> Option<&
         "nodename nor servname provided",
     ];
     let plan = plan.filter(|_| failed)?;
+    if plan.container.is_some() {
+        return SIGNS.iter().any(|s| output.contains(s)).then_some(
+            "[sandbox] This command ran in a container with no network, so nothing it starts can reach a host. If it needs the network, rerun with outside_sandbox (asks the user).",
+        );
+    }
     if plan.proxy.is_some() && REFUSED.iter().any(|s| output.contains(s)) {
         return Some(
             "[sandbox] The proxy only lets sandboxed commands reach package registries, code hosts, model hosts and hosts your WebFetch allow rules name. For another host, rerun with outside_sandbox (asks the user).",
@@ -311,6 +359,16 @@ pub fn status(config_dir: &Path) -> String {
     let settings = settings(config_dir);
     if !settings.enabled {
         return "Shell sandbox: off (shell_sandbox.toml)".into();
+    }
+    if let Some(runtime) = settings.container.then(container::detect).flatten() {
+        let name = match runtime.kind {
+            container::Kind::Podman => "Podman",
+            container::Kind::Docker => "Docker",
+        };
+        return format!(
+            "Shell sandbox: container ({name}, {}); writes only in the workspace and writable folders; no network; nothing else of this computer visible",
+            settings.image
+        );
     }
     #[cfg(target_os = "linux")]
     {
@@ -519,6 +577,11 @@ pub fn writable_roots(
 /// `pre_exec` (so `setsid` runs first).
 #[cfg(unix)]
 pub fn apply(cmd: &mut std::process::Command, plan: &Plan) -> Result<(), String> {
+    // The container holds the command; the runtime's client itself must
+    // write its own state, so no host confinement goes on it.
+    if plan.container.is_some() {
+        return Ok(());
+    }
     if let Some(addr) = &plan.proxy {
         for key in proxy::UNSET {
             cmd.env_remove(key);
