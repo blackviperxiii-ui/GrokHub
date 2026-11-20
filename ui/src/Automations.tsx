@@ -4,6 +4,7 @@ import {
   addSuggestedAutomation,
   editAutomation,
   fillBlueprintSeed,
+  getAutomationsService,
   listAutomationBlueprints,
   listAutomations,
   listSuggestedAutomations,
@@ -11,18 +12,34 @@ import {
   removeAutomation,
   runAutomation,
   setAutomationEnabled,
+  setAutomationsService,
   type AutomationRow,
   type Blueprint,
   type RunResult,
   type SuggestedTile,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { Toggle } from "./Toggle";
 import { ConfirmRow } from "./ui";
 
 export function resultLine(result: RunResult): string {
   if (result.error) return result.error;
   return result.text.trim() || "Finished with no reply.";
 }
+
+/** Row copy for a script-first check: command plus onChange / noAgent gate. */
+export function checkLine(row: AutomationRow): string | null {
+  const cmd = row.checkCommand.trim();
+  if (!cmd) return null;
+  const bits = [`checks \`${cmd}\` first`];
+  if (row.gate.onChange) bits.push("only when it changes");
+  if (row.gate.noAgent) bits.push("without AI");
+  return bits.join(", ");
+}
+
+export const KEEP_RUNNING = "Keep running when the app is closed";
+export const KEEP_RUNNING_HELP =
+  "Installs a login service so scheduled automations keep firing after you quit. Off means they run only while the app is open or in the tray.";
 
 export const SUGGESTED_NOTE = "Suggested from your recent work";
 
@@ -60,9 +77,24 @@ export function Automations({
   const [adding, setAdding] = useState<string | null>(null);
   const [filling, setFilling] = useState<string | null>(null);
   const [slotValues, setSlotValues] = useState<Record<string, string>>({});
+  const [keepRunning, setKeepRunning] = useState<boolean | null>(null);
+  const [keepBusy, setKeepBusy] = useState(false);
 
   useEffect(() => {
     if (active) listAutomations().then(setRows, (err) => setNote(String(err)));
+  }, [active]);
+
+  // Desktop only: a phone or web remote without the command hides the switch.
+  useEffect(() => {
+    if (!active) return;
+    let stale = false;
+    getAutomationsService().then(
+      (on) => !stale && setKeepRunning(on),
+      () => !stale && setKeepRunning(null),
+    );
+    return () => {
+      stale = true;
+    };
   }, [active]);
 
   // The tiles hide jobs already running, so they follow every change to the
@@ -197,6 +229,18 @@ export function Automations({
     }
   }
 
+  async function flipKeepRunning(next: boolean) {
+    setKeepBusy(true);
+    try {
+      setKeepRunning(await setAutomationsService(next));
+      setNote(null);
+    } catch (err) {
+      setNote(String(err));
+    } finally {
+      setKeepBusy(false);
+    }
+  }
+
   return (
     <section className="automations" aria-label="Automations">
       <form className="add" onSubmit={add}>
@@ -214,6 +258,18 @@ export function Automations({
         {PRODUCT_NAME} runs these on schedule while it is open or in the tray. A run follows your
         Approvals setting, and anything that would need your OK is skipped.
       </p>
+      {keepRunning !== null && (
+        <div className="keep-running" role="group" aria-label={KEEP_RUNNING}>
+          <Toggle
+            checked={keepRunning}
+            disabled={keepBusy}
+            onChange={(next) => void flipKeepRunning(next)}
+          >
+            {KEEP_RUNNING}
+          </Toggle>
+          <p className="note">{KEEP_RUNNING_HELP}</p>
+        </div>
+      )}
       {note && (
         <p className="error" role="alert">
           {note}
@@ -222,10 +278,13 @@ export function Automations({
       {rows === null && !note && <p className="empty">Loading automations…</p>}
       {rows?.length === 0 && <p className="empty">{AUTOMATIONS_EMPTY}</p>}
       <ul className="rows">
-        {rows?.map((row) => (
+        {rows?.map((row) => {
+          const check = checkLine(row);
+          return (
           <li key={row.id} className="card automation" aria-label={row.name}>
             <div className="card-title">{row.name}</div>
             <div className="card-status">{row.summary}</div>
+            {check && <div className="card-check">{check}</div>}
             {row.health && <div className="card-health">{row.health}</div>}
             {results[row.id] && <pre className="card-detail">{results[row.id]}</pre>}
             {editing?.id === row.id && (
@@ -290,7 +349,8 @@ export function Automations({
             </div>
             )}
           </li>
-        ))}
+          );
+        })}
       </ul>
       {blueprints.length > 0 && (
         <section className="blueprints" aria-label="Blueprints">

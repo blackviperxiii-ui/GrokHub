@@ -3198,6 +3198,12 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   flex-basis: auto;
 }
 
+.card-check {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
 .card-health,
 .automations .error {
   color: var(--danger-text);

@@ -7915,6 +7915,10 @@ pub const AUTOMATIONS_ARG: &str = "--automations";
 /// reads (the router's settings, provider keys and the learned-tier key from
 /// the OS keyring, the device profile), then ticks until stopped. An open
 /// app takes the jobs over, and this waits for it to close.
+///
+/// Each fire still settles on the row in `automations.json` (health, count,
+/// check gate). The `eprintln!` below is a console hint only: on Windows
+/// release builds (`windows_subsystem = "windows"`) it goes nowhere.
 #[cfg(desktop)]
 pub fn run_automations() -> ! {
     let config_dir = grokhub_agent::perm::config_dir();
@@ -7936,9 +7940,30 @@ pub fn run_automations() -> ! {
             } else {
                 "ok".to_string()
             };
+            // Console only; Windows release has no console. Row results still settle.
             eprintln!("automations: {} {how}", fired.name);
         },
     )
+}
+
+/// Automations page: whether the login service keeps jobs running with the
+/// app closed.
+#[cfg(desktop)]
+#[tauri::command]
+fn get_automations_service() -> Result<bool, String> {
+    headless_service::installed()
+}
+
+/// Automations page switch: install or remove the login service.
+#[cfg(desktop)]
+#[tauri::command]
+fn set_automations_service(on: bool) -> Result<bool, String> {
+    if on {
+        headless_service::install()?;
+    } else {
+        headless_service::remove()?;
+    }
+    headless_service::installed()
 }
 
 #[tauri::command]
@@ -8744,6 +8769,10 @@ pub fn run() {
             edit_automation,
             set_scheduler_clock,
             run_automation,
+            #[cfg(desktop)]
+            get_automations_service,
+            #[cfg(desktop)]
+            set_automations_service,
             get_memory,
             save_memory,
             add_memory,

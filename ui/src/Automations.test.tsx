@@ -27,6 +27,8 @@ const api = vi.hoisted(() => ({
   listSuggestedAutomations: vi.fn<() => Promise<SuggestedTile[]>>(),
   listAutomationBlueprints: vi.fn<() => Promise<Blueprint[]>>(),
   addSuggestedAutomation: vi.fn<(seed: string) => Promise<AutomationRow[]>>(),
+  getAutomationsService: vi.fn<() => Promise<boolean>>(),
+  setAutomationsService: vi.fn<(on: boolean) => Promise<boolean>>(),
   fillBlueprintSeed: vi.fn((seed: string, values: Record<string, string>) => {
     let out = seed;
     for (const [key, raw] of Object.entries(values)) {
@@ -47,7 +49,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { Automations } from "./Automations";
+import { Automations, AUTOMATIONS_EMPTY, checkLine, KEEP_RUNNING } from "./Automations";
 
 function row(over: Partial<AutomationRow>): AutomationRow {
   return {
@@ -58,6 +60,8 @@ function row(over: Partial<AutomationRow>): AutomationRow {
     summary: "weekdays at 09:00 · next today 9:00 AM",
     health: null,
     describe: "every weekday at 9am summarize my inbox",
+    checkCommand: "",
+    gate: { onChange: false, noAgent: false },
     ...over,
   };
 }
@@ -73,11 +77,68 @@ describe("Automations", () => {
       api.runAutomation,
       api.editAutomation,
       api.addSuggestedAutomation,
+      api.getAutomationsService,
+      api.setAutomationsService,
     ])
       fn.mockReset();
     api.listSuggestedAutomations.mockReset().mockResolvedValue([]);
     api.listAutomationBlueprints.mockReset().mockResolvedValue([]);
+    api.getAutomationsService.mockRejectedValue("unknown command");
     ranHandlers.length = 0;
+  });
+
+  it("checkLine names the command and gate", () => {
+    expect(checkLine(row({}))).toBeNull();
+    expect(
+      checkLine(row({ checkCommand: "df -h", gate: { onChange: true, noAgent: false } })),
+    ).toBe("checks `df -h` first, only when it changes");
+    expect(
+      checkLine(row({ checkCommand: "uptime", gate: { onChange: false, noAgent: true } })),
+    ).toBe("checks `uptime` first, without AI");
+  });
+
+  it("shows a check line on each gated row", async () => {
+    api.listAutomations.mockResolvedValue([
+      row({
+        checkCommand: "df -h",
+        gate: { onChange: true, noAgent: false },
+      }),
+      row({
+        id: "auto-2",
+        name: "disk script",
+        checkCommand: "df -h /",
+        gate: { onChange: false, noAgent: true },
+      }),
+    ]);
+    render(<Automations />);
+    const inbox = await screen.findByRole("listitem", { name: "summarize my inbox" });
+    expect(inbox).toHaveTextContent("checks `df -h` first, only when it changes");
+    expect(screen.getByRole("listitem", { name: "disk script" })).toHaveTextContent(
+      "checks `df -h /` first, without AI",
+    );
+  });
+
+  it("toggles Keep running when the app is closed", async () => {
+    api.listAutomations.mockResolvedValue([]);
+    api.getAutomationsService.mockResolvedValue(false);
+    api.setAutomationsService.mockResolvedValue(true);
+    render(<Automations />);
+    const switchEl = await screen.findByRole("switch", { name: KEEP_RUNNING });
+    expect(switchEl).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(switchEl);
+    expect(api.setAutomationsService).toHaveBeenCalledWith(true);
+    expect(await screen.findByRole("switch", { name: KEEP_RUNNING })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("hides Keep running when the service command is missing", async () => {
+    api.listAutomations.mockResolvedValue([]);
+    api.getAutomationsService.mockRejectedValue("unknown command");
+    render(<Automations />);
+    expect(await screen.findByText(AUTOMATIONS_EMPTY)).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: KEEP_RUNNING })).toBeNull();
   });
 
   it("renders a Blueprint and saves the filled seed", async () => {
@@ -310,6 +371,8 @@ describe("Automations edit and schedule", () => {
   beforeEach(() => {
     for (const fn of [api.listAutomations, api.editAutomation]) fn.mockReset();
     api.listSuggestedAutomations.mockReset().mockResolvedValue([]);
+    api.listAutomationBlueprints.mockReset().mockResolvedValue([]);
+    api.getAutomationsService.mockReset().mockRejectedValue("unknown command");
     ranHandlers.length = 0;
   });
 

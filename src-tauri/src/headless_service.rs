@@ -122,6 +122,15 @@ fn service_file_in(home: &Path, xdg_config: Option<&std::ffi::OsStr>) -> Option<
     }
 }
 
+/// Whether the login service is set up for this user.
+pub fn installed() -> Result<bool, String> {
+    let home = grokhub_core::paths::user_home().ok_or("Couldn't find your home folder.")?;
+    match service_file(&home) {
+        Some(file) => Ok(file.is_file()),
+        None => Ok(run("schtasks", &["/Query", "/TN", TASK]).is_ok()),
+    }
+}
+
 /// Sets the service up for this binary and starts it. The text says what
 /// was done.
 pub fn install() -> Result<String, String> {
@@ -285,4 +294,5 @@ mod tests {
             ))
         );
     }
+
 }
