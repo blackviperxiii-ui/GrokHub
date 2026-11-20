@@ -182,8 +182,8 @@ pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{
     active_always_on, active_builtin_bodies, builtin_names, builtin_text,
     discover as discover_skills, discover_all as discover_all_skills, invalidate_discover_cache,
-    set_skill_off_in, skill_is_off_in, skill_name_key, skills_off_in, Skill, SkillSource,
-    BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES,
+    set_skill_off_in, skill_is_off_in, skill_name_key, skill_quarantine_in, skills_off_in, Skill,
+    SkillSource, BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES,
 };
 pub use sse::SseParser;
 pub use subagent::{drain_side_events, requeue_side_events, SideEvent};

@@ -14,13 +14,13 @@ pub mod auto_fix;
 pub mod automation;
 pub mod automation_check;
 pub mod automation_preflight;
-pub mod blueprint_catalog;
 pub mod autonomy;
 pub mod autotune;
 pub mod backup_nudge;
 pub mod battlenet;
 pub mod battlenet_api;
 pub mod bg_task;
+pub mod blueprint_catalog;
 pub mod brain_policy;
 pub mod brand;
 pub mod browser;
@@ -661,10 +661,12 @@ pub use shortcuts::{
 };
 pub use situation::{echoes_source, learn_from_turns, LearnedMove, MoveKind};
 pub use skill::{
-    apply_skill_follow, bump_skill_run, is_feedback_ask, is_hard_run, is_junk_skill, match_skill,
-    parse_skill_md, patch_skill, prefer_patch, propose_skill_from_turn, render_skill_md,
-    skill_dir_name, skill_follow_block, skill_safe, skill_use_in_chat_prompt, SkillMd,
-    AUTO_SKILL_PITFALL,
+    apply_skill_follow, bump_skill_run, is_feedback_ask, is_hard_run, is_junk_skill,
+    load_skill_lock, match_skill, parse_skill_md, patch_skill, prefer_patch,
+    propose_skill_from_turn, render_skill_md, save_skill_lock, scan_skill_md, skill_dir_name,
+    skill_follow_block, skill_lock_path, skill_quarantine_reason, skill_safe,
+    skill_use_in_chat_prompt, verify_and_record_skill, SkillLockEntry, SkillLockfile, SkillMd,
+    SkillScan, SkillThreat, AUTO_SKILL_PITFALL, SKILL_LOCK_FILE,
 };
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
