@@ -1,0 +1,1 @@
+- Diagnostics and hub doctor no longer fail solely for missing xAI when a provider key or local model can answer. Imagine stills fall through to the on-device picture model when signed out, same idea as chat.

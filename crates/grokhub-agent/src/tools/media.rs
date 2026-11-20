@@ -197,6 +197,14 @@ impl ImagineApi for BlockedImagine {
     fn get_json(&self, _path: &str) -> Result<Value, String> {
         Err(grokhub_core::XAI_NEED_SIGNIN.to_string())
     }
+
+    fn ready(&self) -> bool {
+        false
+    }
+
+    fn signs(&self) -> Result<(), String> {
+        Err(grokhub_core::XAI_NEED_SIGNIN.to_string())
+    }
 }
 
 pub(crate) struct UreqImagine {
@@ -583,7 +591,9 @@ pub fn imagine_client(bearer: &str) -> Box<dyn ImagineApi> {
 
 /// One media tool run outside a chat turn, for a page of its own (the
 /// shell's Imagine page): the same request builders, EgressGuard and result
-/// saving as chat. Results are downloaded into `media_dir`.
+/// saving as chat. Results are downloaded into `media_dir`. When nothing
+/// can sign (signed out), stills fall through to the on-device picture
+/// model — same idea as chat (#2065).
 pub fn run_media_tool(
     name: &str,
     args: &Value,
@@ -591,6 +601,24 @@ pub fn run_media_tool(
     stop: &dyn Fn() -> bool,
     media_dir: &std::path::Path,
 ) -> ToolOutput {
+    // No bearer: draw stills here when the picture kit is on disk. A client
+    // that can sign still goes to Grok Imagine only (chat owns the busy /
+    // refused fallthrough).
+    if !api.ready() || api.signs().is_err() {
+        if let Some(out) = on_device(
+            name,
+            args,
+            &|| false,
+            &crate::route::local_image::kit_here,
+            stop,
+            Some(media_dir),
+        ) {
+            return out;
+        }
+        if name == "image_generate" {
+            return ToolOutput::err(crate::route::local_image::NO_SOURCE);
+        }
+    }
     execute_with(name, args, api, stop, Some(media_dir))
 }
 
@@ -2597,6 +2625,24 @@ pub(crate) mod tests {
             "Not made, and nothing was sent: nothing here can draw pictures yet. Download Z-Image Turbo from Settings → Download models → Image, or sign in with Grok or add an API key."
         );
         assert!(posted(&posts).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The Imagine page path (`run_media_tool`) with no bearer and no kit.
+    #[test]
+    fn a_page_make_signed_out_with_no_picture_model_names_both_ways() {
+        let (dir, _cfg) = scratch_config();
+        let media = dir.join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        let out = run_media_tool(
+            "image_generate",
+            &picture(),
+            &BlockedImagine,
+            &|| false,
+            &media,
+        );
+        assert!(out.failed);
+        assert_eq!(out.text, crate::route::local_image::NO_SOURCE);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
