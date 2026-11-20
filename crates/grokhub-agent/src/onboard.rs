@@ -11,7 +11,8 @@ use grokhub_core::onboard_identity::{
 };
 use grokhub_core::openclaw::{
     default_openclaw_paths, import_dest, import_memory_file, is_core, is_openclaw_workspace,
-    merge_imported_memory,
+    merge_imported_memory, preview_mcp_json, preview_skill_md, ImportedMcpPreview,
+    ImportedSkillPreview,
 };
 use serde::Serialize;
 
@@ -346,8 +347,96 @@ pub fn openclaw_workspace(home: &Path) -> Option<PathBuf> {
                 })
                 .unwrap_or_default();
             let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-            is_openclaw_workspace(&refs)
+            if is_openclaw_workspace(&refs) {
+                return true;
+            }
+            if p.file_name().and_then(|n| n.to_str()) == Some(".hermes") {
+                let has_extras = p.join("skills").is_dir() || p.join("mcp.json").is_file();
+                if has_extras {
+                    return true;
+                }
+            }
+            false
         })
+}
+
+fn is_hermes_root(root: &Path) -> bool {
+    root.components()
+        .any(|c| c.as_os_str().to_string_lossy() == ".hermes")
+}
+
+/// Dry-run scan of skills (`skills/*/SKILL.md`) and `mcp.json` associated with
+/// an OpenClaw or Hermes workspace. Skills are scanned with the static threat
+/// scanner; raw credentials in `mcp.json` are never copied.
+pub fn scan_workspace_extras(
+    home: &Path,
+    root: &Path,
+) -> (Vec<ImportedSkillPreview>, Vec<ImportedMcpPreview>) {
+    let hermes = is_hermes_root(root);
+    let mut skill_dirs: Vec<PathBuf> = vec![root.join("skills")];
+    let mut mcp_paths: Vec<PathBuf> = vec![root.join("mcp.json")];
+    if let Some(parent) = root.parent() {
+        skill_dirs.push(parent.join("skills"));
+        mcp_paths.push(parent.join("mcp.json"));
+    }
+    if hermes {
+        skill_dirs.push(home.join(".hermes").join("skills"));
+        mcp_paths.push(home.join(".hermes").join("mcp.json"));
+    } else {
+        skill_dirs.push(home.join(".openclaw").join("skills"));
+        mcp_paths.push(home.join(".openclaw").join("mcp.json"));
+    }
+
+    let mut seen_dirs = std::collections::BTreeSet::new();
+    let mut seen_skills = std::collections::BTreeSet::new();
+    let mut skills = Vec::new();
+    for dir in skill_dirs {
+        let key = dir.canonicalize().unwrap_or(dir);
+        if !seen_dirs.insert(key.clone()) || !key.is_dir() {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&key) else {
+            continue;
+        };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for ent in entries {
+            let folder = ent.path();
+            if !folder.is_dir() {
+                continue;
+            }
+            let skill_md = folder.join("SKILL.md");
+            let text = text_of(&skill_md);
+            if text.is_empty() {
+                continue;
+            }
+            let name = ent.file_name().to_string_lossy().into_owned();
+            if seen_skills.insert(name.clone()) {
+                skills.push(preview_skill_md(&name, &text));
+            }
+        }
+    }
+
+    let mut seen_mcp = std::collections::BTreeSet::new();
+    let mut seen_servers = std::collections::BTreeSet::new();
+    let mut mcps = Vec::new();
+    for path in mcp_paths {
+        let key = path.canonicalize().unwrap_or(path);
+        if !seen_mcp.insert(key.clone()) || !key.is_file() {
+            continue;
+        }
+        let raw = text_of(&key);
+        if raw.is_empty() {
+            continue;
+        }
+        for srv in preview_mcp_json(&raw) {
+            if seen_servers.insert(srv.name.clone()) {
+                mcps.push(srv);
+            }
+        }
+    }
+
+    (skills, mcps)
 }
 
 /// What an import added, and what it could not.
@@ -366,22 +455,46 @@ fn has_block(slot: &str, block: &str) -> bool {
         .any(|(at, _)| (at == 0 || slot.as_bytes()[at - 1] == b'\n') && line_end(at + block.len()))
 }
 
-/// `drafts` with an OpenClaw workspace's files added for Review: each lands
-/// under its own heading below what is there, so nothing is replaced, and a
-/// block that is already there (as read, or as Save wrote it) is not added
+/// `drafts` with an OpenClaw or Hermes workspace's files added for Review: each
+/// lands under its own heading below what is there, so nothing is replaced, and
+/// a block that is already there (as read, or as Save wrote it) is not added
 /// again. `TOOLS.md` and files with secrets stay out. Only files whose name
 /// can be imported are read, at most [`IMPORT_MAX`] of them (the workspace's
 /// own files first), and a file that would take its slot past the size cap
 /// is left out. `None` without a workspace.
 pub fn openclaw_import(home: &Path, drafts: &Drafts) -> Option<Import> {
     let root = openclaw_workspace(home)?;
-    let mut names: Vec<(String, PathBuf)> = std::fs::read_dir(&root)
-        .ok()?
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
-        .filter(|(name, _)| import_dest(name).is_some())
-        .collect();
+    let hermes = is_hermes_root(&root);
+    let source_label = if hermes { "Hermes" } else { "OpenClaw" };
+    let mut scan_dirs = vec![root.clone()];
+    if hermes {
+        if root.file_name().and_then(|n| n.to_str()) == Some("memories") {
+            if let Some(parent) = root.parent() {
+                scan_dirs.push(parent.to_path_buf());
+            }
+        } else {
+            let mem = root.join("memories");
+            if mem.is_dir() {
+                scan_dirs.push(mem);
+            }
+        }
+    }
+    let mut seen_names = std::collections::BTreeSet::new();
+    let mut names: Vec<(String, PathBuf)> = Vec::new();
+    for dir in scan_dirs {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            if !e.file_type().is_ok_and(|t| t.is_file()) {
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().into_owned();
+            if import_dest(&name).is_some() && seen_names.insert(name.clone()) {
+                names.push((name, e.path()));
+            }
+        }
+    }
     names.sort();
     let found = names.len();
     let mut room = IMPORT_MAX.saturating_sub(names.iter().filter(|(n, _)| is_core(n)).count());
@@ -404,7 +517,7 @@ pub fn openclaw_import(home: &Path, drafts: &Drafts) -> Option<Import> {
         if content.is_empty() {
             continue;
         }
-        let heading = format!("From OpenClaw {name}");
+        let heading = format!("From {source_label} {name}");
         let (slot, title, file) = match dest.as_str() {
             "USER.md" => (&mut out.user, "# User", FILES[0]),
             "SOUL.md" => (&mut out.soul, "# Soul", FILES[1]),
@@ -453,11 +566,38 @@ pub fn openclaw_import(home: &Path, drafts: &Drafts) -> Option<Import> {
         };
         notes.push(format!("{file} is nearly full; {files} left out."));
     }
+    let (skills, mcps) = scan_workspace_extras(home, &root);
+    if !skills.is_empty() {
+        let quarantined: Vec<&str> = skills
+            .iter()
+            .filter(|s| s.quarantined.is_some())
+            .map(|s| s.name.as_str())
+            .collect();
+        if quarantined.is_empty() {
+            notes.push(format!(
+                "Skills preview: {} skill(s) passed static scan.",
+                skills.len()
+            ));
+        } else {
+            let safe = skills.len().saturating_sub(quarantined.len());
+            notes.push(format!(
+                "Skills preview: {safe} safe, {} quarantined ({}).",
+                quarantined.len(),
+                quarantined.join(", ")
+            ));
+        }
+    }
+    if !mcps.is_empty() {
+        notes.push(format!(
+            "MCP preview: {} server(s) in mcp.json (credentials omitted).",
+            mcps.len()
+        ));
+    }
     if notes.is_empty() && added == 0 {
         notes.push(if already > 0 {
-            "The OpenClaw notes are already in these files; nothing was added.".to_string()
+            format!("The {source_label} notes are already in these files; nothing was added.")
         } else {
-            "The OpenClaw workspace has no notes to add.".to_string()
+            format!("The {source_label} workspace has no notes to add.")
         });
     }
     Some(Import {
