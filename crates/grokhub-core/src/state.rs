@@ -410,7 +410,7 @@ pub fn save_hub_state(path: &std::path::Path, st: &HubState) -> Result<(), Strin
     Ok(())
 }
 
-fn write_private_synced(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_private_synced(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     #[cfg(windows)]
     {

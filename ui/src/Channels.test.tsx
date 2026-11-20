@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
   disconnectChannel: vi.fn<(kind: ChannelKind) => Promise<Shape | null>>(),
   approveChannelCode: vi.fn<(code: string) => Promise<Shape | null>>(),
   unpairChannelSender: vi.fn<(kind: ChannelKind, sender: string) => Promise<Shape | null>>(),
+  addChannelWebhook: vi.fn<(name: string) => Promise<Shape | null>>(),
+  removeChannelWebhook: vi.fn<(name: string) => Promise<Shape | null>>(),
 }));
 vi.mock("./channelsApi", () => api);
 
@@ -21,6 +23,8 @@ const none: Shape = {
   ],
   pending: [],
   paired: [],
+  webhooks: [],
+  newSecret: null,
   status: null,
 };
 
@@ -89,5 +93,29 @@ describe("Phone and chat apps", () => {
     expect(api.unpairChannelSender).toHaveBeenCalledWith("telegram", "777");
     expect(await screen.findByText("Unpaired 777 on Telegram.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Unpair 777 on Telegram" })).toBeNull();
+  });
+
+  it("shows a new webhook's secret once and removes a webhook", async () => {
+    const secret = "ab".repeat(32);
+    const deploys = { name: "deploys", enabled: true, filters: 0, path: "/v1/hook/deploys" };
+    api.getChannels.mockResolvedValue(none);
+    api.addChannelWebhook.mockResolvedValue({
+      ...none,
+      webhooks: [deploys],
+      newSecret: secret,
+      status: "Added deploys. Copy the secret now: it isn't shown again.",
+    });
+    api.removeChannelWebhook.mockResolvedValue({ ...none, status: "Removed deploys. Its secret no longer works." });
+    render(<Channels />);
+    await userEvent.type(await screen.findByLabelText("Webhook name"), "deploys");
+    await userEvent.click(screen.getByRole("button", { name: "Add webhook" }));
+    expect(api.addChannelWebhook).toHaveBeenCalledWith("deploys");
+    expect(await screen.findByText(secret)).toBeTruthy();
+    expect(screen.getByText("POST /v1/hook/deploys")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove webhook deploys" }));
+    expect(api.removeChannelWebhook).toHaveBeenCalledWith("deploys");
+    expect(await screen.findByText("Removed deploys. Its secret no longer works.")).toBeTruthy();
+    expect(screen.queryByText(secret)).toBeNull();
   });
 });

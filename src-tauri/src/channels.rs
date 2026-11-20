@@ -1,6 +1,6 @@
-//! Connectors → Phone and chat apps (messaging channels, part 6a): connect a
+//! Connectors → Phone and chat apps (messaging channels, part 6): connect a
 //! Telegram or Discord bot, approve the pairing codes strangers were sent,
-//! and unpair senders. Each connected bot has one background worker; its
+//! unpair senders, and add or remove signed webhooks. Each connected bot has one background worker; its
 //! token stays in the OS keychain, and what paired senders write is queued
 //! in `channels/inbox/`.
 
@@ -14,7 +14,7 @@ use grokhub_agent::channels_net::{
     self, DiscordLink, TelegramLink, POLL_WAIT_S, TELEGRAM_TOKEN_REFUSED,
 };
 use grokhub_agent::keyring_blob::Backend;
-use grokhub_core::msg_channels::{ChannelKind, DmTrust};
+use grokhub_core::msg_channels::{self, ChannelKind, DmTrust};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -52,8 +52,21 @@ pub struct ChannelsView {
     pub channels: Vec<ChannelView>,
     pub pending: Vec<PendingView>,
     pub paired: Vec<PairedView>,
+    pub webhooks: Vec<WebhookView>,
+    /// A webhook's secret, only in the answer that made it.
+    pub new_secret: Option<String>,
     /// What the last step did, for the page's status line.
     pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookView {
+    pub name: String,
+    pub enabled: bool,
+    pub filters: usize,
+    /// Where the sender posts, on the hub this computer shares.
+    pub path: String,
 }
 
 const KINDS: [ChannelKind; 2] = [ChannelKind::Telegram, ChannelKind::Discord];
@@ -117,12 +130,57 @@ pub fn view(config_dir: &Path, store: &dyn Backend, status: Option<String>) -> C
             })
         })
         .collect();
+    let webhooks = msg_channels::load_webhooks(config_dir)
+        .into_iter()
+        .map(|h| WebhookView {
+            path: format!("/v1/hook/{}", h.name),
+            name: h.name,
+            enabled: h.enabled,
+            filters: h.filters.len(),
+        })
+        .collect();
     ChannelsView {
         channels,
         pending,
         paired,
+        webhooks,
+        new_secret: None,
         status,
     }
+}
+
+/// A webhook with a fresh secret, shown this once.
+pub fn add_webhook(
+    config_dir: &Path,
+    store: &dyn Backend,
+    name: &str,
+) -> Result<ChannelsView, String> {
+    let hook = msg_channels::add_webhook(config_dir, name)?;
+    let mut next = view(
+        config_dir,
+        store,
+        Some(format!(
+            "Added {}. Copy the secret now: it isn't shown again.",
+            hook.name
+        )),
+    );
+    next.new_secret = Some(hook.secret);
+    Ok(next)
+}
+
+pub fn remove_webhook(
+    config_dir: &Path,
+    store: &dyn Backend,
+    name: &str,
+) -> Result<ChannelsView, String> {
+    if !msg_channels::remove_webhook(config_dir, name)? {
+        return Err(format!("There's no webhook named {name}."));
+    }
+    Ok(view(
+        config_dir,
+        store,
+        Some(format!("Removed {name}. Its secret no longer works.")),
+    ))
 }
 
 /// Waits `total` in short steps, so a stop is noticed soon.
@@ -414,5 +472,38 @@ mod tests {
         );
         assert!(store.0.lock().unwrap().is_empty());
         assert!(workers().is_empty());
+    }
+
+    #[test]
+    fn a_webhook_secret_is_shown_once() {
+        let dir = std::env::temp_dir().join(format!("grokhub-shell-hooks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = MemoryStore::default();
+        let added = add_webhook(&dir, &store, "deploys").unwrap();
+        let secret = added.new_secret.clone().unwrap();
+        assert_eq!(secret.len(), 64);
+        assert_eq!(
+            added.webhooks,
+            vec![WebhookView {
+                name: "deploys".into(),
+                enabled: true,
+                filters: 0,
+                path: "/v1/hook/deploys".into(),
+            }]
+        );
+        assert_eq!(
+            added.status.as_deref(),
+            Some("Added deploys. Copy the secret now: it isn't shown again.")
+        );
+        let later = view(&dir, &store, None);
+        assert_eq!(later.new_secret, None);
+        assert!(!serde_json::to_string(&later).unwrap().contains(&secret));
+        let removed = remove_webhook(&dir, &store, "deploys").unwrap();
+        assert_eq!(removed.webhooks, vec![]);
+        assert_eq!(
+            remove_webhook(&dir, &store, "deploys").unwrap_err(),
+            "There's no webhook named deploys."
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

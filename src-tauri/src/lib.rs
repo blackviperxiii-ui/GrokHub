@@ -487,6 +487,31 @@ fn approve_channel_code(
     )
 }
 
+/// A signed webhook with a fresh secret, shown in this answer only.
+#[tauri::command]
+fn add_channel_webhook(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<channels::ChannelsView, String> {
+    channels::add_webhook(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        &name,
+    )
+}
+
+#[tauri::command]
+fn remove_channel_webhook(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<channels::ChannelsView, String> {
+    channels::remove_webhook(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        &name,
+    )
+}
+
 #[tauri::command]
 fn unpair_channel_sender(
     state: State<'_, ShellState>,
@@ -8949,6 +8974,8 @@ pub fn run() {
             disconnect_channel,
             approve_channel_code,
             unpair_channel_sender,
+            add_channel_webhook,
+            remove_channel_webhook,
             save_browser_attach,
             #[cfg(desktop)]
             os_extras::set_summon_hotkey,
