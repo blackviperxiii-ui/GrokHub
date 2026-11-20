@@ -24,6 +24,32 @@ index.sqlite is a full-text index of the plain nodes. Delete it any time; it is 
 ";
 
 const RECALL_CAP: usize = 20;
+
+/// How [`AmrStore::recall_hybrid`] ranks.
+pub struct RecallOpts<'a> {
+    /// Now, in Unix milliseconds; a node's age is counted from its `updated`.
+    pub now_ms: u64,
+    /// A score halves every this many seconds of age (0 turns decay off).
+    pub half_life_secs: f64,
+    /// Most lines returned.
+    pub cap: usize,
+    /// Recall by meaning too, when the embedding model is on disk.
+    pub meaning: Option<Meaning<'a>>,
+}
+
+/// The meaning part of [`RecallOpts`].
+pub struct Meaning<'a> {
+    /// The ask, encoded.
+    pub query: &'a [f32],
+    /// Encodes one body line; `None` skips it.
+    pub encode: &'a dyn Fn(&str) -> Option<Vec<f32>>,
+    /// Lowest cosine that counts.
+    pub floor: f32,
+    /// Share of the best word score a perfect meaning match adds.
+    pub weight: f64,
+    /// Most nodes that may join by meaning alone.
+    pub only_cap: usize,
+}
 const SEALED_EXT: &str = "sealed";
 const TOMBSTONE_EXT: &str = "tombstone";
 /// `nodes/<id>.paused`: the user said not to use this line. It stays on disk
@@ -195,101 +221,128 @@ impl AmrStore {
         report
     }
 
-    /// Lines that hold any of `words` (lowercase, case-insensitive
-    /// substring), best first: the most distinct words matched, then the most
-    /// recently updated node, then id and line order. At most 20 hits. Same
-    /// filters as [`Self::recall`]: no tombstoned, superseded, or proposed
-    /// node, and sealed nodes only when they open.
-    pub fn recall_ranked(&self, words: &[String]) -> Vec<NodeHit> {
+    /// Lines for `words`, best first (M2). Each live node that isn't
+    /// superseded or proposed scores `(−bm25) × decay` from an in-memory FTS5
+    /// index of those nodes (sealed text never reaches disk), where decay
+    /// halves the score every [`RecallOpts::half_life_secs`] since the node's
+    /// `updated` stamp. With [`RecallOpts::meaning`], a node whose closest
+    /// body line is at or over the floor gains `top × weight × share × decay`
+    /// (`top` is the best word score, or 1 with no word match; `share` is how
+    /// far the cosine is past the floor), and up to `only_cap` nodes that
+    /// share no word can join that way. A node's matched lines come out
+    /// together, most words first. Ties go to the newer node, then id. At
+    /// most `cap` lines.
+    pub fn recall_hybrid(&self, words: &[String], opts: &RecallOpts<'_>) -> Vec<NodeHit> {
         let words: Vec<String> = words
             .iter()
             .map(|w| w.trim().to_ascii_lowercase())
             .filter(|w| !w.is_empty())
             .collect();
-        if words.is_empty() {
+        if opts.cap == 0 || (words.is_empty() && opts.meaning.is_none()) {
             return Vec::new();
         }
         let loaded = self.load_live();
         let superseded = self.superseded_ids();
-        let mut hits: Vec<(usize, &str, &str, usize, String)> = Vec::new();
-        for node in loaded
+        let nodes: Vec<Node> = loaded
             .nodes
-            .iter()
+            .into_iter()
             .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
-        {
-            for (seq, (count, line)) in score_lines(node, &words).into_iter().enumerate() {
-                hits.push((count, node.updated.as_str(), node.id.as_str(), seq, line));
+            .collect();
+        let decay = |node: &Node| {
+            let updated = crate::pulse_sources::parse_date_ms(&node.updated).unwrap_or(0);
+            let age = opts.now_ms.saturating_sub(updated) as f64 / 1000.0;
+            crate::recall_score::combine_score(-1.0, age, opts.half_life_secs)
+        };
+        // (score, node index, lines)
+        let mut scored: Vec<(f64, usize, Vec<String>)> = Vec::new();
+        let bm25 = if words.is_empty() {
+            Vec::new()
+        } else {
+            AmrIndex::in_memory(&nodes)
+                .and_then(|index| index.bm25_any(&words))
+                .unwrap_or_default()
+        };
+        for (id, raw) in bm25 {
+            let Some(at) = nodes.iter().position(|n| n.id == id) else {
+                continue;
+            };
+            let node = &nodes[at];
+            let mut lines = score_lines(node, &words);
+            // Most words first; a stable sort keeps line order on ties.
+            lines.sort_by(|a, b| b.0.cmp(&a.0));
+            let mut lines: Vec<String> = lines.into_iter().map(|(_, line)| line).collect();
+            if lines.is_empty() {
+                // A prefix match the substring scan missed: the first line.
+                lines.extend(first_line(node));
+            }
+            scored.push((-raw * decay(node), at, lines));
+        }
+        if let Some(meaning) = &opts.meaning {
+            self.add_meaning(&nodes, meaning, &decay, &mut scored);
+        }
+        scored.sort_by(|a, b| {
+            b.0.total_cmp(&a.0)
+                .then_with(|| nodes[b.1].updated.cmp(&nodes[a.1].updated))
+                .then_with(|| nodes[a.1].id.cmp(&nodes[b.1].id))
+        });
+        let mut out: Vec<NodeHit> = Vec::new();
+        for (_, at, lines) in scored {
+            for line in lines {
+                if out.len() >= opts.cap {
+                    return out;
+                }
+                out.push(NodeHit {
+                    id: nodes[at].id.clone(),
+                    line,
+                });
             }
         }
-        hits.sort_by(|a, b| {
-            b.0.cmp(&a.0)
-                .then_with(|| b.1.cmp(a.1))
-                .then_with(|| a.2.cmp(b.2))
-                .then_with(|| a.3.cmp(&b.3))
-        });
-        hits.truncate(RECALL_CAP);
-        hits.into_iter()
-            .map(|(_, _, id, _, line)| NodeHit {
-                id: id.to_string(),
-                line,
-            })
-            .collect()
+        out
     }
 
-    /// Lines found by meaning (HX-12): for each live node that isn't
-    /// superseded or proposed, its body line closest to `query` by `encode`
-    /// cosine, when that is at least `floor`. Best first, then newest, then
-    /// id; at most `cap`. Superseded nodes stay on disk with their edge, so a
-    /// replaced fact is never recalled but is never deleted either.
-    pub fn recall_semantic(
+    /// The meaning half of [`Self::recall_hybrid`].
+    fn add_meaning(
         &self,
-        query: &[f32],
-        encode: &dyn Fn(&str) -> Option<Vec<f32>>,
-        floor: f32,
-        cap: usize,
-    ) -> Vec<NodeHit> {
-        if query.is_empty() || cap == 0 {
-            return Vec::new();
+        nodes: &[Node],
+        meaning: &Meaning<'_>,
+        decay: &dyn Fn(&Node) -> f64,
+        scored: &mut Vec<(f64, usize, Vec<String>)>,
+    ) {
+        if meaning.query.is_empty() {
+            return;
         }
-        let loaded = self.load_live();
-        let superseded = self.superseded_ids();
-        let mut hits: Vec<(f32, &str, &str, String)> = Vec::new();
-        for node in loaded
-            .nodes
+        let top = scored.iter().map(|s| s.0).fold(0.0f64, f64::max);
+        let top = if scored.is_empty() || top <= 0.0 { 1.0 } else { top };
+        let mut near: Vec<(f32, usize, String)> = nodes
             .iter()
-            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
-        {
-            let best = node
-                .body
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .filter_map(|line| {
-                    let v = encode(line)?;
-                    Some((crate::static_embed::cosine(query, &v), line))
-                })
-                .max_by(|a, b| a.0.total_cmp(&b.0));
-            if let Some((cos, line)) = best.filter(|(cos, _)| *cos >= floor) {
-                hits.push((
-                    cos,
-                    node.updated.as_str(),
-                    node.id.as_str(),
-                    line.to_string(),
-                ));
+            .enumerate()
+            .filter_map(|(at, node)| {
+                node.body
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .filter_map(|line| {
+                        let v = (meaning.encode)(line)?;
+                        Some((crate::static_embed::cosine(meaning.query, &v), line))
+                    })
+                    .max_by(|a, b| a.0.total_cmp(&b.0))
+                    .filter(|(cos, _)| *cos >= meaning.floor)
+                    .map(|(cos, line)| (cos, at, line.to_string()))
+            })
+            .collect();
+        near.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        let mut only = 0usize;
+        for (cos, at, line) in near {
+            let share =
+                f64::from((cos - meaning.floor) / (1.0 - meaning.floor)).clamp(0.0, 1.0);
+            let boost = top * meaning.weight * share * decay(&nodes[at]);
+            if let Some(hit) = scored.iter_mut().find(|s| s.1 == at) {
+                hit.0 += boost;
+            } else if only < meaning.only_cap {
+                only += 1;
+                scored.push((boost, at, vec![line]));
             }
         }
-        hits.sort_by(|a, b| {
-            b.0.total_cmp(&a.0)
-                .then_with(|| b.1.cmp(a.1))
-                .then_with(|| a.2.cmp(b.2))
-        });
-        hits.truncate(cap);
-        hits.into_iter()
-            .map(|(_, _, id, line)| NodeHit {
-                id: id.to_string(),
-                line,
-            })
-            .collect()
     }
 
     /// True when `nodes/<id>.tombstone` is there.
@@ -961,6 +1014,15 @@ fn frontmatter_safe(label: &str, value: &str) -> Result<(), AmrError> {
 /// so a body hit is not repeated as `amr:<id>: <id>`.
 /// [`match_lines`] for several words at once: each matching line with the
 /// number of distinct `words` it holds.
+/// The node's first non-empty body line, trimmed.
+fn first_line(node: &Node) -> Option<String> {
+    node.body
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
 fn score_lines(node: &Node, words: &[String]) -> Vec<(usize, String)> {
     let count = |text: &str| {
         let lower = text.to_ascii_lowercase();
