@@ -6,6 +6,7 @@ import {
   disconnectChannel,
   getChannels,
   removeChannelWebhook,
+  setChannelAsks,
   unpairChannelSender,
   type ChannelKind,
   type Channels as Shape,
@@ -138,7 +139,18 @@ export function Channels() {
             <li key={`${p.channel}-${p.sender}`} className="card-buttons">
               <span>
                 {NAMES[p.channel]} {p.sender}
+                {p.asks && !p.reachable && <span className="note"> · asks start once they write to the bot</span>}
               </span>
+              <button
+                type="button"
+                className="quiet"
+                disabled={busy}
+                aria-pressed={p.asks}
+                aria-label={`Approval asks for ${p.sender} on ${NAMES[p.channel]}`}
+                onClick={() => void act(() => setChannelAsks(p.channel, p.sender, !p.asks))}
+              >
+                {p.asks ? "Stop approval asks" : "Send approval asks"}
+              </button>
               <button
                 type="button"
                 className="quiet"

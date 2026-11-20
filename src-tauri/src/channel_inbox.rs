@@ -153,11 +153,13 @@ pub fn recover(config_dir: &Path, now_ms: u64) -> usize {
     n
 }
 
-/// Answer every queued record, oldest first. `run(prompt, session_id)` is
-/// one unattended run; `send(reply_to, text)` sends its answer back.
-/// Returns how many were handled.
+/// Answer every queued record, oldest first. `intercept(reply_to, text)`
+/// sees a chat message first and may answer it itself (an approval reply);
+/// otherwise `run(prompt, session_id)` is one unattended run. `send(reply_to,
+/// text)` sends the answer back. Returns how many were handled.
 pub fn drain(
     config_dir: &Path,
+    intercept: &mut dyn FnMut(&ReplyTo, &str) -> Option<String>,
     run: &mut dyn FnMut(&str, &str) -> Result<String, String>,
     send: &mut dyn FnMut(&ReplyTo, &str) -> Result<(), String>,
 ) -> usize {
@@ -198,6 +200,13 @@ pub fn drain(
                 String::new(),
                 Some("The app couldn't read this message.".to_string()),
             ),
+            Some((_, Some(to)))
+                if let Some(said) =
+                    intercept(&to, record["text"].as_str().unwrap_or_default().trim()) =>
+            {
+                let sent = send(&to, &said).err();
+                (said, sent)
+            }
             Some((prompt, reply)) => {
                 let tag = record["channel"].as_str().unwrap_or("channel");
                 match run(&prompt, &format!("channel-{tag}-{now}")) {
@@ -274,6 +283,7 @@ mod tests {
         let mut sent = Vec::new();
         let handled = drain(
             &dir,
+            &mut |_, _| None,
             &mut |prompt, session| {
                 prompts.push((prompt.to_string(), session.to_string()));
                 Ok(" Yes, the last run passed. ".into())
@@ -331,6 +341,7 @@ mod tests {
         let mut sends = 0;
         let handled = drain(
             &dir,
+            &mut |_, _| None,
             &mut |prompt, _| {
                 prompts.push(prompt.to_string());
                 Err("No model is set up.".into())
@@ -355,6 +366,45 @@ mod tests {
     }
 
     #[test]
+    fn an_intercepted_message_is_answered_without_a_run() {
+        let dir = temp("intercept");
+        msg_channels::queue_message(
+            &dir,
+            &Forwarded {
+                channel: ChannelKind::Discord,
+                sender: "42",
+                label: "user",
+                reply_to: "900",
+                text: " yes ABCD ",
+            },
+            2_000,
+        )
+        .unwrap();
+        let mut seen = Vec::new();
+        let mut sent = Vec::new();
+        let handled = drain(
+            &dir,
+            &mut |to, text| {
+                seen.push((to.sender.clone(), text.to_string()));
+                Some("Allowed: run step call-1".into())
+            },
+            &mut |_, _| panic!("an answered ask must not start a run"),
+            &mut |to, text| {
+                sent.push((to.to.clone(), text.to_string()));
+                Ok(())
+            },
+        );
+        assert_eq!(handled, 1);
+        assert_eq!(seen, vec![("42".to_string(), "yes ABCD".to_string())]);
+        assert_eq!(
+            sent,
+            vec![("900".to_string(), "Allowed: run step call-1".to_string())]
+        );
+        assert_eq!(recent(&dir, 1)[0]["answer"], "Allowed: run step call-1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_claim_left_by_a_crash_is_recorded_not_rerun() {
         let dir = temp("crash");
         std::fs::create_dir_all(working_dir(&dir)).unwrap();
@@ -371,6 +421,7 @@ mod tests {
         assert_eq!(
             drain(
                 &dir,
+                &mut |_, _| None,
                 &mut |_, _| {
                     runs += 1;
                     Ok(String::new())
