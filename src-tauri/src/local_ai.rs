@@ -15,7 +15,9 @@
 
 use std::path::{Path, PathBuf};
 
-use grokhub_agent::route::{local_autoconfig, local_gov, local_live, local_sidecar, local_task};
+use grokhub_agent::route::{
+    local_autoconfig, local_gov, local_live, local_perf, local_sidecar, local_task,
+};
 use grokhub_core::local_discover::{self, FoundModel, Source};
 use grokhub_core::local_governor::{Level, Rules};
 use grokhub_core::local_picker::{self, BenchCache, Bucket, CpuSimd, Memory, Pick, Profile};
@@ -27,40 +29,18 @@ use crate::local_engine::{self, DraftOffer, DraftProgress, EngineInfo};
 
 pub const FILE: &str = "local_ai.json";
 
-/// Per-state memory caps may not go past this share.
-pub const CAP_MAX_PCT: u8 = 90;
-const CAP_MIN_PCT: u8 = 10;
 const CTX_MIN: u32 = 2_048;
 const CTX_MAX: u32 = 131_072;
 const NGL_MAX: u32 = 999;
 const IDLE_MAX_MIN: u32 = 240;
 
-/// Memory share each governor state may plan for, in percent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Caps {
-    pub ramp_up: u8,
-    pub normal: u8,
-    pub throttle: u8,
-}
-
-impl Default for Caps {
-    fn default() -> Self {
-        Caps {
-            ramp_up: 90,
-            normal: 80,
-            throttle: 50,
-        }
-    }
-}
-
 /// Settings → Local AI → Advanced: engine tuning that applies whenever it's
-/// set (blank is Auto), and the game app lists. Saved under `manual`.
+/// set (blank is Auto), idle unload, and the game app lists. Saved under
+/// `manual`. Device and memory-cap rows were removed: the launcher picks the
+/// backend, and governor budgets stay fixed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Manual {
-    /// `auto`, or one of `cuda`, `rocm`, `vulkan`, `metal`, `sycl`, `cpu`.
-    pub backend: String,
     pub ngl: Option<u32>,
     pub ctx: Option<u32>,
     pub threads: Option<u32>,
@@ -68,7 +48,7 @@ pub struct Manual {
     pub kv: String,
     /// Minutes without a request before the model unloads.
     pub idle_minutes: u32,
-    pub caps: Caps,
+    /// Idle unload never fires (`local_perf` gets `u64::MAX`).
     pub never_unload: bool,
     /// Apps that never count as a game, even fullscreen.
     pub allow_apps: Vec<String>,
@@ -79,13 +59,11 @@ pub struct Manual {
 impl Default for Manual {
     fn default() -> Self {
         Manual {
-            backend: "auto".into(),
             ngl: None,
             ctx: None,
             threads: None,
             kv: "auto".into(),
             idle_minutes: 10,
-            caps: Caps::default(),
             never_unload: false,
             allow_apps: Vec::new(),
             deny_apps: Vec::new(),
@@ -152,31 +130,29 @@ fn app_list(apps: &[String]) -> Vec<String> {
 }
 
 impl LocalAiConfig {
-    /// Every number back in range: caps at most 90% of memory, `threads` at
-    /// most the machine's `max_threads`.
+    /// Every number back in range: `threads` at most the machine's
+    /// `max_threads`.
     pub fn clamped(mut self, max_threads: u32) -> Self {
         let m = &mut self.manual;
-        m.backend = one_of(
-            &m.backend,
-            &["auto", "cuda", "rocm", "vulkan", "metal", "sycl", "cpu"],
-        );
         m.kv = one_of(&m.kv, &["auto", "q8", "q4"]);
         m.ngl = m.ngl.map(|n| n.min(NGL_MAX));
         m.ctx = m.ctx.map(|c| c.clamp(CTX_MIN, CTX_MAX));
         m.threads = m.threads.map(|t| t.clamp(1, max_threads.max(1)));
         m.idle_minutes = m.idle_minutes.clamp(1, IDLE_MAX_MIN);
-        for cap in [
-            &mut m.caps.ramp_up,
-            &mut m.caps.normal,
-            &mut m.caps.throttle,
-        ] {
-            *cap = (*cap).clamp(CAP_MIN_PCT, CAP_MAX_PCT);
-        }
         m.allow_apps = app_list(&m.allow_apps);
         m.deny_apps = app_list(&m.deny_apps);
         self.own_files = paths(&self.own_files);
         self.notice_seen = app_list(&self.notice_seen);
         self
+    }
+
+    /// Seconds of idle before unload: `u64::MAX` when Never unload is on.
+    pub fn idle_unload_secs(&self) -> u64 {
+        if self.manual.never_unload {
+            u64::MAX
+        } else {
+            u64::from(self.manual.idle_minutes).saturating_mul(60)
+        }
     }
 
     /// What `local/governor.json` holds for these choices.
@@ -256,6 +232,15 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
+/// Hands Advanced choices to the live engine: launch overrides and the idle
+/// unload timeout (`local_perf` for the next start, the running sidecar at once).
+pub fn apply(config: &LocalAiConfig) {
+    local_autoconfig::set_overrides(config.overrides());
+    let secs = config.idle_unload_secs();
+    local_perf::set_idle_unload_secs(Some(secs));
+    local_sidecar::set_idle_unload_secs(secs);
+}
+
 /// Saves the choices and the governor's rules, and applies the overrides.
 pub fn save(config_dir: &Path, config: &LocalAiConfig) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
@@ -268,7 +253,7 @@ pub fn save(config_dir: &Path, config: &LocalAiConfig) -> Result<(), String> {
     }
     let rules = serde_json::to_string_pretty(&rules).map_err(|e| e.to_string())?;
     write(&gov, &rules)?;
-    local_autoconfig::set_overrides(config.overrides());
+    apply(config);
     Ok(())
 }
 
@@ -812,6 +797,8 @@ pub fn max_threads() -> u32 {
 /// Everything the page shows. Runs the hardware readers.
 pub fn view(config_dir: &Path) -> LocalAiView {
     let config = load(config_dir).clamped(max_threads());
+    // A restart must still honor Advanced: apply before the page is painted.
+    apply(&config);
     let machine = read_machine(config_dir);
     let p = machine.profile();
     let bench = BenchCache::new();

@@ -251,21 +251,15 @@ fn status_names_the_model_picked_for_this_pc_and_says_when_nothing_is_set_up() {
 }
 
 #[test]
-fn values_are_clamped_and_caps_never_pass_90_percent() {
+fn values_are_clamped_and_idle_unload_follows_never_unload() {
     let wild = LocalAiConfig {
         own_files: vec![" /m/a.gguf ".into(), "/m/a.gguf".into(), "".into()],
         manual: Manual {
-            backend: "Vulkan".into(),
             ngl: Some(5_000),
             ctx: Some(100),
             threads: Some(64),
             kv: "q4".into(),
             idle_minutes: 0,
-            caps: Caps {
-                ramp_up: 100,
-                normal: 95,
-                throttle: 0,
-            },
             never_unload: true,
             allow_apps: vec![" vlc.exe ".into(), "VLC.exe".into(), "".into()],
             deny_apps: vec!["blender".into()],
@@ -274,20 +268,13 @@ fn values_are_clamped_and_caps_never_pass_90_percent() {
     }
     .clamped(16);
     let m = &wild.manual;
-    assert_eq!((m.backend.as_str(), m.kv.as_str()), ("vulkan", "q4"));
+    assert_eq!(m.kv.as_str(), "q4");
     assert_eq!(
         (m.ngl, m.ctx, m.threads),
         (Some(999), Some(2_048), Some(16))
     );
     assert_eq!(m.idle_minutes, 1);
-    assert_eq!(
-        m.caps,
-        Caps {
-            ramp_up: 90,
-            normal: 90,
-            throttle: 10
-        }
-    );
+    assert_eq!(wild.idle_unload_secs(), u64::MAX);
     assert_eq!(m.allow_apps, ["vlc.exe"]);
     assert_eq!(
         wild.overrides(),
@@ -299,6 +286,30 @@ fn values_are_clamped_and_caps_never_pass_90_percent() {
         }
     );
     assert_eq!(wild.own_files, ["/m/a.gguf"]);
+}
+
+#[test]
+fn saving_applies_idle_minutes_and_never_unload() {
+    let dir = std::env::temp_dir().join(format!("grokhub-local-ai-idle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut config = LocalAiConfig {
+        manual: Manual {
+            idle_minutes: 3,
+            ..Manual::default()
+        },
+        ..LocalAiConfig::default()
+    };
+    save(&dir, &config).unwrap();
+    assert_eq!(local_perf::current_defaults().idle_unload_secs, 180);
+    assert_eq!(config.idle_unload_secs(), 180);
+
+    config.manual.never_unload = true;
+    save(&dir, &config).unwrap();
+    assert_eq!(local_perf::current_defaults().idle_unload_secs, u64::MAX);
+    assert_eq!(config.idle_unload_secs(), u64::MAX);
+
+    local_perf::set_idle_unload_secs(None);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -518,9 +529,11 @@ fn saving_keeps_the_cabins_unload_choice() {
 
 #[test]
 fn a_settings_file_from_before_the_draft_choice_went_away_still_loads() {
-    let old = r#"{"backend":"cuda","draft":"on","idleMinutes":5}"#;
+    // Old Device / draft / caps keys are ignored; idle still loads.
+    let old = r#"{"backend":"cuda","draft":"on","idleMinutes":5,"caps":{"rampUp":90}}"#;
     let m: Manual = serde_json::from_str(old).unwrap();
-    assert_eq!((m.backend.as_str(), m.idle_minutes), ("cuda", 5));
+    assert_eq!(m.idle_minutes, 5);
+    assert!(!m.never_unload);
 }
 
 #[test]

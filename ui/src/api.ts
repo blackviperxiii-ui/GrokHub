@@ -2585,22 +2585,13 @@ export function goalAct(acts: GoalAct[]): Promise<GoalsSaved> {
 }
 
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
-export interface LocalCaps {
-  rampUp: number;
-  normal: number;
-  throttle: number;
-}
-
 export interface LocalManual {
-  /** "auto", "cuda", "rocm", "vulkan", "metal", "sycl" or "cpu". */
-  backend: string;
   ngl: number | null;
   ctx: number | null;
   threads: number | null;
   /** "auto", "q8" or "q4". */
   kv: string;
   idleMinutes: number;
-  caps: LocalCaps;
   neverUnload: boolean;
   allowApps: string[];
   denyApps: string[];
