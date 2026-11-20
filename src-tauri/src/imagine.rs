@@ -5,7 +5,8 @@
 //! no HTTP client of its own. It signs the way the cabin did: Imagine's own
 //! sign-in first (`grokhub_agent::imagine_keychain`, the cabin's "Use a code",
 //! kept in the same keychain account), then chat's (Sign in with Grok, else
-//! the API key). A missing bearer shows the page's own sign-in.
+//! the API key). A missing bearer for stills falls through to the on-device
+//! picture model when that kit is installed; otherwise the page asks to sign in.
 //!
 //! Results land in `{config}/imagine/` and are pinned to the cabin's wall file
 //! (`{config}/imagine-wall.json`), which is the page's gallery. The wall keeps
@@ -192,13 +193,14 @@ impl grokhub_agent::ImagineSource for ChatImagine {
     }
 }
 
-/// There is something to sign the call with. Reads the keychain only; no
-/// refresh goes out.
+/// Something can make a picture: a Grok / Imagine sign-in or key, or the
+/// on-device picture model. Reads the keychain only; no refresh goes out.
 pub fn ready() -> bool {
     crate::credential::test_responses_url().is_none()
         && (own::signed_in(&Keychain).is_some()
             || crate::oauth::signed_in(&crate::oauth::Keychain).is_some()
-            || crate::credential::load_key().is_ok())
+            || crate::credential::load_key().is_ok()
+            || grokhub_agent::route::local_image::can_draw_here())
 }
 
 /// Imagine's own sign-in in progress. The device code stays here.
@@ -309,7 +311,14 @@ pub fn load(config_dir: &Path, ready: bool) -> Result<Page, String> {
 
 fn friendly(err: &str) -> String {
     let err = err.trim();
-    if err == grokhub_core::XAI_NEED_SIGNIN
+    // Chat's both-ways setup line and on-device kit messages stay as written.
+    if err == grokhub_agent::route::local_image::NO_SOURCE
+        || err == grokhub_agent::route::local_image::NOT_SET_UP
+        || err == grokhub_agent::route::local_image::NEEDS_GUARD
+        || err == grokhub_agent::route::local_image::PAUSED
+    {
+        err.to_string()
+    } else if err == grokhub_core::XAI_NEED_SIGNIN
         || err.starts_with("HTTP 401")
         || err.starts_with("HTTP 403")
     {
@@ -397,6 +406,28 @@ pub fn generate(
         made: saved.len(),
         note,
     })
+}
+
+/// A Make from the page: Grok Imagine when signed in, else the on-device
+/// picture model for stills when that kit is installed (same fallthrough as
+/// chat). Videos still need a sign-in.
+pub fn make(
+    config_dir: &Path,
+    req: &Request,
+    stop: &dyn Fn() -> bool,
+    now_ms: u64,
+) -> Result<Made, String> {
+    let run = |bearer: &str| {
+        let api = grokhub_agent::imagine_client(bearer);
+        generate(config_dir, req, api.as_ref(), stop, now_ms)
+    };
+    match bearer() {
+        Ok((bearer, own)) => retry_refused(own, run(&bearer), shared_bearer, run),
+        // Signed out: stills may draw here. `run_media_tool` falls through to
+        // the picture model; with neither source it names both ways.
+        Err(_) if req.kind == Kind::Image => run(""),
+        Err(err) => Err(err),
+    }
 }
 
 /// Hard link where the disk allows (no second copy), else a copy.
@@ -1065,7 +1096,8 @@ mod tests {
             NOW,
         )
         .unwrap_err();
-        assert_eq!(err, "Sign in to Imagine first.");
+        // Signed out and no picture model: name both ways to set one up.
+        assert_eq!(err, grokhub_agent::route::local_image::NO_SOURCE);
         let refused = FakeImagine {
             fail: Some("HTTP 403 {\"error\":\"scope\"}"),
             ..Default::default()
@@ -1092,6 +1124,27 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, "image blocked by moderation");
+    }
+
+    #[test]
+    fn make_without_a_bearer_names_both_ways_when_nothing_can_draw() {
+        let d = dirs("make-none");
+        let err = make(
+            &d.config,
+            &req("a cabin", 1, Kind::Image),
+            &|| false,
+            NOW,
+        )
+        .unwrap_err();
+        assert_eq!(err, grokhub_agent::route::local_image::NO_SOURCE);
+        let err = make(
+            &d.config,
+            &req("a cabin", 1, Kind::Video),
+            &|| false,
+            NOW,
+        )
+        .unwrap_err();
+        assert_eq!(err, NEED_SIGNIN);
     }
 
     fn made(n: usize) -> Made {

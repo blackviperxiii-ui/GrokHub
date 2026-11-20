@@ -181,8 +181,17 @@ fn group_turns(lines: &[history::Line]) -> Vec<Group> {
 }
 
 fn service_status(has_key: bool, config_dir: &Path) -> Vec<String> {
+    // A provider key or a model on this PC can answer without xAI — same
+    // sources as `ai_ready`, minus the xAI sign-in/key already in `has_key`.
+    let other_ai = grokhub_agent::route::local::installed()
+        || !grokhub_agent::route::providers::usable(
+            config_dir,
+            grokhub_agent::route::providers::call_data(false),
+        )
+        .is_empty();
     let mut doctor = grokhub_core::doctor_lines(
         has_key,
+        other_ai,
         config_dir.join("memory").is_dir(),
         grokhub_core::HUB_KIND,
     );
