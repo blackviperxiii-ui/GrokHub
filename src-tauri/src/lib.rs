@@ -3111,6 +3111,12 @@ fn export_personal() -> Result<String, String> {
     memory::export_to(&dir)
 }
 
+/// Updates the Obsidian-friendly wiki of the plain memory. Desktop only.
+#[tauri::command]
+fn export_memory_wiki() -> Result<String, String> {
+    memory::export_wiki()
+}
+
 /// Deletes every learned line for good. Desktop only; the page asks first.
 #[tauri::command]
 fn wipe_personal(state: State<'_, ShellState>) -> Result<memory::Wiped, String> {
@@ -8839,6 +8845,7 @@ pub fn run() {
             pause_memory_row,
             add_personal_fact,
             export_personal,
+            export_memory_wiki,
             wipe_personal,
             get_memory_files,
             save_memory_file,

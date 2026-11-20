@@ -43,7 +43,7 @@ pub(crate) fn refuse_tool(session: &str, name: &str, args: &Value) -> Option<&'s
     };
     // A self tool also answers to its server-prefixed name.
     match crate::self_manage::self_tool(name).unwrap_or(name) {
-        "know_me_tags" => Some(NO_READS),
+        "know_me_tags" | "session_search" => Some(NO_READS),
         "read_file" if on_memory() => Some(NO_READS),
         "write" | "search_replace" if on_memory() => Some(NO_WRITES),
         _ => None,

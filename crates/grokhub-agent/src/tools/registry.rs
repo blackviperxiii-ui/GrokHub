@@ -673,6 +673,9 @@ mod tests {
     /// Adding the deferred `run_tool_script` PTC runner index line added 68 to
     /// Chat/Agent (11_837 → 11_905), Plan/Ask (7_614 → 7_682) and background
     /// (10_317 → 10_385).
+    /// The deferred `session_search` index line (no-model search over past
+    /// chats) added 75 to Chat/Agent (11_905 → 11_980) and background
+    /// (10_385 → 10_460), and 73 to Plan/Ask (7_682 → 7_755).
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -685,27 +688,28 @@ mod tests {
                 // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes,
                 // +334 for eager look_at_screen,
                 // +57 for the merge_subagent_work index line, +49 for spawn_subagent's redo,
-                // +39 for its review type, +68 for the deferred run_tool_script index line.
-                11_905,
+                // +39 for its review type, +68 for the deferred run_tool_script index line,
+                // +75 for the deferred session_search index line.
+                11_980,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                11_905,
+                11_980,
             ),
             (
                 "plan/ask",
                 profile(PermMode::Ask, true, true),
                 full,
                 // +506 for web_search: a read-only session can still look things up (LO-51).
-                7_682,
+                7_755,
             ),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                10_385,
+                10_460,
             ),
         ];
         for (label, gate, set, budget) in cases {

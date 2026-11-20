@@ -504,6 +504,7 @@ pub struct HfFileRow {
 fn hf_get_json(url: &str) -> Result<String, String> {
     use std::io::Read;
     use std::time::Duration;
+    grokhub_core::offline::refuse()?;
     let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
         connect: Duration::from_secs(15),
         read: Some(Duration::from_secs(30)),

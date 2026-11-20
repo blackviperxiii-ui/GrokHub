@@ -20,6 +20,7 @@ pub(crate) mod ptc;
 mod read_file;
 pub(crate) mod registry;
 mod search_replace;
+mod session_search;
 pub(crate) mod set;
 pub(crate) mod shell;
 mod show_panel;
@@ -347,6 +348,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "diagnose" => crate::repair::tool_run(args),
         local_ai::STATUS => local_ai::status(args),
         models_check::NAME => models_check::run(args),
+        session_search::NAME => session_search::run(ctx.session, args),
         ptc::NAME => ptc::run(ctx, args),
         mods::SEARCH | mods::DETAIL | mods::INSTALLED => mods::run(name, args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),

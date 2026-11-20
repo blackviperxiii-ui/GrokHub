@@ -31,6 +31,7 @@ const READONLY: &[&str] = &[
     "diagnose",
     "local_ai_status",
     "models_check",
+    "session_search",
     "mods_search",
     "mods_detail",
     "mods_installed",

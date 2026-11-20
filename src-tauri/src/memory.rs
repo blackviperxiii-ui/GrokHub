@@ -205,6 +205,32 @@ pub fn export_to(dir: &Path) -> Result<String, String> {
     Ok(path.display().to_string())
 }
 
+/// Bring the Obsidian-friendly wiki of the plain memory up to date
+/// (`amr/wiki/`). Returns the page's line. Private lines never get a page.
+pub fn export_wiki() -> Result<String, String> {
+    wiki_line(&grokhub_agent::amr_store())
+}
+
+fn wiki_line(store: &grokhub_core::amr::AmrStore) -> Result<String, String> {
+    let done = store.export_wiki().map_err(|e| format!("{e:?}"))?;
+    let pages = match done.pages {
+        1 => "1 page".to_string(),
+        n => format!("{n} pages"),
+    };
+    let mut line = format!(
+        "The wiki in {} has {pages} ({} changed, {} removed).",
+        store.wiki_dir().display(),
+        done.written,
+        done.removed
+    );
+    match done.private {
+        0 => {}
+        1 => line.push_str(" 1 private line stays out of it."),
+        n => line.push_str(&format!(" {n} private lines stay out of it.")),
+    }
+    Ok(line)
+}
+
 /// What Wipe did, for the page's line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1265,6 +1291,42 @@ mod tests {
             workspace,
             _guard: grokhub_agent::perm::ConfigGuard::set(&config),
         }
+    }
+
+    #[test]
+    fn the_wiki_line_counts_pages_and_private_lines() {
+        let root = std::env::temp_dir().join(format!("grokhub-shell-wiki-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = grokhub_core::amr::AmrStore::at(root.join("amr"));
+        store.init().unwrap();
+        let draft = |id: &str, body: &str| grokhub_core::amr::NodeDraft {
+            id: id.into(),
+            node_type: grokhub_core::amr::NodeType::Fact,
+            created: "2026-10-07T00:00:00Z".into(),
+            updated: "2026-10-07T00:00:00Z".into(),
+            source: "user".into(),
+            confidence: 0.9,
+            tags: Vec::new(),
+            body: body.into(),
+            sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
+        };
+        store
+            .remember(&draft("dock-layout", "Berth 4 is ours."))
+            .unwrap();
+        let dir = store.wiki_dir().display().to_string();
+        assert_eq!(
+            wiki_line(&store).unwrap(),
+            format!("The wiki in {dir} has 1 page (1 changed, 0 removed).")
+        );
+        store
+            .remember(&draft("boat-refit", "Refit this winter."))
+            .unwrap();
+        assert_eq!(
+            wiki_line(&store).unwrap(),
+            format!("The wiki in {dir} has 2 pages (1 changed, 0 removed).")
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A preview (`/forget <topic>`, `/memory prune`) runs on a copy of the

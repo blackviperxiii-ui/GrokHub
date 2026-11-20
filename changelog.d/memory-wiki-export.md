@@ -1,0 +1,1 @@
+- Memory: Update wiki writes your plain memories as linked Markdown pages (one page per memory, links both ways, an index by type) for Obsidian or any notes app. Private memories never get a page, and only changed pages are rewritten.
