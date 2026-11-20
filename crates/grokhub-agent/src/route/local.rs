@@ -990,11 +990,12 @@ pub fn serve_request(
         super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
         req.effort.as_deref(),
     );
-    // No launch carries a picture reader (`--mmproj`) yet, and a server
-    // without one refuses any request with a picture in it. The picture
-    // stays in the chat, so each later turn would fail too: the model is
-    // told a picture was there instead.
-    let blind = super::local_vision::strip_images(&mut req.input) > 0;
+    // When the running sidecar carries `--mmproj`, keep images (transcoding
+    // WebP/non-PNG/JPEG payloads to PNG for llama.cpp's stb_image). Otherwise
+    // swap each picture for `BLIND_NOTE` so the server doesn't refuse the turn.
+    let has_vision = super::local_sidecar::sidecar_has_vision();
+    let vision = super::local_vision::prepare_images(&mut req.input, has_vision);
+    let blind = vision.stripped > 0 && vision.kept == 0;
     // The device window is often 4k to 16k: send only what fits, with room to
     // answer. With or without tools, so a long chat is trimmed on the way
     // (the oldest turns first) instead of being refused for its length.
