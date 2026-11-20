@@ -337,8 +337,9 @@ pub fn call_model(
     let mut active_provider = decision.route.provider.clone();
     let mut active_decision = decision;
     let mut tried: Vec<String> = Vec::new();
+    let mut short_retried = false;
     let mut out = Err(ClientError::Protocol("no route".into()));
-    for attempt in 0..3 {
+    for attempt in 0..4 {
         tried.push(sent.model.clone());
         let step = if on_device {
             let r = local_live::routing_reason(&active_decision.route.rule_ids, None);
@@ -366,8 +367,22 @@ pub fn call_model(
             }
             Err(err)
                 if !on_device
+                    && !short_retried
+                    && live::short_retry_after_wait(&err).is_some() =>
+            {
+                let wait = live::short_retry_after_wait(&err).unwrap();
+                if live::wait_short_retry(wait, cancel) {
+                    short_retried = true;
+                    tried.pop();
+                    continue;
+                }
+                out = Err(ClientError::Cancelled);
+                break;
+            }
+            Err(err)
+                if !on_device
                     && allow_failover
-                    && attempt < 2
+                    && attempt < 3
                     && ((on_provider && live::provider_fallible(&err))
                         || (!on_provider && live::xai_cant_answer(&err))) =>
             {
@@ -397,6 +412,7 @@ pub fn call_model(
                     on_provider = next_provider;
                     active_provider = next.route.provider.clone();
                     active_decision = next;
+                    short_retried = false;
                     continue;
                 }
                 if !on_provider
@@ -412,6 +428,7 @@ pub fn call_model(
                         sent.model = stand_in;
                         on_device = false;
                         on_provider = true;
+                        short_retried = false;
                         continue;
                     }
                 }
@@ -425,6 +442,7 @@ pub fn call_model(
                     on_device = true;
                     on_provider = false;
                     active_provider = local::PROVIDER_LOCAL.to_string();
+                    short_retried = false;
                     continue;
                 }
                 out = Err(err);
