@@ -22,7 +22,6 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
 
 /// The image when `image` isn't set. It has bash, coreutils and nothing else.
 pub const DEFAULT_IMAGE: &str = "docker.io/library/debian:stable-slim";
@@ -85,7 +84,7 @@ pub fn detect() -> Option<Runtime> {
 /// per run; a runtime that doesn't answer in a few seconds counts as missing.
 #[cfg(unix)]
 pub fn detect() -> Option<Runtime> {
-    static FOUND: OnceLock<Option<Runtime>> = OnceLock::new();
+    static FOUND: std::sync::OnceLock<Option<Runtime>> = std::sync::OnceLock::new();
     FOUND
         .get_or_init(|| {
             let (uid, _) = ids();
