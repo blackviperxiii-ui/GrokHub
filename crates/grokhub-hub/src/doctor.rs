@@ -27,6 +27,8 @@ const SECRET_FILES: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Facts {
     pub authed: bool,
+    /// A provider key or local model can answer without xAI.
+    pub other_ai: bool,
     pub memory_ok: bool,
     /// The body of `GET /v1/health` on the local hub, if it answered.
     pub hub_health: Option<String>,
@@ -46,7 +48,8 @@ pub struct Facts {
 /// The lines `--doctor` prints and whether all of them are ok.
 pub fn report(facts: &Facts) -> (String, bool) {
     let kind = hub_kind_from_health(facts.hub_health.as_deref());
-    let mut lines: Vec<DoctorLine> = doctor_lines(facts.authed, facts.memory_ok, &kind);
+    let mut lines: Vec<DoctorLine> =
+        doctor_lines(facts.authed, facts.other_ai, facts.memory_ok, &kind);
     lines.extend(doctor_extras(None, facts.skills));
     lines.extend(facts.perms.iter().cloned());
     lines.extend(facts.remote.iter().cloned());
@@ -145,6 +148,7 @@ pub fn gather(dir: &Path, port: u16, fix: bool) -> Facts {
     Facts {
         // The cabin file first, so the keychain is only asked when needed.
         authed: cabin_auth(dir) || shell_auth(),
+        other_ai: other_ai(dir),
         memory_ok: std::fs::create_dir_all(dir.join("memory")).is_ok(),
         hub_health: hub_health(dir, port),
         skills: skill_count(dir),
@@ -154,6 +158,17 @@ pub fn gather(dir: &Path, port: u16, fix: bool) -> Facts {
         mcp: mcp_lines(dir),
         updater: updater_line(),
     }
+}
+
+/// A provider key the user allowed, or a model on this PC — enough to answer
+/// without xAI (same sources as the shell's `ai_ready`, minus xAI itself).
+fn other_ai(dir: &Path) -> bool {
+    grokhub_agent::route::local::installed()
+        || !grokhub_agent::route::providers::usable(
+            dir,
+            grokhub_agent::route::providers::call_data(false),
+        )
+        .is_empty()
 }
 
 /// Safe repairs only: tighten the config dir and known secret files. Never
@@ -486,6 +501,7 @@ mod tests {
     fn empty_facts() -> Facts {
         Facts {
             authed: false,
+            other_ai: false,
             memory_ok: true,
             hub_health: None,
             skills: 0,
@@ -513,6 +529,19 @@ mod tests {
                 text: "updater signature key present (minisign)".into(),
             },
         }
+    }
+
+    #[test]
+    fn other_ai_without_xai_is_ok_on_the_auth_row() {
+        let mut facts = empty_facts();
+        facts.other_ai = true;
+        facts.hub_health = Some(format!(r#"{{"ok":true,"kind":"{}"}}"#, grokhub_core::HUB_KIND));
+        let (text, ok) = report(&facts);
+        assert!(ok, "{text}");
+        assert!(
+            text.contains("ok  xAI auth missing — another AI source can answer"),
+            "{text}"
+        );
     }
 
     #[test]

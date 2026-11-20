@@ -6259,20 +6259,8 @@ async fn imagine_generate(
         kind,
     };
     off_main(move || {
-        let (bearer, own) = imagine::bearer()?;
         let run = imagine::start()?;
-        let make = |bearer: &str| {
-            let api = grokhub_agent::imagine_client(bearer);
-            imagine::generate(
-                &dir,
-                &req,
-                api.as_ref(),
-                &|| run.stopped(),
-                grokhub_core::now_ms(),
-            )
-        };
-        let first = make(&bearer);
-        imagine::retry_refused(own, first, imagine::shared_bearer, make).map(|mut made| {
+        imagine::make(&dir, &req, &|| run.stopped(), grokhub_core::now_ms()).map(|mut made| {
             made.page = imagine::with_account(made.page);
             made
         })
