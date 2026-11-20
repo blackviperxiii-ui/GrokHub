@@ -194,6 +194,22 @@ export function Channels() {
           Add webhook
         </button>
       </form>
+      {shown.recent.length > 0 && (
+        <>
+          <h3>Recent answers</h3>
+          <ul className="rows" aria-label="Recent answers">
+            {shown.recent.map((r) => (
+              <li key={`${r.doneMs}-${r.source}-${r.from}`}>
+                <strong>
+                  {r.source} · {r.from}
+                </strong>
+                {r.text && <p className="note">{r.text}</p>}
+                {r.problem ? <p className="note warn">{r.problem}</p> : <p>{r.answer}</p>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       <StatusLine note={note} />
     </section>
   );

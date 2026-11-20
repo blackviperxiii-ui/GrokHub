@@ -24,6 +24,7 @@ const none: Shape = {
   pending: [],
   paired: [],
   webhooks: [],
+  recent: [],
   newSecret: null,
   status: null,
 };
@@ -117,5 +118,23 @@ describe("Phone and chat apps", () => {
     expect(api.removeChannelWebhook).toHaveBeenCalledWith("deploys");
     expect(await screen.findByText("Removed deploys. Its secret no longer works.")).toBeTruthy();
     expect(screen.queryByText(secret)).toBeNull();
+  });
+
+  it("lists recent answers and their problems", async () => {
+    api.getChannels.mockResolvedValue({
+      ...none,
+      recent: [
+        { source: "Webhook", from: "deploys", text: "", answer: "", problem: "No model is set up.", doneMs: 6 },
+        { source: "Telegram", from: "@user", text: "is the build done?", answer: "Yes, it passed.", problem: null, doneMs: 5 },
+      ],
+    });
+    render(<Channels />);
+    const list = await screen.findByRole("list", { name: "Recent answers" });
+    expect(list.querySelectorAll("li").length).toBe(2);
+    expect(screen.getByText("Webhook · deploys")).toBeTruthy();
+    expect(screen.getByText("No model is set up.")).toBeTruthy();
+    expect(screen.getByText("Telegram · @user")).toBeTruthy();
+    expect(screen.getByText("is the build done?")).toBeTruthy();
+    expect(screen.getByText("Yes, it passed.")).toBeTruthy();
   });
 });

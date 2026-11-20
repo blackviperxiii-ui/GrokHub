@@ -1,0 +1,1 @@
+- Messages from paired Telegram and Discord chats and signed webhooks are now answered: each one gets its own read-only background run, a chat's answer goes back to it while the sender is still paired, and the Phone and chat apps page lists the recent answers and any problems.

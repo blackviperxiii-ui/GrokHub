@@ -34,11 +34,24 @@ export interface ChannelWebhook {
   path: string;
 }
 
+/** A message or webhook the assistant already answered. */
+export interface ChannelRecent {
+  source: "Telegram" | "Discord" | "Webhook" | "Unknown";
+  /** The sender's label or the webhook's name. */
+  from: string;
+  text: string;
+  answer: string;
+  problem: string | null;
+  doneMs: number;
+}
+
 export interface Channels {
   channels: ChannelState[];
   pending: PendingCode[];
   paired: PairedSender[];
   webhooks: ChannelWebhook[];
+  /** Newest first. */
+  recent: ChannelRecent[];
   /** A new webhook's secret, only in the answer that made it. */
   newSecret: string | null;
   /** What the last step did. */
