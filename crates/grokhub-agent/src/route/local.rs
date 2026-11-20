@@ -108,11 +108,20 @@ pub fn probe_ollama_num_ctx(prefer: Option<&str>, ceiling: Option<u64>) -> Optio
         public_only: false,
         ..Default::default()
     });
+    // OLLAMA_HOST may name another machine, so each read runs the guard
+    // (a model name only, no user data); loopback goes with no log line.
+    let guard = |url: &str| {
+        crate::harness::guard_quiet(
+            &crate::perm::config_dir(),
+            &crate::harness::EgressReq::new(url, &[]),
+        )
+    };
     apply_ollama_num_ctx(
         host.as_deref(),
         prefer,
         ceiling,
         |url| {
+            guard(url)?;
             let resp = agent
                 .get(url)
                 .header("user-agent", crate::USER_AGENT)
@@ -121,6 +130,7 @@ pub fn probe_ollama_num_ctx(prefer: Option<&str>, ceiling: Option<u64>) -> Optio
             resp.into_string().map_err(|e| e.to_string())
         },
         |url, body| {
+            guard(url)?;
             let resp = agent
                 .post(url)
                 .header("user-agent", crate::USER_AGENT)

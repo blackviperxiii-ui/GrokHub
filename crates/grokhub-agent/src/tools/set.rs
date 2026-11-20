@@ -176,6 +176,7 @@ const BACKGROUND_TOOLS: &[&str] = &[
     "scheduler_list",
     "skill",
     "diagnose",
+    "run_tool_script",
     "todo_write",
     "report_findings",
     "spawn_subagent",

@@ -36,6 +36,7 @@ const READONLY: &[&str] = &[
     "mods_installed",
     // Checks a panel spec for the chat to draw; only on with generative UI.
     "show_panel",
+    "run_tool_script",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
