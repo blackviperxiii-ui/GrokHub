@@ -1,0 +1,1 @@
+- Local AI: the on-device model server now ends with the app. On Linux it gets a parent-death signal, and on Windows it joins a kill-on-close job, so a killed or crashed app no longer leaves it holding GPU memory.

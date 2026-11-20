@@ -505,8 +505,8 @@ fn spawn_llama(
     if run.low_priority {
         super::local_flags::below_normal(&mut cmd);
     }
-    let child = cmd
-        .spawn()
+    // Tied to the app, so a killed app doesn't leave it holding GPU memory.
+    let child = super::local_tie::spawn(cmd)
         .map_err(|e| format!("could not start local model server: {e}"))?;
     if run.low_priority {
         super::local_flags::lower_priority(child.id());
