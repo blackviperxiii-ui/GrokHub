@@ -405,6 +405,9 @@ pub(crate) fn run_adoptable(
     let handover = handover
         .as_mut()
         .map(|f| f as &mut dyn FnMut(BgProc) -> Result<(String, Feed), BgProc>);
+    // Snapshot referenced workspace files before potentially mutating shell
+    // commands so `/rewind step` can undo shell edits/deletions (Card 957).
+    crate::file_checkpoint::before_shell(&cwd, &command);
     // The output is fenced first; the sandbox's own note stays outside the fence.
     let result = spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref(), handover)
         .map(|o| fence_if_fetched(o, let_out));
