@@ -1,0 +1,1 @@
+Connectors has a new Phone and chat apps section. Paste a Telegram or Discord bot token, and the app checks it with the service, keeps it in the system keychain, and listens for messages (again at every launch). Strangers who message the bot get a pairing code. Type that code here to pair them, and unpair anyone at any time.

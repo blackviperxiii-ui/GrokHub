@@ -23,6 +23,7 @@ pub mod card_chat;
 mod catalog_refresh;
 pub mod change_rows;
 pub mod changes;
+pub mod channels;
 #[cfg(desktop)]
 pub mod chat_review;
 pub mod chat_tabs;
@@ -431,6 +432,73 @@ fn save_settings(
 #[tauri::command]
 fn get_bot_desktop(state: State<'_, ShellState>) -> bot_screen::BotDesktopView {
     bot_screen::view(current(&state).bot_desktop, None)
+}
+
+/// Connectors → Phone and chat apps.
+#[tauri::command]
+fn get_channels(state: State<'_, ShellState>) -> channels::ChannelsView {
+    channels::view(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        None,
+    )
+}
+
+/// Checks a bot token with Telegram or Discord, saves it in the keychain and
+/// starts listening.
+#[tauri::command]
+async fn connect_channel(
+    state: State<'_, ShellState>,
+    kind: grokhub_core::msg_channels::ChannelKind,
+    token: String,
+) -> Result<channels::ChannelsView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        channels::connect(
+            &dir,
+            &grokhub_agent::channels_net::os_keychain(),
+            kind,
+            &token,
+        )
+    })
+    .await?
+}
+
+#[tauri::command]
+async fn disconnect_channel(
+    state: State<'_, ShellState>,
+    kind: grokhub_core::msg_channels::ChannelKind,
+) -> Result<channels::ChannelsView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || channels::disconnect(&dir, &grokhub_agent::channels_net::os_keychain(), kind))
+        .await?
+}
+
+/// The code a stranger was sent: they count as paired from now on.
+#[tauri::command]
+fn approve_channel_code(
+    state: State<'_, ShellState>,
+    code: String,
+) -> Result<channels::ChannelsView, String> {
+    channels::approve(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        &code,
+    )
+}
+
+#[tauri::command]
+fn unpair_channel_sender(
+    state: State<'_, ShellState>,
+    kind: grokhub_core::msg_channels::ChannelKind,
+    sender: String,
+) -> Result<channels::ChannelsView, String> {
+    channels::unpair(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        kind,
+        &sender,
+    )
 }
 
 /// Settings → General → Your browser.
@@ -8227,6 +8295,13 @@ pub fn run() {
                         let _ = bot_screen::apply(&dir, true);
                     });
                 }
+                // Connected Telegram and Discord bots listen again.
+                {
+                    let dir = config_dir.clone();
+                    std::thread::spawn(move || {
+                        channels::start_saved(&dir, &grokhub_agent::channels_net::os_keychain());
+                    });
+                }
                 episode::sync_cua(
                     loaded.desktop_control && capabilities::current().desktop_control,
                     episode::cua_flag(&config_dir),
@@ -8881,6 +8956,11 @@ pub fn run() {
             set_bot_desktop,
             bot_desktop_frame,
             get_browser_attach,
+            get_channels,
+            connect_channel,
+            disconnect_channel,
+            approve_channel_code,
+            unpair_channel_sender,
             save_browser_attach,
             #[cfg(desktop)]
             os_extras::set_summon_hotkey,
@@ -9118,6 +9198,7 @@ fn quit_steps() {
     grokhub_agent::route::local_sidecar::stop_global();
     // Its X server would outlive the app otherwise.
     bot_screen::stop();
+    channels::stop_all();
 }
 
 /// A Windows update ends the process from inside the updater (it starts the
@@ -9360,6 +9441,7 @@ mod command_tests {
             "code_runs::stop();",
             "grokhub_agent::route::local_sidecar::stop_global();",
             "bot_screen::stop();",
+            "channels::stop_all();",
         ] {
             assert!(steps.contains(step), "{step} in {steps}");
         }

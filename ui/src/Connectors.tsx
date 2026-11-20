@@ -11,6 +11,7 @@ import {
   type ConnectorsChanged,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { Channels } from "./Channels";
 import { ConnectorAdd } from "./ConnectorAdd";
 import { Github } from "./Github";
 import { Hooks } from "./Hooks";
@@ -193,6 +194,7 @@ export function Connectors({ remote = false }: { remote?: boolean }) {
         ))}
       </ul>
       {!remote && <Github />}
+      {!remote && <Channels />}
       {!remote && <Hooks />}
     </section>
   );
