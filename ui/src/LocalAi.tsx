@@ -53,18 +53,6 @@ function engineButton(state: LocalEngineEventState, idle: string): string {
   return idle;
 }
 
-const BACKENDS: [string, string][] = [
-  ["auto", "Auto"],
-  ["cuda", "CUDA (NVIDIA)"],
-  ["rocm", "ROCm (AMD)"],
-  ["vulkan", "Vulkan"],
-  ["metal", "Metal (Apple)"],
-  ["sycl", "SYCL (Intel)"],
-  ["cpu", "CPU only"],
-];
-
-const CAP_MAX = 90;
-
 /** Blank is Auto. */
 function numberOrNull(text: string): number | null {
   const n = Number.parseInt(text, 10);
@@ -544,16 +532,6 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
           <h3>Engine</h3>
           <div className="local-grid">
             <label>
-              Device
-              <select value={manual.backend} onChange={(e) => setManual({ backend: e.target.value })}>
-                {BACKENDS.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
               GPU layers
               <input
                 inputMode="numeric"
@@ -601,32 +579,6 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
           <Toggle checked={manual.neverUnload} onChange={(on) => setManual({ neverUnload: on })}>
             Never unload the model
           </Toggle>
-          <h3>Memory caps (up to {CAP_MAX}%)</h3>
-          <div className="local-grid">
-            {(
-              [
-                ["rampUp", "Idle"],
-                ["normal", "Normal"],
-                ["throttle", "Busy"],
-              ] as const
-            ).map(([key, label]) => (
-              <label key={key}>
-                {label}
-                <input
-                  inputMode="numeric"
-                  value={manual.caps[key]}
-                  onChange={(e) =>
-                    setManual({
-                      caps: {
-                        ...manual.caps,
-                        [key]: Math.min(CAP_MAX, numberOrNull(e.target.value) ?? 10),
-                      },
-                    })
-                  }
-                />
-              </label>
-            ))}
-          </div>
           <h3>Apps</h3>
           <label>
             Never pause for these apps (one per line)

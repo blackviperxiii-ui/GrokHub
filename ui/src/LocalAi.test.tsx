@@ -118,13 +118,11 @@ function config(over: Partial<LocalAiConfig> = {}): LocalAiConfig {
     useIdleTime: true,
     throttleOnBattery: true,
     manual: {
-      backend: "auto",
       ngl: null,
       ctx: null,
       threads: null,
       kv: "auto",
       idleMinutes: 10,
-      caps: { rampUp: 90, normal: 80, throttle: 50 },
       neverUnload: false,
       allowApps: [],
       denyApps: [],
@@ -632,19 +630,20 @@ describe("LocalAi", () => {
     expect(api.saveLocalAi).toHaveBeenCalledWith(config());
   });
 
-  it("Advanced values save with caps held to 90% and app lists by line", async () => {
+  it("Advanced values save idle unload, never unload, and app lists by line", async () => {
     const v = PROFILES["16 GB GPU"];
     api.getLocalAi.mockResolvedValue(v);
     api.saveLocalAi.mockResolvedValue(v);
     render(<LocalAi />);
     await openAdvanced();
-    await userEvent.selectOptions(screen.getByLabelText("Device"), "vulkan");
+    expect(screen.queryByLabelText("Device")).toBeNull();
+    expect(screen.queryByText(/Memory caps/)).toBeNull();
     await userEvent.type(screen.getByLabelText("GPU layers"), "20");
     await userEvent.type(screen.getByLabelText("Context"), "16384");
     await userEvent.selectOptions(screen.getByLabelText("KV cache"), "q4");
-    const idle = screen.getByLabelText("Idle");
-    await userEvent.clear(idle);
-    await userEvent.type(idle, "95");
+    const idle = screen.getByLabelText("Unload after idle (minutes)");
+    await userEvent.tripleClick(idle);
+    await userEvent.keyboard("3");
     await userEvent.click(screen.getByLabelText("Never unload the model"));
     await userEvent.type(
       screen.getByLabelText(/Never pause for these apps/),
@@ -656,13 +655,11 @@ describe("LocalAi", () => {
     expect(api.saveLocalAi).toHaveBeenCalledWith(
       config({
         manual: {
-          backend: "vulkan",
           ngl: 20,
           ctx: 16384,
           threads: null,
           kv: "q4",
-          idleMinutes: 10,
-          caps: { rampUp: 90, normal: 80, throttle: 50 },
+          idleMinutes: 3,
           neverUnload: true,
           allowApps: ["vlc.exe", "mpv"],
           denyApps: ["blender"],
