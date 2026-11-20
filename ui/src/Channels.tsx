@@ -1,9 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
+  addChannelWebhook,
   approveChannelCode,
   connectChannel,
   disconnectChannel,
   getChannels,
+  removeChannelWebhook,
   unpairChannelSender,
   type ChannelKind,
   type Channels as Shape,
@@ -15,6 +17,8 @@ const NAMES: Record<ChannelKind, string> = { telegram: "Telegram", discord: "Dis
 
 export const CHANNELS_NOTE = `Message ${PRODUCT_NAME} from your phone through a bot you made. Anyone else who messages the bot gets a pairing code and nothing more, until you enter that code here.`;
 
+export const WEBHOOKS_NOTE = `A service you use (a deploy, a form, a store) can trigger ${PRODUCT_NAME} with a signed POST. It sends X-Webhook-Timestamp (Unix seconds) and X-Webhook-Signature: sha256= then the HMAC-SHA256 of "timestamp.body" with the secret. The hub listens while this computer is shared on the Devices page.`;
+
 const TOKEN_HINT: Record<ChannelKind, string> = {
   telegram: "Paste the token BotFather gave you.",
   discord: "Paste the token from the Bot page of your Discord application.",
@@ -25,6 +29,8 @@ export function Channels() {
   const [shown, setShown] = useState<Shape | null>(null);
   const [tokens, setTokens] = useState<Record<ChannelKind, string>>({ telegram: "", discord: "" });
   const [code, setCode] = useState("");
+  const [hookName, setHookName] = useState("");
+  const [secret, setSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { note, ok, fail } = useNote();
 
@@ -40,6 +46,7 @@ export function Channels() {
       const next = await step();
       if (!next) return false;
       setShown(next);
+      setSecret(next.newSecret);
       ok(next.status);
       return true;
     } catch (err) {
@@ -56,6 +63,11 @@ export function Channels() {
     // The token leaves the page's state as soon as it is sent.
     setTokens((t) => ({ ...t, [kind]: "" }));
     if (token) await act(() => connectChannel(kind, token));
+  }
+
+  async function addHook(event: FormEvent) {
+    event.preventDefault();
+    if (await act(() => addChannelWebhook(hookName.trim()))) setHookName("");
   }
 
   async function approve(event: FormEvent) {
@@ -140,6 +152,48 @@ export function Channels() {
           ))}
         </ul>
       )}
+      <h3>Webhooks</h3>
+      <p className="note">{WEBHOOKS_NOTE}</p>
+      {shown.webhooks.length > 0 && (
+        <ul className="rows" aria-label="Webhooks">
+          {shown.webhooks.map((h) => (
+            <li key={h.name} className="card-buttons">
+              <span>
+                {h.name} <code>POST {h.path}</code>
+              </span>
+              <button
+                type="button"
+                className="quiet danger"
+                disabled={busy}
+                aria-label={`Remove webhook ${h.name}`}
+                onClick={() => void act(() => removeChannelWebhook(h.name))}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {secret && (
+        <p className="note warn" role="group" aria-label="New webhook secret">
+          Secret: <code>{secret}</code>
+        </p>
+      )}
+      <form className="card-buttons" onSubmit={(e) => void addHook(e)}>
+        <label>
+          Webhook name
+          <input
+            value={hookName}
+            onChange={(e) => setHookName(e.target.value)}
+            placeholder="deploys"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </label>
+        <button type="submit" disabled={busy || !hookName.trim()}>
+          Add webhook
+        </button>
+      </form>
       <StatusLine note={note} />
     </section>
   );

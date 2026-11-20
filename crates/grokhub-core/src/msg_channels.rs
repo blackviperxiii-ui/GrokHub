@@ -338,6 +338,71 @@ pub fn load_webhooks(config_dir: &Path) -> Vec<Webhook> {
         .unwrap_or_default()
 }
 
+/// Write `text` to `path` so only this user can read it: the webhooks file
+/// holds every secret.
+fn write_private(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_file_name(format!(".webhooks.json.{}.tmp", std::process::id()));
+    crate::state::write_private_synced(&tmp, text.as_bytes()).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(windows)]
+    crate::win_acl::restrict_user_only(path);
+    Ok(())
+}
+
+pub fn save_webhooks(config_dir: &Path, hooks: &[Webhook]) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(hooks).map_err(|e| e.to_string())?;
+    write_private(&webhooks_path(config_dir), &text)
+}
+
+/// A new webhook with a fresh secret. The secret is handed back this once,
+/// for the sender's settings; the app never shows it again.
+pub fn add_webhook(config_dir: &Path, name: &str) -> Result<Webhook, String> {
+    let name = name.trim().to_ascii_lowercase();
+    if !valid_name(&name) {
+        return Err("A webhook name is 1 to 40 of a-z, 0-9 and -.".into());
+    }
+    let mut hooks = load_webhooks(config_dir);
+    if hooks.iter().any(|h| h.name == name) {
+        return Err(format!("There's already a webhook named {name}."));
+    }
+    let mut secret = [0u8; 32];
+    crate::fill_random(&mut secret);
+    let hook = Webhook {
+        name,
+        secret: hex::encode(secret),
+        filters: Vec::new(),
+        enabled: true,
+    };
+    hooks.push(hook.clone());
+    save_webhooks(config_dir, &hooks)?;
+    Ok(hook)
+}
+
+/// True when a webhook by that name was there.
+pub fn remove_webhook(config_dir: &Path, name: &str) -> Result<bool, String> {
+    let mut hooks = load_webhooks(config_dir);
+    let before = hooks.len();
+    hooks.retain(|h| h.name != name);
+    if hooks.len() == before {
+        return Ok(false);
+    }
+    save_webhooks(config_dir, &hooks)?;
+    Ok(true)
+}
+
 fn valid_name(name: &str) -> bool {
     (1..=40).contains(&name.len())
         && name
@@ -724,6 +789,54 @@ mod tests {
                 "text": "hi there",
                 "receivedMs": NOW,
             })
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn webhooks_are_added_with_a_private_secret_and_removed() {
+        let dir = std::env::temp_dir().join(format!("grokhub-hooks-add-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let hook = add_webhook(&dir, " Deploys ").unwrap();
+        assert_eq!(hook.name, "deploys");
+        assert_eq!(hook.secret.len(), 64);
+        assert!(hook.secret.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(load_webhooks(&dir), vec![hook.clone()]);
+        assert_eq!(
+            add_webhook(&dir, "deploys").unwrap_err(),
+            "There's already a webhook named deploys."
+        );
+        assert_eq!(
+            add_webhook(&dir, "no spaces please").unwrap_err(),
+            "A webhook name is 1 to 40 of a-z, 0-9 and -."
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(webhooks_path(&dir))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // A request signed with the new secret is taken.
+        let body = br#"{"ok":true}"#;
+        let ts = (NOW / 1000).to_string();
+        let mut signed = format!("{ts}.").into_bytes();
+        signed.extend_from_slice(body);
+        let sig = format!(
+            "sha256={}",
+            hex::encode(hmac_sha256(hook.secret.as_bytes(), &signed))
+        );
+        assert!(matches!(
+            receive(&dir, "deploys", &sig, &ts, body, NOW),
+            Received::Queued(_)
+        ));
+        assert!(remove_webhook(&dir, "deploys").unwrap());
+        assert!(!remove_webhook(&dir, "deploys").unwrap());
+        assert_eq!(
+            receive(&dir, "deploys", &sig, &ts, body, NOW),
+            Received::Unknown
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

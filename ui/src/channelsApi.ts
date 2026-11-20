@@ -26,10 +26,21 @@ export interface PairedSender {
   sender: string;
 }
 
+export interface ChannelWebhook {
+  name: string;
+  enabled: boolean;
+  filters: number;
+  /** Where the sender posts on the hub this computer shares. */
+  path: string;
+}
+
 export interface Channels {
   channels: ChannelState[];
   pending: PendingCode[];
   paired: PairedSender[];
+  webhooks: ChannelWebhook[];
+  /** A new webhook's secret, only in the answer that made it. */
+  newSecret: string | null;
   /** What the last step did. */
   status: string | null;
 }
@@ -57,4 +68,15 @@ export async function approveChannelCode(code: string): Promise<Channels | null>
 export async function unpairChannelSender(kind: ChannelKind, sender: string): Promise<Channels | null> {
   if (!inShell()) return null;
   return call<Channels>("unpair_channel_sender", { kind, sender });
+}
+
+/** The answer carries the new secret once, in `newSecret`. */
+export async function addChannelWebhook(name: string): Promise<Channels | null> {
+  if (!inShell()) return null;
+  return call<Channels>("add_channel_webhook", { name });
+}
+
+export async function removeChannelWebhook(name: string): Promise<Channels | null> {
+  if (!inShell()) return null;
+  return call<Channels>("remove_channel_webhook", { name });
 }

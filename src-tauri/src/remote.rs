@@ -1216,6 +1216,8 @@ mod tests {
             "disconnect_channel",
             "approve_channel_code",
             "unpair_channel_sender",
+            "add_channel_webhook",
+            "remove_channel_webhook",
             "save_browser_attach",
             "set_summon_hotkey",
             "set_notifications",
