@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::gate::Gate;
 
 use super::{
-    connections, control, desktop, glob, grep, list_dir, local_ai, media, models_check, mods,
+    connections, control, desktop, glob, grep, list_dir, local_ai, media, models_check, mods, ptc,
     read_file, search_replace, shell, show_panel, web_fetch, web_search, write,
 };
 
@@ -63,7 +63,7 @@ fn desktop_schema(i: usize) -> Value {
 
 /// Read-only tools, sent first. All eager except `scheduler_list`.
 pub fn read_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 13] = [
+    static DEFS: [ToolDef; 14] = [
         ToolDef {
             name: "read_file",
             blurb: "Read a workspace file",
@@ -154,6 +154,13 @@ pub fn read_defs() -> &'static [ToolDef] {
             defer: true,
             schema: mods::installed_schema,
             visible: mods_on,
+        },
+        ToolDef {
+            name: ptc::NAME,
+            blurb: "Run a sandboxed read-only multi-tool Python script",
+            defer: true,
+            schema: ptc::schema,
+            visible: always,
         },
     ];
     &DEFS
