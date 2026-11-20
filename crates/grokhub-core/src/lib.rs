@@ -186,6 +186,7 @@ pub mod pulse_sources;
 pub mod pulse_writer;
 pub mod quips;
 pub mod reactions;
+pub mod recall_score;
 pub mod recipe;
 pub mod recovered;
 pub mod redact;

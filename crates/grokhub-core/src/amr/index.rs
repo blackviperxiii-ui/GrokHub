@@ -106,6 +106,33 @@ impl AmrIndex {
             .map_err(db_err)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_err)
     }
+
+    /// `(id, bm25)` for every node whose body or tags hold any of `words`
+    /// (prefix match per word), best first. `bm25` is SQLite's raw value:
+    /// negative, and more negative for a closer match.
+    pub fn bm25_any(&self, words: &[String]) -> Result<Vec<(String, f64)>, AmrError> {
+        let terms: Vec<String> = words
+            .iter()
+            .flat_map(|w| w.split(|c: char| !c.is_alphanumeric()))
+            .filter(|w| !w.is_empty())
+            .map(|w| format!("\"{}\"*", w.to_lowercase()))
+            .collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, bm25(nodes_fts) FROM nodes_fts WHERE nodes_fts MATCH ?1 ORDER BY bm25(nodes_fts), id",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![terms.join(" OR ")], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })
+            .map_err(db_err)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_err)
+    }
 }
 
 fn db_err(err: rusqlite::Error) -> AmrError {
