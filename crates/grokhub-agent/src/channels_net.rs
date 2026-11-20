@@ -31,6 +31,9 @@ use crate::keyring_blob::{self, Backend};
 pub const TELEGRAM_API: &str = "https://api.telegram.org";
 /// How long one `getUpdates` call waits for a message before it answers empty.
 pub const POLL_WAIT_S: u64 = 25;
+/// The error a refused bot token gives: polling again won't help.
+pub const TELEGRAM_TOKEN_REFUSED: &str =
+    "Telegram refused the bot token. Paste it again from BotFather.";
 
 /// The keychain account a channel's bot token is saved under.
 pub fn token_account(kind: ChannelKind) -> &'static str {
@@ -155,9 +158,7 @@ impl TelegramLink {
     /// A failed call, worded with no URL in it.
     fn failed(method: &str, err: &http::Error) -> String {
         match err.status() {
-            Some(401 | 404) => {
-                "Telegram refused the bot token. Paste it again from BotFather.".into()
-            }
+            Some(401 | 404) => TELEGRAM_TOKEN_REFUSED.into(),
             Some(409) => "Another program is reading this bot's messages (a webhook, or a second copy of the app). Stop it and try again.".into(),
             Some(429) => "Telegram asked the app to slow down.".into(),
             Some(code) => format!("Telegram's {method} failed (status {code})."),
@@ -322,6 +323,24 @@ impl DiscordLink {
             Some(code) => format!("Discord's send failed (status {code})."),
             None => "Couldn't reach Discord to send a reply.".into(),
         }
+    }
+
+    /// The bot's name, to show the token works.
+    pub fn check(&self, config_dir: &Path) -> Result<String, String> {
+        let url = format!("{}/users/@me", self.rest);
+        guard_quiet(config_dir, &EgressReq::new(&url, &[]))?;
+        let me: Value = self
+            .agent
+            .get(&url)
+            .header("Authorization", &format!("Bot {}", self.token.as_str()))
+            .call()
+            .map_err(|e| Self::failed(&e))?
+            .into_json()
+            .map_err(|_| "Discord's answer isn't JSON.".to_string())?;
+        me.get("username")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| "Discord's answer has no bot name.".into())
     }
 
     /// Send `text` to a DM channel; `data` as [`TelegramLink::send`].
@@ -816,6 +835,20 @@ mod tests {
             Err("Discord refused the bot token. Copy it again from the Bot page.".into())
         );
         assert!(DiscordLink::new("not a token").is_err());
+        let (rest, me) = fake_api(vec![
+            (200, json!({ "id": "1", "username": "my-app" })),
+            (401, json!({ "message": "401: Unauthorized" })),
+        ]);
+        let link = DiscordLink::at(None, &rest, DISCORD_TOKEN, false).unwrap();
+        assert_eq!(link.check(&dir).unwrap(), "my-app");
+        assert_eq!(
+            link.check(&dir).unwrap_err(),
+            "Discord refused the bot token. Copy it again from the Bot page."
+        );
+        assert_eq!(
+            me.join().unwrap()[0],
+            format!("GET /users/@me HTTP/1.1 [auth: Bot {DISCORD_TOKEN}]\n")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
