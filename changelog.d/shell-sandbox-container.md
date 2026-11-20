@@ -1,0 +1,1 @@
+- Shell sandbox: opt-in container backend. With `backend = "container"` in `shell_sandbox.toml` and rootless Podman or Docker installed, each sandboxed command runs in a throwaway container that sees only the workspace and your `writable` folders, has no network, drops every capability, and runs as your own user.
