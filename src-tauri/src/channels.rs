@@ -45,6 +45,10 @@ pub struct PendingView {
 pub struct PairedView {
     pub channel: ChannelKind,
     pub sender: String,
+    /// The user turned approval asks on for this sender.
+    pub asks: bool,
+    /// They have written to the bot, so asks have a chat to go to.
+    pub reachable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -209,6 +213,8 @@ pub fn view(config_dir: &Path, store: &dyn Backend, status: Option<String>) -> C
             senders.iter().map(move |sender| PairedView {
                 channel,
                 sender: sender.clone(),
+                asks: crate::channel_asks::is_approver(config_dir, channel, sender),
+                reachable: crate::channel_asks::reachable(config_dir, channel, sender),
             })
         })
         .collect();
@@ -438,11 +444,37 @@ pub fn unpair(
         return Err("That sender isn't paired.".into());
     }
     trust.save(config_dir)?;
+    crate::channel_asks::set_approver(config_dir, kind, sender, false)?;
     Ok(view(
         config_dir,
         store,
         Some(format!("Unpaired {sender} on {}.", name(kind))),
     ))
+}
+
+/// Turn approval asks on or off for one paired sender.
+pub fn set_asks(
+    config_dir: &Path,
+    store: &dyn Backend,
+    kind: ChannelKind,
+    sender: &str,
+    on: bool,
+) -> Result<ChannelsView, String> {
+    if on && !DmTrust::load(config_dir).is_paired(kind, sender) {
+        return Err("That sender isn't paired.".into());
+    }
+    crate::channel_asks::set_approver(config_dir, kind, sender, on)?;
+    let status = if !on {
+        format!("{sender} on {} won't get approval asks.", name(kind))
+    } else if crate::channel_asks::reachable(config_dir, kind, sender) {
+        format!("Approval asks go to {sender} on {} now.", name(kind))
+    } else {
+        format!(
+            "Approval asks for {sender} on {} start once they write to the bot.",
+            name(kind)
+        )
+    };
+    Ok(view(config_dir, store, Some(status)))
 }
 
 #[cfg(test)]
@@ -523,12 +555,30 @@ mod tests {
             approved.paired,
             vec![PairedView {
                 channel: ChannelKind::Telegram,
-                sender: "777".into()
+                sender: "777".into(),
+                asks: false,
+                reachable: false,
             }]
+        );
+
+        let on = set_asks(&dir, &store, ChannelKind::Telegram, "777", true).unwrap();
+        assert!(on.paired[0].asks);
+        assert_eq!(
+            on.status.as_deref(),
+            Some("Approval asks for 777 on Telegram start once they write to the bot.")
         );
 
         let unpaired = unpair(&dir, &store, ChannelKind::Telegram, "777").unwrap();
         assert_eq!(unpaired.paired, vec![]);
+        assert!(!crate::channel_asks::is_approver(
+            &dir,
+            ChannelKind::Telegram,
+            "777"
+        ));
+        assert_eq!(
+            set_asks(&dir, &store, ChannelKind::Telegram, "777", true).unwrap_err(),
+            "That sender isn't paired."
+        );
         assert_eq!(
             unpaired.status.as_deref(),
             Some("Unpaired 777 on Telegram.")

@@ -23,6 +23,7 @@ pub mod card_chat;
 mod catalog_refresh;
 pub mod change_rows;
 pub mod changes;
+pub mod channel_asks;
 pub mod channel_inbox;
 pub mod channels;
 #[cfg(desktop)]
@@ -510,6 +511,22 @@ fn remove_channel_webhook(
         &state.config_dir,
         &grokhub_agent::channels_net::os_keychain(),
         &name,
+    )
+}
+
+#[tauri::command]
+fn set_channel_asks(
+    state: State<'_, ShellState>,
+    kind: grokhub_core::msg_channels::ChannelKind,
+    sender: String,
+    on: bool,
+) -> Result<channels::ChannelsView, String> {
+    channels::set_asks(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        kind,
+        &sender,
+        on,
     )
 }
 
@@ -7870,40 +7887,77 @@ fn start_scheduler(app: &tauri::App) {
 
 /// Messages from paired chats and signed webhooks are answered from here:
 /// one background run each (read-only, no desktop, nobody to approve a
-/// card), and a chat's answer goes back to it.
+/// card), and a chat's answer goes back to it. Waiting decisions go out to
+/// the senders the user chose, and their "yes CODE" / "no CODE" replies are
+/// answered through `answer_inbox`, like the inbox row.
 #[cfg(desktop)]
-fn start_channel_inbox(config_dir: PathBuf) {
+fn start_channel_inbox(app: AppHandle) {
+    let config_dir = app.state::<ShellState>().config_dir.clone();
     channel_inbox::recover(&config_dir, grokhub_core::now_ms());
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(3));
-        let dir = config_dir.as_path();
-        channel_inbox::drain(
-            dir,
-            &mut |prompt, session| {
-                let (client, model, workspace, _) = scheduled_route(dir)?;
-                let _config = grokhub_agent::perm::ConfigGuard::set(dir);
-                let done = unattended::run(unattended::Job {
-                    client,
-                    model,
-                    workspace,
-                    session_id: session.to_string(),
-                    prompt: prompt.to_string(),
-                    // Fixed, so text in a message can't name the tool set.
-                    tools_from: Some(String::new()),
-                    gate: unattended::RunGate::BACKGROUND,
-                    cancel: grokhub_agent::CancelToken::new(),
-                    resume: false,
-                });
-                if done.error.is_empty() {
-                    Ok(done.text)
-                } else {
-                    Err(done.error)
+    std::thread::spawn(move || {
+        let mut asks = channel_asks::RemoteAsks::default();
+        loop {
+            std::thread::sleep(Duration::from_secs(3));
+            let dir = config_dir.as_path();
+            let store = grokhub_agent::channels_net::os_keychain();
+            let waiting = inbox::decisions(dir);
+            let texts = asks.sync(&waiting, &mut grokhub_core::fill_random);
+            if !texts.is_empty() {
+                for to in channel_asks::targets(dir) {
+                    for text in &texts {
+                        let _ = channels::send_answer(dir, &store, &to, text);
+                    }
                 }
-            },
-            &mut |to, text| {
-                channels::send_answer(dir, &grokhub_agent::channels_net::os_keychain(), to, text)
-            },
-        );
+            }
+            channel_inbox::drain(
+                dir,
+                &mut |to, text| {
+                    channel_asks::remember_reach(dir, to);
+                    if !channel_asks::is_approver(dir, to.channel, &to.sender) {
+                        return None;
+                    }
+                    Some(match asks.reply(text)? {
+                        channel_asks::Reply::Said(said) => said,
+                        channel_asks::Reply::Answer { ask, approve } => {
+                            match answer_inbox(
+                                app.clone(),
+                                app.state::<ShellState>(),
+                                ask.chat_id,
+                                ask.id,
+                                ask.kind,
+                                approve,
+                            ) {
+                                Ok(_) if approve => format!("Allowed once: {}", ask.what),
+                                Ok(_) => format!("Denied: {}", ask.what),
+                                Err(why) => why,
+                            }
+                        }
+                    })
+                },
+                &mut |prompt, session| {
+                    let (client, model, workspace, _) = scheduled_route(dir)?;
+                    let _config = grokhub_agent::perm::ConfigGuard::set(dir);
+                    let done = unattended::run(unattended::Job {
+                        client,
+                        model,
+                        workspace,
+                        session_id: session.to_string(),
+                        prompt: prompt.to_string(),
+                        // Fixed, so text in a message can't name the tool set.
+                        tools_from: Some(String::new()),
+                        gate: unattended::RunGate::BACKGROUND,
+                        cancel: grokhub_agent::CancelToken::new(),
+                        resume: false,
+                    });
+                    if done.error.is_empty() {
+                        Ok(done.text)
+                    } else {
+                        Err(done.error)
+                    }
+                },
+                &mut |to, text| channels::send_answer(dir, &store, to, text),
+            );
+        }
     });
 }
 
@@ -8499,7 +8553,7 @@ pub fn run() {
             }
             #[cfg(desktop)]
             start_scheduler(app);
-            start_channel_inbox(app.state::<ShellState>().config_dir.clone());
+            start_channel_inbox(app.handle().clone());
             // Questions from helpers that outlive their chat's reply.
             // Only this shell watches task changes; the cabin leaves it off.
             grokhub_agent::set_task_watch(true);
@@ -9044,6 +9098,7 @@ pub fn run() {
             disconnect_channel,
             approve_channel_code,
             unpair_channel_sender,
+            set_channel_asks,
             add_channel_webhook,
             remove_channel_webhook,
             save_browser_attach,

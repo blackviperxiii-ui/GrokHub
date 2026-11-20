@@ -24,6 +24,10 @@ export interface PendingCode {
 export interface PairedSender {
   channel: ChannelKind;
   sender: string;
+  /** Approval asks go to this sender. */
+  asks: boolean;
+  /** They have written to the bot, so asks have a chat to go to. */
+  reachable: boolean;
 }
 
 export interface ChannelWebhook {
@@ -76,6 +80,11 @@ export async function disconnectChannel(kind: ChannelKind): Promise<Channels | n
 export async function approveChannelCode(code: string): Promise<Channels | null> {
   if (!inShell()) return null;
   return call<Channels>("approve_channel_code", { code });
+}
+
+export async function setChannelAsks(kind: ChannelKind, sender: string, on: boolean): Promise<Channels | null> {
+  if (!inShell()) return null;
+  return call<Channels>("set_channel_asks", { kind, sender, on });
 }
 
 export async function unpairChannelSender(kind: ChannelKind, sender: string): Promise<Channels | null> {

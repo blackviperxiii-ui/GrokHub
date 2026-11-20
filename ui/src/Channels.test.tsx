@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   connectChannel: vi.fn<(kind: ChannelKind, token: string) => Promise<Shape | null>>(),
   disconnectChannel: vi.fn<(kind: ChannelKind) => Promise<Shape | null>>(),
   approveChannelCode: vi.fn<(code: string) => Promise<Shape | null>>(),
+  setChannelAsks: vi.fn<(kind: ChannelKind, sender: string, on: boolean) => Promise<Shape | null>>(),
   unpairChannelSender: vi.fn<(kind: ChannelKind, sender: string) => Promise<Shape | null>>(),
   addChannelWebhook: vi.fn<(name: string) => Promise<Shape | null>>(),
   removeChannelWebhook: vi.fn<(name: string) => Promise<Shape | null>>(),
@@ -71,7 +72,7 @@ describe("Phone and chat apps", () => {
     api.approveChannelCode.mockRejectedValueOnce("That code doesn't match anyone waiting. Codes last an hour.");
     api.approveChannelCode.mockResolvedValueOnce({
       ...none,
-      paired: [{ channel: "telegram", sender: "777" }],
+      paired: [{ channel: "telegram", sender: "777", asks: false, reachable: false }],
       status: "Paired @user on Telegram.",
     });
     api.unpairChannelSender.mockResolvedValue({ ...none, status: "Unpaired 777 on Telegram." });
@@ -89,6 +90,21 @@ describe("Phone and chat apps", () => {
     expect(api.approveChannelCode).toHaveBeenLastCalledWith("abcd-1234");
     expect(await screen.findByText("Paired @user on Telegram.")).toBeTruthy();
     expect((screen.getByLabelText("Pairing code") as HTMLInputElement).value).toBe("");
+
+    api.setChannelAsks.mockResolvedValue({
+      ...none,
+      paired: [{ channel: "telegram", sender: "777", asks: true, reachable: false }],
+      status: "Approval asks for 777 on Telegram start once they write to the bot.",
+    });
+    const asks = screen.getByRole("button", { name: "Approval asks for 777 on Telegram" });
+    expect(asks.textContent).toBe("Send approval asks");
+    await userEvent.click(asks);
+    expect(api.setChannelAsks).toHaveBeenCalledWith("telegram", "777", true);
+    expect(await screen.findByText("Approval asks for 777 on Telegram start once they write to the bot.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Approval asks for 777 on Telegram" }).textContent).toBe(
+      "Stop approval asks",
+    );
+    expect(screen.getByText("· asks start once they write to the bot")).toBeTruthy();
 
     await userEvent.click(screen.getByRole("button", { name: "Unpair 777 on Telegram" }));
     expect(api.unpairChannelSender).toHaveBeenCalledWith("telegram", "777");
