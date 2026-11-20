@@ -1,0 +1,1 @@
+- Automations page: each row shows its check command and gate (`only when it changes` / `without AI`), and a Keep running when the app is closed switch installs or removes the login service (`--install-automations` / `--remove-automations`).

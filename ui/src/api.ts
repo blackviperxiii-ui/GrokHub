@@ -1006,6 +1006,12 @@ export function onEventGap(handler: () => void): Promise<UnlistenFn> {
   return subscribe<null>(GAP_EVENT, () => handler());
 }
 
+/** `gate.onChange` / `gate.noAgent` from automations.json. */
+export interface AutomationGate {
+  onChange: boolean;
+  noAgent: boolean;
+}
+
 export interface AutomationRow {
   id: string;
   name: string;
@@ -1015,6 +1021,9 @@ export interface AutomationRow {
   health: string | null;
   /** The words for the Edit box; null when words can't say the schedule. */
   describe: string | null;
+  /** The job's check command; empty when it has none. */
+  checkCommand: string;
+  gate: AutomationGate;
 }
 
 export interface RunResult {
@@ -1123,6 +1132,16 @@ export function removeAutomation(id: string): Promise<AutomationRow[]> {
 
 export function runAutomation(id: string): Promise<RunResult> {
   return invoke<RunResult>("run_automation", { id });
+}
+
+/** Whether the login service keeps automations running with the app closed. */
+export function getAutomationsService(): Promise<boolean> {
+  return invoke<boolean>("get_automations_service");
+}
+
+/** Install or remove the login service for closed-app automations. */
+export function setAutomationsService(on: boolean): Promise<boolean> {
+  return invoke<boolean>("set_automations_service", { on });
 }
 
 export function editAutomation(

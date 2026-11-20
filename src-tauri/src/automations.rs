@@ -54,6 +54,18 @@ pub struct Row {
     pub health: Option<String>,
     /// The words for the Edit box, `None` when words cannot say the schedule.
     pub describe: Option<String>,
+    /// The job's check command; empty when it has none.
+    pub check_command: String,
+    /// `gate.onChange` / `gate.noAgent` from automations.json.
+    pub gate: RowGate,
+}
+
+/// The check gate the Automations page shows on a row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RowGate {
+    pub on_change: bool,
+    pub no_agent: bool,
 }
 
 pub fn rows(list: &[Automation], clock: LocalClock) -> Vec<Row> {
@@ -66,6 +78,11 @@ pub fn rows(list: &[Automation], clock: LocalClock) -> Vec<Row> {
             summary: grokhub_core::automation_summary_line(a, clock),
             health: grokhub_core::automation_health_line(a),
             describe: grokhub_core::describe_automation(a),
+            check_command: a.check_command.clone(),
+            gate: RowGate {
+                on_change: a.gate.on_change,
+                no_agent: a.gate.no_agent,
+            },
         })
         .collect()
 }
@@ -909,6 +926,30 @@ mod tests {
             (edited[0].check_command.as_str(), edited[0].time.as_str()),
             ("test -d ~/Downloads", "18:00")
         );
+    }
+
+    #[test]
+    fn rows_show_the_check_command_and_gate() {
+        let dir = temp_dir("row-check");
+        let list = add(
+            &dir,
+            "every day at 9am check `df -h /` and tell me only when it changes",
+            tuesday_8am(),
+        )
+        .expect("add");
+        let row = &rows(&list, tuesday_8am())[0];
+        assert_eq!(row.check_command, "df -h /");
+        assert!(row.gate.on_change);
+        assert!(!row.gate.no_agent);
+        let plain = add(
+            &dir,
+            "every day at 10am summarize my inbox",
+            tuesday_8am(),
+        )
+        .expect("plain");
+        let plain_row = &rows(&plain, tuesday_8am())[1];
+        assert_eq!(plain_row.check_command, "");
+        assert_eq!(plain_row.gate, RowGate::default());
     }
 
     #[test]
