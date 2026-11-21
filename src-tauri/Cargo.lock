@@ -2075,6 +2075,7 @@ dependencies = [
  "hex",
  "minisign-verify",
  "quick-xml 0.42.0",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

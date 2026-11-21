@@ -1,0 +1,1 @@
+- Groundwork for routines, saved steps that run without the model: the routine file format, a checker that names every problem in plain words, and safe filling of values into commands (each value is quoted as one argument). Nothing runs routines yet.

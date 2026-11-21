@@ -199,6 +199,7 @@ pub mod review;
 pub mod review_pass;
 pub mod rewind;
 pub mod rhythm;
+pub mod routine;
 pub mod run_metrics;
 pub mod runtime_download;
 pub mod scheduler_lease;
