@@ -87,6 +87,15 @@ pub fn run(
     words: Option<&str>,
     route: &dyn Fn() -> Result<Route, String>,
 ) -> RunResult {
+    // One run of a routine at a time: a Run now and a trigger can meet.
+    let Ok(_running) = crate::automations::Running::claim(&format!("{ID_PREFIX}{}", start.name))
+    else {
+        return RunResult {
+            text: String::new(),
+            error: format!("The routine {} is already running.", start.name),
+            stop: "error".into(),
+        };
+    };
     let routed = route().ok();
     let workspace: PathBuf = match &routed {
         Some((_, _, workspace, _)) => workspace.clone(),
@@ -114,6 +123,7 @@ pub fn run(
         brain: brain.as_ref().map(|b| b as &dyn Brain),
         words,
     });
+    grokhub_agent::routine_log::record(config_dir, &start.name, &start.why, &report);
     let text = report.text();
     match (&report.ended, routed) {
         // A replan comes only from a repair, which needs the route.

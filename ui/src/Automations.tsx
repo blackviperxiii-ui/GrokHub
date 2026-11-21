@@ -19,6 +19,7 @@ import {
   type SuggestedTile,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { Routines } from "./Routines";
 import { Toggle } from "./Toggle";
 import { ConfirmRow } from "./ui";
 
@@ -352,6 +353,7 @@ export function Automations({
           );
         })}
       </ul>
+      <Routines />
       {blueprints.length > 0 && (
         <section className="blueprints" aria-label="Blueprints">
           <h3>Blueprints</h3>

@@ -111,6 +111,10 @@ fn a_due_timer_runs_with_no_model_and_reports_as_a_routine() {
     );
     // A run that went as planned asked the model nothing.
     assert_eq!(client.asked.lock().unwrap().len(), 0);
+    let s = grokhub_agent::routine_log::stats(&config);
+    assert_eq!((s["notes"].runs, s["notes"].model_calls), (1, 0));
+    let last = s["notes"].last.as_ref().unwrap();
+    assert_eq!((last.why.as_str(), last.ok), ("timer", true));
 }
 
 #[test]

@@ -1,0 +1,1 @@
+- The Automations page lists your saved routines: what starts each one, whether its change steps are allowed, how many times it ran and how many model calls that took, and the newest run's result. Each has an on/off switch, Run now, Allow changes, and Undo for the newest save.

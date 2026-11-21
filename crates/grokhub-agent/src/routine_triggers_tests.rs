@@ -250,3 +250,51 @@ fn a_webhook_finds_its_routine_and_typed_inputs() {
     assert_eq!(inputs, Map::new());
     assert_eq!(words, "api shipped");
 }
+
+#[test]
+fn an_off_routine_starts_from_nothing_and_primes_again_when_back_on() {
+    let config = temp("off");
+    save(
+        &config,
+        json!({ "version": 1, "name": "hourly", "triggers": [{ "timer": "every 60m" }, "chat", { "webhook": "pings" }], "steps": echo() }),
+    );
+    due(&config, at(0));
+    assert!(is_on(&config, "hourly"));
+    set_on(&config, "hourly", false).unwrap();
+    assert!(!is_on(&config, "hourly"));
+    assert_eq!(due(&config, at(3 * HOUR)), Vec::new());
+    assert_eq!(for_chat(&config), Vec::new());
+    assert_eq!(for_webhook(&config, "pings"), None);
+    // Back on: it primes again rather than firing for the hours it was off.
+    set_on(&config, "hourly", true).unwrap();
+    assert_eq!(due(&config, at(3 * HOUR + MIN)), Vec::new());
+    assert_eq!(
+        load_state(&config).routines["hourly"].next_run,
+        Some(4 * HOUR + MIN)
+    );
+    assert_eq!(for_chat(&config).len(), 1);
+    assert_eq!(
+        set_on(&config, "nope", false),
+        Err("No routine named nope".to_string())
+    );
+}
+
+#[test]
+fn all_lists_broken_routines_with_their_problems() {
+    let config = temp("all");
+    save(
+        &config,
+        json!({ "version": 1, "name": "fine", "triggers": ["chat"], "steps": echo() }),
+    );
+    save(
+        &config,
+        json!({ "version": 1, "name": "broken", "triggers": ["chat"], "steps": [{ "id": "x", "tool": "no_such_tool", "args": {} }] }),
+    );
+    let list = all(&config);
+    assert_eq!(list.len(), 2);
+    let dir = routine::routines_dir(&config);
+    assert_eq!(list[0].0, dir.join("broken"));
+    assert!(list[0].1.is_err());
+    assert_eq!(list[1].0, dir.join("fine"));
+    assert_eq!(list[1].1.as_ref().map(|r| r.name.as_str()), Ok("fine"));
+}

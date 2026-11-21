@@ -153,6 +153,8 @@ pub mod review_cards;
 mod router_upkeep;
 #[cfg(desktop)]
 pub mod routine_runs;
+#[cfg(desktop)]
+pub mod routines_page;
 pub mod run_resume;
 #[cfg(desktop)]
 pub mod scheduler;
@@ -2652,6 +2654,66 @@ fn add_automation(
     let clock = now_clock(clock);
     let list = automations::add(&state.config_dir, &text, clock)?;
     Ok(automations::rows(&list, clock))
+}
+
+/// The Automations page's Routines list.
+#[cfg(desktop)]
+#[tauri::command]
+fn list_routines(state: State<'_, ShellState>) -> Vec<routines_page::Row> {
+    routines_page::rows(&state.config_dir)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn set_routine_on(
+    state: State<'_, ShellState>,
+    name: String,
+    on: bool,
+) -> Result<Vec<routines_page::Row>, String> {
+    grokhub_agent::routine_triggers::set_on(&state.config_dir, &name, on)?;
+    Ok(routines_page::rows(&state.config_dir))
+}
+
+/// Allow on a routine's row: its change steps may run unattended.
+#[cfg(desktop)]
+#[tauri::command]
+fn allow_routine(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<Vec<routines_page::Row>, String> {
+    routines_page::allow(&state.config_dir, &name)?;
+    Ok(routines_page::rows(&state.config_dir))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn revoke_routine(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<Vec<routines_page::Row>, String> {
+    routines_page::revoke(&state.config_dir, &name)?;
+    Ok(routines_page::rows(&state.config_dir))
+}
+
+/// Undo on a routine's row: the newest saved change to it goes back.
+#[cfg(desktop)]
+#[tauri::command]
+fn undo_routine(state: State<'_, ShellState>, name: String) -> Result<String, String> {
+    routines_page::undo(&state.config_dir, &name)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn run_routine_now(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<automations::RunResult, String> {
+    let config_dir = state.config_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        routines_page::run_now(&config_dir, &name, &|| scheduled_route(&config_dir))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The Automations page's Suggested tiles.
@@ -8742,6 +8804,18 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             phone_smoke_report,
+            #[cfg(desktop)]
+            list_routines,
+            #[cfg(desktop)]
+            set_routine_on,
+            #[cfg(desktop)]
+            allow_routine,
+            #[cfg(desktop)]
+            revoke_routine,
+            #[cfg(desktop)]
+            undo_routine,
+            #[cfg(desktop)]
+            run_routine_now,
             auto_setup,
             onboard_identity,
             quick_chips,
