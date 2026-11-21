@@ -151,6 +151,8 @@ pub mod remote_tls;
 mod reply_sources_fixtures;
 pub mod review_cards;
 mod router_upkeep;
+#[cfg(desktop)]
+pub mod routine_runs;
 pub mod run_resume;
 #[cfg(desktop)]
 pub mod scheduler;
@@ -7896,7 +7898,8 @@ fn start_scheduler(app: &tauri::App) {
 /// one background run each (read-only, no desktop, nobody to approve a
 /// card), and a chat's answer goes back to it. Waiting decisions go out to
 /// the senders the user chose, and their "yes CODE" / "no CODE" replies are
-/// answered through `answer_inbox`, like the inbox row.
+/// answered through `answer_inbox`, like the inbox row. A webhook a saved
+/// routine listens for runs that routine instead ([`routine_runs`]).
 #[cfg(desktop)]
 fn start_channel_inbox(app: AppHandle) {
     let config_dir = app.state::<ShellState>().config_dir.clone();
@@ -7916,7 +7919,7 @@ fn start_channel_inbox(app: AppHandle) {
                     }
                 }
             }
-            channel_inbox::drain(
+            channel_inbox::drain_with(
                 dir,
                 &mut |to, text| {
                     channel_asks::remember_reach(dir, to);
@@ -7939,6 +7942,16 @@ fn start_channel_inbox(app: AppHandle) {
                                 Err(why) => why,
                             }
                         }
+                    })
+                },
+                // A webhook a routine listens for runs that routine instead.
+                &mut |hook, body| {
+                    let fired = routine_runs::webhook(dir, hook, body, &|| scheduled_route(dir))?;
+                    let _ = app.emit(scheduler::RAN_EVENT, &fired);
+                    Some(if fired.result.failed() {
+                        Err(fired.result.error)
+                    } else {
+                        Ok(fired.result.text)
                     })
                 },
                 &mut |prompt, session| {

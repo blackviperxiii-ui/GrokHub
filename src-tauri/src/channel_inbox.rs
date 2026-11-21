@@ -163,6 +163,21 @@ pub fn drain(
     run: &mut dyn FnMut(&str, &str) -> Result<String, String>,
     send: &mut dyn FnMut(&ReplyTo, &str) -> Result<(), String>,
 ) -> usize {
+    drain_with(config_dir, intercept, &mut |_, _| None, run, send)
+}
+
+/// A webhook's own handler: `Some` when it took the record.
+pub type Hooked<'a> = dyn FnMut(&str, &Value) -> Option<Result<String, String>> + 'a;
+
+/// [`drain`], where `hooked(hook, body)` sees a webhook first and may run it
+/// itself (a routine that listens for that hook). `None`: the usual run.
+pub fn drain_with(
+    config_dir: &Path,
+    intercept: &mut dyn FnMut(&ReplyTo, &str) -> Option<String>,
+    hooked: &mut Hooked<'_>,
+    run: &mut dyn FnMut(&str, &str) -> Result<String, String>,
+    send: &mut dyn FnMut(&ReplyTo, &str) -> Result<(), String>,
+) -> usize {
     let Ok(rd) = std::fs::read_dir(msg_channels::inbox_dir(config_dir)) else {
         return 0;
     };
@@ -206,6 +221,16 @@ pub fn drain(
             {
                 let sent = send(&to, &said).err();
                 (said, sent)
+            }
+            Some((_, None))
+                if record["channel"] == "webhook"
+                    && let Some(done) =
+                        hooked(record["hook"].as_str().unwrap_or_default(), &record["body"]) =>
+            {
+                match done {
+                    Ok(answer) => (answer, None),
+                    Err(why) => (String::new(), Some(why)),
+                }
             }
             Some((prompt, reply)) => {
                 let tag = record["channel"].as_str().unwrap_or("channel");
@@ -451,6 +476,53 @@ mod tests {
         };
         assert_eq!(names.len(), DONE_KEPT);
         assert_eq!(names[0], "00003-x.json");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_webhook_a_routine_listens_for_skips_the_model_run() {
+        let dir = temp("hooked");
+        let inbox = msg_channels::inbox_dir(&dir);
+        std::fs::create_dir_all(&inbox).unwrap();
+        for (file, hook) in [
+            ("4-deploys-aa.json", "deploys"),
+            ("5-other-bb.json", "other"),
+        ] {
+            let record = json!({
+                "channel": "webhook", "hook": hook, "receivedMs": 4,
+                "body": { "service": "api" },
+            });
+            std::fs::write(inbox.join(file), record.to_string()).unwrap();
+        }
+        let mut hooks = Vec::new();
+        let mut prompts = 0;
+        let handled = drain_with(
+            &dir,
+            &mut |_, _| None,
+            &mut |hook, body| {
+                hooks.push((hook.to_string(), body.clone()));
+                (hook == "deploys").then(|| Ok("api: 2 checks passed".to_string()))
+            },
+            &mut |_, _| {
+                prompts += 1;
+                Ok("Something happened.".into())
+            },
+            &mut |_, _| Ok(()),
+        );
+        assert_eq!(handled, 2);
+        assert_eq!(
+            hooks,
+            vec![
+                ("deploys".to_string(), json!({ "service": "api" })),
+                ("other".to_string(), json!({ "service": "api" }))
+            ]
+        );
+        // Only the hook no routine took went to a model run.
+        assert_eq!(prompts, 1);
+        let done = recent(&dir, 10);
+        assert_eq!(done[1]["answer"], "api: 2 checks passed");
+        assert_eq!(done[1]["problem"], Value::Null);
+        assert_eq!(done[0]["answer"], "Something happened.");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
