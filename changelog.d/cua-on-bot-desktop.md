@@ -1,0 +1,1 @@
+- Cua clicks and typing now happen on the Bot Desktop while it runs, the same screen the desktop tools and the preview use, instead of on your own screen (Linux). When the Bot Desktop starts or stops, the next Cua step starts Cua again on the right screen.

@@ -96,6 +96,9 @@ pub fn run_cua_stdio() -> i32 {
     let child_dir = dir.clone();
     let mut proxy: hx::CuaProxy<hx::StdioChild> =
         hx::CuaProxy::new(Box::new(move || start_cua_child(&child_dir)));
+    // The child works where the desktop tools do: on the Bot Desktop while
+    // it runs. When it starts or stops, the next call gets a new child there.
+    let mut on = bot_screen_env(&dir);
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     loop {
@@ -110,6 +113,11 @@ pub fn run_cua_stdio() -> i32 {
         };
         if line.trim().is_empty() {
             continue;
+        }
+        let now = bot_screen_env(&dir);
+        if now != on {
+            proxy.restart();
+            on = now;
         }
         let cfg = crate::host::settings();
         let mut halted = || read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started));
@@ -172,7 +180,24 @@ fn start_cua_child(dir: &std::path::Path) -> Result<grokhub_agent::harness::Stdi
     let bin = hx::find_cua_driver(&crate::host::settings().cua_driver_path)
         .ok_or_else(|| hx::CUA_MISSING_MSG.to_string())?;
     hx::verify_cua_driver(&bin)?;
-    hx::spawn_cua_child(&bin, dir)
+    hx::spawn_cua_child(&bin, dir, &bot_screen_env(dir))
+}
+
+/// The shared Bot Desktop's folder under the config folder.
+pub const BOT_DESKTOP_DIR: &str = "bot-desktop";
+
+/// The environment that puts a program on the app's Bot Desktop while it
+/// runs (another process started it); empty keeps the user's screen.
+fn bot_screen_env(config_dir: &std::path::Path) -> Vec<(&'static str, Option<String>)> {
+    #[cfg(target_os = "linux")]
+    {
+        bot_desktop::current_env(&config_dir.join(BOT_DESKTOP_DIR)).unwrap_or_default()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = config_dir;
+        Vec::new()
+    }
 }
 
 /// The Cua proxy is registered only while desktop control and the `cuaDriver`
@@ -1025,6 +1050,33 @@ pub(crate) fn test_root(label: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Cua child's screen comes from the config folder: the user's own
+    /// while no Bot Desktop runs, and the Bot Desktop's while one does.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_cua_child_follows_the_bot_desktop() {
+        let config = test_root("cua-screen");
+        assert_eq!(bot_screen_env(&config), Vec::new());
+        if resolve_bin("Xvfb").is_none() {
+            eprintln!("skipped: no Xvfb");
+            return;
+        }
+        let desk = bot_desktop::start_shared(&config.join(BOT_DESKTOP_DIR)).expect("starts");
+        assert_eq!(
+            bot_screen_env(&config),
+            vec![
+                ("DISPLAY", Some(desk.display_name())),
+                ("XAUTHORITY", Some(desk.xauthority().display().to_string())),
+                ("WAYLAND_DISPLAY", None),
+                ("XDG_SESSION_TYPE", Some("x11".to_string())),
+            ]
+        );
+        drop(desk);
+        assert!(bot_desktop::stop_shared());
+        assert_eq!(bot_screen_env(&config), Vec::new());
+        let _ = std::fs::remove_dir_all(&config);
+    }
 
     #[test]
     fn a_volume_without_a_usable_recycle_bin_moves_nothing() {
