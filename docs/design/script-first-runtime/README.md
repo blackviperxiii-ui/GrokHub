@@ -373,6 +373,29 @@ Part one (`grokhub_agent::routine_consent`) is decision 2, as proposed.
   takes it back. The Routines page (phase 6) adds the same as a click. No
   model reply or routine step reaches `grant`.
 
+Part two (`grokhub_agent::routine_draft` and the `save_routine` tool) is
+Save as routine.
+
+- **Source.** The chat session's last recorded turn: the calls after its
+  last user message whose output shows they ran and worked (no refusal, no
+  cut-off or garbled call, a command's `exit 0`). Only file, command, edit
+  and web-read tools are kept; planning, memory and chat tools are not. At
+  most 30 steps.
+- **Naming.** The chat model is already in the turn, so it names the
+  routine, its about line and its inputs in the tool call; no separate
+  `routine:fill` call is made. Each input names a literal value; every
+  string argument that is that value, or (for values of 3+ characters)
+  holds it, gets `{{inputs.name}}`, and the value becomes the default. A
+  value found in no step is an error.
+- **Yes.** `save_routine` is a control tool, so the approval card is the
+  person's yes, and plan mode and unattended runs refuse it. It shows only
+  in attended chats.
+- **Ledger.** Saves go through the change ledger as kind `routine`
+  (`changes/routines.jsonl`); `grokhub-hub routine undo <name>` walks back
+  one save at a time, removing the routine after its first. Saving never
+  grants consent, and a re-save changes the hash, so earlier consent stops
+  counting.
+
 ## Build order
 
 Each phase is one PR into `beta`, with tests that assert literal results.

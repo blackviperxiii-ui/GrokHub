@@ -6,8 +6,8 @@ use crate::gate::Gate;
 
 use super::{
     connections, control, desktop, glob, grep, list_dir, local_ai, media, models_check, mods, ptc,
-    read_file, run_routine, search_replace, session_search, shell, show_panel, web_fetch,
-    web_search, write,
+    read_file, run_routine, save_routine, search_replace, session_search, shell, show_panel,
+    web_fetch, web_search, write,
 };
 
 /// One row in the native catalog. When deferred loading is on, `defer` tools ship as
@@ -54,6 +54,11 @@ fn mods_action_on(gate: &Gate) -> bool {
 /// as they were.
 fn routines_on(gate: &Gate) -> bool {
     not_readonly(gate) && run_routine::visible(&crate::perm::config_dir())
+}
+
+/// Saving needs someone to say yes on the card.
+fn save_routine_on(gate: &Gate) -> bool {
+    not_readonly(gate) && gate.attended
 }
 
 fn generative_ui_on(_gate: &Gate) -> bool {
@@ -183,7 +188,7 @@ pub fn read_defs() -> &'static [ToolDef] {
 /// Mutating and gated tools. Edit and shell stay eager (the general coding set);
 /// scheduler, media, desktop, connection and the rest are deferred.
 pub fn action_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 25] = [
+    static DEFS: [ToolDef; 26] = [
         ToolDef {
             name: "send_subagent_message",
             blurb: "Send a message to a spawned subagent",
@@ -297,6 +302,13 @@ pub fn action_defs() -> &'static [ToolDef] {
             defer: true,
             schema: run_routine::schema,
             visible: routines_on,
+        },
+        ToolDef {
+            name: save_routine::NAME,
+            blurb: "Save the last turn as a routine",
+            defer: true,
+            schema: save_routine::schema,
+            visible: save_routine_on,
         },
         ToolDef {
             name: "scheduler_delete",

@@ -689,14 +689,15 @@ mod tests {
                 // +334 for eager look_at_screen,
                 // +57 for the merge_subagent_work index line, +49 for spawn_subagent's redo,
                 // +39 for its review type, +68 for the deferred run_tool_script index line,
-                // +75 for the deferred session_search index line.
-                11_980,
+                // +75 for the deferred session_search index line,
+                // +50 for the deferred save_routine index line.
+                12_030,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                11_980,
+                12_030,
             ),
             (
                 "plan/ask",

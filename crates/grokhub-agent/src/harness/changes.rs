@@ -51,6 +51,8 @@ pub const SNIPPET_LEDGER_FILE: &str = "snippets.jsonl";
 pub const POLICY_LEDGER_FILE: &str = "policy.jsonl";
 /// The playbooks ledger inside [`CHANGES_DIR`] (Brain 6).
 pub const PLAYBOOK_LEDGER_FILE: &str = "playbooks.jsonl";
+/// The saved routines ledger inside [`CHANGES_DIR`] (script-first runtime).
+pub const ROUTINE_LEDGER_FILE: &str = "routines.jsonl";
 /// Scope-guard findings inside [`CHANGES_DIR`].
 pub const FINDINGS_FILE: &str = "findings.jsonl";
 /// Detector name on a scope-guard finding.
@@ -90,10 +92,12 @@ pub enum ChangeKind {
     Policy,
     /// A user playbook, `{config}/playbooks/<id>.toml` (Brain 6).
     Playbook,
+    /// A saved routine, `{config}/routines/<name>/routine.json`.
+    Routine,
 }
 
 impl ChangeKind {
-    pub const ALL: [ChangeKind; 7] = [
+    pub const ALL: [ChangeKind; 8] = [
         Self::Skill,
         Self::Connection,
         Self::Automation,
@@ -101,6 +105,7 @@ impl ChangeKind {
         Self::Snippet,
         Self::Policy,
         Self::Playbook,
+        Self::Routine,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -112,6 +117,7 @@ impl ChangeKind {
             Self::Snippet => "snippet",
             Self::Policy => "policy",
             Self::Playbook => "playbook",
+            Self::Routine => "routine",
         }
     }
 
@@ -128,6 +134,7 @@ impl ChangeKind {
             Self::Snippet => SNIPPET_LEDGER_FILE,
             Self::Policy => POLICY_LEDGER_FILE,
             Self::Playbook => PLAYBOOK_LEDGER_FILE,
+            Self::Routine => ROUTINE_LEDGER_FILE,
         }
     }
 
@@ -140,6 +147,7 @@ impl ChangeKind {
             Self::Snippet => "snippets",
             Self::Policy => "policy",
             Self::Playbook => "playbooks",
+            Self::Routine => "routines",
         }
     }
 
@@ -359,6 +367,54 @@ pub fn snippet_path(config_dir: &Path, id: &str) -> PathBuf {
     config_dir
         .join(grokhub_core::protected_surface::TUNABLE_DIR)
         .join(format!("{id}.md"))
+}
+
+/// A saved routine's `routine.json`. Removing it removes its folder once
+/// nothing else is in it; scripts beside it stay.
+pub struct RoutineTarget<'a> {
+    pub config_dir: &'a Path,
+    pub name: &'a str,
+}
+
+impl ChangeTarget for RoutineTarget<'_> {
+    fn kind(&self) -> ChangeKind {
+        ChangeKind::Routine
+    }
+
+    fn id(&self) -> Result<String, String> {
+        entry_id(self.name)
+    }
+
+    fn file(&self) -> Result<PathBuf, String> {
+        Ok(grokhub_core::routine::routines_dir(self.config_dir)
+            .join(self.id()?)
+            .join(grokhub_core::routine::FILE))
+    }
+
+    fn read(&self) -> Result<Option<Vec<u8>>, String> {
+        read_capped(&self.file()?)
+    }
+
+    fn put(&self, bytes: Option<&[u8]>) -> Result<(), String> {
+        let path = self.file()?;
+        match bytes {
+            Some(b) => {
+                if let Some(dir) = path.parent() {
+                    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+                }
+                private_write(&path, b)
+            }
+            None if path.exists() => {
+                fs::remove_file(&path).map_err(|e| e.to_string())?;
+                if let Some(dir) = path.parent() {
+                    // Only when empty; a folder with scripts stays.
+                    let _ = fs::remove_dir(dir);
+                }
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
 }
 
 /// A cabin skill's `SKILL.md` under `skills_dir`.

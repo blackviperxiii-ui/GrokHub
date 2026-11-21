@@ -23,9 +23,9 @@ pub enum Launch {
     /// `grokhub-hub routine run <name> [--dry-run] [--set key=value]…`:
     /// a saved routine's steps, with no model.
     RoutineRun,
-    /// `grokhub-hub routine allow|revoke <name>`: consent for a routine's
-    /// change steps on unattended runs.
-    RoutineConsent,
+    /// `grokhub-hub routine allow|revoke|undo <name>`: consent for a
+    /// routine's change steps on unattended runs, or undo its newest save.
+    RoutineManage,
     /// The desktop tools on stdio, behind the same switch and hard gate.
     McpDesktop,
     /// The Cua Driver gate proxy on stdio (Linux, `cuaDriver` flag).
@@ -62,9 +62,9 @@ pub fn parse_args(args: &[String]) -> Launch {
         return Launch::RoutineRun;
     }
     if args.get(1).map(String::as_str) == Some("routine")
-        && matches!(args.get(2).map(String::as_str), Some("allow" | "revoke"))
+        && matches!(args.get(2).map(String::as_str), Some("allow" | "revoke" | "undo"))
     {
-        return Launch::RoutineConsent;
+        return Launch::RoutineManage;
     }
     for a in args.iter().skip(1) {
         match a.as_str() {
@@ -257,11 +257,15 @@ mod tests {
         );
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "routine", "allow", "x"])),
-            Launch::RoutineConsent
+            Launch::RoutineManage
         );
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "routine", "revoke", "x"])),
-            Launch::RoutineConsent
+            Launch::RoutineManage
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "routine", "undo", "x"])),
+            Launch::RoutineManage
         );
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "routine"])),
