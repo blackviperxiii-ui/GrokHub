@@ -43,6 +43,7 @@ fn now<'a>(home: &'a Path, on_disk: &'a [(&'static LocalModel, PathBuf)]) -> Now
         kept_loaded: false,
         forced: false,
         in_flight: 0,
+        background_in_flight: 0,
         secs_since_swap: u64::MAX,
         need: Need::Normal,
         scale: Scale::default(),
@@ -124,6 +125,15 @@ fn a_model_in_use_kept_loaded_or_just_swapped_is_not_swapped() {
         }),
         Plan::Keep,
         "a request in flight keeps its model"
+    );
+    assert_eq!(
+        plan(Now {
+            in_flight: 1,
+            background_in_flight: 1,
+            ..low
+        }),
+        Plan::Keep,
+        "without an ask, background work in flight keeps its model too"
     );
     assert_eq!(
         plan(Now {
@@ -1165,6 +1175,37 @@ fn keep_loaded_a_low_battery_a_game_and_a_reply_in_flight_beat_an_ask() {
     assert_eq!(plan(busy), Plan::Keep);
     assert_eq!(
         ask_outcome(&busy),
+        Some(AskOutcome::Refused(
+            SpeedQuality::Speed,
+            Refused::Busy(Source::Pin)
+        ))
+    );
+    // The app's own background requests don't hold an ask back; another
+    // chat's reply beside them still does.
+    let helpers = Now {
+        in_flight: 2,
+        background_in_flight: 2,
+        ..n
+    };
+    assert_eq!(
+        plan(helpers),
+        Plan::Load {
+            model: file(SMALL),
+            stand_in: Some(StandIn::Asked(SpeedQuality::Speed, Source::Pin))
+        }
+    );
+    assert_eq!(
+        ask_outcome(&helpers),
+        Some(AskOutcome::Got(SpeedQuality::Speed, Source::Pin))
+    );
+    let beside = Now {
+        in_flight: 3,
+        background_in_flight: 2,
+        ..n
+    };
+    assert_eq!(plan(beside), Plan::Keep);
+    assert_eq!(
+        ask_outcome(&beside),
         Some(AskOutcome::Refused(
             SpeedQuality::Speed,
             Refused::Busy(Source::Pin)
