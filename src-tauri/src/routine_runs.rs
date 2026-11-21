@@ -123,7 +123,7 @@ pub fn run(
         brain: brain.as_ref().map(|b| b as &dyn Brain),
         words,
     });
-    grokhub_agent::routine_log::record(config_dir, &start.name, &start.why, &report);
+    grokhub_agent::routine_log::record(config_dir, &start.routine, &start.why, &report);
     let text = report.text();
     match (&report.ended, routed) {
         // A replan comes only from a repair, which needs the route.

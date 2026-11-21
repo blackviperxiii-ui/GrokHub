@@ -84,6 +84,16 @@ pub struct Report {
     /// Model calls this run made: fills, branches and repairs.
     pub model_calls: u32,
     pub dry_run: bool,
+    /// Repairs that worked: a step that broke, then ran with new arguments.
+    pub fixes: Vec<Fix>,
+}
+
+/// A repair that worked: the arguments step `step` ran with after it broke,
+/// as templates where the new value is what the old template filled to.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Fix {
+    pub step: String,
+    pub args: Map<String, Value>,
 }
 
 impl Report {
@@ -138,6 +148,7 @@ pub fn run(spec: &RunSpec<'_>) -> Report {
         result: None,
         model_calls: 0,
         dry_run: spec.dry_run,
+        fixes: Vec::new(),
     };
     let mut values = Values::default();
     let missing = match inputs(spec.routine, &spec.inputs) {
@@ -226,10 +237,20 @@ pub fn run(spec: &RunSpec<'_>) -> Report {
             i += 1;
             continue;
         }
-        let (went, calls) = runner.step(i, &values, retry.take());
+        let retried = retry.take();
+        let fix = retried
+            .as_ref()
+            .and_then(|args| fix_args(&step.kind, args, &values));
+        let (went, calls) = runner.step(i, &values, retried);
         report.model_calls += calls;
         match went {
             Ok(Went { out, line, goto }) => {
+                if let Some(args) = fix {
+                    report.fixes.push(Fix {
+                        step: step.id.clone(),
+                        args,
+                    });
+                }
                 report.lines.push(format!("{}: {line}", step.id));
                 values.steps.insert(step.id.clone(), out);
                 match goto {
@@ -305,6 +326,34 @@ pub fn run(spec: &RunSpec<'_>) -> Report {
         );
     }
     report
+}
+
+/// A retry's arguments as a fix to the step. A tool's retry holds filled
+/// values, so each one that equals what the step's template filled to keeps
+/// the template; a script's retry is templates already.
+fn fix_args(
+    kind: &StepKind,
+    retry: &Map<String, Value>,
+    values: &Values,
+) -> Option<Map<String, Value>> {
+    match kind {
+        StepKind::Tool { tool, args } => {
+            let filled = fill_args(tool, args, values, Quote::shell()).unwrap_or_default();
+            Some(
+                retry
+                    .iter()
+                    .map(|(key, v)| {
+                        let kept = (filled.get(key) == Some(v))
+                            .then(|| args.get(key))
+                            .flatten();
+                        (key.clone(), kept.unwrap_or(v).clone())
+                    })
+                    .collect(),
+            )
+        }
+        StepKind::Script { .. } => Some(retry.clone()),
+        _ => None,
+    }
 }
 
 /// The trigger's values, type-checked, plus defaults, and the required
@@ -772,7 +821,7 @@ pub fn run_cli(args: &[String], config_dir: &Path) -> i32 {
         brain: None,
         words: None,
     });
-    crate::routine_log::record(config_dir, &routine.name, "terminal", &report);
+    crate::routine_log::record(config_dir, &routine, "terminal", &report);
     println!("{}", report.text());
     match report.ended {
         Ended::Stopped { .. } => 1,

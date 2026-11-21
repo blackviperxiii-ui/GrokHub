@@ -421,6 +421,31 @@ own section on the Automations page, under the automations, not a new view.
 - **Desktop only.** The six commands aren't web commands, so a paired
   browser doesn't get the section.
 
+## Phase 7 notes
+
+`grokhub_agent::routine_fix`. The skill replay gate in `self_improve.rs`
+replays a skill's recorded run against two versions of its `SKILL.md`, so
+it doesn't fit a routine. Routines get their own gate in the same shape:
+dry run only, and a span in the self-review session for every verdict.
+
+- **What counts.** A repair counts when its step broke, was retried with new
+  arguments, and then ran (`Report.fixes`). A tool retry holds filled
+  values, so each value that equals what the old template filled to keeps
+  the template. Each run's log line keeps its fixes and the routine's
+  content hash, so only repairs on the current version count.
+- **When.** The same fix on the same step, in 3 runs of one version.
+- **The gate.** The patched routine has no problems, and putting the old
+  arguments back gives the routine again (only that step's arguments
+  changed). A dry run of the patched routine must also go to the end. The
+  gate runs once per fix and its verdict is kept in `routines/fixes.json`.
+  A fix that fails is never offered.
+- **Offer.** The routine's row on the Routines list shows the step's
+  arguments now and with the fix, with Apply fix… (a pointer click, then a
+  confirm) and Dismiss fix. Apply runs the gate again and saves through the
+  change ledger, so Undo takes it back. An applied or dismissed fix isn't
+  offered again, even after an undo. A fix to a change step changes the
+  hash, so its consent shows Edited until the person allows it again.
+
 ## Build order
 
 Each phase is one PR into `beta`, with tests that assert literal results.

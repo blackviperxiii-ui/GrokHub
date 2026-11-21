@@ -1,0 +1,1 @@
+- When the same repair keeps fixing a routine step (in 3 runs of the same version), the Routines list offers to make it part of the routine. The fix is checked with a dry run first, applies with a click, and Undo takes it back. A fix to a step that changes things needs your OK again before it runs on its own.

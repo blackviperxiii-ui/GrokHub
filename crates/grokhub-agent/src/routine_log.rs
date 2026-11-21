@@ -7,10 +7,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use grokhub_core::routine;
+use grokhub_core::routine::{self, Routine};
 use serde::{Deserialize, Serialize};
 
-use crate::routine_run::{Ended, Report};
+use crate::routine_run::{Ended, Fix, Report};
 
 pub const RUNS_FILE: &str = "runs.jsonl";
 /// Lines kept; older ones go on the next write.
@@ -30,6 +30,12 @@ pub struct RunRow {
     pub model_calls: u32,
     /// The run's last line: its result, or why it stopped.
     pub line: String,
+    /// The routine's content hash when it ran, so fixes count per version.
+    #[serde(default)]
+    pub hash: String,
+    /// Repairs that worked in this run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixes: Vec<Fix>,
 }
 
 /// Per routine: runs, model calls, and the newest run.
@@ -44,8 +50,8 @@ fn path(config_dir: &Path) -> PathBuf {
     routine::routines_dir(config_dir).join(RUNS_FILE)
 }
 
-/// The row for a finished run. A dry run is not a run.
-pub fn row(name: &str, why: &str, report: &Report, at_ms: u64) -> Option<RunRow> {
+/// The row for a finished run of `r`. A dry run is not a run.
+pub fn row(r: &Routine, why: &str, report: &Report, at_ms: u64) -> Option<RunRow> {
     if report.dry_run {
         return None;
     }
@@ -60,12 +66,14 @@ pub fn row(name: &str, why: &str, report: &Report, at_ms: u64) -> Option<RunRow>
         None => last.to_string(),
     };
     Some(RunRow {
-        name: name.to_string(),
+        name: r.name.clone(),
         at_ms,
         why: why.to_string(),
         ok: matches!(report.ended, Ended::Finished | Ended::Done { .. }),
         model_calls: report.model_calls,
         line,
+        hash: crate::routine_consent::content_hash(r),
+        fixes: report.fixes.clone(),
     })
 }
 
@@ -90,9 +98,9 @@ pub fn append(config_dir: &Path, row: &RunRow) -> Result<(), String> {
     grokhub_core::pulse_writer::write_atomic(&path(config_dir), &text)
 }
 
-/// Logs `report` as a run of `name`; a dry run logs nothing.
-pub fn record(config_dir: &Path, name: &str, why: &str, report: &Report) {
-    if let Some(row) = row(name, why, report, grokhub_core::now_ms()) {
+/// Logs `report` as a run of `r`; a dry run logs nothing.
+pub fn record(config_dir: &Path, r: &Routine, why: &str, report: &Report) {
+    if let Some(row) = row(r, why, report, grokhub_core::now_ms()) {
         let _ = append(config_dir, &row);
     }
 }
