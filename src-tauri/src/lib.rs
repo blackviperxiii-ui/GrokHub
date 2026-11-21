@@ -150,6 +150,7 @@ pub mod remote_tls;
 #[cfg(test)]
 mod reply_sources_fixtures;
 pub mod review_cards;
+mod router_upkeep;
 pub mod run_resume;
 #[cfg(desktop)]
 pub mod scheduler;
@@ -8482,6 +8483,7 @@ pub fn run() {
             });
             steam_checks::start(config_dir.clone());
             catalog_refresh::start(config_dir.clone());
+            router_upkeep::start(config_dir.clone());
             vstack_sync::start(config_dir.clone());
             local_model_checks::start(config_dir.clone());
             pc_health::start(config_dir.clone());
