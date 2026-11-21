@@ -42,6 +42,9 @@ pub enum StandIn {
     /// A chat asked for a tier in words, or is set to one: the fastest
     /// model that fits for Speed, the biggest for Performance.
     Asked(SpeedQuality, Source),
+    /// A chat's newest message carries a picture, and the pick can't load
+    /// its vision projector here: a model that can runs ([`vision_plan`]).
+    Vision,
 }
 
 /// The word a tier goes by in the chat and in Settings.
@@ -82,6 +85,7 @@ impl StandIn {
                 };
                 return format!("{how} because {why} {}", tier_word(tier));
             }
+            StandIn::Vision => "a model that can see the picture your pick can't",
         };
         why.to_string()
     }
@@ -97,6 +101,7 @@ impl StandIn {
             StandIn::Performance => "It steps back down when the computer gets busy.",
             StandIn::BestFor(_) => "Turn off Dynamic to always use your pick.",
             StandIn::Asked(..) => "Other chats get your pick again.",
+            StandIn::Vision => "Your pick comes back once the chat is quiet.",
         };
         format!("Running {}. {then}", self.reason())
     }
@@ -526,6 +531,73 @@ fn chat_target(
     };
     let why = (m.id != home.id).then_some(StandIn::Asked(tier, source));
     Some((p.clone(), why))
+}
+
+/// MB `m` needs with its vision projector beside it and its drafter (when
+/// it launches with one), from the catalog.
+fn vision_mb(n: &Now<'_>, m: &LocalModel) -> u64 {
+    let projector = m
+        .projector
+        .and_then(local_setup::model_by_id)
+        .map_or(0, |v| v.run_mb);
+    need(n, m) + projector
+}
+
+/// What a picture loads: the chat's newest message carries a picture the
+/// running launch can't see, so the model [`plan`] aims at loads with its
+/// vision projector when it can (`seeing` holds the ids of the models on
+/// disk whose projector this engine loads), else the biggest smaller one
+/// that can and fits with its drafter and projector. `None` loads nothing
+/// for the picture: it is read as a note, and [`plan`] decides as usual.
+///
+/// A reply in flight keeps its model. Keep loaded and a forced file keep
+/// the pick, which may load its own projector. A low battery or a game
+/// chose the model: only that one may load one. Models a start refused
+/// aren't tried. A picture loads now, past the cooldown and the wait for a
+/// quiet chat, like an ask; the pick comes back once the chat is quiet.
+pub fn vision_plan(n: &Now<'_>, seeing: &[&'static str]) -> Option<Plan> {
+    if n.in_flight > 0 && n.loaded.is_some() {
+        return None;
+    }
+    let sees = |p: &Path| catalog_for(p).is_some_and(|m| seeing.contains(&m.id));
+    let load = |model: PathBuf, stand_in: Option<StandIn>| Some(Plan::Load { model, stand_in });
+    if n.kept_loaded || n.forced {
+        return if sees(n.home) {
+            load(n.home.to_path_buf(), None)
+        } else {
+            None
+        };
+    }
+    let (target, why) = target(n);
+    let free_to_load = |p: &Path| !n.refused.iter().any(|r| r == p);
+    if n.low_battery || n.scale.gaming {
+        return if sees(&target) && free_to_load(&target) {
+            load(target, why)
+        } else {
+            None
+        };
+    }
+    let t = catalog_for(&target)?;
+    // Stopping what runs frees its drafter too, when it loaded one.
+    let resident = n.loaded.and_then(|(p, _)| catalog_for(p)).map_or(0, |m| {
+        grokhub_core::local_draft::pair_mb(m, n.loaded_paired)
+    });
+    let fits = |m: &LocalModel| {
+        n.scale
+            .room
+            .is_none_or(|room| local_scale::fits(vision_mb(n, m), &room, resident, 0))
+    };
+    if sees(&target) && free_to_load(&target) && fits(t) {
+        return load(target, why);
+    }
+    let (m, p) = n
+        .on_disk
+        .iter()
+        .filter(|(m, p)| m.run_mb < t.run_mb && seeing.contains(&m.id) && free_to_load(p))
+        .filter(|(m, _)| fits(m))
+        .max_by_key(|(m, _)| m.run_mb)?;
+    let home = catalog_for(n.home).map(|h| h.id);
+    load(p.clone(), (home != Some(m.id)).then_some(StandIn::Vision))
 }
 
 /// The model [`plan`] aims this request at, whether or not it loads now:

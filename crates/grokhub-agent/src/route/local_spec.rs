@@ -60,9 +60,10 @@ fn own_need_mb(m: &GgufMeta, a: &LaunchArgs) -> u64 {
     m.file_mb + autoconfig::kv_mb_for(m, a.ctx, a.kv, a.run.seqs()) + autoconfig::overhead_mb(a.ctx)
 }
 
-/// MB the model and its drafter take together at `a`'s context and slots.
+/// MB the model and its drafter take together at `a`'s context and slots. A
+/// vision projector the launch loads beside them counts too.
 pub fn pair_need_mb(meta: &GgufMeta, a: &LaunchArgs, drafter: &GgufMeta) -> u64 {
-    own_need_mb(meta, a) + own_need_mb(drafter, a)
+    own_need_mb(meta, a) + own_need_mb(drafter, a) + a.projector.as_ref().map_or(0, |v| v.mb)
 }
 
 /// Whether the drafter fits next to the planned launch: `Some(true)` on the

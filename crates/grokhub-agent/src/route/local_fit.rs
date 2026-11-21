@@ -67,6 +67,28 @@ pub fn reply_reserve(n_ctx: u64) -> u64 {
     (n_ctx / 4).clamp(512, 4096)
 }
 
+/// Tokens one picture a launch with its vision projector reads takes on the
+/// device: Gemma 4 uses up to about this many per picture, more than the
+/// cloud estimate ([`crate::tokens::IMAGE_TOKEN_ESTIMATE`]).
+pub const LOCAL_IMAGE_TOKENS: u64 = 1_120;
+
+/// [`estimate_input_tokens`] with each picture counted at
+/// [`LOCAL_IMAGE_TOKENS`].
+fn input_tokens(items: &[crate::client::InputItem]) -> u64 {
+    let pictures = items
+        .iter()
+        .map(|i| match i {
+            crate::client::InputItem::Message { content, .. } => content
+                .iter()
+                .filter(|p| matches!(p, crate::client::ContentPart::InputImage(_)))
+                .count() as u64,
+            _ => 0,
+        })
+        .sum::<u64>();
+    let extra = LOCAL_IMAGE_TOKENS.saturating_sub(crate::tokens::IMAGE_TOKEN_ESTIMATE);
+    estimate_input_tokens(items).saturating_add(pictures.saturating_mul(extra))
+}
+
 /// Estimated prompt tokens for a request: messages plus tool schemas.
 pub fn request_tokens(req: &ResponsesRequest) -> u64 {
     let tools: u64 = req
@@ -74,7 +96,7 @@ pub fn request_tokens(req: &ResponsesRequest) -> u64 {
         .iter()
         .map(|t| serde_json::to_vec(t).map(|b| b.len() as u64).unwrap_or(0))
         .sum();
-    estimate_input_tokens(&req.input).saturating_add(tools.div_ceil(4))
+    input_tokens(&req.input).saturating_add(tools.div_ceil(4))
 }
 
 /// What [`fit`] changed, for the route log and tests.
@@ -511,7 +533,7 @@ fn keep_recent_turns(req: &mut ResponsesRequest, budget: u64, prior: usize) -> u
         ..req.clone()
     });
     let room = budget.saturating_sub(fixed);
-    let rest = |start: usize| estimate_input_tokens(&req.input[start..]);
+    let rest = |start: usize| input_tokens(&req.input[start..]);
     // A cut that no longer starts a turn (the chat changed) starts over.
     let held = Some(lead + prior).filter(|c| prior > 0 && starts.contains(c));
     let from = held.unwrap_or(lead);

@@ -213,6 +213,28 @@ pub fn chat_mem(
     .plus(draft)
 }
 
+/// Where a vision projector's memory sits: on the GPU beside a launch that
+/// offloads (the projector follows the GPU backend), in RAM for a CPU launch
+/// or on unified memory. Nothing without one.
+pub fn projector_mem(
+    projector: Option<&super::local_autoconfig::ProjectorArgs>,
+    launch: Option<&LaunchArgs>,
+    unified: bool,
+) -> Mem {
+    let Some(v) = projector else {
+        return Mem::default();
+    };
+    let on_gpu = launch.is_some_and(|l| !l.cpu_only && l.ngl > 0);
+    if on_gpu && !unified {
+        Mem {
+            ram_mb: 0,
+            vram_mb: v.mb,
+        }
+    } else {
+        Mem::ram(v.mb)
+    }
+}
+
 /// Megabytes in a file on disk, or 0.
 fn file_mb(p: &Path) -> u64 {
     std::fs::metadata(p).map_or(0, |m| m.len() / (1024 * 1024))
@@ -228,9 +250,11 @@ fn chat_entry(r: &sidecar::ChatResident, unified: bool) -> Entry {
         .and_then(|l| l.draft.as_ref())
         .and_then(|d| d.model.as_deref())
         .map_or(0, file_mb);
+    let mem = chat_mem(main_mb, draft_mb, r.launch.as_ref(), r.bare_cpu, unified);
+    let projector = r.launch.as_ref().and_then(|l| l.projector.as_deref());
     Entry {
         kind: Kind::Chat,
-        mem: chat_mem(main_mb, draft_mb, r.launch.as_ref(), r.bare_cpu, unified),
+        mem: mem.plus(projector_mem(projector, r.launch.as_ref(), unified)),
         last_used_secs: r.last_used_secs,
         pinned: r.pinned,
     }
@@ -558,6 +582,44 @@ mod tests {
     }
 
     #[test]
+    fn a_projector_sits_on_the_gpu_beside_offloaded_layers_and_in_ram_otherwise() {
+        use super::super::local_autoconfig::{on_cpu, KvType, LaunchArgs, ProjectorArgs};
+        let v = ProjectorArgs {
+            file: "/home/user/models/mmproj.gguf".into(),
+            mb: 1_083,
+            off_gpu_flag: true,
+        };
+        let gpu = LaunchArgs {
+            backend: grokhub_core::local_profile::Backend::Vulkan,
+            ngl: 30,
+            all_layers: 40,
+            n_cpu_moe: None,
+            ctx: 8192,
+            kv: KvType::Q8,
+            threads: 4,
+            threads_batch: None,
+            flash_attn: true,
+            mlock: false,
+            tensor_split: None,
+            draft: None,
+            cpu_only: false,
+            run: Default::default(),
+            projector: None,
+        };
+        let vram = Mem {
+            ram_mb: 0,
+            vram_mb: 1_083,
+        };
+        assert_eq!(projector_mem(Some(&v), Some(&gpu), false), vram);
+        assert_eq!(
+            projector_mem(Some(&v), Some(&on_cpu(&gpu)), false),
+            Mem::ram(1_083)
+        );
+        assert_eq!(projector_mem(Some(&v), Some(&gpu), true), Mem::ram(1_083));
+        assert_eq!(projector_mem(None, Some(&gpu), false), Mem::default());
+    }
+
+    #[test]
     fn the_chat_server_splits_by_its_gpu_layers_and_counts_its_draft() {
         use super::super::local_autoconfig::{on_cpu, KvType, LaunchArgs};
         use super::super::local_spec::DraftArgs;
@@ -576,6 +638,7 @@ mod tests {
             draft: None,
             cpu_only: false,
             run: Default::default(),
+            projector: None,
         };
         // 10 of 40 layers stay off the GPU: a quarter of 8 GB.
         assert_eq!(ram_share(8_000, Some(&gpu), false, false), 2_000);

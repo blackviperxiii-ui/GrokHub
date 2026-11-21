@@ -602,6 +602,9 @@ pub struct LocalGate {
     pub local_verify_failed: bool,
     /// The governor's level and whether the runtime is there at all.
     pub capacity: LocalCapacity,
+    /// The model loaded now reads pictures: its launch carries its vision
+    /// projector, the same launch a step that rides on it uses.
+    pub sees_pictures: bool,
 }
 
 impl LocalGate {
@@ -618,6 +621,9 @@ impl LocalGate {
             offline: super::connectivity::state().prefer_local(),
             offline_switch: grokhub_core::offline::enabled(),
             local_verify_failed: local_verify_failed(),
+            sees_pictures: super::local_sidecar::loaded()
+                .and_then(|l| l.launch)
+                .is_some_and(|l| l.projector.is_some()),
         }
     }
 }
@@ -800,6 +806,12 @@ pub trait LocalRuntime: Send + Sync {
     /// The model's context window in tokens, when the runtime can tell.
     fn context_tokens(&self) -> Option<u64> {
         None
+    }
+
+    /// The server reads pictures (its launch carries its vision projector),
+    /// so a chat's pictures go to it as they are.
+    fn sees_pictures(&self) -> bool {
+        false
     }
 
     /// Chat with function tools (cabin web_search / web_fetch). Default falls
@@ -991,6 +1003,23 @@ pub fn serve_request(
     }
     let tier = super::local_scale::chat_tier(&text, care_first, helper, standing);
     let _tier = super::local_scale::ChatGuard::set(tier);
+    // The person's newest message carries a picture: the swap loads a model
+    // that can see it, when one is on disk and fits (a helper's turn never
+    // swaps a model for a picture it quotes).
+    let _picture = super::local_vision::PictureGuard::set(picture && !helper);
+    // Background helpers hold the model right after a person's message: the
+    // picture waits for them (a while) instead of losing to them.
+    if picture && !helper {
+        let waited = super::local_sidecar::wait_for_vision(
+            &config_dir,
+            super::local_sidecar::VISION_DRAIN,
+            &|| cancel.is_cancelled(),
+        );
+        if waited == super::local_sidecar::Drain::Cancelled {
+            return Err(ClientError::Cancelled);
+        }
+        super::local_vision::note_waited();
+    }
     super::local_sidecar::take_ask_outcome();
     if heavy(class_norm, tokens) && super::local_gov::level() != Level::RampUp {
         match super::local_gov::wait_for_ramp_up(HEAVY_WAIT, &|| cancel.is_cancelled()) {
@@ -1013,12 +1042,13 @@ pub fn serve_request(
         super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
         req.effort.as_deref(),
     );
-    // When the running sidecar carries `--mmproj`, keep images (transcoding
-    // WebP/non-PNG/JPEG payloads to PNG for llama.cpp's stb_image). Otherwise
-    // swap each picture for `BLIND_NOTE` so the server doesn't refuse the turn.
-    let has_vision = super::local_sidecar::sidecar_has_vision();
-    let vision = super::local_vision::prepare_images(&mut req.input, has_vision);
-    let blind = vision.stripped > 0 && vision.kept == 0;
+    // A server without its vision projector (`--mmproj`) refuses any
+    // request with a picture in it, and the picture stays in the chat, so
+    // each later turn would fail too: unless the launch reads pictures, the
+    // model is told a picture was there instead. One that reads them gets
+    // each as PNG or JPEG (WebP transcoded for llama.cpp's stb_image).
+    let vision = super::local_vision::prepare_images(&mut req.input, rt.sees_pictures());
+    let blind = vision.stripped > 0;
     // The device window is often 4k to 16k: send only what fits, with room to
     // answer. With or without tools, so a long chat is trimmed on the way
     // (the oldest turns first) instead of being refused for its length.
