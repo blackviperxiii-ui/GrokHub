@@ -6,7 +6,8 @@ use crate::gate::Gate;
 
 use super::{
     connections, control, desktop, glob, grep, list_dir, local_ai, media, models_check, mods, ptc,
-    read_file, search_replace, session_search, shell, show_panel, web_fetch, web_search, write,
+    read_file, run_routine, search_replace, session_search, shell, show_panel, web_fetch,
+    web_search, write,
 };
 
 /// One row in the native catalog. When deferred loading is on, `defer` tools ship as
@@ -47,6 +48,12 @@ fn mods_on(_gate: &Gate) -> bool {
 
 fn mods_action_on(gate: &Gate) -> bool {
     not_readonly(gate) && mods::available()
+}
+
+/// Only once the person has a routine the chat may start, so other lists stay
+/// as they were.
+fn routines_on(gate: &Gate) -> bool {
+    not_readonly(gate) && run_routine::visible(&crate::perm::config_dir())
 }
 
 fn generative_ui_on(_gate: &Gate) -> bool {
@@ -176,7 +183,7 @@ pub fn read_defs() -> &'static [ToolDef] {
 /// Mutating and gated tools. Edit and shell stay eager (the general coding set);
 /// scheduler, media, desktop, connection and the rest are deferred.
 pub fn action_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 24] = [
+    static DEFS: [ToolDef; 25] = [
         ToolDef {
             name: "send_subagent_message",
             blurb: "Send a message to a spawned subagent",
@@ -283,6 +290,13 @@ pub fn action_defs() -> &'static [ToolDef] {
             defer: true,
             schema: control::scheduler_create_schema,
             visible: not_readonly,
+        },
+        ToolDef {
+            name: run_routine::NAME,
+            blurb: "Run one of the user's saved routines",
+            defer: true,
+            schema: run_routine::schema,
+            visible: routines_on,
         },
         ToolDef {
             name: "scheduler_delete",

@@ -744,7 +744,7 @@ pub fn run_cli(args: &[String], config_dir: &Path) -> i32 {
         return 2;
     };
     let dir = routine::routines_dir(config_dir).join(&name);
-    let routine = match Routine::load(&dir, &gate::is_known) {
+    let routine = match Routine::load(&dir, &step_tool) {
         Ok(r) => r,
         Err(problems) => {
             eprintln!("{} can't run:\n- {}", dir.display(), problems.join("\n- "));
@@ -777,6 +777,12 @@ pub fn run_cli(args: &[String], config_dir: &Path) -> i32 {
         Ended::Stopped { .. } => 1,
         _ => 0,
     }
+}
+
+/// A tool a routine step may name: any native tool but `run_routine`, so a
+/// routine never starts another routine.
+pub fn step_tool(name: &str) -> bool {
+    gate::is_known(name) && name != crate::tools::run_routine::NAME
 }
 
 /// `--set key=value`, typed by the routine's input kinds.

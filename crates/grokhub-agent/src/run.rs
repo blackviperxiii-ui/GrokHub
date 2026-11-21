@@ -8220,6 +8220,7 @@ mod tests {
                 ALL,
             ),
             ("work_archive", r#"{"id":"w1"}"#, ALL),
+            ("run_routine", r#"{"name":"disk-report"}"#, ALL),
         ];
         for (name, arguments, line) in rows {
             let line = if *line == ALL { arguments } else { line };
@@ -8242,7 +8243,7 @@ mod tests {
         native.sort_unstable();
         native.dedup();
         assert_eq!(covered, native);
-        assert_eq!(native.len(), 74);
+        assert_eq!(native.len(), 75);
     }
 
     #[test]

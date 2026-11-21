@@ -11,7 +11,7 @@ fn temp(tag: &str) -> PathBuf {
 
 fn routine(v: Value) -> Routine {
     let r = Routine::parse(&v.to_string()).unwrap();
-    assert_eq!(r.problems(&gate::is_known), Vec::<String>::new());
+    assert_eq!(r.problems(&step_tool), Vec::<String>::new());
     r
 }
 
