@@ -1,0 +1,1 @@
+- A routine wakes the model only when it has to: to fill a missing input from your own words, to pick a branch at a decision step, or to fix a failed step. A fix can try the step again with new arguments, skip it, stop, or hand the job to a full assistant turn. Each step gets at most one fix, and each run at most two.

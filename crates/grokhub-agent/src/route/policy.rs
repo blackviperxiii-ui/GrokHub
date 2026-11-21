@@ -153,6 +153,9 @@ pub const CLASS_ALIASES: &[(&str, &str)] = &[
     ("episode:step", "desktop:soft"),
     ("background:review", "background:judge"),
     ("chat:turn", "chat:default"),
+    // A routine's fill and branch calls, and its repair call.
+    ("routine:fill", "background:classify"),
+    ("routine:repair", "background:judge"),
 ];
 
 /// The table row for a call class (after aliases), or `None` for a class the
@@ -542,6 +545,14 @@ mod tests {
             ("high", "high", "xhigh")
         );
         assert_eq!(class_row("episode:step").unwrap().class, "desktop:soft");
+        assert_eq!(
+            class_row("routine:fill").unwrap().class,
+            "background:classify"
+        );
+        assert_eq!(
+            class_row("routine:repair").unwrap().class,
+            "background:judge"
+        );
         assert_eq!(class_row("eval:item"), None);
         const { assert!(POLICY_LIVE && MODEL_LIVE) };
     }

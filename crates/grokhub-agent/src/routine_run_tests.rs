@@ -38,6 +38,8 @@ fn spec<'a>(r: &'a Routine, dir: &'a Path, stop: &'a dyn Fn() -> bool) -> RunSpe
         approve: None,
         desktop: None,
         stop,
+        brain: None,
+        words: None,
     }
 }
 
@@ -383,4 +385,223 @@ fn a_failed_command_stops_unless_the_next_step_checks_its_exit_code() {
         Some((0, "Filesystem\n/dev/vda"))
     );
     assert_eq!(exit_line("read_file", "exit 0\nx"), None);
+}
+
+/// A stand-in model: the replies it was given, in order.
+struct Model(RefCell<Vec<String>>, RefCell<Vec<&'static str>>);
+
+impl Model {
+    fn new(replies: &[&str]) -> Model {
+        Model(
+            RefCell::new(replies.iter().map(|r| r.to_string()).collect()),
+            RefCell::default(),
+        )
+    }
+}
+
+impl Brain for Model {
+    fn ask(
+        &self,
+        class: &'static str,
+        format: crate::client::TextFormat,
+        _: &str,
+        _: &str,
+    ) -> Option<String> {
+        self.1.borrow_mut().push(format.name);
+        assert_eq!(
+            class,
+            if format.name == "routine_repair" {
+                "routine:repair"
+            } else {
+                "routine:fill"
+            }
+        );
+        let mut r = self.0.borrow_mut();
+        (!r.is_empty()).then(|| r.remove(0))
+    }
+}
+
+#[test]
+fn the_model_fills_a_missing_input_from_the_words_that_started_the_run() {
+    let dir = temp("fill");
+    std::fs::write(dir.join("notes.txt"), "used 97%\n").unwrap();
+    let r = routine(json!({
+        "version": 1, "name": "fill",
+        "inputs": { "file": { "type": "string" } },
+        "steps": [{ "id": "read", "tool": "read_file", "args": { "target_file": "{{inputs.file}}" } }],
+        "result": "read {{inputs.file}}"
+    }));
+    let stop = || false;
+    let model = Model::new(&[r#"{"values":[{"name":"file","value":"notes.txt"}]}"#]);
+    let report = run(&RunSpec {
+        brain: Some(&model),
+        words: Some("check notes.txt"),
+        ..spec(&r, &dir, &stop)
+    });
+    assert_eq!(report.ended, Ended::Finished, "{}", report.text());
+    assert_eq!(report.lines[0], "inputs: the model filled inputs.file");
+    assert_eq!(report.result.as_deref(), Some("read notes.txt"));
+    assert_eq!(report.model_calls, 1);
+    // With no words to fill from, the model isn't asked.
+    let model = Model::new(&[]);
+    let report = run(&RunSpec {
+        brain: Some(&model),
+        ..spec(&r, &dir, &stop)
+    });
+    assert_eq!(
+        report.ended,
+        Ended::Stopped {
+            at: "inputs".into(),
+            why: "it needs a value for inputs.file".into()
+        }
+    );
+    assert_eq!(model.1.borrow().len(), 0);
+}
+
+#[test]
+fn an_ask_step_takes_the_branch_the_model_names() {
+    let dir = temp("branch");
+    let r = routine(json!({
+        "version": 1, "name": "branch",
+        "steps": [
+            { "id": "pick", "ask": "Photo or document?", "branches": { "photo": "shrink", "document": "done" } },
+            { "id": "shrink", "tool": "list_dir", "args": { "target_directory": "." } }
+        ],
+        "result": "{{pick.value}}"
+    }));
+    let stop = || false;
+    let model = Model::new(&[r#"{"branch":"photo","why":"It's a JPEG."}"#]);
+    let report = run(&RunSpec {
+        brain: Some(&model),
+        ..spec(&r, &dir, &stop)
+    });
+    assert_eq!(report.ended, Ended::Finished, "{}", report.text());
+    assert_eq!(report.lines[0], "pick: the model chose photo: It's a JPEG.");
+    assert_eq!(report.result.as_deref(), Some("photo"));
+    let model = Model::new(&[r#"{"branch":"document","why":"A PDF."}"#]);
+    assert_eq!(
+        run(&RunSpec {
+            brain: Some(&model),
+            ..spec(&r, &dir, &stop)
+        })
+        .ended,
+        Ended::Done { at: "pick".into() }
+    );
+    let model = Model::new(&[r#"{"branch":"video","why":""}"#]);
+    assert_eq!(
+        run(&RunSpec {
+            brain: Some(&model),
+            ..spec(&r, &dir, &stop)
+        })
+        .ended,
+        Ended::Stopped {
+            at: "pick".into(),
+            why: "the model chose \"video\", which isn't one of document, photo".into()
+        }
+    );
+}
+
+#[test]
+fn a_failed_step_gets_one_repair_and_the_run_at_most_two() {
+    let dir = temp("repair");
+    std::fs::write(dir.join("real.txt"), "used 95%\n").unwrap();
+    let r = routine(json!({
+        "version": 1, "name": "repair",
+        "steps": [
+            { "id": "read", "tool": "read_file", "args": { "target_file": "gone.txt" } },
+            { "id": "use", "expect": { "from": "read.stdout", "regex": "used (\\d+)%", "group": 1 } },
+            { "id": "again", "tool": "read_file", "args": { "target_file": "gone.txt" } },
+            { "id": "last", "tool": "read_file", "args": { "target_file": "gone.txt" } }
+        ],
+        "result": "{{use.value}}"
+    }));
+    let stop = || false;
+    // Retry with new arguments, then skip: two repairs, then the third
+    // failure stops the run.
+    let model = Model::new(&[
+        r#"{"do":"retry","args_json":"{\"target_file\":\"real.txt\"}","why":"The file is real.txt."}"#,
+        r#"{"do":"skip","args_json":"{}","why":"Not needed."}"#,
+    ]);
+    let report = run(&RunSpec {
+        brain: Some(&model),
+        ..spec(&r, &dir, &stop)
+    });
+    assert!(
+        report.lines[0].starts_with("read: read_file failed: "),
+        "{}",
+        report.lines[0]
+    );
+    assert!(
+        report.lines[0].ends_with("; trying again: The file is real.txt."),
+        "{}",
+        report.lines[0]
+    );
+    assert_eq!(report.lines[2], "use: read.stdout is 95, as expected");
+    assert!(
+        report.lines[3].ends_with("; skipped: Not needed."),
+        "{}",
+        report.lines[3]
+    );
+    let Ended::Stopped { at, .. } = &report.ended else {
+        panic!("{:?}", report.ended)
+    };
+    assert_eq!(at, "last");
+    assert_eq!(report.model_calls, 2);
+    assert_eq!(
+        model.1.borrow().as_slice(),
+        ["routine_repair", "routine_repair"]
+    );
+    // A retry that fails again isn't repaired twice.
+    let model = Model::new(&[
+        r#"{"do":"retry","args_json":"{\"target_file\":\"still-gone.txt\"}","why":"Try again."}"#,
+        r#"{"do":"skip","args_json":"{}","why":"unused"}"#,
+    ]);
+    let report = run(&RunSpec {
+        brain: Some(&model),
+        ..spec(&r, &dir, &stop)
+    });
+    let Ended::Stopped { at, why } = &report.ended else {
+        panic!("{:?}", report.ended)
+    };
+    assert_eq!(at, "read");
+    assert!(why.ends_with(" (it still failed after one fix)"), "{why}");
+    assert_eq!(report.model_calls, 1);
+    // Replan hands the job to a full turn.
+    let model =
+        Model::new(&[r#"{"do":"replan","args_json":"{}","why":"There is no such file here."}"#]);
+    assert_eq!(
+        run(&RunSpec {
+            brain: Some(&model),
+            ..spec(&r, &dir, &stop)
+        })
+        .ended,
+        Ended::Replan {
+            at: "read".into(),
+            why: "There is no such file here.".into()
+        }
+    );
+}
+
+#[test]
+fn a_refused_step_is_never_repaired() {
+    let dir = temp("refused");
+    let r = routine(json!({
+        "version": 1, "name": "refused",
+        "steps": [{ "id": "say", "tool": "run_terminal_command", "args": { "command": "echo hi" } }]
+    }));
+    let stop = || false;
+    let model =
+        Model::new(&[r#"{"do":"retry","args_json":"{\"command\":\"echo hi\"}","why":"x"}"#]);
+    let report = run(&RunSpec {
+        brain: Some(&model),
+        ..spec(&r, &dir, &stop)
+    });
+    assert_eq!(
+        report.ended,
+        Ended::Stopped {
+            at: "say".into(),
+            why: gate::unattended_deny("run_terminal_command")
+        }
+    );
+    assert_eq!(report.model_calls, 0);
 }
