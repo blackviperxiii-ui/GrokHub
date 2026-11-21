@@ -261,6 +261,11 @@ pub fn is_web_lookup(name: &str) -> bool {
     name == WEB_SEARCH || name == WEB_FETCH
 }
 
+/// The terminal command tool.
+pub fn is_shell(name: &str) -> bool {
+    SHELL.contains(&name)
+}
+
 pub fn is_desktop(name: &str) -> bool {
     DESKTOP.contains(&name)
 }

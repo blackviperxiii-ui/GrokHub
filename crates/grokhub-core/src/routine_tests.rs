@@ -313,3 +313,57 @@ fn loading_checks_the_folder_name_and_each_script() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_expect_passes_misses_or_cant_read_its_output() {
+    let mut values = Values::default();
+    values.steps.insert(
+        "df".into(),
+        StepOut {
+            stdout: "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vda 263174212 236856791 26317421 91% /\n".into(),
+            exit_code: Some(0),
+            ..StepOut::default()
+        },
+    );
+    let expect = |v: Value| serde_json::from_value::<Expect>(v).unwrap().check(&values);
+    let full = json!({ "from": "df.stdout", "regex": "(\\d+)%", "group": 1, "at_least": 90 });
+    assert_eq!(expect(full), Ok(Checked::Pass("91".into())));
+    let roomy = json!({ "from": "df.stdout", "regex": "(\\d+)%", "group": 1, "at_least": 95 });
+    assert_eq!(expect(roomy), Ok(Checked::Miss("91".into())));
+    assert_eq!(
+        expect(json!({ "from": "df.exit_code", "equals": 0 })),
+        Ok(Checked::Pass("0".into()))
+    );
+    assert_eq!(
+        expect(
+            json!({ "from": "df.stdout", "regex": "Mounted on (\\w+)", "group": 1, "equals": "on" })
+        ),
+        Err("df.stdout has nothing matching \"Mounted on (\\w+)\"".into())
+    );
+    assert_eq!(
+        expect(json!({ "from": "df.stdout", "regex": "/dev/(\\w+)", "group": 1, "at_most": 3 })),
+        Err("df.stdout gave \"vda\", which isn't a number".into())
+    );
+    assert_eq!(
+        expect(json!({ "from": "df.stderr" })),
+        Ok(Checked::Miss(String::new()))
+    );
+    assert_eq!(
+        [
+            parse_ref("inputs.mount").unwrap().to_string(),
+            parse_ref("df.exit_code").unwrap().to_string(),
+            parse_ref("p.json").unwrap().to_string(),
+            parse_ref("p.json.a.0").unwrap().to_string(),
+        ],
+        ["inputs.mount", "df.exit_code", "p.json", "p.json.a.0"]
+    );
+}
+
+#[test]
+fn a_script_step_runs_a_python_file() {
+    let r = routine(json!([{ "id": "a", "script": "check.sh" }]));
+    assert_eq!(
+        r.problems(&tools),
+        ["step \"a\": script \"check.sh\" must be a Python file (.py)"]
+    );
+}

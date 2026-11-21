@@ -264,6 +264,30 @@ It also settles these details of the format:
   - quotes written around a value in a command (the runner quotes values
     itself).
 
+## Phase 2 notes
+
+Phase 2 (`grokhub_agent::routine_run`) runs steps with no model.
+
+- **Gate.** Each `tool`, `script` and `desktop` call goes through
+  `gate::decide_with`, as a model's call does:
+  - the hard floor and hard classes;
+  - the permission policy;
+  - Ask, with the person's answer when someone is there. Unattended, a
+    change step is refused, as in an Ask-mode automation. This holds until
+    phase 5 adds consent.
+- **Scripts** run as the sandboxed `run_tool_script` call, with their filled
+  `args` in `ARGS`.
+- **Desktop steps** map each saved op to the desktop tool, one call at a
+  time. They need the app's desktop control.
+- **Exit codes.** A command's `exit N` line becomes its `exit_code`. A
+  non-zero exit fails the step, unless the next step is an `expect` on that
+  exit code.
+- **Stops.** Missing inputs, `ask` steps and failures stop the run with a
+  plain message. The model wakes at those points in phase 3.
+- **Command.** `grokhub-hub routine run <name> [--dry-run] [--set key=value]`
+  runs in the current folder and asks on the terminal before a change step.
+  A dry run fills and gates every step and runs none.
+
 ## Build order
 
 Each phase is one PR into `beta`, with tests that assert literal results.

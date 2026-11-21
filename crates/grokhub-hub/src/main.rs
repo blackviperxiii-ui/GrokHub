@@ -52,6 +52,7 @@ grokhub-hub --doctor [--fix]  auth / memory / hub / security checks\n  \
 grokhub-hub --oauth      sign in with Grok (device code) for the desktop app\n  \
 grokhub-hub --update     how this install updates (runs nothing)\n  \
 grokhub-hub bench local  on-device speed + eval\n  \
+grokhub-hub routine run <name> [--dry-run] [--set key=value]  a saved routine, no model\n  \
 grokhub-hub --askpass <socket>  answer a sudo prompt (the app runs this)\n  \
 grokhub-hub --version\n  \
 grokhub-hub --help\n"
@@ -122,6 +123,13 @@ fn main() {
             use_os_stores();
             std::process::exit(grokhub_agent::route::local_bench::run_cli());
         }
+        Launch::RoutineRun => {
+            use_os_stores();
+            std::process::exit(grokhub_agent::routine_run::run_cli(
+                &args[3..],
+                &grokhub_core::paths::config_dir(),
+            ));
+        }
         Launch::Serve => {
             let port = hub_port();
             let banner = format!("grokhub-hub {}", env!("CARGO_PKG_VERSION"));
@@ -169,6 +177,7 @@ mod tests {
             "  grokhub-hub              listen on GROKHUB_HUB_PORT or :18766 (also --hub)\n",
             "  grokhub-hub --mcp-self   the agent's skill, connection and automation tools on stdin\n",
             "  grokhub-hub bench local  on-device speed + eval\n",
+            "  grokhub-hub routine run <name> [--dry-run] [--set key=value]  a saved routine, no model\n",
             "  grokhub-hub --askpass <socket>  answer a sudo prompt (the app runs this)\n",
             "  grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n",
             "  grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n",
