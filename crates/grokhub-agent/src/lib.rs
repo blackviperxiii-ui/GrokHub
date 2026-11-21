@@ -61,6 +61,7 @@ mod retry;
 pub mod review;
 pub mod route;
 pub mod routine_run;
+pub mod routine_wake;
 mod run;
 pub mod sandbox;
 mod scan;

@@ -3,9 +3,10 @@
 //! Each `tool`, `script` and `desktop` step goes through the same gate as a
 //! model's tool call ([`crate::gate::decide_with`]: the hard floor, hard
 //! classes, the permission policy and Ask / unattended rules), then through
-//! the native tool dispatch. `expect` steps are checked here. An `ask` step,
-//! a failed step and a missing input stop the run with a plain message;
-//! waking the model at those points is phase 3.
+//! the native tool dispatch. `expect` steps are checked here. The model
+//! wakes only to fill a missing input, pick an `ask` step's branch or repair
+//! a failed step ([`crate::routine_wake`]); with no model those stop the run
+//! with a plain message.
 //!
 //! A dry run fills and gates every step, top to bottom, and runs nothing.
 
@@ -18,6 +19,7 @@ use grokhub_core::routine::{
 use serde_json::{json, Map, Value};
 
 use crate::gate::{self, Decision, DeskFlags, Gate, PermMode};
+use crate::routine_wake::{Brain, Repair};
 use crate::tools::{self, DesktopOps, ToolCtx};
 
 /// Most of a step's output kept in a report line.
@@ -54,6 +56,11 @@ pub struct RunSpec<'a> {
     pub desktop: Option<&'a dyn DesktopOps>,
     /// Halt: checked before each step.
     pub stop: &'a dyn Fn() -> bool,
+    /// The model for fill, branch and repair; `None` stops at those points.
+    pub brain: Option<&'a dyn Brain>,
+    /// The words that started the run (a chat ask, a webhook's text), which
+    /// a fill reads.
+    pub words: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +71,8 @@ pub enum Ended {
     Done { at: String },
     /// The run couldn't go on.
     Stopped { at: String, why: String },
+    /// The routine can't do this job: a full assistant turn takes over.
+    Replan { at: String, why: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +81,7 @@ pub struct Report {
     pub lines: Vec<String>,
     pub ended: Ended,
     pub result: Option<String>,
-    /// Model calls this run made. Phase 2 makes none.
+    /// Model calls this run made: fills, branches and repairs.
     pub model_calls: u32,
     pub dry_run: bool,
 }
@@ -86,6 +95,9 @@ impl Report {
             Ended::Finished => self.result.clone().unwrap_or_else(|| "Finished.".into()),
             Ended::Done { at } => format!("Stopped early at {at}, as planned. Nothing to report."),
             Ended::Stopped { at, why } => format!("Stopped at {at}: {why}"),
+            Ended::Replan { at, why } => {
+                format!("At {at} this routine couldn't do the job, so it needs a full assistant turn: {why}")
+            }
         };
         if !out.is_empty() {
             out.push_str("\n\n");
@@ -93,6 +105,29 @@ impl Report {
         out.push_str(&tail);
         out
     }
+}
+
+/// Why a step didn't finish.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Fail {
+    /// The gate, the person or the setup said no. Never repaired.
+    Refused(String),
+    /// The step broke. The model may repair it.
+    Broke(String),
+}
+
+/// Where the run goes after a step.
+enum Goto {
+    Next,
+    Step(usize),
+    Done,
+}
+
+/// A step that finished: its outputs, its report line, and where next.
+struct Went {
+    out: StepOut,
+    line: String,
+    goto: Goto,
 }
 
 /// Runs (or dry-runs) `spec.routine`.
@@ -105,14 +140,55 @@ pub fn run(spec: &RunSpec<'_>) -> Report {
         dry_run: spec.dry_run,
     };
     let mut values = Values::default();
-    match inputs(spec.routine, &spec.inputs) {
-        Ok(v) => values.inputs = v,
+    let missing = match inputs(spec.routine, &spec.inputs) {
+        Ok((given, missing)) => {
+            values.inputs = given;
+            missing
+        }
         Err(why) => {
             report.ended = Ended::Stopped {
                 at: "inputs".into(),
                 why,
             };
             return report;
+        }
+    };
+    if !missing.is_empty() {
+        let names = missing
+            .iter()
+            .map(|m| format!("inputs.{m}"))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let words = spec.words.map(str::trim).filter(|w| !w.is_empty());
+        match (spec.brain, words) {
+            _ if spec.dry_run => report.lines.push(format!(
+                "inputs: {names} would be filled from the words that start the run"
+            )),
+            (Some(brain), Some(words)) => {
+                report.model_calls += 1;
+                match crate::routine_wake::fill(brain, spec.routine, &missing, words) {
+                    Ok(filled) => {
+                        report
+                            .lines
+                            .push(format!("inputs: the model filled {names}"));
+                        values.inputs.extend(filled);
+                    }
+                    Err(why) => {
+                        report.ended = Ended::Stopped {
+                            at: "inputs".into(),
+                            why,
+                        };
+                        return report;
+                    }
+                }
+            }
+            _ => {
+                report.ended = Ended::Stopped {
+                    at: "inputs".into(),
+                    why: format!("it needs a value for {names}"),
+                };
+                return report;
+            }
         }
     }
     let gate = Gate {
@@ -128,6 +204,8 @@ pub fn run(spec: &RunSpec<'_>) -> Report {
         policy: &policy,
     };
     let steps = &spec.routine.steps;
+    let mut repaired = std::collections::BTreeSet::new();
+    let mut retry: Option<Map<String, Value>> = None;
     let mut i = 0;
     while i < steps.len() {
         let step = &steps[i];
@@ -148,62 +226,73 @@ pub fn run(spec: &RunSpec<'_>) -> Report {
             i += 1;
             continue;
         }
-        let went = match &step.kind {
-            StepKind::Tool { tool, args } => runner.tool(&step.id, tool, args, &values),
-            StepKind::Script { file, args } => runner.script(&step.id, file, args, &values),
-            StepKind::Desktop(recipe) => runner.desktop(&step.id, &recipe.ops),
-            StepKind::Expect { expect, otherwise } => match expect.check(&values) {
-                Ok(Checked::Pass(v)) => {
-                    report
-                        .lines
-                        .push(format!("{}: {} is {v}, as expected", step.id, expect.from));
-                    values.steps.insert(step.id.clone(), out_value(v));
-                    i += 1;
-                    continue;
-                }
-                Ok(Checked::Miss(v)) => {
-                    values.steps.insert(step.id.clone(), out_value(v.clone()));
-                    match otherwise {
-                        Some(target) => {
-                            report.lines.push(format!(
-                                "{}: {} is {v}, so on to {target}",
-                                step.id, expect.from
-                            ));
-                            if target == routine::DONE {
-                                report.ended = Ended::Done {
-                                    at: step.id.clone(),
-                                };
-                                return report;
-                            }
-                            i = steps
-                                .iter()
-                                .position(|s| &s.id == target)
-                                .unwrap_or(steps.len());
-                            continue;
-                        }
-                        None => Err(format!(
-                            "{} is {v}, which isn't what this step expects",
-                            expect.from
-                        )),
+        let (went, calls) = runner.step(i, &values, retry.take());
+        report.model_calls += calls;
+        match went {
+            Ok(Went { out, line, goto }) => {
+                report.lines.push(format!("{}: {line}", step.id));
+                values.steps.insert(step.id.clone(), out);
+                match goto {
+                    Goto::Next => i += 1,
+                    Goto::Step(j) => i = j,
+                    Goto::Done => {
+                        report.ended = Ended::Done {
+                            at: step.id.clone(),
+                        };
+                        return report;
                     }
                 }
-                Err(e) => Err(e),
-            },
-            StepKind::Ask { .. } => {
-                Err("this step needs the model to choose, which routines can't do yet".into())
             }
-        };
-        match went {
-            Ok(out) => {
-                report
-                    .lines
-                    .push(format!("{}: {}", step.id, clip(out.stdout.trim())));
-                values.steps.insert(step.id.clone(), out);
-                i += 1;
-            }
-            Err(why) => {
+            Err(Fail::Refused(why)) => {
                 report.ended = stopped(why);
                 return report;
+            }
+            Err(Fail::Broke(why)) => {
+                let brain = spec.brain.filter(|_| {
+                    !repaired.contains(&i)
+                        && u32::try_from(repaired.len()).unwrap_or(u32::MAX)
+                            < crate::routine_wake::MAX_REPAIRS
+                });
+                let Some(brain) = brain else {
+                    let after = if repaired.contains(&i) {
+                        " (it still failed after one fix)"
+                    } else {
+                        ""
+                    };
+                    report.ended = stopped(format!("{why}{after}"));
+                    return report;
+                };
+                repaired.insert(i);
+                report.model_calls += 1;
+                match crate::routine_wake::repair(brain, spec.routine, step, &why, &values) {
+                    Ok((Repair::Retry(args), fix)) => {
+                        report
+                            .lines
+                            .push(format!("{}: {why}; trying again: {fix}", step.id));
+                        retry = Some(args);
+                    }
+                    Ok((Repair::Skip, fix)) => {
+                        report
+                            .lines
+                            .push(format!("{}: {why}; skipped: {fix}", step.id));
+                        i += 1;
+                    }
+                    Ok((Repair::Stop, fix)) => {
+                        report.ended = stopped(format!("{why}. {fix}"));
+                        return report;
+                    }
+                    Ok((Repair::Replan, fix)) => {
+                        report.ended = Ended::Replan {
+                            at: step.id.clone(),
+                            why: fix,
+                        };
+                        return report;
+                    }
+                    Err(e) => {
+                        report.ended = stopped(format!("{why} ({e})"));
+                        return report;
+                    }
+                }
             }
         }
     }
@@ -218,9 +307,12 @@ pub fn run(spec: &RunSpec<'_>) -> Report {
     report
 }
 
-/// The trigger's values, type-checked, plus defaults. A required input with
-/// no value stops the run (phase 3 asks the model for it).
-fn inputs(routine: &Routine, given: &Map<String, Value>) -> Result<Map<String, Value>, String> {
+/// The trigger's values, type-checked, plus defaults, and the required
+/// inputs still without a value.
+fn inputs(
+    routine: &Routine,
+    given: &Map<String, Value>,
+) -> Result<(Map<String, Value>, Vec<String>), String> {
     let mut out = Map::new();
     for (name, v) in given {
         let Some(input) = routine.inputs.get(name) else {
@@ -234,6 +326,7 @@ fn inputs(routine: &Routine, given: &Map<String, Value>) -> Result<Map<String, V
         }
         out.insert(name.clone(), v.clone());
     }
+    let mut missing = Vec::new();
     for (name, input) in &routine.inputs {
         if out.contains_key(name) {
             continue;
@@ -242,10 +335,10 @@ fn inputs(routine: &Routine, given: &Map<String, Value>) -> Result<Map<String, V
             Some(d) => {
                 out.insert(name.clone(), d.clone());
             }
-            None => return Err(format!("it needs a value for inputs.{name}")),
+            None => missing.push(name.clone()),
         }
     }
-    Ok(out)
+    Ok((out, missing))
 }
 
 fn out_value(v: String) -> StepOut {
@@ -275,6 +368,99 @@ impl Runner<'_> {
             halted: d.halted(),
             locked: d.locked(),
         })
+    }
+
+    /// Runs step `i`. `retry` holds new arguments from a repair. Returns the
+    /// model calls it made (a branch).
+    fn step(
+        &self,
+        i: usize,
+        values: &Values,
+        retry: Option<Map<String, Value>>,
+    ) -> (Result<Went, Fail>, u32) {
+        let steps = &self.spec.routine.steps;
+        let step = &steps[i];
+        let ran = |out: Result<StepOut, Fail>| {
+            out.map(|out| Went {
+                line: clip(out.stdout.trim()),
+                out,
+                goto: Goto::Next,
+            })
+        };
+        let goto = |target: &str| {
+            if target == routine::DONE {
+                Goto::Done
+            } else {
+                steps
+                    .iter()
+                    .position(|s| s.id == target)
+                    .map_or(Goto::Done, Goto::Step)
+            }
+        };
+        let went = match &step.kind {
+            StepKind::Tool { tool, args } => ran(match retry {
+                Some(args) => self.call(&step.id, tool, &Value::Object(args).to_string()),
+                None => fill_args(tool, args, values, Quote::shell())
+                    .map_err(Fail::Broke)
+                    .and_then(|filled| {
+                        self.call(&step.id, tool, &Value::Object(filled).to_string())
+                    }),
+            }),
+            StepKind::Script { file, args } => {
+                let args = retry.as_ref().unwrap_or(args);
+                ran(self
+                    .script_call(file, args, values)
+                    .map_err(Fail::Broke)
+                    .and_then(|arguments| self.call(&step.id, tools::ptc::NAME, &arguments)))
+            }
+            StepKind::Desktop(recipe) => ran(self.desktop(&step.id, &recipe.ops)),
+            StepKind::Expect { expect, otherwise } => match expect.check(values) {
+                Ok(Checked::Pass(v)) => Ok(Went {
+                    line: format!("{} is {v}, as expected", expect.from),
+                    out: out_value(v),
+                    goto: Goto::Next,
+                }),
+                Ok(Checked::Miss(v)) => match otherwise {
+                    Some(target) => Ok(Went {
+                        line: format!("{} is {v}, so on to {target}", expect.from),
+                        out: out_value(v),
+                        goto: goto(target),
+                    }),
+                    None => Err(Fail::Broke(format!(
+                        "{} is {v}, which isn't what this step expects",
+                        expect.from
+                    ))),
+                },
+                Err(e) => Err(Fail::Broke(e)),
+            },
+            StepKind::Ask { question, branches } => {
+                let Some(brain) = self.spec.brain else {
+                    return (
+                        Err(Fail::Refused(
+                            "this step needs the model to choose, and this run has none".into(),
+                        )),
+                        0,
+                    );
+                };
+                let names: Vec<&str> = branches.keys().map(String::as_str).collect();
+                let picked = crate::routine_wake::branch(brain, question, &names, values)
+                    .map(|(name, why)| Went {
+                        line: format!("the model chose {name}: {why}"),
+                        goto: goto(&branches[&name]),
+                        out: out_value(name),
+                    })
+                    .map_err(Fail::Refused);
+                return (picked, 1);
+            }
+        };
+        (went, 0)
+    }
+
+    /// One gated call through the native dispatch.
+    fn call(&self, step: &str, tool: &str, arguments: &str) -> Result<StepOut, Fail> {
+        self.cleared(step, tool, arguments).map_err(Fail::Refused)?;
+        self.dispatch(tool, arguments, self.next_checks_exit(step))
+            .map_err(Fail::Broke)
     }
 
     /// The gate's answer for one call, with the person's answer for an Ask.
@@ -331,19 +517,6 @@ impl Runner<'_> {
         })
     }
 
-    fn tool(
-        &self,
-        step: &str,
-        tool: &str,
-        args: &Map<String, Value>,
-        values: &Values,
-    ) -> Result<StepOut, String> {
-        let filled = fill_args(tool, args, values, Quote::shell())?;
-        let arguments = Value::Object(filled).to_string();
-        self.cleared(step, tool, &arguments)?;
-        self.dispatch(tool, &arguments, self.next_checks_exit(step))
-    }
-
     /// Whether the step after `step` is an `expect` on `step.exit_code`.
     fn next_checks_exit(&self, step: &str) -> bool {
         let steps = &self.spec.routine.steps;
@@ -371,30 +544,24 @@ impl Runner<'_> {
         Ok(json!({ "script": script }).to_string())
     }
 
-    fn script(
-        &self,
-        step: &str,
-        file: &str,
-        args: &Map<String, Value>,
-        values: &Values,
-    ) -> Result<StepOut, String> {
-        let arguments = self.script_call(file, args, values)?;
-        self.cleared(step, tools::ptc::NAME, &arguments)?;
-        self.dispatch(tools::ptc::NAME, &arguments, false)
-    }
-
-    fn desktop(&self, step: &str, ops: &[ComputerOp]) -> Result<StepOut, String> {
+    fn desktop(&self, step: &str, ops: &[ComputerOp]) -> Result<StepOut, Fail> {
         let Some(desk) = self.spec.desktop else {
-            return Err("desktop steps need the app's desktop control".into());
+            return Err(Fail::Refused(
+                "desktop steps need the app's desktop control".into(),
+            ));
         };
         let mut said = Vec::new();
         for op in ops {
-            let (tool, args) = desktop_call(op)?;
+            let (tool, args) = desktop_call(op).map_err(Fail::Broke)?;
             let arguments = args.to_string();
-            self.cleared(step, tool, &arguments)?;
+            self.cleared(step, tool, &arguments)
+                .map_err(Fail::Refused)?;
             let out = desk.call(tool, &args);
             if out.failed {
-                return Err(format!("{tool} failed: {}", clip(out.text.trim())));
+                return Err(Fail::Broke(format!(
+                    "{tool} failed: {}",
+                    clip(out.text.trim())
+                )));
             }
             said.push(out.text);
         }
@@ -602,6 +769,8 @@ pub fn run_cli(args: &[String], config_dir: &Path) -> i32 {
         approve: Some(&Terminal),
         desktop: None,
         stop: &stop,
+        brain: None,
+        words: None,
     });
     println!("{}", report.text());
     match report.ended {

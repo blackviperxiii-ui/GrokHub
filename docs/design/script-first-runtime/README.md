@@ -288,6 +288,35 @@ Phase 2 (`grokhub_agent::routine_run`) runs steps with no model.
   runs in the current folder and asks on the terminal before a change step.
   A dry run fills and gates every step and runs none.
 
+## Phase 3 notes
+
+Phase 3 (`grokhub_agent::routine_wake`) wakes the model at three points.
+Each call has a fixed schema (`routine_fill`, `routine_branch`,
+`routine_repair`) and uses low effort with no tools. A failed call, or a
+reply that doesn't parse, stops the run with a plain message and never
+guesses.
+
+- **Fill.** It runs only when the run has words to read: the chat ask or
+  webhook text that started it. The reply is `{name, value}` text pairs,
+  typed by the input's kind. With no words, the run stops: "it needs a value
+  for inputs.x".
+- **Branch.** The reply must name one of the step's branches. It sees the
+  earlier outputs (clipped) as data.
+- **Repair.** It runs only for a step that *broke*: a tool error, an output
+  the check can't read, or a miss with no `else`. It never runs for a step
+  the gate, the person or the setup refused.
+  - `retry` carries the step's new arguments (`args_json`), which go through
+    the gate again.
+  - There is at most one repair per step and two per run. Then the run stops
+    and says what failed.
+  - `replan` ends the run as `Replan`, and the caller starts the full turn
+    (phase 4).
+- **Classes.** `routine:fill` is aliased to `background:classify`, which is
+  local-eligible, and `routine:repair` to `background:judge`.
+- **Command.** `grokhub-hub routine run` has no model yet: the client is
+  built in the app, so these points stop there. Phase 4's app triggers pass
+  one in.
+
 ## Build order
 
 Each phase is one PR into `beta`, with tests that assert literal results.
