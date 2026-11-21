@@ -1,8 +1,9 @@
 //! Routine runs the app starts (script-first runtime, phase 4): timer and
 //! file triggers on the scheduler's tick, and signed webhooks by the hook's
-//! name. Each run is unattended: no step that changes something runs, and a
-//! routine that hands the job back (`replan`) gets one read-only assistant
-//! turn. The model is only woken to fill, branch or repair, so a routine
+//! name. Each run is unattended: a step that changes something runs only
+//! when the person allowed the routine's change steps (consent bound to its
+//! content hash), and a routine that hands the job back (`replan`) gets one
+//! read-only assistant turn. The model is only woken to fill, branch or repair, so a routine
 //! runs with no API key at all until it needs one.
 
 use std::path::{Path, PathBuf};
@@ -100,13 +101,14 @@ pub fn run(
     });
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
     let stop = || false;
+    let consent = grokhub_agent::routine_consent::approver(config_dir, &start.routine);
     let report = routine_run::run(&RunSpec {
         routine: &start.routine,
         dir: &start.dir,
         workspace: &workspace,
         inputs: start.inputs.clone(),
         dry_run: false,
-        approve: None,
+        approve: consent.as_ref().map(|c| c as &dyn routine_run::Approve),
         desktop: None,
         stop: &stop,
         brain: brain.as_ref().map(|b| b as &dyn Brain),

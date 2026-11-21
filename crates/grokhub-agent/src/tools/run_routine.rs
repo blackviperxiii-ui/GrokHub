@@ -1,9 +1,10 @@
 //! `run_routine`: runs one of the person's saved routines from chat
 //! (script-first runtime, phase 4). The steps run with no model, each
-//! through the same gate as the model's own calls. The chat can't answer a
-//! step's ask yet, so a step that changes something is refused; read-only
-//! routines run to the end. Only routines with the `chat` trigger are
-//! listed, and the tool only shows when there is one.
+//! through the same gate as the model's own calls. A step that changes
+//! something runs only when the person allowed the routine's change steps
+//! ([`crate::routine_consent`]); otherwise it is refused. Only routines
+//! with the `chat` trigger are listed, and the tool only shows when there is
+//! one.
 
 use std::path::Path;
 
@@ -35,7 +36,7 @@ pub fn schema_in(config_dir: &Path) -> Value {
         "description": format!(
             "Run one of the user's saved routines: fixed steps that run with no model, each checked like your own tool calls. \
     Use it when the user asks for what a routine does; it is faster and cheaper than doing the steps yourself. \
-    Pass inputs by name; one left out takes its default. A step that would change something is refused here, and the result says so. \
+    Pass inputs by name; one left out takes its default. A step that would change something runs only if the user allowed that routine's changes; otherwise it is refused and the result says so. \
     Report the result as it reads.\nRoutines:\n{}",
             rows.join("\n")
         ),
@@ -95,6 +96,7 @@ pub fn run_in(config_dir: &Path, ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput 
         Ok(v) => v,
         Err(e) => return ToolOutput::err(e),
     };
+    let consent = crate::routine_consent::approver(config_dir, routine);
     let report = routine_run::run(&RunSpec {
         routine,
         dir,
@@ -104,7 +106,7 @@ pub fn run_in(config_dir: &Path, ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput 
             .get("dry_run")
             .and_then(Value::as_bool)
             .unwrap_or(false),
-        approve: None,
+        approve: consent.as_ref().map(|c| c as &dyn routine_run::Approve),
         desktop: ctx.desktop,
         stop: ctx.stop,
         brain: None,

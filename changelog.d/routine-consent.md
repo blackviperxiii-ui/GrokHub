@@ -1,0 +1,1 @@
+- You can let a routine's change steps run unattended: `grokhub-hub routine allow <name>` shows each step that would change something and asks once. Editing the routine takes that consent away, and a step in a hard class (delete, send, money, credentials) still stops every run. `grokhub-hub routine revoke <name>` takes it back.
