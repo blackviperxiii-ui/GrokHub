@@ -288,11 +288,17 @@ impl Sidecar {
                 return Ok(());
             }
             if !self.alive() {
-                return Err("local model server stopped before it was ready".into());
+                return Err(DIED.into());
             }
             std::thread::sleep(HEALTH_POLL);
         }
         Err("local model server did not become healthy in time".into())
+    }
+
+    /// How the child ended, once it has.
+    pub fn exit_status(&self) -> Option<std::process::ExitStatus> {
+        let mut child = self.child.lock().expect("sidecar lock");
+        child.try_wait().ok().flatten()
     }
 
     /// Child still running.
@@ -438,6 +444,10 @@ fn spawn_args(
     }
 }
 
+/// Spawns llama-server. Router mode (one server for the chat and embedding
+/// models) is used when `router_ok`, the engine has it and there is more than
+/// one model; the `bool` says whether it was.
+#[allow(clippy::too_many_arguments)]
 fn spawn_llama(
     binary: &Path,
     model: &Path,
@@ -446,7 +456,8 @@ fn spawn_llama(
     token: &str,
     launch: Option<&LaunchArgs>,
     bare_cpu: bool,
-) -> Result<Child, String> {
+    router_ok: bool,
+) -> Result<(Child, bool), String> {
     if !is_loopback_host(host) {
         return Err(format!("local model server must bind loopback, not {host}"));
     }
@@ -479,7 +490,8 @@ fn spawn_llama(
         .or_else(|| model.parent());
     let help = super::local_flags::help_text(binary);
     let preset = super::local_preset::RouterPreset::from_sidecar_plan(model, launch, models_dir);
-    let use_router = super::local_preset::supports_router_mode(&help) && preset.models.len() > 1;
+    let use_router =
+        router_ok && super::local_preset::supports_router_mode(&help) && preset.models.len() > 1;
     let mut args = if use_router {
         let preset_path = binary.with_file_name("llama-models-preset.ini");
         match preset.write_to(&preset_path) {
@@ -547,7 +559,133 @@ fn spawn_llama(
     if run.low_priority {
         super::local_flags::lower_priority(child.id());
     }
-    Ok(child)
+    Ok((child, use_router))
+}
+
+/// What [`Sidecar::wait_healthy`] says when the engine exits while loading.
+pub const DIED: &str = "local model server stopped before it was ready";
+
+/// Most characters of a log line quoted in a start error.
+const LOG_LINE_CHARS: usize = 160;
+
+fn clip_line(line: &str) -> String {
+    let line = line.trim();
+    match line.char_indices().nth(LOG_LINE_CHARS) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_string(),
+    }
+}
+
+/// The first log line holding any of `keys` (lowercase), clipped.
+fn log_line(log: &str, keys: &[&str]) -> Option<String> {
+    log.lines()
+        .find(|l| {
+            let l = l.to_ascii_lowercase();
+            keys.iter().any(|k| l.contains(k))
+        })
+        .map(clip_line)
+}
+
+/// Why the engine died while loading, from its log and exit, in words a
+/// person can act on. `None` when neither says anything.
+pub fn death_reason(log: &str, status: Option<std::process::ExitStatus>) -> Option<String> {
+    if autoconfig::oom_in_log(log) {
+        return Some("it ran out of memory loading the model".into());
+    }
+    if let Some(line) = log_line(log, &["unknown model architecture"]) {
+        return Some(format!(
+            "this engine is too old for the model ({line}). Get engine in Settings → Local AI updates it"
+        ));
+    }
+    if let Some(line) = log_line(
+        log,
+        &[
+            "address already in use",
+            "couldn't bind",
+            "failed to bind",
+            "bind failed",
+        ],
+    ) {
+        return Some(format!("its port was taken ({line})"));
+    }
+    if let Some(line) = log_line(
+        log,
+        &[
+            "invalid argument",
+            "unknown argument",
+            "unrecognized option",
+            "unknown option",
+            "error while handling argument",
+        ],
+    ) {
+        return Some(format!("it refused how it was started ({line})"));
+    }
+    // A backend names itself on every start, so only its error lines count.
+    let gpu_error = log.lines().find(|l| {
+        let l = l.to_ascii_lowercase();
+        ["hip", "rocblas", "rocm", "cuda", "vulkan", "vk::"]
+            .iter()
+            .any(|k| l.contains(k))
+            && ["error", "fail", "abort", "lost", "crash"]
+                .iter()
+                .any(|k| l.contains(k))
+    });
+    if let Some(line) = gpu_error.map(clip_line) {
+        let l = line.to_ascii_lowercase();
+        let backend = if l.contains("hip") || l.contains("roc") {
+            "ROCm"
+        } else if l.contains("cuda") {
+            "CUDA"
+        } else {
+            "Vulkan"
+        };
+        return Some(format!("the {backend} GPU backend failed ({line})"));
+    }
+    if let Some(line) = log_line(
+        log,
+        &[
+            "failed to load model",
+            "error loading model",
+            "gguf_init",
+            "invalid magic",
+            "failed to open",
+            "no such file",
+        ],
+    ) {
+        return Some(format!("it couldn't load the model file ({line})"));
+    }
+    let last = log
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .map(clip_line);
+    let how = status.and_then(exit_words);
+    match (how, last) {
+        (Some(how), Some(last)) => Some(format!("{how} (last log line: {last})")),
+        (Some(how), None) => Some(how),
+        (None, Some(last)) => Some(format!("it exited (last log line: {last})")),
+        (None, None) => None,
+    }
+}
+
+/// A process end in words: a crash signal or an exit code.
+fn exit_words(status: std::process::ExitStatus) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = status.signal() {
+            return Some(match sig {
+                4 => "it crashed: this processor lacks an instruction the engine was built for (illegal instruction)".into(),
+                6 => "it crashed (aborted)".into(),
+                9 => "it was killed (SIGKILL), often by the system running out of memory".into(),
+                11 => "it crashed (segmentation fault)".into(),
+                other => format!("it was stopped by signal {other}"),
+            });
+        }
+    }
+    status
+        .code()
+        .map(|code| format!("it exited with code {code}"))
 }
 
 /// Appended to the one-shot defaults to keep the engine off every GPU.
@@ -557,7 +695,7 @@ const CPU_ONLY_ARGS: [&str; 4] = ["-ngl", "0", "--device", "none"];
 /// engine died while loading (a GPU driver or backend crash, not a slow load
 /// or out-of-memory) and this launch could still reach a GPU.
 pub fn retry_on_cpu(err: &str, log: &str, launch: Option<&LaunchArgs>, bare_cpu: bool) -> bool {
-    let died = err.contains("stopped before it was ready");
+    let died = err.contains(DIED);
     let on_gpu = match launch {
         Some(l) => !l.cpu_only,
         None => !bare_cpu,
@@ -632,10 +770,12 @@ fn start_planned(
     let mut gpu_err: Option<String> = None;
     // The drafter came off after it stopped a start (see below).
     let mut dropped_draft = false;
+    // Router mode is tried first; a start it stops runs as one model.
+    let mut router_ok = true;
     loop {
         let port = free_loopback_port()?;
         let token = random_token();
-        let child = spawn_llama(
+        let (child, routed) = spawn_llama(
             &paths.binary,
             &paths.model,
             &host,
@@ -643,6 +783,7 @@ fn start_planned(
             &token,
             launch.as_ref(),
             bare_cpu,
+            router_ok,
         )?;
         let mmproj = super::local_preset::discover_mmproj_for(&paths.model);
         let models_dir = paths
@@ -725,8 +866,21 @@ fn start_planned(
             }
             Err(e) => e,
         };
+        let status = side.exit_status();
         side.stop();
         let log = std::fs::read_to_string(server_log_path(&paths.binary)).unwrap_or_default();
+        // Say why it died, from its log and exit, not only that it did.
+        let err = match death_reason(&log, status).filter(|_| err == DIED) {
+            Some(why) => format!("{DIED}: {why}"),
+            None => err,
+        };
+        // Router mode is newer than the one-model start: when it stops a
+        // start, the model starts alone before anything else is changed.
+        if routed && !autoconfig::oom_in_log(&log) {
+            health::log("router_off", Some(&err));
+            router_ok = false;
+            continue;
+        }
         // A drafter that won't load beside this model (another tokenizer, a
         // broken or half-written file) stops the whole start, and the model
         // and drafter on disk read as not ready. The model starts alone first,
@@ -747,9 +901,10 @@ fn start_planned(
             }
             continue;
         }
-        // The CPU died the same way, so the GPU was not why: report the first start.
+        // The CPU died too, so the GPU was not why: report the first start,
+        // and that the CPU didn't help.
         if let Some(first) = gpu_err.take() {
-            return Err(first);
+            return Err(format!("{first} (it didn't start on the CPU either)"));
         }
         let Some(prev) = launch.as_ref().filter(|_| autoconfig::oom_in_log(&log)) else {
             return Err(err);
@@ -3570,6 +3725,7 @@ mod tests {
             "tok",
             None,
             false,
+            true,
         )
         .unwrap_err();
         assert!(err.contains("must be named"), "{err}");
@@ -3590,6 +3746,7 @@ mod tests {
             "tok",
             None,
             false,
+            true,
         )
         .unwrap_err();
         assert!(err.contains("loopback"), "{err}");
@@ -3975,7 +4132,7 @@ mod tests {
         );
         assert_eq!(
             loading.join().unwrap(),
-            Err("local model server stopped before it was ready".into())
+            Err("local model server stopped before it was ready: it exited with code 1 (it didn't start on the CPU either)".into())
         );
         local_gov::reset_for_test();
         set_last_error(None);
@@ -4076,6 +4233,103 @@ mod tests {
         assert_eq!(global_pid(), Some(pid), "the loaded model stayed");
         assert!(!seen.exists(), "still no engine started");
         stop_global();
+        set_last_error(None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_death_names_its_reason_from_the_log_and_the_exit() {
+        use std::os::unix::process::ExitStatusExt;
+        let code = |c: i32| Some(std::process::ExitStatus::from_raw(c << 8));
+        let signal = |s: i32| Some(std::process::ExitStatus::from_raw(s));
+        assert_eq!(
+            death_reason("llama_model_load: error loading model: unknown model architecture: 'gemma9'\n", code(1)).as_deref(),
+            Some("this engine is too old for the model (llama_model_load: error loading model: unknown model architecture: 'gemma9'). Get engine in Settings → Local AI updates it")
+        );
+        assert_eq!(
+            death_reason("main: couldn't bind HTTP server socket, hostname: 127.0.0.1, port: 8080\n", code(1)).as_deref(),
+            Some("its port was taken (main: couldn't bind HTTP server socket, hostname: 127.0.0.1, port: 8080)")
+        );
+        assert_eq!(
+            death_reason("error: invalid argument: --models-max\n", code(1)).as_deref(),
+            Some("it refused how it was started (error: invalid argument: --models-max)")
+        );
+        // A backend names itself on a good start too: only its error counts.
+        let rocm = "ggml_cuda_init: found 1 ROCm devices:\n  Device 0: AMD Radeon RX 9070 XT, gfx1201\nrocBLAS error: Cannot read TensileLibrary.dat for GPU arch gfx1201\n";
+        assert_eq!(
+            death_reason(rocm, signal(6)).as_deref(),
+            Some("the ROCm GPU backend failed (rocBLAS error: Cannot read TensileLibrary.dat for GPU arch gfx1201)")
+        );
+        assert_eq!(
+            death_reason(
+                "ggml_vulkan: Found 1 Vulkan devices:\nload_tensors: loading model\n",
+                signal(11)
+            )
+            .as_deref(),
+            Some("it crashed (segmentation fault) (last log line: load_tensors: loading model)")
+        );
+        assert_eq!(
+            death_reason("gguf_init_from_file: invalid magic characters 'xxxx'\n", code(1)).as_deref(),
+            Some("it couldn't load the model file (gguf_init_from_file: invalid magic characters 'xxxx')")
+        );
+        assert_eq!(
+            death_reason(
+                "ggml_vulkan: Device memory allocation of size 1 failed: ErrorOutOfDeviceMemory\n",
+                code(1)
+            )
+            .as_deref(),
+            Some("it ran out of memory loading the model")
+        );
+        assert_eq!(
+            death_reason("", signal(4)).as_deref(),
+            Some("it crashed: this processor lacks an instruction the engine was built for (illegal instruction)")
+        );
+        assert_eq!(
+            death_reason("", code(3)).as_deref(),
+            Some("it exited with code 3")
+        );
+        assert_eq!(death_reason("", None), None);
+        let long = format!("{}\n", "x".repeat(200));
+        assert_eq!(
+            death_reason(&long, None),
+            Some(format!("it exited (last log line: {}…)", "x".repeat(160)))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_start_router_mode_stops_runs_the_model_alone_then_says_why() {
+        use std::os::unix::fs::PermissionsExt;
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        local_gov::reset_for_test();
+        let dir = crate::harness::test_dir("sidecar-router-off");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        let bin = dir.join("bin").join("llama-server");
+        let seen = dir.join("args.txt");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = --help ]; then echo '--models-preset PATH'; exit 0; fi\necho \"$@\" >> {}\necho 'error: invalid argument: --models-max' >&2\nexit 1\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("models").join("m.gguf"), b"x").unwrap();
+        std::fs::write(dir.join("models").join("nomic-embed-text.gguf"), b"x").unwrap();
+        assert_eq!(
+            acquire(&dir).err().as_deref(),
+            Some("local model server stopped before it was ready: it refused how it was started (error: invalid argument: --models-max) (it didn't start on the CPU either)")
+        );
+        let starts = std::fs::read_to_string(&seen).unwrap();
+        let starts: Vec<&str> = starts.lines().collect();
+        assert_eq!(starts.len(), 3, "{starts:?}");
+        assert!(starts[0].contains("--models-preset"), "{}", starts[0]);
+        assert!(!starts[1].contains("--models-preset"), "{}", starts[1]);
+        assert!(starts[2].contains("--device none"), "{}", starts[2]);
+        local_gov::reset_for_test();
         set_last_error(None);
     }
 }

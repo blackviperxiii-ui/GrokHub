@@ -1916,6 +1916,8 @@ pub fn stream_routed(
     };
     let now = grokhub_core::now_ms();
     let user_bench = super::user_bench::load(&dir);
+    // "It tries again on your next message": a person's turn is the retry.
+    super::local::retry_for_turn(class);
     let decision = decide(&dir, &call, now);
     if decision.paused() {
         route_log(&dir, &call, &decision, &RouteDone::unseen());
