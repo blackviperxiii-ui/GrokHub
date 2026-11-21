@@ -77,6 +77,7 @@ fn rows_show_triggers_changes_and_broken_routines() {
             last_ok: None,
             last_line: None,
             problems: Vec::new(),
+            fix: None,
         }
     );
     let inbox = row(&rows, "inbox");
@@ -170,4 +171,52 @@ fn undo_takes_back_a_saved_routine() {
         "Removed the routine saved. Its text is kept in the change history."
     );
     assert_eq!(rows(&config), Vec::new());
+}
+
+#[test]
+fn a_repeated_repair_shows_as_a_fix_to_apply() {
+    let config = temp("fix");
+    let r: Routine = serde_json::from_value(json!({
+        "version": 1, "name": "notes", "triggers": ["chat"],
+        "steps": [{ "id": "read", "tool": "read_file", "args": { "target_file": "notes.txt" } }]
+    }))
+    .unwrap();
+    grokhub_agent::routine_draft::save(&config, &r, "test").unwrap();
+    let fix = grokhub_agent::routine_run::Fix {
+        step: "read".into(),
+        args: json!({ "target_file": "in/notes.txt" })
+            .as_object()
+            .unwrap()
+            .clone(),
+    };
+    for at_ms in 0..3 {
+        grokhub_agent::routine_log::append(
+            &config,
+            &grokhub_agent::routine_log::RunRow {
+                name: "notes".into(),
+                at_ms,
+                why: "timer".into(),
+                ok: true,
+                model_calls: 1,
+                line: "x".into(),
+                hash: routine_consent::content_hash(&r),
+                fixes: vec![fix.clone()],
+            },
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        row(&rows(&config), "notes").fix,
+        Some(FixRow {
+            step: "read".into(),
+            before: r#"{"target_file":"notes.txt"}"#.into(),
+            after: r#"{"target_file":"in/notes.txt"}"#.into(),
+            seen: 3,
+        })
+    );
+    assert_eq!(
+        apply_fix(&config, "notes").unwrap(),
+        "Fixed step read in notes."
+    );
+    assert_eq!(row(&rows(&config), "notes").fix, None);
 }

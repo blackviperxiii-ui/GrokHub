@@ -112,7 +112,7 @@ pub fn run_in(config_dir: &Path, ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput 
         brain: None,
         words: None,
     });
-    crate::routine_log::record(config_dir, &routine.name, "chat", &report);
+    crate::routine_log::record(config_dir, routine, "chat", &report);
     // Step outputs are outside text.
     let text = super::fence::fence("routine", &report.text());
     match report.ended {

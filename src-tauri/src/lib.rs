@@ -2695,6 +2695,23 @@ fn revoke_routine(
     Ok(routines_page::rows(&state.config_dir))
 }
 
+/// Apply on a routine's suggested fix.
+#[cfg(desktop)]
+#[tauri::command]
+fn apply_routine_fix(state: State<'_, ShellState>, name: String) -> Result<String, String> {
+    routines_page::apply_fix(&state.config_dir, &name)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn dismiss_routine_fix(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<Vec<routines_page::Row>, String> {
+    routines_page::dismiss_fix(&state.config_dir, &name)?;
+    Ok(routines_page::rows(&state.config_dir))
+}
+
 /// Undo on a routine's row: the newest saved change to it goes back.
 #[cfg(desktop)]
 #[tauri::command]
@@ -8816,6 +8833,10 @@ pub fn run() {
             undo_routine,
             #[cfg(desktop)]
             run_routine_now,
+            #[cfg(desktop)]
+            apply_routine_fix,
+            #[cfg(desktop)]
+            dismiss_routine_fix,
             auto_setup,
             onboard_identity,
             quick_chips,

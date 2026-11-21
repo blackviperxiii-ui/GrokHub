@@ -12,6 +12,8 @@ const api = vi.hoisted(() => ({
   revokeRoutine: vi.fn<(name: string) => Promise<RoutineRow[]>>(),
   undoRoutine: vi.fn<(name: string) => Promise<string>>(),
   runRoutineNow: vi.fn<(name: string) => Promise<RunResult>>(),
+  applyRoutineFix: vi.fn<(name: string) => Promise<string>>(),
+  dismissRoutineFix: vi.fn<(name: string) => Promise<RoutineRow[]>>(),
 }));
 vi.mock("./routinesApi", () => api);
 
@@ -32,6 +34,7 @@ function row(over: Partial<RoutineRow> = {}): RoutineRow {
     lastOk: null,
     lastLine: null,
     problems: [],
+    fix: null,
     ...over,
   };
 }
@@ -131,6 +134,45 @@ describe("Routines", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("suggested fixes", () => {
+  const fix = { step: "read", before: '{"target_file":"notes.txt"}', after: '{"target_file":"in/notes.txt"}', seen: 3 };
+
+  it("shows the fix and applies it after a click and a confirm", async () => {
+    api.listRoutines.mockResolvedValueOnce([row({ fix })]).mockResolvedValueOnce([row()]);
+    api.applyRoutineFix.mockResolvedValue("Fixed step read in greet.");
+    const user = userEvent.setup();
+    render(<Routines />);
+    const card = within(await screen.findByRole("listitem", { name: "greet" }));
+    const block = within(card.getByRole("group", { name: "Suggested fix for greet" }));
+    expect(
+      block.getByText("The same repair to step read worked in 3 runs. Make it part of the routine?"),
+    ).toBeInTheDocument();
+    expect(block.getByText(/Fixed: \{"target_file":"in\/notes.txt"\}/)).toBeInTheDocument();
+    // Enter on the focused button opens nothing.
+    card.getByRole("button", { name: "Apply fix…" }).focus();
+    await user.keyboard("{Enter}");
+    expect(card.queryByRole("group", { name: "Fix step read in greet?" })).toBeNull();
+    await user.click(card.getByRole("button", { name: "Apply fix…" }));
+    await user.click(
+      within(card.getByRole("group", { name: "Fix step read in greet?" })).getByRole("button", { name: "Fix" }),
+    );
+    expect(api.applyRoutineFix).toHaveBeenCalledWith("greet");
+    expect(await screen.findByText("Fixed step read in greet.")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Suggested fix for greet" })).toBeNull();
+  });
+
+  it("dismisses a fix", async () => {
+    api.listRoutines.mockResolvedValue([row({ fix })]);
+    api.dismissRoutineFix.mockResolvedValue([row()]);
+    const user = userEvent.setup();
+    render(<Routines />);
+    const card = within(await screen.findByRole("listitem", { name: "greet" }));
+    await user.click(card.getByRole("button", { name: "Dismiss fix" }));
+    expect(api.dismissRoutineFix).toHaveBeenCalledWith("greet");
+    expect(card.queryByRole("button", { name: "Apply fix…" })).toBeNull();
   });
 });
 

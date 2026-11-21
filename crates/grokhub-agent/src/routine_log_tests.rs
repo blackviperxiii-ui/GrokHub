@@ -14,13 +14,22 @@ fn report(ended: Ended, result: Option<&str>, model_calls: u32) -> Report {
         result: result.map(str::to_string),
         model_calls,
         dry_run: false,
+        fixes: Vec::new(),
     }
+}
+
+fn routine(name: &str) -> Routine {
+    serde_json::from_value(serde_json::json!({
+        "version": 1, "name": name, "triggers": ["chat"],
+        "steps": [{ "id": "say", "tool": "list_dir", "args": { "target_directory": "." } }]
+    }))
+    .unwrap()
 }
 
 #[test]
 fn a_row_keeps_the_last_line_and_whether_it_finished() {
     let done = row(
-        "morning",
+        &routine("morning"),
         "timer",
         &report(Ended::Finished, Some("3 new files"), 1),
         42,
@@ -35,39 +44,55 @@ fn a_row_keeps_the_last_line_and_whether_it_finished() {
             ok: true,
             model_calls: 1,
             line: "3 new files".into(),
+            hash: crate::routine_consent::content_hash(&routine("morning")),
+            fixes: Vec::new(),
         }
     );
     let stopped = Ended::Stopped {
         at: "say".into(),
         why: "refused".into(),
     };
-    let r = row("morning", "chat", &report(stopped, None, 0), 43).unwrap();
+    let r = row(&routine("morning"), "chat", &report(stopped, None, 0), 43).unwrap();
     assert!(!r.ok);
     assert_eq!(r.line, "Stopped at say: refused");
     let replan = Ended::Replan {
         at: "say".into(),
         why: "no rows".into(),
     };
-    assert!(!row("m", "chat", &report(replan, None, 2), 1).unwrap().ok);
+    assert!(
+        !row(&routine("m"), "chat", &report(replan, None, 2), 1)
+            .unwrap()
+            .ok
+    );
     let early = Ended::Done { at: "say".into() };
-    assert!(row("m", "chat", &report(early, None, 0), 1).unwrap().ok);
+    assert!(
+        row(&routine("m"), "chat", &report(early, None, 0), 1)
+            .unwrap()
+            .ok
+    );
 }
 
 #[test]
 fn a_dry_run_is_not_logged_and_long_lines_are_clipped() {
     let mut dry = report(Ended::Finished, None, 0);
     dry.dry_run = true;
-    assert_eq!(row("m", "chat", &dry, 1), None);
+    assert_eq!(row(&routine("m"), "chat", &dry, 1), None);
 
     let long = "x".repeat(250);
-    let r = row("m", "chat", &report(Ended::Finished, Some(&long), 0), 1).unwrap();
+    let r = row(
+        &routine("m"),
+        "chat",
+        &report(Ended::Finished, Some(&long), 0),
+        1,
+    )
+    .unwrap();
     assert_eq!(r.line, format!("{}…", "x".repeat(200)));
 }
 
 #[test]
 fn a_secret_in_the_last_line_is_redacted() {
     let r = row(
-        "m",
+        &routine("m"),
         "chat",
         &report(Ended::Finished, Some("key sk-abcdefghijklmnopqrstuv"), 0),
         1,
@@ -86,6 +111,8 @@ fn stats_add_up_runs_and_model_calls_per_routine() {
         ok,
         model_calls: calls,
         line: format!("run at {at_ms}"),
+        hash: String::new(),
+        fixes: Vec::new(),
     };
     append(&config, &mk("a", 1, 2, true)).unwrap();
     append(&config, &mk("b", 2, 0, true)).unwrap();
@@ -115,6 +142,8 @@ fn the_log_keeps_the_newest_lines() {
             ok: true,
             model_calls: 0,
             line: String::new(),
+            hash: String::new(),
+            fixes: Vec::new(),
         })
         .unwrap()
     };

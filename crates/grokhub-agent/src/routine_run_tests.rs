@@ -547,6 +547,17 @@ fn a_failed_step_gets_one_repair_and_the_run_at_most_two() {
     };
     assert_eq!(at, "last");
     assert_eq!(report.model_calls, 2);
+    // The retry that worked is a fix; the skip is not.
+    assert_eq!(
+        report.fixes,
+        vec![Fix {
+            step: "read".into(),
+            args: json!({ "target_file": "real.txt" })
+                .as_object()
+                .unwrap()
+                .clone()
+        }]
+    );
     assert_eq!(
         model.1.borrow().as_slice(),
         ["routine_repair", "routine_repair"]
@@ -566,6 +577,7 @@ fn a_failed_step_gets_one_repair_and_the_run_at_most_two() {
     assert_eq!(at, "read");
     assert!(why.ends_with(" (it still failed after one fix)"), "{why}");
     assert_eq!(report.model_calls, 1);
+    assert_eq!(report.fixes, Vec::new());
     // Replan hands the job to a full turn.
     let model =
         Model::new(&[r#"{"do":"replan","args_json":"{}","why":"There is no such file here."}"#]);
@@ -604,4 +616,55 @@ fn a_refused_step_is_never_repaired() {
         }
     );
     assert_eq!(report.model_calls, 0);
+}
+
+#[test]
+fn a_fix_keeps_the_templates_the_retry_left_alone() {
+    let dir = temp("fix-templates");
+    std::fs::create_dir_all(dir.join("in")).unwrap();
+    std::fs::write(dir.join("in/notes.txt"), "x\n").unwrap();
+    let r = routine(json!({
+        "version": 1, "name": "fixed",
+        "inputs": { "file": { "type": "string", "default": "notes.txt" } },
+        "steps": [{ "id": "read", "tool": "read_file", "args": { "target_file": "{{inputs.file}}", "offset": 1 } }]
+    }));
+    let stop = || false;
+    // The model keeps the offset and points the file into in/.
+    let model = Model::new(&[
+        r#"{"do":"retry","args_json":"{\"target_file\":\"in/notes.txt\",\"offset\":1}","why":"It moved."}"#,
+    ]);
+    let report = run(&RunSpec {
+        brain: Some(&model),
+        ..spec(&r, &dir, &stop)
+    });
+    assert_eq!(report.ended, Ended::Finished, "{}", report.text());
+    assert_eq!(
+        report.fixes,
+        vec![Fix {
+            step: "read".into(),
+            args: json!({ "target_file": "in/notes.txt", "offset": 1 })
+                .as_object()
+                .unwrap()
+                .clone()
+        }]
+    );
+    let keep = fix_args(
+        &r.steps[0].kind,
+        json!({ "target_file": "notes.txt", "offset": 2 })
+            .as_object()
+            .unwrap(),
+        &Values {
+            inputs: json!({ "file": "notes.txt" }).as_object().unwrap().clone(),
+            ..Values::default()
+        },
+    );
+    assert_eq!(
+        keep,
+        Some(
+            json!({ "target_file": "{{inputs.file}}", "offset": 2 })
+                .as_object()
+                .unwrap()
+                .clone()
+        )
+    );
 }

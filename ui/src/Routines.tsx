@@ -1,6 +1,8 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import {
   allowRoutine,
+  applyRoutineFix,
+  dismissRoutineFix,
   listRoutines,
   revokeRoutine,
   runRoutineNow,
@@ -21,7 +23,7 @@ function pointer(e: MouseEvent) {
   return e.detail > 0;
 }
 
-type Asking = { name: string; act: "allow" | "undo" };
+type Asking = { name: string; act: "allow" | "undo" | "fix" };
 
 export function consentLine(row: RoutineRow): string | null {
   const changes = row.changes.join(", ");
@@ -75,11 +77,12 @@ export function Routines() {
     }
   }
 
-  async function undo(name: string) {
+  /** Undo or Apply fix: a status line, then the list again. */
+  async function change(name: string, work: () => Promise<string>) {
     setBusy(name);
     setAsking(null);
     try {
-      setNote(await undoRoutine(name));
+      setNote(await work());
       setRows(await listRoutines());
     } catch (err) {
       setNote(String(err));
@@ -151,6 +154,24 @@ export function Routines() {
                   </Toggle>
                 </>
               )}
+              {row.fix && (
+                <div className="card-check routine-fix" role="group" aria-label={`Suggested fix for ${row.name}`}>
+                  <p>
+                    {`The same repair to step ${row.fix.step} worked in ${row.fix.seen} runs. Make it part of the routine?`}
+                  </p>
+                  <pre className="card-detail">{`Now:  ${row.fix.before}\nFixed: ${row.fix.after}`}</pre>
+                </div>
+              )}
+              {isAsking === "fix" && row.fix && (
+                <ConfirmRow
+                  question={`Fix step ${row.fix.step} in ${row.name}?`}
+                  detail="Undo takes it back."
+                  action="Fix"
+                  busy={busy !== null}
+                  onConfirm={() => void change(row.name, () => applyRoutineFix(row.name))}
+                  onCancel={() => setAsking(null)}
+                />
+              )}
               {isAsking === "allow" && (
                 <ConfirmRow
                   question={`Allow ${row.name} to change things?`}
@@ -167,12 +188,31 @@ export function Routines() {
                   detail="A routine that was just saved is removed. Its text stays in the change history."
                   action="Undo"
                   busy={busy !== null}
-                  onConfirm={() => void undo(row.name)}
+                  onConfirm={() => void change(row.name, () => undoRoutine(row.name))}
                   onCancel={() => setAsking(null)}
                 />
               )}
               {isAsking === null && (
                 <div className="card-buttons">
+                  {row.fix && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={(e) => ask(e, { name: row.name, act: "fix" })}
+                      >
+                        Apply fix…
+                      </button>
+                      <button
+                        type="button"
+                        className="quiet"
+                        disabled={busy !== null}
+                        onClick={() => void act(row.name, () => dismissRoutineFix(row.name))}
+                      >
+                        Dismiss fix
+                      </button>
+                    </>
+                  )}
                   {!broken && (
                     <button type="button" disabled={busy !== null} onClick={() => void run(row.name)}>
                       {busy === row.name ? "Running…" : "Run now"}

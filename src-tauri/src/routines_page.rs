@@ -7,6 +7,7 @@ use std::path::Path;
 
 use grokhub_agent::harness::UndoAsk;
 use grokhub_agent::routine_consent::{self, Standing};
+use grokhub_agent::routine_fix;
 use grokhub_agent::routine_log;
 use grokhub_agent::routine_triggers::{self, Start};
 use grokhub_core::routine::{Routine, Trigger};
@@ -58,6 +59,29 @@ pub struct Row {
     pub last_line: Option<String>,
     /// Why the routine can't run; empty when it can.
     pub problems: Vec<String>,
+    /// A fix from a repair that kept working, ready to apply.
+    pub fix: Option<FixRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixRow {
+    pub step: String,
+    /// The step's arguments now and with the fix, as JSON.
+    pub before: String,
+    pub after: String,
+    /// Runs the repair worked in.
+    pub seen: usize,
+}
+
+fn fix_row(config_dir: &Path, r: &Routine) -> Option<FixRow> {
+    let p = routine_fix::proposal(config_dir, r)?;
+    Some(FixRow {
+        step: p.step,
+        before: serde_json::Value::Object(p.before).to_string(),
+        after: serde_json::Value::Object(p.after).to_string(),
+        seen: p.seen,
+    })
 }
 
 fn trigger_label(t: &Trigger) -> String {
@@ -78,6 +102,7 @@ pub fn rows(config_dir: &Path) -> Vec<Row> {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let fix = loaded.as_ref().ok().and_then(|r| fix_row(config_dir, r));
             let (name, about, triggers, steps, changes, consent, problems) = match &loaded {
                 Ok(r) => (
                     r.name.clone(),
@@ -116,6 +141,7 @@ pub fn rows(config_dir: &Path) -> Vec<Row> {
                 changes,
                 consent,
                 problems,
+                fix,
             }
         })
         .collect()
@@ -141,6 +167,15 @@ pub fn revoke(config_dir: &Path, name: &str) -> Result<(), String> {
 /// Undoes the newest saved change to routine `name`, from the person's click.
 pub fn undo(config_dir: &Path, name: &str) -> Result<String, String> {
     grokhub_agent::routine_draft::undo(config_dir, name, UndoAsk::from_click())
+}
+
+/// Applies routine `name`'s offered fix, from the person's click.
+pub fn apply_fix(config_dir: &Path, name: &str) -> Result<String, String> {
+    routine_fix::apply(config_dir, name)
+}
+
+pub fn dismiss_fix(config_dir: &Path, name: &str) -> Result<(), String> {
+    routine_fix::dismiss(config_dir, name)
 }
 
 /// Runs routine `name` now, as a trigger would, with its inputs' defaults.
