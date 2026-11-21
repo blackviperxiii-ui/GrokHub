@@ -187,6 +187,45 @@ fn a_drafter_fits_only_beside_a_whole_model_or_on_the_cpu() {
     assert_eq!(fits(&low, &meta, &lo, GovState::Normal, &e2b), None);
 }
 
+/// A mixture of experts that keeps some layers' experts in RAM still drafts
+/// on the GPU when the launch left the drafter its room.
+#[test]
+fn a_drafter_fits_beside_a_moe_with_experts_in_ram() {
+    let moe = GgufMeta {
+        block_count: 30,
+        context_length: 262_144,
+        expert_count: 128,
+        file_mb: 16_018,
+        ..gemma_12b(None)
+    };
+    let e2b = gemma_e2b();
+    let card = machine(vec![nvidia(16_384, 15_800)], 65_536, 48_000);
+    let pair = autoconfig(
+        &card,
+        &moe,
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+        Some(&e2b),
+    );
+    assert_eq!(
+        (pair.ngl, pair.all_layers, pair.n_cpu_moe, pair.ctx),
+        (31, 31, Some(24), 16_384)
+    );
+    assert_eq!(fits(&card, &moe, &pair, GovState::Normal, &e2b), Some(true));
+    // The experts held in RAM must fit there too.
+    let tight = machine(vec![nvidia(16_384, 15_800)], 16_384, 6_000);
+    let t = autoconfig(
+        &tight,
+        &moe,
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+        Some(&e2b),
+    );
+    assert_eq!(fits(&tight, &moe, &t, GovState::Normal, &e2b), None);
+}
+
 /// A GGUF header with a vocabulary, written to `path`.
 fn write_gguf(path: &Path, arch: &str, tokens: &[&str], nextn: u32) {
     fn s(out: &mut Vec<u8>, v: &str) {

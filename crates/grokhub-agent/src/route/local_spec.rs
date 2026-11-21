@@ -54,19 +54,22 @@ impl DraftArgs {
     }
 }
 
-/// MB the model and its drafter take together at `a`'s context and slots:
-/// each brings its file, its KV cache and its compute buffers.
+/// MB one model takes at `a`'s context and slots: its file, its KV cache
+/// and its compute buffers.
+fn own_need_mb(m: &GgufMeta, a: &LaunchArgs) -> u64 {
+    m.file_mb + autoconfig::kv_mb_for(m, a.ctx, a.kv, a.run.seqs()) + autoconfig::overhead_mb(a.ctx)
+}
+
+/// MB the model and its drafter take together at `a`'s context and slots.
 pub fn pair_need_mb(meta: &GgufMeta, a: &LaunchArgs, drafter: &GgufMeta) -> u64 {
-    let seqs = a.run.seqs();
-    let one = |m: &GgufMeta| {
-        m.file_mb + autoconfig::kv_mb_for(m, a.ctx, a.kv, seqs) + autoconfig::overhead_mb(a.ctx)
-    };
-    one(meta) + one(drafter)
+    own_need_mb(meta, a) + own_need_mb(drafter, a)
 }
 
 /// Whether the drafter fits next to the planned launch: `Some(true)` on the
-/// GPU with the whole model, `Some(false)` in RAM for a CPU launch, `None`
-/// when there isn't room (a partly offloaded model has none to spare).
+/// GPU beside every layer of the model (a mixture of experts may keep some
+/// layers' experts in RAM, `--n-cpu-moe`), `Some(false)` in RAM for a CPU
+/// launch, `None` when there isn't room (a dense model split across GPU and
+/// RAM has none to spare).
 pub fn fits(
     p: &LocalProfile,
     meta: &GgufMeta,
@@ -75,12 +78,15 @@ pub fn fits(
     drafter: &GgufMeta,
 ) -> Option<bool> {
     let (gpu, ram) = autoconfig::budgets(p, a.backend, state);
-    let need = pair_need_mb(meta, a, drafter);
     if gpu == 0 {
-        return (need <= ram).then_some(false);
+        return (pair_need_mb(meta, a, drafter) <= ram).then_some(false);
     }
-    let whole = a.ngl >= a.all_layers && a.n_cpu_moe.is_none();
-    (whole && need <= gpu).then_some(true)
+    if a.ngl < a.all_layers {
+        return None;
+    }
+    let (on_gpu, in_ram) = autoconfig::launch_need_mb(meta, a);
+    let experts_fit = a.n_cpu_moe.is_none() || in_ram <= ram;
+    (experts_fit && on_gpu + own_need_mb(drafter, a) <= gpu).then_some(true)
 }
 
 /// One launch's draft plan.
