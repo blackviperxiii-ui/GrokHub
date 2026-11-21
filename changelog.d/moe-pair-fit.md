@@ -1,0 +1,1 @@
+- A mixture-of-experts model that keeps some layers' experts in RAM (`--n-cpu-moe`), such as the 26B, now loads with its draft model on the GPU when there is room, instead of being refused with "there isn't room for the model and its draft model together".
