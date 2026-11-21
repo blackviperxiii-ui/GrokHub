@@ -237,6 +237,9 @@ pub fn plan_in(config_dir: &Path, tool: &str, args: &Value, workspace: &Path) ->
             runtime,
             image: settings.image.clone(),
             mounts: container::mounts(workspace, &settings.writable),
+            egress: proxy
+                .as_deref()
+                .and_then(|addr| container_egress(config_dir, addr)),
         });
     Some(Plan {
         writable,
@@ -244,6 +247,41 @@ pub fn plan_in(config_dir: &Path, tool: &str, args: &Value, workspace: &Path) ->
         isolation,
         container,
     })
+}
+
+/// The container's way out through the egress proxy at `addr`: its Unix
+/// bridge, the port the variables name, and the same variables and token
+/// stand-ins [`apply`] gives a host command. None when the bridge can't
+/// start: the container then has no network.
+#[cfg(unix)]
+fn container_egress(config_dir: &Path, addr: &str) -> Option<container::Egress> {
+    let port = addr.rsplit(':').next()?.parse().ok()?;
+    let socket = proxy::unix_bridge(config_dir).ok()?;
+    let mut env: Vec<(String, String)> = proxy::env(addr)
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+    env.extend(mask::session().command_env());
+    let mut files = Vec::new();
+    if let Some(mitm) = mitm::session() {
+        env.extend(
+            mitm.command_env()
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v)),
+        );
+        files.push(mitm.bundle().to_path_buf());
+    }
+    Some(container::Egress {
+        socket,
+        port,
+        env,
+        files,
+    })
+}
+
+#[cfg(not(unix))]
+fn container_egress(_: &Path, _: &str) -> Option<container::Egress> {
+    None
 }
 
 #[cfg(target_os = "linux")]
@@ -314,6 +352,9 @@ fn isolation(_: &Path, _: &Path, _: Option<&Path>, _: Option<&str>) -> Option<Is
 /// connection that had no way out (SSH, a raw socket, a host service), a
 /// note that only the HTTP proxy reaches out and how to get the whole
 /// machine. None otherwise.
+/// The note for a host the proxy refused.
+const PROXY_ONLY: &str = "[sandbox] The proxy only lets sandboxed commands reach package registries, code hosts, model hosts and hosts your WebFetch allow rules name. For another host, rerun with outside_sandbox (asks the user).";
+
 pub fn network_note(plan: Option<&Plan>, failed: bool, output: &str) -> Option<&'static str> {
     // The proxy's refusal, as curl, git, pip and the like report it.
     const REFUSED: &[&str] = &[
@@ -337,15 +378,21 @@ pub fn network_note(plan: Option<&Plan>, failed: bool, output: &str) -> Option<&
         "nodename nor servname provided",
     ];
     let plan = plan.filter(|_| failed)?;
-    if plan.container.is_some() {
+    if let Some(c) = &plan.container {
+        if c.egress.is_some() {
+            if REFUSED.iter().any(|s| output.contains(s)) {
+                return Some(PROXY_ONLY);
+            }
+            return SIGNS.iter().any(|s| output.contains(s)).then_some(
+                "[sandbox] This command ran in a container whose only way out is HTTP(S) through the proxy, so SSH, DNS lookups, raw sockets and services on this computer don't reach. If it needs them, rerun with outside_sandbox (asks the user).",
+            );
+        }
         return SIGNS.iter().any(|s| output.contains(s)).then_some(
             "[sandbox] This command ran in a container with no network, so nothing it starts can reach a host. If it needs the network, rerun with outside_sandbox (asks the user).",
         );
     }
     if plan.proxy.is_some() && REFUSED.iter().any(|s| output.contains(s)) {
-        return Some(
-            "[sandbox] The proxy only lets sandboxed commands reach package registries, code hosts, model hosts and hosts your WebFetch allow rules name. For another host, rerun with outside_sandbox (asks the user).",
-        );
+        return Some(PROXY_ONLY);
     }
     let isolated = plan.isolation.as_ref().is_some_and(|i| i.net_confined);
     (isolated && SIGNS.iter().any(|s| output.contains(s))).then_some(
@@ -365,8 +412,13 @@ pub fn status(config_dir: &Path) -> String {
             container::Kind::Podman => "Podman",
             container::Kind::Docker => "Docker",
         };
+        let net = if settings.network_guard {
+            "network only through the egress proxy (needs perl in the image)"
+        } else {
+            "no network (network_guard = false)"
+        };
         return format!(
-            "Shell sandbox: container ({name}, {}); writes only in the workspace and writable folders; no network; nothing else of this computer visible",
+            "Shell sandbox: container ({name}, {}); writes only in the workspace and writable folders; {net}; nothing else of this computer visible",
             settings.image
         );
     }
