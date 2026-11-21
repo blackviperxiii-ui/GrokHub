@@ -153,6 +153,9 @@ pub struct Now<'a> {
     /// A model file was forced (`GROKHUB_LOCAL_MODEL`): nothing swaps.
     pub forced: bool,
     pub in_flight: usize,
+    /// Of [`Now::in_flight`], the app's own background requests (a
+    /// classify, a summary): a chat's ask doesn't wait out their turn.
+    pub background_in_flight: usize,
     pub secs_since_swap: u64,
     /// What this request's task needs.
     pub need: Need,
@@ -275,10 +278,16 @@ pub fn plan(n: Now<'_>) -> Plan {
         || (why == Some(StandIn::OutOfMemory) && stand_in.is_none())
         || n.refused.contains(&target)
         || stays_big(&n, running, why, stand_in);
-    // A chat's ask is the person's own word: it skips the cooldown and the
-    // wait for a quiet chat, but never swaps a model mid-reply.
+    // A chat's ask is the person's own word: it skips the cooldown, the wait
+    // for a quiet chat and the app's own background requests, but never
+    // swaps a model mid-reply.
     let asked = n.chat.is_some();
-    if settled || n.in_flight > 0 || (!asked && n.secs_since_swap < SWAP_COOLDOWN_SECS) {
+    let busy = if asked {
+        replies_in_flight(&n)
+    } else {
+        n.in_flight
+    };
+    if settled || busy > 0 || (!asked && n.secs_since_swap < SWAP_COOLDOWN_SECS) {
         return Plan::Keep;
     }
     if asked {
@@ -304,6 +313,11 @@ pub fn plan(n: Now<'_>) -> Plan {
         model: target,
         stand_in,
     }
+}
+
+/// The requests in flight that are replies someone reads.
+fn replies_in_flight(n: &Now<'_>) -> usize {
+    n.in_flight.saturating_sub(n.background_in_flight)
 }
 
 /// A bigger model loaded for hard work stays for lighter asks in between
@@ -559,7 +573,7 @@ pub fn ask_outcome(n: &Now<'_>) -> Option<AskOutcome> {
     }
     let (target, why) = target(n);
     if let Some((running, _)) = n.loaded {
-        if running != target && n.in_flight > 0 {
+        if running != target && replies_in_flight(n) > 0 {
             return Some(AskOutcome::Refused(tier, Refused::Busy(source)));
         }
     }

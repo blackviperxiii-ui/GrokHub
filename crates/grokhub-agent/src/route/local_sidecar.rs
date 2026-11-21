@@ -116,6 +116,11 @@ pub(crate) fn unix_ms() -> u64 {
 
 /// Requests to the sidecar in flight; the governor restarts or stops it only at 0.
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+/// Of [`IN_FLIGHT`], the app's own background requests.
+static BACKGROUND_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+/// How long a chat's ask waits for background requests in flight before it
+/// swaps the model and cuts them.
+const ASK_DRAIN: Duration = Duration::from_secs(10);
 
 /// Unix seconds when the last request finished. Idle time counts from the
 /// later of this and the last start, so a long request doesn't end idle.
@@ -140,6 +145,7 @@ static WARM_GEN: AtomicU64 = AtomicU64::new(0);
 pub struct Busy {
     side: Option<Arc<AtomicUsize>>,
     end: Option<Endpoint>,
+    background: bool,
 }
 
 impl Busy {
@@ -155,6 +161,9 @@ impl Drop for Busy {
             side.fetch_sub(1, Ordering::SeqCst);
         }
         LAST_DONE_SECS.store(unix_secs(), Ordering::SeqCst);
+        if self.background {
+            BACKGROUND_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        }
         if IN_FLIGHT.fetch_sub(1, Ordering::SeqCst) == 1 && STOP_PENDING.load(Ordering::SeqCst) {
             // Never block a request's teardown on the slot; if it's busy, the
             // next idle tick does the pending stop.
@@ -172,13 +181,11 @@ pub fn busy() -> Busy {
     let slot = global_slot().lock().unwrap_or_else(|e| e.into_inner());
     match slot.as_ref() {
         Some(side) => side.busy(),
-        None => {
-            IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
-            Busy {
-                side: None,
-                end: None,
-            }
-        }
+        None => Busy {
+            side: None,
+            end: None,
+            background: count_in(),
+        },
     }
 }
 
@@ -201,6 +208,34 @@ pub fn in_flight() -> usize {
     IN_FLIGHT.load(Ordering::SeqCst)
 }
 
+/// Of [`in_flight`], the app's own background requests.
+pub fn background_in_flight() -> usize {
+    BACKGROUND_IN_FLIGHT.load(Ordering::SeqCst)
+}
+
+/// Counts a request in flight; true when it is the app's own background
+/// work (this thread's need).
+fn count_in() -> bool {
+    let background = super::local_scale::current_need() == super::local_scale::Need::Background;
+    if background {
+        BACKGROUND_IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+    }
+    IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+    background
+}
+
+/// Waits until nothing is in flight, up to `deadline`: true when nothing is.
+fn wait_for_idle(deadline: Duration) -> bool {
+    let until = Instant::now() + deadline;
+    while in_flight() > 0 {
+        if Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(HEALTH_POLL);
+    }
+    true
+}
+
 impl Sidecar {
     /// Base URL for OpenAI-compatible calls (`http://127.0.0.1:<port>`).
     pub fn base_url(&self) -> String {
@@ -209,11 +244,12 @@ impl Sidecar {
 
     /// A request on this server (see [`Busy`]).
     fn busy(&self) -> Busy {
-        IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+        let background = count_in();
         self.in_flight.fetch_add(1, Ordering::SeqCst);
         Busy {
             side: Some(self.in_flight.clone()),
             end: Some(self.endpoint()),
+            background,
         }
     }
 
@@ -1251,6 +1287,28 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
             Plan::Keep | Plan::Later { .. } => (paths.model.clone(), None),
             Plan::Load { model, stand_in } => {
                 PENDING_STEP_UP.lock().expect("pending step up").take();
+                // Only a chat's ask swaps with requests in flight, and only
+                // background ones (see `local_swap::plan`): new requests wait
+                // while they finish, and any still running at ASK_DRAIN are cut.
+                if slot.is_some() && in_flight() > 0 {
+                    STARTING.store(true, Ordering::SeqCst);
+                    drop(slot);
+                    let idle = wait_for_idle(ASK_DRAIN);
+                    slot = global_slot().lock().expect("sidecar global");
+                    STARTING.store(false, Ordering::SeqCst);
+                    LOAD_DONE.notify_all();
+                    if !idle {
+                        health::log_to(
+                            config_dir,
+                            "swap",
+                            Some("cut background work still running for a chat's ask"),
+                            None,
+                        );
+                    }
+                    if let Some(why) = refused(want) {
+                        return Err(why.into());
+                    }
+                }
                 if let Some(side) = slot.take() {
                     health::log_to(config_dir, "swap", Some(&swap_note(&model, stand_in)), None);
                     LAST_SWAP_SECS.store(unix_secs(), Ordering::SeqCst);
@@ -1804,6 +1862,7 @@ fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Wa
         kept_loaded: keep_loaded(),
         forced: std::env::var_os("GROKHUB_LOCAL_MODEL").is_some(),
         in_flight: in_flight(),
+        background_in_flight: background_in_flight(),
         secs_since_swap: unix_secs().saturating_sub(LAST_SWAP_SECS.load(Ordering::SeqCst)),
         need: want_need(want),
         scale,
@@ -1859,6 +1918,7 @@ fn best_model_for(config_dir: &Path, home: &Path, kind: TaskKind) -> Option<Path
         kept_loaded: keep_loaded(),
         forced: std::env::var_os("GROKHUB_LOCAL_MODEL").is_some(),
         in_flight: 0,
+        background_in_flight: 0,
         secs_since_swap: u64::MAX,
         need: super::local_scale::Need::Normal,
         scale: super::local_scale::scale_now(unix_ms()),
@@ -3002,6 +3062,36 @@ mod tests {
                 ))
             );
             assert_eq!(take_ask_outcome(), None, "taken once");
+            // A background helper's request doesn't hold the ask back...
+            let helper = {
+                let _bg = super::super::local_scale::NeedGuard::set(
+                    super::super::local_scale::Need::Background,
+                );
+                busy()
+            };
+            assert_eq!((in_flight(), background_in_flight()), (1, 1));
+            assert_eq!(
+                swap_plan(&dir, &mid, Some(&side), Want::Request),
+                Plan::Load {
+                    model: small.clone(),
+                    stand_in: Some(StandIn::Asked(SpeedQuality::Speed, Source::Words))
+                }
+            );
+            // ...another chat's reply does.
+            let reply = busy();
+            assert_eq!(
+                swap_plan(&dir, &mid, Some(&side), Want::Request),
+                Plan::Keep
+            );
+            assert_eq!(
+                take_ask_outcome().map(|(a, _)| a),
+                Some(AskOutcome::Refused(
+                    SpeedQuality::Speed,
+                    super::super::local_swap::Refused::Busy(Source::Words)
+                ))
+            );
+            drop((helper, reply));
+            assert_eq!((in_flight(), background_in_flight()), (0, 0));
         }
         assert_eq!(
             swap_plan(&dir, &mid, Some(&side), Want::Request),
@@ -3009,6 +3099,28 @@ mod tests {
             "the guard dropped: back on Auto"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_ask_waits_for_background_work_then_stops_waiting_at_the_deadline() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        let helper = {
+            let _bg = super::super::local_scale::NeedGuard::set(
+                super::super::local_scale::Need::Background,
+            );
+            busy()
+        };
+        let began = Instant::now();
+        assert!(!wait_for_idle(Duration::from_millis(200)), "still running");
+        assert!(began.elapsed() >= Duration::from_millis(200));
+        let done = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            drop(helper);
+        });
+        assert!(wait_for_idle(Duration::from_secs(10)), "it finished");
+        assert_eq!(background_in_flight(), 0);
+        done.join().unwrap();
     }
 
     #[test]
