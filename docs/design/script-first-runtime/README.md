@@ -396,6 +396,31 @@ Save as routine.
   grants consent, and a re-save changes the hash, so earlier consent stops
   counting.
 
+## Phase 6 notes
+
+Decision 4 as proposed: automations stay separate. The Routines list is its
+own section on the Automations page, under the automations, not a new view.
+
+- **Runs.** `grokhub_agent::routine_log` keeps one line per run in
+  `routines/runs.jsonl` (the newest 2,000): when, what started it (`timer`,
+  a file's path, `webhook <hook>`, `chat`, `run now`, `terminal`), whether
+  it finished, its model calls, and its last line, clipped and with secrets
+  redacted. A dry run is not a run. A stop or a hand-over to an assistant
+  turn counts as not finished.
+- **On and off.** Off is kept in the trigger state, so no timer, file,
+  webhook or chat start reaches it. Back on, its triggers prime again, so it
+  doesn't fire for what happened while it was off.
+- **Rows.** Each routine shows its triggers, step count, change steps and
+  where their consent stands, on or off, runs and model calls, and the
+  newest run's line. A routine that doesn't load still shows, with why.
+- **Clicks.** Allow and Undo open only on a pointer click and ask first, so
+  a key press on a focused button can't grant consent. Run now runs the
+  routine off the main thread as a trigger would, with its defaults, through
+  the same consent. A routine never runs twice at once: a Run now and a
+  trigger that meet get "already running".
+- **Desktop only.** The six commands aren't web commands, so a paired
+  browser doesn't get the section.
+
 ## Build order
 
 Each phase is one PR into `beta`, with tests that assert literal results.

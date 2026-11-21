@@ -108,6 +108,13 @@ fn a_change_step_is_refused_and_nothing_is_written() {
     assert!(out.failed);
     assert!(out.text.contains("Stopped at put:"), "{}", out.text);
     assert!(!work.join("new.txt").exists());
+    // The run is on the Routines list, as a chat run that didn't finish.
+    let rows = crate::routine_log::read(&config);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].name.as_str(), rows[0].why.as_str(), rows[0].ok),
+        ("write-note", "chat", false)
+    );
 }
 
 #[test]

@@ -772,6 +772,7 @@ pub fn run_cli(args: &[String], config_dir: &Path) -> i32 {
         brain: None,
         words: None,
     });
+    crate::routine_log::record(config_dir, &routine.name, "terminal", &report);
     println!("{}", report.text());
     match report.ended {
         Ended::Stopped { .. } => 1,

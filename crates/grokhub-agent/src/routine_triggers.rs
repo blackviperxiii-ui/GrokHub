@@ -43,6 +43,9 @@ pub struct RoutineState {
     /// File path to modified time (ms), once primed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<BTreeMap<String, u64>>,
+    /// Switched off on the Routines list: no trigger starts it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub off: bool,
 }
 
 /// A run a trigger asks for.
@@ -75,20 +78,10 @@ fn save_state(config_dir: &Path, state: &TriggerState) -> Result<(), String> {
 /// Every routine that loads cleanly, by folder name. A broken one is left
 /// out; `routine run` says why.
 pub fn routines(config_dir: &Path) -> Vec<(PathBuf, Routine)> {
-    let Ok(rd) = std::fs::read_dir(routine::routines_dir(config_dir)) else {
-        return Vec::new();
-    };
-    let mut out: Vec<(PathBuf, Routine)> = rd
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.join(routine::FILE).is_file())
-        .filter_map(|dir| {
-            let r = Routine::load(&dir, &crate::routine_run::step_tool).ok()?;
-            Some((dir, r))
-        })
-        .collect();
-    out.sort_by(|a, b| a.1.name.cmp(&b.1.name));
-    out
+    all(config_dir)
+        .into_iter()
+        .filter_map(|(dir, r)| Some((dir, r.ok()?)))
+        .collect()
 }
 
 /// The next slot after `clock` for `timer`.
@@ -118,6 +111,9 @@ pub fn due(config_dir: &Path, clock: LocalClock) -> Vec<Start> {
     let mut starts = Vec::new();
     for (dir, r) in &list {
         let row = state.routines.entry(r.name.clone()).or_default();
+        if row.off {
+            continue;
+        }
         let mut timers = Vec::new();
         let mut files: Option<BTreeMap<String, u64>> = None;
         for trigger in &r.triggers {
@@ -265,17 +261,68 @@ pub fn wildcard(pattern: &str, name: &str) -> bool {
     p[pi..].iter().all(|c| *c == '*')
 }
 
-/// The routines the `run_routine` chat tool may start, by name.
-pub fn for_chat(config_dir: &Path) -> Vec<(PathBuf, Routine)> {
+/// The routines that are switched on.
+fn on(config_dir: &Path) -> Vec<(PathBuf, Routine)> {
+    let state = load_state(config_dir);
     routines(config_dir)
+        .into_iter()
+        .filter(|(_, r)| !state.routines.get(&r.name).is_some_and(|s| s.off))
+        .collect()
+}
+
+/// Every routine folder, by folder name, with the routine or what is wrong
+/// with it.
+pub fn all(config_dir: &Path) -> Vec<(PathBuf, Result<Routine, Vec<String>>)> {
+    let Ok(rd) = std::fs::read_dir(routine::routines_dir(config_dir)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(PathBuf, Result<Routine, Vec<String>>)> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join(routine::FILE).is_file())
+        .map(|dir| {
+            let r = Routine::load(&dir, &crate::routine_run::step_tool);
+            (dir, r)
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Whether routine `name` is switched on. A new routine is.
+pub fn is_on(config_dir: &Path, name: &str) -> bool {
+    !load_state(config_dir)
+        .routines
+        .get(name)
+        .is_some_and(|s| s.off)
+}
+
+/// Switches routine `name` on or off. Turning it back on primes its
+/// triggers again, so it doesn't fire for what happened while it was off.
+pub fn set_on(config_dir: &Path, name: &str, on: bool) -> Result<(), String> {
+    if !routines(config_dir).iter().any(|(_, r)| r.name == name) {
+        return Err(format!("No routine named {name}"));
+    }
+    let mut state = load_state(config_dir);
+    let row = state.routines.entry(name.to_string()).or_default();
+    if on && row.off {
+        *row = RoutineState::default();
+    }
+    row.off = !on;
+    save_state(config_dir, &state)
+}
+
+/// The switched-on routines the `run_routine` chat tool may start, by name.
+pub fn for_chat(config_dir: &Path) -> Vec<(PathBuf, Routine)> {
+    on(config_dir)
         .into_iter()
         .filter(|(_, r)| r.triggers.contains(&Trigger::Chat))
         .collect()
 }
 
-/// The routine a webhook named `hook` starts, if one listens for it.
+/// The switched-on routine a webhook named `hook` starts, if one listens.
 pub fn for_webhook(config_dir: &Path, hook: &str) -> Option<(PathBuf, Routine)> {
-    routines(config_dir).into_iter().find(|(_, r)| {
+    on(config_dir).into_iter().find(|(_, r)| {
         r.triggers
             .iter()
             .any(|t| matches!(t, Trigger::Webhook(name) if name == hook))
