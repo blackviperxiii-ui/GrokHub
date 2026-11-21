@@ -29,6 +29,8 @@ pub struct HttpLocalRuntime {
     unified: bool,
     /// Requests on the server this runtime talks to.
     in_flight: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    /// The server loaded its vision projector, so it reads pictures.
+    sees_pictures: bool,
 }
 
 impl std::fmt::Debug for HttpLocalRuntime {
@@ -54,7 +56,15 @@ impl HttpLocalRuntime {
             slots: 1,
             unified: false,
             in_flight: None,
+            sees_pictures: false,
         }
+    }
+
+    /// The server loaded its vision projector (see
+    /// [`LocalRuntime::sees_pictures`]).
+    pub fn with_sight(mut self, sees_pictures: bool) -> Self {
+        self.sees_pictures = sees_pictures;
+        self
     }
 
     /// The server's slots and request count, for [`Self::share_of`] and
@@ -383,6 +393,10 @@ impl HttpLocalRuntime {
 }
 
 impl LocalRuntime for HttpLocalRuntime {
+    fn sees_pictures(&self) -> bool {
+        self.sees_pictures
+    }
+
     fn classify(&self, text: &str, labels: &[&str]) -> Result<Value, String> {
         let labels_csv = labels.join(", ");
         let system = format!(
@@ -769,7 +783,8 @@ pub fn from_global_sidecar(busy: super::local_sidecar::Busy) -> Option<Arc<dyn L
     };
     let mut rt = HttpLocalRuntime::new(end.base_url, end.token)
         .with_thinking(end.thinking)
-        .with_slots(end.slots, end.unified, end.in_flight);
+        .with_slots(end.slots, end.unified, end.in_flight)
+        .with_sight(end.sees_pictures);
     rt.busy = Some(Arc::new(busy));
     Some(Arc::new(rt))
 }

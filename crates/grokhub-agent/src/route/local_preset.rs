@@ -1,5 +1,5 @@
 //! `llama-server` router-mode preset generation (`--models-preset` +
-//! `--models-max`), `--mmproj` multimodal projector discovery, and local
+//! `--models-max`), the `--mmproj` projector a picture launch carries, and local
 //! embedding GGUF discovery (Card 955 / Card 917.6 follow-on).
 //!
 //! Router mode lets a single loopback `llama-server` supervise multiple models
@@ -47,14 +47,16 @@ pub struct RouterPreset {
 impl RouterPreset {
     /// Build a router preset from a planned chat model, its optional
     /// auto-configured [`LaunchArgs`] (preserving draft pairing, `ngl`, and
-    /// `ctx`), auto-discovered sibling `--mmproj`, and an optional local
-    /// embedding GGUF in `models_dir`.
+    /// `ctx`), the vision projector the launch carries (`--mmproj`, only for
+    /// a picture turn), and an optional local embedding GGUF in `models_dir`.
     pub fn from_sidecar_plan(
         chat_model: &Path,
         launch: Option<&LaunchArgs>,
         models_dir: Option<&Path>,
     ) -> Self {
-        let mmproj = discover_mmproj_for(chat_model);
+        // The projector a picture turn planned and counted, never one found
+        // in the folder.
+        let mmproj = launch.and_then(|l| Some(l.projector.as_ref()?.file.clone()));
         let (draft_model, draft_max, draft_min, n_gpu_layers, ctx_size) = match launch {
             Some(l) => {
                 let (dm, dmax) = match l.draft.as_deref() {
@@ -239,49 +241,6 @@ pub fn supports_router_mode(help_text: &str) -> bool {
     help_text.contains("--models-preset")
 }
 
-/// Discover a sibling `mmproj` GGUF next to `model` (same directory).
-///
-/// Prefers a projector whose filename shares the model's leading token (e.g.
-/// `mmproj-Qwen3-VL-...` next to `Qwen3-VL-...`), falling back to the first
-/// sorted `*mmproj*.gguf` file in the same directory.
-pub fn discover_mmproj_for(model: &Path) -> Option<PathBuf> {
-    let dir = model.parent()?;
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut candidates: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && is_mmproj_file(p))
-        .collect();
-    candidates.sort();
-    if candidates.is_empty() {
-        return None;
-    }
-    let stem = model
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let prefix = stem.split(['-', '_']).next().unwrap_or("");
-    if !prefix.is_empty()
-        && let Some(best) = candidates.iter().find(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.to_ascii_lowercase().contains(prefix))
-        })
-    {
-        return Some(best.clone());
-    }
-    candidates.into_iter().next()
-}
-
-fn is_mmproj_file(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-        return false;
-    };
-    let lower = name.to_ascii_lowercase();
-    lower.ends_with(".gguf") && lower.contains("mmproj")
-}
-
 /// Discover a resident local embedding GGUF in `models_dir` (one level deep or
 /// inside immediate model subdirectories). Skips `mmproj` and `draft` files.
 pub fn discover_embedding_model(models_dir: &Path) -> Option<PathBuf> {
@@ -329,7 +288,7 @@ pub fn is_embedding_gguf(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::route::local_autoconfig::{KvType, LaunchArgs};
+    use crate::route::local_autoconfig::{KvType, LaunchArgs, ProjectorArgs};
     use crate::route::local_spec::DraftArgs;
     use grokhub_core::local_draft::{DraftFlags, DraftKind};
     use grokhub_core::local_profile::Backend;
@@ -372,8 +331,21 @@ mod tests {
             })),
             cpu_only: false,
             run: Default::default(),
+            projector: None,
         };
 
+        // A projector beside the model in the folder isn't loaded on its own:
+        // only a launch planned for a picture carries one.
+        let plain = RouterPreset::from_sidecar_plan(&chat, Some(&launch), Some(&dir));
+        assert!(!plain.has_vision());
+        assert!(!plain.render_ini().contains("mmproj"));
+
+        let mut launch = launch;
+        launch.projector = Some(Box::new(ProjectorArgs {
+            file: mmproj.clone(),
+            mb: 1,
+            off_gpu_flag: false,
+        }));
         let preset = RouterPreset::from_sidecar_plan(&chat, Some(&launch), Some(&dir));
         assert!(preset.has_vision());
         assert_eq!(preset.embedding_model_id(), Some(SLOT_EMBED));

@@ -691,6 +691,18 @@ fn verify_counts(config_dir: &Path, call: &RouteCall<'_>) -> (Option<u32>, bool)
 }
 
 /// Pick the provider, model and effort for one call and advance its episode's ladder.
+/// The on-device difficulty estimator. It runs only offline: online it
+/// would load the local model for every call, and the cloud is the route
+/// anyway. It rides on a model already loaded and never starts or swaps
+/// one: the turn's own load, which knows whether its newest message carries
+/// a picture, decides what runs.
+pub(super) fn offline_estimator() -> Option<Arc<dyn super::local::LocalRuntime>> {
+    super::connectivity::state()
+        .prefer_local()
+        .then(super::local::warm_runtime)
+        .flatten()
+}
+
 pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision {
     let mut laps = Breakdown::start();
     let (reg, profiles) = snapshot(config_dir);
@@ -699,13 +711,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     let settings = spend::spend_settings();
     let user_bench = super::user_bench::load(config_dir);
     laps.mark("route:week_budget");
-    // The on-device estimator runs only offline: online it would load the local
-    // model for every call, and the cloud is the route anyway.
     super::connectivity::sync_from_core();
-    let rt = super::connectivity::state()
-        .prefer_local()
-        .then(super::local::runtime)
-        .flatten();
+    let rt = offline_estimator();
     let key = episode_key(call);
     let base_row = class_row(call.class);
     let turn = turn_hash(call.text);

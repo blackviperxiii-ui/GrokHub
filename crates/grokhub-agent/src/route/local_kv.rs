@@ -257,6 +257,7 @@ mod tests {
             draft: None,
             cpu_only: false,
             run: Default::default(),
+            projector: None,
         }
     }
 

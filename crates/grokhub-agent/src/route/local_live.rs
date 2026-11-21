@@ -401,7 +401,7 @@ pub fn keep_line(conversation_id: &str, line: String) {
 /// Said under a reply when the person's newest picture went to a model that
 /// can't see it ([`super::local_vision::strip_images`]).
 pub const BLIND_LINE: &str =
-    "The picture wasn't read: no model on this computer can see pictures yet.";
+    "The picture wasn't read: the model that answered on this computer can't see pictures.";
 
 /// `line` with [`BLIND_LINE`] after it.
 pub fn blind_line(line: &str) -> String {
@@ -515,7 +515,7 @@ mod tests {
         assert_eq!(
             super::blind_line("Answered by Gemma 4 E2B with its draft, your pick."),
             "Answered by Gemma 4 E2B with its draft, your pick. The picture wasn't read: \
-             no model on this computer can see pictures yet."
+             the model that answered on this computer can't see pictures."
         );
         super::keep_line("blind-c", "Answered by Gemma 4 E2B, your pick.".into());
         super::note_blind("blind-c");
@@ -523,7 +523,7 @@ mod tests {
             super::take_line("blind-c").as_deref(),
             Some(
                 "Answered by Gemma 4 E2B, your pick. The picture wasn't read: \
-                 no model on this computer can see pictures yet."
+                 the model that answered on this computer can't see pictures."
             )
         );
         // No model named under the reply: the line is the blind line alone.

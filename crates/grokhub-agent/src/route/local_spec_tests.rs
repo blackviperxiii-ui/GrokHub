@@ -550,6 +550,7 @@ fn every_launch_flag_is_live_in_the_pinned_engine() {
         draft: Some(Box::new(d)),
         cpu_only: false,
         run: Default::default(),
+        projector: None,
     };
     let launches = [
         full(simple),
