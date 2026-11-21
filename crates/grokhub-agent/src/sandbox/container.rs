@@ -5,9 +5,14 @@
 //! - Files: only the workspace and the `writable` folders are mounted,
 //!   read-write, at the same paths. Nothing else of the host is there, so the
 //!   secret folders the host sandbox hides are simply missing.
-//! - Network: `--network none`. Nothing leaves the container, so the egress
-//!   proxy's rules hold by refusing every host. A command that needs the
-//!   network asks to run with `outside_sandbox`, as on the host.
+//! - Network: `--network none`, so the container has only its own loopback.
+//!   With the network guard on, the egress proxy's Unix socket folder is
+//!   mounted and a small relay inside listens on `127.0.0.1:<proxy port>`,
+//!   as `netns` does on the host: the proxy variables work and nothing else
+//!   gets out (no DNS, no direct connections). The relay is Perl, which
+//!   Debian-based images carry in their base; an image without it runs the
+//!   command with no network and says so. A command that needs more asks to
+//!   run with `outside_sandbox`, as on the host.
 //! - Image: never pulled here (`--pull never`); the user pulls it once, so
 //!   no download happens outside the egress proxy.
 //! - Privileges: every capability dropped, no-new-privileges, a read-only
@@ -34,8 +39,26 @@ pub const LABEL: &str = "grokhub.sandbox=shell";
 /// stdin closes, then exits with its status. `--init` reaps what is left.
 /// The stdin is kept on fd 3 first: `sh` gives a background job `/dev/null`
 /// for stdin unless it is redirected.
-const WATCHDOG: &str = "exec 3<&0; bash --noprofile --norc -c \"$0\" </dev/null 3<&- & p=$!; \
+/// With an egress proxy, `$1` and `$2` are its socket and port and `$3` is
+/// [`RELAY`], started first (it returns once it listens).
+const WATCHDOG: &str = "if [ -n \"$1\" ] && ! perl -e \"$3\" \"$1\" \"$2\" </dev/null 2>/dev/null; then \
+echo '[sandbox] The network relay needs perl, which this image lacks, so this command has no network.' >&2; fi; \
+exec 3<&0; bash --noprofile --norc -c \"$0\" </dev/null 3<&- & p=$!; \
 (cat <&3 >/dev/null; kill -KILL $p 2>/dev/null) & exec 3<&-; wait $p";
+
+/// Listens on the container's `127.0.0.1:<port>` and carries each
+/// connection to the proxy's Unix socket; returns once it listens and keeps
+/// serving in a child that ends with the container. Only the `Socket` module,
+/// which `perl-base` has.
+pub const RELAY: &str = "use Socket;my($s,$p)=@ARGV;\
+socket(my $l,PF_INET,SOCK_STREAM,0)or die;setsockopt($l,SOL_SOCKET,SO_REUSEADDR,1);\
+bind($l,sockaddr_in($p,inet_aton('127.0.0.1')))or die;listen($l,64)or die;\
+$SIG{CHLD}='IGNORE';exit 0 if fork;\
+while(1){accept(my $c,$l)or next;if(fork){close $c;next}close $l;\
+socket(my $u,PF_UNIX,SOCK_STREAM,0)or exit;connect($u,sockaddr_un($s))or exit;\
+if(fork){cp($c,$u);shutdown($u,1);exit}cp($u,$c);shutdown($c,1);exit}\
+sub cp{my($a,$b)=@_;my $d;while((sysread($a,$d,65536)//0)>0){my $o=0;\
+while($o<length $d){my $w=syswrite($b,$d,length($d)-$o,$o);return unless $w;$o+=$w}}}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -56,6 +79,23 @@ pub struct Container {
     pub image: String,
     /// Mounted read-write at the same path. The workspace comes first.
     pub mounts: Vec<PathBuf>,
+    /// The way out through the egress proxy, when the network guard is on.
+    pub egress: Option<Egress>,
+}
+
+/// What a container needs to reach the egress proxy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Egress {
+    /// The proxy's Unix socket; its folder is mounted at the same path.
+    pub socket: PathBuf,
+    /// The port the proxy variables name; the relay listens on it inside.
+    pub port: u16,
+    /// The proxy variables and the token stand-ins, as the host sandbox
+    /// sets them.
+    pub env: Vec<(String, String)>,
+    /// Mounted read-only at the same path: the session CA bundle the
+    /// variables point at.
+    pub files: Vec<PathBuf>,
 }
 
 /// True when `info` (the runtime's own report, see [`probe`]) says it runs
@@ -211,6 +251,28 @@ pub fn args(c: &Container, cwd: &Path, uid: u32, gid: u32, command: &str) -> Vec
             format!("type=bind,source={path},target={path}"),
         ]);
     }
+    let relay = c.egress.as_ref().and_then(|e| {
+        let folder = e.socket.parent()?.display().to_string();
+        out.extend([
+            "--mount".into(),
+            format!("type=bind,source={folder},target={folder}"),
+        ]);
+        for file in &e.files {
+            let file = file.display();
+            out.extend([
+                "--mount".into(),
+                format!("type=bind,source={file},target={file},readonly"),
+            ]);
+        }
+        for (key, value) in &e.env {
+            out.extend(["--env".into(), format!("{key}={value}")]);
+        }
+        Some([
+            e.socket.display().to_string(),
+            e.port.to_string(),
+            RELAY.into(),
+        ])
+    });
     out.extend([
         "--workdir".into(),
         cwd.display().to_string(),
@@ -220,6 +282,7 @@ pub fn args(c: &Container, cwd: &Path, uid: u32, gid: u32, command: &str) -> Vec
         WATCHDOG.into(),
         command.into(),
     ]);
+    out.extend(relay.into_iter().flatten());
     out
 }
 
@@ -244,6 +307,7 @@ mod tests {
             },
             image: DEFAULT_IMAGE.into(),
             mounts,
+            egress: None,
         }
     }
 
@@ -308,6 +372,51 @@ mod tests {
         let args = args(&c, Path::new("/home/user/my-app"), 1000, 1000, "ls");
         assert!(args.contains(&"--userns=keep-id".to_string()));
         assert!(!args.contains(&"--user".to_string()));
+    }
+
+    #[test]
+    fn with_the_proxy_the_socket_folder_ca_and_variables_go_in_and_the_relay_starts() {
+        let mut c = docker(vec![PathBuf::from("/home/user/my-app")]);
+        c.egress = Some(Egress {
+            socket: PathBuf::from("/tmp/egress-7-0/s"),
+            port: 4000,
+            env: vec![
+                ("HTTPS_PROXY".into(), "http://127.0.0.1:4000".into()),
+                ("GH_TOKEN".into(), "ghp_stand-in".into()),
+            ],
+            files: vec![PathBuf::from("/tmp/grokhub-mitm/bundle.pem")],
+        });
+        let args = args(&c, Path::new("/home/user/my-app"), 1000, 1000, "npm ci");
+        let at = args.iter().position(|a| a == "--workdir").unwrap();
+        assert_eq!(
+            args[at - 8..at],
+            [
+                "--mount",
+                "type=bind,source=/tmp/egress-7-0,target=/tmp/egress-7-0",
+                "--mount",
+                "type=bind,source=/tmp/grokhub-mitm/bundle.pem,target=/tmp/grokhub-mitm/bundle.pem,readonly",
+                "--env",
+                "HTTPS_PROXY=http://127.0.0.1:4000",
+                "--env",
+                "GH_TOKEN=ghp_stand-in",
+            ]
+            .map(String::from)
+        );
+        assert_eq!(
+            args[at + 3..],
+            [
+                "sh",
+                "-c",
+                WATCHDOG,
+                "npm ci",
+                "/tmp/egress-7-0/s",
+                "4000",
+                RELAY,
+            ]
+            .map(String::from)
+        );
+        // Still no network of its own: the relay is the only way out.
+        assert!(args.windows(2).any(|w| w == ["--network", "none"]));
     }
 
     #[test]

@@ -75,6 +75,7 @@ fn a_container_plan_is_enforced_and_skips_host_confinement() {
             },
             image: container::DEFAULT_IMAGE.into(),
             mounts: vec![PathBuf::from("/home/user/my-app")],
+            egress: None,
         }),
     };
     assert!(plan.enforced());
@@ -85,15 +86,33 @@ fn a_container_plan_is_enforced_and_skips_host_confinement() {
         network_note(Some(&plan), true, "curl: (6) Could not resolve host: example.com"),
         Some("[sandbox] This command ran in a container with no network, so nothing it starts can reach a host. If it needs the network, rerun with outside_sandbox (asks the user).")
     );
+    // With the relay, a refused host names the proxy's list, and a lookup
+    // that fails names what the relay doesn't carry.
+    let mut relayed = plan.clone();
+    relayed.container.as_mut().unwrap().egress = Some(container::Egress {
+        socket: PathBuf::from("/tmp/egress-7-0/s"),
+        port: 4000,
+        env: Vec::new(),
+        files: Vec::new(),
+    });
+    assert!(relayed.enforced());
+    assert_eq!(
+        network_note(Some(&relayed), true, "curl: (56) CONNECT tunnel failed, response 403"),
+        Some("[sandbox] The proxy only lets sandboxed commands reach package registries, code hosts, model hosts and hosts your WebFetch allow rules name. For another host, rerun with outside_sandbox (asks the user).")
+    );
+    assert_eq!(
+        network_note(Some(&relayed), true, "ssh: Could not resolve hostname github.com"),
+        Some("[sandbox] This command ran in a container whose only way out is HTTP(S) through the proxy, so SSH, DNS lookups, raw sockets and services on this computer don't reach. If it needs them, rerun with outside_sandbox (asks the user).")
+    );
 }
 
 /// Live: with `backend = "container"` and a rootless runtime (or the app
 /// running as root) that already has the default image, a command writes
-/// the workspace, can't write the image or see the config folder, has no
-/// network, and runs as the user's own uid.
+/// the workspace, can't write the image or see the config folder, reaches
+/// out only through the egress proxy, and runs as the user's own uid.
 #[cfg(unix)]
 #[test]
-fn a_command_in_a_container_sees_only_the_workspace_and_no_network() {
+fn a_command_in_a_container_sees_only_the_workspace_and_reaches_out_only_through_the_proxy() {
     let Some(runtime) = container::detect() else {
         eprintln!("skipped: no rootless Podman or Docker here");
         return;
@@ -136,6 +155,32 @@ fn a_command_in_a_container_sees_only_the_workspace_and_no_network() {
 
     let out = run("(exec 3<>/dev/tcp/1.1.1.1/80) 2>/dev/null && echo out || echo blocked".into());
     assert_eq!(out.text.trim(), "exit 0\nblocked", "{}", out.text);
+
+    // The egress proxy still carries it, through the relay inside (a
+    // CONNECT on the port the variables name, as an HTTP client would), to
+    // a host-side server a rule names; that server isn't reachable directly.
+    std::fs::write(
+        config.join("permission-rules.json"),
+        r#"{"allow":["WebFetch(domain:127.0.0.1)"]}"#,
+    )
+    .unwrap();
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = server.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut conn in server.incoming().flatten() {
+            let _ = std::io::Write::write_all(&mut conn, b"pong\n");
+        }
+    });
+    let out = run(format!(
+        "(exec 3<>/dev/tcp/127.0.0.1/{port}) 2>/dev/null && echo direct || echo blocked; \
+         p=${{HTTPS_PROXY##*:}}; exec 3<>/dev/tcp/127.0.0.1/$p && \
+         printf 'CONNECT 127.0.0.1:{port} HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\n\\r\\n' >&3 && \
+         timeout 5 head -c 200 <&3"
+    ));
+    assert!(out.text.contains("blocked"), "{}", out.text);
+    assert!(!out.text.contains("direct"), "{}", out.text);
+    assert!(out.text.contains(" 200 "), "{}", out.text);
+    assert!(out.text.contains("pong"), "{}", out.text);
 
     // A timeout kills the runtime's client; the watchdog then ends the
     // container, so none is left running. The config pin is per thread, so
