@@ -1,0 +1,1 @@
+- Routines can now run with no model: `grokhub-hub routine run <name>` runs a saved routine's steps in order, through the same safety checks as the assistant's own actions. It asks before any step that changes something, and `--dry-run` shows each step and what the checks would say, without running anything.

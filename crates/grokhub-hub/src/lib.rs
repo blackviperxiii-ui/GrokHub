@@ -20,6 +20,9 @@ pub enum Launch {
     McpSelf,
     /// `grokhub-hub bench local`: on-device speed and eval.
     BenchLocal,
+    /// `grokhub-hub routine run <name> [--dry-run] [--set key=value]…`:
+    /// a saved routine's steps, with no model.
+    RoutineRun,
     /// The desktop tools on stdio, behind the same switch and hard gate.
     McpDesktop,
     /// The Cua Driver gate proxy on stdio (Linux, `cuaDriver` flag).
@@ -49,6 +52,11 @@ pub fn parse_args(args: &[String]) -> Launch {
         && args.get(2).map(String::as_str) == Some("local")
     {
         return Launch::BenchLocal;
+    }
+    if args.get(1).map(String::as_str) == Some("routine")
+        && args.get(2).map(String::as_str) == Some("run")
+    {
+        return Launch::RoutineRun;
     }
     for a in args.iter().skip(1) {
         match a.as_str() {
@@ -235,6 +243,14 @@ mod tests {
             Launch::BenchLocal
         );
         assert_eq!(parse_args(&args(&["grokhub-hub", "bench"])), Launch::Serve);
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "routine", "run", "x", "--help"])),
+            Launch::RoutineRun
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "routine"])),
+            Launch::Serve
+        );
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "--version", "--mcp-self"])),
             Launch::Version

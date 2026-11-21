@@ -432,6 +432,69 @@ pub fn parse_ref(text: &str) -> Result<Ref, String> {
     })
 }
 
+impl std::fmt::Display for Ref {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Ref::Input(name) => write!(f, "inputs.{name}"),
+            Ref::Out { step, field } => match field {
+                Field::Json(path) if path.is_empty() => write!(f, "{step}.json"),
+                Field::Json(path) => write!(f, "{step}.json.{}", path.join(".")),
+                other => write!(f, "{step}.{}", field_name(other)),
+            },
+        }
+    }
+}
+
+/// How an `expect` came out. Both carry the value it read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Checked {
+    Pass(String),
+    Miss(String),
+}
+
+impl Expect {
+    /// Reads `from` out of `values` and checks it. An `Err` is an output
+    /// the check can't read (no such output, no regex match, not a number):
+    /// the step fails, rather than counting as a miss.
+    pub fn check(&self, values: &Values) -> Result<Checked, String> {
+        let text = values.get(&parse_ref(&self.from)?)?;
+        let value = match &self.regex {
+            Some(pattern) => {
+                let re = regex::Regex::new(pattern)
+                    .map_err(|_| format!("the regex \"{pattern}\" doesn't compile"))?;
+                let group = self.group.unwrap_or(0);
+                re.captures(&text)
+                    .and_then(|c| c.get(group))
+                    .map(|m| m.as_str().to_string())
+                    .ok_or_else(|| format!("{} has nothing matching \"{pattern}\"", self.from))?
+            }
+            None => text.trim().to_string(),
+        };
+        let number = || {
+            value
+                .trim()
+                .parse::<f64>()
+                .map_err(|_| format!("{} gave \"{value}\", which isn't a number", self.from))
+        };
+        let pass = if let Some(want) = &self.equals {
+            match want.as_f64() {
+                Some(w) => number()? == w,
+                None => value == text_of(want),
+            }
+        } else if self.at_least.is_some() || self.at_most.is_some() {
+            let n = number()?;
+            self.at_least.is_none_or(|lo| n >= lo) && self.at_most.is_none_or(|hi| n <= hi)
+        } else {
+            !value.is_empty()
+        };
+        Ok(if pass {
+            Checked::Pass(value)
+        } else {
+            Checked::Miss(value)
+        })
+    }
+}
+
 /// Lowercase letters, digits and `_`, starting with a letter.
 fn ident(s: &str) -> bool {
     let mut chars = s.chars();
@@ -811,6 +874,10 @@ impl Routine {
                 if !plain {
                     out.push(format!(
                         "{at}: script \"{file}\" must be a file name in the routine's folder"
+                    ));
+                } else if !file.ends_with(".py") {
+                    out.push(format!(
+                        "{at}: script \"{file}\" must be a Python file (.py)"
                     ));
                 }
             }
