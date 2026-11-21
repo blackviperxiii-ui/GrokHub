@@ -8,21 +8,32 @@
 //!   the sign-in, Local AI or the added providers change. A plan sign-in then
 //!   probes the models it hasn't met and rebuilds the routing table.
 //! - Passive health from real calls is folded in every [`FOLD_EVERY_MS`].
+//! - Every [`LEARN_EVERY_MS`] the accuracy guard reverts a class whose
+//!   start trails, and self-tuning moves its shadows, canaries and
+//!   promotions on.
+//! - What a refresh or fold has to tell (a plan lost models, new models
+//!   joined) comes back once per incident as [`Ran::notices`].
 //!
-//! The app calls [`Upkeep::tick`] from one background thread.
+//! The app calls [`Upkeep::tick`] from one background thread and posts the
+//! notices on Home.
 
 use std::path::Path;
 
+use grokhub_core::model_registry::profile::read_profiles;
 use grokhub_core::model_registry::store::load_registry;
-use grokhub_core::model_registry::{CatalogSource, Credential, RefreshClock};
+use grokhub_core::model_registry::{CatalogSource, Credential, RefreshClock, RegistryEvent};
 
+use super::heal::{heal_messages, joined_messages, HealMsg, HealNotes};
 use super::local::{self, LocalSource};
 use super::providers;
 use super::refresh::{fold_health, probe_next, run_refresh, RefreshDone, RefreshJob};
+use super::signals::{LedgerOutcomeSource, SpanVerifySource};
 use super::sources::{probe_model, rebuild_table, XaiApiSource};
 
 /// Passive health is folded into the registry this often.
 pub const FOLD_EVERY_MS: u64 = 60_000;
+/// The accuracy guard and self-tuning run this often.
+pub const LEARN_EVERY_MS: u64 = 60 * 60 * 1000;
 
 /// The xAI sign-in a refresh lists with: the bearer and its kind.
 pub type SignIn = Option<(String, Credential)>;
@@ -32,6 +43,10 @@ pub type SignIn = Option<(String, Credential)>;
 pub struct Ran {
     pub folded: bool,
     pub refreshed: Option<RefreshDone>,
+    /// The guard and self-tuning ran.
+    pub learned: bool,
+    /// Home updates not told before, each incident once.
+    pub notices: Vec<HealMsg>,
 }
 
 /// The schedule between ticks.
@@ -39,6 +54,7 @@ pub struct Ran {
 pub struct Upkeep {
     clock: RefreshClock,
     last_fold_ms: Option<u64>,
+    last_learn_ms: Option<u64>,
 }
 
 impl Upkeep {
@@ -46,6 +62,7 @@ impl Upkeep {
         Self {
             clock: RefreshClock::new(now_ms),
             last_fold_ms: None,
+            last_learn_ms: None,
         }
     }
 
@@ -57,19 +74,75 @@ impl Upkeep {
             .is_none_or(|t| now_ms.saturating_sub(t) >= FOLD_EVERY_MS)
         {
             self.last_fold_ms = Some(now_ms);
-            let (_, signal) = fold_health(config_dir);
+            let (events, signal) = fold_health(config_dir);
             self.clock.signal |= signal;
             ran.folded = true;
+            ran.notices
+                .extend(heal_after(config_dir, &events, &[], now_ms));
         }
         let stamp = stamp(config_dir, sign_in);
         if self.clock.due(now_ms, true, None, &stamp).is_some() {
             self.clock.ran(now_ms, None, &stamp);
-            let done = refresh(config_dir, now_ms, sign_in);
+            let (done, joined) = refresh(config_dir, now_ms, sign_in);
             self.clock.signal |= done.signal;
+            ran.notices
+                .extend(heal_after(config_dir, &done.events, &joined, now_ms));
             ran.refreshed = Some(done);
+        }
+        if self
+            .last_learn_ms
+            .is_none_or(|t| now_ms.saturating_sub(t) >= LEARN_EVERY_MS)
+        {
+            self.last_learn_ms = Some(now_ms);
+            learn(config_dir, now_ms);
+            ran.learned = true;
         }
         ran
     }
+}
+
+/// The accuracy guard, then self-tuning. Both write their own ledgers and
+/// tell nothing: which effort a class starts at shows nowhere.
+fn learn(config_dir: &Path, now_ms: u64) {
+    super::guard::run_guard(config_dir, now_ms);
+    let verify = SpanVerifySource {
+        config_dir: config_dir.to_path_buf(),
+        session: String::new(),
+    };
+    let _ = super::learn::tick(
+        config_dir,
+        &verify,
+        &LedgerOutcomeSource::new(config_dir),
+        now_ms,
+    );
+}
+
+/// The Home updates a batch of registry events and newly ranked models ask
+/// for, less the incidents already told.
+fn heal_after(
+    config_dir: &Path,
+    events: &[RegistryEvent],
+    joined: &[String],
+    now_ms: u64,
+) -> Vec<HealMsg> {
+    let mut heard = if events.is_empty() {
+        Default::default()
+    } else {
+        heal_messages(
+            events,
+            &load_registry(config_dir),
+            &read_profiles(config_dir),
+            now_ms,
+        )
+    };
+    heard.msgs.extend(joined_messages(joined));
+    if heard.msgs.is_empty() && heard.cleared.is_empty() {
+        return Vec::new();
+    }
+    let mut notes = HealNotes::load(config_dir);
+    let msgs = notes.admit(heard, now_ms);
+    notes.save(config_dir);
+    msgs
 }
 
 /// What a change of refreshes: the sign-in's kind (never the token), Local
@@ -104,7 +177,8 @@ fn named_models() -> Vec<String> {
     named
 }
 
-fn refresh(config_dir: &Path, now_ms: u64, sign_in: &SignIn) -> RefreshDone {
+/// A refresh, and the models the rebuilt table ranked for the first time.
+fn refresh(config_dir: &Path, now_ms: u64, sign_in: &SignIn) -> (RefreshDone, Vec<String>) {
     // No sign-in read: the credential the last refresh proved stands until a
     // sign-in replaces it.
     let credential = sign_in
@@ -147,8 +221,8 @@ fn refresh(config_dir: &Path, now_ms: u64, sign_in: &SignIn) -> RefreshDone {
         .is_some()
         {}
     }
-    rebuild_table(config_dir, plan, false, now_ms);
-    done
+    let joined = rebuild_table(config_dir, plan, false, now_ms).joined;
+    (done, joined)
 }
 
 #[cfg(test)]
@@ -214,9 +288,12 @@ mod tests {
         let mut upkeep = Upkeep::new(1_000);
         let early = upkeep.tick(&dir, 1_000, &None);
         assert!(early.folded);
+        assert!(early.learned, "the guard and tuning run at start");
         assert!(early.refreshed.is_none(), "the first refresh waits 30 s");
         let first = upkeep.tick(&dir, 1_000 + FIRST_REFRESH_MS, &None);
         assert!(!first.folded, "folded under a minute ago");
+        assert!(!first.learned, "tuned under an hour ago");
+        assert!(first.notices.is_empty(), "the tiers joining tell nothing");
         assert_eq!(first.refreshed.map(|d| d.errors), Some(Vec::new()));
         let reg = load_registry(&dir);
         assert_eq!(
@@ -237,6 +314,27 @@ mod tests {
         let later = upkeep.tick(&dir, 2_000 + FIRST_REFRESH_MS + FOLD_EVERY_MS, &None);
         assert!(later.folded);
         assert!(later.refreshed.is_none(), "nothing changed");
+        let hour = upkeep.tick(&dir, 1_000 + LEARN_EVERY_MS, &None);
+        assert!(hour.learned, "an hour on, they run again");
+        assert!(hour.notices.is_empty());
+    }
+
+    /// Models the table ranks for the first time are told once.
+    #[test]
+    fn a_new_model_is_told_once() {
+        let dir = temp("heal");
+        let joined = ["grok-5".to_string()];
+        let told = heal_after(&dir, &[], &joined, 1);
+        assert_eq!(
+            told.iter()
+                .map(|m| (m.title.as_str(), m.text.as_str()))
+                .collect::<Vec<_>>(),
+            [(
+                "New in your plan",
+                "Your plan has a new AI model. Auto uses it where it does best."
+            )]
+        );
+        assert!(heal_after(&dir, &[], &joined, 2).is_empty(), "told already");
     }
 
     /// A new sign-in kind or Local AI going off refreshes at once.
