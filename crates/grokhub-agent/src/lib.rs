@@ -61,6 +61,7 @@ mod retry;
 pub mod review;
 pub mod route;
 pub mod routine_consent;
+pub mod routine_draft;
 pub mod routine_run;
 pub mod routine_triggers;
 pub mod routine_wake;

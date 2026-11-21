@@ -56,6 +56,8 @@ const CONTROL: &[&str] = &[
     "merge_subagent_work",
     // Runs a saved routine; each of its steps meets this gate on its own.
     "run_routine",
+    // Saves the last turn's steps as a routine; it always asks.
+    "save_routine",
 ];
 const DESKTOP: &[&str] = &[
     "screenshot",

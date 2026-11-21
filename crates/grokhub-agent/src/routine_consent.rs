@@ -161,13 +161,28 @@ impl Approve for Consented {
     }
 }
 
-/// `grokhub-hub routine allow|revoke <name>`. Allow shows each change step
-/// and asks on the terminal. Exit 0 when done, 1 on a no, 2 on a bad call.
+/// `grokhub-hub routine allow|revoke|undo <name>`. Allow shows each change
+/// step and asks on the terminal. Undo takes back the routine's newest save.
+/// Exit 0 when done, 1 on a no (or nothing to undo), 2 on a bad call.
 pub fn run_cli(args: &[String], config_dir: &Path) -> i32 {
     let (Some(verb), Some(name), None) = (args.first(), args.get(1), args.get(2)) else {
-        eprintln!("usage: grokhub-hub routine allow|revoke <name>");
+        eprintln!("usage: grokhub-hub routine allow|revoke|undo <name>");
         return 2;
     };
+    if verb == "undo" {
+        // A command the person typed.
+        let ask = crate::harness::UndoAsk::from_typing();
+        return match crate::routine_draft::undo(config_dir, name, ask) {
+            Ok(line) => {
+                println!("{line}");
+                0
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                1
+            }
+        };
+    }
     if verb == "revoke" {
         return match revoke(config_dir, name) {
             Ok(true) => {

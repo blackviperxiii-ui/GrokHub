@@ -20,6 +20,7 @@ pub(crate) mod ptc;
 mod read_file;
 pub(crate) mod registry;
 pub(crate) mod run_routine;
+pub(crate) mod save_routine;
 mod search_replace;
 mod session_search;
 pub(crate) mod set;
@@ -246,6 +247,7 @@ pub fn dispatch_for_job(
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),
         run_routine::NAME => run_routine::run(ctx, &args),
+        save_routine::NAME => save_routine::run(ctx, &args),
         "connection_delete" => connections::delete(&args),
         local_ai::SELFTEST => local_ai::selftest(&args),
         mods::PREPARE => mods::run(name, &args),
