@@ -577,12 +577,14 @@ fn blind_turn(history: Vec<InputItem>) -> (ResponsesRequest, Option<String>) {
     )
 }
 
+/// A user message with a picture: the 8-byte PNG signature, which reads as
+/// a PNG, so it reaches a device that sees pictures as it is.
 fn with_picture(body: &str) -> InputItem {
     InputItem::Message {
         role: "user".into(),
         content: vec![
             ContentPart::InputText(body.into()),
-            ContentPart::InputImage("data:image/png;base64,YQ==".into()),
+            ContentPart::InputImage("data:image/png;base64,iVBORw0KGgo=".into()),
         ],
     }
 }
@@ -675,7 +677,7 @@ fn a_device_that_reads_pictures_gets_them_as_they_are() {
     ]);
     let body = crate::route::providers::openai_body("local", None, &sent).to_string();
     assert_eq!(
-        body.matches("data:image/png;base64,YQ==").count(),
+        body.matches("data:image/png;base64,iVBORw0KGgo=").count(),
         2,
         "{body}"
     );
@@ -693,7 +695,7 @@ fn a_device_that_reads_pictures_gets_them_as_they_are() {
     ]);
     let body = crate::route::providers::openai_body("local", None, &sent).to_string();
     assert_eq!(
-        body.matches("data:image/png;base64,YQ==").count(),
+        body.matches("data:image/png;base64,iVBORw0KGgo=").count(),
         1,
         "{body}"
     );
