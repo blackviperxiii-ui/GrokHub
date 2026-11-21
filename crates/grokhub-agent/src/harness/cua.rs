@@ -415,8 +415,14 @@ pub struct StdioChild {
     rx: mpsc::Receiver<String>,
 }
 
-/// Write the manifest and start `cua-driver mcp` with the bounded env.
-pub fn spawn_cua_child(bin: &Path, config_dir: &Path) -> Result<StdioChild, String> {
+/// Write the manifest and start `cua-driver mcp` with the bounded env, on
+/// the screen `screen` names (the Bot Desktop's `DISPLAY` and the like; a
+/// `None` value is removed). Empty keeps the app's own screen.
+pub fn spawn_cua_child(
+    bin: &Path,
+    config_dir: &Path,
+    screen: &[(&str, Option<String>)],
+) -> Result<StdioChild, String> {
     let dir = cua_dir(config_dir);
     std::fs::create_dir_all(&dir).map_err(|e| {
         format!(
@@ -445,6 +451,12 @@ pub fn spawn_cua_child(bin: &Path, config_dir: &Path) -> Result<StdioChild, Stri
         .stderr(Stdio::inherit());
     for k in CUA_ENV_REMOVE {
         cmd.env_remove(k);
+    }
+    for (key, value) in screen {
+        match value {
+            Some(v) => cmd.env(key, v),
+            None => cmd.env_remove(key),
+        };
     }
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| {
@@ -539,6 +551,18 @@ impl<C: CuaChild> CuaProxy<C> {
     /// Halted in this process: no call reaches a child again.
     pub fn is_halted(&self) -> bool {
         self.halted
+    }
+
+    /// The screen the child works on changed (the Bot Desktop started or
+    /// stopped): a running child stops, and the next call starts one on the
+    /// new screen, with the handshake it never saw. A start that failed is
+    /// tried again there.
+    pub fn restart(&mut self) {
+        if let Some(mut c) = self.child.take() {
+            c.kill();
+            self.answered_init = true;
+        }
+        self.start_err = None;
     }
 
     fn child(&mut self) -> Result<&mut C, String> {
@@ -1158,6 +1182,55 @@ mod tests {
             &["initialize", "notifications/initialized", "tools/call"]
         );
         assert_eq!(*starts.borrow(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_new_screen_starts_a_new_child_that_gets_the_handshake_first() {
+        let dir = test_dir("cua-restart");
+        turn(&dir);
+        let fake = Fake::default();
+        let starts = Rc::new(RefCell::new(0));
+        let mut p = proxy(&fake, starts.clone());
+        let click = call("click", json!({"pid":42,"window_id":7,"x":10,"y":20}));
+        let init = r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#;
+        // The client's own handshake went to the first child.
+        p.handle_line(init, ON, &dir, &mut || false).unwrap();
+        assert_eq!(*starts.borrow(), 1);
+        // Nothing running yet on the old screen: a restart leaves no child
+        // to kill and starts none.
+        let idle = Fake::default();
+        let idle_starts = Rc::new(RefCell::new(0));
+        let mut q = proxy(&idle, idle_starts.clone());
+        q.restart();
+        assert_eq!((*idle_starts.borrow(), *idle.killed.borrow()), (0, false));
+
+        // The Bot Desktop started: the child stops, and the next call starts
+        // one there that is told hello before its first call.
+        p.restart();
+        assert!(*fake.killed.borrow());
+        fake.got.borrow_mut().clear();
+        let out = p.handle_line(&click, ON, &dir, &mut || false).unwrap();
+        assert_eq!(text_of(&out), "click done");
+        assert_eq!(*starts.borrow(), 2);
+        let methods: Vec<String> = fake
+            .got
+            .borrow()
+            .iter()
+            .map(|m| m["method"].as_str().unwrap_or("").to_string())
+            .collect();
+        // The click and its before and after looks follow the hello.
+        assert_eq!(
+            &methods[..3],
+            &["initialize", "notifications/initialized", "tools/call"]
+        );
+        let tools: Vec<String> = fake
+            .got
+            .borrow()
+            .iter()
+            .filter_map(|m| m["params"]["name"].as_str().map(str::to_string))
+            .collect();
+        assert_eq!(tools, ["get_window_state", "click", "get_window_state"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

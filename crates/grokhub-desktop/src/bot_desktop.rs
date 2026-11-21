@@ -12,7 +12,9 @@
 //!
 //! The app keeps one shared screen ([`start_shared`], [`shared`],
 //! [`stop_shared`]); while it runs, [`crate::AppDesktop`] sends the desktop
-//! tools there.
+//! tools there. Its folder holds a [`CURRENT`] file naming its display, so a
+//! program another process starts (the Cua child) can join it through
+//! [`current_env`].
 
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
@@ -38,6 +40,42 @@ pub const SHARED_SIZE: (u32, u32) = (1280, 800);
 
 static SHARED: Mutex<Option<Arc<BotDesktop>>> = Mutex::new(None);
 
+/// In the shared screen's folder while it runs: its display number.
+pub const CURRENT: &str = "current";
+
+/// The environment for a program on the shared screen whose folder is `dir`
+/// ([`crate::BOT_DESKTOP_DIR`] under the config folder), from any process:
+/// `None` while no shared screen runs.
+pub fn current_env(dir: &Path) -> Option<Vec<(&'static str, Option<String>)>> {
+    current_env_in(dir, Path::new(SOCKET_DIR))
+}
+
+/// [`current_env`] with the X sockets in `sockets`. The display must be one
+/// Bot Desktop uses, with its socket and cookie file still there, so a stale
+/// file left by a crash names nothing.
+fn current_env_in(dir: &Path, sockets: &Path) -> Option<Vec<(&'static str, Option<String>)>> {
+    let n: u32 = std::fs::read_to_string(dir.join(CURRENT))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let auth = dir.join(format!("bot-desktop-{n}.xauth"));
+    (DISPLAYS.contains(&n) && sockets.join(format!("X{n}")).exists() && auth.is_file())
+        .then(|| screen_env(n, &auth))
+}
+
+/// The environment for a program on display `n` with cookie file `auth`.
+/// Wayland's variables are cleared so a toolkit can't pick the user's
+/// session.
+fn screen_env(n: u32, auth: &Path) -> Vec<(&'static str, Option<String>)> {
+    vec![
+        ("DISPLAY", Some(format!(":{n}"))),
+        ("XAUTHORITY", Some(auth.display().to_string())),
+        ("WAYLAND_DISPLAY", None),
+        ("XDG_SESSION_TYPE", Some("x11".into())),
+    ]
+}
+
 /// The app's Bot Desktop while it runs.
 pub fn shared() -> Option<Arc<BotDesktop>> {
     let mut slot = SHARED.lock().unwrap_or_else(|e| e.into_inner());
@@ -59,6 +97,7 @@ pub fn start_shared(dir: &Path) -> Result<Arc<BotDesktop>, String> {
     if let Some(first) = slot.as_ref().filter(|d| d.running()) {
         return Ok(first.clone());
     }
+    let _ = std::fs::write(dir.join(CURRENT), desk.display.to_string());
     *slot = Some(desk.clone());
     Ok(desk)
 }
@@ -255,6 +294,12 @@ impl BotDesktop {
         drop(child);
         let _ = std::fs::remove_file(&self.auth);
         let _ = std::fs::remove_file(&self.rfb);
+        // The shared screen's file, when it names this one.
+        if let Some(current) = self.auth.parent().map(|d| d.join(CURRENT))
+            && std::fs::read_to_string(&current).is_ok_and(|n| n.trim() == self.display.to_string())
+        {
+            let _ = std::fs::remove_file(current);
+        }
     }
 
     pub fn server(&self) -> Server {
@@ -283,12 +328,7 @@ impl BotDesktop {
     /// The environment for a program that runs on this screen. Wayland's
     /// variables are cleared so a toolkit can't pick the user's session.
     pub fn env(&self) -> Vec<(&'static str, Option<String>)> {
-        vec![
-            ("DISPLAY", Some(self.display_name())),
-            ("XAUTHORITY", Some(self.auth.display().to_string())),
-            ("WAYLAND_DISPLAY", None),
-            ("XDG_SESSION_TYPE", Some("x11".into())),
-        ]
+        screen_env(self.display, &self.auth)
     }
 
     /// An X connection to this screen, with its cookie.
@@ -415,6 +455,60 @@ mod tests {
         want.extend_from_slice(&[0, 16]);
         want.extend_from_slice(&[0xab; 16]);
         assert_eq!(entry, want);
+    }
+
+    #[test]
+    fn another_process_finds_the_shared_screen_only_while_it_is_there() {
+        let dir = std::env::temp_dir().join(format!("grokhub-botdesk-cur-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sock")).unwrap();
+        let sockets = dir.join("sock");
+        assert_eq!(current_env_in(&dir, &sockets), None, "no file");
+        std::fs::write(dir.join(CURRENT), "93\n").unwrap();
+        assert_eq!(current_env_in(&dir, &sockets), None, "no socket or cookie");
+        std::fs::write(sockets.join("X93"), "").unwrap();
+        assert_eq!(current_env_in(&dir, &sockets), None, "no cookie");
+        let auth = dir.join("bot-desktop-93.xauth");
+        std::fs::write(&auth, "c").unwrap();
+        assert_eq!(
+            current_env_in(&dir, &sockets),
+            Some(vec![
+                ("DISPLAY", Some(":93".to_string())),
+                ("XAUTHORITY", Some(auth.display().to_string())),
+                ("WAYLAND_DISPLAY", None),
+                ("XDG_SESSION_TYPE", Some("x11".to_string())),
+            ])
+        );
+        // A display Bot Desktop never uses (the user's own :0) is never named.
+        std::fs::write(dir.join(CURRENT), "0").unwrap();
+        std::fs::write(sockets.join("X0"), "").unwrap();
+        std::fs::write(dir.join("bot-desktop-0.xauth"), "c").unwrap();
+        assert_eq!(current_env_in(&dir, &sockets), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A real Xvfb as the shared screen: its folder names it while it runs,
+    /// and stopping it takes the name away.
+    #[test]
+    fn the_shared_screen_names_itself_for_other_processes() {
+        if crate::resolve_bin("Xvfb").is_none() {
+            eprintln!("skipped: no Xvfb");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("grokhub-botdesk-shared-{}", std::process::id()));
+        let desk = start_shared(&dir).expect("starts");
+        let env = current_env(&dir).expect("named while it runs");
+        assert_eq!(env[0], ("DISPLAY", Some(desk.display_name())));
+        assert_eq!(
+            env[1],
+            ("XAUTHORITY", Some(desk.xauthority().display().to_string()))
+        );
+        drop(desk);
+        assert!(stop_shared());
+        assert!(!dir.join(CURRENT).exists());
+        assert_eq!(current_env(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

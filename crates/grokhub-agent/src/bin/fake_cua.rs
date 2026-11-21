@@ -25,7 +25,24 @@ fn main() {
         .filter(|(k, _)| k.starts_with("CUA_DRIVER_"))
         .map(|(k, v)| (k, Value::String(v)))
         .collect();
-    let _ = writeln!(log, "{}", json!({ "argv": args, "env": env }));
+    // The screen it was started on.
+    let screen: serde_json::Map<String, Value> = std::env::vars()
+        .filter(|(k, _)| {
+            [
+                "DISPLAY",
+                "XAUTHORITY",
+                "WAYLAND_DISPLAY",
+                "XDG_SESSION_TYPE",
+            ]
+            .contains(&k.as_str())
+        })
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+    let _ = writeln!(
+        log,
+        "{}",
+        json!({ "argv": args, "env": env, "screen": screen })
+    );
     let mut out = std::io::stdout().lock();
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
