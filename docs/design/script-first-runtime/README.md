@@ -317,6 +317,35 @@ guesses.
   built in the app, so these points stop there. Phase 4's app triggers pass
   one in.
 
+## Phase 4 notes
+
+Phase 4 starts routines without a person typing a command. Part one
+(`grokhub_agent::routine_triggers` and the `run_routine` tool) holds the
+logic; part two wires it into the app's scheduler and webhook inbox.
+
+- **State.** `routines/state.json` keeps each routine's next timer slot and
+  the files its file triggers have seen. A trigger seen for the first time
+  only primes that state, so turning a routine on never fires it for a past
+  slot or for files that were already there. A routine that is gone loses
+  its state.
+- **Timer.** `daily` and `weekdays` reuse the automation clock
+  (`compute_next_run`); `every` adds its minutes. A missed slot fires once.
+  Several timers on one routine share the soonest slot.
+- **File.** The folder's direct files whose names match the glob (`*` and
+  `?`; dot files skipped), by modified time. `~/` and relative folders are
+  under the home folder. A new or changed file starts a run, with its path
+  in the `file` input when the routine has one. At most 5 runs per routine
+  per tick; the rest wait for the next tick.
+- **Webhook.** The hook's name picks the routine. Top-level body fields
+  named like an input, of that input's kind, fill it; the body text is the
+  words a fill reads.
+- **Chat.** `run_routine` lists the routines with the `chat` trigger and
+  shows only when there is one, so other tool lists don't change. Starting
+  one asks nothing, since each step meets the gate inside the run; plan mode
+  refuses it. The chat can't answer a step's ask yet (phase 5), so a step
+  that changes something is refused. A routine can't name `run_routine` as
+  a step.
+
 ## Build order
 
 Each phase is one PR into `beta`, with tests that assert literal results.
