@@ -345,7 +345,7 @@ fn tick_live(
     let mut preflight = |job: &Automation, script_only: bool| {
         live_preflight_block(config_dir, job, script_only, route)
     };
-    tick_as(
+    let mut fired = tick_as(
         owner,
         config_dir,
         &clock,
@@ -354,7 +354,10 @@ fn tick_live(
         &mut |cmd| grokhub_core::run_night_check_command(cmd),
         &mut decide,
         &mut preflight,
-    )
+    )?;
+    // Routines' timer and file triggers, under the same lease.
+    fired.extend(crate::routine_runs::tick(owner, config_dir, clock(), route));
+    Ok(fired)
 }
 
 /// Build a preflight block from the live route and configured connectors.

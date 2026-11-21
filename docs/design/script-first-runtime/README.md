@@ -345,6 +345,14 @@ logic; part two wires it into the app's scheduler and webhook inbox.
   refuses it. The chat can't answer a step's ask yet (phase 5), so a step
   that changes something is refused. A routine can't name `run_routine` as
   a step.
+- **App.** The scheduler's tick runs due routines after automations, under
+  the same lease, so an open cabin or app keeps them from running twice.
+  The inbox gives a webhook to the routine that listens for its hook before
+  any model run. Each run is unattended and reports on the bell as
+  `routine:<name>`. The model is woken only to fill, branch or repair; with
+  no route, commands run in the home folder and those points stop the run.
+  A `replan` hands the job to one read-only assistant turn, with the
+  routine's report marked as data.
 
 ## Build order
 
