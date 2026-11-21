@@ -1016,7 +1016,7 @@ pub fn serve_request(
         rt.chat_tools(&fitted, cancel)
     });
     let out = match forced {
-        Some(Ok(out)) => Ok(out),
+        Some(Ok(out)) => Ok(super::local_image::with_picture_call(out, &text)),
         Some(Err(e)) if cancel.is_cancelled() => Err(e),
         _ => {
             let (fitted, _) = super::local_fit::fit_keeping(&req, n_ctx, keep);
