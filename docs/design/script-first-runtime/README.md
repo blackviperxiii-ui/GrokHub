@@ -241,6 +241,29 @@ In steady state there is no resident model.
 4. **Automations.** Leave them separate (proposed for now), or show them on
    the Routines page as one-step routines in phase 6.
 
+## Phase 1 notes
+
+Phase 1 (`grokhub_core::routine`) took the proposed JSON format (decision 1).
+It also settles these details of the format:
+
+- A `desktop` step holds its replay inline, as `{ "screen": …, "ops": […] }`,
+  because desktop recipes have no saved names today.
+- An `ask` step is `{ "id": "pick", "ask": "<question>", "branches": { "<name>": "<step or done>" } }`.
+  It has at least two branches and never falls through.
+- An `expect` reads one `from` (`df.stdout`, `df.exit_code`,
+  `probe.json.free_mb`, `inputs.mount`). An optional `regex`/`group` picks
+  the value out of it, which then checks against `equals`, or against
+  `at_least`/`at_most`. With no check, the value must not be empty.
+  - A miss jumps to `else`.
+  - With no `else`, the step fails, which is the repair point in phase 3.
+- Jumps only go forward. The validator lists every problem in step order:
+  - unknown tools;
+  - bad references;
+  - steps that can never run;
+  - a step reading an output that may not have run on every path to it;
+  - quotes written around a value in a command (the runner quotes values
+    itself).
+
 ## Build order
 
 Each phase is one PR into `beta`, with tests that assert literal results.
