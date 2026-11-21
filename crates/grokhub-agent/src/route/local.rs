@@ -202,8 +202,8 @@ pub(crate) fn toggle_on() -> bool {
     switched_on() || test_on()
 }
 
-/// The route is live: the toggle is on, a runtime is [`installed`], and the
-/// governor isn't at Unload.
+/// The route is live: the toggle is on, a runtime is [`installed`], no start
+/// failed in the last [`START_RETRY_SECS`], and the governor isn't at Unload.
 pub fn available() -> bool {
     LocalCapacity::now().available()
 }
@@ -211,7 +211,8 @@ pub fn available() -> bool {
 /// What the device can take right now, for [`super::Router::choose`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalCapacity {
-    /// The toggle is on and a runtime is installed (whatever the governor says).
+    /// The toggle is on, a runtime is installed and its last start didn't
+    /// just fail (whatever the governor says).
     pub ready: bool,
     pub level: Level,
 }
@@ -228,7 +229,8 @@ impl Default for LocalCapacity {
 impl LocalCapacity {
     pub fn now() -> Self {
         Self {
-            ready: (ENABLED.load(Ordering::SeqCst) && installed()) || test_on(),
+            ready: (ENABLED.load(Ordering::SeqCst) && installed() && !start_failed_recently())
+                || test_on(),
             level: super::local_gov::level(),
         }
     }
@@ -417,17 +419,38 @@ pub(crate) fn age_start_error(secs: u64) {
 }
 
 /// An on-device runtime and model are present: a test fake, or a binary + GGUF
-/// under the config dir / env overrides. Not for [`START_RETRY_SECS`] after a
-/// start failed; then the next request tries again.
+/// under the config dir / env overrides. A failed start doesn't change it, so
+/// it agrees with the models page; [`available`] waits out the retry pause.
 pub fn installed() -> bool {
-    if test_runtime().is_some() {
-        return true;
-    }
-    if !production_assets_present() {
-        return false;
-    }
-    !start_failed_recently()
+    test_runtime().is_some() || production_assets_present()
 }
+
+/// A person's own turn is the retry: when the last start failed, forget it so
+/// this turn starts the model again instead of waiting out the pause. The
+/// app's background work still waits.
+pub fn retry_for_turn(class: &str) {
+    if !class.trim().starts_with("background:")
+        && start_failed_recently()
+        && production_assets_present()
+    {
+        clear_start_error();
+    }
+}
+
+/// Why a local call found no runtime: the start failure when the files are on
+/// disk, else [`NO_RUNTIME_MSG`].
+pub fn no_runtime_msg() -> String {
+    match start_failure() {
+        Some(why) => format!(
+            "{START_FAILED_HEAD}{}. It tries again on your next message.",
+            why.trim().trim_end_matches('.')
+        ),
+        None => NO_RUNTIME_MSG.into(),
+    }
+}
+
+/// How [`no_runtime_msg`] starts when the files are there but didn't start.
+pub const START_FAILED_HEAD: &str = "The model is on this computer, but it didn't start: ";
 
 /// The files are on disk but the last start failed: why, for the chat.
 pub fn start_failure() -> Option<String> {
@@ -979,7 +1002,7 @@ pub fn serve_request(
         }
     }
     let Some(rt) = runtime() else {
-        return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
+        return Err(ClientError::Protocol(no_runtime_msg()));
     };
     // The prompt calls the assistant Grok: the device is told which model it
     // is (the file the running sidecar loaded), so it says so when asked.
@@ -1091,7 +1114,7 @@ fn serve_within_at(
         }
     }
     let Some(rt) = runtime() else {
-        return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
+        return Err(ClientError::Protocol(no_runtime_msg()));
     };
     let class = class_row(class).map(|r| r.class).unwrap_or(class);
     if matches!(class, "chat:quick" | "chat:default" | "desktop:soft") {

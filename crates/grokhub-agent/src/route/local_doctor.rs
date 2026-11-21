@@ -61,7 +61,7 @@ impl Report {
             Verdict::Paused(why) => format!("The model is paused because {why}. It comes back by itself."),
             Verdict::Breaker(why) => format!("{}.", capital(why)),
             Verdict::StartFailed(why) => format!(
-                "The model is on disk, but it didn't start: {why}. It tries again on the next message."
+                "The model is on disk, but it didn't start: {why}. It tries again on your next message."
             ),
         }
     }
@@ -383,11 +383,11 @@ mod tests {
         };
         assert_eq!(
             r.summary(),
-            "The model is on disk, but it didn't start: the draft model's tokenizer doesn't match. It tries again on the next message."
+            "The model is on disk, but it didn't start: the draft model's tokenizer doesn't match. It tries again on your next message."
         );
         assert_eq!(
             r.text(),
-            "The model is on disk, but it didn't start: the draft model's tokenizer doesn't match. It tries again on the next message.\nWhat the check read:\n- Engine: /bin/llama-server."
+            "The model is on disk, but it didn't start: the draft model's tokenizer doesn't match. It tries again on your next message.\nWhat the check read:\n- Engine: /bin/llama-server."
         );
         let n = note(&r);
         assert!(n.starts_with(NOTE_OPENS), "{n}");

@@ -1,0 +1,1 @@
+- When the on-device model fails to start, the chat now says why, read from the engine's log and exit (out of memory, an engine too old for the model, a taken port, a refused flag, a GPU backend crash, a bad model file), instead of "isn't installed". A failed multi-model start falls back to running the model alone, and your next message tries again.

@@ -296,6 +296,8 @@ pub fn call_model(
     // from the same scrubbed input the guard below reads.
     rc.adult = adult::explicit(&sent.input);
     let now = grokhub_core::now_ms();
+    // "It tries again on your next message": a person's turn is the retry.
+    local::retry_for_turn(&call.class);
     let decision = live::decide(&dir, &rc, now);
     if decision.paused() {
         route_log(&dir, &rc, &decision, &RouteDone::unseen());

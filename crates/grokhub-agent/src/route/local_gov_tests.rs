@@ -92,7 +92,7 @@ fn the_breaker_stops_starting_a_server_that_keeps_dying_without_leaking_a_reques
     for _ in 0..3 {
         assert_eq!(
             crate::route::local_sidecar::acquire(&dir).err(),
-            Some("local model server stopped before it was ready".into())
+            Some("local model server stopped before it was ready: it exited with code 1 (it didn't start on the CPU either)".into())
         );
     }
     assert_eq!(
