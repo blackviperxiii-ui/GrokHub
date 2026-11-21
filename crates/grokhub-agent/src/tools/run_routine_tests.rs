@@ -32,7 +32,7 @@ fn config() -> (PathBuf, PathBuf) {
         &config,
         json!({
             "version": 1, "name": "write-note", "triggers": ["chat"],
-            "steps": [{ "id": "put", "tool": "write", "args": { "file_path": "new.txt", "contents": "x" } }]
+            "steps": [{ "id": "put", "tool": "write", "args": { "path": "new.txt", "content": "x" } }]
         }),
     );
     // No chat trigger: not the tool's to run.
@@ -108,6 +108,17 @@ fn a_change_step_is_refused_and_nothing_is_written() {
     assert!(out.failed);
     assert!(out.text.contains("Stopped at put:"), "{}", out.text);
     assert!(!work.join("new.txt").exists());
+}
+
+#[test]
+fn an_allowed_change_step_runs() {
+    let (config, work) = config();
+    let dir = grokhub_core::routine::routines_dir(&config).join("write-note");
+    let r = Routine::load(&dir, &crate::routine_run::step_tool).unwrap();
+    crate::routine_consent::grant(&config, &r, 1).unwrap();
+    let out = call(&config, &work, json!({ "name": "write-note" }));
+    assert!(!out.failed, "{}", out.text);
+    assert_eq!(std::fs::read_to_string(work.join("new.txt")).unwrap(), "x");
 }
 
 #[test]

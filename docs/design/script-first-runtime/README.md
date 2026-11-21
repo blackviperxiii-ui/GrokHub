@@ -354,6 +354,25 @@ logic; part two wires it into the app's scheduler and webhook inbox.
   A `replan` hands the job to one read-only assistant turn, with the
   routine's report marked as data.
 
+## Phase 5 notes
+
+Part one (`grokhub_agent::routine_consent`) is decision 2, as proposed.
+
+- **Change steps.** A tool step whose tool isn't read-only, and every
+  desktop step. Script steps run in the read-only sandbox, so they need no
+  consent.
+- **Consent.** `routines/consent.json` keeps, per routine, the SHA-256 of
+  its canonical JSON and the change step ids allowed. Any edit changes the
+  hash and the consent stops counting (`Edited`) until it is given again.
+- **Runs.** App runs and the `run_routine` tool pass the consent as the
+  run's approver. It allows only the listed steps, and never a step that
+  `harness::decide` parks as a hard class. With no consent, change steps
+  are refused as before.
+- **Granting.** `grokhub-hub routine allow <name>` lists each change step
+  with its argument template and asks on the terminal; `routine revoke`
+  takes it back. The Routines page (phase 6) adds the same as a click. No
+  model reply or routine step reaches `grant`.
+
 ## Build order
 
 Each phase is one PR into `beta`, with tests that assert literal results.

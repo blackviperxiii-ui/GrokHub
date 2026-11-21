@@ -157,7 +157,7 @@ fn a_refused_step_is_an_error_and_writes_nothing() {
         &config,
         json!({
             "version": 1, "name": "writer", "triggers": [{ "webhook": "w" }],
-            "steps": [{ "id": "put", "tool": "write", "args": { "file_path": "x.txt", "contents": "x" } }]
+            "steps": [{ "id": "put", "tool": "write", "args": { "path": "x.txt", "content": "x" } }]
         }),
     );
     let fired = webhook(&config, "w", &json!({}), &no_route).unwrap();
@@ -169,6 +169,38 @@ fn a_refused_step_is_an_error_and_writes_nothing() {
         fired.result.error
     );
     assert!(fired.result.failed());
+}
+
+#[test]
+fn an_allowed_routine_writes_and_an_edit_stops_it_again() {
+    let config = temp("allowed");
+    let write = |contents: &str| {
+        save(
+            &config,
+            json!({
+                "version": 1, "name": "writer", "triggers": [{ "webhook": "w" }],
+                "steps": [{ "id": "put", "tool": "write", "args": { "path": "x.txt", "content": contents } }]
+            }),
+        );
+        routine_triggers::for_webhook(&config, "w").unwrap().1
+    };
+    let r = write("one");
+    grokhub_agent::routine_consent::grant(&config, &r, 1).unwrap();
+    let route = route_in(scripted(&[]), &config);
+    let fired = webhook(&config, "w", &json!({}), &route).unwrap();
+    assert_eq!(fired.result.stop, FINISHED, "{}", fired.result.error);
+    assert_eq!(
+        std::fs::read_to_string(config.join("x.txt")).unwrap(),
+        "one"
+    );
+    // The edited routine asks again, so the unattended run refuses it.
+    write("two");
+    let fired = webhook(&config, "w", &json!({}), &route).unwrap();
+    assert_eq!(fired.result.stop, "error");
+    assert_eq!(
+        std::fs::read_to_string(config.join("x.txt")).unwrap(),
+        "one"
+    );
 }
 
 #[test]
