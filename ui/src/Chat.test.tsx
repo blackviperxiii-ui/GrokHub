@@ -927,6 +927,34 @@ describe("Chat", () => {
     expect(screen.getByText("Done.")).toBeVisible();
   });
 
+  it("a secret typed on a form card is scrubbed from the reply already on the page", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("connect it");
+    emit(id, { kind: "text", text: "Your old token bluefin-harbor-4471 expired." });
+    expect(await screen.findByText("Your old token bluefin-harbor-4471 expired.")).toBeVisible();
+    emit(id, {
+      kind: "elicit",
+      id: "tok-1",
+      server: "github",
+      message: "Paste a new token.",
+      mode: "form",
+      url: "",
+      fieldName: "token",
+      fieldTitle: "Token",
+      secret: true,
+      options: [],
+    });
+    await userEvent.type(await screen.findByLabelText("Token"), "bluefin-harbor-4471");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() =>
+      expect(api.answerElicit).toHaveBeenCalledWith(id, "tok-1", "accept", "token", "bluefin-harbor-4471"),
+    );
+    expect(await screen.findByText("Your old token [redacted] expired.")).toBeVisible();
+    expect(screen.queryByText(/bluefin-harbor-4471/)).toBeNull();
+    finish();
+  });
+
   it("a plan card's chips fill its reply box or answer it, and picks are remembered", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

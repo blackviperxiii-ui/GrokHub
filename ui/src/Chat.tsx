@@ -110,6 +110,7 @@ import { DeviceGlanceRow } from "./DeviceGlance";
 import { PanelCard, panelActionText } from "./PanelCard";
 import { ChatFindBar } from "./ChatFindBar";
 import { findLabel, findRows, findStep, itemText } from "./chatFind";
+import { scrubHeld } from "./heldScrub";
 import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { splitSources } from "./replySources";
 import { SourceChips } from "./SourceChips";
@@ -1773,6 +1774,9 @@ export function Chat({
         ),
       );
     mark(null, action);
+    // The app holds a secret typed here for this chat: scrub it from what
+    // the page already shows, as it is redacted from what comes next.
+    if (action === "accept" && item.secret) setItems((now) => scrubHeld(now, value));
     try {
       await answerElicit(conversationId, item.id, action, field ?? item.fieldName, value);
     } catch (err) {
