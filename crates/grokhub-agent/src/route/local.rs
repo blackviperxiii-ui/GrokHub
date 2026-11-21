@@ -58,6 +58,90 @@ pub fn ctx_cap() -> u64 {
 pub fn set_ctx_cap(cap: u64) {
     CTX_CAP.store(cap.max(LOCAL_CTX_CAP), Ordering::SeqCst);
 }
+
+/// When an Ollama HTTP server is up, probe `/api/show` for the effective
+/// `num_ctx` and raise [`ctx_cap`]. `get` fetches a URL body; `post` posts
+/// a JSON body. Prefer a discovered model name; otherwise the first `/api/tags`
+/// entry. Returns the applied window when Ollama answered.
+pub fn apply_ollama_num_ctx(
+    ollama_host: Option<&str>,
+    prefer: Option<&str>,
+    ceiling: Option<u64>,
+    mut get: impl FnMut(&str) -> Result<String, String>,
+    mut post: impl FnMut(&str, &str) -> Result<String, String>,
+) -> Option<u64> {
+    use grokhub_core::ollama_show::{self as os};
+    let root = os::root_from_env(ollama_host);
+    let tags = get(&os::tags_url(&root)).ok()?;
+    if !os::looks_like_ollama(&tags) {
+        let ver = get(&os::version_url(&root)).ok()?;
+        if !os::looks_like_ollama(&ver) {
+            return None;
+        }
+    }
+    let name = prefer
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| os::parse_tags(&tags).into_iter().next())?;
+    let body = post(&os::show_url(&root), &os::show_body(&name)).ok()?;
+    let detected = os::show_context(&body, false)?;
+    let cap = os::capped(detected, ceiling);
+    if cap == 0 {
+        return None;
+    }
+    set_ctx_cap(cap);
+    Some(ctx_cap())
+}
+
+/// Probe the default local Ollama root with a short-timeout agent and apply
+/// [`apply_ollama_num_ctx`]. No-op when Ollama is down. `prefer` is an Ollama
+/// model name (`gemma4:e4b`) when one is known.
+pub fn probe_ollama_num_ctx(prefer: Option<&str>, ceiling: Option<u64>) -> Option<u64> {
+    use std::time::Duration;
+    let host = std::env::var("OLLAMA_HOST").ok();
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(2),
+        read: Some(Duration::from_secs(3)),
+        redirects: 0,
+        // Ollama is loopback; public_only would refuse it.
+        public_only: false,
+        ..Default::default()
+    });
+    // OLLAMA_HOST may name another machine, so each read runs the guard
+    // (a model name only, no user data); loopback goes with no log line.
+    let guard = |url: &str| {
+        crate::harness::guard_quiet(
+            &crate::perm::config_dir(),
+            &crate::harness::EgressReq::new(url, &[]),
+        )
+    };
+    apply_ollama_num_ctx(
+        host.as_deref(),
+        prefer,
+        ceiling,
+        |url| {
+            guard(url)?;
+            let resp = agent
+                .get(url)
+                .header("user-agent", crate::USER_AGENT)
+                .call()
+                .map_err(|e| e.to_string())?;
+            resp.into_string().map_err(|e| e.to_string())
+        },
+        |url, body| {
+            guard(url)?;
+            let resp = agent
+                .post(url)
+                .header("user-agent", crate::USER_AGENT)
+                .header("content-type", "application/json")
+                .send_string(body)
+                .map_err(|e| e.to_string())?;
+            resp.into_string().map_err(|e| e.to_string())
+        },
+    )
+}
+
 /// The classes a local route may take while online (background helpers).
 pub const LOCAL_CLASSES: &[&str] = &[
     "background:classify",
@@ -118,8 +202,8 @@ pub(crate) fn toggle_on() -> bool {
     switched_on() || test_on()
 }
 
-/// The route is live: the toggle is on, a runtime is [`installed`], and the
-/// governor isn't at Unload.
+/// The route is live: the toggle is on, a runtime is [`installed`], no start
+/// failed in the last [`START_RETRY_SECS`], and the governor isn't at Unload.
 pub fn available() -> bool {
     LocalCapacity::now().available()
 }
@@ -127,7 +211,8 @@ pub fn available() -> bool {
 /// What the device can take right now, for [`super::Router::choose`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalCapacity {
-    /// The toggle is on and a runtime is installed (whatever the governor says).
+    /// The toggle is on, a runtime is installed and its last start didn't
+    /// just fail (whatever the governor says).
     pub ready: bool,
     pub level: Level,
 }
@@ -144,7 +229,8 @@ impl Default for LocalCapacity {
 impl LocalCapacity {
     pub fn now() -> Self {
         Self {
-            ready: (ENABLED.load(Ordering::SeqCst) && installed()) || test_on(),
+            ready: (ENABLED.load(Ordering::SeqCst) && installed() && !start_failed_recently())
+                || test_on(),
             level: super::local_gov::level(),
         }
     }
@@ -333,17 +419,38 @@ pub(crate) fn age_start_error(secs: u64) {
 }
 
 /// An on-device runtime and model are present: a test fake, or a binary + GGUF
-/// under the config dir / env overrides. Not for [`START_RETRY_SECS`] after a
-/// start failed; then the next request tries again.
+/// under the config dir / env overrides. A failed start doesn't change it, so
+/// it agrees with the models page; [`available`] waits out the retry pause.
 pub fn installed() -> bool {
-    if test_runtime().is_some() {
-        return true;
-    }
-    if !production_assets_present() {
-        return false;
-    }
-    !start_failed_recently()
+    test_runtime().is_some() || production_assets_present()
 }
+
+/// A person's own turn is the retry: when the last start failed, forget it so
+/// this turn starts the model again instead of waiting out the pause. The
+/// app's background work still waits.
+pub fn retry_for_turn(class: &str) {
+    if !class.trim().starts_with("background:")
+        && start_failed_recently()
+        && production_assets_present()
+    {
+        clear_start_error();
+    }
+}
+
+/// Why a local call found no runtime: the start failure when the files are on
+/// disk, else [`NO_RUNTIME_MSG`].
+pub fn no_runtime_msg() -> String {
+    match start_failure() {
+        Some(why) => format!(
+            "{START_FAILED_HEAD}{}. It tries again on your next message.",
+            why.trim().trim_end_matches('.')
+        ),
+        None => NO_RUNTIME_MSG.into(),
+    }
+}
+
+/// How [`no_runtime_msg`] starts when the files are there but didn't start.
+pub const START_FAILED_HEAD: &str = "The model is on this computer, but it didn't start: ";
 
 /// The files are on disk but the last start failed: why, for the chat.
 pub fn start_failure() -> Option<String> {
@@ -887,12 +994,14 @@ pub fn serve_request(
     // The router decides the model from it; the model never picks it.
     let config_dir = crate::perm::config_dir();
     let helper = super::local_scale::helper_turn(class, &req.conversation_id);
-    let tier = super::local_scale::chat_tier(
-        &text,
-        crate::brain::care_first_enabled(&config_dir),
-        helper,
-        super::local_pin::get(&config_dir, &req.conversation_id),
-    );
+    let care_first = crate::brain::care_first_enabled(&config_dir);
+    let mut standing = super::local_pin::get(&config_dir, &req.conversation_id);
+    // "From now on, be quick" keeps the tier after a restart; "back to auto"
+    // drops it. A save that fails still serves this turn as asked.
+    if let Some(ask) = super::local_scale::standing_ask(&text, care_first, helper) {
+        standing = super::local_pin::set(&config_dir, &req.conversation_id, ask).unwrap_or(ask);
+    }
+    let tier = super::local_scale::chat_tier(&text, care_first, helper, standing);
     let _tier = super::local_scale::ChatGuard::set(tier);
     // The person's newest message carries a picture: the swap loads a model
     // that can see it, when one is on disk and fits (a helper's turn never
@@ -922,7 +1031,7 @@ pub fn serve_request(
         }
     }
     let Some(rt) = runtime() else {
-        return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
+        return Err(ClientError::Protocol(no_runtime_msg()));
     };
     // The prompt calls the assistant Grok: the device is told which model it
     // is (the file the running sidecar loaded), so it says so when asked.
@@ -936,8 +1045,10 @@ pub fn serve_request(
     // A server without its vision projector (`--mmproj`) refuses any
     // request with a picture in it, and the picture stays in the chat, so
     // each later turn would fail too: unless the launch reads pictures, the
-    // model is told a picture was there instead.
-    let blind = !rt.sees_pictures() && super::local_vision::strip_images(&mut req.input) > 0;
+    // model is told a picture was there instead. One that reads them gets
+    // each as PNG or JPEG (WebP transcoded for llama.cpp's stb_image).
+    let vision = super::local_vision::prepare_images(&mut req.input, rt.sees_pictures());
+    let blind = vision.stripped > 0;
     // The device window is often 4k to 16k: send only what fits, with room to
     // answer. With or without tools, so a long chat is trimmed on the way
     // (the oldest turns first) instead of being refused for its length.
@@ -958,7 +1069,7 @@ pub fn serve_request(
         rt.chat_tools(&fitted, cancel)
     });
     let out = match forced {
-        Some(Ok(out)) => Ok(out),
+        Some(Ok(out)) => Ok(super::local_image::with_picture_call(out, &text)),
         Some(Err(e)) if cancel.is_cancelled() => Err(e),
         _ => {
             let (fitted, _) = super::local_fit::fit_keeping(&req, n_ctx, keep);
@@ -1033,7 +1144,7 @@ fn serve_within_at(
         }
     }
     let Some(rt) = runtime() else {
-        return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
+        return Err(ClientError::Protocol(no_runtime_msg()));
     };
     let class = class_row(class).map(|r| r.class).unwrap_or(class);
     if matches!(class, "chat:quick" | "chat:default" | "desktop:soft") {
@@ -1070,6 +1181,50 @@ fn serve_within_at(
         usage: Usage::default(),
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod ollama_ctx_tests {
+    use super::*;
+
+    #[test]
+    fn apply_ollama_num_ctx_sets_cap_from_show() {
+        set_ctx_cap(LOCAL_CTX_CAP);
+        let cap = apply_ollama_num_ctx(
+            Some("http://127.0.0.1:11434"),
+            Some("gemma4:e4b"),
+            None,
+            |url| {
+                assert!(url.ends_with("/api/tags"));
+                Ok(r#"{"models":[{"name":"gemma4:e4b"}]}"#.into())
+            },
+            |url, body| {
+                assert!(url.ends_with("/api/show"));
+                assert!(body.contains("gemma4:e4b"));
+                Ok(
+                    r#"{"parameters":"num_ctx 8192","model_info":{"gemma3.context_length":32768}}"#
+                        .into(),
+                )
+            },
+        );
+        assert_eq!(cap, Some(8192));
+        assert_eq!(ctx_cap(), 8192);
+        set_ctx_cap(LOCAL_CTX_CAP);
+    }
+
+    #[test]
+    fn apply_ollama_num_ctx_skips_when_not_ollama() {
+        set_ctx_cap(LOCAL_CTX_CAP);
+        let cap = apply_ollama_num_ctx(
+            None,
+            None,
+            None,
+            |_| Ok(r#"{"ok":true}"#.into()),
+            |_, _| panic!("no show"),
+        );
+        assert_eq!(cap, None);
+        assert_eq!(ctx_cap(), LOCAL_CTX_CAP);
+    }
 }
 
 /// What [`scan_pii`] found.

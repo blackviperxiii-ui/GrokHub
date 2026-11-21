@@ -71,9 +71,18 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 | `retarget.yml` | PRs opened against `main`. Moves them to `beta`. Builds nothing. |
 | `cards-sync.yml`, `claude.yml` | Bot workflows: schedule, issue, review and manual triggers. They build nothing. |
 
+## Live eval (offline by default)
+
+`cargo run -p grokhub-agent --example eval -- --live` is opt-in. It needs
+`GROKHUB_EVAL_API_KEY` and `--budget-usd` with `0 < amount <= 0.20`, and every
+model call is held under that dollar/token cap. Default PR CI, the merge
+queue, and push builds never pass `--live` or set that key: they stay on the
+offline dry-run path (and the separate `live_eval` example is manual only).
+
 ## Rules for workflow changes
 
 - Heavy jobs stay off pull requests: release builds, screenshots, packaging, macOS and full matrices. PRs run the light gate.
+- Never add `--live` or `GROKHUB_EVAL_API_KEY` to a required PR job.
 - Every job sets `timeout-minutes`.
 - `actions/upload-artifact` steps for CI evidence (smoke and deck screenshots) keep files for 7 days or less. release.yml's build artifacts only carry files to `publish`, and the files ship on the GitHub release.
 - Required check names (`fmt`, `guards`, `linux`, `windows`, `pii-guard`) don't change without the matching ruleset change.

@@ -1077,7 +1077,8 @@ impl Drop for Session {
 /// The real desktop tools behind the hard gate, with the shell as their host.
 #[cfg(desktop)]
 pub(crate) fn native_desktop() -> Box<dyn DesktopOps> {
-    Box::new(grokhub_desktop::NativeDesktop::new())
+    // The user's screen, or the Bot Desktop while Settings has it on.
+    Box::new(grokhub_desktop::AppDesktop::new())
 }
 
 /// Phones have no desktop tools; the capability report keeps them unoffered,
@@ -1318,6 +1319,23 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 continue;
             }
         };
+        // "From now on, use Claude" moves the chat onto the plan from this
+        // turn on, and "stop using Claude" moves it back; there is no switch.
+        if let Some(on) = crate::claude_chat::steer(&text) {
+            if let Err(why) = crate::claude_chat::set_chat(&config_dir, &conversation_id, on) {
+                let _ = done.send(Err(why));
+                continue;
+            }
+        }
+        // "Use Opus for the refactor" or "use high effort for debugging"
+        // steers that kind of task in this chat and its helpers from now on;
+        // "back to auto" clears it. There is no picker.
+        if let Err(why) =
+            grokhub_agent::route::task_steer::hear(&config_dir, &conversation_id, &text)
+        {
+            let _ = done.send(Err(why));
+            continue;
+        }
         // A Stop from an earlier turn doesn't carry over; one pressed while
         // Claude Code's sign-in is checked ends this turn before it starts.
         if crate::claude_chat::is_on(&config_dir, &conversation_id) {

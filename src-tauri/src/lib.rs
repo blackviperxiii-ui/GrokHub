@@ -14,6 +14,8 @@ pub mod auto_setup;
 pub mod automations;
 pub mod background;
 pub mod bg_runs;
+pub mod bot_screen;
+pub mod browser_attach;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
@@ -21,6 +23,9 @@ pub mod card_chat;
 mod catalog_refresh;
 pub mod change_rows;
 pub mod changes;
+pub mod channel_asks;
+pub mod channel_inbox;
+pub mod channels;
 #[cfg(desktop)]
 pub mod chat_review;
 pub mod chat_tabs;
@@ -59,6 +64,8 @@ pub mod game_companion;
 pub mod game_watch;
 pub mod games;
 pub mod goals;
+#[cfg(desktop)]
+pub mod headless_service;
 mod helper_asks;
 #[cfg(desktop)]
 mod helper_loop;
@@ -143,6 +150,11 @@ pub mod remote_tls;
 #[cfg(test)]
 mod reply_sources_fixtures;
 pub mod review_cards;
+mod router_upkeep;
+#[cfg(desktop)]
+pub mod routine_runs;
+#[cfg(desktop)]
+pub mod routines_page;
 pub mod run_resume;
 #[cfg(desktop)]
 pub mod scheduler;
@@ -168,6 +180,8 @@ pub mod suggested;
 mod task_feed;
 mod turns;
 pub mod unattended;
+#[cfg(desktop)]
+mod update_rollback;
 pub mod voice;
 mod voice_live;
 mod vstack_sync;
@@ -419,6 +433,171 @@ fn save_settings(
     let _ = &app;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     Ok(view(&next))
+}
+
+/// Settings → Bot Desktop.
+#[tauri::command]
+fn get_bot_desktop(state: State<'_, ShellState>) -> bot_screen::BotDesktopView {
+    bot_screen::view(current(&state).bot_desktop, None)
+}
+
+/// Connectors → Phone and chat apps.
+#[tauri::command]
+fn get_channels(state: State<'_, ShellState>) -> channels::ChannelsView {
+    channels::view(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        None,
+    )
+}
+
+/// Checks a bot token with Telegram or Discord, saves it in the keychain and
+/// starts listening.
+#[tauri::command]
+async fn connect_channel(
+    state: State<'_, ShellState>,
+    kind: grokhub_core::msg_channels::ChannelKind,
+    token: String,
+) -> Result<channels::ChannelsView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        channels::connect(
+            &dir,
+            &grokhub_agent::channels_net::os_keychain(),
+            kind,
+            &token,
+        )
+    })
+    .await?
+}
+
+#[tauri::command]
+async fn disconnect_channel(
+    state: State<'_, ShellState>,
+    kind: grokhub_core::msg_channels::ChannelKind,
+) -> Result<channels::ChannelsView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || channels::disconnect(&dir, &grokhub_agent::channels_net::os_keychain(), kind))
+        .await?
+}
+
+/// The code a stranger was sent: they count as paired from now on.
+#[tauri::command]
+fn approve_channel_code(
+    state: State<'_, ShellState>,
+    code: String,
+) -> Result<channels::ChannelsView, String> {
+    channels::approve(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        &code,
+    )
+}
+
+/// A signed webhook with a fresh secret, shown in this answer only.
+#[tauri::command]
+fn add_channel_webhook(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<channels::ChannelsView, String> {
+    channels::add_webhook(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        &name,
+    )
+}
+
+#[tauri::command]
+fn remove_channel_webhook(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<channels::ChannelsView, String> {
+    channels::remove_webhook(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        &name,
+    )
+}
+
+#[tauri::command]
+fn set_channel_asks(
+    state: State<'_, ShellState>,
+    kind: grokhub_core::msg_channels::ChannelKind,
+    sender: String,
+    on: bool,
+) -> Result<channels::ChannelsView, String> {
+    channels::set_asks(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        kind,
+        &sender,
+        on,
+    )
+}
+
+#[tauri::command]
+fn unpair_channel_sender(
+    state: State<'_, ShellState>,
+    kind: grokhub_core::msg_channels::ChannelKind,
+    sender: String,
+) -> Result<channels::ChannelsView, String> {
+    channels::unpair(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        kind,
+        &sender,
+    )
+}
+
+/// Settings → General → Your browser.
+#[tauri::command]
+fn get_browser_attach(state: State<'_, ShellState>) -> browser_attach::AttachView {
+    browser_attach::load(&state.config_dir)
+}
+
+/// Saves the attached browser and its allowed sites, then restarts a running
+/// browser tool so its next step uses them.
+#[tauri::command]
+async fn save_browser_attach(
+    state: State<'_, ShellState>,
+    endpoint: String,
+    sites: Vec<String>,
+) -> Result<browser_attach::AttachView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let saved = browser_attach::save(&dir, &endpoint, &sites)?;
+        grokhub_agent::mcp::browser_attach_changed();
+        Ok(saved)
+    })
+    .await?
+}
+
+/// Settings → Bot Desktop's preview: the screen now, or nothing when it
+/// isn't running.
+#[tauri::command]
+async fn bot_desktop_frame() -> Result<Option<String>, String> {
+    off_main(bot_screen::frame).await
+}
+
+/// Settings → Bot Desktop, on or off. It applies at once, and the next
+/// desktop step of a running chat goes to the screen now in use. A screen
+/// that can't start leaves the switch off and says why.
+#[tauri::command]
+async fn set_bot_desktop(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<bot_screen::BotDesktopView, String> {
+    let dir = state.config_dir.clone();
+    // Starting waits for the X server, so it runs off the main thread.
+    let started = off_main(move || bot_screen::apply(&dir, on)).await?;
+    let on = on && started.is_ok();
+    let next = ShellSettings {
+        bot_desktop: on,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    Ok(bot_screen::view(on, started.err()))
 }
 
 /// Settings → Appearance; the page applies it at once.
@@ -2380,7 +2559,7 @@ fn chip_row(
             },
             follow_ups: &follow,
             mode: mode.as_str(),
-            signed_in: credential::has_key() || oauth::signed_in(&oauth::Keychain).is_some(),
+            ai_ready: ai_ready(dir),
             first_run,
             hour: local.hour as u8,
             weekday: local.weekday,
@@ -2477,10 +2656,93 @@ fn add_automation(
     Ok(automations::rows(&list, clock))
 }
 
+/// The Automations page's Routines list.
+#[cfg(desktop)]
+#[tauri::command]
+fn list_routines(state: State<'_, ShellState>) -> Vec<routines_page::Row> {
+    routines_page::rows(&state.config_dir)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn set_routine_on(
+    state: State<'_, ShellState>,
+    name: String,
+    on: bool,
+) -> Result<Vec<routines_page::Row>, String> {
+    grokhub_agent::routine_triggers::set_on(&state.config_dir, &name, on)?;
+    Ok(routines_page::rows(&state.config_dir))
+}
+
+/// Allow on a routine's row: its change steps may run unattended.
+#[cfg(desktop)]
+#[tauri::command]
+fn allow_routine(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<Vec<routines_page::Row>, String> {
+    routines_page::allow(&state.config_dir, &name)?;
+    Ok(routines_page::rows(&state.config_dir))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn revoke_routine(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<Vec<routines_page::Row>, String> {
+    routines_page::revoke(&state.config_dir, &name)?;
+    Ok(routines_page::rows(&state.config_dir))
+}
+
+/// Apply on a routine's suggested fix.
+#[cfg(desktop)]
+#[tauri::command]
+fn apply_routine_fix(state: State<'_, ShellState>, name: String) -> Result<String, String> {
+    routines_page::apply_fix(&state.config_dir, &name)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn dismiss_routine_fix(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<Vec<routines_page::Row>, String> {
+    routines_page::dismiss_fix(&state.config_dir, &name)?;
+    Ok(routines_page::rows(&state.config_dir))
+}
+
+/// Undo on a routine's row: the newest saved change to it goes back.
+#[cfg(desktop)]
+#[tauri::command]
+fn undo_routine(state: State<'_, ShellState>, name: String) -> Result<String, String> {
+    routines_page::undo(&state.config_dir, &name)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn run_routine_now(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<automations::RunResult, String> {
+    let config_dir = state.config_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        routines_page::run_now(&config_dir, &name, &|| scheduled_route(&config_dir))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The Automations page's Suggested tiles.
 #[tauri::command]
 fn list_suggested_automations(state: State<'_, ShellState>) -> Vec<SuggestedTile> {
     suggested::suggested(&state.config_dir)
+}
+
+/// Slot-filled starter Blueprints for the Automations gallery.
+#[tauri::command]
+fn list_automation_blueprints() -> Vec<grokhub_core::Blueprint> {
+    grokhub_core::blueprint_catalog()
 }
 
 /// Add a Suggested tile: its seed becomes an automation.
@@ -2929,6 +3191,12 @@ fn export_personal() -> Result<String, String> {
     let dir = grokhub_core::diagnostics::downloads_dir()
         .ok_or_else(|| "Couldn't find your Downloads folder.".to_string())?;
     memory::export_to(&dir)
+}
+
+/// Updates the Obsidian-friendly wiki of the plain memory. Desktop only.
+#[tauri::command]
+fn export_memory_wiki() -> Result<String, String> {
+    memory::export_wiki()
 }
 
 /// Deletes every learned line for good. Desktop only; the page asks first.
@@ -6122,20 +6390,8 @@ async fn imagine_generate(
         kind,
     };
     off_main(move || {
-        let (bearer, own) = imagine::bearer()?;
         let run = imagine::start()?;
-        let make = |bearer: &str| {
-            let api = grokhub_agent::imagine_client(bearer);
-            imagine::generate(
-                &dir,
-                &req,
-                api.as_ref(),
-                &|| run.stopped(),
-                grokhub_core::now_ms(),
-            )
-        };
-        let first = make(&bearer);
-        imagine::retry_refused(own, first, imagine::shared_bearer, make).map(|mut made| {
+        imagine::make(&dir, &req, &|| run.stopped(), grokhub_core::now_ms()).map(|mut made| {
             made.page = imagine::with_account(made.page);
             made
         })
@@ -6224,44 +6480,6 @@ async fn set_claude_plan_allowed(
     capabilities::needs(capabilities::current().local_ai, "AI models")?;
     let dir = state.config_dir.clone();
     off_main(move || claude_chat::set_allowed(&dir, on)).await?
-}
-
-/// A chat tab's switch to the Claude plan, from its next message on.
-#[cfg(desktop)]
-#[tauri::command]
-async fn set_claude_plan_chat(
-    state: State<'_, ShellState>,
-    conversation_id: String,
-    on: bool,
-) -> Result<claude_chat::ClaudeChats, String> {
-    capabilities::needs(capabilities::current().local_ai, "AI models")?;
-    let dir = state.config_dir.clone();
-    off_main(move || claude_chat::set_chat(&dir, &conversation_id, on)).await?
-}
-
-/// A chat's on-device tier from its tab menu: `None` is Auto, else Speed,
-/// Balance or Performance, from its next message on. Words in a message
-/// ("be quick", "think hard") still beat it for that message.
-#[tauri::command]
-async fn set_local_chat_pin(
-    state: State<'_, ShellState>,
-    conversation_id: String,
-    tier: Option<grokhub_agent::route::table::SpeedQuality>,
-) -> Result<Option<grokhub_agent::route::table::SpeedQuality>, String> {
-    capabilities::needs(capabilities::current().local_ai, "AI models")?;
-    let dir = state.config_dir.clone();
-    off_main(move || grokhub_agent::route::local_pin::set(&dir, &conversation_id, tier)).await?
-}
-
-/// The tier a chat is set to, or `None` on Auto.
-#[tauri::command]
-async fn local_chat_pin(
-    state: State<'_, ShellState>,
-    conversation_id: String,
-) -> Result<Option<grokhub_agent::route::table::SpeedQuality>, String> {
-    capabilities::needs(capabilities::current().local_ai, "AI models")?;
-    let dir = state.config_dir.clone();
-    off_main(move || grokhub_agent::route::local_pin::get(&dir, &conversation_id)).await
 }
 
 /// Posts the key's approval card; nothing is saved until `answer_ai_models_card`.
@@ -6530,6 +6748,33 @@ async fn remove_library_model(
     capabilities::needs(capabilities::current().local_ai, "Local AI")?;
     let dir = state.config_dir.clone();
     off_main(move || model_library::remove(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn search_hf_gguf(query: String, limit: Option<usize>) -> Result<Vec<model_library::HfHit>, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    off_main(move || model_library::search_hf(&query, limit.unwrap_or(20))).await?
+}
+
+#[tauri::command]
+async fn list_hf_gguf_files(
+    state: State<'_, ShellState>,
+    repo: String,
+) -> Result<Vec<model_library::HfFileRow>, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || model_library::hf_files(&dir, &repo)).await?
+}
+
+#[tauri::command]
+async fn download_hf_gguf(
+    state: State<'_, ShellState>,
+    repo: String,
+    path: String,
+) -> Result<String, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || model_library::download_hf(&dir, &repo, &path)).await?
 }
 
 #[tauri::command]
@@ -7142,6 +7387,20 @@ fn set_diagnostics(
     diagnostics::set(&state.config_dir, mode, include_logs)
 }
 
+/// Some AI source can answer a chat: a Grok sign-in or key, a provider with
+/// a key the user allowed, or a model on this PC. xAI is one of these, not a
+/// requirement.
+pub(crate) fn ai_ready(dir: &Path) -> bool {
+    credential::has_key()
+        || oauth::signed_in(&oauth::Keychain).is_some()
+        || grokhub_agent::route::local::installed()
+        || !grokhub_agent::route::providers::usable(
+            dir,
+            grokhub_agent::route::providers::call_data(false),
+        )
+        .is_empty()
+}
+
 /// Builds the redacted bundle and keeps it for Save; nothing is written yet.
 /// `chat` is the one chat whose text goes in (none: no chat text at all).
 #[tauri::command]
@@ -7431,6 +7690,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "clock")?,
         )?),
         "list_suggested_automations" => out(list_suggested_automations(state)),
+        "list_automation_blueprints" => out(list_automation_blueprints()),
         "add_suggested_automation" => out(add_suggested_automation(
             state,
             arg(args, "seed")?,
@@ -7688,25 +7948,175 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
     }
 }
 
-/// Scheduled automations fire from here while the cabin is closed, with the
-/// settings as they are at each run.
+/// A scheduled run's route, with the settings as they are at each run.
+#[cfg(desktop)]
+fn scheduled_route(config_dir: &Path) -> Result<scheduler::Route, String> {
+    let settings = settings::load(config_dir);
+    let route = route(&settings, agent::SessionMode::Chat, config_dir)?;
+    let (model, _) = grokhub_agent::route::host::chat_start();
+    let gate = run_gate(&route);
+    Ok((route.client, model, route.workspace, gate))
+}
+
+/// Scheduled automations fire from here while the cabin is closed.
 #[cfg(desktop)]
 fn start_scheduler(app: &tauri::App) {
     let config_dir = app.state::<ShellState>().config_dir.clone();
     let handle = app.handle().clone();
+    let dir = config_dir.clone();
     scheduler::start(
-        config_dir.clone(),
-        move || {
-            let settings = settings::load(&config_dir);
-            let route = route(&settings, agent::SessionMode::Chat, &config_dir)?;
-            let (model, _) = grokhub_agent::route::host::chat_start();
-            let gate = run_gate(&route);
-            Ok((route.client, model, route.workspace, gate))
-        },
+        config_dir,
+        move || scheduled_route(&dir),
         move |fired| {
             let _ = handle.emit(scheduler::RAN_EVENT, fired);
         },
     );
+}
+
+/// Messages from paired chats and signed webhooks are answered from here:
+/// one background run each (read-only, no desktop, nobody to approve a
+/// card), and a chat's answer goes back to it. Waiting decisions go out to
+/// the senders the user chose, and their "yes CODE" / "no CODE" replies are
+/// answered through `answer_inbox`, like the inbox row. A webhook a saved
+/// routine listens for runs that routine instead ([`routine_runs`]).
+#[cfg(desktop)]
+fn start_channel_inbox(app: AppHandle) {
+    let config_dir = app.state::<ShellState>().config_dir.clone();
+    channel_inbox::recover(&config_dir, grokhub_core::now_ms());
+    std::thread::spawn(move || {
+        let mut asks = channel_asks::RemoteAsks::default();
+        loop {
+            std::thread::sleep(Duration::from_secs(3));
+            let dir = config_dir.as_path();
+            let store = grokhub_agent::channels_net::os_keychain();
+            let waiting = inbox::decisions(dir);
+            let texts = asks.sync(&waiting, &mut grokhub_core::fill_random);
+            if !texts.is_empty() {
+                for to in channel_asks::targets(dir) {
+                    for text in &texts {
+                        let _ = channels::send_answer(dir, &store, &to, text);
+                    }
+                }
+            }
+            channel_inbox::drain_with(
+                dir,
+                &mut |to, text| {
+                    channel_asks::remember_reach(dir, to);
+                    if !channel_asks::is_approver(dir, to.channel, &to.sender) {
+                        return None;
+                    }
+                    Some(match asks.reply(text)? {
+                        channel_asks::Reply::Said(said) => said,
+                        channel_asks::Reply::Answer { ask, approve } => {
+                            match answer_inbox(
+                                app.clone(),
+                                app.state::<ShellState>(),
+                                ask.chat_id,
+                                ask.id,
+                                ask.kind,
+                                approve,
+                            ) {
+                                Ok(_) if approve => format!("Allowed once: {}", ask.what),
+                                Ok(_) => format!("Denied: {}", ask.what),
+                                Err(why) => why,
+                            }
+                        }
+                    })
+                },
+                // A webhook a routine listens for runs that routine instead.
+                &mut |hook, body| {
+                    let fired = routine_runs::webhook(dir, hook, body, &|| scheduled_route(dir))?;
+                    let _ = app.emit(scheduler::RAN_EVENT, &fired);
+                    Some(if fired.result.failed() {
+                        Err(fired.result.error)
+                    } else {
+                        Ok(fired.result.text)
+                    })
+                },
+                &mut |prompt, session| {
+                    let (client, model, workspace, _) = scheduled_route(dir)?;
+                    let _config = grokhub_agent::perm::ConfigGuard::set(dir);
+                    let done = unattended::run(unattended::Job {
+                        client,
+                        model,
+                        workspace,
+                        session_id: session.to_string(),
+                        prompt: prompt.to_string(),
+                        // Fixed, so text in a message can't name the tool set.
+                        tools_from: Some(String::new()),
+                        gate: unattended::RunGate::BACKGROUND,
+                        cancel: grokhub_agent::CancelToken::new(),
+                        resume: false,
+                    });
+                    if done.error.is_empty() {
+                        Ok(done.text)
+                    } else {
+                        Err(done.error)
+                    }
+                },
+                &mut |to, text| channels::send_answer(dir, &store, to, text),
+            );
+        }
+    });
+}
+
+/// The flag that runs scheduled automations with no window.
+pub const AUTOMATIONS_ARG: &str = "--automations";
+
+/// `grokhub-shell --automations`: scheduled automations with no window, for
+/// a login service while the app is closed. Sets up what a scheduled run
+/// reads (the router's settings, provider keys and the learned-tier key from
+/// the OS keyring, the device profile), then ticks until stopped. An open
+/// app takes the jobs over, and this waits for it to close.
+///
+/// Each fire still settles on the row in `automations.json` (health, count,
+/// check gate). The `eprintln!` below is a console hint only: on Windows
+/// release builds (`windows_subsystem = "windows"`) it goes nowhere.
+#[cfg(desktop)]
+pub fn run_automations() -> ! {
+    let config_dir = grokhub_agent::perm::config_dir();
+    grokhub_agent::route::host::sync(&config_dir);
+    grokhub_agent::route::providers::use_os_vault();
+    grokhub_agent::harness::use_os_keyring();
+    grokhub_agent::device::start(
+        grokhub_core::paths::user_home().unwrap_or_default(),
+        config_dir.clone(),
+    );
+    grokhub_core::learn::hub::start(&config_dir);
+    let dir = config_dir.clone();
+    scheduler::run_headless(
+        &config_dir,
+        move || scheduled_route(&dir),
+        |fired| {
+            let how = if fired.result.failed() {
+                format!("failed: {}", fired.result.error)
+            } else {
+                "ok".to_string()
+            };
+            // Console only; Windows release has no console. Row results still settle.
+            eprintln!("automations: {} {how}", fired.name);
+        },
+    )
+}
+
+/// Automations page: whether the login service keeps jobs running with the
+/// app closed.
+#[cfg(desktop)]
+#[tauri::command]
+fn get_automations_service() -> Result<bool, String> {
+    headless_service::installed()
+}
+
+/// Automations page switch: install or remove the login service.
+#[cfg(desktop)]
+#[tauri::command]
+fn set_automations_service(on: bool) -> Result<bool, String> {
+    if on {
+        headless_service::install()?;
+    } else {
+        headless_service::remove()?;
+    }
+    headless_service::installed()
 }
 
 #[tauri::command]
@@ -7981,7 +8391,7 @@ mod tests {
 }
 
 /// The desktop tools' host: the shell's config folder and its switch. Cua
-/// follows the `cuaDriver` flag the cabin saved (Linux only).
+/// follows the `cuaDriver` flag the cabin saved (Linux and macOS).
 #[cfg(desktop)]
 fn install_desktop_host() {
     // Pin the start time now, as the cabin does: a Halt after it keeps desktop
@@ -8081,6 +8491,23 @@ pub fn run() {
             if !app_guard::take_profile(app.handle(), &config_dir) {
                 return Ok(());
             }
+            // A self-update that keeps ending early is put back to the old
+            // version, which then runs instead of this one.
+            #[cfg(desktop)]
+            {
+                let running = shell_update::version();
+                if let Some(old) = update_rollback::on_launch(&config_dir, &running) {
+                    let mut cmd = std::process::Command::new(&old);
+                    cmd.args(std::env::args_os().skip(1));
+                    let _ = cmd.spawn();
+                    std::process::exit(0);
+                }
+                let dir = config_dir.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(update_rollback::HEALTHY_AFTER);
+                    update_rollback::mark_healthy(&dir, &running);
+                });
+            }
             // Before anything reads the local model catalog.
             catalog_refresh::tidy(&config_dir);
             let loaded = settings::load(&config_dir);
@@ -8090,6 +8517,21 @@ pub fn run() {
                 episode::start_askpass(episode::hub_exe());
                 if loaded.desktop_control && capabilities::current().desktop_control {
                     grokhub_desktop::set_desktop_enabled(true);
+                }
+                // The Bot Desktop comes back with the app; a failed start
+                // shows in Settings when the person looks.
+                if loaded.bot_desktop {
+                    let dir = config_dir.clone();
+                    std::thread::spawn(move || {
+                        let _ = bot_screen::apply(&dir, true);
+                    });
+                }
+                // Connected Telegram and Discord bots listen again.
+                {
+                    let dir = config_dir.clone();
+                    std::thread::spawn(move || {
+                        channels::start_saved(&dir, &grokhub_agent::channels_net::os_keychain());
+                    });
                 }
                 episode::sync_cua(
                     loaded.desktop_control && capabilities::current().desktop_control,
@@ -8103,6 +8545,12 @@ pub fn run() {
             // Provider keys are read from the OS keyring from the first chat,
             // not only once Settings → AI models has been opened.
             grokhub_agent::route::providers::use_os_vault();
+            // Android: install the OS Keystore store before the first read
+            // (keyring's v1 facade has no Android backend).
+            #[cfg(target_os = "android")]
+            if let Err(e) = grokhub_agent::keyring_blob::ensure_android_store() {
+                eprintln!("android keyring: {e}");
+            }
             // The learned-tier key (sealed memory, scope grants and what the
             // indexers learn) lives in the OS keyring too, as in the cabin.
             grokhub_agent::harness::use_os_keyring();
@@ -8127,6 +8575,7 @@ pub fn run() {
             });
             steam_checks::start(config_dir.clone());
             catalog_refresh::start(config_dir.clone());
+            router_upkeep::start(config_dir.clone());
             vstack_sync::start(config_dir.clone());
             local_model_checks::start(config_dir.clone());
             pc_health::start(config_dir.clone());
@@ -8204,6 +8653,7 @@ pub fn run() {
             }
             #[cfg(desktop)]
             start_scheduler(app);
+            start_channel_inbox(app.handle().clone());
             // Questions from helpers that outlive their chat's reply.
             // Only this shell watches task changes; the cabin leaves it off.
             grokhub_agent::set_task_watch(true);
@@ -8371,6 +8821,22 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             phone_smoke_report,
+            #[cfg(desktop)]
+            list_routines,
+            #[cfg(desktop)]
+            set_routine_on,
+            #[cfg(desktop)]
+            allow_routine,
+            #[cfg(desktop)]
+            revoke_routine,
+            #[cfg(desktop)]
+            undo_routine,
+            #[cfg(desktop)]
+            run_routine_now,
+            #[cfg(desktop)]
+            apply_routine_fix,
+            #[cfg(desktop)]
+            dismiss_routine_fix,
             auto_setup,
             onboard_identity,
             quick_chips,
@@ -8466,12 +8932,17 @@ pub fn run() {
             list_automations,
             add_automation,
             list_suggested_automations,
+            list_automation_blueprints,
             add_suggested_automation,
             set_automation_enabled,
             remove_automation,
             edit_automation,
             set_scheduler_clock,
             run_automation,
+            #[cfg(desktop)]
+            get_automations_service,
+            #[cfg(desktop)]
+            set_automations_service,
             get_memory,
             save_memory,
             add_memory,
@@ -8484,6 +8955,7 @@ pub fn run() {
             pause_memory_row,
             add_personal_fact,
             export_personal,
+            export_memory_wiki,
             wipe_personal,
             get_memory_files,
             save_memory_file,
@@ -8655,10 +9127,6 @@ pub fn run() {
             claude_plan_chats,
             #[cfg(desktop)]
             set_claude_plan_allowed,
-            #[cfg(desktop)]
-            set_claude_plan_chat,
-            set_local_chat_pin,
-            local_chat_pin,
             add_ai_provider,
             start_openrouter_sign_in,
             wait_openrouter_sign_in,
@@ -8691,6 +9159,9 @@ pub fn run() {
             download_models,
             pause_model_downloads,
             remove_library_model,
+            search_hf_gguf,
+            list_hf_gguf_files,
+            download_hf_gguf,
             get_web_access,
             set_web_access,
             get_devices,
@@ -8735,6 +9206,19 @@ pub fn run() {
             os_extras::get_autostart,
             #[cfg(desktop)]
             os_extras::set_autostart,
+            get_bot_desktop,
+            set_bot_desktop,
+            bot_desktop_frame,
+            get_browser_attach,
+            get_channels,
+            connect_channel,
+            disconnect_channel,
+            approve_channel_code,
+            unpair_channel_sender,
+            set_channel_asks,
+            add_channel_webhook,
+            remove_channel_webhook,
+            save_browser_attach,
             #[cfg(desktop)]
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]
@@ -8942,9 +9426,7 @@ pub fn run() {
         Ok(app) => app.run(|app, event| {
             // What the learning engine holds in memory is written on the way out.
             if let tauri::RunEvent::Exit = event {
-                grokhub_core::learn::hub::flush();
-                // A test run or deploy does not outlive the app.
-                code_runs::stop();
+                quit_steps();
                 // A computer that paired since Devices last looked stays paired.
                 #[cfg(desktop)]
                 if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {
@@ -8962,6 +9444,31 @@ pub fn run() {
             std::process::exit(1);
         }
     }
+}
+
+/// What every way out runs before the process ends: the learning engine's
+/// memory is written, a test run or deploy is stopped, and the on-device
+/// model server is stopped so it doesn't outlive the app.
+fn quit_steps() {
+    grokhub_core::learn::hub::flush();
+    code_runs::stop();
+    grokhub_agent::route::local_sidecar::stop_global();
+    // Its X server would outlive the app otherwise.
+    bot_screen::stop();
+    channels::stop_all();
+}
+
+/// A Windows update ends the process from inside the updater (it starts the
+/// installer, then exits), so `RunEvent::Exit` never runs. This runs the same
+/// steps first, so nothing the app started holds a file the installer
+/// replaces, then Tauri's own cleanup, which the updater would run alone.
+#[cfg(desktop)]
+pub(crate) fn before_update_exit(app: &AppHandle) {
+    quit_steps();
+    if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {
+        share.save();
+    }
+    app.cleanup_before_exit();
 }
 
 #[cfg(test)]
@@ -9157,6 +9664,49 @@ mod command_tests {
             .expect("run must have an Exit arm");
         arm.contains("if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {")
             && arm.contains("share.save();")
+    }
+
+    #[test]
+    fn a_windows_update_runs_the_quit_steps_before_the_installer_starts() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let arm = src
+            .split("if let tauri::RunEvent::Exit = event {")
+            .nth(1)
+            .and_then(|s| s.split("\n            }\n").next())
+            .expect("Exit arm");
+        assert!(arm.contains("quit_steps();"), "{arm}");
+        let hook = src
+            .split("pub(crate) fn before_update_exit(app: &AppHandle) {")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("update hook");
+        for step in [
+            "quit_steps();",
+            "app.try_state::<Arc<hub_share::HubShare>>()",
+            "share.save();",
+            "app.cleanup_before_exit();",
+        ] {
+            assert!(hook.contains(step), "{step} in {hook}");
+        }
+        let steps = src
+            .split("fn quit_steps() {")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("quit_steps");
+        for step in [
+            "grokhub_core::learn::hub::flush();",
+            "code_runs::stop();",
+            "grokhub_agent::route::local_sidecar::stop_global();",
+            "bot_screen::stop();",
+            "channels::stop_all();",
+        ] {
+            assert!(steps.contains(step), "{step} in {steps}");
+        }
+        let update = include_str!("shell_update.rs").replace("\r\n", "\n");
+        assert!(
+            update.contains(".on_before_exit(move || crate::before_update_exit(&handle))"),
+            "the updater must run the app's quit steps"
+        );
     }
 
     #[test]

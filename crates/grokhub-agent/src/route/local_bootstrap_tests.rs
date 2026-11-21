@@ -1,4 +1,5 @@
-//! L2: bootstrap failures surface a reason and clear `installed()`.
+//! L2: bootstrap failures surface a reason and pause the route, while the
+//! files on disk still read as installed.
 
 use super::local;
 use super::local_sidecar::stop_global;
@@ -37,7 +38,29 @@ fn bootstrap_error_surfaces_when_sidecar_wont_start() {
     assert!(local::runtime().is_none());
     let reason = local::bootstrap_error().expect("bootstrap reason");
     assert!(!reason.is_empty(), "reason names the failure: {reason}");
-    assert!(!local::installed(), "installed false once bootstrap failed");
+    // The files are still there, as the models page says: the route pauses
+    // instead, and a local call says why rather than "isn't installed".
+    assert!(
+        local::installed(),
+        "installed stays true after a failed start"
+    );
+    assert!(!local::available(), "the route waits out the retry pause");
+    assert_eq!(
+        local::no_runtime_msg(),
+        format!(
+            "{}{}. It tries again on your next message.",
+            local::START_FAILED_HEAD,
+            reason.trim().trim_end_matches('.')
+        )
+    );
+    // Background work waits; a person's turn is the retry.
+    local::retry_for_turn("background:summarize");
+    assert!(local::start_failed_recently());
+    local::retry_for_turn("chat:default");
+    assert!(!local::start_failed_recently());
+    assert!(local::available(), "a person's turn starts it again");
+    assert!(local::runtime().is_none());
+    assert_eq!(local::bootstrap_error().as_deref(), Some(reason.as_str()));
     assert_eq!(
         local::start_failure().as_deref(),
         Some(reason.as_str()),
@@ -46,7 +69,7 @@ fn bootstrap_error_surfaces_when_sidecar_wont_start() {
     // One failed start no longer keeps the model away for the session: past
     // the retry pause it reads as set up again and the next turn retries.
     local::age_start_error(local::START_RETRY_SECS);
-    assert!(local::installed(), "a retry is due after the pause");
+    assert!(local::available(), "a retry is due after the pause");
     assert!(
         local::start_failure().is_some(),
         "the reason stays readable"

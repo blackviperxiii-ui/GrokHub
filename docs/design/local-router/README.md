@@ -148,9 +148,11 @@ Each step is its own PR into `beta`, green on Linux and Windows.
    (`chat_tier`), `route/local_swap.rs`, `route/local_pin.rs` and
    `route/local_live.rs` (`chat_line`):
    - The tier comes from the person's words in this turn, else the chat's
-     setting in its tab menu ("Model for this chat": Auto, Speed, Balance,
-     Performance, kept in `{config}/local-chat-pins.json`), else the
-     automatic pick. The phrases are the cloud effort steer's
+     standing ask, else the automatic pick. There is no picker: "from now
+     on, be quick" or "think hard for the rest of this chat" keeps a tier
+     in `{config}/local-chat-steer.json` across restarts, and "back to
+     auto" drops it (`local_scale::standing_ask`). The old tab menu's
+     `local-chat-pins.json` is never read, so its picks are back on Auto. The phrases are the cloud effort steer's
      (`ladder::Steer`): "think hard" asks for Performance, "be quick" for
      Speed. "Keep it short" alone asks for a short reply, not a faster
      model. A helper's turn and a side answer (`<chat>~side-<n>`, whose
@@ -187,7 +189,7 @@ Each step is its own PR into `beta`, green on Linux and Windows.
 6. **Voice on device.** On-device speech-to-text, then text-to-speech
    chosen by need (an on-device chat or Offline only) instead of by
    whether a key is saved. #2032 built the shared voice router
-   (`route/voice_route.rs`: `Auto`, `Local only`, `Pinned`; `plan_stage`
+   (`route/voice_route.rs`: `Auto`, `Local only`; `plan_stage`
    over a `VoiceEnv`), with Offline only, Grok sign-in, xAI cooldowns and
    automatic downloads. This step adds the chat's own need to it:
    - The router writes where each chat's newest step runs
@@ -228,8 +230,7 @@ Each step is its own PR into `beta`, green on Linux and Windows.
      hint, not on the error line.
    - Not yet: the process-wide `local_warm` still puts on-device speech
      first for a cloud chat while a local model is loaded (an existing
-     test locks it in); a `Pinned` Grok Voice 3 wins over a chat that runs
-     here (only 18+ overrides it); whisper on PATH runs with no `-m`
+     test locks it in); whisper on PATH runs with no `-m`
      model; download notices still show on the error line; the record of
      where a chat runs is in memory only, so in a chat that isn't 18+ the
      first spoken turn after a restart, before its first step, follows the

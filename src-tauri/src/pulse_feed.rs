@@ -577,7 +577,8 @@ fn write_post(
         ps::save_cache(&cache_path, &cache)?;
         return Ok(Outcome::Nothing(BUDGET_USED.into()));
     }
-    let research = pw::research_from(&picks);
+    let mut research = pw::research_from(&picks);
+    let pages = read_pages(net, &mut research);
     let recent = pw::recent_titles(&cards);
     let messages = pw::writer_messages(&pw::WriterInput {
         prompt: state.prompt_or_default(),
@@ -602,8 +603,8 @@ fn write_post(
             return Ok(Outcome::Nothing(why));
         }
     };
-    let mut card = pw::post_card(&written, &research, now_ms);
-    card.pulse.image_urls = cache_gallery(config_dir, net, &written.cites, &research);
+    let mut card = pw::post_card(&written, &research, now_ms, state.utc_offset_min);
+    card.pulse.image_urls = cache_gallery(config_dir, net, &written.cites, &research, &pages);
     let id = card.id.clone();
     crate::pulse::add_post(config_dir, card)?;
     let used: Vec<ps::Ranked> = picks
@@ -621,16 +622,46 @@ fn write_post(
     Ok(Outcome::Posted(id))
 }
 
+/// One page read before writing: its URL and the gallery images it names.
+/// A read that failed is kept with no images, so it is not asked again.
+type PageRead = (String, Vec<String>);
+
+/// Read the top [`pw::PAGE_READS`] items' own pages before writing, so the
+/// writer has the article's text and not only the feed's line. Each page's
+/// text goes into its item; a page that fails or says nothing leaves its
+/// item as it was. Nothing is read while Offline only is on.
+fn read_pages(net: &dyn Net, research: &mut [pw::Research]) -> Vec<PageRead> {
+    if grokhub_core::offline::enabled() {
+        return Vec::new();
+    }
+    let mut read = Vec::new();
+    for item in research.iter_mut().take(pw::PAGE_READS) {
+        let url = item.url.clone();
+        let gallery = match net.page(&url) {
+            Ok(html) => {
+                pw::add_page(item, &pc::page_context(&html, pw::PAGE_TEXT_CHARS));
+                pc::gallery_images(&html, &url)
+            }
+            Err(_) => Vec::new(),
+        };
+        read.push((url, gallery));
+    }
+    read
+}
+
 /// A post's images, downloaded once into the local cache: first the cited
 /// items' own feed images (a video thumbnail, a feed's media, a Reddit
 /// preview), then the first cited page's gallery, without repeats and at
-/// most `pc::GALLERY_MAX`. Returns the image URLs that are cached; the page
-/// shows those files and never loads the image from its site.
+/// most `pc::GALLERY_MAX`. A page read before writing is not read again; a
+/// first cite outside those pages is read here. Returns the image URLs that
+/// are cached; the page shows those files and never loads the image from its
+/// site.
 fn cache_gallery(
     config_dir: &Path,
     net: &dyn Net,
     cites: &[String],
     research: &[pw::Research],
+    pages: &[PageRead],
 ) -> Vec<String> {
     let Some(page_url) = cites.first() else {
         return Vec::new();
@@ -644,8 +675,17 @@ fn cache_gallery(
                 .flat_map(|r| r.images.iter().cloned())
         })
         .collect();
-    if let Ok(html) = net.page(page_url) {
-        wanted.extend(pc::gallery_images(&html, page_url));
+    match pages
+        .iter()
+        .find(|(url, _)| ps::canonical_url(url) == ps::canonical_url(page_url))
+    {
+        Some((_, gallery)) => wanted.extend(gallery.iter().cloned()),
+        None if grokhub_core::offline::enabled() => {}
+        None => {
+            if let Ok(html) = net.page(page_url) {
+                wanted.extend(pc::gallery_images(&html, page_url));
+            }
+        }
     }
     let mut seen = HashSet::new();
     wanted.retain(|url| seen.insert(url.clone()));
@@ -860,6 +900,27 @@ struct Got {
     last_modified: Option<String>,
 }
 
+/// Whether a page answer is a web page worth reading: a 2xx status and, when
+/// the site names one, an HTML content type. An image, a PDF or an error
+/// page is not, so its bytes are never read as an article.
+fn page_answer_ok(status: u16, content_type: Option<&str>) -> Result<(), String> {
+    if !(200..300).contains(&status) {
+        return Err(format!("HTTP {status}"));
+    }
+    match content_type.map(|t| {
+        t.split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase()
+    }) {
+        Some(t) if !t.is_empty() && t != "text/html" && t != "application/xhtml+xml" => {
+            Err("not a web page".into())
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Public pages over plain HTTP(S): every hop is checked as a public URL and
 /// dialed through the public-only resolver, and the egress policy sees it.
 pub struct LiveNet;
@@ -874,12 +935,15 @@ impl LiveNet {
         })
     }
 
+    /// `html_only` refuses a page answer that is not a web page before its
+    /// body is read ([`page_answer_ok`]).
     fn get(
         url: &str,
         accept: &str,
         data: &[hx::DataClass],
         have: Option<&CacheEntry>,
         cap: u64,
+        html_only: bool,
     ) -> Result<Got, FetchErr> {
         let mut url = url.to_string();
         for hop in 0..=REDIRECTS_MAX {
@@ -915,6 +979,9 @@ impl LiveNet {
                     }
                     None => return Err(FetchErr::Gone(format!("HTTP {status}"))),
                 }
+            }
+            if html_only {
+                page_answer_ok(status, resp.header("content-type")).map_err(FetchErr::Gone)?;
             }
             let etag = resp.header("etag").map(str::to_string);
             let modified = resp.header("last-modified").map(str::to_string);
@@ -956,7 +1023,7 @@ impl Net for LiveNet {
             &[]
         };
         let accept = "application/json, application/atom+xml, application/rss+xml, application/xml;q=0.9, text/html;q=0.8, */*;q=0.5";
-        match Self::get(&req.url, accept, data, have, SOURCE_CAP) {
+        match Self::get(&req.url, accept, data, have, SOURCE_CAP, false) {
             Ok(got) if got.status == 304 => Fetched::NotModified,
             Ok(got) => Fetched::Body {
                 body: String::from_utf8_lossy(&got.body).into_owned(),
@@ -968,13 +1035,21 @@ impl Net for LiveNet {
     }
 
     fn page(&self, url: &str) -> Result<String, String> {
-        let got = Self::get(url, "text/html", &[], None, PAGE_CAP)?;
+        let got = Self::get(url, "text/html", &[], None, PAGE_CAP, true)?;
         Ok(String::from_utf8_lossy(&got.body).into_owned())
     }
 
     fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
         let cap = pc::IMAGE_MAX_BYTES as u64 + 1;
-        Ok(Self::get(url, "image/webp,image/png,image/jpeg", &[], None, cap)?.body)
+        Ok(Self::get(
+            url,
+            "image/webp,image/png,image/jpeg",
+            &[],
+            None,
+            cap,
+            false,
+        )?
+        .body)
     }
 }
 
@@ -1333,6 +1408,210 @@ mod tests {
                 || u.contains("youtube")),
             "a source turned off was asked: {urls:?}"
         );
+    }
+
+    /// Five Rust stories on Hacker News, most points first.
+    const HN5: &str = r#"{"hits":[
+{"title":"Rust 1.99 ships async closures","url":"https://one.example/rust","points":500,"num_comments":50,"created_at_i":1799990000,"objectID":"1"},
+{"title":"Rust in the Linux kernel grows","url":"https://two.example/rust","points":400,"num_comments":40,"created_at_i":1799990000,"objectID":"2"},
+{"title":"A Rust game engine reaches 1.0","url":"https://three.example/rust","points":300,"num_comments":30,"created_at_i":1799990000,"objectID":"3"},
+{"title":"Rust compile times halved in nightly","url":"https://four.example/rust","points":200,"num_comments":20,"created_at_i":1799990000,"objectID":"4"},
+{"title":"Embedded Rust on a tiny chip","url":"https://five.example/rust","points":100,"num_comments":10,"created_at_i":1799990000,"objectID":"5"}]}"#;
+
+    /// Three Rust threads on Reddit, each in its own subreddit.
+    const REDDIT3: &str = r#"{"data":{"children":[
+{"data":{"title":"Rust 2027 edition plans are out","url":"https://six.example/rust","permalink":"/r/rust/comments/6/","subreddit":"rust","score":900,"created_utc":1799990000}},
+{"data":{"title":"Why our team moved to Rust","url":"https://seven.example/rust","permalink":"/r/programming/comments/7/","subreddit":"programming","score":800,"created_utc":1799990000}},
+{"data":{"title":"Rust for game servers","url":"https://eight.example/rust","permalink":"/r/gamedev/comments/8/","subreddit":"gamedev","score":700,"created_utc":1799990000}}]}}"#;
+
+    /// A net with five picks (two from Hacker News, three from Reddit) whose
+    /// pages log each read. A page answers
+    /// with its own article text and hero image, or fails when `fail` is set.
+    #[derive(Default)]
+    struct PageLog {
+        pages: Mutex<Vec<String>>,
+        images: Mutex<Vec<String>>,
+        fail: bool,
+    }
+
+    impl Net for PageLog {
+        fn source(&self, req: &SourceReq, _have: Option<&CacheEntry>) -> Fetched {
+            let body = if req.url.contains("hn.algolia.com") {
+                HN5
+            } else if req.url.contains("reddit.com") {
+                REDDIT3
+            } else {
+                ""
+            };
+            if !body.is_empty() {
+                Fetched::Body {
+                    body: body.into(),
+                    etag: None,
+                    last_modified: None,
+                }
+            } else {
+                Fetched::Failed("offline".into())
+            }
+        }
+
+        fn page(&self, url: &str) -> Result<String, String> {
+            self.pages.lock().unwrap().push(url.to_string());
+            if self.fail {
+                return Err("HTTP 403".into());
+            }
+            let host = url.split('/').nth(2).unwrap_or("");
+            Ok(format!(
+                r#"<meta property="og:image" content="https://{host}/hero.jpg"><meta name="author" content="Ada"><article><p>The article on {host} explains the whole story in plain words for readers.</p></article>"#
+            ))
+        }
+
+        fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
+            self.images.lock().unwrap().push(url.to_string());
+            Ok(FIXTURE.clone())
+        }
+    }
+
+    fn citing(url: &str) -> String {
+        format!(
+            r#"{{"title":"A Rust story worth a look","snippet":"Read [the story]({url}).","details":["The article explains the whole story."],"icon":"🦀","why":"You follow Rust."}}"#
+        )
+    }
+
+    #[test]
+    fn a_run_reads_at_most_two_pages_before_writing() {
+        let d = dirs("two-pages");
+        let reply = citing("https://four.example/rust");
+        let client = Script::new(&[&reply]);
+        let net = PageLog::default();
+        let Outcome::Posted(id) =
+            run_once(&d.config, "grok-test", &client, &net, NOW).expect("run")
+        else {
+            panic!("no post");
+        };
+        assert_eq!(
+            *net.pages.lock().unwrap(),
+            vec![
+                "https://four.example/rust".to_string(),
+                "https://one.example/rust".to_string()
+            ],
+            "two pages, read before writing, and the cited one is not read again"
+        );
+        let seen = client.seen.lock().unwrap();
+        assert!(
+            seen[0].contains("The article on four.example explains the whole story"),
+            "{}",
+            seen[0]
+        );
+        assert!(seen[0].contains("The article on one.example explains"));
+        assert!(seen[0].contains("https://eight.example/rust"));
+        assert!(!seen[0].contains("eight.example explains"));
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        let card = cards.iter().find(|c| c.id == id).expect("posted");
+        assert_eq!(
+            card.pulse.image_urls,
+            vec!["https://four.example/hero.jpg".to_string()]
+        );
+        assert_eq!(
+            grokhub_core::card_report::report_more(card).as_deref(),
+            Some("- The article explains the whole story.\n\n200 points, 20 comments on Hacker News. · By Ada · Published Jan 15, 2027")
+        );
+    }
+
+    #[test]
+    fn a_cite_outside_the_read_pages_is_read_once_for_its_gallery() {
+        let d = dirs("cite-outside");
+        let reply = citing("https://eight.example/rust");
+        let client = Script::new(&[&reply]);
+        let net = PageLog::default();
+        let Outcome::Posted(id) =
+            run_once(&d.config, "grok-test", &client, &net, NOW).expect("run")
+        else {
+            panic!("no post");
+        };
+        assert_eq!(
+            *net.pages.lock().unwrap(),
+            vec![
+                "https://four.example/rust".to_string(),
+                "https://one.example/rust".to_string(),
+                "https://eight.example/rust".to_string()
+            ]
+        );
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        let card = cards.iter().find(|c| c.id == id).expect("posted");
+        assert_eq!(
+            card.pulse.image_urls,
+            vec!["https://eight.example/hero.jpg".to_string()]
+        );
+        // Its page was read only for the gallery, after writing, so its
+        // author never became a fact.
+        assert_eq!(
+            grokhub_core::card_report::report_more(card).as_deref(),
+            Some("- The article explains the whole story.\n\nScore 700 on r/gamedev · Published Jan 15, 2027")
+        );
+    }
+
+    #[test]
+    fn a_run_whose_page_reads_fail_still_posts_from_the_feed() {
+        let d = dirs("pages-fail");
+        let reply = citing("https://four.example/rust");
+        let client = Script::new(&[&reply]);
+        let net = PageLog {
+            fail: true,
+            ..Default::default()
+        };
+        let Outcome::Posted(id) =
+            run_once(&d.config, "grok-test", &client, &net, NOW).expect("run")
+        else {
+            panic!("no post");
+        };
+        assert_eq!(
+            net.pages.lock().unwrap().len(),
+            2,
+            "a failed page is not asked again"
+        );
+        let seen = client.seen.lock().unwrap();
+        assert!(seen[0].contains("200 points, 20 comments on Hacker News."));
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        let card = cards.iter().find(|c| c.id == id).expect("posted");
+        assert_eq!(card.pulse.image_urls, Vec::<String>::new());
+        assert_eq!(
+            card.body.as_deref(),
+            Some("Read [the story](https://four.example/rust).")
+        );
+    }
+
+    #[test]
+    fn a_run_reads_no_page_while_offline_only_is_on() {
+        let d = dirs("pages-offline");
+        let reply = citing("https://four.example/rust");
+        let client = Script::new(&[&reply]);
+        let net = PageLog::default();
+        let _off = grokhub_core::offline::force_for_thread(true);
+        run_once(&d.config, "grok-test", &client, &net, NOW).expect("run");
+        assert_eq!(*net.pages.lock().unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_page_answer_must_be_a_web_page() {
+        assert_eq!(
+            page_answer_ok(200, Some("text/html; charset=utf-8")),
+            Ok(())
+        );
+        assert_eq!(page_answer_ok(200, Some("application/xhtml+xml")), Ok(()));
+        assert_eq!(page_answer_ok(200, None), Ok(()));
+        assert_eq!(
+            page_answer_ok(200, Some("image/jpeg")),
+            Err("not a web page".to_string())
+        );
+        assert_eq!(
+            page_answer_ok(200, Some("application/pdf")),
+            Err("not a web page".to_string())
+        );
+        assert_eq!(
+            page_answer_ok(404, Some("text/html")),
+            Err("HTTP 404".to_string())
+        );
+        assert_eq!(page_answer_ok(503, None), Err("HTTP 503".to_string()));
     }
 
     #[test]

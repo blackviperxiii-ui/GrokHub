@@ -22,6 +22,7 @@ const STABLE: UpdateView = {
   updatable: true,
   note: null,
   available: null,
+  rolledBack: null,
 };
 const BETA: UpdateView = { ...STABLE, version: "3.5.0-beta.47", channel: "beta" };
 
@@ -91,15 +92,28 @@ describe("Updates", () => {
     expect(api.installShellUpdate).not.toHaveBeenCalled();
   });
 
+  it("says when the last update was rolled back", async () => {
+    api.getUpdateStatus.mockResolvedValue({
+      ...BETA,
+      rolledBack: "3.5.0-beta.48 didn't stay running after the update, so 3.5.0-beta.47 was put back.",
+    });
+    render(<Updates />);
+    expect(
+      await screen.findByText(
+        "3.5.0-beta.48 didn't stay running after the update, so 3.5.0-beta.47 was put back.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("a copy that updates outside the app says how and offers no button", async () => {
     api.getUpdateStatus.mockResolvedValue({
       ...STABLE,
       updatable: false,
-      note: "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --channel stable again in the clone you built it from.",
+      note: "This copy updates outside the app: use your package manager for an AUR install, or run scripts/install.sh --from-source --channel stable again in the clone you built it from.",
     });
     render(<Updates />);
     expect(
-      await screen.findByText("This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --channel stable again in the clone you built it from."),
+      await screen.findByText("This copy updates outside the app: use your package manager for an AUR install, or run scripts/install.sh --from-source --channel stable again in the clone you built it from."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });

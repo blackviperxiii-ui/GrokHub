@@ -2,6 +2,7 @@
 //! One worker thread per stdio child or HTTP read. No tokio.
 
 mod browser;
+pub use browser::{loopback_endpoint, origin_of, Attach as BrowserAttach};
 mod config;
 mod elicit;
 mod headers;
@@ -464,6 +465,29 @@ pub fn restart(name: &str) -> Result<(), String> {
             .unwrap_or_else(|| format!("MCP server `{name}` stopped")));
     }
     Ok(())
+}
+
+/// The browser attach changed: each running Playwright server starts again
+/// with the new flags, and one that fell back to its own browser after a
+/// failed attach tries the attach again. The servers it restarted.
+pub fn browser_attach_changed() -> Vec<String> {
+    browser::forget_isolated();
+    let running: Vec<String> = slots_now()
+        .into_iter()
+        .filter(|(_, slot)| {
+            let inner = lock_slot(slot);
+            inner.conn.is_some()
+                && matches!(
+                    &inner.def.transport,
+                    TransportDef::Stdio { command, args, .. } if browser::is_playwright(command, args)
+                )
+        })
+        .map(|(name, _)| name)
+        .collect();
+    running
+        .into_iter()
+        .filter(|name| restart(name).is_ok())
+        .collect()
 }
 
 /// Sign in to an HTTP server in the browser `open` launches, then reconnect
@@ -1028,6 +1052,10 @@ fn normalize_args(value: Option<&Value>) -> Value {
 }
 
 fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
+    // The user's own browser opens only the sites they allowed.
+    if let Some(why) = browser::navigate_refusal(&rec.server, &rec.raw, args) {
+        return ToolOutput::err(why);
+    }
     let slots = slots_now();
     let Some(slot) = slots.get(&rec.server).cloned() else {
         return ToolOutput::err(format!("MCP server `{}` stopped", rec.server));

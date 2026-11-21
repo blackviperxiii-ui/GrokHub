@@ -54,6 +54,18 @@ pub struct Row {
     pub health: Option<String>,
     /// The words for the Edit box, `None` when words cannot say the schedule.
     pub describe: Option<String>,
+    /// The job's check command; empty when it has none.
+    pub check_command: String,
+    /// `gate.onChange` / `gate.noAgent` from automations.json.
+    pub gate: RowGate,
+}
+
+/// The check gate the Automations page shows on a row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RowGate {
+    pub on_change: bool,
+    pub no_agent: bool,
 }
 
 pub fn rows(list: &[Automation], clock: LocalClock) -> Vec<Row> {
@@ -66,6 +78,11 @@ pub fn rows(list: &[Automation], clock: LocalClock) -> Vec<Row> {
             summary: grokhub_core::automation_summary_line(a, clock),
             health: grokhub_core::automation_health_line(a),
             describe: grokhub_core::describe_automation(a),
+            check_command: a.check_command.clone(),
+            gate: RowGate {
+                on_change: a.gate.on_change,
+                no_agent: a.gate.no_agent,
+            },
         })
         .collect()
 }
@@ -144,9 +161,13 @@ pub const ADD_HINT: &str =
     "Say when, like \"every weekday at 9am summarize my inbox\" or \"heartbeat every 30 min check the build\".";
 
 pub fn add(config_dir: &Path, text: &str, clock: LocalClock) -> Result<Vec<Automation>, String> {
-    let a = grokhub_core::parse_nl_automation(text).ok_or_else(|| ADD_HINT.to_string())?;
+    let mut a = grokhub_core::parse_nl_automation(text).ok_or_else(|| ADD_HINT.to_string())?;
     if a.name.trim().is_empty() {
         return Err(ADD_HINT.into());
+    }
+    if let Some(words) = grokhub_core::automation_check::script_words(text) {
+        a.check_command = words.command;
+        a.gate = words.gate;
     }
     add_parsed(config_dir, a, clock)
 }
@@ -206,8 +227,9 @@ pub fn set_enabled(
 }
 
 /// Edit in place: the new words set the name, the ask and the schedule. The
-/// id, pause state, run count, last run, health and any cabin check command
-/// stay. Words with no time are refused and nothing is written.
+/// id, pause state, run count, last run and health stay, and so does the
+/// check command unless the words name one. Words with no time are refused
+/// and nothing is written.
 pub fn edit(
     config_dir: &Path,
     id: &str,
@@ -218,12 +240,27 @@ pub fn edit(
     if parsed.name.trim().is_empty() {
         return Err(ADD_HINT.into());
     }
+    let words = grokhub_core::automation_check::script_words(text);
     change(config_dir, id, |list, at| {
         let old = &list[at];
+        let (check_command, gate) = match words {
+            // Same command: keep what it printed last, for the next diff.
+            Some(w) if w.command == old.check_command => (
+                w.command,
+                grokhub_core::automation_check::CheckGate {
+                    last_hash: old.gate.last_hash.clone(),
+                    last_output: old.gate.last_output.clone(),
+                    ..w.gate
+                },
+            ),
+            Some(w) => (w.command, w.gate),
+            None => (old.check_command.clone(), old.gate.clone()),
+        };
         let next = Automation {
             id: old.id.clone(),
             enabled: old.enabled,
-            check_command: old.check_command.clone(),
+            check_command,
+            gate,
             last_run: old.last_run,
             next_run: None,
             run_count: old.run_count,
@@ -362,10 +399,35 @@ pub fn run_now(
     workspace: PathBuf,
     gate: RunGate,
 ) -> Result<RunResult, String> {
+    run_now_preflight(config_dir, id, client, model, workspace, gate, true)
+}
+
+/// `run_now`, with an optional route-ready flag for preflight (false when the
+/// shell already knows there is no model route).
+pub fn run_now_preflight(
+    config_dir: &Path,
+    id: &str,
+    client: Arc<dyn ModelClient + Send + Sync>,
+    model: &str,
+    workspace: PathBuf,
+    gate: RunGate,
+    route_ready: bool,
+) -> Result<RunResult, String> {
     let job = load(config_dir)?
         .into_iter()
         .find(|a| a.id == id)
         .ok_or_else(|| "That automation is gone.".to_string())?;
+    if let Some(why) = run_now_preflight_line(config_dir, &job, &workspace, route_ready) {
+        // Run now is not a scheduled claim: mark health only, leave next_run.
+        let _ = change(config_dir, id, |list, at| {
+            list[at] = grokhub_core::mark_automation_failed(list[at].clone(), &why);
+        });
+        return Ok(RunResult {
+            text: String::new(),
+            error: why,
+            stop: grokhub_core::PREFLIGHT_STOP.into(),
+        });
+    }
     let _running = Running::claim(id)?;
     let started = grokhub_core::now_ms();
     let result = run_on_board(config_dir, &job, client, model, workspace, gate, "run now");
@@ -374,6 +436,54 @@ pub fn run_now(
         list[at] = settle(ran, &result);
     })?;
     Ok(result)
+}
+
+fn run_now_preflight_line(
+    _config_dir: &Path,
+    job: &Automation,
+    workspace: &Path,
+    route_ready: bool,
+) -> Option<String> {
+    let script_only = job.gate.no_agent;
+    let rows = crate::connectors::list(workspace);
+    let mut ready = Vec::new();
+    let mut blocked = Vec::new();
+    let mut configured = Vec::new();
+    for row in &rows {
+        configured.push(row.name.clone());
+        if !row.enabled || row.needs_sign_in || row.status == "error" || row.status == "disabled" {
+            let detail = if row.needs_sign_in {
+                "needs sign-in".into()
+            } else if !row.error.is_empty() {
+                row.error.clone()
+            } else if !row.enabled || row.status == "disabled" {
+                "disabled".into()
+            } else {
+                row.status.clone()
+            };
+            blocked.push((row.name.clone(), detail));
+        } else {
+            ready.push(row.name.clone());
+        }
+    }
+    let home = grokhub_core::user_home()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let route_error = if route_ready {
+        ""
+    } else {
+        grokhub_core::XAI_NEED_SIGNIN
+    };
+    let ctx = grokhub_core::PreflightCtx {
+        route_ready,
+        route_error,
+        ready_connectors: &ready,
+        blocked_connectors: &blocked,
+        configured_connectors: &configured,
+        path_env: None,
+        home: &home,
+    };
+    grokhub_core::preflight(job, script_only, &ctx).map(|b| b.line())
 }
 
 /// The scheduler's claim: takes the first due job the shell may fire and
@@ -428,6 +538,33 @@ pub fn next_due(
 pub fn settle_skip(config_dir: &Path, id: &str, clock: LocalClock) -> Result<(), String> {
     change(config_dir, id, |list, at| {
         list[at] = grokhub_core::mark_automation_skipped(list[at].clone(), clock.now_ms, clock);
+    })
+    .map(drop)
+}
+
+/// Preflight refused the run: mark health failed and advance the next slot
+/// without counting a fire or spending tokens.
+pub fn settle_preflight(
+    config_dir: &Path,
+    id: &str,
+    why: &str,
+    clock: LocalClock,
+) -> Result<(), String> {
+    change(config_dir, id, |list, at| {
+        list[at] = grokhub_core::mark_automation_preflight_failed(
+            list[at].clone(),
+            why,
+            clock.now_ms,
+            clock,
+        );
+    })
+    .map(drop)
+}
+
+/// The check output a run used, saved on its row for the next diff.
+pub fn remember_check(config_dir: &Path, id: &str, output: &str) -> Result<(), String> {
+    change(config_dir, id, |list, at| {
+        list[at].gate = list[at].gate.remember(output);
     })
     .map(drop)
 }
@@ -788,6 +925,65 @@ mod tests {
         assert_eq!(
             (edited[0].check_command.as_str(), edited[0].time.as_str()),
             ("test -d ~/Downloads", "18:00")
+        );
+    }
+
+    #[test]
+    fn rows_show_the_check_command_and_gate() {
+        let dir = temp_dir("row-check");
+        let list = add(
+            &dir,
+            "every day at 9am check `df -h /` and tell me only when it changes",
+            tuesday_8am(),
+        )
+        .expect("add");
+        let row = &rows(&list, tuesday_8am())[0];
+        assert_eq!(row.check_command, "df -h /");
+        assert!(row.gate.on_change);
+        assert!(!row.gate.no_agent);
+        let plain = add(
+            &dir,
+            "every day at 10am summarize my inbox",
+            tuesday_8am(),
+        )
+        .expect("plain");
+        let plain_row = &rows(&plain, tuesday_8am())[1];
+        assert_eq!(plain_row.check_command, "");
+        assert_eq!(plain_row.gate, RowGate::default());
+    }
+
+    #[test]
+    fn words_with_a_backticked_check_set_the_command_and_its_gate() {
+        let dir = temp_dir("add-check");
+        let list = add(
+            &dir,
+            "every day at 9am check `df -h /` and tell me only when it changes",
+            tuesday_8am(),
+        )
+        .expect("add");
+        assert_eq!(list[0].check_command, "df -h /");
+        assert!(list[0].gate.on_change);
+        assert!(!list[0].gate.no_agent);
+        let id = list[0].id.clone();
+        remember_check(&dir, &id, "/dev/sda1 80%").expect("remember");
+        // The same command, now without AI: what it printed last stays.
+        let edited = edit(
+            &dir,
+            &id,
+            "every day at 9am check `df -h /` without AI",
+            tuesday_8am(),
+        )
+        .expect("edit");
+        assert_eq!(edited[0].check_command, "df -h /");
+        assert!(edited[0].gate.no_agent);
+        assert!(!edited[0].gate.on_change);
+        assert_eq!(edited[0].gate.last_output, "/dev/sda1 80%");
+        // A new command starts with nothing to diff against.
+        let moved = edit(&dir, &id, "every day at 9am run `uptime`", tuesday_8am()).expect("edit");
+        assert_eq!(moved[0].check_command, "uptime");
+        assert_eq!(
+            moved[0].gate,
+            grokhub_core::automation_check::CheckGate::default()
         );
     }
 

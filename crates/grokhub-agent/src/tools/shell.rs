@@ -405,6 +405,9 @@ pub(crate) fn run_adoptable(
     let handover = handover
         .as_mut()
         .map(|f| f as &mut dyn FnMut(BgProc) -> Result<(String, Feed), BgProc>);
+    // Snapshot referenced workspace files before potentially mutating shell
+    // commands so `/rewind step` can undo shell edits/deletions (Card 957).
+    crate::file_checkpoint::before_shell(&cwd, &command);
     // The output is fenced first; the sandbox's own note stays outside the fence.
     let result = spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref(), handover)
         .map(|o| fence_if_fetched(o, let_out));
@@ -630,9 +633,13 @@ fn bash(
     use std::process::{Command, Stdio};
 
     let argv = ["bash", "--noprofile", "--norc", "-c", command];
+    let boxed = plan.and_then(|p| p.container.as_ref());
     // macOS: the Seatbelt profile wraps bash, so everything it starts is in it.
     #[cfg(target_os = "macos")]
-    let mut cmd = match plan.and_then(|p| p.isolation.as_ref().map(|iso| (p, iso))) {
+    let mut cmd = match plan
+        .filter(|_| boxed.is_none())
+        .and_then(|p| p.isolation.as_ref().map(|iso| (p, iso)))
+    {
         Some((plan, iso)) => {
             let port = plan.proxy_port().filter(|_| iso.net_confined);
             let profile = crate::sandbox::seatbelt::profile(&plan.writable, &iso.hide, port);
@@ -663,6 +670,18 @@ fn bash(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(c) = boxed {
+        // The runtime's client runs bash in the container. Its stdin is a
+        // pipe this process holds until the command ends: once the client
+        // dies, the watchdog inside kills the command.
+        let mut client = crate::sandbox::container::command(c, cwd, command);
+        client
+            .current_dir(cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd = client;
+    }
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt;

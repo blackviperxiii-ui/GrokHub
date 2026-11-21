@@ -9,11 +9,11 @@ sudo pacman -S --needed git rustup base-devel pkgconf nodejs npm webkit2gtk-4.1 
 rustup default stable
 git clone https://github.com/blackviperxiii-ui/GrokHub.git
 cd GrokHub
-./scripts/install.sh --user
+./scripts/install.sh --user --from-source
 grokhub-shell
 ```
 
-`install.sh --user` installs the desktop app and hub. First launch is Get Started, which signs in with SuperGrok OAuth.
+`install.sh --user --from-source` builds and installs the desktop app and hub. First launch is Get Started, which signs in with SuperGrok OAuth.
 
 ## makepkg (system)
 

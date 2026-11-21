@@ -229,13 +229,14 @@ fn words(text: &str) -> Vec<String> {
 /// Whole lines the router, the run loop and sign-in write when no model can
 /// answer. A job's error is clipped to its first line and
 /// [`grokhub_core::AUTO_ERROR_CHARS`], so the start of each line is enough.
-fn router_lines() -> [&'static str; 8] {
+fn router_lines() -> [&'static str; 9] {
     use grokhub_agent::route::local;
     [
         *grokhub_agent::route::live::NO_ROUTE_MSG,
         local::OFFLINE_NO_LOCAL_MSG,
         local::LOCAL_PAUSED_MSG,
         local::NO_RUNTIME_MSG,
+        local::START_FAILED_HEAD,
         grokhub_agent::route::providers::POLICY_REFUSED,
         grokhub_agent::BUSY_GAVE_UP,
         grokhub_agent::xai_keychain::EXPIRED,

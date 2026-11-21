@@ -50,6 +50,7 @@ mod schema;
 mod signal;
 mod store;
 mod user_model;
+mod wiki;
 mod write;
 
 pub use dream::{
@@ -74,7 +75,7 @@ pub use signal::{
     note_user_edit, propose_line, pulse_ledger_dual, skip_remember_line, unsafe_to_learn,
     user_model_type, ChatLine, Correction, Noted, Usage,
 };
-pub use store::{AmrStore, ForgetReport, RecallReport};
+pub use store::{AmrStore, ForgetReport, Meaning, RecallOpts, RecallReport};
 pub use user_model::{
     add_fact, approval_samples, approve_node, calibrate_reflect_min, edit_node, forget_node,
     memory_rows, memory_text, pause_node, personal_export, reflect_diff, reflect_threshold_log,
@@ -82,6 +83,7 @@ pub use user_model::{
     ApprovalSample, MemoryRow, PersonalGroup, ReflectDiff, SourceLink, UserForget, WipeReport,
     PROPOSED_TAG, REFLECT_MIN_CONFIDENCE,
 };
+pub use wiki::{WikiReport, WIKI_DIR};
 pub use write::{
     line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered,
 };
@@ -756,14 +758,35 @@ Glow stays white.
         assert!(store.recall("not a node").is_empty());
     }
 
+    /// 2026-11-08T00:00:00Z, 30 days after the newest test node.
+    const NOV_8_MS: u64 = 1_794_441_600_000;
+    const DAYS_30: f64 = 30.0 * 24.0 * 60.0 * 60.0;
+
+    fn words(list: &[&str]) -> Vec<String> {
+        list.iter().map(|w| w.to_string()).collect()
+    }
+
+    fn by_words(half_life_secs: f64, cap: usize) -> RecallOpts<'static> {
+        RecallOpts {
+            now_ms: NOV_8_MS,
+            half_life_secs,
+            cap,
+            meaning: None,
+        }
+    }
+
+    fn lines(hits: Vec<NodeHit>) -> Vec<String> {
+        hits.into_iter().map(|hit| hit.line).collect()
+    }
+
     #[test]
-    fn ranked_recall_puts_more_matched_words_first_then_newer() {
+    fn hybrid_recall_puts_more_matched_words_first_then_newer() {
         let tmp = Tmp::new("ranked");
         let store = AmrStore::at(&tmp.path);
         store.init().unwrap();
         // "a-" sorts first by id, so id order alone would put it on top.
         store
-            .remember(&draft("a-mode", "ranked mode off\n"))
+            .remember(&draft("a-mode", "ranked mode at ten\n"))
             .unwrap();
         store
             .remember(&draft("z-partner", "Kestrel duo partner ranked\n"))
@@ -774,27 +797,59 @@ Glow stays white.
                 ..draft("m-queue", "ranked queue at nine\n")
             })
             .unwrap();
-        let words: Vec<String> = ["ranked", "duo", "partner"]
-            .iter()
-            .map(|w| w.to_string())
-            .collect();
-        let lines: Vec<String> = store
-            .recall_ranked(&words)
-            .into_iter()
-            .map(|hit| hit.line)
-            .collect();
+        let ask = words(&["ranked", "duo", "partner"]);
         assert_eq!(
-            lines,
+            lines(store.recall_hybrid(&ask, &by_words(DAYS_30, 20))),
             vec![
                 "Kestrel duo partner ranked".to_string(),
                 "ranked queue at nine".to_string(),
-                "ranked mode off".to_string(),
+                "ranked mode at ten".to_string(),
             ]
         );
-        assert!(store.recall_ranked(&[]).is_empty());
+        assert_eq!(
+            lines(store.recall_hybrid(&ask, &by_words(DAYS_30, 1))),
+            vec!["Kestrel duo partner ranked".to_string()]
+        );
+        assert!(store.recall_hybrid(&[], &by_words(DAYS_30, 20)).is_empty());
+        assert!(store.recall_hybrid(&ask, &by_words(DAYS_30, 0)).is_empty());
     }
 
-    /// Toy meanings for [`AmrStore::recall_semantic`]: "gpu" and "graphics"
+    #[test]
+    fn a_year_old_closer_match_falls_behind_a_fresh_one() {
+        let tmp = Tmp::new("decay");
+        let store = AmrStore::at(&tmp.path);
+        store.init().unwrap();
+        store
+            .remember(&NodeDraft {
+                updated: "2025-11-08T00:00:00Z".into(),
+                ..draft("old-pier", "pier nine berth\n")
+            })
+            .unwrap();
+        store
+            .remember(&NodeDraft {
+                updated: "2026-11-07T00:00:00Z".into(),
+                ..draft("new-pier", "the boat sleeps at pier nine tonight\n")
+            })
+            .unwrap();
+        let ask = words(&["pier", "berth"]);
+        assert_eq!(
+            lines(store.recall_hybrid(&ask, &by_words(DAYS_30, 20))),
+            vec![
+                "the boat sleeps at pier nine tonight".to_string(),
+                "pier nine berth".to_string(),
+            ]
+        );
+        // With decay off, the closer word match wins.
+        assert_eq!(
+            lines(store.recall_hybrid(&ask, &by_words(0.0, 20))),
+            vec![
+                "pier nine berth".to_string(),
+                "the boat sleeps at pier nine tonight".to_string(),
+            ]
+        );
+    }
+
+    /// Toy meanings for [`AmrStore::recall_hybrid`]: "gpu" and "graphics"
     /// share one direction, "ram" and "memory" another.
     fn toy_encode(text: &str) -> Option<Vec<f32>> {
         let t = text.to_ascii_lowercase();
@@ -804,8 +859,23 @@ Glow stays white.
         (n > 0.0).then(|| vec![gpu / n, ram / n])
     }
 
+    fn by_meaning<'a>(query: &'a [f32], cap: usize) -> RecallOpts<'a> {
+        RecallOpts {
+            now_ms: NOV_8_MS,
+            half_life_secs: DAYS_30,
+            cap,
+            meaning: Some(Meaning {
+                query,
+                encode: &toy_encode,
+                floor: 0.5,
+                weight: 0.5,
+                only_cap: 2,
+            }),
+        }
+    }
+
     #[test]
-    fn semantic_recall_finds_lines_by_meaning_and_skips_superseded_facts() {
+    fn hybrid_recall_finds_lines_by_meaning_and_skips_superseded_facts() {
         let tmp = Tmp::new("semantic");
         let store = AmrStore::at(&tmp.path);
         store.init().unwrap();
@@ -825,19 +895,40 @@ Glow stays white.
             .link("rig-card", "old-card", EdgeRel::Supersedes)
             .unwrap();
         let q = toy_encode("which GPU do I have").unwrap();
-        let hits = store.recall_semantic(&q, &toy_encode, 0.5, 5);
+        let hits = store.recall_hybrid(&[], &by_meaning(&q, 5));
         assert_eq!(
             hits.iter().map(|h| h.line.as_str()).collect::<Vec<_>>(),
             vec!["graphics card is an RTX 4080"],
             "the replaced card stays on disk but is never recalled"
         );
         assert!(tmp.path.join("nodes").join("old-card.md").is_file());
-        assert!(store.recall_semantic(&q, &toy_encode, 0.5, 0).is_empty());
-        assert!(store.recall_semantic(&[], &toy_encode, 0.5, 5).is_empty());
+        assert!(store.recall_hybrid(&[], &by_meaning(&q, 0)).is_empty());
+        assert!(store.recall_hybrid(&[], &by_meaning(&[], 5)).is_empty());
         let q = toy_encode("how much memory").unwrap();
         assert_eq!(
-            store.recall_semantic(&q, &toy_encode, 0.5, 5)[0].id,
+            store.recall_hybrid(&[], &by_meaning(&q, 5))[0].id,
             "rig-ram"
+        );
+        // A word match keeps its own line, and meaning adds to its score:
+        // the shorter card-game line wins on words alone, the GPU one with
+        // meaning on.
+        store
+            .remember(&draft("card-game", "card game night is friday\n"))
+            .unwrap();
+        let q = toy_encode("which GPU do I have").unwrap();
+        assert_eq!(
+            lines(store.recall_hybrid(&words(&["card"]), &by_words(DAYS_30, 5))),
+            vec![
+                "card game night is friday".to_string(),
+                "graphics card is an RTX 4080".to_string(),
+            ]
+        );
+        assert_eq!(
+            lines(store.recall_hybrid(&words(&["card"]), &by_meaning(&q, 5))),
+            vec![
+                "graphics card is an RTX 4080".to_string(),
+                "card game night is friday".to_string(),
+            ]
         );
     }
 

@@ -428,7 +428,6 @@ fn local_only_voice_route_skips_xai_stream_target() {
         &dir,
         VoiceRouteConfig {
             mode: VoiceRouteMode::LocalOnly,
-            ..Default::default()
         },
     )
     .expect("write route");

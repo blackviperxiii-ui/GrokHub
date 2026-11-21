@@ -2,9 +2,12 @@
 //! machine's memory, CPU, engine and disk, sorts them into Recommended, May be
 //! slow and Hidden with a plain reason, and pre-selects the tier default.
 //! Pure: the hardware probe and the speed test hand their readings here.
+//! Auto also scores user-added `.gguf` files ([`AutoFile`] / [`auto_home`])
+//! against downloads by the same quality × speed rule.
 
 use crate::local_setup::{disk_needed_mb, local_models, size_label, Hardware, LocalModel};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 /// RAM left to the OS when a model runs from RAM.
 pub const SYSTEM_RESERVE_MB: u64 = 4_096;
@@ -384,6 +387,86 @@ pub fn smallest() -> Option<&'static LocalModel> {
         .iter()
         .rev()
         .find(|m| m.is_chat() && !m.optional)
+}
+
+/// A model file Auto can load as home: a download or an added `.gguf`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoFile {
+    pub path: PathBuf,
+    /// Catalog row when the file name matches; `None` for a third-party file.
+    pub model: Option<&'static LocalModel>,
+    /// Exact size on disk, for scoring an added file with no catalog row.
+    pub bytes: u64,
+    /// Measured tok/s from the speed test, when known (catalog id or path).
+    pub measured: Option<f64>,
+}
+
+/// A ~3.2 GB file is scored like a 60 tok/s tiny model; smaller files score
+/// faster, larger ones slower. Used only when the file has no catalog row.
+pub const OWN_REF_MB: f64 = 3_258.0;
+pub const OWN_REF_TOK_S: f64 = 60.0;
+
+/// Rough tok/s for an added file from its size on disk.
+pub fn own_speed(bytes: u64) -> f64 {
+    let mb = (bytes / (1_024 * 1_024)).max(1) as f64;
+    OWN_REF_TOK_S * (OWN_REF_MB / mb)
+}
+
+fn estimate_speed(m: &LocalModel, measured: Option<f64>, p: Option<&Profile>) -> f64 {
+    if let Some(t) = measured {
+        return t;
+    }
+    if let Some(p) = p {
+        return speed_here(p, m, None);
+    }
+    f64::from(m.tok_s.gpu.max(m.tok_s.unified).max(m.tok_s.cpu))
+}
+
+/// Auto's home among `files`: the same quality × speed^SPEED_WEIGHT rule as
+/// the recommended default. An added file with no catalog row is scored from
+/// its size (smaller → faster) at [`CAPABLE_QUALITY`], so it can beat a
+/// slower download. `p` is optional: without it, catalog speed uses the
+/// highest published estimate.
+pub fn auto_home_for(p: Option<&Profile>, files: &[AutoFile]) -> Option<PathBuf> {
+    if files.is_empty() {
+        return None;
+    }
+    let pool: Vec<(usize, f64, u8)> = files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let (speed, quality) = match f.model {
+                Some(m) => (
+                    estimate_speed(m, f.measured, p),
+                    crate::local_skills::resolved(m).quality,
+                ),
+                None => (
+                    f.measured.unwrap_or_else(|| own_speed(f.bytes)),
+                    CAPABLE_QUALITY,
+                ),
+            };
+            (i, speed, quality)
+        })
+        .collect();
+    let narrowed = |keep: &dyn Fn(&(usize, f64, u8)) -> bool, from: Vec<(usize, f64, u8)>| {
+        let kept: Vec<_> = from.iter().copied().filter(|r| keep(r)).collect();
+        if kept.is_empty() {
+            from
+        } else {
+            kept
+        }
+    };
+    let pool = narrowed(&|r| r.2 >= CAPABLE_QUALITY, pool);
+    let value = |r: &(usize, f64, u8)| f64::from(r.2) * r.1.max(0.0).powf(SPEED_WEIGHT);
+    let best = pool
+        .into_iter()
+        .max_by(|a, b| value(a).total_cmp(&value(b)).then(a.1.total_cmp(&b.1)))?;
+    Some(files[best.0].path.clone())
+}
+
+/// [`auto_home_for`] with no machine profile.
+pub fn auto_home(files: &[AutoFile]) -> Option<PathBuf> {
+    auto_home_for(None, files)
 }
 
 #[cfg(test)]

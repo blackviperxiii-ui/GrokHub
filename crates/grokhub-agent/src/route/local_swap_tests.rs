@@ -43,6 +43,7 @@ fn now<'a>(home: &'a Path, on_disk: &'a [(&'static LocalModel, PathBuf)]) -> Now
         kept_loaded: false,
         forced: false,
         in_flight: 0,
+        background_in_flight: 0,
         secs_since_swap: u64::MAX,
         need: Need::Normal,
         scale: Scale::default(),
@@ -124,6 +125,15 @@ fn a_model_in_use_kept_loaded_or_just_swapped_is_not_swapped() {
         }),
         Plan::Keep,
         "a request in flight keeps its model"
+    );
+    assert_eq!(
+        plan(Now {
+            in_flight: 1,
+            background_in_flight: 1,
+            ..low
+        }),
+        Plan::Keep,
+        "without an ask, background work in flight keeps its model too"
     );
     assert_eq!(
         plan(Now {
@@ -699,6 +709,44 @@ fn task_disk() -> Vec<(&'static LocalModel, PathBuf)> {
 }
 
 #[test]
+fn an_added_catalog_file_joins_on_disk_and_can_win_a_task() {
+    let dir = tmp("own-disk");
+    // Home is the big download; the added reasoner is smaller, so it may run
+    // without a room reading, and it beats the home on Reason.
+    let home_model = m(BIG);
+    let stronger = m(REASONER);
+    std::fs::write(
+        grokhub_core::model_download::final_path(&dir, home_model),
+        b"x",
+    )
+    .unwrap();
+    let own_path = dir.join("added").join(stronger.file);
+    std::fs::create_dir_all(own_path.parent().unwrap()).unwrap();
+    std::fs::write(&own_path, b"own").unwrap();
+    let disk = with_own(
+        on_disk(std::slice::from_ref(&dir)),
+        std::slice::from_ref(&own_path),
+    );
+    assert_eq!(
+        disk.iter().map(|(m, _)| m.id).collect::<Vec<_>>(),
+        vec![home_model.id, stronger.id]
+    );
+    let home = grokhub_core::model_download::final_path(&dir, home_model);
+    let n = Now {
+        task: Some(TaskKind::Reason),
+        ..now(&home, &disk)
+    };
+    assert_eq!(
+        plan(n),
+        Plan::Load {
+            model: own_path,
+            stand_in: Some(StandIn::BestFor(TaskKind::Reason))
+        },
+        "the added catalog file wins the reasoning task on merit"
+    );
+}
+
+#[test]
 fn with_dynamic_on_a_task_runs_on_the_model_best_at_it_and_chat_stays_on_the_pick() {
     let disk = task_disk();
     let home = file(BIG);
@@ -1127,6 +1175,37 @@ fn keep_loaded_a_low_battery_a_game_and_a_reply_in_flight_beat_an_ask() {
     assert_eq!(plan(busy), Plan::Keep);
     assert_eq!(
         ask_outcome(&busy),
+        Some(AskOutcome::Refused(
+            SpeedQuality::Speed,
+            Refused::Busy(Source::Pin)
+        ))
+    );
+    // The app's own background requests don't hold an ask back; another
+    // chat's reply beside them still does.
+    let helpers = Now {
+        in_flight: 2,
+        background_in_flight: 2,
+        ..n
+    };
+    assert_eq!(
+        plan(helpers),
+        Plan::Load {
+            model: file(SMALL),
+            stand_in: Some(StandIn::Asked(SpeedQuality::Speed, Source::Pin))
+        }
+    );
+    assert_eq!(
+        ask_outcome(&helpers),
+        Some(AskOutcome::Got(SpeedQuality::Speed, Source::Pin))
+    );
+    let beside = Now {
+        in_flight: 3,
+        background_in_flight: 2,
+        ..n
+    };
+    assert_eq!(plan(beside), Plan::Keep);
+    assert_eq!(
+        ask_outcome(&beside),
         Some(AskOutcome::Refused(
             SpeedQuality::Speed,
             Refused::Busy(Source::Pin)

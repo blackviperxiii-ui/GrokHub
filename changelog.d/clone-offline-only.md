@@ -1,0 +1,1 @@
+- Linking a Code project by cloning a remote URL now stops at once while Offline only is on, before it makes any folder.

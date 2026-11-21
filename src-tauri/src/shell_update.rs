@@ -84,14 +84,32 @@ pub fn set_channel(config_dir: &Path, channel: Channel) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether this install can replace itself: the AppImage (`$APPIMAGE` set)
-/// and the Windows installer can; a `.deb`, macOS and phones can't.
-pub fn updatable(os: &str, appimage: Option<&str>) -> bool {
+/// Whether this install can replace itself:
+/// - the AppImage (`$APPIMAGE` set);
+/// - a `.deb` install under `/usr` (`deb` is the bundle type Tauri stamped
+///   into the binary), which the updater replaces with the new `.deb`
+///   through pkexec;
+/// - the Windows installer;
+/// - a macOS `.app`, swapped for the release's `.app.tar.gz`.
+///
+/// A copy built from a clone or the AUR, and phones, can't.
+pub fn updatable(os: &str, appimage: Option<&str>, deb: bool, exe: &Path) -> bool {
     match os {
-        "linux" => appimage.is_some_and(|p| !p.trim().is_empty()),
+        "linux" => {
+            appimage.is_some_and(|p| !p.trim().is_empty()) || (deb && exe.starts_with("/usr"))
+        }
         "windows" => true,
+        "macos" => exe.to_string_lossy().contains(".app/Contents/MacOS/"),
         _ => false,
     }
+}
+
+/// Whether Tauri's bundler stamped this binary as the `.deb` build.
+pub fn deb_bundle() -> bool {
+    matches!(
+        tauri::utils::platform::bundle_type(),
+        Some(tauri::utils::config::BundleType::Deb)
+    )
 }
 
 /// Why this install doesn't update itself, for the Updates panel. The note
@@ -113,10 +131,10 @@ pub fn not_updatable_note(os: &str, config_dir: &Path, channel: Channel, exe: &P
         .filter(|_| in_bin && !exe.starts_with("/usr"));
     match clone {
         Some(clone) => format!(
-            "Built from the clone in {clone}: to update it, run scripts/install.sh --channel {ch} there with the options you installed it with."
+            "Built from the clone in {clone}: to update it, run scripts/install.sh --from-source --channel {ch} there with the options you installed it with."
         ),
         None => format!(
-            "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --channel {ch} again in the clone you built it from."
+            "This copy updates outside the app: use your package manager for an AUR install, or run scripts/install.sh --from-source --channel {ch} again in the clone you built it from."
         ),
     }
 }
@@ -193,23 +211,27 @@ pub struct UpdateView {
     pub note: Option<String>,
     /// The version a check found, ready to install.
     pub available: Option<String>,
+    /// Set when the last update was rolled back because it didn't stay up.
+    pub rolled_back: Option<String>,
 }
 
 impl UpdateView {
     pub fn now(config_dir: &Path) -> Self {
         let os = std::env::consts::OS;
         let appimage = std::env::var("APPIMAGE").ok();
-        let updatable = updatable(os, appimage.as_deref());
+        let exe = std::env::current_exe().unwrap_or_default();
+        let updatable = updatable(os, appimage.as_deref(), deb_bundle(), &exe);
         let channel = channel(config_dir);
         Self {
             version: version(),
             channel: channel.as_str(),
             updatable,
-            note: (!updatable).then(|| {
-                let exe = std::env::current_exe().unwrap_or_default();
-                not_updatable_note(os, config_dir, channel, &exe)
-            }),
+            note: (!updatable).then(|| not_updatable_note(os, config_dir, channel, &exe)),
             available: None,
+            #[cfg(desktop)]
+            rolled_back: crate::update_rollback::rolled_back_note(config_dir),
+            #[cfg(not(desktop))]
+            rolled_back: None,
         }
     }
 }
@@ -235,8 +257,11 @@ pub mod plugin {
             Version::parse(&version()).map_err(|e| format!("this build's version: {e}"))?;
         let switching = ch != build_channel();
         let pubkey = updater_pubkey().ok_or("this build has no release key")?;
+        let handle = app.clone();
         let updater = app
             .updater_builder()
+            // Windows exits inside the install; run the app's quit steps first.
+            .on_before_exit(move || crate::before_update_exit(&handle))
             .endpoints(vec![url
                 .parse()
                 .map_err(|_| "bad manifest link".to_string())?])
@@ -246,7 +271,13 @@ pub mod plugin {
             .version_comparator(move |_bundle, remote| offer(&remote.version, &running, switching))
             .build()
             .map_err(|e| e.to_string())?;
-        let update = updater.check().await.map_err(|e| e.to_string())?;
+        let update = updater.check().await.map_err(|e| match e {
+            // A beta built per merge carries no macOS update, for one.
+            tauri_plugin_updater::Error::TargetsNotFound(_) => {
+                "that release has no update for this computer yet".to_string()
+            }
+            e => e.to_string(),
+        })?;
         if let Some(u) = &update {
             let link = u.download_url.as_str();
             let name = link.rsplit('/').next().unwrap_or_default();
@@ -262,16 +293,26 @@ pub mod plugin {
     }
 
     /// Download, verify (the plugin refuses a bad signature) and install the
-    /// offered update, then restart into it. Windows' installer exits the app
-    /// itself.
+    /// offered update, then restart into it. On Windows the plugin starts the
+    /// installer and exits the process itself, after the app's quit steps
+    /// ([`crate::before_update_exit`]); a launch it can't make comes back as
+    /// an error.
     pub async fn install(app: &AppHandle, config_dir: &Path) -> Result<(), String> {
         let update = check(app, config_dir)
             .await?
             .ok_or("no update to install")?;
-        update
-            .download_and_install(|_, _| {}, || {})
-            .await
-            .map_err(|e| format!("update not installed: {e}"))?;
+        // An AppImage keeps a copy of itself, so a new version that can't
+        // stay up is rolled back (crate::update_rollback). Without the copy
+        // the update still installs.
+        let appimage = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from);
+        if let Some(target) = appimage.as_deref().filter(|p| p.is_file()) {
+            let _ =
+                crate::update_rollback::prepare(config_dir, target, &version(), &update.version);
+        }
+        if let Err(e) = update.download_and_install(|_, _| {}, || {}).await {
+            crate::update_rollback::abandon(config_dir);
+            return Err(format!("update not installed: {e}"));
+        }
         app.restart()
     }
 }

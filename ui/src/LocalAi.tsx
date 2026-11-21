@@ -25,14 +25,13 @@ import {
   type LocalEngineInfo,
   type LocalFileRow,
   type LocalManual,
-  type LocalModelRow,
 } from "./api";
 import { ModelLibrary, type LibraryFocus } from "./ModelLibrary";
 import { Toggle } from "./Toggle";
 import { VoiceRouteSettings } from "./VoiceRouteSettings";
 import { PRODUCT_NAME } from "./brand";
 
-/** Shown once per file before a model from outside the catalog is picked. */
+/** Shown once per file before a model file from outside the catalog is added. */
 export const MODEL_NOTICE =
   `This model isn't from ${PRODUCT_NAME}'s catalog. Third-party models can have their safety training removed. Check its license before you use it. You are responsible for what you do with it. ${PRODUCT_NAME} never recommends or downloads models from outside its catalog.`;
 
@@ -54,22 +53,6 @@ function engineButton(state: LocalEngineEventState, idle: string): string {
   return idle;
 }
 
-const BACKENDS: [string, string][] = [
-  ["auto", "Auto"],
-  ["cuda", "CUDA (NVIDIA)"],
-  ["rocm", "ROCm (AMD)"],
-  ["vulkan", "Vulkan"],
-  ["metal", "Metal (Apple)"],
-  ["sycl", "SYCL (Intel)"],
-  ["cpu", "CPU only"],
-];
-
-const CAP_MAX = 90;
-
-function ctxLabel(ctx: number): string {
-  return ctx >= 1024 ? `${Math.round(ctx / 1024)}K ctx` : `${ctx} ctx`;
-}
-
 /** Blank is Auto. */
 function numberOrNull(text: string): number | null {
   const n = Number.parseInt(text, 10);
@@ -83,55 +66,23 @@ function lines(text: string): string[] {
     .filter(Boolean);
 }
 
-function ModelOption({
-  row,
-  selected,
-  onPick,
-}: {
-  row: LocalModelRow;
-  selected: boolean;
-  onPick: () => void;
-}) {
-  const meta = [row.size, row.quant, ctxLabel(row.ctx), row.tokS, row.license].join(" · ");
-  return (
-    <li className={`local-model ${row.bucket}`} aria-label={row.name}>
-      <label className="check">
-        <input type="radio" name="local-model" checked={selected} onChange={onPick} />
-        <span className="local-model-name">{row.name}</span>
-        {row.preselected && <span className="badge">Recommended for this PC</span>}
-        {row.optional && <span className="badge">Optional</span>}
-        {row.badges.map((b) => (
-          <span key={b} className="badge">
-            {b}
-          </span>
-        ))}
-      </label>
-      <span className="local-model-meta">{meta}</span>
-      <span className="local-model-reason">{row.reason}</span>
-    </li>
-  );
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
 }
 
-function FileOption({
-  row,
-  selected,
-  onPick,
-}: {
-  row: LocalFileRow;
-  selected: boolean;
-  onPick: () => void;
-}) {
+/** A model file found on this PC or checked from a path, offered to add. */
+function FoundFile({ row, onAdd }: { row: LocalFileRow; onAdd: () => void }) {
   return (
     <li className="local-model file" aria-label={row.name}>
-      <label className="check">
-        <input type="radio" name="local-model" checked={selected} onChange={onPick} />
-        <span className="local-model-name">{row.name}</span>
-        {row.abliterated && <span className="badge warn">Safety training removed</span>}
-        {row.thirdParty && !row.abliterated && <span className="badge">Third-party</span>}
-      </label>
+      <span className="local-model-name">{row.name}</span>
+      {row.abliterated && <span className="badge warn">Safety training removed</span>}
+      {row.thirdParty && !row.abliterated && <span className="badge">Third-party</span>}
       <span className="local-model-meta">
         {row.source} · {row.size} · {row.path}
       </span>
+      <button type="button" className="quiet add-file" onClick={onAdd}>
+        Add
+      </button>
     </li>
   );
 }
@@ -153,7 +104,8 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
   const [draftOffer, setDraftOffer] = useState<LocalDraftOffer | null>(null);
   const [draftProgress, setDraftProgress] = useState<LocalDraftProgress | null>(null);
   const [draftState, setDraftState] = useState<LocalDrafterState | null>(null);
-  const [showAll, setShowAll] = useState(false);
+  /** The drafter last seen downloading, so a paused one can resume. */
+  const [draftId, setDraftId] = useState<string | null>(null);
   const [filePath, setFilePath] = useState("");
   const [extraFiles, setExtraFiles] = useState<LocalFileRow[]>([]);
   const [notice, setNotice] = useState<LocalFileRow | null>(null);
@@ -171,6 +123,7 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
     if (next.engine.state !== "downloading") idleButton.current = next.engine.button;
     setDraftOffer(next.draftOffer);
     setDraftProgress(next.draftProgress);
+    setDraftId(next.draftProgress?.id ?? null);
     setDraftState(null);
     setAllow(next.config.manual.allowApps.join("\n"));
     setDeny(next.config.manual.denyApps.join("\n"));
@@ -231,6 +184,7 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
     let dropped = false;
     void onLocalDrafterEvent((event) => {
       setDraftProgress(event.progress);
+      if (event.progress) setDraftId(event.progress.id);
       setDraftState(event.state);
       if (event.message) setNote({ text: event.message, error: event.error !== null });
       if (event.state !== "downloading") {
@@ -261,36 +215,34 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
 
   const config = draft;
   const manual = config.manual;
-  const selected = config.localModel.selected || view.picker.selected;
   const set = (over: Partial<LocalAiConfig>) => setDraft({ ...config, ...over });
   const setManual = (over: Partial<LocalManual>) =>
     setDraft({ ...config, manual: { ...manual, ...over } });
-  const pick = (value: string) => set({ localModel: { selected: value } });
+  const addPath = (path: string, seen: string[] = config.noticeSeen) =>
+    set({ ownFiles: [...config.ownFiles.filter((f) => f !== path), path], noticeSeen: seen });
+  const removePath = (path: string) => set({ ownFiles: config.ownFiles.filter((f) => f !== path) });
 
-  function pickFile(row: LocalFileRow) {
+  function addFile(row: LocalFileRow) {
     if (row.needsNotice && !config.noticeSeen.includes(row.path)) {
       setNotice(row);
       return;
     }
-    pick(row.path);
+    addPath(row.path);
   }
 
   function acceptNotice() {
     if (!notice) return;
-    setDraft({
-      ...config,
-      localModel: { selected: notice.path },
-      noticeSeen: [...config.noticeSeen, notice.path],
-    });
+    addPath(notice.path, [...config.noticeSeen, notice.path]);
     setNotice(null);
   }
 
-  async function useFile() {
+  async function checkFile() {
     try {
       const row = await checkModelFile(filePath.trim());
       setExtraFiles((rows) => [...rows.filter((r) => r.path !== row.path), row]);
       setNote(null);
-      pickFile(row);
+      setFilePath("");
+      addFile(row);
     } catch (err) {
       fail(err);
     }
@@ -313,8 +265,7 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
   async function reset() {
     try {
       show(await resetLocalAi());
-      setExtraFiles([]);
-      tell("Back to Auto.");
+      tell("Advanced settings are back to their defaults.");
     } catch (err) {
       fail(err);
     }
@@ -323,7 +274,7 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
   async function dynamic(on: boolean) {
     try {
       setView(await setLocalDynamic(on));
-      tell(on ? "Dynamic is on: each task gets the model best at it." : "Dynamic is off: your pick answers every task.");
+      tell(on ? "Dynamic is on: each task gets the model best at it." : "Dynamic is off: one model answers every task.");
     } catch (err) {
       fail(err);
     }
@@ -407,18 +358,33 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
   const status = [s.tier, s.model, `${s.state} (${s.reason})`, s.tokS, s.memory]
     .filter(Boolean)
     .join(" · ");
-  const buckets: [LocalModelRow["bucket"], string][] = [
-    ["recommended", "Recommended"],
-    ["maySlow", "May be slow"],
-  ];
-  if (showAll) buckets.push(["hidden", "Won't run well here"]);
-  const files = [
+  const found = [
     ...view.picker.onThisPc,
     ...extraFiles.filter((f) => !view.picker.onThisPc.some((o) => o.path === f.path)),
-  ];
-  const selectedOffer =
-    view.draftOffers.find((o) => o.targetId === selected) ??
-    (draftOffer?.targetId === selected ? draftOffer : null);
+  ].filter((f) => !config.ownFiles.includes(f.path));
+  const paused = draftState === "paused";
+  const draftTarget =
+    view.draftOffers.find((o) => o.id === draftId)?.targetId ??
+    draftOffer?.targetId ??
+    view.picker.selected;
+  const draftBlock = (
+    <div className="local-draft-offer" aria-label="Draft model offer">
+      <h3>Draft model</h3>
+      {draftOffer && <p className="note">{draftOffer.line}</p>}
+      {draftProgress && <p className="note local-draft-progress">{draftProgress.line}</p>}
+      <button
+        type="button"
+        className="quiet install-draft"
+        onClick={() => void installDraft(draftTarget)}
+      >
+        {draftProgress
+          ? "Cancel draft download"
+          : paused
+            ? "Resume…"
+            : (draftOffer?.button ?? "Install and run draft model")}
+      </button>
+    </div>
+  );
 
   return (
     <section className="local-ai" aria-label="Local AI">
@@ -487,24 +453,6 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
           </button>
         )}
       </div>
-      <div className="local-mode" role="group" aria-label="Local AI mode">
-        <button
-          type="button"
-          className="quiet mode-auto"
-          aria-pressed={config.mode === "auto"}
-          onClick={() => set({ mode: "auto" })}
-        >
-          Auto
-        </button>
-        <button
-          type="button"
-          className="quiet mode-manual"
-          aria-pressed={config.mode === "manual"}
-          onClick={() => set({ mode: "manual" })}
-        >
-          Manual
-        </button>
-      </div>
       <Toggle checked={config.pauseForGames} onChange={(on) => set({ pauseForGames: on })}>
         Pause while gaming or a fullscreen app is in front
       </Toggle>
@@ -514,42 +462,37 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
       <Toggle checked={config.throttleOnBattery} onChange={(on) => set({ throttleOnBattery: on })}>
         Slow down on battery (it pauses below 20%)
       </Toggle>
-      {config.mode === "manual" && (
+      {/* A running download keeps its progress and Cancel in view. */}
+      {(draftProgress || paused) && draftBlock}
+      <details className="local-advanced">
+        <summary>Advanced</summary>
         <div className="local-manual">
-          <h3>Model</h3>
-          {buckets.map(([bucket, title]) => {
-            const rows = view.picker.models.filter((m) => m.bucket === bucket);
-            if (rows.length === 0) return null;
-            return (
-              <div key={bucket} className={`local-bucket ${bucket}`}>
-                <h4>{title}</h4>
-                <ul aria-label={title}>
-                  {rows.map((row) => (
-                    <ModelOption
-                      key={row.id}
-                      row={row}
-                      selected={selected === row.id}
-                      onPick={() => pick(row.id)}
-                    />
-                  ))}
-                </ul>
-              </div>
-            );
-          })}
-          <button type="button" className="link" onClick={() => setShowAll(!showAll)}>
-            {showAll ? "Hide what won't run well" : "Show all"}
-          </button>
-          {files.length > 0 && (
+          <p className="note">
+            Auto picks the model for this PC. These settings only change how it runs.
+          </p>
+          <h3>Your model files</h3>
+          <p className="note">
+            Auto loads the first added file that is on disk when no downloaded model is on this PC.
+          </p>
+          {config.ownFiles.length > 0 && (
+            <ul aria-label="Added model files">
+              {config.ownFiles.map((path) => (
+                <li key={path} className="local-model file" aria-label={fileName(path)}>
+                  <span className="local-model-name">{fileName(path)}</span>
+                  <span className="local-model-meta">{path}</span>
+                  <button type="button" className="quiet remove-file" onClick={() => removePath(path)}>
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {found.length > 0 && (
             <div className="local-bucket files">
               <h4>On this PC</h4>
               <ul aria-label="On this PC">
-                {files.map((row) => (
-                  <FileOption
-                    key={row.path}
-                    row={row}
-                    selected={selected === row.path}
-                    onPick={() => pickFile(row)}
-                  />
+                {found.map((row) => (
+                  <FoundFile key={row.path} row={row} onAdd={() => addFile(row)} />
                 ))}
               </ul>
             </div>
@@ -564,10 +507,10 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
             <button
               type="button"
               className="quiet use-file"
-              onClick={useFile}
+              onClick={checkFile}
               disabled={!filePath.trim()}
             >
-              Use a model file
+              Add a model file
             </button>
           </div>
           {notice && (
@@ -588,16 +531,6 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
           )}
           <h3>Engine</h3>
           <div className="local-grid">
-            <label>
-              Device
-              <select value={manual.backend} onChange={(e) => setManual({ backend: e.target.value })}>
-                {BACKENDS.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
             <label>
               GPU layers
               <input
@@ -646,32 +579,6 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
           <Toggle checked={manual.neverUnload} onChange={(on) => setManual({ neverUnload: on })}>
             Never unload the model
           </Toggle>
-          <h3>Memory caps (up to {CAP_MAX}%)</h3>
-          <div className="local-grid">
-            {(
-              [
-                ["rampUp", "Idle"],
-                ["normal", "Normal"],
-                ["throttle", "Busy"],
-              ] as const
-            ).map(([key, label]) => (
-              <label key={key}>
-                {label}
-                <input
-                  inputMode="numeric"
-                  value={manual.caps[key]}
-                  onChange={(e) =>
-                    setManual({
-                      caps: {
-                        ...manual.caps,
-                        [key]: Math.min(CAP_MAX, numberOrNull(e.target.value) ?? 10),
-                      },
-                    })
-                  }
-                />
-              </label>
-            ))}
-          </div>
           <h3>Apps</h3>
           <label>
             Never pause for these apps (one per line)
@@ -684,35 +591,15 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
           <button type="button" className="quiet" onClick={speedTest} disabled={testing || !view.localUse.on}>
             {testing ? "Testing…" : "Re-run speed test"}
           </button>
+          {!draftProgress && !paused && draftOffer && draftBlock}
         </div>
-      )}
-      {/* A running download keeps its progress and Cancel in Auto too. */}
-      {(draftProgress || (config.mode === "manual" && selectedOffer)) && (
-        <div className="local-draft-offer" aria-label="Draft model offer">
-          <h3>Draft model</h3>
-          {selectedOffer && <p className="note">{selectedOffer.line}</p>}
-          {draftProgress && <p className="note local-draft-progress">{draftProgress.line}</p>}
-          <button
-            type="button"
-            className="quiet install-draft"
-            onClick={() =>
-              void installDraft(selectedOffer?.targetId ?? draftOffer?.targetId ?? selected)
-            }
-          >
-            {draftProgress
-              ? "Cancel draft download"
-              : draftState === "paused"
-                ? "Resume…"
-                : (selectedOffer?.button ?? "Install and run draft model")}
-          </button>
-        </div>
-      )}
+      </details>
       <div className="card-buttons">
         <button type="button" className="save-local" onClick={save}>
           Save local AI
         </button>
         <button type="button" className="quiet reset-local" onClick={reset}>
-          Reset to Auto
+          Reset Advanced
         </button>
       </div>
       {note && (

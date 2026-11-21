@@ -26,6 +26,9 @@ const DRAW_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// Longest the guard may take to load and answer.
 const GUARD_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 
+/// Nothing here can draw a picture: no Grok Imagine sign-in and no picture
+/// model on disk.
+pub const NO_SOURCE: &str = "Not made, and nothing was sent: nothing here can draw pictures yet. Download Z-Image Turbo from Settings → Download models → Image, or sign in with Grok or add an API key.";
 /// Why a picture wasn't made on this computer.
 pub const NOT_SET_UP: &str = "Not made, and nothing was sent: on-device pictures need Z-Image Turbo from Settings → Download models.";
 /// An 18+ ask with no guard on disk.
@@ -40,6 +43,7 @@ pub const GUARD_UNSURE: &str = "Not shown, and deleted: the picture guard couldn
 pub const GUARD_NO_ROOM: &str = "Not shown, and deleted: this computer didn't have the free memory to check the picture. Close some apps, then ask again.";
 
 /// What's on disk for on-device pictures.
+#[derive(Clone)]
 pub struct Kit {
     pub cli: PathBuf,
     pub models_dir: PathBuf,
@@ -200,13 +204,69 @@ pub fn forced() -> bool {
     FORCED.with(std::cell::Cell::get)
 }
 
+/// The forced picture step's answer, with the picture call made from the
+/// person's own words when the model answered without one: an engine or a
+/// small model can ignore `tool_choice: "required"` and say it drew. Its
+/// text (the claim) is dropped; the tool then draws or says why not.
+pub fn with_picture_call(
+    mut out: crate::client::TurnOutput,
+    ask: &str,
+) -> crate::client::TurnOutput {
+    if out.calls.iter().any(|c| c.name == TOOL) || ask.trim().is_empty() {
+        return out;
+    }
+    out.text.clear();
+    out.calls = vec![crate::client::FunctionCall {
+        call_id: format!("call_local_picture_{}", grokhub_core::now_ms()),
+        name: TOOL.to_string(),
+        arguments: json!({ "prompt": ask.trim() }).to_string(),
+    }];
+    out
+}
+
 /// Memory kept free above the picture model while it draws.
 pub const DRAW_HEADROOM_MB: u64 = 512;
 
 /// Said when a picture can't fit in memory now.
-pub fn no_room_line(need_mb: u64) -> String {
-    let gb = need_mb.div_ceil(1024);
-    format!("Not made, and nothing was sent: drawing needs about {gb} GB of free memory and this computer doesn't have it right now. Close some apps, then ask again.")
+pub fn no_room_line(need: resident::Mem) -> String {
+    let gb = |mb: u64| mb.div_ceil(1024);
+    let what = if need.vram_mb == 0 {
+        format!("about {} GB of free memory", gb(need.ram_mb))
+    } else {
+        format!(
+            "about {} GB of free memory and {} GB of free graphics memory",
+            gb(need.ram_mb),
+            gb(need.vram_mb)
+        )
+    };
+    format!("Not made, and nothing was sent: drawing needs {what} and this computer doesn't have it right now. Close some apps, then ask again.")
+}
+
+/// Graphics memory one picture takes: `sd-cli --offload-to-cpu` keeps the
+/// weights in RAM and moves one piece at a time (the text encoder, the
+/// picture model, the decoder) onto the GPU, so it needs the largest piece,
+/// the compute buffers (the catalog's run size past the download) and
+/// headroom.
+pub fn draw_vram_mb(m: &LocalModel) -> u64 {
+    let parts: Vec<u64> = m.parts.iter().map(|p| p.bytes.div_ceil(1 << 20)).collect();
+    let main = m.download_mb.saturating_sub(parts.iter().sum());
+    let largest = parts.into_iter().chain([main]).max().unwrap_or(0);
+    largest + m.run_mb.saturating_sub(m.download_mb) + DRAW_HEADROOM_MB
+}
+
+/// What one picture needs: RAM for the weights, and on a separate graphics
+/// card its share there too, so a chat model filling the card unloads first
+/// (or the picture is refused) instead of the engine running out of memory.
+/// With shared memory the GPU's share is the same RAM.
+pub fn draw_need(m: &LocalModel, room: Option<&super::local_scale::Room>) -> resident::Mem {
+    let ram = resident::Mem::ram(m.run_mb + DRAW_HEADROOM_MB);
+    match room {
+        Some(r) if !r.unified && r.free_vram_mb.is_some_and(|v| v > 0) => resident::Mem {
+            vram_mb: draw_vram_mb(m),
+            ..ram
+        },
+        _ => ram,
+    }
 }
 
 /// Append `line` as its own paragraph to the first system message.
@@ -255,9 +315,10 @@ pub fn make(
     }
     // Held from the memory check until sd-cli exits, so keep-warm doesn't
     // load the chat model back into the room the picture needs.
-    let need = kit.model.run_mb + DRAW_HEADROOM_MB;
-    let drawing = resident::reserve(resident::Kind::Picture, resident::Mem::ram(need), true)
-        .map_err(no_room_line)?;
+    let room = super::local_scale::room_at(grokhub_core::now_ms()).map(|(r, _)| r);
+    let need = draw_need(kit.model, room.as_ref());
+    let drawing =
+        resident::reserve(resident::Kind::Picture, need, true).map_err(|_| no_room_line(need))?;
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("Couldn't make the picture folder: {e}"))?;
     let out = out_dir.join(format!("image-{}-local.png", grokhub_core::now_ms()));
@@ -540,7 +601,13 @@ mod tests {
         // model plus 512 MB: declined, and sd-cli never ran.
         set_room(room(4_096), grokhub_core::now_ms());
         let short = make(&kit, "a fox", "1:1", false, &out, &|| false);
-        assert_eq!(short, Err(no_room_line(model.run_mb + DRAW_HEADROOM_MB)));
+        assert_eq!(
+            short,
+            Err(no_room_line(super::super::local_resident::Mem {
+                ram_mb: model.run_mb + DRAW_HEADROOM_MB,
+                vram_mb: draw_vram_mb(model),
+            }))
+        );
         assert!(!ran.exists());
         // Enough room: it draws, and the job leaves the ledger when done.
         set_room(room(65_536), grokhub_core::now_ms());
@@ -554,11 +621,104 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_step_that_only_claims_it_drew_calls_the_tool_with_the_ask() {
+        use crate::client::{FunctionCall, TurnOutput};
+        let claimed = TurnOutput {
+            text: "Here is your picture of a fox!".into(),
+            ..Default::default()
+        };
+        let out = with_picture_call(claimed, " a fox in snow ");
+        assert_eq!(out.text, "");
+        assert_eq!(
+            out.calls
+                .iter()
+                .map(|c| (c.name.as_str(), c.arguments.as_str()))
+                .collect::<Vec<_>>(),
+            [(TOOL, r#"{"prompt":"a fox in snow"}"#)]
+        );
+        assert!(out.calls[0].call_id.starts_with("call_local_picture_"));
+        // A real call is kept as the model wrote it.
+        let called = TurnOutput {
+            calls: vec![FunctionCall {
+                call_id: "c1".into(),
+                name: TOOL.into(),
+                arguments: r#"{"prompt":"a red fox, snow, dusk"}"#.into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(with_picture_call(called.clone(), "a fox"), called);
+    }
+
+    #[test]
+    fn a_picture_on_a_graphics_card_counts_its_share_there_and_can_unload_the_chat_model() {
+        use super::super::local_resident::{admit, Admit, Entry, Kind, Mem};
+        use super::super::local_scale::Room;
+        let model = grokhub_core::local_setup::model_by_id("z-image-turbo-q4_k").unwrap();
+        // Largest piece 3,685 MB (the picture model), 781 MB of buffers, 512 spare.
+        assert_eq!(draw_vram_mb(model), 4_978);
+        let card = Room {
+            free_vram_mb: Some(2_048),
+            free_ram_mb: 48_000,
+            ..Room::default()
+        };
+        let need = draw_need(model, Some(&card));
+        assert_eq!(
+            need,
+            Mem {
+                ram_mb: 7_680,
+                vram_mb: 4_978
+            }
+        );
+        // Shared memory, or no graphics card: RAM only, as before.
+        let shared = Room {
+            unified: true,
+            ..card
+        };
+        assert_eq!(draw_need(model, Some(&shared)), Mem::ram(7_680));
+        assert_eq!(draw_need(model, None), Mem::ram(7_680));
+        // A 24B chat model fills the card: it unloads first.
+        let free = Mem {
+            ram_mb: 38_400,
+            vram_mb: 2_048,
+        };
+        let chat = Entry {
+            kind: Kind::Chat,
+            mem: Mem {
+                ram_mb: 1_000,
+                vram_mb: 20_000,
+            },
+            last_used_secs: 1,
+            pinned: false,
+        };
+        assert_eq!(
+            admit(need, free, &[chat], false),
+            Admit::Evict(vec![Kind::Chat])
+        );
+        // One answering now can't go: the picture is refused, not started.
+        let busy = Entry {
+            pinned: true,
+            ..chat
+        };
+        assert_eq!(
+            admit(need, free, &[busy], false),
+            Admit::Decline { need_mb: 12_658 }
+        );
+    }
+
+    #[test]
     fn a_picture_without_room_says_how_much_memory_it_needs() {
+        use super::super::local_resident::Mem;
         // 7 GB picture model plus 512 MB to spare.
         assert_eq!(
-            no_room_line(7_168 + DRAW_HEADROOM_MB),
+            no_room_line(Mem::ram(7_168 + DRAW_HEADROOM_MB)),
             "Not made, and nothing was sent: drawing needs about 8 GB of free memory and this computer doesn't have it right now. Close some apps, then ask again."
+        );
+        assert_eq!(
+            no_room_line(Mem {
+                ram_mb: 7_680,
+                vram_mb: 4_980
+            }),
+            "Not made, and nothing was sent: drawing needs about 8 GB of free memory and 5 GB of free graphics memory and this computer doesn't have it right now. Close some apps, then ask again."
         );
     }
 

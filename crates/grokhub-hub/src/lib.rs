@@ -3,6 +3,7 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod doctor;
+pub mod mcp_bridge;
 pub mod oauth_cli;
 mod server;
 pub mod update;
@@ -19,12 +20,21 @@ pub enum Launch {
     McpSelf,
     /// `grokhub-hub bench local`: on-device speed and eval.
     BenchLocal,
+    /// `grokhub-hub routine run <name> [--dry-run] [--set key=value]…`:
+    /// a saved routine's steps, with no model.
+    RoutineRun,
+    /// `grokhub-hub routine allow|revoke|undo <name>`: consent for a
+    /// routine's change steps on unattended runs, or undo its newest save.
+    RoutineManage,
     /// The desktop tools on stdio, behind the same switch and hard gate.
     McpDesktop,
     /// The Cua Driver gate proxy on stdio (Linux, `cuaDriver` flag).
     McpCua,
-    /// Auth, memory folder and hub checks; exits 1 on any ERR.
-    Doctor,
+    /// Read-only unsealed AMR + automation status for local IDE MCP clients.
+    McpBridge,
+    /// Auth, memory, hub and security checks; exits 1 on any ERR.
+    /// `fix`: apply safe permission repairs before reporting.
+    Doctor { fix: bool },
     /// Says how this install updates. Runs nothing.
     Update,
     /// Sign in with Grok (device code) into the shell's keychain entry.
@@ -46,6 +56,16 @@ pub fn parse_args(args: &[String]) -> Launch {
     {
         return Launch::BenchLocal;
     }
+    if args.get(1).map(String::as_str) == Some("routine")
+        && args.get(2).map(String::as_str) == Some("run")
+    {
+        return Launch::RoutineRun;
+    }
+    if args.get(1).map(String::as_str) == Some("routine")
+        && matches!(args.get(2).map(String::as_str), Some("allow" | "revoke" | "undo"))
+    {
+        return Launch::RoutineManage;
+    }
     for a in args.iter().skip(1) {
         match a.as_str() {
             "--version" | "-V" => return Launch::Version,
@@ -53,7 +73,11 @@ pub fn parse_args(args: &[String]) -> Launch {
             "--mcp-self" => return Launch::McpSelf,
             "--mcp-desktop" => return Launch::McpDesktop,
             "--mcp-cua" => return Launch::McpCua,
-            "--doctor" => return Launch::Doctor,
+            "--mcp-bridge" => return Launch::McpBridge,
+            "--doctor" => {
+                let fix = args.iter().skip(1).any(|a| a == "--fix");
+                return Launch::Doctor { fix };
+            }
             "--update" => return Launch::Update,
             "--oauth" => return Launch::OAuth,
             _ => {}
@@ -228,6 +252,26 @@ mod tests {
         );
         assert_eq!(parse_args(&args(&["grokhub-hub", "bench"])), Launch::Serve);
         assert_eq!(
+            parse_args(&args(&["grokhub-hub", "routine", "run", "x", "--help"])),
+            Launch::RoutineRun
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "routine", "allow", "x"])),
+            Launch::RoutineManage
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "routine", "revoke", "x"])),
+            Launch::RoutineManage
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "routine", "undo", "x"])),
+            Launch::RoutineManage
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "routine"])),
+            Launch::Serve
+        );
+        assert_eq!(
             parse_args(&args(&["grokhub-hub", "--version", "--mcp-self"])),
             Launch::Version
         );
@@ -254,8 +298,16 @@ mod tests {
             Launch::McpCua
         );
         assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--mcp-bridge"])),
+            Launch::McpBridge
+        );
+        assert_eq!(
             parse_args(&args(&["grokhub-hub", "--doctor"])),
-            Launch::Doctor
+            Launch::Doctor { fix: false }
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--doctor", "--fix"])),
+            Launch::Doctor { fix: true }
         );
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "--oauth"])),

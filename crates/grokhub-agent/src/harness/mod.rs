@@ -75,6 +75,7 @@ mod ladder;
 mod mindcheck;
 mod park;
 mod path_d;
+pub mod post_turn;
 mod proactive;
 pub mod provenance;
 pub mod replay;
@@ -122,9 +123,9 @@ pub use changes::{
     record_skill_change, restore_change, restore_skill, scope_guard, skill_history_dir,
     skill_ledger_path, snippet_path, take_self_changes, undo_change, undo_change_at,
     undo_skill_change, Change, ChangeKind, ChangeLedger, ChangeOp, ChangeTarget, Reverted,
-    ScopeFinding, SkillTarget, SnippetTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR,
-    CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION,
-    MODEL_LEDGER_FILE, SKILL_LEDGER_FILE, SNIPPET_LEDGER_FILE,
+    RoutineTarget, ScopeFinding, SkillTarget, SnippetTarget, UndoAsk, AUTOMATION_LEDGER_FILE,
+    CHANGES_DIR, CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP,
+    LEDGER_SCOPE_VIOLATION, MODEL_LEDGER_FILE, SKILL_LEDGER_FILE, SNIPPET_LEDGER_FILE,
 };
 pub use consent::{
     consent_path, grant_destination, grant_premium, grant_scope, revoke_grant, scope_excluded,
@@ -132,11 +133,11 @@ pub use consent::{
     SCOPE_KINDS,
 };
 pub use cua::{
-    check_cua_version, cua_as_desk, cua_manifest, cua_manifest_path, cua_socket_path,
-    cua_spawn_args, cua_spawn_env, find_cua_driver, spawn_cua_child, verify_cua_driver, CuaChild,
-    CuaGate, CuaProxy, StdioChild, CUA_DRIVER_LICENSE, CUA_DRIVER_TAG, CUA_DRIVER_VERSION,
-    CUA_ENV_REMOVE, CUA_LINUX_ASSET, CUA_LINUX_ONLY_MSG, CUA_LINUX_SHA256, CUA_MISSING_MSG,
-    CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
+    check_cua_version, cua_as_desk, cua_manifest, cua_manifest_path, cua_platform, cua_socket_path,
+    cua_spawn_args, cua_spawn_env, find_cua_driver, spawn_cua_child, verify_cua_driver, CuaAsset,
+    CuaChild, CuaGate, CuaProxy, StdioChild, CUA_ASSETS, CUA_DRIVER_LICENSE, CUA_DRIVER_TAG,
+    CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE,
+    CUA_TOOLS, CUA_UNSUPPORTED_MSG, CUA_WINDOWS_MSG,
 };
 pub use detect::{
     action_loop, approval_gate_violation, claimed_click_no_change, claims_done, claims_success,

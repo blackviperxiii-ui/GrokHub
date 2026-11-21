@@ -41,6 +41,186 @@ fn settings_default_on_and_the_file_can_widen_or_turn_it_off() {
 }
 
 #[test]
+fn the_container_backend_is_opt_in_and_names_its_image() {
+    let default = Settings::default();
+    assert!(!default.container);
+    assert_eq!(default.image, "docker.io/library/debian:stable-slim");
+    let s = parse_file(
+        "backend = \"container\"\nimage = \"docker.io/library/rust:1-slim\"\n",
+        None,
+    );
+    assert!(s.container);
+    assert_eq!(s.image, "docker.io/library/rust:1-slim");
+    assert!(!parse_file("backend = \"host\"", None).container);
+    // A value that would read as a flag to the runtime is refused.
+    assert_eq!(
+        parse_file("image = \"--privileged\"", None).image,
+        "docker.io/library/debian:stable-slim"
+    );
+}
+
+/// A container plan counts as enforced and leaves the client unconfined, so
+/// the runtime can write its own state; the host fields stay for the PTC
+/// harness.
+#[test]
+fn a_container_plan_is_enforced_and_skips_host_confinement() {
+    let plan = Plan {
+        writable: vec![PathBuf::from("/home/user/my-app")],
+        proxy: None,
+        isolation: None,
+        container: Some(container::Container {
+            runtime: container::Runtime {
+                kind: container::Kind::Podman,
+                program: PathBuf::from("/usr/bin/podman"),
+            },
+            image: container::DEFAULT_IMAGE.into(),
+            mounts: vec![PathBuf::from("/home/user/my-app")],
+            egress: None,
+        }),
+    };
+    assert!(plan.enforced());
+    let mut cmd = std::process::Command::new("true");
+    apply(&mut cmd, &plan).unwrap();
+    assert_eq!(cmd.get_envs().count(), 0, "no proxy variables or tokens");
+    assert_eq!(
+        network_note(Some(&plan), true, "curl: (6) Could not resolve host: example.com"),
+        Some("[sandbox] This command ran in a container with no network, so nothing it starts can reach a host. If it needs the network, rerun with outside_sandbox (asks the user).")
+    );
+    // With the relay, a refused host names the proxy's list, and a lookup
+    // that fails names what the relay doesn't carry.
+    let mut relayed = plan.clone();
+    relayed.container.as_mut().unwrap().egress = Some(container::Egress {
+        socket: PathBuf::from("/tmp/egress-7-0/s"),
+        port: 4000,
+        env: Vec::new(),
+        files: Vec::new(),
+    });
+    assert!(relayed.enforced());
+    assert_eq!(
+        network_note(Some(&relayed), true, "curl: (56) CONNECT tunnel failed, response 403"),
+        Some("[sandbox] The proxy only lets sandboxed commands reach package registries, code hosts, model hosts and hosts your WebFetch allow rules name. For another host, rerun with outside_sandbox (asks the user).")
+    );
+    assert_eq!(
+        network_note(Some(&relayed), true, "ssh: Could not resolve hostname github.com"),
+        Some("[sandbox] This command ran in a container whose only way out is HTTP(S) through the proxy, so SSH, DNS lookups, raw sockets and services on this computer don't reach. If it needs them, rerun with outside_sandbox (asks the user).")
+    );
+}
+
+/// Live: with `backend = "container"` and a rootless runtime (or the app
+/// running as root) that already has the default image, a command writes
+/// the workspace, can't write the image or see the config folder, reaches
+/// out only through the egress proxy, and runs as the user's own uid.
+#[cfg(unix)]
+#[test]
+fn a_command_in_a_container_sees_only_the_workspace_and_reaches_out_only_through_the_proxy() {
+    let Some(runtime) = container::detect() else {
+        eprintln!("skipped: no rootless Podman or Docker here");
+        return;
+    };
+    let has_image = std::process::Command::new(&runtime.program)
+        .args(["image", "inspect", container::DEFAULT_IMAGE])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !has_image {
+        eprintln!("skipped: {} is not pulled", container::DEFAULT_IMAGE);
+        return;
+    }
+    let config = scratch("ctr-cfg");
+    let _pin = crate::perm::ConfigGuard::set(&config);
+    std::fs::write(config.join(CONFIG_NAME), "backend = \"container\"\n").unwrap();
+    std::fs::write(config.join("secret.txt"), "hunter2").unwrap();
+    let ws = scratch("ctr-ws").canonicalize().unwrap();
+    let run_with = |args: serde_json::Value| crate::tools::shell::run(&ws, &args, &|| false);
+    let run = |command: String| run_with(json!({ "command": command }));
+
+    let out = run("echo made > out.txt && id -u && pwd".into());
+    // SAFETY: getuid can't fail.
+    let uid = unsafe { libc::getuid() };
+    assert_eq!(
+        out.text.trim(),
+        format!("exit 0\n{uid}\n{}", ws.display()),
+        "{}",
+        out.text
+    );
+    assert_eq!(
+        std::fs::read_to_string(ws.join("out.txt")).unwrap(),
+        "made\n"
+    );
+
+    let out = run(format!(
+        "test -e {} && echo seen || echo hidden; touch /usr/x 2>/dev/null && echo wrote || echo read-only",
+        config.join("secret.txt").display()
+    ));
+    assert_eq!(out.text.trim(), "exit 0\nhidden\nread-only", "{}", out.text);
+
+    let out = run("(exec 3<>/dev/tcp/1.1.1.1/80) 2>/dev/null && echo out || echo blocked".into());
+    assert_eq!(out.text.trim(), "exit 0\nblocked", "{}", out.text);
+
+    // The egress proxy still carries it, through the relay inside (a
+    // CONNECT on the port the variables name, as an HTTP client would), to
+    // a host-side server a rule names; that server isn't reachable directly.
+    std::fs::write(
+        config.join("permission-rules.json"),
+        r#"{"allow":["WebFetch(domain:127.0.0.1)"]}"#,
+    )
+    .unwrap();
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = server.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut conn in server.incoming().flatten() {
+            let _ = std::io::Write::write_all(&mut conn, b"pong\n");
+        }
+    });
+    let out = run(format!(
+        "(exec 3<>/dev/tcp/127.0.0.1/{port}) 2>/dev/null && echo direct || echo blocked; \
+         p=${{HTTPS_PROXY##*:}}; exec 3<>/dev/tcp/127.0.0.1/$p && \
+         printf 'CONNECT 127.0.0.1:{port} HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\n\\r\\n' >&3 && \
+         timeout 5 head -c 200 <&3"
+    ));
+    assert!(out.text.contains("blocked"), "{}", out.text);
+    assert!(!out.text.contains("direct"), "{}", out.text);
+    assert!(out.text.contains(" 200 "), "{}", out.text);
+    assert!(out.text.contains("pong"), "{}", out.text);
+
+    // A timeout kills the runtime's client; the watchdog then ends the
+    // container, so none is left running. The config pin is per thread, so
+    // the command runs here and a helper thread watches.
+    let program = runtime.program.clone();
+    let running = move || {
+        let out = std::process::Command::new(&program)
+            .args([
+                "ps",
+                "--quiet",
+                "--filter",
+                &format!("label={}", container::LABEL),
+            ])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().count()
+    };
+    let watch = {
+        let running = running.clone();
+        std::thread::spawn(move || {
+            (0..40).any(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                running() == 1
+            })
+        })
+    };
+    let out = run_with(json!({ "command": "sleep 60", "timeout": 4000 }));
+    assert!(out.text.contains("timed out"), "{}", out.text);
+    assert!(
+        watch.join().unwrap(),
+        "the slow command's container never showed up"
+    );
+    let gone = (0..50).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        running() == 0
+    });
+    assert!(gone, "a container outlived its command");
+}
+
+#[test]
 fn only_a_plan_that_holds_writes_and_the_network_counts_as_enforced() {
     let held = |net_confined| Plan {
         writable: vec![PathBuf::from("/work")],
@@ -50,6 +230,7 @@ fn only_a_plan_that_holds_writes_and_the_network_counts_as_enforced() {
             bridge: None,
             net_confined,
         }),
+        container: None,
     };
     assert!(!held(false).enforced(), "the network isn't fenced in");
     let bare = Plan {
@@ -586,6 +767,7 @@ fn a_failed_connection_in_its_own_network_gets_a_note_and_nothing_else_does() {
             bridge: Some((PathBuf::from("/tmp/s"), 1)),
             net_confined: true,
         }),
+        container: None,
     };
     let ssh = "ssh: connect to host github.com port 22: Network is unreachable";
     assert!(network_note(Some(&isolated), true, ssh).is_some());

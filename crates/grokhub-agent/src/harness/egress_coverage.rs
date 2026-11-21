@@ -57,6 +57,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-agent/src/ws_mode.rs", 1, "WsPool::turn's socket (WebSocket mode): only XaiClient::over_socket calls it, after guard_egress (chat, personal) for the same endpoint; api.x.ai, or a loopback ws URL in tests"),
     ("grokhub-agent/src/mcp/http.rs", 1, "connect / ping: guard_quiet (no user data); call: guard_or_park"),
     ("grokhub-agent/src/route/providers.rs", 1, "ProviderSource::fetch / call_model: guard_provider / provider_or_park (your grant, else a hard send card)"),
+    ("grokhub-agent/src/route/local.rs", 1, "probe_ollama_num_ctx: guard_quiet (a model name, no user data) before each /api/tags and /api/show read; loopback unless OLLAMA_HOST names another host"),
     ("grokhub-agent/src/route/local_http.rs", 2, "HttpLocalRuntime: loopback-only chat/completions and the /props window lookup; no egress line (on-device)"),
     ("grokhub-agent/src/route/local_sidecar.rs", 1, "Sidecar health_ok: loopback /health with bearer token; no egress line"),
     ("grokhub-agent/src/route/local_effort.rs", 1, "fetch_thinking: loopback-only /props with bearer token; no egress line"),
@@ -77,6 +78,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-hub/src/doctor.rs", 1, "hub_health: guard_quiet (loopback) before its /v1/health read on 127.0.0.1"),
     ("grokhub-agent/src/mods_net.rs", 1, "ModsNet::once (both shells): guard_quiet (chat when a search carries text) to the mod source's own hosts, redirects checked by hand, public IPs only"),
     ("grokhub-agent/src/xai_keychain.rs", 1, "Sign in with Grok get_json / post_form (desktop app and grokhub-hub --oauth): guard_quiet (codes and tokens only) before every call; the test override is loopback only"),
+    ("grokhub-agent/src/channels_net.rs", 3, "messaging channels: TelegramLink's agent (guard_quiet before every getUpdates / getMe, no user data, and sendMessage: no data for the pairing text, chat for an answer; the guard target leaves the token out), DiscordLink's REST agent (guard_quiet before each message send, same classes) and its Gateway socket (guard_quiet before each connect, no user data; only Discord's own hosts are dialed again)"),
     ("grokhub-agent/src/vstack_sync.rs", 1, "runtime upstream vstack skills sync: offline::refuse + github host allowlist + guard_quiet (no user data) on every hop"),
 ];
 

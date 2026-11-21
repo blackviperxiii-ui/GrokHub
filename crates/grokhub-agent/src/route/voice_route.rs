@@ -1,5 +1,6 @@
-//! Shared voice routing (`Auto` / `Local only` / `Pinned`) for speech-to-text,
-//! reply model, and voice/TTS.
+//! Shared voice routing (`Auto` / `Local only`) for speech-to-text, reply
+//! model, and voice/TTS. There is no per-stage pin: Auto picks each source,
+//! and a file saved with the old `pinned` mode reads as Auto.
 //!
 //! xAI (`grok-voice-3.0`) is one option alongside on-device engines
 //! (`sherpa-onnx` Parakeet/Kokoro, `whisper`, `llama-server`) and added reply
@@ -30,7 +31,6 @@ pub enum VoiceRouteMode {
     #[default]
     Auto,
     LocalOnly,
-    Pinned,
 }
 
 /// Source choice for speech-to-text or text-to-speech.
@@ -41,22 +41,11 @@ pub enum SpeechSource {
     GrokVoice3,
 }
 
-/// Stage-level source pins used when [`VoiceRouteMode::Pinned`] is active.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct VoicePin {
-    pub stt: Option<SpeechSource>,
-    /// Reply source id: `"local"`, `"xai"`, a configured provider id, or `None` for Auto.
-    pub reply: Option<String>,
-    pub tts: Option<SpeechSource>,
-}
-
 /// Persisted voice routing preference in `{config}/voice-route.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct VoiceRouteConfig {
     pub mode: VoiceRouteMode,
-    pub pinned: VoicePin,
 }
 
 /// Reply-model routing constraint injected into [`super::RouteInput`] while
@@ -64,7 +53,6 @@ pub struct VoiceRouteConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplyPref {
     LocalOnly,
-    Provider(String),
 }
 
 /// Speech stage identifier for cooldown tracking and user-facing blocker copy.
@@ -129,6 +117,26 @@ static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static STT_XAI_COOLDOWN_UNTIL: AtomicU64 = AtomicU64::new(0);
 static TTS_XAI_COOLDOWN_UNTIL: AtomicU64 = AtomicU64::new(0);
 
+thread_local! {
+    static TEST_SESSION_ACTIVE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// RAII guard pinning [`session_active`] on the current thread so parallel
+/// unit tests never race the process-wide voice session flag.
+pub struct SessionActiveGuard(Option<bool>);
+
+impl SessionActiveGuard {
+    pub fn set(active: bool) -> Self {
+        Self(TEST_SESSION_ACTIVE.with(|c| c.replace(Some(active))))
+    }
+}
+
+impl Drop for SessionActiveGuard {
+    fn drop(&mut self) {
+        TEST_SESSION_ACTIVE.with(|c| c.set(self.0));
+    }
+}
+
 /// Marks whether an open-mic voice session is active in this process so
 /// reply routing applies [`VoiceRouteConfig`] only during voice conversations.
 pub fn set_session_active(active: bool) {
@@ -136,7 +144,28 @@ pub fn set_session_active(active: bool) {
 }
 
 pub fn session_active() -> bool {
+    if let Some(active) = TEST_SESSION_ACTIVE.with(std::cell::Cell::get) {
+        return active;
+    }
     SESSION_ACTIVE.load(Ordering::SeqCst)
+}
+
+pub const VOICE_SPEED_REASON: &str = "live voice turn";
+
+/// True when an active voice session is running in `Auto` mode, so the
+/// router automatically favors low-latency reply routes (`goal:speed` and
+/// live waiting fast-variant eligibility) without any UI picker.
+pub fn auto_fast_turn(dir: &Path) -> bool {
+    session_active() && read(dir).mode == VoiceRouteMode::Auto
+}
+
+/// Default speed goal injected on user-facing voice turns in `Auto` mode
+/// when no explicit session/pinned goal overrides it.
+pub fn voice_turn_goal(dir: &Path) -> Option<super::goal::RouteGoal> {
+    auto_fast_turn(dir).then(|| super::goal::RouteGoal {
+        goal: super::goal::Goal::Speed,
+        reason: VOICE_SPEED_REASON.to_string(),
+    })
 }
 
 fn cooldown_cell(kind: StageKind) -> &'static AtomicU64 {
@@ -164,22 +193,6 @@ pub fn xai_in_cooldown(kind: StageKind, now_ms: u64) -> bool {
     until > 0 && now_ms < until
 }
 
-fn normalize_reply_pin(raw: Option<&str>) -> Option<String> {
-    let trimmed = raw?.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
-        return None;
-    }
-    if trimmed.eq_ignore_ascii_case("grok_voice_3") || trimmed.eq_ignore_ascii_case("grok") {
-        return Some(super::PROVIDER_XAI.to_string());
-    }
-    Some(trimmed.to_ascii_lowercase())
-}
-
-fn clean(mut cfg: VoiceRouteConfig) -> VoiceRouteConfig {
-    cfg.pinned.reply = normalize_reply_pin(cfg.pinned.reply.as_deref());
-    cfg
-}
-
 fn parse_lenient(bytes: &[u8]) -> Result<VoiceRouteConfig, String> {
     let v: Value = serde_json::from_slice(bytes)
         .map_err(|e| format!("Couldn't read {FILE}, so it was left as it is: {e}"))?;
@@ -187,23 +200,7 @@ fn parse_lenient(bytes: &[u8]) -> Result<VoiceRouteConfig, String> {
         .get("mode")
         .and_then(|m| serde_json::from_value::<VoiceRouteMode>(m.clone()).ok())
         .unwrap_or_default();
-    let pin_val = v.get("pinned");
-    let stt = pin_val
-        .and_then(|p| p.get("stt"))
-        .and_then(|s| serde_json::from_value::<Option<SpeechSource>>(s.clone()).ok())
-        .flatten();
-    let tts = pin_val
-        .and_then(|p| p.get("tts"))
-        .and_then(|s| serde_json::from_value::<Option<SpeechSource>>(s.clone()).ok())
-        .flatten();
-    let reply = pin_val
-        .and_then(|p| p.get("reply"))
-        .and_then(Value::as_str)
-        .and_then(|s| normalize_reply_pin(Some(s)));
-    Ok(VoiceRouteConfig {
-        mode,
-        pinned: VoicePin { stt, reply, tts },
-    })
+    Ok(VoiceRouteConfig { mode })
 }
 
 fn load(dir: &Path) -> Result<VoiceRouteConfig, String> {
@@ -222,7 +219,7 @@ pub fn read(dir: &Path) -> VoiceRouteConfig {
 /// Saves `cfg` atomically to `{config}/voice-route.json`.
 pub fn write(dir: &Path, cfg: VoiceRouteConfig) -> Result<VoiceRouteConfig, String> {
     let _held = LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let cleaned = clean(cfg);
+    let cleaned = cfg;
     // Preserve unreadable custom fields by validating readability first, or
     // allow overwriting once valid JSON.
     let _ = load(dir)?;
@@ -240,11 +237,6 @@ pub fn reply_pref_for(cfg: &VoiceRouteConfig) -> Option<ReplyPref> {
     match cfg.mode {
         VoiceRouteMode::Auto => None,
         VoiceRouteMode::LocalOnly => Some(ReplyPref::LocalOnly),
-        VoiceRouteMode::Pinned => match normalize_reply_pin(cfg.pinned.reply.as_deref()) {
-            Some(p) if p == super::local::PROVIDER_LOCAL => Some(ReplyPref::LocalOnly),
-            Some(p) => Some(ReplyPref::Provider(p)),
-            None => None,
-        },
     }
 }
 
@@ -301,27 +293,6 @@ fn neither_available_blocker(kind: StageKind, env: &VoiceEnv) -> String {
     local_offline_blocker(kind, env)
 }
 
-fn pinned_xai_auth_blocker(kind: StageKind) -> String {
-    format!(
-        "{} is pinned to Grok Voice 3. Sign in with Grok or add an xAI API key in Settings → Account, or switch Voice routing to Auto.",
-        stage_noun(kind)
-    )
-}
-
-fn pinned_xai_offline_blocker(kind: StageKind, offline_only: bool) -> String {
-    if offline_only {
-        format!(
-            "{} is pinned to Grok Voice 3, while Offline only is on. Switch Voice routing to Auto or Local only, or turn off Offline only.",
-            stage_noun(kind)
-        )
-    } else {
-        format!(
-            "{} is pinned to Grok Voice 3, and you're offline. Switch Voice routing to Auto or Local only to use on-device speech.",
-            stage_noun(kind)
-        )
-    }
-}
-
 fn must_stay_blocker(kind: StageKind) -> String {
     format!(
         "{} in this 18+ chat stay on this computer, and the {} isn't downloaded. Install it in Settings → Local AI.",
@@ -337,8 +308,8 @@ fn must_stay_off_blocker(kind: StageKind) -> String {
     )
 }
 
-/// An 18+ chat's voice stays on this computer, whatever the routing says
-/// (a Grok Voice 3 pin included): the on-device engine, its download, or a
+/// An 18+ chat's voice stays on this computer, whatever the routing says:
+/// the on-device engine, its download, or a
 /// blocker naming the real reason.
 fn must_stay_plan(kind: StageKind, env: &VoiceEnv, offline: bool) -> StagePlan {
     if env.local_enabled && env.local_ready {
@@ -354,20 +325,9 @@ fn must_stay_plan(kind: StageKind, env: &VoiceEnv, offline: bool) -> StagePlan {
     }
 }
 
-fn pinned_of(cfg: &VoiceRouteConfig, kind: StageKind) -> Option<SpeechSource> {
-    match kind {
-        StageKind::Stt => cfg.pinned.stt,
-        StageKind::Tts => cfg.pinned.tts,
-    }
-}
-
-fn pinned_to_xai(cfg: &VoiceRouteConfig, kind: StageKind) -> bool {
-    cfg.mode == VoiceRouteMode::Pinned && pinned_of(cfg, kind) == Some(SpeechSource::GrokVoice3)
-}
-
 /// Whether the on-device engine for `kind` should download now: the plan
 /// waits on it, or xAI stands in for a chat that runs here only until it is
-/// downloaded (not when routing is pinned to Grok Voice 3).
+/// downloaded.
 pub fn wants_download(cfg: &VoiceRouteConfig, kind: StageKind, env: &VoiceEnv) -> bool {
     let offline = env.offline_only || env.net.prefer_local();
     matches!(plan_stage(cfg, kind, env), StagePlan::DownloadLocal)
@@ -377,7 +337,6 @@ pub fn wants_download(cfg: &VoiceRouteConfig, kind: StageKind, env: &VoiceEnv) -
             && env.local_enabled
             && env.local_ai_capable
             && !env.local_ready
-            && !pinned_to_xai(cfg, kind)
             && cfg.mode != VoiceRouteMode::LocalOnly)
 }
 
@@ -386,10 +345,9 @@ pub fn plan_stage(cfg: &VoiceRouteConfig, kind: StageKind, env: &VoiceEnv) -> St
     if env.loopback_override {
         return StagePlan::Try(vec![SpeechSource::GrokVoice3]);
     }
-    let pinned = pinned_of(cfg, kind);
     let offline = env.offline_only || env.net.prefer_local();
-    match (cfg.mode, pinned) {
-        (VoiceRouteMode::LocalOnly, _) | (VoiceRouteMode::Pinned, Some(SpeechSource::Local)) => {
+    match cfg.mode {
+        VoiceRouteMode::LocalOnly => {
             if env.local_ready {
                 StagePlan::Try(vec![SpeechSource::Local])
             } else if !offline && env.local_ai_capable {
@@ -398,18 +356,7 @@ pub fn plan_stage(cfg: &VoiceRouteConfig, kind: StageKind, env: &VoiceEnv) -> St
                 StagePlan::Blocked(local_offline_blocker(kind, env))
             }
         }
-        (VoiceRouteMode::Pinned, Some(SpeechSource::GrokVoice3)) => {
-            if env.chat_must_stay {
-                must_stay_plan(kind, env, offline)
-            } else if !env.has_xai_auth {
-                StagePlan::Blocked(pinned_xai_auth_blocker(kind))
-            } else if offline {
-                StagePlan::Blocked(pinned_xai_offline_blocker(kind, env.offline_only))
-            } else {
-                StagePlan::Try(vec![SpeechSource::GrokVoice3])
-            }
-        }
-        _ => {
+        VoiceRouteMode::Auto => {
             let online_usable = !offline && env.has_xai_auth && !env.xai_recently_failed;
             let local_usable = env.local_enabled && env.local_ready;
             if offline {
@@ -472,17 +419,12 @@ pub fn stage_line(
     };
     match used {
         SpeechSource::Local => {
-            let pinned = pinned_of(cfg, kind);
             let why = if env.offline_only {
                 "Offline only is on"
             } else if env.net.prefer_local() {
                 "you're offline"
             } else if cfg.mode == VoiceRouteMode::LocalOnly {
                 "voice routing is Local only"
-            } else if cfg.mode == VoiceRouteMode::Pinned && pinned == Some(SpeechSource::Local) {
-                "voice routing is pinned to this computer"
-            } else if env.chat_must_stay && pinned_to_xai(cfg, kind) {
-                "this 18+ chat stays on this computer, over the Grok Voice 3 pin"
             } else if env.chat_must_stay {
                 "this 18+ chat stays on this computer"
             } else if env.chat_here {
@@ -503,9 +445,7 @@ pub fn stage_line(
             model_noun(kind)
         )),
         SpeechSource::GrokVoice3 if env.chat_here => {
-            let but = if pinned_to_xai(cfg, kind) {
-                "voice routing is pinned to Grok Voice 3".to_string()
-            } else if !env.local_enabled {
+            let but = if !env.local_enabled {
                 "Local AI is off".to_string()
             } else if !env.local_ready {
                 format!("the {} isn't downloaded", model_noun(kind))
@@ -615,10 +555,9 @@ mod tests {
     }
 
     #[test]
-    fn local_only_and_pinned_modes_enforce_selected_sources() {
+    fn local_only_keeps_every_stage_on_this_computer() {
         let local_only = VoiceRouteConfig {
             mode: VoiceRouteMode::LocalOnly,
-            pinned: VoicePin::default(),
         };
         let mut e = env();
         e.has_xai_auth = true;
@@ -628,56 +567,36 @@ mod tests {
             StagePlan::Try(vec![SpeechSource::Local])
         );
         assert_eq!(reply_pref_for(&local_only), Some(ReplyPref::LocalOnly));
-
-        let pinned = VoiceRouteConfig {
-            mode: VoiceRouteMode::Pinned,
-            pinned: VoicePin {
-                stt: Some(SpeechSource::Local),
-                reply: Some("openrouter".into()),
-                tts: Some(SpeechSource::GrokVoice3),
-            },
-        };
         assert_eq!(
-            plan_stage(&pinned, StageKind::Stt, &e),
+            plan_stage(&local_only, StageKind::Tts, &e),
             StagePlan::Try(vec![SpeechSource::Local])
         );
-        assert_eq!(
-            plan_stage(&pinned, StageKind::Tts, &e),
-            StagePlan::Try(vec![SpeechSource::GrokVoice3])
-        );
-        assert_eq!(
-            reply_pref_for(&pinned),
-            Some(ReplyPref::Provider("openrouter".into()))
-        );
+        assert_eq!(reply_pref_for(&VoiceRouteConfig::default()), None);
     }
 
     #[test]
-    fn config_round_trips_and_leniently_ignores_unknown_values() {
+    fn config_round_trips_and_an_old_pinned_file_reads_as_auto() {
         let dir = std::env::temp_dir().join(format!("grokhub-voice-route-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(read(&dir), VoiceRouteConfig::default());
         let saved = VoiceRouteConfig {
-            mode: VoiceRouteMode::Pinned,
-            pinned: VoicePin {
-                stt: Some(SpeechSource::Local),
-                reply: Some("Grok_Voice_3".into()),
-                tts: Some(SpeechSource::GrokVoice3),
-            },
+            mode: VoiceRouteMode::LocalOnly,
         };
-        let written = write(&dir, saved).expect("write");
-        assert_eq!(written.pinned.reply.as_deref(), Some("xai"));
-        assert_eq!(read(&dir), written);
+        let written = write(&dir, saved.clone()).expect("write");
+        assert_eq!(written, saved);
+        assert_eq!(read(&dir), saved);
+        assert_eq!(
+            std::fs::read_to_string(dir.join(FILE)).unwrap(),
+            "{\n  \"mode\": \"local_only\"\n}"
+        );
 
-        std::fs::write(
-            dir.join(FILE),
-            r#"{"mode":"future_mode","pinned":{"stt":"future","reply":"anthropic","tts":"local"}}"#,
-        )
-        .unwrap();
-        let lenient = read(&dir);
-        assert_eq!(lenient.mode, VoiceRouteMode::Auto);
-        assert_eq!(lenient.pinned.stt, None);
-        assert_eq!(lenient.pinned.reply.as_deref(), Some("anthropic"));
-        assert_eq!(lenient.pinned.tts, Some(SpeechSource::Local));
+        for old in [
+            r#"{"mode":"pinned","pinned":{"stt":"local","reply":"openrouter","tts":"grok_voice_3"}}"#,
+            r#"{"mode":"future_mode"}"#,
+        ] {
+            std::fs::write(dir.join(FILE), old).unwrap();
+            assert_eq!(read(&dir).mode, VoiceRouteMode::Auto, "{old}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -739,15 +658,6 @@ mod tests {
             plan_stage(&VoiceRouteConfig::default(), StageKind::Tts, &e),
             blocked
         );
-        let pinned = VoiceRouteConfig {
-            mode: VoiceRouteMode::Pinned,
-            pinned: VoicePin {
-                stt: None,
-                reply: None,
-                tts: Some(SpeechSource::GrokVoice3),
-            },
-        };
-        assert_eq!(plan_stage(&pinned, StageKind::Tts, &e), blocked);
         // With the voice downloaded it speaks here.
         e.local_ready = true;
         assert_eq!(
@@ -821,48 +731,35 @@ mod tests {
         );
     }
 
-    fn pinned_tts_xai() -> VoiceRouteConfig {
-        VoiceRouteConfig {
-            mode: VoiceRouteMode::Pinned,
-            pinned: VoicePin {
-                stt: None,
-                reply: None,
-                tts: Some(SpeechSource::GrokVoice3),
-            },
-        }
-    }
-
     #[test]
-    fn an_18_plus_chat_speaks_here_over_a_grok_voice_3_pin_and_says_so() {
-        let pinned = pinned_tts_xai();
+    fn an_18_plus_chat_speaks_here_and_says_so() {
+        let cfg = VoiceRouteConfig::default();
         let mut e = env();
         e.chat_must_stay = true;
         e.has_xai_auth = true;
         e.local_ready = true;
         assert_eq!(
-            plan_stage(&pinned, StageKind::Tts, &e),
+            plan_stage(&cfg, StageKind::Tts, &e),
             StagePlan::Try(vec![SpeechSource::Local])
         );
         assert_eq!(
-            stage_line(StageKind::Tts, &pinned, &e, SpeechSource::Local, false, "Kokoro text to speech")
+            stage_line(StageKind::Tts, &cfg, &e, SpeechSource::Local, false, "Kokoro text to speech")
                 .as_deref(),
-            Some("Spoken on this computer with Kokoro text to speech: this 18+ chat stays on this computer, over the Grok Voice 3 pin.")
+            Some("Spoken on this computer with Kokoro text to speech: this 18+ chat stays on this computer.")
         );
-        // Downloaded but Local AI off: the blocker says that, in both modes.
+        // Downloaded but Local AI off: the blocker says that.
         e.local_enabled = false;
-        let off = StagePlan::Blocked(
-            "Spoken replies in this 18+ chat stay on this computer, and Local AI is off. Turn it on in Settings → Local AI.".into(),
-        );
-        assert_eq!(plan_stage(&pinned, StageKind::Tts, &e), off);
         assert_eq!(
-            plan_stage(&VoiceRouteConfig::default(), StageKind::Tts, &e),
-            off
+            plan_stage(&cfg, StageKind::Tts, &e),
+            StagePlan::Blocked(
+                "Spoken replies in this 18+ chat stay on this computer, and Local AI is off. Turn it on in Settings → Local AI.".into(),
+            )
         );
-        // Not downloaded yet, under the pin: it downloads, never xAI.
+        // Not downloaded yet: it downloads, never xAI.
         e.local_enabled = true;
         e.local_ready = false;
         assert_eq!(
-            plan_stage(&pinned, StageKind::Tts, &e),
+            plan_stage(&cfg, StageKind::Tts, &e),
             StagePlan::DownloadLocal
         );
     }
@@ -877,9 +774,9 @@ mod tests {
             stage_line(StageKind::Tts, cfg, e, SpeechSource::GrokVoice3, false, "")
         };
         assert_eq!(
-            line(&pinned_tts_xai(), &e).as_deref(),
+            line(&VoiceRouteConfig::default(), &e).as_deref(),
             Some(
-                "Spoken by xAI: this chat runs here, but voice routing is pinned to Grok Voice 3."
+                "Spoken by xAI: this chat runs here, but the on-device voice (Kokoro) isn't ready."
             )
         );
         e.local_enabled = false;
@@ -918,8 +815,7 @@ mod tests {
         );
         assert!(wants_download(&cfg, StageKind::Tts, &e));
         assert!(wants_download(&cfg, StageKind::Stt, &e));
-        // Pinned to Grok Voice 3, ready, or a cloud chat: nothing to fetch.
-        assert!(!wants_download(&pinned_tts_xai(), StageKind::Tts, &e));
+        // Ready, or a cloud chat: nothing to fetch.
         let mut cloud = e;
         cloud.chat_here = false;
         assert!(!wants_download(&cfg, StageKind::Tts, &cloud));
@@ -929,5 +825,40 @@ mod tests {
         let mut none = env();
         none.has_xai_auth = false;
         assert!(wants_download(&cfg, StageKind::Stt, &none));
+    }
+
+    #[test]
+    fn auto_voice_session_injects_speed_goal_and_local_only_does_not() {
+        let dir = std::env::temp_dir().join(format!(
+            "gh-voice-fast-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        {
+            let _off = SessionActiveGuard::set(false);
+            assert!(!auto_fast_turn(&dir));
+            assert_eq!(voice_turn_goal(&dir), None);
+        }
+        {
+            let _on = SessionActiveGuard::set(true);
+            assert!(auto_fast_turn(&dir));
+            let goal = voice_turn_goal(&dir).expect("speed goal in auto voice session");
+            assert_eq!(goal.goal, super::super::goal::Goal::Speed);
+            assert_eq!(goal.reason, VOICE_SPEED_REASON);
+
+            write(
+                &dir,
+                VoiceRouteConfig {
+                    mode: VoiceRouteMode::LocalOnly,
+                },
+            )
+            .unwrap();
+            assert!(!auto_fast_turn(&dir));
+            assert_eq!(voice_turn_goal(&dir), None);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

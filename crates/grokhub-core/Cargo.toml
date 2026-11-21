@@ -37,6 +37,8 @@ ureq = { workspace = true }
 # The HTTP facade parses each URL as ureq 2 did (WHATWG) before handing it on,
 # so the host it dials is the host the egress checks read.
 url = "2"
+# Routine `expect` steps: the same regex build as grokhub-agent.
+regex = { version = "1.13", default-features = false, features = ["std", "perf", "unicode"] }
 
 # User-only DACL for hub-state.json (pair tokens) — matches secrets.json on Windows.
 [target.'cfg(windows)'.dependencies]

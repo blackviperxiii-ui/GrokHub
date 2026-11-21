@@ -5,6 +5,8 @@ pub mod batch;
 pub mod brain;
 mod builtin_skills;
 pub mod cache_watch;
+pub mod channels_net;
+pub mod check_decide;
 mod checkpoint;
 pub mod claude_plan;
 mod client;
@@ -58,6 +60,13 @@ pub mod research;
 mod retry;
 pub mod review;
 pub mod route;
+pub mod routine_consent;
+pub mod routine_draft;
+pub mod routine_fix;
+pub mod routine_log;
+pub mod routine_run;
+pub mod routine_triggers;
+pub mod routine_wake;
 mod run;
 pub mod sandbox;
 mod scan;
@@ -105,9 +114,10 @@ pub use eval::live::{
 pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
 pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{
-    load_tasks, parse_args, reject_live, render_markdown, render_report, run_suite,
-    run_technique_matrix, ItemResult, Opts, Recommendation, Technique, TechniqueArm,
-    TechniqueMatrixReport, SUITE_ITEMS,
+    live_budget_ticks, load_tasks, parse_args, reject_live, render_markdown, render_report,
+    render_report_with, run_live_suite, run_live_suite_with, run_suite, run_technique_matrix,
+    ItemResult, LiveSpend, LiveSuite, Opts, Recommendation, Technique, TechniqueArm,
+    TechniqueMatrixReport, LIVE_BUDGET_CAP_CENTS, SUITE_ITEMS,
 };
 pub use events::{Engine, EngineParts, EpisodeSeed, NativeEngine, StampHalt};
 pub use file_checkpoint::{
@@ -180,8 +190,8 @@ pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{
     active_always_on, active_builtin_bodies, builtin_names, builtin_text,
     discover as discover_skills, discover_all as discover_all_skills, invalidate_discover_cache,
-    set_skill_off_in, skill_is_off_in, skill_name_key, skills_off_in, Skill, SkillSource,
-    BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES,
+    set_skill_off_in, skill_is_off_in, skill_name_key, skill_quarantine_in, skills_off_in, Skill,
+    SkillSource, BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES,
 };
 pub use sse::SseParser;
 pub use subagent::{drain_side_events, requeue_side_events, SideEvent};

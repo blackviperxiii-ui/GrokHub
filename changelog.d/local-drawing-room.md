@@ -1,0 +1,2 @@
+- Drawing on device counts the picture model's graphics memory, so a big chat model on the card unloads first instead of the picture failing out of memory, and a too-tight card says how much free graphics memory a picture needs.
+- When a small on-device model answers a picture ask without calling the drawing tool, the app now makes that call from your own words instead of showing the model's claim that it drew.

@@ -165,6 +165,11 @@ impl Mitm {
     }
 
     /// The variables that make a sandboxed command trust this CA.
+    /// The bundle file the variables point at.
+    pub fn bundle(&self) -> &Path {
+        &self.bundle
+    }
+
     pub fn command_env(&self) -> Vec<(&'static str, String)> {
         let path = self.bundle.to_string_lossy().into_owned();
         BUNDLE_VARS.iter().map(|k| (*k, path.clone())).collect()

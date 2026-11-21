@@ -91,6 +91,7 @@ pub const WEB_COMMANDS: &[&str] = &[
     "list_automations",
     "add_automation",
     "list_suggested_automations",
+    "list_automation_blueprints",
     "add_suggested_automation",
     "set_automation_enabled",
     "remove_automation",
@@ -1110,6 +1111,7 @@ mod tests {
             "set_game_companion_ping",
             // Export saves on the computer and Wipe can't be undone: desktop only.
             "export_personal",
+            "export_memory_wiki",
             "wipe_personal",
             "save_settings",
             // The web rail shows the profile; changing it stays on the computer.
@@ -1206,6 +1208,19 @@ mod tests {
             "pick_attachments",
             "get_autostart",
             "set_autostart",
+            "get_bot_desktop",
+            "set_bot_desktop",
+            "bot_desktop_frame",
+            "get_browser_attach",
+            "get_channels",
+            "connect_channel",
+            "disconnect_channel",
+            "approve_channel_code",
+            "unpair_channel_sender",
+            "set_channel_asks",
+            "add_channel_webhook",
+            "remove_channel_webhook",
+            "save_browser_attach",
             "set_summon_hotkey",
             "set_notifications",
             "nyx_tiles",
@@ -1355,7 +1370,7 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-        const REVIEWED: [&str; 99] = [
+        const REVIEWED: [&str; 100] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
@@ -1399,6 +1414,7 @@ mod tests {
             "imagine_cancel",
             "imagine_generate",
             "imagine_image",
+            "list_automation_blueprints",
             "list_automations",
             "list_connectors",
             "list_suggested_automations",

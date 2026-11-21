@@ -31,11 +31,13 @@ const READONLY: &[&str] = &[
     "diagnose",
     "local_ai_status",
     "models_check",
+    "session_search",
     "mods_search",
     "mods_detail",
     "mods_installed",
     // Checks a panel spec for the chat to draw; only on with generative UI.
     "show_panel",
+    "run_tool_script",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
@@ -52,6 +54,10 @@ const CONTROL: &[&str] = &[
     "spawn_subagent",
     "send_subagent_message",
     "merge_subagent_work",
+    // Runs a saved routine; each of its steps meets this gate on its own.
+    "run_routine",
+    // Saves the last turn's steps as a routine; it always asks.
+    "save_routine",
 ];
 const DESKTOP: &[&str] = &[
     "screenshot",
@@ -259,6 +265,11 @@ pub fn is_web_lookup(name: &str) -> bool {
     name == WEB_SEARCH || name == WEB_FETCH
 }
 
+/// The terminal command tool.
+pub fn is_shell(name: &str) -> bool {
+    SHELL.contains(&name)
+}
+
 pub fn is_desktop(name: &str) -> bool {
     DESKTOP.contains(&name)
 }
@@ -437,6 +448,11 @@ pub fn decide_with(
     // Explore is read-only work. It runs in plan mode and while unattended.
     // A general spawn stays on the normal gate, so it is never looser than the parent.
     if crate::subagent::spawn_is_explore(name, arguments) {
+        return Decision::Run;
+    }
+    // A routine's steps each meet this gate inside the run, so starting one
+    // asks nothing. Plan mode still refuses it.
+    if name == crate::tools::run_routine::NAME && !gate.readonly_session {
         return Decision::Run;
     }
     let base = decide(gate, name, latched_always, desk);

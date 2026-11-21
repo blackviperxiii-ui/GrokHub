@@ -148,8 +148,10 @@ struct TaskSlot {
     owner: Option<String>,
     /// A subagent, whose finished result our own code already fenced.
     agent: bool,
-    /// The model a helper ran on; empty for commands and monitors.
+    /// The model a helper was started with; empty for commands and monitors.
     model: String,
+    /// The model, effort and reason the router last sent a helper's step with.
+    route: Mutex<Option<crate::route::live::RouteSeen>>,
     /// A subagent's progress, kept only when it started with the watch on.
     progress: Option<Mutex<Progress>>,
 }
@@ -164,6 +166,13 @@ struct Progress {
 }
 
 impl TaskSlot {
+    fn route(&self) -> Option<crate::route::live::RouteSeen> {
+        self.route
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone()
+    }
+
     fn progress(&self) -> Option<std::sync::MutexGuard<'_, Progress>> {
         self.progress
             .as_ref()
@@ -304,6 +313,10 @@ pub struct TaskProgress {
     pub tokens: u64,
     /// The model this helper ran on; empty when unknown.
     pub model: String,
+    /// The effort its last step was sent with; empty when none or unknown.
+    pub effort: String,
+    /// Why the router sent it there; empty when no step was routed yet.
+    pub why: String,
 }
 
 /// One task's steps and result, read without taking them from the model.
@@ -425,6 +438,7 @@ impl TaskHub {
             owner,
             agent: false,
             model: String::new(),
+            route: Mutex::new(None),
             progress: None,
         });
         self.lock().tasks.insert(id.to_string(), Arc::clone(&slot));
@@ -574,6 +588,7 @@ impl TaskHub {
             owner,
             agent: true,
             model: model.trim().to_string(),
+            route: Mutex::new(None),
             progress: watching().then(|| {
                 Mutex::new(Progress {
                     started_ms: grokhub_core::now_ms(),
@@ -701,6 +716,7 @@ impl TaskHub {
     /// id, and a helper that started while the watch was off.
     pub fn progress(&self, id: &str) -> Option<TaskProgress> {
         let slot = self.lock().tasks.get(id).cloned()?;
+        let route = slot.route();
         let progress = slot.progress()?;
         Some(TaskProgress {
             started_ms: progress.started_ms,
@@ -708,8 +724,32 @@ impl TaskHub {
             steps: progress.steps,
             last_step: progress.last_step.clone(),
             tokens: progress.tokens,
-            model: slot.model.clone(),
+            model: route
+                .as_ref()
+                .map_or_else(|| slot.model.clone(), |r| r.model.clone()),
+            effort: route.as_ref().map(|r| r.effort.clone()).unwrap_or_default(),
+            why: route.map(|r| r.why).unwrap_or_default(),
         })
+    }
+
+    /// What the router last sent helper `id`'s step with: its model, effort
+    /// and why. A command, a monitor or an unknown id is left alone.
+    pub fn note_route(&self, id: &str, seen: &crate::route::live::RouteSeen) {
+        let Some(slot) = self.lock().tasks.get(id).cloned() else {
+            return;
+        };
+        if slot.agent {
+            *slot.route.lock().unwrap_or_else(|err| err.into_inner()) = Some(seen.clone());
+            self.mark();
+        }
+    }
+
+    /// The model, effort and reason helper `id`'s last routed step went out
+    /// with. `None` for a command, a monitor, an unknown id, or a helper with
+    /// no routed step yet.
+    pub fn agent_route(&self, id: &str) -> Option<crate::route::live::RouteSeen> {
+        let slot = self.lock().tasks.get(id).cloned()?;
+        slot.agent.then(|| slot.route()).flatten()
     }
 
     /// The model helper `id` ran on. `None` for a command, a monitor, an
@@ -719,12 +759,10 @@ impl TaskHub {
         if !slot.agent {
             return None;
         }
-        let model = slot.model.trim();
-        if model.is_empty() {
-            None
-        } else {
-            Some(model.to_string())
-        }
+        let model = slot
+            .route()
+            .map_or_else(|| slot.model.trim().to_string(), |r| r.model);
+        (!model.is_empty()).then_some(model)
     }
 
     /// Task `id`'s steps and everything it wrote, for a person to read. The
@@ -1535,6 +1573,37 @@ mod tests {
         assert_eq!(hub.agent_model(&id).as_deref(), Some("grok-4.7"));
         assert_eq!(hub.progress(&id).unwrap().model, "grok-4.7");
         assert_eq!(hub.agent_model("nope"), None);
+    }
+
+    #[test]
+    fn a_routed_step_shows_the_helpers_model_effort_and_why() {
+        let _watch = WatchScope::set(true);
+        let hub = TaskHub::new("route-1");
+        let id = hub
+            .register_agent(None, "refactor", no_kill(), "grok-4.7")
+            .unwrap();
+        assert_eq!(hub.agent_route(&id), None);
+        let sink_hub = Arc::clone(&hub);
+        let sink_id = id.clone();
+        {
+            let _route = crate::route::live::RouteWatch::enter(Box::new(move |seen| {
+                sink_hub.note_route(&sink_id, seen)
+            }));
+            crate::route::live::tell_route(&crate::route::live::RouteSeen {
+                model: "grok-4.3".into(),
+                effort: "high".into(),
+                why: "quality · High: a multi-file change.".into(),
+            });
+        }
+        assert_eq!(hub.agent_model(&id).as_deref(), Some("grok-4.3"));
+        let p = hub.progress(&id).unwrap();
+        assert_eq!(
+            (p.model.as_str(), p.effort.as_str(), p.why.as_str()),
+            ("grok-4.3", "high", "quality · High: a multi-file change.")
+        );
+        // A command row never takes a route.
+        hub.note_route("c9", &crate::route::live::RouteSeen::default());
+        assert_eq!(hub.agent_route("c9"), None);
     }
 
     #[test]

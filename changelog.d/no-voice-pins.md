@@ -1,0 +1,1 @@
+- Settings → Local AI → Voice routing: the Pinned mode and its per-stage dropdowns (speech to text, reply model, voice) are gone. Voice routing is now Auto or Local only, and a saved Pinned setting reads as Auto.

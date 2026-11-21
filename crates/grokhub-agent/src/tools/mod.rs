@@ -16,9 +16,13 @@ pub(crate) mod media;
 mod models_check;
 pub(crate) mod mods;
 pub(crate) mod ports;
+pub(crate) mod ptc;
 mod read_file;
 pub(crate) mod registry;
+pub(crate) mod run_routine;
+pub(crate) mod save_routine;
 mod search_replace;
+mod session_search;
 pub(crate) mod set;
 pub(crate) mod shell;
 mod show_panel;
@@ -242,6 +246,8 @@ pub fn dispatch_for_job(
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),
+        run_routine::NAME => run_routine::run(ctx, &args),
+        save_routine::NAME => save_routine::run(ctx, &args),
         "connection_delete" => connections::delete(&args),
         local_ai::SELFTEST => local_ai::selftest(&args),
         mods::PREPARE => mods::run(name, &args),
@@ -346,6 +352,8 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "diagnose" => crate::repair::tool_run(args),
         local_ai::STATUS => local_ai::status(args),
         models_check::NAME => models_check::run(args),
+        session_search::NAME => session_search::run(ctx.session, args),
+        ptc::NAME => ptc::run(ctx, args),
         mods::SEARCH | mods::DETAIL | mods::INSTALLED => mods::run(name, args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
@@ -457,6 +465,10 @@ pub(crate) fn dry_imagine_body(args: &Value) -> Result<Value, String> {
 
 pub use media::{imagine_client, run_media_tool, ImagineApi, ImagineSource};
 pub use show_panel::SHOW_PANEL;
+
+/// `web_fetch` and `web_search` outside a turn that installed the network:
+/// neither needs a sign-in, so the note names none.
+pub(crate) const NO_WEB_PORT: &str = "Web access isn't set up for this run.";
 
 /// Install fetch and Imagine clients for this thread. `web_fetch` and
 /// `web_search` never send the bearer, so they work without one; each hop still

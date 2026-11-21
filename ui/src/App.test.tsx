@@ -3,7 +3,7 @@ import { Profiler } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Capabilities, Profile, RecordStatus } from "./api";
+import type { Capabilities, ChatRow, Profile, RecordStatus } from "./api";
 
 // The App's own chat listener (the Activity Dock); tests push events through it.
 const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
@@ -50,7 +50,7 @@ const api = vi.hoisted(() => ({
   }),
   onLocalEngineEvent: vi.fn(() => Promise.resolve(() => {})),
   workboardSweepUndo: vi.fn(() => Promise.resolve({})),
-  listChats: vi.fn(() => Promise.resolve([{ id: "shell-c9", title: "Trip plans", created: 1, updated: 2 }])),
+  listChats: vi.fn((): Promise<ChatRow[]> => Promise.resolve([{ id: "shell-c9", title: "Trip plans", created: 1, updated: 2 }])),
   shareSchedulerClock: vi.fn(() => Promise.resolve()),
   quickChips: vi.fn(() => Promise.resolve([])),
   chipOutcome: vi.fn(() => Promise.resolve(true)),

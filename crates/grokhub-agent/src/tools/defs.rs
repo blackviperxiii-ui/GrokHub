@@ -5,8 +5,9 @@ use serde_json::Value;
 use crate::gate::Gate;
 
 use super::{
-    connections, control, desktop, glob, grep, list_dir, local_ai, media, models_check, mods,
-    read_file, search_replace, shell, show_panel, web_fetch, web_search, write,
+    connections, control, desktop, glob, grep, list_dir, local_ai, media, models_check, mods, ptc,
+    read_file, run_routine, save_routine, search_replace, session_search, shell, show_panel,
+    web_fetch, web_search, write,
 };
 
 /// One row in the native catalog. When deferred loading is on, `defer` tools ship as
@@ -49,6 +50,17 @@ fn mods_action_on(gate: &Gate) -> bool {
     not_readonly(gate) && mods::available()
 }
 
+/// Only once the person has a routine the chat may start, so other lists stay
+/// as they were.
+fn routines_on(gate: &Gate) -> bool {
+    not_readonly(gate) && run_routine::visible(&crate::perm::config_dir())
+}
+
+/// Saving needs someone to say yes on the card.
+fn save_routine_on(gate: &Gate) -> bool {
+    not_readonly(gate) && gate.attended
+}
+
 fn generative_ui_on(_gate: &Gate) -> bool {
     show_panel::enabled(&crate::perm::config_dir())
 }
@@ -63,7 +75,7 @@ fn desktop_schema(i: usize) -> Value {
 
 /// Read-only tools, sent first. All eager except `scheduler_list`.
 pub fn read_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 13] = [
+    static DEFS: [ToolDef; 15] = [
         ToolDef {
             name: "read_file",
             blurb: "Read a workspace file",
@@ -97,6 +109,13 @@ pub fn read_defs() -> &'static [ToolDef] {
             blurb: "Read background command or subagent output",
             defer: false,
             schema: control::output_schema,
+            visible: always,
+        },
+        ToolDef {
+            name: session_search::NAME,
+            blurb: "Search earlier chats for something said, no model call",
+            defer: true,
+            schema: session_search::schema,
             visible: always,
         },
         ToolDef {
@@ -155,6 +174,13 @@ pub fn read_defs() -> &'static [ToolDef] {
             schema: mods::installed_schema,
             visible: mods_on,
         },
+        ToolDef {
+            name: ptc::NAME,
+            blurb: "Run a sandboxed read-only multi-tool Python script",
+            defer: true,
+            schema: ptc::schema,
+            visible: always,
+        },
     ];
     &DEFS
 }
@@ -162,7 +188,7 @@ pub fn read_defs() -> &'static [ToolDef] {
 /// Mutating and gated tools. Edit and shell stay eager (the general coding set);
 /// scheduler, media, desktop, connection and the rest are deferred.
 pub fn action_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 24] = [
+    static DEFS: [ToolDef; 26] = [
         ToolDef {
             name: "send_subagent_message",
             blurb: "Send a message to a spawned subagent",
@@ -269,6 +295,20 @@ pub fn action_defs() -> &'static [ToolDef] {
             defer: true,
             schema: control::scheduler_create_schema,
             visible: not_readonly,
+        },
+        ToolDef {
+            name: run_routine::NAME,
+            blurb: "Run one of the user's saved routines",
+            defer: true,
+            schema: run_routine::schema,
+            visible: routines_on,
+        },
+        ToolDef {
+            name: save_routine::NAME,
+            blurb: "Save the last turn as a routine",
+            defer: true,
+            schema: save_routine::schema,
+            visible: save_routine_on,
         },
         ToolDef {
             name: "scheduler_delete",

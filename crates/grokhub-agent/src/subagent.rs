@@ -725,6 +725,13 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     let agent_id = job.agent_id.clone();
     let _class = job.class.map(crate::route::live::ClassScope::enter);
     let _helper = crate::route::live::HelperScope::enter();
+    // The Helpers tab shows the model and effort the router gave this
+    // helper, and why.
+    let _route = {
+        let hub = Arc::clone(&job.tasks);
+        let id = agent_id.clone();
+        crate::route::live::RouteWatch::enter(Box::new(move |seen| hub.note_route(&id, seen)))
+    };
     let _fork = job
         .fork
         .as_ref()
@@ -2984,7 +2991,9 @@ mod tests {
                     &spawn_args("second", "general", false, "worktree"),
                 ),
                 (1, 0) => {
-                    let who = if task_of(req).starts_with("first") {
+                    // The task may begin with a <repo_rules> prefix; the
+                    // lead's prompt is still a line of its own.
+                    let who = if task_of(req).lines().any(|line| line.trim() == "first") {
                         "first"
                     } else {
                         "second"
@@ -3082,7 +3091,7 @@ mod tests {
             "there is no helper work zz in this chat"
         );
         let told = helper_task.lock().unwrap().clone();
-        let start = format!(
+        let redo_body = format!(
             "again\n\nThis task redoes helper work {key} (second), which was made on an older \
              copy of the project and is not merged. Your worktree is a fresh copy of the \
              project as it is now. Make that work's change here so that it fits the project \
@@ -3090,7 +3099,8 @@ mod tests {
              Files that conflicted: a.txt.\n\
              The old work's changes as a diff:\n<<<UNTRUSTED source=subagent:local nonce="
         );
-        assert!(told.starts_with(&start), "{told}");
+        // A discovered <repo_rules> block may lead the task.
+        assert!(told.contains(&redo_body), "{told}");
         assert!(
             told.contains(
                 "\n--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO second\n three\n"
@@ -4157,8 +4167,10 @@ mod tests {
         assert!(all.contains(crate::review::REVIEW_PERSONA), "{all}");
         assert!(!all.contains("be kind"), "{all}");
         let task = ran.sent.last().expect("the task");
+        // A discovered <repo_rules> block may lead the task; the plan and
+        // change still follow it.
         assert!(
-            task.starts_with(
+            task.contains(
                 "Approved plan:\nAdd a total.\n\nCommits made since this session began: none\n\n\
                  Changed files (1):\nA total.txt\n\n\
                  The change as a diff from the commit this session began at:\n"

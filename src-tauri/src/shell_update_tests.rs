@@ -57,13 +57,42 @@ fn the_manifest_comes_only_from_this_repos_releases() {
 }
 
 #[test]
-fn only_the_appimage_and_the_windows_installer_update_themselves() {
-    assert!(!updatable("linux", None));
-    assert!(!updatable("linux", Some("")));
-    assert!(updatable("linux", Some("/home/v/Apps/loadout.AppImage")));
-    assert!(updatable("windows", None));
-    assert!(!updatable("macos", None));
-    assert!(!updatable("android", None));
+fn the_appimage_the_deb_the_mac_app_and_the_windows_installer_update_themselves() {
+    let bin = Path::new("/home/user/.local/bin/grokhub-shell");
+    let usr = Path::new("/usr/bin/grokhub-shell");
+    assert!(!updatable("linux", None, false, bin));
+    assert!(!updatable("linux", Some(""), false, bin));
+    assert!(updatable(
+        "linux",
+        Some("/home/user/Apps/loadout.AppImage"),
+        false,
+        bin
+    ));
+    // The .deb build, where the package put it.
+    assert!(updatable("linux", None, true, usr));
+    // A .deb-stamped binary copied somewhere else isn't the package's.
+    assert!(!updatable("linux", None, true, bin));
+    // An AUR or clone build under /usr isn't stamped .deb.
+    assert!(!updatable("linux", None, false, usr));
+    assert!(updatable(
+        "windows",
+        None,
+        false,
+        Path::new(r"C:\Users\user\AppData\Local\GrokHub Shell\grokhub-shell.exe")
+    ));
+    assert!(updatable(
+        "macos",
+        None,
+        false,
+        Path::new("/Applications/GrokHub Shell.app/Contents/MacOS/grokhub-shell")
+    ));
+    assert!(!updatable(
+        "macos",
+        None,
+        false,
+        Path::new("/Users/user/src/target/release/grokhub-shell")
+    ));
+    assert!(!updatable("android", None, false, bin));
 }
 
 #[test]
@@ -75,7 +104,7 @@ fn a_build_that_cant_update_itself_says_how_to_update_it() {
     let note = |os: &str, channel: Channel, exe: &str| {
         not_updatable_note(os, &dir, channel, Path::new(exe))
     };
-    let outside = "This copy updates outside the app: use your package manager for a .deb or AUR install, or run scripts/install.sh --channel beta again in the clone you built it from.";
+    let outside = "This copy updates outside the app: use your package manager for an AUR install, or run scripts/install.sh --from-source --channel beta again in the clone you built it from.";
     let not_yet = "This build doesn't update itself yet.";
     // No receipt: nothing says where this copy came from.
     assert_eq!(
@@ -99,7 +128,7 @@ fn a_build_that_cant_update_itself_says_how_to_update_it() {
         assert_eq!(
             note("linux", Channel::Stable, exe),
             format!(
-                "Built from the clone in {shown}: to update it, run scripts/install.sh --channel stable there with the options you installed it with."
+                "Built from the clone in {shown}: to update it, run scripts/install.sh --from-source --channel stable there with the options you installed it with."
             ),
             "{exe}"
         );

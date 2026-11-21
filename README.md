@@ -68,12 +68,24 @@ Prerequisites:
     sudo apt-get install -y git pkg-config nodejs npm libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev libwayland-dev libasound2-dev
     ```
 
-Clone and install on Linux (`~/.local/bin/grokhub-shell` and `~/.local/bin/grokhub-hub`):
+Install the prebuilt app with nothing to compile (Linux x86_64 gets the self-updating AppImage in `~/.local/bin/grokhub-shell`, an Apple silicon Mac gets the app in `~/Applications`). The script checks `SHA256SUMS` against the release's minisign key, and the download against `SHA256SUMS`, before it installs anything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/blackviperxiii-ui/GrokHub/main/scripts/install.sh | bash
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/blackviperxiii-ui/GrokHub/main/scripts/install.ps1 | iex
+```
+
+Or build from a clone on Linux (`~/.local/bin/grokhub-shell` and `~/.local/bin/grokhub-hub`; the packages above are needed only for this):
 
 ```bash
 git clone https://github.com/blackviperxiii-ui/GrokHub.git
 cd GrokHub
-./scripts/install.sh --user
+./scripts/install.sh --user --from-source
 ```
 
 Build the Tauri desktop shell directly on Linux, Windows, or macOS:
@@ -103,11 +115,11 @@ GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub   # run the standalone LAN sync 
 
 ### Beta Channel
 
-- **In the app:** switch to **Beta** in **Settings → About → Updates**. The Windows installer and the AppImage then install the newest signed beta pre-release; a `.deb`, AUR or clone install keeps the choice and updates outside the app. You can switch back to stable anytime.
+- **In the app:** switch to **Beta** in **Settings → About → Updates**. The Windows installer, the AppImage, the `.deb` (it asks for your password to install the new package) and the Mac app then install the newest signed beta pre-release. Per-merge betas carry no Mac build, so a Mac waits for the next tagged or nightly one. An AUR or clone install keeps the choice and updates outside the app. You can switch back to stable anytime.
 - **From a Linux source clone:**
   ```bash
-  ./scripts/install.sh --user --channel beta     # track origin/beta, build, and install
-  ./scripts/install.sh --user --channel stable   # switch back to origin/main
+  ./scripts/install.sh --user --from-source --channel beta     # track origin/beta, build, and install
+  ./scripts/install.sh --user --from-source --channel stable   # switch back to origin/main
   ```
 
 ### Development Checks

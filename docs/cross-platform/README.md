@@ -84,9 +84,12 @@ In `grokhub-agent` they sit in `sudo_pass.rs`, `tools/shell.rs`,
   iOS: `apple-native-keyring-store` needs its `protected` feature there.
 - CI job `cross-check` runs that clippy matrix on macOS and Ubuntu (NDK)
   runners.
-- Known for Phase 4: keyring's `v1` feature has no Android store. On Android,
-  `keyring::Entry::new` will fail until the app enables
-  `android-native-keyring-store`.
+- Android keyring (Order 966): keyring's `v1` facade still has no Android
+  store, so phone builds depend on `android-native-keyring-store` +
+  `keyring-core` behind `cfg(target_os = "android")`. Startup calls
+  `grokhub_agent::keyring_blob::ensure_android_store()` (SharedPreferences
+  sealed with the OS Keystore) before `use_os_keyring`, and `OsBackend`
+  reads/writes through `keyring_core::Entry` on Android only.
 
 
 ## Phase 2 status
@@ -415,8 +418,8 @@ the same hard gate as the cabin (`src-tauri/src/agent.rs`).
 - Rust tests cover listing, the transcript with folded tool steps, a second
   worker sending the first turn again, search, rename, delete and that cabin
   sessions stay out. vitest covers the page, its search and delete prompt,
-  and Chat reopening the last chat. Not yet: the smoke test does not walk
-  History.
+  and Chat reopening the last chat. The smoke test opens History (under More),
+  checks a saved chat from the run, searches, and reopens the row in Chat.
 
 **3i, the Code tab.** A Code page for the project folder. Its logic is the
 `grokhub-code` crate (`crates/grokhub-code`), which the egui cabin's Code tab
@@ -506,8 +509,8 @@ uses too; the shell wraps it in the `code_*` commands
   and the redactors, the editor's path rules and the terminal.
   `no_code_tab_command_is_a_web_command` (`src-tauri/src/remote.rs`) reads
   the window's handler list and fails when a Code command is on the web
-  list. vitest covers the pages. Not yet: the smoke test does not walk the
-  Code tab.
+  list. vitest covers the pages. The smoke test walks the Code tab: projects,
+  the agent window, and Helpers ship (review, commit, push, Open PR).
 
 Phase 3 met its accept line: risky desktop steps wait for an OK in the Rust
 gate tests on all three desktop OSes, and the smoke test confirms it on
@@ -546,9 +549,9 @@ connectors only.
   `phone_smoke_report` command refuses.
 - CI jobs `phone (android)` (an API 34 x86_64 emulator) and `phone (ios)` (a
   booted iPhone simulator) run this on every PR.
-- Not yet: saving an API key on Android, because keyring has no Android store
-  until the app enables `android-native-keyring-store`. Sign-in on phones is
-  only mocked so far.
+- Android credentials seal in the OS Keystore via
+  `android-native-keyring-store` (see Phase 1). Sign-in on phones is still
+  only mocked in the smoke path so far.
 
 ## Phase 5 status
 

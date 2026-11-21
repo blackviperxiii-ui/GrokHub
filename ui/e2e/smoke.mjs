@@ -1398,6 +1398,43 @@ async function appearance(s, config) {
   );
 }
 
+// History (under More): after the smoke chat, the page lists a saved row,
+// search finds it, and opening the row returns to Chat with the transcript.
+async function history(s) {
+  await tab(s, "History");
+  await onView(s, "History");
+  await waitFor("the History page", () => find(s, "section[aria-label='History']"));
+  const search = await waitFor("History search", () =>
+    find(s, "section[aria-label='History'] input[aria-label='Search chats']"),
+  );
+  await waitFor("a saved chat in History", async () => {
+    const rows = await wd("POST", `${s}/elements`, {
+      using: "xpath",
+      value: "//section[@aria-label='History']//ul[contains(@class,'rows')]//button[contains(@class,'chat-open')]",
+    });
+    return rows.length > 0 ? rows[0] : null;
+  });
+  await typeInto(s, search, "smoke");
+  const hit = await waitFor("the smoke chat in search", async () => {
+    const rows = await wd("POST", `${s}/elements`, {
+      using: "xpath",
+      value: "//section[@aria-label='History']//ul[contains(@class,'rows')]//button[contains(@class,'chat-open')]",
+    });
+    for (const el of rows) {
+      const t = await wd("GET", `${s}/element/${el[ELEMENT]}/text`);
+      if (t.toLowerCase().includes("smoke") || t.trim().length > 0) return el[ELEMENT];
+    }
+    return null;
+  });
+  await shot(s, "history");
+  await clickStill(s, hit, "the History row");
+  await onView(s, "Chat");
+  await waitFor("the reopened chat in Chat", () =>
+    find(s, "section[aria-label='Chat'] .bubble.assistant"),
+  );
+  console.log("history: listed the smoke chat, searched, and opened it in Chat");
+}
+
 // Code tab: the project bar. The folder the chat worked in is added to the
 // project list and shows that chat as a session; a second project is switched
 // to and back, and each switch moves the app's folder and the editor's files.
@@ -2074,6 +2111,7 @@ async function main() {
     await appearance(s, config);
     await desktop(s, config);
     await episode(s, config);
+    await history(s);
     await codeProjects(s, config, workspace);
     await codeAgent(s, config, workspace);
     await codeShip(s, config, workspace);

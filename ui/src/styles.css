@@ -2589,6 +2589,40 @@ button.md-copy {
   align-items: flex-start;
 }
 
+/* Settings → Your browser: the allowed sites, each with Remove. */
+.settings .attach-sites {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings .attach-sites li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.settings .attach-add {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+
+/* Settings → Bot Desktop: the hidden screen, scaled to the column. */
+.settings .bot-desktop-preview {
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
 .settings label {
   display: flex;
   flex-direction: column;
@@ -3116,6 +3150,41 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   gap: 8px;
 }
 
+.automations .blueprints,
+.automations .suggested {
+  margin-top: 16px;
+}
+
+.automations .blueprints h3,
+.automations .suggested h3 {
+  margin: 0 0 4px;
+  font-size: var(--font-prose);
+  color: var(--amber, #ff9f1a);
+}
+
+.automations .blueprint-fill {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.automations .blueprint-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--font-small, 0.85rem);
+}
+
+.automations .blueprint-slot input {
+  border-color: color-mix(in srgb, var(--amber, #ff9f1a) 35%, var(--border, #333));
+}
+
+.automations .card.blueprint {
+  border-color: color-mix(in srgb, var(--red, #d7263d) 28%, var(--border, #333));
+}
+
 .card.automation,
 .card.hit {
   max-width: none;
@@ -3127,6 +3196,12 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .card.automation pre,
 .card.hit pre {
   flex-basis: auto;
+}
+
+.card-check {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9em;
 }
 
 .card-health,
@@ -3237,13 +3312,9 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   padding-left: 24px;
 }
 
-.local-mode {
-  display: flex;
-  gap: 8px;
-}
-
-.local-mode button[aria-pressed="true"] {
-  border-color: var(--accent);
+.local-advanced > summary {
+  cursor: pointer;
+  font-weight: 600;
 }
 
 .local-manual {
@@ -3263,24 +3334,18 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   background: var(--panel);
 }
 
-.local-model .check {
-  gap: 8px;
-  flex-wrap: wrap;
+.local-model button {
+  align-self: flex-start;
 }
 
 .local-model-name {
   font-weight: 600;
 }
 
-.local-model-meta,
-.local-model-reason {
+.local-model-meta {
   color: var(--muted);
   font-size: var(--font-body);
   overflow-wrap: anywhere;
-}
-
-.local-model.hidden {
-  opacity: 0.7;
 }
 
 .badge {
@@ -4369,25 +4434,6 @@ a.feed-title:focus-visible {
 
 .feed-menu button.danger {
   color: var(--danger-text);
-}
-
-/* A tab menu's group of choices, such as "Model for this chat". */
-.tab-menu-group {
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--border);
-  margin-top: 4px;
-  padding-top: 4px;
-}
-
-.tab-menu-heading {
-  color: var(--muted);
-  font-size: var(--font-body);
-  padding: 4px 12px;
-}
-
-.feed-menu button[role="menuitemradio"][aria-checked="true"] {
-  color: var(--red);
 }
 
 .feed-menu-date {
@@ -7179,6 +7225,44 @@ button.primary:not(.quick-chip) {
 .feed-items {
   margin: 0 0 8px;
   padding-left: 16px;
+}
+
+/* Download models: live HF GGUF browse (Auto pool only). */
+.hf-browse {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid color-mix(in srgb, #000 18%, transparent);
+}
+.hf-browse-search {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.hf-browse-search input {
+  flex: 1;
+  min-width: 0;
+}
+.hf-browse-files h4 {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.95rem;
+}
+.badge.hf-fit-yes {
+  color: #000;
+  background: color-mix(in srgb, var(--amber) 35%, transparent);
+  border: 1px solid var(--amber);
+}
+.badge.hf-fit-tight {
+  color: #000;
+  background: color-mix(in srgb, var(--amber) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber) 55%, #000);
+}
+.badge.hf-fit-no {
+  color: #fff;
+  background: var(--red);
+  border: 1px solid var(--red);
 }
 
 /* Download models: kind tabs, then one row per model. */

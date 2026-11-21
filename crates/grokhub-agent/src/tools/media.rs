@@ -197,6 +197,14 @@ impl ImagineApi for BlockedImagine {
     fn get_json(&self, _path: &str) -> Result<Value, String> {
         Err(grokhub_core::XAI_NEED_SIGNIN.to_string())
     }
+
+    fn ready(&self) -> bool {
+        false
+    }
+
+    fn signs(&self) -> Result<(), String> {
+        Err(grokhub_core::XAI_NEED_SIGNIN.to_string())
+    }
 }
 
 pub(crate) struct UreqImagine {
@@ -475,20 +483,51 @@ fn run_with_kit(
     let imagine = ports.imagine.filter(|api| api.ready());
     // A chat running on this computer draws here when it can; Grok Imagine
     // takes the cloud chats.
+    let imagine_first = std::cell::Cell::new(false);
     if let Some(out) = on_device(
         name,
         args,
-        &|| !crate::route::live::step_on_device() && imagine_takes_it(imagine.as_ref()),
+        &|| {
+            let first = !crate::route::live::step_on_device() && imagine_takes_it(imagine.as_ref());
+            imagine_first.set(first);
+            first
+        },
         kit,
         stop,
         ports.media_dir.as_deref(),
     ) {
         return out;
     }
-    match imagine {
+    let out = match imagine {
         Some(api) => execute_with(name, args, api.as_ref(), stop, ports.media_dir.as_deref()),
         None => ToolOutput::err(grokhub_core::XAI_NEED_SIGNIN),
+    };
+    if !out.failed || name != "image_generate" {
+        return out;
     }
+    // Grok Imagine went first and couldn't make the picture: the picture
+    // model here is the next source. Only when neither can take it does the
+    // error say what to set up.
+    if imagine_first.get() && next_source_may_take(&out.text) {
+        if let Some(here) = on_device(name, args, &|| false, kit, stop, ports.media_dir.as_deref())
+        {
+            return here;
+        }
+    }
+    if out.text == grokhub_core::XAI_NEED_SIGNIN {
+        return ToolOutput::err(crate::route::local_image::NO_SOURCE);
+    }
+    out
+}
+
+/// A Grok Imagine failure another source could get past: no sign-in, a
+/// refused or ended one, a busy or down service, or no network. A request
+/// xAI turned down for what it asks (any other 4xx) and a Stop are not.
+fn next_source_may_take(err: &str) -> bool {
+    if err == "cancelled" {
+        return false;
+    }
+    !err.starts_with("HTTP 4") || refused(err) || err.starts_with("HTTP 429")
 }
 
 /// A picture is drawn on this computer when it must or can: an 18+ prompt
@@ -552,7 +591,9 @@ pub fn imagine_client(bearer: &str) -> Box<dyn ImagineApi> {
 
 /// One media tool run outside a chat turn, for a page of its own (the
 /// shell's Imagine page): the same request builders, EgressGuard and result
-/// saving as chat. Results are downloaded into `media_dir`.
+/// saving as chat. Results are downloaded into `media_dir`. When nothing
+/// can sign (signed out), stills fall through to the on-device picture
+/// model — same idea as chat (#2065).
 pub fn run_media_tool(
     name: &str,
     args: &Value,
@@ -560,6 +601,24 @@ pub fn run_media_tool(
     stop: &dyn Fn() -> bool,
     media_dir: &std::path::Path,
 ) -> ToolOutput {
+    // No bearer: draw stills here when the picture kit is on disk. A client
+    // that can sign still goes to Grok Imagine only (chat owns the busy /
+    // refused fallthrough).
+    if !api.ready() || api.signs().is_err() {
+        if let Some(out) = on_device(
+            name,
+            args,
+            &|| false,
+            &crate::route::local_image::kit_here,
+            stop,
+            Some(media_dir),
+        ) {
+            return out;
+        }
+        if name == "image_generate" {
+            return ToolOutput::err(crate::route::local_image::NO_SOURCE);
+        }
+    }
     execute_with(name, args, api, stop, Some(media_dir))
 }
 
@@ -1484,14 +1543,11 @@ pub(crate) mod tests {
         }
     }
 
+    /// A picture kit in `root` whose stand-in engine writes a PNG header to
+    /// the path after -o.
     #[cfg(unix)]
-    #[test]
-    fn with_the_kit_on_disk_a_clean_picture_is_made_here_when_grok_is_signed_out() {
+    fn stand_in_kit(root: &std::path::Path) -> crate::route::local_image::Kit {
         use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("grokhub-media-local-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        // A stand-in engine: writes a PNG header to the path after -o.
         let cli = root.join("sd-cli");
         std::fs::write(
             &cli,
@@ -1503,14 +1559,22 @@ pub(crate) mod tests {
             .iter()
             .find(|m| m.kind == grokhub_core::local_setup::ModelKind::Image)
             .unwrap();
-        let kit = || {
-            Some(crate::route::local_image::Kit {
-                cli: cli.clone(),
-                models_dir: root.clone(),
-                model,
-                guard: None,
-            })
-        };
+        crate::route::local_image::Kit {
+            cli,
+            models_dir: root.to_path_buf(),
+            model,
+            guard: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn with_the_kit_on_disk_a_clean_picture_is_made_here_when_grok_is_signed_out() {
+        let root = std::env::temp_dir().join(format!("grokhub-media-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let kit = stand_in_kit(&root);
+        let kit = || Some(kit.clone());
         let out_dir = root.join("media");
         let out = on_device(
             "image_generate",
@@ -2489,6 +2553,96 @@ pub(crate) mod tests {
                 "no picture model here: Imagine draws"
             );
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_picture_grok_imagine_cannot_make_falls_through_to_the_picture_model() {
+        let (dir, _cfg) = scratch_config();
+        let root = dir.join("kit");
+        std::fs::create_dir_all(&root).unwrap();
+        let kit = stand_in_kit(&root);
+        let kit = || Some(kit.clone());
+        let src = Arc::new(FakeSource::signed_in());
+        for error in [
+            "HTTP 503 Service Unavailable",
+            "HTTP 429 Too Many Requests",
+            "connection refused",
+        ] {
+            let (_ports, posts) =
+                turn_failing(&src, &["imagine-own-fake", "chat-shared-fake"], error);
+            let out = run_with_kit("image_generate", &picture(), &kit, &|| false);
+            assert!(!out.failed, "{error}: {}", out.text);
+            assert!(out.text.starts_with("IMAGINE: "), "{error}: {}", out.text);
+            assert!(
+                out.text.contains("Made on this computer"),
+                "{error}: {}",
+                out.text
+            );
+            assert_eq!(posted(&posts), ["imagine-own-fake"], "{error}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_picture_xai_turns_down_for_what_it_asks_is_not_drawn_here() {
+        let (dir, _cfg) = scratch_config();
+        let root = dir.join("kit");
+        std::fs::create_dir_all(&root).unwrap();
+        let kit = stand_in_kit(&root);
+        let asked = std::cell::Cell::new(0);
+        let kit = || {
+            asked.set(asked.get() + 1);
+            Some(kit.clone())
+        };
+        let src = Arc::new(FakeSource::signed_in());
+        let (_ports, _posts) = turn_failing(
+            &src,
+            &["imagine-own-fake"],
+            "HTTP 400 Bad Request: prompt rejected",
+        );
+        let out = run_with_kit("image_generate", &picture(), &kit, &|| false);
+        assert!(out.failed);
+        assert_eq!(out.text, "HTTP 400 Bad Request: prompt rejected");
+        assert_eq!(asked.get(), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn with_no_imagine_and_no_picture_model_a_picture_says_both_ways_to_set_one_up() {
+        let (dir, _cfg) = scratch_config();
+        let src = Arc::new(FakeSource {
+            ready: false,
+            ..FakeSource::signed_in()
+        });
+        let (_ports, posts) = turn(&src, &[]);
+        let out = run_with_kit("image_generate", &picture(), &|| None, &|| false);
+        assert!(out.failed);
+        assert_eq!(
+            out.text,
+            "Not made, and nothing was sent: nothing here can draw pictures yet. Download Z-Image Turbo from Settings → Download models → Image, or sign in with Grok or add an API key."
+        );
+        assert!(posted(&posts).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The Imagine page path (`run_media_tool`) with no bearer and no kit.
+    #[test]
+    fn a_page_make_signed_out_with_no_picture_model_names_both_ways() {
+        let (dir, _cfg) = scratch_config();
+        let media = dir.join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        let out = run_media_tool(
+            "image_generate",
+            &picture(),
+            &BlockedImagine,
+            &|| false,
+            &media,
+        );
+        assert!(out.failed);
+        assert_eq!(out.text, crate::route::local_image::NO_SOURCE);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

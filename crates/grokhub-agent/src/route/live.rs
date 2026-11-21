@@ -7,12 +7,14 @@
 //! R2a: one model per episode. The model is picked at an episode boundary (a
 //! new user message), on a second VerifyGate reject at the ceiling (E2), or
 //! when the episode's model goes unhealthy; otherwise every step of the
-//! episode keeps it, so the prompt cache stays warm. Nothing you set pins,
-//! forces or steers the cloud model or the effort: the router alone picks
-//! them. On device, a chat's tier (its words this turn, else its tab menu's
-//! "Model for this chat", see [`super::local_pin`]) steers which model on
-//! disk loads, and the swap planner still decides it. With no healthy,
-//! included model the call pauses instead of sending.
+//! episode keeps it, so the prompt cache stays warm. No setting pins,
+//! forces or steers the cloud model or the effort. Only the chat's own words
+//! do ([`super::task_steer`]: "use Opus for the refactor"), and even then the
+//! router picks among the models that carry the name. On device, a chat's
+//! tier (its words this turn, else its standing ask, see
+//! [`super::local_pin`]) steers which model on disk loads, and the swap
+//! planner still decides it. With no healthy, included model the call pauses
+//! instead of sending.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -333,6 +335,60 @@ static COOLING: Mutex<BTreeMap<PathBuf, BTreeMap<String, u64>>> = Mutex::new(BTr
 /// How long a model that failed with an outage is routed around.
 pub(crate) const OUTAGE_COOL_MS: u64 = 60_000;
 
+/// Maximum `Retry-After` (seconds) on HTTP 429 that we wait out in-place once
+/// before cooling the chosen model down and failing over to another model.
+pub const SHORT_RETRY_AFTER_SECS: u64 = 5;
+
+/// Returns the wait duration when a 429 rate-limit error carries a short
+/// `Retry-After` (`1..=SHORT_RETRY_AFTER_SECS`), so callers can retry the
+/// chosen model once instead of cooling it down for 5 minutes and failing over.
+pub fn short_retry_after_wait(err: &ClientError) -> Option<Duration> {
+    match err {
+        ClientError::RateLimited {
+            retry_after_secs: Some(secs),
+            ..
+        } if (1..=SHORT_RETRY_AFTER_SECS).contains(secs) => Some(Duration::from_secs(*secs)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static SHORT_RETRY_WAITS: std::cell::RefCell<Option<Vec<Duration>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Sleep `wait` in 20ms slices while watching `cancel`. Returns `true` if the
+/// full wait elapsed without cancellation. In tests with [`ShortRetryWaitGuard`],
+/// records the wait duration immediately without wall-clock sleeping.
+pub(crate) fn wait_short_retry(wait: Duration, cancel: &CancelToken) -> bool {
+    if cancel.is_cancelled() {
+        return false;
+    }
+    #[cfg(test)]
+    {
+        let recorded = SHORT_RETRY_WAITS.with(|slot| {
+            if let Some(log) = slot.borrow_mut().as_mut() {
+                log.push(wait);
+                true
+            } else {
+                false
+            }
+        });
+        if recorded {
+            return !cancel.is_cancelled();
+        }
+    }
+    let deadline = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < deadline {
+        if cancel.is_cancelled() {
+            return false;
+        }
+        let rem = deadline.saturating_duration_since(std::time::Instant::now());
+        std::thread::sleep(rem.min(Duration::from_millis(20)));
+    }
+    !cancel.is_cancelled()
+}
+
 /// How long a provider model that hit its rate limit (429) is routed around,
 /// unless the provider asked for longer. A minute was too short: a long step
 /// outlasted it and the next step hit the same wall.
@@ -585,17 +641,6 @@ impl Decision {
         if self.budget_pause.is_none() && rule("voice:no_local") {
             return "Voice routing is set to Local only, and no on-device model is ready. Download one in Settings → Local AI or switch Voice routing to Auto.".to_string();
         }
-        if self.budget_pause.is_none()
-            && let Some(target) = self
-                .route
-                .rule_ids
-                .iter()
-                .find_map(|r| r.strip_prefix("voice:pinned_missing:"))
-        {
-            return format!(
-                "Voice reply is pinned to {target}, which isn't ready right now. Check Settings or switch Voice routing to Auto."
-            );
-        }
         self.pause_msg().to_string()
     }
 
@@ -694,6 +739,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         super::knn::blend_turn(config_dir, bank_key, call.text, turn, &cx, read, now_ms)
     });
     let lane = ask.as_ref().map(|a| a.lane());
+    // What the chat's words asked for this kind of task ("use Opus for the
+    // refactor"); a helper reads its chat's asks.
+    let (named_model, named_effort) = ask
+        .as_ref()
+        .map(|a| {
+            let asks = super::task_steer::asks(config_dir, key);
+            super::task_steer::for_kind(&asks, a.kind)
+        })
+        .unwrap_or_default();
     let d = match &ask {
         Some(a) if rt.is_none() => a.d,
         _ => estimate(
@@ -734,10 +788,12 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     // Brain 2: the goal the turn's Brief named; user-facing steps only, never the holdout.
     // Brain 4: a goal the cabin pinned on a background run (cost while you're active) is
     // logged with it; only user-facing steps move by a goal.
+    let voice_auto_fast = facing && super::voice_route::auto_fast_turn(config_dir);
     let goal = if holdout {
         None
     } else if facing {
         super::goal::goal_for(&[call.session, call.episode])
+            .or_else(|| super::voice_route::voice_turn_goal(config_dir))
     } else {
         super::goal::pinned_for(&[call.session, call.episode])
     };
@@ -871,13 +927,6 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         .filter(|m| match &voice_reply {
             None => true,
             Some(super::voice_route::ReplyPref::LocalOnly) => super::local::is_local(m),
-            Some(super::voice_route::ReplyPref::Provider(p)) => {
-                if p == super::PROVIDER_XAI {
-                    !super::local::is_local(m) && !super::policy::is_new_provider(&reg, m)
-                } else {
-                    split_provider_model(m).is_some_and(|(mp, _)| mp == p)
-                }
-            }
         });
     // PR E: a failed verify on an on-device turn asks the next online pick to escalate.
     if rejects.unwrap_or(0) > 0 && !verify_ok {
@@ -915,9 +964,13 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         Vec::new()
     };
     laps.mark("route:providers");
+    let mut latency = Latency::of(origin, facing, steps, call.deadline_ms, now_ms);
+    if voice_auto_fast {
+        latency.waiting_live = true;
+    }
     let spend = Spend {
         settings,
-        latency: Latency::of(origin, facing, steps, call.deadline_ms, now_ms),
+        latency,
         background: !facing || spend::background_origin(origin),
         budget_tight: false,
         grants,
@@ -978,6 +1031,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         prior_escalated,
         care_first,
         lane,
+        named_model: named_model.as_deref(),
+        named_effort: named_effort.as_deref(),
         size: Some(size_est),
         // Failover PR 5: whether a local model is already loaded, for the
         // warm-local default. Never starts the sidecar to find out.
@@ -1125,12 +1180,10 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     // switch: neither is a model to wait for.
     if live
         && route.no_route
-        && !route.rule_ids.iter().any(|r| {
-            r == "local:paused"
-                || r == "offline:switch"
-                || r == "voice:no_local"
-                || r.starts_with("voice:pinned_missing:")
-        })
+        && !route
+            .rule_ids
+            .iter()
+            .any(|r| r == "local:paused" || r == "offline:switch" || r == "voice:no_local")
     {
         let failed = reg
             .get(call.model)
@@ -1727,6 +1780,52 @@ pub fn in_helper() -> bool {
     HELPER.with(std::cell::Cell::get)
 }
 
+/// The model, effort and reason a step was sent with, for a helper's row.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RouteSeen {
+    pub model: String,
+    /// Empty when the step sent no effort.
+    pub effort: String,
+    /// The route's reason sentence ("balanced · High: a multi-file change.").
+    pub why: String,
+}
+
+type RouteSink = Box<dyn Fn(&RouteSeen)>;
+
+thread_local! {
+    static ROUTE_WATCH: std::cell::RefCell<Option<RouteSink>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Hears each step this thread sends until dropped, so a helper's row can
+/// say which model and effort the router gave it, and why.
+pub struct RouteWatch {
+    prev: Option<RouteSink>,
+}
+
+impl RouteWatch {
+    pub fn enter(sink: RouteSink) -> Self {
+        Self {
+            prev: ROUTE_WATCH.with(|w| w.replace(Some(sink))),
+        }
+    }
+}
+
+impl Drop for RouteWatch {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        ROUTE_WATCH.with(|w| *w.borrow_mut() = prev);
+    }
+}
+
+/// Tells this thread's [`RouteWatch`], if any, what a step was sent with.
+pub fn tell_route(seen: &RouteSeen) {
+    ROUTE_WATCH.with(|w| {
+        if let Some(sink) = w.borrow().as_ref() {
+            sink(seen);
+        }
+    });
+}
+
 /// Note where `conversation_id`'s step runs, for the voice: the app's own
 /// background calls and a helper's steps leave the chat's record alone.
 fn note_here(class: &str, conversation_id: &str, here: bool, must_stay: bool) {
@@ -1824,6 +1923,8 @@ pub fn stream_routed(
     };
     let now = grokhub_core::now_ms();
     let user_bench = super::user_bench::load(&dir);
+    // "It tries again on your next message": a person's turn is the retry.
+    super::local::retry_for_turn(class);
     let decision = decide(&dir, &call, now);
     if decision.paused() {
         route_log(&dir, &call, &decision, &RouteDone::unseen());
@@ -1967,8 +2068,9 @@ pub fn stream_routed(
     let mut tried: Vec<String> = Vec::new();
     let mut last_fail_rule: Option<&'static str> = None;
     let mut emitted_fallback_msg = false;
+    let mut short_retried = false;
     let mut out = Err(ClientError::Protocol("no route".into()));
-    for attempt in 0..4 {
+    for attempt in 0..5 {
         if active_on_device {
             let reason = if forced_adult_local {
                 "keeping explicit content on this computer"
@@ -2036,7 +2138,18 @@ pub fn stream_routed(
                 break;
             }
             Err(err) => {
-                let retryable = attempt < 3
+                if !streamed && !short_retried {
+                    if let Some(wait) = short_retry_after_wait(&err) {
+                        if wait_short_retry(wait, cancel) {
+                            short_retried = true;
+                            tried.pop();
+                            continue;
+                        }
+                        out = Err(ClientError::Cancelled);
+                        break;
+                    }
+                }
+                let retryable = attempt < 4
                     && allow_cross_provider_failover
                     && !streamed
                     && !matches!(err, ClientError::Cancelled)
@@ -2130,6 +2243,7 @@ pub fn stream_routed(
                 active_effort = next_effort;
                 active_on_device = next_on_device;
                 active_on_provider = next_on_provider;
+                short_retried = false;
                 if let Some(d) = next_dec {
                     active_decision = d;
                 }
@@ -2205,6 +2319,13 @@ pub fn stream_routed(
     // Only the xAI client queues; a local or provider answer was timed live.
     done.batched = client.batches() && !active_on_device && !active_on_provider;
     route_log(&dir, &call, &active_decision, &done);
+    if out.is_ok() {
+        tell_route(&RouteSeen {
+            model: call.model.to_string(),
+            effort: call.effort.unwrap_or_default().to_string(),
+            why: active_decision.route.reason.clone(),
+        });
+    }
     out
 }
 
@@ -2307,4 +2428,173 @@ pub fn route_gb_turn(
     call.model = &spawn_model;
     route_log(config_dir, &call, &decision, &RouteDone::unseen());
     (spawn_model, effort)
+}
+
+#[cfg(test)]
+mod card_964_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct ShortRetryWaitGuard;
+
+    impl ShortRetryWaitGuard {
+        fn capture() -> Self {
+            SHORT_RETRY_WAITS.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
+            Self
+        }
+
+        fn recorded(&self) -> Vec<Duration> {
+            SHORT_RETRY_WAITS.with(|slot| slot.borrow().clone().unwrap_or_default())
+        }
+    }
+
+    impl Drop for ShortRetryWaitGuard {
+        fn drop(&mut self) {
+            SHORT_RETRY_WAITS.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    struct SeqClient {
+        calls: AtomicUsize,
+        models: Mutex<Vec<String>>,
+        first_err: Mutex<Option<ClientError>>,
+    }
+
+    impl ModelClient for SeqClient {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.models
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(req.model.clone());
+            if let Some(err) = self
+                .first_err
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+            {
+                return Err(err);
+            }
+            sink(StreamEvent::TextDelta("ok".into()));
+            Ok(TurnOutput {
+                text: "ok".into(),
+                ..TurnOutput::default()
+            })
+        }
+    }
+
+    #[test]
+    fn short_retry_after_wait_checks_bounds_and_error_kind() {
+        let mk = |secs| ClientError::RateLimited {
+            retry_after_secs: secs,
+            message: "429".into(),
+        };
+        assert_eq!(
+            short_retry_after_wait(&mk(Some(1))),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(
+            short_retry_after_wait(&mk(Some(2))),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            short_retry_after_wait(&mk(Some(SHORT_RETRY_AFTER_SECS))),
+            Some(Duration::from_secs(SHORT_RETRY_AFTER_SECS))
+        );
+        assert_eq!(short_retry_after_wait(&mk(Some(0))), None);
+        assert_eq!(
+            short_retry_after_wait(&mk(Some(SHORT_RETRY_AFTER_SECS + 1))),
+            None
+        );
+        assert_eq!(short_retry_after_wait(&mk(None)), None);
+        assert_eq!(
+            short_retry_after_wait(&ClientError::Server {
+                status: 503,
+                message: "down".into(),
+                retry_after_secs: Some(2),
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn stream_routed_waits_once_on_short_retry_after_without_cooling_down() {
+        let dir = std::env::temp_dir().join(format!(
+            "gh-short-retry-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let waits = ShortRetryWaitGuard::capture();
+
+        let client = SeqClient {
+            calls: AtomicUsize::new(0),
+            models: Mutex::new(Vec::new()),
+            first_err: Mutex::new(Some(ClientError::RateLimited {
+                retry_after_secs: Some(2),
+                message: "burst limit".into(),
+            })),
+        };
+        let req = ResponsesRequest {
+            model: "grok-4.3".into(),
+            effort: None,
+            input: vec![InputItem::Message {
+                role: "user".into(),
+                content: vec![ContentPart::InputText("hello".into())],
+            }],
+            conversation_id: "conv-short-retry".into(),
+            tools: Vec::new(),
+            hosted_search: false,
+            call_timeout: None,
+            text_format: None,
+        };
+        let cancel = CancelToken::new();
+        let out = stream_routed(&client, &req, &cancel, &mut |_| {}, "unlisted:test")
+            .expect("should succeed after waiting 2s");
+        assert_eq!(out.text, "ok");
+        assert_eq!(client.calls.load(Ordering::SeqCst), 2);
+        let models = client.models.lock().unwrap().clone();
+        assert_eq!(models, vec!["grok-4.3", "grok-4.3"]);
+        assert_eq!(waits.recorded(), vec![Duration::from_secs(2)]);
+        assert!(
+            !cooling(&dir, "grok-4.3", grokhub_core::now_ms()),
+            "model must not be cooled down for 5m after a successful short Retry-After wait"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn active_auto_voice_session_injects_speed_goal_in_decide() {
+        let dir = std::env::temp_dir().join(format!(
+            "gh-voice-decide-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _voice = super::super::voice_route::SessionActiveGuard::set(true);
+
+        let call = RouteCall {
+            provider: super::super::PROVIDER_XAI,
+            class: DEFAULT_CLASS,
+            model: "grok-4.3",
+            session: "voice-sess-auto",
+            text: "what time is the game tonight?",
+            ..RouteCall::default()
+        };
+        let dec = decide(&dir, &call, grokhub_core::now_ms());
+        let goal = dec
+            .goal
+            .expect("speed goal injected for active auto voice turn");
+        assert_eq!(goal.goal, super::super::goal::Goal::Speed);
+        assert_eq!(goal.reason, super::super::voice_route::VOICE_SPEED_REASON);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

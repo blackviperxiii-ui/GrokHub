@@ -59,6 +59,8 @@ pub struct Sidecar {
     pub token: String,
     pub binary: PathBuf,
     pub model: PathBuf,
+    /// Managed local embeddings slot model ID (router mode), when resident.
+    pub embedding_model: Option<String>,
     restarts: AtomicU64,
     /// Unix seconds of the last successful use (idle unload).
     last_used_secs: AtomicU64,
@@ -90,6 +92,8 @@ impl std::fmt::Debug for Sidecar {
             .field("token", &"[redacted]")
             .field("binary", &self.binary)
             .field("model", &self.model)
+            .field("sees_pictures", &self.sees_pictures())
+            .field("embedding_model", &self.embedding_model)
             .field("restarts", &self.restart_count())
             .field("idle_unload_secs", &self.idle_unload_secs)
             .field("thinking", &self.thinking)
@@ -110,6 +114,11 @@ pub(crate) fn unix_ms() -> u64 {
 
 /// Requests to the sidecar in flight; the governor restarts or stops it only at 0.
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+/// Of [`IN_FLIGHT`], the app's own background requests.
+static BACKGROUND_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+/// How long a chat's ask waits for background requests in flight before it
+/// swaps the model and cuts them.
+const ASK_DRAIN: Duration = Duration::from_secs(10);
 
 /// Unix seconds when the last request finished. Idle time counts from the
 /// later of this and the last start, so a long request doesn't end idle.
@@ -134,6 +143,7 @@ static WARM_GEN: AtomicU64 = AtomicU64::new(0);
 pub struct Busy {
     side: Option<Arc<AtomicUsize>>,
     end: Option<Endpoint>,
+    background: bool,
 }
 
 impl Busy {
@@ -149,6 +159,9 @@ impl Drop for Busy {
             side.fetch_sub(1, Ordering::SeqCst);
         }
         LAST_DONE_SECS.store(unix_secs(), Ordering::SeqCst);
+        if self.background {
+            BACKGROUND_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        }
         if IN_FLIGHT.fetch_sub(1, Ordering::SeqCst) == 1 && STOP_PENDING.load(Ordering::SeqCst) {
             // Never block a request's teardown on the slot; if it's busy, the
             // next idle tick does the pending stop.
@@ -166,18 +179,53 @@ pub fn busy() -> Busy {
     let slot = global_slot().lock().unwrap_or_else(|e| e.into_inner());
     match slot.as_ref() {
         Some(side) => side.busy(),
-        None => {
-            IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
-            Busy {
-                side: None,
-                end: None,
-            }
-        }
+        None => Busy {
+            side: None,
+            end: None,
+            background: count_in(),
+        },
     }
+}
+
+/// Loopback `(base_url, token, model_id)` for the running sidecar's managed
+/// local embeddings slot (router mode), if an embedding GGUF is resident.
+pub fn sidecar_embedding_endpoint() -> Option<(String, String, String)> {
+    let slot = global_slot().lock().unwrap_or_else(|e| e.into_inner());
+    let side = slot.as_ref()?;
+    let model = side.embedding_model.clone()?;
+    Some((side.base_url(), side.token.clone(), model))
 }
 
 pub fn in_flight() -> usize {
     IN_FLIGHT.load(Ordering::SeqCst)
+}
+
+/// Of [`in_flight`], the app's own background requests.
+pub fn background_in_flight() -> usize {
+    BACKGROUND_IN_FLIGHT.load(Ordering::SeqCst)
+}
+
+/// Counts a request in flight; true when it is the app's own background
+/// work (this thread's need).
+fn count_in() -> bool {
+    let background = super::local_scale::current_need() == super::local_scale::Need::Background;
+    if background {
+        BACKGROUND_IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+    }
+    IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+    background
+}
+
+/// Waits until nothing is in flight, up to `deadline`: true when nothing is.
+fn wait_for_idle(deadline: Duration) -> bool {
+    let until = Instant::now() + deadline;
+    while in_flight() > 0 {
+        if Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(HEALTH_POLL);
+    }
+    true
 }
 
 impl Sidecar {
@@ -188,11 +236,12 @@ impl Sidecar {
 
     /// A request on this server (see [`Busy`]).
     fn busy(&self) -> Busy {
-        IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+        let background = count_in();
         self.in_flight.fetch_add(1, Ordering::SeqCst);
         Busy {
             side: Some(self.in_flight.clone()),
             end: Some(self.endpoint()),
+            background,
         }
     }
 
@@ -232,11 +281,17 @@ impl Sidecar {
                 return Ok(());
             }
             if !self.alive() {
-                return Err("local model server stopped before it was ready".into());
+                return Err(DIED.into());
             }
             std::thread::sleep(HEALTH_POLL);
         }
         Err("local model server did not become healthy in time".into())
+    }
+
+    /// How the child ended, once it has.
+    pub fn exit_status(&self) -> Option<std::process::ExitStatus> {
+        let mut child = self.child.lock().expect("sidecar lock");
+        child.try_wait().ok().flatten()
     }
 
     /// Child still running.
@@ -382,6 +437,10 @@ fn spawn_args(
     }
 }
 
+/// Spawns llama-server. Router mode (one server for the chat and embedding
+/// models) is used when `router_ok`, the engine has it and there is more than
+/// one model; the `bool` says whether it was.
+#[allow(clippy::too_many_arguments)]
 fn spawn_llama(
     binary: &Path,
     model: &Path,
@@ -390,7 +449,8 @@ fn spawn_llama(
     token: &str,
     launch: Option<&LaunchArgs>,
     bare_cpu: bool,
-) -> Result<Child, String> {
+    router_ok: bool,
+) -> Result<(Child, bool), String> {
     if !is_loopback_host(host) {
         return Err(format!("local model server must bind loopback, not {host}"));
     }
@@ -416,11 +476,31 @@ fn spawn_llama(
             ));
         }
     }
-    let mut args = spawn_args(model, host, port, launch, bare_cpu);
+    // A vision projector rides in the launch (`launch.projector`), planned
+    // and counted for a picture turn: it is never picked up from the folder,
+    // where another model's projector may sit.
+    let models_dir = model
+        .parent()
+        .and_then(Path::parent)
+        .or_else(|| model.parent());
+    let help = super::local_flags::help_text(binary);
+    let preset = super::local_preset::RouterPreset::from_sidecar_plan(model, launch, models_dir);
+    let use_router =
+        router_ok && super::local_preset::supports_router_mode(&help) && preset.models.len() > 1;
+    let mut args = if use_router {
+        let preset_path = binary.with_file_name("llama-models-preset.ini");
+        match preset.write_to(&preset_path) {
+            Ok(written) => {
+                super::local_preset::llama_router_args(&written, host, port, preset.models_max)
+            }
+            Err(_) => spawn_args(model, host, port, launch, bare_cpu),
+        }
+    } else {
+        spawn_args(model, host, port, launch, bare_cpu)
+    };
     // A planned launch can save and restore its KV cache (see `local_kv`),
     // and a cold one wholly on the GPU with RAM short skips the page cache.
     if let Some(l) = launch {
-        let help = super::local_flags::help_text(binary);
         let file_mb = std::fs::metadata(model).map_or(0, |m| m.len()) / (1024 * 1024);
         let facts = super::local_warm::LoadFacts {
             whole_on_gpu: !l.cpu_only && l.ngl >= l.all_layers && l.n_cpu_moe.is_none(),
@@ -458,13 +538,139 @@ fn spawn_llama(
     if run.low_priority {
         super::local_flags::below_normal(&mut cmd);
     }
-    let child = cmd
-        .spawn()
+    // Tied to the app, so a killed app doesn't leave it holding GPU memory.
+    let child = super::local_tie::spawn(cmd)
         .map_err(|e| format!("could not start local model server: {e}"))?;
     if run.low_priority {
         super::local_flags::lower_priority(child.id());
     }
-    Ok(child)
+    Ok((child, use_router))
+}
+
+/// What [`Sidecar::wait_healthy`] says when the engine exits while loading.
+pub const DIED: &str = "local model server stopped before it was ready";
+
+/// Most characters of a log line quoted in a start error.
+const LOG_LINE_CHARS: usize = 160;
+
+fn clip_line(line: &str) -> String {
+    let line = line.trim();
+    match line.char_indices().nth(LOG_LINE_CHARS) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_string(),
+    }
+}
+
+/// The first log line holding any of `keys` (lowercase), clipped.
+fn log_line(log: &str, keys: &[&str]) -> Option<String> {
+    log.lines()
+        .find(|l| {
+            let l = l.to_ascii_lowercase();
+            keys.iter().any(|k| l.contains(k))
+        })
+        .map(clip_line)
+}
+
+/// Why the engine died while loading, from its log and exit, in words a
+/// person can act on. `None` when neither says anything.
+pub fn death_reason(log: &str, status: Option<std::process::ExitStatus>) -> Option<String> {
+    if autoconfig::oom_in_log(log) {
+        return Some("it ran out of memory loading the model".into());
+    }
+    if let Some(line) = log_line(log, &["unknown model architecture"]) {
+        return Some(format!(
+            "this engine is too old for the model ({line}). Get engine in Settings → Local AI updates it"
+        ));
+    }
+    if let Some(line) = log_line(
+        log,
+        &[
+            "address already in use",
+            "couldn't bind",
+            "failed to bind",
+            "bind failed",
+        ],
+    ) {
+        return Some(format!("its port was taken ({line})"));
+    }
+    if let Some(line) = log_line(
+        log,
+        &[
+            "invalid argument",
+            "unknown argument",
+            "unrecognized option",
+            "unknown option",
+            "error while handling argument",
+        ],
+    ) {
+        return Some(format!("it refused how it was started ({line})"));
+    }
+    // A backend names itself on every start, so only its error lines count.
+    let gpu_error = log.lines().find(|l| {
+        let l = l.to_ascii_lowercase();
+        ["hip", "rocblas", "rocm", "cuda", "vulkan", "vk::"]
+            .iter()
+            .any(|k| l.contains(k))
+            && ["error", "fail", "abort", "lost", "crash"]
+                .iter()
+                .any(|k| l.contains(k))
+    });
+    if let Some(line) = gpu_error.map(clip_line) {
+        let l = line.to_ascii_lowercase();
+        let backend = if l.contains("hip") || l.contains("roc") {
+            "ROCm"
+        } else if l.contains("cuda") {
+            "CUDA"
+        } else {
+            "Vulkan"
+        };
+        return Some(format!("the {backend} GPU backend failed ({line})"));
+    }
+    if let Some(line) = log_line(
+        log,
+        &[
+            "failed to load model",
+            "error loading model",
+            "gguf_init",
+            "invalid magic",
+            "failed to open",
+            "no such file",
+        ],
+    ) {
+        return Some(format!("it couldn't load the model file ({line})"));
+    }
+    let last = log
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .map(clip_line);
+    let how = status.and_then(exit_words);
+    match (how, last) {
+        (Some(how), Some(last)) => Some(format!("{how} (last log line: {last})")),
+        (Some(how), None) => Some(how),
+        (None, Some(last)) => Some(format!("it exited (last log line: {last})")),
+        (None, None) => None,
+    }
+}
+
+/// A process end in words: a crash signal or an exit code.
+fn exit_words(status: std::process::ExitStatus) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = status.signal() {
+            return Some(match sig {
+                4 => "it crashed: this processor lacks an instruction the engine was built for (illegal instruction)".into(),
+                6 => "it crashed (aborted)".into(),
+                9 => "it was killed (SIGKILL), often by the system running out of memory".into(),
+                11 => "it crashed (segmentation fault)".into(),
+                other => format!("it was stopped by signal {other}"),
+            });
+        }
+    }
+    status
+        .code()
+        .map(|code| format!("it exited with code {code}"))
 }
 
 /// Appended to the one-shot defaults to keep the engine off every GPU.
@@ -472,7 +678,7 @@ const CPU_ONLY_ARGS: [&str; 4] = ["-ngl", "0", "--device", "none"];
 
 /// The engine stopped while it loaded, rather than taking too long.
 fn engine_died(err: &str) -> bool {
-    err.contains("stopped before it was ready")
+    err.contains(DIED)
 }
 
 /// Whether a failed start should be tried again with every GPU left out: the
@@ -574,10 +780,12 @@ fn start_planned(
     // Whether the projector alone kept the last start from running (see
     // below).
     let mut blame = ProjectorBlame::default();
+    // Router mode is tried first; a start it stops runs as one model.
+    let mut router_ok = true;
     loop {
         let port = free_loopback_port()?;
         let token = random_token();
-        let child = spawn_llama(
+        let (child, routed) = spawn_llama(
             &paths.binary,
             &paths.model,
             &host,
@@ -585,7 +793,16 @@ fn start_planned(
             &token,
             launch.as_ref(),
             bare_cpu,
+            router_ok,
         )?;
+        let models_dir = paths
+            .model
+            .parent()
+            .and_then(Path::parent)
+            .or_else(|| paths.model.parent());
+        let embedding_model = models_dir
+            .and_then(super::local_preset::discover_embedding_model)
+            .map(|_| super::local_preset::SLOT_EMBED.to_string());
         let mut side = Sidecar {
             child: Mutex::new(child),
             host: host.clone(),
@@ -593,6 +810,7 @@ fn start_planned(
             token,
             binary: paths.binary.clone(),
             model: paths.model.clone(),
+            embedding_model,
             restarts: AtomicU64::new(0),
             last_used_secs: AtomicU64::new(unix_secs()),
             idle_unload_secs: idle,
@@ -612,6 +830,11 @@ fn start_planned(
                 // really has, not a fixed default.
                 if let Some(l) = launch.as_ref() {
                     super::local::set_ctx_cap(u64::from(l.ctx));
+                    // When Ollama is up, prefer its effective num_ctx (Modelfile
+                    // or GGUF), never above this server's window.
+                    let _ = super::local::probe_ollama_num_ctx(None, Some(u64::from(l.ctx)));
+                } else {
+                    let _ = super::local::probe_ollama_num_ctx(None, None);
                 }
                 side.thinking = super::local_effort::fetch_thinking(
                     &side.host,
@@ -658,8 +881,21 @@ fn start_planned(
             }
             Err(e) => e,
         };
+        let status = side.exit_status();
         side.stop();
         let log = std::fs::read_to_string(server_log_path(&paths.binary)).unwrap_or_default();
+        // Say why it died, from its log and exit, not only that it did.
+        let err = match death_reason(&log, status).filter(|_| err == DIED) {
+            Some(why) => format!("{DIED}: {why}"),
+            None => err,
+        };
+        // Router mode is newer than the one-model start: when it stops a
+        // start, the model starts alone before anything else is changed.
+        if routed && !autoconfig::oom_in_log(&log) {
+            health::log("router_off", Some(&err));
+            router_ok = false;
+            continue;
+        }
         let taken = launch
             .as_mut()
             .and_then(|l| shed(l, autoconfig::oom_in_log(&log)));
@@ -684,9 +920,10 @@ fn start_planned(
             }
             continue;
         }
-        // The CPU died the same way, so the GPU was not why: report the first start.
+        // The CPU died too, so the GPU was not why: report the first start,
+        // and that the CPU didn't help.
         if let Some(first) = gpu_err.take() {
-            return Err(first);
+            return Err(format!("{first} (it didn't start on the CPU either)"));
         }
         let Some(prev) = launch.as_ref().filter(|_| autoconfig::oom_in_log(&log)) else {
             return Err(err);
@@ -777,10 +1014,8 @@ pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool 
 /// - `GROKHUB_LLAMA_SERVER`: path to `llama-server`
 /// - `GROKHUB_LOCAL_MODEL`: path to a `.gguf`
 /// - binary else: `{config}/bin/llama-server`, else `llama-server` on `PATH`
-/// - model else: the pick in `{config}/local_ai.json` (`localModel.selected`,
-///   a model file's path or a downloaded catalog id), then
-///   `model_download::installed` under `~/GrokHub/models` (or
-///   `{config}/models`), then the first `*.gguf` in those folders
+/// - model else: Auto's best among downloads and added files
+///   ([`resolve_model_file`]), then the first `*.gguf` in those folders
 pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
     let stamp = paths_stamp(config_dir);
     let mut cache = PATHS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -846,6 +1081,11 @@ fn paths_stamp(config_dir: &Path) -> PathsStamp {
 
 type PathsCache = Mutex<Option<(PathBuf, PathsStamp, Instant, Option<SidecarPaths>)>>;
 static PATHS_CACHE: PathsCache = Mutex::new(None);
+
+/// Drop the cached binary/model paths so a newly downloaded GGUF is seen.
+pub fn clear_paths_cache() {
+    *PATHS_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
 
 /// `llama-server` from `GROKHUB_LLAMA_SERVER`, `{config}/bin`, then `PATH`.
 pub fn find_binary(config_dir: &Path) -> Option<PathBuf> {
@@ -936,61 +1176,96 @@ fn user_models_dir() -> Option<PathBuf> {
     )
 }
 
-/// The model picked in Settings → Local AI, when its file is on disk.
-pub fn picked_model(config_dir: &Path) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(config_dir.join("local_ai.json")).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let pick = v.get("localModel")?.get("selected")?.as_str()?.trim();
-    if pick.is_empty() {
-        return None;
-    }
-    let path = PathBuf::from(pick);
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
-    {
-        return path.is_file().then_some(path);
-    }
-    let m = grokhub_core::local_setup::model_by_id(pick)?;
-    [user_models_dir(), Some(config_dir.join("models"))]
-        .into_iter()
-        .flatten()
-        .map(|dir| grokhub_core::model_download::final_path(&dir, m))
-        .find(|p| p.is_file())
+/// Model files the user added in Settings → Local AI (`ownFiles` in
+/// `{config}/local_ai.json`) that are on disk and can be a chat model.
+pub fn own_files(config_dir: &Path) -> Vec<PathBuf> {
+    let text = match std::fs::read_to_string(config_dir.join("local_ai.json")) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let v: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    v.get("ownFiles")
+        .and_then(|x| x.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(|p| PathBuf::from(p.trim()))
+                .filter(|p| {
+                    p.extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
+                        && p.is_file()
+                        && !helper_gguf(p)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
-/// Record `pick` (a catalog id or a model file's path) as the Settings pick in
-/// `{config}/local_ai.json`, keeping the file's other keys.
-pub fn set_pick(config_dir: &Path, pick: &str) -> Result<(), String> {
-    let path = config_dir.join("local_ai.json");
-    let mut v: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .filter(serde_json::Value::is_object)
-        .unwrap_or_else(|| serde_json::json!({}));
-    v["localModel"] = serde_json::json!({ "selected": pick });
-    let text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
-    std::fs::write(&path, format!("{text}\n")).map_err(|e| format!("Couldn't save the pick: {e}"))
+/// The first added model file on disk ([`own_files`]).
+pub fn own_model(config_dir: &Path) -> Option<PathBuf> {
+    own_files(config_dir).into_iter().next()
 }
 
+/// Auto's home model: downloads and added files scored on merit (size,
+/// published or measured speed), then the first `*.gguf` in the models
+/// folders. There is no picker.
 fn resolve_model_file(config_dir: &Path) -> Option<PathBuf> {
-    if let Some(p) = picked_model(config_dir) {
+    let dirs = [user_models_dir(), Some(config_dir.join("models"))];
+    let mut files: Vec<grokhub_core::local_picker::AutoFile> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for dir in dirs.iter().flatten() {
+        for m in grokhub_core::model_download::downloaded(dir) {
+            push_auto_file(
+                &mut files,
+                &mut seen,
+                grokhub_core::model_download::final_path(dir, m),
+                Some(m),
+            );
+        }
+        if let Some(rec) = grokhub_core::model_download::installed(dir) {
+            let path = dir.join(&rec.file);
+            let model = grokhub_core::local_setup::model_by_id(&rec.id);
+            push_auto_file(&mut files, &mut seen, path, model);
+        }
+    }
+    for path in own_files(config_dir) {
+        let model = path.file_name().and_then(|n| n.to_str()).and_then(|name| {
+            grokhub_core::local_setup::local_models()
+                .iter()
+                .find(|m| m.is_chat() && m.file == name)
+        });
+        push_auto_file(&mut files, &mut seen, path, model);
+    }
+    if let Some(p) = grokhub_core::local_picker::auto_home(&files) {
         return Some(p);
     }
-    let dirs = [user_models_dir(), Some(config_dir.join("models"))];
     for dir in dirs.into_iter().flatten() {
-        if let Some(rec) = grokhub_core::model_download::installed(&dir) {
-            let path = dir.join(&rec.file);
-            if path.is_file() {
-                return Some(path);
-            }
-        }
         if let Some(p) = first_gguf(&dir) {
             return Some(p);
         }
     }
     None
+}
+
+fn push_auto_file(
+    files: &mut Vec<grokhub_core::local_picker::AutoFile>,
+    seen: &mut std::collections::BTreeSet<PathBuf>,
+    path: PathBuf,
+    model: Option<&'static grokhub_core::local_setup::LocalModel>,
+) {
+    if !path.is_file() || helper_gguf(&path) || !seen.insert(path.clone()) {
+        return;
+    }
+    let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    files.push(grokhub_core::local_picker::AutoFile {
+        path,
+        model,
+        bytes,
+        measured: None,
+    });
 }
 
 fn llama_server_name() -> &'static str {
@@ -1233,6 +1508,28 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
             Plan::Keep | Plan::Later { .. } => (paths.model.clone(), None),
             Plan::Load { model, stand_in } => {
                 PENDING_STEP_UP.lock().expect("pending step up").take();
+                // Only a chat's ask swaps with requests in flight, and only
+                // background ones (see `local_swap::plan`): new requests wait
+                // while they finish, and any still running at ASK_DRAIN are cut.
+                if slot.is_some() && in_flight() > 0 {
+                    STARTING.store(true, Ordering::SeqCst);
+                    drop(slot);
+                    let idle = wait_for_idle(ASK_DRAIN);
+                    slot = global_slot().lock().expect("sidecar global");
+                    STARTING.store(false, Ordering::SeqCst);
+                    LOAD_DONE.notify_all();
+                    if !idle {
+                        health::log_to(
+                            config_dir,
+                            "swap",
+                            Some("cut background work still running for a chat's ask"),
+                            None,
+                        );
+                    }
+                    if let Some(why) = refused(want) {
+                        return Err(why.into());
+                    }
+                }
                 if let Some(side) = slot.take() {
                     health::log_to(config_dir, "swap", Some(&swap_note(&model, stand_in)), None);
                     LAST_SWAP_SECS.store(unix_secs(), Ordering::SeqCst);
@@ -1841,13 +2138,14 @@ static LAST_SWAP_SECS: AtomicU64 = AtomicU64::new(0);
 /// The model the idle timer last unloaded, and when.
 static LAST_IDLE_UNLOAD: Mutex<Option<(PathBuf, u64)>> = Mutex::new(None);
 
-/// The chat models downloaded where [`picked_model`] looks.
+/// The catalog chat models on disk: downloads in the models folders, plus
+/// added files that match a catalog chat model so Auto can score them.
 fn on_disk(config_dir: &Path) -> Vec<(&'static LocalModel, PathBuf)> {
     let dirs: Vec<PathBuf> = [user_models_dir(), Some(config_dir.join("models"))]
         .into_iter()
         .flatten()
         .collect();
-    super::local_swap::on_disk(&dirs)
+    super::local_swap::with_own(super::local_swap::on_disk(&dirs), &own_files(config_dir))
 }
 
 /// The running server loaded a drafter file beside its model.
@@ -2036,6 +2334,7 @@ fn swap_plan(
         kept_loaded: keep_loaded(),
         forced: std::env::var_os("GROKHUB_LOCAL_MODEL").is_some(),
         in_flight: in_flight(),
+        background_in_flight: background_in_flight(),
         secs_since_swap: unix_secs().saturating_sub(LAST_SWAP_SECS.load(Ordering::SeqCst)),
         need: want_need(want),
         scale,
@@ -2154,6 +2453,7 @@ fn best_model_for(config_dir: &Path, home: &Path, kind: TaskKind) -> Option<Path
         kept_loaded: keep_loaded(),
         forced: std::env::var_os("GROKHUB_LOCAL_MODEL").is_some(),
         in_flight: 0,
+        background_in_flight: 0,
         secs_since_swap: u64::MAX,
         need: super::local_scale::Need::Normal,
         scale: super::local_scale::scale_now(unix_ms()),
@@ -3027,6 +3327,7 @@ mod tests {
             token: "t".into(),
             binary: PathBuf::from("llama-server"),
             model: PathBuf::from("m.gguf"),
+            embedding_model: None,
             restarts: AtomicU64::new(0),
             last_used_secs: AtomicU64::new(last_used_secs),
             idle_unload_secs,
@@ -3399,6 +3700,36 @@ mod tests {
                 ))
             );
             assert_eq!(take_ask_outcome(), None, "taken once");
+            // A background helper's request doesn't hold the ask back...
+            let helper = {
+                let _bg = super::super::local_scale::NeedGuard::set(
+                    super::super::local_scale::Need::Background,
+                );
+                busy()
+            };
+            assert_eq!((in_flight(), background_in_flight()), (1, 1));
+            assert_eq!(
+                swap_plan(&dir, &mid, Some(&side), Want::Request).0,
+                Plan::Load {
+                    model: small.clone(),
+                    stand_in: Some(StandIn::Asked(SpeedQuality::Speed, Source::Words))
+                }
+            );
+            // ...another chat's reply does.
+            let reply = busy();
+            assert_eq!(
+                swap_plan(&dir, &mid, Some(&side), Want::Request).0,
+                Plan::Keep
+            );
+            assert_eq!(
+                take_ask_outcome().map(|(a, _)| a),
+                Some(AskOutcome::Refused(
+                    SpeedQuality::Speed,
+                    super::super::local_swap::Refused::Busy(Source::Words)
+                ))
+            );
+            drop((helper, reply));
+            assert_eq!((in_flight(), background_in_flight()), (0, 0));
         }
         assert_eq!(
             swap_plan(&dir, &mid, Some(&side), Want::Request).0,
@@ -3406,6 +3737,28 @@ mod tests {
             "the guard dropped: back on Auto"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_ask_waits_for_background_work_then_stops_waiting_at_the_deadline() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        let helper = {
+            let _bg = super::super::local_scale::NeedGuard::set(
+                super::super::local_scale::Need::Background,
+            );
+            busy()
+        };
+        let began = Instant::now();
+        assert!(!wait_for_idle(Duration::from_millis(200)), "still running");
+        assert!(began.elapsed() >= Duration::from_millis(200));
+        let done = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            drop(helper);
+        });
+        assert!(wait_for_idle(Duration::from_secs(10)), "it finished");
+        assert_eq!(background_in_flight(), 0);
+        done.join().unwrap();
     }
 
     #[test]
@@ -4254,6 +4607,7 @@ mod tests {
             "tok",
             None,
             false,
+            true,
         )
         .unwrap_err();
         assert!(err.contains("must be named"), "{err}");
@@ -4274,6 +4628,7 @@ mod tests {
             "tok",
             None,
             false,
+            true,
         )
         .unwrap_err();
         assert!(err.contains("loopback"), "{err}");
@@ -4359,9 +4714,9 @@ mod tests {
         std::fs::write(dir.join("models").join("b.gguf"), b"gguf").unwrap();
         let next = resolve_paths(&dir).expect("paths");
         assert!(next.model.ends_with("b.gguf"), "{:?}", next.model);
-        // A pick saved in Settings is a file it reads, so it counts too.
+        // The added files live in a Settings file it reads, so it counts too.
         let before = paths_stamp(&dir);
-        set_pick(&dir, "x").unwrap();
+        std::fs::write(dir.join("local_ai.json"), r#"{"ownFiles":["/x.gguf"]}"#).unwrap();
         assert_ne!(paths_stamp(&dir), before);
     }
 
@@ -4465,38 +4820,60 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_pick_wins_over_the_last_download() {
-        let dir = std::env::temp_dir().join(format!("gh-sidecar-pick-{}", std::process::id()));
+    fn an_added_model_file_loads_when_it_is_the_only_one_or_scores_best() {
+        let dir = std::env::temp_dir().join(format!("gh-sidecar-own-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let models = dir.join("models");
         std::fs::create_dir_all(&models).unwrap();
-        std::fs::write(models.join("last.gguf"), b"12345").unwrap();
-        std::fs::write(
-            models.join("installed.json"),
-            r#"{"id":"x","file":"last.gguf","sha256":"abc","bytes":5}"#,
-        )
-        .unwrap();
-        std::fs::write(dir.join("local_ai.json"), r#"{"mode":"manual"}"#).unwrap();
-        let pick = |selected: &str| {
-            set_pick(&dir, selected).unwrap();
-            resolve_model_file(&dir)
-        };
         let own = dir.join("mine.gguf");
         std::fs::write(&own, b"gguf").unwrap();
-        assert_eq!(pick(&own.display().to_string()), Some(own.clone()));
-        let m = grokhub_core::local_setup::local_models()
-            .iter()
-            .find(|m| m.is_chat())
+        let added = |files: &[&std::path::Path]| {
+            let list: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
+            std::fs::write(
+                dir.join("local_ai.json"),
+                serde_json::json!({ "ownFiles": list }).to_string(),
+            )
             .unwrap();
-        std::fs::write(models.join(m.file), b"gguf").unwrap();
-        assert_eq!(pick(m.id), Some(models.join(m.file)));
-        // A pick whose file is gone falls back to the last download.
+            resolve_model_file(&dir)
+        };
+        // A file that's gone or a projector is skipped; the next one loads.
+        let gone = dir.join("gone.gguf");
+        let projector = dir.join("mmproj-x.gguf");
+        std::fs::write(&projector, b"gguf").unwrap();
+        assert_eq!(added(&[&gone, &projector, &own]), Some(own.clone()));
+        // An old Settings pick is no longer read.
+        std::fs::write(
+            dir.join("local_ai.json"),
+            serde_json::json!({ "localModel": { "selected": own.display().to_string() } })
+                .to_string(),
+        )
+        .unwrap();
+        assert_ne!(resolve_model_file(&dir), Some(own.clone()));
+        // A tiny added file can beat a slow catalog download on merit.
+        let slow = grokhub_core::local_setup::model_by_id("bytedance-seed-oss-36b-heretic-q4_k_m")
+            .expect("slow catalog model");
+        let fast = grokhub_core::local_setup::model_by_id("gemma-4-e4b-it-abliterated-q4_k")
+            .expect("fast capable catalog model");
+        let slow_path = models.join(slow.file);
+        std::fs::write(&slow_path, vec![0u8; 64]).unwrap();
+        std::fs::write(
+            models.join("installed.json"),
+            serde_json::json!({
+                "id": slow.id,
+                "file": slow.file,
+                "sha256": "abc",
+                "bytes": 64
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let own_fast = dir.join(fast.file);
+        std::fs::write(&own_fast, vec![0u8; 32]).unwrap();
         assert_eq!(
-            pick(&dir.join("gone.gguf").display().to_string()),
-            Some(models.join("last.gguf"))
+            added(&[&own_fast]),
+            Some(own_fast.clone()),
+            "the faster added catalog file beats the slow download"
         );
-        let saved = std::fs::read_to_string(dir.join("local_ai.json")).unwrap();
-        assert!(saved.contains(r#""mode": "manual""#), "{saved}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4637,7 +5014,7 @@ mod tests {
         );
         assert_eq!(
             loading.join().unwrap(),
-            Err("local model server stopped before it was ready".into())
+            Err("local model server stopped before it was ready: it exited with code 1 (it didn't start on the CPU either)".into())
         );
         local_gov::reset_for_test();
         set_last_error(None);
@@ -4738,6 +5115,103 @@ mod tests {
         assert_eq!(global_pid(), Some(pid), "the loaded model stayed");
         assert!(!seen.exists(), "still no engine started");
         stop_global();
+        set_last_error(None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_death_names_its_reason_from_the_log_and_the_exit() {
+        use std::os::unix::process::ExitStatusExt;
+        let code = |c: i32| Some(std::process::ExitStatus::from_raw(c << 8));
+        let signal = |s: i32| Some(std::process::ExitStatus::from_raw(s));
+        assert_eq!(
+            death_reason("llama_model_load: error loading model: unknown model architecture: 'gemma9'\n", code(1)).as_deref(),
+            Some("this engine is too old for the model (llama_model_load: error loading model: unknown model architecture: 'gemma9'). Get engine in Settings → Local AI updates it")
+        );
+        assert_eq!(
+            death_reason("main: couldn't bind HTTP server socket, hostname: 127.0.0.1, port: 8080\n", code(1)).as_deref(),
+            Some("its port was taken (main: couldn't bind HTTP server socket, hostname: 127.0.0.1, port: 8080)")
+        );
+        assert_eq!(
+            death_reason("error: invalid argument: --models-max\n", code(1)).as_deref(),
+            Some("it refused how it was started (error: invalid argument: --models-max)")
+        );
+        // A backend names itself on a good start too: only its error counts.
+        let rocm = "ggml_cuda_init: found 1 ROCm devices:\n  Device 0: AMD Radeon RX 9070 XT, gfx1201\nrocBLAS error: Cannot read TensileLibrary.dat for GPU arch gfx1201\n";
+        assert_eq!(
+            death_reason(rocm, signal(6)).as_deref(),
+            Some("the ROCm GPU backend failed (rocBLAS error: Cannot read TensileLibrary.dat for GPU arch gfx1201)")
+        );
+        assert_eq!(
+            death_reason(
+                "ggml_vulkan: Found 1 Vulkan devices:\nload_tensors: loading model\n",
+                signal(11)
+            )
+            .as_deref(),
+            Some("it crashed (segmentation fault) (last log line: load_tensors: loading model)")
+        );
+        assert_eq!(
+            death_reason("gguf_init_from_file: invalid magic characters 'xxxx'\n", code(1)).as_deref(),
+            Some("it couldn't load the model file (gguf_init_from_file: invalid magic characters 'xxxx')")
+        );
+        assert_eq!(
+            death_reason(
+                "ggml_vulkan: Device memory allocation of size 1 failed: ErrorOutOfDeviceMemory\n",
+                code(1)
+            )
+            .as_deref(),
+            Some("it ran out of memory loading the model")
+        );
+        assert_eq!(
+            death_reason("", signal(4)).as_deref(),
+            Some("it crashed: this processor lacks an instruction the engine was built for (illegal instruction)")
+        );
+        assert_eq!(
+            death_reason("", code(3)).as_deref(),
+            Some("it exited with code 3")
+        );
+        assert_eq!(death_reason("", None), None);
+        let long = format!("{}\n", "x".repeat(200));
+        assert_eq!(
+            death_reason(&long, None),
+            Some(format!("it exited (last log line: {}…)", "x".repeat(160)))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_start_router_mode_stops_runs_the_model_alone_then_says_why() {
+        use std::os::unix::fs::PermissionsExt;
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        local_gov::reset_for_test();
+        let dir = crate::harness::test_dir("sidecar-router-off");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        let bin = dir.join("bin").join("llama-server");
+        let seen = dir.join("args.txt");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = --help ]; then echo '--models-preset PATH'; exit 0; fi\necho \"$@\" >> {}\necho 'error: invalid argument: --models-max' >&2\nexit 1\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("models").join("m.gguf"), b"x").unwrap();
+        std::fs::write(dir.join("models").join("nomic-embed-text.gguf"), b"x").unwrap();
+        assert_eq!(
+            acquire(&dir).err().as_deref(),
+            Some("local model server stopped before it was ready: it refused how it was started (error: invalid argument: --models-max) (it didn't start on the CPU either)")
+        );
+        let starts = std::fs::read_to_string(&seen).unwrap();
+        let starts: Vec<&str> = starts.lines().collect();
+        assert_eq!(starts.len(), 3, "{starts:?}");
+        assert!(starts[0].contains("--models-preset"), "{}", starts[0]);
+        assert!(!starts[1].contains("--models-preset"), "{}", starts[1]);
+        assert!(starts[2].contains("--device none"), "{}", starts[2]);
+        local_gov::reset_for_test();
         set_last_error(None);
     }
 }

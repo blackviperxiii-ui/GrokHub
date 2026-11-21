@@ -345,12 +345,18 @@ fn the_cua_flag_comes_from_the_saved_app_json_and_defaults_off() {
 }
 
 #[test]
-fn the_cua_gate_registers_only_on_linux_with_both_switches_and_the_hub() {
+fn the_cua_gate_registers_only_on_linux_and_mac_with_both_switches_and_the_hub() {
     let hub = Some(PathBuf::from("/opt/grokhub/grokhub-hub"));
     assert!(!sync_cua(false, true, hub.clone()), "desktop control off");
     assert!(!sync_cua(true, false, hub.clone()), "cuaDriver off");
     assert!(!sync_cua(true, true, None), "no hub binary");
-    assert_eq!(sync_cua(true, true, hub), cfg!(target_os = "linux"));
+    assert_eq!(
+        sync_cua(true, true, hub),
+        matches!(
+            (std::env::consts::OS, std::env::consts::ARCH),
+            ("linux" | "macos", "x86_64" | "aarch64")
+        )
+    );
     assert!(!sync_cua(true, true, None));
 }
 

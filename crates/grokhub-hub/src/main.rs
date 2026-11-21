@@ -1,6 +1,7 @@
 //! LAN hub — same /v1 contract as grokhub --hub — plus the headless tools
 //! the desktop shell has no console for (`--mcp-self`, `--mcp-desktop`,
-//! `--mcp-cua`, `--doctor`, `--oauth`, `--update`, `--askpass`, `bench local`).
+//! `--mcp-cua`, `--mcp-bridge`, `--doctor`, `--oauth`, `--update`, `--askpass`,
+//! `bench local`).
 
 use grokhub_core::DEFAULT_PORT;
 use grokhub_hub::{askpass_socket, parse_args, Launch};
@@ -46,10 +47,14 @@ grokhub-hub              listen on GROKHUB_HUB_PORT or :18766 (also --hub)\n  \
 grokhub-hub --mcp-self   the agent's skill, connection and automation tools on stdin\n  \
 grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n  \
 grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n  \
-grokhub-hub --doctor     auth / memory / hub checks\n  \
+grokhub-hub --mcp-bridge read-only unsealed memory search and automation status on stdin\n  \
+grokhub-hub --doctor [--fix]  auth / memory / hub / security checks\n  \
 grokhub-hub --oauth      sign in with Grok (device code) for the desktop app\n  \
 grokhub-hub --update     how this install updates (runs nothing)\n  \
 grokhub-hub bench local  on-device speed + eval\n  \
+grokhub-hub routine run <name> [--dry-run] [--set key=value]  a saved routine, no model\n  \
+grokhub-hub routine allow|revoke <name>  let its change steps run unattended, or not\n  \
+grokhub-hub routine undo <name>  take back its newest save\n  \
 grokhub-hub --askpass <socket>  answer a sudo prompt (the app runs this)\n  \
 grokhub-hub --version\n  \
 grokhub-hub --help\n"
@@ -84,10 +89,17 @@ fn main() {
             grokhub_desktop::host::install_standalone();
             std::process::exit(grokhub_desktop::run_cua_stdio());
         }
-        Launch::Doctor => {
+        Launch::McpBridge => {
             let dir = grokhub_core::paths::config_dir();
-            let (text, ok) =
-                grokhub_hub::doctor::report(&grokhub_hub::doctor::gather(&dir, hub_port()));
+            std::process::exit(grokhub_hub::mcp_bridge::run_stdio(&dir));
+        }
+        Launch::Doctor { fix } => {
+            let dir = grokhub_core::paths::config_dir();
+            let (text, ok) = grokhub_hub::doctor::report(&grokhub_hub::doctor::gather(
+                &dir,
+                hub_port(),
+                fix,
+            ));
             print!("{text}");
             std::process::exit(if ok { 0 } else { 1 });
         }
@@ -112,6 +124,19 @@ fn main() {
         Launch::BenchLocal => {
             use_os_stores();
             std::process::exit(grokhub_agent::route::local_bench::run_cli());
+        }
+        Launch::RoutineRun => {
+            use_os_stores();
+            std::process::exit(grokhub_agent::routine_run::run_cli(
+                &args[3..],
+                &grokhub_core::paths::config_dir(),
+            ));
+        }
+        Launch::RoutineManage => {
+            std::process::exit(grokhub_agent::routine_consent::run_cli(
+                &args[2..],
+                &grokhub_core::paths::config_dir(),
+            ));
         }
         Launch::Serve => {
             let port = hub_port();
@@ -160,10 +185,14 @@ mod tests {
             "  grokhub-hub              listen on GROKHUB_HUB_PORT or :18766 (also --hub)\n",
             "  grokhub-hub --mcp-self   the agent's skill, connection and automation tools on stdin\n",
             "  grokhub-hub bench local  on-device speed + eval\n",
+            "  grokhub-hub routine run <name> [--dry-run] [--set key=value]  a saved routine, no model\n",
+            "  grokhub-hub routine allow|revoke <name>  let its change steps run unattended, or not\n",
+            "  grokhub-hub routine undo <name>  take back its newest save\n",
             "  grokhub-hub --askpass <socket>  answer a sudo prompt (the app runs this)\n",
             "  grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n",
             "  grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n",
-            "  grokhub-hub --doctor     auth / memory / hub checks\n",
+            "  grokhub-hub --mcp-bridge read-only unsealed memory search and automation status on stdin\n",
+            "  grokhub-hub --doctor [--fix]  auth / memory / hub / security checks\n",
             "  grokhub-hub --oauth      sign in with Grok (device code) for the desktop app\n",
             "  grokhub-hub --update     how this install updates (runs nothing)\n",
         ] {

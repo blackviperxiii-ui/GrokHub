@@ -11,16 +11,10 @@ import {
   chatTabSoftDelete,
   chatTabSwitch,
   chatTabUnarchive,
-  claudePlanChats,
   listArchivedChats,
   listChatTabs,
   listDeletedChats,
-  localChatPin,
-  setClaudePlanChat,
-  setLocalChatPin,
   type ChatTab,
-  type ClaudeChats,
-  type LocalTier,
 } from "./api";
 import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { ClearChatDialog } from "./ClearChat";
@@ -29,16 +23,6 @@ import { useDismiss } from "./ui";
 export const CHAT_TABS_LABEL = "Chat tabs";
 export const NEW_CHAT_TAB = "New chat";
 export const MAIN_TAB_HINT = "Main: always here. Clear empties it.";
-export const ON_CLAUDE_PLAN = "Run on Claude (your plan)";
-export const MODEL_FOR_CHAT = "Model for this chat";
-
-/** The tiers a chat can be set to for its on-device model; Auto is none. */
-export const CHAT_TIERS: readonly { tier: LocalTier | null; label: string }[] = [
-  { tier: null, label: "Auto" },
-  { tier: "speed", label: "Speed" },
-  { tier: "balanced", label: "Balance" },
-  { tier: "quality", label: "Performance" },
-];
 
 function shortTitle(title: string): string {
   const words = title.trim().split(/\s+/).filter(Boolean).slice(0, 4);
@@ -306,8 +290,6 @@ export function ChatTabs({
             (menu.id === activeId && shown.length <= 1 && draftEmpty)
           }
         >
-          <TierSwitch id={menu.id} onClose={() => setMenu(null)} onError={onError} />
-          <PlanSwitch id={menu.id} onClose={() => setMenu(null)} onError={onError} />
         </TabContextMenu>
       )}
 
@@ -455,66 +437,6 @@ function TabContextMenu({
       )}
       {children}
     </div>
-  );
-}
-
-/** A chat's on-device tier, from its next message on. Words in a message
- * ("be quick", "think hard") still beat it for that message. Hidden where
- * the command isn't there (the web page, a phone). */
-function TierSwitch({ id, onClose, onError }: { id: string; onClose: () => void; onError: (note: string) => void }) {
-  const [tier, setTier] = useState<LocalTier | null | undefined>(undefined);
-
-  useEffect(() => {
-    localChatPin(id).then(setTier, () => setTier(undefined));
-  }, [id]);
-
-  if (tier === undefined) return null;
-  return (
-    <div role="group" aria-label={MODEL_FOR_CHAT} className="tab-menu-group">
-      <div className="tab-menu-heading" aria-hidden="true">
-        {MODEL_FOR_CHAT}
-      </div>
-      {CHAT_TIERS.map((t) => (
-        <button
-          key={t.label}
-          type="button"
-          role="menuitemradio"
-          aria-checked={tier === t.tier}
-          onClick={() => {
-            onClose();
-            setLocalChatPin(id, t.tier).catch((err: unknown) => onError(String(err)));
-          }}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** A chat's switch to the user's Claude plan; shown once Settings allowed it. */
-function PlanSwitch({ id, onClose, onError }: { id: string; onClose: () => void; onError: (note: string) => void }) {
-  const [chats, setChats] = useState<ClaudeChats | null>(null);
-
-  useEffect(() => {
-    // Where the command isn't there (the web page, a phone), the switch stays hidden.
-    claudePlanChats().then(setChats, () => setChats(null));
-  }, []);
-
-  if (!chats?.allowed) return null;
-  const on = chats.chats.includes(id);
-  return (
-    <button
-      type="button"
-      role="menuitemcheckbox"
-      aria-checked={on}
-      onClick={() => {
-        onClose();
-        setClaudePlanChat(id, !on).catch((err: unknown) => onError(String(err)));
-      }}
-    >
-      {ON_CLAUDE_PLAN}
-    </button>
   );
 }
 

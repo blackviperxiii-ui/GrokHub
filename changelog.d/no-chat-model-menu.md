@@ -1,0 +1,1 @@
+- Chat: the tab menu no longer has a "Model for this chat" picker. Auto picks the model. To steer it, tell the chat "from now on, be quick" or "think hard from now on", which still holds after a restart, or "back to auto". A tier picked in the old menu is back on Auto.

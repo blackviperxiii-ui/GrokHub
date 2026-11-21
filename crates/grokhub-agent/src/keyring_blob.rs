@@ -37,8 +37,17 @@ impl OsBackend {
         Self { service, map_err }
     }
 
+    #[cfg(not(target_os = "android"))]
     fn entry(&self, account: &str) -> Result<keyring::Entry, String> {
         keyring::Entry::new(self.service, account).map_err(self.map_err)
+    }
+
+    #[cfg(target_os = "android")]
+    fn entry(&self, account: &str) -> Result<keyring_core::Entry, String> {
+        // keyring's `v1` facade rejects Android; seal in the OS keystore via
+        // keyring-core after [`ensure_android_store`].
+        ensure_android_store()?;
+        keyring_core::Entry::new(self.service, account).map_err(self.map_err)
     }
 }
 
@@ -63,6 +72,28 @@ impl Backend for OsBackend {
             Err(err) => Err((self.map_err)(err)),
         }
     }
+}
+
+/// Install Android's SharedPreferences + Keystore store as the keyring-core
+/// default. Tauri Mobile initializes `ndk-context` before setup; call this
+/// once before the first credential read. No-op on other targets.
+#[cfg(target_os = "android")]
+pub fn ensure_android_store() -> Result<(), String> {
+    use std::sync::OnceLock;
+    static INIT: OnceLock<Result<(), String>> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let store = android_native_keyring_store::Store::new()
+            .map_err(|e| format!("android keyring store: {e}"))?;
+        keyring_core::set_default_store(store);
+        Ok(())
+    })
+    .clone()
+}
+
+/// Desktop / iOS: the OS store is chosen by keyring's `v1` feature.
+#[cfg(not(target_os = "android"))]
+pub fn ensure_android_store() -> Result<(), String> {
+    Ok(())
 }
 
 fn count_account(base: &str) -> String {

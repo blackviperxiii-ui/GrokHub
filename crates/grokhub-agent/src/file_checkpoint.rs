@@ -21,6 +21,10 @@ use crate::perm;
 pub const MAX_RUNS: usize = 20;
 /// Soft size cap for the whole checkpoints tree (200 MB).
 pub const MAX_BYTES: u64 = 200 * 1024 * 1024;
+/// Maximum workspace files snapshotted before a single mutating shell command.
+const MAX_SHELL_SNAPSHOT_FILES: usize = 32;
+/// Skip individual files larger than 4 MB during pre-shell auto-snapshotting.
+const MAX_SHELL_SNAPSHOT_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 thread_local! {
     static ACTIVE: RefCell<Option<Active>> = const { RefCell::new(None) };
@@ -157,6 +161,105 @@ pub fn before_write(path: &Path) {
         return;
     }
     prune_keeping(Some(&active.conversation));
+}
+
+/// True when `command` looks like it may create, modify, or delete workspace
+/// files (Card 957). Pure read-only inspection commands return `false`.
+pub fn is_potentially_mutating_shell(command: &str) -> bool {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.contains('>') {
+        return true;
+    }
+    const MUTATING_TOKENS: &[&str] = &[
+        "rm",
+        "mv",
+        "cp",
+        "tee",
+        "truncate",
+        "patch",
+        "touch",
+        "chmod",
+        "dd",
+        "install",
+        "sed",
+        "perl",
+        "python",
+        "python3",
+        "node",
+        "ruby",
+        "sh",
+        "bash",
+        "zsh",
+        "pwsh",
+        "powershell",
+    ];
+    for raw in trimmed.split_whitespace() {
+        let tok = raw
+            .trim_matches(|c: char| matches!(c, '\'' | '"' | ';' | '(' | ')' | '{' | '}'))
+            .rsplit('/')
+            .next()
+            .unwrap_or("");
+        if MUTATING_TOKENS.contains(&tok) {
+            return true;
+        }
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower.contains("git checkout")
+        || lower.contains("git reset")
+        || lower.contains("git restore")
+        || lower.contains("git clean")
+        || lower.contains("git apply")
+        || lower.contains("git rm")
+        || lower.contains("git mv")
+}
+
+/// Snapshot workspace files referenced by a potentially mutating shell command
+/// (Card 957) so shell mutations can be undone via `/rewind step`.
+///
+/// No-op when there is no active step or when the command is read-only.
+/// Returns the number of existing workspace files snapshotted.
+pub fn before_shell(workspace: &Path, command: &str) -> usize {
+    let has_active = ACTIVE.with(|slot| slot.borrow().is_some());
+    if !has_active || !is_potentially_mutating_shell(command) {
+        return 0;
+    }
+    let Ok(ws_canon) = workspace.canonicalize() else {
+        return 0;
+    };
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for raw in command.split_whitespace() {
+        let cleaned = raw
+            .trim_start_matches(['>', '<', '&', '|', ';'])
+            .trim_matches(|c: char| matches!(c, '\'' | '"' | ';' | ',' | ')' | '('));
+        if cleaned.is_empty() || cleaned.starts_with('-') {
+            continue;
+        }
+        let path = if Path::new(cleaned).is_absolute() {
+            PathBuf::from(cleaned)
+        } else {
+            ws_canon.join(cleaned)
+        };
+        if let Ok(canon) = path.canonicalize()
+            && canon.starts_with(&ws_canon)
+            && canon.is_file()
+            && fs::metadata(&canon)
+                .map(|m| m.len() <= MAX_SHELL_SNAPSHOT_FILE_BYTES)
+                .unwrap_or(false)
+            && !candidates.contains(&canon)
+        {
+            candidates.push(canon);
+            if candidates.len() >= MAX_SHELL_SNAPSHOT_FILES {
+                break;
+            }
+        }
+    }
+    for path in &candidates {
+        before_write(path);
+    }
+    candidates.len()
 }
 
 /// Steps for a conversation, oldest first.
@@ -596,6 +699,31 @@ mod tests {
         let text = format_steps("conv-fmt");
         assert!(text.contains("step 1"), "{text}");
         assert!(text.contains("a.txt"), "{text}");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn before_shell_snapshots_mutated_files_and_rewinds_them() {
+        let (base, ws, _guard) = scratch("shell");
+        let path = ws.join("notes.txt");
+        fs::write(&path, b"original content").unwrap();
+        let step = begin_step("conv-shell").unwrap();
+
+        // Read-only command does not snapshot.
+        assert!(!is_potentially_mutating_shell("git status"));
+        assert_eq!(before_shell(&ws, "cat notes.txt"), 0);
+
+        // Mutating shell command snapshots referenced workspace file.
+        assert!(is_potentially_mutating_shell("rm -f notes.txt"));
+        assert_eq!(before_shell(&ws, "rm -f notes.txt"), 1);
+
+        // Simulate shell mutation (deletion) and rewind.
+        fs::remove_file(&path).unwrap();
+        assert!(!path.exists());
+        let restored = restore_step("conv-shell", step).unwrap();
+        assert!(restored.contains("1 file"), "{restored}");
+        assert_eq!(fs::read(&path).unwrap(), b"original content");
+
         let _ = fs::remove_dir_all(&base);
     }
 }

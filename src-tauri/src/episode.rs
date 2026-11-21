@@ -622,7 +622,7 @@ pub fn start_askpass(hub: Option<PathBuf>) -> bool {
 }
 
 /// Registers (or removes) the Cua gate as the engine's native MCP server:
-/// only on Linux, with desktop control and `cuaDriver` both on, and only when
+/// only where Cua runs (Linux and macOS), with desktop control and `cuaDriver` both on, and only when
 /// the hub binary is there. Returns whether it is registered.
 pub fn sync_cua(desktop_control: bool, cua_flag: bool, hub: Option<PathBuf>) -> bool {
     let wanted = grokhub_agent::harness::ComputerUseBackend::selected(cua_flag, desktop_control)
@@ -635,7 +635,9 @@ pub fn sync_cua(desktop_control: bool, cua_flag: bool, hub: Option<PathBuf>) -> 
 
 /// Whether this chat's steps run through the Cua gate right now.
 pub fn cua_in_use(config_dir: &Path) -> bool {
-    cfg!(target_os = "linux") && cua_flag(config_dir) && hub_exe().is_some()
+    grokhub_agent::harness::cua_platform(std::env::consts::OS, std::env::consts::ARCH).is_ok()
+        && cua_flag(config_dir)
+        && hub_exe().is_some()
 }
 
 /// The end of an episode no loop is running: its marker span, and every card

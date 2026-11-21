@@ -1,24 +1,50 @@
 #!/usr/bin/env bash
-# Install the Tauri shell (grokhub-shell) + grokhub-hub from this clone.
-#   --channel beta    fetch origin, check out the beta branch, build, install
-#   --channel stable  same for main (stable = main)
-#   --app shell       the Tauri shell (grokhub-shell) plus the hub; the only
-#                     app since the egui cabin was retired
+# Install the Tauri shell (grokhub-shell).
+#
+# By default this downloads the prebuilt app from the GitHub release, checks
+# SHA256SUMS against its minisign signature and the download against
+# SHA256SUMS, and installs it. Nothing is compiled, and it also runs piped:
+#   curl -fsSL https://raw.githubusercontent.com/blackviperxiii-ui/GrokHub/main/scripts/install.sh | bash
+# Linux x86_64 gets the AppImage, which updates itself from Settings ->
+# Updates. An Apple silicon Mac gets the app from the .dmg.
+#
+#   --channel beta    the newest beta release (with --from-source, this
+#                     clone's beta branch)
+#   --channel stable  the newest stable release (main)
+#   --version vX.Y.Z  that release instead of the newest one
+#   --from-dir DIR    release files already downloaded to DIR (SHA256SUMS,
+#                     SHA256SUMS.minisig and the app): same checks, no network
+#   --from-source     build the shell and grokhub-hub from this clone
+#                     instead (needs Rust, npm and webkit2gtk-4.1)
+#   --app shell       the Tauri shell, the only app since the egui cabin was
+#                     retired
 # The channel is remembered in $GROKHUB_CONFIG/channel (the install receipt),
 # so a plain ./scripts/install.sh --user and the in-app Update stay on it.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Piped into bash there is no script file and no clone.
+SELF="${BASH_SOURCE[0]:-}"
+ROOT=""
+if [[ -n "$SELF" && -f "$SELF" ]]; then
+  ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+fi
 PREFIX="${PREFIX:-$HOME/.local}"
 SYSTEM=0
 CHANNEL=""
 DRY_RUN=0
+FROM_SOURCE=0
+VERSION_PIN=""
+FROM_DIR=""
+REPO="blackviperxiii-ui/GrokHub"
+# The release key, the same as packaging/minisign.pub. Every prebuilt
+# download is checked against it.
+RELEASE_PUBKEY="RWR4FhfLw4OqMXxiX+l3k/KmAVfsRzTpUD28zoz3HacmWPiwbTnyXgeD"
 # Which app to build: the shell and the hub. An old cabin install moves over
 # to the shell (see move_cabin_login below).
 APP=shell
 
 usage() {
-  echo "usage: $0 [--user|--system] [--prefix=DIR] [--channel beta|stable] [--app shell] [--dry-run]"
+  echo "usage: $0 [--user|--system] [--prefix=DIR] [--channel beta|stable] [--version vX.Y.Z] [--from-dir DIR] [--from-source] [--app shell] [--dry-run]"
 }
 
 set_channel() {
@@ -45,6 +71,15 @@ set_app() {
   esac
 }
 
+set_version() {
+  if [[ "$1" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]; then
+    VERSION_PIN="v${1#v}"
+  else
+    echo "error: --version takes a release tag like v3.5.0, not '$1'" >&2
+    exit 2
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --user) SYSTEM=0; PREFIX="${PREFIX:-$HOME/.local}" ;;
@@ -66,6 +101,25 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       set_app "$2"
+      shift
+      ;;
+    --from-source) FROM_SOURCE=1 ;;
+    --version=*) set_version "${1#--version=}" ;;
+    --version)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --version takes a release tag like v3.5.0" >&2
+        exit 2
+      fi
+      set_version "$2"
+      shift
+      ;;
+    --from-dir=*) FROM_DIR="${1#--from-dir=}" ;;
+    --from-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --from-dir takes a folder" >&2
+        exit 2
+      fi
+      FROM_DIR="$2"
       shift
       ;;
     --dry-run) DRY_RUN=1 ;;
@@ -96,10 +150,231 @@ else
 fi
 if [[ "$CHANNEL" == beta ]]; then BRANCH=beta; else BRANCH=main; fi
 
+MODE=prebuilt
+if [[ "$FROM_SOURCE" -eq 1 ]]; then
+  MODE=source
+  if [[ -n "$VERSION_PIN" || -n "$FROM_DIR" ]]; then
+    echo "error: --version and --from-dir pick a prebuilt release; leave them out with --from-source" >&2
+    exit 2
+  fi
+fi
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  echo "channel=$CHANNEL branch=$BRANCH switch=$SWITCH prefix=$PREFIX receipt=$RECEIPT app=$APP"
+  echo "channel=$CHANNEL branch=$BRANCH switch=$SWITCH prefix=$PREFIX receipt=$RECEIPT app=$APP mode=$MODE"
   exit 0
 fi
+
+# ---- prebuilt install --------------------------------------------------
+
+say() { echo "install: $*"; }
+die() { echo "error: $*" >&2; exit 1; }
+
+# minisig_ok FILE SIG: FILE is signed by the release key. Uses minisign when
+# it is installed, otherwise OpenSSL 3 (Ed25519, plus BLAKE2b-512 for
+# minisign's prehashed "ED" signatures). Both the file signature and the
+# trusted comment's global signature must verify.
+minisig_ok() {
+  local file="$1" sig="$2"
+  if command -v minisign >/dev/null 2>&1; then
+    minisign -V -q -P "$RELEASE_PUBKEY" -m "$file" -x "$sig" >/dev/null 2>&1
+    return
+  fi
+  local t trusted alg ok=1
+  t="$(mktemp -d)"
+  trusted="$(sed -n 3p "$sig")"
+  if [[ "$trusted" == "trusted comment: "* ]] &&
+    printf '%s' "$RELEASE_PUBKEY" | base64 -d >"$t/pub" 2>/dev/null &&
+    sed -n 2p "$sig" | base64 -d >"$t/line" 2>/dev/null &&
+    sed -n 4p "$sig" | base64 -d >"$t/global" 2>/dev/null &&
+    [[ "$(wc -c <"$t/pub" | tr -d ' ')" == 42 ]] &&
+    [[ "$(wc -c <"$t/line" | tr -d ' ')" == 74 ]] &&
+    [[ "$(wc -c <"$t/global" | tr -d ' ')" == 64 ]] &&
+    [[ "$(head -c 2 "$t/pub")" == Ed ]] &&
+    cmp -s <(tail -c +3 "$t/pub" | head -c 8) <(tail -c +3 "$t/line" | head -c 8); then
+    # An Ed25519 public key as DER: the fixed SPKI prefix, then its 32 bytes.
+    { printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00'; tail -c 32 "$t/pub"; } >"$t/der"
+    tail -c 64 "$t/line" >"$t/sig"
+    { cat "$t/sig"; printf '%s' "${trusted#trusted comment: }"; } >"$t/gmsg"
+    alg="$(head -c 2 "$t/line")"
+    if [[ "$alg" == ED ]]; then
+      openssl dgst -blake2b512 -binary "$file" >"$t/msg" 2>/dev/null || alg=bad
+    elif [[ "$alg" == Ed ]]; then
+      cp -- "$file" "$t/msg"
+    fi
+    if [[ "$alg" == ED || "$alg" == Ed ]] &&
+      openssl pkey -pubin -inform DER -in "$t/der" -out "$t/pem" 2>/dev/null &&
+      openssl pkeyutl -verify -pubin -inkey "$t/pem" -rawin -in "$t/msg" -sigfile "$t/sig" >/dev/null 2>&1 &&
+      openssl pkeyutl -verify -pubin -inkey "$t/pem" -rawin -in "$t/gmsg" -sigfile "$t/global" >/dev/null 2>&1; then
+      ok=0
+    fi
+  fi
+  rm -rf "${t:?}"
+  return "$ok"
+}
+
+can_check_signatures() {
+  command -v minisign >/dev/null 2>&1 && return 0
+  command -v openssl >/dev/null 2>&1 || return 1
+  # pkeyutl -rawin for Ed25519 arrived in OpenSSL 3.
+  [[ "$(openssl version 2>/dev/null)" =~ ^OpenSSL\ ([3-9]|[1-9][0-9]) ]]
+}
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -- "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 -- "$1" | cut -d' ' -f1
+  fi
+}
+
+# The newest release tag on the channel.
+latest_tag() {
+  local url tag=""
+  if [[ "$CHANNEL" == stable ]]; then
+    url="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")" ||
+      die "couldn't reach GitHub to find the newest release"
+    tag="${url##*/tag/}"
+  else
+    tag="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=20" |
+      sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\(v[0-9.]*-beta\.[0-9]*\)".*/\1/p' | head -n1)" ||
+      die "couldn't reach GitHub to find the newest beta"
+  fi
+  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || die "couldn't find a $CHANNEL release"
+  printf '%s\n' "$tag"
+}
+
+# fetch NAME: the release file NAME into $WORK, from --from-dir or GitHub.
+fetch() {
+  if [[ -n "$FROM_DIR" ]]; then
+    [[ -f "$FROM_DIR/$1" ]] || die "$FROM_DIR has no $1"
+    cp -- "$FROM_DIR/$1" "$WORK/$1"
+  else
+    curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$WORK/$1" \
+      "https://github.com/$REPO/releases/download/$TAG/$1" || die "couldn't download $1 from $TAG"
+  fi
+}
+
+install_prebuilt() {
+  local os arch pattern asset want got
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os/$arch" in
+    Linux/x86_64) pattern='grokhub-shell-v[^ ]*-linux-amd64[.]AppImage' ;;
+    Darwin/arm64) pattern='grokhub-shell-v[^ ]*-macos-arm64[.]dmg' ;;
+    *) die "there is no prebuilt app for $os $arch yet; run scripts/install.sh --from-source in a clone" ;;
+  esac
+  can_check_signatures ||
+    die "checking the download needs minisign or OpenSSL 3; install one (for example sudo apt-get install minisign) and run this again"
+  [[ -n "$FROM_DIR" ]] || command -v curl >/dev/null 2>&1 || die "downloading needs curl"
+  if [[ "$SYSTEM" -eq 1 && "$(id -u)" -ne 0 ]]; then
+    die "--system needs root"
+  fi
+
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "${WORK:?}"' EXIT
+  if [[ -n "$FROM_DIR" ]]; then
+    TAG="${VERSION_PIN:-local files}"
+    say "checking the release files in $FROM_DIR"
+  else
+    TAG="${VERSION_PIN:-$(latest_tag)}"
+    say "$CHANNEL release $TAG"
+  fi
+  fetch SHA256SUMS
+  fetch SHA256SUMS.minisig
+  minisig_ok "$WORK/SHA256SUMS" "$WORK/SHA256SUMS.minisig" ||
+    die "SHA256SUMS isn't signed by the release key; nothing was installed"
+  read -r want asset < <(grep -E "^[0-9a-f]{64}  $pattern\$" "$WORK/SHA256SUMS" | head -n1) || true
+  [[ -n "${asset:-}" ]] || die "that release has no prebuilt app for $os $arch; run scripts/install.sh --from-source in a clone"
+  fetch "$asset"
+  got="$(sha256_of "$WORK/$asset")"
+  [[ "$got" == "$want" ]] || die "$asset doesn't match SHA256SUMS; nothing was installed"
+  say "verified $asset"
+
+  case "$os" in
+    Linux) place_appimage "$WORK/$asset" ;;
+    Darwin) place_mac_app "$WORK/$asset" ;;
+  esac
+
+  mkdir -p "$CONFIG_DIR"
+  printf '%s\n' "$CHANNEL" >"$RECEIPT"
+  # This copy isn't built from a clone, so the app mustn't send the user back
+  # to one to update it.
+  rm -f "$CONFIG_DIR/source"
+  [[ "$SWITCH" -eq 0 ]] || rm -f "$CONFIG_DIR/channel.beta-since"
+}
+
+# The AppImage is the program; it replaces itself when it updates.
+place_appimage() {
+  local bin="$PREFIX/bin/grokhub-shell"
+  mkdir -p "$PREFIX/bin"
+  # Copy beside the old one, then rename over it, so a failed copy never
+  # leaves a half-written app.
+  install -m755 "$1" "$PREFIX/bin/.grokhub-shell.new"
+  mv -f "$PREFIX/bin/.grokhub-shell.new" "$bin"
+  local entry="$PREFIX/share/applications/grokhub-shell.desktop"
+  if [[ -n "$ROOT" && -f "$ROOT/packaging/grokhub-shell.desktop" ]]; then
+    install_desktop_entry "$ROOT/packaging/grokhub-shell.desktop" "$entry" "$bin"
+  else
+    mkdir -p "$(dirname "$entry")"
+    printf '[Desktop Entry]\nType=Application\nName=GrokHub Shell\nExec=%s\nTryExec=%s\nIcon=grokhub\nCategories=Utility;\nTerminal=false\n' \
+      "$bin" "$bin" >"$entry"
+  fi
+  if [[ -n "$ROOT" && -f "$ROOT/packaging/grokhub.svg" ]]; then
+    install -Dm644 "$ROOT/packaging/grokhub.svg" "$PREFIX/share/icons/hicolor/scalable/apps/grokhub.svg"
+  fi
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
+  fi
+  echo "installed $bin (channel $CHANNEL, $TAG)"
+  [[ "$SYSTEM" -eq 1 ]] || echo "ensure $PREFIX/bin is on PATH"
+}
+
+place_mac_app() {
+  local mnt="$WORK/mnt" app name dest
+  mkdir -p "$mnt"
+  hdiutil attach -nobrowse -readonly -quiet -mountpoint "$mnt" "$1" || die "couldn't open $1"
+  app="$(find "$mnt" -maxdepth 1 -name '*.app' -print -quit)"
+  if [[ -z "$app" ]]; then
+    hdiutil detach -quiet "$mnt" || true
+    die "$1 has no app in it"
+  fi
+  if [[ "$SYSTEM" -eq 1 ]]; then dest=/Applications; else dest="$HOME/Applications"; fi
+  name="$(basename "$app")"
+  mkdir -p "$dest"
+  rm -rf "${dest:?}/.${name:?}.new"
+  cp -R "$app" "$dest/.$name.new"
+  hdiutil detach -quiet "$mnt" || true
+  # Swap in the new app with renames, so a failed copy leaves the old one.
+  rm -rf "${dest:?}/${name:?}.old"
+  [[ ! -e "$dest/$name" ]] || mv "$dest/$name" "$dest/$name.old"
+  mv "$dest/.$name.new" "$dest/$name"
+  rm -rf "${dest:?}/${name:?}.old"
+  echo "installed $dest/$name (channel $CHANNEL, $TAG)"
+}
+
+install_desktop_entry() {
+  local src="$1"
+  local dst="$2"
+  local bin="$3"
+  local name tmp
+  name="$(basename "$bin")"
+  tmp="$(mktemp)"
+  sed -e "s|^Exec=${name}\$|Exec=${bin}|" \
+      -e "s|^TryExec=${name}\$|TryExec=${bin}|" \
+      "$src" >"$tmp"
+  install -Dm644 "$tmp" "$dst"
+  rm -f "$tmp"
+}
+
+if [[ "$MODE" == prebuilt ]]; then
+  install_prebuilt
+  exit 0
+fi
+
+# ---- build from this clone (--from-source) --------------------------------
+
+[[ -n "$ROOT" && -e "$ROOT/.git" ]] ||
+  die "--from-source builds a clone: git clone https://github.com/$REPO, then run scripts/install.sh --from-source there"
 
 if [[ "$SYSTEM" -eq 1 && "$(id -u)" -ne 0 ]]; then
   echo "error: --system needs root" >&2
@@ -198,19 +473,6 @@ install -Dm755 "$TARGET/release/grokhub-hub" "$PREFIX/bin/grokhub-hub"
 # working for at least one release. It replaces an old cabin binary here.
 install -Dm755 "$TARGET/release/grokhub" "$PREFIX/bin/grokhub"
 install -Dm755 "$SHELL_TARGET/release/grokhub-shell" "$PREFIX/bin/grokhub-shell"
-install_desktop_entry() {
-  local src="$1"
-  local dst="$2"
-  local bin="$3"
-  local name tmp
-  name="$(basename "$bin")"
-  tmp="$(mktemp)"
-  sed -e "s|^Exec=${name}\$|Exec=${bin}|" \
-      -e "s|^TryExec=${name}\$|TryExec=${bin}|" \
-      "$src" >"$tmp"
-  install -Dm644 "$tmp" "$dst"
-  rm -f "$tmp"
-}
 install_desktop_entry \
   "$ROOT/packaging/grokhub-shell.desktop" \
   "$PREFIX/share/applications/grokhub-shell.desktop" \

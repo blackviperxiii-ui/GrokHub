@@ -12,12 +12,15 @@ pub mod attach;
 pub mod audio_check;
 pub mod auto_fix;
 pub mod automation;
+pub mod automation_check;
+pub mod automation_preflight;
 pub mod autonomy;
 pub mod autotune;
 pub mod backup_nudge;
 pub mod battlenet;
 pub mod battlenet_api;
 pub mod bg_task;
+pub mod blueprint_catalog;
 pub mod brain_policy;
 pub mod brand;
 pub mod browser;
@@ -100,6 +103,7 @@ pub mod hands;
 pub mod health;
 pub mod heartbeat;
 pub mod heartbeat_throttle;
+pub mod hf_gguf;
 pub mod history;
 pub mod hobby_paths;
 pub mod home;
@@ -147,11 +151,15 @@ pub mod model_library;
 pub mod model_lineup;
 pub mod model_registry;
 pub mod mods;
+pub mod msg_channels;
+pub mod msg_discord;
+pub mod msg_telegram;
 pub mod net_log;
 pub mod nudge_watchers;
 pub mod oauth;
 pub mod objectives;
 pub mod offline;
+pub mod ollama_show;
 pub mod onboard_identity;
 pub mod openclaw;
 pub mod organs;
@@ -178,6 +186,7 @@ pub mod pulse_sources;
 pub mod pulse_writer;
 pub mod quips;
 pub mod reactions;
+pub mod recall_score;
 pub mod recipe;
 pub mod recovered;
 pub mod redact;
@@ -190,6 +199,7 @@ pub mod review;
 pub mod review_pass;
 pub mod rewind;
 pub mod rhythm;
+pub mod routine;
 pub mod run_metrics;
 pub mod runtime_download;
 pub mod scheduler_lease;
@@ -287,6 +297,14 @@ pub use automation::{
     teach_routine, teachable_steps, user_asked_to_schedule, watch_once_keeps_running, AutoHealth,
     AutoOutcome, Automation, AutomationAlert, ScheduleRoute,
 };
+pub use automation_preflight::{
+    check_binary, mark_automation_preflight_failed, mentioned_connectors, needs_model_route,
+    preflight, PreflightBlock, PreflightCtx, PREFLIGHT_STOP, WELL_KNOWN_CONNECTORS,
+};
+pub use blueprint_catalog::{
+    catalog as blueprint_catalog, fill as fill_blueprint, Blueprint, BlueprintSlot,
+};
+
 pub use autonomy::{
     anticipate_consumes_slot, anticipated_need, cabin_system_prompt, host_plan_autorun,
     host_step_autorun, should_anticipate, HostAuto, LearnMode, Policy, SkillFollow, SkillWrite,
@@ -557,6 +575,7 @@ pub use oauth::{
 };
 pub use openclaw::{
     default_openclaw_paths, import_memory_file, is_openclaw_workspace, merge_imported_memory,
+    preview_mcp_json, preview_skill_md, ImportedMcpPreview, ImportedSkillPreview,
 };
 pub use organs::{
     cap_from_text, cap_label, daily_units_blocked, date_out_from, greet_from_last_job,
@@ -645,10 +664,12 @@ pub use shortcuts::{
 };
 pub use situation::{echoes_source, learn_from_turns, LearnedMove, MoveKind};
 pub use skill::{
-    apply_skill_follow, bump_skill_run, is_feedback_ask, is_hard_run, is_junk_skill, match_skill,
-    parse_skill_md, patch_skill, prefer_patch, propose_skill_from_turn, render_skill_md,
-    skill_dir_name, skill_follow_block, skill_safe, skill_use_in_chat_prompt, SkillMd,
-    AUTO_SKILL_PITFALL,
+    apply_skill_follow, bump_skill_run, is_feedback_ask, is_hard_run, is_junk_skill,
+    load_skill_lock, match_skill, parse_skill_md, patch_skill, prefer_patch,
+    propose_skill_from_turn, render_skill_md, save_skill_lock, scan_skill_md, skill_dir_name,
+    skill_follow_block, skill_lock_path, skill_quarantine_reason, skill_safe,
+    skill_use_in_chat_prompt, verify_and_record_skill, SkillLockEntry, SkillLockfile, SkillMd,
+    SkillScan, SkillThreat, AUTO_SKILL_PITFALL, SKILL_LOCK_FILE,
 };
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,

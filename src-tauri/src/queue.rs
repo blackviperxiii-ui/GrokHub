@@ -48,6 +48,12 @@ pub struct Progress {
     /// The model this helper ran on; empty when unknown.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub model: String,
+    /// The effort its last step went out with; empty when none or unknown.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub effort: String,
+    /// Why the router sent it there; empty before its first routed step.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub why: String,
 }
 
 /// A helper's progress as the page shows it, with its clock read at `now_ms`.
@@ -59,6 +65,8 @@ fn progress_of(progress: &TaskProgress, now_ms: u64) -> Progress {
         tokens: progress.tokens,
         seconds: end.saturating_sub(progress.started_ms) / 1000,
         model: progress.model.clone(),
+        effort: progress.effort.clone(),
+        why: progress.why.clone(),
     }
 }
 
@@ -1736,6 +1744,8 @@ mod tests {
             last_step: "shell".into(),
             tokens: 750,
             model: "grok-4.7".into(),
+            effort: "high".into(),
+            why: "quality · High: debugging.".into(),
         };
         assert_eq!(
             progress_of(&running, 43_500),
@@ -1745,6 +1755,8 @@ mod tests {
                 tokens: 750,
                 seconds: 42,
                 model: "grok-4.7".into(),
+                effort: "high".into(),
+                why: "quality · High: debugging.".into(),
             }
         );
         let ended = TaskProgress {
@@ -1770,10 +1782,19 @@ mod tests {
             tokens: 750,
             seconds: 42,
             model: "grok-4.7".into(),
+            effort: String::new(),
+            why: String::new(),
         });
         assert_eq!(
             serde_json::to_string(&plain).unwrap(),
             r#"{"id":"t1","title":"x","status":"running","live":true,"model":"grok-4.7","progress":{"steps":2,"lastStep":"shell","tokens":750,"seconds":42,"model":"grok-4.7"}}"#
+        );
+        let p = plain.progress.as_mut().unwrap();
+        p.effort = "high".into();
+        p.why = "quality · High: debugging.".into();
+        assert_eq!(
+            serde_json::to_value(&plain).unwrap()["progress"],
+            serde_json::json!({"steps":2,"lastStep":"shell","tokens":750,"seconds":42,"model":"grok-4.7","effort":"high","why":"quality · High: debugging."})
         );
     }
 

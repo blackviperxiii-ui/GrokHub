@@ -754,14 +754,8 @@ pub fn local_ai_view(
             TileAction::settings("localAi"),
         );
     }
-    let model = if cfg.local_model.selected.trim().is_empty() {
-        "Picked for this PC".to_string()
-    } else {
-        let s = cfg.local_model.selected.trim();
-        Path::new(s)
-            .file_name()
-            .map_or_else(|| s.to_string(), |f| f.to_string_lossy().into_owned())
-    };
+    // Auto picks the model; there is no pick of the user's to show.
+    let model = "Picked for this PC".to_string();
     let (big, tone) = if !on {
         ("Off", Tone::Quiet)
     } else if ready {

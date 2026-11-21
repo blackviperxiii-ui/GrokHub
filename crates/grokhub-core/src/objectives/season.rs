@@ -43,6 +43,12 @@ pub fn short_date(ms: u64, offset_min: i32) -> String {
     format!("{} {d}", MONTHS[(m - 1) as usize])
 }
 
+/// "Oct 20, 2026", for a Pulse post's published line.
+pub fn long_date(ms: u64, offset_min: i32) -> String {
+    let (y, m, d) = civil(local_day(ms, offset_min));
+    format!("{} {d}, {y}", MONTHS[(m - 1) as usize])
+}
+
 /// The season a local day falls in: (year, quarter 0-3).
 pub fn season_of(day: i64) -> (i32, u32) {
     let (y, m, _) = civil(day);

@@ -252,7 +252,9 @@ pub fn card_context(card: &UpdateCard) -> Option<String> {
             subject.kind.label()
         ));
     }
-    let summary = report.summary.trim();
+    // A written post's report holds only its details; its body is the summary.
+    let summary = card_summary(card);
+    let summary = summary.trim();
     if !summary.is_empty() {
         out.push_str("\nSummary: ");
         out.push_str(summary);

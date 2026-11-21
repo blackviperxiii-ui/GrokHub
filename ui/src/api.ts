@@ -632,18 +632,11 @@ export function voiceSpeak(text: string, conversationId?: string | null): Promis
   return invoke<Spoken>("voice_speak", { text, conversationId: conversationId ?? null });
 }
 
-export type VoiceRouteMode = "auto" | "local_only" | "pinned";
-export type SpeechSource = "local" | "grok_voice_3";
-
-export interface VoicePin {
-  stt: SpeechSource | null;
-  reply: string | null;
-  tts: SpeechSource | null;
-}
+/** Auto picks every voice source; Local only keeps them all on this computer. */
+export type VoiceRouteMode = "auto" | "local_only";
 
 export interface VoiceRouteConfig {
   mode: VoiceRouteMode;
-  pinned: VoicePin;
 }
 
 /** Shared voice routing preference across STT, reply model and TTS. */
@@ -1013,6 +1006,12 @@ export function onEventGap(handler: () => void): Promise<UnlistenFn> {
   return subscribe<null>(GAP_EVENT, () => handler());
 }
 
+/** `gate.onChange` / `gate.noAgent` from automations.json. */
+export interface AutomationGate {
+  onChange: boolean;
+  noAgent: boolean;
+}
+
 export interface AutomationRow {
   id: string;
   name: string;
@@ -1022,6 +1021,9 @@ export interface AutomationRow {
   health: string | null;
   /** The words for the Edit box; null when words can't say the schedule. */
   describe: string | null;
+  /** The job's check command; empty when it has none. */
+  checkCommand: string;
+  gate: AutomationGate;
 }
 
 export interface RunResult {
@@ -1057,8 +1059,50 @@ export interface SuggestedTile {
   seed: string;
 }
 
+/** One fillable field on a Blueprint starter. */
+export interface BlueprintSlot {
+  key: string;
+  label: string;
+  placeholder: string;
+}
+
+/** A slot-filled starter on the Automations Blueprints gallery. */
+export interface Blueprint {
+  id: string;
+  title: string;
+  body: string;
+  seed: string;
+  slots: BlueprintSlot[];
+}
+
 export function listSuggestedAutomations(): Promise<SuggestedTile[]> {
   return invoke<SuggestedTile[]>("list_suggested_automations");
+}
+
+export function listAutomationBlueprints(): Promise<Blueprint[]> {
+  return invoke<Blueprint[]>("list_automation_blueprints");
+}
+
+/** Replace `{key}` slots in a Blueprint seed. */
+export function fillBlueprintSeed(
+  seed: string,
+  values: Record<string, string>,
+): string {
+  let out = seed;
+  for (const [key, raw] of Object.entries(values)) {
+    const value = raw.trim();
+    if (!value) throw new Error(`Fill in ${key} first.`);
+    if (value.includes("`") || value.includes("\n")) {
+      throw new Error(`The value for ${key} cannot include backticks or new lines.`);
+    }
+    const needle = `{${key}}`;
+    if (!out.includes(needle)) throw new Error(`This Blueprint has no {${key}} field.`);
+    out = out.split(needle).join(value);
+  }
+  if (out.includes("{") && out.includes("}")) {
+    throw new Error("Fill in every field first.");
+  }
+  return out;
 }
 
 export function addSuggestedAutomation(seed: string): Promise<AutomationRow[]> {
@@ -1088,6 +1132,16 @@ export function removeAutomation(id: string): Promise<AutomationRow[]> {
 
 export function runAutomation(id: string): Promise<RunResult> {
   return invoke<RunResult>("run_automation", { id });
+}
+
+/** Whether the login service keeps automations running with the app closed. */
+export function getAutomationsService(): Promise<boolean> {
+  return invoke<boolean>("get_automations_service");
+}
+
+/** Install or remove the login service for closed-app automations. */
+export function setAutomationsService(on: boolean): Promise<boolean> {
+  return invoke<boolean>("set_automations_service", { on });
 }
 
 export function editAutomation(
@@ -1333,6 +1387,11 @@ export function addPersonalFact(
 /** Saves one readable copy in Downloads; returns where. Desktop only. */
 export function exportPersonal(): Promise<string> {
   return invoke<string>("export_personal");
+}
+
+/** Updates the Obsidian-friendly wiki of the plain memory; returns the page's line. Desktop only. */
+export function exportMemoryWiki(): Promise<string> {
+  return invoke<string>("export_memory_wiki");
 }
 
 export interface PersonalWiped {
@@ -2550,37 +2609,26 @@ export function goalAct(acts: GoalAct[]): Promise<GoalsSaved> {
 }
 
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
-export type LocalMode = "auto" | "manual";
-
-export interface LocalCaps {
-  rampUp: number;
-  normal: number;
-  throttle: number;
-}
-
 export interface LocalManual {
-  /** "auto", "cuda", "rocm", "vulkan", "metal", "sycl" or "cpu". */
-  backend: string;
   ngl: number | null;
   ctx: number | null;
   threads: number | null;
   /** "auto", "q8" or "q4". */
   kv: string;
   idleMinutes: number;
-  caps: LocalCaps;
   neverUnload: boolean;
   allowApps: string[];
   denyApps: string[];
 }
 
 export interface LocalAiConfig {
-  mode: LocalMode;
   pauseForGames: boolean;
   useIdleTime: boolean;
   throttleOnBattery: boolean;
   manual: LocalManual;
-  /** A catalog id or a model file's path; empty for the tier default. */
-  localModel: { selected: string };
+  /** Model files the user added (.gguf paths); Auto loads the first one on
+   * disk when no downloaded model is there. */
+  ownFiles: string[];
   /** Model files whose notice was read. */
   noticeSeen: string[];
 }
@@ -2842,6 +2890,36 @@ export function onModelLibraryEvent(
   handler: (status: LibraryStatus) => void,
 ): Promise<UnlistenFn> {
   return subscribe<LibraryStatus>("model-library", handler);
+}
+
+/** Live Hugging Face GGUF search (Download models → browse). */
+export interface HfGgufHit {
+  repo: string;
+  downloads: number;
+  likes: number;
+  updated: string;
+  gated: boolean;
+}
+
+export interface HfGgufFile {
+  label: string;
+  paths: string[];
+  size: string;
+  fit: string;
+  fitKind: "yes" | "tight" | "no";
+}
+
+export function searchHfGguf(query: string, limit = 20): Promise<HfGgufHit[]> {
+  return invoke<HfGgufHit[]>("search_hf_gguf", { query, limit });
+}
+
+export function listHfGgufFiles(repo: string): Promise<HfGgufFile[]> {
+  return invoke<HfGgufFile[]>("list_hf_gguf_files", { repo });
+}
+
+/** Downloads into the models folder and registers the file in Auto only. */
+export function downloadHfGguf(repo: string, path: string): Promise<string> {
+  return invoke<string>("download_hf_gguf", { repo, path });
 }
 
 export function runLocalSpeedTest(): Promise<string> {
@@ -3645,6 +3723,8 @@ export interface UpdateView {
   note: string | null;
   /** The version a check found, ready to install. */
   available: string | null;
+  /** Set when the last update was rolled back because it didn't stay up. */
+  rolledBack: string | null;
 }
 
 /** Emitted when the background check (every 2 hours) finds an update. */
@@ -3749,6 +3829,10 @@ export interface QueueProgress {
   seconds: number;
   /** The model this helper ran on; absent when unknown. */
   model?: string;
+  /** The effort its last step went out with; absent when none or unknown. */
+  effort?: string;
+  /** Why the router sent it there ("quality · High: debugging."). */
+  why?: string;
 }
 
 /** A background command, subagent or monitor of the open chat. */
@@ -5444,7 +5528,7 @@ export function claudePlanStatus(): Promise<ClaudePlan> {
   return invoke<ClaudePlan>("claude_plan_status");
 }
 
-/** Settings' Allow for chats on the Claude plan, and the chats switched to it. */
+/** Settings' Allow for chats on the Claude plan, and the chats moved to it by words. */
 export interface ClaudeChats {
   allowed: boolean;
   chats: string[];
@@ -5470,23 +5554,6 @@ export function setClaudePlanAllowed(on: boolean): Promise<ClaudeChats> {
   return invoke<ClaudeChats>("set_claude_plan_allowed", { on });
 }
 
-/** A chat's on-device tier from its tab menu; `null` is Auto. */
-export type LocalTier = "speed" | "balanced" | "quality";
-
-/** The tier a chat is set to, or `null` on Auto. */
-export function localChatPin(conversationId: string): Promise<LocalTier | null> {
-  return invoke<LocalTier | null>("local_chat_pin", { conversationId });
-}
-
-/** Set a chat's tier from its next message on; `null` puts it back on Auto. */
-export function setLocalChatPin(conversationId: string, tier: LocalTier | null): Promise<LocalTier | null> {
-  return invoke<LocalTier | null>("set_local_chat_pin", { conversationId, tier });
-}
-
-/** A chat's switch to the Claude plan, from its next message on. */
-export function setClaudePlanChat(conversationId: string, on: boolean): Promise<ClaudeChats> {
-  return invoke<ClaudeChats>("set_claude_plan_chat", { conversationId, on });
-}
 
 /** Posts the key's approval card; nothing is saved until `answerAiModelsCard`. */
 export function addAiProvider(

@@ -32,6 +32,8 @@ pub enum Kind {
     Speech,
     /// The on-device engine hearing one clip.
     Hearing,
+    /// A managed local embedding model slot for semantic recall.
+    Embeddings,
 }
 
 /// Memory in MB, split by where it sits.
@@ -388,6 +390,7 @@ fn reason(kind: Kind) -> &'static str {
         Kind::PictureGuard => "made room for the picture guard",
         Kind::Speech => "made room for the voice",
         Kind::Hearing => "made room for listening",
+        Kind::Embeddings => "made room for local embeddings",
     }
 }
 

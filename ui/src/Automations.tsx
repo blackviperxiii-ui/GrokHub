@@ -3,17 +3,24 @@ import {
   addAutomation,
   addSuggestedAutomation,
   editAutomation,
+  fillBlueprintSeed,
+  getAutomationsService,
+  listAutomationBlueprints,
   listAutomations,
   listSuggestedAutomations,
   onAutomationRan,
   removeAutomation,
   runAutomation,
   setAutomationEnabled,
+  setAutomationsService,
   type AutomationRow,
+  type Blueprint,
   type RunResult,
   type SuggestedTile,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { Routines } from "./Routines";
+import { Toggle } from "./Toggle";
 import { ConfirmRow } from "./ui";
 
 export function resultLine(result: RunResult): string {
@@ -21,7 +28,24 @@ export function resultLine(result: RunResult): string {
   return result.text.trim() || "Finished with no reply.";
 }
 
+/** Row copy for a script-first check: command plus onChange / noAgent gate. */
+export function checkLine(row: AutomationRow): string | null {
+  const cmd = row.checkCommand.trim();
+  if (!cmd) return null;
+  const bits = [`checks \`${cmd}\` first`];
+  if (row.gate.onChange) bits.push("only when it changes");
+  if (row.gate.noAgent) bits.push("without AI");
+  return bits.join(", ");
+}
+
+export const KEEP_RUNNING = "Keep running when the app is closed";
+export const KEEP_RUNNING_HELP =
+  "Installs a login service so scheduled automations keep firing after you quit. Off means they run only while the app is open or in the tray.";
+
 export const SUGGESTED_NOTE = "Suggested from your recent work";
+
+export const BLUEPRINTS_NOTE =
+  "Starters with a few fields to fill — script-first checks that fail closed before a model call.";
 
 export const AUTOMATIONS_EMPTY =
   "No automations yet. Describe one above in plain words and it runs on its own schedule.";
@@ -50,10 +74,28 @@ export function Automations({
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
   const [tiles, setTiles] = useState<SuggestedTile[]>([]);
+  const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [adding, setAdding] = useState<string | null>(null);
+  const [filling, setFilling] = useState<string | null>(null);
+  const [slotValues, setSlotValues] = useState<Record<string, string>>({});
+  const [keepRunning, setKeepRunning] = useState<boolean | null>(null);
+  const [keepBusy, setKeepBusy] = useState(false);
 
   useEffect(() => {
     if (active) listAutomations().then(setRows, (err) => setNote(String(err)));
+  }, [active]);
+
+  // Desktop only: a phone or web remote without the command hides the switch.
+  useEffect(() => {
+    if (!active) return;
+    let stale = false;
+    getAutomationsService().then(
+      (on) => !stale && setKeepRunning(on),
+      () => !stale && setKeepRunning(null),
+    );
+    return () => {
+      stale = true;
+    };
   }, [active]);
 
   // The tiles hide jobs already running, so they follow every change to the
@@ -69,6 +111,18 @@ export function Automations({
       stale = true;
     };
   }, [active, rows]);
+
+  useEffect(() => {
+    if (!active) return;
+    let stale = false;
+    listAutomationBlueprints().then(
+      (got) => !stale && setBlueprints(got),
+      () => !stale && setBlueprints([]),
+    );
+    return () => {
+      stale = true;
+    };
+  }, [active]);
 
   // A scheduled run the shell fired: show its reply and the row's new count.
   useEffect(() => {
@@ -134,6 +188,31 @@ export function Automations({
     }
   }
 
+  function openBlueprint(tile: Blueprint) {
+    const next: Record<string, string> = {};
+    for (const slot of tile.slots) next[slot.key] = slot.placeholder;
+    setSlotValues(next);
+    setFilling(tile.id);
+    setNote(null);
+  }
+
+  async function saveBlueprint(tile: Blueprint) {
+    setAdding(tile.id);
+    try {
+      const values: Record<string, string> = {};
+      for (const slot of tile.slots) values[slot.key] = slotValues[slot.key] ?? "";
+      const seed = fillBlueprintSeed(tile.seed, values);
+      setRows(await addAutomation(seed));
+      setFilling(null);
+      setSlotValues({});
+      setNote(null);
+    } catch (err) {
+      setNote(String(err));
+    } finally {
+      setAdding(null);
+    }
+  }
+
   async function run(id: string) {
     const name = rows?.find((row) => row.id === id)?.name ?? "Automation";
     setRunning(id);
@@ -148,6 +227,18 @@ export function Automations({
       onFinished?.({ id, name, ok: false, text: String(err) });
     } finally {
       setRunning(null);
+    }
+  }
+
+  async function flipKeepRunning(next: boolean) {
+    setKeepBusy(true);
+    try {
+      setKeepRunning(await setAutomationsService(next));
+      setNote(null);
+    } catch (err) {
+      setNote(String(err));
+    } finally {
+      setKeepBusy(false);
     }
   }
 
@@ -168,6 +259,18 @@ export function Automations({
         {PRODUCT_NAME} runs these on schedule while it is open or in the tray. A run follows your
         Approvals setting, and anything that would need your OK is skipped.
       </p>
+      {keepRunning !== null && (
+        <div className="keep-running" role="group" aria-label={KEEP_RUNNING}>
+          <Toggle
+            checked={keepRunning}
+            disabled={keepBusy}
+            onChange={(next) => void flipKeepRunning(next)}
+          >
+            {KEEP_RUNNING}
+          </Toggle>
+          <p className="note">{KEEP_RUNNING_HELP}</p>
+        </div>
+      )}
       {note && (
         <p className="error" role="alert">
           {note}
@@ -176,10 +279,13 @@ export function Automations({
       {rows === null && !note && <p className="empty">Loading automations…</p>}
       {rows?.length === 0 && <p className="empty">{AUTOMATIONS_EMPTY}</p>}
       <ul className="rows">
-        {rows?.map((row) => (
+        {rows?.map((row) => {
+          const check = checkLine(row);
+          return (
           <li key={row.id} className="card automation" aria-label={row.name}>
             <div className="card-title">{row.name}</div>
             <div className="card-status">{row.summary}</div>
+            {check && <div className="card-check">{check}</div>}
             {row.health && <div className="card-health">{row.health}</div>}
             {results[row.id] && <pre className="card-detail">{results[row.id]}</pre>}
             {editing?.id === row.id && (
@@ -244,8 +350,73 @@ export function Automations({
             </div>
             )}
           </li>
-        ))}
+          );
+        })}
       </ul>
+      <Routines />
+      {blueprints.length > 0 && (
+        <section className="blueprints" aria-label="Blueprints">
+          <h3>Blueprints</h3>
+          <p className="note">{BLUEPRINTS_NOTE}</p>
+          <ul className="rows">
+            {blueprints.map((tile) => (
+              <li key={tile.id} className="card automation blueprint" aria-label={tile.title}>
+                <div className="card-title">{tile.title}</div>
+                <div className="card-status">{tile.body}</div>
+                {filling === tile.id ? (
+                  <form
+                    className="blueprint-fill"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void saveBlueprint(tile);
+                    }}
+                  >
+                    {tile.slots.map((slot) => (
+                      <label key={slot.key} className="blueprint-slot">
+                        <span>{slot.label}</span>
+                        <input
+                          aria-label={`${tile.title} ${slot.label}`}
+                          value={slotValues[slot.key] ?? ""}
+                          placeholder={slot.placeholder}
+                          onChange={(e) =>
+                            setSlotValues((now) => ({ ...now, [slot.key]: e.target.value }))
+                          }
+                        />
+                      </label>
+                    ))}
+                    <div className="card-buttons">
+                      <button type="submit" disabled={adding !== null}>
+                        {adding === tile.id ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        type="button"
+                        className="quiet"
+                        disabled={adding !== null}
+                        onClick={() => {
+                          setFilling(null);
+                          setSlotValues({});
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="card-buttons">
+                    <button
+                      type="button"
+                      disabled={adding !== null}
+                      onClick={() => openBlueprint(tile)}
+                    >
+                      Use
+                    </button>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {tiles.length > 0 && (
         <section className="suggested" aria-label="Suggested">
           <h3>Suggested</h3>
