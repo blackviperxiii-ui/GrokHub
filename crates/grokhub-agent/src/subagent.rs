@@ -861,6 +861,7 @@ fn side_from(session: &str, ev: LoopEvent) -> Option<SideEvent> {
             name,
             action,
             reason,
+            hard,
         } => SideEvent::Permission(PermissionAsk {
             rpc_id: serde_json::Value::String(id.clone()),
             session_id: session.to_string(),
@@ -869,6 +870,7 @@ fn side_from(session: &str, ev: LoopEvent) -> Option<SideEvent> {
             action,
             reason,
             reject_option: Some("denied".into()),
+            hard,
         }),
         LoopEvent::Elicit(view) => SideEvent::Elicit(ElicitAsk {
             rpc_id: serde_json::Value::String(view.id.clone()),

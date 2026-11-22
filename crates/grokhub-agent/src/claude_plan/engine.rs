@@ -408,6 +408,7 @@ impl ClaudePlanEngine {
             action: ask.action.clone(),
             reason: ask.reason.clone(),
             reject_option: None,
+            hard: ask.is_hard(),
         }));
         let halted = Arc::clone(&approvals.halted);
         match approvals
@@ -930,6 +931,7 @@ mod tests {
                         action: "touch made".into(),
                         reason: "Make a file".into(),
                         reject_option: None,
+                        hard: false,
                     }),
                     AcpEvent::Done {
                         stop_reason: "end_turn".into()

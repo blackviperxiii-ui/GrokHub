@@ -129,6 +129,9 @@ pub struct PermissionAsk {
     /// The agent's own "reject once" option, if it offered one. Deny selects it so
     /// the agent hears a refusal; `cancelled` means the turn was stopped.
     pub reject_option: Option<String>,
+    /// A hard stop (a delete, a force push, the app's own config): it can
+    /// only be allowed on this computer, never from a paired chat.
+    pub hard: bool,
 }
 
 /// Grok Build 1.0.17 `x.ai/mcp/elicit` — MCP tool needs a form or URL from you.
@@ -1028,6 +1031,7 @@ pub fn parse_permission(id: Value, params: &Value) -> PermissionAsk {
         action,
         reason,
         reject_option: permission_option(params, "reject_once"),
+        hard: false,
     }
 }
 

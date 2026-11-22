@@ -235,6 +235,7 @@ fn ask_id(ui: &UiEvent) -> Option<&str> {
 fn ask_event(event: SideEvent) -> Option<UiEvent> {
     match event {
         SideEvent::Permission(ask) => Some(UiEvent::Permission {
+            hard: crate::agent::ask_is_hard(&ask),
             id: ask.tool_call_id,
             title: ask.title,
             action: ask.action,
@@ -271,6 +272,7 @@ mod tests {
             action: "cargo test".into(),
             reason: "check the fix".into(),
             reject_option: Some("denied".into()),
+            hard: false,
         })
     }
 
@@ -297,6 +299,7 @@ mod tests {
                 action: "cargo test".into(),
                 reason: "check the fix".into(),
                 asks_every_time: false,
+                hard: false,
             }
         );
         assert_eq!(pending.waiting("chat-a").len(), 1);
@@ -318,6 +321,7 @@ mod tests {
             action: "note.txt".into(),
             reason: String::new(),
             asks_every_time: false,
+            hard: false,
         };
         assert!(!needs_you(chat));
         assert!(!in_turn(chat));

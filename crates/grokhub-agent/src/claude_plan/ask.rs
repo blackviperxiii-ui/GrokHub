@@ -24,6 +24,22 @@ pub struct ToolAsk {
     pub always: Vec<Value>,
 }
 
+impl ToolAsk {
+    /// Whether the app's own gate counts this call as a hard stop (a delete,
+    /// a force push, the app's config), read as the app's matching tool:
+    /// `Bash` as a command, `Write` and the edit tools as file writes. A hard
+    /// stop can only be allowed on this computer, never from a paired chat.
+    pub fn is_hard(&self) -> bool {
+        let native = match self.tool.as_str() {
+            "Bash" => "run_terminal_command",
+            "Write" => "write",
+            "Edit" | "MultiEdit" | "NotebookEdit" => "search_replace",
+            _ => return false,
+        };
+        crate::harness::hard_class(native, &self.input.to_string()).is_some()
+    }
+}
+
 /// A `control_request` line: a tool to ask about, or another request this
 /// app doesn't take (answered with an error so the turn doesn't hang).
 #[derive(Debug, Clone, PartialEq)]
@@ -189,6 +205,20 @@ mod tests {
             Some(Control::Ask(ask)) => ask,
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_delete_or_a_force_push_is_a_hard_stop_and_a_touch_is_not() {
+        assert!(!touch().is_hard());
+        let ask = |tool: &str, input: Value| ToolAsk {
+            tool: tool.into(),
+            input,
+            ..touch()
+        };
+        assert!(ask("Bash", json!({"command": "rm -rf ~/old"})).is_hard());
+        assert!(ask("Bash", json!({"command": "git push --force origin main"})).is_hard());
+        assert!(!ask("Bash", json!({"command": "cargo test"})).is_hard());
+        assert!(!ask("Read", json!({"file_path": "/home/user/my-app/x.rs"})).is_hard());
     }
 
     #[test]

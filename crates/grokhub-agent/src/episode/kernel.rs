@@ -1239,6 +1239,7 @@ impl Run<'_, '_> {
                 None => arg_line(&call.name, &call.arguments),
             },
             reason: reason.into(),
+            hard: harness::hard_class(&call.name, &call.arguments).is_some(),
         });
         let halt = self.k.halt;
         matches!(
