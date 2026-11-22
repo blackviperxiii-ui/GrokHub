@@ -292,6 +292,11 @@ pub fn run(spec: &RunSpec<'_>) -> Report {
                             .push(format!("{}: {why}; trying again: {fix}", step.id));
                         retry = Some(args);
                     }
+                    Ok((Repair::Skip, fix)) if matches!(step.kind, StepKind::Expect { .. }) => {
+                        // A check guards the steps after it; only a person may pass it.
+                        report.ended = stopped(format!("{why}. A check can't be skipped: {fix}"));
+                        return report;
+                    }
                     Ok((Repair::Skip, fix)) => {
                         report
                             .lines
@@ -448,7 +453,9 @@ impl Runner<'_> {
         };
         let went = match &step.kind {
             StepKind::Tool { tool, args } => ran(match retry {
-                Some(args) => self.call(&step.id, tool, &Value::Object(args).to_string()),
+                Some(args) => {
+                    self.call(&retry_id(&step.id), tool, &Value::Object(args).to_string())
+                }
                 None => fill_args(tool, args, values, Quote::shell())
                     .map_err(Fail::Broke)
                     .and_then(|filled| {
@@ -456,11 +463,15 @@ impl Runner<'_> {
                     }),
             }),
             StepKind::Script { file, args } => {
+                let id = match retry {
+                    Some(_) => retry_id(&step.id),
+                    None => step.id.clone(),
+                };
                 let args = retry.as_ref().unwrap_or(args);
                 ran(self
                     .script_call(file, args, values)
                     .map_err(Fail::Broke)
-                    .and_then(|arguments| self.call(&step.id, tools::ptc::NAME, &arguments)))
+                    .and_then(|arguments| self.call(&id, tools::ptc::NAME, &arguments)))
             }
             StepKind::Desktop(recipe) => ran(self.desktop(&step.id, &recipe.ops)),
             StepKind::Expect { expect, otherwise } => match expect.check(values) {
@@ -854,6 +865,13 @@ fn parse_sets(routine: &Routine, sets: &[String]) -> Result<Map<String, Value>, 
         out.insert(key.into(), v);
     }
     Ok(out)
+}
+
+/// The id a repaired retry of `step` runs under. Consent names the step as
+/// saved, so a retry with arguments the model chose never matches it: it
+/// asks a person, or stops while nobody is there.
+fn retry_id(step: &str) -> String {
+    format!("{step} (retry)")
 }
 
 /// Asks on the terminal before a change step runs.

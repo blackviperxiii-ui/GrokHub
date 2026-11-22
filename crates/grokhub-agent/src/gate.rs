@@ -37,7 +37,6 @@ const READONLY: &[&str] = &[
     "mods_installed",
     // Checks a panel spec for the chat to draw; only on with generative UI.
     "show_panel",
-    "run_tool_script",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
@@ -58,6 +57,9 @@ const CONTROL: &[&str] = &[
     "run_routine",
     // Saves the last turn's steps as a routine; it always asks.
     "save_routine",
+    // Runs a Python script. It runs without asking only where the OS sandbox
+    // fully holds it (see `decide_with`); anywhere else it asks like a command.
+    "run_tool_script",
 ];
 const DESKTOP: &[&str] = &[
     "screenshot",
@@ -450,6 +452,12 @@ pub fn decide_with(
     if crate::subagent::spawn_is_explore(name, arguments) {
         return Decision::Run;
     }
+    // A tool script is Python, so it is read-only only where the OS sandbox
+    // holds it: writes fenced, the network only through the proxy, secrets
+    // hidden. Elsewhere (Windows, the sandbox off, no Landlock) it asks.
+    if name == crate::tools::ptc::NAME && crate::tools::ptc::sandbox_holds(workspace) {
+        return Decision::Run;
+    }
     // A routine's steps each meet this gate inside the run, so starting one
     // asks nothing. Plan mode still refuses it.
     if name == crate::tools::run_routine::NAME && !gate.readonly_session {
@@ -492,6 +500,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_tool_script_asks_where_the_sandbox_does_not_hold_it() {
+        // Python can write, delete and reach the network, so with the sandbox
+        // off it asks like a command and plan mode and unattended runs refuse it.
+        let config = std::env::temp_dir().join(format!("gate-ptc-{}", std::process::id()));
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join(crate::sandbox::CONFIG_NAME),
+            "enabled = false\n",
+        )
+        .unwrap();
+        let _pin = crate::perm::ConfigGuard::set(&config);
+        let ws = std::path::Path::new("/home/user/my-app");
+        let args = r#"{"script":"print(1)"}"#;
+        assert!(!crate::tools::ptc::sandbox_holds(ws));
+        let decide_ptc = |g: &Gate| decide_with(g, "run_tool_script", args, false, None, ws, None);
+        assert_eq!(
+            decide_ptc(&gate(PermMode::Ask, false, true, false)),
+            Decision::Ask
+        );
+        assert_eq!(
+            decide_ptc(&gate(PermMode::Auto, false, true, false)),
+            Decision::Ask
+        );
+        assert!(matches!(
+            decide_ptc(&gate(PermMode::Ask, true, true, false)),
+            Decision::Refuse(_)
+        ));
+        assert!(matches!(
+            decide_ptc(&gate(PermMode::Auto, false, false, false)),
+            Decision::Refuse(_)
+        ));
+        let _ = std::fs::remove_dir_all(&config);
     }
 
     #[test]

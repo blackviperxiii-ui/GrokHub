@@ -172,15 +172,30 @@ fn clip_chars(text: &str, max: usize) -> String {
     )
 }
 
-fn spawn_sandboxed_python(cwd: &Path) -> Result<Child, String> {
+/// The host sandbox plan a tool script runs under: no writable roots, and on
+/// this computer even when the shell's commands go to a container.
+fn script_plan(cwd: &Path) -> Option<crate::sandbox::Plan> {
     let mut plan = crate::sandbox::plan_for_call("run_terminal_command", &json!({}), cwd);
-    // PTC scripts are read-only; remove all writable filesystem roots under the OS sandbox.
-    // The harness runs on this computer, so it keeps the host sandbox even
-    // when the shell's commands go to a container.
     if let Some(p) = plan.as_mut() {
         p.writable.clear();
         p.container = None;
     }
+    plan
+}
+
+/// Whether a tool script here is fully held by the OS sandbox (writes fenced,
+/// network only through the proxy, secrets hidden), so it may run without
+/// asking. The Windows process container doesn't wrap the script yet, so on
+/// Windows it never is.
+pub fn sandbox_holds(cwd: &Path) -> bool {
+    cfg!(unix) && script_plan(cwd).is_some_and(|plan| plan.enforced())
+}
+
+fn spawn_sandboxed_python(cwd: &Path) -> Result<Child, String> {
+    // PTC scripts are read-only; remove all writable filesystem roots under the OS sandbox.
+    // Windows has no wrap for the script yet, so the gate asks there.
+    #[cfg(unix)]
+    let plan = script_plan(cwd);
     let py = python_program();
     let argv = [py, "-I", "-B", "-u", "-c", PYTHON_HARNESS];
 

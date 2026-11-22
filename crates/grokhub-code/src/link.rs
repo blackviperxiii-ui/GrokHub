@@ -92,12 +92,12 @@ pub fn clone_remote(url: &str, dest: &Path, github_token: Option<&str>) -> Resul
     let parent = dest.parent().ok_or_else(|| "Bad clone path.".to_string())?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
 
-    let auth_url = auth_clone_url(url, github_token);
     let mut c = Command::new("git");
     c.arg("-c")
         .arg("core.fsmonitor=false")
-        .args(["clone", "--", &auth_url])
+        .args(["clone", "--", &clone_url(url)])
         .arg(dest)
+        .envs(github_auth_env(github_token))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -255,19 +255,37 @@ pub fn sanitize_remote_url(url: &str) -> String {
     u.to_string()
 }
 
-fn auth_clone_url(url: &str, github_token: Option<&str>) -> String {
+/// The URL a clone uses: no credentials, and `www.github.com` as
+/// `github.com` so the token header below applies to it.
+fn clone_url(url: &str) -> String {
     let u = sanitize_remote_url(url);
-    let Some(token) = github_token.map(str::trim).filter(|t| !t.is_empty()) else {
-        return u;
-    };
-    // HTTPS GitHub only; SSH and other hosts keep the plain URL (credential helper).
-    let rest = u
-        .strip_prefix("https://github.com/")
-        .or_else(|| u.strip_prefix("https://www.github.com/"));
-    if let Some(rest) = rest {
-        return format!("https://x-access-token:{token}@github.com/{rest}");
+    match u.strip_prefix("https://www.github.com/") {
+        Some(rest) => format!("https://github.com/{rest}"),
+        None => u,
     }
-    u
+}
+
+/// Lends the GitHub token to one git call as an HTTPS header for github.com
+/// only, through git's environment config. A token in the clone URL would be
+/// saved in the clone's `.git/config` (where any tool in the folder reads it)
+/// and shown in the process list. SSH and other hosts get nothing and keep
+/// the user's own credential helper.
+fn github_auth_env(github_token: Option<&str>) -> Vec<(&'static str, String)> {
+    let Some(token) = github_token.map(str::trim).filter(|t| !t.is_empty()) else {
+        return Vec::new();
+    };
+    let basic = grokhub_core::encode_b64(format!("x-access-token:{token}").as_bytes());
+    vec![
+        ("GIT_CONFIG_COUNT", "1".to_string()),
+        (
+            "GIT_CONFIG_KEY_0",
+            "http.https://github.com/.extraheader".to_string(),
+        ),
+        (
+            "GIT_CONFIG_VALUE_0",
+            format!("AUTHORIZATION: basic {basic}"),
+        ),
+    ]
 }
 
 fn git_ok(dir: &Path, args: &[&str]) -> bool {
@@ -312,17 +330,55 @@ mod tests {
             sanitize_remote_url("https://x-access-token:secret@github.com/org/app.git"),
             "https://github.com/org/app.git"
         );
-        assert!(
-            !auth_clone_url("https://github.com/org/app.git", Some("tok")).contains("tok")
-                || auth_clone_url("https://github.com/org/app.git", Some("tok"))
-                    .contains("x-access-token:tok@")
+        assert_eq!(
+            clone_url("https://x-access-token:secret@www.github.com/org/app.git"),
+            "https://github.com/org/app.git"
         );
-        // Token stays out of sanitize output.
-        let auth = auth_clone_url(
-            "https://github.com/org/app.git",
+        assert_eq!(
+            clone_url("https://gitlab.com/org/app.git"),
+            "https://gitlab.com/org/app.git"
+        );
+    }
+
+    #[test]
+    fn the_token_goes_to_github_as_a_header_never_in_the_url() {
+        assert_eq!(
+            github_auth_env(Some(" sk-abcdefghijklmnopqrstuv ")),
+            vec![
+                ("GIT_CONFIG_COUNT", "1".to_string()),
+                (
+                    "GIT_CONFIG_KEY_0",
+                    "http.https://github.com/.extraheader".to_string()
+                ),
+                (
+                    "GIT_CONFIG_VALUE_0",
+                    "AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46c2stYWJjZGVmZ2hpamtsbW5vcHFyc3R1dg=="
+                        .to_string()
+                ),
+            ]
+        );
+        assert!(github_auth_env(None).is_empty());
+        assert!(github_auth_env(Some("  ")).is_empty());
+    }
+
+    #[test]
+    fn a_clone_with_a_token_saves_no_token_in_its_config() {
+        // A local bare repo stands in for GitHub; the header is only lent.
+        let tmp = std::env::temp_dir().join(format!("link-token-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let origin = tmp.join("origin.git");
+        std::fs::create_dir_all(&origin).unwrap();
+        assert!(git_ok(&origin, &["init", "--bare", "-q"]));
+        let dest = tmp.join("app");
+        clone_remote(
+            origin.to_str().unwrap(),
+            &dest,
             Some("sk-abcdefghijklmnopqrstuv"),
-        );
-        assert!(auth.contains("x-access-token:sk-abcdefghijklmnopqrstuv@"));
-        assert_eq!(sanitize_remote_url(&auth), "https://github.com/org/app.git");
+        )
+        .unwrap();
+        let config = std::fs::read_to_string(dest.join(".git/config")).unwrap();
+        assert!(!config.contains("sk-abcdefghijklmnopqrstuv"), "{config}");
+        assert!(!config.contains("extraheader"), "{config}");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
