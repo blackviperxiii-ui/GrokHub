@@ -116,6 +116,7 @@ impl HaltCheck for NoHalt {
 
 struct Once {
     name: String,
+    arguments: String,
     turn: AtomicUsize,
 }
 
@@ -134,7 +135,7 @@ impl ModelClient for Once {
                 calls: vec![FunctionCall {
                     call_id: "c1".into(),
                     name: self.name.clone(),
-                    arguments: "{}".into(),
+                    arguments: self.arguments.clone(),
                 }],
                 usage: Usage::default(),
                 ..Default::default()
@@ -154,8 +155,14 @@ impl ModelClient for Once {
 use grokhub_agent::ClientError;
 
 fn run_qualified(dir: &Path, qualified: &str) -> String {
+    run_qualified_with(dir, qualified, "{}")
+}
+
+/// One chat turn that calls `qualified` with `arguments`; the tool's output.
+fn run_qualified_with(dir: &Path, qualified: &str, arguments: &str) -> String {
     let client = Once {
         name: qualified.to_string(),
+        arguments: arguments.to_string(),
         turn: AtomicUsize::new(0),
     };
     let cancel = CancelToken::new();
@@ -389,4 +396,63 @@ fn a_browser_that_keeps_dying_points_the_model_at_web_fetch() {
     );
     assert!(out.contains("web_fetch"), "{out}");
     assert!(out.contains("has been closed"), "{out}");
+}
+
+/// Imports a Playwright entry `name` whose every answer shows a page on `url`
+/// after `pad` characters, with the user's own browser attached and only
+/// github.com allowed.
+fn import_attached_browser(dir: &Path, name: &str, bin: &str, url: &str, pad: usize) {
+    let attach = json!({ "endpoint": "http://127.0.0.1:9222", "origins": ["https://github.com"] });
+    std::fs::create_dir_all(dir.join("browser")).unwrap();
+    std::fs::write(dir.join("browser").join("attach.json"), attach.to_string()).unwrap();
+    let doc = json!({
+        "mcpServers": {
+            name: {
+                "command": bin,
+                "args": ["@playwright/mcp@latest"],
+                "env": {"FAKE_MCP_PAGE_URL": url, "FAKE_MCP_PAGE_PAD": pad.to_string()},
+            }
+        }
+    });
+    mcp::import_documents(&[doc.to_string()]).unwrap();
+}
+
+#[test]
+fn an_attached_browser_answer_from_another_site_is_held_back() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("pw-attached");
+    import_attached_browser(&dir, "pwattach", bin, "https://bank.example/accounts", 0);
+    // The server answers on another site: the page text never reaches the model.
+    let new_tab = r#"{"action":"new","url":"https://github.com/"}"#;
+    let out = run_qualified_with(&dir, "pwattach__browser_tabs", new_tab);
+    assert!(
+        out.contains("The tab is on https://bank.example, which isn't one of the sites"),
+        "{out}"
+    );
+    assert!(!out.contains("account 1234"), "{out}");
+    // A new tab on a site that isn't allowed never reaches the server.
+    let other = r#"{"action":"new","url":"https://bank.example/"}"#;
+    let out = run_qualified_with(&dir, "pwattach__browser_tabs", other);
+    assert!(
+        out.contains("https://bank.example isn't one of them"),
+        "{out}"
+    );
+}
+
+#[test]
+fn an_attached_browser_page_past_the_answer_cut_is_still_held_back() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("pw-attached-long");
+    // The page section starts after 50,000 characters, past where the
+    // answer is cut for the model.
+    import_attached_browser(&dir, "pwlong", bin, "https://bank.example/accounts", 50_000);
+    let new_tab = r#"{"action":"new","url":"https://github.com/"}"#;
+    let out = run_qualified_with(&dir, "pwlong__browser_tabs", new_tab);
+    assert!(
+        out.contains("The tab is on https://bank.example, which isn't one of the sites"),
+        "{}",
+        &out[..out.len().min(300)]
+    );
+    assert!(!out.contains("account 1234"));
+    assert!(!out.contains("xxxx"));
 }

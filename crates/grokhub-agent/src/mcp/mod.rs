@@ -1097,6 +1097,10 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     );
     if let Some(text) = died.filter(|_| playwright) {
         eprintln!("grokhub mcp `{}` browser launch died: {text}", rec.server);
+        // The dead launch's text passes the same page check as any answer,
+        // here and when the next call shows it as the server's error.
+        let text = browser::page_refusal(&rec.server, &rec.raw, args, &text, true)
+            .map_or_else(|why| why, rpc::clip);
         inner.conn.take();
         inner.last_error = Some(clip_err(&text));
         drop(inner);
@@ -1107,6 +1111,17 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
         out.text = format!("{}\n{}", browser::CANT_START, out.text);
         return out;
     }
+    // Nothing from a tab on a site the user didn't allow reaches the model.
+    // The page check reads the whole answer; only then is it cut to size.
+    let result = match result {
+        Ok((text, failed)) => {
+            match browser::page_refusal(&rec.server, &rec.raw, args, &text, failed) {
+                Ok(text) => Ok((rpc::clip(text), failed)),
+                Err(why) => return ToolOutput::err(why),
+            }
+        }
+        Err(err) => Err(err),
+    };
     match result {
         Ok((text, true)) => fenced_error(&text),
         Ok((text, false)) => ToolOutput::ok(fence::fence("mcp", &text)),
