@@ -1668,6 +1668,7 @@ mod tests {
                 action: "parser.rs".into(),
                 reason: String::new(),
                 asks_every_time: false,
+                hard: false,
             },
         );
         let queue = queue(&cfg, &id);

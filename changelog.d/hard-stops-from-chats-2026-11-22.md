@@ -1,0 +1,1 @@
+- Messaging channels: a hard stop (a delete, a force push, the app's own settings) asked in a chat can only be allowed on the computer. A paired Telegram or Discord chat can still deny it. Asks from a helper agent and the Claude plan are checked the same way.

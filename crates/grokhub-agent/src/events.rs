@@ -1160,6 +1160,7 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
             name,
             action,
             reason,
+            hard,
         } => AcpEvent::Permission(PermissionAsk {
             rpc_id: serde_json::Value::String(id.clone()),
             session_id: session.to_string(),
@@ -1168,6 +1169,7 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
             action,
             reason,
             reject_option: Some("denied".into()),
+            hard,
         }),
         LoopEvent::Elicit(view) => AcpEvent::Elicit(ElicitAsk {
             rpc_id: serde_json::Value::String(view.id.clone()),

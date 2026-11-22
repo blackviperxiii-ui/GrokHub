@@ -164,6 +164,10 @@ pub enum UiEvent {
         /// chat on the Claude plan), so the card offers no "Stop asking me".
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         asks_every_time: bool,
+        /// A hard stop: only a person at this computer may allow it, so the
+        /// decision inbox never lets a paired chat say yes.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        hard: bool,
     },
     /// A permission card answered away from the page, such as Deny on its
     /// notification. `answer` is a word `parse_answer` reads.
@@ -470,6 +474,18 @@ fn turn_event(event: AcpEvent, on_plan: bool) -> Option<UiEvent> {
     Some(ui)
 }
 
+/// Whether a permission ask is a hard stop. The app's own agent marks its
+/// asks exactly. A helper agent's ask doesn't say, so its action line is read
+/// as a command: a delete or force push there is hard too.
+pub fn ask_is_hard(ask: &grokhub_core::wire::PermissionAsk) -> bool {
+    ask.hard
+        || grokhub_agent::harness::hard_class(
+            "run_terminal_command",
+            &serde_json::json!({ "command": ask.action }).to_string(),
+        )
+        .is_some()
+}
+
 /// The picture file a finished `image_generate` names on its `IMAGINE:`
 /// line. A web address, a relative path or a video gives `None`.
 fn made_picture(tool: &str, status: &str, detail: &str) -> Option<String> {
@@ -496,6 +512,7 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
             detail: card.detail,
         },
         AcpEvent::Permission(ask) => UiEvent::Permission {
+            hard: ask_is_hard(&ask),
             id: ask.tool_call_id,
             title: ask.title,
             action: ask.action,
@@ -2690,6 +2707,7 @@ mod tests {
             action: "note.txt".into(),
             reason: String::new(),
             asks_every_time: false,
+            hard: false,
         })
         .expect("json");
         assert_eq!(
@@ -2706,6 +2724,7 @@ mod tests {
                 action: "touch a.txt".into(),
                 reason: String::new(),
                 reject_option: None,
+                hard: false,
             })
         };
         let card = |asks_every_time| UiEvent::Permission {
@@ -2714,6 +2733,7 @@ mod tests {
             action: "touch a.txt".into(),
             reason: String::new(),
             asks_every_time,
+            hard: false,
         };
         assert_eq!(turn_event(ask(), true), Some(card(true)));
         assert_eq!(turn_event(ask(), false), Some(card(false)));
@@ -2727,6 +2747,7 @@ mod tests {
             action: "touch a.txt".into(),
             reason: String::new(),
             asks_every_time: true,
+            hard: false,
         })
         .expect("json");
         assert_eq!(
