@@ -8,7 +8,7 @@ import type { RoutineRow } from "./routinesApi";
 const api = vi.hoisted(() => ({
   listRoutines: vi.fn<() => Promise<RoutineRow[]>>(),
   setRoutineOn: vi.fn<(name: string, on: boolean) => Promise<RoutineRow[]>>(),
-  allowRoutine: vi.fn<(name: string) => Promise<RoutineRow[]>>(),
+  allowRoutine: vi.fn<(name: string, hash: string) => Promise<RoutineRow[]>>(),
   revokeRoutine: vi.fn<(name: string) => Promise<RoutineRow[]>>(),
   undoRoutine: vi.fn<(name: string) => Promise<string>>(),
   runRoutineNow: vi.fn<(name: string) => Promise<RunResult>>(),
@@ -26,6 +26,8 @@ function row(over: Partial<RoutineRow> = {}): RoutineRow {
     triggers: ["weekdays 07:30", "chat"],
     steps: 2,
     changes: ["say: run_terminal_command"],
+    changeDetails: ['say: run_terminal_command {"command":"echo {{inputs.who}}"}'],
+    hash: "4f2a",
     consent: "not_allowed",
     on: true,
     runs: 0,
@@ -68,11 +70,36 @@ describe("Routines", () => {
     expect(card.queryByRole("group", { name: "Allow greet to change things?" })).toBeNull();
 
     await user.click(card.getByRole("button", { name: "Allow changes…" }));
+    // Each step shows with its arguments before the person allows it.
+    expect(card.getByText('say: run_terminal_command {"command":"echo {{inputs.who}}"}')).toBeInTheDocument();
     const confirm = within(card.getByRole("group", { name: "Allow greet to change things?" }));
     await user.click(confirm.getByRole("button", { name: "Allow" }));
-    expect(api.allowRoutine).toHaveBeenCalledWith("greet");
+    // The routine as listed goes back, so an edit since the list isn't allowed.
+    expect(api.allowRoutine).toHaveBeenCalledWith("greet", "4f2a");
     expect(await card.findByText("Allowed to change things: say: run_terminal_command.")).toBeInTheDocument();
     expect(card.getByRole("button", { name: "Take back" })).toBeInTheDocument();
+  });
+
+  it("loads the list again when Allow finds the routine changed", async () => {
+    api.allowRoutine.mockRejectedValue("greet changed since its steps were shown. Look over them again, then allow it.");
+    api.listRoutines
+      .mockResolvedValueOnce([row()])
+      .mockResolvedValueOnce([row({ changeDetails: ['say: run_terminal_command {"command":"rm -r notes"}'], hash: "9c1e" })]);
+    const user = userEvent.setup();
+    render(<Routines />);
+    const card = within(await screen.findByRole("listitem", { name: "greet" }));
+    await user.click(card.getByRole("button", { name: "Allow changes…" }));
+    await user.click(
+      within(card.getByRole("group", { name: "Allow greet to change things?" })).getByRole("button", { name: "Allow" }),
+    );
+    expect(await screen.findByText("greet changed since its steps were shown. Look over them again, then allow it.")).toBeInTheDocument();
+    // The next Allow shows the new steps and sends the new hash.
+    await user.click(card.getByRole("button", { name: "Allow changes…" }));
+    expect(card.getByText('say: run_terminal_command {"command":"rm -r notes"}')).toBeInTheDocument();
+    await user.click(
+      within(card.getByRole("group", { name: "Allow greet to change things?" })).getByRole("button", { name: "Allow" }),
+    );
+    expect(api.allowRoutine).toHaveBeenLastCalledWith("greet", "9c1e");
   });
 
   it("switches a routine off", async () => {
@@ -120,7 +147,7 @@ describe("Routines", () => {
 
   it("lists a broken routine with its problem and no Run now", async () => {
     api.listRoutines.mockResolvedValue([
-      row({ name: "broken", consent: null, triggers: [], steps: 0, changes: [], problems: ["step x: no tool named no_such_tool"] }),
+      row({ name: "broken", consent: null, triggers: [], steps: 0, changes: [], changeDetails: [], hash: null, problems: ["step x: no tool named no_such_tool"] }),
     ]);
     render(<Routines />);
     const card = within(await screen.findByRole("listitem", { name: "broken" }));

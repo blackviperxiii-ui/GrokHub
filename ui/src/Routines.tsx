@@ -72,6 +72,9 @@ export function Routines() {
       setNote(null);
     } catch (err) {
       setNote(String(err));
+      // A routine saved since the list loaded is refused: load it again, so
+      // the next Allow shows what it does now.
+      await listRoutines().then(setRows, () => {});
     } finally {
       setBusy(null);
     }
@@ -93,6 +96,8 @@ export function Routines() {
 
   async function run(name: string) {
     setBusy(name);
+    // The list loads again after the run: an open Allow mustn't change under the person.
+    setAsking(null);
     try {
       const got = await runRoutineNow(name);
       setResults((now) => ({ ...now, [name]: got.error || got.text }));
@@ -172,15 +177,18 @@ export function Routines() {
                   onCancel={() => setAsking(null)}
                 />
               )}
-              {isAsking === "allow" && (
-                <ConfirmRow
-                  question={`Allow ${row.name} to change things?`}
-                  detail={`These steps will run on their own: ${row.changes.join(", ")}. Editing the routine takes this back.`}
-                  action="Allow"
-                  busy={busy !== null}
-                  onConfirm={() => void act(row.name, () => allowRoutine(row.name))}
-                  onCancel={() => setAsking(null)}
-                />
+              {isAsking === "allow" && row.hash && (
+                <>
+                  <pre className="card-detail">{row.changeDetails.join("\n")}</pre>
+                  <ConfirmRow
+                    question={`Allow ${row.name} to change things?`}
+                    detail="The steps above will run on their own, as shown. Editing the routine takes this back."
+                    action="Allow"
+                    busy={busy !== null}
+                    onConfirm={() => void act(row.name, () => allowRoutine(row.name, row.hash ?? ""))}
+                    onCancel={() => setAsking(null)}
+                  />
+                </>
               )}
               {isAsking === "undo" && (
                 <ConfirmRow

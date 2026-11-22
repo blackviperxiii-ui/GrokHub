@@ -43,6 +43,24 @@ pub enum Launch {
     OAuth,
 }
 
+impl Launch {
+    /// Launches that read or write what the app keeps sealed with the OS
+    /// keyring and the provider vault: tokens, learned data and routine
+    /// consent. Without them a seal can't be made or opened.
+    pub fn uses_os_stores(self) -> bool {
+        matches!(
+            self,
+            Launch::McpSelf
+                | Launch::McpDesktop
+                | Launch::McpCua
+                | Launch::OAuth
+                | Launch::BenchLocal
+                | Launch::RoutineRun
+                | Launch::RoutineManage
+        )
+    }
+}
+
 /// `grokhub-hub --askpass <socket> [prompt]`: `sudo` runs this through the
 /// helper script the app writes.
 pub fn askpass_socket(args: &[String]) -> Option<&str> {
@@ -276,6 +294,12 @@ mod tests {
             parse_args(&args(&["grokhub-hub", "routine"])),
             Launch::Serve
         );
+        // Allow seals its grant with the keyring key, so the CLI needs the
+        // keyring like a routine run does.
+        assert!(parse_args(&args(&["grokhub-hub", "routine", "allow", "x"])).uses_os_stores());
+        assert!(parse_args(&args(&["grokhub-hub", "routine", "run", "x"])).uses_os_stores());
+        assert!(!Launch::Serve.uses_os_stores());
+        assert!(!Launch::McpBridge.uses_os_stores());
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "--version", "--mcp-self"])),
             Launch::Version

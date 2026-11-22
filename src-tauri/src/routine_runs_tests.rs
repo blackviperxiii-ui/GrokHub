@@ -12,6 +12,11 @@ fn temp(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("routine-runs-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    // Grants are sealed with the learned-tier key: a test keyring.
+    grokhub_agent::harness::use_key_store_for(
+        &dir,
+        std::sync::Arc::new(grokhub_agent::harness::MemoryKeyStore::new()),
+    );
     dir
 }
 

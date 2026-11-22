@@ -35,6 +35,9 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         Ok(path) => path,
         Err(err) => return ToolOutput::err(err),
     };
+    if let Some(why) = super::person_only_file(&grokhub_core::paths::config_dir(), &path) {
+        return ToolOutput::err(why);
+    }
     if path.is_dir() {
         return ToolOutput::err("path is a directory");
     }

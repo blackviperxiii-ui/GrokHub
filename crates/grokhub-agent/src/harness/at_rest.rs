@@ -1,7 +1,8 @@
 //! Spike-4b: the learned tier at rest (harness design §12 P4).
 //!
-//! What is sealed: `consent.jsonl`, `egress.jsonl` (and its roll), and AMR
-//! nodes marked `personal` or `sensitive` (`amr/nodes/<id>.sealed`). The
+//! What is sealed: `consent.jsonl`, `egress.jsonl` (and its roll), AMR
+//! nodes marked `personal` or `sensitive` (`amr/nodes/<id>.sealed`), and
+//! each routine grant's seal in `routines/consent.json`. The
 //! curated plain tier (SOUL / USER / MEMORY, `plain` AMR nodes) stays
 //! `cat`-able. Each sealed line is ChaCha20-Poly1305 (`ring`) with a fresh
 //! random 96-bit nonce and a per-file associated-data label, so a line cannot

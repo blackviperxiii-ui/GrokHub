@@ -1759,7 +1759,9 @@ pub fn hard_floor(name: &str, arguments: &str) -> Option<HardFloor> {
 /// The agent never widens its own permissions (harness design §12.0 rule 4).
 const LEDGER_FLOOR: &str = "hard floor: consent ledger (only your click changes it)";
 
-/// A non-read-only tool whose path argument is the consent ledger.
+/// A non-read-only tool whose path argument is the consent ledger or the
+/// routine consent store (`routines/consent.json`), under any of the path
+/// keys the write and edit tools take.
 fn ledger_write(name: &str, arguments: &str) -> bool {
     if crate::gate::is_readonly(name) {
         return false;
@@ -1767,15 +1769,37 @@ fn ledger_write(name: &str, arguments: &str) -> bool {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(arguments) else {
         return false;
     };
-    ["path", "file_path", "target", "destination"]
+    ["path", "file_path", "target_file", "target", "destination"]
         .iter()
         .any(|k| {
             v.get(*k).and_then(|p| p.as_str()).is_some_and(|p| {
-                p.replace('\\', "/")
-                    .to_ascii_lowercase()
-                    .ends_with("consent.jsonl")
+                let p = folded(p);
+                p.ends_with("consent.jsonl") || p.ends_with("routines/consent.json")
             })
         })
+}
+
+/// `path` the way the file tools read it: trimmed, `\` as `/`, without
+/// empty or `.` parts and with each `..` stepping back, in lowercase.
+fn folded(path: &str) -> String {
+    let path = path.trim().replace('\\', "/").to_ascii_lowercase();
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if parts.last().is_some_and(|prev| *prev != "..") => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    parts.join("/")
+}
+
+/// A command that names the consent ledger, or a routine consent store.
+fn names_consent(cmd: &str) -> bool {
+    let c = cmd.to_ascii_lowercase();
+    c.contains("consent.jsonl") || (c.contains("consent.json") && c.contains("routines"))
 }
 
 fn command_floor(cmd: &str) -> Option<String> {
@@ -1785,7 +1809,7 @@ fn command_floor(cmd: &str) -> Option<String> {
     if let Some(why) = grokhub_core::driver_check::input_driver_install(cmd) {
         return Some(why);
     }
-    if cmd.to_ascii_lowercase().contains("consent.jsonl") {
+    if names_consent(cmd) {
         return Some(LEDGER_FLOOR.into());
     }
     let c = cmd.to_ascii_lowercase().replace('\\', "/");
@@ -3435,6 +3459,47 @@ mod tests {
         );
         assert_eq!(
             hard_floor("search_replace", r#"{"file_path":"notes/consent.md"}"#),
+            None
+        );
+        // The write tool's own path key, and the routine consent store.
+        assert_eq!(
+            hard_floor(
+                "write",
+                r#"{"target_file":"/home/user/.config/GrokHub/consent.jsonl","contents":"x"}"#
+            ),
+            ledger
+        );
+        assert_eq!(
+            hard_floor(
+                "write",
+                r#"{"target_file":"/home/user/.config/GrokHub/routines/consent.json","contents":"{}"}"#
+            ),
+            ledger
+        );
+        assert_eq!(
+            hard_floor(
+                "run_terminal_command",
+                &sh("cd ~/.config/GrokHub/routines && printf '{}' > consent.json")
+            ),
+            ledger
+        );
+        // However the path is spelled, the way the write tool reads it.
+        for path in [
+            ".config/GrokHub/routines/consent.json ",
+            ".config/GrokHub/routines/consent.json\n",
+            ".config/GrokHub/routines/./consent.json",
+            ".config/GrokHub/routines//consent.json",
+            ".config/GrokHub/routines/x/../consent.json",
+        ] {
+            let args = serde_json::json!({ "path": path, "content": "{}" }).to_string();
+            assert_eq!(hard_floor("write", &args), ledger, "{path:?}");
+        }
+        // A project's own consent.json is no ledger.
+        assert_eq!(
+            hard_floor(
+                "write",
+                r#"{"target_file":"web/public/consent.json","contents":"{}"}"#
+            ),
             None
         );
     }

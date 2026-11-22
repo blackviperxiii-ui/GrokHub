@@ -22,6 +22,10 @@ export interface RoutineRow {
   steps: number;
   /** The steps that change something, as `id: tool`. */
   changes: string[];
+  /** The same steps with their arguments, as `id: tool {...}`: what Allow shows. */
+  changeDetails: string[];
+  /** The routine as listed; Allow sends it back, so a routine edited since isn't allowed. */
+  hash: string | null;
   /** Null when the routine doesn't load; `problems` says why. */
   consent: RoutineConsent | null;
   on: boolean;
@@ -36,7 +40,7 @@ export interface RoutineRow {
 
 export const listRoutines = () => call<RoutineRow[]>("list_routines");
 export const setRoutineOn = (name: string, on: boolean) => call<RoutineRow[]>("set_routine_on", { name, on });
-export const allowRoutine = (name: string) => call<RoutineRow[]>("allow_routine", { name });
+export const allowRoutine = (name: string, hash: string) => call<RoutineRow[]>("allow_routine", { name, hash });
 export const revokeRoutine = (name: string) => call<RoutineRow[]>("revoke_routine", { name });
 export const undoRoutine = (name: string) => call<string>("undo_routine", { name });
 export const runRoutineNow = (name: string) => call<RunResult>("run_routine_now", { name });

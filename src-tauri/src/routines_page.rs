@@ -49,6 +49,12 @@ pub struct Row {
     pub steps: usize,
     /// The change steps, as `id: tool`.
     pub changes: Vec<String>,
+    /// The same steps with their arguments, as `id: tool {...}`: what the
+    /// Allow dialog shows.
+    pub change_details: Vec<String>,
+    /// [`routine_consent::consent_hash`] of the routine as listed. Allow
+    /// sends it back, so a routine edited after the list isn't allowed.
+    pub hash: Option<String>,
     /// `None` when the routine doesn't load.
     pub consent: Option<Consent>,
     pub on: bool,
@@ -103,17 +109,40 @@ pub fn rows(config_dir: &Path) -> Vec<Row> {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let fix = loaded.as_ref().ok().and_then(|r| fix_row(config_dir, r));
-            let (name, about, triggers, steps, changes, consent, problems) = match &loaded {
+            let change_steps = loaded
+                .as_ref()
+                .map(|r| routine_consent::shown_steps(config_dir, r))
+                .unwrap_or_default();
+            let changes = change_steps
+                .iter()
+                .map(|c| format!("{}: {}", c.id, c.tool))
+                .collect();
+            let mut change_details: Vec<String> = change_steps
+                .iter()
+                .map(|c| format!("{}: {} {}", c.id, c.tool, c.what))
+                .collect();
+            // Timer runs and Run now fill from the defaults, so show them.
+            if let Ok(r) = &loaded {
+                let defaults: serde_json::Map<String, serde_json::Value> = r
+                    .inputs
+                    .iter()
+                    .filter_map(|(k, i)| Some((k.clone(), i.default.clone()?)))
+                    .collect();
+                if !change_steps.is_empty() && !defaults.is_empty() {
+                    change_details.push(format!(
+                        "inputs unless a run sets them: {}",
+                        serde_json::Value::Object(defaults)
+                    ));
+                }
+            }
+            let (name, about, triggers, steps, consent, hash, problems) = match &loaded {
                 Ok(r) => (
                     r.name.clone(),
                     r.about.clone(),
                     r.triggers.iter().map(trigger_label).collect(),
                     r.steps.len(),
-                    routine_consent::change_steps(r)
-                        .into_iter()
-                        .map(|c| format!("{}: {}", c.id, c.tool))
-                        .collect(),
                     Some(routine_consent::standing(config_dir, r).into()),
+                    Some(routine_consent::consent_hash(config_dir, r)),
                     Vec::new(),
                 ),
                 Err(problems) => (
@@ -121,7 +150,7 @@ pub fn rows(config_dir: &Path) -> Vec<Row> {
                     String::new(),
                     Vec::new(),
                     0,
-                    Vec::new(),
+                    None,
                     None,
                     problems.clone(),
                 ),
@@ -139,6 +168,8 @@ pub fn rows(config_dir: &Path) -> Vec<Row> {
                 triggers,
                 steps,
                 changes,
+                change_details,
+                hash,
                 consent,
                 problems,
                 fix,
@@ -154,10 +185,12 @@ fn find(config_dir: &Path, name: &str) -> Result<(std::path::PathBuf, Routine), 
         .ok_or_else(|| format!("No routine named {name}"))
 }
 
-/// Allows routine `name`'s change steps as they are now.
-pub fn allow(config_dir: &Path, name: &str) -> Result<(), String> {
+/// Allows routine `name`'s change steps as the person saw them: `hash` is
+/// the routine's hash from the row they clicked. A routine saved again since
+/// then isn't allowed, since they haven't seen its new steps.
+pub fn allow(config_dir: &Path, name: &str, hash: &str) -> Result<(), String> {
     let (_, r) = find(config_dir, name)?;
-    routine_consent::grant(config_dir, &r, grokhub_core::now_ms())
+    routine_consent::grant_seen(config_dir, &r, hash, grokhub_core::now_ms())
 }
 
 pub fn revoke(config_dir: &Path, name: &str) -> Result<(), String> {

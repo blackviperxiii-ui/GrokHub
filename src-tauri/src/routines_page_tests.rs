@@ -7,6 +7,11 @@ fn temp(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("routines-page-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    // Grants are sealed with the learned-tier key: a test keyring.
+    grokhub_agent::harness::use_key_store_for(
+        &dir,
+        std::sync::Arc::new(grokhub_agent::harness::MemoryKeyStore::new()),
+    );
     dir
 }
 
@@ -36,6 +41,11 @@ fn row<'a>(rows: &'a [Row], name: &str) -> &'a Row {
     rows.iter().find(|r| r.name == name).unwrap()
 }
 
+/// The hash on `name`'s row, as the page sends it back with Allow.
+fn hash_of(config: &Path, name: &str) -> String {
+    row(&rows(config), name).hash.clone().unwrap()
+}
+
 #[test]
 fn rows_show_triggers_changes_and_broken_routines() {
     let config = temp("rows");
@@ -57,6 +67,8 @@ fn rows_show_triggers_changes_and_broken_routines() {
         rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
         vec!["broken", "greet", "inbox"]
     );
+    let greet_hash = row(&rows, "greet").hash.clone();
+    assert_eq!(greet_hash.as_deref().map(str::len), Some(64));
     assert_eq!(
         row(&rows, "greet"),
         &Row {
@@ -69,6 +81,8 @@ fn rows_show_triggers_changes_and_broken_routines() {
             ],
             steps: 1,
             changes: vec!["say: run_terminal_command".into()],
+            change_details: vec![r#"say: run_terminal_command {"command":"echo hi"}"#.into()],
+            hash: greet_hash.clone(),
             consent: Some(Consent::NotAllowed),
             on: true,
             runs: 0,
@@ -100,7 +114,8 @@ fn rows_show_triggers_changes_and_broken_routines() {
 fn allow_revoke_and_off_show_on_the_row() {
     let config = temp("allow");
     greeter(&config);
-    allow(&config, "greet").unwrap();
+    let seen = hash_of(&config, "greet");
+    allow(&config, "greet", &seen).unwrap();
     assert_eq!(row(&rows(&config), "greet").consent, Some(Consent::Allowed));
     revoke(&config, "greet").unwrap();
     assert_eq!(
@@ -110,8 +125,34 @@ fn allow_revoke_and_off_show_on_the_row() {
     grokhub_agent::routine_triggers::set_on(&config, "greet", false).unwrap();
     assert!(!row(&rows(&config), "greet").on);
     assert_eq!(
-        allow(&config, "nope"),
+        allow(&config, "nope", &seen),
         Err("No routine named nope".to_string())
+    );
+}
+
+#[test]
+fn allow_refuses_a_routine_saved_again_after_the_list() {
+    let config = temp("allow-stale");
+    greeter(&config);
+    let seen = hash_of(&config, "greet");
+    // The routine changes on disk between the list and the click.
+    save(
+        &config,
+        json!({
+            "version": 1, "name": "greet",
+            "steps": [{ "id": "say", "tool": "run_terminal_command", "args": { "command": "rm -r notes" } }]
+        }),
+    );
+    assert_eq!(
+        allow(&config, "greet", &seen),
+        Err(
+            "greet changed since its steps were shown. Look over them again, then allow it."
+                .to_string()
+        )
+    );
+    assert_eq!(
+        row(&rows(&config), "greet").consent,
+        Some(Consent::NotAllowed)
     );
 }
 
@@ -127,7 +168,7 @@ fn run_now_counts_on_the_row_and_refuses_until_allowed() {
         refused.error
     );
 
-    allow(&config, "greet").unwrap();
+    allow(&config, "greet", &hash_of(&config, "greet")).unwrap();
     let ran = run_now(&config, "greet", &no_route).unwrap();
     assert_eq!(ran.stop, crate::routine_runs::FINISHED, "{}", ran.error);
     assert_eq!(ran.text, "say: hi\n\nhi");
