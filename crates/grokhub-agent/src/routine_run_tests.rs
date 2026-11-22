@@ -618,6 +618,88 @@ fn a_refused_step_is_never_repaired() {
     assert_eq!(report.model_calls, 0);
 }
 
+/// Allows only the steps it names, as a routine's consent does, and keeps
+/// what it was asked.
+struct Only(&'static str, RefCell<Vec<(String, String)>>);
+
+impl Approve for Only {
+    fn approve(&self, step: &str, _: &str, arguments: &str) -> bool {
+        self.1.borrow_mut().push((step.into(), arguments.into()));
+        step == self.0
+    }
+}
+
+#[test]
+fn a_retry_with_new_arguments_is_not_covered_by_the_steps_consent() {
+    let dir = temp("retry-consent");
+    let r = routine(json!({
+        "version": 1, "name": "retry-consent",
+        "steps": [{ "id": "run", "tool": "run_terminal_command", "args": { "command": "exit 3" } }]
+    }));
+    let stop = || false;
+    let model = Model::new(&[
+        r#"{"do":"retry","args_json":"{\"command\":\"echo replaced\"}","why":"Try this."}"#,
+    ]);
+    let consent = Only("run", RefCell::default());
+    let report = run(&RunSpec {
+        brain: Some(&model),
+        approve: Some(&consent),
+        ..spec(&r, &dir, &stop)
+    });
+    assert_eq!(
+        report.ended,
+        Ended::Stopped {
+            at: "run".into(),
+            why: "you didn't allow run_terminal_command".into()
+        }
+    );
+    assert_eq!(
+        consent.1.borrow().as_slice(),
+        [
+            (
+                "run".to_string(),
+                json!({ "command": "exit 3" }).to_string()
+            ),
+            (
+                "run (retry)".to_string(),
+                json!({ "command": "echo replaced" }).to_string()
+            )
+        ]
+    );
+    assert_eq!(report.model_calls, 1);
+    assert_eq!(report.fixes, Vec::new());
+}
+
+#[test]
+fn a_failed_check_is_never_skipped_by_a_repair() {
+    let dir = temp("skip-check");
+    std::fs::write(dir.join("disk.txt"), "used 50%\n").unwrap();
+    std::fs::write(dir.join("after.txt"), "after\n").unwrap();
+    let r = routine(json!({
+        "version": 1, "name": "skip-check",
+        "steps": [
+            { "id": "read", "tool": "read_file", "args": { "target_file": "disk.txt" } },
+            { "id": "full", "expect": { "from": "read.stdout", "regex": "used (\\d+)%", "group": 1, "at_least": 90 } },
+            { "id": "after", "tool": "read_file", "args": { "target_file": "after.txt" } }
+        ]
+    }));
+    let stop = || false;
+    let model = Model::new(&[r#"{"do":"skip","args_json":"{}","why":"Not needed."}"#]);
+    let report = run(&RunSpec {
+        brain: Some(&model),
+        ..spec(&r, &dir, &stop)
+    });
+    let Ended::Stopped { at, why } = &report.ended else {
+        panic!("{:?}", report.ended)
+    };
+    assert_eq!(at, "full");
+    assert!(
+        why.ends_with(". A check can't be skipped: Not needed."),
+        "{why}"
+    );
+    assert_eq!(report.model_calls, 1);
+}
+
 #[test]
 fn a_fix_keeps_the_templates_the_retry_left_alone() {
     let dir = temp("fix-templates");
