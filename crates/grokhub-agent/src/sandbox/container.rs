@@ -77,8 +77,14 @@ pub struct Runtime {
 pub struct Container {
     pub runtime: Runtime,
     pub image: String,
-    /// Mounted read-write at the same path. The workspace comes first.
+    /// Mounted read-write at the same path, from [`layout`]. The workspace
+    /// comes first; the folders between a mount and a cover come last.
     pub mounts: Vec<PathBuf>,
+    /// Secret folders and files inside a mount (see [`super::secrets`]),
+    /// with the app's own config folder: covered inside, so the container
+    /// sees what the host sandbox lets a command see. A folder shows as an
+    /// empty scratch folder, a file as an empty one.
+    pub hide: Vec<PathBuf>,
     /// The way out through the egress proxy, when the network guard is on.
     pub egress: Option<Egress>,
 }
@@ -214,6 +220,80 @@ pub fn mounts(workspace: &Path, extra: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
+/// What the container mounts and covers, for the workspace, the extra
+/// writable folders and the paths the host sandbox hides
+/// ([`super::secrets::hidden`]), so it holds the same fence as the host:
+///
+/// - An extra folder that holds the config folder is left out, as
+///   `writable_roots` leaves it out on the host: a command could rewrite the
+///   app's rules, or leave code there that later runs outside the sandbox.
+///   The workspace always stays (a helper's tree sits inside the config
+///   folder).
+/// - An extra folder that is a hidden path, or sits inside one, is left out:
+///   the host hides it.
+/// - A hidden path inside a mount is covered (the second list).
+/// - Each folder between a mount and a covered path is mounted again on
+///   itself: a mount point can't be renamed, so a cover can't be moved off
+///   its path (`mv ~/.config ~/.c`) to leave the real folder uncovered.
+/// - A hidden path inside another is already under that one's cover, so it
+///   gets neither a cover nor a pin of its own: each path is mounted once.
+/// - A mount whose covers or pins would need a path with a comma (which
+///   `--mount` can't name) is left out.
+pub fn layout(
+    workspace: &Path,
+    extra: &[PathBuf],
+    hidden: &[PathBuf],
+    config_dir: &Path,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let ws = workspace.canonicalize().ok();
+    let config = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
+    let mut keep: Vec<PathBuf> = Vec::new();
+    let mut pins: Vec<PathBuf> = Vec::new();
+    let mut hide: Vec<PathBuf> = Vec::new();
+    for m in mounts(workspace, extra) {
+        let is_ws = ws.as_ref() == Some(&m);
+        if !is_ws && (config.starts_with(&m) || hidden.iter().any(|h| m.starts_with(h))) {
+            continue;
+        }
+        let inside: Vec<&PathBuf> = hidden
+            .iter()
+            .filter(|h| h.starts_with(&m) && **h != m)
+            .collect();
+        let between: Vec<PathBuf> = inside
+            .iter()
+            .flat_map(|h| h.ancestors().skip(1))
+            .filter(|a| a.starts_with(&m) && *a != m.as_path())
+            .map(Path::to_path_buf)
+            .collect();
+        let named = |p: &PathBuf| !p.to_string_lossy().contains(',');
+        if !inside.iter().all(|h| named(h)) || !between.iter().all(named) {
+            continue;
+        }
+        for h in inside {
+            if !hide.contains(h) {
+                hide.push(h.clone());
+            }
+        }
+        for a in between {
+            if !pins.contains(&a) {
+                pins.push(a);
+            }
+        }
+        keep.push(m);
+    }
+    let outer = |p: &Path, hide: &[PathBuf]| !hide.iter().any(|h| p.starts_with(h) && p != h);
+    let hide: Vec<PathBuf> = hide.iter().filter(|h| outer(h, &hide)).cloned().collect();
+    for a in pins {
+        let covered = hide.iter().any(|h| a.starts_with(h));
+        if !covered && !keep.contains(&a) {
+            keep.push(a);
+        }
+    }
+    (keep, hide)
+}
+
 /// The runtime's arguments for `command` in `cwd`, run as `uid:gid`.
 pub fn args(c: &Container, cwd: &Path, uid: u32, gid: u32, command: &str) -> Vec<String> {
     let mut out: Vec<String> = [
@@ -250,6 +330,17 @@ pub fn args(c: &Container, cwd: &Path, uid: u32, gid: u32, command: &str) -> Vec
             "--mount".into(),
             format!("type=bind,source={path},target={path}"),
         ]);
+    }
+    for path in &c.hide {
+        let cover = if path.is_dir() {
+            format!("type=tmpfs,destination={}", path.display())
+        } else {
+            format!(
+                "type=bind,source=/dev/null,target={},readonly",
+                path.display()
+            )
+        };
+        out.extend(["--mount".into(), cover]);
     }
     let relay = c.egress.as_ref().and_then(|e| {
         let folder = e.socket.parent()?.display().to_string();
@@ -307,6 +398,7 @@ mod tests {
             },
             image: DEFAULT_IMAGE.into(),
             mounts,
+            hide: Vec::new(),
             egress: None,
         }
     }
@@ -438,6 +530,139 @@ mod tests {
             "[name=seccomp,profile=builtin]",
             0
         ));
+    }
+
+    /// A home with a workspace, two secret folders (one nested) and a file.
+    fn scratch_home(label: &str) -> PathBuf {
+        let home = std::env::temp_dir()
+            .join(format!("grokhub-ctr-layout-{label}-{}", std::process::id()))
+            .join("home");
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+        for dir in [
+            "my-app",
+            ".ssh",
+            ".config/gh",
+            ".config/GrokHub/helper-work/k1",
+            ".kube",
+        ] {
+            std::fs::create_dir_all(home.join(dir)).unwrap();
+        }
+        std::fs::write(home.join(".netrc"), "machine x").unwrap();
+        home.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn a_home_mount_that_holds_the_config_folder_is_left_out_as_on_the_host() {
+        let home = scratch_home("config-home");
+        let config = home.join(".config/GrokHub");
+        let ws = home.join("my-app");
+        let hidden = crate::sandbox::secrets::hidden(Some(&home), &config, &ws);
+        assert_eq!(
+            layout(&ws, std::slice::from_ref(&home), &hidden, &config),
+            (vec![ws.clone()], vec![])
+        );
+        // A helper works in a tree inside the config folder: its own tree
+        // mounts, the home that holds the config folder still doesn't.
+        let helper = config.join("helper-work/k1");
+        let hidden = crate::sandbox::secrets::hidden(Some(&home), &config, &helper);
+        assert_eq!(
+            layout(&helper, std::slice::from_ref(&home), &hidden, &config),
+            (vec![helper], vec![])
+        );
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    #[test]
+    fn secrets_in_a_home_mount_are_covered_and_the_folders_above_them_pinned() {
+        let home = scratch_home("covered");
+        // The config folder lives elsewhere, so the home folder may mount.
+        let config = home.parent().unwrap().join("cfg");
+        std::fs::create_dir_all(&config).unwrap();
+        let ws = home.join("my-app");
+        let hidden = crate::sandbox::secrets::hidden(Some(&home), &config, &ws);
+        let (mounts, hide) = layout(&ws, std::slice::from_ref(&home), &hidden, &config);
+        // `.config` is mounted on itself, so `mv ~/.config ~/.c` fails and
+        // the cover stays on `.config/gh`.
+        assert_eq!(mounts, vec![ws.clone(), home.clone(), home.join(".config")]);
+        assert_eq!(
+            hide,
+            vec![
+                home.join(".ssh"),
+                home.join(".kube"),
+                home.join(".config/gh"),
+                home.join(".netrc")
+            ]
+        );
+        // A secret folder asked for as a writable folder stays hidden, and
+        // gives no second mount at the same path.
+        assert_eq!(
+            layout(&ws, &[home.join(".kube")], &hidden, &config),
+            (vec![ws.clone()], vec![])
+        );
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    #[test]
+    fn a_mount_whose_cover_would_need_a_comma_is_left_out() {
+        let base = std::env::temp_dir().join(format!("grokhub-ctr-comma-{}", std::process::id()));
+        let odd = base.join("a,b/.ssh");
+        std::fs::create_dir_all(&odd).unwrap();
+        std::fs::create_dir_all(base.join("ws")).unwrap();
+        let base = base.canonicalize().unwrap();
+        let ws = base.join("ws");
+        let hidden = [base.join("a,b/.ssh")];
+        assert_eq!(
+            layout(&ws, std::slice::from_ref(&base), &hidden, &base.join("cfg")),
+            (vec![ws], vec![])
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_hidden_path_inside_another_is_mounted_once_under_the_outer_cover() {
+        let base = std::env::temp_dir().join(format!("grokhub-ctr-nest-{}", std::process::id()));
+        let hub = base.join(".grok/hub");
+        std::fs::create_dir_all(&hub).unwrap();
+        let home = base.canonicalize().unwrap();
+        // The workspace is home, and the config folder sits inside the
+        // sign-in folder: both are hidden, so ~/.grok gets one cover and
+        // no pin (Docker refuses two mounts on one path).
+        let hidden = [home.join(".grok"), home.join(".grok/hub")];
+        assert_eq!(
+            layout(&home, &[], &hidden, &home.join(".grok/hub")),
+            (vec![home.clone()], vec![home.join(".grok")])
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_covered_folder_is_an_empty_scratch_folder_and_a_file_dev_null() {
+        let base = std::env::temp_dir().join(format!("grokhub-ctr-hide-{}", std::process::id()));
+        let ssh = base.join(".ssh");
+        let netrc = base.join(".netrc");
+        std::fs::create_dir_all(&ssh).unwrap();
+        std::fs::write(&netrc, "machine x").unwrap();
+        let mut c = docker(vec![base.clone()]);
+        c.hide = vec![ssh.clone(), netrc.clone()];
+        let args = args(&c, &base, 1000, 1000, "ls");
+        let after = |flag: &str| {
+            args.windows(2)
+                .filter(|w| w[0] == flag)
+                .map(|w| w[1].clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            after("--mount"),
+            [
+                format!("type=bind,source={0},target={0}", base.display()),
+                format!("type=tmpfs,destination={}", ssh.display()),
+                format!(
+                    "type=bind,source=/dev/null,target={},readonly",
+                    netrc.display()
+                ),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

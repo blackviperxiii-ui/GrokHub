@@ -1,0 +1,1 @@
+- Sandbox: commands run in a container now see the same protected folders as the host sandbox. A mounted folder that holds the app's settings is left out, and secret folders like `~/.ssh` inside a mounted folder show up empty.

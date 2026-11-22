@@ -217,6 +217,18 @@ pub fn auto_allows(config_dir: &Path, tool: &str, args: &Value, workspace: &Path
 }
 
 pub fn plan_in(config_dir: &Path, tool: &str, args: &Value, workspace: &Path) -> Option<Plan> {
+    plan_with(config_dir, tool, args, workspace, container::detect)
+}
+
+/// [`plan_in`] with the container runtime from `runtime`, asked only when
+/// the settings pick the container backend.
+fn plan_with(
+    config_dir: &Path,
+    tool: &str,
+    args: &Value,
+    workspace: &Path,
+    runtime: impl FnOnce() -> Option<container::Runtime>,
+) -> Option<Plan> {
     let settings = settings(config_dir);
     if !settings.enabled || runs_outside(tool, args) {
         return None;
@@ -229,18 +241,21 @@ pub fn plan_in(config_dir: &Path, tool: &str, args: &Value, workspace: &Path) ->
         None
     };
     let isolation = isolation(config_dir, workspace, home.as_deref(), proxy.as_deref());
-    let container = settings
-        .container
-        .then(container::detect)
-        .flatten()
-        .map(|runtime| container::Container {
+    let container = settings.container.then(runtime).flatten().map(|runtime| {
+        // The same fence as the host: no mount that holds the config
+        // folder, and the secrets the host hides covered.
+        let hidden = secrets::hidden(home.as_deref(), config_dir, workspace);
+        let (mounts, hide) = container::layout(workspace, &settings.writable, &hidden, config_dir);
+        container::Container {
             runtime,
             image: settings.image.clone(),
-            mounts: container::mounts(workspace, &settings.writable),
+            mounts,
+            hide,
             egress: proxy
                 .as_deref()
                 .and_then(|addr| container_egress(config_dir, addr)),
-        });
+        }
+    });
     Some(Plan {
         writable,
         proxy,

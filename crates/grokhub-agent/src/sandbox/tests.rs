@@ -75,6 +75,7 @@ fn a_container_plan_is_enforced_and_skips_host_confinement() {
             },
             image: container::DEFAULT_IMAGE.into(),
             mounts: vec![PathBuf::from("/home/user/my-app")],
+            hide: Vec::new(),
             egress: None,
         }),
     };
@@ -357,6 +358,41 @@ fn the_settings_file_turns_the_plan_off_and_a_sudo_call_gets_none() {
     assert!(plan_in(&config, "run_terminal_command", &args, &ws).is_none());
     let _ = std::fs::remove_dir_all(&config);
     let _ = std::fs::remove_dir_all(&ws);
+}
+
+#[test]
+fn a_container_plan_leaves_out_a_writable_folder_that_holds_the_config_folder() {
+    let base = scratch("plan-ctr");
+    let ws = base.join("ws");
+    let extra = base.join("extra");
+    let config = extra.join("cfg");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&config).unwrap();
+    let settings = format!(
+        "backend = \"container\"\nwritable = [{:?}]\n",
+        extra.display().to_string()
+    );
+    std::fs::write(config.join(CONFIG_NAME), settings).unwrap();
+    let docker = || {
+        Some(container::Runtime {
+            kind: container::Kind::Docker,
+            program: PathBuf::from("/usr/bin/docker"),
+        })
+    };
+    let args = json!({"command": "ls"});
+    let plan = plan_with(&config, "run_terminal_command", &args, &ws, docker).unwrap();
+    let c = plan.container.expect("the container backend is on");
+    // `extra` holds the config folder, so only the workspace mounts.
+    assert_eq!(c.mounts, vec![ws.canonicalize().unwrap()]);
+    // A config folder inside the workspace is covered in the container.
+    let inner = ws.join(".cfg");
+    std::fs::create_dir_all(&inner).unwrap();
+    std::fs::write(inner.join(CONFIG_NAME), "backend = \"container\"\n").unwrap();
+    let plan = plan_with(&inner, "run_terminal_command", &args, &ws, docker).unwrap();
+    let c = plan.container.expect("the container backend is on");
+    assert_eq!(c.mounts, vec![ws.canonicalize().unwrap()]);
+    assert_eq!(c.hide, vec![inner.canonicalize().unwrap()]);
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// The real thing, through `run_terminal_command`: a write in the workspace
